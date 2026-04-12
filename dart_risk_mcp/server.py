@@ -346,7 +346,13 @@ def find_risk_precedents(signal_types: list[str], lookback_days: int = 90) -> st
 
 
 def main() -> None:
-    mcp.run()
+    import sys
+    transport = "sse" if "--sse" in sys.argv else "stdio"
+    if transport == "sse":
+        port = int(os.environ.get("PORT", "8000"))
+        mcp.run(transport="sse", host="0.0.0.0", port=port)
+    else:
+        mcp.run()
 
 
 if __name__ == "__main__":
