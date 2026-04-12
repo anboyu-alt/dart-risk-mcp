@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dart-risk-mcp"
+version = "0.1.0"
+description = "DART 공시 기반 한국 기업 주가조작 위험 분석 MCP 서버"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+keywords = ["dart", "mcp", "korea", "stock", "risk", "disclosure"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "mcp>=1.0.0",
+    "requests>=2.28.0",
+]
+
+[project.scripts]
+dart-risk-mcp = "dart_risk_mcp.server:main"
+
+[project.urls]
+Homepage = "https://github.com/kang-reporter/dart-risk-mcp"
+Repository = "https://github.com/kang-reporter/dart-risk-mcp"
+
+[tool.hatch.build.targets.wheel]
+packages = ["dart_risk_mcp"]
