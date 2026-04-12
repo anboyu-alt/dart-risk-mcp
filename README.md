@@ -27,42 +27,34 @@ DART 전자공시 기반 한국 기업 주가조작 위험 분석 MCP 서버.
 
 ## 설치
 
-### Claude Code (로컬)
+### Claude Desktop / Claude Code
 
-```bash
-pip install dart-risk-mcp
-```
+`uv`가 없으면 먼저 설치: `pip install uv`
 
-`.mcp.json`에 추가:
-
-```json
-{
-  "mcpServers": {
-    "dart-risk-analyzer": {
-      "command": "dart-risk-mcp",
-      "env": {
-        "DART_API_KEY": "your_key_here"
-      }
-    }
-  }
-}
-```
-
-### uvx (설치 없이 실행)
+프로젝트 `.mcp.json` (또는 Claude Desktop 설정 파일)에 추가:
 
 ```json
 {
   "mcpServers": {
     "dart-risk-analyzer": {
       "command": "uvx",
-      "args": ["dart-risk-mcp"],
+      "args": ["--from", "git+https://github.com/anboyu-alt/dart-risk-mcp", "dart-risk-mcp"],
       "env": {
-        "DART_API_KEY": "your_key_here"
+        "DART_API_KEY": "your_dart_api_key_here"
       }
     }
   }
 }
 ```
+
+Claude Desktop 설정 파일 위치:
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+
+### Claude.ai 웹 (원격 배포 필요)
+
+Railway/Render 등에 배포 후 Claude.ai → Settings → Integrations에서 연결.
+배포 방법: `dart-risk-mcp --sse` 명령, `PORT=8000` 환경변수 설정.
 
 ## DART API 키 발급
 
