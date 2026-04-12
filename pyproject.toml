@@ -25,8 +25,8 @@ dependencies = [
 dart-risk-mcp = "dart_risk_mcp.server:main"
 
 [project.urls]
-Homepage = "https://github.com/kang-reporter/dart-risk-mcp"
-Repository = "https://github.com/kang-reporter/dart-risk-mcp"
+Homepage = "https://github.com/anboyu-alt/dart-risk-mcp"
+Repository = "https://github.com/anboyu-alt/dart-risk-mcp"
 
 [tool.hatch.build.targets.wheel]
 packages = ["dart_risk_mcp"]
