@@ -15,9 +15,12 @@ from .core import (
     estimate_crisis_timeline,
     extract_cb_investors,
     fetch_company_disclosures,
+    fetch_disclosure_full,
+    fetch_document_content,
     fetch_document_text,
     find_pattern_match,
     is_amendment_disclosure,
+    list_document_sections,
     match_signals,
     resolve_corp,
 )
@@ -343,6 +346,214 @@ def find_risk_precedents(signal_types: list[str], lookback_days: int = 90) -> st
     lines.append(f"{emoji} 신호 합산 점수: **{total}점** ({level})")
 
     return "\n".join(lines)
+
+
+# ── 도구 4: 종목코드로 공시 접수번호 목록 조회 ────────────────────────────
+
+
+@mcp.tool()
+def list_disclosures_by_stock(stock_code: str, lookback_days: int = 90) -> str:
+    """종목코드로 최근 공시의 접수번호(rcept_no) 목록을 조회한다.
+
+    반환된 접수번호는 get_disclosure_document, view_disclosure,
+    check_disclosure_risk 등에 바로 사용할 수 있다.
+
+    Args:
+        stock_code: 종목코드 6자리 (예: "086520")
+        lookback_days: 조회 기간 (기본 90일, 최대 365일)
+    """
+    import re as _re
+
+    if not _DART_API_KEY:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+
+    if not _re.match(r"^\d{6}$", stock_code):
+        return "❌ 종목코드는 6자리 숫자여야 합니다. 예: '086520'"
+
+    lookback_days = min(max(lookback_days, 1), 365)
+
+    result = resolve_corp(stock_code, _DART_API_KEY)
+    if not result:
+        return f"❌ 종목코드 '{stock_code}'에 해당하는 기업을 DART에서 찾을 수 없습니다."
+
+    corp_name, corp_info = result
+    corp_code = corp_info["corp_code"]
+
+    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days)
+    if not disclosures:
+        return (
+            f"📋 **{corp_name}** ({stock_code})\n\n"
+            f"최근 {lookback_days}일간 공시가 없습니다."
+        )
+
+    lines = [
+        f"📋 **{corp_name}** ({stock_code}) 공시 접수번호 목록",
+        f"조회 기간: 최근 {lookback_days}일 | 총 {len(disclosures)}건",
+        "",
+    ]
+    for d in disclosures:
+        rcept_no = d.get("rcept_no", "")
+        report_nm = d.get("report_nm", "")
+        rcept_dt = d.get("rcept_dt", "")[:10]
+        lines.append(f"• {rcept_no}  {rcept_dt}  {report_nm}")
+
+    lines += [
+        "",
+        "💡 접수번호로 원문을 읽으려면: get_disclosure_document(rcept_no=\"...\")",
+    ]
+
+    return "\n".join(lines)
+
+
+# ── 도구 5: 공시 원문 전체 조회 (단일 호출) ───────────────────────────────
+
+
+@mcp.tool()
+def get_disclosure_document(rcept_no: str, max_chars: int = 8000) -> str:
+    """DART 공시 접수번호로 공시 원문 전체를 조회한다.
+
+    한 번의 호출로 원문 내용과 수록 파일 목록을 반환한다.
+    긴 문서는 max_chars로 제한하며, 잘린 경우 안내 메시지가 표시된다.
+    더 긴 문서나 특정 섹션을 읽으려면 list_disclosure_sections / view_disclosure 를 사용한다.
+
+    Args:
+        rcept_no: DART 접수번호 14자리 (예: "20240315000123")
+        max_chars: 최대 반환 글자수 (기본 8000, 최대 20000)
+    """
+    if not _DART_API_KEY:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+    if not rcept_no:
+        return "❌ rcept_no(접수번호)를 입력하세요."
+
+    result = fetch_disclosure_full(rcept_no, _DART_API_KEY, max_chars)
+
+    if not result["text"] and not result["files"]:
+        return f"❌ 접수번호 {rcept_no}의 공시 원문을 불러올 수 없습니다."
+
+    files = result["files"]
+    main_file = result["main_file"]
+    text = result["text"]
+    char_count = result["char_count"]
+    truncated = result["truncated"]
+
+    lines = [
+        f"📄 **공시 원문 조회: {rcept_no}**",
+        f"수록 파일 ({len(files)}개): {', '.join(files)}",
+        f"주 문서: {main_file}",
+        "",
+        "━━ 원문 내용 ━━",
+        text,
+    ]
+
+    if truncated:
+        lines.append(f"\n... (전체 {char_count:,}자 중 {len(text):,}자 표시)")
+        lines.append("💡 더 읽으려면: list_disclosure_sections / view_disclosure 도구를 사용하세요.")
+
+    return "\n".join(lines)
+
+
+# ── 도구 6: 공시 원문 목차 조회 ────────────────────────────────────────────
+
+
+@mcp.tool()
+def list_disclosure_sections(rcept_no: str) -> str:
+    """DART 공시 원문의 목차(섹션 구조)를 조회한다.
+
+    view_disclosure 호출 전에 이 도구로 섹션 ID와 분량을 먼저 확인하면 좋다.
+
+    Args:
+        rcept_no: DART 접수번호 14자리 (예: "20240315000123")
+    """
+    if not _DART_API_KEY:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+    if not rcept_no:
+        return "❌ rcept_no(접수번호)를 입력하세요."
+
+    file_list = list_document_sections(rcept_no, _DART_API_KEY)
+    if not file_list:
+        return f"❌ 접수번호 {rcept_no}의 공시 원문을 불러올 수 없습니다."
+
+    lines = [f"📑 **공시 원문 목차**", f"접수번호: {rcept_no}", ""]
+
+    for f in file_list:
+        lines.append(f"━━ 파일 {f['file_index']}: {f['doc_title']} ━━")
+        lines.append(f"   파일명: {f['filename']} | 전체 {f['char_length']:,}자")
+        for sec in f["sections"]:
+            lines.append(f"   [{sec['id']}] {sec['title']}")
+        lines.append("")
+
+    lines.append("💡 view_disclosure(rcept_no, section_id=\"...\") 로 특정 섹션을 읽을 수 있습니다.")
+    return "\n".join(lines)
+
+
+# ── 도구 5: 공시 원문 내용 조회 ────────────────────────────────────────────
+
+
+@mcp.tool()
+def view_disclosure(
+    rcept_no: str,
+    section_id: str = "",
+    page: int = 1,
+    page_size: int = 4000,
+) -> str:
+    """DART 공시 원문을 조회한다. 섹션 지정 또는 페이지 단위로 전체 원문을 읽을 수 있다.
+
+    사용법:
+    1. list_disclosure_sections(rcept_no) → 목차/섹션 ID 확인
+    2. view_disclosure(rcept_no, section_id="f0s2") → 특정 섹션 읽기
+    3. view_disclosure(rcept_no, page=2) → 다음 페이지로 순차 읽기
+
+    Args:
+        rcept_no: DART 접수번호 14자리 (예: "20240315000123")
+        section_id: 섹션 ID (list_disclosure_sections 결과 참조, 비워두면 전체 문서)
+        page: 페이지 번호 (기본 1)
+        page_size: 페이지당 글자 수 (기본 4000, 범위 1000~8000)
+    """
+    if not _DART_API_KEY:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+    if not rcept_no:
+        return "❌ rcept_no(접수번호)를 입력하세요."
+
+    # section_id에서 file_index 파싱
+    file_index = 0
+    import re as _re
+    fi_m = _re.match(r"f(\d+)", section_id)
+    if fi_m:
+        file_index = int(fi_m.group(1))
+
+    result = fetch_document_content(
+        rcept_no=rcept_no,
+        api_key=_DART_API_KEY,
+        file_index=file_index,
+        section_id=section_id or None,
+        page=page,
+        page_size=page_size,
+    )
+
+    if not result["content"]:
+        return f"❌ 접수번호 {rcept_no}의 원문을 불러올 수 없습니다."
+
+    total = result["total_pages"]
+    cur = result["page"]
+
+    header_lines = [
+        f"📄 **공시 원문** (페이지 {cur}/{total})",
+        f"접수번호: {rcept_no}" + (f" | 섹션: {section_id}" if section_id else ""),
+        f"파일: {result['doc_title']}",
+        "━" * 40,
+        "",
+    ]
+
+    footer_lines = ["", "━" * 40]
+    if result["has_more"]:
+        next_args = f'rcept_no="{rcept_no}", page={cur + 1}'
+        if section_id:
+            next_args += f', section_id="{section_id}"'
+        footer_lines.append(f"▶ 다음 페이지: view_disclosure({next_args})")
+    else:
+        footer_lines.append("✅ 마지막 페이지입니다.")
+
+    return "\n".join(header_lines) + result["content"] + "\n".join(footer_lines)
 
 
 def main() -> None:
