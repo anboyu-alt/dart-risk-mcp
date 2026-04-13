@@ -55,7 +55,24 @@ dart_risk_mcp/
 - 실제 과거 공시 검색은 하지 않음 (taxonomy 정적 데이터 조회)
 - 사용 가능한 신호 키: `CB_BW`, `THIRD_PARTY`, `SHAREHOLDER`, `EXECUTIVE`, `EMBEZZLEMENT`, `AUDIT`, `INQUIRY`, `CONTROL`
 
-### 4. `list_disclosures_by_stock(stock_code, lookback_days=90)` ✨
+### 4. `build_event_timeline(company_name, lookback_days=365)` ✨
+
+기업의 공시 이벤트를 시간순 서사 구조로 구성합니다.
+
+- 진입기(CB_BW, 3PCA, MGMT), 심화기(SHAREHOLDER, EXEC), 탈출기(INQUIRY, AUDIT, EMBEZZLE) 3단계 분류
+- `CROSS_SIGNAL_PATTERNS`(taxonomy.py)과 매칭하여 알려진 위기 패턴 식별
+- CB 인수자(행위자) 정보도 함께 표시
+- 정정공시는 자동 제외
+
+### 5. `find_actor_overlap(company_names)` ✨
+
+여러 기업(2~5개)의 CB/BW 인수자를 비교해 공통 행위자를 탐지합니다.
+
+- 기업별 최근 365일 CB 공시에서 인수자 추출 (최대 3건/기업)
+- 2개 이상 기업에 등장하는 인수자 = 공통 행위자로 표시
+- DART API 제약: 행위자 이름으로 역검색 불가, 기업 목록을 직접 입력해야 함
+
+### 6. `list_disclosures_by_stock(stock_code, lookback_days=90)` ✨
 
 종목코드(6자리)로 최근 공시 목록과 접수번호를 반환합니다.
 
@@ -64,7 +81,7 @@ dart_risk_mcp/
 - 하단에 `get_disclosure_document` 연동 안내 자동 포함
 - 입력 검증: 6자리 숫자 여부, API키, 기업 존재 여부
 
-### 5. `get_disclosure_document(rcept_no, max_chars=8000)` ✨
+### 7. `get_disclosure_document(rcept_no, max_chars=8000)` ✨
 
 접수번호로 공시 원문 전체를 단일 호출로 반환합니다.
 
@@ -73,7 +90,7 @@ dart_risk_mcp/
 - `max_chars` 상한: 내부에서 20,000자로 강제
 - 잘린 경우 잘림 안내 + `view_disclosure` 사용 안내 표시
 
-### 6. `list_disclosure_sections(rcept_no)` ✨
+### 8. `list_disclosure_sections(rcept_no)` ✨
 
 공시 ZIP 내 파일별 섹션(목차) 구조를 반환합니다.
 
@@ -81,7 +98,7 @@ dart_risk_mcp/
 - 각 섹션에 `id` 부여 (예: `f0s2` = 파일0의 3번째 섹션)
 - `view_disclosure`에서 `section_id`로 사용
 
-### 7. `view_disclosure(rcept_no, section_id="", page=1, page_size=4000)` ✨
+### 9. `view_disclosure(rcept_no, section_id="", page=1, page_size=4000)` ✨
 
 공시 원문을 섹션별 또는 페이지 단위로 읽습니다.
 

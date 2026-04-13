@@ -160,10 +160,14 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
                     if loss:
                         timeline_text += f", 예상 지분 손실 {loss}%"
 
-    # 7. CB 인수자 추출 (첫 번째 공시만)
+    # 7. CB 인수자 추출 (최근 3건까지)
     cb_investors: list[dict] = []
-    if cb_rcept_nos:
-        cb_investors = extract_cb_investors(cb_rcept_nos[0], _DART_API_KEY)
+    seen_investors: set[str] = set()
+    for _cb_rcept in cb_rcept_nos[:3]:
+        for inv in extract_cb_investors(_cb_rcept, _DART_API_KEY):
+            if inv["name"] not in seen_investors:
+                seen_investors.add(inv["name"])
+                cb_investors.append(inv)
 
     # ── 리포트 조립 ──
     lines = [
@@ -348,7 +352,252 @@ def find_risk_precedents(signal_types: list[str], lookback_days: int = 90) -> st
     return "\n".join(lines)
 
 
-# ── 도구 4: 종목코드로 공시 접수번호 목록 조회 ────────────────────────────
+# ── 도구 4: 이벤트 타임라인 (서사 구조) ────────────────────────────────────
+
+# 단계 분류: 신호 키 → 진입/심화/탈출
+_PHASE_MAP = {
+    "CB_BW": "진입기", "3PCA": "진입기", "MGMT": "진입기",
+    "SHAREHOLDER": "심화기", "EXEC": "심화기",
+    "INQUIRY": "탈출기", "AUDIT": "탈출기", "EMBEZZLE": "탈출기",
+}
+_PHASE_ORDER = {"진입기": 0, "심화기": 1, "탈출기": 2}
+_PHASE_EMOJI = {"진입기": "🟢", "심화기": "🟡", "탈출기": "🔴"}
+
+
+@mcp.tool()
+def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
+    """기업의 공시 이벤트를 시간순으로 정렬해 조작 흐름의 서사를 구성한다.
+
+    각 이벤트를 진입기(자금 조달/경영권 진입), 심화기(지배구조 변화),
+    탈출기(의심/수사/부실) 단계로 분류하고, 알려진 위기 패턴과 매칭한다.
+
+    Args:
+        company_name: 기업명 (예: "에코프로") 또는 종목코드 6자리 (예: "086520")
+        lookback_days: 조회 기간 (기본 365일, 최대 365일)
+    """
+    if not _DART_API_KEY:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+
+    lookback_days = min(max(lookback_days, 1), 365)
+
+    result = resolve_corp(company_name, _DART_API_KEY)
+    if not result:
+        return f"❌ '{company_name}'에 해당하는 기업을 DART에서 찾을 수 없습니다."
+    corp_name, corp_info = result
+    corp_code = corp_info["corp_code"]
+    stock_code = corp_info.get("stock_code", "")
+
+    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days)
+    if not disclosures:
+        return (
+            f"📋 **{corp_name}** ({stock_code or corp_code})\n\n"
+            f"최근 {lookback_days}일간 공시가 없습니다."
+        )
+
+    # 이벤트 수집: (날짜, 단계, 신호키, 신호라벨, 공시명)
+    events: list[tuple[str, str, str, str, str]] = []
+    all_tax_ids: set[str] = set()
+
+    from .core.signals import SIGNAL_KEY_TO_TAXONOMY
+
+    for d in disclosures:
+        report_nm = d.get("report_nm", "")
+        rcept_dt = d.get("rcept_dt", "")[:10]
+        if is_amendment_disclosure(report_nm):
+            continue
+        matched = match_signals(report_nm)
+        for sig in matched:
+            phase = _PHASE_MAP.get(sig["key"], "심화기")
+            events.append((rcept_dt, phase, sig["key"], sig["label"], report_nm))
+            tax_ids = SIGNAL_KEY_TO_TAXONOMY.get(sig["key"], [])
+            all_tax_ids.update(tax_ids)
+
+    if not events:
+        return (
+            f"📋 **{corp_name}** ({stock_code or corp_code})\n\n"
+            f"최근 {lookback_days}일간 위험 신호 이벤트가 없습니다.\n"
+            f"(전체 공시 {len(disclosures)}건 검토)"
+        )
+
+    # 날짜순 정렬
+    events.sort(key=lambda e: e[0])
+
+    # 단계별 그룹핑
+    phases: dict[str, list] = {"진입기": [], "심화기": [], "탈출기": []}
+    for evt in events:
+        phases[evt[1]].append(evt)
+
+    # 패턴 매칭
+    pattern = find_pattern_match(list(all_tax_ids))
+
+    # 타임라인 출력
+    first_date = events[0][0]
+    last_date = events[-1][0]
+    lines = [
+        f"⏳ **이벤트 타임라인: {corp_name}** ({stock_code or corp_code})",
+        f"기간: {first_date} ~ {last_date} | 이벤트 {len(events)}건",
+        "",
+    ]
+
+    for phase_name in ("진입기", "심화기", "탈출기"):
+        phase_events = phases[phase_name]
+        if not phase_events:
+            continue
+        emoji = _PHASE_EMOJI[phase_name]
+        lines.append(f"{emoji} **[{phase_name}]**")
+        for evt in phase_events:
+            lines.append(f"  • {evt[0]}  [{evt[3]}]  {evt[4]}")
+        lines.append("")
+
+    if pattern:
+        lines += [
+            "━━ 패턴 매칭 ━━",
+            f"⚠️ **\"{pattern['name']}\"** 패턴과 유사",
+            f"  → {pattern.get('description', '')}",
+            f"  → 위기 사이클: 약 {pattern.get('timeline_months', '?')}개월",
+            "",
+        ]
+
+    # CB 인수자 (있으면)
+    cb_rcept_nos = [
+        evt[0]  # 실제로는 rcept_no가 필요
+        for d in disclosures
+        for sig in match_signals(d.get("report_nm", ""))
+        if sig["key"] == "CB_BW" and not is_amendment_disclosure(d.get("report_nm", ""))
+    ]
+    # 위에서 rcept_no를 다시 수집
+    cb_rcept_list = [
+        d.get("rcept_no", "")
+        for d in disclosures
+        if any(s["key"] == "CB_BW" for s in match_signals(d.get("report_nm", "")))
+        and not is_amendment_disclosure(d.get("report_nm", ""))
+        and d.get("rcept_no")
+    ]
+    if cb_rcept_list:
+        seen: set[str] = set()
+        investors: list[dict] = []
+        for rn in cb_rcept_list[:3]:
+            for inv in extract_cb_investors(rn, _DART_API_KEY):
+                if inv["name"] not in seen:
+                    seen.add(inv["name"])
+                    investors.append(inv)
+        if investors:
+            lines.append("━━ CB/BW 인수자 (행위자) ━━")
+            for inv in investors:
+                amt = _format_amount(inv.get("amount", ""))
+                lines.append(f"  • {inv['name']}" + (f" — {amt}" if amt else ""))
+            lines.append("")
+
+    lines.append("⚠️ 이 타임라인은 공시 제목 기반 자동 분류이며, 실제 상황과 다를 수 있습니다.")
+    return "\n".join(lines)
+
+
+# ── 도구 5: 세력 추적 (공통 CB 인수자) ────────────────────────────────────
+
+
+@mcp.tool()
+def find_actor_overlap(company_names: list[str]) -> str:
+    """여러 기업의 CB/BW 인수자를 비교해 공통 행위자(세력)를 탐지한다.
+
+    DART API 제약상, 분석 대상 기업을 직접 지정해야 한다.
+    "행위자 이름으로 역검색"은 현재 불가능하다.
+
+    Args:
+        company_names: 비교할 기업명 목록 (2~5개, 예: ["에코프로", "바이오제닉스"])
+    """
+    if not _DART_API_KEY:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+
+    if len(company_names) < 2:
+        return "❌ 최소 2개 기업을 입력하세요."
+    if len(company_names) > 5:
+        return "❌ 최대 5개 기업까지 비교할 수 있습니다."
+
+    # 기업별 CB 인수자 수집
+    corp_investors: dict[str, list[dict]] = {}  # corp_name → [{"name":..., "amount":...}]
+    failed: list[str] = []
+
+    for name in company_names:
+        result = resolve_corp(name, _DART_API_KEY)
+        if not result:
+            failed.append(name)
+            continue
+        corp_name, corp_info = result
+        corp_code = corp_info["corp_code"]
+
+        disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, 365)
+        cb_rcepts = [
+            d.get("rcept_no", "")
+            for d in disclosures
+            if any(s["key"] == "CB_BW" for s in match_signals(d.get("report_nm", "")))
+            and not is_amendment_disclosure(d.get("report_nm", ""))
+            and d.get("rcept_no")
+        ]
+
+        investors: list[dict] = []
+        seen: set[str] = set()
+        for rn in cb_rcepts[:3]:
+            for inv in extract_cb_investors(rn, _DART_API_KEY):
+                if inv["name"] not in seen:
+                    seen.add(inv["name"])
+                    investors.append({**inv, "corp_name": corp_name})
+
+        corp_investors[corp_name] = investors
+
+    if failed:
+        lines_fail = [f"⚠️ 찾을 수 없는 기업: {', '.join(failed)}"]
+    else:
+        lines_fail = []
+
+    # 인수자별로 등장 기업 집계
+    actor_corps: dict[str, list[dict]] = {}  # investor_name → [{corp_name, amount}]
+    for corp_name, investors in corp_investors.items():
+        for inv in investors:
+            actor_corps.setdefault(inv["name"], []).append(
+                {"corp_name": corp_name, "amount": inv.get("amount", "")}
+            )
+
+    # 공통 행위자 (2개 이상 기업)
+    overlaps = {k: v for k, v in actor_corps.items() if len(v) >= 2}
+    singles = {k: v for k, v in actor_corps.items() if len(v) == 1}
+
+    lines = [
+        f"🔍 **공통 CB/BW 인수자 분석** ({len(corp_investors)}개 기업 비교)",
+        f"분석 대상: {', '.join(corp_investors.keys())}",
+        "",
+    ]
+    lines.extend(lines_fail)
+
+    if overlaps:
+        lines.append("━━ 공통 행위자 (세력 추적) ━━")
+        for actor, entries in sorted(overlaps.items(), key=lambda x: -len(x[1])):
+            detail = ", ".join(
+                f"{e['corp_name']} {_format_amount(e['amount'])}" if e['amount']
+                else e['corp_name']
+                for e in entries
+            )
+            lines.append(f"  ⚠️ **{actor}**: {detail} → {len(entries)}개 기업 관여")
+        lines.append("")
+    else:
+        lines += ["✅ 공통 행위자가 발견되지 않았습니다.", ""]
+
+    if singles:
+        lines.append("━━ 기업별 단독 인수자 ━━")
+        for actor, entries in singles.items():
+            e = entries[0]
+            amt = _format_amount(e['amount']) if e.get('amount') else ""
+            lines.append(f"  • {e['corp_name']}: {actor}" + (f" — {amt}" if amt else ""))
+        lines.append("")
+
+    no_cb = [cn for cn, inv in corp_investors.items() if not inv]
+    if no_cb:
+        lines.append(f"ℹ️ CB/BW 공시 없음: {', '.join(no_cb)}")
+
+    lines.append("⚠️ DART 공개 API 범위 내 분석이며, 비공개 거래는 포함되지 않습니다.")
+    return "\n".join(lines)
+
+
+# ── 도구 6: 종목코드로 공시 접수번호 목록 조회 ────────────────────────────
 
 
 @mcp.tool()
