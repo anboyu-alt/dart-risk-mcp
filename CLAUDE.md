@@ -6,7 +6,7 @@ AI 어시스턴트와 개발자를 위한 프로젝트 내부 가이드입니다
 
 ## 프로젝트 개요
 
-한국 금융감독원 DART 전자공시 시스템에서 공시 데이터를 가져와 투자 위험 신호를 탐지하는 MCP 서버입니다.
+한국 금융감독원 DART 전자공시 시스템에서 공시 데이터를 가져와 불공정거래 위험 신호를 탐지하는 MCP 서버입니다.
 
 - **언어:** Python 3.11+
 - **의존성:** `mcp>=1.0.0`, `requests>=2.28.0` (외부 라이브러리 최소화 원칙)
@@ -21,18 +21,18 @@ AI 어시스턴트와 개발자를 위한 프로젝트 내부 가이드입니다
 dart_risk_mcp/
 ├── __init__.py          # 패키지 버전 (0.1.0)
 ├── __main__.py          # 진입점 → server.main() 호출
-├── server.py            # MCP 서버 + 6개 도구 정의
+├── server.py            # MCP 서버 + 13개 도구 정의
 └── core/
     ├── __init__.py      # 공개 API export
     ├── dart_client.py   # DART API 클라이언트 (핵심)
-    ├── signals.py       # 8개 신호 유형 + 키워드 매칭
+    ├── signals.py       # 28개 신호 유형 (8개 카테고리) + 키워드 매칭
     ├── cb_extractor.py  # CB/BW 인수자명 추출
     └── taxonomy.py      # 27개 신호 분류 + 위험 점수 + 패턴
 ```
 
 ---
 
-## MCP 도구 6개
+## MCP 도구 13개
 
 ### 1. `analyze_company_risk(company_name, lookback_days=90)`
 
@@ -53,7 +53,19 @@ dart_risk_mcp/
 신호 유형 목록을 받아 각 신호의 의미, 위기 타임라인, 복합 패턴을 반환합니다.
 
 - 실제 과거 공시 검색은 하지 않음 (taxonomy 정적 데이터 조회)
-- 사용 가능한 신호 키: `CB_BW`, `THIRD_PARTY`, `SHAREHOLDER`, `EXECUTIVE`, `EMBEZZLEMENT`, `AUDIT`, `INQUIRY`, `CONTROL`
+- `SIGNAL_KEY_TO_TAXONOMY`로 신호 키 → taxonomy ID(1.1~8.4) 매핑 후 조회
+- 사용 가능한 신호 키 (28개, 8개 카테고리):
+
+  | 카테고리 | 키 목록 |
+  |---------|---------|
+  | Cat 1 CB/채권 | `CB_BW`, `CB_REPAY`, `EB`, `RCPS`, `CB_ROLLOVER`, `CB_BUYBACK`, `TREASURY_EB` |
+  | Cat 2 자본구조 | `REVERSE_SPLIT`, `GAMJA_MERGE`, `3PCA`, `RIGHTS_UNDER`, `TREASURY` |
+  | Cat 3 경영권 | `SHAREHOLDER`, `EXEC`, `MGMT_DISPUTE`, `CIRCULAR` |
+  | Cat 4 거버넌스 | `RELATED_PARTY`, `AUDIT` |
+  | Cat 5 기업활동 | `ASSET_TRANSFER`, `DEMERGER`, `MGMT` |
+  | Cat 6 회계/재무 | `REVENUE_IRREG`, `CONTINGENT` |
+  | Cat 7 시장조작 | `INQUIRY`, `EMBEZZLE` |
+  | Cat 8 위기/부실 | `INSOLVENCY`, `DEBT_RESTR`, `GOING_CONCERN` |
 
 ### 4. `build_event_timeline(company_name, lookback_days=365)` ✨
 
@@ -107,6 +119,39 @@ dart_risk_mcp/
 - 단락 경계에서 분할 (문장 중간 끊김 방지)
 - 마지막 페이지가 아니면 다음 페이지 호출 방법 안내
 
+### 10. `get_company_info(company_name)` ✨
+
+기업 개요 정보(대표자·업종·설립일·상장 구분 등)를 조회합니다.
+
+- 내부 흐름: `resolve_corp` → `fetch_company_info`
+- 반환: 기업명, 종목코드, 대표자, 법인구분, 업종, 설립일, 결산월, 주소, 홈페이지, IR URL, 전화
+
+### 11. `get_financial_summary(company_name, year="", report_type="annual")` ✨
+
+기업의 주요 재무제표(매출·영업이익·순이익·자산·부채)를 조회합니다.
+
+- 내부 흐름: `resolve_corp` → `fetch_financial_statements`
+- `report_type` 허용값: `"annual"`(사업보고서), `"half"`(반기), `"q1"`(1분기), `"q3"`(3분기)
+- 반환: 연결/별도 구분, 사업연도, 주요 계정과목별 당기/전기 금액
+- `year` 미입력 시 직전 연도
+
+### 12. `compare_financials(company_names, year="")` ✨
+
+여러 기업(2~5개)의 재무제표를 나란히 비교합니다.
+
+- 내부 흐름: `resolve_corp` × N → `fetch_multi_financial` (`/fnlttMultiAcnt.json`)
+- 반환: 기업별 매출·영업이익·당기순이익·자산·부채 비교 텍스트
+- 기업을 찾지 못해도 2개 이상 성공하면 부분 결과 반환
+
+### 13. `get_shareholder_info(company_name, year="")` ✨
+
+최대주주 및 특수관계인, 5% 이상 대량보유자 현황을 조회합니다.
+
+- 내부 흐름: `resolve_corp` → `fetch_shareholder_status`
+- 반환: 최대주주/특수관계인 보유 주식 수·비율, 5% 대량보유보고 목록
+- `year` 미입력 시 직전 연도
+- DART 공시 기준이므로 최신 변동 사항이 반영되지 않을 수 있음
+
 ---
 
 ## 핵심 내부 함수
@@ -125,6 +170,10 @@ dart_risk_mcp/
 | `_html_to_structured_text(html)` | HTML → 마크다운 (헤더·테이블·리스트 보존) |
 | `list_document_sections(rcept_no, api_key)` | ZIP 파일별 섹션 목록 반환 |
 | `fetch_document_content(rcept_no, api_key, ...)` | 페이지네이션 원문 조회 |
+| `fetch_company_info(corp_code, api_key)` | `/company.json` — 기업 개요 (대표자·업종·설립일 등) |
+| `fetch_financial_statements(corp_code, api_key, year, report_type)` | `/fnlttSinglAcnt.json` — 단일 기업 재무제표 |
+| `fetch_multi_financial(corp_codes, api_key, year, report_type)` | `/fnlttMultiAcnt.json` — 다중 기업 재무 비교 |
+| `fetch_shareholder_status(corp_code, api_key, year, report_type)` | 최대주주 현황 + 5% 대량보유 통합 조회 |
 
 ### DART API 엔드포인트
 
@@ -133,6 +182,11 @@ dart_risk_mcp/
 | `GET /api/corpCode.xml` | 전체 기업 코드 ZIP (24시간 캐시) |
 | `GET /api/list.json` | 기업별 공시 목록 (corp_code, 날짜 범위) |
 | `GET /api/document.xml` | 공시 원문 ZIP (rcept_no) |
+| `GET /api/company.json` | 기업 개요 정보 (corp_code) |
+| `GET /api/fnlttSinglAcnt.json` | 단일 기업 재무제표 (corp_code, 연도, 보고서 유형) |
+| `GET /api/fnlttMultiAcnt.json` | 다중 기업 재무 비교 (corp_codes 목록) |
+| `GET /api/majorstock.json` | 최대주주 현황 (corp_code, 연도) |
+| `GET /api/elestock.json` | 5% 이상 대량보유 현황 (corp_code, 연도) |
 
 모든 요청에 `crtfc_key` 파라미터로 API 키 전달.
 
@@ -161,19 +215,23 @@ dart_risk_mcp/
 ### 새 신호 유형 추가
 
 1. `signals.py` → `SIGNAL_TYPES` 리스트에 항목 추가 (key, label, score, keywords)
-2. `signals.py` → `SIGNAL_KEY_TO_TAXONOMY` 딕셔너리에 taxonomy ID 매핑
-3. `taxonomy.py` → 해당 taxonomy ID의 위기 타임라인 데이터 추가
+2. `signals.py` → `SIGNAL_KEY_TO_TAXONOMY` 딕셔너리에 taxonomy ID 매핑 (예: `"MY_KEY": "5.4"`)
+3. `taxonomy.py` → `TAXONOMY` 딕셔너리에 해당 ID 항목 추가 (severity, keywords, indicators 등)
+4. (선택) `taxonomy.py` → `CROSS_SIGNAL_PATTERNS`에 관련 조합 패턴 추가
 
 ### 새 복합 패턴 추가
 
-`taxonomy.py` → `COMPOUND_PATTERNS` 리스트에 추가:
+`taxonomy.py` → `CROSS_SIGNAL_PATTERNS` 리스트에 추가:
 ```python
 {
     "name": "패턴명",
-    "required": ["taxonomy_id_1", "taxonomy_id_2"],  # 모두 있어야 매칭
+    "signals": ["taxonomy_id_1", "taxonomy_id_2"],  # 이 신호들이 모두 탐지되면 매칭
     "description": "패턴 설명",
+    "severity": "CRITICAL",  # CRITICAL / HIGH / MEDIUM / LOW
 }
 ```
+
+기존 패턴 4개: `founder_fade`(창업주 퇴장), `debt_spiral`(부채 악순환), `reverse_split_spiral`(무상감자 나선), `related_party_hollowing`(특수관계자 자산 공동화)
 
 ### 도구 추가
 
