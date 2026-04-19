@@ -1,7 +1,7 @@
 """주가조작 의심 신호 분류
 
-27가지 신호 유형 정의 + 공시 제목 매칭 + 정정공시 판별.
-taxonomy.py의 27개 신호 분류 체계에 기반.
+37가지 신호 유형 정의 + 공시 제목 매칭 + 정정공시 판별.
+taxonomy.py의 신호 분류 체계에 기반.
 """
 
 import re
@@ -149,7 +149,7 @@ SIGNAL_TYPES = [
     # ── Category 2: 자본구조 조작 ─────────────────────────────
     {
         "key":   "REVERSE_SPLIT",
-        "label": "감자/주식병합",
+        "label": "무상감자/주식병합",
         "score": 3,
         "keywords": [
             "무상감자",
@@ -157,6 +157,16 @@ SIGNAL_TYPES = [
             "주식병합",
             "자본감소",
             "감자공시",
+        ],
+    },
+    {
+        "key":   "CAPITAL_RED",
+        "label": "유상감자/손실보전감자",
+        "score": 3,
+        "keywords": [
+            "유상감자",
+            "손실보전감자",
+            "이익배당으로서감자",
         ],
     },
     {
@@ -246,7 +256,37 @@ SIGNAL_TYPES = [
             "지분연쇄",
         ],
     },
+    {
+        "key":   "ACTIVIST",
+        "label": "주주행동주의",
+        "score": 2,
+        "keywords": [
+            "활동주의펀드",
+            "주주행동주의",
+            "주주제안",
+        ],
+    },
     # ── Category 4: 거버넌스/공시 ─────────────────────────────
+    {
+        "key":   "MEETING_VIOL",
+        "label": "주총절차위반",
+        "score": 3,
+        "keywords": [
+            "주총위반",
+            "소집절차위반",
+            "의결정족수미달",
+        ],
+    },
+    {
+        "key":   "DISCLOSURE_VIOL",
+        "label": "공시의무위반",
+        "score": 3,
+        "keywords": [
+            "공시의무위반",
+            "공시누락",
+            "중요정보누락",
+        ],
+    },
     {
         "key":   "RELATED_PARTY",
         "label": "특수관계자거래",
@@ -272,6 +312,35 @@ SIGNAL_TYPES = [
         ],
     },
     # ── Category 5: 기업 활동 조작 ────────────────────────────
+    {
+        "key":   "EQUITY_SPLIT",
+        "label": "주식분할/액면분할",
+        "score": 2,
+        "keywords": [
+            "주식분할결정",
+            "액면분할결정",
+            "주식배당결정",
+        ],
+    },
+    {
+        "key":   "BUYBACK_NEG",
+        "label": "재무위기중자사주매입",
+        "score": 2,
+        "keywords": [
+            "부도직전매입",
+            "자금난속매입",
+        ],
+    },
+    {
+        "key":   "DISTRESS_MA",
+        "label": "위기중인수합병",
+        "score": 2,
+        "keywords": [
+            "위기속인수",
+            "부실기업인수",
+            "자금난속합병",
+        ],
+    },
     {
         "key":   "ASSET_TRANSFER",
         "label": "자산매각/유출",
@@ -331,6 +400,16 @@ SIGNAL_TYPES = [
     },
     # ── Category 7: 시장 조작 ─────────────────────────────────
     {
+        "key":   "THEME_STOCK",
+        "label": "테마주/작전주",
+        "score": 2,
+        "keywords": [
+            "테마주",
+            "작전주",
+            "테마편승",
+        ],
+    },
+    {
         "key":   "INQUIRY",
         "label": "조회공시",
         "score": 3,
@@ -379,6 +458,15 @@ SIGNAL_TYPES = [
         ],
     },
     {
+        "key":   "ASSET_SPIRAL",
+        "label": "자산연쇄처분",
+        "score": 3,
+        "keywords": [
+            "연쇄매각",
+            "긴급자산처분",
+        ],
+    },
+    {
         "key":   "GOING_CONCERN",
         "label": "계속기업불확실",
         "score": 5,
@@ -393,7 +481,12 @@ SIGNAL_TYPES = [
 
 
 def match_signals(report_nm: str) -> list[dict]:
-    """공시 제목에서 의심 신호 유형 매칭. 복수 유형 매칭 가능."""
+    """공시 제목에서 의심 신호 유형 매칭. 복수 유형 매칭 가능.
+
+    정정공시([기재정정] 등)는 새 공시가 아니므로 빈 리스트를 반환한다.
+    """
+    if is_amendment_disclosure(report_nm):
+        return []
     matched = []
     for sig in SIGNAL_TYPES:
         for kw in sig["keywords"]:

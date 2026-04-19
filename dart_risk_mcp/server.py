@@ -475,19 +475,11 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
             "",
         ]
 
-    # CB 인수자 (있으면)
-    cb_rcept_nos = [
-        evt[0]  # 실제로는 rcept_no가 필요
-        for d in disclosures
-        for sig in match_signals(d.get("report_nm", ""))
-        if sig["key"] == "CB_BW" and not is_amendment_disclosure(d.get("report_nm", ""))
-    ]
-    # 위에서 rcept_no를 다시 수집
+    # CB 인수자 (있으면) — match_signals는 이미 정정공시 제외 처리
     cb_rcept_list = [
         d.get("rcept_no", "")
         for d in disclosures
         if any(s["key"] == "CB_BW" for s in match_signals(d.get("report_nm", "")))
-        and not is_amendment_disclosure(d.get("report_nm", ""))
         and d.get("rcept_no")
     ]
     if cb_rcept_list:
@@ -529,6 +521,7 @@ def find_actor_overlap(company_names: list[str]) -> str:
         return "❌ 최소 2개 기업을 입력하세요."
     if len(company_names) > 5:
         return "❌ 최대 5개 기업까지 비교할 수 있습니다."
+    company_names = list(dict.fromkeys(company_names))  # 중복 제거 (순서 보존)
 
     # 기업별 CB 인수자 수집
     corp_investors: dict[str, list[dict]] = {}  # corp_name → [{"name":..., "amount":...}]
@@ -779,6 +772,7 @@ def view_disclosure(
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
     if not rcept_no:
         return "❌ rcept_no(접수번호)를 입력하세요."
+    page_size = max(1000, min(8000, page_size))
 
     # section_id에서 file_index 파싱
     file_index = 0

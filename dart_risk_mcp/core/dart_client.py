@@ -24,7 +24,7 @@ _CACHE_DIR = Path.home() / ".cache" / "dart-risk-mcp"
 
 
 def _retry(method: str, url: str, **kwargs) -> requests.Response:
-    """429/5xx 지수 백오프 재시도 (최대 3회)."""
+    """429/5xx 지수 백오프 재시도 (최대 3회). 3회 후에도 4xx/5xx면 raise_for_status."""
     kwargs.setdefault("timeout", 15)
     last: requests.Response | None = None
     for i in range(3):
@@ -38,7 +38,28 @@ def _retry(method: str, url: str, **kwargs) -> requests.Response:
             if i == 2:
                 raise
             time.sleep(min(2 ** i, 10))
+    if last is not None and last.status_code >= 400:
+        last.raise_for_status()
     return last  # type: ignore
+
+
+# ── DART API 상태코드 ─────────────────────────────────────────────
+_DART_WARN_STATUS = {"020", "800", "900"}
+_DART_STATUS_MSG = {
+    "013": "데이터 없음",
+    "020": "요청 한도 초과 — API 쿼터를 확인하세요",
+    "800": "시스템 점검 중",
+    "900": "API 키 오류 또는 권한 없음",
+}
+
+
+def _log_dart_status(status: str, context: str = "") -> None:
+    """DART status 코드에 따라 적절한 레벨로 로그 기록."""
+    msg = _DART_STATUS_MSG.get(status, f"알 수 없는 오류 (status={status})")
+    if status in _DART_WARN_STATUS:
+        log.warning("DART API [%s]: %s", context, msg)
+    else:
+        log.debug("DART API [%s]: %s", context, msg)
 
 
 # ── Corp code 캐시 ──────────────────────────────────────────────
@@ -65,11 +86,11 @@ def _load_corp_codes(api_key: str) -> None:
         if resp.status_code != 200:
             return
 
-        zf = zipfile.ZipFile(io.BytesIO(resp.content))
+        zf = zipfile.ZipFile(io.BytesIO(resp.content), metadata_encoding="cp949")
         xml_bytes = zf.read(zf.namelist()[0])
         zf.close()
 
-        root = ET.fromstring(xml_bytes.decode("utf-8"))
+        root = ET.fromstring(xml_bytes.decode("utf-8", errors="replace"))
         for item in root.findall(".//list"):
             name  = (item.findtext("corp_name")  or "").strip()
             code  = (item.findtext("corp_code")   or "").strip()
@@ -128,7 +149,7 @@ def fetch_company_disclosures(
     results: list[dict] = []
     page_no = 1
 
-    while page_no <= 5:
+    while page_no <= 10:
         params = {
             "crtfc_key": api_key,
             "corp_code": corp_code,
@@ -142,11 +163,17 @@ def fetch_company_disclosures(
         except Exception:
             break
 
-        if data.get("status") != "000":
+        status = data.get("status")
+        if status != "000":
+            _log_dart_status(status, f"공시목록 corp_code={corp_code}")
             break
 
         results.extend(data.get("list", []))
-        if page_no * 100 >= int(data.get("total_count", 0)):
+        total = int(data.get("total_count", 0))
+        if page_no * 100 >= total:
+            break
+        if page_no >= 10 and len(results) < total:
+            log.warning("공시목록 1000건 초과 기업 (corp_code=%s, total=%d) — 일부 누락", corp_code, total)
             break
         page_no += 1
         time.sleep(0.25)
@@ -198,7 +225,7 @@ def _fetch_document_zip(rcept_no: str, api_key: str) -> zipfile.ZipFile | None:
 
         raw = resp.content
         try:
-            zf = zipfile.ZipFile(io.BytesIO(raw))
+            zf = zipfile.ZipFile(io.BytesIO(raw), metadata_encoding="cp949")
         except zipfile.BadZipFile:
             return None
 
@@ -640,6 +667,7 @@ def fetch_company_info(corp_code: str, api_key: str) -> dict:
         data = resp.json()
         if data.get("status") == "000":
             return data
+        _log_dart_status(data.get("status", "?"), f"기업개요 corp_code={corp_code}")
     except Exception as e:
         log.debug("기업 개요 조회 실패 (%s): %s", corp_code, e)
     return {}
@@ -648,7 +676,8 @@ def fetch_company_info(corp_code: str, api_key: str) -> dict:
 # ── 재무제표 조회 ──────────────────────────────────────────────
 
 # 보고서 코드: 11011=사업보고서, 11012=반기, 11013=1분기, 11014=3분기
-_REPORT_CODES = {"annual": "11011", "semi": "11012", "q1": "11013", "q3": "11014"}
+_REPORT_CODES = {"annual": "11011", "half": "11012", "q1": "11013", "q3": "11014"}
+_VALID_REPORT_TYPES = frozenset(_REPORT_CODES)
 
 
 def fetch_financial_statements(
@@ -663,15 +692,18 @@ def fetch_financial_statements(
         corp_code: DART 기업 코드
         api_key: DART API 키
         year: 사업연도 (빈 문자열이면 전년도)
-        report_type: "annual", "semi", "q1", "q3"
+        report_type: "annual", "half", "q1", "q3"
 
     Returns: [{account_nm, thstrm_amount, frmtrm_amount, bfefrmtrm_amount, ...}]
     """
     if not api_key:
         return []
+    if report_type not in _VALID_REPORT_TYPES:
+        log.warning("지원하지 않는 report_type: %r (허용값: %s)", report_type, sorted(_VALID_REPORT_TYPES))
+        return []
     if not year:
         year = str(datetime.now().year - 1)
-    reprt_code = _REPORT_CODES.get(report_type, "11011")
+    reprt_code = _REPORT_CODES[report_type]
 
     try:
         resp = _retry(
@@ -687,6 +719,7 @@ def fetch_financial_statements(
         data = resp.json()
         if data.get("status") == "000":
             return data.get("list", [])
+        _log_dart_status(data.get("status", "?"), f"재무제표(CFS) corp_code={corp_code}")
         # 연결재무제표 없으면 개별재무제표
         resp = _retry(
             "GET", f"{DART_BASE}/fnlttSinglAcnt.json",
@@ -701,6 +734,7 @@ def fetch_financial_statements(
         data = resp.json()
         if data.get("status") == "000":
             return data.get("list", [])
+        _log_dart_status(data.get("status", "?"), f"재무제표(OFS) corp_code={corp_code}")
     except Exception as e:
         log.debug("재무제표 조회 실패 (%s): %s", corp_code, e)
     return []
@@ -720,7 +754,7 @@ def fetch_multi_financial(
         return []
     if not year:
         year = str(datetime.now().year - 1)
-    reprt_code = _REPORT_CODES.get(report_type, "11011")
+    reprt_code = _REPORT_CODES.get(report_type, _REPORT_CODES["annual"])
 
     try:
         resp = _retry(
@@ -735,6 +769,7 @@ def fetch_multi_financial(
         data = resp.json()
         if data.get("status") == "000":
             return data.get("list", [])
+        _log_dart_status(data.get("status", "?"), "다중재무제표")
     except Exception as e:
         log.debug("다중 재무제표 조회 실패: %s", e)
     return []
@@ -778,6 +813,8 @@ def fetch_shareholder_status(
         data = resp.json()
         if data.get("status") == "000":
             result["major_holders"] = data.get("list", [])
+        else:
+            _log_dart_status(data.get("status", "?"), f"최대주주 corp_code={corp_code}")
     except Exception as e:
         log.debug("최대주주 조회 실패 (%s): %s", corp_code, e)
 
@@ -790,6 +827,8 @@ def fetch_shareholder_status(
         data = resp.json()
         if data.get("status") == "000":
             result["bulk_holders"] = data.get("list", [])
+        else:
+            _log_dart_status(data.get("status", "?"), f"대량보유 corp_code={corp_code}")
     except Exception as e:
         log.debug("대량보유 조회 실패 (%s): %s", corp_code, e)
 

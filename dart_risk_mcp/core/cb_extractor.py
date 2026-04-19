@@ -14,10 +14,10 @@ import requests
 DART_BASE = "https://opendart.fss.or.kr/api"
 
 _INVESTOR_RES = [
-    re.compile(r"인수인\s*[：:]\s*([^\n\r\t。,]{2,50})"),
-    re.compile(r"매수인\s*[：:]\s*([^\n\r\t。,]{2,50})"),
-    re.compile(r"인수자\s*[：:]\s*([^\n\r\t。,]{2,50})"),
-    re.compile(r"취득자\s*[：:]\s*([^\n\r\t。,]{2,50})"),
+    re.compile(r"인수인\s*[：:]\s*([^\n\r\t。,，;./()（）\[\]]{2,50})"),
+    re.compile(r"매수인\s*[：:]\s*([^\n\r\t。,，;./()（）\[\]]{2,50})"),
+    re.compile(r"인수자\s*[：:]\s*([^\n\r\t。,，;./()（）\[\]]{2,50})"),
+    re.compile(r"취득자\s*[：:]\s*([^\n\r\t。,，;./()（）\[\]]{2,50})"),
 ]
 _AMOUNT_RE = re.compile(
     r"(?:인수금액|발행금액)\s*[：:]\s*([\d,]+)\s*(?:원|백만원|억원)?"
@@ -38,7 +38,7 @@ def _fetch_text(rcept_no: str, api_key: str) -> str:
         )
         if resp.status_code != 200:
             return ""
-        zf = zipfile.ZipFile(io.BytesIO(resp.content))
+        zf = zipfile.ZipFile(io.BytesIO(resp.content), metadata_encoding="cp949")
         names = zf.namelist()
         targets = [n for n in names if n.endswith(".xml")] + \
                   [n for n in names if n.endswith(".html") or n.endswith(".htm")]
