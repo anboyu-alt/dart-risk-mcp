@@ -619,3 +619,178 @@ def fetch_document_content(
         "filename": filename,
         "doc_title": doc_title,
     }
+
+
+# ── 기업 개요 조회 ─────────────────────────────────────────────
+
+def fetch_company_info(corp_code: str, api_key: str) -> dict:
+    """DART /company.json — 기업 기본 프로필 조회.
+
+    Returns:
+        {"corp_name", "ceo_nm", "corp_cls", "adres", "induty_code",
+         "est_dt", "acc_mt", "stock_code", ...} or empty dict
+    """
+    if not api_key:
+        return {}
+    try:
+        resp = _retry(
+            "GET", f"{DART_BASE}/company.json",
+            params={"crtfc_key": api_key, "corp_code": corp_code},
+        )
+        data = resp.json()
+        if data.get("status") == "000":
+            return data
+    except Exception as e:
+        log.debug("기업 개요 조회 실패 (%s): %s", corp_code, e)
+    return {}
+
+
+# ── 재무제표 조회 ──────────────────────────────────────────────
+
+# 보고서 코드: 11011=사업보고서, 11012=반기, 11013=1분기, 11014=3분기
+_REPORT_CODES = {"annual": "11011", "semi": "11012", "q1": "11013", "q3": "11014"}
+
+
+def fetch_financial_statements(
+    corp_code: str,
+    api_key: str,
+    year: str = "",
+    report_type: str = "annual",
+) -> list[dict]:
+    """DART /fnlttSinglAcnt.json — 단일 기업 주요 재무제표.
+
+    Args:
+        corp_code: DART 기업 코드
+        api_key: DART API 키
+        year: 사업연도 (빈 문자열이면 전년도)
+        report_type: "annual", "semi", "q1", "q3"
+
+    Returns: [{account_nm, thstrm_amount, frmtrm_amount, bfefrmtrm_amount, ...}]
+    """
+    if not api_key:
+        return []
+    if not year:
+        year = str(datetime.now().year - 1)
+    reprt_code = _REPORT_CODES.get(report_type, "11011")
+
+    try:
+        resp = _retry(
+            "GET", f"{DART_BASE}/fnlttSinglAcnt.json",
+            params={
+                "crtfc_key": api_key,
+                "corp_code": corp_code,
+                "bsns_year": year,
+                "reprt_code": reprt_code,
+                "fs_div": "CFS",  # 연결재무제표 우선
+            },
+        )
+        data = resp.json()
+        if data.get("status") == "000":
+            return data.get("list", [])
+        # 연결재무제표 없으면 개별재무제표
+        resp = _retry(
+            "GET", f"{DART_BASE}/fnlttSinglAcnt.json",
+            params={
+                "crtfc_key": api_key,
+                "corp_code": corp_code,
+                "bsns_year": year,
+                "reprt_code": reprt_code,
+                "fs_div": "OFS",
+            },
+        )
+        data = resp.json()
+        if data.get("status") == "000":
+            return data.get("list", [])
+    except Exception as e:
+        log.debug("재무제표 조회 실패 (%s): %s", corp_code, e)
+    return []
+
+
+def fetch_multi_financial(
+    corp_codes: list[str],
+    api_key: str,
+    year: str = "",
+    report_type: str = "annual",
+) -> list[dict]:
+    """DART /fnlttMultiAcnt.json — 다중 기업 재무 비교 (최대 100개).
+
+    Returns: [{corp_code, corp_name, account_nm, thstrm_amount, ...}]
+    """
+    if not api_key or not corp_codes:
+        return []
+    if not year:
+        year = str(datetime.now().year - 1)
+    reprt_code = _REPORT_CODES.get(report_type, "11011")
+
+    try:
+        resp = _retry(
+            "GET", f"{DART_BASE}/fnlttMultiAcnt.json",
+            params={
+                "crtfc_key": api_key,
+                "corp_code": ",".join(corp_codes[:100]),
+                "bsns_year": year,
+                "reprt_code": reprt_code,
+            },
+        )
+        data = resp.json()
+        if data.get("status") == "000":
+            return data.get("list", [])
+    except Exception as e:
+        log.debug("다중 재무제표 조회 실패: %s", e)
+    return []
+
+
+# ── 최대주주/대량보유 현황 ─────────────────────────────────────
+
+def fetch_shareholder_status(
+    corp_code: str,
+    api_key: str,
+    year: str = "",
+    report_type: str = "annual",
+) -> dict:
+    """DART 최대주주 + 5% 대량보유 통합 조회.
+
+    Returns:
+        {
+            "major_holders": [...],   # /hyslrSttus.json 결과
+            "bulk_holders": [...],    # /majorstock.json 결과
+        }
+    """
+    if not api_key:
+        return {"major_holders": [], "bulk_holders": []}
+    if not year:
+        year = str(datetime.now().year - 1)
+    reprt_code = _REPORT_CODES.get(report_type, "11011")
+
+    result: dict = {"major_holders": [], "bulk_holders": []}
+
+    # 최대주주 현황
+    try:
+        resp = _retry(
+            "GET", f"{DART_BASE}/hyslrSttus.json",
+            params={
+                "crtfc_key": api_key,
+                "corp_code": corp_code,
+                "bsns_year": year,
+                "reprt_code": reprt_code,
+            },
+        )
+        data = resp.json()
+        if data.get("status") == "000":
+            result["major_holders"] = data.get("list", [])
+    except Exception as e:
+        log.debug("최대주주 조회 실패 (%s): %s", corp_code, e)
+
+    # 5% 대량보유
+    try:
+        resp = _retry(
+            "GET", f"{DART_BASE}/majorstock.json",
+            params={"crtfc_key": api_key, "corp_code": corp_code},
+        )
+        data = resp.json()
+        if data.get("status") == "000":
+            result["bulk_holders"] = data.get("list", [])
+    except Exception as e:
+        log.debug("대량보유 조회 실패 (%s): %s", corp_code, e)
+
+    return result

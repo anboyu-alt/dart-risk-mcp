@@ -15,9 +15,13 @@ from .core import (
     estimate_crisis_timeline,
     extract_cb_investors,
     fetch_company_disclosures,
+    fetch_company_info,
     fetch_disclosure_full,
     fetch_document_content,
     fetch_document_text,
+    fetch_financial_statements,
+    fetch_multi_financial,
+    fetch_shareholder_status,
     find_pattern_match,
     is_amendment_disclosure,
     list_document_sections,
@@ -356,9 +360,22 @@ def find_risk_precedents(signal_types: list[str], lookback_days: int = 90) -> st
 
 # 단계 분류: 신호 키 → 진입/심화/탈출
 _PHASE_MAP = {
-    "CB_BW": "진입기", "3PCA": "진입기", "MGMT": "진입기",
-    "SHAREHOLDER": "심화기", "EXEC": "심화기",
+    # 진입기: 자금 조달 / 자본구조 변경
+    "CB_BW": "진입기", "CB_REPAY": "진입기", "EB": "진입기", "RCPS": "진입기",
+    "CB_ROLLOVER": "진입기", "CB_BUYBACK": "진입기", "TREASURY_EB": "진입기",
+    "3PCA": "진입기", "REVERSE_SPLIT": "진입기", "RIGHTS_UNDER": "진입기",
+    "TREASURY": "진입기", "MGMT": "진입기", "DEMERGER": "진입기",
+    # 심화기: 지배구조 변화 / 기업활동 조작
+    "SHAREHOLDER": "심화기", "EXEC": "심화기", "MGMT_DISPUTE": "심화기",
+    "CIRCULAR": "심화기", "RELATED_PARTY": "심화기", "GAMJA_MERGE": "심화기",
+    "ASSET_TRANSFER": "심화기", "BUYBACK_NEG": "심화기", "DISTRESS_MA": "심화기",
+    "EQUITY_SPLIT": "심화기", "REVENUE_IRREG": "심화기", "CONTINGENT": "심화기",
+    "THEME_STOCK": "심화기",
+    # 탈출기: 위기 / 부실 / 수사
     "INQUIRY": "탈출기", "AUDIT": "탈출기", "EMBEZZLE": "탈출기",
+    "INSOLVENCY": "탈출기", "DEBT_RESTR": "탈출기", "GOING_CONCERN": "탈출기",
+    "ASSET_SPIRAL": "탈출기", "MEETING_VIOL": "탈출기", "DISCLOSURE_VIOL": "탈출기",
+    "CAPITAL_RED": "탈출기", "ACTIVIST": "탈출기",
 }
 _PHASE_ORDER = {"진입기": 0, "심화기": 1, "탈출기": 2}
 _PHASE_EMOJI = {"진입기": "🟢", "심화기": "🟡", "탈출기": "🔴"}
@@ -803,6 +820,222 @@ def view_disclosure(
         footer_lines.append("✅ 마지막 페이지입니다.")
 
     return "\n".join(header_lines) + result["content"] + "\n".join(footer_lines)
+
+
+# ── 도구 10: 기업 개요 조회 ───────────────────────────────────────────────
+
+
+@mcp.tool()
+def get_company_info(company_name: str) -> str:
+    """기업 개요를 조회한다 (대표자, 업종, 설립일, 상장 구분 등).
+
+    Args:
+        company_name: 기업명 (예: "삼성전자") 또는 종목코드 6자리 (예: "005930")
+    """
+    if not _DART_API_KEY:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+
+    result = resolve_corp(company_name, _DART_API_KEY)
+    if not result:
+        return f"❌ '{company_name}'에 해당하는 기업을 DART에서 찾을 수 없습니다."
+    corp_name, corp_info = result
+    corp_code = corp_info["corp_code"]
+
+    info = fetch_company_info(corp_code, _DART_API_KEY)
+    if not info:
+        return f"❌ {corp_name}의 기업 개요를 불러올 수 없습니다."
+
+    lines = [
+        f"🏢 **기업 개요: {info.get('corp_name', corp_name)}**",
+        "",
+        f"• 종목코드: {info.get('stock_code', '-')}",
+        f"• 대표자: {info.get('ceo_nm', '-')}",
+        f"• 법인구분: {info.get('corp_cls_nm', '-')}",
+        f"• 업종: {info.get('induty_code', '-')}",
+        f"• 설립일: {info.get('est_dt', '-')}",
+        f"• 결산월: {info.get('acc_mt', '-')}월",
+        f"• 주소: {info.get('adres', '-')}",
+        f"• 홈페이지: {info.get('hm_url', '-')}",
+        f"• IR: {info.get('ir_url', '-')}",
+        f"• 전화: {info.get('phn_no', '-')}",
+    ]
+    return "\n".join(lines)
+
+
+# ── 도구 11: 재무제표 조회 ────────────────────────────────────────────────
+
+
+@mcp.tool()
+def get_financial_summary(
+    company_name: str, year: str = "", report_type: str = "annual"
+) -> str:
+    """기업의 주요 재무제표를 조회한다 (매출, 영업이익, 순이익, 자산, 부채).
+
+    Args:
+        company_name: 기업명 (예: "삼성전자") 또는 종목코드 6자리
+        year: 사업연도 4자리 (예: "2024"). 미입력 시 직전 연도
+        report_type: 보고서 유형 — "annual"(사업보고서), "half"(반기), "q1"(1분기), "q3"(3분기)
+    """
+    if not _DART_API_KEY:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+
+    result = resolve_corp(company_name, _DART_API_KEY)
+    if not result:
+        return f"❌ '{company_name}'에 해당하는 기업을 DART에서 찾을 수 없습니다."
+    corp_name, corp_info = result
+    corp_code = corp_info["corp_code"]
+    stock_code = corp_info.get("stock_code", "")
+
+    items = fetch_financial_statements(corp_code, _DART_API_KEY, year, report_type)
+    if not items:
+        return f"❌ {corp_name}의 재무제표를 불러올 수 없습니다. 연도/보고서 유형을 확인하세요."
+
+    # 연결/개별 구분
+    fs_div = items[0].get("fs_div", "")
+    fs_label = "연결재무제표" if fs_div == "CFS" else "개별재무제표"
+    bsns_year = items[0].get("bsns_year", year)
+
+    lines = [
+        f"📊 **{corp_name} 재무제표** ({stock_code or corp_code})",
+        f"사업연도: {bsns_year} | {fs_label}",
+        "",
+    ]
+
+    for item in items:
+        nm = item.get("account_nm", "")
+        cur = item.get("thstrm_amount", "-")
+        prev = item.get("frmtrm_amount", "-")
+        lines.append(f"• {nm}: {cur} (전기: {prev})")
+
+    lines += [
+        "",
+        "⚠️ 금액 단위는 원화(원)이며 DART 공시 기준입니다.",
+    ]
+    return "\n".join(lines)
+
+
+# ── 도구 12: 다중 기업 재무 비교 ──────────────────────────────────────────
+
+
+@mcp.tool()
+def compare_financials(company_names: list[str], year: str = "") -> str:
+    """여러 기업의 재무제표를 비교한다 (최대 5개 기업).
+
+    매출액, 영업이익, 당기순이익, 자산총계, 부채총계를 나란히 비교한다.
+
+    Args:
+        company_names: 비교할 기업명 목록 (2~5개, 예: ["삼성전자", "SK하이닉스"])
+        year: 사업연도 4자리 (예: "2024"). 미입력 시 직전 연도
+    """
+    if not _DART_API_KEY:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+    if len(company_names) < 2:
+        return "❌ 최소 2개 기업을 입력하세요."
+    if len(company_names) > 5:
+        return "❌ 최대 5개 기업까지 비교할 수 있습니다."
+
+    # 기업 코드 수집
+    corp_map: list[tuple[str, str]] = []  # (corp_name, corp_code)
+    failed: list[str] = []
+    for name in company_names:
+        result = resolve_corp(name, _DART_API_KEY)
+        if not result:
+            failed.append(name)
+            continue
+        corp_name, corp_info = result
+        corp_map.append((corp_name, corp_info["corp_code"]))
+
+    if len(corp_map) < 2:
+        return f"❌ 비교 가능한 기업이 2개 미만입니다. 찾을 수 없는 기업: {', '.join(failed)}"
+
+    corp_codes = [cc for _, cc in corp_map]
+    items = fetch_multi_financial(corp_codes, _DART_API_KEY, year)
+
+    if not items:
+        return "❌ 재무 데이터를 불러올 수 없습니다. 연도를 확인하세요."
+
+    # 기업별 그룹핑
+    by_corp: dict[str, list[dict]] = {}
+    for item in items:
+        cname = item.get("corp_name", item.get("stock_code", ""))
+        by_corp.setdefault(cname, []).append(item)
+
+    lines = [
+        f"📊 **재무 비교** ({len(by_corp)}개 기업)",
+        "",
+    ]
+
+    if failed:
+        lines.append(f"⚠️ 찾을 수 없는 기업: {', '.join(failed)}")
+        lines.append("")
+
+    for cname, corp_items in by_corp.items():
+        lines.append(f"━━ {cname} ━━")
+        for item in corp_items:
+            nm = item.get("account_nm", "")
+            cur = item.get("thstrm_amount", "-")
+            lines.append(f"  • {nm}: {cur}")
+        lines.append("")
+
+    lines.append("⚠️ 금액 단위는 원화(원)이며 DART 공시 기준입니다.")
+    return "\n".join(lines)
+
+
+# ── 도구 13: 최대주주/대량보유자 조회 ─────────────────────────────────────
+
+
+@mcp.tool()
+def get_shareholder_info(company_name: str, year: str = "") -> str:
+    """기업의 최대주주 및 5% 이상 대량보유자 현황을 조회한다.
+
+    Args:
+        company_name: 기업명 (예: "삼성전자") 또는 종목코드 6자리
+        year: 사업연도 4자리 (예: "2024"). 미입력 시 직전 연도
+    """
+    if not _DART_API_KEY:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+
+    result = resolve_corp(company_name, _DART_API_KEY)
+    if not result:
+        return f"❌ '{company_name}'에 해당하는 기업을 DART에서 찾을 수 없습니다."
+    corp_name, corp_info = result
+    corp_code = corp_info["corp_code"]
+    stock_code = corp_info.get("stock_code", "")
+
+    data = fetch_shareholder_status(corp_code, _DART_API_KEY, year)
+
+    major = data.get("major_holders", [])
+    bulk = data.get("bulk_holders", [])
+
+    if not major and not bulk:
+        return f"❌ {corp_name}의 주주 정보를 불러올 수 없습니다. 연도를 확인하세요."
+
+    lines = [
+        f"👥 **주주 현황: {corp_name}** ({stock_code or corp_code})",
+        "",
+    ]
+
+    if major:
+        lines.append("━━ 최대주주 및 특수관계인 ━━")
+        for h in major:
+            nm = h.get("nm", "-")
+            relate = h.get("relate", "")
+            stock_cnt = h.get("bsis_posesn_stock_co", "-")
+            ratio = h.get("bsis_posesn_stock_qota_rt", "-")
+            lines.append(f"  • {nm} ({relate}): {stock_cnt}주 ({ratio}%)")
+        lines.append("")
+
+    if bulk:
+        lines.append("━━ 5% 이상 대량보유자 ━━")
+        for h in bulk:
+            nm = h.get("reprt_nm", h.get("nm", "-"))
+            stock_cnt = h.get("stkqy", "-")
+            ratio = h.get("stkrt", "-")
+            lines.append(f"  • {nm}: {stock_cnt}주 ({ratio}%)")
+        lines.append("")
+
+    lines.append("⚠️ DART 공시 기준이며, 최신 변동 사항은 반영되지 않을 수 있습니다.")
+    return "\n".join(lines)
 
 
 def main() -> None:
