@@ -587,7 +587,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 > **uv 설치가 안 된다면 — pip 대안:**
 > uv 대신 pip로도 설치할 수 있습니다.
 > ```bash
-> pip install git+https://github.com/angyeongjae/dart-risk-mcp.git
+> pip install git+https://github.com/anboyu-alt/dart-risk-mcp.git
 > ```
 > 이 경우 아래 설정에서 `"command": "uvx"` 대신 `"command": "dart-risk-mcp"`를 사용합니다.
 
@@ -647,7 +647,7 @@ Finder에서 `Cmd + Shift + G`를 누르고 아래 경로를 입력:
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/angyeongjae/dart-risk-mcp.git",
+        "git+https://github.com/anboyu-alt/dart-risk-mcp.git",
         "dart-risk-mcp"
       ],
       "env": {
@@ -672,7 +672,7 @@ Finder에서 `Cmd + Shift + G`를 누르고 아래 경로를 입력:
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/angyeongjae/dart-risk-mcp.git",
+        "git+https://github.com/anboyu-alt/dart-risk-mcp.git",
         "dart-risk-mcp"
       ],
       "env": {
@@ -709,7 +709,7 @@ Finder에서 `Cmd + Shift + G`를 누르고 아래 경로를 입력:
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/angyeongjae/dart-risk-mcp.git",
+        "git+https://github.com/anboyu-alt/dart-risk-mcp.git",
         "dart-risk-mcp"
       ],
       "env": {
@@ -733,7 +733,7 @@ Claude Code를 사용하는 경우, 아래 명령어로 MCP를 추가합니다.
 ```bash
 claude mcp add dart-risk-analyzer \
   --command uvx \
-  --args "--from" "git+https://github.com/angyeongjae/dart-risk-mcp.git" "dart-risk-mcp" \
+  --args "--from" "git+https://github.com/anboyu-alt/dart-risk-mcp.git" "dart-risk-mcp" \
   --env DART_API_KEY=[발급받은_API키]
 ```
 
@@ -748,7 +748,7 @@ claude mcp add dart-risk-analyzer \
 #### 1단계 — 저장소 복제
 
 ```bash
-git clone https://github.com/angyeongjae/dart-risk-mcp.git
+git clone https://github.com/anboyu-alt/dart-risk-mcp.git
 cd dart-risk-mcp
 ```
 
@@ -934,10 +934,12 @@ AI 클라이언트에 아래 질문을 입력해보세요:
 터미널에서 아래 명령어를 실행한 뒤 Claude Desktop을 재시작하세요.
 
 ```bash
-uv cache clean
+uvx --refresh --from git+https://github.com/anboyu-alt/dart-risk-mcp.git dart-risk-mcp --help
 ```
 
-uvx로 설치한 경우 캐시를 지우면 다음 실행 시 GitHub에서 최신 버전을 자동으로 다시 내려받습니다.
+`--refresh` 플래그가 해당 패키지의 캐시만 무효화하고 GitHub에서 최신 코드를 다시 내려받습니다. 명령어가 도움말을 출력하면 정상입니다.
+
+> **전체 캐시 초기화가 필요한 경우** (문제 발생 시): `uv cache clean` 후 Claude Desktop 재시작. 단, 이 명령은 uv가 관리하는 모든 패키지 캐시를 삭제합니다.
 
 ---
 
