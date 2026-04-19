@@ -1138,6 +1138,121 @@ def search_market_disclosures(preset: str, days: int = 7, max_results: int = 50)
     return "\n".join(lines)
 
 
+@mcp.tool()
+def check_disclosure_anomaly(company_name: str, lookback_days: int = 365) -> str:
+    """공시 구조 지표를 집계해 0~100 이상 스코어를 반환합니다.
+
+    정정공시 비율·감사의견 이슈·공시의무 위반·자본 스트레스·조회공시 빈도
+    5개 지표를 가중 합산합니다.
+
+    Args:
+        company_name: 기업명 또는 종목코드
+        lookback_days: 조회 기간 (기본값 365일)
+
+    Returns:
+        0~100 스코어 + 지표별 내역 텍스트
+    """
+    if not _DART_API_KEY:
+        return "오류: DART_API_KEY 환경변수가 설정되지 않았습니다."
+
+    corp_name, meta = resolve_corp(company_name, _DART_API_KEY)
+    if not corp_name:
+        return f"기업을 찾을 수 없습니다: {company_name}"
+    corp_code = meta["corp_code"]
+
+    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days)
+    total = len(disclosures)
+    if total == 0:
+        return f"[{corp_name}] 최근 {lookback_days}일 공시 없음 — 스코어 산출 불가."
+
+    # ── 지표 집계 ──────────────────────────────────────────────
+    amendment_count = sum(1 for d in disclosures if is_amendment_disclosure(d.get("report_nm", "")))
+
+    _CAPITAL_STRESS = {"REVERSE_SPLIT", "CAPITAL_RED", "RIGHTS_UNDER", "3PCA"}
+
+    audit_hits: list[str] = []
+    viol_hits: list[str] = []
+    capital_hits: list[str] = []
+    inquiry_hits: list[str] = []
+
+    for d in disclosures:
+        nm = d.get("report_nm", "")
+        if is_amendment_disclosure(nm):
+            continue
+        sigs = match_signals(nm)
+        keys = {s["key"] for s in sigs}
+        if "AUDIT" in keys:
+            audit_hits.append(nm)
+        if "DISCLOSURE_VIOL" in keys:
+            viol_hits.append(nm)
+        if keys & _CAPITAL_STRESS:
+            capital_hits.append(nm)
+        if "INQUIRY" in keys:
+            inquiry_hits.append(nm)
+
+    # ── 가중 스코어 (상한 100) ─────────────────────────────────
+    amend_ratio = amendment_count / total
+    s_amend = min(25, round(amend_ratio * 25))
+    s_audit = min(20, len(audit_hits) * 20)
+    s_viol = min(15, len(viol_hits) * 15)
+    s_capital = min(25, len(capital_hits) * 5)
+    s_inquiry = min(15, len(inquiry_hits) * 5)
+    total_score = min(100, s_amend + s_audit + s_viol + s_capital + s_inquiry)
+
+    if total_score >= 70:
+        grade = "심각"
+    elif total_score >= 50:
+        grade = "높음"
+    elif total_score >= 30:
+        grade = "보통"
+    else:
+        grade = "낮음"
+
+    def _top3(items: list[str]) -> str:
+        shown = items[:3]
+        rest = len(items) - len(shown)
+        out = "\n".join(f"    • {nm}" for nm in shown)
+        if rest:
+            out += f"\n    … 외 {rest}건"
+        return out
+
+    lines = [
+        f"━━━ [{corp_name}] 공시 구조 이상 스코어 ━━━",
+        f"조회기간: 최근 {lookback_days}일 / 총 공시 {total}건 (정정공시 {amendment_count}건)",
+        "",
+        f"종합 스코어: {total_score}/100  [{grade}]",
+        "",
+        "── 지표별 내역 ──────────────────────────────",
+        f"① 정정공시 비율   {s_amend:2d}점  ({amendment_count}/{total}건, {amend_ratio:.0%})",
+        f"② 감사의견 이슈   {s_audit:2d}점  ({len(audit_hits)}건)",
+    ]
+    if audit_hits:
+        lines.append(_top3(audit_hits))
+    lines += [
+        f"③ 공시의무 위반   {s_viol:2d}점  ({len(viol_hits)}건)",
+    ]
+    if viol_hits:
+        lines.append(_top3(viol_hits))
+    lines += [
+        f"④ 자본 스트레스   {s_capital:2d}점  ({len(capital_hits)}건)",
+    ]
+    if capital_hits:
+        lines.append(_top3(capital_hits))
+    lines += [
+        f"⑤ 조회공시 빈도   {s_inquiry:2d}점  ({len(inquiry_hits)}건)",
+    ]
+    if inquiry_hits:
+        lines.append(_top3(inquiry_hits))
+    lines += [
+        "",
+        "─────────────────────────────────────────────",
+        "※ 본 스코어는 공시 기반 불공정거래 위험 모니터링 목적의 참고 지표이며,",
+        "   법적 판단이나 투자 결정의 근거로 사용할 수 없습니다.",
+        "💡 세부 분석: analyze_company_risk(company_name=...)",
+    ]
+    return "\n".join(lines)
+
+
 def main() -> None:
     import sys
     transport = "sse" if "--sse" in sys.argv else "stdio"
