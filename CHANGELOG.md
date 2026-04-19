@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-04-20
+
+### Added
+- 시장 전체 preset 배치 스캔 (`search_market_disclosures`) — 12개 preset으로 당일~90일 위험 공시 필터
+- 공시 구조 이상 스코어 (`check_disclosure_anomaly`) — 정정비율·감사이슈·공시위반·자본스트레스·조회공시 0~100 집계
+- 임원 보수 현황 조회 (`get_executive_compensation`) — 5억이상·개인별·미등기·주총한도 4섹션
+- 임원·대주주 지분 변동 시계열 (`track_insider_trading`) — 30일 매수/매도 클러스터 탐지
+- `fetch_market_disclosures` — corp_code 없이 DART /list.json 시장 전체 호출
+- `fetch_executive_compensation` — 보수 4개 엔드포인트 통합
+- `fetch_insider_timeline` — elestock + hyslrSttus 연도별 시계열 통합
+
 ## [0.2.0] — 2026-04-20
 
 ### Added

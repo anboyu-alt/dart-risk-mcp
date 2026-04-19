@@ -32,7 +32,7 @@ dart_risk_mcp/
 
 ---
 
-## MCP 도구 13개
+## MCP 도구 17개
 
 ### 1. `analyze_company_risk(company_name, lookback_days=90)`
 
@@ -152,6 +152,40 @@ dart_risk_mcp/
 - `year` 미입력 시 직전 연도
 - DART 공시 기준이므로 최신 변동 사항이 반영되지 않을 수 있음
 
+### 14. `search_market_disclosures(preset, days=7, max_results=50)` ✨
+
+시장 전체 공시를 preset 기반으로 배치 스캔합니다.
+
+- `preset` 허용값: `cb_issue`, `treasury`, `reverse_split`, `3pca`, `shareholder_change`, `exec_change`, `audit_issue`, `asset_transfer`, `going_concern`, `embezzle`, `inquiry`, `all_risk`
+- `days` 범위: 1~90일, `max_results` 범위: 1~200건
+- 내부 흐름: `fetch_market_disclosures` (corp_code 없이 `/list.json`) → `match_signals` 필터
+- 반환: 날짜|기업|공시명|신호|접수번호 한 줄씩
+
+### 15. `check_disclosure_anomaly(company_name, lookback_days=365)` ✨
+
+공시 구조 지표 5개를 0~100 스코어로 집계합니다.
+
+- 지표: ① 정정공시 비율(25) ② 감사의견 이슈(20) ③ 공시의무 위반(15) ④ 자본 스트레스(25) ⑤ 조회공시 빈도(15)
+- 새 API 호출 없음 — `fetch_company_disclosures` + `match_signals` + `is_amendment_disclosure` 재사용
+- 반환: 종합 스코어 + 지표별 내역(탐지 건수·근거 공시명 최대 3건) + 법적 판단 아님 고지
+
+### 16. `get_executive_compensation(company_name, year="", report_type="annual")` ✨
+
+임원 보수 현황을 4섹션으로 조회합니다.
+
+- 내부 흐름: `resolve_corp` → `fetch_executive_compensation`
+- 섹션: ① 5억 이상 고액수령자 ② 개인별 보수 ③ 미등기임원 보수 ④ 주총 승인 한도
+- `report_type` 허용값: `annual` | `half` | `q1` | `q3`
+
+### 17. `track_insider_trading(company_name, lookback_years=2)` ✨
+
+최대주주·5% 대량보유자의 지분 변동 시계열을 분석합니다.
+
+- 내부 흐름: `resolve_corp` → `fetch_insider_timeline` (elestock + hyslrSttus 연도별)
+- 보유 비율(Δ) 계산 + 30일 윈도우 매수/매도 클러스터 탐지
+- `lookback_years` 범위: 1~5년
+- 반환: 보고자별 Δ 테이블 + 클러스터 알림 + 공시 지연 고지
+
 ---
 
 ## 핵심 내부 함수
@@ -174,6 +208,9 @@ dart_risk_mcp/
 | `fetch_financial_statements(corp_code, api_key, year, report_type)` | `/fnlttSinglAcnt.json` — 단일 기업 재무제표 |
 | `fetch_multi_financial(corp_codes, api_key, year, report_type)` | `/fnlttMultiAcnt.json` — 다중 기업 재무 비교 |
 | `fetch_shareholder_status(corp_code, api_key, year, report_type)` | 최대주주 현황 + 5% 대량보유 통합 조회 |
+| `fetch_market_disclosures(api_key, bgn_de, end_de, pblntf_ty, max_pages)` | corp_code 없이 시장 전체 공시 조회 |
+| `fetch_executive_compensation(corp_code, api_key, year, report_type)` | 보수 4개 엔드포인트 통합 조회 |
+| `fetch_insider_timeline(corp_code, api_key, lookback_years)` | elestock + hyslrSttus 연도별 시계열 |
 
 ### DART API 엔드포인트
 
