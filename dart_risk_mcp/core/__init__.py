@@ -10,6 +10,8 @@ from .dart_client import (
     fetch_financial_statements,
     fetch_multi_financial,
     fetch_shareholder_status,
+    fetch_executive_compensation,
+    fetch_insider_timeline,
 )
 from .signals import match_signals, is_amendment_disclosure, SIGNAL_TYPES, SIGNAL_KEY_TO_TAXONOMY
 from .cb_extractor import extract_cb_investors
@@ -27,6 +29,8 @@ __all__ = [
     "fetch_financial_statements",
     "fetch_multi_financial",
     "fetch_shareholder_status",
+    "fetch_executive_compensation",
+    "fetch_insider_timeline",
     "match_signals",
     "is_amendment_disclosure",
     "SIGNAL_TYPES",

@@ -890,3 +890,117 @@ def fetch_shareholder_status(
         log.debug("대량보유 조회 실패 (%s): %s", corp_code, e)
 
     return result
+
+
+def fetch_executive_compensation(
+    corp_code: str,
+    api_key: str,
+    year: str = "",
+    report_type: str = "annual",
+) -> dict:
+    """DART 임원 보수 현황 통합 조회.
+
+    Returns:
+        {
+            "high_pay":     [...],  # 5억 이상 고액수령자 (/hmvAuditAllSttus.json)
+            "individual":   [...],  # 개인별 보수 현황 (/indvdlByPay.json)
+            "unregistered": [...],  # 미등기임원 보수 (/unrstExctvMendngSttus.json)
+            "agm_limit":    [...],  # 주총 승인 보수한도 (/hmvAuditIndvdlBySttus.json)
+        }
+    """
+    if not api_key:
+        return {"high_pay": [], "individual": [], "unregistered": [], "agm_limit": []}
+    if not year:
+        year = str(datetime.now().year - 1)
+    reprt_code = _REPORT_CODES.get(report_type, "11011")
+
+    params_base = {
+        "crtfc_key": api_key,
+        "corp_code": corp_code,
+        "bsns_year": year,
+        "reprt_code": reprt_code,
+    }
+    result: dict = {"high_pay": [], "individual": [], "unregistered": [], "agm_limit": []}
+    endpoints = [
+        ("high_pay", "hmvAuditAllSttus.json"),
+        ("individual", "indvdlByPay.json"),
+        ("unregistered", "unrstExctvMendngSttus.json"),
+        ("agm_limit", "hmvAuditIndvdlBySttus.json"),
+    ]
+    for key, ep in endpoints:
+        try:
+            resp = _retry("GET", f"{DART_BASE}/{ep}", params=params_base)
+            data = resp.json()
+            if data.get("status") == "000":
+                result[key] = data.get("list", [])
+            else:
+                _log_dart_status(data.get("status", "?"), f"{ep} corp_code={corp_code}")
+        except Exception as e:
+            log.debug("%s 조회 실패 (%s): %s", ep, corp_code, e)
+    return result
+
+
+def fetch_insider_timeline(
+    corp_code: str,
+    api_key: str,
+    lookback_years: int = 2,
+) -> list[dict]:
+    """DART 5% 대량보유 + 최대주주 변동 시계열 조회.
+
+    여러 연도의 elestock.json / hyslrSttus.json 을 묶어
+    보고일 기준 정렬한 목록을 반환한다.
+
+    Returns:
+        List of holding records with added "source" key ("elestock"|"hyslr")
+    """
+    if not api_key:
+        return []
+    current_year = datetime.now().year
+    years = [str(current_year - i) for i in range(lookback_years + 1)]
+    reprt_code = "11011"
+
+    records: list[dict] = []
+
+    # 5% 대량보유 (elestock은 전체 이력 반환 — 1회만 호출)
+    try:
+        resp = _retry(
+            "GET", f"{DART_BASE}/elestock.json",
+            params={"crtfc_key": api_key, "corp_code": corp_code},
+        )
+        data = resp.json()
+        if data.get("status") == "000":
+            for rec in data.get("list", []):
+                rec = dict(rec)
+                rec["source"] = "elestock"
+                records.append(rec)
+        else:
+            _log_dart_status(data.get("status", "?"), f"elestock corp_code={corp_code}")
+    except Exception as e:
+        log.debug("elestock 조회 실패 (%s): %s", corp_code, e)
+
+    # 최대주주 현황 (연도별)
+    for year in years:
+        try:
+            resp = _retry(
+                "GET", f"{DART_BASE}/hyslrSttus.json",
+                params={
+                    "crtfc_key": api_key,
+                    "corp_code": corp_code,
+                    "bsns_year": year,
+                    "reprt_code": reprt_code,
+                },
+            )
+            data = resp.json()
+            if data.get("status") == "000":
+                for rec in data.get("list", []):
+                    rec = dict(rec)
+                    rec["source"] = "hyslr"
+                    rec["bsns_year"] = year
+                    records.append(rec)
+            else:
+                _log_dart_status(data.get("status", "?"), f"hyslrSttus year={year} corp_code={corp_code}")
+        except Exception as e:
+            log.debug("hyslrSttus 조회 실패 year=%s (%s): %s", year, corp_code, e)
+
+    records.sort(key=lambda r: r.get("rcept_dt", r.get("bsns_year", "")), reverse=True)
+    return records

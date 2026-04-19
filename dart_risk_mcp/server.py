@@ -20,7 +20,9 @@ from .core import (
     fetch_disclosure_full,
     fetch_document_content,
     fetch_document_text,
+    fetch_executive_compensation,
     fetch_financial_statements,
+    fetch_insider_timeline,
     fetch_multi_financial,
     fetch_shareholder_status,
     find_pattern_match,
@@ -1134,6 +1136,174 @@ def search_market_disclosures(preset: str, days: int = 7, max_results: int = 50)
         "",
         "💡 개별 공시 상세: check_disclosure_risk(rcept_no=...)",
         "💡 기업 종합 분석: analyze_company_risk(company_name=...)",
+    ]
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def get_executive_compensation(
+    company_name: str,
+    year: str = "",
+    report_type: str = "annual",
+) -> str:
+    """임원 보수 현황을 조회합니다 (불공정거래 탐지 참고 자료).
+
+    5억 이상 고액수령자·개인별 보수·미등기임원 보수·주총 승인 한도
+    4개 섹션을 반환합니다.
+
+    Args:
+        company_name: 기업명 또는 종목코드
+        year: 사업연도 (기본값: 직전 연도)
+        report_type: annual(사업) | half(반기) | q1(1분기) | q3(3분기)
+
+    Returns:
+        임원 보수 4섹션 텍스트
+    """
+    if not _DART_API_KEY:
+        return "오류: DART_API_KEY 환경변수가 설정되지 않았습니다."
+
+    corp_name, meta = resolve_corp(company_name, _DART_API_KEY)
+    if not corp_name:
+        return f"기업을 찾을 수 없습니다: {company_name}"
+    corp_code = meta["corp_code"]
+
+    data = fetch_executive_compensation(corp_code, _DART_API_KEY, year, report_type)
+
+    import datetime as _dt
+    display_year = year or str(_dt.datetime.now().year - 1)
+
+    def _rows(items: list[dict], cols: list[tuple[str, str]]) -> str:
+        if not items:
+            return "    (공시 없음)"
+        lines = []
+        for item in items:
+            parts = [f"{label}: {item.get(key, '-')}" for key, label in cols]
+            lines.append("    • " + " | ".join(parts))
+        return "\n".join(lines)
+
+    high_pay_cols = [("nm", "성명"), ("ofcps", "직위"), ("mendng_totamt", "보수총액(원)")]
+    indv_cols = [("nm", "성명"), ("ofcps", "직위"), ("mendng_totamt", "보수총액(원)"), ("stk_optn_exrcs_mny", "스톡옵션행사액")]
+    unreg_cols = [("mendng_totamt", "미등기임원 보수총액(원)"), ("nmpr", "인원수")]
+    agm_cols = [("mendng_totamt", "주총승인 보수한도(원)"), ("nmpr", "이사인원수")]
+
+    lines = [
+        f"━━━ [{corp_name}] 임원 보수 현황 ({display_year}년 {report_type}) ━━━",
+        "",
+        "① 5억 이상 고액수령자",
+        _rows(data["high_pay"], high_pay_cols),
+        "",
+        "② 개인별 보수 현황",
+        _rows(data["individual"], indv_cols),
+        "",
+        "③ 미등기임원 보수",
+        _rows(data["unregistered"], unreg_cols),
+        "",
+        "④ 주총 승인 보수한도",
+        _rows(data["agm_limit"], agm_cols),
+        "",
+        "─────────────────────────────────────────────",
+        "※ 임원 보수 정보는 공시 기반 불공정거래 탐지의 참고 자료이며,",
+        "   경영진의 사익 추구 여부 등 이상 징후 파악에 활용됩니다.",
+        "💡 임원 지분 변동: track_insider_trading(company_name=...)",
+    ]
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
+    """최대주주·5% 대량보유자의 지분 변동 시계열을 분석합니다.
+
+    보유 비율(Δ) 변화로 매수·매도 클러스터를 탐지합니다.
+
+    Args:
+        company_name: 기업명 또는 종목코드
+        lookback_years: 조회 연수 (기본값 2년, 최대 5년)
+
+    Returns:
+        보고자별 지분 변동 테이블 + 클러스터 알림
+    """
+    if not _DART_API_KEY:
+        return "오류: DART_API_KEY 환경변수가 설정되지 않았습니다."
+
+    corp_name, meta = resolve_corp(company_name, _DART_API_KEY)
+    if not corp_name:
+        return f"기업을 찾을 수 없습니다: {company_name}"
+    corp_code = meta["corp_code"]
+
+    lookback_years = max(1, min(5, lookback_years))
+    records = fetch_insider_timeline(corp_code, _DART_API_KEY, lookback_years)
+
+    if not records:
+        return f"[{corp_name}] 최근 {lookback_years}년간 대량보유·최대주주 공시 없음."
+
+    # ── 보고자별 시계열 구성 ──────────────────────────────────
+    from collections import defaultdict
+    timeline: dict[str, list[dict]] = defaultdict(list)
+    for rec in records:
+        holder = rec.get("repror") or rec.get("nm", "미상")
+        timeline[holder].append(rec)
+
+    def _parse_ratio(val: str) -> float:
+        try:
+            return float(str(val).replace(",", "").replace("%", "").strip())
+        except (ValueError, AttributeError):
+            return 0.0
+
+    lines = [
+        f"━━━ [{corp_name}] 임원·대주주 지분 변동 시계열 (최근 {lookback_years}년) ━━━",
+        "",
+    ]
+
+    # ── 클러스터 탐지 (30일 윈도우) ───────────────────────────
+    buy_cluster: list[str] = []
+    sell_cluster: list[str] = []
+
+    import datetime as _dt
+
+    for holder, recs in timeline.items():
+        recs_sorted = sorted(recs, key=lambda r: r.get("rcept_dt", r.get("bsns_year", "")))
+        ratios = [_parse_ratio(r.get("stkqy_rt", r.get("trmend_posesn_stock_qota_rt", "0"))) for r in recs_sorted]
+
+        lines.append(f"▶ {holder}")
+        for i, rec in enumerate(recs_sorted):
+            date = rec.get("rcept_dt") or rec.get("bsns_year", "-")
+            ratio = ratios[i]
+            delta = ratios[i] - ratios[i - 1] if i > 0 else 0.0
+            delta_str = f" (Δ{delta:+.2f}%)" if i > 0 else ""
+            source_label = "대량보유" if rec.get("source") == "elestock" else "최대주주"
+            lines.append(f"    {date}  {ratio:.2f}%{delta_str}  [{source_label}]")
+
+            if i > 0:
+                try:
+                    d_prev = _dt.datetime.strptime(recs_sorted[i - 1].get("rcept_dt", "00000000")[:8], "%Y%m%d")
+                    d_curr = _dt.datetime.strptime(rec.get("rcept_dt", "00000000")[:8], "%Y%m%d")
+                    within_30d = abs((d_curr - d_prev).days) <= 30
+                except ValueError:
+                    within_30d = False
+                if within_30d and delta > 0.5:
+                    buy_cluster.append(holder)
+                elif within_30d and delta < -0.5:
+                    sell_cluster.append(holder)
+        lines.append("")
+
+    if buy_cluster:
+        lines += [
+            f"⚠️  매수 클러스터 탐지: {', '.join(set(buy_cluster))}",
+            "   30일 이내 0.5%p 이상 보유 증가 — 불공정거래 전조 가능성 검토 권장",
+            "",
+        ]
+    if sell_cluster:
+        lines += [
+            f"⚠️  매도 클러스터 탐지: {', '.join(set(sell_cluster))}",
+            "   30일 이내 0.5%p 이상 보유 감소 — 정보 우위 매도 가능성 검토 권장",
+            "",
+        ]
+
+    lines += [
+        "─────────────────────────────────────────────",
+        "※ 공시 지연으로 실시간 내부자 거래 현황과 차이가 있을 수 있습니다.",
+        "   본 정보는 공시 기반 불공정거래 위험 모니터링 목적으로만 활용하십시오.",
+        "💡 임원 보수 조회: get_executive_compensation(company_name=...)",
     ]
     return "\n".join(lines)
 
