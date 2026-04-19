@@ -15,6 +15,7 @@ from .core import (
     estimate_crisis_timeline,
     extract_cb_investors,
     fetch_company_disclosures,
+    fetch_market_disclosures,
     fetch_company_info,
     fetch_disclosure_full,
     fetch_document_content,
@@ -1029,6 +1030,111 @@ def get_shareholder_info(company_name: str, year: str = "") -> str:
         lines.append("")
 
     lines.append("⚠️ DART 공시 기준이며, 최신 변동 사항은 반영되지 않을 수 있습니다.")
+    return "\n".join(lines)
+
+
+# ── 도구 14: 시장 전체 preset 스캔 ─────────────────────────────────────────
+
+_PRESET_TO_SIGNALS: dict[str, list[str]] = {
+    "cb_issue":           ["CB_BW", "CB_REPAY", "CB_ROLLOVER", "CB_BUYBACK", "EB", "RCPS", "TREASURY_EB"],
+    "treasury":           ["TREASURY"],
+    "reverse_split":      ["REVERSE_SPLIT", "CAPITAL_RED", "GAMJA_MERGE"],
+    "3pca":               ["3PCA", "RIGHTS_UNDER"],
+    "shareholder_change": ["SHAREHOLDER", "MGMT_DISPUTE"],
+    "exec_change":        ["EXEC"],
+    "audit_issue":        ["AUDIT", "DISCLOSURE_VIOL"],
+    "asset_transfer":     ["ASSET_TRANSFER", "ASSET_SPIRAL", "DEMERGER"],
+    "going_concern":      ["GOING_CONCERN", "INSOLVENCY", "DEBT_RESTR"],
+    "embezzle":           ["EMBEZZLE"],
+    "inquiry":            ["INQUIRY"],
+    "all_risk":           [],  # 모든 신호
+}
+
+
+@mcp.tool()
+def search_market_disclosures(preset: str, days: int = 7, max_results: int = 50) -> str:
+    """시장 전체 공시에서 preset에 해당하는 위험 신호를 일괄 스캔한다.
+
+    기업명을 지정하지 않고 전체 상장사 공시를 조회하므로, 특정 위험 신호가 시장에
+    얼마나 확산되어 있는지 조기경보로 활용할 수 있다.
+
+    사용법:
+    - "최근 7일 동안 CB/BW 발행 공시 전수": search_market_disclosures("cb_issue", 7)
+    - "최근 30일 자사주 취득 결정": search_market_disclosures("treasury", 30)
+    - "최근 14일 감자 공시": search_market_disclosures("reverse_split", 14)
+
+    Args:
+        preset: 신호 프리셋 — cb_issue / treasury / reverse_split / 3pca /
+                shareholder_change / exec_change / audit_issue / asset_transfer /
+                going_concern / embezzle / inquiry / all_risk
+        days: 조회 기간 (기본 7일, 최대 90일)
+        max_results: 최대 반환 건수 (기본 50, 최대 200)
+    """
+    from datetime import datetime, timedelta
+
+    if not _DART_API_KEY:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+    if preset not in _PRESET_TO_SIGNALS:
+        return (
+            f"❌ 알 수 없는 preset: {preset!r}\n"
+            f"허용값: {', '.join(sorted(_PRESET_TO_SIGNALS))}"
+        )
+    days = max(1, min(90, days))
+    max_results = max(1, min(200, max_results))
+
+    now = datetime.now()
+    bgn_de = (now - timedelta(days=days)).strftime("%Y%m%d")
+    end_de = now.strftime("%Y%m%d")
+
+    raw = fetch_market_disclosures(_DART_API_KEY, bgn_de, end_de, max_pages=10)
+    if not raw:
+        return f"❌ 최근 {days}일 시장 공시를 불러올 수 없습니다."
+
+    target_keys = set(_PRESET_TO_SIGNALS[preset])
+
+    filtered: list[tuple[dict, list[dict]]] = []
+    for d in raw:
+        report_nm = d.get("report_nm", "")
+        sigs = match_signals(report_nm)
+        if not sigs:
+            continue
+        if target_keys and not any(s["key"] in target_keys for s in sigs):
+            continue
+        filtered.append((d, sigs))
+
+    filtered.sort(key=lambda x: x[0].get("rcept_dt", ""), reverse=True)
+    truncated = len(filtered) > max_results
+    shown = filtered[:max_results]
+
+    lines = [
+        f"🔍 **시장 공시 스캔** (preset={preset}, 최근 {days}일)",
+        f"전체 {len(raw)}건 중 신호 일치 {len(filtered)}건 (표시 {len(shown)}건)",
+        "",
+    ]
+
+    if not shown:
+        lines.append(f"✅ 해당 기간에 '{preset}' 프리셋에 해당하는 공시가 없습니다.")
+        return "\n".join(lines)
+
+    lines.append(f"{'─' * 60}")
+    for d, sigs in shown:
+        corp_nm = d.get("corp_name", "-")
+        rcept_dt = d.get("rcept_dt", "")
+        rcept_no = d.get("rcept_no", "")
+        report_nm = d.get("report_nm", "")
+        sig_labels = ", ".join(s["label"] for s in sigs)
+        lines.append(f"{rcept_dt} | {corp_nm}")
+        lines.append(f"  📄 {report_nm}")
+        lines.append(f"  🔖 [{sig_labels}] rcept_no={rcept_no}")
+
+    if truncated:
+        lines += ["", f"⚠️ {len(filtered) - max_results}건 더 있음. max_results 를 늘리세요."]
+
+    lines += [
+        "",
+        "💡 개별 공시 상세: check_disclosure_risk(rcept_no=...)",
+        "💡 기업 종합 분석: analyze_company_risk(company_name=...)",
+    ]
     return "\n".join(lines)
 
 

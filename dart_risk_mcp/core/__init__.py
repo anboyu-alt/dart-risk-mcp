@@ -1,6 +1,7 @@
 from .dart_client import (
     resolve_corp,
     fetch_company_disclosures,
+    fetch_market_disclosures,
     fetch_document_text,
     fetch_disclosure_full,
     list_document_sections,
@@ -17,6 +18,7 @@ from .taxonomy import calculate_risk_score, find_pattern_match, estimate_crisis_
 __all__ = [
     "resolve_corp",
     "fetch_company_disclosures",
+    "fetch_market_disclosures",
     "fetch_document_text",
     "fetch_disclosure_full",
     "list_document_sections",

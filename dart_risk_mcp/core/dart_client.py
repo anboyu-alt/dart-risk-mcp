@@ -181,6 +181,63 @@ def fetch_company_disclosures(
     return results
 
 
+# ── 시장 전체 공시 조회 ─────────────────────────────────────────
+
+def fetch_market_disclosures(
+    api_key: str,
+    bgn_de: str,
+    end_de: str,
+    pblntf_ty: str = "",
+    max_pages: int = 10,
+) -> list[dict]:
+    """DART /list.json을 corp_code 없이 호출해 시장 전체 공시 조회.
+
+    Args:
+        api_key: DART API 키
+        bgn_de: 시작일 YYYYMMDD
+        end_de: 종료일 YYYYMMDD
+        pblntf_ty: 공시 유형 (A=정기, B=주요사항, C=발행, D=지분, E=기타, F=외부감사, I=거래소, J=공정위)
+        max_pages: 최대 페이지 수 (100건/페이지)
+    """
+    if not api_key:
+        return []
+
+    results: list[dict] = []
+    page_no = 1
+    while page_no <= max_pages:
+        params = {
+            "crtfc_key": api_key,
+            "bgn_de": bgn_de,
+            "end_de": end_de,
+            "page_no": page_no,
+            "page_count": 100,
+        }
+        if pblntf_ty:
+            params["pblntf_ty"] = pblntf_ty
+
+        try:
+            data = _retry("GET", f"{DART_BASE}/list.json", params=params).json()
+        except Exception:
+            break
+
+        status = data.get("status")
+        if status != "000":
+            _log_dart_status(status, f"시장공시 {bgn_de}~{end_de} pblntf={pblntf_ty}")
+            break
+
+        results.extend(data.get("list", []))
+        total = int(data.get("total_count", 0))
+        if page_no * 100 >= total:
+            break
+        if page_no >= max_pages and len(results) < total:
+            log.warning("시장공시 %d건 초과 (%s~%s) — 일부 누락", max_pages * 100, bgn_de, end_de)
+            break
+        page_no += 1
+        time.sleep(0.25)
+
+    return results
+
+
 # ── 공시 원문 텍스트 ────────────────────────────────────────────
 
 _TAG_RE  = re.compile(r"<[^>]+>")
