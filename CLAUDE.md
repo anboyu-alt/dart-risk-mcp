@@ -25,7 +25,8 @@ dart_risk_mcp/
 └── core/
     ├── __init__.py      # 공개 API export
     ├── dart_client.py   # DART API 클라이언트 (핵심)
-    ├── signals.py       # 28개 신호 유형 (8개 카테고리) + 키워드 매칭
+    ├── signals.py       # 37개 신호 유형 (8개 카테고리) + 키워드 매칭 (v0.4.0 카탈로그 기반 보강)
+    ├── catalog.py       # 금감원·금융위 MD 카탈로그 로더 (load_catalog_excerpt)
     ├── cb_extractor.py  # CB/BW 인수자명 추출
     └── taxonomy.py      # 27개 신호 분류 + 위험 점수 + 패턴
 ```
@@ -268,7 +269,9 @@ dart_risk_mcp/
 }
 ```
 
-기존 패턴 4개: `founder_fade`(창업주 퇴장), `debt_spiral`(부채 악순환), `reverse_split_spiral`(무상감자 나선), `related_party_hollowing`(특수관계자 자산 공동화)
+등록 패턴 8개 (v0.4.0 기준):
+- **기존 4개 (전통 위기 사이클)**: `founder_fade`(창업주 퇴장), `debt_spiral`(부채 악순환), `reverse_split_spiral`(무상감자 나선), `related_party_hollowing`(특수관계자 자산 공동화)
+- **v0.4.0 신규 4개 (금감원 사례 기반)**: `zombie_ma`(무자본 M&A), `audit_insider_dump`(감사의견 내부자 덤프), `delisting_evasion`(상폐 회피), `fake_new_biz`(허위 신사업 주가부양)
 
 ### 도구 추가
 

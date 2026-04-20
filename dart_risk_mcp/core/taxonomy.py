@@ -98,6 +98,7 @@ TAXONOMY = {
         "field_evidence": [
             "위메이드: 전기아이피 400억, 위메이드맥스 100억, 비상장사 700억 배당 → CB상환",
             "반복불가능한 자금조달",
+            "2025-03-24 금감원: 사모CB 악용 4유형 적발 (미공개정보·허위사업·가액부풀리기·허위자금조달)",
         ],
         "investor_implication": "Asset base hollowing; unsustainable liquidity management",
     },
@@ -339,7 +340,10 @@ TAXONOMY = {
             "Lock-up period <1 year",
             "Multiple 3PA within 12 months",
         ],
-        "field_evidence": ["manipulation_monitor.py signal type: 3PCA"],
+        "field_evidence": [
+            "2026-04-19 금감원: 상폐회피 목적 허위 자기자본 확충 — 횡령자금 유상증자 적발",
+            "2025-03-10 금감원: 투자조합·페이퍼컴퍼니 CB·BW 인수대상으로 내세운 가장납입 구조",
+        ],
         "investor_implication": "Existing shareholders diluted; governance control transferred",
     },
     "2.5": {
@@ -583,7 +587,10 @@ TAXONOMY = {
             "Information split across multiple filings",
             "Negative information buried in attachments",
         ],
-        "field_evidence": ["공시의무 위반 사례"],
+        "field_evidence": [
+            "2025-02-27 금감원: IPO 허위 매출·자기자본 과대계상으로 상장 후 급락 사례",
+            "2025-03-10 금감원: 공시서류 중요사항 허위기재 + 발행철회 반복 패턴 적발",
+        ],
         "investor_implication": "Investor information asymmetry; market inefficiency",
     },
     "4.4": {
@@ -610,7 +617,7 @@ TAXONOMY = {
         ],
         "field_evidence": [
             "네오이뮨텍: 계속기업가정 불확실 (20250902)",
-            "manipulation_monitor.py signal type: AUDIT",
+            "2026-02-27 금감원: 최근 3년 결산 불공정거래 24건 중 79%가 1~3월 발생, 84%가 내부자 연루",
         ],
         "investor_implication": "Insolvency risk; default imminent",
     },
@@ -758,7 +765,9 @@ TAXONOMY = {
             "Accounts receivable / revenue ratio spike",
             "Revenue recognition before cash receipt >90 days",
         ],
-        "field_evidence": ["회계감시 신호"],
+        "field_evidence": [
+            "2026-04-19 금감원: 특수관계자 실물거래 없는 매출 과대계상·허위 재고자산으로 매출원가 축소 적발",
+        ],
         "investor_implication": "Earnings quality deterioration; restatement risk",
     },
     "6.2": {
@@ -828,7 +837,8 @@ TAXONOMY = {
             "Timing: coincides with insider trading allegations",
         ],
         "field_evidence": [
-            "stock_analysis_monitor.py detects PRE_DISCLOSURE signal",
+            "2026-03-25 금감원: 상장사 IR 담당 임원이 미공개중요정보(자회사 치료제 승인) 이용 차명계좌 매수 — 5.5억 부당이득",
+            "2026-01-21 금감원: 지배주주 연루 미공개정보 이용 거래 적발",
         ],
         "investor_implication": "Insider trading; market integrity violation",
     },
@@ -904,6 +914,7 @@ TAXONOMY = {
         "field_evidence": [
             "동성제약: 1억 어음 부도 (20251014)",
             "셀리버리: 재무상태 악화 (20250918)",
+            "2024-03-25 금감원: 좀비기업 15개사 부당이득 1,694억원 — 연말 유상증자 상폐요건 면탈 패턴 적발",
         ],
         "investor_implication": "Likely default / receivership; total shareholder loss",
     },
@@ -1033,6 +1044,51 @@ CROSS_SIGNAL_PATTERNS = {
         "field_evidence": [
             "파마리서차: RCPS 비대칭 구조 (20250708)",
             "동성제약: 경영권 방어용 회생신청 (20251014)",
+        ],
+    },
+    "zombie_ma": {
+        "name": "The Zombie M&A",
+        "description": "무자본 M&A 세력이 차명·투자조합으로 경영권 인수 → 사모CB 대량발행·허위자금조달 → 허위 신사업 발표 → 주가부양 후 고가매도",
+        "signal_sequence": ["3.1", "2.4", "1.2", "4.3", "7.1"],
+        "timeline_months": 12,
+        "severity": "CRITICAL",
+        "field_evidence": [
+            "2025-03-10 금감원: 사모CB·BW 허위자금조달 조직적 세력 적발 — 검찰 고발",
+            "2026-01-08 금감원: 무자본 M&A 대량보유상황보고 허위기재 적발",
+        ],
+    },
+    "audit_insider_dump": {
+        "name": "The Audit Insider Dump",
+        "description": "감사의견거절·비적정 미공개정보를 임원·최대주주가 직무상 취득 후 공시 전 주식 전량매도",
+        "signal_sequence": ["4.4", "7.1", "3.1"],
+        "timeline_months": 6,
+        "severity": "CRITICAL",
+        "field_evidence": [
+            "2025-03-24 금감원: A사 대표이사가 감사의견거절 정보를 CB 보유자에게 전달 후 매도",
+            "2026-02-27 금감원: 최근 3년 결산 불공정거래 24건 중 79%가 1~3월 발생, 84%가 내부자",
+        ],
+    },
+    "delisting_evasion": {
+        "name": "The Delisting Evasion",
+        "description": "자본잠식·영업손실로 상장폐지 위기 → 연말 거액 유상증자(가장납입) + 재무제표 과대계상 → 요건 면탈 → 횡령",
+        "signal_sequence": ["8.1", "2.4", "6.1", "4.3"],
+        "timeline_months": 9,
+        "severity": "CRITICAL",
+        "field_evidence": [
+            "2024-03-25 금감원: 좀비기업 15개사 부당이득 1,694억원 — 연말 유상증자 상폐요건 면탈 패턴",
+            "2026-04-19 금감원: 상폐요건 강화 후 불법행위 급증, 허위 자기자본 확충 적발",
+        ],
+    },
+    "fake_new_biz": {
+        "name": "The Fake New Business Pump",
+        "description": "주업과 무관한 테마사업(2차전지·AI·우주항공 등) 허위 발표 + 형식적 MOU·페이퍼컴퍼니 → 테마주 편승 주가급등 → 최대주주 주식 고가매도",
+        "signal_sequence": ["5.4", "4.3", "7.2", "7.1"],
+        "timeline_months": 6,
+        "severity": "CRITICAL",
+        "field_evidence": [
+            "2024-01-18 금감원: 허위신사업 집중조사 — 20건 중 90%가 코스닥, 50%가 상폐·거래정지",
+            "2025-05-21 금감원: B사 해외광물 허위발표 주가 24% 상승 후 수십억 부당이득",
+            "2023-10-31 금감원: 신사업 추진실적 전무 129사 중 횡령·감사거절 22%",
         ],
     },
 }
