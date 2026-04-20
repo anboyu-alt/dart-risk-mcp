@@ -28,6 +28,7 @@ from .core import (
     find_pattern_match,
     is_amendment_disclosure,
     list_document_sections,
+    load_catalog_excerpt,
     match_signals,
     resolve_corp,
 )
@@ -211,6 +212,10 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
     if timeline_text:
         lines += ["", "━━ 위기 타임라인 ━━", timeline_text]
 
+    catalog = load_catalog_excerpt(tax_ids_all)
+    if catalog:
+        lines += ["", catalog]
+
     return "\n".join(lines)
 
 
@@ -278,6 +283,12 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
         text = fetch_document_text(rcept_no, _DART_API_KEY, max_chars=500)
         if text:
             lines += ["", "━━ 원문 요약 (첫 500자) ━━", text[:500]]
+
+    from .core.signals import SIGNAL_KEY_TO_TAXONOMY as _SKT
+    all_tax_ids = list({tid for s in matched for tid in _SKT.get(s["key"], [])})
+    catalog = load_catalog_excerpt(all_tax_ids)
+    if catalog:
+        lines += ["", catalog]
 
     return "\n".join(lines)
 
@@ -355,6 +366,11 @@ def find_risk_precedents(signal_types: list[str], lookback_days: int = 90) -> st
     level = _risk_level(total)
     emoji = _risk_emoji(level)
     lines.append(f"{emoji} 신호 합산 점수: **{total}점** ({level})")
+
+    all_tax_ids = list({tid for k in valid_keys for tid in SIGNAL_KEY_TO_TAXONOMY.get(k, [])})
+    catalog = load_catalog_excerpt(all_tax_ids)
+    if catalog:
+        lines += ["", catalog]
 
     return "\n".join(lines)
 

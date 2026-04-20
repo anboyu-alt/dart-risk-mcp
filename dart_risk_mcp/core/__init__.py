@@ -16,6 +16,7 @@ from .dart_client import (
 from .signals import match_signals, is_amendment_disclosure, SIGNAL_TYPES, SIGNAL_KEY_TO_TAXONOMY
 from .cb_extractor import extract_cb_investors
 from .taxonomy import calculate_risk_score, find_pattern_match, estimate_crisis_timeline
+from .catalog import load_catalog_excerpt
 
 __all__ = [
     "resolve_corp",
@@ -39,4 +40,5 @@ __all__ = [
     "calculate_risk_score",
     "find_pattern_match",
     "estimate_crisis_timeline",
+    "load_catalog_excerpt",
 ]
