@@ -12,6 +12,9 @@ from .dart_client import (
     fetch_shareholder_status,
     fetch_executive_compensation,
     fetch_insider_timeline,
+    fetch_fund_usage,
+    fetch_major_decision,
+    resolve_decision_type,
 )
 from .signals import match_signals, is_amendment_disclosure, SIGNAL_TYPES, SIGNAL_KEY_TO_TAXONOMY
 from .cb_extractor import extract_cb_investors
@@ -40,5 +43,8 @@ __all__ = [
     "calculate_risk_score",
     "find_pattern_match",
     "estimate_crisis_timeline",
+    "fetch_fund_usage",
+    "fetch_major_decision",
+    "resolve_decision_type",
     "load_catalog_excerpt",
 ]
