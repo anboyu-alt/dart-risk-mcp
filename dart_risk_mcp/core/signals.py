@@ -62,6 +62,12 @@ SIGNAL_KEY_TO_TAXONOMY: dict[str, list[str]] = {
     "DECISION_RELATED_PARTY": ["4.2"],
     "DECISION_OVERSIZED":     ["5.3"],
     "DECISION_NO_EXTVAL":     ["4.3"],
+    # v0.6.0: 자본 이벤트 반복·재무 이상
+    "CAPITAL_CHURN":       ["2.5"],
+    "AR_SURGE":            ["6.1"],
+    "INVENTORY_SURGE":     ["6.1"],
+    "CASH_GAP":            ["6.1"],
+    "CAPITAL_IMPAIRMENT":  ["8.2"],
     # 기존 호환 키
     "MGMT":          ["3.4", "5.4"],
 }
@@ -538,7 +544,27 @@ SIGNAL_TYPES = [
         "score": 3,
         "keywords": [],
     },
+    # ── v0.6.0: 자본 이벤트 반복·재무 이상 (프로그램적 부착) ─────
+    {"key": "CAPITAL_CHURN", "label": "자본 이벤트 과다 반복", "score": 7, "keywords": []},
+    {"key": "AR_SURGE", "label": "매출채권/매출 비율 급등", "score": 8, "keywords": []},
+    {"key": "INVENTORY_SURGE", "label": "재고자산/매출 비율 급등", "score": 7, "keywords": []},
+    {"key": "CASH_GAP", "label": "순이익·현금흐름 괴리", "score": 8, "keywords": []},
+    {"key": "CAPITAL_IMPAIRMENT", "label": "자본잠식 근접", "score": 9, "keywords": []},
 ]
+
+
+# 자본 이벤트로 분류되는 신호 키 (track_capital_structure에서 필터링 기준)
+CAPITAL_EVENT_KEYS = frozenset({
+    "3PCA",           # 3자배정 유상증자
+    "RIGHTS_UNDER",   # 주주배정/일반공모 유상증자
+    "GAMJA_MERGE",    # 감자
+    "REVERSE_SPLIT",  # 주식병합·액면병합
+    "TREASURY",       # 자사주 취득/처분/소각
+    "CB_BW",          # 전환사채·신주인수권부사채
+    "EB",             # 교환사채
+    "RCPS",           # 전환상환우선주
+    "TREASURY_EB",    # 자사주 EB
+})
 
 
 def match_signals(report_nm: str) -> list[dict]:
