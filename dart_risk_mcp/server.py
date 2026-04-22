@@ -7,6 +7,7 @@
 """
 
 import os
+from datetime import datetime, timedelta
 
 from mcp.server.fastmcp import FastMCP
 
@@ -105,11 +106,7 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
 
     # 2. 공시 목록 조회
     disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days)
-    if not disclosures:
-        return (
-            f"📋 **{corp_name}** ({stock_code or corp_code})\n\n"
-            f"최근 {lookback_days}일간 탐지된 의심 공시가 없습니다."
-        )
+    # (조기 반환 제거 — 공시가 없어도 v0.6.0 자본 churn / 재무 이상 스캔은 별도로 수행)
 
     # 3. 신호 분류 + 정정공시 필터
     signal_events: list[dict] = []
@@ -181,6 +178,53 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
                 "rcept_no": "",
                 "is_amendment": False,
             })
+
+    # ============ v0.6.0 블록 시작 ============
+    # 자본 churn 탐지 (최근 12개월 window)
+    try:
+        churn = detect_capital_churn(signal_events, lookback_years=1)
+        if "CAPITAL_CHURN" in churn["flags"]:
+            signal_events.append({
+                "key": "CAPITAL_CHURN",
+                "label": "자본 이벤트 과다 반복",
+                "score": 7,
+                "report_nm": f"최근 12개월 내 자본 이벤트 {churn['max_12m_count']}건 집중",
+                "rcept_dt": "",
+                "rcept_no": "",
+                "is_amendment": False,
+            })
+    except Exception:
+        churn = {"flags": [], "events": [], "max_12m_count": 0, "total_events": 0, "by_year": {}}
+
+    # 재무이상 스캔 (당기/전기)
+    _v6_labels = {
+        "AR_SURGE": ("매출채권/매출 비율 급등", 8),
+        "INVENTORY_SURGE": ("재고자산/매출 비율 급등", 7),
+        "CASH_GAP": ("순이익·현금흐름 괴리", 8),
+        "CAPITAL_IMPAIRMENT": ("자본잠식 근접", 9),
+    }
+    fs_flags: list[str] = []
+    fs_metrics: list[dict] = []
+    try:
+        _year = str(datetime.now().year - 1)
+        fs_list = fetch_financial_statements(corp_code, _DART_API_KEY, _year, "annual")
+        if fs_list:
+            _cur, _pri = _fs_response_to_periods({"list": fs_list})
+            fs_flags, fs_metrics = detect_financial_anomaly(_cur, _pri)
+            for f in fs_flags:
+                label, score = _v6_labels[f]
+                signal_events.append({
+                    "key": f,
+                    "label": label,
+                    "score": score,
+                    "report_nm": f"{_year} 재무제표 YoY 이상",
+                    "rcept_dt": "",
+                    "rcept_no": "",
+                    "is_amendment": False,
+                })
+    except Exception:
+        pass
+    # ============ v0.6.0 블록 끝 ============
 
     if not signal_events:
         return (
@@ -279,6 +323,44 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
             )
         if failed_decisions:
             lines.append(f"  (추가 {failed_decisions}건 구조화 조회 실패)")
+
+    # v0.6.0 자본 변동 타임라인 (최근 12개월 요약)
+    if churn.get("events"):
+        lines.append("")
+        lines.append("## 📊 자본 변동 타임라인 (최근 12개월)")
+        _cutoff = (datetime.now() - timedelta(days=365)).strftime("%Y%m%d")
+        recent = [e for e in churn["events"] if (e.get("rcept_dt") or "").replace("-", "") >= _cutoff]
+        if recent:
+            for e in recent[:10]:
+                lines.append(f"- {e['rcept_dt']} `{e['key']}` {e['report_nm']}")
+            if len(recent) > 10:
+                lines.append(f"- ... (+{len(recent) - 10}건)")
+        else:
+            lines.append("- 최근 12개월 내 자본 이벤트 없음")
+
+    # v0.6.0 재무 이상 스캔
+    if fs_metrics:
+        lines.append("")
+        lines.append("## 📊 재무 이상 스캔")
+        flagged_only = [m for m in fs_metrics if m.get("flagged")]
+        if flagged_only:
+            for m in flagged_only:
+                if m["name"] == "순이익 vs 영업현금흐름":
+                    lines.append(
+                        f"- 🚩 **CASH_GAP**: 순이익 {m['current_ni']:,} vs 영업현금흐름 {m['current_ocf']:,}"
+                    )
+                elif "current" in m and "prior" in m and "delta" in m:
+                    lines.append(
+                        f"- 🚩 **{_v6_flag_label(m['name'])}**: "
+                        f"{m['name']} {m['current']:.1f}% (전기 {m['prior']:.1f}%, Δ {m['delta']:+.1f}%p)"
+                    )
+                else:
+                    lines.append(
+                        f"- 🚩 **{_v6_flag_label(m['name'])}**: "
+                        f"{m['name']} {m.get('current', 0):.1f}%"
+                    )
+        else:
+            lines.append("- 모든 지표 정상")
 
     # v0.5.0: 자금사용내역 요약 섹션 ---------------------------
     if fund_records:
