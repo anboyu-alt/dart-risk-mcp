@@ -1505,6 +1505,50 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
     return "\n".join(lines)
 
 
+@mcp.tool()
+def get_major_decision(rcept_no: str, decision_type: str = "") -> str:
+    """DS005 주요사항보고서 12종 결정 공시(양수도·합병·분할·교환)를
+    구조화 필드로 조회한다. related_party_hollowing·delisting_evasion
+    패턴의 경로 추적에 사용.
+
+    Args:
+        rcept_no: 14자리 접수번호
+        decision_type: 결정 유형 (미지정 시 지원 타입 안내).
+            business_acq | business_div | tangible_acq | tangible_div |
+            stock_acq | stock_div | bond_acq | bond_div |
+            merger | demerger | demerger_merger | stock_exchange
+    """
+    if not _DART_API_KEY:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+
+    result = fetch_major_decision(rcept_no, _DART_API_KEY, decision_type)
+    if "error" in result:
+        return f"❌ {result['error']}"
+
+    lines = [
+        f"📑 **주요사항 결정 공시** (rcept_no={rcept_no})",
+        f"- 유형: `{result['decision_type']}`",
+        f"- 상대방: {result['counterparty'] or '(미기재)'}",
+        f"- 금액: {result['amount']:,}원",
+        f"- 자산대비: {result['asset_ratio']:.2f}%",
+        f"- 특수관계인: {'예' if result['related_party'] else '아니오'}",
+        f"- 외부평가: {'실시' if result['external_eval'] else '미실시'}",
+        f"- 결의일: {result['bddd'] or '(미기재)'}",
+    ]
+    if result["flags"]:
+        lines.append("")
+        lines.append("🚨 **탐지 플래그**: " + ", ".join(result["flags"]))
+        tax_ids = sorted({
+            t for f in result["flags"]
+            for t in SIGNAL_KEY_TO_TAXONOMY.get(f, [])
+        })
+        if tax_ids:
+            lines.append(f"관련 taxonomy ID: {', '.join(tax_ids)}")
+    lines.append("")
+    lines.append(f"원문 전체 보기: `view_disclosure('{rcept_no}')`")
+    return "\n".join(lines)
+
+
 def main() -> None:
     import sys
     transport = "sse" if "--sse" in sys.argv else "stdio"
