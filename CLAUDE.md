@@ -33,7 +33,7 @@ dart_risk_mcp/
 
 ---
 
-## MCP 도구 17개
+## MCP 도구 19개
 
 ### 1. `analyze_company_risk(company_name, lookback_days=90)`
 
@@ -187,6 +187,24 @@ dart_risk_mcp/
 - `lookback_years` 범위: 1~5년
 - 반환: 보고자별 Δ 테이블 + 클러스터 알림 + 공시 지연 고지
 
+### 18. `track_fund_usage(company_name, lookback_years=3)` ✨
+
+유상증자·CB 발행 자금의 계획 vs 실제 집행을 대조합니다 (DS002).
+
+- 내부 흐름: `resolve_corp` → `fetch_fund_usage` (공모·사모 2개 엔드포인트 통합)
+- 이상 플래그: `FUND_DIVERSION`(용도 변경), `FUND_UNREPORTED`(실제 집행 미보고)
+- `lookback_years` 범위: 1~5년
+- 반환: 납입일·계획금액·실제집행·차이사유 + 플래그 + 금감원 카탈로그(`zombie_ma`, `fake_new_biz`) 발췌
+
+### 19. `get_major_decision(rcept_no, corp_cls="K", decision_type="")` ✨
+
+타법인주식·영업·자산 양수도, 합병·분할 등 DS005 주요 결정 공시의 상대방·규모·외부평가를 조회합니다.
+
+- 내부 흐름: `resolve_decision_type`(공시명 → decision_type) → `fetch_major_decision` (12개 DS005 엔드포인트 중 자동 선택)
+- 이상 플래그: `DECISION_RELATED_PARTY`(특수관계 거래), `DECISION_OVERSIZED`(자산총액 대비 과대), `DECISION_NO_EXTVAL`(외부평가 미시행)
+- `corp_cls`: `Y`(유가증권), `K`(코스닥), `N`(코넥스), `E`(기타)
+- `decision_type` 자동 결정 가능(공시명 기반). 수동 지정 시 허용값: `stock_acq`/`stock_div`/`merger`/`demerger`/`business_acq`/`business_div`/`tangible_acq`/`tangible_div`/`bond_acq`/`bond_div`/`demerger_merger`/`stock_exchange`
+
 ---
 
 ## 핵심 내부 함수
@@ -212,6 +230,9 @@ dart_risk_mcp/
 | `fetch_market_disclosures(api_key, bgn_de, end_de, pblntf_ty, max_pages)` | corp_code 없이 시장 전체 공시 조회 |
 | `fetch_executive_compensation(corp_code, api_key, year, report_type)` | 보수 4개 엔드포인트 통합 조회 |
 | `fetch_insider_timeline(corp_code, api_key, lookback_years)` | elestock + hyslrSttus 연도별 시계열 |
+| `fetch_fund_usage(corp_code, api_key, corp_cls, lookback_years)` | 공모·사모 자금사용 2개 엔드포인트 통합 + 이상 플래그 탐지 |
+| `fetch_major_decision(rcept_no, corp_cls, decision_type)` | 12개 DS005 주요결정 엔드포인트 중 decision_type에 따라 자동 선택 |
+| `resolve_decision_type(report_nm)` | 공시명 → decision_type 키 자동 추론 (`[기재정정]` 등 접두어 제거) |
 
 ### DART API 엔드포인트
 
@@ -225,6 +246,14 @@ dart_risk_mcp/
 | `GET /api/fnlttMultiAcnt.json` | 다중 기업 재무 비교 (corp_codes 목록) |
 | `GET /api/majorstock.json` | 최대주주 현황 (corp_code, 연도) |
 | `GET /api/elestock.json` | 5% 이상 대량보유 현황 (corp_code, 연도) |
+| `GET /api/prstInvstmEntrCptalUseDtls.json` | 공모 자금 사용 내역 (corp_code, 연도) |
+| `GET /api/otrCptalUseDtls.json` | 사모 자금 사용 내역 (corp_code, 연도) |
+| `GET /api/bsnAcqsDecsn.json` / `bsnTrfDecsn.json` | 영업 양수/양도 결정 (rcept_no) |
+| `GET /api/tsstkAqDecsn.json` / `tsstkDpDecsn.json` | 유형자산 양수/양도 결정 |
+| `GET /api/otcprStkInvscrTrfDecsn.json` / `otcprStkInvscrAcqsDecsn.json` | 타법인 주식 양수/양도 |
+| `GET /api/bdwtIsDecsn.json` / `cvbdIsDecsn.json` | 채권 인수/발행 결정 |
+| `GET /api/cmpMgDecsn.json` / `cmpDvDecsn.json` / `cmpDvmgDecsn.json` | 합병·분할·분할합병 결정 |
+| `GET /api/stkExtrDecsn.json` | 주식교환·이전 결정 |
 
 모든 요청에 `crtfc_key` 파라미터로 API 키 전달.
 
@@ -236,6 +265,8 @@ dart_risk_mcp/
 |------|-----------|-----|
 | 기업 코드 목록 | `~/.cache/dart-risk-mcp/corp_codes.json` | 24시간 |
 | 공시 원문 ZIP | 메모리 `_zip_cache` (최대 5건) | 10분 |
+| 자금사용 내역 | 메모리 `_fund_usage_cache` (최대 20건) | 10분 |
+| 주요결정 공시 | 메모리 `_major_decision_cache` (최대 50건) | 10분 |
 
 ---
 

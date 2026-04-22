@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-04-22
+
+### Added
+- **신규 MCP 도구 2개** (총 17개 → 19개):
+  - `track_fund_usage` — 유상증자·CB 자금 사용 계획 vs 실제 집행 대조 (DS002 `/api/prstInvstmEntrCptalUseDtls.json`·`/otrCptalUseDtls.json`). 용도 변경(`FUND_DIVERSION`), 미보고(`FUND_UNREPORTED`) 이상 플래그 탐지
+  - `get_major_decision` — 타법인주식·영업·자산 양수도, 합병·분할 등 12개 DS005 주요 결정 공시의 상대방·규모·외부평가 공시 조회. 특수관계 거래(`DECISION_RELATED_PARTY`), 자산총액 대비 과대(`DECISION_OVERSIZED`), 외부평가 미시행(`DECISION_NO_EXTVAL`) 플래그 탐지
+- **신규 신호 키 5개**: `FUND_DIVERSION`(5.3/8.1), `FUND_UNREPORTED`(4.3), `DECISION_RELATED_PARTY`(4.2), `DECISION_OVERSIZED`(5.3), `DECISION_NO_EXTVAL`(4.3)
+- `fetch_fund_usage`, `fetch_major_decision`, `resolve_decision_type` — DS002/DS005 엔드포인트 래퍼 + LRU+TTL 메모리 캐시 (fund_usage 20건/10분, major_decision 50건/10분)
+
+### Changed
+- `check_disclosure_risk` — 주요 결정 공시(DS005) 탐지 시 자금 흐름·상대방 섹션 자동 첨부
+- `analyze_company_risk` — 자금사용내역·주요 결정 상대방 플래그를 신호 이벤트에 합산해 최종 점수·복합 패턴 판정에 반영
+- `build_event_timeline` — 이벤트 튜플을 6-튜플로 확장(접수번호 포함)해 주요 결정 상대방 정보를 렌더링에 포함. 신규 5개 신호 키 단계 매핑 추가
+
+### Infra
+- `dart_client._fund_usage_cache`·`_major_decision_cache` — OrderedDict LRU + TTL 범용 캐시 헬퍼(`_cache_get`·`_cache_set`) 추가
+
 ## [0.4.0] — 2026-04-21
 
 ### Added
