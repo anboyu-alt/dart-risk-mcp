@@ -290,13 +290,15 @@ dart_risk_mcp/
 
 ### 새 복합 패턴 추가
 
-`taxonomy.py` → `CROSS_SIGNAL_PATTERNS` 리스트에 추가:
+`taxonomy.py` → `CROSS_SIGNAL_PATTERNS` 딕셔너리(dict[str, dict] — key=패턴명, value=상세)에 항목 추가:
 ```python
-{
+"패턴명": {
     "name": "패턴명",
-    "signals": ["taxonomy_id_1", "taxonomy_id_2"],  # 이 신호들이 모두 탐지되면 매칭
     "description": "패턴 설명",
+    "signal_sequence": ["taxonomy_id_1", "taxonomy_id_2"],  # 이 신호들이 모두 탐지되면 매칭
+    "timeline_months": 12,
     "severity": "CRITICAL",  # CRITICAL / HIGH / MEDIUM / LOW
+    "field_evidence": ["실제 사례 근거"],
 }
 ```
 

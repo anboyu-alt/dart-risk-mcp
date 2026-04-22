@@ -8,7 +8,7 @@ class TestV6Taxonomy(unittest.TestCase):
     def test_2_7_exists(self):
         self.assertIn("2.7", TAXONOMY)
         entry = TAXONOMY["2.7"]
-        self.assertEqual(entry["label"], "자본 이벤트 과다 반복")
+        self.assertEqual(entry["name"], "자본 이벤트 과다 반복")
         self.assertEqual(entry["severity"], "HIGH")
 
     def test_capital_churn_pattern_registered(self):

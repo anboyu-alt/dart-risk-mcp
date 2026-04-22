@@ -394,21 +394,23 @@ TAXONOMY = {
     },
     "2.7": {
         "id": "2.7",
-        "label": "자본 이벤트 과다 반복",
+        "category": "Capital Structure Manipulation",
+        "name": "자본 이벤트 과다 반복",
+        "description": "12개월 내 증자·감자·자사주·CB/BW/EB 등 자본 이벤트가 비정상적으로 집중",
+        "base_score": 4,
         "severity": "HIGH",
-        "category": "Category 2 자본구조",
+        "crisis_timeline_months": 12,
         "keywords": [],  # 복합 판정이라 키워드 없음
-        "indicators": [
+        "red_flags": [
             "12개월 내 증자·감자·자사주 등 자본 이벤트 3건 이상",
             "CB·BW·EB 연속 발행",
             "자본구조 리듬의 비정상성",
         ],
-        "field_evidence": (
+        "field_evidence": [
             "금감원 2024·2025 주가조작 적발 사례(동성제약·헬릭스미스·셀리버리 등) "
-            "공통 특징: 12개월 내 3~6건의 자본 이벤트 집중"
-        ),
-        "typical_timeline": "6~18개월",
-        "related_patterns": ["zombie_ma", "fake_new_biz", "delisting_evasion"],
+            "공통 특징: 12개월 내 3~6건의 자본 이벤트 집중",
+        ],
+        "investor_implication": "잦은 자본 이벤트로 기존 주주 지분 희석·자본구조 불투명성 확대; 무자본 M&A·허위 신사업·상폐 회피 세력의 공통 지표",
     },
 
     # CATEGORY 3: Ownership & Control (5 signals)
@@ -1113,9 +1115,11 @@ CROSS_SIGNAL_PATTERNS = {
         "name": "capital_churn_anomaly",
         "description": "잦은 자본 변동과 공시 지연·위반이 겹치면 자본 투명성 훼손 우려",
         "signal_sequence": ["2.7", "4.3"],
-        "signals": ["2.7", "4.3"],
         "timeline_months": 12,
         "severity": "HIGH",
+        "field_evidence": [
+            "금감원 2024·2025 주가조작 적발 — 자본 이벤트 반복 + 공시의무 위반 동시 발생 공통",
+        ],
     },
 }
 
