@@ -15,8 +15,11 @@ from .dart_client import (
     fetch_fund_usage,
     fetch_major_decision,
     resolve_decision_type,
+    detect_capital_churn,
+    detect_financial_anomaly,
+    _fs_response_to_periods,
 )
-from .signals import match_signals, is_amendment_disclosure, SIGNAL_TYPES, SIGNAL_KEY_TO_TAXONOMY
+from .signals import match_signals, is_amendment_disclosure, SIGNAL_TYPES, SIGNAL_KEY_TO_TAXONOMY, CAPITAL_EVENT_KEYS
 from .cb_extractor import extract_cb_investors
 from .taxonomy import calculate_risk_score, find_pattern_match, estimate_crisis_timeline
 from .catalog import load_catalog_excerpt
@@ -47,4 +50,7 @@ __all__ = [
     "fetch_major_decision",
     "resolve_decision_type",
     "load_catalog_excerpt",
+    "detect_capital_churn",
+    "detect_financial_anomaly",
+    "CAPITAL_EVENT_KEYS",
 ]
