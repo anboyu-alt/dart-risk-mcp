@@ -282,6 +282,27 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
                     amt = _format_amount(inv.get("amount", ""))
                     lines.append(f"• {inv['name']}" + (f" — {amt}" if amt else ""))
 
+    # v0.5.0: DS005 결정 공시면 구조화 필드 추가 ---------------
+    dtype = resolve_decision_type(report_name)
+    if dtype and rcept_no and _DART_API_KEY:
+        dec = fetch_major_decision(rcept_no, _DART_API_KEY, dtype)
+        if "error" not in dec:
+            lines += ["", "📑 **결정 공시 구조화 정보**"]
+            lines.append(f"- 유형: `{dec['decision_type']}`")
+            lines.append(f"- 상대방: {dec['counterparty'] or '(미기재)'}")
+            lines.append(
+                f"- 금액: {dec['amount']:,}원 "
+                f"(자산대비 {dec['asset_ratio']:.2f}%)"
+            )
+            lines.append(
+                f"- 특수관계인: {'예' if dec['related_party'] else '아니오'}"
+            )
+            lines.append(
+                f"- 외부평가: {'실시' if dec['external_eval'] else '미실시'}"
+            )
+            if dec["flags"]:
+                lines.append("- 플래그: " + ", ".join(dec["flags"]))
+
     # 원문 요약
     if rcept_no and _DART_API_KEY:
         text = fetch_document_text(rcept_no, _DART_API_KEY, max_chars=500)
