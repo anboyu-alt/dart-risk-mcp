@@ -496,6 +496,12 @@ _PHASE_MAP = {
     "INSOLVENCY": "탈출기", "DEBT_RESTR": "탈출기", "GOING_CONCERN": "탈출기",
     "ASSET_SPIRAL": "탈출기", "MEETING_VIOL": "탈출기", "DISCLOSURE_VIOL": "탈출기",
     "CAPITAL_RED": "탈출기", "ACTIVIST": "탈출기",
+    # v0.5.0: 자금흐름·주요결정
+    "DECISION_RELATED_PARTY": "진입기",
+    "FUND_DIVERSION":         "진입기",
+    "DECISION_OVERSIZED":     "심화기",
+    "DECISION_NO_EXTVAL":     "심화기",
+    "FUND_UNREPORTED":        "심화기",
 }
 _PHASE_ORDER = {"진입기": 0, "심화기": 1, "탈출기": 2}
 _PHASE_EMOJI = {"진입기": "🟢", "심화기": "🟡", "탈출기": "🔴"}
@@ -540,12 +546,13 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
     for d in disclosures:
         report_nm = d.get("report_nm", "")
         rcept_dt = d.get("rcept_dt", "")[:10]
+        rcept_no = d.get("rcept_no", "")
         if is_amendment_disclosure(report_nm):
             continue
         matched = match_signals(report_nm)
         for sig in matched:
             phase = _PHASE_MAP.get(sig["key"], "심화기")
-            events.append((rcept_dt, phase, sig["key"], sig["label"], report_nm))
+            events.append((rcept_dt, phase, sig["key"], sig["label"], report_nm, rcept_no))
             tax_ids = SIGNAL_KEY_TO_TAXONOMY.get(sig["key"], [])
             all_tax_ids.update(tax_ids)
 
@@ -584,6 +591,16 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
         lines.append(f"{emoji} **[{phase_name}]**")
         for evt in phase_events:
             lines.append(f"  • {evt[0]}  [{evt[3]}]  {evt[4]}")
+            # v0.5.0: 결정 공시면 상대방 한 줄 추가
+            _dtype = resolve_decision_type(evt[4])
+            _evt_rcept = evt[5] if len(evt) > 5 else ""
+            if _dtype and _evt_rcept and _DART_API_KEY:
+                _dec = fetch_major_decision(_evt_rcept, _DART_API_KEY, _dtype)
+                if "error" not in _dec and _dec["counterparty"]:
+                    lines.append(
+                        f"      └ 상대방: {_dec['counterparty']} "
+                        f"({_dec['amount']:,}원)"
+                    )
         lines.append("")
 
     if pattern:
