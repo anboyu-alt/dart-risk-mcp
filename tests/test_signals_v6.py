@@ -24,7 +24,8 @@ class TestV6Signals(unittest.TestCase):
     def test_capital_event_keys_is_frozen_set(self):
         self.assertIsInstance(CAPITAL_EVENT_KEYS, (set, frozenset))
         expected = {"3PCA", "RIGHTS_UNDER", "GAMJA_MERGE", "REVERSE_SPLIT",
-                    "TREASURY", "CB_BW", "EB", "RCPS", "TREASURY_EB"}
+                    "TREASURY", "CB_BW", "EB", "RCPS", "TREASURY_EB",
+                    "CB_ROLLOVER", "CB_BUYBACK"}
         self.assertEqual(CAPITAL_EVENT_KEYS, expected)
 
 

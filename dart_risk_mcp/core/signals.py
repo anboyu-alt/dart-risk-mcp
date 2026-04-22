@@ -553,18 +553,28 @@ SIGNAL_TYPES = [
 ]
 
 
-# 자본 이벤트로 분류되는 신호 키 (track_capital_structure에서 필터링 기준)
-CAPITAL_EVENT_KEYS = frozenset({
+# 희석성 자본 이벤트 — 주주가치 훼손 우려가 있는 이벤트
+# 반복 발생 시 주가조작·무자본 M&A 의심 강화
+DILUTIVE_CAPITAL_EVENTS = frozenset({
     "3PCA",           # 3자배정 유상증자
     "RIGHTS_UNDER",   # 주주배정/일반공모 유상증자
     "GAMJA_MERGE",    # 감자
     "REVERSE_SPLIT",  # 주식병합·액면병합
-    "TREASURY",       # 자사주 취득/처분/소각
     "CB_BW",          # 전환사채·신주인수권부사채
     "EB",             # 교환사채
     "RCPS",           # 전환상환우선주
+    "CB_ROLLOVER",    # CB 차환 (연속차입)
+})
+
+# 비희석성 자본 이벤트 — 정상 기업도 반복 수행하는 이벤트
+NON_DILUTIVE_CAPITAL_EVENTS = frozenset({
+    "TREASURY",       # 자사주 취득/처분/소각
+    "CB_BUYBACK",     # CB 조기상환
     "TREASURY_EB",    # 자사주 EB
 })
+
+# 하위 호환 — 전체 자본 이벤트 집합
+CAPITAL_EVENT_KEYS = DILUTIVE_CAPITAL_EVENTS | NON_DILUTIVE_CAPITAL_EVENTS
 
 
 def match_signals(report_nm: str) -> list[dict]:
