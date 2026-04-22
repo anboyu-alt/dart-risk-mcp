@@ -22,7 +22,9 @@ from .core import (
     fetch_document_text,
     fetch_executive_compensation,
     fetch_financial_statements,
+    fetch_fund_usage,
     fetch_insider_timeline,
+    fetch_major_decision,
     fetch_multi_financial,
     fetch_shareholder_status,
     find_pattern_match,
@@ -31,6 +33,8 @@ from .core import (
     load_catalog_excerpt,
     match_signals,
     resolve_corp,
+    resolve_decision_type,
+    SIGNAL_KEY_TO_TAXONOMY,
 )
 
 mcp = FastMCP("dart-risk-analyzer")
@@ -1436,6 +1440,68 @@ def check_disclosure_anomaly(company_name: str, lookback_days: int = 365) -> str
         "   법적 판단이나 투자 결정의 근거로 사용할 수 없습니다.",
         "💡 세부 분석: analyze_company_risk(company_name=...)",
     ]
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
+    """공모/사모 자금 사용내역(계획 vs 실제)을 조회해 조달자금 유용·
+    목적외 사용 신호를 탐지한다. zombie_ma·fake_new_biz 패턴의 핵심 증거.
+
+    Args:
+        company_name: 기업명 또는 6자리 종목코드
+        lookback_years: 조회 연도 수 (1~5, 기본 3)
+    """
+    if not _DART_API_KEY:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+    if not isinstance(lookback_years, int) or not (1 <= lookback_years <= 5):
+        return "❌ lookback_years는 1~5 사이 정수여야 합니다."
+
+    corp_name, info = resolve_corp(company_name, _DART_API_KEY)
+    if not info:
+        return f"❌ '{company_name}'에 해당하는 기업을 찾을 수 없습니다."
+
+    records = fetch_fund_usage(info["corp_code"], _DART_API_KEY, lookback_years)
+    if not records:
+        return (
+            f"💰 **{corp_name}** 자금사용내역\n\n"
+            f"최근 {lookback_years}년간 등록된 공모/사모 자금사용내역이 없습니다.\n"
+            f"(정기보고서(사업/반기/분기) 제출 시점에만 갱신됩니다.)"
+        )
+
+    lines = [
+        f"💰 **{corp_name}** 조달자금 사용내역 (lookback={lookback_years}년)",
+        f"총 {len(records)}건 조회",
+        "",
+    ]
+    anomaly_records = []
+    for rec in records:
+        flags_str = " ".join(f"⚠{f}" for f in rec["flags"])
+        if rec["flags"]:
+            anomaly_records.append(rec)
+        lines.append(
+            f"[{rec['year']} {rec['kind']} 회차{rec['tm']}] "
+            f"납입 {rec['pay_amount']:,}원"
+        )
+        lines.append(
+            f"  계획: {rec['plan_useprps'][:60] or '(공란)'} "
+            f"({rec['plan_amount']:,}원)"
+        )
+        lines.append(
+            f"  실제: {rec['real_dtls_cn'][:60] or '(공란)'} "
+            f"({rec['real_dtls_amount']:,}원) {flags_str}"
+        )
+        if rec["dffrnc_resn"]:
+            lines.append(f"  차이사유: {rec['dffrnc_resn'][:100]}")
+        lines.append("")
+
+    if anomaly_records:
+        lines.append(f"🚨 **이상 플래그 {len(anomaly_records)}건**")
+        lines.append("")
+        lines.append(load_catalog_excerpt(["zombie_ma", "fake_new_biz"]))
+    else:
+        lines.append("✅ 탐지된 이상 플래그 없음")
+
     return "\n".join(lines)
 
 
