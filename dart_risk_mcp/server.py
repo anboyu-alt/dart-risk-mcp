@@ -1750,6 +1750,80 @@ def scan_financial_anomaly(
     return "\n".join(lines)
 
 
+@mcp.tool()
+def track_capital_structure(
+    company_name: str,
+    lookback_years: int = 3,
+) -> str:
+    """
+    자본 이벤트(증자·감자·자사주·CB/BW/EB/RCPS 등)를 시간순으로 집계해
+    '자본 주무르기' 리듬을 탐지합니다.
+
+    Args:
+        company_name: 기업명 또는 종목코드(6자리).
+        lookback_years: 1~5(밖이면 3으로 강제).
+
+    Returns:
+        이벤트 총수·12개월 집중도·연도별 집계·시계열·플래그 텍스트.
+    """
+    api_key = os.environ.get("DART_API_KEY", "")
+    if not api_key:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+
+    if not isinstance(lookback_years, int) or not (1 <= lookback_years <= 5):
+        lookback_years = 3
+
+    corp_info = resolve_corp(company_name, api_key)
+    if not corp_info[1]:
+        return f"❌ 기업 '{company_name}'을(를) 찾을 수 없습니다."
+    corp_name, info = corp_info
+    corp_code = info["corp_code"]
+
+    disclosures = fetch_company_disclosures(corp_code, api_key, lookback_years * 365)
+
+    # match_signals로 신호 탐지 + 자본 이벤트만 필터는 detect_capital_churn이 처리
+    signal_events: list[dict] = []
+    for d in disclosures:
+        matches = match_signals(d.get("report_nm", ""))
+        for m in matches:
+            signal_events.append({
+                "key": m["key"],
+                "label": m["label"],
+                "score": m.get("score", 0),
+                "report_nm": d.get("report_nm", ""),
+                "rcept_dt": d.get("rcept_dt", ""),
+                "rcept_no": d.get("rcept_no", ""),
+                "is_amendment": is_amendment_disclosure(d.get("report_nm", "")),
+            })
+
+    result = detect_capital_churn(signal_events, lookback_years)
+
+    # 포맷
+    lines = [
+        f"📊 **{corp_name}** ({info.get('stock_code','')}) — 자본구조 추적 (최근 {lookback_years}년)",
+        "",
+        f"자본 이벤트 총 **{result['total_events']}건** | "
+        f"12개월 최대 집중도: **{result['max_12m_count']}건**"
+        + (f" | 🚩 CAPITAL_CHURN" if "CAPITAL_CHURN" in result["flags"] else ""),
+        "",
+    ]
+    if result["by_year"]:
+        lines.append("**연도별 집계**")
+        for y in sorted(result["by_year"].keys()):
+            lines.append(f"- {y}: {result['by_year'][y]}건")
+        lines.append("")
+    if result["events"]:
+        lines.append("**시계열** (최대 30건)")
+        for e in result["events"][:30]:
+            lines.append(f"- {e['rcept_dt']}  `{e['key']:<14}`  {e['report_nm']}")
+        if len(result["events"]) > 30:
+            lines.append(f"- ... (총 {len(result['events'])}건 중 30건 표시)")
+        lines.append("")
+    lines.append("📎 참고: 이 도구는 공시 '횟수·리듬' 탐지 전용. 정확한 희석률·금액은 "
+                 "`get_major_decision` 또는 `get_disclosure_document`로 개별 확인.")
+    return "\n".join(lines)
+
+
 def main() -> None:
     import sys
     transport = "sse" if "--sse" in sys.argv else "stdio"
