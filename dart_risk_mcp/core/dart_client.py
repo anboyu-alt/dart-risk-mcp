@@ -250,6 +250,101 @@ _zip_cache: dict[str, tuple[float, bytes]] = {}
 _ZIP_CACHE_MAX = 5
 _ZIP_CACHE_TTL = 600  # 10분
 
+# v0.5.0: fund_usage / major_decision LRU 캐시 ------------------
+_fund_usage_cache: dict[tuple, tuple[float, list]] = {}
+_FUND_CACHE_MAX = 20
+_FUND_CACHE_TTL = 600  # 10분
+
+_major_decision_cache: dict[str, tuple[float, dict]] = {}
+_MAJOR_CACHE_MAX = 50
+_MAJOR_CACHE_TTL = 600
+
+
+def _cache_get(cache: dict, key, ttl: int):
+    item = cache.get(key)
+    if item is None:
+        return None
+    ts, val = item
+    if time.time() - ts > ttl:
+        cache.pop(key, None)
+        return None
+    return val
+
+
+def _cache_set(cache: dict, key, val, limit: int) -> None:
+    if len(cache) >= limit and key not in cache:
+        oldest_key = min(cache.items(), key=lambda kv: kv[1][0])[0]
+        cache.pop(oldest_key, None)
+    cache[key] = (time.time(), val)
+
+
+# v0.5.0: 자금사용내역 엔드포인트 --------------------------------
+_FUND_USAGE_URLS = {
+    "public":  f"{DART_BASE}/pssrpCptalUseDtls.json",   # 2020016
+    "private": f"{DART_BASE}/prvsrpCptalUseDtls.json",  # 2020017
+}
+
+_FUND_DIVERSION_KEYWORDS = (
+    "목적 변경", "목적변경", "사용목적 변경",
+    "사업 취소", "사업취소", "계획 취소", "계획취소",
+    "일반 운영자금", "일반운영자금", "운영자금 전용", "운영자금으로",
+    "변경 사용", "변경사용", "유보",
+)
+
+
+def _to_int_safe(v) -> int:
+    if v is None or v == "":
+        return 0
+    try:
+        return int(str(v).replace(",", "").replace(" ", ""))
+    except (ValueError, TypeError):
+        return 0
+
+
+def _normalize_fund_usage(item: dict, kind: str, year: int) -> dict:
+    """공모(rs_*)/사모(mtrpt_*)/구필드를 통합 스키마로 정규화."""
+    plan_useprps = (
+        item.get("rs_cptal_use_plan_useprps")
+        or item.get("mtrpt_cptal_use_plan_useprps")
+        or item.get("cptal_use_plan")
+        or item.get("on_dclrt_cptal_use_plan")
+        or ""
+    )
+    plan_amount = _to_int_safe(
+        item.get("rs_cptal_use_plan_prcure_amount")
+        or item.get("mtrpt_cptal_use_plan_prcure_amount")
+        or item.get("pay_amount")
+    )
+    real_dtls_cn = (
+        item.get("real_cptal_use_dtls_cn")
+        or item.get("real_cptal_use_sttus")
+        or ""
+    )
+    return {
+        "kind": kind,
+        "year": year,
+        "tm": str(item.get("tm", "")),
+        "pay_de": str(item.get("pay_de", "")),
+        "pay_amount": _to_int_safe(item.get("pay_amount")),
+        "plan_useprps": str(plan_useprps).strip(),
+        "plan_amount": plan_amount,
+        "real_dtls_cn": str(real_dtls_cn).strip(),
+        "real_dtls_amount": _to_int_safe(item.get("real_cptal_use_dtls_amount")),
+        "dffrnc_resn": str(item.get("dffrnc_occrrnc_resn") or "").strip(),
+    }
+
+
+def _detect_fund_anomaly(rec: dict) -> list[str]:
+    flags: list[str] = []
+    if rec["plan_amount"] > 0 and (
+        rec["real_dtls_amount"] == 0 or not rec["real_dtls_cn"]
+    ):
+        flags.append("FUND_UNREPORTED")
+    dffrnc = rec["dffrnc_resn"]
+    if dffrnc and any(kw in dffrnc for kw in _FUND_DIVERSION_KEYWORDS):
+        flags.append("FUND_DIVERSION")
+    return flags
+
 
 def _fetch_document_zip(rcept_no: str, api_key: str) -> zipfile.ZipFile | None:
     """DART document.xml에서 ZIP 다운로드. 인메모리 캐시 적용 (최대 5건, TTL 10분)."""
@@ -1004,3 +1099,46 @@ def fetch_insider_timeline(
 
     records.sort(key=lambda r: r.get("rcept_dt", r.get("bsns_year", "")), reverse=True)
     return records
+
+
+def fetch_fund_usage(
+    corp_code: str,
+    api_key: str,
+    lookback_years: int = 3,
+) -> list[dict]:
+    """공모/사모 자금사용내역(DS002 2020016/17)을 lookback_years만큼 조회해 정규화 반환.
+
+    각 레코드에 `flags` 키(FUND_DIVERSION·FUND_UNREPORTED)가 부착된다.
+    API 호출 실패 또는 status!="000"인 연도·보고서 코드는 조용히 스킵한다.
+    """
+    cache_key = (corp_code, lookback_years)
+    cached = _cache_get(_fund_usage_cache, cache_key, _FUND_CACHE_TTL)
+    if cached is not None:
+        return cached
+
+    from datetime import date
+    current_year = date.today().year
+    results: list[dict] = []
+
+    for yr in range(current_year - lookback_years, current_year + 1):
+        for kind, url in _FUND_USAGE_URLS.items():
+            for reprt_code in ("11011", "11012", "11013", "11014"):
+                params = {
+                    "crtfc_key": api_key,
+                    "corp_code": corp_code,
+                    "bsns_year": str(yr),
+                    "reprt_code": reprt_code,
+                }
+                try:
+                    data = _retry("GET", url, params=params).json()
+                except Exception:
+                    continue
+                if data.get("status") != "000":
+                    continue
+                for item in data.get("list", []):
+                    rec = _normalize_fund_usage(item, kind, yr)
+                    rec["flags"] = _detect_fund_anomaly(rec)
+                    results.append(rec)
+
+    _cache_set(_fund_usage_cache, cache_key, results, _FUND_CACHE_MAX)
+    return results
