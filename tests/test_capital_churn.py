@@ -29,18 +29,19 @@ class TestDetectCapitalChurn(unittest.TestCase):
         self.assertNotIn("CAPITAL_CHURN", r["flags"])
         self.assertEqual(r["max_12m_count"], 2)
 
-    def test_three_events_12m_triggers_flag(self):
-        evs = [_ev("3PCA", "20250101"), _ev("CB_BW", "20250501"), _ev("TREASURY", "20251001")]
+    def test_three_dilutive_events_12m_triggers_flag(self):
+        # 희석성 3건 → 플래그 발동
+        evs = [_ev("3PCA", "20250101"), _ev("CB_BW", "20250501"), _ev("RIGHTS_UNDER", "20251001")]
         r = detect_capital_churn(evs, 3)
         self.assertIn("CAPITAL_CHURN", r["flags"])
         self.assertEqual(r["max_12m_count"], 3)
 
     def test_events_spread_over_24m_no_flag(self):
-        # 이벤트를 366일 이상 간격으로 배치: 어떤 365일 윈도우에도 2건까지만
+        # 366일 이상 간격 → 어떤 365일 윈도우에도 2건까지만
         evs = [
             _ev("3PCA", "20240101"),
-            _ev("3PCA", "20250201"),   # 396일 후
-            _ev("3PCA", "20260301"),   # 독립 윈도우
+            _ev("3PCA", "20250201"),
+            _ev("3PCA", "20260301"),
         ]
         r = detect_capital_churn(evs, 3)
         self.assertLessEqual(r["max_12m_count"], 2)
@@ -50,23 +51,71 @@ class TestDetectCapitalChurn(unittest.TestCase):
         evs = [
             _ev("3PCA", "20250101"),
             _ev("CB_BW", "20250501"),
-            _ev("TREASURY", "20250801", is_amendment=True),  # 제외
+            _ev("TREASURY", "20250801", is_amendment=True),
         ]
         r = detect_capital_churn(evs, 3)
         self.assertEqual(r["total_events"], 2)
         self.assertNotIn("CAPITAL_CHURN", r["flags"])
 
-    def test_mixed_signals_only_capital_counted(self):
+    def test_mixed_signals_only_dilutive_capital_counted(self):
+        # 비자본 신호 제외, 희석성 3건만 카운트
         evs = [
             _ev("3PCA", "20250101"),
-            _ev("SHAREHOLDER", "20250201"),   # 비자본
-            _ev("EXEC", "20250301"),           # 비자본
+            _ev("SHAREHOLDER", "20250201"),
+            _ev("EXEC", "20250301"),
             _ev("CB_BW", "20250401"),
-            _ev("TREASURY", "20250501"),
+            _ev("RIGHTS_UNDER", "20250501"),
         ]
         r = detect_capital_churn(evs, 3)
         self.assertEqual(r["total_events"], 3)
         self.assertIn("CAPITAL_CHURN", r["flags"])
+
+    def test_non_dilutive_only_three_no_flag(self):
+        # 비희석성(자사주) 3건 → 거짓양성 제거
+        evs = [
+            _ev("TREASURY", "20250101"),
+            _ev("TREASURY", "20250501"),
+            _ev("TREASURY", "20251001"),
+        ]
+        r = detect_capital_churn(evs, 3)
+        self.assertNotIn("CAPITAL_CHURN", r["flags"])
+        self.assertEqual(r["total_events"], 3)
+
+    def test_mixed_2_dilutive_2_non_dilutive_triggers_flag(self):
+        # 희석성 2 + 비희석성 2 → 플래그 발동
+        evs = [
+            _ev("3PCA", "20250101"),
+            _ev("CB_BW", "20250201"),
+            _ev("TREASURY", "20250301"),
+            _ev("CB_BUYBACK", "20250401"),
+        ]
+        r = detect_capital_churn(evs, 3)
+        self.assertIn("CAPITAL_CHURN", r["flags"])
+        self.assertEqual(r["total_events"], 4)
+
+    def test_mixed_1_dilutive_3_non_dilutive_no_flag(self):
+        # 희석성 1 + 비희석성 3 → 희석성 조건 미충족
+        evs = [
+            _ev("3PCA", "20250101"),
+            _ev("TREASURY", "20250201"),
+            _ev("TREASURY", "20250301"),
+            _ev("CB_BUYBACK", "20250401"),
+        ]
+        r = detect_capital_churn(evs, 3)
+        self.assertNotIn("CAPITAL_CHURN", r["flags"])
+
+    def test_counts_reported_in_result(self):
+        # max_dilutive_12m, max_non_dilutive_12m 반환 dict에 존재
+        evs = [
+            _ev("3PCA", "20250101"),
+            _ev("CB_BW", "20250201"),
+            _ev("TREASURY", "20250301"),
+        ]
+        r = detect_capital_churn(evs, 3)
+        self.assertIn("max_dilutive_12m", r)
+        self.assertIn("max_non_dilutive_12m", r)
+        self.assertEqual(r["max_dilutive_12m"], 2)
+        self.assertEqual(r["max_non_dilutive_12m"], 1)
 
 
 if __name__ == "__main__":

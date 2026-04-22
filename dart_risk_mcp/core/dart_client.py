@@ -17,7 +17,7 @@ from pathlib import Path
 
 import requests
 
-from .signals import CAPITAL_EVENT_KEYS
+from .signals import CAPITAL_EVENT_KEYS, DILUTIVE_CAPITAL_EVENTS, NON_DILUTIVE_CAPITAL_EVENTS
 
 log = logging.getLogger(__name__)
 
@@ -1307,20 +1307,25 @@ def fetch_major_decision(
 
 def detect_capital_churn(events: list[dict], lookback_years: int) -> dict:
     """
-    12개월 슬라이딩 윈도우에서 자본 이벤트 >= 3건이면 CAPITAL_CHURN 플래그.
+    12개월 슬라이딩 윈도우 판정:
+      (A) 희석성 자본 이벤트 ≥ 3건 → CAPITAL_CHURN
+      (B) 희석성 ≥ 2건 AND 비희석성 ≥ 2건 → CAPITAL_CHURN
+      그 외(비희석성만 반복, 부족) → 플래그 없음
 
     Args:
-        events: match_signals가 반환한 신호 이벤트 리스트.
-                각 항목은 {"key", "rcept_dt" (YYYYMMDD), "is_amendment", ...} 포함.
-        lookback_years: 조회 기간(년). 집계 메타에만 기록되며 로직에는 영향 없음.
+        events: match_signals 반환 이벤트 리스트. 각 항목은
+                {"key", "rcept_dt" (YYYYMMDD), "is_amendment", ...}.
+        lookback_years: 조회 기간(년). 메타에만 기록.
 
     Returns:
         {
-            "max_12m_count": int,       # 12개월 윈도우 최대 이벤트 수
-            "total_events": int,        # 필터 후 자본 이벤트 전체 수
-            "by_year": dict[str, int],  # 연도별 집계 {"2024": 3, ...}
-            "events": list[dict],       # 필터된 자본 이벤트 (시간 오름차순)
-            "flags": list[str],         # ["CAPITAL_CHURN"] or []
+            "max_12m_count": int,          # 전체 자본 이벤트 12개월 최대 카운트
+            "max_dilutive_12m": int,       # 희석성 12개월 최대 카운트
+            "max_non_dilutive_12m": int,   # 비희석성 12개월 최대 카운트
+            "total_events": int,
+            "by_year": dict[str, int],
+            "events": list[dict],
+            "flags": list[str],
             "lookback_years": int,
         }
     """
@@ -1336,22 +1341,40 @@ def detect_capital_churn(events: list[dict], lookback_years: int) -> dict:
     # 2) rcept_dt 오름차순 정렬
     caps.sort(key=lambda e: (e.get("rcept_dt") or "00000000"))
 
-    # 3) 날짜 파싱 (잘못된 포맷은 스킵)
-    dates: list[datetime] = []
+    # 3) 날짜 파싱 (잘못된 포맷은 스킵). 각 이벤트의 희석/비희석 속성 보존.
+    parsed: list[tuple[datetime, str, bool]] = []  # (date, key, is_dilutive)
     for e in caps:
         raw = (e.get("rcept_dt") or "")[:8]
         try:
-            dates.append(datetime.strptime(raw, "%Y%m%d"))
+            d = datetime.strptime(raw, "%Y%m%d")
         except ValueError:
             continue
+        key = e.get("key") or ""
+        parsed.append((d, key, key in DILUTIVE_CAPITAL_EVENTS))
 
-    # 4) 365일 슬라이딩 윈도우 최대 카운트
-    max_count = 0
-    for i, start in enumerate(dates):
+    # 4) 365일 슬라이딩 윈도우에서 전체/희석/비희석 최대 카운트
+    max_total = 0
+    max_dil = 0
+    max_non = 0
+    window_hits: list[tuple[int, int]] = []  # (dil, non) per window
+    for i, (start, _, _) in enumerate(parsed):
         end = start + timedelta(days=365)
-        cnt = sum(1 for d in dates[i:] if start <= d <= end)
-        if cnt > max_count:
-            max_count = cnt
+        dil = 0
+        non = 0
+        for d, _, is_dil in parsed[i:]:
+            if start <= d <= end:
+                if is_dil:
+                    dil += 1
+                else:
+                    non += 1
+        tot = dil + non
+        if tot > max_total:
+            max_total = tot
+        if dil > max_dil:
+            max_dil = dil
+        if non > max_non:
+            max_non = non
+        window_hits.append((dil, non))
 
     # 5) 연도별 집계
     by_year: dict[str, int] = {}
@@ -1360,10 +1383,21 @@ def detect_capital_churn(events: list[dict], lookback_years: int) -> dict:
         if y:
             by_year[y] = by_year.get(y, 0) + 1
 
-    flags = ["CAPITAL_CHURN"] if max_count >= 3 else []
+    # 6) 플래그 판정 — 단일 윈도우 내에서 조건 (A) 또는 (B) 충족 여부
+    flagged = False
+    for dil, non in window_hits:
+        if dil >= 3:
+            flagged = True
+            break
+        if dil >= 2 and non >= 2:
+            flagged = True
+            break
+    flags = ["CAPITAL_CHURN"] if flagged else []
 
     return {
-        "max_12m_count": max_count,
+        "max_12m_count": max_total,
+        "max_dilutive_12m": max_dil,
+        "max_non_dilutive_12m": max_non,
         "total_events": len(caps),
         "by_year": by_year,
         "events": caps,
