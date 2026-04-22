@@ -17,6 +17,8 @@ from pathlib import Path
 
 import requests
 
+from .signals import CAPITAL_EVENT_KEYS
+
 log = logging.getLogger(__name__)
 
 DART_BASE = "https://opendart.fss.or.kr/api"
@@ -1301,3 +1303,70 @@ def fetch_major_decision(
     result["flags"] = _detect_decision_anomaly(result)
     _cache_set(_major_decision_cache, rcept_no, result, _MAJOR_CACHE_MAX)
     return result
+
+
+def detect_capital_churn(events: list[dict], lookback_years: int) -> dict:
+    """
+    12개월 슬라이딩 윈도우에서 자본 이벤트 >= 3건이면 CAPITAL_CHURN 플래그.
+
+    Args:
+        events: match_signals가 반환한 신호 이벤트 리스트.
+                각 항목은 {"key", "rcept_dt" (YYYYMMDD), "is_amendment", ...} 포함.
+        lookback_years: 조회 기간(년). 집계 메타에만 기록되며 로직에는 영향 없음.
+
+    Returns:
+        {
+            "max_12m_count": int,       # 12개월 윈도우 최대 이벤트 수
+            "total_events": int,        # 필터 후 자본 이벤트 전체 수
+            "by_year": dict[str, int],  # 연도별 집계 {"2024": 3, ...}
+            "events": list[dict],       # 필터된 자본 이벤트 (시간 오름차순)
+            "flags": list[str],         # ["CAPITAL_CHURN"] or []
+            "lookback_years": int,
+        }
+    """
+    # 1) 자본 이벤트만 필터 + 정정공시 제외
+    caps: list[dict] = []
+    for e in events or []:
+        if e.get("key") not in CAPITAL_EVENT_KEYS:
+            continue
+        if e.get("is_amendment"):
+            continue
+        caps.append(e)
+
+    # 2) rcept_dt 오름차순 정렬
+    caps.sort(key=lambda e: (e.get("rcept_dt") or "00000000"))
+
+    # 3) 날짜 파싱 (잘못된 포맷은 스킵)
+    dates: list[datetime] = []
+    for e in caps:
+        raw = (e.get("rcept_dt") or "")[:8]
+        try:
+            dates.append(datetime.strptime(raw, "%Y%m%d"))
+        except ValueError:
+            continue
+
+    # 4) 365일 슬라이딩 윈도우 최대 카운트
+    max_count = 0
+    for i, start in enumerate(dates):
+        end = start + timedelta(days=365)
+        cnt = sum(1 for d in dates[i:] if start <= d <= end)
+        if cnt > max_count:
+            max_count = cnt
+
+    # 5) 연도별 집계
+    by_year: dict[str, int] = {}
+    for e in caps:
+        y = (e.get("rcept_dt") or "")[:4]
+        if y:
+            by_year[y] = by_year.get(y, 0) + 1
+
+    flags = ["CAPITAL_CHURN"] if max_count >= 3 else []
+
+    return {
+        "max_12m_count": max_count,
+        "total_events": len(caps),
+        "by_year": by_year,
+        "events": caps,
+        "flags": flags,
+        "lookback_years": lookback_years,
+    }
