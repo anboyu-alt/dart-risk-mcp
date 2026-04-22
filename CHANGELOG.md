@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-04-22
+
+### Changed
+- `CAPITAL_EVENT_KEYS` 희석성(`DILUTIVE_CAPITAL_EVENTS`, 8종: 3PCA·RIGHTS_UNDER·GAMJA_MERGE·REVERSE_SPLIT·CB_BW·EB·RCPS·CB_ROLLOVER) / 비희석성(`NON_DILUTIVE_CAPITAL_EVENTS`, 3종: TREASURY·CB_BUYBACK·TREASURY_EB)으로 이원화. 하위 호환용 `CAPITAL_EVENT_KEYS` 유지.
+- `detect_capital_churn` 판정 규칙 변경 — `희석성 ≥ 3건` 또는 `희석성 ≥ 2 + 비희석성 ≥ 2` 조건에서만 `CAPITAL_CHURN` 플래그 (기존: 자본 이벤트 합계 ≥ 3건). 대형주 자사주 매입 반복 시나리오의 거짓양성 제거 — 삼성전자 검증 완료.
+- `CROSS_SIGNAL_PATTERNS` 2개 확장:
+  - `zombie_ma` signal_sequence에 `2.7`(CAPITAL_CHURN) 추가
+  - `delisting_evasion` signal_sequence에 `2.7`(CAPITAL_CHURN)·`8.2`(CAPITAL_IMPAIRMENT) 추가
+
+### Fixed
+- `analyze_company_risk`·`build_event_timeline`·`scan_financial_anomaly`의 재무이상 탐지가 v0.6.0에서 0/5였던 근본 원인 수정 — `/api/fnlttSinglAcnt.json`은 주요 10개 계정만 반환해 매출채권·재고자산·현금흐름 계정이 결측이었음. `fetch_financial_statements_all` 도입(`/api/fnlttSinglAcntAll.json`, 전체 XBRL 계정)으로 교체. `get_financial_summary`·`compare_financials`는 기존 엔드포인트 유지.
+
+### Infra
+- `detect_capital_churn` 반환 dict에 `max_dilutive_12m`·`max_non_dilutive_12m` 필드 추가.
+- `tmp/thresholds_decision.md` — V.2 5개 샘플 실측 분포 및 임계값 재조정 연기 근거 기록.
+
+### Deferred (v0.7.x로 이연)
+- 재무이상 임계값 경험적 재조정 — V.2 5개 샘플 중 2개 상폐·나머지 분포가 현재 임계값 재조정에 불충분. 10~20개 확장 샘플 필요.
+
 ## [0.6.0] — 2026-04-22
 
 ### Added
