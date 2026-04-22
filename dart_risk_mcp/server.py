@@ -35,6 +35,7 @@ from .core import (
     resolve_corp,
     resolve_decision_type,
     SIGNAL_KEY_TO_TAXONOMY,
+    SIGNAL_TYPES,
 )
 
 mcp = FastMCP("dart-risk-analyzer")
@@ -132,6 +133,51 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
             if sig["key"] == "CB_BW" and not is_amendment and rcept_no:
                 cb_rcept_nos.append(rcept_no)
 
+    # v0.5.0: DS005 결정 공시 최신 10건 구조화 ------------------
+    decision_items = [
+        d for d in disclosures
+        if resolve_decision_type(d.get("report_nm", ""))
+    ][:10]
+    decisions: list[tuple[dict, dict]] = []
+    failed_decisions = 0
+    for _d in decision_items:
+        _dtype = resolve_decision_type(_d["report_nm"])
+        _r = fetch_major_decision(_d["rcept_no"], _DART_API_KEY, _dtype)
+        if "error" in _r:
+            failed_decisions += 1
+            continue
+        decisions.append((_d, _r))
+
+    # v0.5.0: 자금사용내역 (최근 3년 고정) -------------------------
+    fund_records = fetch_fund_usage(corp_code, _DART_API_KEY, 3)
+
+    # v0.5.0: 신규 플래그를 signal_events에 합산 (패턴 매칭용) ----
+    _v5_lookup = {s["key"]: s for s in SIGNAL_TYPES}
+    for _d, _r in decisions:
+        for _fkey in _r["flags"]:
+            _meta = _v5_lookup.get(_fkey, {"label": _fkey, "score": 3})
+            signal_events.append({
+                "key": _fkey,
+                "label": _meta["label"],
+                "score": _meta["score"],
+                "report_nm": f"[결정:{_r['decision_type']}] {_r.get('counterparty', '') or _d['report_nm']}",
+                "rcept_dt": _d.get("rcept_dt", "")[:10],
+                "rcept_no": _d.get("rcept_no", ""),
+                "is_amendment": False,
+            })
+    for _rec in fund_records:
+        for _fkey in _rec["flags"]:
+            _meta = _v5_lookup.get(_fkey, {"label": _fkey, "score": 3})
+            signal_events.append({
+                "key": _fkey,
+                "label": _meta["label"],
+                "score": _meta["score"],
+                "report_nm": f"[자금:{_rec['kind']} 회차{_rec['tm']}] {(_rec.get('plan_useprps') or '')[:30]}",
+                "rcept_dt": _rec.get("pay_de", "") or f"{_rec.get('year', '')}-00-00",
+                "rcept_no": "",
+                "is_amendment": False,
+            })
+
     if not signal_events:
         return (
             f"📋 **{corp_name}** ({stock_code or corp_code})\n\n"
@@ -215,6 +261,36 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
 
     if timeline_text:
         lines += ["", "━━ 위기 타임라인 ━━", timeline_text]
+
+    # v0.5.0: 주요 결정 상대방 섹션 ---------------------------
+    if decisions:
+        lines += ["", "📑 **주요 결정 상대방** (최근 순, 최대 10건)"]
+        for _d, _r in decisions:
+            _flag_str = " " + ",".join(_r["flags"]) if _r["flags"] else ""
+            lines.append(f"- [{_d['rcept_dt']}] {_d['report_nm']}")
+            lines.append(
+                f"  → {_r['counterparty'] or '(미기재)'} / "
+                f"{_r['amount']:,}원 ({_r['asset_ratio']:.1f}%)"
+                f"{_flag_str}"
+            )
+        if failed_decisions:
+            lines.append(f"  (추가 {failed_decisions}건 구조화 조회 실패)")
+
+    # v0.5.0: 자금사용내역 요약 섹션 ---------------------------
+    if fund_records:
+        _anomaly_recs = [r for r in fund_records if r["flags"]]
+        lines += [
+            "",
+            f"💰 **조달자금 사용내역** (최근 3년, {len(fund_records)}건, "
+            f"이상 {len(_anomaly_recs)}건)",
+        ]
+        for _r in _anomaly_recs[:5]:
+            lines.append(
+                f"- [{_r['year']} {_r['kind']} 회차{_r['tm']}] "
+                f"{','.join(_r['flags'])} | "
+                f"계획 {_r['plan_useprps'][:30]} → "
+                f"실제 {_r['real_dtls_cn'][:30]}"
+            )
 
     catalog = load_catalog_excerpt(tax_ids_all)
     if catalog:
