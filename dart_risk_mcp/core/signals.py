@@ -63,7 +63,7 @@ SIGNAL_KEY_TO_TAXONOMY: dict[str, list[str]] = {
     "DECISION_OVERSIZED":     ["5.3"],
     "DECISION_NO_EXTVAL":     ["4.3"],
     # v0.6.0: 자본 이벤트 반복·재무 이상
-    "CAPITAL_CHURN":       ["2.5"],
+    "CAPITAL_CHURN":       ["2.7"],
     "AR_SURGE":            ["6.1"],
     "INVENTORY_SURGE":     ["6.1"],
     "CASH_GAP":            ["6.1"],
