@@ -1069,7 +1069,7 @@ CROSS_SIGNAL_PATTERNS = {
     "zombie_ma": {
         "name": "The Zombie M&A",
         "description": "무자본 M&A 세력이 차명·투자조합으로 경영권 인수 → 사모CB 대량발행·허위자금조달 → 허위 신사업 발표 → 주가부양 후 고가매도",
-        "signal_sequence": ["3.1", "2.4", "1.2", "4.3", "7.1"],
+        "signal_sequence": ["3.1", "2.4", "1.2", "4.3", "7.1", "2.7"],
         "timeline_months": 12,
         "severity": "CRITICAL",
         "field_evidence": [
@@ -1091,7 +1091,7 @@ CROSS_SIGNAL_PATTERNS = {
     "delisting_evasion": {
         "name": "The Delisting Evasion",
         "description": "자본잠식·영업손실로 상장폐지 위기 → 연말 거액 유상증자(가장납입) + 재무제표 과대계상 → 요건 면탈 → 횡령",
-        "signal_sequence": ["8.1", "2.4", "6.1", "4.3"],
+        "signal_sequence": ["8.1", "2.4", "6.1", "4.3", "2.7", "8.2"],
         "timeline_months": 9,
         "severity": "CRITICAL",
         "field_evidence": [

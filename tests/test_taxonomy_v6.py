@@ -16,5 +16,19 @@ class TestV6Taxonomy(unittest.TestCase):
         self.assertIn("capital_churn_anomaly", names)
 
 
+class TestV61PatternExtensions(unittest.TestCase):
+    """v0.6.1: zombie_ma, delisting_evasion 패턴에 v0.6.0 신호 연동."""
+
+    def test_zombie_ma_includes_capital_churn(self):
+        from dart_risk_mcp.core.taxonomy import CROSS_SIGNAL_PATTERNS
+        self.assertIn("2.7", CROSS_SIGNAL_PATTERNS["zombie_ma"]["signal_sequence"])
+
+    def test_delisting_evasion_includes_capital_churn_and_impairment(self):
+        from dart_risk_mcp.core.taxonomy import CROSS_SIGNAL_PATTERNS
+        seq = CROSS_SIGNAL_PATTERNS["delisting_evasion"]["signal_sequence"]
+        self.assertIn("2.7", seq)
+        self.assertIn("8.2", seq)
+
+
 if __name__ == "__main__":
     unittest.main()
