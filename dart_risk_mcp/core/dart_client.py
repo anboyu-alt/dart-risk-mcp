@@ -926,6 +926,56 @@ def fetch_financial_statements(
     return []
 
 
+def fetch_financial_statements_all(
+    corp_code: str,
+    api_key: str,
+    year: str,
+    report_type: str = "annual",
+    fs_div: str = "CFS",
+) -> list[dict]:
+    """전체 계정 과목을 반환하는 재무제표 (매출채권·재고자산 등 포함).
+
+    Endpoint: /api/fnlttSinglAcntAll.json
+    fnlttSinglAcnt.json이 주요 10개 계정만 반환하는 것과 달리 전체 XBRL 계정 과목을 포함.
+
+    Args:
+        corp_code: 8자리 법인코드
+        api_key: DART API 키
+        year: 사업연도 (예: "2024")
+        report_type: "annual" | "half" | "q1" | "q3"
+        fs_div: "CFS"(연결) | "OFS"(별도). 연결 우선 시도 후 없으면 호출측에서 OFS 재시도 권장.
+
+    Returns:
+        list of account dicts. 실패 시 [].
+    """
+    if not api_key or not corp_code or not year:
+        return []
+    if report_type not in _VALID_REPORT_TYPES:
+        log.warning("지원하지 않는 report_type: %r (허용값: %s)", report_type, sorted(_VALID_REPORT_TYPES))
+        return []
+    reprt_code = _REPORT_CODES[report_type]
+    try:
+        resp = _retry(
+            "GET", f"{DART_BASE}/fnlttSinglAcntAll.json",
+            params={
+                "crtfc_key": api_key,
+                "corp_code": corp_code,
+                "bsns_year": year,
+                "reprt_code": reprt_code,
+                "fs_div": fs_div,
+            },
+            timeout=30,
+        )
+        data = resp.json()
+    except Exception as e:
+        log.debug("전체 재무제표 조회 실패 (%s/%s): %s", corp_code, fs_div, e)
+        return []
+    if data.get("status") != "000":
+        _log_dart_status(data.get("status", "?"), f"전체 재무제표({fs_div}) corp_code={corp_code}")
+        return []
+    return data.get("list", []) or []
+
+
 def fetch_multi_financial(
     corp_codes: list[str],
     api_key: str,

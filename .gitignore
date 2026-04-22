@@ -10,3 +10,7 @@ venv/
 ~/.cache/
 .mcp.json
 .claude/
+tmp/*.json
+tmp/*.txt
+tmp/*.py
+tmp/*.out

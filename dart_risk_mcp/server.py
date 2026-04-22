@@ -25,6 +25,7 @@ from .core import (
     fetch_document_text,
     fetch_executive_compensation,
     fetch_financial_statements,
+    fetch_financial_statements_all,
     fetch_fund_usage,
     fetch_insider_timeline,
     fetch_major_decision,
@@ -207,7 +208,10 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
     fs_metrics: list[dict] = []
     try:
         _year = str(datetime.now().year - 1)
-        fs_list = fetch_financial_statements(corp_code, _DART_API_KEY, _year, "annual")
+        # 전체 계정 과목 필요 (매출채권·재고자산 포함) → fnlttSinglAcntAll 사용. CFS 우선, 없으면 OFS.
+        fs_list = fetch_financial_statements_all(corp_code, _DART_API_KEY, _year, "annual", "CFS")
+        if not fs_list:
+            fs_list = fetch_financial_statements_all(corp_code, _DART_API_KEY, _year, "annual", "OFS")
         if fs_list:
             _cur, _pri = _fs_response_to_periods({"list": fs_list})
             fs_flags, fs_metrics = detect_financial_anomaly(_cur, _pri)
@@ -729,7 +733,10 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
     # v0.6.0 재무 징후 블록 (공시 이벤트가 아닌 스칼라 판정)
     try:
         _year = str(datetime.now().year - 1)
-        fs_list = fetch_financial_statements(corp_code, _DART_API_KEY, _year, "annual")
+        # 전체 계정 과목 필요 (매출채권·재고자산 포함) → fnlttSinglAcntAll 사용. CFS 우선, 없으면 OFS.
+        fs_list = fetch_financial_statements_all(corp_code, _DART_API_KEY, _year, "annual", "CFS")
+        if not fs_list:
+            fs_list = fetch_financial_statements_all(corp_code, _DART_API_KEY, _year, "annual", "OFS")
         if fs_list:
             _cur, _pri = _fs_response_to_periods({"list": fs_list})
             fs_flags, _ = detect_financial_anomaly(_cur, _pri)
@@ -1814,7 +1821,10 @@ def scan_financial_anomaly(
         from datetime import datetime
         year = str(datetime.now().year - 1)
 
-    fs_list = fetch_financial_statements(corp_code, api_key, year, report_type)
+    # 전체 계정 과목 필요 (매출채권·재고자산 포함) → fnlttSinglAcntAll 사용. CFS 우선, 없으면 OFS.
+    fs_list = fetch_financial_statements_all(corp_code, api_key, year, report_type, "CFS")
+    if not fs_list:
+        fs_list = fetch_financial_statements_all(corp_code, api_key, year, report_type, "OFS")
     if not fs_list:
         return (f"📊 **{corp_name}** ({info.get('stock_code','')}) — {year} {report_type}\n\n"
                 "재무제표 조회 불가(데이터 없음 또는 권한 부족).")

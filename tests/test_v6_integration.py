@@ -35,7 +35,7 @@ class TestAnalyzeV6Integration(unittest.TestCase):
         ]
 
     @patch("dart_risk_mcp.server.fetch_fund_usage")
-    @patch("dart_risk_mcp.server.fetch_financial_statements")
+    @patch("dart_risk_mcp.server.fetch_financial_statements_all")
     @patch("dart_risk_mcp.server.fetch_company_disclosures")
     @patch("dart_risk_mcp.server.resolve_corp")
     def test_includes_capital_churn_flag(self, m_resolve, m_disc, m_fs, m_fund):
@@ -48,7 +48,7 @@ class TestAnalyzeV6Integration(unittest.TestCase):
         self.assertIn("CAPITAL_CHURN", out)
 
     @patch("dart_risk_mcp.server.fetch_fund_usage")
-    @patch("dart_risk_mcp.server.fetch_financial_statements")
+    @patch("dart_risk_mcp.server.fetch_financial_statements_all")
     @patch("dart_risk_mcp.server.fetch_company_disclosures")
     @patch("dart_risk_mcp.server.resolve_corp")
     def test_includes_financial_anomaly_flag(self, m_resolve, m_disc, m_fs, m_fund):
@@ -61,7 +61,7 @@ class TestAnalyzeV6Integration(unittest.TestCase):
         self.assertIn("AR_SURGE", out)
 
     @patch("dart_risk_mcp.server.fetch_fund_usage")
-    @patch("dart_risk_mcp.server.fetch_financial_statements")
+    @patch("dart_risk_mcp.server.fetch_financial_statements_all")
     @patch("dart_risk_mcp.server.fetch_company_disclosures")
     @patch("dart_risk_mcp.server.resolve_corp")
     def test_financial_fetch_failure_isolated(self, m_resolve, m_disc, m_fs, m_fund):
