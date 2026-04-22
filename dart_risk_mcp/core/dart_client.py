@@ -1370,3 +1370,134 @@ def detect_capital_churn(events: list[dict], lookback_years: int) -> dict:
         "flags": flags,
         "lookback_years": lookback_years,
     }
+
+
+_FS_ALIASES = {
+    "매출": ["매출액", "영업수익"],
+    "매출채권": ["매출채권", "매출채권및기타채권"],
+    "재고자산": ["재고자산"],
+    "영업현금흐름": ["영업활동현금흐름", "영업활동으로인한현금흐름"],
+    "당기순이익": ["당기순이익", "당기순이익(손실)"],
+    "자본총계": ["자본총계"],
+    "자본금": ["자본금"],
+}
+
+
+def _pick_account(fs: dict, names: list[str]):
+    """fs dict에서 names 우선순위대로 첫 유효 값을 반환. 없으면 None."""
+    for n in names:
+        v = fs.get(n)
+        if v is not None:
+            return v
+    return None
+
+
+def detect_financial_anomaly(current: dict, prior: dict) -> tuple[list[str], list[dict]]:
+    """
+    당기·전기 재무 dict를 받아 4개 이상 지표 판정.
+
+    Args:
+        current: 당기 재무 {account_nm: int, ...}
+        prior: 전기 재무 {account_nm: int, ...}
+
+    Returns:
+        (flags, metrics)
+        flags: ["AR_SURGE", "INVENTORY_SURGE", "CASH_GAP", "CAPITAL_IMPAIRMENT"] 부분집합
+        metrics: [{"name", "current", "prior", "delta", "unit", "flagged"} ...]
+    """
+    flags: list[str] = []
+    metrics: list[dict] = []
+
+    rev_c = _pick_account(current, _FS_ALIASES["매출"])
+    rev_p = _pick_account(prior, _FS_ALIASES["매출"])
+    ar_c = _pick_account(current, _FS_ALIASES["매출채권"])
+    ar_p = _pick_account(prior, _FS_ALIASES["매출채권"])
+    inv_c = _pick_account(current, _FS_ALIASES["재고자산"])
+    inv_p = _pick_account(prior, _FS_ALIASES["재고자산"])
+    ni_c = _pick_account(current, _FS_ALIASES["당기순이익"])
+    ocf_c = _pick_account(current, _FS_ALIASES["영업현금흐름"])
+    eq_c = _pick_account(current, _FS_ALIASES["자본총계"])
+    cap_c = _pick_account(current, _FS_ALIASES["자본금"])
+
+    # AR_SURGE
+    if rev_c and rev_p and ar_c is not None and ar_p is not None and rev_c > 0 and rev_p > 0:
+        r_c = ar_c / rev_c * 100
+        r_p = ar_p / rev_p * 100
+        delta = r_c - r_p
+        m = {"name": "매출채권/매출", "current": r_c, "prior": r_p, "delta": delta, "unit": "%", "flagged": False}
+        if delta >= 50:
+            flags.append("AR_SURGE")
+            m["flagged"] = True
+        metrics.append(m)
+
+    # INVENTORY_SURGE
+    if rev_c and rev_p and inv_c is not None and inv_p is not None and rev_c > 0 and rev_p > 0:
+        r_c = inv_c / rev_c * 100
+        r_p = inv_p / rev_p * 100
+        delta = r_c - r_p
+        m = {"name": "재고자산/매출", "current": r_c, "prior": r_p, "delta": delta, "unit": "%", "flagged": False}
+        if delta >= 50:
+            flags.append("INVENTORY_SURGE")
+            m["flagged"] = True
+        metrics.append(m)
+
+    # CASH_GAP
+    if ni_c is not None and ocf_c is not None:
+        m = {"name": "순이익 vs 영업현금흐름", "current_ni": ni_c, "current_ocf": ocf_c, "flagged": False}
+        if ni_c > 0 and ocf_c < 0:
+            flags.append("CASH_GAP")
+            m["flagged"] = True
+        metrics.append(m)
+
+    # CAPITAL_IMPAIRMENT
+    if eq_c is not None and cap_c is not None and cap_c > 0:
+        ratio = eq_c / cap_c * 100
+        m = {"name": "자본총계/자본금", "current": ratio, "unit": "%", "flagged": False}
+        if ratio < 50:
+            flags.append("CAPITAL_IMPAIRMENT")
+            m["flagged"] = True
+        metrics.append(m)
+
+    return flags, metrics
+
+
+def _fs_response_to_periods(fs_data: dict) -> tuple[dict, dict]:
+    """
+    fetch_financial_statements 응답(list of account items) → (current, prior) 두 기간 dict.
+
+    DART fnlttSinglAcnt.json 응답은 {"status": "000", "list": [{"account_nm": "매출액",
+    "thstrm_amount": "12,345", "frmtrm_amount": "10,000", ...}, ...]}.
+    연결(CFS) 우선, 없으면 별도(OFS) 값을 채움.
+    """
+    current: dict = {}
+    prior: dict = {}
+
+    def _parse(s):
+        if s is None:
+            return None
+        s = str(s).replace(",", "").replace(" ", "").strip()
+        if not s or s in ("-", "null"):
+            return None
+        # 괄호는 음수 표기
+        if s.startswith("(") and s.endswith(")"):
+            s = "-" + s[1:-1]
+        try:
+            return int(s)
+        except ValueError:
+            try:
+                return int(float(s))
+            except ValueError:
+                return None
+
+    for item in fs_data.get("list", []) if isinstance(fs_data, dict) else []:
+        name = (item.get("account_nm") or "").strip()
+        if not name:
+            continue
+        cur_v = _parse(item.get("thstrm_amount"))
+        pri_v = _parse(item.get("frmtrm_amount"))
+        # 이미 채워진 키는 덮어쓰지 않음 (CFS가 먼저 나오는 DART 관행 활용)
+        if cur_v is not None and name not in current:
+            current[name] = cur_v
+        if pri_v is not None and name not in prior:
+            prior[name] = pri_v
+    return current, prior
