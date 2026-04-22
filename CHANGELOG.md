@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-04-22
+
+### Added
+- **신규 MCP 도구 2개** (총 19개 → 21개):
+  - `track_capital_structure` — 자본 이벤트(증자·감자·자사주·CB/BW/EB/RCPS 9종)를 시간순 집계. 12개월 내 3건 이상 발생 시 `CAPITAL_CHURN` 플래그
+  - `scan_financial_anomaly` — 재무제표 4개 지표 YoY 이상 탐지(`AR_SURGE`·`INVENTORY_SURGE`·`CASH_GAP`·`CAPITAL_IMPAIRMENT`)
+- **신규 신호 키 5개**: `CAPITAL_CHURN`(2.7), `AR_SURGE`(6.1), `INVENTORY_SURGE`(6.1), `CASH_GAP`(6.1), `CAPITAL_IMPAIRMENT`(8.2)
+- **신규 taxonomy 2.7** (Category 2 자본구조) — 자본 이벤트 과다 반복
+- **신규 복합 패턴 1개**: `capital_churn_anomaly` (2.7 + 4.3)
+- `detect_capital_churn`, `detect_financial_anomaly` — 순수 계산 함수. 신규 DART 엔드포인트 0개
+
+### Changed
+- `analyze_company_risk` — 자본 churn·재무이상 플래그를 signal_events에 자동 합산. 리포트에 자본 변동 타임라인·재무 이상 스캔 섹션 2개 추가
+- `build_event_timeline` — 신규 5개 키 `_PHASE_MAP` 매핑 추가, 말미에 "재무 징후" 블록 렌더링
+
+### Infra
+- `CAPITAL_EVENT_KEYS` 상수 추가 (자본 이벤트 신호 9개 집합)
+- 재무 응답 어댑터 `_fs_response_to_periods` 추가 (DART `fnlttSinglAcnt.json` list → 당기/전기 dict 변환)
+
 ## [0.5.0] — 2026-04-22
 
 ### Added

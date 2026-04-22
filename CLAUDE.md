@@ -33,7 +33,7 @@ dart_risk_mcp/
 
 ---
 
-## MCP 도구 19개
+## MCP 도구 21개
 
 ### 1. `analyze_company_risk(company_name, lookback_days=90)`
 
@@ -205,6 +205,22 @@ dart_risk_mcp/
 - `corp_cls`: `Y`(유가증권), `K`(코스닥), `N`(코넥스), `E`(기타)
 - `decision_type` 자동 결정 가능(공시명 기반). 수동 지정 시 허용값: `stock_acq`/`stock_div`/`merger`/`demerger`/`business_acq`/`business_div`/`tangible_acq`/`tangible_div`/`bond_acq`/`bond_div`/`demerger_merger`/`stock_exchange`
 
+### 20. `track_capital_structure(company_name, lookback_years=3)` ✨
+
+자본 이벤트(증자·감자·자사주·CB/BW/EB/RCPS 9종)를 시간순으로 집계해 '자본 주무르기' 리듬을 탐지합니다.
+
+- 내부 흐름: `resolve_corp` → `fetch_company_disclosures` → `match_signals` × N → `CAPITAL_EVENT_KEYS` 필터 → `detect_capital_churn`
+- 판정 규칙: 12개월 슬라이딩 윈도우에서 자본 이벤트 ≥3건 → `CAPITAL_CHURN` 플래그
+- `lookback_years` 범위: 1~5년
+
+### 21. `scan_financial_anomaly(company_name, year="", report_type="annual")` ✨
+
+재무제표 4개 지표(매출채권·재고자산·현금흐름·자본잠식)를 전년 대비 비교해 이상을 탐지합니다.
+
+- 내부 흐름: `resolve_corp` → `fetch_financial_statements` 1회 호출 → `_fs_response_to_periods` → `detect_financial_anomaly`
+- 이상 플래그 4종: `AR_SURGE`, `INVENTORY_SURGE`, `CASH_GAP`, `CAPITAL_IMPAIRMENT`
+- `report_type` 허용값: `annual`·`half`·`q1`·`q3`
+
 ---
 
 ## 핵심 내부 함수
@@ -233,6 +249,8 @@ dart_risk_mcp/
 | `fetch_fund_usage(corp_code, api_key, corp_cls, lookback_years)` | 공모·사모 자금사용 2개 엔드포인트 통합 + 이상 플래그 탐지 |
 | `fetch_major_decision(rcept_no, corp_cls, decision_type)` | 12개 DS005 주요결정 엔드포인트 중 decision_type에 따라 자동 선택 |
 | `resolve_decision_type(report_nm)` | 공시명 → decision_type 키 자동 추론 (`[기재정정]` 등 접두어 제거) |
+| `detect_capital_churn(events, lookback_years)` | 12개월 슬라이딩 윈도우로 CAPITAL_CHURN 판정 |
+| `detect_financial_anomaly(current, prior)` | 4개 지표 YoY 비교 → 플래그+메트릭 |
 
 ### DART API 엔드포인트
 
@@ -302,9 +320,10 @@ dart_risk_mcp/
 }
 ```
 
-등록 패턴 8개 (v0.4.0 기준):
+등록 패턴 9개 (v0.6.0 기준):
 - **기존 4개 (전통 위기 사이클)**: `founder_fade`(창업주 퇴장), `debt_spiral`(부채 악순환), `reverse_split_spiral`(무상감자 나선), `related_party_hollowing`(특수관계자 자산 공동화)
 - **v0.4.0 신규 4개 (금감원 사례 기반)**: `zombie_ma`(무자본 M&A), `audit_insider_dump`(감사의견 내부자 덤프), `delisting_evasion`(상폐 회피), `fake_new_biz`(허위 신사업 주가부양)
+- **v0.6.0 신규 1개**: `capital_churn_anomaly`(자본 이벤트 과다 반복 + 공시의무 위반)
 
 ### 도구 추가
 
