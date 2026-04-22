@@ -392,6 +392,24 @@ TAXONOMY = {
         "field_evidence": ["자사주EB급증 (20251010)"],
         "investor_implication": "Share count manipulation; hidden dilution",
     },
+    "2.7": {
+        "id": "2.7",
+        "label": "자본 이벤트 과다 반복",
+        "severity": "HIGH",
+        "category": "Category 2 자본구조",
+        "keywords": [],  # 복합 판정이라 키워드 없음
+        "indicators": [
+            "12개월 내 증자·감자·자사주 등 자본 이벤트 3건 이상",
+            "CB·BW·EB 연속 발행",
+            "자본구조 리듬의 비정상성",
+        ],
+        "field_evidence": (
+            "금감원 2024·2025 주가조작 적발 사례(동성제약·헬릭스미스·셀리버리 등) "
+            "공통 특징: 12개월 내 3~6건의 자본 이벤트 집중"
+        ),
+        "typical_timeline": "6~18개월",
+        "related_patterns": ["zombie_ma", "fake_new_biz", "delisting_evasion"],
+    },
 
     # CATEGORY 3: Ownership & Control (5 signals)
     "3.1": {
@@ -1090,6 +1108,14 @@ CROSS_SIGNAL_PATTERNS = {
             "2025-05-21 금감원: B사 해외광물 허위발표 주가 24% 상승 후 수십억 부당이득",
             "2023-10-31 금감원: 신사업 추진실적 전무 129사 중 횡령·감사거절 22%",
         ],
+    },
+    "capital_churn_anomaly": {
+        "name": "capital_churn_anomaly",
+        "description": "잦은 자본 변동과 공시 지연·위반이 겹치면 자본 투명성 훼손 우려",
+        "signal_sequence": ["2.7", "4.3"],
+        "signals": ["2.7", "4.3"],
+        "timeline_months": 12,
+        "severity": "HIGH",
     },
 }
 
