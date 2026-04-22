@@ -291,6 +291,38 @@ _FUND_DIVERSION_KEYWORDS = (
     "변경 사용", "변경사용", "유보",
 )
 
+# v0.5.0: 주요사항보고서 결정 공시(DS005 2020042~2020053) 라우팅 -
+_MAJOR_DECISION_URLS = {
+    "business_acq":    f"{DART_BASE}/bsnInhDecsn.json",              # 2020042
+    "business_div":    f"{DART_BASE}/bsnTrfDecsn.json",              # 2020043
+    "tangible_acq":    f"{DART_BASE}/tgastInhDecsn.json",            # 2020044
+    "tangible_div":    f"{DART_BASE}/tgastTrfDecsn.json",            # 2020045
+    "stock_acq":       f"{DART_BASE}/otcprStkInvscrInhDecsn.json",   # 2020046
+    "stock_div":       f"{DART_BASE}/otcprStkInvscrTrfDecsn.json",   # 2020047
+    "bond_acq":        f"{DART_BASE}/stkrtbdInhDecsn.json",          # 2020048
+    "bond_div":        f"{DART_BASE}/stkrtbdTrfDecsn.json",          # 2020049
+    "merger":          f"{DART_BASE}/cmpMgDecsn.json",               # 2020050
+    "demerger":        f"{DART_BASE}/cmpDvDecsn.json",               # 2020051
+    "demerger_merger": f"{DART_BASE}/cmpDvmgDecsn.json",             # 2020052
+    "stock_exchange":  f"{DART_BASE}/stkExtrDecsn.json",             # 2020053
+}
+
+# 보고서명 키워드 → decision_type 매핑 (긴 키워드부터 매칭)
+_DECISION_NAME_MAP = [
+    ("타법인주식및출자증권양수결정", "stock_acq"),
+    ("타법인주식및출자증권양도결정", "stock_div"),
+    ("주권관련사채권양수결정",       "bond_acq"),
+    ("주권관련사채권양도결정",       "bond_div"),
+    ("유형자산양수결정",             "tangible_acq"),
+    ("유형자산양도결정",             "tangible_div"),
+    ("회사분할합병결정",             "demerger_merger"),
+    ("주식교환이전결정",             "stock_exchange"),
+    ("회사합병결정",                 "merger"),
+    ("회사분할결정",                 "demerger"),
+    ("영업양수결정",                 "business_acq"),
+    ("영업양도결정",                 "business_div"),
+]
+
 
 def _to_int_safe(v) -> int:
     if v is None or v == "":
@@ -1142,3 +1174,130 @@ def fetch_fund_usage(
 
     _cache_set(_fund_usage_cache, cache_key, results, _FUND_CACHE_MAX)
     return results
+
+
+def resolve_decision_type(report_name: str) -> str:
+    """보고서명에서 decision_type을 자동 판별. 판별 실패 시 빈 문자열."""
+    import re
+    nm = re.sub(r"\[[^\]]*\]", "", report_name or "")
+    nm = nm.replace(" ", "").replace("·", "").replace(",", "")
+    for keyword, dtype in _DECISION_NAME_MAP:
+        if keyword in nm:
+            return dtype
+    return ""
+
+
+def _normalize_decision(raw: dict, dtype: str, url: str) -> dict:
+    """결정 공시 원본을 공통 스키마로 정규화."""
+    counterparty = (
+        raw.get("dlptn_cmpnm")
+        or raw.get("dlptn_rl_cmpn")
+        or raw.get("mg_ctrcmp_cmpnm")
+        or raw.get("dvcmp_cmpnm")
+        or ""
+    )
+    amount = _to_int_safe(
+        raw.get("inh_pp")
+        or raw.get("trf_pp")
+        or raw.get("trfg_pp")
+        or raw.get("mg_rt")
+        or raw.get("dlptn_cpt")
+    )
+    asset_ratio_raw = (
+        raw.get("inhdamount_totalast_rt")
+        or raw.get("trfamount_totalast_rt")
+        or raw.get("totalast_rt")
+        or "0"
+    )
+    try:
+        asset_ratio = float(str(asset_ratio_raw).replace("%", "").strip() or 0)
+    except ValueError:
+        asset_ratio = 0.0
+
+    related = False
+    for k in ("ftc_stt_atn", "rl_cmpn_atn", "speclt_pson_atn"):
+        v = str(raw.get(k) or "").strip()
+        if v in ("예", "Y", "해당", "있음"):
+            related = True
+            break
+    if not related:
+        rel_text = str(raw.get("dlptn_rl_cmpn") or "")
+        if any(s in rel_text for s in ("특수관계", "계열회사", "관계회사", "자회사", "최대주주")):
+            related = True
+
+    external_eval = str(raw.get("exevl_atn") or "").strip() in (
+        "예", "Y", "해당", "실시",
+    )
+
+    return {
+        "decision_type": dtype,
+        "endpoint": url,
+        "counterparty": str(counterparty).strip(),
+        "amount": amount,
+        "asset_ratio": asset_ratio,
+        "related_party": related,
+        "external_eval": external_eval,
+        "bddd": str(raw.get("bddd") or raw.get("dcrdd") or "").strip(),
+        "raw": raw,
+    }
+
+
+def _detect_decision_anomaly(result: dict) -> list[str]:
+    flags: list[str] = []
+    if result["related_party"] and result["asset_ratio"] >= 10.0:
+        flags.append("DECISION_RELATED_PARTY")
+    if result["asset_ratio"] >= 30.0:
+        flags.append("DECISION_OVERSIZED")
+    if (not result["external_eval"]) and result["amount"] >= 5_000_000_000:
+        flags.append("DECISION_NO_EXTVAL")
+    return flags
+
+
+def fetch_major_decision(
+    rcept_no: str,
+    api_key: str,
+    decision_type: str = "",
+) -> dict:
+    """DS005 12개 결정 공시를 구조화 필드로 반환. 실패 시 {"error": ...}.
+
+    decision_type 미지정 시 빈 결과를 안내 메시지로 반환한다(rcept_no만으로
+    보고서명을 역조회하는 API가 없어 호출자가 명시해야 한다).
+    """
+    if not isinstance(rcept_no, str) or len(rcept_no) != 14 or not rcept_no.isdigit():
+        return {"error": f"rcept_no는 14자리 숫자여야 합니다: {rcept_no!r}"}
+
+    cached = _cache_get(_major_decision_cache, rcept_no, _MAJOR_CACHE_TTL)
+    if cached is not None and cached.get("decision_type") == (decision_type or cached.get("decision_type")):
+        return cached
+
+    dtype = decision_type
+    if not dtype or dtype not in _MAJOR_DECISION_URLS:
+        return {
+            "error": (
+                "decision_type 미지정 또는 알 수 없는 값. 지원 타입: "
+                + ", ".join(_MAJOR_DECISION_URLS.keys())
+            )
+        }
+
+    url = _MAJOR_DECISION_URLS[dtype]
+    params = {"crtfc_key": api_key, "rcept_no": rcept_no}
+    try:
+        data = _retry("GET", url, params=params).json()
+    except Exception as e:
+        return {"error": f"DART 조회 실패: {e}"}
+
+    if data.get("status") != "000":
+        return {
+            "error": (
+                f"DART status={data.get('status')}: "
+                f"{data.get('message', '')}"
+            )
+        }
+    items = data.get("list", [])
+    if not items:
+        return {"error": "해당 공시에 구조화 데이터가 없습니다."}
+
+    result = _normalize_decision(items[0], dtype, url)
+    result["flags"] = _detect_decision_anomaly(result)
+    _cache_set(_major_decision_cache, rcept_no, result, _MAJOR_CACHE_MAX)
+    return result
