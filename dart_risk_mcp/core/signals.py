@@ -56,6 +56,12 @@ SIGNAL_KEY_TO_TAXONOMY: dict[str, list[str]] = {
     "DEBT_RESTR":    ["8.2"],
     "ASSET_SPIRAL":  ["8.3"],
     "GOING_CONCERN": ["8.4"],
+    # v0.5.0: 자금흐름·주요결정
+    "FUND_DIVERSION":         ["5.3", "8.1"],
+    "FUND_UNREPORTED":        ["4.3"],
+    "DECISION_RELATED_PARTY": ["4.2"],
+    "DECISION_OVERSIZED":     ["5.3"],
+    "DECISION_NO_EXTVAL":     ["4.3"],
     # 기존 호환 키
     "MGMT":          ["3.4", "5.4"],
 }
@@ -500,6 +506,37 @@ SIGNAL_TYPES = [
             "회생절차",
             "파산절차",
         ],
+    },
+    # ── v0.5.0: 자금흐름·주요결정 (프로그램적 부착) ─────────────
+    {
+        "key":   "FUND_DIVERSION",
+        "label": "조달자금 목적외 사용",
+        "score": 4,
+        "keywords": [],
+    },
+    {
+        "key":   "FUND_UNREPORTED",
+        "label": "자금사용내역 미기재",
+        "score": 3,
+        "keywords": [],
+    },
+    {
+        "key":   "DECISION_RELATED_PARTY",
+        "label": "특수관계인 대상 결정",
+        "score": 4,
+        "keywords": [],
+    },
+    {
+        "key":   "DECISION_OVERSIZED",
+        "label": "자산대비 대형 결정",
+        "score": 3,
+        "keywords": [],
+    },
+    {
+        "key":   "DECISION_NO_EXTVAL",
+        "label": "외부평가 미실시 결정",
+        "score": 3,
+        "keywords": [],
     },
 ]
 
