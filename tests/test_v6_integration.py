@@ -12,14 +12,14 @@ class TestAnalyzeV6Integration(unittest.TestCase):
         _srv._DART_API_KEY = "TESTKEY"
 
     def _mock_disclosures(self):
-        # 12개월 내 자본 이벤트 3건 → CAPITAL_CHURN 발화 기대
+        # 12개월 내 희석성 자본 이벤트 3건 → CAPITAL_CHURN 발화 기대 (v0.6.1 이원화 규칙)
         return [
             {"rcept_no": "20250101000001", "rcept_dt": "20250101",
              "report_nm": "유상증자결정(제3자배정)", "corp_code": "00000001"},
             {"rcept_no": "20250501000001", "rcept_dt": "20250501",
              "report_nm": "전환사채권발행결정", "corp_code": "00000001"},
             {"rcept_no": "20251001000001", "rcept_dt": "20251001",
-             "report_nm": "자기주식취득결정", "corp_code": "00000001"},
+             "report_nm": "교환사채권발행결정", "corp_code": "00000001"},
         ]
 
     def _mock_fs(self):
