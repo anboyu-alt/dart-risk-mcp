@@ -588,6 +588,12 @@ _PHASE_MAP = {
     "DECISION_OVERSIZED":     "심화기",
     "DECISION_NO_EXTVAL":     "심화기",
     "FUND_UNREPORTED":        "심화기",
+    # v0.6.0: 자본 이벤트 과다 반복 + 재무제표 YoY 이상
+    "CAPITAL_CHURN":       "심화기",
+    "AR_SURGE":            "심화기",
+    "INVENTORY_SURGE":     "심화기",
+    "CASH_GAP":            "탈출기",
+    "CAPITAL_IMPAIRMENT":  "탈출기",
 }
 _PHASE_ORDER = {"진입기": 0, "심화기": 1, "탈출기": 2}
 _PHASE_EMOJI = {"진입기": "🟢", "심화기": "🟡", "탈출기": "🔴"}
@@ -719,6 +725,20 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
                 amt = _format_amount(inv.get("amount", ""))
                 lines.append(f"  • {inv['name']}" + (f" — {amt}" if amt else ""))
             lines.append("")
+
+    # v0.6.0 재무 징후 블록 (공시 이벤트가 아닌 스칼라 판정)
+    try:
+        _year = str(datetime.now().year - 1)
+        fs_list = fetch_financial_statements(corp_code, _DART_API_KEY, _year, "annual")
+        if fs_list:
+            _cur, _pri = _fs_response_to_periods({"list": fs_list})
+            fs_flags, _ = detect_financial_anomaly(_cur, _pri)
+            if fs_flags:
+                lines.append("━━ 재무 징후 ━━")
+                lines.append(f"**{_year} 사업보고서 기준 이상 플래그:** {', '.join(fs_flags)}")
+                lines.append("")
+    except Exception:
+        pass
 
     lines.append("⚠️ 이 타임라인은 공시 제목 기반 자동 분류이며, 실제 상황과 다를 수 있습니다.")
     return "\n".join(lines)
