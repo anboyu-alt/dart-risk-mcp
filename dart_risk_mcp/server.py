@@ -12,6 +12,8 @@ from mcp.server.fastmcp import FastMCP
 
 from .core import (
     calculate_risk_score,
+    detect_capital_churn,
+    detect_financial_anomaly,
     estimate_crisis_timeline,
     extract_cb_investors,
     fetch_company_disclosures,
@@ -34,8 +36,10 @@ from .core import (
     match_signals,
     resolve_corp,
     resolve_decision_type,
+    CAPITAL_EVENT_KEYS,
     SIGNAL_KEY_TO_TAXONOMY,
     SIGNAL_TYPES,
+    _fs_response_to_periods,
 )
 
 mcp = FastMCP("dart-risk-analyzer")
@@ -1660,6 +1664,89 @@ def get_major_decision(rcept_no: str, decision_type: str = "") -> str:
             lines.append(f"관련 taxonomy ID: {', '.join(tax_ids)}")
     lines.append("")
     lines.append(f"원문 전체 보기: `view_disclosure('{rcept_no}')`")
+    return "\n".join(lines)
+
+
+# ── 도구 20: 재무 이상 스캔 ────────────────────────────────────────────────
+
+
+def _v6_flag_label(metric_name: str) -> str:
+    """지표명 → 대응 플래그 라벨."""
+    return {
+        "매출채권/매출": "AR_SURGE",
+        "재고자산/매출": "INVENTORY_SURGE",
+        "순이익 vs 영업현금흐름": "CASH_GAP",
+        "자본총계/자본금": "CAPITAL_IMPAIRMENT",
+    }.get(metric_name, "FLAG")
+
+
+@mcp.tool()
+def scan_financial_anomaly(
+    company_name: str,
+    year: str = "",
+    report_type: str = "annual",
+) -> str:
+    """
+    재무제표 4개 지표(매출채권·재고자산·현금흐름·자본잠식)를 전년 대비로 비교해
+    분식·부실 초기 조짐을 탐지합니다.
+
+    Args:
+        company_name: 기업명 또는 종목코드(6자리).
+        year: 사업연도(예: "2024"). 빈 값이면 직전 연도.
+        report_type: "annual"(사업보고서) | "half"(반기) | "q1" | "q3".
+
+    Returns:
+        지표별 당기/전기/Δ/판정 표 + 탐지된 플래그 목록 텍스트.
+    """
+    api_key = os.environ.get("DART_API_KEY", "")
+    if not api_key:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+
+    corp_info = resolve_corp(company_name, api_key)
+    if not corp_info[1]:
+        return f"❌ 기업 '{company_name}'을(를) 찾을 수 없습니다."
+    corp_name, info = corp_info
+    corp_code = info["corp_code"]
+
+    if not year:
+        from datetime import datetime
+        year = str(datetime.now().year - 1)
+
+    fs_list = fetch_financial_statements(corp_code, api_key, year, report_type)
+    if not fs_list:
+        return (f"📊 **{corp_name}** ({info.get('stock_code','')}) — {year} {report_type}\n\n"
+                "재무제표 조회 불가(데이터 없음 또는 권한 부족).")
+
+    current, prior = _fs_response_to_periods({"list": fs_list})
+    flags, metrics = detect_financial_anomaly(current, prior)
+
+    # 포맷
+    lines = [f"📊 **{corp_name}** ({info.get('stock_code','')}) — 재무 이상 스캔 ({year}, {report_type})", ""]
+    lines.append("| 지표 | 당기 | 전기 | Δ | 판정 |")
+    lines.append("|---|---|---|---|---|")
+    for m in metrics:
+        name = m["name"]
+        if name == "순이익 vs 영업현금흐름":
+            cur = f"순이익 {m['current_ni']:,} / OCF {m['current_ocf']:,}"
+            pri = "-"
+            delta = "-"
+        elif "current" in m and "prior" in m:
+            cur = f"{m['current']:.1f}{m.get('unit','')}"
+            pri = f"{m['prior']:.1f}{m.get('unit','')}"
+            delta = f"{m['delta']:+.1f}%p"
+        else:
+            cur = f"{m.get('current', 0):.1f}{m.get('unit','')}"
+            pri = "-"
+            delta = "-"
+        verdict = "🚩 " + _v6_flag_label(name) if m.get("flagged") else "정상"
+        lines.append(f"| {name} | {cur} | {pri} | {delta} | {verdict} |")
+    lines.append("")
+    if flags:
+        lines.append(f"**탐지 플래그:** {', '.join(flags)}")
+    else:
+        lines.append("**탐지 플래그:** 없음 (모든 지표 정상)")
+    lines.append("")
+    lines.append("📎 참고: DART 공시 기준. 감사 전 수치 포함 가능. 회계 전문가 판단이 아닌 스크리닝 참고용.")
     return "\n".join(lines)
 
 
