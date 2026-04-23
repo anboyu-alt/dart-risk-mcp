@@ -8,10 +8,13 @@ v0.7.0: 구조화 엔드포인트(cvbdIsDecsn / bdwtIsDecsn / exbdIsDecsn) 우�
 """
 
 import io
+import logging
 import re
 import zipfile
 
 import requests
+
+log = logging.getLogger(__name__)
 
 from .dart_client import (
     fetch_cb_issue_decision,
@@ -130,7 +133,7 @@ def _legacy_html_extract(rcept_no: str, api_key: str) -> list[dict]:
             if name in _NOISE_NAMES or name in seen:
                 continue
             seen.add(name)
-            investors.append({"name": name, "amount": amount})
+            investors.append({"name": name, "type": "", "amount": amount})
 
     return investors
 
@@ -162,6 +165,10 @@ def extract_cb_investors(rcept_no: str, api_key: str) -> list[dict]:
         if investors:
             return investors
 
+    log.debug(
+        "cb_extractor: structured endpoints returned no investors for %s, falling back to HTML",
+        rcept_no,
+    )
     # 구조화 전부 실패 또는 빈 응답 → HTML 폴백
     try:
         return _legacy_html_extract(rcept_no, api_key)
