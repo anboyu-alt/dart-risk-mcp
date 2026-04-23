@@ -80,6 +80,26 @@ class TestExtractRightsOfferingInvestors(unittest.TestCase):
         self.assertEqual(len(investors), 1)
         self.assertEqual(investors[0]["name"], "정상펀드")
 
+    def test_extract_fallbacks_to_pifric_on_empty_piic_list(self):
+        # DART가 status=000이지만 빈 list를 반환하는 경우에도 pifric로 폴백해야 한다
+        piic_empty = {"status": "000", "list": []}
+        pifric_payload = {
+            "status": "000",
+            "list": [{"actsen": "제3자배정", "actnmn": "DD펀드",
+                      "fric_tisstk_fta": "3000000000"}],
+        }
+        with patch(
+            "dart_risk_mcp.core.investor_extractor.fetch_piic_decision",
+            return_value=piic_empty,
+        ), patch(
+            "dart_risk_mcp.core.investor_extractor.fetch_pifric_decision",
+            return_value=pifric_payload,
+        ) as mock_pifric:
+            investors = extract_rights_offering_investors("20240201000006", "key")
+        mock_pifric.assert_called_once()
+        self.assertEqual(len(investors), 1)
+        self.assertEqual(investors[0]["name"], "DD펀드")
+
 
 if __name__ == "__main__":
     unittest.main()
