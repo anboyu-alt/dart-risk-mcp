@@ -16,7 +16,7 @@ class TestExtractRightsOfferingInvestors(unittest.TestCase):
             "dart_risk_mcp.core.investor_extractor.fetch_piic_decision",
             return_value=payload,
         ):
-            investors = extract_rights_offering_investors("20240201000001", "key")
+            investors = extract_rights_offering_investors("20240201000001", "key", "testcc")
         self.assertEqual(len(investors), 2)
         self.assertEqual(investors[0]["name"], "AA펀드")
         self.assertEqual(investors[0]["type"], "제3자배정")
@@ -35,20 +35,23 @@ class TestExtractRightsOfferingInvestors(unittest.TestCase):
             "dart_risk_mcp.core.investor_extractor.fetch_pifric_decision",
             return_value=pifric_payload,
         ):
-            investors = extract_rights_offering_investors("20240201000002", "key")
+            investors = extract_rights_offering_investors("20240201000002", "key", "testcc")
         self.assertEqual(len(investors), 1)
         self.assertEqual(investors[0]["name"], "CC파트너스")
 
     def test_extract_empty_on_fric_only(self):
-        # 무상증자는 인수인 개념이 없어 빈 리스트
+        # 무상증자는 인수인 개념이 없어 구조화+HTML 모두 빈 리스트
         with patch(
             "dart_risk_mcp.core.investor_extractor.fetch_piic_decision",
             return_value={},
         ), patch(
             "dart_risk_mcp.core.investor_extractor.fetch_pifric_decision",
             return_value={},
+        ), patch(
+            "dart_risk_mcp.core.investor_extractor._html_fallback",
+            return_value=[],
         ):
-            investors = extract_rights_offering_investors("20240201000003", "key")
+            investors = extract_rights_offering_investors("20240201000003", "key", "testcc")
         self.assertEqual(investors, [])
 
     def test_extract_cleans_name_whitespace(self):
@@ -60,7 +63,7 @@ class TestExtractRightsOfferingInvestors(unittest.TestCase):
             "dart_risk_mcp.core.investor_extractor.fetch_piic_decision",
             return_value=payload,
         ):
-            investors = extract_rights_offering_investors("20240201000004", "key")
+            investors = extract_rights_offering_investors("20240201000004", "key", "testcc")
         self.assertEqual(investors[0]["name"], "AA 펀드")
 
     def test_extract_skips_blank_names(self):
@@ -76,7 +79,7 @@ class TestExtractRightsOfferingInvestors(unittest.TestCase):
             "dart_risk_mcp.core.investor_extractor.fetch_piic_decision",
             return_value=payload,
         ):
-            investors = extract_rights_offering_investors("20240201000005", "key")
+            investors = extract_rights_offering_investors("20240201000005", "key", "testcc")
         self.assertEqual(len(investors), 1)
         self.assertEqual(investors[0]["name"], "정상펀드")
 
@@ -95,10 +98,23 @@ class TestExtractRightsOfferingInvestors(unittest.TestCase):
             "dart_risk_mcp.core.investor_extractor.fetch_pifric_decision",
             return_value=pifric_payload,
         ) as mock_pifric:
-            investors = extract_rights_offering_investors("20240201000006", "key")
+            investors = extract_rights_offering_investors("20240201000006", "key", "testcc")
         mock_pifric.assert_called_once()
         self.assertEqual(len(investors), 1)
         self.assertEqual(investors[0]["name"], "DD펀드")
+
+    def test_skips_structured_uses_html_when_no_corp_code(self):
+        # corp_code 없으면 구조화 경로 건너뜀, 바로 HTML 폴백
+        html_result = [{"name": "HTML추출", "type": "", "amount": "", "source": "rights_offering"}]
+        with patch(
+            "dart_risk_mcp.core.investor_extractor.fetch_piic_decision"
+        ) as mock_piic, patch(
+            "dart_risk_mcp.core.investor_extractor._html_fallback",
+            return_value=html_result,
+        ):
+            investors = extract_rights_offering_investors("20240201000007", "key")
+        mock_piic.assert_not_called()
+        self.assertEqual(investors[0]["name"], "HTML추출")
 
 
 if __name__ == "__main__":

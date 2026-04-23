@@ -145,7 +145,7 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
     failed_decisions = 0
     for _d in decision_items:
         _dtype = resolve_decision_type(_d["report_nm"])
-        _r = fetch_major_decision(_d["rcept_no"], _DART_API_KEY, _dtype)
+        _r = fetch_major_decision(_d["rcept_no"], _DART_API_KEY, _dtype, corp_code)
         if "error" in _r:
             failed_decisions += 1
             continue
@@ -275,7 +275,7 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
     cb_investors: list[dict] = []
     seen_investors: set[str] = set()
     for _cb_rcept in cb_rcept_nos[:3]:
-        for inv in extract_cb_investors(_cb_rcept, _DART_API_KEY):
+        for inv in extract_cb_investors(_cb_rcept, _DART_API_KEY, corp_code):
             if inv["name"] not in seen_investors:
                 seen_investors.add(inv["name"])
                 cb_investors.append(inv)
@@ -437,12 +437,12 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
                     if tl_parts:
                         lines += ["", "━━ 위기 타임라인 ━━", "• " + ", ".join(tl_parts)]
 
-    # CB/BW면 인수자 추출
+    # CB/BW면 인수자 추출 (check_disclosure_risk는 corp_code 불명 → HTML 폴백)
     if rcept_no and any(s["key"] == "CB_BW" for s in matched) and not is_amendment:
         if not _DART_API_KEY:
             lines += ["", "⚠️ DART_API_KEY 미설정 — CB 인수자 조회 불가"]
         else:
-            investors = extract_cb_investors(rcept_no, _DART_API_KEY)
+            investors = extract_cb_investors(rcept_no, _DART_API_KEY, "")
             if investors:
                 lines += ["", "━━ CB/BW 인수자 ━━"]
                 for inv in investors:
@@ -452,7 +452,7 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
     # v0.5.0: DS005 결정 공시면 구조화 필드 추가 ---------------
     dtype = resolve_decision_type(report_name)
     if dtype and rcept_no and _DART_API_KEY:
-        dec = fetch_major_decision(rcept_no, _DART_API_KEY, dtype)
+        dec = fetch_major_decision(rcept_no, _DART_API_KEY, dtype, "")
         if "error" not in dec:
             lines += ["", "📑 **결정 공시 구조화 정보**"]
             lines.append(f"- 유형: `{dec['decision_type']}`")
@@ -692,7 +692,7 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
             _dtype = resolve_decision_type(evt[4])
             _evt_rcept = evt[5] if len(evt) > 5 else ""
             if _dtype and _evt_rcept and _DART_API_KEY:
-                _dec = fetch_major_decision(_evt_rcept, _DART_API_KEY, _dtype)
+                _dec = fetch_major_decision(_evt_rcept, _DART_API_KEY, _dtype, corp_code)
                 if "error" not in _dec and _dec["counterparty"]:
                     lines.append(
                         f"      └ 상대방: {_dec['counterparty']} "
@@ -720,7 +720,7 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
         seen: set[str] = set()
         investors: list[dict] = []
         for rn in cb_rcept_list[:3]:
-            for inv in extract_cb_investors(rn, _DART_API_KEY):
+            for inv in extract_cb_investors(rn, _DART_API_KEY, corp_code):
                 if inv["name"] not in seen:
                     seen.add(inv["name"])
                     investors.append(inv)
@@ -818,10 +818,10 @@ def find_actor_overlap(company_names: list[str]) -> str:
 
         investors: list[tuple] = []  # (source, inv_dict, rcept_no)
         for rn in cb_rcepts:
-            for inv in (extract_cb_investors(rn, api_key) or []):
+            for inv in (extract_cb_investors(rn, api_key, corp_code) or []):
                 investors.append(("CB", inv, rn))
         for rn in rights_rcepts:
-            for inv in (extract_rights_offering_investors(rn, api_key) or []):
+            for inv in (extract_rights_offering_investors(rn, api_key, corp_code) or []):
                 investors.append(("유상증자", inv, rn))
 
         for source, inv, rn in investors:

@@ -1309,11 +1309,16 @@ def fetch_major_decision(
     rcept_no: str,
     api_key: str,
     decision_type: str = "",
+    corp_code: str = "",
+    corp_cls: str = "",  # kept for backward compat, not sent to DART when corp_code provided
 ) -> dict:
     """DS005 12개 결정 공시를 구조화 필드로 반환. 실패 시 {"error": ...}.
 
     decision_type 미지정 시 빈 결과를 안내 메시지로 반환한다(rcept_no만으로
     보고서명을 역조회하는 API가 없어 호출자가 명시해야 한다).
+
+    corp_code 제공 시 corp_code+날짜 범위로 조회 후 rcept_no 필터 (DART 필수 파라미터 대응).
+    corp_code 미제공 시 rcept_no 단독 조회 시도 (일부 DS005 엔드포인트는 지원).
     """
     if not isinstance(rcept_no, str) or len(rcept_no) != 14 or not rcept_no.isdigit():
         return {"error": f"rcept_no는 14자리 숫자여야 합니다: {rcept_no!r}"}
@@ -1332,9 +1337,33 @@ def fetch_major_decision(
         }
 
     url = _MAJOR_DECISION_URLS[dtype]
-    params = {"crtfc_key": api_key, "rcept_no": rcept_no}
+    # DS005 엔드포인트들도 corp_code+날짜 방식이 더 안정적 — corp_code 있으면 활용
+    if corp_code and len(rcept_no) >= 8:
+        rcpt_date = rcept_no[:8]
+        endpoint_path = url.split("/api/", 1)[-1]  # e.g. "bsnInhDecsn.json"
+        params = {"crtfc_key": api_key, "corp_code": corp_code,
+                  "bgn_de": rcpt_date, "end_de": rcpt_date}
+        try:
+            data = _retry("GET", url, params=params).json()
+        except Exception as e:
+            return {"error": f"DART 조회 실패: {e}"}
+        if data.get("status") == "000":
+            lst = data.get("list") or []
+            matched = [r for r in lst if r.get("rcept_no") == rcept_no]
+            if matched:
+                result = _normalize_decision(matched[0], dtype, url)
+                result["flags"] = _detect_decision_anomaly(result)
+                _cache_set(_major_decision_cache, rcept_no, result, _MAJOR_CACHE_MAX)
+                return result
+            # corp_code 조회로 해당 날짜 데이터는 있으나 이 rcept_no가 없음
+            return {"error": "해당 공시에 구조화 데이터가 없습니다."}
+        # status 비정상 — rcept_no 단독 폴백 시도
+        _log_dart_status(data.get("status", "?"), f"{dtype} corp={corp_code} rcept={rcept_no}")
+
+    # corp_code 없거나 corp_code 조회 실패 → rcept_no 단독 시도 (일부 DS005 지원)
+    params_fallback = {"crtfc_key": api_key, "rcept_no": rcept_no}
     try:
-        data = _retry("GET", url, params=params).json()
+        data = _retry("GET", url, params=params_fallback).json()
     except Exception as e:
         return {"error": f"DART 조회 실패: {e}"}
 
@@ -1587,113 +1616,93 @@ def _fs_response_to_periods(fs_data: dict) -> tuple[dict, dict]:
     return current, prior
 
 
-def fetch_cb_issue_decision(rcept_no: str, api_key: str) -> dict:
+def _fetch_decision_filtered(endpoint: str, rcept_no: str, api_key: str, corp_code: str) -> dict:
+    """공통 헬퍼: corp_code + rcept_date 범위로 결정공시 엔드포인트를 조회하고 rcept_no로 필터.
+
+    DART의 cvbdIsDecsn / bdwtIsDecsn / piicDecsn 등은 rcept_no 단독 조회를 지원하지 않아
+    status:100 필수값 누락 오류를 반환한다. corp_code + bgn_de + end_de (날짜 = rcept_no 앞 8자리)
+    로 조회한 뒤, 결과를 rcept_no로 필터링한다.
+
+    반환 dict에는 원본 응답에서 list만 rcept_no 매치 결과로 교체. 실패/빈 응답 시 {}.
+    """
+    if not api_key or not corp_code or not rcept_no or len(rcept_no) < 8:
+        return {}
+    rcpt_date = rcept_no[:8]
+    url = f"{DART_BASE}/{endpoint}"
+    params = {"crtfc_key": api_key, "corp_code": corp_code,
+              "bgn_de": rcpt_date, "end_de": rcpt_date}
+    try:
+        resp = _retry("get", url, params=params, timeout=10)
+        data = resp.json()
+        if data.get("status") != "000":
+            _log_dart_status(data.get("status", "?"), f"{endpoint} rcept={rcept_no}")
+            return {}
+        lst = data.get("list") or []
+        matched = [r for r in lst if r.get("rcept_no") == rcept_no]
+        return {**data, "list": matched} if matched else {}
+    except Exception as e:
+        log.debug("%s 조회 실패 (rcept=%s corp=%s): %s", endpoint, rcept_no, corp_code, e)
+        return {}
+
+
+def fetch_cb_issue_decision(rcept_no: str, api_key: str, corp_code: str = "") -> dict:
     """
     /api/cvbdIsDecsn.json — 전환사채권 발행결정 공시 상세.
 
+    corp_code 지정 시 corp_code+날짜 범위로 조회 후 rcept_no 필터(DART 필수 파라미터 대응).
+    corp_code 미지정 시 빈 dict 반환 (HTML 폴백으로 진행).
     Returns full response dict on success, empty dict on any error/non-000 status.
     """
-    if not api_key:
+    if not corp_code:
         return {}
-    url = f"{DART_BASE}/cvbdIsDecsn.json"
-    params = {"crtfc_key": api_key, "rcept_no": rcept_no}
-    try:
-        resp = _retry("get", url, params=params, timeout=10)
-        data = resp.json()
-        if data.get("status") != "000":
-            _log_dart_status(data.get("status", "?"), f"발행결정 rcept_no={rcept_no}")
-            return {}
-        return data
-    except Exception as e:
-        log.debug("발행결정 조회 실패 (%s): %s", rcept_no, e)
-        return {}
+    return _fetch_decision_filtered("cvbdIsDecsn.json", rcept_no, api_key, corp_code)
 
 
-def fetch_bw_issue_decision(rcept_no: str, api_key: str) -> dict:
-    """/api/bdwtIsDecsn.json — 신주인수권부사채권 발행결정 공시 상세."""
-    if not api_key:
+def fetch_bw_issue_decision(rcept_no: str, api_key: str, corp_code: str = "") -> dict:
+    """/api/bdwtIsDecsn.json — 신주인수권부사채권 발행결정 공시 상세.
+
+    corp_code 지정 시 corp_code+날짜 범위로 조회 후 rcept_no 필터.
+    """
+    if not corp_code:
         return {}
-    url = f"{DART_BASE}/bdwtIsDecsn.json"
-    params = {"crtfc_key": api_key, "rcept_no": rcept_no}
-    try:
-        resp = _retry("get", url, params=params, timeout=10)
-        data = resp.json()
-        if data.get("status") != "000":
-            _log_dart_status(data.get("status", "?"), f"발행결정 rcept_no={rcept_no}")
-            return {}
-        return data
-    except Exception as e:
-        log.debug("발행결정 조회 실패 (%s): %s", rcept_no, e)
-        return {}
+    return _fetch_decision_filtered("bdwtIsDecsn.json", rcept_no, api_key, corp_code)
 
 
-def fetch_eb_issue_decision(rcept_no: str, api_key: str) -> dict:
-    """/api/exbdIsDecsn.json — 교환사채권 발행결정 공시 상세."""
-    if not api_key:
+def fetch_eb_issue_decision(rcept_no: str, api_key: str, corp_code: str = "") -> dict:
+    """/api/exbdIsDecsn.json — 교환사채권 발행결정 공시 상세.
+
+    corp_code 지정 시 corp_code+날짜 범위로 조회 후 rcept_no 필터.
+    """
+    if not corp_code:
         return {}
-    url = f"{DART_BASE}/exbdIsDecsn.json"
-    params = {"crtfc_key": api_key, "rcept_no": rcept_no}
-    try:
-        resp = _retry("get", url, params=params, timeout=10)
-        data = resp.json()
-        if data.get("status") != "000":
-            _log_dart_status(data.get("status", "?"), f"발행결정 rcept_no={rcept_no}")
-            return {}
-        return data
-    except Exception as e:
-        log.debug("발행결정 조회 실패 (%s): %s", rcept_no, e)
-        return {}
+    return _fetch_decision_filtered("exbdIsDecsn.json", rcept_no, api_key, corp_code)
 
 
-def fetch_piic_decision(rcept_no: str, api_key: str) -> dict:
-    """/api/piicDecsn.json — 유상증자 결정 공시 상세."""
-    if not api_key:
+def fetch_piic_decision(rcept_no: str, api_key: str, corp_code: str = "") -> dict:
+    """/api/piicDecsn.json — 유상증자 결정 공시 상세.
+
+    corp_code 지정 시 corp_code+날짜 범위로 조회 후 rcept_no 필터.
+    """
+    if not corp_code:
         return {}
-    url = f"{DART_BASE}/piicDecsn.json"
-    params = {"crtfc_key": api_key, "rcept_no": rcept_no}
-    try:
-        resp = _retry("get", url, params=params, timeout=10)
-        data = resp.json()
-        if data.get("status") != "000":
-            _log_dart_status(data.get("status", "?"), f"증자결정 rcept_no={rcept_no}")
-            return {}
-        return data
-    except Exception as e:
-        log.debug("증자결정 조회 실패 (%s): %s", rcept_no, e)
-        return {}
+    return _fetch_decision_filtered("piicDecsn.json", rcept_no, api_key, corp_code)
 
 
-def fetch_fric_decision(rcept_no: str, api_key: str) -> dict:
-    """/api/fricDecsn.json — 무상증자 결정 공시 상세."""
-    if not api_key:
+def fetch_fric_decision(rcept_no: str, api_key: str, corp_code: str = "") -> dict:
+    """/api/fricDecsn.json — 무상증자 결정 공시 상세.
+
+    corp_code 지정 시 corp_code+날짜 범위로 조회 후 rcept_no 필터.
+    """
+    if not corp_code:
         return {}
-    url = f"{DART_BASE}/fricDecsn.json"
-    params = {"crtfc_key": api_key, "rcept_no": rcept_no}
-    try:
-        resp = _retry("get", url, params=params, timeout=10)
-        data = resp.json()
-        if data.get("status") != "000":
-            _log_dart_status(data.get("status", "?"), f"증자결정 rcept_no={rcept_no}")
-            return {}
-        return data
-    except Exception as e:
-        log.debug("증자결정 조회 실패 (%s): %s", rcept_no, e)
-        return {}
+    return _fetch_decision_filtered("fricDecsn.json", rcept_no, api_key, corp_code)
 
 
-def fetch_pifric_decision(rcept_no: str, api_key: str) -> dict:
-    """/api/pifricDecsn.json — 유무상증자 결정 공시 상세."""
-    if not api_key:
+def fetch_pifric_decision(rcept_no: str, api_key: str, corp_code: str = "") -> dict:
+    """/api/pifricDecsn.json — 유무상증자 결정 공시 상세.
+
+    corp_code 지정 시 corp_code+날짜 범위로 조회 후 rcept_no 필터.
+    """
+    if not corp_code:
         return {}
-    url = f"{DART_BASE}/pifricDecsn.json"
-    params = {"crtfc_key": api_key, "rcept_no": rcept_no}
-    try:
-        resp = _retry("get", url, params=params, timeout=10)
-        data = resp.json()
-        if data.get("status") != "000":
-            _log_dart_status(data.get("status", "?"), f"증자결정 rcept_no={rcept_no}")
-            return {}
-        return data
-    except Exception as e:
-        log.debug("증자결정 조회 실패 (%s): %s", rcept_no, e)
-        return {}
+    return _fetch_decision_filtered("pifricDecsn.json", rcept_no, api_key, corp_code)

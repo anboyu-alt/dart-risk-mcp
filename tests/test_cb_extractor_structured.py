@@ -15,7 +15,7 @@ class TestCBExtractorStructuredFirst(unittest.TestCase):
         ), patch(
             "dart_risk_mcp.core.cb_extractor._legacy_html_extract"
         ) as mock_html:
-            investors = extract_cb_investors("20240101000001", "key")
+            investors = extract_cb_investors("20240101000001", "key", "testcc")
         self.assertEqual(investors[0]["name"], "OO투자조합")
         mock_html.assert_not_called()
 
@@ -33,7 +33,7 @@ class TestCBExtractorStructuredFirst(unittest.TestCase):
         ), patch(
             "dart_risk_mcp.core.cb_extractor._legacy_html_extract"
         ) as mock_html:
-            investors = extract_cb_investors("20240101000002", "key")
+            investors = extract_cb_investors("20240101000002", "key", "testcc")
         self.assertEqual(investors[0]["name"], "XX파트너스")
         mock_html.assert_not_called()
 
@@ -54,7 +54,7 @@ class TestCBExtractorStructuredFirst(unittest.TestCase):
         ), patch(
             "dart_risk_mcp.core.cb_extractor._legacy_html_extract"
         ) as mock_html:
-            investors = extract_cb_investors("20240101000003", "key")
+            investors = extract_cb_investors("20240101000003", "key", "testcc")
         self.assertEqual(investors[0]["name"], "YY캐피탈")
         mock_html.assert_not_called()
 
@@ -73,7 +73,7 @@ class TestCBExtractorStructuredFirst(unittest.TestCase):
             "dart_risk_mcp.core.cb_extractor._legacy_html_extract",
             return_value=html_result,
         ):
-            investors = extract_cb_investors("20240101000004", "key")
+            investors = extract_cb_investors("20240101000004", "key", "testcc")
         self.assertEqual(investors[0]["name"], "ZZ자산운용")
 
     def test_falls_back_to_html_when_structured_raises(self):
@@ -91,8 +91,21 @@ class TestCBExtractorStructuredFirst(unittest.TestCase):
             "dart_risk_mcp.core.cb_extractor._legacy_html_extract",
             return_value=html_result,
         ):
-            investors = extract_cb_investors("20240101000005", "key")
+            investors = extract_cb_investors("20240101000005", "key", "testcc")
         self.assertEqual(investors[0]["name"], "WW캐피탈")
+
+    def test_skips_structured_and_uses_html_when_no_corp_code(self):
+        # corp_code 없으면 구조화 경로 스킵, 바로 HTML 폴백
+        html_result = [{"name": "직접HTML추출", "type": "", "amount": ""}]
+        with patch(
+            "dart_risk_mcp.core.cb_extractor.fetch_cb_issue_decision"
+        ) as mock_cb, patch(
+            "dart_risk_mcp.core.cb_extractor._legacy_html_extract",
+            return_value=html_result,
+        ):
+            investors = extract_cb_investors("20240101000006", "key")
+        mock_cb.assert_not_called()
+        self.assertEqual(investors[0]["name"], "직접HTML추출")
 
 
 if __name__ == "__main__":
