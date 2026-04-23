@@ -1593,41 +1593,53 @@ def fetch_cb_issue_decision(rcept_no: str, api_key: str) -> dict:
 
     Returns full response dict on success, empty dict on any error/non-000 status.
     """
+    if not api_key:
+        return {}
     url = f"{DART_BASE}/cvbdIsDecsn.json"
     params = {"crtfc_key": api_key, "rcept_no": rcept_no}
     try:
         resp = _retry("get", url, params=params, timeout=10)
         data = resp.json()
         if data.get("status") != "000":
+            _log_dart_status(data.get("status", "?"), f"발행결정 rcept_no={rcept_no}")
             return {}
         return data
-    except Exception:
+    except Exception as e:
+        log.debug("발행결정 조회 실패 (%s): %s", rcept_no, e)
         return {}
 
 
 def fetch_bw_issue_decision(rcept_no: str, api_key: str) -> dict:
     """/api/bdwtIsDecsn.json — 신주인수권부사채권 발행결정 공시 상세."""
+    if not api_key:
+        return {}
     url = f"{DART_BASE}/bdwtIsDecsn.json"
     params = {"crtfc_key": api_key, "rcept_no": rcept_no}
     try:
         resp = _retry("get", url, params=params, timeout=10)
         data = resp.json()
         if data.get("status") != "000":
+            _log_dart_status(data.get("status", "?"), f"발행결정 rcept_no={rcept_no}")
             return {}
         return data
-    except Exception:
+    except Exception as e:
+        log.debug("발행결정 조회 실패 (%s): %s", rcept_no, e)
         return {}
 
 
 def fetch_eb_issue_decision(rcept_no: str, api_key: str) -> dict:
     """/api/exbdIsDecsn.json — 교환사채권 발행결정 공시 상세."""
+    if not api_key:
+        return {}
     url = f"{DART_BASE}/exbdIsDecsn.json"
     params = {"crtfc_key": api_key, "rcept_no": rcept_no}
     try:
         resp = _retry("get", url, params=params, timeout=10)
         data = resp.json()
         if data.get("status") != "000":
+            _log_dart_status(data.get("status", "?"), f"발행결정 rcept_no={rcept_no}")
             return {}
         return data
-    except Exception:
+    except Exception as e:
+        log.debug("발행결정 조회 실패 (%s): %s", rcept_no, e)
         return {}

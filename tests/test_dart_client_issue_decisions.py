@@ -66,6 +66,40 @@ class TestFetchIssueDecisions(unittest.TestCase):
             data = fetch_cb_issue_decision("20240101000001", "key")
         self.assertEqual(data, {})
 
+    def test_fetch_bw_issue_decision_empty_on_error_status(self):
+        payload = {"status": "013", "message": "조회된 데이타가 없습니다."}
+        with patch(
+            "dart_risk_mcp.core.dart_client._retry",
+            return_value=self._mock_response(payload),
+        ):
+            data = fetch_bw_issue_decision("20240101000002", "key")
+        self.assertEqual(data, {})
+
+    def test_fetch_bw_issue_decision_empty_on_network_exception(self):
+        with patch(
+            "dart_risk_mcp.core.dart_client._retry",
+            side_effect=Exception("connection refused"),
+        ):
+            data = fetch_bw_issue_decision("20240101000002", "key")
+        self.assertEqual(data, {})
+
+    def test_fetch_eb_issue_decision_empty_on_error_status(self):
+        payload = {"status": "013", "message": "조회된 데이타가 없습니다."}
+        with patch(
+            "dart_risk_mcp.core.dart_client._retry",
+            return_value=self._mock_response(payload),
+        ):
+            data = fetch_eb_issue_decision("20240101000003", "key")
+        self.assertEqual(data, {})
+
+    def test_fetch_eb_issue_decision_empty_on_network_exception(self):
+        with patch(
+            "dart_risk_mcp.core.dart_client._retry",
+            side_effect=Exception("connection refused"),
+        ):
+            data = fetch_eb_issue_decision("20240101000003", "key")
+        self.assertEqual(data, {})
+
 
 if __name__ == "__main__":
     unittest.main()
