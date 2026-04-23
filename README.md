@@ -1261,15 +1261,37 @@ uvx --refresh --from git+https://github.com/anboyu-alt/dart-risk-mcp.git dart-ri
 
 ### Q. 비상장사(상장 안 된 회사)도 조회할 수 있나요?
 
-**네, 대부분의 도구는 비상장사도 지원합니다.** DART는 상장사(약 3,800개)뿐 아니라 외부감사 대상 비상장 법인(약 10만 개)도 모두 등록되어 있고, 이 MCP는 그 전체 목록(`corpCode.xml`)을 24시간 캐시해 사용합니다.
+**"공시 원문·이벤트 스캔" 도구는 비상장사도 됩니다. 하지만 "재무·지분·보수" 도구는 대부분 상장사 전용입니다.** DART는 상장사(약 3,800개)뿐 아니라 외부감사 대상 비상장 법인(약 10만 개)도 모두 등록되어 있어 공시 자체는 비상장사도 조회 가능하지만, DART OpenAPI의 많은 엔드포인트가 **"상장법인 재무정보"** 전용으로 설계되어 있기 때문입니다.
 
-- **비상장사 조회 방법:** 반드시 **회사 이름**으로 검색해야 합니다 (비상장사는 종목코드 자체가 없음). 예: `"신세계프라퍼티 공시 분석해줘"`, `"연방건설산업 감사의견 확인해줘"`
-- **지원하는 도구:** `analyze_company_risk`, `check_disclosure_anomaly`, `build_event_timeline`, `get_company_info`, `get_financial_summary`, `compare_financials`, `get_disclosure_document`, `view_disclosure` 등 **회사 이름을 받는 거의 모든 도구**
-- **비상장사에서는 작동하지 않는 도구:**
-  - `list_disclosures_by_stock` — 정의상 종목코드(6자리)를 필수로 받는 유일한 도구. 비상장사는 쓸 수 없습니다
-  - `track_insider_trading` — 5%·최대주주 보고 제도는 상장사에만 적용되므로 비상장사는 데이터가 비어 있습니다
-  - `search_market_disclosures` — 시장 전체 스캔은 대부분 상장사 공시가 대상입니다
-- **주의:** 비상장사는 사업보고서·감사보고서·합병/영업 양수도 같은 "외감법·자본시장법상 공시"만 올라오며, 수시공시(시세·지분 변동 등)는 제한적입니다
+**조회 방법.** 비상장사는 반드시 **회사 이름**으로 검색해야 합니다(종목코드 자체가 없음). 예: `"신세계프라퍼티 공시 분석해줘"`, `"연방건설산업 감사의견 확인해줘"`
+
+**✅ 비상장사도 지원** (공시 목록·원문·이벤트 기반)
+
+| 도구 | 비고 |
+|------|------|
+| `analyze_company_risk` | 공시 목록 스캔 — 비상장사 공시 있으면 정상 작동 |
+| `check_disclosure_anomaly` | 공시 목록 기반 지표 5개 |
+| `build_event_timeline` | 공시 목록 기반 서사 구성 |
+| `get_company_info` | `/company.json` — 등록된 모든 법인 지원 |
+| `get_disclosure_document` / `list_disclosure_sections` / `view_disclosure` | 접수번호 기반 원문 조회 |
+| `find_risk_precedents` | 정적 taxonomy 조회 (API 호출 없음) |
+| `find_actor_overlap` | 비상장사가 CB/BW를 발행한 경우 인수자 비교 가능 |
+
+**❌ 비상장사에서는 작동하지 않음** (DART API가 상장사 전용으로 제한)
+
+| 도구 | 제약 사유 |
+|------|----------|
+| `get_financial_summary` / `compare_financials` / `scan_financial_anomaly` | `fnlttSinglAcnt`·`fnlttMultiAcnt` API가 **상장법인 재무정보** 전용. 비상장사는 사업보고서 API로 접근 불가 |
+| `get_shareholder_info` | `majorstock`·`elestock` API는 자본시장법상 **상장사 보고의무**에 기반 |
+| `get_executive_compensation` | 임원 보수 5억 이상 공시는 **상장사 사업보고서** 기반 |
+| `track_insider_trading` | 5%·최대주주 보고 제도는 **상장사만** 적용 |
+| `track_fund_usage` | 공모·사모 자금사용 내역 공시는 **상장사 증권신고서** 기반 |
+| `track_capital_structure` | 자본 이벤트 다수가 상장사 수시공시에 집중 |
+| `get_major_decision` | DS005 주요결정 공시는 **상장법인 공시의무** 기반 |
+| `list_disclosures_by_stock` | 정의상 종목코드(6자리) 필수 |
+| `search_market_disclosures` | 시장 전체 스캔은 대부분 상장 공시가 대상 |
+
+**주의.** 비상장사는 외감법상 **감사보고서·사업보고서**, 자본시장법상 **합병/영업 양수도** 같은 공시만 올라오며, 수시공시(시세·지분 변동 등)는 제한적입니다. 따라서 비상장사 분석은 **이벤트·거버넌스 신호 중심**으로 이뤄집니다.
 
 ---
 
