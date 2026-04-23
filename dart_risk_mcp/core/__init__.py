@@ -29,6 +29,12 @@ from .cb_extractor import extract_cb_investors
 from .investor_extractor import extract_rights_offering_investors
 from .taxonomy import calculate_risk_score, find_pattern_match, estimate_crisis_timeline
 from .catalog import load_catalog_excerpt
+from .explain import (
+    flag_to_prose,
+    signal_to_prose,
+    pattern_to_prose,
+    category_prose,
+)
 
 __all__ = [
     "resolve_corp",
@@ -63,4 +69,8 @@ __all__ = [
     "CAPITAL_EVENT_KEYS",
     "DILUTIVE_CAPITAL_EVENTS",
     "NON_DILUTIVE_CAPITAL_EVENTS",
+    "flag_to_prose",
+    "signal_to_prose",
+    "pattern_to_prose",
+    "category_prose",
 ]

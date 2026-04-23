@@ -4,6 +4,32 @@
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-04-23
+
+### Changed
+- **비전문가가 읽어도 막힘 없는 출력** — 6개 도구의 렌더링 레이어를 완전 재작성. 내부 flag/signal/pattern 키(`AR_SURGE`, `CB_BW`, `CAPITAL_CHURN`, `DECISION_RELATED_PARTY`, `FUND_DIVERSION` 등)가 **사용자 출력에 더 이상 노출되지 않음**. 모든 코드 문자열은 렌더 직전 한국어 서술로 치환:
+  - `analyze_company_risk` — 맨 위 🎯 3문장 요약 블록 신설(규모·등급·가장 무거운 신호). `• [KEY] ...` 형식 → `• YYYY-MM-DD · 공시명 → 왜 주목할 만한지 한 문장` 형식. 복합 패턴·재무이상·주요결정·자금사용 블록 모두 prose 기반.
+  - `scan_financial_anomaly` — 판정 열(`🚩 AR_SURGE`) 제거. 지표별 "이 지표가 말하는 것" 단락으로 이상 신호 해설.
+  - `check_disclosure_anomaly` — 5개 구조 지표 각각에 "이 지표가 뭘 재는지 + 지금 수준의 의미" 1~2문장 추가.
+  - `track_fund_usage` — `⚠FUND_DIVERSION` 토큰 제거. 계획 vs 실제 불일치를 한국어 서술로 설명.
+  - `track_capital_structure` — `🚩 CAPITAL_CHURN` 제거. 상단 요약에 churn 의미 3~4문장.
+  - `get_major_decision` — `탐지 플래그: DECISION_*` 제거. "주목할 이유" 블록으로 대체.
+- `load_catalog_excerpt` — 각 카테고리 발췌 앞에 "이 카테고리가 뭔가요" 2문장 머리말 자동 prepend.
+- `README.md` — Section 7 "결과 읽는 법" 예시를 새 출력 형식으로 교체(후속 커밋).
+
+### Added
+- **`dart_risk_mcp/core/explain.py`** 신설 — plain-language 사전 모듈. 4개 공개 API: `flag_to_prose(flag, metric) → (title, body)`, `signal_to_prose(key, report_nm) → str`, `pattern_to_prose(pattern_key) → str`, `category_prose(category) → str`. 10개 flag + 31개 signal + 9개 pattern + 8개 category 사전 임베드. 외부 의존성 없음.
+- `_metric_amendments()` 내부 헬퍼 — metric dict가 있을 때 본문 말미에 "이번 분석: 전년 8.0%에서 18.2%로 +10.2%포인트 움직였습니다." 같은 맥락 수치 삽입.
+
+### Removed
+- `_v6_flag_label()` 함수(server.py) — 영어 코드로 되돌리는 역방향 추상화. `flag_to_prose`로 대체.
+
+### Design Principles (향후 유지)
+1. 내부 코드는 출력 경계를 넘지 못한다.
+2. 모든 수치에는 의미를 동반한다.
+3. 각 도구 출력은 맨 위 3~4줄로 독립적으로 읽힌다.
+4. 단일 출력 — level/mode 파라미터 분기 없음.
+
 ## [0.7.0] — 2026-04-23
 
 ### Added

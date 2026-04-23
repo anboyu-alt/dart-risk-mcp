@@ -13,6 +13,7 @@ from mcp.server.fastmcp import FastMCP
 
 from .core import (
     calculate_risk_score,
+    category_prose,
     detect_capital_churn,
     detect_financial_anomaly,
     estimate_crisis_timeline,
@@ -33,12 +34,15 @@ from .core import (
     fetch_multi_financial,
     fetch_shareholder_status,
     find_pattern_match,
+    flag_to_prose,
     is_amendment_disclosure,
     list_document_sections,
     load_catalog_excerpt,
     match_signals,
+    pattern_to_prose,
     resolve_corp,
     resolve_decision_type,
+    signal_to_prose,
     CAPITAL_EVENT_KEYS,
     SIGNAL_KEY_TO_TAXONOMY,
     SIGNAL_TYPES,
@@ -281,9 +285,45 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
                 cb_investors.append(inv)
 
     # ── 리포트 조립 ──
+
+    # 🎯 3문장 요약 — 맨 위에 독립적으로 읽히는 단락
+    non_amend_events = [e for e in signal_events if not e["is_amendment"]]
+    top_signal_label = (
+        top_signal.get("label", "") if top_signal else ""
+    )
+    top_signal_prose = (
+        signal_to_prose(top_signal["key"]) if top_signal else ""
+    )
+    # 첫 문장: 규모
+    s1 = (
+        f"지난 {lookback_days}일 동안 **{corp_name}**의 공시 "
+        f"{len(disclosures)}건을 살펴본 결과, 위험 신호로 꼽을 만한 공시·"
+        f"재무 이벤트가 **{len(non_amend_events)}건** 감지됐습니다."
+    )
+    # 둘째 문장: 등급
+    s2 = (
+        f"종합 위험 점수는 {total_score}점으로 **{level}** 등급에 해당합니다. "
+        "점수는 공시 기반 불공정거래 가능성의 참고값이며, 법적 판단이나 "
+        "투자 결정의 근거는 아닙니다."
+    )
+    # 셋째 문장: 가장 무거운 신호
+    if top_signal and top_signal_prose:
+        s3 = (
+            f"가장 무게 있는 신호는 '{top_signal_label}'이며, "
+            f"{top_signal_prose}"
+        )
+    elif top_signal:
+        s3 = f"가장 무게 있는 신호는 '{top_signal_label}'입니다."
+    else:
+        s3 = "가장 주목할 만한 단일 신호는 감지되지 않았습니다."
+
+    summary_block = f"🎯 {s1}\n\n{s2}\n\n{s3}"
+
     lines = [
         f"📊 **기업 리스크 분석: {corp_name}**",
         f"종목코드: {stock_code}" if stock_code else f"Corp code: {corp_code}",
+        "",
+        summary_block,
         "",
         f"{emoji} **위험 등급: {level}** ({total_score}점)",
         f"조회 기간: 최근 {lookback_days}일 | 전체 공시 {len(disclosures)}건 검토",
@@ -292,22 +332,48 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
     ]
 
     for e in sorted(signal_events, key=lambda x: x["rcept_dt"], reverse=True):
-        amend_tag = " ⚠️ 정정공시 (점수 제외)" if e["is_amendment"] else ""
-        score_tag = "" if e["is_amendment"] else f" ({e['score']}점)"
+        amend_tag = " · 정정공시(점수 제외)" if e["is_amendment"] else ""
+        score_tag = "" if e["is_amendment"] else f" · {e['score']}점"
+        date = e["rcept_dt"] or "-"
+        meaning = signal_to_prose(e["key"])
+        one_liner = meaning if meaning else e["label"]
+        # 첫 줄: 날짜 · 공시명 · 점수
         lines.append(
-            f"• [{e['key']}] {e['report_nm']} — {e['rcept_dt']}{score_tag}{amend_tag}"
+            f"• {date} · {e['report_nm']}{score_tag}{amend_tag}"
         )
+        # 두번째 줄: 의미 해설 (접미 들여쓰기)
+        if one_liner:
+            lines.append(f"  → {one_liner}")
 
     if pattern:
+        pattern_key = None
+        for k, v in __import__(
+            "dart_risk_mcp.core.taxonomy", fromlist=["CROSS_SIGNAL_PATTERNS"]
+        ).CROSS_SIGNAL_PATTERNS.items():
+            if v.get("name") == pattern.get("name"):
+                pattern_key = k
+                break
+        pattern_body = pattern_to_prose(pattern_key) if pattern_key else ""
         lines += [
             "",
             "━━ 복합 패턴 ━━",
-            f"• ⚠️ **\"{pattern['name']}\"** 패턴 매칭",
-            f"  → {pattern.get('description', '')}",
+            f"⚠️ **\"{pattern['name']}\"** 패턴이 감지됐습니다.",
         ]
+        if pattern_body:
+            lines.append("")
+            lines.append(pattern_body)
+        elif pattern.get("description"):
+            lines.append(f"  → {pattern['description']}")
 
     if cb_investors:
-        lines += ["", "━━ CB 인수자 ━━"]
+        lines += [
+            "",
+            "━━ CB 인수자 ━━",
+            "아래는 이 기업이 발행한 전환사채(CB)를 실제로 받아간 "
+            "개인·법인입니다. 같은 이름이 다른 기업에도 반복 등장하면 "
+            "세력 이동의 단서가 됩니다.",
+            "",
+        ]
         for inv in cb_investors:
             amt = _format_amount(inv.get("amount", ""))
             lines.append(f"• {inv['name']}" + (f" — {amt}" if amt else ""))
@@ -317,15 +383,25 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
 
     # v0.5.0: 주요 결정 상대방 섹션 ---------------------------
     if decisions:
-        lines += ["", "📑 **주요 결정 상대방** (최근 순, 최대 10건)"]
+        lines += [
+            "",
+            "📑 **주요 결정 상대방** (최근 순, 최대 10건)",
+            "양수도·합병 같은 주요 결정의 거래 상대방과 규모입니다. "
+            "상대방이 특수관계인이거나, 거래 규모가 회사 자산 대비 "
+            "과도하거나, 외부 평가가 생략됐을 때 아래에 '주목할 이유'를 "
+            "덧붙입니다.",
+            "",
+        ]
         for _d, _r in decisions:
-            _flag_str = " " + ",".join(_r["flags"]) if _r["flags"] else ""
             lines.append(f"- [{_d['rcept_dt']}] {_d['report_nm']}")
             lines.append(
                 f"  → {_r['counterparty'] or '(미기재)'} / "
-                f"{_r['amount']:,}원 ({_r['asset_ratio']:.1f}%)"
-                f"{_flag_str}"
+                f"{_r['amount']:,}원 (자산 대비 {_r['asset_ratio']:.1f}%)"
             )
+            for f in _r["flags"]:
+                title, body = flag_to_prose(f)
+                if title:
+                    lines.append(f"    • **주목할 이유:** {title}")
         if failed_decisions:
             lines.append(f"  (추가 {failed_decisions}건 구조화 조회 실패)")
 
@@ -337,7 +413,7 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
         recent = [e for e in churn["events"] if (e.get("rcept_dt") or "").replace("-", "") >= _cutoff]
         if recent:
             for e in recent[:10]:
-                lines.append(f"- {e['rcept_dt']} `{e['key']}` {e['report_nm']}")
+                lines.append(f"- {e['rcept_dt']} · {e['report_nm']}")
             if len(recent) > 10:
                 lines.append(f"- ... (+{len(recent) - 10}건)")
         else:
@@ -350,20 +426,13 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
         flagged_only = [m for m in fs_metrics if m.get("flagged")]
         if flagged_only:
             for m in flagged_only:
-                if m["name"] == "순이익 vs 영업현금흐름":
-                    lines.append(
-                        f"- 🚩 **CASH_GAP**: 순이익 {m['current_ni']:,} vs 영업현금흐름 {m['current_ocf']:,}"
-                    )
-                elif "current" in m and "prior" in m and "delta" in m:
-                    lines.append(
-                        f"- 🚩 **{_v6_flag_label(m['name'])}**: "
-                        f"{m['name']} {m['current']:.1f}% (전기 {m['prior']:.1f}%, Δ {m['delta']:+.1f}%p)"
-                    )
-                else:
-                    lines.append(
-                        f"- 🚩 **{_v6_flag_label(m['name'])}**: "
-                        f"{m['name']} {m.get('current', 0):.1f}%"
-                    )
+                flag_key = _METRIC_TO_FLAG.get(m["name"], "")
+                if not flag_key:
+                    continue
+                title, body = flag_to_prose(flag_key, m)
+                lines.append("")
+                lines.append(f"**{title}**")
+                lines.append(body)
         else:
             lines.append("- 모든 지표 정상")
 
@@ -378,10 +447,13 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
         for _r in _anomaly_recs[:5]:
             lines.append(
                 f"- [{_r['year']} {_r['kind']} 회차{_r['tm']}] "
-                f"{','.join(_r['flags'])} | "
-                f"계획 {_r['plan_useprps'][:30]} → "
-                f"실제 {_r['real_dtls_cn'][:30]}"
+                f"계획 \"{_r['plan_useprps'][:30]}\" → "
+                f"실제 \"{_r['real_dtls_cn'][:30]}\""
             )
+            for f in _r["flags"]:
+                title, _ = flag_to_prose(f)
+                if title:
+                    lines.append(f"    • **주목할 이유:** {title}")
 
     catalog = load_catalog_excerpt(tax_ids_all)
     if catalog:
@@ -1668,30 +1740,70 @@ def check_disclosure_anomaly(company_name: str, lookback_days: int = 365) -> str
             out += f"\n    … 외 {rest}건"
         return out
 
+    # 상단 한 줄 요약
+    summary = (
+        f"🎯 최근 {lookback_days}일 동안 **{corp_name}**의 공시 활동 "
+        f"{total}건을 5개 구조 지표로 집계한 결과 **{total_score}/100점 "
+        f"({grade})**입니다. 점수 자체는 불공정거래 가능성의 '강도'를 "
+        "가늠하는 참고값이며, 실제 해석은 아래 지표별 설명과 함께 봐야 합니다."
+    )
+
     lines = [
         f"━━━ [{corp_name}] 공시 구조 이상 스코어 ━━━",
         f"조회기간: 최근 {lookback_days}일 / 총 공시 {total}건 (정정공시 {amendment_count}건)",
         "",
-        f"종합 스코어: {total_score}/100  [{grade}]",
+        summary,
+        "",
+        f"**종합 스코어: {total_score}/100  [{grade}]**",
         "",
         "── 지표별 내역 ──────────────────────────────",
-        f"① 정정공시 비율   {s_amend:2d}점  ({amendment_count}/{total}건, {amend_ratio:.0%})",
-        f"② 감사의견 이슈   {s_audit:2d}점  ({len(audit_hits)}건)",
+        "",
+        f"**① 정정공시 비율 — {s_amend}/25점** ({amendment_count}/{total}건, {amend_ratio:.0%})",
+        (
+            "이미 낸 공시를 고쳐서 다시 내는 비율입니다. 정상 기업은 보통 "
+            "5% 안쪽이고, 20%를 넘으면 최초 공시 품질이 떨어지거나 "
+            "정보를 조금씩 흘려보내는 의도가 있을 수 있습니다."
+        ),
+        "",
+        f"**② 감사의견 이슈 — {s_audit}/20점** ({len(audit_hits)}건)",
+        (
+            "회계감사 과정에서 한정·부적정·거절 의견이 나오거나 감사인이 "
+            "중도 교체된 건수입니다. 감사의견 거절은 코스닥에서 상장폐지로 "
+            "직결되는 가장 무거운 신호 중 하나입니다."
+        ),
     ]
     if audit_hits:
         lines.append(_top3(audit_hits))
     lines += [
-        f"③ 공시의무 위반   {s_viol:2d}점  ({len(viol_hits)}건)",
+        "",
+        f"**③ 공시의무 위반 — {s_viol}/15점** ({len(viol_hits)}건)",
+        (
+            "거래소가 불성실공시법인으로 지정하거나 공시 철회·정정을 "
+            "반복한 건수입니다. 한 해 한두 건이면 실무 실수일 수 있지만, "
+            "반복되면 기본 거버넌스가 흔들리는 신호입니다."
+        ),
     ]
     if viol_hits:
         lines.append(_top3(viol_hits))
     lines += [
-        f"④ 자본 스트레스   {s_capital:2d}점  ({len(capital_hits)}건)",
+        "",
+        f"**④ 자본 스트레스 — {s_capital}/25점** ({len(capital_hits)}건)",
+        (
+            "액면병합·자본감소·주주배정 실권·제3자배정 증자처럼 "
+            "'자본을 주무르는' 공시의 누적 건수입니다. 상장폐지 회피나 "
+            "특정 세력 지분 몰아주기 맥락에서 집중 관찰됩니다."
+        ),
     ]
     if capital_hits:
         lines.append(_top3(capital_hits))
     lines += [
-        f"⑤ 조회공시 빈도   {s_inquiry:2d}점  ({len(inquiry_hits)}건)",
+        "",
+        f"**⑤ 조회공시 빈도 — {s_inquiry}/15점** ({len(inquiry_hits)}건)",
+        (
+            "거래소가 주가·거래량 급변 원인을 묻기 위해 회사에 해명을 "
+            "요구한 건수입니다. 빈번하면 회사 주변에서 비공식 정보 "
+            "유통이나 세력 개입이 있을 가능성이 커집니다."
+        ),
     ]
     if inquiry_hits:
         lines.append(_top3(inquiry_hits))
@@ -1731,16 +1843,33 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
             f"(정기보고서(사업/반기/분기) 제출 시점에만 갱신됩니다.)"
         )
 
+    anomaly_records = [r for r in records if r["flags"]]
+
+    # 상단 요약
+    if anomaly_records:
+        summary = (
+            f"🎯 **{corp_name}**이(가) 유상증자·CB 발행으로 모은 자금 중 "
+            f"{len(anomaly_records)}건에서 '계획과 실제 집행의 불일치' 또는 "
+            "'실제 사용 내역 미보고' 신호가 감지됐습니다. 정상 기업에서는 "
+            "계획과 실제가 대체로 맞아떨어집니다. 아래 개별 건에서 무엇이 "
+            "어긋났는지 확인하세요."
+        )
+    else:
+        summary = (
+            f"🎯 최근 {lookback_years}년 동안 **{corp_name}**의 공모·사모 "
+            "자금 사용 내역은 계획과 실제가 대체로 맞아떨어집니다. "
+            "조달 자금 유용으로 해석할 만한 신호는 없습니다."
+        )
+
     lines = [
         f"💰 **{corp_name}** 조달자금 사용내역 (lookback={lookback_years}년)",
         f"총 {len(records)}건 조회",
         "",
+        summary,
+        "",
     ]
-    anomaly_records = []
+
     for rec in records:
-        flags_str = " ".join(f"⚠{f}" for f in rec["flags"])
-        if rec["flags"]:
-            anomaly_records.append(rec)
         lines.append(
             f"[{rec['year']} {rec['kind']} 회차{rec['tm']}] "
             f"납입 {rec['pay_amount']:,}원"
@@ -1751,18 +1880,26 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
         )
         lines.append(
             f"  실제: {rec['real_dtls_cn'][:60] or '(공란)'} "
-            f"({rec['real_dtls_amount']:,}원) {flags_str}"
+            f"({rec['real_dtls_amount']:,}원)"
         )
         if rec["dffrnc_resn"]:
             lines.append(f"  차이사유: {rec['dffrnc_resn'][:100]}")
+        # 플래그 → 한국어 서술
+        for f in rec["flags"]:
+            title, body = flag_to_prose(f)
+            if title and body:
+                lines.append(f"  ⚠ **{title}**")
+                lines.append(f"    {body}")
         lines.append("")
 
     if anomaly_records:
-        lines.append(f"🚨 **이상 플래그 {len(anomaly_records)}건**")
+        lines.append(f"🚨 **이상 신호가 감지된 건: {len(anomaly_records)}건**")
         lines.append("")
-        lines.append(load_catalog_excerpt(["zombie_ma", "fake_new_biz"]))
+        excerpt = load_catalog_excerpt(["zombie_ma", "fake_new_biz"])
+        if excerpt:
+            lines.append(excerpt)
     else:
-        lines.append("✅ 탐지된 이상 플래그 없음")
+        lines.append("✅ 계획과 실제 사용이 맞아떨어져, 별도 경고 신호는 없습니다.")
 
     return "\n".join(lines)
 
@@ -1791,26 +1928,61 @@ def get_major_decision(rcept_no: str, decision_type: str = "", corp_code: str = 
     if "error" in result:
         return f"❌ {result['error']}"
 
+    # 결정 유형 한국어 라벨
+    decision_label_map = {
+        "business_acq": "영업 양수",
+        "business_div": "영업 양도",
+        "tangible_acq": "유형자산 양수",
+        "tangible_div": "유형자산 양도",
+        "stock_acq": "타법인 주식 양수",
+        "stock_div": "타법인 주식 양도",
+        "bond_acq": "채권 인수",
+        "bond_div": "채권 발행",
+        "merger": "합병",
+        "demerger": "분할",
+        "demerger_merger": "분할합병",
+        "stock_exchange": "주식교환·이전",
+    }
+    decision_label = decision_label_map.get(
+        result["decision_type"], result["decision_type"]
+    )
+
+    # 상단 요약
+    if result["flags"]:
+        summary = (
+            f"🎯 이 공시는 **{decision_label}** 결정이며, "
+            f"{len(result['flags'])}개 이상 신호가 겹쳤습니다. 아래 '주목할 "
+            "이유' 블록에서 무엇이 왜 문제인지 쉽게 설명합니다."
+        )
+    else:
+        summary = (
+            f"🎯 이 공시는 **{decision_label}** 결정이며, 특수관계·과대거래·"
+            "외부평가 기준으로는 특이 신호가 감지되지 않았습니다."
+        )
+
     lines = [
         f"📑 **주요사항 결정 공시** (rcept_no={rcept_no})",
-        f"- 유형: `{result['decision_type']}`",
+        "",
+        summary,
+        "",
+        f"- 결정 유형: {decision_label}",
         f"- 상대방: {result['counterparty'] or '(미기재)'}",
         f"- 금액: {result['amount']:,}원",
-        f"- 자산대비: {result['asset_ratio']:.2f}%",
-        f"- 특수관계인: {'예' if result['related_party'] else '아니오'}",
-        f"- 외부평가: {'실시' if result['external_eval'] else '미실시'}",
+        f"- 자산 총액 대비: {result['asset_ratio']:.2f}%",
+        f"- 특수관계인 여부: {'예' if result['related_party'] else '아니오'}",
+        f"- 외부평가 실시: {'예' if result['external_eval'] else '아니오'}",
         f"- 결의일: {result['bddd'] or '(미기재)'}",
     ]
     if result["flags"]:
         lines.append("")
-        lines.append("🚨 **탐지 플래그**: " + ", ".join(result["flags"]))
-        tax_ids = sorted({
-            t for f in result["flags"]
-            for t in SIGNAL_KEY_TO_TAXONOMY.get(f, [])
-        })
-        if tax_ids:
-            lines.append(f"관련 taxonomy ID: {', '.join(tax_ids)}")
-    lines.append("")
+        lines.append("### 주목할 이유")
+        lines.append("")
+        for f in result["flags"]:
+            title, body = flag_to_prose(f)
+            if title and body:
+                lines.append(f"**{title}**")
+                lines.append(body)
+                lines.append("")
     lines.append(f"원문 전체 보기: `view_disclosure('{rcept_no}')`")
     return "\n".join(lines)
 
@@ -1818,14 +1990,13 @@ def get_major_decision(rcept_no: str, decision_type: str = "", corp_code: str = 
 # ── 도구 20: 재무 이상 스캔 ────────────────────────────────────────────────
 
 
-def _v6_flag_label(metric_name: str) -> str:
-    """지표명 → 대응 플래그 라벨."""
-    return {
-        "매출채권/매출": "AR_SURGE",
-        "재고자산/매출": "INVENTORY_SURGE",
-        "순이익 vs 영업현금흐름": "CASH_GAP",
-        "자본총계/자본금": "CAPITAL_IMPAIRMENT",
-    }.get(metric_name, "FLAG")
+# 지표명 → 이상 징후일 때 사용할 플래그 키
+_METRIC_TO_FLAG: dict[str, str] = {
+    "매출채권/매출": "AR_SURGE",
+    "재고자산/매출": "INVENTORY_SURGE",
+    "순이익 vs 영업현금흐름": "CASH_GAP",
+    "자본총계/자본금": "CAPITAL_IMPAIRMENT",
+}
 
 
 @mcp.tool()
@@ -1844,7 +2015,7 @@ def scan_financial_anomaly(
         report_type: "annual"(사업보고서) | "half"(반기) | "q1" | "q3".
 
     Returns:
-        지표별 당기/전기/Δ/판정 표 + 탐지된 플래그 목록 텍스트.
+        지표별 당기/전기/Δ 표 + 이상 징후별 쉬운 설명 텍스트.
     """
     api_key = os.environ.get("DART_API_KEY", "")
     if not api_key:
@@ -1871,10 +2042,29 @@ def scan_financial_anomaly(
     current, prior = _fs_response_to_periods({"list": fs_list})
     flags, metrics = detect_financial_anomaly(current, prior)
 
-    # 포맷
-    lines = [f"📊 **{corp_name}** ({info.get('stock_code','')}) — 재무 이상 스캔 ({year}, {report_type})", ""]
-    lines.append("| 지표 | 당기 | 전기 | Δ | 판정 |")
-    lines.append("|---|---|---|---|---|")
+    # 상단 한 줄 요약
+    flagged_metrics = [m for m in metrics if m.get("flagged")]
+    if flagged_metrics:
+        summary = (
+            f"🎯 **{corp_name}**의 {year} {report_type} 재무제표에서 이상 징후 "
+            f"{len(flagged_metrics)}개를 찾았습니다. 아래 표의 각 지표가 "
+            "전년과 얼마나 달라졌는지 먼저 확인하고, 그 아래 '이 지표가 "
+            "말하는 것'에서 왜 주목할 만한지 쉽게 설명합니다."
+        )
+    else:
+        summary = (
+            f"🎯 **{corp_name}**의 {year} {report_type} 재무제표에서는 "
+            "분식·부실 초기 조짐으로 해석할 만한 이상이 감지되지 않았습니다."
+        )
+
+    lines = [
+        f"📊 **{corp_name}** ({info.get('stock_code','')}) — 재무 이상 스캔 ({year}, {report_type})",
+        "",
+        summary,
+        "",
+        "| 지표 | 당기 | 전기 | 변화 |",
+        "|---|---|---|---|",
+    ]
     for m in metrics:
         name = m["name"]
         if name == "순이익 vs 영업현금흐름":
@@ -1889,15 +2079,32 @@ def scan_financial_anomaly(
             cur = f"{m.get('current', 0):.1f}{m.get('unit','')}"
             pri = "-"
             delta = "-"
-        verdict = "🚩 " + _v6_flag_label(name) if m.get("flagged") else "정상"
-        lines.append(f"| {name} | {cur} | {pri} | {delta} | {verdict} |")
+        lines.append(f"| {name} | {cur} | {pri} | {delta} |")
+
     lines.append("")
-    if flags:
-        lines.append(f"**탐지 플래그:** {', '.join(flags)}")
+    if flagged_metrics:
+        lines.append("### 이 지표가 말하는 것")
+        lines.append("")
+        for m in flagged_metrics:
+            flag_key = _METRIC_TO_FLAG.get(m["name"], "")
+            if not flag_key:
+                continue
+            title, body = flag_to_prose(flag_key, m)
+            lines.append(f"**{title}**")
+            lines.append(body)
+            lines.append("")
     else:
-        lines.append("**탐지 플래그:** 없음 (모든 지표 정상)")
-    lines.append("")
-    lines.append("📎 참고: DART 공시 기준. 감사 전 수치 포함 가능. 회계 전문가 판단이 아닌 스크리닝 참고용.")
+        lines.append(
+            "네 지표 모두 정상 범위입니다. 단, 재무제표는 감사 전 수치가 포함될 "
+            "수 있어 스크리닝 참고용으로만 활용하세요."
+        )
+        lines.append("")
+
+    lines.append(
+        "📎 참고: DART 공시 기준 수치입니다. 감사 전 수치가 포함될 수 있고, "
+        "회계 전문가 판단을 대체하지 않습니다. 이상 징후가 나왔더라도 "
+        "실제 분식 여부는 감사보고서·공시 원문을 함께 봐야 합니다."
+    )
     return "\n".join(lines)
 
 
@@ -1948,14 +2155,33 @@ def track_capital_structure(
             })
 
     result = detect_capital_churn(signal_events, lookback_years)
+    churn_flagged = "CAPITAL_CHURN" in result["flags"]
 
-    # 포맷
+    # 상단 요약
+    if churn_flagged:
+        title, body = flag_to_prose("CAPITAL_CHURN", result)
+        summary = f"🎯 **{title}**\n\n{body}"
+    elif result["total_events"] == 0:
+        summary = (
+            f"🎯 최근 {lookback_years}년 동안 **{corp_name}**에서는 증자·감자·"
+            "자사주·메자닌 같은 자본 구조 변경 공시가 감지되지 않았습니다. "
+            "자본 주무르기로 볼 만한 리듬은 없습니다."
+        )
+    else:
+        summary = (
+            f"🎯 최근 {lookback_years}년 동안 자본 이벤트 {result['total_events']}건이 "
+            f"관찰됐지만 12개월 최대 집중도가 {result['max_12m_count']}건으로 "
+            "'3건 이상 몰림' 기준(CAPITAL_CHURN)에는 미치지 못했습니다. "
+            "개별 이벤트의 성격은 아래 시계열에서 확인하세요."
+        )
+
     lines = [
         f"📊 **{corp_name}** ({info.get('stock_code','')}) — 자본구조 추적 (최근 {lookback_years}년)",
         "",
-        f"자본 이벤트 총 **{result['total_events']}건** | "
-        f"12개월 최대 집중도: **{result['max_12m_count']}건**"
-        + (f" | 🚩 CAPITAL_CHURN" if "CAPITAL_CHURN" in result["flags"] else ""),
+        summary,
+        "",
+        f"자본 이벤트 총 **{result['total_events']}건** · "
+        f"12개월 최대 집중도: **{result['max_12m_count']}건**",
         "",
     ]
     if result["by_year"]:
@@ -1966,12 +2192,28 @@ def track_capital_structure(
     if result["events"]:
         lines.append("**시계열** (최대 30건)")
         for e in result["events"][:30]:
-            lines.append(f"- {e['rcept_dt']}  `{e['key']:<14}`  {e['report_nm']}")
+            meaning = signal_to_prose(e["key"], e.get("report_nm", ""))
+            one_liner = meaning.split("다.")[0] + "다." if meaning else e.get("label", "")
+            lines.append(
+                f"- {e['rcept_dt']} · {e['report_nm']}"
+                + (f"\n  → {one_liner}" if one_liner else "")
+            )
         if len(result["events"]) > 30:
             lines.append(f"- ... (총 {len(result['events'])}건 중 30건 표시)")
         lines.append("")
-    lines.append("📎 참고: 이 도구는 공시 '횟수·리듬' 탐지 전용. 정확한 희석률·금액은 "
-                 "`get_major_decision` 또는 `get_disclosure_document`로 개별 확인.")
+
+    if churn_flagged:
+        pattern = pattern_to_prose("capital_churn_anomaly")
+        if pattern:
+            lines.append("**유사 패턴 서술**")
+            lines.append(pattern)
+            lines.append("")
+
+    lines.append(
+        "📎 참고: 이 도구는 공시 '횟수·리듬'을 잡아냅니다. 정확한 희석률이나 "
+        "실제 조달 금액은 `get_major_decision` 또는 `get_disclosure_document`로 "
+        "개별 공시를 열어 확인해야 합니다."
+    )
     return "\n".join(lines)
 
 

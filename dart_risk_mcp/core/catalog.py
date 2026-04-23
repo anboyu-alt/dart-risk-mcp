@@ -8,6 +8,7 @@ dart-monitor의 knowledge/manipulation_catalog/*.md를 읽어
 
 from pathlib import Path
 
+from .explain import category_prose
 from .taxonomy import TAXONOMY
 
 _CATALOG_DIR = Path(__file__).parent.parent / "knowledge" / "manipulation_catalog"
@@ -57,6 +58,12 @@ def load_catalog_excerpt(taxonomy_ids: list[str], max_chars: int = 1500) -> str:
         truncated = content[:max_chars]
         if len(content) > max_chars:
             truncated += "\n…(이하 생략)"
-        excerpts.append(f"━━ 카탈로그 선례: {category} ━━\n{truncated}")
+
+        header = f"━━ 카탈로그 선례: {category} ━━"
+        prose = category_prose(category)
+        if prose:
+            excerpts.append(f"{header}\n이 카테고리가 뭔가요 — {prose}\n\n{truncated}")
+        else:
+            excerpts.append(f"{header}\n{truncated}")
 
     return "\n\n".join(excerpts)
