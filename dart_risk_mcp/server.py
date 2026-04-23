@@ -17,6 +17,7 @@ from .core import (
     detect_financial_anomaly,
     estimate_crisis_timeline,
     extract_cb_investors,
+    extract_rights_offering_investors,
     fetch_company_disclosures,
     fetch_market_disclosures,
     fetch_company_info,
@@ -751,109 +752,138 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
     return "\n".join(lines)
 
 
-# ── 도구 5: 세력 추적 (공통 CB 인수자) ────────────────────────────────────
+# ── 도구 5: 세력 추적 (공통 CB/BW/EB + 유상증자 인수자) ──────────────────
 
 
 @mcp.tool()
 def find_actor_overlap(company_names: list[str]) -> str:
-    """여러 기업의 CB/BW 인수자를 비교해 공통 행위자(세력)를 탐지한다.
+    """여러 기업(2~5개)의 CB/BW/EB 인수자 + 유상증자 인수자를 비교해 공통 행위자(세력)를 탐지한다.
 
     DART API 제약상, 분석 대상 기업을 직접 지정해야 한다.
     "행위자 이름으로 역검색"은 현재 불가능하다.
 
-    Args:
-        company_names: 비교할 기업명 목록 (2~5개, 예: ["에코프로", "바이오제닉스"])
-    """
-    if not _DART_API_KEY:
-        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+    CB/BW/EB 공시(CB_BW, EB 신호)와 유상증자 공시(3PCA, RIGHTS_UNDER 신호)를
+    모두 수집해 인수자를 통합 비교하며, 공통 행위자에는 출처 태그(CB / 유상증자)를 표시한다.
 
-    if len(company_names) < 2:
-        return "❌ 최소 2개 기업을 입력하세요."
-    if len(company_names) > 5:
-        return "❌ 최대 5개 기업까지 비교할 수 있습니다."
+    Args:
+        company_names: 비교할 기업명 또는 종목코드 목록 (2~5개, 예: ["에코프로", "바이오제닉스"])
+    """
+    if not isinstance(company_names, list) or not (2 <= len(company_names) <= 5):
+        return "입력 오류: 2개 이상 5개 이하 기업명(또는 종목코드) 리스트를 전달하세요."
+
+    api_key = os.environ.get("DART_API_KEY") or _DART_API_KEY
+    if not api_key:
+        return "DART_API_KEY 환경변수가 설정되지 않았습니다."
+
     company_names = list(dict.fromkeys(company_names))  # 중복 제거 (순서 보존)
 
-    # 기업별 CB 인수자 수집
-    corp_investors: dict[str, list[dict]] = {}  # corp_name → [{"name":..., "amount":...}]
+    CB_SIGNAL_KEYS = {"CB_BW", "EB"}
+    RIGHTS_SIGNAL_KEYS = {"3PCA", "RIGHTS_UNDER"}
+    MAX_DOCS_PER_COMPANY = 5  # CB + 유상증자 합쳐 최대 5건
+
+    # actor_map: {"actor_name": [(company, source, amount, rcept_no), ...]}
+    actor_map: dict[str, list[tuple]] = {}
+    per_company_solo: dict[str, list[tuple]] = {}
     failed: list[str] = []
 
-    for name in company_names:
-        result = resolve_corp(name, _DART_API_KEY)
+    for query in company_names:
+        result = resolve_corp(query, api_key)
         if not result:
-            failed.append(name)
+            failed.append(query)
             continue
         corp_name, corp_info = result
         corp_code = corp_info["corp_code"]
 
-        disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, 365)
-        cb_rcepts = [
-            d.get("rcept_no", "")
-            for d in disclosures
-            if any(s["key"] == "CB_BW" for s in match_signals(d.get("report_nm", "")))
-            and not is_amendment_disclosure(d.get("report_nm", ""))
-            and d.get("rcept_no")
-        ]
+        disclosures = fetch_company_disclosures(corp_code, api_key, lookback_days=365) or []
 
-        investors: list[dict] = []
-        seen: set[str] = set()
-        for rn in cb_rcepts[:3]:
-            for inv in extract_cb_investors(rn, _DART_API_KEY):
-                if inv["name"] not in seen:
-                    seen.add(inv["name"])
-                    investors.append({**inv, "corp_name": corp_name})
+        cb_rcepts: list[str] = []
+        rights_rcepts: list[str] = []
+        for d in disclosures:
+            report_nm = d.get("report_nm", "")
+            rcept_no = d.get("rcept_no", "")
+            if not rcept_no or is_amendment_disclosure(report_nm):
+                continue
+            signals = match_signals(report_nm) or []
+            keys = {s["key"] for s in signals}
+            if keys & CB_SIGNAL_KEYS and len(cb_rcepts) < MAX_DOCS_PER_COMPANY:
+                cb_rcepts.append(rcept_no)
+            if keys & RIGHTS_SIGNAL_KEYS and len(rights_rcepts) < MAX_DOCS_PER_COMPANY:
+                rights_rcepts.append(rcept_no)
+            if len(cb_rcepts) + len(rights_rcepts) >= MAX_DOCS_PER_COMPANY:
+                break
 
-        corp_investors[corp_name] = investors
+        investors: list[tuple] = []  # (source, inv_dict, rcept_no)
+        for rn in cb_rcepts:
+            for inv in (extract_cb_investors(rn, api_key) or []):
+                investors.append(("CB", inv, rn))
+        for rn in rights_rcepts:
+            for inv in (extract_rights_offering_investors(rn, api_key) or []):
+                investors.append(("유상증자", inv, rn))
+
+        for source, inv, rn in investors:
+            name = (inv.get("name") or "").strip()
+            if not name:
+                continue
+            amount = inv.get("amount", "")
+            entry = (corp_name, source, amount, rn)
+            actor_map.setdefault(name, []).append(entry)
+            per_company_solo.setdefault(corp_name, []).append((name, source, amount, rn))
+
+    # 공통 인수자: 2개 이상 서로 다른 기업에 등장
+    common = {
+        actor: entries
+        for actor, entries in actor_map.items()
+        if len({e[0] for e in entries}) >= 2
+    }
+    singles = {
+        actor: entries
+        for actor, entries in actor_map.items()
+        if len({e[0] for e in entries}) == 1
+    }
+
+    lines: list[str] = []
+    lines.append(f"🔍 **공통 CB/BW/EB+유상증자 인수자 분석** ({len(company_names)}개 기업 비교)")
+    analyzed = [q for q in company_names if q not in failed]
+    lines.append(f"분석 대상: {', '.join(analyzed)}")
+    lines.append("")
 
     if failed:
-        lines_fail = [f"⚠️ 찾을 수 없는 기업: {', '.join(failed)}"]
-    else:
-        lines_fail = []
-
-    # 인수자별로 등장 기업 집계
-    actor_corps: dict[str, list[dict]] = {}  # investor_name → [{corp_name, amount}]
-    for corp_name, investors in corp_investors.items():
-        for inv in investors:
-            actor_corps.setdefault(inv["name"], []).append(
-                {"corp_name": corp_name, "amount": inv.get("amount", "")}
-            )
-
-    # 공통 행위자 (2개 이상 기업)
-    overlaps = {k: v for k, v in actor_corps.items() if len(v) >= 2}
-    singles = {k: v for k, v in actor_corps.items() if len(v) == 1}
-
-    lines = [
-        f"🔍 **공통 CB/BW 인수자 분석** ({len(corp_investors)}개 기업 비교)",
-        f"분석 대상: {', '.join(corp_investors.keys())}",
-        "",
-    ]
-    lines.extend(lines_fail)
-
-    if overlaps:
-        lines.append("━━ 공통 행위자 (세력 추적) ━━")
-        for actor, entries in sorted(overlaps.items(), key=lambda x: -len(x[1])):
-            detail = ", ".join(
-                f"{e['corp_name']} {_format_amount(e['amount'])}" if e['amount']
-                else e['corp_name']
-                for e in entries
-            )
-            lines.append(f"  ⚠️ **{actor}**: {detail} → {len(entries)}개 기업 관여")
-        lines.append("")
-    else:
-        lines += ["✅ 공통 행위자가 발견되지 않았습니다.", ""]
-
-    if singles:
-        lines.append("━━ 기업별 단독 인수자 ━━")
-        for actor, entries in singles.items():
-            e = entries[0]
-            amt = _format_amount(e['amount']) if e.get('amount') else ""
-            lines.append(f"  • {e['corp_name']}: {actor}" + (f" — {amt}" if amt else ""))
+        lines.append(f"⚠️ 찾을 수 없는 기업: {', '.join(failed)}")
         lines.append("")
 
-    no_cb = [cn for cn, inv in corp_investors.items() if not inv]
-    if no_cb:
-        lines.append(f"ℹ️ CB/BW 공시 없음: {', '.join(no_cb)}")
+    lines.append("━━ 공통 행위자 (세력 추적) ━━")
+    if not common:
+        lines.append("  ✅ 공통 행위자가 발견되지 않았습니다.")
+    else:
+        for actor, entries in sorted(common.items(), key=lambda x: -len({e[0] for e in x[1]})):
+            company_set = sorted({e[0] for e in entries})
+            source_set = sorted({e[1] for e in entries})
+            lines.append(
+                f"  ⚠️ **{actor}**: "
+                f"{len(company_set)}개 기업 "
+                f"[{', '.join(source_set)}] "
+                f"→ {', '.join(company_set)}"
+            )
+    lines.append("")
 
-    lines.append("⚠️ DART 공개 API 범위 내 분석이며, 비공개 거래는 포함되지 않습니다.")
+    lines.append("━━ 기업별 인수자 요약 ━━")
+    for corp_name, entries in per_company_solo.items():
+        unique = sorted({(n, s) for n, s, _, _ in entries})
+        if not unique:
+            continue
+        lines.append(f"  • {corp_name} ({len(unique)}명):")
+        for name, source in unique[:10]:
+            lines.append(f"      [{source}] {name}")
+
+    no_data = [cn for cn in analyzed if cn not in per_company_solo]
+    if no_data:
+        lines.append("")
+        lines.append(f"ℹ️ CB/BW/EB/유상증자 공시 없음: {', '.join(no_data)}")
+
+    lines.append("")
+    lines.append(
+        "⚠️ DART 공개 API 범위 내 분석. 최근 365일 이내 CB/BW/EB/유상증자 공시 기준 (기업당 최대 5건)."
+    )
     return "\n".join(lines)
 
 
