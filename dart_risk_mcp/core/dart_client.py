@@ -1643,3 +1643,57 @@ def fetch_eb_issue_decision(rcept_no: str, api_key: str) -> dict:
     except Exception as e:
         log.debug("발행결정 조회 실패 (%s): %s", rcept_no, e)
         return {}
+
+
+def fetch_piic_decision(rcept_no: str, api_key: str) -> dict:
+    """/api/piicDecsn.json — 유상증자 결정 공시 상세."""
+    if not api_key:
+        return {}
+    url = f"{DART_BASE}/piicDecsn.json"
+    params = {"crtfc_key": api_key, "rcept_no": rcept_no}
+    try:
+        resp = _retry("get", url, params=params, timeout=10)
+        data = resp.json()
+        if data.get("status") != "000":
+            _log_dart_status(data.get("status", "?"), f"증자결정 rcept_no={rcept_no}")
+            return {}
+        return data
+    except Exception as e:
+        log.debug("증자결정 조회 실패 (%s): %s", rcept_no, e)
+        return {}
+
+
+def fetch_fric_decision(rcept_no: str, api_key: str) -> dict:
+    """/api/fricDecsn.json — 무상증자 결정 공시 상세."""
+    if not api_key:
+        return {}
+    url = f"{DART_BASE}/fricDecsn.json"
+    params = {"crtfc_key": api_key, "rcept_no": rcept_no}
+    try:
+        resp = _retry("get", url, params=params, timeout=10)
+        data = resp.json()
+        if data.get("status") != "000":
+            _log_dart_status(data.get("status", "?"), f"증자결정 rcept_no={rcept_no}")
+            return {}
+        return data
+    except Exception as e:
+        log.debug("증자결정 조회 실패 (%s): %s", rcept_no, e)
+        return {}
+
+
+def fetch_pifric_decision(rcept_no: str, api_key: str) -> dict:
+    """/api/pifricDecsn.json — 유무상증자 결정 공시 상세."""
+    if not api_key:
+        return {}
+    url = f"{DART_BASE}/pifricDecsn.json"
+    params = {"crtfc_key": api_key, "rcept_no": rcept_no}
+    try:
+        resp = _retry("get", url, params=params, timeout=10)
+        data = resp.json()
+        if data.get("status") != "000":
+            _log_dart_status(data.get("status", "?"), f"증자결정 rcept_no={rcept_no}")
+            return {}
+        return data
+    except Exception as e:
+        log.debug("증자결정 조회 실패 (%s): %s", rcept_no, e)
+        return {}
