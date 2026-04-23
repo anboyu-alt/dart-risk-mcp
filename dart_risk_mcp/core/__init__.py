@@ -26,6 +26,7 @@ from .signals import (
     CAPITAL_EVENT_KEYS, DILUTIVE_CAPITAL_EVENTS, NON_DILUTIVE_CAPITAL_EVENTS,
 )
 from .cb_extractor import extract_cb_investors
+from .investor_extractor import extract_rights_offering_investors
 from .taxonomy import calculate_risk_score, find_pattern_match, estimate_crisis_timeline
 from .catalog import load_catalog_excerpt
 
@@ -49,6 +50,7 @@ __all__ = [
     "SIGNAL_TYPES",
     "SIGNAL_KEY_TO_TAXONOMY",
     "extract_cb_investors",
+    "extract_rights_offering_investors",
     "calculate_risk_score",
     "find_pattern_match",
     "estimate_crisis_timeline",
