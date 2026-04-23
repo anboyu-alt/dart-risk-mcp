@@ -1,6 +1,6 @@
 # DART 리스크 분석 MCP
 
-**버전:** v0.6.1 · **공시 기반 불공정거래 위험 모니터링**
+**버전:** v0.7.0 · **공시 기반 불공정거래 위험 모니터링**
 
 DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 
@@ -8,17 +8,18 @@ DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 > Claude, Cursor, Windsurf 등 MCP를 지원하는 어떤 AI 클라이언트에서도 사용할 수 있습니다.  
 > 예: **"삼성바이오로직스 최근 공시 위험도 분석해줘"** 라고 물어보면 공시를 가져와 분석합니다.
 
-### v0.6.1 주요 변경
+### v0.7.0 주요 변경
 
-- **CAPITAL_CHURN 거짓양성 제거** — 자본 이벤트를 희석성(CB/BW·유상증자·감자 등 8종)과 비희석성(자사주·CB상환 3종)으로 이원화. "희석성 ≥3 또는 희석성 ≥2 + 비희석성 ≥2" 조건에서만 플래그 발동해, 대형주 자사주 매입 반복 시나리오의 오탐 제거
-- **재무 엔드포인트 결측 버그 수정** — `fnlttSinglAcnt.json`은 주요 10개 계정만 반환하여 매출채권·재고자산·현금흐름이 결측이던 문제를 `fnlttSinglAcntAll.json`(전체 XBRL 계정)으로 교체. AR_SURGE·INVENTORY_SURGE·CASH_GAP 탐지가 실제로 동작
-- **복합 패턴 연동** — `zombie_ma`에 CAPITAL_CHURN(2.7) 추가, `delisting_evasion`에 CAPITAL_CHURN(2.7)·CAPITAL_IMPAIRMENT(8.2) 추가
+- **CB/BW/유상증자 인수자 추출 품질 향상** — DART 구조화 엔드포인트(`cvbdIsDecsn`·`piicDecsn` 등 6종) 파라미터를 `corp_code+bgn_de+end_de` 조합으로 교정. 구조화 응답에 인수자명이 없는 공시는 DART 표준 HTML의 `<TE ACODE="ISSU_NM">`(CB)·`<TE ACODE="PART">`(Rights) 컬럼을 정확히 파싱해 폴백
+- **재무이상 임계값 현실화** — 25개 샘플 실측 분포 기반 재조정: `AR_SURGE`·`INVENTORY_SURGE` ≥50%p → ≥10%p, `CAPITAL_IMPAIRMENT` <50% → <200%. 기존 임계값은 사실상 never-flag였음
+- **HTML 파싱 false positive 제거** — 이전 heuristic이 "선정경위" 프로즈 텍스트를 인수자로 오인하던 버그를 ACODE 기반 파싱으로 해결. `_fetch_text` 20,000자 truncation도 제거(인수자 섹션이 그 뒤에 등장하는 공시 존재)
 
 ### 최근 릴리스 요약
 
-- **v0.6.0** — 자본구조·재무이상 스캔 도구 2개 추가(`track_capital_structure`, `scan_financial_anomaly`), 신호 5개·복합 패턴 1개 추가
-- **v0.5.0** — 자금사용·주요결정 공시 도구 2개 추가(`track_fund_usage`, `get_major_decision`), 신호 5개 추가
-- **v0.4.0** — 금감원·금융위 실제 적발 사례 카탈로그 자동 첨부, 복합 패턴 4개 추가, 신호 키워드 보강
+- **v0.6.1** — CAPITAL_CHURN 희석/비희석 이원화, 재무 엔드포인트 결측 버그 수정
+- **v0.6.0** — 자본구조·재무이상 스캔 도구 2개 추가(`track_capital_structure`, `scan_financial_anomaly`)
+- **v0.5.0** — 자금사용·주요결정 공시 도구 2개 추가(`track_fund_usage`, `get_major_decision`)
+- **v0.4.0** — 금감원·금융위 실제 적발 사례 카탈로그 자동 첨부, 복합 패턴 4개 추가
 
 자세한 변경 내역은 [CHANGELOG.md](CHANGELOG.md) 참고.
 
@@ -1222,7 +1223,7 @@ python -m dart_risk_mcp
 ## 참고 자료
 
 - **[OpenDART API 개발가이드 (한글 정리본)](opendart_api_guide.md)** — 이 MCP가 사용하는 DART OpenAPI 전체 명세. 엔드포인트·요청 파라미터·응답 필드·공통 에러코드(`010`~`901`)를 8개 섹션(DS001 공시정보 ~ DS008 증권신고서)으로 정리했습니다. 새 도구를 추가하거나 기존 응답을 디버깅할 때, 공식 문서([opendart.fss.or.kr/guide](https://opendart.fss.or.kr/guide/main.do)) 대신 이 파일을 빠르게 훑어볼 수 있습니다.
-- **[CHANGELOG.md](CHANGELOG.md)** — 버전별 변경 내역 (현재 v0.6.1).
+- **[CHANGELOG.md](CHANGELOG.md)** — 버전별 변경 내역 (현재 v0.7.0).
 - **[CLAUDE.md](CLAUDE.md)** — 프로젝트 내부 개발자 가이드 (디렉토리 구조, 핵심 함수, 도구 추가 절차).
 
 ---

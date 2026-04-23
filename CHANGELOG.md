@@ -4,6 +4,34 @@
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-04-23
+
+### Added
+- **CB/BW/EB·유상증자 구조화 엔드포인트 래퍼 6종** — `fetch_cb_issue_decision`(`cvbdIsDecsn`), `fetch_bw_issue_decision`(`bdwtIsDecsn`), `fetch_eb_issue_decision`(`exbdIsDecsn`), `fetch_piic_decision`(`piicDecsn`), `fetch_fric_decision`(`fricDecsn`), `fetch_pifric_decision`(`pifricDecsn`). 파라미터는 DART 규격에 맞춰 `corp_code + bgn_de + end_de`.
+- **DART ACODE 기반 HTML 테이블 파서** — `_extract_investor_table(name_acode, amount_acode)`. DART 표준 공시의 `<TE ACODE="X">` 컬럼 속성으로 인수자명·금액을 정확히 추출. CB는 `ISSU_NM/ISSU_AMT`, Rights는 `PART/ALL_CNT`.
+- 릴리스 게이트 문서 `docs/superpowers/release_gates/2026-04-23-v0.7.0-gate.md` — G1~G4 실측 결과.
+- 재무이상 임계값 재조정 근거 문서 `tmp/thresholds_v0.7_decision.md` — 25개 샘플 분포 기반.
+
+### Changed
+- **재무이상 임계값 재조정** — V.2 샘플로 측정한 실제 분포 기반:
+  - `AR_SURGE`: ≥50%p → **≥10%p** (샘플 최대값 12.4%p, 50%p는 never-flag)
+  - `INVENTORY_SURGE`: ≥50%p → **≥10%p** (샘플 최대값 12.6%p, 동일 논리)
+  - `CAPITAL_IMPAIRMENT`: < 50% → **< 200%** (자본 버퍼 취약 경계)
+  - `CASH_GAP`: 이분법 유지
+- `extract_cb_investors(rcept_no, api_key, corp_code="")` / `extract_rights_offering_investors(rcept_no, api_key, corp_code="")` — `corp_code` 인자 추가. 구조화 엔드포인트 우선 시도 후 HTML 폴백.
+- `fetch_major_decision(rcept_no, corp_cls, decision_type, corp_code="")` — `corp_code` 인자 추가. DS005 12개 엔드포인트를 `corp_code+bgn_de+end_de` 조합으로 호출.
+- `server.py` — `extract_cb_investors`·`extract_rights_offering_investors`·`fetch_major_decision` 호출부에 `corp_code` 전달.
+
+### Fixed
+- **DART 구조화 엔드포인트 파라미터 불일치** — v0.7.0 신규 추가된 6개 발행결정 엔드포인트가 `rcept_no` 단독으로 호출되어 DART API가 `status:100 필수값(corp_code,bgn_de,end_de)이 누락되었습니다`를 반환하던 버그. 단위 테스트는 mock으로 가려졌고 라이브 게이트에서 발견.
+- **`_fetch_text`/`_fetch_rights_html_text` 20,000자 truncation 제거** — 실제 공시에서 인수자 섹션이 char 23,000+ 이후 등장하는 샘플 존재(예: 하이드로리튬 CB 23,102; 핑거 Rights 28,681). 섹션 누락 원인.
+- **HTML 테이블 파싱 false positive 제거** — 이전 heuristic이 "선정경위" 프로즈 텍스트를 인수자로 오인했음. ACODE 기반 파싱으로 해결.
+- **재무이상 G2 측정 버그** — 사전 측정에서 `fetch_financial_statements`(요약만)를 사용해 CF 계정이 누락되어 CASH_GAP이 계산되지 않았음. 라이브 게이트에서 `fetch_financial_statements_all`로 교정.
+
+### Infra
+- `_TE_CELL_RE` 정규식 + `_CB_NAME_ACODE`/`_CB_AMOUNT_ACODE`/`_RIGHTS_NAME_ACODE`/`_RIGHTS_AMOUNT_ACODE` 상수 `cb_extractor.py`에 집약.
+- 단위 테스트 4개 신규/갱신 — `test_cb_extractor_structured.py`, `test_dart_client_capital_decisions.py`, `test_dart_client_issue_decisions.py`, `test_investor_extractor.py`. 총 77 PASS.
+
 ## [0.6.1] — 2026-04-22
 
 ### Changed
