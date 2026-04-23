@@ -1768,7 +1768,7 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
 
 
 @mcp.tool()
-def get_major_decision(rcept_no: str, decision_type: str = "") -> str:
+def get_major_decision(rcept_no: str, decision_type: str = "", corp_code: str = "") -> str:
     """DS005 주요사항보고서 12종 결정 공시(양수도·합병·분할·교환)를
     구조화 필드로 조회한다. related_party_hollowing·delisting_evasion
     패턴의 경로 추적에 사용.
@@ -1779,11 +1779,15 @@ def get_major_decision(rcept_no: str, decision_type: str = "") -> str:
             business_acq | business_div | tangible_acq | tangible_div |
             stock_acq | stock_div | bond_acq | bond_div |
             merger | demerger | demerger_merger | stock_exchange
+        corp_code: DART 기업 코드 8자리. 권장 — DART API가
+            rcept_no 단독 호출을 거부하는 엔드포인트가 있어 정확한
+            조회를 위해 corp_code 전달을 권장한다. 미지정 시 rcept_no
+            단독 폴백을 시도하나 일부 결정 유형은 빈 결과가 반환될 수 있다.
     """
     if not _DART_API_KEY:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
 
-    result = fetch_major_decision(rcept_no, _DART_API_KEY, decision_type)
+    result = fetch_major_decision(rcept_no, _DART_API_KEY, decision_type, corp_code)
     if "error" in result:
         return f"❌ {result['error']}"
 

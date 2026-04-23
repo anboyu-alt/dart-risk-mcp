@@ -48,10 +48,17 @@ def _parse_list(data: dict) -> list[dict]:
         name = _clean_name(row.get("actnmn", ""))
         if name in _BLANK_PATTERNS:
             continue
+        # piicDecsn은 piic_tisstk_fta, pifricDecsn은 fric_tisstk_fta 필드 사용
+        amount = (
+            row.get("piic_tisstk_fta")
+            or row.get("fric_tisstk_fta")
+            or row.get("bd_fta")
+            or ""
+        )
         results.append({
             "name": name,
             "type": (row.get("actsen") or "").strip(),
-            "amount": (row.get("fric_tisstk_fta") or row.get("bd_fta") or "").strip(),
+            "amount": amount.strip() if isinstance(amount, str) else str(amount),
             "source": "rights_offering",
         })
     return results
