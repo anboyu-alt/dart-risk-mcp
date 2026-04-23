@@ -1509,7 +1509,7 @@ def detect_financial_anomaly(current: dict, prior: dict) -> tuple[list[str], lis
         r_p = ar_p / rev_p * 100
         delta = r_c - r_p
         m = {"name": "매출채권/매출", "current": r_c, "prior": r_p, "delta": delta, "unit": "%", "flagged": False}
-        if delta >= 50:
+        if delta >= 10:
             flags.append("AR_SURGE")
             m["flagged"] = True
         metrics.append(m)
@@ -1520,7 +1520,7 @@ def detect_financial_anomaly(current: dict, prior: dict) -> tuple[list[str], lis
         r_p = inv_p / rev_p * 100
         delta = r_c - r_p
         m = {"name": "재고자산/매출", "current": r_c, "prior": r_p, "delta": delta, "unit": "%", "flagged": False}
-        if delta >= 50:
+        if delta >= 10:
             flags.append("INVENTORY_SURGE")
             m["flagged"] = True
         metrics.append(m)
@@ -1537,7 +1537,7 @@ def detect_financial_anomaly(current: dict, prior: dict) -> tuple[list[str], lis
     if eq_c is not None and cap_c is not None and cap_c > 0:
         ratio = eq_c / cap_c * 100
         m = {"name": "자본총계/자본금", "current": ratio, "unit": "%", "flagged": False}
-        if ratio < 50:
+        if ratio < 200:
             flags.append("CAPITAL_IMPAIRMENT")
             m["flagged"] = True
         metrics.append(m)
