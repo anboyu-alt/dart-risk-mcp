@@ -779,7 +779,9 @@ def find_actor_overlap(company_names: list[str]) -> str:
 
     CB_SIGNAL_KEYS = {"CB_BW", "EB"}
     RIGHTS_SIGNAL_KEYS = {"3PCA", "RIGHTS_UNDER"}
-    MAX_DOCS_PER_COMPANY = 5  # CB + 유상증자 합쳐 최대 5건
+    # 기업당 CB 최대 3건 + 유상증자 최대 3건 (각 소스 독립 상한, 총 ≤ 6건)
+    # 공통 상한을 쓰면 CB 공시가 많은 기업에서 유상증자 몫을 빼앗겨 "머지"가 CB-only로 회귀함
+    MAX_DOCS_PER_SOURCE = 3
 
     # actor_map: {"actor_name": [(company, source, amount, rcept_no), ...]}
     actor_map: dict[str, list[tuple]] = {}
@@ -805,11 +807,13 @@ def find_actor_overlap(company_names: list[str]) -> str:
                 continue
             signals = match_signals(report_nm) or []
             keys = {s["key"] for s in signals}
-            if keys & CB_SIGNAL_KEYS and len(cb_rcepts) < MAX_DOCS_PER_COMPANY:
+            if keys & CB_SIGNAL_KEYS and len(cb_rcepts) < MAX_DOCS_PER_SOURCE:
                 cb_rcepts.append(rcept_no)
-            if keys & RIGHTS_SIGNAL_KEYS and len(rights_rcepts) < MAX_DOCS_PER_COMPANY:
+            if keys & RIGHTS_SIGNAL_KEYS and len(rights_rcepts) < MAX_DOCS_PER_SOURCE:
                 rights_rcepts.append(rcept_no)
-            if len(cb_rcepts) + len(rights_rcepts) >= MAX_DOCS_PER_COMPANY:
+            # 두 소스 모두 상한에 도달하면 조기 종료 (최대 6건까지만 수집)
+            if (len(cb_rcepts) >= MAX_DOCS_PER_SOURCE
+                    and len(rights_rcepts) >= MAX_DOCS_PER_SOURCE):
                 break
 
         investors: list[tuple] = []  # (source, inv_dict, rcept_no)
@@ -882,7 +886,8 @@ def find_actor_overlap(company_names: list[str]) -> str:
 
     lines.append("")
     lines.append(
-        "⚠️ DART 공개 API 범위 내 분석. 최근 365일 이내 CB/BW/EB/유상증자 공시 기준 (기업당 최대 5건)."
+        "⚠️ DART 공개 API 범위 내 분석. 최근 365일 이내 CB/BW/EB/유상증자 공시 기준 "
+        "(기업당 CB 최대 3건 + 유상증자 최대 3건)."
     )
     return "\n".join(lines)
 

@@ -41,9 +41,16 @@ class TestFindActorOverlapMerging(unittest.TestCase):
             result = find_actor_overlap(["a", "b"])
 
         self.assertIn("공통펀드", result)
-        # source 태그 확인 — CB와 rights_offering 모두 표시
-        self.assertIn("CB", result)
-        self.assertIn("유상증자", result)
+        # 공통 행위자 섹션: "공통펀드"가 실제로 2개 기업에 걸친 오버랩으로 집계되어야 함.
+        # 헤더/고지문에는 "2개 기업" 문구가 없으므로 actor_map이 비어 있으면 이 assert는 실패함.
+        self.assertIn("2개 기업", result)
+        # 공통 행위자 라인의 source_set은 "[CB, 유상증자]" 형태로 포맷됨
+        # (헤더는 "CB/BW/EB+유상증자", 고지문은 "CB/BW/EB/유상증자" — 대괄호+쉼표 없음)
+        self.assertIn("[CB, 유상증자]", result)
+        # 기업별 인수자 요약: 각 인수자 앞에 "[CB]" 또는 "[유상증자]" 소스 태그가 붙음.
+        # 이 대괄호 래핑은 머지 결과가 있을 때만 출력됨.
+        self.assertIn("[CB]", result)
+        self.assertIn("[유상증자]", result)
 
     def test_single_company_no_overlap(self):
         from dart_risk_mcp.server import find_actor_overlap
@@ -57,8 +64,8 @@ class TestFindActorOverlapMerging(unittest.TestCase):
              patch.dict("os.environ", {"DART_API_KEY": "test_key"}):
             result = find_actor_overlap(["a"])
 
-        # 입력 검증: 최소 2개 기업 필요
-        self.assertIn("2개 이상", result)
+        # 입력 검증: 최소 2개 기업 필요 (실제 메시지는 "2개 이상 5개 이하")
+        self.assertIn("2개 이상 5개 이하", result)
 
 
 if __name__ == "__main__":
