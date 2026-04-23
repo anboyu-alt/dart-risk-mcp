@@ -1585,3 +1585,49 @@ def _fs_response_to_periods(fs_data: dict) -> tuple[dict, dict]:
         if pri_v is not None and name not in prior:
             prior[name] = pri_v
     return current, prior
+
+
+def fetch_cb_issue_decision(rcept_no: str, api_key: str) -> dict:
+    """
+    /api/cvbdIsDecsn.json — 전환사채권 발행결정 공시 상세.
+
+    Returns full response dict on success, empty dict on any error/non-000 status.
+    """
+    url = f"{DART_BASE}/cvbdIsDecsn.json"
+    params = {"crtfc_key": api_key, "rcept_no": rcept_no}
+    try:
+        resp = _retry("get", url, params=params, timeout=10)
+        data = resp.json()
+        if data.get("status") != "000":
+            return {}
+        return data
+    except Exception:
+        return {}
+
+
+def fetch_bw_issue_decision(rcept_no: str, api_key: str) -> dict:
+    """/api/bdwtIsDecsn.json — 신주인수권부사채권 발행결정 공시 상세."""
+    url = f"{DART_BASE}/bdwtIsDecsn.json"
+    params = {"crtfc_key": api_key, "rcept_no": rcept_no}
+    try:
+        resp = _retry("get", url, params=params, timeout=10)
+        data = resp.json()
+        if data.get("status") != "000":
+            return {}
+        return data
+    except Exception:
+        return {}
+
+
+def fetch_eb_issue_decision(rcept_no: str, api_key: str) -> dict:
+    """/api/exbdIsDecsn.json — 교환사채권 발행결정 공시 상세."""
+    url = f"{DART_BASE}/exbdIsDecsn.json"
+    params = {"crtfc_key": api_key, "rcept_no": rcept_no}
+    try:
+        resp = _retry("get", url, params=params, timeout=10)
+        data = resp.json()
+        if data.get("status") != "000":
+            return {}
+        return data
+    except Exception:
+        return {}
