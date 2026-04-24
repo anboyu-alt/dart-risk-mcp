@@ -2603,6 +2603,37 @@ def track_capital_structure(
         for y in sorted(result["by_year"].keys()):
             lines.append(f"- {y}: {result['by_year'][y]}건")
         lines.append("")
+
+    # v0.8.0: 채무증권 잔액 추이 + CB_ROLLOVER 판정
+    from datetime import datetime as _dt
+    _current_year = _dt.now().year
+    _balance_years = [str(_current_year - 1 - i) for i in range(max(lookback_years, 3))]
+    _balance_history: list[tuple[int, int]] = []
+    _balance_by_year: dict[int, dict] = {}
+    for _y in _balance_years:
+        _bal = fetch_debt_balance(corp_code, api_key, _y)
+        if _bal["total"] > 0 and _bal["year"] is not None:
+            _balance_history.append((_bal["year"], _bal["total"]))
+            _balance_by_year[_bal["year"]] = _bal
+
+    if _balance_history:
+        _balance_history.sort(key=lambda x: x[0])
+        lines.append("**채무증권 잔액 추이**")
+        for _y, _tot in _balance_history:
+            _eok = _tot // 100_000_000
+            _m1y = _balance_by_year[_y]["maturity_1y_share"]
+            lines.append(f"- {_y}: 총 {_eok:,}억원 (1년 이내 {_m1y:.0%})")
+        lines.append("")
+
+    _rollover_flag = detect_debt_rollover(_balance_history, signal_events)
+    if _rollover_flag == "CB_ROLLOVER":
+        lines += [
+            "⚠ **CB_ROLLOVER 탐지** — 최근 3년간 채무증권 잔액이 10% 이내로 "
+            "평탄하게 유지되면서 같은 기간 CB/BW 발행이 2건 이상 관찰됐습니다. "
+            "신규 발행 자금으로 만기 도래분을 차환하는 '롤오버' 징후입니다.",
+            "",
+        ]
+
     if result["events"]:
         lines.append("**시계열** (최대 30건)")
         _events_slice = result["events"][:30]
