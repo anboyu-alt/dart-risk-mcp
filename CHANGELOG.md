@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+## [0.7.3] — 2026-04-24
+
+### Changed
+- **실 DART API 출력 리뷰 반영 문구 다듬기** — 3개 기업(셀트리온·제이스코홀딩스·두산에너빌리티) 13개 출력 샘플을 사람이 눈으로 읽은 뒤, 내부 코드·영문 약어·어색한 반복을 제거:
+  - **카탈로그 발췌 블록 한글화** (`find_risk_precedents`, `analyze_company_risk`) — `load_catalog_excerpt`가 반환하는 MD에서 `## N.M: English Title` / `- **Severity**` / `- **Base Score**` / `- **Crisis Timeline**` / `### 정의`(영문) / `### Red Flags`(영문) 블록을 regex(`_strip_taxonomy_metadata`)로 제거. 한글로 작성된 `### 금감원·금융위 적발 사례` · `### 적발 기법 종합` · `### 인용 법조` · `### 기존 현장 기사 인용` 섹션만 남김.
+  - **`scan_financial_anomaly` — "OCF" 약어 제거** — 결과 표의 `순이익 X / OCF Y` 표기를 `순이익 X / 영업현금흐름 Y`로 치환(`server.py` 포매터 1곳).
+  - **`analyze_company_risk` — 🎯 리드 문장 중복 해소** — `가장 무게 있는 신호는 'X'이며, X 공시입니다. ...` 꼴로 라벨과 산문 첫 문장이 같은 말을 반복하던 현상 수정. `_compose_top_signal_sentence` 헬퍼로 prose 첫 문장이 라벨 재소개형이면 생략 후 두 번째 문장부터 이어 붙임.
+  - **공시 제목 내부 공백 정리** — DART 원본이 `전환가액의조정              (제4회차)`처럼 패딩된 공시명을 리스팅에 그대로 노출하던 문제 수정. `_clean_report_name`으로 2칸 이상 공백을 1칸으로 축약, 3개 렌더 지점(analyze_company_risk 이벤트, 최근 공시, build_event_timeline)에 적용.
+  - **자금조달 이벤트 라벨 한글화** — `[자금:public 회차-]` 같은 디버그풍 표기를 `[자금조달(공모)]` / `[자금조달(공모) 제4회차]` 형태로 치환. `_fund_kind_korean` + `_fund_round_korean` + `_format_fund_event_name` + `_format_fund_year_prefix` 헬퍼 신설. DART API가 빈 회차를 리터럴 `"-"`로 돌려주는 케이스도 `_EMPTY_TM_VALUES` 센티넬로 흡수해 `회차-` 잔존 제거(`track_fund_usage`·`analyze_company_risk` 자금사용 블록 양쪽).
+
+### Design Principles (유지)
+1. 내부 코드는 출력 경계를 넘지 못한다.
+2. 모든 수치에는 의미를 동반한다.
+3. 각 도구 출력은 맨 위 3~4줄로 독립적으로 읽힌다.
+4. 단일 출력 — level/mode 파라미터 분기 없음.
+
 ## [0.7.2] — 2026-04-24
 
 ### Changed

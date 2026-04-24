@@ -7,6 +7,7 @@
 """
 
 import os
+import re
 from datetime import datetime, timedelta
 
 from mcp.server.fastmcp import FastMCP
@@ -84,6 +85,92 @@ def _format_amount(amount: str) -> str:
         if n >= 10_000:
             return f"{n // 10_000}만원"
     return amount
+
+
+_FUND_KIND_LABEL = {"public": "공모", "private": "사모"}
+# DART 응답에서 회차가 비어 있을 때 오는 플레이스홀더 값들
+_EMPTY_TM_VALUES = {"", "-", "—", "–"}
+
+
+def _fund_kind_korean(kind: str | None) -> str:
+    """`kind`(public/private) → 공모/사모. 그 외는 `기타`."""
+    return _FUND_KIND_LABEL.get((kind or "").lower(), "기타")
+
+
+def _fund_round_korean(tm: str | None) -> str:
+    """회차 문자열을 `제N회차`로 포맷. 값이 비어 있으면 빈 문자열."""
+    tm_s = (tm or "").strip()
+    if tm_s in _EMPTY_TM_VALUES:
+        return ""
+    return f"제{tm_s}회차"
+
+
+def _format_fund_event_name(rec: dict) -> str:
+    """자금사용 레코드를 사용자 노출용 한글 라벨로 정리한다.
+
+    v0.7.3: 기존 `[자금:public 회차-]` 형태가 영문·placeholder를 노출해 디버그 로그처럼
+    보이던 문제를 수정. `kind`는 공모/사모로 변환, 회차가 비었으면 통째로 생략.
+    """
+    kind_label = _fund_kind_korean(rec.get("kind"))
+    tm_part = _fund_round_korean(rec.get("tm"))
+    use = (rec.get("plan_useprps") or "").strip()[:30]
+    head = f"[자금조달({kind_label}){' ' + tm_part if tm_part else ''}]"
+    return f"{head} {use}".strip() if use else head
+
+
+def _format_fund_year_prefix(rec: dict) -> str:
+    """`[YYYY 공모 제N회차]` / `[YYYY 사모]` 형태로 연도+조달유형+회차 프리픽스를 만든다.
+
+    v0.7.3: 기존 `[2023 public 회차-]` 형태가 사용자 출력에 노출되던 문제를 수정.
+    `조달자금 사용내역` 블록의 공통 프리픽스로 사용.
+    """
+    year = rec.get("year", "")
+    kind_label = _fund_kind_korean(rec.get("kind"))
+    tm_part = _fund_round_korean(rec.get("tm"))
+    inner = " ".join(p for p in [str(year), kind_label, tm_part] if p)
+    return f"[{inner}]"
+
+
+def _clean_report_name(name: str) -> str:
+    """DART 원본 공시명에 섞인 과다 공백을 한 칸으로 압축한다.
+
+    v0.7.3: 원본이 고정폭 패딩으로 저장돼 `전환가액의조정              (제4회차)` 같이
+    긴 공백이 사용자 출력에 그대로 드러나던 문제를 수정.
+    """
+    return re.sub(r"\s{2,}", " ", (name or "")).strip()
+
+
+def _compose_top_signal_sentence(label: str, prose: str) -> str:
+    """🎯 리드의 '가장 무거운 신호' 문장을 조립한다.
+
+    v0.7.3: 기존 형태 `가장 무게 있는 신호는 'X'이며, X 공시입니다. ...`가
+    라벨과 prose 첫 문장에서 같은 말을 반복하던 문제를 수정. prose 첫 문장이
+    라벨을 단순히 되풀이하는 `... 공시입니다.` 꼴이면 그 문장을 건너뛰고
+    다음 문장부터 이어 붙인다.
+    """
+    if not prose:
+        return f"가장 무게 있는 신호는 '{label}'입니다."
+
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", prose.strip()) if s.strip()]
+    if not sentences:
+        return f"가장 무게 있는 신호는 '{label}'입니다."
+
+    # 라벨의 앞부분(공백 제거)이 첫 문장 안에 포함되고 그 문장이 '입니다.'로 끝나면
+    # 라벨 되풀이로 판정하여 생략.
+    label_core = (label or "").replace(" ", "")
+    first = sentences[0]
+    first_core = first.replace(" ", "")
+    is_restatement = (
+        len(label_core) >= 3
+        and label_core[: min(6, len(label_core))] in first_core
+        and (first_core.endswith("입니다.") or first_core.endswith("공시입니다."))
+    )
+    if is_restatement:
+        rest = " ".join(sentences[1:]).strip()
+        if rest:
+            return f"가장 무게 있는 신호는 '{label}'입니다. {rest}"
+        return f"가장 무게 있는 신호는 '{label}'입니다."
+    return f"가장 무게 있는 신호는 '{label}'이며, {prose}"
 
 
 # ── 도구 1: 기업 종합 위험 분석 ────────────────────────────────────────────
@@ -179,7 +266,7 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
                 "key": _fkey,
                 "label": _meta["label"],
                 "score": _meta["score"],
-                "report_nm": f"[자금:{_rec['kind']} 회차{_rec['tm']}] {(_rec.get('plan_useprps') or '')[:30]}",
+                "report_nm": _format_fund_event_name(_rec),
                 "rcept_dt": _rec.get("pay_de", "") or f"{_rec.get('year', '')}-00-00",
                 "rcept_no": "",
                 "is_amendment": False,
@@ -307,13 +394,8 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
         "투자 결정의 근거는 아닙니다."
     )
     # 셋째 문장: 가장 무거운 신호
-    if top_signal and top_signal_prose:
-        s3 = (
-            f"가장 무게 있는 신호는 '{top_signal_label}'이며, "
-            f"{top_signal_prose}"
-        )
-    elif top_signal:
-        s3 = f"가장 무게 있는 신호는 '{top_signal_label}'입니다."
+    if top_signal:
+        s3 = _compose_top_signal_sentence(top_signal_label, top_signal_prose)
     else:
         s3 = "가장 주목할 만한 단일 신호는 감지되지 않았습니다."
 
@@ -339,7 +421,7 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
         one_liner = meaning if meaning else e["label"]
         # 첫 줄: 날짜 · 공시명 · 점수
         lines.append(
-            f"• {date} · {e['report_nm']}{score_tag}{amend_tag}"
+            f"• {date} · {_clean_report_name(e['report_nm'])}{score_tag}{amend_tag}"
         )
         # 두번째 줄: 의미 해설 (접미 들여쓰기)
         if one_liner:
@@ -393,7 +475,7 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
             "",
         ]
         for _d, _r in decisions:
-            lines.append(f"- [{_d['rcept_dt']}] {_d['report_nm']}")
+            lines.append(f"- [{_d['rcept_dt']}] {_clean_report_name(_d['report_nm'])}")
             lines.append(
                 f"  → {_r['counterparty'] or '(미기재)'} / "
                 f"{_r['amount']:,}원 (자산 대비 {_r['asset_ratio']:.1f}%)"
@@ -413,7 +495,7 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
         recent = [e for e in churn["events"] if (e.get("rcept_dt") or "").replace("-", "") >= _cutoff]
         if recent:
             for e in recent[:10]:
-                lines.append(f"- {e['rcept_dt']} · {e['report_nm']}")
+                lines.append(f"- {e['rcept_dt']} · {_clean_report_name(e['report_nm'])}")
             if len(recent) > 10:
                 lines.append(f"- ... (+{len(recent) - 10}건)")
         else:
@@ -446,7 +528,7 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
         ]
         for _r in _anomaly_recs[:5]:
             lines.append(
-                f"- [{_r['year']} {_r['kind']} 회차{_r['tm']}] "
+                f"- {_format_fund_year_prefix(_r)} "
                 f"계획 \"{_r['plan_useprps'][:30]}\" → "
                 f"실제 \"{_r['real_dtls_cn'][:30]}\""
             )
@@ -2005,7 +2087,7 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
 
     for rec in records:
         lines.append(
-            f"[{rec['year']} {rec['kind']} 회차{rec['tm']}] "
+            f"{_format_fund_year_prefix(rec)} "
             f"납입 {rec['pay_amount']:,}원"
         )
         lines.append(
@@ -2202,7 +2284,10 @@ def scan_financial_anomaly(
     for m in metrics:
         name = m["name"]
         if name == "순이익 vs 영업현금흐름":
-            cur = f"순이익 {m['current_ni']:,} / OCF {m['current_ocf']:,}"
+            cur = (
+                f"순이익 {m['current_ni']:,} / "
+                f"영업현금흐름 {m['current_ocf']:,}"
+            )
             pri = "-"
             delta = "-"
         elif "current" in m and "prior" in m:
