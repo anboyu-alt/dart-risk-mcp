@@ -181,7 +181,8 @@ class TestCheckDisclosureAnomalyAuditBonus(unittest.TestCase):
         }
         result = server.check_disclosure_anomaly("테스트", 365)
         self.assertIn("감사인 교체 2회", result)
-        self.assertIn("+5점", result)
+        # v0.8.5: 점수 가산(+5점) 표기 제거 — 경고 문구만 확인
+        self.assertIn("감사 독립성", result)
 
     @patch("dart_risk_mcp.server.fetch_audit_opinion_history")
     @patch("dart_risk_mcp.server.match_signals")
@@ -205,7 +206,7 @@ class TestCheckDisclosureAnomalyAuditBonus(unittest.TestCase):
         result = server.check_disclosure_anomaly("테스트", 365)
         self.assertIn("비감사용역 비중 초과", result)
         self.assertIn("2025", result)
-        self.assertIn("+3점", result)
+        # v0.8.5: 점수 가산(+3점) 표기 제거 — 연도 경고만 확인
 
 
 if __name__ == "__main__":

@@ -164,11 +164,12 @@ dart_risk_mcp/
 
 ### 15. `check_disclosure_anomaly(company_name, lookback_days=365)` ✨
 
-공시 구조 지표 5개를 0~100 스코어로 집계합니다.
+공시 구조 지표 5개에 해당하는 건수·비율을 나열합니다. **기업 위험도를 정량화하거나 등급을 부여하지 않습니다** (v0.8.5 원칙).
 
-- 지표: ① 정정공시 비율(25) ② 감사의견 이슈(20) ③ 공시의무 위반(15) ④ 자본 스트레스(25) ⑤ 조회공시 빈도(15)
+- 지표: ① 정정공시 비율 ② 감사의견 이슈 ③ 공시의무 위반 ④ 자본 스트레스 ⑤ 조회공시 빈도
+- 감사의견 구조화 엔드포인트(`fetch_audit_opinion_history`)로 최근 5년 감사인 교체 2회 이상·비감사용역 비중 30% 초과 경고 문구 자동 첨부(점수 가산 없음)
 - 새 API 호출 없음 — `fetch_company_disclosures` + `match_signals` + `is_amendment_disclosure` 재사용
-- 반환: 종합 스코어 + 지표별 내역(탐지 건수·근거 공시명 최대 3건) + 법적 판단 아님 고지
+- 반환: 포지셔닝 고지 + 지표별 내역(탐지 건수·근거 공시명 최대 3건) + 감사의견 관련 경고(해당 시)
 
 ### 16. `get_executive_compensation(company_name, year="", report_type="annual")` ✨
 
@@ -327,7 +328,8 @@ dart_risk_mcp/
 - **외부 라이브러리 추가 금지**: `requests`와 `mcp` 외 의존성을 추가하지 않습니다. HTML 파싱도 regex + 문자열 처리로 구현합니다.
 - **인코딩 처리**: DART 문서는 utf-8, euc-kr, cp949 순으로 시도합니다 (`_decode_zip_file`).
 - **오류 처리**: API 호출 실패 시 빈 값 반환 (예외를 도구 레벨로 전파하지 않음).
-- **정정공시 필터**: `is_amendment_disclosure(report_nm)`으로 `[기재정정]` 등을 감지해 점수에서 제외합니다.
+- **정정공시 필터**: `is_amendment_disclosure(report_nm)`으로 `[기재정정]` 등을 감지해 내부 랭킹에서 제외합니다.
+- **점수·등급 없음 원칙 (v0.8.5)**: 기업 위험도를 정량화하거나 등급("매우위험", "고위험" 등)으로 부여하는 어떤 표기도 사용자 출력에 노출되면 안 됩니다. 내부에서는 `SIGNAL_TYPES[*].score`·`taxonomy.base_score`로 신호 우선순위를 정렬하지만 렌더 경로로 유출되면 안 됩니다. `tests/test_golden_output_hygiene.py`가 점수/등급/이모지 회귀를 기계적으로 막습니다.
 
 ---
 

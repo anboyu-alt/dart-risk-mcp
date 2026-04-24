@@ -62,20 +62,6 @@ _DART_API_KEY: str = os.environ.get("DART_API_KEY", "")
 # ── 공통 헬퍼 ──────────────────────────────────────────────────────────────
 
 
-def _risk_level(score: int) -> str:
-    if score >= 15:
-        return "매우위험"
-    if score >= 10:
-        return "고위험"
-    if score >= 7:
-        return "위험"
-    return "주의"
-
-
-def _risk_emoji(level: str) -> str:
-    return {"매우위험": "🔴", "고위험": "🟠", "위험": "🟡", "주의": "🔵"}.get(level, "⚪")
-
-
 def _format_amount(amount: str) -> str:
     if not amount:
         return ""
@@ -337,11 +323,6 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
             f"(전체 공시 {len(disclosures)}건 검토)"
         )
 
-    # 4. 위험점수
-    total_score = sum(e["score"] for e in signal_events)
-    level = _risk_level(total_score)
-    emoji = _risk_emoji(level)
-
     # 5. 복합 패턴
     from .core.signals import SIGNAL_KEY_TO_TAXONOMY as _SKT
 
@@ -349,7 +330,7 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
     tax_ids_all = list({tid for k in sig_keys for tid in _SKT.get(k, [])})
     pattern = find_pattern_match(tax_ids_all)
 
-    # 6. 타임라인 (가장 고점수 신호 기준)
+    # 6. 타임라인 (내부 랭킹 점수 기준 — 출력에는 노출되지 않음)
     top_signal = max(
         (e for e in signal_events if not e["is_amendment"]),
         key=lambda e: e["score"],
@@ -744,14 +725,6 @@ def find_risk_precedents(signal_types: list[str], lookback_days: int = 90) -> st
             lines.append(prose_body or pattern.get("description", ""))
             lines.append("")
 
-    # 점수 합산
-    total = sum(sig_map[k]["score"] for k in valid_keys)
-    level = _risk_level(total)
-    emoji = _risk_emoji(level)
-    lines.append(
-        f"{emoji} 이 신호 조합의 종합 위험도는 **{level}**입니다."
-    )
-
     all_tax_ids = list({tid for k in valid_keys for tid in SIGNAL_KEY_TO_TAXONOMY.get(k, [])})
     catalog = load_catalog_excerpt(all_tax_ids)
     if catalog:
@@ -794,7 +767,6 @@ _PHASE_MAP = {
     "CAPITAL_IMPAIRMENT":  "탈출기",
 }
 _PHASE_ORDER = {"진입기": 0, "심화기": 1, "탈출기": 2}
-_PHASE_EMOJI = {"진입기": "🟢", "심화기": "🟡", "탈출기": "🔴"}
 
 
 @mcp.tool()
@@ -901,9 +873,9 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
     # 단계 설명 머리말
     lines.append(
         "아래 타임라인은 공시를 세 단계로 나눠 보여줍니다. "
-        "🟢 진입기는 자금을 끌어오거나 자본 구조를 바꾸는 움직임, "
-        "🟡 심화기는 경영권·지배구조가 흔들리는 움직임, "
-        "🔴 탈출기는 감사·수사·부실 등 위기가 드러나는 움직임입니다."
+        "진입기는 자금을 끌어오거나 자본 구조를 바꾸는 움직임, "
+        "심화기는 경영권·지배구조가 흔들리는 움직임, "
+        "탈출기는 감사·수사·부실 등 위기가 드러나는 움직임입니다."
     )
     lines.append("")
 
@@ -911,8 +883,7 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
         phase_events = phases[phase_name]
         if not phase_events:
             continue
-        emoji = _PHASE_EMOJI[phase_name]
-        lines.append(f"{emoji} **[{phase_name}] — {phase_events[0][0]} 이후 {len(phase_events)}건**")
+        lines.append(f"**[{phase_name}] — {phase_events[0][0]} 이후 {len(phase_events)}건**")
         # 이 단계에서 처음 등장한 신호에 대해 한 줄 해설을 붙여준다(중복 방지).
         seen_keys: set[str] = set()
         for evt in phase_events:
@@ -2104,33 +2075,11 @@ def check_disclosure_anomaly(company_name: str, lookback_days: int = 365) -> str
 
     # ── 가중 스코어 (상한 100) ─────────────────────────────────
     amend_ratio = amendment_count / total
-    s_amend = min(25, round(amend_ratio * 25))
-    s_audit = min(20, len(audit_hits) * 20)
-    s_viol = min(15, len(viol_hits) * 15)
-    s_capital = min(25, len(capital_hits) * 5)
-    s_inquiry = min(15, len(inquiry_hits) * 5)
-
-    # v0.8.0: 구조화 엔드포인트 보강 (실패 시 기존 키워드 매칭 점수 유지)
+    # v0.8.5: 내부 스코어 계산을 제거. 출력에는 건수·비율·사실만 노출한다.
+    # 감사의견 구조화 엔드포인트는 교체 이력·비감사용역 경고에만 사용.
     _audit_struct = fetch_audit_opinion_history(corp_code, _DART_API_KEY, 5)
-    _audit_bonus = 0
     _auditor_change_count = len(_audit_struct.get("auditor_changes", []))
     _indep_warnings = _audit_struct.get("independence_warnings", [])
-    if _auditor_change_count >= 2:
-        _audit_bonus += 5
-    if _indep_warnings:
-        _audit_bonus += 3
-    s_audit = min(20, s_audit + _audit_bonus)
-
-    total_score = min(100, s_amend + s_audit + s_viol + s_capital + s_inquiry)
-
-    if total_score >= 70:
-        grade = "심각"
-    elif total_score >= 50:
-        grade = "높음"
-    elif total_score >= 30:
-        grade = "보통"
-    else:
-        grade = "낮음"
 
     def _top3(items: list[str]) -> str:
         shown = items[:3]

@@ -1,7 +1,8 @@
-"""v0.7.4 — 골드 파일에 대한 내부 코드·영문 약어 누출 회귀 검증.
+"""v0.7.4 / v0.8.5 — 골드 파일에 대한 내부 코드·영문 약어·점수/등급 누출 회귀 검증.
 
 실 API 호출 없이 `tests/fixtures/sample_outputs/` 안의 `.txt`만 스캔한다.
-렌더러가 내부 키·영문 메타·영문 약어를 출력 경계 밖으로 흘리면 실패한다.
+렌더러가 내부 키·영문 메타·영문 약어·점수/등급/등급 이모지를 출력 경계 밖으로
+흘리면 실패한다. v0.8.5에서 점수·등급·이모지 검증 3종이 추가됐다.
 
 재수집 절차: `python tmp/v072_review/regen_fixtures.py` 후 `git diff` 확인.
 """
@@ -36,6 +37,19 @@ _CATALOG_META = [
 # v0.7.3에서 한글화된 영문 약어. 공백 포함으로 false-positive(예: 한글 조사 직전의 OCF) 최소화.
 _ABBREV = ["OCF "]
 
+# v0.8.5 — 점수·등급·위상 이모지 노출 금지. 기업 위험도를 정량화하지 않는다는 원칙의 기계적 검증.
+# 주의: 단순 "점" 글자는 "시점", "관점" 같은 정상 한국어와 충돌하므로 패턴을 좁힌다.
+_SCORE_GRADE_PATTERNS = [
+    (r"\d+\s*/\s*\d+\s*점", "'N/M점' 형식의 점수 표기"),
+    (r"\d+\s*점\s*(?:$|[\s·,\)])", "'N점' 단독 점수 표기"),
+    (r"위험\s*등급", "'위험 등급' 라벨"),
+    (r"종합\s*스코어", "'종합 스코어' 라벨"),
+    (r"종합\s*위험도", "'종합 위험도' 라벨"),
+    (r"매우위험|고위험|중위험|저위험", "위험 등급 명칭"),
+]
+# 위상/위험도를 시각적으로 등급화하던 이모지 세트(v0.8.5에서 전면 제거)
+_SEVERITY_EMOJI = ["🔴", "🟠", "🟡", "🟢", "🔵"]
+
 
 class TestGoldenOutputHygiene(unittest.TestCase):
     def _iter_fixtures(self) -> list[Path]:
@@ -68,6 +82,25 @@ class TestGoldenOutputHygiene(unittest.TestCase):
             for abbr in _ABBREV:
                 self.assertNotIn(
                     abbr, text, f"{path.name}에 영문 약어 '{abbr.strip()}' 노출"
+                )
+
+    def test_no_score_or_grade_labels(self) -> None:
+        """v0.8.5: 기업 위험도를 정량화하는 점수·등급 표기가 사용자 출력에 노출되면 안 된다."""
+        for path in self._iter_fixtures():
+            text = path.read_text(encoding="utf-8")
+            for pattern, desc in _SCORE_GRADE_PATTERNS:
+                self.assertFalse(
+                    re.search(pattern, text),
+                    f"{path.name}에 {desc} 노출",
+                )
+
+    def test_no_severity_emoji(self) -> None:
+        """v0.8.5: 위상·위험도를 시각적으로 등급화하던 이모지 전면 금지."""
+        for path in self._iter_fixtures():
+            text = path.read_text(encoding="utf-8")
+            for emoji in _SEVERITY_EMOJI:
+                self.assertNotIn(
+                    emoji, text, f"{path.name}에 등급 이모지 '{emoji}' 노출"
                 )
 
     def test_fixture_set_non_empty(self) -> None:
