@@ -19,6 +19,9 @@ from .dart_client import (
     detect_capital_churn,
     detect_financial_anomaly,
     _fs_response_to_periods,
+    fetch_audit_opinion_history,
+    fetch_debt_balance,
+    detect_debt_rollover,
 )
 from .signals import (
     match_signals, is_amendment_disclosure,
@@ -73,4 +76,7 @@ __all__ = [
     "signal_to_prose",
     "pattern_to_prose",
     "category_prose",
+    "fetch_audit_opinion_history",
+    "fetch_debt_balance",
+    "detect_debt_rollover",
 ]

@@ -261,6 +261,37 @@ _major_decision_cache: dict[str, tuple[float, dict]] = {}
 _MAJOR_CACHE_MAX = 50
 _MAJOR_CACHE_TTL = 600
 
+# v0.8.0: 감사의견 이력 엔드포인트 3종 --------------------------------
+_AUDIT_OPINION_URLS = {
+    "opinion":       f"{DART_BASE}/accnutAdtorNmNdAdtOpinion.json",        # 2020025
+    "audit_service": f"{DART_BASE}/adtServcCnclsSttus.json",               # 2020026
+    "non_audit":     f"{DART_BASE}/accnutAdtorNonAdtServcCnclsSttus.json", # 2020027
+}
+
+_audit_history_cache: dict[tuple, tuple[float, dict]] = {}
+_AUDIT_CACHE_MAX = 20
+_AUDIT_CACHE_TTL = 600
+
+_NON_AUDIT_THRESHOLD = 0.30   # 비감사용역 비중 30% 이상 경고
+_AUDITOR_CHANGE_WINDOW = 3    # 3년 내 2회 이상 교체 경고
+
+# v0.8.0: 미상환 채무증권 잔액 엔드포인트 5종 -------------------------
+_DEBT_BALANCE_URLS = {
+    "corporate_bond":   f"{DART_BASE}/cprndNrdmpBlce.json",              # 회사채
+    "short_term_bond":  f"{DART_BASE}/srtpdPsndbtNrdmpBlce.json",        # 단기사채
+    "commercial_paper": f"{DART_BASE}/entrprsBilScritsNrdmpBlce.json",   # 기업어음
+    "new_capital":      f"{DART_BASE}/newCaplScritsNrdmpBlce.json",      # 신종자본증권
+    "cnd_capital":      f"{DART_BASE}/cndlCaplScritsNrdmpBlce.json",     # 조건부자본증권
+}
+
+_debt_balance_cache: dict[tuple, tuple[float, dict]] = {}
+_DEBT_CACHE_MAX = 20
+_DEBT_CACHE_TTL = 600
+
+_CB_ROLLOVER_YOY_THRESHOLD = 0.10   # 10% 이내 변동 = 평탄
+_CB_ROLLOVER_YEARS_REQUIRED = 3     # 3년 연속
+_CB_ROLLOVER_EVENTS_REQUIRED = 2    # 같은 기간 CB/BW 발행 2건 이상
+
 
 def _cache_get(cache: dict, key, ttl: int):
     item = cache.get(key)
@@ -1706,3 +1737,279 @@ def fetch_pifric_decision(rcept_no: str, api_key: str, corp_code: str = "") -> d
     if not corp_code:
         return {}
     return _fetch_decision_filtered("pifricDecsn.json", rcept_no, api_key, corp_code)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v0.8.0: 감사의견 이력 + 미상환 채무증권 잔액 (구조화 엔드포인트)
+# ═══════════════════════════════════════════════════════════════════
+
+def _safe_int(v) -> int | None:
+    """문자열/None → int. 콤마·공백 제거. 실패 시 None."""
+    if v is None:
+        return None
+    s = str(v).replace(",", "").strip()
+    if not s or s in {"-", "N/A"}:
+        return None
+    try:
+        return int(float(s))
+    except (ValueError, TypeError):
+        return None
+
+
+def _safe_int_from_de(de: str) -> int | None:
+    """'YYYY-MM-DD' 또는 'YYYYMMDD' → 연도(int). 실패 시 None."""
+    if not de:
+        return None
+    s = str(de).replace("-", "").replace(".", "")[:4]
+    return _safe_int(s)
+
+
+def fetch_audit_opinion_history(
+    corp_code: str,
+    api_key: str,
+    lookback_years: int = 5,
+) -> dict:
+    """감사의견·감사인 교체·비감사용역 통합 조회.
+
+    3개 엔드포인트(`accnutAdtorNmNdAdtOpinion`, `adtServcCnclsSttus`,
+    `accnutAdtorNonAdtServcCnclsSttus`)를 결합해 연도별 감사의견·감사인·
+    보수를 한 dict로 반환합니다. 일부 엔드포인트가 실패해도 남은 값으로
+    구성해 graceful degradation.
+
+    반환:
+        {
+            "opinions": [{"year": int, "opinion": str, "auditor": str,
+                          "tenure_years": int, "audit_fee_okwon": int,
+                          "non_audit_fee_okwon": int}],
+            "auditor_changes": [{"from_year": int, "to_year": int,
+                                 "from": str, "to": str}],
+            "independence_warnings": [str, ...],
+        }
+    """
+    empty = {"opinions": [], "auditor_changes": [], "independence_warnings": []}
+    if not corp_code or not api_key:
+        return empty
+
+    if not isinstance(lookback_years, int) or not (1 <= lookback_years <= 10):
+        lookback_years = 5
+
+    cache_key = (corp_code, lookback_years)
+    cached = _cache_get(_audit_history_cache, cache_key, _AUDIT_CACHE_TTL)
+    if cached is not None:
+        return cached
+
+    # 엔드포인트 3종 순회 (실패 시 빈 리스트)
+    raw: dict[str, list] = {}
+    for kind, url in _AUDIT_OPINION_URLS.items():
+        try:
+            resp = _retry("GET", url, params={"crtfc_key": api_key, "corp_code": corp_code}, timeout=15)
+            data = resp.json() if resp is not None else {}
+            raw[kind] = data.get("list", []) if data.get("status") == "000" else []
+        except Exception:
+            raw[kind] = []
+
+    current_year = datetime.now().year
+    cutoff = current_year - lookback_years
+
+    by_year: dict[int, dict] = {}
+    for item in raw.get("opinion", []):
+        y = _safe_int(item.get("bsns_year"))
+        if y is None or y < cutoff:
+            continue
+        by_year.setdefault(y, {"year": y})
+        by_year[y]["opinion"] = (item.get("adt_opinion") or "").strip()
+        by_year[y]["auditor"] = (item.get("adtor") or "").strip()
+
+    for item in raw.get("audit_service", []):
+        y = _safe_int(item.get("bsns_year"))
+        if y is None or y < cutoff:
+            continue
+        by_year.setdefault(y, {"year": y, "opinion": "", "auditor": ""})
+        by_year[y]["audit_fee_okwon"] = _safe_int(item.get("mendng")) or 0
+
+    non_audit_by_year: dict[int, int] = {}
+    for item in raw.get("non_audit", []):
+        y = _safe_int_from_de(item.get("cntrct_cncls_de", ""))
+        if y is None or y < cutoff:
+            continue
+        non_audit_by_year[y] = non_audit_by_year.get(y, 0) + (_safe_int(item.get("mendng")) or 0)
+    for y, amount in non_audit_by_year.items():
+        by_year.setdefault(y, {"year": y, "opinion": "", "auditor": ""})
+        by_year[y]["non_audit_fee_okwon"] = amount
+
+    # opinions(최신 순) + tenure_years
+    opinions = []
+    for y in sorted(by_year.keys(), reverse=True):
+        e = by_year[y]
+        opinions.append({
+            "year": e.get("year", y),
+            "opinion": e.get("opinion", ""),
+            "auditor": e.get("auditor", ""),
+            "tenure_years": 0,
+            "audit_fee_okwon": e.get("audit_fee_okwon", 0),
+            "non_audit_fee_okwon": e.get("non_audit_fee_okwon", 0),
+        })
+    # 과거→최신 방향으로 같은 감사인 연속 횟수 누적
+    asc_for_tenure = sorted(opinions, key=lambda x: x["year"])
+    prev_auditor = None
+    run = 0
+    tenure_by_year: dict[int, int] = {}
+    for o in asc_for_tenure:
+        if o["auditor"] and o["auditor"] == prev_auditor:
+            run += 1
+        else:
+            run = 1
+        tenure_by_year[o["year"]] = run
+        prev_auditor = o["auditor"]
+    for o in opinions:
+        o["tenure_years"] = tenure_by_year.get(o["year"], 0)
+
+    # 감사인 교체 이벤트(과거 → 최신)
+    auditor_changes = []
+    asc = sorted(opinions, key=lambda x: x["year"])
+    for i in range(1, len(asc)):
+        prev_a = asc[i-1]["auditor"]
+        cur_a = asc[i]["auditor"]
+        if prev_a and cur_a and prev_a != cur_a:
+            auditor_changes.append({
+                "from_year": asc[i-1]["year"],
+                "to_year": asc[i]["year"],
+                "from": prev_a,
+                "to": cur_a,
+            })
+
+    # 독립성 경고
+    warnings: list[str] = []
+    for o in opinions:
+        af = o.get("audit_fee_okwon", 0)
+        naf = o.get("non_audit_fee_okwon", 0)
+        if af + naf > 0:
+            ratio = naf / (af + naf)
+            if ratio >= _NON_AUDIT_THRESHOLD:
+                warnings.append(f"{o['year']} 비감사용역 비중 {int(ratio*100)}%")
+
+    result = {
+        "opinions": opinions,
+        "auditor_changes": auditor_changes,
+        "independence_warnings": warnings,
+    }
+    _cache_set(_audit_history_cache, cache_key, result, _AUDIT_CACHE_MAX)
+    return result
+
+
+def fetch_debt_balance(
+    corp_code: str,
+    api_key: str,
+    year: str = "",
+) -> dict:
+    """채무증권 5종 미상환 잔액 통합.
+
+    5개 엔드포인트(`cprndNrdmpBlce`, `srtpdPsndbtNrdmpBlce`,
+    `entrprsBilScritsNrdmpBlce`, `newCaplScritsNrdmpBlce`,
+    `cndlCaplScritsNrdmpBlce`)를 합산해 채무증권 종류별 잔액과 만기
+    구간을 반환. 일부 실패해도 graceful degradation.
+
+    반환:
+        {
+            "year": int,
+            "by_kind": {"corporate_bond": {"total": int, "maturity_under_1y": int}, ...},
+            "total": int,
+            "maturity_1y_share": float,
+            "equity_ratio": float | None,
+        }
+    """
+    empty = {"year": None, "by_kind": {}, "total": 0,
+             "maturity_1y_share": 0.0, "equity_ratio": None}
+    if not corp_code or not api_key:
+        return empty
+
+    if not year:
+        year = str(datetime.now().year - 1)
+
+    cache_key = (corp_code, year)
+    cached = _cache_get(_debt_balance_cache, cache_key, _DEBT_CACHE_TTL)
+    if cached is not None:
+        return cached
+
+    by_kind: dict[str, dict] = {}
+    total = 0
+    maturity_1y = 0
+
+    for kind, url in _DEBT_BALANCE_URLS.items():
+        try:
+            resp = _retry("GET", url, params={
+                "crtfc_key": api_key,
+                "corp_code": corp_code,
+                "bsns_year": year,
+                "reprt_code": "11011",  # 사업보고서
+            }, timeout=15)
+            data = resp.json() if resp is not None else {}
+        except Exception:
+            continue
+        if data.get("status") != "000":
+            continue
+
+        kind_total = 0
+        kind_1y = 0
+        for item in data.get("list", []):
+            amt = _safe_int(item.get("remndr_amount")) or 0
+            kind_total += amt
+            within = _safe_int(item.get("remndr_within1y_amount")) or 0
+            kind_1y += within
+
+        if kind_total > 0:
+            by_kind[kind] = {"total": kind_total, "maturity_under_1y": kind_1y}
+            total += kind_total
+            maturity_1y += kind_1y
+
+    maturity_share = maturity_1y / total if total > 0 else 0.0
+    result = {
+        "year": _safe_int(year),
+        "by_kind": by_kind,
+        "total": total,
+        "maturity_1y_share": maturity_share,
+        "equity_ratio": None,
+    }
+    _cache_set(_debt_balance_cache, cache_key, result, _DEBT_CACHE_MAX)
+    return result
+
+
+def detect_debt_rollover(
+    balances: list[tuple[int, int]],
+    events: list[dict],
+) -> str | None:
+    """3년 연속 잔액 YoY <10% AND 같은 기간 CB/BW 발행 ≥2건 → 'CB_ROLLOVER'.
+
+    Args:
+        balances: [(year, total_balance), ...] 최소 3개 연도.
+        events: 자본 이벤트 목록. 각 항목은 "key"·"rcept_dt" 필드 필요.
+
+    Returns:
+        조건 충족 시 문자열 "CB_ROLLOVER", 아니면 None.
+    """
+    if len(balances) < _CB_ROLLOVER_YEARS_REQUIRED:
+        return None
+
+    asc = sorted(balances, key=lambda x: x[0])
+    recent = asc[-_CB_ROLLOVER_YEARS_REQUIRED:]
+
+    for i in range(1, len(recent)):
+        prev = recent[i-1][1]
+        cur = recent[i][1]
+        if prev <= 0:
+            return None
+        yoy = abs(cur - prev) / prev
+        if yoy >= _CB_ROLLOVER_YOY_THRESHOLD:
+            return None
+
+    start_year = recent[0][0]
+    cb_events = [
+        e for e in events
+        if e.get("key") == "CB_BW"
+        and _safe_int_from_de(e.get("rcept_dt", "")) is not None
+        and (_safe_int_from_de(e.get("rcept_dt", "")) or 0) >= start_year
+    ]
+    if len(cb_events) < _CB_ROLLOVER_EVENTS_REQUIRED:
+        return None
+
+    return "CB_ROLLOVER"
