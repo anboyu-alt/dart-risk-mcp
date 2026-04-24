@@ -8,6 +8,10 @@ DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 > Claude, Cursor, Windsurf 등 MCP를 지원하는 어떤 AI 클라이언트에서도 사용할 수 있습니다.  
 > 예: **"삼성바이오로직스 최근 공시 위험도 분석해줘"** 라고 물어보면 공시를 가져와 분석합니다.
 
+## 출력 원칙
+
+모든 도구는 **하나의 한국어 서술 출력**만 반환합니다. level/mode/format 분기는 지원하지 않습니다. 원시 데이터가 필요하면 `get_disclosure_document`·`view_disclosure`·`list_disclosure_sections` 같은 원문 도구를 직접 조합하세요.
+
 ### v0.7.5 주요 변경
 
 - **주가조작 카탈로그 본문 한글화** — `dart_risk_mcp/knowledge/manipulation_catalog/*.md` 8개 파일의 영문 제목·정의·Red Flags 섹션을 전면 한글 번역. 예: `1.1: Conversion Price Adjustment Exploitation` → `1.1: 전환가액 조정 악용`, `8.1: Engineered Insolvency` → `8.1: 인위적 부실화`. `### Red Flags`는 `### 위험 신호`로 통일

@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-04-25 (예정)
+
+### Design Principle (확정)
+- **단일 출력 원칙 확정** — v0.7.x 동안 모든 도구를 하나의 한국어 서술 출력로 통일했습니다. v0.8.0에서 expert/easy 모드 분기 가능성을 공식 폐기합니다. 향후 어떤 도구도 `level=`·`mode=`·`format=` 같은 분기 파라미터를 받지 않습니다. 사용자가 더 자세한 원시 데이터를 원하면 개별 도구(`get_disclosure_document`, `view_disclosure`, `list_disclosure_sections`)를 조합해 파이프라인을 구성합니다.
+
 ## [0.7.5] — 2026-04-24
 
 ### Changed
