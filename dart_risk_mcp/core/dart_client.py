@@ -1798,41 +1798,97 @@ def fetch_audit_opinion_history(
     if cached is not None:
         return cached
 
-    # 엔드포인트 3종 순회 (실패 시 빈 리스트)
-    raw: dict[str, list] = {}
-    for kind, url in _AUDIT_OPINION_URLS.items():
-        try:
-            resp = _retry("GET", url, params={"crtfc_key": api_key, "corp_code": corp_code}, timeout=15)
-            data = resp.json() if resp is not None else {}
-            raw[kind] = data.get("list", []) if data.get("status") == "000" else []
-        except Exception:
-            raw[kind] = []
-
     current_year = datetime.now().year
     cutoff = current_year - lookback_years
 
+    # DART 엔드포인트는 bsns_year+reprt_code 필수: 연도×엔드포인트 루프
+    raw: dict[str, list] = {k: [] for k in _AUDIT_OPINION_URLS}
+    for year_int in range(cutoff + 1, current_year + 1):
+        for kind, url in _AUDIT_OPINION_URLS.items():
+            try:
+                resp = _retry("GET", url, params={
+                    "crtfc_key": api_key,
+                    "corp_code": corp_code,
+                    "bsns_year": str(year_int),
+                    "reprt_code": "11011",
+                }, timeout=15)
+                data = resp.json() if resp is not None else {}
+                if data.get("status") == "000":
+                    raw[kind].extend(data.get("list", []))
+            except Exception:
+                continue
+
+    def _year_of_item(item: dict) -> int | None:
+        """DART 응답의 bsns_year는 '제34기(당기)' 같은 한글 표현이므로
+        stlm_dt(결산일)에서 연도를 추출한다. 폴백으로 bsns_year 숫자 시도."""
+        y = _safe_int_from_de(item.get("stlm_dt", ""))
+        if y is not None:
+            return y
+        return _safe_int(item.get("bsns_year"))
+
     by_year: dict[int, dict] = {}
     for item in raw.get("opinion", []):
-        y = _safe_int(item.get("bsns_year"))
+        y = _year_of_item(item)
         if y is None or y < cutoff:
             continue
         by_year.setdefault(y, {"year": y})
-        by_year[y]["opinion"] = (item.get("adt_opinion") or "").strip()
-        by_year[y]["auditor"] = (item.get("adtor") or "").strip()
+        # 동일 연도 내 (연결/별도) 중복 엔트리 중 비어있지 않은 값을 우선
+        op_new = (item.get("adt_opinion") or "").strip()
+        ad_new = (item.get("adtor") or "").strip()
+        if op_new and not by_year[y].get("opinion"):
+            by_year[y]["opinion"] = op_new
+        elif "opinion" not in by_year[y]:
+            by_year[y]["opinion"] = op_new
+        if ad_new and not by_year[y].get("auditor"):
+            by_year[y]["auditor"] = ad_new
+        elif "auditor" not in by_year[y]:
+            by_year[y]["auditor"] = ad_new
+
+    # DART servc_mendng는 '130,000200,000600,000\n9.600' 처럼 값이 공백 없이
+    # 뭉쳐 있어 안전한 숫자 파싱이 불가능하다. v0.8.0에서는 non_audit 금액을
+    # 집계하지 않고 계약 존재 여부만 카운트한다. 정교한 파싱은 v0.8.1.
+    _NON_AUDIT_MAX_PER_ITEM = 10_000_000_000  # 1조원 초과 = 파싱 오류로 간주
+
+    def _extract_numbers(s) -> list[int]:
+        if s is None:
+            return []
+        import re
+        # 각 라인/공백을 분리자로 사용, 라인 내 콤마-숫자 그룹만 단일 값으로 인정
+        out: list[int] = []
+        for line in re.split(r"[\s\n]+", str(s)):
+            m = re.fullmatch(r"[\d,]+(?:\.\d+)?", line)
+            if not m:
+                continue
+            n = _safe_int(line)
+            if n is not None and 0 < n < _NON_AUDIT_MAX_PER_ITEM:
+                out.append(n)
+        return out
 
     for item in raw.get("audit_service", []):
-        y = _safe_int(item.get("bsns_year"))
+        y = _year_of_item(item)
         if y is None or y < cutoff:
             continue
         by_year.setdefault(y, {"year": y, "opinion": "", "auditor": ""})
-        by_year[y]["audit_fee_okwon"] = _safe_int(item.get("mendng")) or 0
+        # mendng='-'인 경우 계약/실제집행 보수 필드로 폴백
+        fee = (_safe_int(item.get("mendng"))
+               or _safe_int(item.get("adt_cntrct_dtls_mendng"))
+               or _safe_int(item.get("real_exc_dtls_mendng"))
+               or 0)
+        if fee > by_year[y].get("audit_fee_okwon", 0):
+            by_year[y]["audit_fee_okwon"] = fee
 
     non_audit_by_year: dict[int, int] = {}
     for item in raw.get("non_audit", []):
         y = _safe_int_from_de(item.get("cntrct_cncls_de", ""))
         if y is None or y < cutoff:
             continue
-        non_audit_by_year[y] = non_audit_by_year.get(y, 0) + (_safe_int(item.get("mendng")) or 0)
+        # mendng 단일 값이 없으면 servc_mendng 다중 값의 합계 사용
+        direct = _safe_int(item.get("mendng"))
+        if direct is not None:
+            amount = direct
+        else:
+            amount = sum(_extract_numbers(item.get("servc_mendng")))
+        non_audit_by_year[y] = non_audit_by_year.get(y, 0) + amount
     for y, amount in non_audit_by_year.items():
         by_year.setdefault(y, {"year": y, "opinion": "", "auditor": ""})
         by_year[y]["non_audit_fee_okwon"] = amount

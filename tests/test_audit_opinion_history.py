@@ -15,26 +15,48 @@ def _resp(status="000", lst=None):
     return r
 
 
+def _make_side_effect(opinion=None, audit=None, non_audit=None,
+                      target_year: str = "2025", status: str = "000"):
+    """지정 연도 호출에만 데이터 반환. 다른 해에는 빈 리스트.
+
+    연도 × 엔드포인트 루프가 있어도 items 자체의 bsns_year로 처리되므로
+    한 연도 호출만 데이터를 반환해도 테스트 의도가 보존된다.
+    """
+    opinion = opinion or []
+    audit = audit or []
+    non_audit = non_audit or []
+
+    def _side(method, url, **kwargs):
+        if status != "000":
+            return _resp(status=status)
+        if kwargs.get("params", {}).get("bsns_year") != target_year:
+            return _resp(lst=[])
+        if "accnutAdtorNmNdAdtOpinion" in url:
+            return _resp(lst=opinion)
+        if "adtServcCnclsSttus" in url:
+            return _resp(lst=audit)
+        if "accnutAdtorNonAdtServcCnclsSttus" in url:
+            return _resp(lst=non_audit)
+        return _resp(lst=[])
+    return _side
+
+
 class TestFetchAuditOpinionHistory(unittest.TestCase):
     def setUp(self):
         dart_client._audit_history_cache.clear()
 
     @patch("dart_risk_mcp.core.dart_client._retry")
     def test_parses_opinion_auditor_year(self, mock_retry):
-        mock_retry.side_effect = [
-            _resp(lst=[
+        mock_retry.side_effect = _make_side_effect(
+            opinion=[
                 {"bsns_year": "2025", "adtor": "삼일회계법인", "adt_opinion": "적정"},
                 {"bsns_year": "2024", "adtor": "삼일회계법인", "adt_opinion": "적정"},
                 {"bsns_year": "2023", "adtor": "한영회계법인", "adt_opinion": "적정"},
-            ]),
-            _resp(lst=[
-                {"bsns_year": "2025", "mendng": "820000000", "tot_reqre_time": "3000"},
-            ]),
-            _resp(lst=[
-                {"bsns_year": "2025", "cntrct_cncls_de": "2025-03-10",
-                 "servc_cn": "세무자문", "mendng": "110000000"},
-            ]),
-        ]
+            ],
+            audit=[{"bsns_year": "2025", "mendng": "820000000", "tot_reqre_time": "3000"}],
+            non_audit=[{"bsns_year": "2025", "cntrct_cncls_de": "2025-03-10",
+                        "servc_cn": "세무자문", "mendng": "110000000"}],
+        )
         result = dart_client.fetch_audit_opinion_history("00000001", "KEY", 5)
         self.assertEqual(len(result["opinions"]), 3)
         self.assertEqual(result["opinions"][0]["year"], 2025)
@@ -43,14 +65,12 @@ class TestFetchAuditOpinionHistory(unittest.TestCase):
 
     @patch("dart_risk_mcp.core.dart_client._retry")
     def test_detects_auditor_change(self, mock_retry):
-        mock_retry.side_effect = [
-            _resp(lst=[
+        mock_retry.side_effect = _make_side_effect(
+            opinion=[
                 {"bsns_year": "2025", "adtor": "삼일", "adt_opinion": "적정"},
                 {"bsns_year": "2024", "adtor": "한영", "adt_opinion": "적정"},
-            ]),
-            _resp(lst=[]),
-            _resp(lst=[]),
-        ]
+            ],
+        )
         r = dart_client.fetch_audit_opinion_history("00000001", "KEY", 5)
         self.assertEqual(len(r["auditor_changes"]), 1)
         self.assertEqual(r["auditor_changes"][0]["from"], "한영")
@@ -58,47 +78,47 @@ class TestFetchAuditOpinionHistory(unittest.TestCase):
 
     @patch("dart_risk_mcp.core.dart_client._retry")
     def test_no_change_when_same_auditor(self, mock_retry):
-        mock_retry.side_effect = [
-            _resp(lst=[
+        mock_retry.side_effect = _make_side_effect(
+            opinion=[
                 {"bsns_year": "2025", "adtor": "삼일", "adt_opinion": "적정"},
                 {"bsns_year": "2024", "adtor": "삼일", "adt_opinion": "적정"},
-            ]),
-            _resp(lst=[]),
-            _resp(lst=[]),
-        ]
+            ],
+        )
         r = dart_client.fetch_audit_opinion_history("00000001", "KEY", 5)
         self.assertEqual(r["auditor_changes"], [])
         self.assertEqual(r["opinions"][0]["tenure_years"], 2)
 
     @patch("dart_risk_mcp.core.dart_client._retry")
     def test_non_audit_warning_at_30_percent(self, mock_retry):
-        mock_retry.side_effect = [
-            _resp(lst=[{"bsns_year": "2025", "adtor": "삼일", "adt_opinion": "적정"}]),
-            _resp(lst=[{"bsns_year": "2025", "mendng": "700000000"}]),
-            _resp(lst=[{"bsns_year": "2025", "cntrct_cncls_de": "2025-03-10",
-                        "servc_cn": "세무", "mendng": "300000000"}]),
-        ]
+        mock_retry.side_effect = _make_side_effect(
+            opinion=[{"bsns_year": "2025", "adtor": "삼일", "adt_opinion": "적정"}],
+            audit=[{"bsns_year": "2025", "mendng": "700000000"}],
+            non_audit=[{"bsns_year": "2025", "cntrct_cncls_de": "2025-03-10",
+                        "servc_cn": "세무", "mendng": "300000000"}],
+        )
         r = dart_client.fetch_audit_opinion_history("00000001", "KEY", 5)
         self.assertTrue(any("30%" in w for w in r["independence_warnings"]))
 
     @patch("dart_risk_mcp.core.dart_client._retry")
     def test_non_audit_no_warning_below_30_percent(self, mock_retry):
-        mock_retry.side_effect = [
-            _resp(lst=[{"bsns_year": "2025", "adtor": "삼일", "adt_opinion": "적정"}]),
-            _resp(lst=[{"bsns_year": "2025", "mendng": "900000000"}]),
-            _resp(lst=[{"bsns_year": "2025", "cntrct_cncls_de": "2025-03-10",
-                        "servc_cn": "세무", "mendng": "100000000"}]),
-        ]
+        mock_retry.side_effect = _make_side_effect(
+            opinion=[{"bsns_year": "2025", "adtor": "삼일", "adt_opinion": "적정"}],
+            audit=[{"bsns_year": "2025", "mendng": "900000000"}],
+            non_audit=[{"bsns_year": "2025", "cntrct_cncls_de": "2025-03-10",
+                        "servc_cn": "세무", "mendng": "100000000"}],
+        )
         r = dart_client.fetch_audit_opinion_history("00000001", "KEY", 5)
         self.assertEqual(r["independence_warnings"], [])
 
     @patch("dart_risk_mcp.core.dart_client._retry")
     def test_partial_failure_one_endpoint(self, mock_retry):
-        mock_retry.side_effect = [
-            _resp(lst=[{"bsns_year": "2025", "adtor": "삼일", "adt_opinion": "적정"}]),
-            _resp(status="013"),
-            _resp(status="013"),
-        ]
+        def _side(method, url, **kwargs):
+            if kwargs.get("params", {}).get("bsns_year") != "2025":
+                return _resp(lst=[])
+            if "accnutAdtorNmNdAdtOpinion" in url:
+                return _resp(lst=[{"bsns_year": "2025", "adtor": "삼일", "adt_opinion": "적정"}])
+            return _resp(status="013")  # adt fee & non-audit 실패
+        mock_retry.side_effect = _side
         r = dart_client.fetch_audit_opinion_history("00000001", "KEY", 5)
         self.assertEqual(len(r["opinions"]), 1)
         self.assertEqual(r["opinions"][0]["audit_fee_okwon"], 0)
@@ -121,14 +141,14 @@ class TestFetchAuditOpinionHistory(unittest.TestCase):
 
     @patch("dart_risk_mcp.core.dart_client._retry")
     def test_cache_hit_skips_network(self, mock_retry):
-        mock_retry.side_effect = [
-            _resp(lst=[{"bsns_year": "2025", "adtor": "삼일", "adt_opinion": "적정"}]),
-            _resp(lst=[]),
-            _resp(lst=[]),
-        ]
+        mock_retry.side_effect = _make_side_effect(
+            opinion=[{"bsns_year": "2025", "adtor": "삼일", "adt_opinion": "적정"}],
+        )
         dart_client.fetch_audit_opinion_history("00000099", "KEY", 5)
+        calls_first = mock_retry.call_count
         dart_client.fetch_audit_opinion_history("00000099", "KEY", 5)
-        self.assertEqual(mock_retry.call_count, 3)
+        # 2번째 호출은 캐시 히트이므로 추가 _retry 호출 없음
+        self.assertEqual(mock_retry.call_count, calls_first)
 
 
 class TestCheckDisclosureAnomalyAuditBonus(unittest.TestCase):

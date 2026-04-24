@@ -1935,21 +1935,21 @@ def get_audit_opinion_history(company_name: str, lookback_years: int = 5) -> str
         "",
         "**연도별 감사의견**",
     ]
+    # DART 보수 필드는 기업별·연도별 단위(천원/백만원)가 일관되지 않아
+    # v0.8.0에서는 절대 금액 표시를 생략. 비중 경고만 '독립성 경고' 섹션에서 제공.
     for o in data["opinions"]:
-        warn = ""
-        if o["opinion"] in ("한정", "부적정", "의견거절"):
-            warn = f" ⚠ {o['opinion']}"
-        elif o["opinion"] and o["opinion"] != "적정":
-            warn = f" ({o['opinion']})"
-        fee_parts = []
-        if o["audit_fee_okwon"]:
-            fee_parts.append(f"보수 {o['audit_fee_okwon']//100_000_000}억")
-        if o["non_audit_fee_okwon"]:
-            fee_parts.append(f"비감사 {o['non_audit_fee_okwon']//100_000_000}억")
-        fee_str = f" · {' / '.join(fee_parts)}" if fee_parts else ""
+        opinion_text = (o.get("opinion") or "").strip()
+        # "적정" / "적정의견" 표기 혼용을 정규화
+        norm = opinion_text.replace("의견", "")
+        if norm in ("한정", "부적정", "의견거절"):
+            suffix = f" ⚠ {norm}의견"
+        elif norm:
+            suffix = f" · {norm}의견"
+        else:
+            suffix = ""
         lines.append(
             f"- {o['year']}: {o['auditor'] or '미확인'} "
-            f"(연속 {o['tenure_years']}년차){fee_str}{warn}"
+            f"(연속 {o['tenure_years']}년차){suffix}"
         )
     lines.append("")
 
