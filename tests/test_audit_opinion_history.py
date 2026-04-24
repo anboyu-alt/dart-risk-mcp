@@ -131,5 +131,62 @@ class TestFetchAuditOpinionHistory(unittest.TestCase):
         self.assertEqual(mock_retry.call_count, 3)
 
 
+class TestCheckDisclosureAnomalyAuditBonus(unittest.TestCase):
+    """check_disclosure_anomaly — 감사의견 구조화 보강(+5점/+3점) 검증."""
+
+    def setUp(self):
+        dart_client._audit_history_cache.clear()
+
+    @patch("dart_risk_mcp.server.fetch_audit_opinion_history")
+    @patch("dart_risk_mcp.server.match_signals")
+    @patch("dart_risk_mcp.server.fetch_company_disclosures")
+    @patch("dart_risk_mcp.server.resolve_corp")
+    def test_audit_bonus_from_auditor_change(
+        self, mock_resolve, mock_fetch, mock_match, mock_audit_hist
+    ):
+        from dart_risk_mcp import server
+
+        mock_resolve.return_value = ("테스트", {"corp_code": "00000001", "stock_code": "000000"})
+        mock_fetch.return_value = [
+            {"rcept_no": "1", "rcept_dt": "20260101", "report_nm": "사업보고서"},
+        ]
+        mock_match.return_value = []  # 키워드 매칭은 0건
+        mock_audit_hist.return_value = {
+            "opinions": [],
+            "auditor_changes": [
+                {"from_year": 2023, "to_year": 2024, "from": "A", "to": "B"},
+                {"from_year": 2024, "to_year": 2025, "from": "B", "to": "C"},
+            ],
+            "independence_warnings": [],
+        }
+        result = server.check_disclosure_anomaly("테스트", 365)
+        self.assertIn("감사인 교체 2회", result)
+        self.assertIn("+5점", result)
+
+    @patch("dart_risk_mcp.server.fetch_audit_opinion_history")
+    @patch("dart_risk_mcp.server.match_signals")
+    @patch("dart_risk_mcp.server.fetch_company_disclosures")
+    @patch("dart_risk_mcp.server.resolve_corp")
+    def test_audit_bonus_from_non_audit_warning(
+        self, mock_resolve, mock_fetch, mock_match, mock_audit_hist
+    ):
+        from dart_risk_mcp import server
+
+        mock_resolve.return_value = ("테스트", {"corp_code": "00000001", "stock_code": "000000"})
+        mock_fetch.return_value = [
+            {"rcept_no": "1", "rcept_dt": "20260101", "report_nm": "사업보고서"},
+        ]
+        mock_match.return_value = []
+        mock_audit_hist.return_value = {
+            "opinions": [],
+            "auditor_changes": [],
+            "independence_warnings": ["2025", "2024"],
+        }
+        result = server.check_disclosure_anomaly("테스트", 365)
+        self.assertIn("비감사용역 비중 초과", result)
+        self.assertIn("2025", result)
+        self.assertIn("+3점", result)
+
+
 if __name__ == "__main__":
     unittest.main()

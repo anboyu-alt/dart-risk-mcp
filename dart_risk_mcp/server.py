@@ -17,13 +17,16 @@ from .core import (
     calculate_risk_score,
     category_prose,
     detect_capital_churn,
+    detect_debt_rollover,
     detect_financial_anomaly,
     estimate_crisis_timeline,
     extract_cb_investors,
     extract_rights_offering_investors,
+    fetch_audit_opinion_history,
     fetch_company_disclosures,
     fetch_market_disclosures,
     fetch_company_info,
+    fetch_debt_balance,
     fetch_disclosure_full,
     fetch_document_content,
     fetch_document_text,
@@ -1892,6 +1895,90 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
 
 
 @mcp.tool()
+def get_audit_opinion_history(company_name: str, lookback_years: int = 5) -> str:
+    """감사의견·감사인 교체·비감사용역 이력을 조회합니다.
+
+    DART OpenAPI 3개 엔드포인트(`accnutAdtorNmNdAdtOpinion`,
+    `adtServcCnclsSttus`, `accnutAdtorNonAdtServcCnclsSttus`)를 결합해
+    연도별 감사의견·감사인·보수 경고 신호를 한글 서술로 반환합니다.
+
+    Args:
+        company_name: 기업명 또는 종목코드(6자리).
+        lookback_years: 1~10(밖이면 5로 강제).
+
+    Returns:
+        감사의견 표·교체 이력·독립성 경고 텍스트.
+    """
+    api_key = _DART_API_KEY
+    if not api_key:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+
+    if not isinstance(lookback_years, int) or not (1 <= lookback_years <= 10):
+        lookback_years = 5
+
+    corp_info = resolve_corp(company_name, api_key)
+    if not corp_info[1]:
+        return f"❌ 기업 '{company_name}'을(를) 찾을 수 없습니다."
+    corp_name, info = corp_info
+
+    data = fetch_audit_opinion_history(info["corp_code"], api_key, lookback_years)
+
+    if not data["opinions"]:
+        return (
+            f"📋 **{corp_name}** ({info.get('stock_code','')}) — 감사의견 이력\n\n"
+            f"최근 {lookback_years}년 감사의견 공시를 찾지 못했습니다. "
+            "비상장·소규모 기업이거나 DART 보고서 제출 의무가 없는 경우일 수 있습니다."
+        )
+
+    lines = [
+        f"📋 **{corp_name}** ({info.get('stock_code','')}) — 감사의견 이력 (최근 {lookback_years}년)",
+        "",
+        "**연도별 감사의견**",
+    ]
+    for o in data["opinions"]:
+        warn = ""
+        if o["opinion"] in ("한정", "부적정", "의견거절"):
+            warn = f" ⚠ {o['opinion']}"
+        elif o["opinion"] and o["opinion"] != "적정":
+            warn = f" ({o['opinion']})"
+        fee_parts = []
+        if o["audit_fee_okwon"]:
+            fee_parts.append(f"보수 {o['audit_fee_okwon']//100_000_000}억")
+        if o["non_audit_fee_okwon"]:
+            fee_parts.append(f"비감사 {o['non_audit_fee_okwon']//100_000_000}억")
+        fee_str = f" · {' / '.join(fee_parts)}" if fee_parts else ""
+        lines.append(
+            f"- {o['year']}: {o['auditor'] or '미확인'} "
+            f"(연속 {o['tenure_years']}년차){fee_str}{warn}"
+        )
+    lines.append("")
+
+    if data["auditor_changes"]:
+        lines.append("**감사인 교체 이력**")
+        for c in data["auditor_changes"]:
+            lines.append(f"- {c['from_year']}→{c['to_year']}: {c['from']} → {c['to']}")
+        if len(data["auditor_changes"]) >= 2:
+            lines.append("  ⚠ 3년 내 2회 이상 교체는 감사 독립성 경고 신호입니다.")
+        lines.append("")
+
+    if data["independence_warnings"]:
+        lines.append("**독립성 경고**")
+        for w in data["independence_warnings"]:
+            lines.append(f"- ⚠ {w}")
+        lines.append(
+            "  비감사용역(세무·자문 등) 보수가 감사·비감사 합계의 30% 이상이면 "
+            "외감법상 독립성 훼손 우려가 제기됩니다."
+        )
+        lines.append("")
+
+    lines.append(
+        "📎 참고: DART 사업보고서 기준 감사의견입니다. 반기·분기 감사인 리뷰 "
+        "의견은 별도 공시로 조회하세요."
+    )
+    return "\n".join(lines)
+
+
+@mcp.tool()
 def check_disclosure_anomaly(company_name: str, lookback_days: int = 365) -> str:
     """공시 구조 지표를 집계해 0~100 이상 스코어를 반환합니다.
 
@@ -1950,6 +2037,18 @@ def check_disclosure_anomaly(company_name: str, lookback_days: int = 365) -> str
     s_viol = min(15, len(viol_hits) * 15)
     s_capital = min(25, len(capital_hits) * 5)
     s_inquiry = min(15, len(inquiry_hits) * 5)
+
+    # v0.8.0: 구조화 엔드포인트 보강 (실패 시 기존 키워드 매칭 점수 유지)
+    _audit_struct = fetch_audit_opinion_history(corp_code, _DART_API_KEY, 5)
+    _audit_bonus = 0
+    _auditor_change_count = len(_audit_struct.get("auditor_changes", []))
+    _indep_warnings = _audit_struct.get("independence_warnings", [])
+    if _auditor_change_count >= 2:
+        _audit_bonus += 5
+    if _indep_warnings:
+        _audit_bonus += 3
+    s_audit = min(20, s_audit + _audit_bonus)
+
     total_score = min(100, s_amend + s_audit + s_viol + s_capital + s_inquiry)
 
     if total_score >= 70:
@@ -2003,6 +2102,15 @@ def check_disclosure_anomaly(company_name: str, lookback_days: int = 365) -> str
     ]
     if audit_hits:
         lines.append(_top3(audit_hits))
+    if _auditor_change_count >= 2:
+        lines.append(
+            f"  ⚠ 최근 5년간 감사인 교체 {_auditor_change_count}회 "
+            "— 감사 독립성 훼손 경고(+5점)."
+        )
+    if _indep_warnings:
+        lines.append(
+            f"  ⚠ 비감사용역 비중 초과 연도: {', '.join(_indep_warnings)} (+3점)."
+        )
     lines += [
         "",
         f"**③ 공시의무 위반 — {s_viol}/15점** ({len(viol_hits)}건)",
