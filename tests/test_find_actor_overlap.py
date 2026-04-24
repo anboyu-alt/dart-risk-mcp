@@ -41,14 +41,12 @@ class TestFindActorOverlapMerging(unittest.TestCase):
             result = find_actor_overlap(["a", "b"])
 
         self.assertIn("공통펀드", result)
-        # 공통 행위자 섹션: "공통펀드"가 실제로 2개 기업에 걸친 오버랩으로 집계되어야 함.
-        # 헤더/고지문에는 "2개 기업" 문구가 없으므로 actor_map이 비어 있으면 이 assert는 실패함.
-        self.assertIn("2개 기업", result)
-        # 공통 행위자 라인의 source_set은 "[CB, 유상증자]" 형태로 포맷됨
-        # (헤더는 "CB/BW/EB+유상증자", 고지문은 "CB/BW/EB/유상증자" — 대괄호+쉼표 없음)
-        self.assertIn("[CB, 유상증자]", result)
+        # v0.7.x 포맷: 공통 행위자 라인은 "2개 회사에 [CB · 유상증자] 경로로 등장" 형태.
+        # "N개 회사" 집계 문구(separator=" · ")와 기업별 명단의 [CB]/[유상증자]
+        # 소스 태그로 머지 결과를 검증한다.
+        self.assertIn("2개 회사에", result)
+        self.assertIn("[CB · 유상증자]", result)
         # 기업별 인수자 요약: 각 인수자 앞에 "[CB]" 또는 "[유상증자]" 소스 태그가 붙음.
-        # 이 대괄호 래핑은 머지 결과가 있을 때만 출력됨.
         self.assertIn("[CB]", result)
         self.assertIn("[유상증자]", result)
 

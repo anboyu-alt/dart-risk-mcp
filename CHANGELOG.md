@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [0.7.4] — 2026-04-24
+
+### Changed
+- **반복 prose 억제** (`analyze_company_risk`, `track_capital_structure`) — 같은 `signal_key`가 4번째부터 등장하면 `→ 한국어 해설` 라인을 생략하고 공시명·날짜·점수만 출력. 제이스코홀딩스처럼 전환사채 공시가 10건 이상 몰리는 기업에서 같은 문장이 10번 반복되던 피로감 해소. 임계값은 모듈 상단 `_PROSE_REPEAT_LIMIT = 3` 상수로 조정 가능. 영향 없는 곳: `build_event_timeline`(기존 `seen_keys` dedup으로 phase별 1회), `check_disclosure_risk`(단일 공시), `find_risk_precedents`(입력 `valid_keys` 순회).
+
+### Added
+- **골드 파일 회귀 기준선** (`tests/fixtures/sample_outputs/`) — 2026-04-24 3개 기업(셀트리온·제이스코홀딩스·두산에너빌리티) 13개 실 API 출력을 v0.7.4 기준선으로 고정. analyze×3 + timeline×3 + scan_fs×3 + list(셀트리온) + disclosure(셀트리온 첫 접수번호) + precedents(CB_BW/3PCA/SHAREHOLDER) + actor_overlap 커버. 재수집 스크립트: `tmp/v072_review/regen_fixtures.py`.
+- **기계적 회귀 검증** (`tests/test_golden_output_hygiene.py`) — 골드 파일을 스캔해 ① 내부 flag 코드 10종(AR_SURGE·CAPITAL_CHURN 등), ② 카탈로그 영문 메타(`**Severity**`·`### Red Flags`·`## N.M: EnglishTitle` 헤더), ③ 영문 약어(`OCF `)가 사용자 출력에 노출되면 실패. 실 API 호출 없이 저장된 `.txt`만 검사하므로 CI에서 항상 실행 가능.
+
+### Fixed
+- **v0.7.0 시절 stale 테스트 2건 갱신** — `tests/test_v6_integration.py`와 `tests/test_find_actor_overlap.py`가 `self.assertIn("AR_SURGE"/"CAPITAL_CHURN"/"[CB, 유상증자]", out)`로 내부 코드·구(舊) 포맷 노출을 기대하던 것을 한글 라벨·현행 포맷(` · ` separator) 검증으로 갱신. 전체 81개 테스트 통과.
+
+### Design Principles (유지)
+1. 내부 코드는 출력 경계를 넘지 못한다.
+2. 모든 수치에는 의미를 동반한다.
+3. 각 도구 출력은 맨 위 3~4줄로 독립적으로 읽힌다.
+4. 단일 출력 — level/mode 파라미터 분기 없음.
+
 ## [0.7.3] — 2026-04-24
 
 ### Changed

@@ -1,4 +1,10 @@
-"""analyze_company_risk v0.6.0 통합 검증."""
+"""analyze_company_risk v0.6.0 통합 검증.
+
+v0.7.1에서 렌더러가 내부 flag 코드('AR_SURGE', 'CAPITAL_CHURN')를 사용자 출력
+경계 밖으로 내보내지 않도록 재작성되면서, 이 파일의 assert 대상도 한글 prose
+제목(`FLAG_PROSE[...]["title"]`)로 갱신했다. 내부 코드가 다시 노출되면
+tests/test_golden_output_hygiene.py가 대신 회귀를 잡는다.
+"""
 import os
 import unittest
 from unittest.mock import patch
@@ -45,7 +51,10 @@ class TestAnalyzeV6Integration(unittest.TestCase):
         m_fund.return_value = []
         from dart_risk_mcp.server import analyze_company_risk
         out = analyze_company_risk("테스트기업", 365)
-        self.assertIn("CAPITAL_CHURN", out)
+        # v0.7.1+: 내부 코드 'CAPITAL_CHURN' 대신 한글 라벨('자본 이벤트 과다 반복')이
+        # signal_event 스트림에 삽입된 뒤 '가장 무게 있는 신호' 헤드라인으로 노출된다.
+        self.assertIn("자본 이벤트 과다 반복", out)
+        self.assertNotIn("CAPITAL_CHURN", out)
 
     @patch("dart_risk_mcp.server.fetch_fund_usage")
     @patch("dart_risk_mcp.server.fetch_financial_statements_all")
@@ -58,7 +67,9 @@ class TestAnalyzeV6Integration(unittest.TestCase):
         m_fund.return_value = []
         from dart_risk_mcp.server import analyze_company_risk
         out = analyze_company_risk("테스트기업", 365)
-        self.assertIn("AR_SURGE", out)
+        # v0.7.1+: 내부 코드 'AR_SURGE' 대신 FLAG_PROSE 한글 제목이 노출된다.
+        self.assertIn("매출채권이 매출보다 훨씬 빠르게 늘고 있습니다", out)
+        self.assertNotIn("AR_SURGE", out)
 
     @patch("dart_risk_mcp.server.fetch_fund_usage")
     @patch("dart_risk_mcp.server.fetch_financial_statements_all")

@@ -8,6 +8,7 @@
 
 import os
 import re
+from collections import Counter
 from datetime import datetime, timedelta
 
 from mcp.server.fastmcp import FastMCP
@@ -90,6 +91,10 @@ def _format_amount(amount: str) -> str:
 _FUND_KIND_LABEL = {"public": "공모", "private": "사모"}
 # DART 응답에서 회차가 비어 있을 때 오는 플레이스홀더 값들
 _EMPTY_TM_VALUES = {"", "-", "—", "–"}
+# 같은 signal_key가 이 횟수를 넘기면 그 뒤의 이벤트는 prose(→) 해설을 생략한다.
+# v0.7.4: 제이스코홀딩스처럼 전환사채 공시가 10건 몰리면 같은 해설이 반복 출력되는
+# 피로감을 줄이기 위한 renderer-side dedup. 첫 3건만 full prose.
+_PROSE_REPEAT_LIMIT = 3
 
 
 def _fund_kind_korean(kind: str | None) -> str:
@@ -413,17 +418,25 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
         f"━━ 탐지된 신호 ({len(signal_events)}건) ━━",
     ]
 
+    # 같은 signal_key가 많이 반복될 때 해설(→)을 첫 3건에만 붙여 가독성을 보존한다.
+    _key_counts = Counter(e["key"] for e in signal_events)
+    _key_seen: dict[str, int] = {}
     for e in sorted(signal_events, key=lambda x: x["rcept_dt"], reverse=True):
         amend_tag = " · 정정공시(점수 제외)" if e["is_amendment"] else ""
         score_tag = "" if e["is_amendment"] else f" · {e['score']}점"
         date = e["rcept_dt"] or "-"
-        meaning = signal_to_prose(e["key"])
-        one_liner = meaning if meaning else e["label"]
+        _key_seen[e["key"]] = _key_seen.get(e["key"], 0) + 1
+        _show_prose = (
+            _key_counts[e["key"]] <= _PROSE_REPEAT_LIMIT
+            or _key_seen[e["key"]] <= _PROSE_REPEAT_LIMIT
+        )
+        meaning = signal_to_prose(e["key"]) if _show_prose else ""
+        one_liner = meaning if meaning else (e["label"] if _show_prose else "")
         # 첫 줄: 날짜 · 공시명 · 점수
         lines.append(
             f"• {date} · {_clean_report_name(e['report_nm'])}{score_tag}{amend_tag}"
         )
-        # 두번째 줄: 의미 해설 (접미 들여쓰기)
+        # 두번째 줄: 의미 해설 (반복 N회 초과 시 생략)
         if one_liner:
             lines.append(f"  → {one_liner}")
 
@@ -2410,9 +2423,20 @@ def track_capital_structure(
         lines.append("")
     if result["events"]:
         lines.append("**시계열** (최대 30건)")
-        for e in result["events"][:30]:
-            meaning = signal_to_prose(e["key"], e.get("report_nm", ""))
-            one_liner = meaning.split("다.")[0] + "다." if meaning else e.get("label", "")
+        _events_slice = result["events"][:30]
+        _cap_key_counts = Counter(e["key"] for e in _events_slice)
+        _cap_key_seen: dict[str, int] = {}
+        for e in _events_slice:
+            _cap_key_seen[e["key"]] = _cap_key_seen.get(e["key"], 0) + 1
+            _show_prose = (
+                _cap_key_counts[e["key"]] <= _PROSE_REPEAT_LIMIT
+                or _cap_key_seen[e["key"]] <= _PROSE_REPEAT_LIMIT
+            )
+            if _show_prose:
+                meaning = signal_to_prose(e["key"], e.get("report_nm", ""))
+                one_liner = meaning.split("다.")[0] + "다." if meaning else e.get("label", "")
+            else:
+                one_liner = ""
             lines.append(
                 f"- {e['rcept_dt']} · {e['report_nm']}"
                 + (f"\n  → {one_liner}" if one_liner else "")
