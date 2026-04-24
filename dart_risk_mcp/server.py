@@ -389,44 +389,42 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
     top_signal_prose = (
         signal_to_prose(top_signal["key"]) if top_signal else ""
     )
-    # 첫 문장: 규모
+    # 첫 문장: 규모 (사실 서술)
     s1 = (
         f"지난 {lookback_days}일 동안 **{corp_name}**의 공시 "
-        f"{len(disclosures)}건을 살펴본 결과, 위험 신호로 꼽을 만한 공시·"
-        f"재무 이벤트가 **{len(non_amend_events)}건** 감지됐습니다."
+        f"{len(disclosures)}건을 살펴본 결과, 주목할 만한 공시·"
+        f"재무 이벤트가 **{len(non_amend_events)}건** 관찰됐습니다."
     )
-    # 둘째 문장: 등급
+    # 둘째 문장: 관찰된 사실의 성격 (점수·등급 제거, 포지셔닝 고지)
     s2 = (
-        f"종합 위험 점수는 {total_score}점으로 **{level}** 등급에 해당합니다. "
-        "점수는 공시 기반 불공정거래 가능성의 참고값이며, 법적 판단이나 "
-        "투자 결정의 근거는 아닙니다."
+        "이 도구는 공시 기록에서 관찰된 사실만 서술합니다. "
+        "기업의 위험도를 정량화하거나 등급을 부여하지 않으며, "
+        "법적 판단이나 투자 결정의 근거가 아닙니다."
     )
-    # 셋째 문장: 가장 무거운 신호
+    # 셋째 문장: 가장 눈에 띄는 신호
     if top_signal:
         s3 = _compose_top_signal_sentence(top_signal_label, top_signal_prose)
     else:
-        s3 = "가장 주목할 만한 단일 신호는 감지되지 않았습니다."
+        s3 = "가장 주목할 만한 단일 신호는 관찰되지 않았습니다."
 
-    summary_block = f"🎯 {s1}\n\n{s2}\n\n{s3}"
+    summary_block = f"📋 {s1}\n\n{s2}\n\n{s3}"
 
     lines = [
-        f"📊 **기업 리스크 분석: {corp_name}**",
+        f"📋 **기업 공시 관찰 요약: {corp_name}**",
         f"종목코드: {stock_code}" if stock_code else f"Corp code: {corp_code}",
         "",
         summary_block,
         "",
-        f"{emoji} **위험 등급: {level}** ({total_score}점)",
         f"조회 기간: 최근 {lookback_days}일 | 전체 공시 {len(disclosures)}건 검토",
         "",
-        f"━━ 탐지된 신호 ({len(signal_events)}건) ━━",
+        f"━━ 관찰된 신호 ({len(signal_events)}건) ━━",
     ]
 
     # 같은 signal_key가 많이 반복될 때 해설(→)을 첫 3건에만 붙여 가독성을 보존한다.
     _key_counts = Counter(e["key"] for e in signal_events)
     _key_seen: dict[str, int] = {}
     for e in sorted(signal_events, key=lambda x: x["rcept_dt"], reverse=True):
-        amend_tag = " · 정정공시(점수 제외)" if e["is_amendment"] else ""
-        score_tag = "" if e["is_amendment"] else f" · {e['score']}점"
+        amend_tag = " · 정정공시(관찰 대상 제외)" if e["is_amendment"] else ""
         date = e["rcept_dt"] or "-"
         _key_seen[e["key"]] = _key_seen.get(e["key"], 0) + 1
         _show_prose = (
@@ -435,9 +433,9 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
         )
         meaning = signal_to_prose(e["key"]) if _show_prose else ""
         one_liner = meaning if meaning else (e["label"] if _show_prose else "")
-        # 첫 줄: 날짜 · 공시명 · 점수
+        # 첫 줄: 날짜 · 공시명
         lines.append(
-            f"• {date} · {_clean_report_name(e['report_nm'])}{score_tag}{amend_tag}"
+            f"• {date} · {_clean_report_name(e['report_nm'])}{amend_tag}"
         )
         # 두번째 줄: 의미 해설 (반복 N회 초과 시 생략)
         if one_liner:
@@ -588,7 +586,7 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
 
             tax_ids = SIGNAL_KEY_TO_TAXONOMY.get(sig["key"], [])
             prose = signal_to_prose(sig["key"])
-            amendment_note = " (정정공시이므로 이번 분석에서는 위험 점수 0으로 처리합니다.)" if is_amendment else ""
+            amendment_note = " (정정공시 — 원공시의 번복/수정이므로 관찰 대상에서 제외됩니다.)" if is_amendment else ""
             lines.append(f"🎯 **{sig['label']}**{amendment_note}")
             if prose:
                 lines.append(prose)
@@ -2142,32 +2140,29 @@ def check_disclosure_anomaly(company_name: str, lookback_days: int = 365) -> str
             out += f"\n    … 외 {rest}건"
         return out
 
-    # 상단 한 줄 요약
+    # 상단 한 줄 요약 (점수/등급 제거 — 관찰된 사실만)
     summary = (
-        f"🎯 최근 {lookback_days}일 동안 **{corp_name}**의 공시 활동 "
-        f"{total}건을 5개 구조 지표로 집계한 결과 **{total_score}/100점 "
-        f"({grade})**입니다. 점수 자체는 불공정거래 가능성의 '강도'를 "
-        "가늠하는 참고값이며, 실제 해석은 아래 지표별 설명과 함께 봐야 합니다."
+        f"📋 최근 {lookback_days}일 동안 **{corp_name}**의 공시 "
+        f"{total}건을 5개 구조 지표로 분류했습니다. 이 도구는 공시 행태의 "
+        "사실 요약만 제공하며, 기업의 위험도를 등급화하지 않습니다."
     )
 
     lines = [
-        f"━━━ [{corp_name}] 공시 구조 이상 스코어 ━━━",
+        f"━━━ [{corp_name}] 공시 구조 관찰 요약 ━━━",
         f"조회기간: 최근 {lookback_days}일 / 총 공시 {total}건 (정정공시 {amendment_count}건)",
         "",
         summary,
         "",
-        f"**종합 스코어: {total_score}/100  [{grade}]**",
-        "",
         "── 지표별 내역 ──────────────────────────────",
         "",
-        f"**① 정정공시 비율 — {s_amend}/25점** ({amendment_count}/{total}건, {amend_ratio:.0%})",
+        f"**① 정정공시 비율** ({amendment_count}/{total}건, {amend_ratio:.0%})",
         (
             "이미 낸 공시를 고쳐서 다시 내는 비율입니다. 정상 기업은 보통 "
             "5% 안쪽이고, 20%를 넘으면 최초 공시 품질이 떨어지거나 "
             "정보를 조금씩 흘려보내는 의도가 있을 수 있습니다."
         ),
         "",
-        f"**② 감사의견 이슈 — {s_audit}/20점** ({len(audit_hits)}건)",
+        f"**② 감사의견 이슈** ({len(audit_hits)}건)",
         (
             "회계감사 과정에서 한정·부적정·거절 의견이 나오거나 감사인이 "
             "중도 교체된 건수입니다. 감사의견 거절은 코스닥에서 상장폐지로 "
@@ -2179,15 +2174,15 @@ def check_disclosure_anomaly(company_name: str, lookback_days: int = 365) -> str
     if _auditor_change_count >= 2:
         lines.append(
             f"  ⚠ 최근 5년간 감사인 교체 {_auditor_change_count}회 "
-            "— 감사 독립성 훼손 경고(+5점)."
+            "— 감사 독립성 훼손 가능성이 제기되는 맥락입니다."
         )
     if _indep_warnings:
         lines.append(
-            f"  ⚠ 비감사용역 비중 초과 연도: {', '.join(_indep_warnings)} (+3점)."
+            f"  ⚠ 비감사용역 비중 초과 연도: {', '.join(_indep_warnings)}."
         )
     lines += [
         "",
-        f"**③ 공시의무 위반 — {s_viol}/15점** ({len(viol_hits)}건)",
+        f"**③ 공시의무 위반** ({len(viol_hits)}건)",
         (
             "거래소가 불성실공시법인으로 지정하거나 공시 철회·정정을 "
             "반복한 건수입니다. 한 해 한두 건이면 실무 실수일 수 있지만, "
@@ -2198,7 +2193,7 @@ def check_disclosure_anomaly(company_name: str, lookback_days: int = 365) -> str
         lines.append(_top3(viol_hits))
     lines += [
         "",
-        f"**④ 자본 스트레스 — {s_capital}/25점** ({len(capital_hits)}건)",
+        f"**④ 자본 스트레스** ({len(capital_hits)}건)",
         (
             "액면병합·자본감소·주주배정 실권·제3자배정 증자처럼 "
             "'자본을 주무르는' 공시의 누적 건수입니다. 상장폐지 회피나 "
@@ -2209,7 +2204,7 @@ def check_disclosure_anomaly(company_name: str, lookback_days: int = 365) -> str
         lines.append(_top3(capital_hits))
     lines += [
         "",
-        f"**⑤ 조회공시 빈도 — {s_inquiry}/15점** ({len(inquiry_hits)}건)",
+        f"**⑤ 조회공시 빈도** ({len(inquiry_hits)}건)",
         (
             "거래소가 주가·거래량 급변 원인을 묻기 위해 회사에 해명을 "
             "요구한 건수입니다. 빈번하면 회사 주변에서 비공식 정보 "
