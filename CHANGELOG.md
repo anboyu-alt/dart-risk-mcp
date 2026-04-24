@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [0.7.2] — 2026-04-24
+
+### Changed
+- **v0.7.1 '쉬운 출력' 원칙을 남은 4개 도구로 확장** — 내부 flag/signal/pattern 키가 절대 사용자 출력에 노출되지 않도록 렌더러를 재작성:
+  - `check_disclosure_risk` — `신호 유형: ... (CB_BW, 25점)` 형식의 내부 키/점수 노출 제거. `signal_to_prose`로 "이 공시가 왜 중요한가"를 문장으로 설명. DS005 주요결정 블록의 `플래그: DECISION_RELATED_PARTY, ...` 라인은 `flag_to_prose` 본문으로 치환("이 결정에서 주의할 점" 블록).
+  - `find_risk_precedents` — `━━ 전환사채·신주인수권부사채 (CB_BW, 25점) ━━` 형식의 키/점수 노출 제거. 각 신호에 `signal_to_prose` 본문을 붙이고, 과거 위기 궤적은 "평균 약 N개월/손실 N%"로 문장화. 패턴 매칭 블록은 `pattern_to_prose`로 대체.
+  - `build_event_timeline` — 맨 위 🎯 3문장 요약(분석 기간·가장 밀집된 단계·패턴 유사도) 신설. 단계(진입기/심화기/탈출기)에 한 줄 정의 머리말 추가. 각 이벤트의 첫 등장 신호 아래 `→ signal_to_prose` 한 줄 해설. 재무 징후 블록의 `**이상 플래그:** AR_SURGE, CASH_GAP` 라인을 `flag_to_prose` title+body 쌍으로 교체(`_METRIC_TO_FLAG`를 통해 지표→플래그 역추적).
+  - `find_actor_overlap` — 맨 위 🎯 요약 추가(이 도구의 목적 + 오늘의 결과). "공통 행위자 없음"이 "세력이 없다"는 결론이 아님을 명시. 기업별 인수자 섹션 머리말·회사별 판정 문구를 모두 완전한 문장으로.
+
+### Design Principles (유지)
+1. 내부 코드는 출력 경계를 넘지 못한다.
+2. 모든 수치에는 의미를 동반한다.
+3. 각 도구 출력은 맨 위 3~4줄로 독립적으로 읽힌다.
+4. 단일 출력 — level/mode 파라미터 분기 없음.
+
 ## [0.7.1] — 2026-04-23
 
 ### Changed

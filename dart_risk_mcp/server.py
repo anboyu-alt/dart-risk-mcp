@@ -489,11 +489,12 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
             from .core.signals import SIGNAL_KEY_TO_TAXONOMY
 
             tax_ids = SIGNAL_KEY_TO_TAXONOMY.get(sig["key"], [])
-            score = 0 if is_amendment else sig["score"]
-            lines += [
-                f"신호 유형: **{sig['label']}** ({sig['key']}, {score}점{' — 정정공시 제외' if is_amendment else ''})",
-                f"정정공시 여부: {'예 (기존 공시의 수정)' if is_amendment else '아니오 (원본 공시)'}",
-            ]
+            prose = signal_to_prose(sig["key"])
+            amendment_note = " (정정공시이므로 이번 분석에서는 위험 점수 0으로 처리합니다.)" if is_amendment else ""
+            lines.append(f"🎯 **{sig['label']}**{amendment_note}")
+            if prose:
+                lines.append(prose)
+            lines.append("")
 
             # 타임라인
             if tax_ids and not is_amendment:
@@ -503,11 +504,16 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
                     months = tl.get("months_to_impact")
                     loss = tl.get("equity_loss_pct")
                     if months and months < 999:
-                        tl_parts.append(f"위기 도달 약 {months}개월")
+                        tl_parts.append(f"위기 도달까지 평균 {months}개월이 걸린 사례가 보고돼 있습니다")
                     if loss:
-                        tl_parts.append(f"지분 손실 추정 {loss}%")
+                        tl_parts.append(f"주가·지분 손실은 평균 {loss}% 수준으로 추정됩니다")
                     if tl_parts:
-                        lines += ["", "━━ 위기 타임라인 ━━", "• " + ", ".join(tl_parts)]
+                        lines += [
+                            "━━ 과거 유사 신호가 끝까지 간 경우의 참고 궤적 ━━",
+                            "과거 같은 유형의 신호가 확산된 사례를 모아 보면, "
+                            + ", ".join(tl_parts) + ".",
+                            "",
+                        ]
 
     # CB/BW면 인수자 추출 (check_disclosure_risk는 corp_code 불명 → HTML 폴백)
     if rcept_no and any(s["key"] == "CB_BW" for s in matched) and not is_amendment:
@@ -526,21 +532,31 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
     if dtype and rcept_no and _DART_API_KEY:
         dec = fetch_major_decision(rcept_no, _DART_API_KEY, dtype, "")
         if "error" not in dec:
-            lines += ["", "📑 **결정 공시 구조화 정보**"]
-            lines.append(f"- 유형: `{dec['decision_type']}`")
-            lines.append(f"- 상대방: {dec['counterparty'] or '(미기재)'}")
+            lines += ["", "📑 **주요 결정 공시에서 읽히는 거래 구조**"]
+            lines.append(f"- 거래 상대방: {dec['counterparty'] or '공시에 기재되지 않았습니다'}")
             lines.append(
-                f"- 금액: {dec['amount']:,}원 "
-                f"(자산대비 {dec['asset_ratio']:.2f}%)"
+                f"- 거래 금액: {dec['amount']:,}원 "
+                f"(회사 자산총액 대비 {dec['asset_ratio']:.2f}% 규모)"
             )
             lines.append(
-                f"- 특수관계인: {'예' if dec['related_party'] else '아니오'}"
+                "- 특수관계인 여부: "
+                + ("예 — 회사와 이해관계가 얽힌 상대방입니다" if dec["related_party"]
+                   else "아니오")
             )
             lines.append(
-                f"- 외부평가: {'실시' if dec['external_eval'] else '미실시'}"
+                "- 외부 평가: "
+                + ("실시 — 회계법인 등 독립된 제3자가 가격을 검증했습니다" if dec["external_eval"]
+                   else "미실시 — 외부 기관의 가격 검증이 없었습니다")
             )
             if dec["flags"]:
-                lines.append("- 플래그: " + ", ".join(dec["flags"]))
+                lines.append("")
+                lines.append("이 결정에서 주의할 점:")
+                for fl in dec["flags"]:
+                    title, body = flag_to_prose(fl)
+                    if body:
+                        lines.append(f"  • **{title}** — {body}")
+                    else:
+                        lines.append(f"  • {title}")
 
     # 원문 요약
     if rcept_no and _DART_API_KEY:
@@ -584,21 +600,22 @@ def find_risk_precedents(signal_types: list[str], lookback_days: int = 90) -> st
         else:
             unknown.append(k)
 
-    lines = ["📚 **신호 위험 해석**", ""]
+    lines = ["📚 **신호별 해석 — 왜 주목해야 하는지**", ""]
 
     if unknown:
         known_list = ", ".join(sig_map.keys())
-        lines.append(f"⚠️ 알 수 없는 신호: {', '.join(unknown)}")
-        lines.append(f"사용 가능한 신호: {known_list}")
+        lines.append(f"⚠️ 알 수 없는 신호 키: {', '.join(unknown)}")
+        lines.append(f"(참고용으로만 입력받는 내부 키 목록: {known_list})")
         lines.append("")
 
     for key in valid_keys:
         sig = sig_map[key]
         tax_ids = SIGNAL_KEY_TO_TAXONOMY.get(key, [])
-        lines += [
-            f"━━ {sig['label']} ({key}, {sig['score']}점) ━━",
-            f"키워드: {', '.join(sig['keywords'][:5])}",
-        ]
+        prose = signal_to_prose(key)
+        lines.append(f"━━ {sig['label']} ━━")
+        if prose:
+            lines.append(prose)
+        tl_sentences: list[str] = []
         for tid in tax_ids:
             tl = estimate_crisis_timeline(tid)
             if tl:
@@ -606,11 +623,16 @@ def find_risk_precedents(signal_types: list[str], lookback_days: int = 90) -> st
                 loss = tl.get("equity_loss_pct")
                 parts = []
                 if months and months < 999:
-                    parts.append(f"위기까지 {months}개월")
+                    parts.append(f"위기 도달까지 평균 약 {months}개월이 걸렸습니다")
                 if loss:
-                    parts.append(f"손실 {loss}%")
+                    parts.append(f"주가·지분 손실은 평균 {loss}% 수준이었습니다")
                 if parts:
-                    lines.append(f"• 분류 {tid}: " + ", ".join(parts))
+                    tl_sentences.append(", ".join(parts))
+        if tl_sentences:
+            lines.append(
+                "과거 같은 유형의 신호가 끝까지 간 사례를 모아 보면, "
+                + "; ".join(tl_sentences) + "."
+            )
         lines.append("")
 
     # 복합 패턴
@@ -619,17 +641,20 @@ def find_risk_precedents(signal_types: list[str], lookback_days: int = 90) -> st
         pattern = find_pattern_match(tax_ids_flat)
         if pattern:
             lines += [
-                "━━ 복합 패턴 감지 ━━",
-                f"⚠️ **\"{pattern['name']}\"**",
-                pattern.get("description", ""),
-                "",
+                "━━ 이 신호들이 동시에 나타날 때의 의미 ━━",
+                f"⚠️ **\"{pattern['name']}\"** 패턴과 유사합니다.",
             ]
+            prose_body = pattern_to_prose(pattern.get("pattern_id", ""))
+            lines.append(prose_body or pattern.get("description", ""))
+            lines.append("")
 
     # 점수 합산
     total = sum(sig_map[k]["score"] for k in valid_keys)
     level = _risk_level(total)
     emoji = _risk_emoji(level)
-    lines.append(f"{emoji} 신호 합산 점수: **{total}점** ({level})")
+    lines.append(
+        f"{emoji} 이 신호 조합의 종합 위험도는 **{level}**입니다."
+    )
 
     all_tax_ids = list({tid for k in valid_keys for tid in SIGNAL_KEY_TO_TAXONOMY.get(k, [])})
     catalog = load_catalog_excerpt(all_tax_ids)
@@ -746,20 +771,62 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
     # 타임라인 출력
     first_date = events[0][0]
     last_date = events[-1][0]
-    lines = [
+
+    # 🎯 맨 위 3~4줄 요약 — 이 단락만 읽어도 상황이 그려진다
+    phase_counts = {p: len(phases[p]) for p in ("진입기", "심화기", "탈출기")}
+    busiest_phase = max(phase_counts, key=lambda p: phase_counts[p])
+    phase_plain = {
+        "진입기": "자금 조달·자본 구조 변경이 몰려 있는 '진입기'",
+        "심화기": "지배구조·경영권 움직임이 늘어난 '심화기'",
+        "탈출기": "감사·수사·부실 관련 공시가 많은 '탈출기'",
+    }
+    summary_lines = [
         f"⏳ **이벤트 타임라인: {corp_name}** ({stock_code or corp_code})",
-        f"기간: {first_date} ~ {last_date} | 이벤트 {len(events)}건",
         "",
+        "🎯 **한눈에 보는 요약**",
+        (
+            f"- 최근 {lookback_days}일 동안 위험 신호로 분류된 공시 "
+            f"{len(events)}건이 {first_date}부터 {last_date}까지 이어졌습니다."
+        ),
+        (
+            f"- 이 가운데 가장 많이 몰려 있는 단계는 {phase_plain[busiest_phase]}로, "
+            f"총 {phase_counts[busiest_phase]}건이 이 구간에 해당합니다."
+        ),
     ]
+    if pattern:
+        summary_lines.append(
+            f"- 이 흐름은 과거 금감원 적발 사례 중 \"{pattern['name']}\" 패턴과 "
+            f"유사한 궤적을 그리고 있습니다(상세는 아래 참고)."
+        )
+    summary_lines.append("")
+
+    lines = summary_lines
+
+    # 단계 설명 머리말
+    lines.append(
+        "아래 타임라인은 공시를 세 단계로 나눠 보여줍니다. "
+        "🟢 진입기는 자금을 끌어오거나 자본 구조를 바꾸는 움직임, "
+        "🟡 심화기는 경영권·지배구조가 흔들리는 움직임, "
+        "🔴 탈출기는 감사·수사·부실 등 위기가 드러나는 움직임입니다."
+    )
+    lines.append("")
 
     for phase_name in ("진입기", "심화기", "탈출기"):
         phase_events = phases[phase_name]
         if not phase_events:
             continue
         emoji = _PHASE_EMOJI[phase_name]
-        lines.append(f"{emoji} **[{phase_name}]**")
+        lines.append(f"{emoji} **[{phase_name}] — {phase_events[0][0]} 이후 {len(phase_events)}건**")
+        # 이 단계에서 처음 등장한 신호에 대해 한 줄 해설을 붙여준다(중복 방지).
+        seen_keys: set[str] = set()
         for evt in phase_events:
             lines.append(f"  • {evt[0]}  [{evt[3]}]  {evt[4]}")
+            sig_key = evt[2]
+            if sig_key not in seen_keys:
+                prose = signal_to_prose(sig_key)
+                if prose:
+                    lines.append(f"      → {prose}")
+                seen_keys.add(sig_key)
             # v0.5.0: 결정 공시면 상대방 한 줄 추가
             _dtype = resolve_decision_type(evt[4])
             _evt_rcept = evt[5] if len(evt) > 5 else ""
@@ -767,19 +834,25 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
                 _dec = fetch_major_decision(_evt_rcept, _DART_API_KEY, _dtype, corp_code)
                 if "error" not in _dec and _dec["counterparty"]:
                     lines.append(
-                        f"      └ 상대방: {_dec['counterparty']} "
+                        f"      └ 거래 상대방: {_dec['counterparty']} "
                         f"({_dec['amount']:,}원)"
                     )
         lines.append("")
 
     if pattern:
+        pattern_id = pattern.get("pattern_id", "")
+        prose_body = pattern_to_prose(pattern_id)
         lines += [
-            "━━ 패턴 매칭 ━━",
-            f"⚠️ **\"{pattern['name']}\"** 패턴과 유사",
-            f"  → {pattern.get('description', '')}",
-            f"  → 위기 사이클: 약 {pattern.get('timeline_months', '?')}개월",
-            "",
+            "━━ 과거 금감원 적발 사례와의 유사도 ━━",
+            f"⚠️ **\"{pattern['name']}\"** 패턴과 유사한 흐름입니다.",
         ]
+        lines.append(prose_body or pattern.get("description", ""))
+        months = pattern.get("timeline_months")
+        if months:
+            lines.append(
+                f"과거 유사 사례에서는 위기가 본격화되기까지 평균 약 {months}개월이 걸린 것으로 집계됩니다."
+            )
+        lines.append("")
 
     # CB 인수자 (있으면) — match_signals는 이미 정정공시 제외 처리
     cb_rcept_list = [
@@ -797,7 +870,11 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
                     seen.add(inv["name"])
                     investors.append(inv)
         if investors:
-            lines.append("━━ CB/BW 인수자 (행위자) ━━")
+            lines.append("━━ 이 기간에 등장한 CB/BW 인수자 ━━")
+            lines.append(
+                "이 인수자들은 전환사채·신주인수권부사채로 회사의 빚을 떠안은 쪽이며, "
+                "나중에 주식으로 바꿀 경우 새로운 주요 주주가 될 수 있습니다."
+            )
             for inv in investors:
                 amt = _format_amount(inv.get("amount", ""))
                 lines.append(f"  • {inv['name']}" + (f" — {amt}" if amt else ""))
@@ -812,10 +889,27 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
             fs_list = fetch_financial_statements_all(corp_code, _DART_API_KEY, _year, "annual", "OFS")
         if fs_list:
             _cur, _pri = _fs_response_to_periods({"list": fs_list})
-            fs_flags, _ = detect_financial_anomaly(_cur, _pri)
+            fs_flags, fs_metrics = detect_financial_anomaly(_cur, _pri)
             if fs_flags:
-                lines.append("━━ 재무 징후 ━━")
-                lines.append(f"**{_year} 사업보고서 기준 이상 플래그:** {', '.join(fs_flags)}")
+                lines.append("━━ 재무제표에서 함께 잡힌 이상 신호 ━━")
+                lines.append(
+                    f"{_year} 사업보고서를 전년과 비교해 보면, "
+                    "공시 이벤트와 별개로 아래 항목이 이상 구간에 들어 있습니다."
+                )
+                # fs_metrics는 [{"name", "current", "prior", "delta", "flagged"}...] 리스트.
+                # _METRIC_TO_FLAG로 지표명 → flag 키를 역추적해 prose 렌더.
+                _rendered: set[str] = set()
+                for _m in fs_metrics:
+                    if not _m.get("flagged"):
+                        continue
+                    _fl = _METRIC_TO_FLAG.get(_m.get("name", ""), "")
+                    if not _fl or _fl in _rendered:
+                        continue
+                    _rendered.add(_fl)
+                    _title, _body = flag_to_prose(_fl, _m)
+                    lines.append(f"  • **{_title}**")
+                    if _body:
+                        lines.append(f"    {_body}")
                 lines.append("")
     except Exception:
         pass
@@ -917,49 +1011,89 @@ def find_actor_overlap(company_names: list[str]) -> str:
         if len({e[0] for e in entries}) == 1
     }
 
-    lines: list[str] = []
-    lines.append(f"🔍 **공통 CB/BW/EB+유상증자 인수자 분석** ({len(company_names)}개 기업 비교)")
     analyzed = [q for q in company_names if q not in failed]
-    lines.append(f"분석 대상: {', '.join(analyzed)}")
+
+    lines: list[str] = []
+    lines.append(f"🔍 **여러 회사를 동시에 드나든 '돈을 댄 사람'(공통 행위자) 분석**")
+    lines.append("")
+
+    # 🎯 맨 위 요약 — 왜 이런 비교를 하는지 + 오늘 무엇을 찾았는지
+    lines.append("🎯 **한눈에 보는 요약**")
+    lines.append(
+        "- 이 도구는 서로 다른 회사들의 전환사채(CB)·신주인수권부사채(BW)·"
+        "교환사채(EB)·유상증자 '인수자' 명단을 모아, 두 회사 이상에 동시에 "
+        "이름이 오른 개인·법인이 있는지 확인합니다."
+    )
+    lines.append(
+        "- 같은 이름이 여러 회사의 자금조달에 반복 등장한다면, 우연의 일치가 "
+        "아니라 같은 세력이 여러 상장사를 연쇄적으로 인수·유용하는 '무자본 "
+        "M&A' 패턴을 의심해 볼 근거가 됩니다."
+    )
+    if common:
+        lines.append(
+            f"- 이번 비교({', '.join(analyzed)} · {len(analyzed)}개 회사)에서 "
+            f"2곳 이상에 동시에 등장한 인수자가 **{len(common)}명/건** 발견됐습니다."
+        )
+    else:
+        lines.append(
+            f"- 이번 비교({', '.join(analyzed)} · {len(analyzed)}개 회사)에서 "
+            "2곳 이상에 동시에 등장한 인수자는 발견되지 않았습니다."
+        )
     lines.append("")
 
     if failed:
-        lines.append(f"⚠️ 찾을 수 없는 기업: {', '.join(failed)}")
+        lines.append(
+            f"ℹ️ DART에서 찾지 못한 기업: {', '.join(failed)} "
+            "(기업명 철자나 종목코드를 다시 확인해 주세요.)"
+        )
         lines.append("")
 
-    lines.append("━━ 공통 행위자 (세력 추적) ━━")
+    lines.append("━━ 여러 회사에 동시에 등장한 인수자 ━━")
     if not common:
-        lines.append("  ✅ 공통 행위자가 발견되지 않았습니다.")
+        lines.append(
+            "  ✅ 2곳 이상에 공통으로 이름이 오른 인수자는 이번 비교 범위에서 "
+            "발견되지 않았습니다. 다만 이 결과는 최근 365일, 기업당 CB 최대 "
+            "3건 + 유상증자 최대 3건으로 좁힌 범위의 판정입니다."
+        )
     else:
+        lines.append(
+            "아래 인수자들은 비교 대상 회사 중 2곳 이상의 CB/BW/EB 또는 "
+            "유상증자 공시에 이름이 올랐습니다. 괄호 안의 [CB] / [유상증자]는 "
+            "어느 경로로 지분을 취득했는지를 뜻합니다."
+        )
         for actor, entries in sorted(common.items(), key=lambda x: -len({e[0] for e in x[1]})):
             company_set = sorted({e[0] for e in entries})
             source_set = sorted({e[1] for e in entries})
             lines.append(
-                f"  ⚠️ **{actor}**: "
-                f"{len(company_set)}개 기업 "
-                f"[{', '.join(source_set)}] "
-                f"→ {', '.join(company_set)}"
+                f"  ⚠️ **{actor}** — {len(company_set)}개 회사에 "
+                f"[{' · '.join(source_set)}] 경로로 등장: "
+                f"{', '.join(company_set)}"
             )
     lines.append("")
 
-    lines.append("━━ 기업별 인수자 요약 ━━")
+    lines.append("━━ 회사별 전체 인수자 명단 (중복 제거) ━━")
     for corp_name, entries in per_company_solo.items():
         unique = sorted({(n, s) for n, s, _, _ in entries})
         if not unique:
             continue
-        lines.append(f"  • {corp_name} ({len(unique)}명):")
+        lines.append(f"  • {corp_name} — 총 {len(unique)}명:")
         for name, source in unique[:10]:
             lines.append(f"      [{source}] {name}")
 
     no_data = [cn for cn in analyzed if cn not in per_company_solo]
     if no_data:
         lines.append("")
-        lines.append(f"ℹ️ CB/BW/EB/유상증자 공시 없음: {', '.join(no_data)}")
+        lines.append(
+            "ℹ️ 최근 365일 안에 CB·BW·EB·유상증자 공시 자체가 없는 회사: "
+            f"{', '.join(no_data)}"
+        )
 
     lines.append("")
     lines.append(
-        "⚠️ DART 공개 API 범위 내 분석. 최근 365일 이내 CB/BW/EB/유상증자 공시 기준 "
-        "(기업당 CB 최대 3건 + 유상증자 최대 3건)."
+        "⚠️ 이 결과는 DART 공개 API 범위 내 분석입니다. 최근 365일 이내 "
+        "CB/BW/EB/유상증자 공시만 대상으로 하며, 회사당 CB 최대 3건 + "
+        "유상증자 최대 3건으로 제한됩니다. 따라서 '공통 인수자 없음'이 "
+        "'세력이 없다'는 결론으로 이어지지는 않습니다."
     )
     return "\n".join(lines)
 
