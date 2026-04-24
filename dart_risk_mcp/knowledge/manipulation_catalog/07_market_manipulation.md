@@ -5,22 +5,22 @@
 
 ---
 
-## 7.1: Pre-Disclosure Abnormal Trading
+## 7.1: 공시 전 이상 거래
 
 - **Severity**: CRITICAL
 - **Base Score**: 4
 - **Crisis Timeline**: 3개월
 
 ### 정의
-Unusual trading volume/price spike preceding public disclosure
+공시 직전에 나타나는 비정상적 거래량·주가 급등 패턴
 
 ### 탐지 키워드
 이상거래, 선반영, 미공개정보, 부당이득, 거래량급증
 
-### Red Flags
-- Trading volume >5x 20-day avg 1-5 days before disclosure
-- Price spike >10% without news
-- Timing: coincides with insider trading allegations
+### 위험 신호
+- 공시 1~5일 전 거래량이 20일 평균의 5배 초과
+- 특별한 뉴스 없이 주가가 10% 이상 급등
+- 내부자 거래 혐의와 시점이 겹침
 
 ### 금감원·금융위 적발 사례
 
@@ -116,22 +116,22 @@ Unusual trading volume/price spike preceding public disclosure
 
 ---
 
-## 7.2: Theme Stock Manipulation
+## 7.2: 테마주·작전주 시세조종
 
 - **Severity**: MEDIUM
 - **Base Score**: 3
 - **Crisis Timeline**: 6개월
 
 ### 정의
-Stock price inflation via speculative theme / meme stock pattern
+투기적 테마·밈 종목 패턴으로 주가를 인위적으로 부양하는 조작 행위
 
 ### 탐지 키워드
 테마주, 작전주, 급등, 급락, 테마편승
 
-### Red Flags
-- Price volatility >100% YTD without fundamental changes
-- Retail investor participation spike
-- Media mentions spike without business updates
+### 위험 신호
+- 실적 변화 없이 연초 대비 주가 변동률 100% 초과
+- 개인투자자 참여 비중 급증
+- 사업 진전 없이 언론 노출만 급증
 
 ### 금감원·금융위 적발 사례
 
@@ -228,21 +228,21 @@ Stock price inflation via speculative theme / meme stock pattern
 
 ---
 
-## 7.3: Derivative Abuse (EB/CB Speculation)
+## 7.3: 파생상품 남용 (EB/CB 투기)
 
 - **Severity**: HIGH
 - **Base Score**: 3
 - **Crisis Timeline**: 9개월
 
 ### 정의
-EB/CB used for leveraged speculation rather than financing
+자금조달 목적이 아닌 레버리지 투기 수단으로 EB·CB가 활용되는 패턴
 
 ### 탐지 키워드
 레버리지거래, 파생상품거래, CB투기, EB투기
 
-### Red Flags
-- EB/CB trading volume >>company equity volume
-- Retail investor EB/CB position concentration
+### 위험 신호
+- EB·CB 거래량이 해당 기업 주식 거래량을 크게 상회
+- 개인투자자의 EB·CB 포지션 집중
 
 ### 금감원·금융위 적발 사례
 

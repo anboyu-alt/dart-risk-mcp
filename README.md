@@ -1,6 +1,6 @@
 # DART 리스크 분석 MCP
 
-**버전:** v0.7.4 · **공시 기반 불공정거래 위험 모니터링**
+**버전:** v0.7.5 · **공시 기반 불공정거래 위험 모니터링**
 
 DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 
@@ -8,14 +8,15 @@ DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 > Claude, Cursor, Windsurf 등 MCP를 지원하는 어떤 AI 클라이언트에서도 사용할 수 있습니다.  
 > 예: **"삼성바이오로직스 최근 공시 위험도 분석해줘"** 라고 물어보면 공시를 가져와 분석합니다.
 
-### v0.7.4 주요 변경
+### v0.7.5 주요 변경
 
-- **반복 prose 억제** — `analyze_company_risk`·`track_capital_structure`에서 같은 유형의 공시가 4건 이상 몰리면 4번째부터 `→ 한국어 해설` 라인을 생략하고 공시명·날짜·점수만 출력. 전환사채가 10건 넘게 나오는 기업에서 같은 해설이 반복되던 피로감 해소. 임계값 상수(`_PROSE_REPEAT_LIMIT = 3`)로 조정 가능
-- **골드 파일 회귀 테스트 추가** — `tests/fixtures/sample_outputs/`에 3개 기업(셀트리온·제이스코홀딩스·두산에너빌리티) 실 API 출력 13개를 기준선으로 고정. `tests/test_golden_output_hygiene.py`가 내부 flag 코드·카탈로그 영문 메타·영문 약어가 사용자 출력에 다시 노출되면 자동 실패(실 API 호출 없이 저장된 `.txt`만 검사)
-- **v0.7.0 시절 stale 테스트 갱신** — 내부 코드(`AR_SURGE`·`CAPITAL_CHURN`) 노출을 assert하던 낡은 테스트 2건을 한글 라벨 검증으로 교체. 전체 81개 테스트 통과
+- **주가조작 카탈로그 본문 한글화** — `dart_risk_mcp/knowledge/manipulation_catalog/*.md` 8개 파일의 영문 제목·정의·Red Flags 섹션을 전면 한글 번역. 예: `1.1: Conversion Price Adjustment Exploitation` → `1.1: 전환가액 조정 악용`, `8.1: Engineered Insolvency` → `8.1: 인위적 부실화`. `### Red Flags`는 `### 위험 신호`로 통일
+- **카탈로그 발췌 필터 축소** — `_strip_taxonomy_metadata`가 `## N.M:` 서브섹션 전체를 잘라내던 것을 `- **Severity**` / `- **Base Score**` / `- **Crisis Timeline**` 세 줄만 핀포인트 제거로 변경. `analyze_company_risk`·`find_risk_precedents`에 붙는 카탈로그 발췌가 처음으로 **제목·정의·위험 신호**까지 한글로 보여지게 됨
+- **골드 파일 재생성** — 카탈로그 한글화 영향이 13개 실 API 출력에 어떻게 스며드는지 `tests/fixtures/sample_outputs/`에 고정. 전체 81개 테스트 통과
 
 ### 최근 릴리스 요약
 
+- **v0.7.4** — 반복 prose 억제(같은 signal_key 4번째부터 → 해설 생략) + 골드 파일 회귀 테스트 추가(내부 코드·영문 메타 재노출 자동 감지)
 - **v0.7.3** — 실 API 출력 리뷰 반영(카탈로그 영문 메타 필터링, `scan_financial_anomaly` "OCF" 약어 제거, 리드 문장 중복 해소, 공시명 공백 정리, 자금조달 라벨 한글화)
 - **v0.7.2** — '쉬운 출력' 원칙을 `check_disclosure_risk`·`find_risk_precedents`·`build_event_timeline`·`find_actor_overlap` 4개 도구로 확장. 내부 flag/signal/pattern 키가 사용자 출력에 노출되지 않도록 렌더러 재작성
 - **v0.7.1** — `analyze_company_risk` 출력을 평서체 한국어 prose로 재작성. 내부 코드·점수·약어 노출 제거의 출발점
@@ -238,7 +239,7 @@ v0.4.0에서 **11개 신호 유형의 탐지 키워드**를 금감원 실제 적
 005930 종목 최근 공시 확인해줘   ← 삼성전자 종목코드로도 검색 가능
 ```
 
-**AI가 돌려주는 결과 형태 예시 (v0.7.4 실제 출력 발췌):**
+**AI가 돌려주는 결과 형태 예시 (v0.7.5 실제 출력 발췌):**
 
 ```
 📊 **기업 리스크 분석: 셀트리온**
@@ -279,7 +280,7 @@ v0.4.0에서 **11개 신호 유형의 탐지 키워드**를 금감원 실제 적
 …(이하 생략)
 ```
 
-> **v0.7.4 렌더러 특징**:
+> **v0.7.5 렌더러 특징**:
 > - 내부 코드(`CB_BW`·`AR_SURGE`·`CAPITAL_CHURN`)는 사용자 출력에 노출되지 않고 모두 한국어 라벨로 치환됩니다(예: '제3자배정유상증자', '매출채권이 매출보다 훨씬 빠르게 늘고 있습니다').
 > - **반복 prose 억제**: 같은 유형 공시가 4건 이상 몰리면 4번째부터 공시명·날짜·점수만 나오고 `→ 해설` 라인은 생략됩니다.
 > - **카탈로그 영문 메타 필터링**: `## N.M: English Title` / `- **Severity**` / `### Red Flags` 등은 자동 제거되고 한국어 섹션(금감원·금융위 적발 사례 등)만 남습니다.
@@ -1433,7 +1434,7 @@ python -m dart_risk_mcp
 ## 참고 자료
 
 - **[OpenDART API 개발가이드 (한글 정리본)](opendart_api_guide.md)** — 이 MCP가 사용하는 DART OpenAPI 전체 명세. 엔드포인트·요청 파라미터·응답 필드·공통 에러코드(`010`~`901`)를 8개 섹션(DS001 공시정보 ~ DS008 증권신고서)으로 정리했습니다. 새 도구를 추가하거나 기존 응답을 디버깅할 때, 공식 문서([opendart.fss.or.kr/guide](https://opendart.fss.or.kr/guide/main.do)) 대신 이 파일을 빠르게 훑어볼 수 있습니다.
-- **[CHANGELOG.md](CHANGELOG.md)** — 버전별 변경 내역 (현재 v0.7.4).
+- **[CHANGELOG.md](CHANGELOG.md)** — 버전별 변경 내역 (현재 v0.7.5).
 - **[CLAUDE.md](CLAUDE.md)** — 프로젝트 내부 개발자 가이드 (디렉토리 구조, 핵심 함수, 도구 추가 절차).
 
 ---

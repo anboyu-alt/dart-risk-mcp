@@ -5,22 +5,22 @@
 
 ---
 
-## 8.1: Engineered Insolvency
+## 8.1: 인위적 부실화
 
 - **Severity**: CRITICAL
 - **Base Score**: 5
 - **Crisis Timeline**: 6개월
 
 ### 정의
-Deliberate asset depletion / liability inflation to trigger insolvency
+자산을 의도적으로 유출하거나 부채를 부풀려 부실을 유발하는 패턴
 
 ### 탐지 키워드
 자본잠식, 부도, 회생, 어음부도, 의도적부도
 
-### Red Flags
-- Capital erosion >50% shareholders' equity within 12 months
-- Debt restructuring while paying founder dividends
-- Bill of exchange (어음) default without explanation
+### 위험 신호
+- 12개월 내 자기자본의 50% 초과 잠식
+- 채무 구조조정 중임에도 창업자 배당 지급
+- 합리적 사유 설명 없이 어음 부도 발생
 
 ### 금감원·금융위 적발 사례
 
@@ -75,22 +75,22 @@ Deliberate asset depletion / liability inflation to trigger insolvency
 
 ---
 
-## 8.2: Debt Restructuring as Equity Grab
+## 8.2: 채무조정을 가장한 지분 탈취
 
 - **Severity**: CRITICAL
 - **Base Score**: 4
 - **Crisis Timeline**: 9개월
 
 ### 정의
-Debt-to-equity conversion; founder exits while equity holders absorb loss
+채무의 주식 전환 과정에서 창업자는 엑시트하고 기존 주주만 손실을 떠안는 패턴
 
 ### 탐지 키워드
 구조조정, 채무조정, 채무면제, DIP파이낸싱, 환권
 
-### Red Flags
-- Debt-to-equity conversion at <50% of par
-- Founder exit before / during restructuring
-- New investor (PE) enters post-restructuring
+### 위험 신호
+- 액면가 대비 50% 미만 가격으로 채무-주식 전환
+- 구조조정 전·중 창업자 엑시트
+- 구조조정 후 신규 투자자(PE) 진입
 
 ### 금감원·금융위 적발 사례
 
@@ -119,22 +119,22 @@ Debt-to-equity conversion; founder exits while equity holders absorb loss
 
 ---
 
-## 8.3: Asset Liquidation Spiral
+## 8.3: 연쇄 자산 청산
 
 - **Severity**: CRITICAL
 - **Base Score**: 4
 - **Crisis Timeline**: 12개월
 
 ### 정의
-Sequential asset sales (real estate, subsidiaries) at distressed prices
+부동산·자회사 등 자산을 곤경매각 가격으로 연속 매각하는 패턴
 
 ### 탐지 키워드
 자산매각, 사옥매각, 자회사매각, 사업양도, 연쇄매각
 
-### Red Flags
-- Multi-asset sale pattern within 12 months
-- Sale prices consistently <fair value
-- Timing: during operational losses
+### 위험 신호
+- 12개월 내 복수 자산의 연쇄 매각
+- 매각 가격이 지속적으로 공정가치 이하
+- 영업손실 시기에 매각 집중
 
 ### 금감원·금융위 적발 사례
 
@@ -157,22 +157,22 @@ Sequential asset sales (real estate, subsidiaries) at distressed prices
 
 ---
 
-## 8.4: Going-Concern Doubt Escalation
+## 8.4: 계속기업 불확실성 심화
 
 - **Severity**: CRITICAL
 - **Base Score**: 5
 - **Crisis Timeline**: 6개월
 
 ### 정의
-Auditor doubt disclosure; management fails to remediate
+감사인의 계속기업 불확실성 의견이 공시됐음에도 경영진이 개선 조치를 취하지 못하는 패턴
 
 ### 탐지 키워드
 계속기업가정불확실, 계속기업불확실성, 회생절차, 파산절차, 감사인교체
 
-### Red Flags
-- Going-concern doubt disclosed ≥2 consecutive reporting periods
-- Management response insufficient (restructuring plan delayed)
-- Auditor change post-doubt disclosure
+### 위험 신호
+- 2개 연속 보고기간 이상 계속기업 불확실성 공시
+- 구조조정 계획 지연 등 경영진 대응 부실
+- 불확실성 공시 이후 감사인 교체
 
 ### 금감원·금융위 적발 사례
 

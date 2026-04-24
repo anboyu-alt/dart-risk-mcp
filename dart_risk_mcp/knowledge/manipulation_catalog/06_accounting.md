@@ -5,22 +5,22 @@
 
 ---
 
-## 6.1: Revenue Recognition Irregularities
+## 6.1: 수익 인식 이상
 
 - **Severity**: HIGH
 - **Base Score**: 3
 - **Crisis Timeline**: 12개월
 
 ### 정의
-Revenue recognition policy changes or aggressive timing
+수익 인식 정책이 바뀌거나 인식 시점이 공격적으로 앞당겨지는 패턴
 
 ### 탐지 키워드
 수익인식, 매출인식, 수익조정, 선수금, 미수금급증
 
-### Red Flags
-- Revenue recognition policy change >K-IFRS guidelines
-- Accounts receivable / revenue ratio spike
-- Revenue recognition before cash receipt >90 days
+### 위험 신호
+- K-IFRS 기준을 넘어서는 수익 인식 정책 변경
+- 매출채권/매출 비율 급등
+- 현금 수취 전 90일 이상 앞선 수익 인식
 
 ### 금감원·금융위 적발 사례
 
@@ -86,22 +86,22 @@ Revenue recognition policy changes or aggressive timing
 
 ---
 
-## 6.2: Contingent Liability Omission
+## 6.2: 우발채무 누락
 
 - **Severity**: HIGH
 - **Base Score**: 3
 - **Crisis Timeline**: 15개월
 
 ### 정의
-Material contingent liabilities omitted from disclosures
+공시에 중요한 우발채무를 누락하는 패턴
 
 ### 탐지 키워드
 우발채무, 우발성채무, 미공개채무, 소송중인사건, 보증채무
 
-### Red Flags
-- Contingent liabilities >50% shareholders' equity
-- Material lawsuit / regulatory fine not disclosed
-- Guarantee obligations to related parties
+### 위험 신호
+- 우발채무 규모가 자기자본의 50% 초과
+- 중요 소송 또는 규제 과징금 미공시
+- 특수관계자에 대한 보증 채무
 
 ### 금감원·금융위 적발 사례
 
@@ -155,21 +155,21 @@ Material contingent liabilities omitted from disclosures
 
 ---
 
-## 6.3: RCPS Accounting Restructuring
+## 6.3: RCPS 회계 분류 조정
 
 - **Severity**: MEDIUM
 - **Base Score**: 2
 - **Crisis Timeline**: 12개월
 
 ### 정의
-RCPS reclassified as equity/debt to manipulate ratios
+재무 비율을 조작하기 위해 RCPS(상환전환우선주)를 자본·부채로 재분류하는 패턴
 
 ### 탐지 키워드
 RCPS회계, 우선주회계, 지분/부채분류, 회계변경
 
-### Red Flags
-- RCPS classification changes >K-IFRS guidance
-- Debt/equity ratio manipulation via RCPS classification
+### 위험 신호
+- RCPS 분류 변경이 K-IFRS 가이드라인을 이탈
+- RCPS 분류 변경으로 부채/자본 비율 조작
 
 ### 금감원·금융위 적발 사례
 

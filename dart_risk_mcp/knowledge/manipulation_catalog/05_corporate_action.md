@@ -5,21 +5,21 @@
 
 ---
 
-## 5.1: Equity Split + Dividend Combination
+## 5.1: 액면분할 + 배당 조합
 
 - **Severity**: MEDIUM
 - **Base Score**: 2
 - **Crisis Timeline**: 6개월
 
 ### 정의
-Stock split + dividend announcement to inflate shareholder count
+주주 수를 부풀리기 위해 액면분할과 배당 공시를 함께 진행하는 패턴
 
 ### 탐지 키워드
 주식분할, 배당금, 분할배당, 주식배당, 액면분할
 
-### Red Flags
-- Stock split + dividend ≤30 days apart
-- Pre-split dividend record date unclear
+### 위험 신호
+- 액면분할 공시와 배당 공시가 30일 이내에 모두 진행
+- 분할 전 배당 기준일이 불명확함
 
 ### 금감원·금융위 적발 사례
 
@@ -41,22 +41,22 @@ Stock split + dividend announcement to inflate shareholder count
 
 ---
 
-## 5.2: Buyback + Negative Cash Flow
+## 5.2: 적자 상황에서의 자사주 매입
 
 - **Severity**: HIGH
 - **Base Score**: 3
 - **Crisis Timeline**: 9개월
 
 ### 정의
-Share buyback announcement despite negative operating cash flow
+영업현금흐름이 적자인데도 자사주 매입을 단행하는 패턴
 
 ### 탐지 키워드
 자사주매입, 주식소각, 부도직전매입, 자금난속매입
 
-### Red Flags
-- FCF <0, buyback >10M USD announced
-- Buyback funded by debt issuance
-- Share price <book value
+### 위험 신호
+- 잉여현금흐름(FCF)이 음수인데 100억원 이상 자사주 매입
+- 부채 발행으로 자사주 매입 자금 조달
+- 주가가 장부가 미만
 
 ### 금감원·금융위 적발 사례
 
@@ -100,22 +100,22 @@ Share buyback announcement despite negative operating cash flow
 
 ---
 
-## 5.3: Off-Market Asset Transfers
+## 5.3: 장외 자산 이전
 
 - **Severity**: HIGH
 - **Base Score**: 4
 - **Crisis Timeline**: 12개월
 
 ### 정의
-Asset transfer to related party at below fair value
+특수관계자에게 공정가치 미만으로 자산을 이전하는 패턴
 
 ### 탐지 키워드
 자산매각, 저가매각, 관련자자산매각, 사옥매각, 자산유출
 
-### Red Flags
-- Asset sale price <fair value (>15% discount)
-- Buyer: related party / founder's shell company
-- Timing: during cash crisis
+### 위험 신호
+- 자산 매각 가격이 공정가치보다 15% 이상 낮음
+- 매수자가 특수관계자 또는 창업주 페이퍼컴퍼니
+- 현금 위기 국면에 매각 진행
 
 ### 금감원·금융위 적발 사례
 
@@ -146,23 +146,23 @@ Asset transfer to related party at below fair value
 
 ---
 
-## 5.4: Acquisitions During Distress
+## 5.4: 재무 곤경기 중 M&A
 
 - **Severity**: MEDIUM
 - **Base Score**: 3
 - **Crisis Timeline**: 9개월
 
 ### 정의
-M&A announcement during financial distress; unrelated diversification
+재무 위기 국면에서 본업과 무관한 사업에 대한 M&A를 발표하는 패턴
 
 ### 탐지 키워드
 인수, 합병, 인수합병, 위기속인수, 화장품인수
 
-### Red Flags
-- M&A deal size >50% of market cap
-- Timing: during earnings miss / debt maturity
-- Target: unrelated industry
-- Deal financing: new debt + CB
+### 위험 신호
+- M&A 거래 규모가 시가총액의 50% 초과
+- 실적 발표 부진 또는 채무 만기 시점에 진행
+- 인수 대상이 본업과 무관한 산업
+- M&A 자금을 신규 부채와 CB로 조달
 
 ### 금감원·금융위 적발 사례
 
@@ -204,22 +204,22 @@ M&A announcement during financial distress; unrelated diversification
 
 ---
 
-## 5.5: Demerger with Asymmetric Value Distribution
+## 5.5: 비대칭 가치배분 분할
 
 - **Severity**: HIGH
 - **Base Score**: 4
 - **Crisis Timeline**: 12개월
 
 ### 정의
-Demerger with unequal value transfer to related party
+특수관계자에게 가치가 비대칭적으로 분배되는 분할 패턴
 
 ### 탐지 키워드
 분할, 사업분할, 분할결정, 분할공시, 비대칭분할
 
-### Red Flags
-- Spun-off entity valuation opaque
-- Founder/related party preferential stake in spinco
-- Spinco burn rate >50% within 12 months post-spin
+### 위험 신호
+- 분할 법인의 가치 산정이 불투명
+- 창업자·특수관계자가 신설법인에 우선 지분 취득
+- 분할 후 12개월 이내 신설법인의 자금 소진 속도가 매우 빠름(50% 초과)
 
 ### 금감원·금융위 적발 사례
 

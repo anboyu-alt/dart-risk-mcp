@@ -5,23 +5,23 @@
 
 ---
 
-## 2.1: Reverse Split (Stock Consolidation)
+## 2.1: 액면병합(주식병합)
 
 - **Severity**: HIGH
 - **Base Score**: 3
 - **Crisis Timeline**: 18개월
 
 ### 정의
-Dramatic reverse split (>5:1) to mask poor financial health
+부실한 재무 상태를 가리기 위해 단행되는 대규모 주식병합(5대1 초과)
 
 ### 탐지 키워드
 감자, 역감자, 주식병합, 주식통합, 15대1감자, 50대1감자, 액면분할
 
-### Red Flags
-- Reverse split ratio >5:1
-- Share count reduction >80%
-- Timing: before delisting threshold
-- Market float suppression
+### 위험 신호
+- 주식병합 비율 5대1 초과
+- 주식 수 80% 이상 감소
+- 상장폐지 기준 임박 시점에 진행
+- 유통 주식 수 인위적 축소
 
 ### 금감원·금융위 적발 사례
 
@@ -44,23 +44,23 @@ Dramatic reverse split (>5:1) to mask poor financial health
 
 ---
 
-## 2.2: Capital Reduction (Equity Dilution via Reverse Split)
+## 2.2: 자본감소(감자 방식 희석)
 
 - **Severity**: HIGH
 - **Base Score**: 3
 - **Crisis Timeline**: 15개월
 
 ### 정의
-Reverse split announced as 'capital reduction'; ratio >10:1
+'자본감소'라는 명분으로 발표되는 10대1을 초과하는 주식병합
 
 ### 탐지 키워드
 자본감소, 감자결정, 감자공시, 이익배당으로서감자, 손실보전감자, 주식병합으로감자
 
-### Red Flags
-- Capital reduction >50% of prior share capital
-- Timing: before earnings release or debt maturity
-- Announced as 'shareholder-friendly' measure
-- Shares consolidated >10:1
+### 위험 신호
+- 직전 자본금의 50% 이상을 감자
+- 실적 발표 또는 채무 만기 직전 시점에 진행
+- '주주 친화 조치'로 포장된 공시
+- 10대1을 초과하는 주식 병합
 
 ### 금감원·금융위 적발 사례
 
@@ -82,22 +82,22 @@ Reverse split announced as 'capital reduction'; ratio >10:1
 
 ---
 
-## 2.3: Gamja-Hapbyeong (Simultaneous Reverse Split + Merger)
+## 2.3: 감자·합병 동시 진행(감자병합)
 
 - **Severity**: CRITICAL
 - **Base Score**: 5
 - **Crisis Timeline**: 8개월
 
 ### 정의
-Reverse split + merger announcement within 30 days
+주식병합(감자)과 합병 공시가 30일 이내에 동시에 진행되는 패턴
 
 ### 탐지 키워드
 감자병합, 감자및병합, 감자병합동시신고, 감자와병합, 통합감자
 
-### Red Flags
-- Both gamja + hapbyeong filings ≤30 days apart
-- Stock price <1,000 KRW + debt restructuring
-- Timing: before insolvency announcement
+### 위험 신호
+- 감자 공시와 합병 공시가 30일 이내에 모두 진행
+- 주가 1,000원 미만 + 채무 구조조정 동반
+- 부실공시(관리종목·상장폐지) 직전 시점에 진행
 
 ### 금감원·금융위 적발 사례
 
@@ -115,27 +115,27 @@ Reverse split + merger announcement within 30 days
 
 ### 기존 현장 기사 인용
 
-- gamja_hapbyeong_monitor.py detects ≥2 signals within window
+- gamja_hapbyeong_monitor.py: 일정 윈도우 내 2개 이상 신호 탐지
 
 ---
 
-## 2.4: 3rd Party Placement (제3자배정 유상증자)
+## 2.4: 제3자배정 유상증자
 
 - **Severity**: HIGH
 - **Base Score**: 4
 - **Crisis Timeline**: 12개월
 
 ### 정의
-3rd party equity placement at preferential terms
+특정 제3자에게 유리한 조건으로 진행되는 유상증자
 
 ### 탐지 키워드
 제3자배정, 유상증자, 제3자배정유상증자, 특정인배정, 지정배정
 
-### Red Flags
-- Price ≥15% discount to VWAP
-- Buyer: PE fund / private equity
-- Lock-up period <1 year
-- Multiple 3PA within 12 months
+### 위험 신호
+- VWAP(거래량가중평균가) 대비 15% 이상 할인 발행
+- 인수자가 사모펀드(PE)
+- 보호예수(Lock-up) 1년 미만
+- 12개월 내 제3자배정 유상증자 다수 반복
 
 ### 금감원·금융위 적발 사례
 
@@ -185,26 +185,26 @@ Reverse split + merger announcement within 30 days
 
 ### 기존 현장 기사 인용
 
-- manipulation_monitor.py signal type: 3PCA
+- manipulation_monitor.py 신호 유형: 3PCA
 
 ---
 
-## 2.5: Rights Undersubscription (공모 미달)
+## 2.5: 공모 미달(청약 미달)
 
 - **Severity**: MEDIUM
 - **Base Score**: 2
 - **Crisis Timeline**: 9개월
 
 ### 정의
-Rights offering undersubscribed; shortfall filled by related parties
+유상증자 청약 미달분을 특수관계자가 인수하는 형태
 
 ### 탐지 키워드
 유상증자미달, 공모미달, 청약미달, 미청약, 인수회피
 
-### Red Flags
-- Subscription rate <70%
-- Shortfall filled by founders/PE
-- Offer price >VWAP
+### 위험 신호
+- 청약률 70% 미만
+- 미청약분을 창업주·사모펀드가 인수
+- 발행가가 VWAP보다 높음
 
 ### 금감원·금융위 적발 사례
 
@@ -226,22 +226,22 @@ Rights offering undersubscribed; shortfall filled by related parties
 
 ---
 
-## 2.6: Treasury Stock Buyback + Reissue Pattern
+## 2.6: 자사주 매입·재발행 패턴
 
 - **Severity**: MEDIUM
 - **Base Score**: 3
 - **Crisis Timeline**: 12개월
 
 ### 정의
-Buyback for capital reduction + immediate reissue as EB/CB
+자본감소 목적으로 자사주를 매입한 뒤 곧바로 교환사채(EB)·전환사채(CB) 등으로 재발행하는 패턴
 
 ### 탐지 키워드
 자기주식, 자사주매입, 자사주처분, 자사주EB, 자기주식매입
 
-### Red Flags
-- Buyback announcement → reissue ≤6 months
-- Buyback volume >total FCF
-- Reissue as EB/CB to related parties
+### 위험 신호
+- 자사주 매입 공시 후 6개월 이내 재발행
+- 자사주 매입 규모가 전체 잉여현금흐름(FCF)을 초과
+- 특수관계자 대상 EB/CB로 재발행
 
 ### 금감원·금융위 적발 사례
 

@@ -12,25 +12,24 @@ from pathlib import Path
 from .explain import category_prose
 from .taxonomy import TAXONOMY
 
-# 각 `## N.N: ...` 서브섹션에서 내부 taxonomy 메타데이터 블록(정의·Severity·
-# Base Score·Crisis Timeline·Red Flags 등)을 통째로 제거하고, 실제 가치가 있는
-# `### 금감원·금융위 적발 사례` / `### 기존 현장 기사 인용`부터만 남긴다.
-# v0.7.3에서 실제 출력이 영문 메타 라벨을 그대로 노출하던 문제를 수정하면서 추가.
-_TAXONOMY_META_BLOCK = re.compile(
-    r"^## \d+\.\d+:.*?(?=^### 금감원|^### 기존|^---|\Z)",
-    re.MULTILINE | re.DOTALL,
+# v0.7.5: MD 본문이 한글화되면서(제목·정의·위험 신호) 카탈로그 발췌 시 사용자에게
+# 보여줘도 좋은 맥락 정보가 됐다. 남은 '내부 지표'는 영문 메타 라벨 3종(`Severity`,
+# `Base Score`, `Crisis Timeline`)뿐이어서 이 3줄만 핀포인트로 제거한다.
+# 헤더(`## N.M: 제목`), `### 정의`, `### 탐지 키워드`, `### 위험 신호`는 보존한다.
+_TAXONOMY_META_LINE = re.compile(
+    r"^- \*\*(?:Severity|Base Score|Crisis Timeline)\*\*:.*(?:\r?\n|$)",
+    re.MULTILINE,
 )
 
 
 def _strip_taxonomy_metadata(md: str) -> str:
-    """카탈로그 MD에서 내부 분류 메타 블록을 제거한다.
+    """카탈로그 MD에서 내부용 메타 라벨(Severity / Base Score / Crisis Timeline)만 제거한다.
 
-    제거 대상: `## N.M: English Title` 헤더 + 바로 뒤따르는 Severity / Base Score /
-    Crisis Timeline 라벨 + `### 정의` / `### 탐지 키워드` / `### Red Flags` 서브섹션.
-    남기는 대상: 한글로 작성된 `### 금감원·금융위 적발 사례`, `### 적발 기법 종합`,
-    `### 인용 법조`, `### 기존 현장 기사 인용` 블록.
+    제거 대상: `- **Severity**: ...`, `- **Base Score**: ...`, `- **Crisis Timeline**: ...`
+    세 줄만 핀포인트로 제거.
+    남기는 대상: 한글화된 제목·정의·탐지 키워드·위험 신호 섹션 + 적발 사례·법조·기존 기사 인용.
     """
-    return _TAXONOMY_META_BLOCK.sub("", md)
+    return _TAXONOMY_META_LINE.sub("", md)
 
 _CATALOG_DIR = Path(__file__).parent.parent / "knowledge" / "manipulation_catalog"
 

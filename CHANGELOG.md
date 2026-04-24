@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [0.7.5] — 2026-04-24
+
+### Changed
+- **카탈로그 MD 본문 한글화** (`dart_risk_mcp/knowledge/manipulation_catalog/*.md` 8개 파일) — 그동안 영문으로만 남아 있던 `## N.M: English Title` / `### 정의` 본문 / `### Red Flags` 섹션을 전면 한글 번역. 제목 예: `1.1: Conversion Price Adjustment Exploitation` → `1.1: 전환가액 조정 악용`, `8.1: Engineered Insolvency` → `8.1: 인위적 부실화`. `### Red Flags` 헤더는 `### 위험 신호`로 통일. 금감원 적발 사례·법조·기존 기사 인용 블록은 원래부터 한글이라 그대로 유지.
+- **`_strip_taxonomy_metadata` 필터 좁히기** (`dart_risk_mcp/core/catalog.py`) — v0.7.3에서 영문 방어 목적으로 `## N.M:` 서브섹션 전체를 제거하던 regex를 `- **Severity**` / `- **Base Score**` / `- **Crisis Timeline**` 세 줄만 핀포인트로 지우도록 축소. 결과적으로 `analyze_company_risk`·`find_risk_precedents`의 카탈로그 발췌에 한글화된 제목·정의·위험 신호 섹션이 처음으로 노출된다. 내부 전용 숫자 라벨 3종은 여전히 필터링되므로 `tests/test_golden_output_hygiene.py`의 기계적 회귀 검증은 통과.
+
+### Added
+- **v0.7.5 기준 골드 파일 재생성** (`tests/fixtures/sample_outputs/` 13개) — 카탈로그 한글화가 사용자 출력에 어떻게 스며드는지 고정. `tmp/v072_review/regen_fixtures.py`로 재수집.
+
+### Design Principles (유지)
+1. 내부 코드는 출력 경계를 넘지 못한다.
+2. 모든 수치에는 의미를 동반한다.
+3. 각 도구 출력은 맨 위 3~4줄로 독립적으로 읽힌다.
+4. 단일 출력 — level/mode 파라미터 분기 없음.
+
 ## [0.7.4] — 2026-04-24
 
 ### Changed

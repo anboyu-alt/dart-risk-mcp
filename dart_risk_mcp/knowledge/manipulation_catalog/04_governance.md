@@ -5,22 +5,22 @@
 
 ---
 
-## 4.1: Shareholder Meeting Procedural Violations
+## 4.1: 주주총회 절차 위반
 
 - **Severity**: MEDIUM
 - **Base Score**: 2
 - **Crisis Timeline**: 12개월
 
 ### 정의
-Irregularities in shareholder voting; agenda manipulation
+주주 의결권 행사 과정의 이상, 안건 조작 패턴
 
 ### 탐지 키워드
 주총위반, 의결권행사, 소집절차위반, 의결정족수미달, 주총부실
 
-### Red Flags
-- Quorum barely met
-- Voting irregularities (split ballots, late tabuluation)
-- Board proposal rejection rate >10%
+### 위험 신호
+- 의결정족수가 가까스로 충족
+- 의결 이상(분할 투표·집계 지연 등)
+- 이사회 제안 부결률 10% 초과
 
 ### 금감원·금융위 적발 사례
 
@@ -42,22 +42,22 @@ Irregularities in shareholder voting; agenda manipulation
 
 ---
 
-## 4.2: Related-Party Transactions at Non-Arm's-Length Prices
+## 4.2: 비정상 가격의 특수관계자 거래
 
 - **Severity**: HIGH
 - **Base Score**: 3
 - **Crisis Timeline**: 12개월
 
 ### 정의
-Related-party transactions with significant price distortion
+특수관계자 간 거래가 시장가와 크게 다른 가격에 체결되는 패턴
 
 ### 탐지 키워드
 관련자거래, 특수관계자거래, 관계회사거래, 거래처집중, 비정상거래
 
-### Red Flags
-- Related-party transactions >20% revenue
-- Price deviation >15% from market
-- Buyer/seller: related party
+### 위험 신호
+- 특수관계자 거래 비중이 매출의 20% 초과
+- 시장가 대비 15% 이상 가격 이탈
+- 매수자 또는 매도자가 특수관계자
 
 ### 금감원·금융위 적발 사례
 
@@ -129,22 +129,22 @@ Related-party transactions with significant price distortion
 
 ---
 
-## 4.3: Disclosure Loophole Exploitation
+## 4.3: 공시 허점 악용
 
 - **Severity**: MEDIUM
 - **Base Score**: 2
 - **Crisis Timeline**: 9개월
 
 ### 정의
-Purposeful use of DART filing loopholes; material information omitted
+중요 정보를 누락하거나 분할 공시로 내용을 흐리는 등 DART 공시 허점을 의도적으로 이용하는 패턴
 
 ### 탐지 키워드
 공시누락, 중요정보누락, 공시지연, 분할공시, 공시의무위반
 
-### Red Flags
-- Material event not disclosed within 4 hours
-- Information split across multiple filings
-- Negative information buried in attachments
+### 위험 신호
+- 중요 사안이 4시간 이내에 공시되지 않음
+- 정보가 여러 공시에 나뉘어 흩어짐
+- 부정적 내용이 첨부파일 깊숙이 묻혀 있음
 
 ### 금감원·금융위 적발 사례
 
@@ -240,23 +240,23 @@ Purposeful use of DART filing loopholes; material information omitted
 
 ---
 
-## 4.4: Auditor Opinion Qualifications
+## 4.4: 감사의견 비적정·거절
 
 - **Severity**: CRITICAL
 - **Base Score**: 4
 - **Crisis Timeline**: 12개월
 
 ### 정의
-Auditor opinion: qualified / adverse / disclaimed
+감사인이 한정·부적정 의견을 내거나 의견거절을 제시하는 상황
 
 ### 탐지 키워드
 한정의견, 부적정의견, 의견거절, 감사범위제한, 감사인교체, 계속기업불확실
 
-### Red Flags
-- Auditor opinion: qualified / adverse / disclaimed
-- Going-concern doubt disclosed
-- Auditor change within 12 months
-- Multiple accountants in 3 years
+### 위험 신호
+- 감사의견이 한정·부적정·의견거절 중 하나
+- 계속기업 가정 불확실성 공시
+- 12개월 내 감사인 교체
+- 최근 3년간 감사인이 여러 차례 변경
 
 ### 금감원·금융위 적발 사례
 
@@ -275,6 +275,6 @@ Auditor opinion: qualified / adverse / disclaimed
 ### 기존 현장 기사 인용
 
 - 네오이뮨텍: 계속기업가정 불확실 (20250902)
-- manipulation_monitor.py signal type: AUDIT
+- manipulation_monitor.py 신호 유형: AUDIT
 
 ---

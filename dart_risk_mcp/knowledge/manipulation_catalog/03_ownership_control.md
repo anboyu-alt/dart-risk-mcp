@@ -5,22 +5,22 @@
 
 ---
 
-## 3.1: Major Shareholder Change via Debt Conversion
+## 3.1: 채권 전환을 통한 최대주주 변경
 
 - **Severity**: CRITICAL
 - **Base Score**: 3
 - **Crisis Timeline**: 9개월
 
 ### 정의
-Ownership transfer through CB/EB conversion; founder ownership diluted
+전환사채(CB)·교환사채(EB) 전환을 통해 지배권이 이전되고 창업자 지분이 희석되는 패턴
 
 ### 탐지 키워드
 최대주주변경, 대주주변경, 채권자주주화, 채무자주주화, 순위변경
 
-### Red Flags
-- Major shareholder changes ≥2 times <1 year
-- Founder ownership drops <10%
-- External investor takes control via CB conversion
+### 위험 신호
+- 1년 이내 최대주주가 2회 이상 변경
+- 창업자 지분 10% 미만으로 하락
+- 외부 투자자가 CB 전환으로 지배권 확보
 
 ### 금감원·금융위 적발 사례
 
@@ -63,23 +63,23 @@ Ownership transfer through CB/EB conversion; founder ownership diluted
 
 ---
 
-## 3.2: Controlling Shareholder Below-Market Exit
+## 3.2: 지배주주 저가 엑시트
 
 - **Severity**: HIGH
 - **Base Score**: 3
 - **Crisis Timeline**: 12개월
 
 ### 정의
-Founder sells stake at significant discount to market value
+창업자가 시장가 대비 큰 폭으로 할인된 가격에 지분을 매각하는 패턴
 
 ### 탐지 키워드
 지분매각, 저가매각, 주식매각, 경영권이양, 지분양수도
 
-### Red Flags
-- Sale price ≥15% discount to market
-- Timing: before earnings announcement
-- Founder retains <10% post-sale
-- Buyer: PE fund / activist investor
+### 위험 신호
+- 매각 가격이 시장가 대비 15% 이상 할인
+- 실적 발표 직전 시점에 매각
+- 매각 후 창업자 지분 10% 미만
+- 매수자가 사모펀드(PE) 또는 행동주의 투자자
 
 ### 금감원·금융위 적발 사례
 
@@ -101,22 +101,22 @@ Founder sells stake at significant discount to market value
 
 ---
 
-## 3.3: Activist Investor Board Takeover
+## 3.3: 행동주의 투자자의 이사회 장악
 
 - **Severity**: HIGH
 - **Base Score**: 4
 - **Crisis Timeline**: 9개월
 
 ### 정의
-External investor forces board replacement; management purge
+외부 투자자가 이사회 교체를 강요하며 기존 경영진을 축출하는 패턴
 
 ### 탐지 키워드
 경영진교체, 이사진교체, 사외이사진출, 활동주의펀드, 제2의창업
 
-### Red Flags
-- Board replacement >50%
-- Timing: during operational crisis
-- Activist investor stake >10%
+### 위험 신호
+- 이사회 구성원 50% 이상 교체
+- 경영 위기 국면에 교체 진행
+- 행동주의 투자자 지분 10% 초과
 
 ### 금감원·금융위 적발 사례
 
@@ -138,22 +138,22 @@ External investor forces board replacement; management purge
 
 ---
 
-## 3.4: Management Succession Disputes
+## 3.4: 경영권 승계 분쟁
 
 - **Severity**: MEDIUM
 - **Base Score**: 3
 - **Crisis Timeline**: 12개월
 
 ### 정의
-Founder vs external investor clash over CEO succession
+대표이사 승계를 둘러싼 창업자와 외부 투자자 간 충돌
 
 ### 탐지 키워드
 경영권분쟁, 대표이사분쟁, 경영진분쟁, 경영권다툼, 내홍
 
-### Red Flags
-- Multiple CEO announcements <12 months
-- Founder vs board conflict public statements
-- Shareholder lawsuits filed
+### 위험 신호
+- 12개월 내 대표이사 공시가 여러 차례 반복
+- 창업자와 이사회 간 공개 충돌 성명 발표
+- 주주 대상 소송 제기
 
 ### 금감원·금융위 적발 사례
 
@@ -175,22 +175,22 @@ Founder vs external investor clash over CEO succession
 
 ---
 
-## 3.5: Related-Party Circular Transfers
+## 3.5: 특수관계자 순환 지분 이전
 
 - **Severity**: MEDIUM
 - **Base Score**: 3
 - **Crisis Timeline**: 15개월
 
 ### 정의
-Share transfers through related party chain; ultimate owner hidden
+특수관계자 체인을 통해 주식을 이전해 최종 소유자를 은폐하는 패턴
 
 ### 탐지 키워드
 순환출자, 계열회사, 순환구조, 지분연쇄, 관련자거래
 
-### Red Flags
-- Ownership chain >3 levels deep
-- Related party: family members / shell companies
-- Transfer price <market value
+### 위험 신호
+- 지분 체인이 3단계 이상으로 깊음
+- 특수관계자가 가족 또는 페이퍼컴퍼니
+- 이전 가격이 시장가보다 낮음
 
 ### 금감원·금융위 적발 사례
 
