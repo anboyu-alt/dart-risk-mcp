@@ -33,7 +33,7 @@ dart_risk_mcp/
 
 ---
 
-## MCP 도구 21개
+## MCP 도구 23개
 
 ### 1. `analyze_company_risk(company_name, lookback_days=90)`
 
@@ -209,9 +209,12 @@ dart_risk_mcp/
 
 자본 이벤트(증자·감자·자사주·CB/BW/EB/RCPS 9종)를 시간순으로 집계해 '자본 주무르기' 리듬을 탐지합니다.
 
-- 내부 흐름: `resolve_corp` → `fetch_company_disclosures` → `match_signals` × N → `CAPITAL_EVENT_KEYS` 필터 → `detect_capital_churn`
-- 판정 규칙: 12개월 슬라이딩 윈도우에서 자본 이벤트 ≥3건 → `CAPITAL_CHURN` 플래그
+- 내부 흐름: `resolve_corp` → `fetch_company_disclosures` → `match_signals` × N → `CAPITAL_EVENT_KEYS` 필터 → `detect_capital_churn` + `fetch_debt_balance` × N → `detect_debt_rollover`
+- 판정 규칙:
+  - 12개월 슬라이딩 윈도우에서 자본 이벤트 ≥3건 → `CAPITAL_CHURN` 플래그
+  - 3년 이상 채무잔액이 거의 변동 없고(YoY ≤ 10%) CB 발행 ≥2건 → `CB_ROLLOVER` 플래그(자본 차환 의존)
 - `lookback_years` 범위: 1~5년
+- v0.8.0: "최근 3년 채무증권 잔액 추이" 블록을 시계열 위에 출력
 
 ### 21. `scan_financial_anomaly(company_name, year="", report_type="annual")` ✨
 
@@ -220,6 +223,24 @@ dart_risk_mcp/
 - 내부 흐름: `resolve_corp` → `fetch_financial_statements` 1회 호출 → `_fs_response_to_periods` → `detect_financial_anomaly`
 - 이상 플래그 4종: `AR_SURGE`, `INVENTORY_SURGE`, `CASH_GAP`, `CAPITAL_IMPAIRMENT`
 - `report_type` 허용값: `annual`·`half`·`q1`·`q3`
+
+### 22. `get_audit_opinion_history(company_name, lookback_years=5)` ✨ v0.8.0
+
+최근 5년 감사의견·감사인 재직 이력·비감사용역 비중 경고를 조회합니다.
+
+- 내부 흐름: `resolve_corp` → `fetch_audit_opinion_history` (3개 엔드포인트 × 연도 루프)
+- 반환: 연도별 감사의견 + 연속 재직 연수, 감사인 교체 이력, 비감사용역 비중 30% 초과 연도 경고
+- `lookback_years` 범위: 1~10년
+- DART 감사보수 절대 금액 표시는 단위(천원/백만원) 혼용으로 v0.8.0에서 생략. 비중(%)만 경고 섹션에서 제공
+
+### 23. `track_debt_balance(company_name, year="")` ✨ v0.8.0
+
+채무증권 5종 잔액과 1년 이내 만기 비중을 조회합니다.
+
+- 내부 흐름: `resolve_corp` → `fetch_debt_balance` (5개 엔드포인트 통합)
+- 반환: 종류별 잔액(회사채·단기사채·기업어음·신종자본증권·조건부자본증권) + 1년 이내 만기 비중
+- 판정 규칙: 1년 이내 만기 비중 ≥30% → 차환 압박 경고
+- `year` 미입력 시 직전 연도
 
 ---
 
@@ -251,6 +272,9 @@ dart_risk_mcp/
 | `resolve_decision_type(report_nm)` | 공시명 → decision_type 키 자동 추론 (`[기재정정]` 등 접두어 제거) |
 | `detect_capital_churn(events, lookback_years)` | 12개월 슬라이딩 윈도우로 CAPITAL_CHURN 판정 |
 | `detect_financial_anomaly(current, prior)` | 4개 지표 YoY 비교 → 플래그+메트릭 |
+| `fetch_audit_opinion_history(corp_code, api_key, lookback_years)` | 감사의견 3개 엔드포인트 × 연도 루프 통합 + 재직 연수·교체·비감사 비중 경고 |
+| `fetch_debt_balance(corp_code, api_key, year)` | 채무증권 5개 엔드포인트 통합 + 1년 이내 만기 비중 산출 |
+| `detect_debt_rollover(balance_history, capital_events)` | 3년 잔액 변동 ≤10% + CB ≥2건 → CB_ROLLOVER 판정 |
 
 ### DART API 엔드포인트
 
@@ -272,6 +296,14 @@ dart_risk_mcp/
 | `GET /api/bdwtIsDecsn.json` / `cvbdIsDecsn.json` | 채권 인수/발행 결정 |
 | `GET /api/cmpMgDecsn.json` / `cmpDvDecsn.json` / `cmpDvmgDecsn.json` | 합병·분할·분할합병 결정 |
 | `GET /api/stkExtrDecsn.json` | 주식교환·이전 결정 |
+| `GET /api/accnutAdtorNmNdAdtOpinion.json` | 감사인 및 감사의견 (corp_code, bsns_year, reprt_code) |
+| `GET /api/adtServcCnclsSttus.json` | 감사용역 계약 체결 현황 (corp_code, bsns_year) |
+| `GET /api/accnutAdtorNonAdtServcCnclsSttus.json` | 비감사용역 계약 체결 현황 (corp_code, bsns_year) |
+| `GET /api/cprndIsDecsn.json` | 회사채 발행 잔액 (corp_code, bsns_year) |
+| `GET /api/stIsDecsn.json` | 단기사채 미상환 잔액 |
+| `GET /api/cpIsDecsn.json` | 기업어음 미상환 잔액 |
+| `GET /api/newCaptlScrtIsDecsn.json` | 신종자본증권 미상환 잔액 |
+| `GET /api/cndlCaptlScrtIsDecsn.json` | 조건부자본증권 미상환 잔액 |
 
 모든 요청에 `crtfc_key` 파라미터로 API 키 전달.
 
@@ -285,6 +317,8 @@ dart_risk_mcp/
 | 공시 원문 ZIP | 메모리 `_zip_cache` (최대 5건) | 10분 |
 | 자금사용 내역 | 메모리 `_fund_usage_cache` (최대 20건) | 10분 |
 | 주요결정 공시 | 메모리 `_major_decision_cache` (최대 50건) | 10분 |
+| 감사의견 이력 | 메모리 `_audit_history_cache` (최대 20건) | 10분 |
+| 채무증권 잔액 | 메모리 `_debt_balance_cache` (최대 20건) | 10분 |
 
 ---
 

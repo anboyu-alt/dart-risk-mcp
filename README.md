@@ -1,6 +1,6 @@
 # DART 리스크 분석 MCP
 
-**버전:** v0.7.5 · **공시 기반 불공정거래 위험 모니터링**
+**버전:** v0.8.0 · **공시 기반 불공정거래 위험 모니터링**
 
 DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 
@@ -12,14 +12,18 @@ DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 
 모든 도구는 **하나의 한국어 서술 출력**만 반환합니다. level/mode/format 분기는 지원하지 않습니다. 원시 데이터가 필요하면 `get_disclosure_document`·`view_disclosure`·`list_disclosure_sections` 같은 원문 도구를 직접 조합하세요.
 
-### v0.7.5 주요 변경
+### v0.8.0 주요 변경
 
-- **주가조작 카탈로그 본문 한글화** — `dart_risk_mcp/knowledge/manipulation_catalog/*.md` 8개 파일의 영문 제목·정의·Red Flags 섹션을 전면 한글 번역. 예: `1.1: Conversion Price Adjustment Exploitation` → `1.1: 전환가액 조정 악용`, `8.1: Engineered Insolvency` → `8.1: 인위적 부실화`. `### Red Flags`는 `### 위험 신호`로 통일
-- **카탈로그 발췌 필터 축소** — `_strip_taxonomy_metadata`가 `## N.M:` 서브섹션 전체를 잘라내던 것을 `- **Severity**` / `- **Base Score**` / `- **Crisis Timeline**` 세 줄만 핀포인트 제거로 변경. `analyze_company_risk`·`find_risk_precedents`에 붙는 카탈로그 발췌가 처음으로 **제목·정의·위험 신호**까지 한글로 보여지게 됨
-- **골드 파일 재생성** — 카탈로그 한글화 영향이 13개 실 API 출력에 어떻게 스며드는지 `tests/fixtures/sample_outputs/`에 고정. 전체 81개 테스트 통과
+- **단일 출력 원칙 확정** — expert/easy 모드 분기 가능성을 공식 폐기. 향후 어떤 도구도 `level=`·`mode=`·`format=` 파라미터를 받지 않음. 원시 데이터가 필요하면 `get_disclosure_document`·`view_disclosure`·`list_disclosure_sections`를 조합
+- **신규 도구 `get_audit_opinion_history`** (22번째) — 최근 5년 감사의견·감사인 교체 이력·비감사용역 비중 30% 초과 경고를 단일 한국어 출력으로 반환. 같은 감사인 연속 재직 연수 자동 계산
+- **신규 도구 `track_debt_balance`** (23번째) — 회사채·단기사채·기업어음·신종자본증권·조건부자본증권 5종 잔액 통합 조회. 1년 이내 만기 비중 30% 초과 시 차환 압박 경고
+- **`CB_ROLLOVER` 플래그** — 3년 이상 채무 잔액이 거의 변동 없이 유지(YoY ≤ 10%)되면서 해당 기간 CB 발행이 2건 이상이면 "자본 차환 의존" 판정. `track_capital_structure` 출력에 잔액 추이 블록으로 반영
+- **`check_disclosure_anomaly` 감사 지표 강화** — 최근 5년간 감사인 교체 2회 이상(+5점), 비감사용역 비중 30% 초과 연도(+3점)를 지표 ② 감사의견 이슈에 가산
+- **Track C (비상장사 감사보고서 정량 추출) 공식 폐기** — DART 비상장사 보고서는 구조화된 XBRL이 없어 정량 비교 가치가 낮아 재검토 대상에서 제외
 
 ### 최근 릴리스 요약
 
+- **v0.8.0** — 주가조작 카탈로그 8개 MD 본문 한글화(제목·정의·Red Flags → 위험 신호), `_strip_taxonomy_metadata` 필터를 3줄 메타만 핀포인트 제거로 축소
 - **v0.7.4** — 반복 prose 억제(같은 signal_key 4번째부터 → 해설 생략) + 골드 파일 회귀 테스트 추가(내부 코드·영문 메타 재노출 자동 감지)
 - **v0.7.3** — 실 API 출력 리뷰 반영(카탈로그 영문 메타 필터링, `scan_financial_anomaly` "OCF" 약어 제거, 리드 문장 중복 해소, 공시명 공백 정리, 자금조달 라벨 한글화)
 - **v0.7.2** — '쉬운 출력' 원칙을 `check_disclosure_risk`·`find_risk_precedents`·`build_event_timeline`·`find_actor_overlap` 4개 도구로 확장. 내부 flag/signal/pattern 키가 사용자 출력에 노출되지 않도록 렌더러 재작성
@@ -243,7 +247,7 @@ v0.4.0에서 **11개 신호 유형의 탐지 키워드**를 금감원 실제 적
 005930 종목 최근 공시 확인해줘   ← 삼성전자 종목코드로도 검색 가능
 ```
 
-**AI가 돌려주는 결과 형태 예시 (v0.7.5 실제 출력 발췌):**
+**AI가 돌려주는 결과 형태 예시 (v0.8.0 실제 출력 발췌):**
 
 ```
 📊 **기업 리스크 분석: 셀트리온**
@@ -284,7 +288,7 @@ v0.4.0에서 **11개 신호 유형의 탐지 키워드**를 금감원 실제 적
 …(이하 생략)
 ```
 
-> **v0.7.5 렌더러 특징**:
+> **v0.8.0 렌더러 특징**:
 > - 내부 코드(`CB_BW`·`AR_SURGE`·`CAPITAL_CHURN`)는 사용자 출력에 노출되지 않고 모두 한국어 라벨로 치환됩니다(예: '제3자배정유상증자', '매출채권이 매출보다 훨씬 빠르게 늘고 있습니다').
 > - **반복 prose 억제**: 같은 유형 공시가 4건 이상 몰리면 4번째부터 공시명·날짜·점수만 나오고 `→ 해설` 라인은 생략됩니다.
 > - **카탈로그 영문 메타 필터링**: `## N.M: English Title` / `- **Severity**` / `### Red Flags` 등은 자동 제거되고 한국어 섹션(금감원·금융위 적발 사례 등)만 남습니다.
@@ -1085,7 +1089,7 @@ uv run dart-risk-mcp
 
 사용 중인 AI 클라이언트에서 새 대화를 시작하고, 도구 목록을 확인합니다.  
 (Claude Desktop 기준: 채팅창 **왼쪽 아래의 망치(🔨) 아이콘** 클릭)  
-아래 21가지 도구가 목록에 보이면 설치 성공입니다:
+아래 23가지 도구가 목록에 보이면 설치 성공입니다:
 
 | 도구 이름 | 하는 일 |
 |-----------|---------|
@@ -1108,8 +1112,10 @@ uv run dart-risk-mcp
 | `track_insider_trading` | 임원·대주주 지분 변동 시계열 |
 | `track_fund_usage` | 자금사용 계획 vs 실제 집행 대조 |
 | `get_major_decision` | 주요결정 공시 상대방·규모·외부평가 조회 |
-| `track_capital_structure` | 자본 이벤트 리듬 추적 (CAPITAL_CHURN) |
+| `track_capital_structure` | 자본 이벤트 리듬 추적 (CAPITAL_CHURN, CB_ROLLOVER) |
 | `scan_financial_anomaly` | 재무제표 4개 지표 이상 스캔 |
+| `get_audit_opinion_history` | 최근 5년 감사의견·감사인 교체·비감사용역 비중 경고 |
+| `track_debt_balance` | 채무증권 5종 잔액 + 1년 이내 만기 비중 |
 
 #### 테스트 질문으로 동작 확인
 
@@ -1438,7 +1444,7 @@ python -m dart_risk_mcp
 ## 참고 자료
 
 - **[OpenDART API 개발가이드 (한글 정리본)](opendart_api_guide.md)** — 이 MCP가 사용하는 DART OpenAPI 전체 명세. 엔드포인트·요청 파라미터·응답 필드·공통 에러코드(`010`~`901`)를 8개 섹션(DS001 공시정보 ~ DS008 증권신고서)으로 정리했습니다. 새 도구를 추가하거나 기존 응답을 디버깅할 때, 공식 문서([opendart.fss.or.kr/guide](https://opendart.fss.or.kr/guide/main.do)) 대신 이 파일을 빠르게 훑어볼 수 있습니다.
-- **[CHANGELOG.md](CHANGELOG.md)** — 버전별 변경 내역 (현재 v0.7.5).
+- **[CHANGELOG.md](CHANGELOG.md)** — 버전별 변경 내역 (현재 v0.8.0).
 - **[CLAUDE.md](CLAUDE.md)** — 프로젝트 내부 개발자 가이드 (디렉토리 구조, 핵심 함수, 도구 추가 절차).
 
 ---

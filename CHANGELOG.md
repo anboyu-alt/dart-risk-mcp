@@ -4,10 +4,34 @@
 
 ## [Unreleased]
 
-## [0.8.0] — 2026-04-25 (예정)
+## [0.8.0] — 2026-04-25
 
 ### Design Principle (확정)
 - **단일 출력 원칙 확정** — v0.7.x 동안 모든 도구를 하나의 한국어 서술 출력로 통일했습니다. v0.8.0에서 expert/easy 모드 분기 가능성을 공식 폐기합니다. 향후 어떤 도구도 `level=`·`mode=`·`format=` 같은 분기 파라미터를 받지 않습니다. 사용자가 더 자세한 원시 데이터를 원하면 개별 도구(`get_disclosure_document`, `view_disclosure`, `list_disclosure_sections`)를 조합해 파이프라인을 구성합니다.
+
+### Added — 탐지 정확도 업그레이드
+- **`get_audit_opinion_history(company_name, lookback_years=5)`** (22번째 도구) — DART 감사의견 공시 3개 엔드포인트(`accnutAdtorNmNdAdtOpinion`·`adtServcCnclsSttus`·`accnutAdtorNonAdtServcCnclsSttus`)를 연도×엔드포인트 루프로 통합. 최근 5년(조정 가능 1~10년) 감사의견·감사인·연속 재직 연수, 감사인 교체 이력, 비감사용역 비중 30% 초과 연도 경고를 단일 한국어 출력으로 반환. 재직 연수는 과거→최신 방향으로 같은 감사인 연속 횟수를 누적.
+- **`track_debt_balance(company_name, year="")`** (23번째 도구) — 채무증권 잔액 5개 엔드포인트(회사채·단기사채·기업어음·신종자본증권·조건부자본증권)를 통합 조회. 종류별 잔액 + 1년 이내 만기 도래 비중을 표시하며, 단기 만기 비중이 30%를 넘으면 차환 압박 경고.
+- **`detect_debt_rollover(balance_history, capital_events)`** — 3년 이상 채무 잔액이 거의 변동 없이(YoY ≤ 10%) 유지되면서 해당 기간 CB 발행이 2건 이상이면 `CB_ROLLOVER` 플래그 발생. `track_capital_structure` 출력에 잔액 추이 블록으로 반영.
+
+### Changed
+- **`check_disclosure_anomaly` 지표 ② 보강** — 감사의견 이슈(20점) 집계 시, 최근 5년간 감사인 교체 2회 이상이면 +5점, 비감사용역 비중 30% 초과 연도가 있으면 +3점을 추가 가산. 근거 문장도 함께 노출(예: "⚠ 최근 5년간 감사인 교체 2회").
+- **감사보수 절대 금액 표시 제거** — DART가 기업·연도별로 천원/백만원 단위를 혼용하여 신뢰할 수 있는 단위 정규화가 불가능. v0.8.0에서는 `audit_fee_okwon`·`non_audit_fee_okwon` 원시 값만 API 응답에 포함하고, 사용자 출력에는 비감사용역 **비중(%)**만 독립성 경고 섹션에서 제공.
+- **`fetch_audit_opinion_history` 파싱 견고화** — ① 연도×엔드포인트 루프로 전환해 DART가 `bsns_year` 필터를 요구하는 문제 해결, ② `bsns_year` 응답 필드가 한글("제34기(당기)")이라 `stlm_dt`(결산일)로 연도 추출, ③ `mendng='-'` 폴백 체인(`adt_cntrct_dtls_mendng → real_exc_dtls_mendng`), ④ `servc_mendng`의 공백 없는 숫자 뭉침을 거부하는 엄격 정규식(`re.fullmatch(r"[\d,]+(?:\.\d+)?", line)`) + 건당 1조원 캡으로 파싱 오류 차단.
+- **`track_capital_structure` 잔액 블록** — 시계열 위에 "최근 3년 채무증권 잔액 추이" 블록을 추가. 잔액이 거의 변하지 않으면서 CB 발행이 반복되면 `CB_ROLLOVER` 플래그와 함께 차환 의존 경고 문장.
+
+### Added — 골드 파일
+- `tests/fixtures/sample_outputs/셀트리온_audit_history.txt`, `셀트리온_debt_balance.txt` — v0.8.0 신규 도구 2개의 실 API 기준선.
+- `tests/fixtures/sample_outputs/` 분석·사례 골드 파일 4종 갱신(카탈로그·감사 섹션 문구 변경 반영).
+
+### Removed
+- **Track C (비상장사 감사보고서 정량 추출) 공식 폐기** — DART 비상장사 감사보고서는 개별 건별 재무 XBRL이 없고, 구조화된 attachments도 제공되지 않아 정량 비교 가치가 낮다. 제안 단계에서 폐기하며 향후 릴리스에서도 재검토하지 않음.
+
+### Design Principles (유지)
+1. 내부 코드는 출력 경계를 넘지 못한다.
+2. 모든 수치에는 의미를 동반한다.
+3. 각 도구 출력은 맨 위 3~4줄로 독립적으로 읽힌다.
+4. 단일 출력 — level/mode 파라미터 분기 없음.
 
 ## [0.7.5] — 2026-04-24
 
