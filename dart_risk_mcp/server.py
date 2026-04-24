@@ -1978,6 +1978,80 @@ def get_audit_opinion_history(company_name: str, lookback_years: int = 5) -> str
     return "\n".join(lines)
 
 
+_DEBT_KIND_LABEL = {
+    "corporate_bond": "회사채",
+    "short_term_bond": "단기사채",
+    "commercial_paper": "기업어음",
+    "new_capital": "신종자본증권",
+    "cnd_capital": "조건부자본증권",
+}
+
+
+@mcp.tool()
+def track_debt_balance(company_name: str, year: str = "") -> str:
+    """미상환 채무증권 5종 잔액을 조회합니다.
+
+    회사채·단기사채·기업어음·신종자본증권·조건부자본증권 잔액과
+    1년 이내 만기 비중을 집계해 한글 서술로 반환합니다.
+
+    Args:
+        company_name: 기업명 또는 종목코드(6자리).
+        year: 사업연도(YYYY). 비우면 직전 연도.
+
+    Returns:
+        종류별 잔액 표 + 만기 1년 이내 비중 텍스트.
+    """
+    api_key = _DART_API_KEY
+    if not api_key:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+
+    corp_name, info = resolve_corp(company_name, api_key)
+    if not info:
+        return f"❌ 기업 '{company_name}'을(를) 찾을 수 없습니다."
+
+    data = fetch_debt_balance(info["corp_code"], api_key, year)
+    if data["total"] <= 0:
+        return (
+            f"💰 **{corp_name}** ({info.get('stock_code','')}) — 채무증권 잔액 "
+            f"({data['year'] or year or '최근'})\n\n"
+            "미상환 채무증권 잔액이 없거나 해당 공시를 찾지 못했습니다. "
+            "비상장·소규모 기업이거나 채무증권 발행 실적이 없는 경우입니다."
+        )
+
+    total_eok = data["total"] // 100_000_000
+    m1y_share = data["maturity_1y_share"]
+
+    lines = [
+        f"💰 **{corp_name}** ({info.get('stock_code','')}) — 미상환 채무증권 잔액 ({data['year']}년)",
+        "",
+        f"**총 잔액: {total_eok:,}억원** (만기 1년 이내 비중 {m1y_share:.1%})",
+        "",
+        "**종류별 내역**",
+    ]
+    for kind, v in data["by_kind"].items():
+        label = _DEBT_KIND_LABEL.get(kind, kind)
+        kind_eok = v["total"] // 100_000_000
+        within_eok = v["maturity_under_1y"] // 100_000_000
+        share = (v["maturity_under_1y"] / v["total"]) if v["total"] else 0.0
+        lines.append(
+            f"- {label}: {kind_eok:,}억 (1년 이내 {within_eok:,}억 · {share:.0%})"
+        )
+
+    if m1y_share >= 0.30:
+        lines += [
+            "",
+            f"⚠ 전체 채무의 {m1y_share:.0%}가 1년 이내 만기 — "
+            "단기 상환·차환 부담이 집중된 구간입니다.",
+        ]
+
+    lines += [
+        "",
+        "📎 사업보고서 기준 잔액입니다. 분기·반기 공시 이후의 신규 발행·상환은 "
+        "반영되지 않을 수 있습니다.",
+    ]
+    return "\n".join(lines)
+
+
 @mcp.tool()
 def check_disclosure_anomaly(company_name: str, lookback_days: int = 365) -> str:
     """공시 구조 지표를 집계해 0~100 이상 스코어를 반환합니다.
