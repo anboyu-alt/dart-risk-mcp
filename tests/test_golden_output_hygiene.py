@@ -1,10 +1,15 @@
-"""v0.7.4 / v0.8.5 — 골드 파일에 대한 내부 코드·영문 약어·점수/등급 누출 회귀 검증.
+"""v0.7.4 / v0.8.5 / v1.0 — 골드 출력에 대한 stable contract 회귀 검증.
 
 실 API 호출 없이 `tests/fixtures/sample_outputs/` 안의 `.txt`만 스캔한다.
 렌더러가 내부 키·영문 메타·영문 약어·점수/등급/등급 이모지를 출력 경계 밖으로
-흘리면 실패한다. v0.8.5에서 점수·등급·이모지 검증 3종이 추가됐다.
+흘리거나, 사용자가 학습한 헤더·도구별 첫 줄 형식이 깨지면 실패한다.
 
-재수집 절차: `python tmp/v072_review/regen_fixtures.py` 후 `git diff` 확인.
+검증 9종:
+- v0.7.x: 내부 flag 코드 / 카탈로그 영문 메타 / 영문 약어
+- v0.8.5: 점수·등급 라벨 / 등급 이모지
+- v1.0  : 임계 ≥100 / 도구별 첫 줄 형식 / 핵심 헤더 보존 / 미등록 영문 코드 괄호 인용 차단
+
+재수집 절차: `python scripts/regen_goldens.py` 후 `git diff` 확인.
 """
 from __future__ import annotations
 
@@ -49,6 +54,88 @@ _SCORE_GRADE_PATTERNS = [
 ]
 # 위상/위험도를 시각적으로 등급화하던 이모지 세트(v0.8.5에서 전면 제거)
 _SEVERITY_EMOJI = ["🔴", "🟠", "🟡", "🟢", "🔵"]
+
+# ────────────────────────────────────────────────────────────────────────────
+# v1.0 stable output contract — 출력 표준 계약 검증 3종
+# ────────────────────────────────────────────────────────────────────────────
+
+# 도구 단축명 → 첫 줄 정규식 (23종, 6 회사 × 도구 매트릭스의 모든 첫 줄 + 회사 무관 4종)
+_FIRST_LINE_PATTERNS: dict[str, str] = {
+    # 회사명 단일 인자 13개
+    "analyze":       r"^📋 \*\*기업 공시 관찰 요약: .+\*\*$",
+    "anomaly":       r"^━━━ \[.+\] 공시 구조 관찰 요약 ━━━$",
+    "audit_history": r"^📋 \*\*.+\*\* \(\d{6}\) — 감사의견 이력 \(최근 \d+년\)$",
+    "capital":       r"^📊 \*\*.+\*\* \(\d{6}\) — 자본구조 추적 \(최근 \d+년\)$",
+    "company_info":  r"^🏢 \*\*기업 개요: .+\*\*$",
+    "debt_balance":  r"^💰 \*\*.+\*\* \(\d{6}\) — 채무증권 잔액 \(\d{4}\)$",
+    "exec_comp":     r"^━━━ \[.+\] 임원 보수 현황 \(\d{4}년 \w+\) ━━━$",
+    "fs":            r"^📊 \*\*.+\*\*",
+    "fund_usage":    r"^💰 \*\*.+\*\* 조달자금 사용내역 \(lookback=\d+년\)$",
+    "insider":       r"^━━━ \[.+\] 임원·대주주 지분 변동 시계열 \(최근 \d+년\) ━━━$",
+    "scan_fs":       r"^📊 \*\*.+\*\* \(\d{6}\) — 재무 이상 스캔 \(\d{4}, \w+\)$",
+    "shareholder":   r"^👥 \*\*주주 현황: .+\*\* \(\d{6}\)$",
+    "timeline":      r"^⏳ \*\*이벤트 타임라인: .+\*\* \(\d{6}\)$",
+    # 종목코드 1개
+    "list":          r"^📋 \*\*.+\*\* \(\d{6}\) 공시 접수번호 목록$",
+    # rcept 4개
+    "doc":           r"^📄 \*\*공시 원문 조회: \d+\*\*$",
+    "risk_check":    r"^📋 \*\*공시 리스크 분석\*\*$",
+    "sections":      r"^📑 \*\*공시 원문 목차\*\*$",
+    "view":          r"^📄 \*\*공시 원문\*\* \(페이지 \d+/\d+\)$",
+    # 회사 무관 4종
+    "actor_overlap": r"^🔍 \*\*여러 회사를 동시에 드나든 .+\*\*",
+    "compare_fs":    r"^📊 \*\*재무 비교\*\* \(\d+개 기업\)$",
+    "precedents":    r"^📚 \*\*신호별 해석 — 왜 주목해야 하는지\*\*$",
+    "market":        r"^🔍 \*\*시장 공시 스캔\*\* \(preset=[a-z_0-9]+, 최근 \d+일\)$",
+    # 기존 단일 disclosure (v0.7.x 골드 — risk_check 이전 명명 잔존)
+    "disclosure":    r"^📋 \*\*공시 리스크 분석\*\*$",
+}
+
+# 사용자가 학습한 핵심 헤더 8종 — 골드 전체에서 사라지면 contract 깨짐
+_CORE_HEADERS = [
+    "**시계열**",                                # capital
+    "**전년 대비 추세 (DART 재무지표 기준)**",  # scan_fs
+    "**공시 원문 목차**",                        # sections
+    "**공시 원문**",                             # view
+    "**공시 리스크 분석**",                      # risk_check + 기존 disclosure
+    "**① 정정공시 비율**",                       # anomaly 5지표
+    "**③ 공시의무 위반**",
+    "**⑤ 조회공시 빈도**",
+]
+
+# v0.8.7 발견 패턴 차단 화이트리스트 — 한국어 본문에 (코드) 형태로 합법 인용되는 영문 약어.
+# 이 화이트리스트 외 영문 대문자 코드가 괄호 인용으로 노출되면 fail (예: (CAPITAL_CHURN)).
+_ALLOWED_PAREN_ABBREVS = {
+    # 채권/우선주
+    "CB", "BW", "EB", "RCPS", "BCPS", "CPS",
+    # 투자/IR
+    "IR", "NDR", "PE", "PEF",
+    # 정부·기관
+    "MFDS", "FSC", "FSS", "SEC", "NICE", "KFTC", "KRX",
+    # 회계 표준 지표
+    "ROE", "ROA", "EPS", "EBITDA", "EBIT", "EV",
+    # 기타 산업 표준
+    "OECD", "IFRS", "GAAP", "ESG",
+}
+
+
+def _short_name(fname: str) -> str:
+    """파일명에서 도구 단축명을 추출."""
+    stem = fname[:-4]  # remove .txt
+    if stem[0].isascii():
+        # 회사 무관 — actor_overlap, compare_fs, market_xxx, precedents_xxx
+        for prefix in ("market_", "precedents_"):
+            if stem.startswith(prefix):
+                return prefix[:-1]  # "market" or "precedents"
+        return stem  # actor_overlap, compare_fs
+    # 한글 회사명 prefix
+    parts = stem.split("_", 1)
+    if len(parts) < 2:
+        return stem
+    rest = parts[1]
+    # rcept 도구는 마지막 _NNNNNNNN(8자리 이상) 제거
+    rest = re.sub(r"_\d{8,}$", "", rest)
+    return rest
 
 
 class TestGoldenOutputHygiene(unittest.TestCase):
@@ -104,14 +191,64 @@ class TestGoldenOutputHygiene(unittest.TestCase):
                 )
 
     def test_fixture_set_non_empty(self) -> None:
+        """v1.0: 골드 다양화 임계를 100개로 상향 (6 회사 × 23 도구 매트릭스 충족)."""
         files = self._iter_fixtures()
         self.assertGreaterEqual(
-            len(files), 10, "골드 파일이 10개 미만 — 수집이 불완전할 수 있음"
+            len(files), 100,
+            f"골드 파일이 100개 미만({len(files)}개) — v1.0 GA 기준 미달. "
+            "scripts/regen_goldens.py로 재수집 필요",
         )
         for p in files:
             self.assertGreater(
                 p.stat().st_size, 100, f"{p.name}이 100바이트 미만 — 빈 응답일 가능성"
             )
+
+    def test_first_line_format_per_tool(self) -> None:
+        """v1.0: 도구별 첫 줄 형식이 stable contract — 23개 단축명별 정규식 매핑."""
+        unmatched: list[str] = []
+        for path in self._iter_fixtures():
+            short = _short_name(path.name)
+            pat = _FIRST_LINE_PATTERNS.get(short)
+            if pat is None:
+                unmatched.append(f"{path.name} (단축명={short})")
+                continue
+            first = path.read_text(encoding="utf-8").splitlines()[0]
+            self.assertRegex(
+                first, pat,
+                f"{path.name} 첫 줄 형식 깨짐 (단축명={short}): {first!r}",
+            )
+        self.assertFalse(
+            unmatched,
+            f"_FIRST_LINE_PATTERNS에 등록되지 않은 골드 파일: {unmatched}",
+        )
+
+    def test_core_headers_preserved(self) -> None:
+        """v1.0: 사용자가 학습한 핵심 헤더 8종이 골드 전체에서 살아 있어야 한다."""
+        all_text = "\n".join(
+            p.read_text(encoding="utf-8") for p in self._iter_fixtures()
+        )
+        for header in _CORE_HEADERS:
+            self.assertIn(
+                header, all_text,
+                f"핵심 헤더 '{header}' 가 골드 전체에서 사라짐 — 렌더러 회귀 의심",
+            )
+
+    def test_no_unknown_internal_code_parens(self) -> None:
+        """v1.0: v0.8.7 발견 — `(CAPITAL_CHURN)` 등 내부 flag 코드 괄호 인용 회귀 차단.
+
+        화이트리스트(_ALLOWED_PAREN_ABBREVS)에 등록된 표준 영문 약어는 허용한다.
+        새 영문 코드를 정상 출력하려는 경우 화이트리스트에 추가하거나 한국어 라벨로 교체.
+        """
+        pat = re.compile(r"\(([A-Z][A-Z_]{1,30})\)")
+        for path in self._iter_fixtures():
+            text = path.read_text(encoding="utf-8")
+            for m in pat.finditer(text):
+                code = m.group(1)
+                self.assertIn(
+                    code, _ALLOWED_PAREN_ABBREVS,
+                    f"{path.name}에 미등록 영문 코드 괄호 인용 ({code}) 노출 — "
+                    "_ALLOWED_PAREN_ABBREVS 검토 또는 한국어 라벨로 교체",
+                )
 
 
 if __name__ == "__main__":
