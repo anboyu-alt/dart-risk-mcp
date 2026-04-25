@@ -68,6 +68,8 @@ SIGNAL_KEY_TO_TAXONOMY: dict[str, list[str]] = {
     "INVENTORY_SURGE":     ["6.1"],
     "CASH_GAP":            ["6.1"],
     "CAPITAL_IMPAIRMENT":  ["8.2"],
+    # v0.8.6: 임원·대주주 매도 + 인접 부정 공시 패턴
+    "INSIDER_PRE_DISCLOSURE": ["3.6"],
     # 기존 호환 키
     "MGMT":          ["3.4", "5.4"],
 }
@@ -550,6 +552,9 @@ SIGNAL_TYPES = [
     {"key": "INVENTORY_SURGE", "label": "재고자산/매출 비율 급등", "score": 7, "keywords": []},
     {"key": "CASH_GAP", "label": "순이익·현금흐름 괴리", "score": 8, "keywords": []},
     {"key": "CAPITAL_IMPAIRMENT", "label": "자본잠식 근접", "score": 9, "keywords": []},
+    # ── v0.8.6: 임원·대주주 매도 + 인접 부정 공시 ─────────────────
+    {"key": "INSIDER_PRE_DISCLOSURE", "label": "임원·대주주 매도 후 부정 공시",
+     "score": 0, "keywords": []},
 ]
 
 

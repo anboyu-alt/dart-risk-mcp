@@ -19,6 +19,7 @@ from .core import (
     detect_capital_churn,
     detect_debt_rollover,
     detect_financial_anomaly,
+    detect_insider_pre_disclosure,
     estimate_crisis_timeline,
     extract_cb_investors,
     extract_rights_offering_investors,
@@ -1791,54 +1792,151 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
     if not records:
         return f"[{corp_name}] 최근 {lookback_years}년간 대량보유·최대주주 공시 없음."
 
-    # ── 보고자별 시계열 구성 ──────────────────────────────────
-    from collections import defaultdict
-    timeline: dict[str, list[dict]] = defaultdict(list)
-    for rec in records:
-        holder = rec.get("repror") or rec.get("nm", "미상")
-        timeline[holder].append(rec)
+    # ── source별 정규화 — 의미 없는 합산 행/빈 ratio/회사 자기주식 row 스킵 ──
+    _SKIP_HOLDER_TOKENS = {"계", "합계", "총계", "Total", "TOTAL", "-", ""}
 
-    def _parse_ratio(val: str) -> float:
+    def _parse_ratio(val) -> float | None:
+        if val in (None, "", "-"):
+            return None
         try:
             return float(str(val).replace(",", "").replace("%", "").strip())
         except (ValueError, AttributeError):
-            return 0.0
+            return None
+
+    def _normalize_date(s: str) -> str:
+        """YYYY.MM.DD / YYYY-MM-DD / YYYYMMDD 등 날짜 표기를 YYYYMMDD로 정규화."""
+        if not s:
+            return ""
+        digits = "".join(ch for ch in str(s) if ch.isdigit())
+        return digits[:8] if len(digits) >= 8 else str(s)
+
+    def _extract_row(rec: dict) -> tuple[str, float, str, str] | None:
+        """레코드를 (holder, ratio_pct, date_yyyymmdd, source_label)로 정규화.
+
+        반환 None이면 시계열에 포함하지 않는다.
+        - exec_treasury: 회사 자체 자기주식 활동이라 보고자별 시계열에 부적합 → None
+        - 합산 행/빈 holder/ratio 결측 → None
+        """
+        src = rec.get("source")
+        if src == "exec_treasury":
+            return None
+        if src == "elestock":
+            holder = (rec.get("repror") or "").strip()
+            ratio = _parse_ratio(rec.get("stkqy_rt"))
+            date = _normalize_date(rec.get("rcept_dt"))
+        elif src == "hyslr_chg":
+            holder = (rec.get("mxmm_shrholdr_nm") or "").strip()
+            ratio = _parse_ratio(rec.get("qota_rt"))
+            date = _normalize_date(rec.get("change_on") or rec.get("rcept_dt"))
+        else:  # hyslr (기본)
+            holder = (rec.get("nm") or "").strip()
+            ratio = _parse_ratio(rec.get("trmend_posesn_stock_qota_rt"))
+            date = _normalize_date(rec.get("rcept_dt") or rec.get("bsns_year"))
+        if holder in _SKIP_HOLDER_TOKENS:
+            return None
+        if ratio is None:
+            return None
+        if not date:
+            return None
+        source_label = _SOURCE_LABEL.get(src, "기타")
+        return (holder, ratio, date, source_label)
+
+    _SOURCE_LABEL = {
+        "elestock":      "대량보유",
+        "hyslr":         "최대주주",
+        "hyslr_chg":     "최대주주 변동",
+        "exec_treasury": "임원·주요주주 자기주식",
+    }
+
+    # ── 보고자별 시계열 구성 ──────────────────────────────────
+    from collections import defaultdict
+    timeline: dict[str, list[tuple[float, str, str]]] = defaultdict(list)
+    treasury_count = 0
+    # lookback 윈도우 cutoff (hyslr_chg는 전체 이력을 반환하므로 연도 외 데이터 필터)
+    cutoff_dt = datetime.now() - timedelta(days=lookback_years * 365)
+    for rec in records:
+        if rec.get("source") == "exec_treasury":
+            treasury_count += 1
+            continue
+        row = _extract_row(rec)
+        if row is None:
+            continue
+        holder, ratio, date, src_label = row
+        # 날짜 윈도우 필터 — 8자리(YYYYMMDD)는 정확 비교, 4자리(YYYY)는 연 시작으로 가정
+        try:
+            if len(date) >= 8:
+                rec_dt = datetime.strptime(date[:8], "%Y%m%d")
+            elif len(date) == 4 and date.isdigit():
+                rec_dt = datetime.strptime(date + "0101", "%Y%m%d")
+            else:
+                rec_dt = None
+        except ValueError:
+            rec_dt = None
+        if rec_dt is not None and rec_dt < cutoff_dt:
+            continue
+        timeline[holder].append((ratio, date, src_label))
 
     lines = [
         f"━━━ [{corp_name}] 임원·대주주 지분 변동 시계열 (최근 {lookback_years}년) ━━━",
         "",
     ]
 
+    if not timeline:
+        lines.append("(추출 가능한 보고자별 보유 비율 없음 — 합산 행·미보고 항목만 존재)")
+        if treasury_count:
+            lines.append(f"※ 자기주식 활동 보고 {treasury_count}건은 별도 수집됨 (track_capital_structure 참고)")
+
     # ── 클러스터 탐지 (30일 윈도우) ───────────────────────────
     buy_cluster: list[str] = []
     sell_cluster: list[str] = []
+    insider_sells: list[dict] = []  # v0.8.6 INSIDER_PRE_DISCLOSURE 입력용
 
     import datetime as _dt
 
-    for holder, recs in timeline.items():
-        recs_sorted = sorted(recs, key=lambda r: r.get("rcept_dt", r.get("bsns_year", "")))
-        ratios = [_parse_ratio(r.get("stkqy_rt", r.get("trmend_posesn_stock_qota_rt", "0"))) for r in recs_sorted]
+    for holder, rows in timeline.items():
+        # rows: list[(ratio, date_yyyymmdd, source_label)]
+        rows_sorted = sorted(rows, key=lambda r: r[1])
+        # ── 인접 중복 dedup: 같은 ratio가 연속되면 첫 1건만 유지 (분기 4회 호출 노이즈 억제)
+        deduped: list[tuple[float, str, str]] = []
+        for ratio, date, src_lbl in rows_sorted:
+            if deduped and abs(deduped[-1][0] - ratio) < 0.005:
+                continue  # 0.005%p 미만 차이는 동일 데이터로 간주
+            deduped.append((ratio, date, src_lbl))
+        if not deduped:
+            continue
 
         lines.append(f"▶ {holder}")
-        for i, rec in enumerate(recs_sorted):
-            date = rec.get("rcept_dt") or rec.get("bsns_year", "-")
-            ratio = ratios[i]
-            delta = ratios[i] - ratios[i - 1] if i > 0 else 0.0
-            delta_str = f" (Δ{delta:+.2f}%)" if i > 0 else ""
-            source_label = "대량보유" if rec.get("source") == "elestock" else "최대주주"
-            lines.append(f"    {date}  {ratio:.2f}%{delta_str}  [{source_label}]")
+        prev_ratio: float | None = None
+        prev_date: str = ""
+        for ratio, date, src_lbl in deduped:
+            delta = ratio - prev_ratio if prev_ratio is not None else 0.0
+            delta_str = f" (Δ{delta:+.2f}%)" if prev_ratio is not None else ""
+            lines.append(f"    {date}  {ratio:.2f}%{delta_str}  [{src_lbl}]")
 
-            if i > 0:
+            if prev_ratio is not None and delta < 0:
+                insider_sells.append({
+                    "holder": holder,
+                    "rcept_dt": date,
+                    "delta_pct": delta,
+                })
                 try:
-                    d_prev = _dt.datetime.strptime(recs_sorted[i - 1].get("rcept_dt", "00000000")[:8], "%Y%m%d")
-                    d_curr = _dt.datetime.strptime(rec.get("rcept_dt", "00000000")[:8], "%Y%m%d")
+                    d_prev = _dt.datetime.strptime(prev_date[:8], "%Y%m%d")
+                    d_curr = _dt.datetime.strptime(date[:8], "%Y%m%d")
+                    within_30d = abs((d_curr - d_prev).days) <= 30
+                except ValueError:
+                    within_30d = False
+                if within_30d and delta < -0.5:
+                    sell_cluster.append(holder)
+            elif prev_ratio is not None and delta > 0:
+                try:
+                    d_prev = _dt.datetime.strptime(prev_date[:8], "%Y%m%d")
+                    d_curr = _dt.datetime.strptime(date[:8], "%Y%m%d")
                     within_30d = abs((d_curr - d_prev).days) <= 30
                 except ValueError:
                     within_30d = False
                 if within_30d and delta > 0.5:
                     buy_cluster.append(holder)
-                elif within_30d and delta < -0.5:
-                    sell_cluster.append(holder)
+            prev_ratio, prev_date = ratio, date
         lines.append("")
 
     if buy_cluster:
@@ -1853,6 +1951,44 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
             "   30일 이내 0.5%p 이상 보유 감소 — 정보 우위 매도 가능성 검토 권장",
             "",
         ]
+
+    # ── v0.8.6: INSIDER_PRE_DISCLOSURE 패턴 탐지 ──────────────
+    # 매도 이벤트 ±30일 내 부정 공시(감사의견·부도·횡령·조회공시 등) 동시 발생 시 표기.
+    # 점수 가산 없음(v0.8.5 원칙) — 사실 표기만.
+    if insider_sells:
+        try:
+            disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_years * 365)
+            signal_events: list[dict] = []
+            for d in disclosures or []:
+                report_nm = d.get("report_nm", "")
+                if is_amendment_disclosure(report_nm):
+                    continue
+                for sig in match_signals(report_nm):
+                    signal_events.append({
+                        "key": sig["key"],
+                        "rcept_dt": d.get("rcept_dt", ""),
+                        "report_nm": report_nm,
+                    })
+            pre_flags = detect_insider_pre_disclosure(insider_sells, signal_events, window_days=30)
+        except Exception:
+            pre_flags = []
+
+        if pre_flags:
+            lines += [
+                "⚠️  매도 + 인접 부정 공시 패턴 탐지 (정보 우위 매도 가능성 검토)",
+            ]
+            # holder + sell_date + disclosure 단위로 정렬·중복 제거
+            seen_keys: set[tuple] = set()
+            for f in sorted(pre_flags, key=lambda x: (x["sell_date"], x["holder"])):
+                key = (f["holder"], f["sell_date"], f["disclosure_key"], f["disclosure_date"])
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                lines.append(
+                    f"   • {f['holder']}  매도일 {f['sell_date']}  Δ{f['delta_pct']:+.2f}%p  "
+                    f"→ {f['days_gap']}일 후 {f['disclosure_key']} 공시 ({f['disclosure_date']})"
+                )
+            lines.append("")
 
     lines += [
         "─────────────────────────────────────────────",

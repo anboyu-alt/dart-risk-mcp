@@ -4,6 +4,31 @@
 
 ## [Unreleased]
 
+## [0.8.6] — 2026-04-25
+
+### Added
+- **`fetch_insider_timeline` 분기 보고 데이터 통합** — 기존 `elestock`(5% 대량보유) + `hyslrSttus`(연 단위 최대주주)에 더해 신규 두 엔드포인트를 4개 분기 코드(`11011`·`11012`·`11013`·`11014`) × N년 루프로 통합:
+  - `hyslrChgSttus` (최대주주 변동현황) — 분기별 보유 변동 보고
+  - `tesstkAcqsDspsSttus` (임원·주요주주 자기주식 취득·처분 현황) — 회사 자기주식 활동
+  - 각 record에 `source` 라벨(`elestock`·`hyslr`·`hyslr_chg`·`exec_treasury`) 부착, `bsns_year`·`reprt_code` 보존.
+- **`detect_insider_pre_disclosure(insider_records, signal_events, window_days=30)`** — 매도 이벤트(Δ<0) 직후 ±30일 내 부정 공시(AUDIT/INSOLVENCY/EMBEZZLE/INQUIRY/GOING_CONCERN/DISCLOSURE_VIOL/DEBT_RESTR) 동시 발생 패턴 탐지 함수. 점수 가산 없음, 사실 표기만(v0.8.5 원칙).
+- **신호 키 `INSIDER_PRE_DISCLOSURE` (taxonomy `3.6`)** — `signals.py`/`taxonomy.py` 신규 등록. base_score 0, severity OBSERVATION.
+- **`tests/test_insider_v086.py`** — 13개 테스트(엔드포인트 통합·source 라벨·분기 4코드 호출·부분 실패 격리·detect 패턴·신호 등록).
+- **골드 파일 3개 신규** — `셀트리온_insider.txt`/`제이스코홀딩스_insider.txt`/`두산에너빌리티_insider.txt`.
+
+### Changed
+- **`track_insider_trading` 렌더러 — 출력 품질 보정**:
+  - source별 적절한 holder/ratio/date 필드 추출 헬퍼(`_extract_row`) 추가.
+  - 합산 행("계"·"합계"·"Total"·"-"·빈값) 시계열에서 제외.
+  - 인접 분기 동일 비율(<0.005%p 차이) **dedup** — 분기 4회 호출 노이즈 억제.
+  - `lookback_years × 365`일 **윈도우 필터** — `hyslrChgSttus`가 전체 이력을 반환해도 윈도우 외 데이터는 제외.
+  - `exec_treasury`(회사 자기주식 활동)는 보고자별 시계열에서 분리. 하단 안내로 `track_capital_structure` 연동 표시(예정).
+  - source 라벨에 `최대주주 변동`·`임원·주요주주 자기주식` 신규 추가.
+
+### Notes
+- v1.0 로드맵 검증(`tmp/v1_feasibility/REPORT.md`) 결론에 따라 "이벤트 단위 거래 추적" 표현은 **분기 보고 단위**로 정정. DART API는 임원 거래일 단위 시계열을 직접 제공하지 않습니다.
+- `tesstkAcqsDspsSttus` 응답은 회사 자기주식 활동(취득방법별 분류)이라 v0.8.6에서는 시계열 표기에서 제외하고 v0.8.7(자사주 결정 통합)에 흡수합니다.
+
 ## [0.8.5] — 2026-04-25
 
 ### Design Principle (신규 확정)

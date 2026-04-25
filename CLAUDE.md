@@ -179,14 +179,18 @@ dart_risk_mcp/
 - 섹션: ① 5억 이상 고액수령자 ② 개인별 보수 ③ 미등기임원 보수 ④ 주총 승인 한도
 - `report_type` 허용값: `annual` | `half` | `q1` | `q3`
 
-### 17. `track_insider_trading(company_name, lookback_years=2)` ✨
+### 17. `track_insider_trading(company_name, lookback_years=2)` ✨ v0.8.6
 
-최대주주·5% 대량보유자의 지분 변동 시계열을 분석합니다.
+최대주주·5% 대량보유자·임원·주요주주의 지분 변동 시계열을 분기 보고 단위로 분석합니다.
 
-- 내부 흐름: `resolve_corp` → `fetch_insider_timeline` (elestock + hyslrSttus 연도별)
-- 보유 비율(Δ) 계산 + 30일 윈도우 매수/매도 클러스터 탐지
-- `lookback_years` 범위: 1~5년
-- 반환: 보고자별 Δ 테이블 + 클러스터 알림 + 공시 지연 고지
+- 내부 흐름: `resolve_corp` → `fetch_insider_timeline` (4개 엔드포인트 통합) → `fetch_company_disclosures` + `match_signals` → `detect_insider_pre_disclosure`
+- 통합 엔드포인트: `elestock`(5% 대량보유, 전체 이력) + `hyslrSttus`(최대주주 현황) + `hyslrChgSttus`(최대주주 변동현황) + `tesstkAcqsDspsSttus`(임원·주요주주 자기주식). 신규 3개는 4개 분기 reprt_code(11011·11012·11013·11014) × N년 루프.
+- v0.8.6 출력 보정: 합산 행("계"/"합계") 스킵, 인접 분기 동일 비율(<0.005%p) dedup, lookback 윈도우 외 데이터 필터, `exec_treasury`(회사 자기주식)는 보고자별 시계열에서 분리.
+- 추가 플래그 `INSIDER_PRE_DISCLOSURE` (taxonomy 3.6, base_score 0): 매도 이벤트(Δ<0) ±30일 내 부정 공시(AUDIT/INSOLVENCY/EMBEZZLE/INQUIRY/GOING_CONCERN/DISCLOSURE_VIOL/DEBT_RESTR) 동시 발생 시 사실 표기. 점수 가산 없음(v0.8.5 원칙).
+- 보유 비율(Δ) 계산 + 30일 윈도우 매수/매도 클러스터 탐지(0.5%p 임계).
+- `lookback_years` 범위: 1~5년.
+- 반환: 보고자별 Δ 테이블 + 클러스터 알림 + INSIDER_PRE_DISCLOSURE 패턴 라인 + 공시 지연 고지.
+- ※ DART API는 임원 거래일 단위 시계열을 직접 제공하지 않습니다. 본 도구는 **분기 보고 단위** 스냅샷의 차이를 추적합니다.
 
 ### 18. `track_fund_usage(company_name, lookback_years=3)` ✨
 
@@ -267,7 +271,8 @@ dart_risk_mcp/
 | `fetch_shareholder_status(corp_code, api_key, year, report_type)` | 최대주주 현황 + 5% 대량보유 통합 조회 |
 | `fetch_market_disclosures(api_key, bgn_de, end_de, pblntf_ty, max_pages)` | corp_code 없이 시장 전체 공시 조회 |
 | `fetch_executive_compensation(corp_code, api_key, year, report_type)` | 보수 4개 엔드포인트 통합 조회 |
-| `fetch_insider_timeline(corp_code, api_key, lookback_years)` | elestock + hyslrSttus 연도별 시계열 |
+| `fetch_insider_timeline(corp_code, api_key, lookback_years)` | elestock + hyslrSttus + hyslrChgSttus + tesstkAcqsDspsSttus 4엔드포인트 × 4분기 통합 시계열 (v0.8.6) |
+| `detect_insider_pre_disclosure(insider_records, signal_events, window_days=30)` | 매도 ±30일 내 부정 공시 패턴 탐지 (v0.8.6) |
 | `fetch_fund_usage(corp_code, api_key, corp_cls, lookback_years)` | 공모·사모 자금사용 2개 엔드포인트 통합 + 이상 플래그 탐지 |
 | `fetch_major_decision(rcept_no, corp_cls, decision_type)` | 12개 DS005 주요결정 엔드포인트 중 decision_type에 따라 자동 선택 |
 | `resolve_decision_type(report_nm)` | 공시명 → decision_type 키 자동 추론 (`[기재정정]` 등 접두어 제거) |
@@ -289,6 +294,9 @@ dart_risk_mcp/
 | `GET /api/fnlttMultiAcnt.json` | 다중 기업 재무 비교 (corp_codes 목록) |
 | `GET /api/majorstock.json` | 최대주주 현황 (corp_code, 연도) |
 | `GET /api/elestock.json` | 5% 이상 대량보유 현황 (corp_code, 연도) |
+| `GET /api/hyslrSttus.json` | 최대주주 현황 (corp_code, bsns_year, reprt_code) |
+| `GET /api/hyslrChgSttus.json` | 최대주주 변동현황 (corp_code, bsns_year, reprt_code) — v0.8.6 |
+| `GET /api/tesstkAcqsDspsSttus.json` | 임원·주요주주 자기주식 취득·처분 현황 (corp_code, bsns_year, reprt_code) — v0.8.6 |
 | `GET /api/prstInvstmEntrCptalUseDtls.json` | 공모 자금 사용 내역 (corp_code, 연도) |
 | `GET /api/otrCptalUseDtls.json` | 사모 자금 사용 내역 (corp_code, 연도) |
 | `GET /api/bsnAcqsDecsn.json` / `bsnTrfDecsn.json` | 영업 양수/양도 결정 (rcept_no) |

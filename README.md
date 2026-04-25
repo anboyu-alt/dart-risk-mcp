@@ -1,6 +1,6 @@
 # DART 리스크 분석 MCP
 
-**버전:** v0.8.5 · **공시 기반 불공정거래 위험 모니터링**
+**버전:** v0.8.6 · **공시 기반 불공정거래 위험 모니터링**
 
 DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 
@@ -11,6 +11,14 @@ DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 ## 출력 원칙
 
 모든 도구는 **하나의 한국어 서술 출력**만 반환합니다. level/mode/format 분기는 지원하지 않습니다. 원시 데이터가 필요하면 `get_disclosure_document`·`view_disclosure`·`list_disclosure_sections` 같은 원문 도구를 직접 조합하세요.
+
+### v0.8.6 주요 변경
+
+- **`track_insider_trading` 분기 보고 데이터 통합** — 기존 `elestock` + `hyslrSttus`(연 단위)에 더해 `hyslrChgSttus`(최대주주 변동현황) + `tesstkAcqsDspsSttus`(임원·주요주주 자기주식)를 4개 분기 reprt_code(11011·11012·11013·11014) × N년 루프로 통합. 보유 비율 추세를 분기 단위로 추적합니다.
+- **신규 패턴 `INSIDER_PRE_DISCLOSURE` (taxonomy 3.6)** — 매도 이벤트(Δ<0) 직후 ±30일 내 부정 공시(AUDIT/INSOLVENCY/EMBEZZLE/INQUIRY/GOING_CONCERN/DISCLOSURE_VIOL/DEBT_RESTR) 동시 발생 시 사실 표기. 점수 가산 없음(v0.8.5 원칙 유지).
+- **출력 품질 보정** — 합산 행("계"/"합계") 자동 제외, 인접 분기 동일 비율(<0.005%p) dedup, lookback 윈도우 외 데이터 필터, `exec_treasury`(회사 자기주식 활동)는 보고자별 시계열에서 분리.
+- **표현 정정** — DART API는 임원 거래일 단위 시계열을 직접 제공하지 않습니다. 본 도구는 **분기 보고 단위** 스냅샷 차이를 추적합니다(v1.0 로드맵 검증 결과 반영).
+- **회귀 방지** — `tests/test_insider_v086.py` 13개 신규, 골드 파일 3개 신규(`{셀트리온/제이스코홀딩스/두산에너빌리티}_insider.txt`). 전체 120/120 PASS.
 
 ### v0.8.5 주요 변경
 
@@ -23,6 +31,7 @@ DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 
 ### 최근 릴리스 요약
 
+- **v0.8.6** — `track_insider_trading` 분기 보고 데이터 통합(`hyslrChgSttus` + `tesstkAcqsDspsSttus`) + 신규 패턴 `INSIDER_PRE_DISCLOSURE`(매도 ±30일 내 부정 공시) + 출력 품질 보정(합산 행 스킵·dedup·윈도우 필터)
 - **v0.8.5** — 점수·등급 표기 전면 제거. `_risk_level`·`_risk_emoji`·`_PHASE_EMOJI` 삭제. 내부 `SIGNAL_TYPES[*].score`는 우선순위 랭킹 목적으로 유지하지만 출력 경계를 넘지 않음
 - **v0.8.0** — 신규 도구 2개(`get_audit_opinion_history`, `track_debt_balance`) + `CB_ROLLOVER` 플래그 + 단일 출력 원칙 확정. 주가조작 카탈로그 8개 MD 본문 한글화
 - **v0.7.4** — 반복 prose 억제(같은 signal_key 4번째부터 → 해설 생략) + 골드 파일 회귀 테스트 추가(내부 코드·영문 메타 재노출 자동 감지)
@@ -1461,7 +1470,7 @@ python -m dart_risk_mcp
 ## 참고 자료
 
 - **[OpenDART API 개발가이드 (한글 정리본)](opendart_api_guide.md)** — 이 MCP가 사용하는 DART OpenAPI 전체 명세. 엔드포인트·요청 파라미터·응답 필드·공통 에러코드(`010`~`901`)를 8개 섹션(DS001 공시정보 ~ DS008 증권신고서)으로 정리했습니다. 새 도구를 추가하거나 기존 응답을 디버깅할 때, 공식 문서([opendart.fss.or.kr/guide](https://opendart.fss.or.kr/guide/main.do)) 대신 이 파일을 빠르게 훑어볼 수 있습니다.
-- **[CHANGELOG.md](CHANGELOG.md)** — 버전별 변경 내역 (현재 v0.8.5).
+- **[CHANGELOG.md](CHANGELOG.md)** — 버전별 변경 내역 (현재 v0.8.6).
 - **[CLAUDE.md](CLAUDE.md)** — 프로젝트 내부 개발자 가이드 (디렉토리 구조, 핵심 함수, 도구 추가 절차).
 
 ---

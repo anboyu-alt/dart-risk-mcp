@@ -537,6 +537,23 @@ TAXONOMY = {
         "field_evidence": ["동성제약: SK플래닛 지분 정리 (150억원) (20250903)"],
         "investor_implication": "Hidden ownership; opaque control structure",
     },
+    "3.6": {
+        "id": "3.6",
+        "category": "Ownership & Control",
+        "name": "Insider Selling Before Adverse Disclosure",
+        "description": "임원·대주주가 매도한 직후 30일 내에 감사의견 비적정·부도·횡령·조회공시 등 부정적 공시가 게시되는 패턴. 정보 우위 매도 가능성 검토 대상.",
+        "base_score": 0,
+        "severity": "OBSERVATION",
+        "crisis_timeline_months": 3,
+        "keywords": [],
+        "red_flags": [
+            "임원 매도 후 30일 내 감사의견 비적정",
+            "임원 매도 후 30일 내 부도/횡령/조회공시",
+            "분기 보고서 시점 보유 비율 급락 + 인접 부정 공시",
+        ],
+        "field_evidence": [],
+        "investor_implication": "Possible information advantage trading; pre-disclosure selling pattern",
+    },
 
     # CATEGORY 4: Governance & Disclosure (4 signals)
     "4.1": {

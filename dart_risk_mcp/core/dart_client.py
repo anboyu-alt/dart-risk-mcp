@@ -1155,23 +1155,30 @@ def fetch_insider_timeline(
     api_key: str,
     lookback_years: int = 2,
 ) -> list[dict]:
-    """DART 5% 대량보유 + 최대주주 변동 시계열 조회.
+    """DART 5% 대량보유 + 최대주주(연·분기) + 변동내역 + 임원·주요주주 자기주식 시계열 조회.
 
-    여러 연도의 elestock.json / hyslrSttus.json 을 묶어
-    보고일 기준 정렬한 목록을 반환한다.
+    엔드포인트:
+      - elestock.json (5% 대량보유, 전체 이력 — 1회 호출)
+      - hyslrSttus.json (최대주주 현황, 연·분기별)
+      - hyslrChgSttus.json (최대주주 변동현황, 연·분기별) — v0.8.6 신규
+      - tesstkAcqsDspsSttus.json (임원·주요주주 자기주식 취득·처분 현황, 연·분기별) — v0.8.6 신규
+
+    분기 reprt_code 4종(11011 사업·11012 반기·11013 1분기·11014 3분기)을
+    각 연도별로 모두 호출한다. status≠000 응답은 조용히 스킵한다.
 
     Returns:
-        List of holding records with added "source" key ("elestock"|"hyslr")
+        List of holding records. 각 레코드에 `source` 키:
+          "elestock" | "hyslr" | "hyslr_chg" | "exec_treasury"
     """
     if not api_key:
         return []
     current_year = datetime.now().year
     years = [str(current_year - i) for i in range(lookback_years + 1)]
-    reprt_code = "11011"
+    quarter_codes = ("11011", "11012", "11013", "11014")
 
     records: list[dict] = []
 
-    # 5% 대량보유 (elestock은 전체 이력 반환 — 1회만 호출)
+    # 1) 5% 대량보유 (elestock은 전체 이력 반환 — 1회만 호출)
     try:
         resp = _retry(
             "GET", f"{DART_BASE}/elestock.json",
@@ -1188,32 +1195,130 @@ def fetch_insider_timeline(
     except Exception as e:
         log.debug("elestock 조회 실패 (%s): %s", corp_code, e)
 
-    # 최대주주 현황 (연도별)
+    # 2~4) DS002 정기보고서 형식 — 연도 × 분기 코드 루프
+    periodic_endpoints: tuple[tuple[str, str], ...] = (
+        ("hyslrSttus", "hyslr"),
+        ("hyslrChgSttus", "hyslr_chg"),
+        ("tesstkAcqsDspsSttus", "exec_treasury"),
+    )
     for year in years:
-        try:
-            resp = _retry(
-                "GET", f"{DART_BASE}/hyslrSttus.json",
-                params={
-                    "crtfc_key": api_key,
-                    "corp_code": corp_code,
-                    "bsns_year": year,
-                    "reprt_code": reprt_code,
-                },
-            )
-            data = resp.json()
-            if data.get("status") == "000":
-                for rec in data.get("list", []):
-                    rec = dict(rec)
-                    rec["source"] = "hyslr"
-                    rec["bsns_year"] = year
-                    records.append(rec)
-            else:
-                _log_dart_status(data.get("status", "?"), f"hyslrSttus year={year} corp_code={corp_code}")
-        except Exception as e:
-            log.debug("hyslrSttus 조회 실패 year=%s (%s): %s", year, corp_code, e)
+        for ep_path, source_label in periodic_endpoints:
+            for reprt_code in quarter_codes:
+                try:
+                    resp = _retry(
+                        "GET", f"{DART_BASE}/{ep_path}.json",
+                        params={
+                            "crtfc_key": api_key,
+                            "corp_code": corp_code,
+                            "bsns_year": year,
+                            "reprt_code": reprt_code,
+                        },
+                    )
+                    data = resp.json()
+                    if data.get("status") == "000":
+                        for rec in data.get("list", []):
+                            rec = dict(rec)
+                            rec["source"] = source_label
+                            rec["bsns_year"] = year
+                            rec["reprt_code"] = reprt_code
+                            records.append(rec)
+                    else:
+                        _log_dart_status(
+                            data.get("status", "?"),
+                            f"{ep_path} year={year} reprt={reprt_code} corp_code={corp_code}",
+                        )
+                except Exception as e:
+                    log.debug(
+                        "%s 조회 실패 year=%s reprt=%s (%s): %s",
+                        ep_path, year, reprt_code, corp_code, e,
+                    )
 
     records.sort(key=lambda r: r.get("rcept_dt", r.get("bsns_year", "")), reverse=True)
     return records
+
+
+# v0.8.6: 임원·대주주 매도 + 인접 부정 공시 패턴 검출용 부정 신호 키 집합
+_NEGATIVE_DISCLOSURE_KEYS: frozenset[str] = frozenset({
+    "AUDIT", "INSOLVENCY", "EMBEZZLE", "INQUIRY",
+    "GOING_CONCERN", "DISCLOSURE_VIOL", "DEBT_RESTR",
+})
+
+
+def detect_insider_pre_disclosure(
+    insider_records: list[dict],
+    signal_events: list[dict],
+    window_days: int = 30,
+) -> list[dict]:
+    """임원·대주주 매도 직후 ±window_days 내 부정 공시 패턴 검출.
+
+    Args:
+        insider_records: track_insider_trading의 시계열 항목.
+            각 dict는 holder, rcept_dt(YYYYMMDD), delta_pct(음수=매도, 양수=매수)를 가진다.
+        signal_events: match_signals 등으로 추출한 공시 신호 이벤트.
+            각 dict는 key(신호 키), rcept_dt(YYYYMMDD)를 가진다.
+        window_days: 매도일 기준 전후 윈도우 일수(기본 30).
+
+    Returns:
+        flag dict 리스트. 각 항목은
+          {"holder": str, "sell_date": str, "delta_pct": float,
+           "disclosure_key": str, "disclosure_date": str,
+           "report_nm": str, "days_gap": int}
+        형식. 매도(delta_pct<0)가 없거나 부정 공시가 윈도우 밖이면 빈 리스트.
+    """
+    if not insider_records or not signal_events:
+        return []
+
+    # YYYYMMDD 문자열 → datetime 파서
+    def _parse(d: str) -> datetime | None:
+        if not d:
+            return None
+        s = str(d)[:8]
+        if len(s) != 8 or not s.isdigit():
+            return None
+        try:
+            return datetime.strptime(s, "%Y%m%d")
+        except ValueError:
+            return None
+
+    # 부정 공시만 추려 (날짜, key, report_nm) 튜플로 인덱싱
+    negative: list[tuple[datetime, str, str]] = []
+    for ev in signal_events:
+        if ev.get("key") not in _NEGATIVE_DISCLOSURE_KEYS:
+            continue
+        d = _parse(ev.get("rcept_dt"))
+        if d is None:
+            continue
+        negative.append((d, ev["key"], ev.get("report_nm", "")))
+
+    if not negative:
+        return []
+
+    flags: list[dict] = []
+    for rec in insider_records:
+        delta = rec.get("delta_pct", 0.0)
+        try:
+            delta_f = float(delta)
+        except (TypeError, ValueError):
+            continue
+        if delta_f >= 0:
+            continue  # 매수 또는 변동 없음 → 패턴 비대상
+        sell_date = _parse(rec.get("rcept_dt"))
+        if sell_date is None:
+            continue
+        for disc_date, disc_key, report_nm in negative:
+            gap = abs((disc_date - sell_date).days)
+            if gap <= window_days:
+                flags.append({
+                    "holder": rec.get("holder", "미상"),
+                    "sell_date": rec.get("rcept_dt", ""),
+                    "delta_pct": delta_f,
+                    "disclosure_key": disc_key,
+                    "disclosure_date": disc_date.strftime("%Y%m%d"),
+                    "report_nm": report_nm,
+                    "days_gap": gap,
+                })
+                break  # 같은 매도 이벤트에 대해 중복 플래그 방지
+    return flags
 
 
 def fetch_fund_usage(
