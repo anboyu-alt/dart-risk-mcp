@@ -2,6 +2,35 @@
 
 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식 준수. 버전은 [SemVer](https://semver.org/lang/ko/).
 
+## Stability / Deprecation Policy (v1.0 GA부터 발효)
+
+본 정책은 v1.0.0 GA에서 발효합니다. 마이너 릴리스(1.x)는 사용자에게 노출되는 모든 표면을 stable contract로 간주하며, 다음 규칙을 따릅니다.
+
+### Stable contract 표면
+
+1. **MCP 도구 시그니처** — 23개 도구의 함수명·파라미터명·기본값·반환 타입.
+2. **사용자 출력 형식** — 첫 줄 패턴, 핵심 헤더, 한국어 표기 원칙(점수·등급·이모지·내부 flag·영문 약어 노출 금지). `tests/test_golden_output_hygiene.py` 9종 검증으로 기계적으로 보장.
+3. **신호 키 카탈로그** — `SIGNAL_TYPES[*].key`, `SIGNAL_KEY_TO_TAXONOMY` 매핑, taxonomy ID(N.M) 체계.
+4. **CLI 인터페이스** — `python -m dart_risk_mcp` 진입점·환경변수 `DART_API_KEY`·`scripts/regen_goldens.py` 인자.
+
+### 변경 분류 + 최소 절차
+
+| 변경 유형 | SemVer 영향 | 절차 |
+|----------|:-:|------|
+| 도구 시그니처 변경(파라미터 추가·이름 변경·기본값 변경) | minor | 최소 **1 minor 버전 동안 별칭(alias) 유지** + CHANGELOG `### Deprecated` 섹션 표기. 별칭 제거는 다음 minor에서. |
+| 도구 제거 | major | CHANGELOG `### Removed` + 직전 minor에서 `### Deprecated` 1회 이상 공지 선행. |
+| 사용자 출력 형식 변경(첫 줄·핵심 헤더·표기 원칙) | **major 또는 minor + 명시 공지** | hygiene 9종 회귀가 깨지는 변경은 stable output contract 위반. 의도적 변경 시 CHANGELOG `### Output Contract Change` 섹션으로 명시 + 골드 파일 일괄 갱신. |
+| 신호 키 추가(`SIGNAL_TYPES`에 새 key) | minor | contract 변경 아님(추가 정보). CHANGELOG `### Added`. |
+| 신호 키 제거 또는 라벨 변경 | minor | CHANGELOG `### Removed` 또는 `### Changed` + 직전 minor에서 `### Deprecated` 공지 권장. |
+| MCP 도구 신규 추가 | minor | CHANGELOG `### Added`. **단, 도구 인플레이션 회피 — 흡수 우선**(v0.9.0 `analyze_company_risk` 부실 후속 흡수 사례 참고). |
+| 내부 헬퍼·렌더러·캐시 구조 변경 | patch / minor | 출력 형식이 깨지지 않으면 contract 영향 없음. hygiene PASS 시 자유. |
+
+### 비범위는 영구 비범위
+
+[README.md](README.md) "이 도구가 하지 않는 것" 7개 항목은 v1.0 이후 어떤 마이너 릴리스에서도 도입하지 않습니다. 우회 PR은 거절됩니다.
+
+---
+
 ## [Unreleased]
 
 ## [0.9.0] — 2026-04-26
