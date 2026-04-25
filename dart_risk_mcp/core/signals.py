@@ -70,6 +70,8 @@ SIGNAL_KEY_TO_TAXONOMY: dict[str, list[str]] = {
     "CAPITAL_IMPAIRMENT":  ["8.2"],
     # v0.8.6: 임원·대주주 매도 + 인접 부정 공시 패턴
     "INSIDER_PRE_DISCLOSURE": ["3.6"],
+    # v0.8.7: 자사주 신탁계약 (직접 매입 우회 경로)
+    "TREASURY_TRUST": ["2.8"],
     # 기존 호환 키
     "MGMT":          ["3.4", "5.4"],
 }
@@ -555,6 +557,9 @@ SIGNAL_TYPES = [
     # ── v0.8.6: 임원·대주주 매도 + 인접 부정 공시 ─────────────────
     {"key": "INSIDER_PRE_DISCLOSURE", "label": "임원·대주주 매도 후 부정 공시",
      "score": 0, "keywords": []},
+    # ── v0.8.7: 자사주 신탁계약 (구조화 결정 공시 입력) ─────────
+    {"key": "TREASURY_TRUST", "label": "자사주 신탁계약",
+     "score": 0, "keywords": []},
 ]
 
 
@@ -576,6 +581,7 @@ NON_DILUTIVE_CAPITAL_EVENTS = frozenset({
     "TREASURY",       # 자사주 취득/처분/소각
     "CB_BUYBACK",     # CB 조기상환
     "TREASURY_EB",    # 자사주 EB
+    "TREASURY_TRUST", # 자사주 신탁계약 체결/해지 (v0.8.7)
 })
 
 # 하위 호환 — 전체 자본 이벤트 집합

@@ -4,6 +4,32 @@
 
 ## [Unreleased]
 
+## [0.8.7] — 2026-04-25
+
+### Added
+- **`fetch_treasury_decisions(corp_code, api_key, lookback_years=3)`** — 자사주 결정 4개 엔드포인트 통합 조회:
+  - `tsstkAqDecsn`         → `key=TREASURY`, `decision_type=acq` (자사주 취득 결정)
+  - `tsstkDpDecsn`         → `key=TREASURY`, `decision_type=disp` (자사주 처분 결정)
+  - `tsstkAqTrctrCnsDecsn` → `key=TREASURY_TRUST`, `decision_type=trust_cons` (신탁계약 체결)
+  - `tsstkAqTrctrCcDecsn`  → `key=TREASURY_TRUST`, `decision_type=trust_canc` (신탁계약 해지)
+  - 응답 누락 시 `rcept_no[:8]`로 `rcept_dt` 폴백, 일부 엔드포인트 실패는 격리.
+  - 인메모리 LRU 캐시(`_treasury_decisions_cache`, 최대 20건, TTL 600초).
+- **신호 키 `TREASURY_TRUST` (taxonomy `2.8`)** — 자사주 신탁 우회 매입 경로. base_score 0, severity OBSERVATION. `NON_DILUTIVE_CAPITAL_EVENTS`에 포함.
+- **`signal_to_prose("TREASURY_TRUST")`** — "자사주 신탁계약 체결 또는 해지 공시입니다…" 한국어 해설.
+- **`tests/test_treasury_decisions_v087.py`** — 12개 테스트(엔드포인트 정규화·rcept_dt 폴백·부분 실패 격리·캐시·신호 등록·detect_capital_churn 12개월 카운팅).
+- **골드 파일 9개 재생성** — 셀트리온/제이스코홀딩스/두산에너빌리티 × {`_capital.txt`, `_analyze.txt`, `_timeline.txt`}.
+
+### Changed
+- **`track_capital_structure` — 키워드 매칭 의존을 줄이고 결정 공시 구조화 데이터로 보강**:
+  - `match_signals`로 키워드 매칭한 자본 이벤트에 더해 `fetch_treasury_decisions` 결과를 자동 머지.
+  - 기존 키워드 매칭으로 잡힌 동일 `rcept_no`는 중복 방지(`_existing_rcept` set).
+  - 결정 이벤트는 `report_nm`이 `"자사주 취득 결정"` 등 한글 라벨로 노출.
+- **`detect_capital_churn` 12개월 윈도우 카운팅** — 입력에 결정 공시가 자동으로 포함되므로 별도 코드 변경 없이 정확도 상승. `TREASURY_TRUST`는 `NON_DILUTIVE`로 분류돼 비희석 카운트에만 합산.
+
+### Notes
+- v1.0 로드맵 검증(`tmp/v1_feasibility/REPORT.md`) 결론에 따라 무상증자(`fricDecsn`)·유무상증자(`pifricDecsn`)·감자(`crDecsn`) 결정은 본 릴리스 범위에서 **제외**. 빈도가 낮아 v1.0 이후로 이월.
+- 도구 개수 23개 그대로 유지(신규 도구 추가 없음).
+
 ## [0.8.6] — 2026-04-25
 
 ### Added

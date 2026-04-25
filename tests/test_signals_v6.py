@@ -25,7 +25,9 @@ class TestV6Signals(unittest.TestCase):
         self.assertIsInstance(CAPITAL_EVENT_KEYS, (set, frozenset))
         expected = {"3PCA", "RIGHTS_UNDER", "GAMJA_MERGE", "REVERSE_SPLIT",
                     "TREASURY", "CB_BW", "EB", "RCPS", "TREASURY_EB",
-                    "CB_ROLLOVER", "CB_BUYBACK"}
+                    "CB_ROLLOVER", "CB_BUYBACK",
+                    # v0.8.7: 자사주 신탁계약 (비희석성)
+                    "TREASURY_TRUST"}
         self.assertEqual(CAPITAL_EVENT_KEYS, expected)
 
 

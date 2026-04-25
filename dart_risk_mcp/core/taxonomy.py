@@ -412,6 +412,27 @@ TAXONOMY = {
         ],
         "investor_implication": "잦은 자본 이벤트로 기존 주주 지분 희석·자본구조 불투명성 확대; 무자본 M&A·허위 신사업·상폐 회피 세력의 공통 지표",
     },
+    "2.8": {
+        "id": "2.8",
+        "category": "Capital Structure Manipulation",
+        "name": "Treasury Stock Trust Indirect Acquisition",
+        "description": "신탁회사를 통한 자기주식 우회 매입·해지. 직접 매입 신고 없이 신탁계약으로 자사주 매입 효과를 거두는 경로. 자사주 직접 결정과 같은 시계열에 표기해 자본 리듬을 본다.",
+        "base_score": 0,
+        "severity": "OBSERVATION",
+        "crisis_timeline_months": 12,
+        "keywords": [
+            "자기주식취득 신탁계약",
+            "자기주식취득 신탁",
+            "자기주식 신탁",
+        ],
+        "red_flags": [
+            "신탁계약 체결 후 단기간(<6개월) 해지",
+            "직접 매입과 신탁 매입의 동시 발생",
+            "신탁 만기 직후 처분",
+        ],
+        "field_evidence": [],
+        "investor_implication": "Indirect treasury acquisition path; combined with direct treasury cycle indicates capital rhythm management",
+    },
 
     # CATEGORY 3: Ownership & Control (5 signals)
     "3.1": {

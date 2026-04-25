@@ -210,11 +210,12 @@ dart_risk_mcp/
 - `corp_cls`: `Y`(유가증권), `K`(코스닥), `N`(코넥스), `E`(기타)
 - `decision_type` 자동 결정 가능(공시명 기반). 수동 지정 시 허용값: `stock_acq`/`stock_div`/`merger`/`demerger`/`business_acq`/`business_div`/`tangible_acq`/`tangible_div`/`bond_acq`/`bond_div`/`demerger_merger`/`stock_exchange`
 
-### 20. `track_capital_structure(company_name, lookback_years=3)` ✨
+### 20. `track_capital_structure(company_name, lookback_years=3)` ✨ v0.8.7
 
-자본 이벤트(증자·감자·자사주·CB/BW/EB/RCPS 9종)를 시간순으로 집계해 '자본 주무르기' 리듬을 탐지합니다.
+자본 이벤트(증자·감자·자사주·CB/BW/EB/RCPS 9종 + 자사주 결정 4종)를 시간순으로 집계해 '자본 주무르기' 리듬을 탐지합니다.
 
-- 내부 흐름: `resolve_corp` → `fetch_company_disclosures` → `match_signals` × N → `CAPITAL_EVENT_KEYS` 필터 → `detect_capital_churn` + `fetch_debt_balance` × N → `detect_debt_rollover`
+- 내부 흐름: `resolve_corp` → `fetch_company_disclosures` → `match_signals` × N + **`fetch_treasury_decisions` 4엔드포인트 머지(v0.8.7)** → `CAPITAL_EVENT_KEYS` 필터 → `detect_capital_churn` + `fetch_debt_balance` × N → `detect_debt_rollover`
+- v0.8.7: 키워드 매칭에 더해 자사주 결정 구조화 데이터 4종(`tsstkAqDecsn`·`tsstkDpDecsn`·`tsstkAqTrctrCnsDecsn`·`tsstkAqTrctrCcDecsn`)을 자동 통합. 동일 `rcept_no` 중복 방지. 신규 신호 키 `TREASURY_TRUST`(taxonomy 2.8, 비희석성).
 - 판정 규칙:
   - 12개월 슬라이딩 윈도우에서 자본 이벤트 ≥3건 → `CAPITAL_CHURN` 플래그
   - 3년 이상 채무잔액이 거의 변동 없고(YoY ≤ 10%) CB 발행 ≥2건 → `CB_ROLLOVER` 플래그(자본 차환 의존)
@@ -273,6 +274,7 @@ dart_risk_mcp/
 | `fetch_executive_compensation(corp_code, api_key, year, report_type)` | 보수 4개 엔드포인트 통합 조회 |
 | `fetch_insider_timeline(corp_code, api_key, lookback_years)` | elestock + hyslrSttus + hyslrChgSttus + tesstkAcqsDspsSttus 4엔드포인트 × 4분기 통합 시계열 (v0.8.6) |
 | `detect_insider_pre_disclosure(insider_records, signal_events, window_days=30)` | 매도 ±30일 내 부정 공시 패턴 탐지 (v0.8.6) |
+| `fetch_treasury_decisions(corp_code, api_key, lookback_years)` | 자사주 결정 4엔드포인트(취득·처분·신탁체결·신탁해지) 통합. key=TREASURY/TREASURY_TRUST로 정규화 (v0.8.7) |
 | `fetch_fund_usage(corp_code, api_key, corp_cls, lookback_years)` | 공모·사모 자금사용 2개 엔드포인트 통합 + 이상 플래그 탐지 |
 | `fetch_major_decision(rcept_no, corp_cls, decision_type)` | 12개 DS005 주요결정 엔드포인트 중 decision_type에 따라 자동 선택 |
 | `resolve_decision_type(report_nm)` | 공시명 → decision_type 키 자동 추론 (`[기재정정]` 등 접두어 제거) |
@@ -300,7 +302,8 @@ dart_risk_mcp/
 | `GET /api/prstInvstmEntrCptalUseDtls.json` | 공모 자금 사용 내역 (corp_code, 연도) |
 | `GET /api/otrCptalUseDtls.json` | 사모 자금 사용 내역 (corp_code, 연도) |
 | `GET /api/bsnAcqsDecsn.json` / `bsnTrfDecsn.json` | 영업 양수/양도 결정 (rcept_no) |
-| `GET /api/tsstkAqDecsn.json` / `tsstkDpDecsn.json` | 유형자산 양수/양도 결정 |
+| `GET /api/tsstkAqDecsn.json` / `tsstkDpDecsn.json` | 자사주 취득/처분 결정 (v0.8.7 통합) |
+| `GET /api/tsstkAqTrctrCnsDecsn.json` / `tsstkAqTrctrCcDecsn.json` | 자사주 신탁계약 체결/해지 결정 (v0.8.7 통합) |
 | `GET /api/otcprStkInvscrTrfDecsn.json` / `otcprStkInvscrAcqsDecsn.json` | 타법인 주식 양수/양도 |
 | `GET /api/bdwtIsDecsn.json` / `cvbdIsDecsn.json` | 채권 인수/발행 결정 |
 | `GET /api/cmpMgDecsn.json` / `cmpDvDecsn.json` / `cmpDvmgDecsn.json` | 합병·분할·분할합병 결정 |

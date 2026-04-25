@@ -39,6 +39,7 @@ from .core import (
     fetch_major_decision,
     fetch_multi_financial,
     fetch_shareholder_status,
+    fetch_treasury_decisions,
     find_pattern_match,
     flag_to_prose,
     is_amendment_disclosure,
@@ -2648,6 +2649,24 @@ def track_capital_structure(
                 "is_amendment": is_amendment_disclosure(d.get("report_nm", "")),
             })
 
+    # v0.8.7: 자사주 결정 4종 구조화 데이터 보강 (TREASURY 직접/처분 + TREASURY_TRUST 체결/해지)
+    # 키워드 매칭으로 이미 들어온 동일 rcept_no는 중복 방지.
+    treasury_decisions = fetch_treasury_decisions(corp_code, api_key, lookback_years)
+    _existing_rcept = {e.get("rcept_no") for e in signal_events if e.get("rcept_no")}
+    for t in treasury_decisions:
+        if t.get("rcept_no") in _existing_rcept:
+            continue
+        signal_events.append({
+            "key": t["key"],
+            "label": t["report_nm"],
+            "score": 0,
+            "report_nm": t["report_nm"],
+            "rcept_dt": t["rcept_dt"],
+            "rcept_no": t["rcept_no"],
+            "is_amendment": False,
+            "decision_type": t["decision_type"],
+        })
+
     result = detect_capital_churn(signal_events, lookback_years)
     churn_flagged = "CAPITAL_CHURN" in result["flags"]
 
@@ -2665,7 +2684,7 @@ def track_capital_structure(
         summary = (
             f"🎯 최근 {lookback_years}년 동안 자본 이벤트 {result['total_events']}건이 "
             f"관찰됐지만 12개월 최대 집중도가 {result['max_12m_count']}건으로 "
-            "'3건 이상 몰림' 기준(CAPITAL_CHURN)에는 미치지 못했습니다. "
+            "'3건 이상 몰림' 기준(자본 이벤트 집중 판정)에는 미치지 못했습니다. "
             "개별 이벤트의 성격은 아래 시계열에서 확인하세요."
         )
 

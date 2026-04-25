@@ -2174,3 +2174,95 @@ def detect_debt_rollover(
         return None
 
     return "CB_ROLLOVER"
+
+
+# v0.8.7: 자사주 결정 4종 통합 ---------------------------------------
+_TREASURY_DECISION_ENDPOINTS: tuple[tuple[str, str, str, str], ...] = (
+    # (path, key, decision_type, 한글 라벨)
+    ("tsstkAqDecsn",         "TREASURY",       "acq",        "자사주 취득 결정"),
+    ("tsstkDpDecsn",         "TREASURY",       "disp",       "자사주 처분 결정"),
+    ("tsstkAqTrctrCnsDecsn", "TREASURY_TRUST", "trust_cons", "자사주 신탁계약 체결"),
+    ("tsstkAqTrctrCcDecsn",  "TREASURY_TRUST", "trust_canc", "자사주 신탁계약 해지"),
+)
+
+_treasury_decisions_cache: dict[tuple, tuple[float, list]] = {}
+_TREASURY_CACHE_MAX = 20
+_TREASURY_CACHE_TTL = 600  # 10분
+
+
+def fetch_treasury_decisions(
+    corp_code: str,
+    api_key: str,
+    lookback_years: int = 3,
+) -> list[dict]:
+    """자사주 취득·처분·신탁 결정 4개 엔드포인트 통합 조회 (v0.8.7).
+
+    매핑:
+      - tsstkAqDecsn         → key=TREASURY,       decision_type=acq        (자사주 취득)
+      - tsstkDpDecsn         → key=TREASURY,       decision_type=disp       (자사주 처분)
+      - tsstkAqTrctrCnsDecsn → key=TREASURY_TRUST, decision_type=trust_cons (신탁 체결)
+      - tsstkAqTrctrCcDecsn  → key=TREASURY_TRUST, decision_type=trust_canc (신탁 해지)
+
+    각 이벤트:
+        {
+          "key":            "TREASURY" | "TREASURY_TRUST",
+          "decision_type":  "acq" | "disp" | "trust_cons" | "trust_canc",
+          "rcept_no":       "YYYYMMDDxxxxxx",
+          "rcept_dt":       "YYYYMMDD" (응답 누락 시 rcept_no[:8]로 폴백),
+          "report_nm":      "자사주 취득 결정" 등 한글 라벨,
+          "raw":            원본 응답 dict,
+        }
+
+    빈 corp_code/api_key는 빈 리스트. 일부 엔드포인트 실패는 다른 이벤트를 막지 않는다.
+    """
+    if not corp_code or not api_key:
+        return []
+
+    cache_key = (corp_code, lookback_years)
+    cached = _cache_get(_treasury_decisions_cache, cache_key, _TREASURY_CACHE_TTL)
+    if cached is not None:
+        return cached
+
+    end = datetime.now()
+    start = end - timedelta(days=max(1, lookback_years) * 365)
+    bgn_de = start.strftime("%Y%m%d")
+    end_de = end.strftime("%Y%m%d")
+
+    events: list[dict] = []
+    for ep_path, key, dtype, label in _TREASURY_DECISION_ENDPOINTS:
+        try:
+            resp = _retry(
+                "GET", f"{DART_BASE}/{ep_path}.json",
+                params={
+                    "crtfc_key": api_key,
+                    "corp_code": corp_code,
+                    "bgn_de": bgn_de,
+                    "end_de": end_de,
+                },
+            )
+            data = resp.json()
+            if data.get("status") != "000":
+                _log_dart_status(data.get("status", "?"),
+                                 f"{ep_path} corp_code={corp_code}")
+                continue
+            for item in data.get("list") or []:
+                rcept_no = (item.get("rcept_no") or "").strip()
+                rcept_dt = (item.get("rcept_dt") or "").strip()
+                if not rcept_dt and len(rcept_no) >= 8 and rcept_no[:8].isdigit():
+                    rcept_dt = rcept_no[:8]
+                if not rcept_dt or len(rcept_dt) < 8:
+                    continue
+                events.append({
+                    "key": key,
+                    "decision_type": dtype,
+                    "rcept_no": rcept_no,
+                    "rcept_dt": rcept_dt[:8],
+                    "report_nm": item.get("report_nm") or label,
+                    "raw": item,
+                })
+        except Exception as e:
+            log.debug("%s 조회 실패 (%s): %s", ep_path, corp_code, e)
+
+    events.sort(key=lambda e: e["rcept_dt"])
+    _cache_set(_treasury_decisions_cache, cache_key, events, _TREASURY_CACHE_MAX)
+    return events

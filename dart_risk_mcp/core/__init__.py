@@ -23,6 +23,7 @@ from .dart_client import (
     fetch_debt_balance,
     detect_debt_rollover,
     detect_insider_pre_disclosure,
+    fetch_treasury_decisions,
 )
 from .signals import (
     match_signals, is_amendment_disclosure,
@@ -81,4 +82,5 @@ __all__ = [
     "fetch_debt_balance",
     "detect_debt_rollover",
     "detect_insider_pre_disclosure",
+    "fetch_treasury_decisions",
 ]
