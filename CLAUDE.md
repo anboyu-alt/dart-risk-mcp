@@ -390,6 +390,19 @@ dart_risk_mcp/
 2. `core/__init__.py`에 import + `__all__` 추가
 3. `server.py`에 `@mcp.tool()` 데코레이터로 도구 등록
 
+### 골드 출력 재생성 (회귀 검증용)
+
+`scripts/regen_goldens.py`로 6개 회사 × 23개 도구 매트릭스를 한 번에 재생성합니다.
+API 키는 `tmp/_apikey.txt` 또는 환경변수 `DART_API_KEY`에서 자동 로드.
+
+```bash
+python scripts/regen_goldens.py --dry-run                            # 호출 매트릭스만 확인
+python scripts/regen_goldens.py --companies 셀트리온 --tools capital  # 부분 재생성
+python scripts/regen_goldens.py                                       # 전체 ≥100개 재생성
+```
+
+생성 후 `python -m pytest tests/test_golden_output_hygiene.py -v`로 회귀 검증.
+
 ---
 
 ## 테스트 방법
