@@ -1641,18 +1641,27 @@ def _pick_account(fs: dict, names: list[str]):
     return None
 
 
-def detect_financial_anomaly(current: dict, prior: dict) -> tuple[list[str], list[dict]]:
+def detect_financial_anomaly(
+    current: dict,
+    prior: dict,
+    current_indx: dict | None = None,
+    prior_indx: dict | None = None,
+) -> tuple[list[str], list[dict]]:
     """
     당기·전기 재무 dict를 받아 4개 이상 지표 판정.
 
     Args:
         current: 당기 재무 {account_nm: int, ...}
         prior: 전기 재무 {account_nm: int, ...}
+        current_indx: (v0.8.8) 당기 fnlttSinglIndx 결과 {idx_nm: float, ...}.
+        prior_indx: (v0.8.8) 전기 fnlttSinglIndx 결과. 둘 다 주어지면
+            핵심 지표 7종에 대한 YoY 변동률 metric을 추가한다(절대 임계 없음, flagged=False).
 
     Returns:
         (flags, metrics)
         flags: ["AR_SURGE", "INVENTORY_SURGE", "CASH_GAP", "CAPITAL_IMPAIRMENT"] 부분집합
         metrics: [{"name", "current", "prior", "delta", "unit", "flagged"} ...]
+                 v0.8.8: indx 기반 항목은 source="indx", delta_pct(float|None) 키를 가짐.
     """
     flags: list[str] = []
     metrics: list[dict] = []
@@ -1707,7 +1716,57 @@ def detect_financial_anomaly(current: dict, prior: dict) -> tuple[list[str], lis
             m["flagged"] = True
         metrics.append(m)
 
+    # v0.8.8: fnlttSinglIndx YoY 추세 (절대 임계 없음, 사실 표기만)
+    if current_indx and prior_indx:
+        for idx_nm in _CORE_INDX_NAMES:
+            cv = current_indx.get(idx_nm)
+            pv = prior_indx.get(idx_nm)
+            if cv is None or pv is None:
+                continue
+            try:
+                cv_f = float(cv)
+                pv_f = float(pv)
+            except (TypeError, ValueError):
+                continue
+            unit = _INDX_UNIT.get(idx_nm, "%")
+            delta_pct: float | None
+            if pv_f == 0:
+                delta_pct = None
+            else:
+                delta_pct = (cv_f - pv_f) / abs(pv_f) * 100
+            metrics.append({
+                "name": idx_nm,
+                "source": "indx",
+                "current": cv_f,
+                "prior": pv_f,
+                "delta_pct": delta_pct,
+                "unit": unit,
+                "flagged": False,
+            })
+
     return flags, metrics
+
+
+# v0.8.8: fnlttSinglIndx 핵심 지표 7종 (사용자 출력에 표기) -----------------
+_CORE_INDX_NAMES: tuple[str, ...] = (
+    "순이익률",
+    "자기자본비율",
+    "부채비율",
+    "유동비율",
+    "매출액증가율(YoY)",
+    "매출채권회전율",
+    "재고자산회전율",
+)
+
+_INDX_UNIT: dict[str, str] = {
+    "순이익률": "%",
+    "자기자본비율": "%",
+    "부채비율": "%",
+    "유동비율": "%",
+    "매출액증가율(YoY)": "%",
+    "매출채권회전율": "회",
+    "재고자산회전율": "회",
+}
 
 
 def _fs_response_to_periods(fs_data: dict) -> tuple[dict, dict]:
@@ -2266,3 +2325,76 @@ def fetch_treasury_decisions(
     events.sort(key=lambda e: e["rcept_dt"])
     _cache_set(_treasury_decisions_cache, cache_key, events, _TREASURY_CACHE_MAX)
     return events
+
+
+# v0.8.8: fnlttSinglIndx (단일회사 주요 재무지표) 통합 ----------------------
+_INDX_CL_CODES: tuple[str, ...] = (
+    "M210000",  # 수익성
+    "M220000",  # 안정성
+    "M230000",  # 성장성
+    "M240000",  # 활동성
+)
+
+_company_indicators_cache: dict[tuple, tuple[float, dict]] = {}
+_INDX_CACHE_MAX = 40
+_INDX_CACHE_TTL = 600  # 10분
+
+
+def fetch_company_indicators(
+    corp_code: str,
+    api_key: str,
+    bsns_year: str,
+    reprt_code: str = "11011",
+) -> dict[str, float]:
+    """단일회사 주요 재무지표(`fnlttSinglIndx`)를 4개 카테고리로 호출해 합친다.
+
+    카테고리:
+      - M210000 수익성 (순이익률 등)
+      - M220000 안정성 (자기자본비율·부채비율·유동비율 등)
+      - M230000 성장성 (매출액증가율 등)
+      - M240000 활동성 (매출채권회전율·재고자산회전율 등)
+
+    Returns:
+        {idx_nm: float, ...} flat dict. idx_val이 None이거나 숫자 변환 불가한
+        항목은 제외. 일부 cl_code 실패는 다른 결과를 막지 않는다.
+    """
+    if not corp_code or not api_key or not bsns_year:
+        return {}
+
+    cache_key = (corp_code, bsns_year, reprt_code)
+    cached = _cache_get(_company_indicators_cache, cache_key, _INDX_CACHE_TTL)
+    if cached is not None:
+        return cached
+
+    merged: dict[str, float] = {}
+    for cl in _INDX_CL_CODES:
+        try:
+            resp = _retry(
+                "GET", f"{DART_BASE}/fnlttSinglIndx.json",
+                params={
+                    "crtfc_key": api_key,
+                    "corp_code": corp_code,
+                    "bsns_year": bsns_year,
+                    "reprt_code": reprt_code,
+                    "idx_cl_code": cl,
+                },
+            )
+            data = resp.json()
+            if data.get("status") != "000":
+                _log_dart_status(data.get("status", "?"),
+                                 f"fnlttSinglIndx cl={cl} corp_code={corp_code}")
+                continue
+            for item in data.get("list") or []:
+                nm = (item.get("idx_nm") or "").strip()
+                raw = item.get("idx_val")
+                if not nm or raw is None:
+                    continue
+                try:
+                    merged[nm] = float(str(raw).replace(",", "").strip())
+                except (TypeError, ValueError):
+                    continue
+        except Exception as e:
+            log.debug("fnlttSinglIndx cl=%s 조회 실패 (%s): %s", cl, corp_code, e)
+
+    _cache_set(_company_indicators_cache, cache_key, merged, _INDX_CACHE_MAX)
+    return merged

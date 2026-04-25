@@ -1,6 +1,6 @@
 # DART 리스크 분석 MCP
 
-**버전:** v0.8.7 · **공시 기반 불공정거래 위험 모니터링**
+**버전:** v0.8.8 · **공시 기반 불공정거래 위험 모니터링**
 
 DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 
@@ -11,6 +11,14 @@ DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 ## 출력 원칙
 
 모든 도구는 **하나의 한국어 서술 출력**만 반환합니다. level/mode/format 분기는 지원하지 않습니다. 원시 데이터가 필요하면 `get_disclosure_document`·`view_disclosure`·`list_disclosure_sections` 같은 원문 도구를 직접 조합하세요.
+
+### v0.8.8 주요 변경
+
+- **`scan_financial_anomaly` — 전년 대비 추세 블록 신설** — `fnlttSinglIndx`(단일회사 주요 재무지표) 4개 카테고리(수익성·안정성·성장성·활동성)를 자동 호출해 핵심 7종 지표(순이익률·자기자본비율·부채비율·유동비율·매출액증가율·매출채권회전율·재고자산회전율)를 `12.30%p → 8.10%p (전년 대비 -34.1%)` 형식으로 표기. 절대 임계 4지표(AR_SURGE 등)는 폴백으로 유지.
+- **`detect_financial_anomaly`에 `current_indx` / `prior_indx` 옵션** — 같은 회사 전년도 지표를 받아 YoY 변동률을 metric에 부착. 점수 가산 없음, 사실 표기만(v0.8.5 원칙).
+- **신규 헬퍼 `fetch_company_indicators(corp_code, api_key, bsns_year, reprt_code)`** — 4개 idx_cl_code 응답을 `{idx_nm: float}`로 정규화. 무효 값(None/공백/문자) 자동 스킵.
+- **v1.0 로드맵 #6 재정의 반영** — 검증 결과 DART API가 업종 평균을 직접 제공하지 않음. "업종 평균 대비 +Xσ"는 v1.0 이후로도 영구 비범위. **회사 자체 YoY 추세**로 false-positive 완화.
+- **회귀 방지** — `tests/test_financial_indx_v088.py` 8개 신규, 골드 파일 3개 재생성. 전체 140/140 PASS.
 
 ### v0.8.7 주요 변경
 
@@ -39,6 +47,7 @@ DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 
 ### 최근 릴리스 요약
 
+- **v0.8.8** — `scan_financial_anomaly` 전년 대비 추세 블록 신설(`fnlttSinglIndx` 4카테고리 통합) + `detect_financial_anomaly`에 `current_indx`/`prior_indx` 옵션 + 신규 헬퍼 `fetch_company_indicators`
 - **v0.8.7** — `track_capital_structure` 결정 공시 4종 자동 통합 + 신규 신호 키 `TREASURY_TRUST`(taxonomy 2.8) + `fetch_treasury_decisions` 헬퍼
 - **v0.8.6** — `track_insider_trading` 분기 보고 데이터 통합(`hyslrChgSttus` + `tesstkAcqsDspsSttus`) + 신규 패턴 `INSIDER_PRE_DISCLOSURE`(매도 ±30일 내 부정 공시) + 출력 품질 보정(합산 행 스킵·dedup·윈도우 필터)
 - **v0.8.5** — 점수·등급 표기 전면 제거. `_risk_level`·`_risk_emoji`·`_PHASE_EMOJI` 삭제. 내부 `SIGNAL_TYPES[*].score`는 우선순위 랭킹 목적으로 유지하지만 출력 경계를 넘지 않음
@@ -1479,7 +1488,7 @@ python -m dart_risk_mcp
 ## 참고 자료
 
 - **[OpenDART API 개발가이드 (한글 정리본)](opendart_api_guide.md)** — 이 MCP가 사용하는 DART OpenAPI 전체 명세. 엔드포인트·요청 파라미터·응답 필드·공통 에러코드(`010`~`901`)를 8개 섹션(DS001 공시정보 ~ DS008 증권신고서)으로 정리했습니다. 새 도구를 추가하거나 기존 응답을 디버깅할 때, 공식 문서([opendart.fss.or.kr/guide](https://opendart.fss.or.kr/guide/main.do)) 대신 이 파일을 빠르게 훑어볼 수 있습니다.
-- **[CHANGELOG.md](CHANGELOG.md)** — 버전별 변경 내역 (현재 v0.8.7).
+- **[CHANGELOG.md](CHANGELOG.md)** — 버전별 변경 내역 (현재 v0.8.8).
 - **[CLAUDE.md](CLAUDE.md)** — 프로젝트 내부 개발자 가이드 (디렉토리 구조, 핵심 함수, 도구 추가 절차).
 
 ---

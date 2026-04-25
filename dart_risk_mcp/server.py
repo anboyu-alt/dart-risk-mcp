@@ -40,6 +40,7 @@ from .core import (
     fetch_multi_financial,
     fetch_shareholder_status,
     fetch_treasury_decisions,
+    fetch_company_indicators,
     find_pattern_match,
     flag_to_prose,
     is_amendment_disclosure,
@@ -2532,7 +2533,21 @@ def scan_financial_anomaly(
                 "재무제표 조회 불가(데이터 없음 또는 권한 부족).")
 
     current, prior = _fs_response_to_periods({"list": fs_list})
-    flags, metrics = detect_financial_anomaly(current, prior)
+
+    # v0.8.8: 단일회사 주요 재무지표 — 당기·전기 동시 조회 (전년 대비 추세 표기)
+    _reprt_map = {"annual": "11011", "half": "11012", "q1": "11013", "q3": "11014"}
+    _reprt = _reprt_map.get(report_type, "11011")
+    _current_indx = fetch_company_indicators(corp_code, api_key, year, _reprt)
+    _prior_year = str(int(year) - 1) if year.isdigit() else ""
+    _prior_indx = (
+        fetch_company_indicators(corp_code, api_key, _prior_year, _reprt)
+        if _prior_year else {}
+    )
+
+    flags, metrics = detect_financial_anomaly(
+        current, prior,
+        current_indx=_current_indx, prior_indx=_prior_indx,
+    )
 
     # 상단 한 줄 요약
     flagged_metrics = [m for m in metrics if m.get("flagged")]
@@ -2557,7 +2572,10 @@ def scan_financial_anomaly(
         "| 지표 | 당기 | 전기 | 변화 |",
         "|---|---|---|---|",
     ]
-    for m in metrics:
+    # v0.8.8: indx 항목은 별도 블록으로 분리 — 4지표 본 표는 종전 그대로 유지
+    _fs_metrics = [m for m in metrics if m.get("source") != "indx"]
+    _indx_metrics = [m for m in metrics if m.get("source") == "indx"]
+    for m in _fs_metrics:
         name = m["name"]
         if name == "순이익 vs 영업현금흐름":
             cur = (
@@ -2575,6 +2593,24 @@ def scan_financial_anomaly(
             pri = "-"
             delta = "-"
         lines.append(f"| {name} | {cur} | {pri} | {delta} |")
+
+    # v0.8.8: 전년 대비 추세 (DART 재무지표 기준) — 사실 표기만
+    if _indx_metrics:
+        lines.append("")
+        lines.append("**전년 대비 추세 (DART 재무지표 기준)**")
+        for m in _indx_metrics:
+            cv = m["current"]
+            pv = m["prior"]
+            unit = m.get("unit", "%")
+            dp = m.get("delta_pct")
+            if dp is None:
+                trend = "전년 0 또는 비교 불가"
+            else:
+                # 음수=둔화/감소, 양수=상승
+                trend = f"전년 대비 {dp:+.1f}%"
+            lines.append(
+                f"- {m['name']}  {pv:.2f}{unit} → {cv:.2f}{unit}  ({trend})"
+            )
 
     lines.append("")
     if flagged_metrics:

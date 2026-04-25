@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [0.8.8] — 2026-04-26
+
+### Added
+- **`fetch_company_indicators(corp_code, api_key, bsns_year, reprt_code="11011")`** — 단일회사 주요 재무지표(`fnlttSinglIndx`)를 4개 카테고리로 호출해 합친 flat dict 반환:
+  - `M210000` 수익성 / `M220000` 안정성 / `M230000` 성장성 / `M240000` 활동성
+  - `idx_val=None` 또는 숫자 변환 불가 항목은 자동 제외, 일부 cl_code 실패는 격리.
+  - 인메모리 LRU 캐시(`_company_indicators_cache`, 최대 40건, TTL 600초).
+- **`detect_financial_anomaly`에 `current_indx` / `prior_indx` 옵션 추가** — 기존 4개 절대 임계 판정에 더해 핵심 7종 지표(순이익률·자기자본비율·부채비율·유동비율·매출액증가율·매출채권회전율·재고자산회전율)에 대해 YoY 변동률(delta_pct)을 metric에 부착. **flagged=False 유지**(절대 임계 없음, 사실 표기만).
+- **`scan_financial_anomaly` 출력에 "전년 대비 추세 (DART 재무지표 기준)" 블록 신설** — 핵심 지표를 `12.30%p → 8.10%p (전년 대비 -34.1%)` 형식으로 한국어 표기. 기존 4지표 본 표(절대 임계 기준)와 분리.
+- **`tests/test_financial_indx_v088.py`** — 8개 테스트(엔드포인트 통합·무효 값 스킵·부분 실패 격리·detect 옵션 호환·YoY 계산·분모 0 처리).
+
+### Changed
+- **v1.0 로드맵 #6 재정의 반영** — 원래 plan은 "업종 평균 정규화"였으나, 검증 결과 `fnlttSinglIndx`·`fnlttCmpnyIndx` 둘 다 단일 회사 지표만 반환하고 DART API가 업종 평균을 직접 제공하지 않음을 확인. 따라서 **회사 자체 YoY 추세**로 재정의해 false-positive를 완화. 절대 임계값(AR_SURGE ≥10%p 등)은 폴백으로 유지.
+
+### Notes
+- 도구 23개 그대로 유지(신규 도구 추가 없음).
+- "업종 평균 대비 +Xσ" 표기는 v1.0 이후로도 영구 비범위(외부 데이터 의존성).
+
 ## [0.8.7] — 2026-04-25
 
 ### Added
