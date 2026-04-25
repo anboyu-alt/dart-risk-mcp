@@ -33,6 +33,44 @@
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-04-26 (GA)
+
+**메인 메시지: 출력 표준의 계약화.** 새 MCP 도구 0개. v0.7.x~v0.9.0 동안 다듬어진 한국어 출력 형식이 마이너 릴리스에서도 깨지지 않음을 기계적으로 보증한다. 도구 카탈로그 23개 그대로 유지.
+
+### Added — 골드 다양화
+
+- **`scripts/regen_goldens.py`** 영구 승격 — `tmp/v1_feasibility/regen_v0XX.py` 4개 임시 패턴을 단일 진입점으로 통합. 6개 카테고리 회사 × 23개 도구 매트릭스를 코드에 명시. argparse CLI(`--companies`, `--tools`, `--dry-run`, `--quiet`).
+- **6개 회사 카테고리 추가** — 셀트리온(대형주·바이오), 제이스코홀딩스(중소형·위험사례), 두산에너빌리티(대형 자회사·채무), 삼성전자(대형주 표준·페이지네이션), 헬릭스미스(관리종목·부실), 두산(지주사). iridescent plan 라인 211 사용자 승인.
+- **rcept 자동 추출** — `analyze_company_risk` 결과의 첫 정상 공시(정정 제외) `rcept_no`를 자동 파싱해 4개 rcept 인자 도구(check_disclosure_risk·get_disclosure_document·list_disclosure_sections·view_disclosure)에 적용.
+- **DS005 자동 탐지** — 회사별 DS005 키워드(타법인주식·합병·분할·영업양수도 등) 1건 자동 탐지(미발견 시 콘텐트 경고만, 발견 시 `decision_{rcept}.txt` 생성). v1.0 시점 6 회사 모두 미발견 — v1.0.1 데이터 가용성 추가 검증으로 이월.
+- **회사 무관 도구** — `find_actor_overlap`(6 회사 한 번), `compare_financials`(6 회사 한 번), `find_risk_precedents`(신호 키 조합 3종), `search_market_disclosures`(preset 4종) 매트릭스 통합.
+- **골드 파일 119개** — `tests/fixtures/sample_outputs/`에 24개 → 119개로 다양화.
+- **`CLAUDE.md` "자주 있는 작업"** 절에 골드 재생성 명령 1단락 추가.
+
+### Added — Stable Output Contract (hygiene 검증 3종)
+
+- **`test_first_line_format_per_tool`** — 23개 단축명별 첫 줄 정규식 매핑(`_FIRST_LINE_PATTERNS`). 회사명 단순 13개 + 종목코드 1개 + rcept 4개 + 회사 무관 4개 + 기존 disclosure 1개. `_short_name(fname)` 헬퍼가 파일명 → 단축명 자동 추출(rcept 8자리 suffix 제거).
+- **`test_core_headers_preserved`** — 사용자가 학습한 핵심 헤더 8종(`**시계열**`, `**전년 대비 추세 (DART 재무지표 기준)**`, `**공시 원문 목차**`, `**공시 원문**`, `**공시 리스크 분석**`, `**① 정정공시 비율**`, `**③ 공시의무 위반**`, `**⑤ 조회공시 빈도**`)이 골드 전체에서 살아 있어야 한다.
+- **`test_no_unknown_internal_code_parens`** — v0.8.7에서 발견한 `(CAPITAL_CHURN)` 등 내부 flag 코드 괄호 인용 회귀 차단. 정규식 `\([A-Z][A-Z_]+\)` 매칭 + `_ALLOWED_PAREN_ABBREVS` 화이트리스트(CB·BW·EB·RCPS·IR·PE·MFDS·FSC·ROE·EBITDA·OECD·IFRS 등 24종) 외 모든 영문 코드 괄호 인용을 fail.
+
+### Changed
+
+- **hygiene 임계 ≥10 → ≥100** — `test_fixture_set_non_empty`. v1.0 GA 119개 골드 기준 충족.
+- **README.md 비범위 절 신설** — "이 도구가 하는 것"(23 도구 6 그룹 분류) + "이 도구가 하지 않는 것"(7 영구 비범위 — 점수·등급/실시간 알림/매수 추천/업종 평균/해외상장/비상장 감사/시장 일일 자동 스캔). v0.7.x~v0.9.0 마이너 변경 5개 절·11개 릴리스 요약은 본 CHANGELOG로 일임.
+- **CLAUDE.md "비범위" 표 신설** — 7항목 + 사유/검증 출처 컬럼. 도구 인플레이션 회피 안내.
+- **CHANGELOG에 Stability/Deprecation Policy 명문화** — Stable contract 4표면(도구 시그니처·출력 형식·신호 키·CLI) 정의 + 변경 분류 7유형별 SemVer 영향·최소 절차 표. v1.0 GA부터 발효.
+- **pyproject.toml** Development Status 분류 `3 - Alpha` → `5 - Production/Stable`.
+
+### Removed
+
+- `tmp/v1_feasibility/regen_v0{86,87,88,90}.py` 4개 임시 스크립트 — `scripts/regen_goldens.py` 단일 진입점으로 흡수 후 삭제.
+
+### Notes
+
+- **신규 MCP 도구 0개** — v1.0의 메인 메시지는 "새 기능 0개, 출력 표준 계약화"였음.
+- **v1.0.1 이관 항목**: (1) DS007 데이터 가용성, (2) `fetch_market_disclosures` 호출법 점검(`pblntf_ty=B`/`C` 빈 응답), (3) PyPI 패키지명 점유 확인. iridescent plan 라인 142 분리 결정.
+- **회귀 검증**: hygiene 9/9 PASS · 전체 157/157 PASS(DART_API_KEY 세팅 시).
+
 ## [0.9.0] — 2026-04-26
 
 ### Added
