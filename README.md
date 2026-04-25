@@ -12,64 +12,32 @@ DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 
 모든 도구는 **하나의 한국어 서술 출력**만 반환합니다. level/mode/format 분기는 지원하지 않습니다. 원시 데이터가 필요하면 `get_disclosure_document`·`view_disclosure`·`list_disclosure_sections` 같은 원문 도구를 직접 조합하세요.
 
-### v0.9.0 주요 변경
+## 이 도구가 하는 것
 
-- **`analyze_company_risk` 부실 후속 단계 자동 흡수** — `dfOcr`(부도)·`bsnSp`(영업정지)·`ctrcvsBgrq`(회생절차)·`dsRsOcr`(해산사유) 4개 엔드포인트 통합. 발생 시 "**부실 단계 진입 — 주요사항보고서 발생**" 경고 블록과 일자별 사건 라인 표기. 신호 키 `DISTRESS_EVENT`(taxonomy 8.5).
-- **`track_fund_usage` 배당 이상 흡수** — `alotMatter`(배당에 관한 사항)을 분기 4코드 × N년 호출. 출력에 "**배당 이력**" 블록 신설. 적자 시점 배당이 있으면 `DIVIDEND_DRAIN`(taxonomy 5.6) 경고 라인 표기.
-- **신규 헬퍼 3종**: `fetch_distress_events`, `fetch_dividend_history`, `detect_dividend_drain`. 모두 인메모리 캐시 + 부분 실패 격리.
-- **도구 23개 그대로 유지** — 원 plan의 `track_distress_progression` 단독 도구는 발생 빈도가 낮아 폐기, 기존 도구에 흡수 방식 채택. v1.0 로드맵 검증 결론 반영.
-- **회귀 방지** — `tests/test_distress_dividend_v090.py` 14개 신규, 골드 파일 6개 재생성. 전체 154/154 PASS.
+총 **23개 MCP 도구**를 6개 그룹으로 분류합니다(자세한 시그니처는 [CLAUDE.md](CLAUDE.md) 참고).
 
-### v0.8.8 주요 변경
+- **공시 시계열 재구성** — 한 기업의 최근 N개월 공시를 자동 정렬·신호 분류·복합 패턴 매칭. (`analyze_company_risk`, `build_event_timeline`)
+- **자본·재무·내부자 추세 분석** — 자본구조 12개월 churn, 재무 4지표 YoY 추세, 분기 보고 단위 보유 비율 변동, 채무증권 5종 잔액·만기. (`track_capital_structure`, `scan_financial_anomaly`, `track_insider_trading`, `track_debt_balance`)
+- **자금 흐름·감사·배당 검증** — 공모/사모 조달 자금 계획 vs 실제 집행, 5년 감사의견 이력, 적자 시점 배당 이상. (`track_fund_usage`, `get_audit_opinion_history`)
+- **행위자·DS005·기업 정보 조회** — 공통 CB/BW 인수자 교차 비교, 12종 주요결정 공시, 임원 보수, 주주 현황, 재무 비교, 기업 개요. (`find_actor_overlap`, `get_major_decision`, `get_executive_compensation`, `get_shareholder_info`, `compare_financials`, `get_company_info`, `get_financial_summary`)
+- **공시 원문·접수번호 조회** — 종목코드·접수번호로 공시 목록·원문·섹션·페이지네이션. (`list_disclosures_by_stock`, `get_disclosure_document`, `list_disclosure_sections`, `view_disclosure`, `check_disclosure_risk`, `check_disclosure_anomaly`)
+- **시장 전체·신호 해설** — preset 기반 시장 일괄 스캔, 신호 키 조합별 위기 타임라인·복합 패턴 해설. (`search_market_disclosures`, `find_risk_precedents`)
 
-- **`scan_financial_anomaly` — 전년 대비 추세 블록 신설** — `fnlttSinglIndx`(단일회사 주요 재무지표) 4개 카테고리(수익성·안정성·성장성·활동성)를 자동 호출해 핵심 7종 지표(순이익률·자기자본비율·부채비율·유동비율·매출액증가율·매출채권회전율·재고자산회전율)를 `12.30%p → 8.10%p (전년 대비 -34.1%)` 형식으로 표기. 절대 임계 4지표(AR_SURGE 등)는 폴백으로 유지.
-- **`detect_financial_anomaly`에 `current_indx` / `prior_indx` 옵션** — 같은 회사 전년도 지표를 받아 YoY 변동률을 metric에 부착. 점수 가산 없음, 사실 표기만(v0.8.5 원칙).
-- **신규 헬퍼 `fetch_company_indicators(corp_code, api_key, bsns_year, reprt_code)`** — 4개 idx_cl_code 응답을 `{idx_nm: float}`로 정규화. 무효 값(None/공백/문자) 자동 스킵.
-- **v1.0 로드맵 #6 재정의 반영** — 검증 결과 DART API가 업종 평균을 직접 제공하지 않음. "업종 평균 대비 +Xσ"는 v1.0 이후로도 영구 비범위. **회사 자체 YoY 추세**로 false-positive 완화.
-- **회귀 방지** — `tests/test_financial_indx_v088.py` 8개 신규, 골드 파일 3개 재생성. 전체 140/140 PASS.
+## 이 도구가 하지 않는 것
 
-### v0.8.7 주요 변경
+다음 항목은 본 도구의 **영구 비범위**입니다 — v1.0 GA에서 명시 확정.
 
-- **`track_capital_structure` 결정 공시 구조화 데이터 통합** — 키워드 매칭(`match_signals`)에 더해 자사주 결정 4개 엔드포인트(`tsstkAqDecsn`·`tsstkDpDecsn`·`tsstkAqTrctrCnsDecsn`·`tsstkAqTrctrCcDecsn`)를 직접 호출해 자본 이벤트 시계열에 자동 머지. CAPITAL_CHURN 12개월 카운팅 정확도 상승.
-- **신규 신호 키 `TREASURY_TRUST` (taxonomy 2.8)** — 자사주 신탁 우회 매입 경로. 직접 매입(`TREASURY`)과 같은 시계열에 표기. 점수 가산 없음(v0.8.5 원칙 유지).
-- **신규 헬퍼 `fetch_treasury_decisions(corp_code, api_key, lookback_years)`** — 4개 엔드포인트 응답을 `{key, decision_type, rcept_no, rcept_dt, report_nm}`로 정규화. `rcept_dt` 누락 시 `rcept_no[:8]` 폴백.
-- **회귀 방지** — `tests/test_treasury_decisions_v087.py` 12개 신규, 골드 파일 9개 재생성. 전체 132/132 PASS.
-- ※ 무상증자·유무상증자·감자 결정은 빈도가 낮아 본 릴리스 범위 외(v1.0 이후 별도 검토).
+- **점수·등급 부여 안 함** — 기업 위험도를 정량화하거나 "매우위험/고위험" 등급으로 라벨링하지 않습니다. 출력은 관찰된 사실(건수·비율·날짜·공시명)만 서술합니다(v0.8.5 원칙).
+- **실시간 알림·푸시 안 함** — 호출 시점 데이터만 응답합니다. 푸시 구독은 사용자가 별도 시스템에서 처리.
+- **매수/매도 추천·가격 예측 안 함** — 본 도구의 출력은 투자 판단의 근거가 아니며, 법적 책임 영역도 아닙니다.
+- **업종 평균 비교 안 함** — DART OpenAPI는 업종 평균을 제공하지 않습니다(v0.8.8 검증). 본 도구는 회사 자체 YoY 추세로 false-positive를 완화합니다.
+- **해외상장 신호 없음** — 한국 기업의 발생 빈도가 미미해 코드 유지 비용 대비 가치가 낮음(v1.0 검증 후 영구 폐기).
+- **비상장사 감사보고서 정량 추출 안 함** — DART 비상장사 감사보고서는 형식이 비정형이라 안정적 추출이 불가능(v0.7.x Track C 폐기).
+- **시장 전체 일일 자동 스캔 안 함** — DART OpenAPI 호출 한도(분당·일별 quota)와 사용자 책임 영역 분리 차원. `search_market_disclosures`는 1회 preset 호출 단위.
 
-### v0.8.6 주요 변경
+## 변경 이력
 
-- **`track_insider_trading` 분기 보고 데이터 통합** — 기존 `elestock` + `hyslrSttus`(연 단위)에 더해 `hyslrChgSttus`(최대주주 변동현황) + `tesstkAcqsDspsSttus`(임원·주요주주 자기주식)를 4개 분기 reprt_code(11011·11012·11013·11014) × N년 루프로 통합. 보유 비율 추세를 분기 단위로 추적합니다.
-- **신규 패턴 `INSIDER_PRE_DISCLOSURE` (taxonomy 3.6)** — 매도 이벤트(Δ<0) 직후 ±30일 내 부정 공시(AUDIT/INSOLVENCY/EMBEZZLE/INQUIRY/GOING_CONCERN/DISCLOSURE_VIOL/DEBT_RESTR) 동시 발생 시 사실 표기. 점수 가산 없음(v0.8.5 원칙 유지).
-- **출력 품질 보정** — 합산 행("계"/"합계") 자동 제외, 인접 분기 동일 비율(<0.005%p) dedup, lookback 윈도우 외 데이터 필터, `exec_treasury`(회사 자기주식 활동)는 보고자별 시계열에서 분리.
-- **표현 정정** — DART API는 임원 거래일 단위 시계열을 직접 제공하지 않습니다. 본 도구는 **분기 보고 단위** 스냅샷 차이를 추적합니다(v1.0 로드맵 검증 결과 반영).
-- **회귀 방지** — `tests/test_insider_v086.py` 13개 신규, 골드 파일 3개 신규(`{셀트리온/제이스코홀딩스/두산에너빌리티}_insider.txt`). 전체 120/120 PASS.
-
-### v0.8.5 주요 변경
-
-- **점수·등급 없음 원칙 확정** — 기업의 위험도를 정량화하거나 등급(매우위험/고위험 등)을 부여하는 어떤 표기도 사용자 출력에서 제거. 이 도구는 **공시 기록에서 관찰된 사실(건수·비율·날짜·공시명)만 서술**하며, 법적 판단이나 투자 결정의 권위자가 아님
-- **`analyze_company_risk`** — "🔴 위험 등급: 매우위험 (45점)" 헤더와 이벤트별 "N점" 꼬리표 삭제. 상단 요약 둘째 문장을 "이 도구는 공시 기록에서 관찰된 사실만 서술합니다. 기업의 위험도를 정량화하거나 등급을 부여하지 않으며, 법적 판단이나 투자 결정의 근거가 아닙니다." 로 고정
-- **`check_disclosure_anomaly`** — "종합 스코어 N/100" 상단 라인과 지표별 "N/25점" 꼬리표 삭제. 5개 지표는 건수·비율만 나열. 감사의견 가산점(+5/+3)도 문구만 남기고 점수 표기 제거
-- **`find_risk_precedents`** — "🟠 이 신호 조합의 종합 위험도는 **고위험**입니다." 마감 라인 삭제
-- **`build_event_timeline`** — 위상 이모지(🟢🟡🔴) 전면 제거. 단계 헤더는 `**[진입기] — YYYYMMDD 이후 N건**` 형식으로 간소화
-- **회귀 방지** — `tests/test_golden_output_hygiene.py`에 점수/등급/이모지 노출 검사 3종 추가. 골드 파일 15개 재생성
-
-### 최근 릴리스 요약
-
-- **v0.9.0** — `analyze_company_risk` 부실 후속(부도·영업정지·회생·해산) 자동 흡수 + `track_fund_usage` 배당 이력 블록 신설 + `DIVIDEND_DRAIN`/`DISTRESS_EVENT` 신호 키 2종 추가. 도구 23개 유지(흡수 방식)
-- **v0.8.8** — `scan_financial_anomaly` 전년 대비 추세 블록 신설(`fnlttSinglIndx` 4카테고리 통합) + `detect_financial_anomaly`에 `current_indx`/`prior_indx` 옵션 + 신규 헬퍼 `fetch_company_indicators`
-- **v0.8.7** — `track_capital_structure` 결정 공시 4종 자동 통합 + 신규 신호 키 `TREASURY_TRUST`(taxonomy 2.8) + `fetch_treasury_decisions` 헬퍼
-- **v0.8.6** — `track_insider_trading` 분기 보고 데이터 통합(`hyslrChgSttus` + `tesstkAcqsDspsSttus`) + 신규 패턴 `INSIDER_PRE_DISCLOSURE`(매도 ±30일 내 부정 공시) + 출력 품질 보정(합산 행 스킵·dedup·윈도우 필터)
-- **v0.8.5** — 점수·등급 표기 전면 제거. `_risk_level`·`_risk_emoji`·`_PHASE_EMOJI` 삭제. 내부 `SIGNAL_TYPES[*].score`는 우선순위 랭킹 목적으로 유지하지만 출력 경계를 넘지 않음
-- **v0.8.0** — 신규 도구 2개(`get_audit_opinion_history`, `track_debt_balance`) + `CB_ROLLOVER` 플래그 + 단일 출력 원칙 확정. 주가조작 카탈로그 8개 MD 본문 한글화
-- **v0.7.4** — 반복 prose 억제(같은 signal_key 4번째부터 → 해설 생략) + 골드 파일 회귀 테스트 추가(내부 코드·영문 메타 재노출 자동 감지)
-- **v0.7.3** — 실 API 출력 리뷰 반영(카탈로그 영문 메타 필터링, `scan_financial_anomaly` "OCF" 약어 제거, 리드 문장 중복 해소, 공시명 공백 정리, 자금조달 라벨 한글화)
-- **v0.7.2** — '쉬운 출력' 원칙을 `check_disclosure_risk`·`find_risk_precedents`·`build_event_timeline`·`find_actor_overlap` 4개 도구로 확장. 내부 flag/signal/pattern 키가 사용자 출력에 노출되지 않도록 렌더러 재작성
-- **v0.7.1** — `analyze_company_risk` 출력을 평서체 한국어 prose로 재작성. 내부 코드·점수·약어 노출 제거의 출발점
-- **v0.7.0** — CB/BW/유상증자 인수자 추출 품질 향상(ACODE 기반 파싱 폴백), 재무이상 임계값 현실화
-- **v0.6.1** — `CAPITAL_CHURN` 희석/비희석 이원화, 재무 엔드포인트 결측 버그 수정
-- **v0.6.0** — 자본구조·재무이상 스캔 도구 2개 추가(`track_capital_structure`, `scan_financial_anomaly`)
-
-자세한 변경 내역은 [CHANGELOG.md](CHANGELOG.md) 참고.
+마이너 릴리스의 상세 변경 사항은 [CHANGELOG.md](CHANGELOG.md)에 정리돼 있습니다. README에는 v1.0.0 시점 영구 정책만 기록합니다.
 
 ---
 
