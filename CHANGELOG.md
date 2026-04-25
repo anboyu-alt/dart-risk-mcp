@@ -4,6 +4,31 @@
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-04-26
+
+### Added
+- **`fetch_distress_events(corp_code, api_key, lookback_years=3)`** — 부실 후속 4개 엔드포인트 통합:
+  - `dfOcr`(부도발생) → `subtype="default"` (df_cn·df_amt·df_bnk 요약)
+  - `bsnSp`(영업정지) → `subtype="business_susp"`
+  - `ctrcvsBgrq`(회생절차 개시신청) → `subtype="rehabilitation"`
+  - `dsRsOcr`(해산사유 발생) → `subtype="dissolution"`
+  - 각 이벤트에 `key="DISTRESS_EVENT"` + 한글 `summary` 부착. rcept_dt 폴백·부분 실패 격리·캐시(20건/600초).
+- **`fetch_dividend_history(corp_code, api_key, lookback_years=3)`** — `alotMatter`(배당에 관한 사항)을 분기 4코드 × N년 호출. 각 record에 `bsns_year`/`reprt_code` 부착.
+- **`detect_dividend_drain(dividend_records, current_fs)`** — 적자 시점 배당 유출(DIVIDEND_DRAIN) 패턴 검출. 당기순이익 음수 + "주당 현금배당금" 양수 동시 발생 시 flag 부여. 분기 4회 호출 노이즈 dedup.
+- **신호 키 2종 신규** (점수 가산 없음, 사실 표기만 — v0.8.5 원칙):
+  - `DISTRESS_EVENT` (taxonomy 8.5) — 부실 단계 진입(부도/영업정지/회생/해산)
+  - `DIVIDEND_DRAIN` (taxonomy 5.6) — 적자 시점 배당 유출
+- **`tests/test_distress_dividend_v090.py`** — 14개 테스트.
+- **골드 파일 6개 재생성** — 3개 기업 × {`_analyze.txt`, `_fund_usage.txt`}. `_fund_usage.txt`는 신규.
+
+### Changed
+- **`analyze_company_risk` 흡수** — `fetch_distress_events` 결과를 자동 통합. 발생 시 하단에 "**부실 단계 진입 — 주요사항보고서 발생**" 경고 블록과 일자별 사건 라인 추가. 점수 가산 없음.
+- **`track_fund_usage` 보강** — 출력 하단에 "**배당 이력 (alotMatter)**" 블록 신설. 분기 4회 호출 dedup, 최근 사업연도 재무로 `detect_dividend_drain` 호출 후 적자 시점 배당이면 경고 라인 추가.
+
+### Notes
+- 신규 도구 추가 없음 — 도구 23개 그대로 유지(원 plan에서 검토했던 `track_distress_progression` 단독 도구는 빈도 낮음으로 폐기, 흡수 방식 채택).
+- v1.0 로드맵 검증 결론에 따른 흡수 결정.
+
 ## [0.8.8] — 2026-04-26
 
 ### Added

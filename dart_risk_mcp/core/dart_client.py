@@ -2398,3 +2398,221 @@ def fetch_company_indicators(
 
     _cache_set(_company_indicators_cache, cache_key, merged, _INDX_CACHE_MAX)
     return merged
+
+
+# v0.9.0: 부실 후속 4종 통합 (#7) ----------------------------------------
+_DISTRESS_ENDPOINTS: tuple[tuple[str, str], ...] = (
+    # (path, subtype)
+    ("dfOcr",       "default"),         # 부도발생
+    ("bsnSp",       "business_susp"),   # 영업정지
+    ("ctrcvsBgrq",  "rehabilitation"),  # 회생절차 개시신청
+    ("dsRsOcr",     "dissolution"),     # 해산사유 발생
+)
+
+_distress_events_cache: dict[tuple, tuple[float, list]] = {}
+_DISTRESS_CACHE_MAX = 20
+_DISTRESS_CACHE_TTL = 600
+
+
+def _distress_summary(item: dict, subtype: str) -> str:
+    """부실 이벤트의 한 줄 요약 — 사실 표기만."""
+    if subtype == "default":
+        cn = item.get("df_cn") or "부도"
+        amt = item.get("df_amt") or ""
+        bnk = item.get("df_bnk") or ""
+        parts = [cn]
+        if amt:
+            parts.append(f"금액 {amt}")
+        if bnk:
+            parts.append(f"은행 {bnk}")
+        return " · ".join(parts)
+    if subtype == "business_susp":
+        cn = item.get("bsnsp_cn") or item.get("bsnsp_rs") or "영업정지"
+        return cn
+    if subtype == "rehabilitation":
+        return item.get("rs") or item.get("ctrcvs_rs") or "회생절차 개시신청"
+    if subtype == "dissolution":
+        return item.get("ds_rs") or "해산사유 발생"
+    return ""
+
+
+def fetch_distress_events(
+    corp_code: str,
+    api_key: str,
+    lookback_years: int = 3,
+) -> list[dict]:
+    """부도·영업정지·회생절차·해산사유 4개 엔드포인트 통합 (v0.9.0).
+
+    각 이벤트:
+        {
+          "key":      "DISTRESS_EVENT",
+          "subtype":  "default" | "business_susp" | "rehabilitation" | "dissolution",
+          "rcept_no": "YYYYMMDDxxxxxx",
+          "rcept_dt": "YYYYMMDD" (응답 누락 시 rcept_no[:8]로 폴백),
+          "summary":  "한 줄 요약 (한국어)",
+          "raw":      원본 응답 dict,
+        }
+
+    빈 corp_code/api_key는 빈 리스트. 일부 엔드포인트 실패는 격리.
+    """
+    if not corp_code or not api_key:
+        return []
+
+    cache_key = (corp_code, lookback_years)
+    cached = _cache_get(_distress_events_cache, cache_key, _DISTRESS_CACHE_TTL)
+    if cached is not None:
+        return cached
+
+    end = datetime.now()
+    start = end - timedelta(days=max(1, lookback_years) * 365)
+    bgn_de = start.strftime("%Y%m%d")
+    end_de = end.strftime("%Y%m%d")
+
+    events: list[dict] = []
+    for ep_path, subtype in _DISTRESS_ENDPOINTS:
+        try:
+            resp = _retry(
+                "GET", f"{DART_BASE}/{ep_path}.json",
+                params={
+                    "crtfc_key": api_key,
+                    "corp_code": corp_code,
+                    "bgn_de": bgn_de,
+                    "end_de": end_de,
+                },
+            )
+            data = resp.json()
+            if data.get("status") != "000":
+                _log_dart_status(data.get("status", "?"),
+                                 f"{ep_path} corp_code={corp_code}")
+                continue
+            for item in data.get("list") or []:
+                rcept_no = (item.get("rcept_no") or "").strip()
+                rcept_dt = (item.get("rcept_dt") or "").strip()
+                if not rcept_dt and len(rcept_no) >= 8 and rcept_no[:8].isdigit():
+                    rcept_dt = rcept_no[:8]
+                if not rcept_dt or len(rcept_dt) < 8:
+                    continue
+                events.append({
+                    "key": "DISTRESS_EVENT",
+                    "subtype": subtype,
+                    "rcept_no": rcept_no,
+                    "rcept_dt": rcept_dt[:8],
+                    "summary": _distress_summary(item, subtype),
+                    "raw": item,
+                })
+        except Exception as e:
+            log.debug("%s 조회 실패 (%s): %s", ep_path, corp_code, e)
+
+    events.sort(key=lambda e: e["rcept_dt"])
+    _cache_set(_distress_events_cache, cache_key, events, _DISTRESS_CACHE_MAX)
+    return events
+
+
+# v0.9.0: 배당 이상 (#10) -----------------------------------------------
+_dividend_history_cache: dict[tuple, tuple[float, list]] = {}
+_DIVIDEND_CACHE_MAX = 20
+_DIVIDEND_CACHE_TTL = 600
+
+
+def fetch_dividend_history(
+    corp_code: str,
+    api_key: str,
+    lookback_years: int = 3,
+) -> list[dict]:
+    """`alotMatter`(배당에 관한 사항)을 분기 4코드 × N년 호출.
+
+    각 record는 원본 필드(`se`/`stock_knd`/`thstrm`/`frmtrm`/`lwfr`/`stlm_dt`) +
+    `bsns_year`/`reprt_code`/`rcept_no`/`rcept_dt`(있으면).
+    """
+    if not corp_code or not api_key:
+        return []
+
+    cache_key = (corp_code, lookback_years)
+    cached = _cache_get(_dividend_history_cache, cache_key, _DIVIDEND_CACHE_TTL)
+    if cached is not None:
+        return cached
+
+    current_year = datetime.now().year
+    years = [str(current_year - i) for i in range(max(1, lookback_years) + 1)]
+    quarter_codes = ("11011", "11012", "11013", "11014")
+
+    records: list[dict] = []
+    for year in years:
+        for reprt_code in quarter_codes:
+            try:
+                resp = _retry(
+                    "GET", f"{DART_BASE}/alotMatter.json",
+                    params={
+                        "crtfc_key": api_key,
+                        "corp_code": corp_code,
+                        "bsns_year": year,
+                        "reprt_code": reprt_code,
+                    },
+                )
+                data = resp.json()
+                if data.get("status") != "000":
+                    _log_dart_status(data.get("status", "?"),
+                                     f"alotMatter year={year} reprt={reprt_code} corp_code={corp_code}")
+                    continue
+                for item in data.get("list") or []:
+                    rec = dict(item)
+                    rec["bsns_year"] = year
+                    rec["reprt_code"] = reprt_code
+                    records.append(rec)
+            except Exception as e:
+                log.debug("alotMatter year=%s reprt=%s 조회 실패 (%s): %s",
+                          year, reprt_code, corp_code, e)
+
+    _cache_set(_dividend_history_cache, cache_key, records, _DIVIDEND_CACHE_MAX)
+    return records
+
+
+def detect_dividend_drain(
+    dividend_records: list[dict],
+    current_fs: dict | None,
+) -> list[dict]:
+    """적자 시점 배당 유출(DIVIDEND_DRAIN) 패턴 검출.
+
+    Args:
+        dividend_records: fetch_dividend_history 결과.
+        current_fs: 당기 재무 dict (`{account_nm: int}`).
+            `당기순이익`을 보고 음수일 때만 검사.
+
+    Returns:
+        flag dict 리스트:
+          {"bsns_year", "se", "dividend": float, "net_income": int}
+        매 record마다 최대 1건. 적자 + 양수 배당이 동시에 만족돼야 플래그.
+    """
+    if not dividend_records or not current_fs:
+        return []
+    ni = _pick_account(current_fs, _FS_ALIASES.get("당기순이익", ["당기순이익"]))
+    if ni is None or ni >= 0:
+        return []
+
+    flags: list[dict] = []
+    seen_year: set[str] = set()
+    for rec in dividend_records:
+        se = rec.get("se") or ""
+        # "주당 현금배당금(원)" 같은 항목만 대상으로 한다(주식배당·지급대상 등은 제외).
+        if "현금배당금" not in se:
+            continue
+        raw = rec.get("thstrm") or "0"
+        try:
+            div = float(str(raw).replace(",", "").strip())
+        except (TypeError, ValueError):
+            continue
+        if div <= 0:
+            continue
+        year = rec.get("bsns_year") or ""
+        # 같은 연도 중복 방지(분기 4회 호출 노이즈)
+        if year and year in seen_year:
+            continue
+        if year:
+            seen_year.add(year)
+        flags.append({
+            "bsns_year": year,
+            "se": se,
+            "dividend": div,
+            "net_income": ni,
+        })
+    return flags

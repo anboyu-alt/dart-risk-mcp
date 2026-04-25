@@ -18,6 +18,7 @@ from .core import (
     category_prose,
     detect_capital_churn,
     detect_debt_rollover,
+    detect_dividend_drain,
     detect_financial_anomaly,
     detect_insider_pre_disclosure,
     estimate_crisis_timeline,
@@ -29,6 +30,8 @@ from .core import (
     fetch_company_info,
     fetch_debt_balance,
     fetch_disclosure_full,
+    fetch_distress_events,
+    fetch_dividend_history,
     fetch_document_content,
     fetch_document_text,
     fetch_executive_compensation,
@@ -241,6 +244,23 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
 
     # v0.5.0: 자금사용내역 (최근 3년 고정) -------------------------
     fund_records = fetch_fund_usage(corp_code, _DART_API_KEY, 3)
+
+    # v0.9.0: 부실 후속 이벤트(부도/영업정지/회생/해산) 흡수 — 발생 시 사실 표기만 ------
+    distress_events = fetch_distress_events(
+        corp_code, _DART_API_KEY,
+        max(1, (lookback_days // 365) + 1),
+    )
+    for _de in distress_events:
+        signal_events.append({
+            "key": "DISTRESS_EVENT",
+            "label": "부실 단계 진입",
+            "score": 0,
+            "report_nm": _de.get("summary") or "부실 사건",
+            "rcept_dt": _de.get("rcept_dt", ""),
+            "rcept_no": _de.get("rcept_no", ""),
+            "is_amendment": False,
+            "subtype": _de.get("subtype"),
+        })
 
     # v0.5.0: 신규 플래그를 signal_events에 합산 (패턴 매칭용) ----
     _v5_lookup = {s["key"]: s for s in SIGNAL_TYPES}
@@ -534,6 +554,29 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
                 title, _ = flag_to_prose(f)
                 if title:
                     lines.append(f"    • **주목할 이유:** {title}")
+
+    # v0.9.0: 부실 후속 단계 진입 경고 — 사실 표기만(점수 가산 없음)
+    if distress_events:
+        _DISTRESS_LABEL = {
+            "default":        "부도발생",
+            "business_susp":  "영업정지",
+            "rehabilitation": "회생절차 개시신청",
+            "dissolution":    "해산사유 발생",
+        }
+        lines += [
+            "",
+            "⚠ **부실 단계 진입 — 주요사항보고서 발생**",
+        ]
+        seen_dates: set[tuple] = set()
+        for _de in sorted(distress_events, key=lambda x: x.get("rcept_dt", "")):
+            key = (_de.get("rcept_dt"), _de.get("subtype"))
+            if key in seen_dates:
+                continue
+            seen_dates.add(key)
+            lbl = _DISTRESS_LABEL.get(_de.get("subtype"), "부실 사건")
+            lines.append(
+                f"   • {_de.get('rcept_dt', '-')}  [{lbl}]  {_de.get('summary', '')}"
+            )
 
     catalog = load_catalog_excerpt(tax_ids_all)
     if catalog:
@@ -2393,6 +2436,58 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
             lines.append(excerpt)
     else:
         lines.append("✅ 계획과 실제 사용이 맞아떨어져, 별도 경고 신호는 없습니다.")
+
+    # v0.9.0: 배당 이력 + 적자 시점 배당 유출(DIVIDEND_DRAIN) 표기 ----------
+    dividend_records = fetch_dividend_history(
+        info["corp_code"], _DART_API_KEY, lookback_years
+    )
+    if dividend_records:
+        lines += ["", "**배당 이력 (alotMatter)**"]
+        # 분기 4회 호출 노이즈 제거: (bsns_year, se, stock_knd) 기준 dedup
+        seen_div: set[tuple] = set()
+        cash_dividends: list[dict] = []
+        for r in dividend_records:
+            key = (r.get("bsns_year"), r.get("se"), r.get("stock_knd"))
+            if key in seen_div:
+                continue
+            seen_div.add(key)
+            cash_dividends.append(r)
+        for r in sorted(cash_dividends, key=lambda x: (x.get("bsns_year", ""), x.get("se", "")))[:20]:
+            yr = r.get("bsns_year", "-")
+            se = r.get("se", "-")
+            kn = r.get("stock_knd", "-")
+            ts = r.get("thstrm", "-") or "-"
+            fr = r.get("frmtrm", "-") or "-"
+            lines.append(
+                f"- {yr}  {se} ({kn})  당기 {ts} / 전기 {fr}"
+            )
+
+        # DIVIDEND_DRAIN 검출 — 당기 재무에서 당기순이익이 음수일 때만
+        try:
+            _fs_list = fetch_financial_statements_all(
+                info["corp_code"], _DART_API_KEY,
+                str(datetime.now().year - 1), "annual", "CFS",
+            )
+            if not _fs_list:
+                _fs_list = fetch_financial_statements_all(
+                    info["corp_code"], _DART_API_KEY,
+                    str(datetime.now().year - 1), "annual", "OFS",
+                )
+            _current_fs, _ = _fs_response_to_periods({"list": _fs_list or []})
+        except Exception:
+            _current_fs = {}
+
+        drain_flags = detect_dividend_drain(dividend_records, _current_fs)
+        if drain_flags:
+            lines += [
+                "",
+                "⚠ **적자 시점 배당 유출(DIVIDEND_DRAIN) 패턴 탐지**",
+            ]
+            for fl in drain_flags[:5]:
+                lines.append(
+                    f"   • {fl['bsns_year']} 사업연도  당기순이익 {fl['net_income']:,}원 "
+                    f"+ {fl['se']} {fl['dividend']:.0f}원  → 자금 유출 경로 검토 권장"
+                )
 
     return "\n".join(lines)
 

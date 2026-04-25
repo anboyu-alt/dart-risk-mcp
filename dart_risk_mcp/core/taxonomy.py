@@ -801,6 +801,27 @@ TAXONOMY = {
         ],
         "investor_implication": "Value transfer to insiders; minority shareholder dilution",
     },
+    "5.6": {
+        "id": "5.6",
+        "category": "Corporate Action Manipulation",
+        "name": "Dividend Outflow While Loss-Making",
+        "description": "당기순이익 적자임에도 현금배당이 결정되는 패턴. 특수관계자 보유 비중이 높을 때 자금 우회 경로로 작용할 수 있어 사실 표기 대상.",
+        "base_score": 0,
+        "severity": "OBSERVATION",
+        "crisis_timeline_months": 12,
+        "keywords": [
+            "현금배당",
+            "현금ㆍ현물배당결정",
+            "주당 현금배당금",
+        ],
+        "red_flags": [
+            "당기순이익 적자 + 현금배당 양수",
+            "특수관계자 보유 ≥30% + 고배당",
+            "감자 직후 단기간(<12개월) 배당 결정",
+        ],
+        "field_evidence": [],
+        "investor_implication": "Cash outflow path to related parties despite operating losses",
+    },
 
     # CATEGORY 6: Accounting & Financial Reporting (3 signals)
     "6.1": {
@@ -1051,6 +1072,24 @@ TAXONOMY = {
             "네오이뮨텍: 계속기업가정 불확실 (20250902)",
         ],
         "investor_implication": "Default / receivership imminent; equity worthless",
+    },
+    "8.5": {
+        "id": "8.5",
+        "category": "Crisis & Distress Signals",
+        "name": "Distress Stage Entry",
+        "description": "부도발생·영업정지·회생절차 개시신청·해산사유 발생 — 부실 단계 진입을 직접 알리는 주요사항보고서. GOING_CONCERN 이후 후속 단계로 발생.",
+        "base_score": 0,
+        "severity": "OBSERVATION",
+        "crisis_timeline_months": 0,
+        "keywords": [],
+        "red_flags": [
+            "당좌거래정지(부도) 발생",
+            "관리종목 사유 영업정지",
+            "회생절차 개시신청",
+            "주총 해산결의·해산사유 발생",
+        ],
+        "field_evidence": [],
+        "investor_implication": "Receivership / liquidation path activated; equity claim subordinated",
     },
 }
 

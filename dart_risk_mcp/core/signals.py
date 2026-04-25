@@ -72,6 +72,9 @@ SIGNAL_KEY_TO_TAXONOMY: dict[str, list[str]] = {
     "INSIDER_PRE_DISCLOSURE": ["3.6"],
     # v0.8.7: 자사주 신탁계약 (직접 매입 우회 경로)
     "TREASURY_TRUST": ["2.8"],
+    # v0.9.0: 부실 후속(부도/영업정지/회생/해산) + 배당 유출 (적자 + 배당)
+    "DISTRESS_EVENT": ["8.5"],
+    "DIVIDEND_DRAIN": ["5.6"],
     # 기존 호환 키
     "MGMT":          ["3.4", "5.4"],
 }
@@ -559,6 +562,12 @@ SIGNAL_TYPES = [
      "score": 0, "keywords": []},
     # ── v0.8.7: 자사주 신탁계약 (구조화 결정 공시 입력) ─────────
     {"key": "TREASURY_TRUST", "label": "자사주 신탁계약",
+     "score": 0, "keywords": []},
+    # ── v0.9.0: 부실 후속 단계(부도·영업정지·회생·해산) ─────────
+    {"key": "DISTRESS_EVENT", "label": "부실 단계 진입",
+     "score": 0, "keywords": []},
+    # ── v0.9.0: 적자 시점 배당 유출 ─────────────────────────────
+    {"key": "DIVIDEND_DRAIN", "label": "적자 시점 배당 유출",
      "score": 0, "keywords": []},
 ]
 

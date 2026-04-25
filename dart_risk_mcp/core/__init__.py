@@ -25,6 +25,9 @@ from .dart_client import (
     detect_insider_pre_disclosure,
     fetch_treasury_decisions,
     fetch_company_indicators,
+    fetch_distress_events,
+    fetch_dividend_history,
+    detect_dividend_drain,
 )
 from .signals import (
     match_signals, is_amendment_disclosure,
@@ -85,4 +88,7 @@ __all__ = [
     "detect_insider_pre_disclosure",
     "fetch_treasury_decisions",
     "fetch_company_indicators",
+    "fetch_distress_events",
+    "fetch_dividend_history",
+    "detect_dividend_drain",
 ]
