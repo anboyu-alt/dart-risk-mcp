@@ -886,7 +886,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 > **uv 설치가 안 된다면 — pip 대안:**
 > uv 대신 pip로도 설치할 수 있습니다.
 > ```bash
-> pip install git+https://github.com/anboyu-alt/dart-risk-mcp.git
+> pip install git+https://github.com/anboyu-alt/dart-risk-mcp.git@v1.0.1
 > ```
 > 이 경우 아래 설정에서 `"command": "uvx"` 대신 `"command": "dart-risk-mcp"`를 사용합니다.
 
@@ -946,7 +946,7 @@ Finder에서 `Cmd + Shift + G`를 누르고 아래 경로를 입력:
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/anboyu-alt/dart-risk-mcp.git",
+        "git+https://github.com/anboyu-alt/dart-risk-mcp.git@v1.0.1",
         "dart-risk-mcp"
       ],
       "env": {
@@ -971,7 +971,7 @@ Finder에서 `Cmd + Shift + G`를 누르고 아래 경로를 입력:
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/anboyu-alt/dart-risk-mcp.git",
+        "git+https://github.com/anboyu-alt/dart-risk-mcp.git@v1.0.1",
         "dart-risk-mcp"
       ],
       "env": {
@@ -1008,7 +1008,7 @@ Finder에서 `Cmd + Shift + G`를 누르고 아래 경로를 입력:
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/anboyu-alt/dart-risk-mcp.git",
+        "git+https://github.com/anboyu-alt/dart-risk-mcp.git@v1.0.1",
         "dart-risk-mcp"
       ],
       "env": {
@@ -1031,10 +1031,11 @@ Claude Code를 사용하는 경우, 아래 명령어로 MCP를 추가합니다.
 
 ```bash
 claude mcp add dart-risk-analyzer \
-  --command uvx \
-  --args "--from" "git+https://github.com/anboyu-alt/dart-risk-mcp.git" "dart-risk-mcp" \
-  --env DART_API_KEY=[발급받은_API키]
+  --env DART_API_KEY=[발급받은_API키] \
+  -- uvx --from git+https://github.com/anboyu-alt/dart-risk-mcp.git@v1.0.1 dart-risk-mcp
 ```
+
+> **버전 anchor 안내:** 위 `@v1.0.1`은 안정적 재현성을 위해 명시한 버전입니다. 항상 최신 master를 받고 싶다면 `@v1.0.1`을 빼고 `git+https://github.com/anboyu-alt/dart-risk-mcp.git`로 사용하세요. 같은 원칙이 위쪽 JSON 설정의 `args`에도 적용됩니다.
 
 또는 프로젝트 폴더에 `.mcp.json` 파일을 직접 만드는 방법(방법 B와 동일)을 사용해도 됩니다.
 
