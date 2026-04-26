@@ -33,6 +33,25 @@
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-04-26
+
+**메인 메시지: v1.0 GA 후속 인프라 검증 종결.** 코드 변경 0(서버·도구·핵심 헬퍼). v1.0 GA 직후 분리한 인프라 검증 4건을 모두 종결하고 결과를 docs에 기록한다.
+
+### Verified
+
+- **PyPI 패키지명 `dart-risk-mcp` 사용 가능** — `https://pypi.org/pypi/dart-risk-mcp/json` HTTP 404 확인. `dart-risk-mcp-kr`(백업명)도 사용 가능. 정식 업로드는 사용자가 PyPI 토큰으로 `python -m twine upload dist/*` 실행.
+- **빌드 무결성** — `python -m build` → `dart_risk_mcp-1.0.0-py3-none-any.whl`(170 KB) + `dart_risk_mcp-1.0.0.tar.gz`(502 KB) 생성. `python -m twine check dist/*` PASSED.
+- **`fetch_market_disclosures` `pblntf_ty` 재검증** — A·B·C·D·E·F·G·H·I·J 10개 코드 모두 정상 응답(B 190건·C 659건·D 619건 등). v1.0 검증 시 보고된 빈 응답 이슈는 재현되지 않음 — 검증 종결, 코드 변경 불필요.
+
+### Removed (영구 비범위)
+
+- **DS007 증권신고서(`bdRs`·`mgRs`) 통합 폐기** — 5개 대형 회사(셀트리온·두산에너빌리티·셀트리온헬스케어·삼성바이오로직스·SK하이닉스) 2024-01-01 ~ 2026-12-31 3년 윈도우 모두 0건. iridescent plan #11에서 빈도 미확인으로 보류했던 항목을 영구 비범위로 확정. README "이 도구가 하지 않는 것" + CLAUDE.md "비범위" 표에 추가.
+
+### Notes
+
+- v1.0 GA stable contract(도구 23개·출력 형식·신호 키·CLI) 그대로 유지.
+- 이번 릴리스로 iridescent plan v1.0.1 이관 4항목 모두 종결(GitHub Release 페이지 생성 포함).
+
 ## [1.0.0] — 2026-04-26 (GA)
 
 **메인 메시지: 출력 표준의 계약화.** 새 MCP 도구 0개. v0.7.x~v0.9.0 동안 다듬어진 한국어 출력 형식이 마이너 릴리스에서도 깨지지 않음을 기계적으로 보증한다. 도구 카탈로그 23개 그대로 유지.
