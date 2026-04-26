@@ -8,14 +8,14 @@
 
 ## 4편 비교
 
-| # | 파일 | 입력 | 작성 도구 | 분량 | 용도 |
-|---|------|------|---------|:---:|------|
-| 1 | [`dart_risk_v1_0_demo.md`](dart_risk_v1_0_demo.md) | "MCP 18개 도구 39회 호출 후 데모 보고서" | **DART Risk MCP만** | 1,574줄 | **MCP 단독 출력** — 도구별 한국어 prose 원문이 그대로 보존된 점검·데모 보고서 |
-| 2 | [`dart_baseline_no_mcp.md`](dart_baseline_no_mcp.md) | "같은 3개 회사 비교" | **MCP 없이 web_search만** | 279줄 | **대조군** — 일반 검색·언론 기사로만 작성한 baseline |
-| 3 | [`dart_integrated_report.md`](dart_integrated_report.md) | "정량 분석(MCP) + 맥락(검색) 결합" | **MCP + web_search** | 389줄 | **종합 보고서** — 분석가가 두 자료원을 결합해 작성한 실무형 |
-| 4 | [`dart_risk_v1_0_investor.md`](dart_risk_v1_0_investor.md) | "일반 투자자도 읽을 수 있게 풀어 써줘" | **MCP + 자연어 가이드** | 1,865줄 | **일반 투자자용** — 5분 용어 가이드 + 위험 신호 해석 + 학습 포인트 |
+| # | 파일 (Markdown) | HTML 미리보기 (Claude Artifact) | 입력 | 작성 도구 | 분량 | 용도 |
+|---|------|------|------|---------|:---:|------|
+| 1 | [`dart_risk_v1_0_demo.md`](dart_risk_v1_0_demo.md) | [🔗 열기](https://claude.ai/public/artifacts/c388906c-334a-4d2b-bf71-9b1a40467609) | "MCP 18개 도구 39회 호출 후 데모 보고서" | **DART Risk MCP만** | 1,574줄 | **MCP 단독 출력** — 도구별 한국어 prose 원문이 그대로 보존된 점검·데모 보고서 |
+| 2 | [`dart_baseline_no_mcp.md`](dart_baseline_no_mcp.md) | [🔗 열기](https://claude.ai/public/artifacts/3ccacd9e-169a-4104-a849-ac8e5467fdc5) | "같은 3개 회사 비교" | **MCP 없이 web_search만** | 279줄 | **대조군** — 일반 검색·언론 기사로만 작성한 baseline |
+| 3 | [`dart_integrated_report.md`](dart_integrated_report.md) | [🔗 열기](https://claude.ai/public/artifacts/9ea9ffc3-1dfa-4000-aa7f-8b99720407b3) | "정량 분석(MCP) + 맥락(검색) 결합" | **MCP + web_search** | 389줄 | **종합 보고서** — 분석가가 두 자료원을 결합해 작성한 실무형 |
+| 4 | [`dart_risk_v1_0_investor.md`](dart_risk_v1_0_investor.md) | [🔗 열기](https://claude.ai/public/artifacts/570b3a7f-66d1-4d0f-9dec-f6599428be75) | "일반 투자자도 읽을 수 있게 풀어 써줘" | **MCP + 자연어 가이드** | 1,865줄 | **일반 투자자용** — 5분 용어 가이드 + 위험 신호 해석 + 학습 포인트 |
 
-전체 원본(.html, .pdf 포함)은 `OneDrive/필드뉴스/202604/files/`에 보관.
+각 보고서는 마크다운(이 디렉토리 안)과 HTML(Claude Artifact 외부 호스팅) 두 형태로 제공됩니다. HTML은 브라우저에서 즉시 시각적으로 읽기 좋고, 마크다운은 텍스트 검색·diff에 유리합니다.
 
 ---
 

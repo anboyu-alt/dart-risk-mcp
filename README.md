@@ -40,12 +40,12 @@ DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 
 [`examples/`](examples/) 디렉토리에 v1.0.0 시점(2026-04-25~26) 같은 한국 상장사 3개(셀트리온·제이스코홀딩스·헬릭스미스)를 대상으로 **MCP 사용 여부와 보고서 형태를 달리해 만든 보고서 4편**이 있습니다. 이 도구가 실제 분석에서 어떤 가치를 더하는지 직접 비교할 수 있는 reference 입니다.
 
-| # | 파일 | MCP | 분량 | 용도 |
-|---|------|:---:|:---:|------|
-| 1 | [`dart_risk_v1_0_demo.md`](examples/dart_risk_v1_0_demo.md) | ✅ 단독 | 1,574줄 | **MCP 단독 출력** — 18종 도구 39회 호출 결과를 한국어 prose로 보존한 데모 |
-| 2 | [`dart_baseline_no_mcp.md`](examples/dart_baseline_no_mcp.md) | ❌ | 279줄 | **대조군** — 일반 검색·언론 기사로만 만든 baseline |
-| 3 | [`dart_integrated_report.md`](examples/dart_integrated_report.md) | ✅ + 검색 | 389줄 | **종합 보고서** — 정량(MCP) + 맥락(검색) 결합한 실무형 |
-| 4 | [`dart_risk_v1_0_investor.md`](examples/dart_risk_v1_0_investor.md) | ✅ + 자연어 | 1,865줄 | **일반 투자자용** — 5분 용어 가이드 + 위험 신호 해석 + 학습 포인트 |
+| # | 파일 (MD) | HTML 미리보기 | MCP | 분량 | 용도 |
+|---|------|:---:|:---:|:---:|------|
+| 1 | [`dart_risk_v1_0_demo.md`](examples/dart_risk_v1_0_demo.md) | [🔗](https://claude.ai/public/artifacts/c388906c-334a-4d2b-bf71-9b1a40467609) | ✅ 단독 | 1,574줄 | **MCP 단독 출력** — 18종 도구 39회 호출 결과를 한국어 prose로 보존한 데모 |
+| 2 | [`dart_baseline_no_mcp.md`](examples/dart_baseline_no_mcp.md) | [🔗](https://claude.ai/public/artifacts/3ccacd9e-169a-4104-a849-ac8e5467fdc5) | ❌ | 279줄 | **대조군** — 일반 검색·언론 기사로만 만든 baseline |
+| 3 | [`dart_integrated_report.md`](examples/dart_integrated_report.md) | [🔗](https://claude.ai/public/artifacts/9ea9ffc3-1dfa-4000-aa7f-8b99720407b3) | ✅ + 검색 | 389줄 | **종합 보고서** — 정량(MCP) + 맥락(검색) 결합한 실무형 |
+| 4 | [`dart_risk_v1_0_investor.md`](examples/dart_risk_v1_0_investor.md) | [🔗](https://claude.ai/public/artifacts/570b3a7f-66d1-4d0f-9dec-f6599428be75) | ✅ + 자연어 | 1,865줄 | **일반 투자자용** — 5분 용어 가이드 + 위험 신호 해석 + 학습 포인트 |
 
 ### 결합 효과 — #2(MCP 없음) vs #3(MCP 결합)에서 갈라지는 사실
 
