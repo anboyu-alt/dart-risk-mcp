@@ -1,5 +1,7 @@
 # DART 리스크 분석 MCP
 
+[![PyPI](https://img.shields.io/pypi/v/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![Python](https://img.shields.io/pypi/pyversions/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![License](https://img.shields.io/pypi/l/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![Release](https://img.shields.io/github/v/release/anboyu-alt/dart-risk-mcp)](https://github.com/anboyu-alt/dart-risk-mcp/releases) [![Downloads](https://img.shields.io/pypi/dm/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/)
+
 **버전:** v1.0.2 · **공시 기반 불공정거래 위험 모니터링** · **설치:** `pip install dart-risk-mcp` → `python -m dart_risk_mcp.setup`
 
 DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
