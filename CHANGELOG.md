@@ -33,6 +33,27 @@
 
 ## [Unreleased]
 
+## [1.0.2] — 2026-04-27
+
+**메인 메시지: 사용자 진입 장벽 제거.** 코드 본질 변경 0(서버·도구·핵심 헬퍼 그대로). v1.0.1 PyPI 등록 후 사용자가 JSON 파일 직접 편집에서 막히는 케이스가 보고돼, 자동 셋업 스크립트 + Windows PATH 트러블슈팅 보강.
+
+### Added
+
+- **`dart_risk_mcp/setup.py`** — 대화형 자동 셋업. `python -m dart_risk_mcp.setup` 한 줄로 클라이언트 선택(Claude Desktop / Cursor / Windsurf) → 설정 파일 자동 탐색(macOS·Windows·Linux 분기) → 백업(`.json.bak`) 생성 → DART API 키 입력 받아 `mcpServers` 블록에 안전 merge → 저장. 기존 다른 MCP 등록·preferences는 그대로 보존. CLI 인자(`--client`, `--api-key`, `--server-name`, `--dry-run`, `--force`)도 지원해 비대화형 자동화 가능.
+- **README "1단계 — 자동 셋업"** 절 신설 — 0단계 패키지 설치 직후 배치. JSON 직접 편집은 옵션으로 강등.
+- **헤더 설치 라인** — `pip install dart-risk-mcp → python -m dart_risk_mcp.setup` 두 단계로 갱신.
+
+### Changed
+
+- **JSON·CLI 설정 형태를 `python -m dart_risk_mcp` 로 통일** — Windows user-install + PATH 미등록 케이스를 회피. entry point(`dart-risk-mcp`)는 PATH에 잡히지 않아도 동작 안 함과 무관.
+- **0단계 설치 확인 명령** — `dart-risk-mcp --help` (PATH 의존) → `python -c "import dart_risk_mcp; print(dart_risk_mcp.__version__)"` (100% 동작).
+- **Q&A "pip로 설치했는데 명령어가 없다"** — 1줄 → Windows user-install PATH 원인 + 해결법 2가지(python -m 사용 / PowerShell로 PATH 영구 추가) 보강.
+
+### Notes
+
+- v1.0.2 PyPI 업로드 시 `pip install --upgrade dart-risk-mcp` 한 줄로 누구나 자동 셋업 명령 사용 가능.
+- iridescent plan v1.0.x 후속 사용자 피드백 반영 — 설치 진입 장벽 0에 가깝게 단순화.
+
 ## [1.0.1] — 2026-04-26
 
 **메인 메시지: v1.0 GA 후속 인프라 검증 종결.** 코드 변경 0(서버·도구·핵심 헬퍼). v1.0 GA 직후 분리한 인프라 검증 4건을 모두 종결하고 결과를 docs에 기록한다.

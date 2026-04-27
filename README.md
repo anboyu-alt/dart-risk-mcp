@@ -1,6 +1,6 @@
 # DART 리스크 분석 MCP
 
-**버전:** v1.0.1 · **공시 기반 불공정거래 위험 모니터링** · **설치:** `pip install dart-risk-mcp`
+**버전:** v1.0.2 · **공시 기반 불공정거래 위험 모니터링** · **설치:** `pip install dart-risk-mcp` → `python -m dart_risk_mcp.setup`
 
 DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 
@@ -890,7 +890,32 @@ Python을 설치했다면 pip은 이미 함께 깔려 있어 **추가 도구 없
 python -c "import dart_risk_mcp; print(dart_risk_mcp.__version__)"
 ```
 
-`1.0.1`(또는 그 이상)이 출력되면 설치 성공입니다. 이제 사용 중인 AI 클라이언트에 등록만 하면 됩니다(아래 방법 A~D 중 본인 환경에 맞는 것 하나만 골라 진행).
+`1.0.2`(또는 그 이상)가 출력되면 설치 성공입니다.
+
+---
+
+### 1단계 — 자동 셋업 (가장 쉬운 방법, JSON 직접 편집 불필요)
+
+JSON 파일을 직접 편집하기 부담스러우면 다음 한 줄로 자동 등록할 수 있습니다.
+
+```bash
+python -m dart_risk_mcp.setup
+```
+
+대화형 메뉴가 뜨면서:
+1. 어떤 클라이언트(Claude Desktop / Cursor / Windsurf)에 등록할지 선택
+2. DART API 키 입력
+3. 클라이언트 설정 파일 자동 탐색 → 백업(`.json.bak`) 후 자동 등록
+
+기존 `mcpServers` 블록은 그대로 보존됩니다(다른 MCP가 이미 등록돼 있어도 안전). 등록 후 클라이언트를 완전히 종료 후 재시작하면 끝.
+
+> **CLI 인자로 바로 실행:** `python -m dart_risk_mcp.setup --client claude-desktop --api-key 발급받은_API키`
+>
+> **결과 미리보기:** `python -m dart_risk_mcp.setup --client claude-desktop --api-key dummy --dry-run` (저장 없이 JSON만 출력)
+>
+> **Claude Code 사용자:** 자동 셋업 대신 `claude mcp add dart-risk-analyzer --env DART_API_KEY=발급키 -- python -m dart_risk_mcp` 한 줄로 끝.
+
+자동 셋업이 잘 안 되거나 직접 편집을 원하면 아래 방법 A~D를 참고하세요.
 
 > **모든 JSON·CLI 설정에서 `python -m dart_risk_mcp` 형태를 사용합니다.** Windows·macOS·Linux 모두 동일하게 작동하며, PATH에 entry point가 등록 안 돼 있어도 문제없습니다.
 
