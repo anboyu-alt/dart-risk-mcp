@@ -39,7 +39,8 @@
 
 ### Verified
 
-- **PyPI 패키지명 `dart-risk-mcp` 사용 가능** — `https://pypi.org/pypi/dart-risk-mcp/json` HTTP 404 확인. `dart-risk-mcp-kr`(백업명)도 사용 가능. 정식 업로드는 사용자가 PyPI 토큰으로 `python -m twine upload dist/*` 실행.
+- **PyPI 패키지명 `dart-risk-mcp` 사용 가능** — `https://pypi.org/pypi/dart-risk-mcp/json` HTTP 404 확인. `dart-risk-mcp-kr`(백업명)도 사용 가능.
+- **PyPI 정식 등록 완료 (2026-04-27)** — https://pypi.org/project/dart-risk-mcp/1.0.1/ 라이브. 설치 한 줄: `pip install dart-risk-mcp` (또는 `uvx dart-risk-mcp`). README 설치 섹션 4곳(pip 대안·JSON args 3·CLI 명령·Q&A)을 git+url 기반 → PyPI 표준 명령으로 단순화.
 - **빌드 무결성** — `python -m build` → `dart_risk_mcp-1.0.0-py3-none-any.whl`(170 KB) + `dart_risk_mcp-1.0.0.tar.gz`(502 KB) 생성. `python -m twine check dist/*` PASSED.
 - **`fetch_market_disclosures` `pblntf_ty` 재검증** — A·B·C·D·E·F·G·H·I·J 10개 코드 모두 정상 응답(B 190건·C 659건·D 619건 등). v1.0 검증 시 보고된 빈 응답 이슈는 재현되지 않음 — 검증 종결, 코드 변경 불필요.
 
