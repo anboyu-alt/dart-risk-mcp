@@ -836,61 +836,43 @@ OO바이오 반기 재무제표 이상 지표 있는지 확인해줘
 
 ## 4. 설치 전 준비물
 
-### 필수 항목 확인
+### 필수 — Python 3.11+
 
-터미널(명령 프롬프트)을 열고 아래 명령어를 입력해서 각 항목이 설치되어 있는지 확인하세요.
+터미널(명령 프롬프트)을 열고 아래 명령어로 확인하세요.
 
-| 확인 명령어 | 정상 출력 예시 | 없으면? |
-|-------------|----------------|---------|
-| `python --version` | `Python 3.11.9` | 아래 설치 방법 참고 |
-| `uv --version` | `uv 0.5.x` | 아래 설치 방법 참고 |
+```
+python --version
+```
+
+`Python 3.11.x` 이상이 출력되면 OK입니다.
 
 > **터미널 여는 방법:**
-> - Windows: `Win + R` → `cmd` 입력 → 확인
+> - Windows: `Win + R` → `cmd` 입력 → 확인 (또는 PowerShell)
 > - macOS: Spotlight(`Cmd + Space`) → "터미널" 검색
 
----
+**Python 설치 (없는 경우)**
 
-### Python 설치 (없는 경우)
+Windows: `winget install Python.Python.3.11`
+macOS: `brew install python@3.11`
 
-**Windows:**
-```
-winget install Python.Python.3.11
-```
-
-**macOS:**
-```bash
-brew install python@3.11
-```
-
-설치 후 터미널을 새로 열고 `python --version`으로 확인하세요.
+설치 후 터미널을 새로 열고 `python --version`으로 다시 확인.
 
 ---
 
-### uv 설치 (없는 경우)
+### 패키지 설치 — pip 한 줄이면 끝 (가장 편하고 빠른 방법)
 
-`uv`는 Python 패키지를 빠르게 설치하는 도구입니다.
+본 MCP는 **PyPI**에 등록돼 있어 Python만 있으면 즉시 설치 가능합니다.
 
-**Windows (PowerShell에서 실행):**
-```powershell
-powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
-
-**macOS / Linux:**
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+pip install dart-risk-mcp
 ```
 
-설치 후 터미널을 **새로 열고** `uv --version`으로 확인하세요.
+Python을 설치했다면 pip은 이미 함께 깔려 있어 **추가 도구 없이 한 줄이면 끝**입니다. 설치 후 시스템 PATH에 `dart-risk-mcp` 명령이 등록됩니다.
 
-> **uv 설치가 안 된다면 — pip 대안:**
-> uv 대신 pip로도 설치할 수 있습니다.
-> ```bash
-> pip install dart-risk-mcp
-> ```
-> 이 경우 아래 설정에서 `"command": "uvx"` 대신 `"command": "dart-risk-mcp"`를 사용합니다.
+> **선택 — uv 사용자라면:**
+> uv가 이미 깔려 있으면 별도 설치 없이 `uvx dart-risk-mcp` 한 줄로 즉시 실행됩니다(임시 환경에 격리). 설치하려면 Windows: `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"` · macOS/Linux: `curl -LsSf https://astral.sh/uv/install.sh | sh`.
 >
-> 특정 버전을 고정하려면 `pip install dart-risk-mcp==1.0.1`. 개발판(master HEAD)이 필요하면 `pip install git+https://github.com/anboyu-alt/dart-risk-mcp.git`.
+> **버전 고정·개발판:** `pip install dart-risk-mcp==1.0.1` (특정 버전), `pip install git+https://github.com/anboyu-alt/dart-risk-mcp.git` (master HEAD).
 
 ---
 
