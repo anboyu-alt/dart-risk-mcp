@@ -1,6 +1,6 @@
 # DART 리스크 분석 MCP
 
-[![PyPI](https://img.shields.io/pypi/v/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![Python](https://img.shields.io/pypi/pyversions/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![License](https://img.shields.io/pypi/l/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![Release](https://img.shields.io/github/v/release/anboyu-alt/dart-risk-mcp)](https://github.com/anboyu-alt/dart-risk-mcp/releases) [![Downloads](https://img.shields.io/pypi/dm/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/)
+[![PyPI](https://img.shields.io/pypi/v/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![Python](https://img.shields.io/pypi/pyversions/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![License](https://img.shields.io/pypi/l/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![Release](https://img.shields.io/github/v/release/anboyu-alt/dart-risk-mcp)](https://github.com/anboyu-alt/dart-risk-mcp/releases) [![Downloads](https://img.shields.io/pypi/dm/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![Last commit](https://img.shields.io/github/last-commit/anboyu-alt/dart-risk-mcp)](https://github.com/anboyu-alt/dart-risk-mcp/commits/master) [![Commit activity](https://img.shields.io/github/commit-activity/m/anboyu-alt/dart-risk-mcp)](https://github.com/anboyu-alt/dart-risk-mcp/graphs/commit-activity)
 
 **버전:** v1.0.2 · **공시 기반 불공정거래 위험 모니터링** · **설치:** `pip install dart-risk-mcp` → `python -m dart_risk_mcp.setup`
 
