@@ -2,7 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![Python](https://img.shields.io/pypi/pyversions/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![License](https://img.shields.io/pypi/l/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![Release](https://img.shields.io/github/v/release/anboyu-alt/dart-risk-mcp)](https://github.com/anboyu-alt/dart-risk-mcp/releases) [![Downloads](https://static.pepy.tech/badge/dart-risk-mcp/month)](https://pepy.tech/project/dart-risk-mcp) [![Last commit](https://img.shields.io/github/last-commit/anboyu-alt/dart-risk-mcp)](https://github.com/anboyu-alt/dart-risk-mcp/commits/master) [![Commit activity](https://img.shields.io/github/commit-activity/m/anboyu-alt/dart-risk-mcp)](https://github.com/anboyu-alt/dart-risk-mcp/graphs/commit-activity)
 
-**버전:** v1.0.2 · **공시 기반 불공정거래 위험 모니터링** · **설치:** `pip install dart-risk-mcp` → `python -m dart_risk_mcp.setup`
+**버전:** v1.0.3 · **공시 기반 불공정거래 위험 모니터링** · **설치:** `pip install dart-risk-mcp` → `python -m dart_risk_mcp.setup`
 
 DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 
@@ -37,6 +37,28 @@ DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 - **비상장사 감사보고서 정량 추출 안 함** — DART 비상장사 감사보고서는 형식이 비정형이라 안정적 추출이 불가능(v0.7.x Track C 폐기).
 - **시장 전체 일일 자동 스캔 안 함** — DART OpenAPI 호출 한도(분당·일별 quota)와 사용자 책임 영역 분리 차원. `search_market_disclosures`는 1회 preset 호출 단위.
 - **DS007 증권신고서(bdRs/mgRs) 통합 안 함** — 채권신고서·합병등의신고서 5개 대형 회사(셀트리온·두산에너빌리티·셀트리온헬스케어·삼성바이오로직스·SK하이닉스) 3년 윈도우 검증 결과 모두 0건(v1.0.1 검증). 발생 빈도 미미로 영구 폐기.
+
+## 라이브 검증 매트릭스 (v1.0.3 기준)
+
+각 도구·신호 키가 **실제 DART API 응답으로 매칭된 적 있는지** 정직하게 표기합니다. ⚠는 "코드와 단위 테스트는 있지만 라이브 매칭 사례가 아직 없음" — 사례가 발견되면 골드 매트릭스에 추가하고 ⚠를 제거합니다.
+
+| 도구·기능 | 라이브 검증 | 비고 |
+|---|:---:|---|
+| 회사명 단순 13개 도구 (`analyze_company_risk`·`build_event_timeline`·`track_capital_structure`·`scan_financial_anomaly` 등) | ✅ | 6 회사 매트릭스 골드 검증 |
+| 종목코드·접수번호·재무·감사·채무 도구 | ✅ | 6 회사 매트릭스 골드 검증 |
+| `search_market_disclosures` 12개 preset | ✅ | v1.0.3에서 8개 추가 검증, 골드 12개 |
+| `track_capital_structure` 의 `capital_churn_anomaly` | ✅ | 제이스코홀딩스 라이브 매칭 |
+| `track_capital_structure` 의 `TREASURY_TRUST` (자사주 신탁) | ⚠ | 발생 빈도 낮음, 라이브 매칭 사례 0 |
+| `track_insider_trading` 의 `INSIDER_PRE_DISCLOSURE` (매도 ±30일 부정 공시) | ⚠ | 라이브 매칭 사례 0 |
+| `track_fund_usage` 의 `DIVIDEND_DRAIN` (적자 시점 배당) | ⚠ | 라이브 매칭 사례 0 |
+| `analyze_company_risk` 의 `DISTRESS_EVENT` (부도/영업정지/회생/해산 4종) | ⚠ | 헬릭스미스조차 미발화, 라이브 매칭 사례 0 |
+| `get_major_decision` 12개 decision_type (DS005) | ⚠ | 발생 빈도 낮음, 단위 테스트만, 6 회사 365일 매트릭스 0건 |
+| `find_actor_overlap` 의 실제 공통 인수자 매칭 | ⚠ | 단위 테스트만, 무자본 M&A 의심 페어 발굴 필요 |
+| `find_risk_precedents` 9개 복합 패턴 중 8개 (`founder_fade`·`debt_spiral`·`reverse_split_spiral`·`related_party_hollowing`·`zombie_ma`·`audit_insider_dump`·`delisting_evasion`·`fake_new_biz`) | ⚠ | 카탈로그·키워드 정의는 있으나 라이브 매칭 사례 0 (capital_churn_anomaly만 검증) |
+
+**해석:** 도구 23개 자체는 모두 라이브 검증돼 정상 작동합니다. ⚠ 표시는 도구 안의 **특정 신호 키·패턴이 실제로 발화하는 사례를 아직 발견 못 함**을 의미. 코드는 사례가 발생하면 자동으로 매칭하도록 작성돼 있으니, 부실/사기/M&A 의심 회사 사례를 발견하시면 [GitHub Issues](https://github.com/anboyu-alt/dart-risk-mcp/issues)로 제보 주시면 골드 매트릭스에 반영하겠습니다.
+
+---
 
 ## 활용 예시 — 같은 회사·같은 시점 보고서 4편
 

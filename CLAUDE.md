@@ -375,6 +375,27 @@ PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설
 
 ---
 
+## 라이브 검증 매트릭스 (v1.0.3 기준)
+
+각 도구·신호 키가 실 DART API 응답으로 매칭된 적 있는지 정직 표기. ⚠ = 코드와 단위 테스트는 있으나 라이브 매칭 사례 0 → 사례 발견 시 골드 추가하고 ⚠ 제거.
+
+| 항목 | 라이브 검증 | 비고 |
+|---|:---:|---|
+| 회사명 단순 13개 도구 + 종목/접수번호/재무/감사/채무 도구 | ✅ | 6 회사 매트릭스 골드 (셀트리온·제이스코·두산에너빌리티·삼성전자·헬릭스미스·두산) |
+| `search_market_disclosures` 12개 preset | ✅ | v1.0.3에서 8개 추가, 골드 `tests/fixtures/sample_outputs/market_*.txt` 12개 |
+| `track_capital_structure` 의 `capital_churn_anomaly` | ✅ | 제이스코홀딩스 라이브 매칭 |
+| `TREASURY_TRUST` (v0.8.7) | ⚠ | 자사주 신탁 발생 빈도 낮음 |
+| `INSIDER_PRE_DISCLOSURE` (v0.8.6) | ⚠ | 매도 ±30일 부정 공시 |
+| `DIVIDEND_DRAIN` (v0.9.0) | ⚠ | 적자 시점 배당 동시 사례 |
+| `DISTRESS_EVENT` (v0.9.0) | ⚠ | 부도/영업정지/회생/해산 4 endpoint, 헬릭스미스조차 미발화 |
+| `get_major_decision` 12개 decision_type | ⚠ | DS005 빈도 낮음, 단위 테스트만, 6 회사 365일 0건 |
+| `find_actor_overlap` 실제 공통 인수자 매칭 | ⚠ | 단위 테스트만, 무자본 M&A 의심 페어 발굴 필요 |
+| `CROSS_SIGNAL_PATTERNS` 9개 중 8개 (capital_churn_anomaly 제외) | ⚠ | `founder_fade`·`debt_spiral`·`reverse_split_spiral`·`related_party_hollowing`·`zombie_ma`·`audit_insider_dump`·`delisting_evasion`·`fake_new_biz` |
+
+신규 PR이 ⚠ 항목의 라이브 매칭 사례 발굴 시: (1) 사례 회사를 `scripts/regen_goldens.py`의 `COMPANIES`에 추가하거나 (2) `tests/fixtures/sample_outputs/`에 직접 골드 추가. hygiene 검증 9/9 PASS 후 ⚠ 제거.
+
+---
+
 ## 자주 있는 작업
 
 ### 새 신호 유형 추가

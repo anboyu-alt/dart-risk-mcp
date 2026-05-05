@@ -135,7 +135,11 @@ PRECEDENT_KEY_SETS = [
     ["REVERSE_SPLIT", "GAMJA_MERGE", "EXEC"],
 ]
 
-MARKET_PRESETS = ["cb_issue", "treasury", "going_concern", "all_risk"]
+MARKET_PRESETS = [
+    "cb_issue", "treasury", "going_concern", "all_risk",  # v1.0.0~v1.0.2 검증
+    "reverse_split", "3pca", "shareholder_change", "exec_change",
+    "audit_issue", "asset_transfer", "embezzle", "inquiry",  # v1.0.3 신규 검증 8개
+]
 
 
 # ────────────────────────────────────────────────────────────────────────────

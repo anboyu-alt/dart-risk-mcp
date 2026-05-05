@@ -33,6 +33,34 @@
 
 ## [Unreleased]
 
+## [1.0.3] — 2026-04-28
+
+**메인 메시지: 검증 정직성 — 라이브 매칭된 항목과 코드만 있는 항목을 README에 명확히 구분.** 코드 본질 변경 0(서버·도구·핵심 헬퍼 그대로). 사용자 피드백 — README에 적힌 모든 기능이 라이브 검증된 것은 아니라는 점을 정직하게 표기.
+
+### Verified — 시장 preset 8개 추가 라이브 검증
+
+`scripts/regen_goldens.py`의 `MARKET_PRESETS` 4개 → 12개 확장. 신규 8개(`reverse_split`·`3pca`·`shareholder_change`·`exec_change`·`audit_issue`·`asset_transfer`·`embezzle`·`inquiry`)를 라이브 호출해 골드 매트릭스에 추가. `tests/fixtures/sample_outputs/market_*.txt` 4개 → 12개. 골드 총 119 → 127.
+
+### Documented — 라이브 검증 매트릭스 (README + CLAUDE.md)
+
+README의 "이 도구가 하지 않는 것" 직후, CLAUDE.md의 "비범위" 직후에 "라이브 검증 매트릭스" 섹션 신설. 7개 ⚠ 항목 정직 표기:
+
+- `TREASURY_TRUST` (v0.8.7) — 자사주 신탁, 빈도 낮음
+- `INSIDER_PRE_DISCLOSURE` (v0.8.6) — 매도 ±30일 부정 공시
+- `DIVIDEND_DRAIN` (v0.9.0) — 적자 시점 배당
+- `DISTRESS_EVENT` (v0.9.0) — 부도/영업정지/회생/해산
+- `get_major_decision` 12개 decision_type — DS005 빈도 낮음
+- `find_actor_overlap` 실제 공통 인수자 매칭 — 단위 테스트만
+- `CROSS_SIGNAL_PATTERNS` 9개 중 8개 — capital_churn_anomaly만 라이브 검증
+
+⚠ 표시는 "코드와 단위 테스트는 있으나 라이브 매칭 사례 0" 의미. 사례 발굴 시 골드 추가 + ⚠ 제거 (v1.0.4 이후 점진적).
+
+### Notes
+
+- 도구 23개 자체는 모두 라이브 검증돼 정상 작동. ⚠는 도구 안의 특정 신호 키·패턴이 발화한 사례를 못 본 것일 뿐 도구 가용성과는 무관.
+- 차기 사례 발굴 트랙 — 무자본 M&A 의심 페어, 부실/배당 회사, DS005 발생 회사를 GitHub Issues로 받아 점진적 골드 추가.
+- v1.0.3 PyPI 업로드 시 사용자가 `pip install --upgrade dart-risk-mcp`로 새 docs와 동기화 가능.
+
 ## [1.0.2] — 2026-04-27
 
 **메인 메시지: 사용자 진입 장벽 제거.** 코드 본질 변경 0(서버·도구·핵심 헬퍼 그대로). v1.0.1 PyPI 등록 후 사용자가 JSON 파일 직접 편집에서 막히는 케이스가 보고돼, 자동 셋업 스크립트 + Windows PATH 트러블슈팅 보강.
