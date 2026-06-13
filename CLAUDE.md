@@ -28,12 +28,13 @@ dart_risk_mcp/
     ├── signals.py       # 37개 신호 유형 (8개 카테고리) + 키워드 매칭 (v0.4.0 카탈로그 기반 보강)
     ├── catalog.py       # 금감원·금융위 MD 카탈로그 로더 (load_catalog_excerpt)
     ├── cb_extractor.py  # CB/BW 인수자명 추출
+    ├── watchlist.py     # 인물↔회사군 영속 워치리스트 (순수 파일 I/O)
     └── taxonomy.py      # 27개 신호 분류 + 위험 점수 + 패턴
 ```
 
 ---
 
-## MCP 도구 23개
+## MCP 도구 24개
 
 ### 1. `analyze_company_risk(company_name, lookback_days=90)`
 
@@ -77,7 +78,7 @@ dart_risk_mcp/
 - CB 인수자(행위자) 정보도 함께 표시
 - 정정공시는 자동 제외
 
-### 5. `find_actor_overlap(company_names, lookback_years=1)` ✨
+### 5. `find_actor_overlap(company_names, lookback_years=1, watchlist="")` ✨
 
 여러 기업(2~5개)의 CB/BW/EB·유상증자 인수자 + **등기임원 겸직**을 통합 비교해 공통 행위자(세력)를 탐지합니다.
 
@@ -86,6 +87,7 @@ dart_risk_mcp/
 - 핵심: 무자본 M&A 세력은 인수마다 새 SPC/조합을 만들어 조합명이 매번 다르지만, **임원 이름은 고정점** — 다년 합집합으로 겸직 포착
 - `lookback_years` 범위 1~5년. 기본 1년이면 출력 안내가 "최근 365일", N년이면 "최근 N년"으로 정직 표기
 - DART API 제약: 행위자 이름으로 역검색 불가, 기업 목록을 직접 입력해야 함
+- `watchlist` 지정 시 `manage_watchlist`에 저장된 인물의 회사군을 `company_names`와 합집합으로 자동 로드(예: `find_actor_overlap(watchlist="신승수")`)
 - 라이브 입증: 신승수군(이엠앤아이·제이케이시냅스·CG인바이츠·헬스커넥트·티쓰리) `lookback_years=3` → 신승수 3개사 겸직 + 신용규·이호영 동행 인물 탐지
 
 ### 6. `list_disclosures_by_stock(stock_code, lookback_days=90)` ✨
@@ -253,6 +255,16 @@ dart_risk_mcp/
 - 판정 규칙: 1년 이내 만기 비중 ≥30% → 차환 압박 경고
 - `year` 미입력 시 직전 연도
 
+### 24. `manage_watchlist(action, person="", companies=None, note="")` ✨
+
+감시 대상 인물↔회사군 워치리스트를 관리합니다 (영속 저장).
+
+- `action` 허용값: `list`(등록 인물·회사 수) | `show`(특정 인물 회사군·메모) | `add`(인물 추가/갱신, companies 합집합 병합) | `remove`(인물 삭제)
+- 저장 위치: `~/.config/dart-risk-mcp/watchlist.json` (환경변수 `DART_WATCHLIST_PATH`로 오버라이드)
+- DART는 인물명 역검색 불가 → 회사군은 사용자가 직접 채움(예: `find_actor_overlap` 임원 겸직 결과를 `add`)
+- 저장된 인물은 `find_actor_overlap(watchlist=인물명)`으로 바로 재조회
+- **저장 + 수동 조회까지만** — 실시간 알림·자동 스캔은 비범위
+
 ---
 
 ## 핵심 내부 함수
@@ -348,6 +360,9 @@ dart_risk_mcp/
 | 주요결정 공시 | 메모리 `_major_decision_cache` (최대 50건) | 10분 |
 | 감사의견 이력 | 메모리 `_audit_history_cache` (최대 20건) | 10분 |
 | 채무증권 잔액 | 메모리 `_debt_balance_cache` (최대 20건) | 10분 |
+| 워치리스트(영속, 캐시 아님) | `~/.config/dart-risk-mcp/watchlist.json` (`DART_WATCHLIST_PATH`로 오버라이드) | 영속(비휘발) |
+
+> 워치리스트는 캐시가 아니라 사용자 자산이라 `~/.cache`가 아닌 `~/.config`에 영속 저장합니다. `core/watchlist.py`의 `add_person`/`remove_person`/`get_person_companies`/`list_persons`/`load_watchlist`/`save_watchlist`가 관리합니다.
 
 ---
 
