@@ -35,6 +35,7 @@ from .core import (
     fetch_document_content,
     fetch_document_text,
     fetch_executive_compensation,
+    fetch_executive_roster,
     fetch_financial_statements,
     fetch_financial_statements_all,
     fetch_fund_usage,
@@ -1035,7 +1036,7 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
 
 
 @mcp.tool()
-def find_actor_overlap(company_names: list[str]) -> str:
+def find_actor_overlap(company_names: list[str], lookback_years: int = 1) -> str:
     """여러 기업(2~5개)의 CB/BW/EB 인수자 + 유상증자 인수자를 비교해 공통 행위자(세력)를 탐지한다.
 
     DART API 제약상, 분석 대상 기업을 직접 지정해야 한다.
@@ -1044,11 +1045,21 @@ def find_actor_overlap(company_names: list[str]) -> str:
     CB/BW/EB 공시(CB_BW, EB 신호)와 유상증자 공시(3PCA, RIGHTS_UNDER 신호)를
     모두 수집해 인수자를 통합 비교하며, 공통 행위자에는 출처 태그(CB / 유상증자)를 표시한다.
 
+    무자본 M&A 세력은 인수 시점에 CB를 한 번 박은 뒤 수년에 걸쳐 리픽싱·차환으로
+    굴리므로, 신규 CB 발행결정 공시는 과거에 몰린다. lookback_years로 조회 윈도우를
+    넓혀야 단년 창에 안 잡히는 다년 공통 인수자를 포착할 수 있다.
+
     Args:
         company_names: 비교할 기업명 또는 종목코드 목록 (2~5개, 예: ["에코프로", "바이오제닉스"])
+        lookback_years: 조회 기간(년). 기본 1년(하위호환), 1~5년 범위.
     """
     if not isinstance(company_names, list) or not (2 <= len(company_names) <= 5):
         return "입력 오류: 2개 이상 5개 이하 기업명(또는 종목코드) 리스트를 전달하세요."
+
+    lookback_years = min(max(lookback_years, 1), 5)
+    lookback_days = lookback_years * 365
+    # 기본 1년은 기존 '최근 365일' 문구를 유지(골드 호환), N년은 정직하게 반영
+    window_label = "최근 365일" if lookback_years == 1 else f"최근 {lookback_years}년"
 
     api_key = os.environ.get("DART_API_KEY") or _DART_API_KEY
     if not api_key:
@@ -1075,7 +1086,7 @@ def find_actor_overlap(company_names: list[str]) -> str:
         corp_name, corp_info = result
         corp_code = corp_info["corp_code"]
 
-        disclosures = fetch_company_disclosures(corp_code, api_key, lookback_days=365) or []
+        disclosures = fetch_company_disclosures(corp_code, api_key, lookback_days=lookback_days) or []
 
         cb_rcepts: list[str] = []
         rights_rcepts: list[str] = []
@@ -1111,6 +1122,17 @@ def find_actor_overlap(company_names: list[str]) -> str:
             entry = (corp_name, source, amount, rn)
             actor_map.setdefault(name, []).append(entry)
             per_company_solo.setdefault(corp_name, []).append((name, source, amount, rn))
+
+        # 등기임원 겸직 수집 (조합명 비고정성 우회 — 사람 이름은 고정점)
+        roster = fetch_executive_roster(corp_code, api_key, lookback_years) or {}
+        for exec_name, years in roster.items():
+            name = (exec_name or "").strip()
+            if not name:
+                continue
+            year_label = ", ".join(sorted(years))
+            entry = (corp_name, "임원", year_label, "")
+            actor_map.setdefault(name, []).append(entry)
+            per_company_solo.setdefault(corp_name, []).append((name, "임원", year_label, ""))
 
     # 공통 인수자: 2개 이상 서로 다른 기업에 등장
     common = {
@@ -1165,7 +1187,7 @@ def find_actor_overlap(company_names: list[str]) -> str:
     if not common:
         lines.append(
             "  ✅ 2곳 이상에 공통으로 이름이 오른 인수자는 이번 비교 범위에서 "
-            "발견되지 않았습니다. 다만 이 결과는 최근 365일, 기업당 CB 최대 "
+            f"발견되지 않았습니다. 다만 이 결과는 {window_label}, 기업당 CB 최대 "
             "3건 + 유상증자 최대 3건으로 좁힌 범위의 판정입니다."
         )
     else:
@@ -1184,29 +1206,37 @@ def find_actor_overlap(company_names: list[str]) -> str:
             )
     lines.append("")
 
-    lines.append("━━ 회사별 전체 인수자 명단 (중복 제거) ━━")
+    lines.append("━━ 회사별 전체 인수자·임원 명단 (중복 제거) ━━")
     for corp_name, entries in per_company_solo.items():
-        unique = sorted({(n, s) for n, s, _, _ in entries})
-        if not unique:
+        # (name, source) 단위로 묶고, 임원은 연도라벨을 합집합으로 모은다
+        seen: dict[tuple, set] = {}
+        for n, s, amt, _ in entries:
+            seen.setdefault((n, s), set())
+            if s == "임원" and amt:
+                seen[(n, s)].update(amt.split(", "))
+        if not seen:
             continue
-        lines.append(f"  • {corp_name} — 총 {len(unique)}명:")
-        for name, source in unique[:10]:
-            lines.append(f"      [{source}] {name}")
+        lines.append(f"  • {corp_name} — 총 {len(seen)}명:")
+        for (name, source), years in sorted(seen.items())[:10]:
+            if source == "임원" and years:
+                lines.append(f"      [임원] {name} ({', '.join(sorted(years))})")
+            else:
+                lines.append(f"      [{source}] {name}")
 
     no_data = [cn for cn in analyzed if cn not in per_company_solo]
     if no_data:
         lines.append("")
         lines.append(
-            "ℹ️ 최근 365일 안에 CB·BW·EB·유상증자 공시 자체가 없는 회사: "
+            f"ℹ️ {window_label} 안에 CB·BW·EB·유상증자 공시 자체가 없는 회사: "
             f"{', '.join(no_data)}"
         )
 
     lines.append("")
     lines.append(
-        "⚠️ 이 결과는 DART 공개 API 범위 내 분석입니다. 최근 365일 이내 "
-        "CB/BW/EB/유상증자 공시만 대상으로 하며, 회사당 CB 최대 3건 + "
-        "유상증자 최대 3건으로 제한됩니다. 따라서 '공통 인수자 없음'이 "
-        "'세력이 없다'는 결론으로 이어지지는 않습니다."
+        f"⚠️ 이 결과는 DART 공개 API 범위 내 분석입니다. {window_label} 이내 "
+        "CB/BW/EB/유상증자 공시 인수자와 임원현황(등기임원) 겸직을 함께 대조하며, "
+        "회사당 CB 최대 3건 + 유상증자 최대 3건으로 제한됩니다. 따라서 '공통 "
+        "행위자 없음'이 '세력이 없다'는 결론으로 이어지지는 않습니다."
     )
     return "\n".join(lines)
 

@@ -77,13 +77,16 @@ dart_risk_mcp/
 - CB 인수자(행위자) 정보도 함께 표시
 - 정정공시는 자동 제외
 
-### 5. `find_actor_overlap(company_names)` ✨
+### 5. `find_actor_overlap(company_names, lookback_years=1)` ✨
 
-여러 기업(2~5개)의 CB/BW 인수자를 비교해 공통 행위자를 탐지합니다.
+여러 기업(2~5개)의 CB/BW/EB·유상증자 인수자 + **등기임원 겸직**을 통합 비교해 공통 행위자(세력)를 탐지합니다.
 
-- 기업별 최근 365일 CB 공시에서 인수자 추출 (최대 3건/기업)
-- 2개 이상 기업에 등장하는 인수자 = 공통 행위자로 표시
+- 기업별 CB/유상증자 공시 인수자(최대 3건/기업) + `fetch_executive_roster`로 임원현황 다년 수집
+- 2개 이상 기업에 (돈 댄 사람 **또는** 등기임원으로) 등장 = 공통 행위자. 출처 태그 `[CB]`/`[유상증자]`/`[임원]`
+- 핵심: 무자본 M&A 세력은 인수마다 새 SPC/조합을 만들어 조합명이 매번 다르지만, **임원 이름은 고정점** — 다년 합집합으로 겸직 포착
+- `lookback_years` 범위 1~5년. 기본 1년이면 출력 안내가 "최근 365일", N년이면 "최근 N년"으로 정직 표기
 - DART API 제약: 행위자 이름으로 역검색 불가, 기업 목록을 직접 입력해야 함
+- 라이브 입증: 신승수군(이엠앤아이·제이케이시냅스·CG인바이츠·헬스커넥트·티쓰리) `lookback_years=3` → 신승수 3개사 겸직 + 신용규·이호영 동행 인물 탐지
 
 ### 6. `list_disclosures_by_stock(stock_code, lookback_days=90)` ✨
 
@@ -274,6 +277,7 @@ dart_risk_mcp/
 | `fetch_shareholder_status(corp_code, api_key, year, report_type)` | 최대주주 현황 + 5% 대량보유 통합 조회 |
 | `fetch_market_disclosures(api_key, bgn_de, end_de, pblntf_ty, max_pages)` | corp_code 없이 시장 전체 공시 조회 |
 | `fetch_executive_compensation(corp_code, api_key, year, report_type)` | 보수 4개 엔드포인트 통합 조회 |
+| `fetch_executive_roster(corp_code, api_key, lookback_years)` | 임원현황(exctvSttus) 다년 수집 → {임원명: {연도}} 합집합. 조합명 비고정성 우회용 고정점 (find_actor_overlap 임원 차원) |
 | `fetch_insider_timeline(corp_code, api_key, lookback_years)` | elestock + hyslrSttus + hyslrChgSttus + tesstkAcqsDspsSttus 4엔드포인트 × 4분기 통합 시계열 (v0.8.6) |
 | `detect_insider_pre_disclosure(insider_records, signal_events, window_days=30)` | 매도 ±30일 내 부정 공시 패턴 탐지 (v0.8.6) |
 | `fetch_treasury_decisions(corp_code, api_key, lookback_years)` | 자사주 결정 4엔드포인트(취득·처분·신탁체결·신탁해지) 통합. key=TREASURY/TREASURY_TRUST로 정규화 (v0.8.7) |
@@ -305,6 +309,7 @@ dart_risk_mcp/
 | `GET /api/hyslrSttus.json` | 최대주주 현황 (corp_code, bsns_year, reprt_code) |
 | `GET /api/hyslrChgSttus.json` | 최대주주 변동현황 (corp_code, bsns_year, reprt_code) — v0.8.6 |
 | `GET /api/tesstkAcqsDspsSttus.json` | 임원·주요주주 자기주식 취득·처분 현황 (corp_code, bsns_year, reprt_code) — v0.8.6 |
+| `GET /api/exctvSttus.json` | 임원 현황 (corp_code, bsns_year, reprt_code) — find_actor_overlap 겸직 탐지 |
 | `GET /api/prstInvstmEntrCptalUseDtls.json` | 공모 자금 사용 내역 (corp_code, 연도) |
 | `GET /api/otrCptalUseDtls.json` | 사모 자금 사용 내역 (corp_code, 연도) |
 | `GET /api/bsnAcqsDecsn.json` / `bsnTrfDecsn.json` | 영업 양수/양도 결정 (rcept_no) |
@@ -384,12 +389,12 @@ PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설
 | 회사명 단순 13개 도구 + 종목/접수번호/재무/감사/채무 도구 | ✅ | 6 회사 매트릭스 골드 (셀트리온·제이스코·두산에너빌리티·삼성전자·헬릭스미스·두산) |
 | `search_market_disclosures` 12개 preset | ✅ | v1.0.3에서 8개 추가, 골드 `tests/fixtures/sample_outputs/market_*.txt` 12개 |
 | `track_capital_structure` 의 `capital_churn_anomaly` | ✅ | 제이스코홀딩스 라이브 매칭 |
+| `find_actor_overlap` 임원 겸직 매칭 | ✅ | 신승수군 3개사 겸직 라이브 매칭(신용규·이호영 동행 포함), 골드 `tests/fixtures/sample_outputs/actor_overlap.txt` |
 | `TREASURY_TRUST` (v0.8.7) | ⚠ | 자사주 신탁 발생 빈도 낮음 |
 | `INSIDER_PRE_DISCLOSURE` (v0.8.6) | ⚠ | 매도 ±30일 부정 공시 |
 | `DIVIDEND_DRAIN` (v0.9.0) | ⚠ | 적자 시점 배당 동시 사례 |
 | `DISTRESS_EVENT` (v0.9.0) | ⚠ | 부도/영업정지/회생/해산 4 endpoint, 헬릭스미스조차 미발화 |
 | `get_major_decision` 12개 decision_type | ⚠ | DS005 빈도 낮음, 단위 테스트만, 6 회사 365일 0건 |
-| `find_actor_overlap` 실제 공통 인수자 매칭 | ⚠ | 단위 테스트만, 무자본 M&A 의심 페어 발굴 필요 |
 | `CROSS_SIGNAL_PATTERNS` 9개 중 8개 (capital_churn_anomaly 제외) | ⚠ | `founder_fade`·`debt_spiral`·`reverse_split_spiral`·`related_party_hollowing`·`zombie_ma`·`audit_insider_dump`·`delisting_evasion`·`fake_new_biz` |
 
 신규 PR이 ⚠ 항목의 라이브 매칭 사례 발굴 시: (1) 사례 회사를 `scripts/regen_goldens.py`의 `COMPANIES`에 추가하거나 (2) `tests/fixtures/sample_outputs/`에 직접 골드 추가. hygiene 검증 9/9 PASS 후 ⚠ 제거.
@@ -464,3 +469,66 @@ from dart_risk_mcp.core.dart_client import resolve_corp
 print(resolve_corp('삼성전자', '키값'))
 "
 ```
+
+# context-mode — MANDATORY routing rules
+
+You have context-mode MCP tools available. These rules are NOT optional — they protect your context window from flooding. A single unrouted command can dump 56 KB into context and waste the entire session.
+
+## BLOCKED commands — do NOT attempt these
+
+### curl / wget — BLOCKED
+Any Bash command containing `curl` or `wget` is intercepted and replaced with an error message. Do NOT retry.
+Instead use:
+- `ctx_fetch_and_index(url, source)` to fetch and index web pages
+- `ctx_execute(language: "javascript", code: "const r = await fetch(...)")` to run HTTP calls in sandbox
+
+### Inline HTTP — BLOCKED
+Any Bash command containing `fetch('http`, `requests.get(`, `requests.post(`, `http.get(`, or `http.request(` is intercepted and replaced with an error message. Do NOT retry with Bash.
+Instead use:
+- `ctx_execute(language, code)` to run HTTP calls in sandbox — only stdout enters context
+
+### WebFetch — BLOCKED
+WebFetch calls are denied entirely. The URL is extracted and you are told to use `ctx_fetch_and_index` instead.
+Instead use:
+- `ctx_fetch_and_index(url, source)` then `ctx_search(queries)` to query the indexed content
+
+## REDIRECTED tools — use sandbox equivalents
+
+### Bash (>20 lines output)
+Bash is ONLY for: `git`, `mkdir`, `rm`, `mv`, `cd`, `ls`, `npm install`, `pip install`, and other short-output commands.
+For everything else, use:
+- `ctx_batch_execute(commands, queries)` — run multiple commands + search in ONE call
+- `ctx_execute(language: "shell", code: "...")` — run in sandbox, only stdout enters context
+
+### Read (for analysis)
+If you are reading a file to **Edit** it → Read is correct (Edit needs content in context).
+If you are reading to **analyze, explore, or summarize** → use `ctx_execute_file(path, language, code)` instead. Only your printed summary enters context. The raw file content stays in the sandbox.
+
+### Grep (large results)
+Grep results can flood context. Use `ctx_execute(language: "shell", code: "grep ...")` to run searches in sandbox. Only your printed summary enters context.
+
+## Tool selection hierarchy
+
+1. **GATHER**: `ctx_batch_execute(commands, queries)` — Primary tool. Runs all commands, auto-indexes output, returns search results. ONE call replaces 30+ individual calls.
+2. **FOLLOW-UP**: `ctx_search(queries: ["q1", "q2", ...])` — Query indexed content. Pass ALL questions as array in ONE call.
+3. **PROCESSING**: `ctx_execute(language, code)` | `ctx_execute_file(path, language, code)` — Sandbox execution. Only stdout enters context.
+4. **WEB**: `ctx_fetch_and_index(url, source)` then `ctx_search(queries)` — Fetch, chunk, index, query. Raw HTML never enters context.
+5. **INDEX**: `ctx_index(content, source)` — Store content in FTS5 knowledge base for later search.
+
+## Subagent routing
+
+When spawning subagents (Agent/Task tool), the routing block is automatically injected into their prompt. Bash-type subagents are upgraded to general-purpose so they have access to MCP tools. You do NOT need to manually instruct subagents about context-mode.
+
+## Output constraints
+
+- Keep responses under 500 words.
+- Write artifacts (code, configs, PRDs) to FILES — never return them as inline text. Return only: file path + 1-line description.
+- When indexing content, use descriptive source labels so others can `ctx_search(source: "label")` later.
+
+## ctx commands
+
+| Command | Action |
+|---------|--------|
+| `ctx stats` | Call the `ctx_stats` MCP tool and display the full output verbatim |
+| `ctx doctor` | Call the `ctx_doctor` MCP tool, run the returned shell command, display as checklist |
+| `ctx upgrade` | Call the `ctx_upgrade` MCP tool, run the returned shell command, display as checklist |
