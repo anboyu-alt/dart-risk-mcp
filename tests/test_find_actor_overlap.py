@@ -37,6 +37,7 @@ class TestFindActorOverlapMerging(unittest.TestCase):
              patch("dart_risk_mcp.server.extract_rights_offering_investors",
                    return_value=[{"name": "공통펀드", "type": "제3자배정",
                                   "amount": "2", "source": "rights_offering"}]), \
+             patch("dart_risk_mcp.server.fetch_executive_roster", return_value={}), \
              patch.dict("os.environ", {"DART_API_KEY": "test_key"}):
             result = find_actor_overlap(["a", "b"])
 
@@ -67,6 +68,7 @@ class TestFindActorOverlapMerging(unittest.TestCase):
         with patch("dart_risk_mcp.server.resolve_corp", side_effect=_resolve), \
              patch("dart_risk_mcp.server.fetch_company_disclosures",
                    side_effect=_disclosures), \
+             patch("dart_risk_mcp.server.fetch_executive_roster", return_value={}), \
              patch.dict("os.environ", {"DART_API_KEY": "test_key"}):
             find_actor_overlap(*call_args, **call_kwargs)
 
@@ -93,6 +95,7 @@ class TestFindActorOverlapMerging(unittest.TestCase):
 
         with patch("dart_risk_mcp.server.resolve_corp", side_effect=_resolve), \
              patch("dart_risk_mcp.server.fetch_company_disclosures", return_value=[]), \
+             patch("dart_risk_mcp.server.fetch_executive_roster", return_value={}), \
              patch.dict("os.environ", {"DART_API_KEY": "test_key"}):
             return find_actor_overlap(*call_args, **call_kwargs)
 
@@ -106,6 +109,70 @@ class TestFindActorOverlapMerging(unittest.TestCase):
         self.assertIn("최근 3년", result)
         self.assertNotIn("최근 365일", result)
 
+    def test_director_overlap_detected_across_companies(self):
+        # 두 회사에 같은 임원(겸직) — 공시(인수자)는 없고 임원만으로 공통 행위자 탐지
+        from dart_risk_mcp.server import find_actor_overlap
+
+        def _resolve(query, api_key):
+            return (query, {"corp_code": query.lower(), "stock_code": "000000"})
+
+        def _roster(corp_code, api_key, lookback_years):
+            if corp_code == "a":
+                return {"신승수": {"2023", "2024"}, "김갑": {"2024"}}
+            if corp_code == "b":
+                return {"신승수": {"2022"}, "이을": {"2022"}}
+            return {}
+
+        with patch("dart_risk_mcp.server.resolve_corp", side_effect=_resolve), \
+             patch("dart_risk_mcp.server.fetch_company_disclosures", return_value=[]), \
+             patch("dart_risk_mcp.server.fetch_executive_roster", side_effect=_roster), \
+             patch.dict("os.environ", {"DART_API_KEY": "test_key"}):
+            result = find_actor_overlap(["a", "b"], lookback_years=3)
+
+        # 신승수는 2개사 공통 행위자로, [임원] 경로로 표기
+        self.assertIn("신승수", result)
+        self.assertIn("[임원]", result)
+        self.assertIn("2개 회사에", result)
+        # 단일 회사 임원은 공통 행위자가 아님
+        self.assertNotIn("⚠️ **김갑**", result)
+
+    def test_director_and_investor_same_person_merge(self):
+        # A사 임원 = B사 인수자가 동일인이면 공통 행위자로 묶인다
+        from dart_risk_mcp.server import find_actor_overlap
+
+        def _resolve(query, api_key):
+            return (query, {"corp_code": query.lower(), "stock_code": "000000"})
+
+        def _disclosures(corp_code, api_key, lookback_days):
+            if corp_code == "b":
+                return [{"rcept_no": "B001", "report_nm": "전환사채권발행결정",
+                         "rcept_dt": "20240401"}]
+            return []
+
+        def _match_signals(report_nm):
+            if "전환사채" in report_nm:
+                return [{"key": "CB_BW", "label": "CB/BW발행", "score": 3}]
+            return []
+
+        def _roster(corp_code, api_key, lookback_years):
+            if corp_code == "a":
+                return {"양민성": {"2024"}}
+            return {}
+
+        with patch("dart_risk_mcp.server.resolve_corp", side_effect=_resolve), \
+             patch("dart_risk_mcp.server.fetch_company_disclosures", side_effect=_disclosures), \
+             patch("dart_risk_mcp.server.match_signals", side_effect=_match_signals), \
+             patch("dart_risk_mcp.server.fetch_executive_roster", side_effect=_roster), \
+             patch("dart_risk_mcp.server.extract_cb_investors",
+                   return_value=[{"name": "양민성", "type": "사모", "amount": "1"}]), \
+             patch.dict("os.environ", {"DART_API_KEY": "test_key"}):
+            result = find_actor_overlap(["a", "b"])
+
+        self.assertIn("양민성", result)
+        self.assertIn("2개 회사에", result)
+        # 두 경로가 함께 표기됨
+        self.assertIn("[CB · 임원]", result)
+
     def test_single_company_no_overlap(self):
         from dart_risk_mcp.server import find_actor_overlap
 
@@ -115,6 +182,7 @@ class TestFindActorOverlapMerging(unittest.TestCase):
         with patch("dart_risk_mcp.server.resolve_corp", side_effect=_resolve), \
              patch("dart_risk_mcp.server.fetch_company_disclosures",
                    return_value=[]), \
+             patch("dart_risk_mcp.server.fetch_executive_roster", return_value={}), \
              patch.dict("os.environ", {"DART_API_KEY": "test_key"}):
             result = find_actor_overlap(["a"])
 

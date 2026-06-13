@@ -35,6 +35,7 @@ from .core import (
     fetch_document_content,
     fetch_document_text,
     fetch_executive_compensation,
+    fetch_executive_roster,
     fetch_financial_statements,
     fetch_financial_statements_all,
     fetch_fund_usage,
@@ -1122,6 +1123,17 @@ def find_actor_overlap(company_names: list[str], lookback_years: int = 1) -> str
             actor_map.setdefault(name, []).append(entry)
             per_company_solo.setdefault(corp_name, []).append((name, source, amount, rn))
 
+        # 등기임원 겸직 수집 (조합명 비고정성 우회 — 사람 이름은 고정점)
+        roster = fetch_executive_roster(corp_code, api_key, lookback_years) or {}
+        for exec_name, years in roster.items():
+            name = (exec_name or "").strip()
+            if not name:
+                continue
+            year_label = ", ".join(sorted(years))
+            entry = (corp_name, "임원", year_label, "")
+            actor_map.setdefault(name, []).append(entry)
+            per_company_solo.setdefault(corp_name, []).append((name, "임원", year_label, ""))
+
     # 공통 인수자: 2개 이상 서로 다른 기업에 등장
     common = {
         actor: entries
@@ -1194,14 +1206,22 @@ def find_actor_overlap(company_names: list[str], lookback_years: int = 1) -> str
             )
     lines.append("")
 
-    lines.append("━━ 회사별 전체 인수자 명단 (중복 제거) ━━")
+    lines.append("━━ 회사별 전체 인수자·임원 명단 (중복 제거) ━━")
     for corp_name, entries in per_company_solo.items():
-        unique = sorted({(n, s) for n, s, _, _ in entries})
-        if not unique:
+        # (name, source) 단위로 묶고, 임원은 연도라벨을 합집합으로 모은다
+        seen: dict[tuple, set] = {}
+        for n, s, amt, _ in entries:
+            seen.setdefault((n, s), set())
+            if s == "임원" and amt:
+                seen[(n, s)].update(amt.split(", "))
+        if not seen:
             continue
-        lines.append(f"  • {corp_name} — 총 {len(unique)}명:")
-        for name, source in unique[:10]:
-            lines.append(f"      [{source}] {name}")
+        lines.append(f"  • {corp_name} — 총 {len(seen)}명:")
+        for (name, source), years in sorted(seen.items())[:10]:
+            if source == "임원" and years:
+                lines.append(f"      [임원] {name} ({', '.join(sorted(years))})")
+            else:
+                lines.append(f"      [{source}] {name}")
 
     no_data = [cn for cn in analyzed if cn not in per_company_solo]
     if no_data:
@@ -1214,9 +1234,9 @@ def find_actor_overlap(company_names: list[str], lookback_years: int = 1) -> str
     lines.append("")
     lines.append(
         f"⚠️ 이 결과는 DART 공개 API 범위 내 분석입니다. {window_label} 이내 "
-        "CB/BW/EB/유상증자 공시만 대상으로 하며, 회사당 CB 최대 3건 + "
-        "유상증자 최대 3건으로 제한됩니다. 따라서 '공통 인수자 없음'이 "
-        "'세력이 없다'는 결론으로 이어지지는 않습니다."
+        "CB/BW/EB/유상증자 공시 인수자와 임원현황(등기임원) 겸직을 함께 대조하며, "
+        "회사당 CB 최대 3건 + 유상증자 최대 3건으로 제한됩니다. 따라서 '공통 "
+        "행위자 없음'이 '세력이 없다'는 결론으로 이어지지는 않습니다."
     )
     return "\n".join(lines)
 
