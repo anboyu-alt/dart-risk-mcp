@@ -50,6 +50,62 @@ class TestFindActorOverlapMerging(unittest.TestCase):
         self.assertIn("[CB]", result)
         self.assertIn("[유상증자]", result)
 
+    def _capture_lookback(self, *call_args, **call_kwargs):
+        """find_actor_overlap 호출 시 fetch_company_disclosures에 전달된
+        lookback_days 값을 캡처해 반환한다."""
+        from dart_risk_mcp.server import find_actor_overlap
+
+        captured = {}
+
+        def _resolve(query, api_key):
+            return (query, {"corp_code": query.lower(), "stock_code": "000000"})
+
+        def _disclosures(corp_code, api_key, lookback_days):
+            captured["lookback_days"] = lookback_days
+            return []
+
+        with patch("dart_risk_mcp.server.resolve_corp", side_effect=_resolve), \
+             patch("dart_risk_mcp.server.fetch_company_disclosures",
+                   side_effect=_disclosures), \
+             patch.dict("os.environ", {"DART_API_KEY": "test_key"}):
+            find_actor_overlap(*call_args, **call_kwargs)
+
+        return captured["lookback_days"]
+
+    def test_default_lookback_is_one_year(self):
+        # lookback_years 미지정 시 기존 동작(365일)을 유지해야 한다 (하위호환).
+        self.assertEqual(self._capture_lookback(["a", "b"]), 365)
+
+    def test_lookback_years_widens_disclosure_window(self):
+        # lookback_years=3 지정 시 조회 윈도우가 3*365일로 확장된다.
+        self.assertEqual(self._capture_lookback(["a", "b"], lookback_years=3), 3 * 365)
+
+    def test_lookback_years_clamped_to_five(self):
+        # 무자본 M&A 다년 추적이라도 상한은 5년으로 제한된다.
+        self.assertEqual(self._capture_lookback(["a", "b"], lookback_years=99), 5 * 365)
+
+    def _run_empty(self, *call_args, **call_kwargs):
+        """공시 0건 시나리오로 find_actor_overlap을 실행해 출력 문자열을 반환한다."""
+        from dart_risk_mcp.server import find_actor_overlap
+
+        def _resolve(query, api_key):
+            return (query, {"corp_code": query.lower(), "stock_code": "000000"})
+
+        with patch("dart_risk_mcp.server.resolve_corp", side_effect=_resolve), \
+             patch("dart_risk_mcp.server.fetch_company_disclosures", return_value=[]), \
+             patch.dict("os.environ", {"DART_API_KEY": "test_key"}):
+            return find_actor_overlap(*call_args, **call_kwargs)
+
+    def test_default_window_label_unchanged(self):
+        # 기본 1년: 기존 '최근 365일' 문구를 유지해 골드와 호환된다.
+        self.assertIn("최근 365일", self._run_empty(["a", "b"]))
+
+    def test_multi_year_window_label_is_honest(self):
+        # 3년 조회 시 출력 안내가 '최근 3년'을 반영하고, 거짓인 '최근 365일'은 쓰지 않는다.
+        result = self._run_empty(["a", "b"], lookback_years=3)
+        self.assertIn("최근 3년", result)
+        self.assertNotIn("최근 365일", result)
+
     def test_single_company_no_overlap(self):
         from dart_risk_mcp.server import find_actor_overlap
 
