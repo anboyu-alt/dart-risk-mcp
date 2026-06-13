@@ -35,6 +35,14 @@ from .signals import (
     SIGNAL_TYPES, SIGNAL_KEY_TO_TAXONOMY,
     CAPITAL_EVENT_KEYS, DILUTIVE_CAPITAL_EVENTS, NON_DILUTIVE_CAPITAL_EVENTS,
 )
+from .watchlist import (
+    load_watchlist,
+    save_watchlist,
+    add_person,
+    remove_person,
+    get_person_companies,
+    list_persons,
+)
 from .cb_extractor import extract_cb_investors
 from .investor_extractor import extract_rights_offering_investors
 from .taxonomy import calculate_risk_score, find_pattern_match, estimate_crisis_timeline
@@ -93,4 +101,10 @@ __all__ = [
     "fetch_distress_events",
     "fetch_dividend_history",
     "detect_dividend_drain",
+    "load_watchlist",
+    "save_watchlist",
+    "add_person",
+    "remove_person",
+    "get_person_companies",
+    "list_persons",
 ]
