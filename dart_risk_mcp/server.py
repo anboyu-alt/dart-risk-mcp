@@ -34,6 +34,11 @@ from .core import (
     fetch_dividend_history,
     fetch_document_content,
     fetch_document_text,
+    add_person,
+    get_person_companies,
+    list_persons,
+    load_watchlist,
+    remove_person,
     fetch_executive_compensation,
     fetch_executive_roster,
     fetch_financial_statements,
@@ -1033,6 +1038,72 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
 
 
 # ── 도구 5: 세력 추적 (공통 CB/BW/EB + 유상증자 인수자) ──────────────────
+
+
+@mcp.tool()
+def manage_watchlist(
+    action: str,
+    person: str = "",
+    companies: list[str] | None = None,
+    note: str = "",
+) -> str:
+    """감시 대상 인물↔회사군 워치리스트를 관리한다 (list / show / add / remove).
+
+    DART는 인물명 역검색이 불가능해 회사 목록을 직접 입력해야 한다. 자주 보는
+    인물의 연관 회사군을 저장해두면 find_actor_overlap(watchlist=인물명)으로 바로
+    재조회할 수 있다. 회사군은 사용자가 직접 채운다(예: find_actor_overlap의 임원
+    겸직 결과를 add).
+
+    Args:
+        action: "list" | "show" | "add" | "remove"
+        person: 인물명 (show/add/remove에 필요)
+        companies: 회사명 목록 (add에 필요, 기존과 합집합 병합)
+        note: 메모 (add 시 선택)
+    """
+    companies = list(companies or [])
+    act = (action or "").strip().lower()
+
+    if act == "list":
+        rows = list_persons()
+        if not rows:
+            return ("워치리스트가 비어 있습니다. "
+                    "manage_watchlist(action='add', person='홍길동', "
+                    "companies=['회사1','회사2'])로 추가하세요.")
+        lines = ["📋 워치리스트 등록 인물:"]
+        for name, cnt in rows:
+            lines.append(f"  • {name} — {cnt}개사")
+        return "\n".join(lines)
+
+    if act == "show":
+        if not person:
+            return "입력 오류: show에는 person이 필요합니다."
+        comps = get_person_companies(person)
+        if not comps:
+            return f"'{person}'은(는) 워치리스트에 없습니다."
+        note_txt = load_watchlist().get("persons", {}).get(person, {}).get("note", "")
+        lines = [f"👤 {person} — {len(comps)}개사:"]
+        for c in comps:
+            lines.append(f"  • {c}")
+        if note_txt:
+            lines.append(f"메모: {note_txt}")
+        lines.append(f"→ find_actor_overlap(watchlist='{person}') 으로 분석할 수 있습니다.")
+        return "\n".join(lines)
+
+    if act == "add":
+        if not person or not companies:
+            return "입력 오류: add에는 person과 companies(1개 이상)가 필요합니다."
+        entry = add_person(person, companies, note)
+        return (f"✅ '{person}' 갱신 — 총 {len(entry['companies'])}개사: "
+                f"{', '.join(entry['companies'])}")
+
+    if act == "remove":
+        if not person:
+            return "입력 오류: remove에는 person이 필요합니다."
+        ok = remove_person(person)
+        return (f"🗑 '{person}' 삭제됨." if ok
+                else f"'{person}'은(는) 워치리스트에 없습니다.")
+
+    return "입력 오류: action은 list / show / add / remove 중 하나여야 합니다."
 
 
 @mcp.tool()
