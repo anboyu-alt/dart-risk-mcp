@@ -1107,7 +1107,11 @@ def manage_watchlist(
 
 
 @mcp.tool()
-def find_actor_overlap(company_names: list[str], lookback_years: int = 1) -> str:
+def find_actor_overlap(
+    company_names: list[str] | None = None,
+    lookback_years: int = 1,
+    watchlist: str = "",
+) -> str:
     """여러 기업(2~5개)의 CB/BW/EB 인수자 + 유상증자 인수자를 비교해 공통 행위자(세력)를 탐지한다.
 
     DART API 제약상, 분석 대상 기업을 직접 지정해야 한다.
@@ -1123,9 +1127,25 @@ def find_actor_overlap(company_names: list[str], lookback_years: int = 1) -> str
     Args:
         company_names: 비교할 기업명 또는 종목코드 목록 (2~5개, 예: ["에코프로", "바이오제닉스"])
         lookback_years: 조회 기간(년). 기본 1년(하위호환), 1~5년 범위.
+        watchlist: 저장된 워치리스트 인물명. 지정 시 해당 회사군을 company_names와
+            합집합으로 분석한다 (manage_watchlist로 관리).
     """
+    names = list(company_names or [])
+    watchlist_note = ""
+    if watchlist:
+        wl_companies = get_person_companies(watchlist)
+        if wl_companies:
+            names = list(dict.fromkeys(names + wl_companies))
+            watchlist_note = (f"ℹ️ 워치리스트 '{watchlist}'에서 "
+                              f"{len(wl_companies)}개사를 불러왔습니다.")
+        else:
+            watchlist_note = (f"ℹ️ 워치리스트 '{watchlist}'를 찾지 못했습니다. "
+                              "manage_watchlist(action='list')로 등록 인물을 확인하세요.")
+    company_names = names
+
     if not isinstance(company_names, list) or not (2 <= len(company_names) <= 5):
-        return "입력 오류: 2개 이상 5개 이하 기업명(또는 종목코드) 리스트를 전달하세요."
+        base = "입력 오류: 2개 이상 5개 이하 기업명(또는 종목코드) 리스트를 전달하세요."
+        return f"{base}\n{watchlist_note}" if watchlist_note else base
 
     lookback_years = min(max(lookback_years, 1), 5)
     lookback_days = lookback_years * 365
@@ -1246,6 +1266,10 @@ def find_actor_overlap(company_names: list[str], lookback_years: int = 1) -> str
             "2곳 이상에 동시에 등장한 인수자는 발견되지 않았습니다."
         )
     lines.append("")
+
+    if watchlist_note:
+        lines.append(watchlist_note)
+        lines.append("")
 
     if failed:
         lines.append(

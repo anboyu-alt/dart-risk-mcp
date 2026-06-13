@@ -173,6 +173,48 @@ class TestFindActorOverlapMerging(unittest.TestCase):
         # 두 경로가 함께 표기됨
         self.assertIn("[CB · 임원]", result)
 
+    def test_watchlist_loads_saved_companies(self):
+        # watchlist 이름을 주면 저장된 회사군이 분석 대상이 된다
+        import tempfile
+        from pathlib import Path
+        from dart_risk_mcp.server import find_actor_overlap
+        from dart_risk_mcp.core.watchlist import add_person
+
+        seen_corps = []
+
+        def _resolve(query, api_key):
+            seen_corps.append(query)
+            return (query, {"corp_code": query.lower(), "stock_code": "000000"})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict("os.environ", {
+                "DART_WATCHLIST_PATH": str(Path(tmp) / "wl.json"),
+                "DART_API_KEY": "test_key",
+            }):
+                add_person("신승수", ["회사가", "회사나"])
+                with patch("dart_risk_mcp.server.resolve_corp", side_effect=_resolve), \
+                     patch("dart_risk_mcp.server.fetch_company_disclosures", return_value=[]), \
+                     patch("dart_risk_mcp.server.fetch_executive_roster", return_value={}):
+                    find_actor_overlap(watchlist="신승수")
+
+        self.assertIn("회사가", seen_corps)
+        self.assertIn("회사나", seen_corps)
+
+    def test_watchlist_unknown_name_message(self):
+        import tempfile
+        from pathlib import Path
+        from dart_risk_mcp.server import find_actor_overlap
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict("os.environ", {
+                "DART_WATCHLIST_PATH": str(Path(tmp) / "wl.json"),
+                "DART_API_KEY": "test_key",
+            }):
+                result = find_actor_overlap(["회사가", "회사나"], watchlist="유령")
+
+        # 미등록 워치리스트는 안내하되 company_names로 계속 진행
+        self.assertIn("유령", result)
+
     def test_single_company_no_overlap(self):
         from dart_risk_mcp.server import find_actor_overlap
 
