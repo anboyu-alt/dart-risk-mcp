@@ -1928,6 +1928,50 @@ def _safe_int_from_de(de: str) -> int | None:
     return _safe_int(s)
 
 
+def fetch_executive_roster(
+    corp_code: str,
+    api_key: str,
+    lookback_years: int = 1,
+) -> dict[str, set[str]]:
+    """임원현황(exctvSttus)을 최근 N개 사업연도 수집해 {임원명: {연도}} 합집합 반환.
+
+    임원현황은 사업보고서(reprt_code=11011) 기재 항목이라 당해년도는 아직 미제출일 수
+    있다. 루프 범위를 current_year 까지 포함하되 미제출 연도(status!='000')는 건너뛴다.
+    조합명이 매번 달라도 '사람 이름'은 고정점이므로, 다년 합집합으로 겸직을 포착한다.
+
+    Args:
+        corp_code: DART 기업 고유번호
+        api_key: DART API 키
+        lookback_years: 조회할 직전 사업연도 수 (1~5)
+    """
+    roster: dict[str, set[str]] = {}
+    if not corp_code or not api_key:
+        return roster
+    if not isinstance(lookback_years, int) or not (1 <= lookback_years <= 5):
+        lookback_years = 1
+
+    current_year = datetime.now().year
+    for year_int in range(current_year - lookback_years, current_year + 1):
+        try:
+            resp = _retry("GET", f"{DART_BASE}/exctvSttus.json", params={
+                "crtfc_key": api_key,
+                "corp_code": corp_code,
+                "bsns_year": str(year_int),
+                "reprt_code": "11011",
+            }, timeout=15)
+            data = resp.json() if resp is not None else {}
+            if data.get("status") != "000":
+                continue
+            for row in data.get("list", []):
+                nm = (row.get("nm") or "").strip()
+                if not nm or nm in ("계", "합계"):
+                    continue
+                roster.setdefault(nm, set()).add(str(year_int))
+        except Exception:
+            continue
+    return roster
+
+
 def fetch_audit_opinion_history(
     corp_code: str,
     api_key: str,
