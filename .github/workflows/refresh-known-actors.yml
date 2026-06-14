@@ -21,6 +21,9 @@ jobs:
       - name: Refresh known_actors
         env:
           DART_API_KEY: ${{ secrets.DART_API_KEY }}
+          MAIL_USER: ${{ secrets.MAIL_USER }}
+          MAIL_APP_PASSWORD: ${{ secrets.MAIL_APP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
         run: python scripts/refresh_known_actors.py
       - name: Commit if changed
         run: |
