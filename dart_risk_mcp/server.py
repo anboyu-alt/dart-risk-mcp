@@ -1360,6 +1360,24 @@ def find_actor_overlap(
         )
 
     lines.append("")
+    # 공개기록 대조 (사실 표면화 — 판정 아님)
+    known_hits = []
+    for nm in sorted(actor_map.keys()):
+        recs = lookup_actor(nm)
+        if recs:
+            known_hits.append((nm, recs))
+    if known_hits:
+        lines.append("📎 공개기록 참고 (사실 표기 — 판정 아님):")
+        for nm, recs in known_hits:
+            for r in recs:
+                src = r.get("source", "")
+                date = r.get("date", "")
+                ev = r.get("evidence", "")
+                tag = f"{src}({date})" if date else src
+                lines.append(f"  • {nm} — {tag}: {ev}")
+        lines.append("  ⚠ 원본 공시로 사실 확인 권장 · 동명이인 가능성 있음")
+        lines.append("")
+
     lines.append(
         f"⚠️ 이 결과는 DART 공개 API 범위 내 분석입니다. {window_label} 이내 "
         "CB/BW/EB/유상증자 공시 인수자와 임원현황(등기임원) 겸직을 함께 대조하며, "
