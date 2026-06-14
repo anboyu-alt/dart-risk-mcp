@@ -247,6 +247,37 @@ class TestFindActorOverlapMerging(unittest.TestCase):
         self.assertIn("신승수", result)
         self.assertIn("동명이인", result)
 
+    def test_maintainer_seed_actor_marked_in_cross_reference(self):
+        # 탐지된 인물이 제작자 시드면 참고 섹션에 '제작자 모니터링 등록' 면책이 붙는다
+        import json, tempfile
+        from pathlib import Path
+        from dart_risk_mcp.server import find_actor_overlap
+
+        def _resolve(query, api_key):
+            return (query, {"corp_code": query.lower(), "stock_code": "000000"})
+
+        def _roster(corp_code, api_key, lookback_years):
+            if corp_code in ("a", "b"):
+                return {"이준민": {"2024"}}
+            return {}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ka = Path(tmp) / "ka.json"
+            ka.write_text(json.dumps({"version": 1, "actors": {
+                "이준민": [{"source": "제작자 모니터링 등록", "status": "maintainer_seed",
+                           "evidence": "제작자가 모니터링 대상으로 등록", "url": "", "date": ""}]
+            }}, ensure_ascii=False), encoding="utf-8")
+            with patch.dict("os.environ", {
+                "DART_KNOWN_ACTORS_PATH": str(ka), "DART_API_KEY": "test_key",
+            }):
+                with patch("dart_risk_mcp.server.resolve_corp", side_effect=_resolve), \
+                     patch("dart_risk_mcp.server.fetch_company_disclosures", return_value=[]), \
+                     patch("dart_risk_mcp.server.fetch_executive_roster", side_effect=_roster):
+                    result = find_actor_overlap(["a", "b"])
+
+        self.assertIn("공개기록 참고", result)
+        self.assertIn("제작자 모니터링 등록", result)
+
     def test_no_known_actor_no_section(self):
         # 레지스트리에 없으면 참고 섹션이 붙지 않는다
         import tempfile

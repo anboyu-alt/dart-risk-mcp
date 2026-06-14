@@ -32,6 +32,21 @@ class TestLookupKnownActor(unittest.TestCase):
         from dart_risk_mcp.server import lookup_known_actor
         self.assertIn("없습니다", lookup_known_actor("유령"))
 
+    def test_maintainer_seed_marked_distinctly(self):
+        # 제작자 등록(근거 사후 확보) 인물은 verified와 구분 표기 + 강한 면책
+        import json
+        from pathlib import Path
+        from dart_risk_mcp.server import lookup_known_actor
+        Path(self._path).write_text(json.dumps({"version": 1, "actors": {
+            "이준민": [{"source": "제작자 모니터링 등록", "status": "maintainer_seed",
+                       "evidence": "제작자가 모니터링 대상으로 등록", "url": "", "date": "",
+                       "tags": ["제작자 시드"]}]
+        }}, ensure_ascii=False), encoding="utf-8")
+        out = lookup_known_actor("이준민")
+        self.assertIn("제작자 모니터링 등록", out)
+        self.assertIn("공시 자동매칭이 아닌", out)   # 제작자 판단 면책
+        self.assertIn("동명이인", out)
+
 
 if __name__ == "__main__":
     unittest.main()
