@@ -8,7 +8,7 @@
 
 ### Stable contract 표면
 
-1. **MCP 도구 시그니처** — 23개 도구의 함수명·파라미터명·기본값·반환 타입.
+1. **MCP 도구 시그니처** — 24개 도구의 함수명·파라미터명·기본값·반환 타입.
 2. **사용자 출력 형식** — 첫 줄 패턴, 핵심 헤더, 한국어 표기 원칙(점수·등급·이모지·내부 flag·영문 약어 노출 금지). `tests/test_golden_output_hygiene.py` 9종 검증으로 기계적으로 보장.
 3. **신호 키 카탈로그** — `SIGNAL_TYPES[*].key`, `SIGNAL_KEY_TO_TAXONOMY` 매핑, taxonomy ID(N.M) 체계.
 4. **CLI 인터페이스** — `python -m dart_risk_mcp` 진입점·환경변수 `DART_API_KEY`·`scripts/regen_goldens.py` 인자.
@@ -32,6 +32,29 @@
 ---
 
 ## [Unreleased]
+
+## [1.1.0] — 2026-06-14
+
+**메인 메시지: 세력 탐지 강화 — `find_actor_overlap`에 등기임원 겸직 차원 + 워치리스트.** 무자본 M&A 세력은 인수마다 새 SPC/사모조합을 만들어 조합명이 매번 달라 인수자 이름 대조로는 묶이지 않는다. 조합명은 변해도 **사람 이름은 고정점**이라는 통찰로, DART 임원현황(`exctvSttus`) 다년 합집합을 통해 겸직을 포착한다. (착안 출처: gameworkerkim/vibe-investing의 CASSANDRA AI 주식셀럽 위키)
+
+### Added — 임원 겸직 차원 (PR #1)
+
+- `dart_client.fetch_executive_roster(corp_code, api_key, lookback_years)` — `exctvSttus.json` 다년 수집 → `{임원명: {연도}}` 합집합.
+- `find_actor_overlap`에 `lookback_years`(1~5, 기본 1) 파라미터 추가 — 365일 하드코딩 → 다년 조회. 출력 안내 문구도 정직 표기(1년=최근 365일, N년=최근 N년).
+- `find_actor_overlap`이 인수자(CB/유상증자)와 등기임원 겸직을 한 화면에서 교차 비교. 출처 태그 `[CB]`/`[유상증자]`/`[임원]`. 공통 행위자 = 2개사 이상에 (돈 댄 사람 또는 등기임원으로) 등장.
+- 라이브 검증: 신승수군 3개사 겸직(신용규·이호영 동행 포함) 매칭 → `find_actor_overlap` ⚠ → ✅.
+
+### Added — 워치리스트 (PR #2)
+
+- `core/watchlist.py` 신규 — 인물↔회사군 영속 저장(`~/.config/dart-risk-mcp/watchlist.json`, 환경변수 `DART_WATCHLIST_PATH`로 오버라이드). 파일 없음/손상 시 graceful degrade.
+- `manage_watchlist(action, person, companies, note)` 신규 도구 (24개째) — `list`/`show`/`add`/`remove`. add는 회사군 합집합 병합.
+- `find_actor_overlap(..., watchlist="")` — 저장된 인물의 회사군을 `company_names`와 합집합으로 자동 로드.
+
+### Notes
+
+- MCP 도구 23개 → **24개** (`manage_watchlist` 추가).
+- 외부 라이브러리 0 추가(표준 라이브러리만). 점수·등급 없음(v0.8.5)·"저장+수동조회까지만"(실시간 알림 비범위) 원칙 유지.
+- 기존 호출은 모두 하위호환 — `find_actor_overlap(company_names=...)`·골드 `actor_overlap.txt` 불변. hygiene 9/9 유지.
 
 ## [1.0.3] — 2026-04-28
 
