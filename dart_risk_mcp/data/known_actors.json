@@ -1,5 +1,17 @@
 {
-  "version": 1,
-  "updated": "2026-06-14",
-  "actors": {}
+ "version": 1,
+ "updated": "2026-06-14",
+ "actors": {
+  "신승수": [
+   {
+    "source": "DART 임원현황",
+    "evidence": "CG인바이츠·제이케이시냅스·헬스커넥트 등기임원 (2023–2025)",
+    "url": "https://dart.fss.or.kr",
+    "date": "2023-2025",
+    "tags": [
+     "다수 상장사 등기임원 겸직"
+    ]
+   }
+  ]
+ }
 }
