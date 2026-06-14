@@ -5,11 +5,72 @@
   "신승수": [
    {
     "source": "DART 임원현황",
+    "status": "verified",
     "evidence": "CG인바이츠·제이케이시냅스·헬스커넥트 등기임원 (2023–2025)",
     "url": "https://dart.fss.or.kr",
     "date": "2023-2025",
     "tags": [
      "다수 상장사 등기임원 겸직"
+    ]
+   }
+  ],
+  "이준민": [
+   {
+    "source": "제작자 모니터링 등록",
+    "status": "maintainer_seed",
+    "evidence": "제작자가 모니터링 대상으로 등록 (공시 자동매칭 아님, 혐의·확정 아님)",
+    "url": "",
+    "date": "",
+    "tags": [
+     "제작자 시드"
+    ]
+   }
+  ],
+  "배상윤": [
+   {
+    "source": "제작자 모니터링 등록",
+    "status": "maintainer_seed",
+    "evidence": "제작자가 모니터링 대상으로 등록 (공시 자동매칭 아님, 혐의·확정 아님)",
+    "url": "",
+    "date": "",
+    "tags": [
+     "제작자 시드"
+    ]
+   }
+  ],
+  "원영식": [
+   {
+    "source": "제작자 모니터링 등록",
+    "status": "maintainer_seed",
+    "evidence": "제작자가 모니터링 대상으로 등록 (공시 자동매칭 아님, 혐의·확정 아님)",
+    "url": "",
+    "date": "",
+    "tags": [
+     "제작자 시드"
+    ]
+   }
+  ],
+  "온성준": [
+   {
+    "source": "제작자 모니터링 등록",
+    "status": "maintainer_seed",
+    "evidence": "제작자가 모니터링 대상으로 등록 (공시 자동매칭 아님, 혐의·확정 아님)",
+    "url": "",
+    "date": "",
+    "tags": [
+     "제작자 시드"
+    ]
+   }
+  ],
+  "Yoo Andy C": [
+   {
+    "source": "제작자 모니터링 등록",
+    "status": "maintainer_seed",
+    "evidence": "제작자가 모니터링 대상으로 등록 (공시 자동매칭 아님, 혐의·확정 아님)",
+    "url": "",
+    "date": "",
+    "tags": [
+     "제작자 시드"
     ]
    }
   ]

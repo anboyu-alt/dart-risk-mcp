@@ -1057,11 +1057,14 @@ def lookup_known_actor(name: str) -> str:
         return (f"'{name}'에 대한 공개기록이 레지스트리에 없습니다. "
                 "(등재는 공개 출처가 확인된 경우에만 이뤄집니다.)")
     lines = [f"📎 '{name}' 공개기록 (사실 표기 — 판정 아님):"]
+    has_seed = False
     for r in records:
         src = r.get("source", "")
         ev = r.get("evidence", "")
         date = r.get("date", "")
         url = r.get("url", "")
+        if r.get("status") == "maintainer_seed":
+            has_seed = True
         head = f"  • {src}"
         if date:
             head += f" ({date})"
@@ -1069,6 +1072,8 @@ def lookup_known_actor(name: str) -> str:
         lines.append(head)
         if url:
             lines.append(f"      출처: {url}")
+    if has_seed:
+        lines.append("⚠ 일부 항목은 공시 자동매칭이 아닌 제작자 모니터링 등록입니다 (혐의·확정 아님).")
     lines.append("⚠ 원본 공시로 사실 확인 권장 · 동명이인 가능성 있음 · 본 기록은 판정이 아닙니다.")
     return "\n".join(lines)
 
@@ -1375,6 +1380,8 @@ def find_actor_overlap(
                 ev = r.get("evidence", "")
                 tag = f"{src}({date})" if date else src
                 lines.append(f"  • {nm} — {tag}: {ev}")
+        if any(r.get("status") == "maintainer_seed" for _, recs in known_hits for r in recs):
+            lines.append("  ⚠ 일부는 제작자 모니터링 등록 (공시 자동매칭 아님, 혐의·확정 아님)")
         lines.append("  ⚠ 원본 공시로 사실 확인 권장 · 동명이인 가능성 있음")
         lines.append("")
 
