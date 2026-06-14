@@ -16,12 +16,12 @@ DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 
 ## 이 도구가 하는 것
 
-총 **24개 MCP 도구**를 6개 그룹으로 분류합니다(자세한 시그니처는 [CLAUDE.md](CLAUDE.md) 참고).
+총 **25개 MCP 도구**를 6개 그룹으로 분류합니다(자세한 시그니처는 [CLAUDE.md](CLAUDE.md) 참고).
 
 - **공시 시계열 재구성** — 한 기업의 최근 N개월 공시를 자동 정렬·신호 분류·복합 패턴 매칭. (`analyze_company_risk`, `build_event_timeline`)
 - **자본·재무·내부자 추세 분석** — 자본구조 12개월 churn, 재무 4지표 YoY 추세, 분기 보고 단위 보유 비율 변동, 채무증권 5종 잔액·만기. (`track_capital_structure`, `scan_financial_anomaly`, `track_insider_trading`, `track_debt_balance`)
 - **자금 흐름·감사·배당 검증** — 공모/사모 조달 자금 계획 vs 실제 집행, 5년 감사의견 이력, 적자 시점 배당 이상. (`track_fund_usage`, `get_audit_opinion_history`)
-- **행위자·세력·DS005·기업 정보 조회** — 공통 CB/BW 인수자 **+ 등기임원 겸직** 교차 비교(조합명이 달라도 사람 이름으로 세력 포착), 인물↔회사군 워치리스트 관리, 12종 주요결정 공시, 임원 보수, 주주 현황, 재무 비교, 기업 개요. (`find_actor_overlap`, `manage_watchlist`, `get_major_decision`, `get_executive_compensation`, `get_shareholder_info`, `compare_financials`, `get_company_info`, `get_financial_summary`)
+- **행위자·세력·DS005·기업 정보 조회** — 공통 CB/BW 인수자 **+ 등기임원 겸직** 교차 비교(조합명이 달라도 사람 이름으로 세력 포착), 인물↔회사군 워치리스트 관리, 공개기록 행위자 조회(사실·출처만, 판정 아님), 12종 주요결정 공시, 임원 보수, 주주 현황, 재무 비교, 기업 개요. (`find_actor_overlap`, `manage_watchlist`, `lookup_known_actor`, `get_major_decision`, `get_executive_compensation`, `get_shareholder_info`, `compare_financials`, `get_company_info`, `get_financial_summary`)
 - **공시 원문·접수번호 조회** — 종목코드·접수번호로 공시 목록·원문·섹션·페이지네이션. (`list_disclosures_by_stock`, `get_disclosure_document`, `list_disclosure_sections`, `view_disclosure`, `check_disclosure_risk`, `check_disclosure_anomaly`)
 - **시장 전체·신호 해설** — preset 기반 시장 일괄 스캔, 신호 키 조합별 위기 타임라인·복합 패턴 해설. (`search_market_disclosures`, `find_risk_precedents`)
 
@@ -30,6 +30,7 @@ DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 다음 항목은 본 도구의 **영구 비범위**입니다 — v1.0 GA에서 명시 확정.
 
 - **점수·등급 부여 안 함** — 기업 위험도를 정량화하거나 "매우위험/고위험" 등급으로 라벨링하지 않습니다. 출력은 관찰된 사실(건수·비율·날짜·공시명)만 서술합니다(v0.8.5 원칙).
+- **인물 낙인 안 함** — 공개기록 행위자 레지스트리(`lookup_known_actor`)는 출처가 확인된 공개기록에 인물이 어느 상장사에 등장했는지를 **사실·출처로만** 제공합니다. "세력/문제 인물" 같은 판정·점수는 부여하지 않으며, 항상 동명이인 가능성과 원본 공시 확인 필요를 고지합니다. 등재 이의는 [GitHub Issues](https://github.com/anboyu-alt/dart-risk-mcp/issues).
 - **실시간 알림·푸시 안 함** — 호출 시점 데이터만 응답합니다. 푸시 구독은 사용자가 별도 시스템에서 처리.
 - **매수/매도 추천·가격 예측 안 함** — 본 도구의 출력은 투자 판단의 근거가 아니며, 법적 책임 영역도 아닙니다.
 - **업종 평균 비교 안 함** — DART OpenAPI는 업종 평균을 제공하지 않습니다(v0.8.8 검증). 본 도구는 회사 자체 YoY 추세로 false-positive를 완화합니다.
@@ -56,7 +57,7 @@ DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 | `find_actor_overlap` 의 임원 겸직 매칭 | ✅ | 신승수군 3개사 겸직 라이브 매칭(신용규·이호영 동행 포함), 골드 `actor_overlap.txt` (v1.1.0) |
 | `find_risk_precedents` 9개 복합 패턴 중 8개 (`founder_fade`·`debt_spiral`·`reverse_split_spiral`·`related_party_hollowing`·`zombie_ma`·`audit_insider_dump`·`delisting_evasion`·`fake_new_biz`) | ⚠ | 카탈로그·키워드 정의는 있으나 라이브 매칭 사례 0 (capital_churn_anomaly만 검증) |
 
-**해석:** 도구 24개 자체는 모두 라이브 검증돼 정상 작동합니다. ⚠ 표시는 도구 안의 **특정 신호 키·패턴이 실제로 발화하는 사례를 아직 발견 못 함**을 의미. 코드는 사례가 발생하면 자동으로 매칭하도록 작성돼 있으니, 부실/사기/M&A 의심 회사 사례를 발견하시면 [GitHub Issues](https://github.com/anboyu-alt/dart-risk-mcp/issues)로 제보 주시면 골드 매트릭스에 반영하겠습니다.
+**해석:** 도구 25개 자체는 모두 라이브 검증돼 정상 작동합니다. ⚠ 표시는 도구 안의 **특정 신호 키·패턴이 실제로 발화하는 사례를 아직 발견 못 함**을 의미. 코드는 사례가 발생하면 자동으로 매칭하도록 작성돼 있으니, 부실/사기/M&A 의심 회사 사례를 발견하시면 [GitHub Issues](https://github.com/anboyu-alt/dart-risk-mcp/issues)로 제보 주시면 골드 매트릭스에 반영하겠습니다.
 
 ---
 
