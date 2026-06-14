@@ -278,7 +278,7 @@ dart_risk_mcp/
 - 데이터: 동봉 `data/known_actors.json`. `core/known_actors.py`의 `lookup_actor`로 조회
 - `find_actor_overlap`도 탐지된 인물을 이 레지스트리와 자동 대조해 "공개기록 참고" 섹션으로 표면화
 - **status 3단계:** `verified`(회사 직접 조회 근거) / `maintainer_seed`(제작자 등록, 근거 미확보) / `auto_matched`(시장 공시 이름 자동 매칭, **동명이인 미확인**). 자동 매칭은 verified로 자동 승격하지 않으며 강한 동명이인 경고를 동반
-- **등재 기준:** 공개 출처가 확인된 경우에만 등재. 근거(회사·연도·출처)는 `scripts/build_known_actors.py`(수동 부트스트랩) 또는 `scripts/refresh_known_actors.py`(매일 자동)가 DART에서 집계(사람은 회사 단서만 제공). 단정 표현 금지. 등재 이의는 GitHub Issues
+- **등재 기준:** 공개 출처가 확인된 경우에만 등재. 근거(회사·연도·출처)는 `scripts/build_known_actors.py`(수동 부트스트랩) 또는 `scripts/refresh_known_actors.py`(매일 자동)가 DART에서 집계(사람은 회사 단서만 제공). 단정 표현 금지. 명단은 제작자가 직접 관리·연락(GitHub 프로필 연락처). 변경 시 제작자 Gmail 통지(`refresh_known_actors.py`의 `send_mail`, 자격증명 `MAIL_USER`/`MAIL_APP_PASSWORD`/`MAIL_TO` Secret)
 
 ---
 

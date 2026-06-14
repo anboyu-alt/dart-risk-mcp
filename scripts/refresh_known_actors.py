@@ -8,7 +8,9 @@ API 키: 환경변수 DART_API_KEY 또는 tmp/_apikey.txt.
 """
 import json
 import os
+import smtplib
 from datetime import datetime, timedelta
+from email.message import EmailMessage
 from pathlib import Path
 
 from dart_risk_mcp.core.dart_client import fetch_market_disclosures
@@ -87,6 +89,52 @@ def merge_auto_matches(data: dict, matches: dict) -> bool:
     return changed
 
 
+def build_change_summary(data: dict, matches: dict) -> str:
+    """status별 집계 + 이번 변경분을 평문 요약으로 반환 (사실 표기·판정 아님)."""
+    counts = {"verified": 0, "maintainer_seed": 0, "auto_matched": 0}
+    for recs in data.get("actors", {}).values():
+        for r in recs:
+            st = r.get("status", "")
+            if st in counts:
+                counts[st] += 1
+    lines = [
+        "known_actors 자동 갱신 — 변경 알림 (사실 표기 · 판정 아님)",
+        "",
+        f"현재 등재 근거: verified {counts['verified']} · "
+        f"maintainer_seed {counts['maintainer_seed']} · auto_matched {counts['auto_matched']}",
+        "",
+        "이번 추가:",
+    ]
+    for name, recs in matches.items():
+        for r in recs:
+            lines.append(f"  - {name} — {r.get('evidence', '')} (접수 {r.get('rcept_no', '')})")
+    lines.append("")
+    lines.append("자동 매칭은 동명이인 미확인 — 원본 공시로 확인 필요. 판정 아님.")
+    return "\n".join(lines)
+
+
+def send_mail(subject: str, body: str) -> bool:
+    """제작자 Gmail로 발송. 자격증명(env) 미설정 시 스킵(False). 예외도 False."""
+    user = os.environ.get("MAIL_USER")
+    pw = os.environ.get("MAIL_APP_PASSWORD")
+    to = os.environ.get("MAIL_TO")
+    if not (user and pw and to):
+        return False
+    try:
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = user
+        msg["To"] = to
+        msg.set_content(body)
+        with smtplib.SMTP("smtp.gmail.com", 587) as s:
+            s.starttls()
+            s.login(user, pw)
+            s.send_message(msg)
+        return True
+    except Exception:
+        return False
+
+
 def main():
     key = _api_key()
     if not key:
@@ -97,7 +145,10 @@ def main():
     changed = merge_auto_matches(data, matches)
     if changed:
         DATA_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-        print(f"갱신: {sum(len(v) for v in matches.values())}건 근거 추가")
+        n = sum(len(v) for v in matches.values())
+        summary = build_change_summary(data, matches)
+        sent = send_mail("[known_actors] 자동 갱신 변경 알림", summary)
+        print(f"갱신: {n}건 근거 추가" + (" (메일 발송)" if sent else " (메일 스킵)"))
     else:
         print("변경 없음")
 
