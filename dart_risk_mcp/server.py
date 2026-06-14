@@ -1058,20 +1058,27 @@ def lookup_known_actor(name: str) -> str:
                 "(등재는 공개 출처가 확인된 경우에만 이뤄집니다.)")
     lines = [f"📎 '{name}' 공개기록 (사실 표기 — 판정 아님):"]
     has_seed = False
+    has_auto = False
     for r in records:
         src = r.get("source", "")
         ev = r.get("evidence", "")
         date = r.get("date", "")
         url = r.get("url", "")
-        if r.get("status") == "maintainer_seed":
+        st = r.get("status", "")
+        if st == "maintainer_seed":
             has_seed = True
-        head = f"  • {src}"
+        elif st == "auto_matched":
+            has_auto = True
+        prefix = "[자동 매칭 · 동명이인 미확인] " if st == "auto_matched" else ""
+        head = f"  • {prefix}{src}"
         if date:
             head += f" ({date})"
         head += f": {ev}"
         lines.append(head)
         if url:
             lines.append(f"      출처: {url}")
+    if has_auto:
+        lines.append("⚠ 자동 매칭 항목은 시장 공시 이름 매칭 결과로 동일인 여부가 미확인입니다 — 원본 공시로 반드시 확인하세요.")
     if has_seed:
         lines.append("⚠ 일부 항목은 공시 자동매칭이 아닌 제작자 모니터링 등록입니다 (혐의·확정 아님).")
     lines.append("⚠ 원본 공시로 사실 확인 권장 · 동명이인 가능성 있음 · 본 기록은 판정이 아닙니다.")
@@ -1380,6 +1387,8 @@ def find_actor_overlap(
                 ev = r.get("evidence", "")
                 tag = f"{src}({date})" if date else src
                 lines.append(f"  • {nm} — {tag}: {ev}")
+        if any(r.get("status") == "auto_matched" for _, recs in known_hits for r in recs):
+            lines.append("  ⚠ 일부는 시장 공시 자동 매칭 (동일인 여부 미확인)")
         if any(r.get("status") == "maintainer_seed" for _, recs in known_hits for r in recs):
             lines.append("  ⚠ 일부는 제작자 모니터링 등록 (공시 자동매칭 아님, 혐의·확정 아님)")
         lines.append("  ⚠ 원본 공시로 사실 확인 권장 · 동명이인 가능성 있음")

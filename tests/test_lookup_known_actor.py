@@ -32,6 +32,21 @@ class TestLookupKnownActor(unittest.TestCase):
         from dart_risk_mcp.server import lookup_known_actor
         self.assertIn("없습니다", lookup_known_actor("유령"))
 
+    def test_auto_matched_marked_with_strong_warning(self):
+        import json
+        from pathlib import Path
+        from dart_risk_mcp.server import lookup_known_actor
+        Path(self._path).write_text(json.dumps({"version": 1, "actors": {
+            "이준민": [{"source": "DART CB인수(자동매칭)", "status": "auto_matched",
+                       "evidence": "△△전자 CB 인수자로 등장", "url": "https://dart.fss.or.kr",
+                       "date": "2026-06", "rcept_no": "20260612000123",
+                       "tags": ["자동 매칭", "동명이인 미확인"]}]
+        }}, ensure_ascii=False), encoding="utf-8")
+        out = lookup_known_actor("이준민")
+        self.assertIn("자동 매칭", out)
+        self.assertIn("동명이인", out)
+        self.assertIn("동일인 여부", out)   # 강한 경고 문구
+
     def test_maintainer_seed_marked_distinctly(self):
         # 제작자 등록(근거 사후 확보) 인물은 verified와 구분 표기 + 강한 면책
         import json
