@@ -50,6 +50,60 @@ class TestKnownActors(unittest.TestCase):
         Path(self._path).write_text("{ broken", encoding="utf-8")
         self.assertEqual(load_known_actors(), {"version": 1, "actors": {}})
 
+    def test_override_skips_remote(self):
+        # DART_KNOWN_ACTORS_PATH 지정 시 원격 fetch를 호출하지 않는다
+        from unittest.mock import patch as _p
+        from dart_risk_mcp.core import known_actors as ka
+        self._write({"version": 1, "actors": {"X": [{"source": "s", "evidence": "e"}]}})
+        with _p("dart_risk_mcp.core.known_actors.requests.get") as get:
+            data = ka.load_known_actors()
+        get.assert_not_called()
+        self.assertIn("X", data["actors"])
+
+    def test_remote_fetch_when_no_cache(self):
+        # 캐시 없음 + 원격 성공 → 원격 데이터 반환 + 캐시 저장
+        import os
+        import tempfile
+        from unittest.mock import patch as _p, MagicMock
+        from pathlib import Path
+        from dart_risk_mcp.core import known_actors as ka
+        self._env.stop()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                cache = Path(tmp) / "remote.json"
+                resp = MagicMock()
+                resp.status_code = 200
+                resp.json.return_value = {"version": 1, "actors": {
+                    "원격인물": [{"source": "DART", "evidence": "e"}]}}
+                with _p("dart_risk_mcp.core.known_actors._CACHE_FILE", cache), \
+                     _p("dart_risk_mcp.core.known_actors.requests.get", return_value=resp) as get:
+                    os.environ.pop("DART_KNOWN_ACTORS_PATH", None)
+                    data = ka.load_known_actors()
+                get.assert_called_once()
+                self.assertIn("원격인물", data["actors"])
+                self.assertTrue(cache.exists())
+        finally:
+            self._env.start()
+
+    def test_remote_failure_falls_back_to_bundled(self):
+        # 원격 실패 → 동봉 데이터 fallback (예외 없음)
+        import os
+        import tempfile
+        from unittest.mock import patch as _p
+        from pathlib import Path
+        from dart_risk_mcp.core import known_actors as ka
+        self._env.stop()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                cache = Path(tmp) / "remote.json"
+                with _p("dart_risk_mcp.core.known_actors._CACHE_FILE", cache), \
+                     _p("dart_risk_mcp.core.known_actors.requests.get", side_effect=Exception("net")):
+                    os.environ.pop("DART_KNOWN_ACTORS_PATH", None)
+                    data = ka.load_known_actors()
+                self.assertIsInstance(data.get("actors"), dict)
+        finally:
+            self._env.start()
+
 
 if __name__ == "__main__":
     unittest.main()
