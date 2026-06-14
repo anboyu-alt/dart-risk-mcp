@@ -33,6 +33,23 @@
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-06-14
+
+**known_actors 자동 갱신 + 원격 로드.** 등재 인물의 인수 근거를 매일 자동 수집하고, 유저는 갱신된 데이터를 즉시 받는다.
+
+### Added
+
+- `core/known_actors.py` 원격 로드 — GitHub raw 최신 `known_actors.json`을 24h 캐시로 로드, 네트워크 실패 시 동봉 fallback. 중앙 서버 없음(정적 파일).
+- `scripts/refresh_known_actors.py` — 최근 2일 시장 CB/유상증자 공시에서 등재 인물의 인수자 근거를 자동 매칭. `status: auto_matched`(동명이인 미확인). 새 인물 등재 안 함.
+- `.github/workflows/refresh-known-actors.yml` — 매일 cron 자동 실행 → master 자동 push.
+- `status` 3단계: `verified` / `maintainer_seed` / `auto_matched`. 자동 매칭은 verified로 자동 승격하지 않으며 강한 동명이인 경고 동반.
+
+### Notes
+
+- `DART_API_KEY`는 GitHub repo Secret으로 운영자가 등록.
+- 유저 MCP 도구의 시장 자동 스캔은 여전히 비범위 — 운영 큐레이션은 GitHub Actions 전용.
+- 점수·등급·판정 없음(v0.8.5) 유지.
+
 ## [1.2.1] — 2026-06-14
 
 **제작자 시드 + 등재 상태 구분.** 공개기록 레지스트리에 `status` 필드를 도입해, DART 근거가 확보된 인물(`verified`)과 제작자가 모니터링 대상으로 등록한 인물(`maintainer_seed`)을 명확히 구분한다.
