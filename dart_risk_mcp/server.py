@@ -38,6 +38,7 @@ from .core import (
     get_person_companies,
     list_persons,
     load_watchlist,
+    lookup_actor,
     remove_person,
     fetch_executive_compensation,
     fetch_executive_roster,
@@ -1038,6 +1039,38 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
 
 
 # ── 도구 5: 세력 추적 (공통 CB/BW/EB + 유상증자 인수자) ──────────────────
+
+
+@mcp.tool()
+def lookup_known_actor(name: str) -> str:
+    """인물명으로 공개기록 레지스트리를 조회한다 (사실 표기 — 판정 아님).
+
+    출처가 명확한 공개기록(DART 임원현황·CB/유상증자 인수 등)에 그 인물이 어느
+    상장사에 등장했는지를 사실로만 반환한다. 위험 판정·점수·등급은 부여하지 않으며,
+    동명이인 가능성과 원본 확인 필요를 함께 고지한다.
+
+    Args:
+        name: 조회할 인물명
+    """
+    records = lookup_actor(name)
+    if not records:
+        return (f"'{name}'에 대한 공개기록이 레지스트리에 없습니다. "
+                "(등재는 공개 출처가 확인된 경우에만 이뤄집니다.)")
+    lines = [f"📎 '{name}' 공개기록 (사실 표기 — 판정 아님):"]
+    for r in records:
+        src = r.get("source", "")
+        ev = r.get("evidence", "")
+        date = r.get("date", "")
+        url = r.get("url", "")
+        head = f"  • {src}"
+        if date:
+            head += f" ({date})"
+        head += f": {ev}"
+        lines.append(head)
+        if url:
+            lines.append(f"      출처: {url}")
+    lines.append("⚠ 원본 공시로 사실 확인 권장 · 동명이인 가능성 있음 · 본 기록은 판정이 아닙니다.")
+    return "\n".join(lines)
 
 
 @mcp.tool()
