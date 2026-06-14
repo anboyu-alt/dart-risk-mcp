@@ -43,6 +43,7 @@ from .watchlist import (
     get_person_companies,
     list_persons,
 )
+from .known_actors import load_known_actors, lookup_actor
 from .cb_extractor import extract_cb_investors
 from .investor_extractor import extract_rights_offering_investors
 from .taxonomy import calculate_risk_score, find_pattern_match, estimate_crisis_timeline
@@ -107,4 +108,6 @@ __all__ = [
     "remove_person",
     "get_person_companies",
     "list_persons",
+    "load_known_actors",
+    "lookup_actor",
 ]

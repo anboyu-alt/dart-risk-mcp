@@ -215,6 +215,60 @@ class TestFindActorOverlapMerging(unittest.TestCase):
         # 미등록 워치리스트는 안내하되 company_names로 계속 진행
         self.assertIn("유령", result)
 
+    def test_known_actor_cross_reference_appended(self):
+        # 탐지된 임원이 공개기록 레지스트리에 있으면 참고 섹션이 붙는다
+        import json, tempfile
+        from pathlib import Path
+        from dart_risk_mcp.server import find_actor_overlap
+
+        def _resolve(query, api_key):
+            return (query, {"corp_code": query.lower(), "stock_code": "000000"})
+
+        def _roster(corp_code, api_key, lookback_years):
+            if corp_code in ("a", "b"):
+                return {"신승수": {"2024"}}
+            return {}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ka = Path(tmp) / "ka.json"
+            ka.write_text(json.dumps({"version": 1, "actors": {
+                "신승수": [{"source": "DART 임원현황", "evidence": "CG인바이츠 등기임원",
+                           "url": "https://dart.fss.or.kr", "date": "2024"}]
+            }}, ensure_ascii=False), encoding="utf-8")
+            with patch.dict("os.environ", {
+                "DART_KNOWN_ACTORS_PATH": str(ka), "DART_API_KEY": "test_key",
+            }):
+                with patch("dart_risk_mcp.server.resolve_corp", side_effect=_resolve), \
+                     patch("dart_risk_mcp.server.fetch_company_disclosures", return_value=[]), \
+                     patch("dart_risk_mcp.server.fetch_executive_roster", side_effect=_roster):
+                    result = find_actor_overlap(["a", "b"])
+
+        self.assertIn("공개기록 참고", result)
+        self.assertIn("신승수", result)
+        self.assertIn("동명이인", result)
+
+    def test_no_known_actor_no_section(self):
+        # 레지스트리에 없으면 참고 섹션이 붙지 않는다
+        import tempfile
+        from pathlib import Path
+        from dart_risk_mcp.server import find_actor_overlap
+
+        def _resolve(query, api_key):
+            return (query, {"corp_code": query.lower(), "stock_code": "000000"})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ka = Path(tmp) / "ka.json"
+            ka.write_text('{"version":1,"actors":{}}', encoding="utf-8")
+            with patch.dict("os.environ", {
+                "DART_KNOWN_ACTORS_PATH": str(ka), "DART_API_KEY": "test_key",
+            }):
+                with patch("dart_risk_mcp.server.resolve_corp", side_effect=_resolve), \
+                     patch("dart_risk_mcp.server.fetch_company_disclosures", return_value=[]), \
+                     patch("dart_risk_mcp.server.fetch_executive_roster", return_value={}):
+                    result = find_actor_overlap(["a", "b"])
+
+        self.assertNotIn("공개기록 참고", result)
+
     def test_single_company_no_overlap(self):
         from dart_risk_mcp.server import find_actor_overlap
 

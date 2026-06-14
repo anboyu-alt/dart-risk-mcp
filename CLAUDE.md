@@ -29,12 +29,15 @@ dart_risk_mcp/
     ├── catalog.py       # 금감원·금융위 MD 카탈로그 로더 (load_catalog_excerpt)
     ├── cb_extractor.py  # CB/BW 인수자명 추출
     ├── watchlist.py     # 인물↔회사군 영속 워치리스트 (순수 파일 I/O)
+    ├── known_actors.py  # 공개기록 행위자 레지스트리 로드/조회 (동봉 data/known_actors.json)
     └── taxonomy.py      # 27개 신호 분류 + 위험 점수 + 패턴
 ```
 
+> 동봉 데이터: `dart_risk_mcp/data/known_actors.json`(공개기록 시드). 부트스트랩 스크립트: `scripts/build_known_actors.py`(인물+회사단서 → DART 근거 자동 집계).
+
 ---
 
-## MCP 도구 24개
+## MCP 도구 25개
 
 ### 1. `analyze_company_risk(company_name, lookback_days=90)`
 
@@ -88,6 +91,7 @@ dart_risk_mcp/
 - `lookback_years` 범위 1~5년. 기본 1년이면 출력 안내가 "최근 365일", N년이면 "최근 N년"으로 정직 표기
 - DART API 제약: 행위자 이름으로 역검색 불가, 기업 목록을 직접 입력해야 함
 - `watchlist` 지정 시 `manage_watchlist`에 저장된 인물의 회사군을 `company_names`와 합집합으로 자동 로드(예: `find_actor_overlap(watchlist="신승수")`)
+- 탐지된 인물(인수자·임원)을 공개기록 레지스트리(`lookup_actor`)와 대조해 매칭 시 "📎 공개기록 참고(사실 표기 — 판정 아님)" 섹션 + 면책 표면화
 - 라이브 입증: 신승수군(이엠앤아이·제이케이시냅스·CG인바이츠·헬스커넥트·티쓰리) `lookback_years=3` → 신승수 3개사 겸직 + 신용규·이호영 동행 인물 탐지
 
 ### 6. `list_disclosures_by_stock(stock_code, lookback_days=90)` ✨
@@ -264,6 +268,15 @@ dart_risk_mcp/
 - DART는 인물명 역검색 불가 → 회사군은 사용자가 직접 채움(예: `find_actor_overlap` 임원 겸직 결과를 `add`)
 - 저장된 인물은 `find_actor_overlap(watchlist=인물명)`으로 바로 재조회
 - **저장 + 수동 조회까지만** — 실시간 알림·자동 스캔은 비범위
+
+### 25. `lookup_known_actor(name)` ✨
+
+인물명으로 **공개기록 행위자 레지스트리**를 조회합니다 (사실 표기 — 판정 아님).
+
+- 출처가 명확한 공개기록(DART 임원현황·CB/유상증자 인수)에 그 인물이 어느 상장사에 등장했는지를 사실로만 반환. **위험 판정·점수·등급 없음**, 동명이인·원본 확인 면책 동반
+- 데이터: 동봉 `data/known_actors.json`. `core/known_actors.py`의 `lookup_actor`로 조회
+- `find_actor_overlap`도 탐지된 인물을 이 레지스트리와 자동 대조해 "공개기록 참고" 섹션으로 표면화
+- **등재 기준:** 공개 출처가 확인된 경우에만 등재. 근거(회사·연도·출처)는 `scripts/build_known_actors.py`가 DART에서 집계(사람은 회사 단서만 제공). 단정 표현 금지. 등재 이의는 GitHub Issues
 
 ---
 
