@@ -2,7 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![Python](https://img.shields.io/pypi/pyversions/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![License](https://img.shields.io/pypi/l/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![Release](https://img.shields.io/github/v/release/anboyu-alt/dart-risk-mcp)](https://github.com/anboyu-alt/dart-risk-mcp/releases) [![Downloads](https://static.pepy.tech/badge/dart-risk-mcp/month)](https://pepy.tech/project/dart-risk-mcp) [![Last commit](https://img.shields.io/github/last-commit/anboyu-alt/dart-risk-mcp)](https://github.com/anboyu-alt/dart-risk-mcp/commits/master) [![Commit activity](https://img.shields.io/github/commit-activity/m/anboyu-alt/dart-risk-mcp)](https://github.com/anboyu-alt/dart-risk-mcp/graphs/commit-activity)
 
-**버전:** v1.1.0 · **공시 기반 불공정거래 위험 모니터링** · **설치:** `pip install dart-risk-mcp` → `python -m dart_risk_mcp.setup`
+**버전:** v1.2.0 · **공시 기반 불공정거래 위험 모니터링** · **설치:** `pip install dart-risk-mcp` → `python -m dart_risk_mcp.setup`
 
 DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 
@@ -39,7 +39,7 @@ DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 - **시장 전체 일일 자동 스캔 안 함** — DART OpenAPI 호출 한도(분당·일별 quota)와 사용자 책임 영역 분리 차원. `search_market_disclosures`는 1회 preset 호출 단위.
 - **DS007 증권신고서(bdRs/mgRs) 통합 안 함** — 채권신고서·합병등의신고서 5개 대형 회사(셀트리온·두산에너빌리티·셀트리온헬스케어·삼성바이오로직스·SK하이닉스) 3년 윈도우 검증 결과 모두 0건(v1.0.1 검증). 발생 빈도 미미로 영구 폐기.
 
-## 라이브 검증 매트릭스 (v1.1.0 기준)
+## 라이브 검증 매트릭스 (v1.2.0 기준)
 
 각 도구·신호 키가 **실제 DART API 응답으로 매칭된 적 있는지** 정직하게 표기합니다. ⚠는 "코드와 단위 테스트는 있지만 라이브 매칭 사례가 아직 없음" — 사례가 발견되면 골드 매트릭스에 추가하고 ⚠를 제거합니다.
 
