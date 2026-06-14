@@ -54,5 +54,41 @@ class TestRefreshKnownActors(unittest.TestCase):
         self.assertEqual(data["actors"], {})
 
 
+    def test_build_change_summary_includes_counts_and_changes(self):
+        import scripts.refresh_known_actors as rk
+        data = {"actors": {"신승수": [{"status": "verified"}],
+                           "이준민": [{"status": "maintainer_seed"}]}}
+        matches = {"이준민": [{"evidence": "△△전자 CB 인수자로 등장", "rcept_no": "R1"}]}
+        s = rk.build_change_summary(data, matches)
+        self.assertIn("verified 1", s)
+        self.assertIn("maintainer_seed 1", s)
+        self.assertIn("이준민", s)
+        self.assertIn("R1", s)
+
+    def test_send_mail_skips_without_credentials(self):
+        import os
+        import scripts.refresh_known_actors as rk
+        from unittest.mock import patch
+        with patch.dict("os.environ", {}, clear=False):
+            for k in ("MAIL_USER", "MAIL_APP_PASSWORD", "MAIL_TO"):
+                os.environ.pop(k, None)
+            with patch.object(rk.smtplib, "SMTP") as smtp:
+                ok = rk.send_mail("s", "b")
+        self.assertFalse(ok)
+        smtp.assert_not_called()
+
+    def test_send_mail_sends_with_credentials(self):
+        import scripts.refresh_known_actors as rk
+        from unittest.mock import patch, MagicMock
+        with patch.dict("os.environ", {"MAIL_USER": "u@gmail.com",
+                                       "MAIL_APP_PASSWORD": "p", "MAIL_TO": "t@x.com"}):
+            srv = MagicMock()
+            srv.__enter__.return_value = srv
+            with patch.object(rk.smtplib, "SMTP", return_value=srv):
+                ok = rk.send_mail("s", "b")
+        self.assertTrue(ok)
+        srv.send_message.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
