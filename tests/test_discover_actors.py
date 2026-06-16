@@ -75,5 +75,53 @@ class TestCollectSightings(unittest.TestCase):
         self.assertEqual(sightings[0]["rcept_no"], "R1")
 
 
+class TestMergeAndPromote(unittest.TestCase):
+    def test_merge_dedup_and_window(self):
+        import scripts.discover_actors as da
+        data = {"sightings": {"홍길동": [
+            {"corp_code": "c1", "rcept_no": "R1", "date": "2026-06"}]}}
+        new = [{"name": "홍길동", "corp_code": "c1", "rcept_no": "R1", "date": "2026-06"},  # 중복
+               {"name": "홍길동", "corp_code": "c2", "rcept_no": "R2", "date": "2026-06"}]  # 신규
+        changed = da.merge_sightings(data, new, window_months=12)
+        self.assertTrue(changed)
+        rcepts = {e["rcept_no"] for e in data["sightings"]["홍길동"]}
+        self.assertEqual(rcepts, {"R1", "R2"})
+
+    def test_merge_drops_old_outside_window(self):
+        import scripts.discover_actors as da
+        data = {"sightings": {"김갑": [
+            {"corp_code": "c1", "rcept_no": "OLD", "date": "2000-01"}]}}
+        changed = da.merge_sightings(data, [], window_months=12)
+        self.assertTrue(changed)
+        self.assertNotIn("김갑", data["sightings"])  # 전부 윈도우 밖 → 제거
+
+    def test_promote_two_distinct_companies(self):
+        import scripts.discover_actors as da
+        sd = {"sightings": {"홍길동": [
+            {"corp_code": "c1", "corp": "A", "rcept_no": "R1", "date": "2026-06"},
+            {"corp_code": "c2", "corp": "B", "rcept_no": "R2", "date": "2026-06"}]}}
+        kd = {"actors": {}}
+        promoted = da.promote_repeat_actors(sd, kd, n=2)
+        self.assertEqual(promoted, ["홍길동"])
+        self.assertIn("홍길동", kd["actors"])
+        self.assertEqual(kd["actors"]["홍길동"][0]["status"], "auto_matched")
+
+    def test_promote_skips_single_company(self):
+        import scripts.discover_actors as da
+        sd = {"sightings": {"외톨이": [
+            {"corp_code": "c1", "corp": "A", "rcept_no": "R1", "date": "2026-06"}]}}
+        kd = {"actors": {}}
+        self.assertEqual(da.promote_repeat_actors(sd, kd, n=2), [])
+        self.assertEqual(kd["actors"], {})
+
+    def test_promote_skips_already_discovered(self):
+        import scripts.discover_actors as da
+        sd = {"sightings": {"홍길동": [
+            {"corp_code": "c1", "corp": "A", "rcept_no": "R1", "date": "2026-06"},
+            {"corp_code": "c2", "corp": "B", "rcept_no": "R2", "date": "2026-06"}]}}
+        kd = {"actors": {"홍길동": [{"source": "자동 발굴", "status": "auto_matched"}]}}
+        self.assertEqual(da.promote_repeat_actors(sd, kd, n=2), [])  # 이미 발굴 등재
+
+
 if __name__ == "__main__":
     unittest.main()

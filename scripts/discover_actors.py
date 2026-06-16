@@ -101,3 +101,53 @@ def collect_problem_sightings(api_key, window_days=WINDOW_DAYS, max_pages=MAX_PA
                 "signals": sorted(keys & (FUNDING_KEYS | INSTABILITY_KEYS)),
             })
     return sightings
+
+
+def merge_sightings(data: dict, new: list, window_months: int = WINDOW_MONTHS) -> bool:
+    """new sighting을 data에 병합. (corp_code,rcept_no) 중복 스킵, window 밖 제거. 변경 여부."""
+    s = data.setdefault("sightings", {})
+    changed = False
+    for rec in new:
+        nm = rec.get("name", "")
+        if not nm:
+            continue
+        lst = s.setdefault(nm, [])
+        if any(e.get("rcept_no") == rec.get("rcept_no") and
+               e.get("corp_code") == rec.get("corp_code") for e in lst):
+            continue
+        lst.append({k: rec[k] for k in ("corp", "corp_code", "date", "rcept_no", "signals") if k in rec})
+        changed = True
+    cutoff = (datetime.now() - timedelta(days=window_months * 30)).strftime("%Y-%m")
+    for nm in list(s.keys()):
+        kept = [e for e in s[nm] if (e.get("date") or "9999-99") >= cutoff]
+        if len(kept) != len(s[nm]):
+            changed = True
+        if kept:
+            s[nm] = kept
+        else:
+            del s[nm]
+            changed = True
+    return changed
+
+
+def promote_repeat_actors(sightings_data: dict, known_data: dict, n: int = N_THRESHOLD) -> list:
+    """서로 다른 corp_code n개+ 인물을 known_actors에 auto_matched(자동 발굴)로 등재."""
+    actors = known_data.setdefault("actors", {})
+    promoted = []
+    for nm, recs in sightings_data.get("sightings", {}).items():
+        corp_codes = {r.get("corp_code") for r in recs if r.get("corp_code")}
+        if len(corp_codes) < n:
+            continue
+        if any(r.get("source") == "자동 발굴" for r in actors.get(nm, [])):
+            continue  # 이미 발굴 등재
+        corp_names = sorted({r.get("corp") for r in recs if r.get("corp")})
+        actors.setdefault(nm, []).append({
+            "source": "자동 발굴",
+            "status": "auto_matched",
+            "evidence": f"문제 회사 {len(corp_codes)}곳 인수자 반복 등장: {'·'.join(corp_names[:5])}",
+            "url": "https://dart.fss.or.kr",
+            "date": "",
+            "tags": ["자동 발굴", "동명이인 미확인", "반복 등장"],
+        })
+        promoted.append(nm)
+    return promoted
