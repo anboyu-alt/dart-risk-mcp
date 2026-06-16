@@ -59,3 +59,45 @@ def _is_person(name: str) -> bool:
     if not name or not name.strip():
         return False
     return not _ORG_PAT.search(name)
+
+
+def collect_problem_sightings(api_key, window_days=WINDOW_DAYS, max_pages=MAX_PAGES):
+    """최근 window_days 자금조달 공시 중 문제 회사의 개인 인수자 sighting 목록."""
+    end = datetime.now()
+    start = end - timedelta(days=max(1, window_days))
+    discs = fetch_market_disclosures(
+        api_key, start.strftime("%Y%m%d"), end.strftime("%Y%m%d"),
+        pblntf_ty="B", max_pages=max_pages) or []
+    sightings = []
+    problem_cache = {}  # corp_code -> bool
+    for d in discs:
+        rn = d.get("rcept_no", "")
+        rnm = d.get("report_nm", "")
+        corp = d.get("corp_name", "")
+        cc = d.get("corp_code", "")
+        if not rn or is_amendment_disclosure(rnm):
+            continue
+        keys = {s["key"] for s in (match_signals(rnm) or [])}
+        if not (keys & FUNDING_KEYS):
+            continue
+        if cc not in problem_cache:
+            problem_cache[cc] = is_problem_company(company_signal_keys(cc, api_key))
+        if not problem_cache[cc]:
+            continue
+        invs = []
+        if keys & {"CB_BW", "EB"}:
+            invs += extract_cb_investors(rn, api_key, cc) or []
+        if keys & {"3PCA", "RIGHTS_UNDER"}:
+            invs += extract_rights_offering_investors(rn, api_key, cc) or []
+        rdt = d.get("rcept_dt", "") or ""
+        date = f"{rdt[:4]}-{rdt[4:6]}" if len(rdt) >= 6 else ""
+        for inv in invs:
+            nm = (inv.get("name") or "").strip()
+            if not _is_person(nm):
+                continue
+            sightings.append({
+                "name": nm, "corp": corp, "corp_code": cc,
+                "date": date, "rcept_no": rn,
+                "signals": sorted(keys & (FUNDING_KEYS | INSTABILITY_KEYS)),
+            })
+    return sightings
