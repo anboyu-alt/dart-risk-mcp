@@ -123,5 +123,27 @@ class TestMergeAndPromote(unittest.TestCase):
         self.assertEqual(da.promote_repeat_actors(sd, kd, n=2), [])  # 이미 발굴 등재
 
 
+class TestDailyReport(unittest.TestCase):
+    def test_build_daily_report_always_summarizes(self):
+        import scripts.discover_actors as da
+        kd = {"actors": {"A": [{"status": "verified"}],
+                         "B": [{"status": "auto_matched"}],
+                         "C": [{"status": "maintainer_seed"}]}}
+        r = da.build_daily_report({"sightings": {}}, kd, True, ["B"])
+        self.assertIn("오늘 실행: 정상", r)
+        self.assertIn("sightings: 갱신", r)
+        self.assertIn("신규 등재: 1명", r)
+        self.assertIn("verified 1", r)
+        self.assertIn("auto_matched 1", r)
+        self.assertIn("maintainer_seed 1", r)
+
+    def test_build_daily_report_no_change_still_reports(self):
+        import scripts.discover_actors as da
+        r = da.build_daily_report({"sightings": {}}, {"actors": {}}, False, [])
+        self.assertIn("오늘 실행: 정상", r)   # 변경 없어도 heartbeat
+        self.assertIn("sightings: 무변경", r)
+        self.assertIn("신규 등재: 0명", r)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -153,6 +153,28 @@ def promote_repeat_actors(sightings_data: dict, known_data: dict, n: int = N_THR
     return promoted
 
 
+def build_daily_report(sdata: dict, kdata: dict, s_changed: bool, promoted: list) -> str:
+    """매일 발송하는 heartbeat 요약(변경 없어도 작동 확인용)."""
+    counts = {"verified": 0, "maintainer_seed": 0, "auto_matched": 0}
+    for recs in kdata.get("actors", {}).values():
+        for r in recs:
+            st = r.get("status", "")
+            if st in counts:
+                counts[st] += 1
+    lines = [
+        f"known_actors 일일 자동 발굴 리포트 ({datetime.now().strftime('%Y-%m-%d')})",
+        "",
+        "· 오늘 실행: 정상",
+        f"· sightings: {'갱신' if s_changed else '무변경'}",
+        f"· 신규 등재: {len(promoted)}명" + (": " + ", ".join(promoted) if promoted else ""),
+        f"· 현재 등재: verified {counts['verified']} · "
+        f"maintainer_seed {counts['maintainer_seed']} · auto_matched {counts['auto_matched']}",
+        "",
+        "자동 발굴은 동명이인 미확인 — 원본 공시로 확인 필요. 판정 아님.",
+    ]
+    return "\n".join(lines)
+
+
 def _load(path: Path, empty: dict) -> dict:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -178,12 +200,13 @@ def main():
         sightings_path.write_text(json.dumps(sdata, ensure_ascii=False, indent=1), encoding="utf-8")
     if promoted:
         KNOWN_PATH.write_text(json.dumps(kdata, ensure_ascii=False, indent=1), encoding="utf-8")
-        body = ("자동 발굴 — known_actors 신규 등재 (사실 표기 · 판정 아님)\n\n"
-                + "\n".join(f"  - {nm}" for nm in promoted)
-                + "\n\n자동 발굴은 동명이인 미확인 — 원본 공시로 확인 필요.")
-        send_mail("[known_actors] 자동 발굴 신규 등재", body)
 
-    print(f"sightings {'갱신' if s_changed else '무변경'} · 신규 등재 {len(promoted)}건")
+    # 변경 여부와 무관하게 매일 heartbeat 리포트 발송 (작동 확인용)
+    report = build_daily_report(sdata, kdata, s_changed, promoted)
+    sent = send_mail("[known_actors] 일일 자동 발굴 리포트", report)
+
+    print(f"sightings {'갱신' if s_changed else '무변경'} · 신규 등재 {len(promoted)}건"
+          + (" · 리포트 발송" if sent else " · 리포트 스킵(자격증명 없음)"))
 
 
 if __name__ == "__main__":
