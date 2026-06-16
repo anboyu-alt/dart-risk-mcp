@@ -151,3 +151,40 @@ def promote_repeat_actors(sightings_data: dict, known_data: dict, n: int = N_THR
         })
         promoted.append(nm)
     return promoted
+
+
+def _load(path: Path, empty: dict) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return dict(empty)
+
+
+def main():
+    key = _api_key()
+    if not key:
+        raise SystemExit("DART_API_KEY 또는 tmp/_apikey.txt 필요")
+    sightings_path = Path(os.environ.get("SIGHTINGS_PATH") or _DEFAULT_SIGHTINGS)
+    sdata = _load(sightings_path, {"version": 1, "sightings": {}})
+    kdata = _load(KNOWN_PATH, {"version": 1, "actors": {}})
+
+    new = collect_problem_sightings(key)
+    s_changed = merge_sightings(sdata, new)
+    promoted = promote_repeat_actors(sdata, kdata)
+
+    if s_changed:
+        sightings_path.parent.mkdir(parents=True, exist_ok=True)
+        sdata["updated"] = datetime.now().strftime("%Y-%m-%d")
+        sightings_path.write_text(json.dumps(sdata, ensure_ascii=False, indent=1), encoding="utf-8")
+    if promoted:
+        KNOWN_PATH.write_text(json.dumps(kdata, ensure_ascii=False, indent=1), encoding="utf-8")
+        body = ("자동 발굴 — known_actors 신규 등재 (사실 표기 · 판정 아님)\n\n"
+                + "\n".join(f"  - {nm}" for nm in promoted)
+                + "\n\n자동 발굴은 동명이인 미확인 — 원본 공시로 확인 필요.")
+        send_mail("[known_actors] 자동 발굴 신규 등재", body)
+
+    print(f"sightings {'갱신' if s_changed else '무변경'} · 신규 등재 {len(promoted)}건")
+
+
+if __name__ == "__main__":
+    main()

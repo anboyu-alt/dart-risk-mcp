@@ -25,6 +25,32 @@ jobs:
           MAIL_APP_PASSWORD: ${{ secrets.MAIL_APP_PASSWORD }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
         run: python scripts/refresh_known_actors.py
+      - name: Checkout sightings (private)
+        uses: actions/checkout@v5
+        with:
+          repository: anboyu-alt/dart-risk-mcp-sightings
+          token: ${{ secrets.SIGHTINGS_REPO_TOKEN }}
+          path: _sightings
+      - name: Discover actors
+        env:
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+          MAIL_USER: ${{ secrets.MAIL_USER }}
+          MAIL_APP_PASSWORD: ${{ secrets.MAIL_APP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          SIGHTINGS_PATH: _sightings/sightings.json
+        run: python scripts/discover_actors.py
+      - name: Commit sightings (private)
+        working-directory: _sightings
+        run: |
+          if [ -n "$(git status --porcelain sightings.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add sightings.json
+            git commit -m "chore: sightings auto-update"
+            git push
+          else
+            echo "sightings 변경 없음"
+          fi
       - name: Commit if changed
         run: |
           if ! git diff --quiet dart_risk_mcp/data/known_actors.json; then
