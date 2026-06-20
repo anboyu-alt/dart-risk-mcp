@@ -203,17 +203,19 @@ def _compose_top_signal_sentence(label: str, prose: str) -> str:
 
 
 @mcp.tool()
-def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
+def analyze_company_risk(company_name: str, lookback_years: int = 1) -> str:
     """기업명 또는 종목코드로 최근 공시 기반 투자 위험도를 분석한다.
 
     Args:
         company_name: 기업명 (예: "에코프로") 또는 종목코드 6자리 (예: "086520")
-        lookback_days: 조회 기간 (기본 90일, 최대 365일)
+        lookback_years: 조회 기간(년). 기본 1년, 1~5년 범위.
     """
     if not _DART_API_KEY:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
 
-    lookback_days = min(max(lookback_days, 1), 365)
+    lookback_years = min(max(lookback_years, 1), 5)
+    lookback_days = lookback_years * 365
+    window_phrase = f"{lookback_days}일" if lookback_years == 1 else f"{lookback_years}년"
 
     # 1. 기업 조회
     result = resolve_corp(company_name, _DART_API_KEY)
@@ -224,7 +226,7 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
     stock_code = corp_info.get("stock_code", "")
 
     # 2. 공시 목록 조회
-    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days)
+    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days, max_pages=lookback_years * 10)
     # (조기 반환 제거 — 공시가 없어도 v0.6.0 자본 churn / 재무 이상 스캔은 별도로 수행)
 
     # 3. 신호 분류 + 정정공시 필터
@@ -274,7 +276,7 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
     # v0.9.0: 부실 후속 이벤트(부도/영업정지/회생/해산) 흡수 — 발생 시 사실 표기만 ------
     distress_events = fetch_distress_events(
         corp_code, _DART_API_KEY,
-        max(1, (lookback_days // 365) + 1),
+        lookback_years + 1,
     )
     for _de in distress_events:
         signal_events.append({
@@ -368,7 +370,7 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
     if not signal_events:
         return (
             f"📋 **{corp_name}** ({stock_code or corp_code})\n\n"
-            f"최근 {lookback_days}일간 탐지된 의심 공시가 없습니다.\n"
+            f"최근 {window_phrase}간 탐지된 의심 공시가 없습니다.\n"
             f"(전체 공시 {len(disclosures)}건 검토)"
         )
 
@@ -421,7 +423,7 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
     )
     # 첫 문장: 규모 (사실 서술)
     s1 = (
-        f"지난 {lookback_days}일 동안 **{corp_name}**의 공시 "
+        f"지난 {window_phrase} 동안 **{corp_name}**의 공시 "
         f"{len(disclosures)}건을 살펴본 결과, 주목할 만한 공시·"
         f"재무 이벤트가 **{len(non_amend_events)}건** 관찰됐습니다."
     )
@@ -445,7 +447,7 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
         "",
         summary_block,
         "",
-        f"조회 기간: 최근 {lookback_days}일 | 전체 공시 {len(disclosures)}건 검토",
+        f"조회 기간: 최근 {window_phrase} | 전체 공시 {len(disclosures)}건 검토",
         "",
         f"━━ 관찰된 신호 ({len(signal_events)}건) ━━",
     ]
@@ -608,7 +610,7 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
     if catalog:
         lines += ["", catalog]
 
-    return "\n".join(lines)
+    return _append_size_footer("\n".join(lines), lookback_years)
 
 
 # ── 도구 2: 개별 공시 분석 ─────────────────────────────────────────────────
