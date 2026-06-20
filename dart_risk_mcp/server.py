@@ -72,6 +72,26 @@ mcp = FastMCP("dart-risk-analyzer")
 _DART_API_KEY: str = os.environ.get("DART_API_KEY", "")
 
 
+def _estimate_output_size(text: str) -> tuple[int, int]:
+    """렌더된 출력의 문자 수와 대략적 토큰 수를 추정한다.
+
+    정밀 토크나이저가 아니라 문자 수 기반 휴리스틱이다(외부 의존성 없음).
+    한국어·마크다운 혼합 기준 대략 글자 2.5개당 1토큰으로 환산한다.
+    """
+    chars = len(text)
+    tokens = round(chars / 2.5)
+    return chars, tokens
+
+
+def _append_size_footer(text: str, lookback_years: int) -> str:
+    """다년 조회(lookback_years > 1)일 때만 예상 출력 규모 푸터를 덧붙인다."""
+    if lookback_years <= 1:
+        return text
+    chars, tokens = _estimate_output_size(text)
+    return text + f"\n\n📊 예상 출력 규모: 약 {chars:,}자 / ~{tokens:,}토큰 (대략적 추정)"
+
+
+
 # ── 공통 헬퍼 ──────────────────────────────────────────────────────────────
 
 

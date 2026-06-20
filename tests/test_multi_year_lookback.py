@@ -1,4 +1,5 @@
 import dart_risk_mcp.core.dart_client as dc
+from dart_risk_mcp import server as srv
 
 
 def test_fetch_company_disclosures_respects_max_pages(monkeypatch):
@@ -28,3 +29,20 @@ def test_fetch_company_disclosures_respects_max_pages(monkeypatch):
     rows = dc.fetch_company_disclosures("00126380", "KEY", lookback_days=1825, max_pages=30)
     assert calls["n"] == 30
     assert len(rows) == 3000
+
+
+def test_estimate_output_size():
+    chars, tokens = srv._estimate_output_size("가" * 250)
+    assert chars == 250
+    assert tokens == 100  # round(250 / 2.5)
+
+
+def test_append_size_footer_only_for_multiyear():
+    body = "본문" * 100
+    # 1년 이하: 변화 없음
+    assert srv._append_size_footer(body, 1) == body
+    # 다년: 푸터 1줄 추가
+    out = srv._append_size_footer(body, 3)
+    assert out.startswith(body)
+    assert "예상 출력 규모" in out
+    assert "토큰" in out
