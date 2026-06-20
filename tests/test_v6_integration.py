@@ -50,7 +50,7 @@ class TestAnalyzeV6Integration(unittest.TestCase):
         m_fs.return_value = []  # 재무 조회 실패/없음
         m_fund.return_value = []
         from dart_risk_mcp.server import analyze_company_risk
-        out = analyze_company_risk("테스트기업", 365)
+        out = analyze_company_risk("테스트기업", lookback_years=1)
         # v0.7.1+: 내부 코드 'CAPITAL_CHURN' 대신 한글 라벨('자본 이벤트 과다 반복')이
         # signal_event 스트림에 삽입된 뒤 '가장 무게 있는 신호' 헤드라인으로 노출된다.
         self.assertIn("자본 이벤트 과다 반복", out)
@@ -66,7 +66,7 @@ class TestAnalyzeV6Integration(unittest.TestCase):
         m_fs.return_value = self._mock_fs()
         m_fund.return_value = []
         from dart_risk_mcp.server import analyze_company_risk
-        out = analyze_company_risk("테스트기업", 365)
+        out = analyze_company_risk("테스트기업", lookback_years=1)
         # v0.7.1+: 내부 코드 'AR_SURGE' 대신 FLAG_PROSE 한글 제목이 노출된다.
         self.assertIn("매출채권이 매출보다 훨씬 빠르게 늘고 있습니다", out)
         self.assertNotIn("AR_SURGE", out)
@@ -81,7 +81,7 @@ class TestAnalyzeV6Integration(unittest.TestCase):
         m_fs.side_effect = Exception("network error")
         m_fund.return_value = []
         from dart_risk_mcp.server import analyze_company_risk
-        out = analyze_company_risk("테스트기업", 365)
+        out = analyze_company_risk("테스트기업", lookback_years=1)
         self.assertIsInstance(out, str)
         self.assertIn("테스트기업", out)
 
