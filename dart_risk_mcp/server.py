@@ -2421,17 +2421,17 @@ def track_debt_balance(company_name: str, year: str = "") -> str:
 
 @mcp.tool()
 def check_disclosure_anomaly(company_name: str, lookback_years: int = 1) -> str:
-    """공시 구조 지표를 집계해 0~100 이상 스코어를 반환합니다.
+    """공시 구조 지표 5종의 건수·비율을 집계해 사실 요약을 반환합니다.
 
     정정공시 비율·감사의견 이슈·공시의무 위반·자본 스트레스·조회공시 빈도
-    5개 지표를 가중 합산합니다.
+    5개 지표를 나열합니다. 위험도를 정량화하거나 등급화하지 않습니다(v0.8.5 원칙).
 
     Args:
         company_name: 기업명 또는 종목코드
         lookback_years: 조회 기간(년). 기본 1년, 1~5년 범위.
 
     Returns:
-        0~100 스코어 + 지표별 내역 텍스트
+        지표별 탐지 건수·근거 공시명 텍스트 (점수·등급 없음)
     """
     if not _DART_API_KEY:
         return "오류: DART_API_KEY 환경변수가 설정되지 않았습니다."
