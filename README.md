@@ -2,7 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![Python](https://img.shields.io/pypi/pyversions/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![License](https://img.shields.io/pypi/l/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![Release](https://img.shields.io/github/v/release/anboyu-alt/dart-risk-mcp)](https://github.com/anboyu-alt/dart-risk-mcp/releases) [![Downloads](https://static.pepy.tech/badge/dart-risk-mcp/month)](https://pepy.tech/project/dart-risk-mcp) [![Last commit](https://img.shields.io/github/last-commit/anboyu-alt/dart-risk-mcp)](https://github.com/anboyu-alt/dart-risk-mcp/commits/master) [![Commit activity](https://img.shields.io/github/commit-activity/m/anboyu-alt/dart-risk-mcp)](https://github.com/anboyu-alt/dart-risk-mcp/graphs/commit-activity)
 
-**버전:** v1.3.0 · **공시 기반 불공정거래 위험 모니터링** · **설치:** `pip install dart-risk-mcp` → `python -m dart_risk_mcp.setup`
+**버전:** v1.4.0 · **공시 기반 불공정거래 위험 모니터링** · **설치:** `pip install dart-risk-mcp` → `python -m dart_risk_mcp.setup`
 
 DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 
@@ -18,7 +18,7 @@ DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 
 총 **25개 MCP 도구**를 6개 그룹으로 분류합니다(자세한 시그니처는 [CLAUDE.md](CLAUDE.md) 참고).
 
-- **공시 시계열 재구성** — 한 기업의 최근 N개월 공시를 자동 정렬·신호 분류·복합 패턴 매칭. (`analyze_company_risk`, `build_event_timeline`)
+- **공시 시계열 재구성** — 한 기업의 최근 **1~5년**(`lookback_years`, 기본 1년) 공시를 자동 정렬·신호 분류·복합 패턴 매칭. 다년 조회로 과거 위기 사이클을 한 번에 추적. (`analyze_company_risk`, `build_event_timeline`)
 - **자본·재무·내부자 추세 분석** — 자본구조 12개월 churn, 재무 4지표 YoY 추세, 분기 보고 단위 보유 비율 변동, 채무증권 5종 잔액·만기. (`track_capital_structure`, `scan_financial_anomaly`, `track_insider_trading`, `track_debt_balance`)
 - **자금 흐름·감사·배당 검증** — 공모/사모 조달 자금 계획 vs 실제 집행, 5년 감사의견 이력, 적자 시점 배당 이상. (`track_fund_usage`, `get_audit_opinion_history`)
 - **행위자·세력·DS005·기업 정보 조회** — 공통 CB/BW 인수자 **+ 등기임원 겸직** 교차 비교(조합명이 달라도 사람 이름으로 세력 포착), 인물↔회사군 워치리스트 관리, 공개기록 행위자 조회(사실·출처만, 판정 아님), 12종 주요결정 공시, 임원 보수, 주주 현황, 재무 비교, 기업 개요. (`find_actor_overlap`, `manage_watchlist`, `lookup_known_actor`, `get_major_decision`, `get_executive_compensation`, `get_shareholder_info`, `compare_financials`, `get_company_info`, `get_financial_summary`)
@@ -1529,7 +1529,7 @@ claude mcp add dart-risk-analyzer --env DART_API_KEY=발급키 -- python -m dart
 - **첫 번째 실행**: 기업 코드 목록 파일을 다운로드해서 1~2분 소요됩니다
 - **이후 실행**: 24시간 동안 캐시되어 빠르게 실행됩니다
 - 공시 원문은 동일 접수번호 재조회 시 10분간 캐시되어 빠릅니다
-- 조회 기간을 줄이면 더 빠릅니다 (기본 90일 → 30일로 변경 요청 가능)
+- 조회 기간(`lookback_years`, 1~5년)을 줄이면 더 빠릅니다 (기본 1년 — 다년 조회는 그만큼 느려짐)
 
 ---
 

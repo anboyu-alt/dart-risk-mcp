@@ -8,6 +8,7 @@
 
 import os
 import re
+import warnings
 from collections import Counter
 from datetime import datetime, timedelta
 
@@ -89,6 +90,29 @@ def _append_size_footer(text: str, lookback_years: int) -> str:
         return text
     chars, tokens = _estimate_output_size(text)
     return text + f"\n\n📊 예상 출력 규모: 약 {chars:,}자 / ~{tokens:,}토큰 (대략적 추정)"
+
+
+def _resolve_lookback(
+    lookback_years: int, lookback_days: "int | None"
+) -> "tuple[int, int, str]":
+    """조회 윈도우를 (일수, max_pages, 표시문구)로 해석한다.
+
+    lookback_days(deprecated)가 명시되면 구버전 동작(일 단위, 1~365 클램프)을
+    보존하고, 아니면 lookback_years(1~5)를 일수로 환산한다. lookback_days는
+    v1.4.0에서 deprecated 별칭이며 다음 minor에서 제거 예정이다.
+    """
+    if lookback_days is not None:
+        warnings.warn(
+            "lookback_days는 deprecated입니다. lookback_years(1~5)를 사용하세요.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        days = min(max(lookback_days, 1), 365)
+        return days, 10, f"{days}일"
+    years = min(max(lookback_years, 1), 5)
+    days = years * 365
+    phrase = f"{days}일" if years == 1 else f"{years}년"
+    return days, years * 10, phrase
 
 
 # ── 공통 헬퍼 ──────────────────────────────────────────────────────────────
@@ -203,7 +227,9 @@ def _compose_top_signal_sentence(label: str, prose: str) -> str:
 
 
 @mcp.tool()
-def analyze_company_risk(company_name: str, lookback_years: int = 1) -> str:
+def analyze_company_risk(
+    company_name: str, lookback_years: int = 1, lookback_days: int | None = None
+) -> str:
     """기업명 또는 종목코드로 최근 공시 기반 투자 위험도를 분석한다.
 
     Args:
@@ -213,9 +239,7 @@ def analyze_company_risk(company_name: str, lookback_years: int = 1) -> str:
     if not _DART_API_KEY:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
 
-    lookback_years = min(max(lookback_years, 1), 5)
-    lookback_days = lookback_years * 365
-    window_phrase = f"{lookback_days}일" if lookback_years == 1 else f"{lookback_years}년"
+    lookback_days, max_pages, window_phrase = _resolve_lookback(lookback_years, lookback_days)
 
     # 1. 기업 조회
     result = resolve_corp(company_name, _DART_API_KEY)
@@ -226,7 +250,7 @@ def analyze_company_risk(company_name: str, lookback_years: int = 1) -> str:
     stock_code = corp_info.get("stock_code", "")
 
     # 2. 공시 목록 조회
-    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days, max_pages=lookback_years * 10)
+    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days, max_pages=max_pages)
     # (조기 반환 제거 — 공시가 없어도 v0.6.0 자본 churn / 재무 이상 스캔은 별도로 수행)
 
     # 3. 신호 분류 + 정정공시 필터
@@ -276,7 +300,7 @@ def analyze_company_risk(company_name: str, lookback_years: int = 1) -> str:
     # v0.9.0: 부실 후속 이벤트(부도/영업정지/회생/해산) 흡수 — 발생 시 사실 표기만 ------
     distress_events = fetch_distress_events(
         corp_code, _DART_API_KEY,
-        lookback_years + 1,
+        max(1, (lookback_days // 365) + 1),
     )
     for _de in distress_events:
         signal_events.append({
@@ -844,7 +868,9 @@ _PHASE_ORDER = {"진입기": 0, "심화기": 1, "탈출기": 2}
 
 
 @mcp.tool()
-def build_event_timeline(company_name: str, lookback_years: int = 1) -> str:
+def build_event_timeline(
+    company_name: str, lookback_years: int = 1, lookback_days: int | None = None
+) -> str:
     """기업의 공시 이벤트를 시간순으로 정렬해 조작 흐름의 서사를 구성한다.
 
     각 이벤트를 진입기(자금 조달/경영권 진입), 심화기(지배구조 변화),
@@ -857,9 +883,7 @@ def build_event_timeline(company_name: str, lookback_years: int = 1) -> str:
     if not _DART_API_KEY:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
 
-    lookback_years = min(max(lookback_years, 1), 5)
-    lookback_days = lookback_years * 365
-    window_phrase = f"{lookback_days}일" if lookback_years == 1 else f"{lookback_years}년"
+    lookback_days, max_pages, window_phrase = _resolve_lookback(lookback_years, lookback_days)
 
     result = resolve_corp(company_name, _DART_API_KEY)
     if not result:
@@ -868,7 +892,7 @@ def build_event_timeline(company_name: str, lookback_years: int = 1) -> str:
     corp_code = corp_info["corp_code"]
     stock_code = corp_info.get("stock_code", "")
 
-    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days, max_pages=lookback_years * 10)
+    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days, max_pages=max_pages)
     if not disclosures:
         return (
             f"📋 **{corp_name}** ({stock_code or corp_code})\n\n"
@@ -1430,7 +1454,9 @@ def find_actor_overlap(
 
 
 @mcp.tool()
-def list_disclosures_by_stock(stock_code: str, lookback_years: int = 1) -> str:
+def list_disclosures_by_stock(
+    stock_code: str, lookback_years: int = 1, lookback_days: int | None = None
+) -> str:
     """종목코드로 최근 공시의 접수번호(rcept_no) 목록을 조회한다.
 
     반환된 접수번호는 get_disclosure_document, view_disclosure,
@@ -1448,9 +1474,7 @@ def list_disclosures_by_stock(stock_code: str, lookback_years: int = 1) -> str:
     if not _re.match(r"^\d{6}$", stock_code):
         return "❌ 종목코드는 6자리 숫자여야 합니다. 예: '086520'"
 
-    lookback_years = min(max(lookback_years, 1), 5)
-    lookback_days = lookback_years * 365
-    window_phrase = f"{lookback_days}일" if lookback_years == 1 else f"{lookback_years}년"
+    lookback_days, max_pages, window_phrase = _resolve_lookback(lookback_years, lookback_days)
 
     result = resolve_corp(stock_code, _DART_API_KEY)
     if not result:
@@ -1459,7 +1483,7 @@ def list_disclosures_by_stock(stock_code: str, lookback_years: int = 1) -> str:
     corp_name, corp_info = result
     corp_code = corp_info["corp_code"]
 
-    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days, max_pages=lookback_years * 10)
+    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days, max_pages=max_pages)
     if not disclosures:
         return (
             f"📋 **{corp_name}** ({stock_code})\n\n"
@@ -2420,7 +2444,9 @@ def track_debt_balance(company_name: str, year: str = "") -> str:
 
 
 @mcp.tool()
-def check_disclosure_anomaly(company_name: str, lookback_years: int = 1) -> str:
+def check_disclosure_anomaly(
+    company_name: str, lookback_years: int = 1, lookback_days: int | None = None
+) -> str:
     """공시 구조 지표 5종의 건수·비율을 집계해 사실 요약을 반환합니다.
 
     정정공시 비율·감사의견 이슈·공시의무 위반·자본 스트레스·조회공시 빈도
@@ -2441,11 +2467,9 @@ def check_disclosure_anomaly(company_name: str, lookback_years: int = 1) -> str:
         return f"기업을 찾을 수 없습니다: {company_name}"
     corp_code = meta["corp_code"]
 
-    lookback_years = min(max(lookback_years, 1), 5)
-    lookback_days = lookback_years * 365
-    window_phrase = f"{lookback_days}일" if lookback_years == 1 else f"{lookback_years}년"
+    lookback_days, max_pages, window_phrase = _resolve_lookback(lookback_years, lookback_days)
 
-    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days, max_pages=lookback_years * 10)
+    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days, max_pages=max_pages)
     total = len(disclosures)
     if total == 0:
         return f"[{corp_name}] 최근 {window_phrase} 공시 없음 — 스코어 산출 불가."

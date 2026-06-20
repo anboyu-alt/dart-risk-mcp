@@ -67,3 +67,37 @@ def test_list_disclosures_passes_years_to_core(monkeypatch):
     assert captured["max_pages"] == 3 * 10
     assert "최근 3년" in out  # 다년 라벨
     assert "예상 출력 규모" in out  # years>1 푸터
+
+
+def test_lookback_days_alias_backward_compat(monkeypatch):
+    """deprecated lookback_days 별칭: 일 단위 동작 보존 + DeprecationWarning (v1.4.0)."""
+    import warnings
+
+    captured = {}
+    monkeypatch.setattr(srv, "_DART_API_KEY", "KEY")
+    monkeypatch.setattr(srv, "resolve_corp", lambda q, k: ("테스트사", {"corp_code": "00000000", "stock_code": "012345"}))
+
+    def _fake_fetch(corp_code, api_key, lookback_days, max_pages=10):
+        captured["lookback_days"] = lookback_days
+        captured["max_pages"] = max_pages
+        return [{"rcept_no": "20240101000001", "report_nm": "사업보고서", "rcept_dt": "20240101"}]
+
+    monkeypatch.setattr(srv, "fetch_company_disclosures", _fake_fetch)
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        out = srv.list_disclosures_by_stock("012345", lookback_days=90)
+
+    assert captured["lookback_days"] == 90  # 일 단위 그대로(구버전 동작)
+    assert captured["max_pages"] == 10  # 구버전 기본 페이지 상한
+    assert "최근 90일" in out  # 구버전 라벨
+    assert "예상 출력 규모" not in out  # 1년 미만 → 푸터 없음
+    assert any(issubclass(x.category, DeprecationWarning) for x in w)
+
+
+def test_resolve_lookback_years_path_parity():
+    """years 경로: years==1 → 365일 라벨(골든 패리티), max_pages=years*10."""
+    assert srv._resolve_lookback(1, None) == (365, 10, "365일")
+    assert srv._resolve_lookback(3, None) == (1095, 30, "3년")
+    # 범위 클램프(1~5)
+    assert srv._resolve_lookback(99, None) == (1825, 50, "5년")

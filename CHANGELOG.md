@@ -33,6 +33,30 @@
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-06-21
+
+**조회 기간 다년 확장.** 4개 도구가 `lookback_years`(1~5)를 받아 과거 위기 사이클을 한 번에 추적한다.
+
+### Added
+
+- `analyze_company_risk`·`build_event_timeline`·`list_disclosures_by_stock`·`check_disclosure_anomaly`에 `lookback_years: int = 1`(1~5) 파라미터 추가. 내부에서 `days = years*365`로 환산.
+- 코어 `fetch_company_disclosures(..., max_pages=10)` 파라미터 — 1000건 페이지네이션 상한을 호출자가 상향 가능. 위 4개 도구는 `max_pages = years*10`(5년 → 최대 5000건) 전달로 다년 누락 방지.
+- 다년(>1년) 조회 시 결과 하단에 `📊 예상 출력 규모: 약 N자 / ~M토큰 (대략적 추정)` 푸터(문자 수 휴리스틱, 외부 의존성 없음).
+- 골든 재생성 워크플로우 `.github/workflows/regen-goldens.yml`(`workflow_dispatch`, 재생성 범위 `tools` 입력, 기본 `list`).
+
+### Deprecated
+
+- 위 4개 도구의 `lookback_days` 파라미터 — `lookback_years`로 대체. 안정성 정책(도구 시그니처 변경 = 최소 1 minor 별칭 유지)에 따라 **deprecated 별칭으로 유지**(호출 시 `DeprecationWarning`): 일 단위(1~365) 구버전 동작을 보존하며, 다음 minor(1.5.0)에서 제거 예정.
+
+### Changed
+
+- `analyze_company_risk`·`list_disclosures_by_stock` 기본 조회 윈도우가 90일 → 1년(365일)으로 확대(`lookback_years=1` 기본값). `years==1` 출력 라벨("최근 365일")은 기존 골든과 동일(패리티 유지).
+- (test) `test_golden_output_hygiene.py`의 내부코드 괄호 검사를 verbatim passthrough 골든(`*_list.txt`·`*_doc_*`)에서 제외. 해당 골든은 DART 공시 제목·원문을 그대로 옮긴 것으로, 원문의 실제 규제기관 약어(FDA·EMA 등)는 내부코드 누출이 아니다(false-positive). 나머지 8종 hygiene 검사는 전 골든에 유지.
+
+### Fixed
+
+- `check_disclosure_anomaly` docstring의 stale "0~100 스코어" 표기를 v0.8.5 사실 표기로 정정.
+
 ## [1.3.0] — 2026-06-14
 
 **known_actors 자동 갱신 + 원격 로드.** 등재 인물의 인수 근거를 매일 자동 수집하고, 유저는 갱신된 데이터를 즉시 받는다.
