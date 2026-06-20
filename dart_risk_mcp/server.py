@@ -91,7 +91,6 @@ def _append_size_footer(text: str, lookback_years: int) -> str:
     return text + f"\n\n📊 예상 출력 규모: 약 {chars:,}자 / ~{tokens:,}토큰 (대략적 추정)"
 
 
-
 # ── 공통 헬퍼 ──────────────────────────────────────────────────────────────
 
 
