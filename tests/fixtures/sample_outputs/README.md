@@ -8,10 +8,10 @@
 
 | 파일 | 생성 도구 | 입력 |
 |---|---|---|
-| `셀트리온_analyze.txt` · `제이스코홀딩스_analyze.txt` · `두산에너빌리티_analyze.txt` | `analyze_company_risk` | lookback_days=180 |
-| `셀트리온_timeline.txt` · `제이스코홀딩스_timeline.txt` · `두산에너빌리티_timeline.txt` | `build_event_timeline` | lookback_days=365 |
+| `셀트리온_analyze.txt` · `제이스코홀딩스_analyze.txt` · `두산에너빌리티_analyze.txt` | `analyze_company_risk` | lookback_years=1 |
+| `셀트리온_timeline.txt` · `제이스코홀딩스_timeline.txt` · `두산에너빌리티_timeline.txt` | `build_event_timeline` | lookback_years=1 |
 | `셀트리온_scan_fs.txt` · `제이스코홀딩스_scan_fs.txt` · `두산에너빌리티_scan_fs.txt` | `scan_financial_anomaly` | year="", report_type="annual" |
-| `셀트리온_list.txt` | `list_disclosures_by_stock` | stock_code=068270, lookback_days=90 |
+| `셀트리온_list.txt` | `list_disclosures_by_stock` | stock_code=068270, lookback_years=1 |
 | `셀트리온_disclosure_<rcept_no>.txt` | `check_disclosure_risk` | 셀트리온_list.txt 첫 접수번호 |
 | `precedents_CB_3PCA_SHAREHOLDER.txt` | `find_risk_precedents` | signal_types=["CB_BW","3PCA","SHAREHOLDER"] |
 | `actor_overlap.txt` | `find_actor_overlap` | 3개 기업 동시 |

@@ -41,12 +41,13 @@ dart_risk_mcp/
 
 ## MCP 도구 25개
 
-### 1. `analyze_company_risk(company_name, lookback_days=90)`
+### 1. `analyze_company_risk(company_name, lookback_years=1)`
 
 기업명 또는 종목코드로 최근 공시 전체를 스캔해 종합 위험 리포트를 반환합니다.
 
 - 내부 흐름: `resolve_corp` → `fetch_company_disclosures` → `match_signals` × N → `calculate_risk_score` → `find_pattern_match` → `extract_cb_investors`
 - 반환: 위험 등급, 탐지 신호 목록, 복합 패턴, CB 인수자, 위기 타임라인
+- `lookback_years` 범위 1~5, 기본 1년. 다년(>1년) 조회 시 결과 하단에 예상 출력 규모(문자·토큰 추정) 푸터 표기.
 
 ### 2. `check_disclosure_risk(rcept_no="", report_name="")`
 
@@ -74,7 +75,7 @@ dart_risk_mcp/
   | Cat 7 시장조작 | `INQUIRY`, `EMBEZZLE` |
   | Cat 8 위기/부실 | `INSOLVENCY`, `DEBT_RESTR`, `GOING_CONCERN` |
 
-### 4. `build_event_timeline(company_name, lookback_days=365)` ✨
+### 4. `build_event_timeline(company_name, lookback_years=1)` ✨
 
 기업의 공시 이벤트를 시간순 서사 구조로 구성합니다.
 
@@ -82,6 +83,7 @@ dart_risk_mcp/
 - `CROSS_SIGNAL_PATTERNS`(taxonomy.py)과 매칭하여 알려진 위기 패턴 식별
 - CB 인수자(행위자) 정보도 함께 표시
 - 정정공시는 자동 제외
+- `lookback_years` 범위 1~5, 기본 1년. 다년(>1년) 조회 시 결과 하단에 예상 출력 규모(문자·토큰 추정) 푸터 표기.
 
 ### 5. `find_actor_overlap(company_names, lookback_years=1, watchlist="")` ✨
 
@@ -96,7 +98,7 @@ dart_risk_mcp/
 - 탐지된 인물(인수자·임원)을 공개기록 레지스트리(`lookup_actor`)와 대조해 매칭 시 "📎 공개기록 참고(사실 표기 — 판정 아님)" 섹션 + 면책 표면화
 - 라이브 입증: 신승수군(이엠앤아이·제이케이시냅스·CG인바이츠·헬스커넥트·티쓰리) `lookback_years=3` → 신승수 3개사 겸직 + 신용규·이호영 동행 인물 탐지
 
-### 6. `list_disclosures_by_stock(stock_code, lookback_days=90)` ✨
+### 6. `list_disclosures_by_stock(stock_code, lookback_years=1)` ✨
 
 종목코드(6자리)로 최근 공시 목록과 접수번호를 반환합니다.
 
@@ -104,6 +106,7 @@ dart_risk_mcp/
 - 반환: 접수번호·날짜·공시명 한 줄씩 목록
 - 하단에 `get_disclosure_document` 연동 안내 자동 포함
 - 입력 검증: 6자리 숫자 여부, API키, 기업 존재 여부
+- `lookback_years` 범위 1~5, 기본 1년. 다년(>1년) 조회 시 결과 하단에 예상 출력 규모(문자·토큰 추정) 푸터 표기.
 
 ### 7. `get_disclosure_document(rcept_no, max_chars=8000)` ✨
 
@@ -173,7 +176,7 @@ dart_risk_mcp/
 - 내부 흐름: `fetch_market_disclosures` (corp_code 없이 `/list.json`) → `match_signals` 필터
 - 반환: 날짜|기업|공시명|신호|접수번호 한 줄씩
 
-### 15. `check_disclosure_anomaly(company_name, lookback_days=365)` ✨
+### 15. `check_disclosure_anomaly(company_name, lookback_years=1)` ✨
 
 공시 구조 지표 5개에 해당하는 건수·비율을 나열합니다. **기업 위험도를 정량화하거나 등급을 부여하지 않습니다** (v0.8.5 원칙).
 
@@ -181,6 +184,7 @@ dart_risk_mcp/
 - 감사의견 구조화 엔드포인트(`fetch_audit_opinion_history`)로 최근 5년 감사인 교체 2회 이상·비감사용역 비중 30% 초과 경고 문구 자동 첨부(점수 가산 없음)
 - 새 API 호출 없음 — `fetch_company_disclosures` + `match_signals` + `is_amendment_disclosure` 재사용
 - 반환: 포지셔닝 고지 + 지표별 내역(탐지 건수·근거 공시명 최대 3건) + 감사의견 관련 경고(해당 시)
+- `lookback_years` 범위 1~5, 기본 1년. 다년(>1년) 조회 시 결과 하단에 예상 출력 규모(문자·토큰 추정) 푸터 표기.
 
 ### 16. `get_executive_compensation(company_name, year="", report_type="annual")` ✨
 
