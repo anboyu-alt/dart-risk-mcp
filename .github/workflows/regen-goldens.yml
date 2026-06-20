@@ -1,0 +1,40 @@
+name: Regenerate goldens
+
+# 골든 출력(tests/fixtures/sample_outputs/*) 재생성 — 수동 트리거 전용.
+# DART_API_KEY Secret이 Actions 런타임에만 주입되므로, 로컬에 키가 없어도
+# 여기서 재생성할 수 있다. 재생성 결과가 hygiene 검증을 통과하면 master에 직접 커밋한다.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  regen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install package + pytest
+        run: |
+          pip install -e .
+          pip install pytest
+      - name: Regenerate goldens
+        env:
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+        run: python scripts/regen_goldens.py
+      - name: Hygiene gate (점수·등급·이모지 회귀 차단)
+        run: python -m pytest tests/test_golden_output_hygiene.py -q
+      - name: Commit if changed
+        run: |
+          if [ -n "$(git status --porcelain tests/fixtures/sample_outputs)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add tests/fixtures/sample_outputs
+            git commit -m "chore(goldens): regenerate via workflow [skip ci]"
+            git push
+          else
+            echo "골든 변경 없음"
+          fi
