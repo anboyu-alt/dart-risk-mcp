@@ -844,7 +844,7 @@ _PHASE_ORDER = {"진입기": 0, "심화기": 1, "탈출기": 2}
 
 
 @mcp.tool()
-def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
+def build_event_timeline(company_name: str, lookback_years: int = 1) -> str:
     """기업의 공시 이벤트를 시간순으로 정렬해 조작 흐름의 서사를 구성한다.
 
     각 이벤트를 진입기(자금 조달/경영권 진입), 심화기(지배구조 변화),
@@ -852,12 +852,14 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
 
     Args:
         company_name: 기업명 (예: "에코프로") 또는 종목코드 6자리 (예: "086520")
-        lookback_days: 조회 기간 (기본 365일, 최대 365일)
+        lookback_years: 조회 기간(년). 기본 1년, 1~5년 범위.
     """
     if not _DART_API_KEY:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
 
-    lookback_days = min(max(lookback_days, 1), 365)
+    lookback_years = min(max(lookback_years, 1), 5)
+    lookback_days = lookback_years * 365
+    window_phrase = f"{lookback_days}일" if lookback_years == 1 else f"{lookback_years}년"
 
     result = resolve_corp(company_name, _DART_API_KEY)
     if not result:
@@ -866,11 +868,11 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
     corp_code = corp_info["corp_code"]
     stock_code = corp_info.get("stock_code", "")
 
-    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days)
+    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days, max_pages=lookback_years * 10)
     if not disclosures:
         return (
             f"📋 **{corp_name}** ({stock_code or corp_code})\n\n"
-            f"최근 {lookback_days}일간 공시가 없습니다."
+            f"최근 {window_phrase}간 공시가 없습니다."
         )
 
     # 이벤트 수집: (날짜, 단계, 신호키, 신호라벨, 공시명)
@@ -895,7 +897,7 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
     if not events:
         return (
             f"📋 **{corp_name}** ({stock_code or corp_code})\n\n"
-            f"최근 {lookback_days}일간 위험 신호 이벤트가 없습니다.\n"
+            f"최근 {window_phrase}간 위험 신호 이벤트가 없습니다.\n"
             f"(전체 공시 {len(disclosures)}건 검토)"
         )
 
@@ -927,7 +929,7 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
         "",
         "🎯 **한눈에 보는 요약**",
         (
-            f"- 최근 {lookback_days}일 동안 위험 신호로 분류된 공시 "
+            f"- 최근 {window_phrase} 동안 위험 신호로 분류된 공시 "
             f"{len(events)}건이 {first_date}부터 {last_date}까지 이어졌습니다."
         ),
         (
@@ -1056,7 +1058,7 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
         pass
 
     lines.append("⚠️ 이 타임라인은 공시 제목 기반 자동 분류이며, 실제 상황과 다를 수 있습니다.")
-    return "\n".join(lines)
+    return _append_size_footer("\n".join(lines), lookback_years)
 
 
 # ── 도구 5: 세력 추적 (공통 CB/BW/EB + 유상증자 인수자) ──────────────────
