@@ -142,6 +142,7 @@ def fetch_company_disclosures(
     corp_code: str,
     api_key: str,
     lookback_days: int = 90,
+    max_pages: int = 10,
 ) -> list[dict]:
     """특정 기업의 DART 공시 목록 조회."""
     if not api_key:
@@ -151,7 +152,7 @@ def fetch_company_disclosures(
     results: list[dict] = []
     page_no = 1
 
-    while page_no <= 10:
+    while page_no <= max_pages:
         params = {
             "crtfc_key": api_key,
             "corp_code": corp_code,
@@ -174,8 +175,8 @@ def fetch_company_disclosures(
         total = int(data.get("total_count", 0))
         if page_no * 100 >= total:
             break
-        if page_no >= 10 and len(results) < total:
-            log.warning("공시목록 1000건 초과 기업 (corp_code=%s, total=%d) — 일부 누락", corp_code, total)
+        if page_no >= max_pages and len(results) < total:
+            log.warning("공시목록 %d건 초과 기업 (corp_code=%s, total=%d) — 일부 누락", max_pages * 100, corp_code, total)
             break
         page_no += 1
         time.sleep(0.25)

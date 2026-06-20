@@ -88,8 +88,8 @@ COMPANIES = [
 # 단축명은 기존 골드 파일 호환을 위해 변경 금지.
 # ────────────────────────────────────────────────────────────────────────────
 COMPANY_TOOL_MATRIX: list[tuple[str, Callable[[dict], str]]] = [
-    ("analyze",       lambda c: analyze_company_risk(c["name"], 365)),
-    ("timeline",      lambda c: build_event_timeline(c["name"], 365)),
+    ("analyze",       lambda c: analyze_company_risk(c["name"], 1)),
+    ("timeline",      lambda c: build_event_timeline(c["name"], 1)),
     ("company_info",  lambda c: get_company_info(c["name"])),
     ("fs",            lambda c: get_financial_summary(c["name"], "2024", "annual")),
     ("shareholder",   lambda c: get_shareholder_info(c["name"], "2024")),
@@ -97,14 +97,14 @@ COMPANY_TOOL_MATRIX: list[tuple[str, Callable[[dict], str]]] = [
     ("insider",       lambda c: track_insider_trading(c["name"], 2)),
     ("audit_history", lambda c: get_audit_opinion_history(c["name"], 5)),
     ("debt_balance",  lambda c: track_debt_balance(c["name"], "2024")),
-    ("anomaly",       lambda c: check_disclosure_anomaly(c["name"], 365)),
+    ("anomaly",       lambda c: check_disclosure_anomaly(c["name"], 1)),
     ("fund_usage",    lambda c: track_fund_usage(c["name"], 3)),
     ("scan_fs",       lambda c: scan_financial_anomaly(c["name"], "2024", "annual")),
     ("capital",       lambda c: track_capital_structure(c["name"], 3)),
 ]
 
 # B. 종목코드 인자 1개 도구
-STOCK_TOOL = ("list", lambda c: list_disclosures_by_stock(c["stock"], 90))
+STOCK_TOOL = ("list", lambda c: list_disclosures_by_stock(c["stock"], 1))
 
 # C. rcept_no 인자 4개 도구 — 회사별 첫 정상 공시 rcept를 자동 추출
 RCEPT_TOOLS: list[tuple[str, Callable[[str], str]]] = [

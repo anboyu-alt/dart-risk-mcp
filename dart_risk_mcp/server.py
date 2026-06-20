@@ -72,6 +72,25 @@ mcp = FastMCP("dart-risk-analyzer")
 _DART_API_KEY: str = os.environ.get("DART_API_KEY", "")
 
 
+def _estimate_output_size(text: str) -> tuple[int, int]:
+    """렌더된 출력의 문자 수와 대략적 토큰 수를 추정한다.
+
+    정밀 토크나이저가 아니라 문자 수 기반 휴리스틱이다(외부 의존성 없음).
+    한국어·마크다운 혼합 기준 대략 글자 2.5개당 1토큰으로 환산한다.
+    """
+    chars = len(text)
+    tokens = round(chars / 2.5)
+    return chars, tokens
+
+
+def _append_size_footer(text: str, lookback_years: int) -> str:
+    """다년 조회(lookback_years > 1)일 때만 예상 출력 규모 푸터를 덧붙인다."""
+    if lookback_years <= 1:
+        return text
+    chars, tokens = _estimate_output_size(text)
+    return text + f"\n\n📊 예상 출력 규모: 약 {chars:,}자 / ~{tokens:,}토큰 (대략적 추정)"
+
+
 # ── 공통 헬퍼 ──────────────────────────────────────────────────────────────
 
 
@@ -184,17 +203,19 @@ def _compose_top_signal_sentence(label: str, prose: str) -> str:
 
 
 @mcp.tool()
-def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
+def analyze_company_risk(company_name: str, lookback_years: int = 1) -> str:
     """기업명 또는 종목코드로 최근 공시 기반 투자 위험도를 분석한다.
 
     Args:
         company_name: 기업명 (예: "에코프로") 또는 종목코드 6자리 (예: "086520")
-        lookback_days: 조회 기간 (기본 90일, 최대 365일)
+        lookback_years: 조회 기간(년). 기본 1년, 1~5년 범위.
     """
     if not _DART_API_KEY:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
 
-    lookback_days = min(max(lookback_days, 1), 365)
+    lookback_years = min(max(lookback_years, 1), 5)
+    lookback_days = lookback_years * 365
+    window_phrase = f"{lookback_days}일" if lookback_years == 1 else f"{lookback_years}년"
 
     # 1. 기업 조회
     result = resolve_corp(company_name, _DART_API_KEY)
@@ -205,7 +226,7 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
     stock_code = corp_info.get("stock_code", "")
 
     # 2. 공시 목록 조회
-    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days)
+    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days, max_pages=lookback_years * 10)
     # (조기 반환 제거 — 공시가 없어도 v0.6.0 자본 churn / 재무 이상 스캔은 별도로 수행)
 
     # 3. 신호 분류 + 정정공시 필터
@@ -255,7 +276,7 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
     # v0.9.0: 부실 후속 이벤트(부도/영업정지/회생/해산) 흡수 — 발생 시 사실 표기만 ------
     distress_events = fetch_distress_events(
         corp_code, _DART_API_KEY,
-        max(1, (lookback_days // 365) + 1),
+        lookback_years + 1,
     )
     for _de in distress_events:
         signal_events.append({
@@ -349,7 +370,7 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
     if not signal_events:
         return (
             f"📋 **{corp_name}** ({stock_code or corp_code})\n\n"
-            f"최근 {lookback_days}일간 탐지된 의심 공시가 없습니다.\n"
+            f"최근 {window_phrase}간 탐지된 의심 공시가 없습니다.\n"
             f"(전체 공시 {len(disclosures)}건 검토)"
         )
 
@@ -402,7 +423,7 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
     )
     # 첫 문장: 규모 (사실 서술)
     s1 = (
-        f"지난 {lookback_days}일 동안 **{corp_name}**의 공시 "
+        f"지난 {window_phrase} 동안 **{corp_name}**의 공시 "
         f"{len(disclosures)}건을 살펴본 결과, 주목할 만한 공시·"
         f"재무 이벤트가 **{len(non_amend_events)}건** 관찰됐습니다."
     )
@@ -426,7 +447,7 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
         "",
         summary_block,
         "",
-        f"조회 기간: 최근 {lookback_days}일 | 전체 공시 {len(disclosures)}건 검토",
+        f"조회 기간: 최근 {window_phrase} | 전체 공시 {len(disclosures)}건 검토",
         "",
         f"━━ 관찰된 신호 ({len(signal_events)}건) ━━",
     ]
@@ -589,7 +610,7 @@ def analyze_company_risk(company_name: str, lookback_days: int = 90) -> str:
     if catalog:
         lines += ["", catalog]
 
-    return "\n".join(lines)
+    return _append_size_footer("\n".join(lines), lookback_years)
 
 
 # ── 도구 2: 개별 공시 분석 ─────────────────────────────────────────────────
@@ -823,7 +844,7 @@ _PHASE_ORDER = {"진입기": 0, "심화기": 1, "탈출기": 2}
 
 
 @mcp.tool()
-def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
+def build_event_timeline(company_name: str, lookback_years: int = 1) -> str:
     """기업의 공시 이벤트를 시간순으로 정렬해 조작 흐름의 서사를 구성한다.
 
     각 이벤트를 진입기(자금 조달/경영권 진입), 심화기(지배구조 변화),
@@ -831,12 +852,14 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
 
     Args:
         company_name: 기업명 (예: "에코프로") 또는 종목코드 6자리 (예: "086520")
-        lookback_days: 조회 기간 (기본 365일, 최대 365일)
+        lookback_years: 조회 기간(년). 기본 1년, 1~5년 범위.
     """
     if not _DART_API_KEY:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
 
-    lookback_days = min(max(lookback_days, 1), 365)
+    lookback_years = min(max(lookback_years, 1), 5)
+    lookback_days = lookback_years * 365
+    window_phrase = f"{lookback_days}일" if lookback_years == 1 else f"{lookback_years}년"
 
     result = resolve_corp(company_name, _DART_API_KEY)
     if not result:
@@ -845,11 +868,11 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
     corp_code = corp_info["corp_code"]
     stock_code = corp_info.get("stock_code", "")
 
-    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days)
+    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days, max_pages=lookback_years * 10)
     if not disclosures:
         return (
             f"📋 **{corp_name}** ({stock_code or corp_code})\n\n"
-            f"최근 {lookback_days}일간 공시가 없습니다."
+            f"최근 {window_phrase}간 공시가 없습니다."
         )
 
     # 이벤트 수집: (날짜, 단계, 신호키, 신호라벨, 공시명)
@@ -874,7 +897,7 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
     if not events:
         return (
             f"📋 **{corp_name}** ({stock_code or corp_code})\n\n"
-            f"최근 {lookback_days}일간 위험 신호 이벤트가 없습니다.\n"
+            f"최근 {window_phrase}간 위험 신호 이벤트가 없습니다.\n"
             f"(전체 공시 {len(disclosures)}건 검토)"
         )
 
@@ -906,7 +929,7 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
         "",
         "🎯 **한눈에 보는 요약**",
         (
-            f"- 최근 {lookback_days}일 동안 위험 신호로 분류된 공시 "
+            f"- 최근 {window_phrase} 동안 위험 신호로 분류된 공시 "
             f"{len(events)}건이 {first_date}부터 {last_date}까지 이어졌습니다."
         ),
         (
@@ -1035,7 +1058,7 @@ def build_event_timeline(company_name: str, lookback_days: int = 365) -> str:
         pass
 
     lines.append("⚠️ 이 타임라인은 공시 제목 기반 자동 분류이며, 실제 상황과 다를 수 있습니다.")
-    return "\n".join(lines)
+    return _append_size_footer("\n".join(lines), lookback_years)
 
 
 # ── 도구 5: 세력 추적 (공통 CB/BW/EB + 유상증자 인수자) ──────────────────
@@ -1407,7 +1430,7 @@ def find_actor_overlap(
 
 
 @mcp.tool()
-def list_disclosures_by_stock(stock_code: str, lookback_days: int = 90) -> str:
+def list_disclosures_by_stock(stock_code: str, lookback_years: int = 1) -> str:
     """종목코드로 최근 공시의 접수번호(rcept_no) 목록을 조회한다.
 
     반환된 접수번호는 get_disclosure_document, view_disclosure,
@@ -1415,7 +1438,7 @@ def list_disclosures_by_stock(stock_code: str, lookback_days: int = 90) -> str:
 
     Args:
         stock_code: 종목코드 6자리 (예: "086520")
-        lookback_days: 조회 기간 (기본 90일, 최대 365일)
+        lookback_years: 조회 기간(년). 기본 1년, 1~5년 범위.
     """
     import re as _re
 
@@ -1425,7 +1448,9 @@ def list_disclosures_by_stock(stock_code: str, lookback_days: int = 90) -> str:
     if not _re.match(r"^\d{6}$", stock_code):
         return "❌ 종목코드는 6자리 숫자여야 합니다. 예: '086520'"
 
-    lookback_days = min(max(lookback_days, 1), 365)
+    lookback_years = min(max(lookback_years, 1), 5)
+    lookback_days = lookback_years * 365
+    window_phrase = f"{lookback_days}일" if lookback_years == 1 else f"{lookback_years}년"
 
     result = resolve_corp(stock_code, _DART_API_KEY)
     if not result:
@@ -1434,16 +1459,16 @@ def list_disclosures_by_stock(stock_code: str, lookback_days: int = 90) -> str:
     corp_name, corp_info = result
     corp_code = corp_info["corp_code"]
 
-    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days)
+    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days, max_pages=lookback_years * 10)
     if not disclosures:
         return (
             f"📋 **{corp_name}** ({stock_code})\n\n"
-            f"최근 {lookback_days}일간 공시가 없습니다."
+            f"최근 {window_phrase}간 공시가 없습니다."
         )
 
     lines = [
         f"📋 **{corp_name}** ({stock_code}) 공시 접수번호 목록",
-        f"조회 기간: 최근 {lookback_days}일 | 총 {len(disclosures)}건",
+        f"조회 기간: 최근 {window_phrase} | 총 {len(disclosures)}건",
         "",
     ]
     for d in disclosures:
@@ -1457,7 +1482,7 @@ def list_disclosures_by_stock(stock_code: str, lookback_days: int = 90) -> str:
         "💡 접수번호로 원문을 읽으려면: get_disclosure_document(rcept_no=\"...\")",
     ]
 
-    return "\n".join(lines)
+    return _append_size_footer("\n".join(lines), lookback_years)
 
 
 # ── 도구 5: 공시 원문 전체 조회 (단일 호출) ───────────────────────────────
@@ -2395,18 +2420,18 @@ def track_debt_balance(company_name: str, year: str = "") -> str:
 
 
 @mcp.tool()
-def check_disclosure_anomaly(company_name: str, lookback_days: int = 365) -> str:
-    """공시 구조 지표를 집계해 0~100 이상 스코어를 반환합니다.
+def check_disclosure_anomaly(company_name: str, lookback_years: int = 1) -> str:
+    """공시 구조 지표 5종의 건수·비율을 집계해 사실 요약을 반환합니다.
 
     정정공시 비율·감사의견 이슈·공시의무 위반·자본 스트레스·조회공시 빈도
-    5개 지표를 가중 합산합니다.
+    5개 지표를 나열합니다. 위험도를 정량화하거나 등급화하지 않습니다(v0.8.5 원칙).
 
     Args:
         company_name: 기업명 또는 종목코드
-        lookback_days: 조회 기간 (기본값 365일)
+        lookback_years: 조회 기간(년). 기본 1년, 1~5년 범위.
 
     Returns:
-        0~100 스코어 + 지표별 내역 텍스트
+        지표별 탐지 건수·근거 공시명 텍스트 (점수·등급 없음)
     """
     if not _DART_API_KEY:
         return "오류: DART_API_KEY 환경변수가 설정되지 않았습니다."
@@ -2416,10 +2441,14 @@ def check_disclosure_anomaly(company_name: str, lookback_days: int = 365) -> str
         return f"기업을 찾을 수 없습니다: {company_name}"
     corp_code = meta["corp_code"]
 
-    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days)
+    lookback_years = min(max(lookback_years, 1), 5)
+    lookback_days = lookback_years * 365
+    window_phrase = f"{lookback_days}일" if lookback_years == 1 else f"{lookback_years}년"
+
+    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days, max_pages=lookback_years * 10)
     total = len(disclosures)
     if total == 0:
-        return f"[{corp_name}] 최근 {lookback_days}일 공시 없음 — 스코어 산출 불가."
+        return f"[{corp_name}] 최근 {window_phrase} 공시 없음 — 스코어 산출 불가."
 
     # ── 지표 집계 ──────────────────────────────────────────────
     amendment_count = sum(1 for d in disclosures if is_amendment_disclosure(d.get("report_nm", "")))
@@ -2464,14 +2493,14 @@ def check_disclosure_anomaly(company_name: str, lookback_days: int = 365) -> str
 
     # 상단 한 줄 요약 (점수/등급 제거 — 관찰된 사실만)
     summary = (
-        f"📋 최근 {lookback_days}일 동안 **{corp_name}**의 공시 "
+        f"📋 최근 {window_phrase} 동안 **{corp_name}**의 공시 "
         f"{total}건을 5개 구조 지표로 분류했습니다. 이 도구는 공시 행태의 "
         "사실 요약만 제공하며, 기업의 위험도를 등급화하지 않습니다."
     )
 
     lines = [
         f"━━━ [{corp_name}] 공시 구조 관찰 요약 ━━━",
-        f"조회기간: 최근 {lookback_days}일 / 총 공시 {total}건 (정정공시 {amendment_count}건)",
+        f"조회기간: 최근 {window_phrase} / 총 공시 {total}건 (정정공시 {amendment_count}건)",
         "",
         summary,
         "",
@@ -2542,7 +2571,7 @@ def check_disclosure_anomaly(company_name: str, lookback_days: int = 365) -> str
         "   법적 판단이나 투자 결정의 근거로 사용할 수 없습니다.",
         "💡 세부 분석: analyze_company_risk(company_name=...)",
     ]
-    return "\n".join(lines)
+    return _append_size_footer("\n".join(lines), lookback_years)
 
 
 @mcp.tool()
