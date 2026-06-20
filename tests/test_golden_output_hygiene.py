@@ -238,9 +238,16 @@ class TestGoldenOutputHygiene(unittest.TestCase):
 
         화이트리스트(_ALLOWED_PAREN_ABBREVS)에 등록된 표준 영문 약어는 허용한다.
         새 영문 코드를 정상 출력하려는 경우 화이트리스트에 추가하거나 한국어 라벨로 교체.
+
+        단, `*_list.txt`(공시 목록)·`*_doc_*`(공시 원문)은 DART의 공시 제목·원문을
+        그대로 옮긴 passthrough라 이 검사 대상이 아니다. 본 검사의 취지는 *우리가
+        생성한 라벨*에 내부 flag 코드가 새는 것을 막는 것이고, 원문에 등장하는 실제
+        규제기관·표준 약어(FDA·EMA 등)는 false-positive다.
         """
         pat = re.compile(r"\(([A-Z][A-Z_]{1,30})\)")
         for path in self._iter_fixtures():
+            if path.name.endswith("_list.txt") or "_doc_" in path.name:
+                continue
             text = path.read_text(encoding="utf-8")
             for m in pat.finditer(text):
                 code = m.group(1)
