@@ -179,7 +179,7 @@ class TestCheckDisclosureAnomalyAuditBonus(unittest.TestCase):
             ],
             "independence_warnings": [],
         }
-        result = server.check_disclosure_anomaly("테스트", 365)
+        result = server.check_disclosure_anomaly("테스트", lookback_years=1)
         self.assertIn("감사인 교체 2회", result)
         # v0.8.5: 점수 가산(+5점) 표기 제거 — 경고 문구만 확인
         self.assertIn("감사 독립성", result)
@@ -203,7 +203,7 @@ class TestCheckDisclosureAnomalyAuditBonus(unittest.TestCase):
             "auditor_changes": [],
             "independence_warnings": ["2025", "2024"],
         }
-        result = server.check_disclosure_anomaly("테스트", 365)
+        result = server.check_disclosure_anomaly("테스트", lookback_years=1)
         self.assertIn("비감사용역 비중 초과", result)
         self.assertIn("2025", result)
         # v0.8.5: 점수 가산(+3점) 표기 제거 — 연도 경고만 확인
