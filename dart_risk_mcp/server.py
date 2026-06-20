@@ -2420,7 +2420,7 @@ def track_debt_balance(company_name: str, year: str = "") -> str:
 
 
 @mcp.tool()
-def check_disclosure_anomaly(company_name: str, lookback_days: int = 365) -> str:
+def check_disclosure_anomaly(company_name: str, lookback_years: int = 1) -> str:
     """공시 구조 지표를 집계해 0~100 이상 스코어를 반환합니다.
 
     정정공시 비율·감사의견 이슈·공시의무 위반·자본 스트레스·조회공시 빈도
@@ -2428,7 +2428,7 @@ def check_disclosure_anomaly(company_name: str, lookback_days: int = 365) -> str
 
     Args:
         company_name: 기업명 또는 종목코드
-        lookback_days: 조회 기간 (기본값 365일)
+        lookback_years: 조회 기간(년). 기본 1년, 1~5년 범위.
 
     Returns:
         0~100 스코어 + 지표별 내역 텍스트
@@ -2441,10 +2441,14 @@ def check_disclosure_anomaly(company_name: str, lookback_days: int = 365) -> str
         return f"기업을 찾을 수 없습니다: {company_name}"
     corp_code = meta["corp_code"]
 
-    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days)
+    lookback_years = min(max(lookback_years, 1), 5)
+    lookback_days = lookback_years * 365
+    window_phrase = f"{lookback_days}일" if lookback_years == 1 else f"{lookback_years}년"
+
+    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days, max_pages=lookback_years * 10)
     total = len(disclosures)
     if total == 0:
-        return f"[{corp_name}] 최근 {lookback_days}일 공시 없음 — 스코어 산출 불가."
+        return f"[{corp_name}] 최근 {window_phrase} 공시 없음 — 스코어 산출 불가."
 
     # ── 지표 집계 ──────────────────────────────────────────────
     amendment_count = sum(1 for d in disclosures if is_amendment_disclosure(d.get("report_nm", "")))
@@ -2489,14 +2493,14 @@ def check_disclosure_anomaly(company_name: str, lookback_days: int = 365) -> str
 
     # 상단 한 줄 요약 (점수/등급 제거 — 관찰된 사실만)
     summary = (
-        f"📋 최근 {lookback_days}일 동안 **{corp_name}**의 공시 "
+        f"📋 최근 {window_phrase} 동안 **{corp_name}**의 공시 "
         f"{total}건을 5개 구조 지표로 분류했습니다. 이 도구는 공시 행태의 "
         "사실 요약만 제공하며, 기업의 위험도를 등급화하지 않습니다."
     )
 
     lines = [
         f"━━━ [{corp_name}] 공시 구조 관찰 요약 ━━━",
-        f"조회기간: 최근 {lookback_days}일 / 총 공시 {total}건 (정정공시 {amendment_count}건)",
+        f"조회기간: 최근 {window_phrase} / 총 공시 {total}건 (정정공시 {amendment_count}건)",
         "",
         summary,
         "",
@@ -2567,7 +2571,7 @@ def check_disclosure_anomaly(company_name: str, lookback_days: int = 365) -> str
         "   법적 판단이나 투자 결정의 근거로 사용할 수 없습니다.",
         "💡 세부 분석: analyze_company_risk(company_name=...)",
     ]
-    return "\n".join(lines)
+    return _append_size_footer("\n".join(lines), lookback_years)
 
 
 @mcp.tool()
