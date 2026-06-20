@@ -46,3 +46,24 @@ def test_append_size_footer_only_for_multiyear():
     assert out.startswith(body)
     assert "예상 출력 규모" in out
     assert "토큰" in out
+
+
+def test_list_disclosures_passes_years_to_core(monkeypatch):
+    """lookback_years -> lookback_days(years*365), max_pages(years*10) 전달 확인."""
+    captured = {}
+
+    monkeypatch.setattr(srv, "_DART_API_KEY", "KEY")
+    monkeypatch.setattr(srv, "resolve_corp", lambda q, k: ("테스트사", {"corp_code": "00000000", "stock_code": "012345"}))
+
+    def _fake_fetch(corp_code, api_key, lookback_days, max_pages=10):
+        captured["lookback_days"] = lookback_days
+        captured["max_pages"] = max_pages
+        return [{"rcept_no": "20240101000001", "report_nm": "사업보고서", "rcept_dt": "20240101"}]
+
+    monkeypatch.setattr(srv, "fetch_company_disclosures", _fake_fetch)
+
+    out = srv.list_disclosures_by_stock("012345", lookback_years=3)
+    assert captured["lookback_days"] == 3 * 365
+    assert captured["max_pages"] == 3 * 10
+    assert "최근 3년" in out  # 다년 라벨
+    assert "예상 출력 규모" in out  # years>1 푸터

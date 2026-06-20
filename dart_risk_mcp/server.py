@@ -1430,7 +1430,7 @@ def find_actor_overlap(
 
 
 @mcp.tool()
-def list_disclosures_by_stock(stock_code: str, lookback_days: int = 90) -> str:
+def list_disclosures_by_stock(stock_code: str, lookback_years: int = 1) -> str:
     """종목코드로 최근 공시의 접수번호(rcept_no) 목록을 조회한다.
 
     반환된 접수번호는 get_disclosure_document, view_disclosure,
@@ -1438,7 +1438,7 @@ def list_disclosures_by_stock(stock_code: str, lookback_days: int = 90) -> str:
 
     Args:
         stock_code: 종목코드 6자리 (예: "086520")
-        lookback_days: 조회 기간 (기본 90일, 최대 365일)
+        lookback_years: 조회 기간(년). 기본 1년, 1~5년 범위.
     """
     import re as _re
 
@@ -1448,7 +1448,9 @@ def list_disclosures_by_stock(stock_code: str, lookback_days: int = 90) -> str:
     if not _re.match(r"^\d{6}$", stock_code):
         return "❌ 종목코드는 6자리 숫자여야 합니다. 예: '086520'"
 
-    lookback_days = min(max(lookback_days, 1), 365)
+    lookback_years = min(max(lookback_years, 1), 5)
+    lookback_days = lookback_years * 365
+    window_phrase = f"{lookback_days}일" if lookback_years == 1 else f"{lookback_years}년"
 
     result = resolve_corp(stock_code, _DART_API_KEY)
     if not result:
@@ -1457,16 +1459,16 @@ def list_disclosures_by_stock(stock_code: str, lookback_days: int = 90) -> str:
     corp_name, corp_info = result
     corp_code = corp_info["corp_code"]
 
-    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days)
+    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days, max_pages=lookback_years * 10)
     if not disclosures:
         return (
             f"📋 **{corp_name}** ({stock_code})\n\n"
-            f"최근 {lookback_days}일간 공시가 없습니다."
+            f"최근 {window_phrase}간 공시가 없습니다."
         )
 
     lines = [
         f"📋 **{corp_name}** ({stock_code}) 공시 접수번호 목록",
-        f"조회 기간: 최근 {lookback_days}일 | 총 {len(disclosures)}건",
+        f"조회 기간: 최근 {window_phrase} | 총 {len(disclosures)}건",
         "",
     ]
     for d in disclosures:
@@ -1480,7 +1482,7 @@ def list_disclosures_by_stock(stock_code: str, lookback_days: int = 90) -> str:
         "💡 접수번호로 원문을 읽으려면: get_disclosure_document(rcept_no=\"...\")",
     ]
 
-    return "\n".join(lines)
+    return _append_size_footer("\n".join(lines), lookback_years)
 
 
 # ── 도구 5: 공시 원문 전체 조회 (단일 호출) ───────────────────────────────
