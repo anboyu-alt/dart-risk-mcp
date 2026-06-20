@@ -4,7 +4,12 @@ name: Regenerate goldens
 # DART_API_KEY Secret이 Actions 런타임에만 주입되므로, 로컬에 키가 없어도
 # 여기서 재생성할 수 있다. 재생성 결과가 hygiene 검증을 통과하면 master에 직접 커밋한다.
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      tools:
+        description: "재생성할 도구 단축명 (공백 구분, 예: list 또는 'analyze timeline'). 비우면 전체 재생성."
+        required: false
+        default: "list"
 
 permissions:
   contents: write
@@ -24,7 +29,15 @@ jobs:
       - name: Regenerate goldens
         env:
           DART_API_KEY: ${{ secrets.DART_API_KEY }}
-        run: python scripts/regen_goldens.py
+          TOOLS: ${{ inputs.tools }}
+        run: |
+          if [ -n "$TOOLS" ]; then
+            echo "재생성 대상 도구: $TOOLS"
+            python scripts/regen_goldens.py --tools $TOOLS
+          else
+            echo "전체 재생성"
+            python scripts/regen_goldens.py
+          fi
       - name: Hygiene gate (점수·등급·이모지 회귀 차단)
         run: python -m pytest tests/test_golden_output_hygiene.py -q
       - name: Commit if changed
