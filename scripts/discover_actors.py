@@ -30,10 +30,26 @@ N_THRESHOLD = 2
 KNOWN_PATH = Path(__file__).resolve().parents[1] / "dart_risk_mcp" / "data" / "known_actors.json"
 _DEFAULT_SIGHTINGS = Path(__file__).resolve().parents[1] / "tmp" / "sightings.json"
 
-# 개인명이 아닌(법인·조합) 패턴
+# 개인명이 아닌(법인·조합·기관) 패턴 — 영문 약어는 대소문자 무관 매칭
 _ORG_PAT = re.compile(
     r"조합|투자|신탁|펀드|주식회사|\(주\)|㈜|유한|법인|파트너스|캐피탈|자산운용|"
-    r"벤처|컴퍼니|코프|홀딩스|그룹|Co\.|Ltd|LLC|Inc")
+    r"벤처|컴퍼니|코프|홀딩스|그룹|은행|공사|기금|시스템|"
+    r"\b(?:co|ltd|llc|inc|corp)\b\.?|"
+    r"limited|holdings|investment|bank|fund|trust|partners|capital|company",
+    re.IGNORECASE,
+)
+
+# 개인명치고 지나치게 많은 공백 분리 토큰 — 프로그램/기관명 설명구(괄호 등) 필터
+_MAX_PERSON_TOKENS = 4
+
+
+def _normalize_name(name: str) -> str:
+    """공백 정규화 + 라틴 표기 대소문자 통일.
+
+    동일 인물이 'Liu Huan'/'LIU HUAN'처럼 표기만 다르게 등장해도 같은
+    sightings 키로 병합되도록 한다(한글은 대소문자가 없어 영향 없음).
+    """
+    return re.sub(r"\s+", " ", name.strip()).upper()
 
 
 def company_signal_keys(corp_code: str, api_key: str, lookback_days: int = 180) -> set:
@@ -55,10 +71,14 @@ def is_problem_company(signal_keys) -> bool:
 
 
 def _is_person(name: str) -> bool:
-    """개인명 여부(법인·조합 패턴 제외)."""
+    """개인명 여부(법인·조합·기관 패턴 및 다단어 기관/프로그램명 제외)."""
     if not name or not name.strip():
         return False
-    return not _ORG_PAT.search(name)
+    if _ORG_PAT.search(name):
+        return False
+    if len(re.split(r"\s+", name.strip())) > _MAX_PERSON_TOKENS:
+        return False
+    return True
 
 
 def collect_problem_sightings(api_key, window_days=WINDOW_DAYS, max_pages=MAX_PAGES):
@@ -111,7 +131,8 @@ def merge_sightings(data: dict, new: list, window_months: int = WINDOW_MONTHS) -
         nm = rec.get("name", "")
         if not nm:
             continue
-        lst = s.setdefault(nm, [])
+        key = _normalize_name(nm)
+        lst = s.setdefault(key, [])
         if any(e.get("rcept_no") == rec.get("rcept_no") and
                e.get("corp_code") == rec.get("corp_code") for e in lst):
             continue

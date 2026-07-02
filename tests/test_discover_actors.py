@@ -20,6 +20,21 @@ class TestDiscoverPredicates(unittest.TestCase):
         self.assertFalse(da._is_person("아레스1호투자조합"))
         self.assertFalse(da._is_person(""))
 
+    def test_is_person_filters_institutions_and_foreign_orgs(self):
+        import scripts.discover_actors as da
+        self.assertFalse(da._is_person("Citibank, N.A."))
+        self.assertFalse(da._is_person("AMPLE OCEAN LIMITED"))
+        self.assertFalse(da._is_person("PAN ORION Corp. Limited"))
+        self.assertFalse(da._is_person("RUI XING INTERNATIONALHOLDINGS LIMITED"))
+        self.assertFalse(da._is_person("ZHUOHUA INVESTMENT HOLDINGS PTE. LTD"))
+        self.assertFalse(da._is_person("한국산업은행(첨단전략산업기금의 관리,운용기관)"))
+        self.assertFalse(da._is_person("한국토지주택공사 부산울산지역본부"))
+        self.assertFalse(da._is_person("아주기술시스템"))
+        self.assertFalse(da._is_person("BOLD (Business Opportunities for L'Oreal Development)"))
+        # 정상 개인명(로마자 3단어 이하)은 여전히 통과
+        self.assertTrue(da._is_person("DING SHAO BIN"))
+        self.assertTrue(da._is_person("GAN XIAOCHUN"))
+
     def test_company_signal_keys_collects(self):
         import scripts.discover_actors as da
         discs = [{"report_nm": "전환사채권발행결정"},
@@ -85,6 +100,18 @@ class TestMergeAndPromote(unittest.TestCase):
         changed = da.merge_sightings(data, new, window_months=12)
         self.assertTrue(changed)
         rcepts = {e["rcept_no"] for e in data["sightings"]["홍길동"]}
+        self.assertEqual(rcepts, {"R1", "R2"})
+
+    def test_merge_normalizes_case_and_whitespace_variants(self):
+        # 'Liu Huan'과 'LIU HUAN'처럼 표기만 다른 동일 인물이 분리 집계되던 버그 회귀 테스트
+        import scripts.discover_actors as da
+        data = {"sightings": {}}
+        new = [{"name": "Liu Huan", "corp_code": "c1", "rcept_no": "R1", "date": "2026-06"},
+               {"name": "LIU  HUAN", "corp_code": "c2", "rcept_no": "R2", "date": "2026-06"}]
+        changed = da.merge_sightings(data, new, window_months=12)
+        self.assertTrue(changed)
+        self.assertEqual(set(data["sightings"].keys()), {"LIU HUAN"})
+        rcepts = {e["rcept_no"] for e in data["sightings"]["LIU HUAN"]}
         self.assertEqual(rcepts, {"R1", "R2"})
 
     def test_merge_drops_old_outside_window(self):
