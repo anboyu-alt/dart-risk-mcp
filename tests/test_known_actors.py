@@ -40,6 +40,20 @@ class TestKnownActors(unittest.TestCase):
         self.assertEqual(len(lookup_actor("  신승수  ")), 1)
         self.assertEqual(lookup_actor(""), [])
 
+    def test_lookup_matches_case_variant(self):
+        # 레지스트리 키 'LIU HUAN'(자동 발굴 정규화 표기)을 'Liu Huan'으로 조회해도 매칭
+        from dart_risk_mcp.core.known_actors import lookup_actor
+        self._write({"version": 1, "actors": {
+            "LIU HUAN": [{"source": "자동 발굴", "evidence": "e"}]}})
+        self.assertEqual(len(lookup_actor("Liu Huan")), 1)
+        self.assertEqual(len(lookup_actor("liu  huan")), 1)
+
+    def test_normalize_name(self):
+        from dart_risk_mcp.core.known_actors import normalize_name
+        self.assertEqual(normalize_name("  Liu   Huan "), "LIU HUAN")
+        self.assertEqual(normalize_name("홍길동"), "홍길동")
+        self.assertEqual(normalize_name(""), "")
+
     def test_load_missing_file_returns_empty(self):
         from dart_risk_mcp.core.known_actors import load_known_actors
         # 파일 미생성 상태

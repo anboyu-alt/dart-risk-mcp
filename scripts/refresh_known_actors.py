@@ -16,10 +16,11 @@ from pathlib import Path
 from dart_risk_mcp.core.dart_client import fetch_market_disclosures
 from dart_risk_mcp.core.cb_extractor import extract_cb_investors
 from dart_risk_mcp.core.investor_extractor import extract_rights_offering_investors
-from dart_risk_mcp.core.signals import match_signals, is_amendment_disclosure
+from dart_risk_mcp.core.known_actors import normalize_name
+from dart_risk_mcp.core.signals import match_signals, strip_amendment_prefix
 
 WINDOW_DAYS = 2
-MAX_PAGES = 5
+MAX_PAGES = 10
 DATA_PATH = Path(__file__).resolve().parents[1] / "dart_risk_mcp" / "data" / "known_actors.json"
 
 
@@ -34,22 +35,27 @@ def _api_key() -> str:
 def collect_auto_matches(api_key, known_names, window_days=WINDOW_DAYS, max_pages=MAX_PAGES):
     """최근 window_days CB/유상증자 공시에서 known_names와 매칭되는 인수자 근거 수집.
 
-    반환: {인물명: [auto_matched record, ...]}
+    매칭은 표기 정규화(공백·대소문자) 기준 — 레지스트리에 'Yoo Andy C'로
+    등재된 인물이 공시에 'YOO ANDY C'로 등장해도 잡는다. 정정공시도
+    접두사를 벗겨 스캔한다(대상자 변경 정정본에 확정 명단이 실리므로).
+
+    반환: {레지스트리 등재 표기 그대로의 인물명: [auto_matched record, ...]}
     """
     end = datetime.now()
     start = end - timedelta(days=max(1, window_days))
     discs = fetch_market_disclosures(
         api_key, start.strftime("%Y%m%d"), end.strftime("%Y%m%d"),
         pblntf_ty="B", max_pages=max_pages) or []
+    norm_to_canon = {normalize_name(k): k for k in known_names}
     matches = {}
     for d in discs:
         rn = d.get("rcept_no", "")
         rnm = d.get("report_nm", "")
         corp = d.get("corp_name", "")
         cc = d.get("corp_code", "")
-        if not rn or is_amendment_disclosure(rnm):
+        if not rn:
             continue
-        keys = {s["key"] for s in (match_signals(rnm) or [])}
+        keys = {s["key"] for s in (match_signals(strip_amendment_prefix(rnm)) or [])}
         invs = []
         if keys & {"CB_BW", "EB"}:
             invs += [("CB인수", i) for i in (extract_cb_investors(rn, api_key, cc) or [])]
@@ -59,8 +65,9 @@ def collect_auto_matches(api_key, known_names, window_days=WINDOW_DAYS, max_page
         date = f"{rdt[:4]}-{rdt[4:6]}" if len(rdt) >= 6 else ""
         for label, inv in invs:
             nm = (inv.get("name") or "").strip()
-            if nm in known_names:
-                matches.setdefault(nm, []).append({
+            canon = norm_to_canon.get(normalize_name(nm)) if nm else None
+            if canon:
+                matches.setdefault(canon, []).append({
                     "source": f"DART {label}(자동매칭)",
                     "status": "auto_matched",
                     "evidence": f"{corp} {label} 인수자로 등장",
