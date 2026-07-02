@@ -87,24 +87,27 @@ def _is_person(name: str) -> bool:
     return True
 
 
-def collect_funding_sightings(api_key, window_days=WINDOW_DAYS, max_pages=MAX_PAGES):
-    """최근 window_days 자금조달 공시(정정 포함)의 개인 인수자 sighting 수집.
+def collect_funding_sightings_range(api_key, bgn_de, end_de,
+                                    max_pages=MAX_PAGES, pace_sec=0.0):
+    """지정 구간(YYYYMMDD)의 자금조달 공시(정정 포함)에서 개인 인수자 sighting 수집.
 
     문제 회사 필터는 여기서 적용하지 않는다 — promote 시점에 재평가.
     정정공시([기재정정] 등)도 접두사를 벗겨 유형을 판별하고 추출한다.
     실전에서 인수자 확정 명단(대상자 변경·납입일 연기)은 정정본에 실리는
     경우가 많아, 정정을 버리면 최종 인수자를 놓친다.
 
+    Args:
+        pace_sec: 자금조달 공시 1건 추출 후 대기 시간(초). 백필처럼 대량
+            구간을 돌 때 DART 분당 상한을 피하기 위한 페이싱.
+
     Returns:
         (sightings, stats) — stats는 heartbeat 리포트용 수집 통계:
         {"scanned": 스캔 공시 수, "funding": 자금조달 공시 수,
          "extracted": 추출된 개인 sighting 수, "truncated": 페이지 상한 도달 여부}
     """
-    end = datetime.now()
-    start = end - timedelta(days=max(1, window_days))
+    import time as _time
     discs = fetch_market_disclosures(
-        api_key, start.strftime("%Y%m%d"), end.strftime("%Y%m%d"),
-        pblntf_ty="B", max_pages=max_pages) or []
+        api_key, bgn_de, end_de, pblntf_ty="B", max_pages=max_pages) or []
     sightings = []
     n_funding = 0
     for d in discs:
@@ -135,6 +138,8 @@ def collect_funding_sightings(api_key, window_days=WINDOW_DAYS, max_pages=MAX_PA
                 "date": date, "rcept_no": rn,
                 "signals": sorted(keys & (FUNDING_KEYS | INSTABILITY_KEYS)),
             })
+        if pace_sec:
+            _time.sleep(pace_sec)
     stats = {
         "scanned": len(discs),
         "funding": n_funding,
@@ -142,6 +147,14 @@ def collect_funding_sightings(api_key, window_days=WINDOW_DAYS, max_pages=MAX_PA
         "truncated": len(discs) >= max_pages * 100,
     }
     return sightings, stats
+
+
+def collect_funding_sightings(api_key, window_days=WINDOW_DAYS, max_pages=MAX_PAGES):
+    """최근 window_days 자금조달 공시의 개인 인수자 sighting 수집 (일일 크론용)."""
+    end = datetime.now()
+    start = end - timedelta(days=max(1, window_days))
+    return collect_funding_sightings_range(
+        api_key, start.strftime("%Y%m%d"), end.strftime("%Y%m%d"), max_pages=max_pages)
 
 
 def merge_sightings(data: dict, new: list, window_months: int = WINDOW_MONTHS) -> bool:

@@ -1,0 +1,67 @@
+name: Backfill sightings
+
+# 수동 실행 전용 — 주말(평일 모니터들과 DART 쿼터 충돌 없는 시간대) 실행 권장.
+# 기본 예산(max_funding=3500 ≈ 9천 콜)으로 12개월치는 보통 2회 실행에 완료.
+# 진행 상황은 sightings.json의 backfill.done_until에 저장돼 재실행 시 이어감.
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "수집 시작일 YYYY-MM-DD (기본: 종료일-365일)"
+        required: false
+        default: ""
+      end_date:
+        description: "수집 종료일 YYYY-MM-DD (기본: 오늘)"
+        required: false
+        default: ""
+      max_funding:
+        description: "자금조달 공시 처리 상한 (기본 3500 ≈ 9천 콜, 일일 쿼터의 절반)"
+        required: false
+        default: "3500"
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install package
+        run: pip install -e .
+      - name: Checkout sightings (private)
+        uses: actions/checkout@v5
+        with:
+          repository: anboyu-alt/dart-risk-mcp-sightings
+          token: ${{ secrets.SIGHTINGS_REPO_TOKEN }}
+          path: _sightings
+      - name: Backfill sightings
+        env:
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+          MAIL_USER: ${{ secrets.MAIL_USER }}
+          MAIL_APP_PASSWORD: ${{ secrets.MAIL_APP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          SIGHTINGS_PATH: _sightings/sightings.json
+        run: |
+          ARGS=""
+          [ -n "${{ inputs.start_date }}" ] && ARGS="$ARGS --start ${{ inputs.start_date }}"
+          [ -n "${{ inputs.end_date }}" ]   && ARGS="$ARGS --end ${{ inputs.end_date }}"
+          python scripts/backfill_sightings.py $ARGS --max-funding ${{ inputs.max_funding }}
+      - name: Commit sightings (private)
+        if: always()
+        working-directory: _sightings
+        run: |
+          if [ -n "$(git status --porcelain sightings.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add sightings.json
+            git commit -m "chore: sightings 백필"
+            git push
+          else
+            echo "sightings 변경 없음"
+          fi
