@@ -616,3 +616,13 @@ def match_signals(report_nm: str) -> list[dict]:
 def is_amendment_disclosure(report_nm: str) -> bool:
     """공시 제목이 정정공시(기존 공시의 수정·보완)인지 판별."""
     return bool(_AMENDMENT_RE.match(report_nm))
+
+
+def strip_amendment_prefix(report_nm: str) -> str:
+    """정정공시 접두사([기재정정] 등)를 제거한 원 보고서명을 반환.
+
+    신호 점수 집계에서는 정정을 제외하는 게 맞지만, 인수자 추출처럼
+    정정본이 오히려 최종 확정 정보(대상자 변경 등)를 담는 용도에서는
+    접두사를 벗겨 원 제목 기준으로 유형을 판별해야 한다.
+    """
+    return _AMENDMENT_RE.sub("", report_nm or "")

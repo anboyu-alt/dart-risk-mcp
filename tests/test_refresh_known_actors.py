@@ -14,7 +14,6 @@ class TestRefreshKnownActors(unittest.TestCase):
 
         with patch.object(rk, "fetch_market_disclosures", return_value=discs), \
              patch.object(rk, "match_signals", side_effect=_match), \
-             patch.object(rk, "is_amendment_disclosure", return_value=False), \
              patch.object(rk, "extract_cb_investors", return_value=[{"name": "이준민"}]), \
              patch.object(rk, "extract_rights_offering_investors", return_value=[]):
             matches = rk.collect_auto_matches("key", {"이준민"}, window_days=2, max_pages=1)
@@ -23,13 +22,47 @@ class TestRefreshKnownActors(unittest.TestCase):
         self.assertEqual(matches["이준민"][0]["status"], "auto_matched")
         self.assertEqual(matches["이준민"][0]["rcept_no"], "R1")
 
+    def test_collect_matches_case_variant_of_registered_actor(self):
+        # 레지스트리 'Yoo Andy C' vs 공시 'YOO ANDY C' — 표기 정규화로 매칭,
+        # 결과 키는 레지스트리 등재 표기 그대로 반환(merge가 그 키로 병합하므로)
+        import scripts.refresh_known_actors as rk
+        discs = [{"rcept_no": "R1", "report_nm": "전환사채권발행결정",
+                  "corp_name": "△△전자", "corp_code": "c1", "rcept_dt": "20260612"}]
+        with patch.object(rk, "fetch_market_disclosures", return_value=discs), \
+             patch.object(rk, "match_signals", return_value=[{"key": "CB_BW"}]), \
+             patch.object(rk, "extract_cb_investors",
+                          return_value=[{"name": "YOO  ANDY C"}]), \
+             patch.object(rk, "extract_rights_offering_investors", return_value=[]):
+            matches = rk.collect_auto_matches("key", {"Yoo Andy C"},
+                                              window_days=2, max_pages=1)
+        self.assertIn("Yoo Andy C", matches)
+        self.assertEqual(matches["Yoo Andy C"][0]["rcept_no"], "R1")
+
+    def test_collect_scans_amendment_filings(self):
+        # 정정공시도 접두사를 벗겨 유형 판별 후 스캔한다 (확정 명단이 정정본에 실림)
+        import scripts.refresh_known_actors as rk
+        discs = [{"rcept_no": "R2", "report_nm": "[기재정정]전환사채권발행결정",
+                  "corp_name": "△△전자", "corp_code": "c1", "rcept_dt": "20260612"}]
+
+        def _match(rnm):
+            # strip_amendment_prefix가 적용됐다면 접두사 없는 제목이 들어온다
+            assert not rnm.startswith("["), f"접두사 미제거: {rnm}"
+            return [{"key": "CB_BW"}] if "전환사채" in rnm else []
+
+        with patch.object(rk, "fetch_market_disclosures", return_value=discs), \
+             patch.object(rk, "match_signals", side_effect=_match), \
+             patch.object(rk, "extract_cb_investors", return_value=[{"name": "이준민"}]), \
+             patch.object(rk, "extract_rights_offering_investors", return_value=[]):
+            matches = rk.collect_auto_matches("key", {"이준민"}, window_days=2, max_pages=1)
+        self.assertIn("이준민", matches)
+        self.assertEqual(matches["이준민"][0]["rcept_no"], "R2")
+
     def test_collect_ignores_unregistered(self):
         import scripts.refresh_known_actors as rk
         discs = [{"rcept_no": "R1", "report_nm": "전환사채권발행결정",
                   "corp_name": "X", "corp_code": "c", "rcept_dt": "20260612"}]
         with patch.object(rk, "fetch_market_disclosures", return_value=discs), \
              patch.object(rk, "match_signals", return_value=[{"key": "CB_BW"}]), \
-             patch.object(rk, "is_amendment_disclosure", return_value=False), \
              patch.object(rk, "extract_cb_investors", return_value=[{"name": "낯선사람"}]), \
              patch.object(rk, "extract_rights_offering_investors", return_value=[]):
             matches = rk.collect_auto_matches("key", {"이준민"}, window_days=2, max_pages=1)
