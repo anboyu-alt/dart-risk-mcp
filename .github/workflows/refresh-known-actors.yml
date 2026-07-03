@@ -5,8 +5,9 @@ on:
     - cron: "0 19 * * *"   # UTC 19:00 = 한국 04:00
   workflow_dispatch: {}
 
+# 레지스트리 원본은 비공개 Notion DB — 이 레포에는 인물 데이터를 커밋하지 않는다.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   refresh:
@@ -21,6 +22,8 @@ jobs:
       - name: Refresh known_actors
         env:
           DART_API_KEY: ${{ secrets.DART_API_KEY }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          DB_KNOWN_ACTORS: ${{ secrets.DB_KNOWN_ACTORS }}
           MAIL_USER: ${{ secrets.MAIL_USER }}
           MAIL_APP_PASSWORD: ${{ secrets.MAIL_APP_PASSWORD }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
@@ -34,6 +37,8 @@ jobs:
       - name: Discover actors
         env:
           DART_API_KEY: ${{ secrets.DART_API_KEY }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          DB_KNOWN_ACTORS: ${{ secrets.DB_KNOWN_ACTORS }}
           MAIL_USER: ${{ secrets.MAIL_USER }}
           MAIL_APP_PASSWORD: ${{ secrets.MAIL_APP_PASSWORD }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
@@ -50,15 +55,4 @@ jobs:
             git push
           else
             echo "sightings 변경 없음"
-          fi
-      - name: Commit if changed
-        run: |
-          if ! git diff --quiet dart_risk_mcp/data/known_actors.json; then
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add dart_risk_mcp/data/known_actors.json
-            git commit -m "chore(known_actors): auto-refresh evidence [skip ci]"
-            git push
-          else
-            echo "변경 없음"
           fi

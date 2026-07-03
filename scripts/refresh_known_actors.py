@@ -3,10 +3,13 @@
 GitHub Actions cron이 매일 실행. 등재 인물만 대상이며, 자동 매칭은 status=auto_matched
 (동명이인 미확인)로 추가하고 verified로 승격하지 않는다.
 
+레지스트리 원본은 비공개 Notion DB(NOTION_TOKEN + DB_KNOWN_ACTORS) —
+public 레포에는 어떤 인물 데이터도 커밋하지 않는다. env 미설정 시
+근거 기록은 스킵하고 메일 통지만 수행한다.
+
 사용: python scripts/refresh_known_actors.py
 API 키: 환경변수 DART_API_KEY 또는 tmp/_apikey.txt.
 """
-import json
 import os
 import smtplib
 from datetime import datetime, timedelta
@@ -16,12 +19,16 @@ from pathlib import Path
 from dart_risk_mcp.core.dart_client import fetch_market_disclosures
 from dart_risk_mcp.core.cb_extractor import extract_cb_investors
 from dart_risk_mcp.core.investor_extractor import extract_rights_offering_investors
-from dart_risk_mcp.core.known_actors import normalize_name
+from dart_risk_mcp.core.known_actors import (
+    normalize_name,
+    load_known_actors,
+    fetch_registry_from_notion,
+    add_registry_record,
+)
 from dart_risk_mcp.core.signals import match_signals, strip_amendment_prefix
 
 WINDOW_DAYS = 2
 MAX_PAGES = 10
-DATA_PATH = Path(__file__).resolve().parents[1] / "dart_risk_mcp" / "data" / "known_actors.json"
 
 
 def _api_key() -> str:
@@ -79,10 +86,14 @@ def collect_auto_matches(api_key, known_names, window_days=WINDOW_DAYS, max_page
     return matches
 
 
-def merge_auto_matches(data: dict, matches: dict) -> bool:
-    """matches를 data에 병합. 등재 인물만, 동일 rcept_no 중복 스킵. 변경 여부 반환."""
+def merge_auto_matches(data: dict, matches: dict) -> list:
+    """matches를 data에 병합. 등재 인물만, 동일 rcept_no 중복 스킵.
+
+    반환: 새로 추가된 (인물명, 기록) 튜플 리스트 — 호출측이 레지스트리에
+    기록할 대상. 변경 없으면 빈 리스트(기존 bool 사용처와 truthiness 호환).
+    """
     actors = data.setdefault("actors", {})
-    changed = False
+    added = []
     for name, recs in matches.items():
         if name not in actors:
             continue  # 등재 인물만 근거 추가 (새 인물 등재 안 함)
@@ -92,8 +103,8 @@ def merge_auto_matches(data: dict, matches: dict) -> bool:
                 continue
             actors[name].append(rec)
             seen.add(rec.get("rcept_no"))
-            changed = True
-    return changed
+            added.append((name, rec))
+    return added
 
 
 def build_change_summary(data: dict, matches: dict) -> str:
@@ -146,16 +157,20 @@ def main():
     key = _api_key()
     if not key:
         raise SystemExit("DART_API_KEY 또는 tmp/_apikey.txt 필요")
-    data = json.loads(DATA_PATH.read_text(encoding="utf-8"))
+    # 크론 실행은 캐시를 우회해 항상 최신 레지스트리로 중복 판정한다
+    data = fetch_registry_from_notion() or load_known_actors()
     known_names = set(data.get("actors", {}).keys())
     matches = collect_auto_matches(key, known_names)
-    changed = merge_auto_matches(data, matches)
-    if changed:
-        DATA_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-        n = sum(len(v) for v in matches.values())
+    added = merge_auto_matches(data, matches)
+    if added:
+        written = sum(1 for name, rec in added if add_registry_record(name, rec))
         summary = build_change_summary(data, matches)
+        summary += (f"\n※ Notion 레지스트리 기록: {written}/{len(added)}건"
+                    + ("" if written == len(added)
+                       else " — NOTION_TOKEN/DB_KNOWN_ACTORS 설정 확인 필요"))
         sent = send_mail("[known_actors] 자동 갱신 변경 알림", summary)
-        print(f"갱신: {n}건 근거 추가" + (" (메일 발송)" if sent else " (메일 스킵)"))
+        print(f"갱신: {len(added)}건 근거 추가, Notion 기록 {written}건"
+              + (" (메일 발송)" if sent else " (메일 스킵)"))
     else:
         print("변경 없음")
 

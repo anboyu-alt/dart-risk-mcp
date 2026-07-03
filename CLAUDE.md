@@ -29,13 +29,13 @@ dart_risk_mcp/
     ├── catalog.py       # 금감원·금융위 MD 카탈로그 로더 (load_catalog_excerpt)
     ├── cb_extractor.py  # CB/BW 인수자명 추출
     ├── watchlist.py     # 인물↔회사군 영속 워치리스트 (순수 파일 I/O)
-    ├── known_actors.py  # 공개기록 행위자 레지스트리 로드/조회 (동봉 data/known_actors.json)
+    ├── known_actors.py  # 공개기록 행위자 레지스트리 로드/조회 (비공개 Notion opt-in)
     └── taxonomy.py      # 27개 신호 분류 + 위험 점수 + 패턴
 ```
 
-> 동봉 데이터: `dart_risk_mcp/data/known_actors.json`(공개기록 시드). 부트스트랩 스크립트: `scripts/build_known_actors.py`(인물+회사단서 → DART 근거 자동 집계).
-> 원격 로드: `load_known_actors()`는 GitHub raw 최신 `known_actors.json`을 24h 캐시(`~/.cache/dart-risk-mcp/known_actors_remote.json`)로 로드하고, 네트워크 실패 시 동봉 데이터로 fallback(중앙 서버 없음, 정적 파일). 자동 갱신: `scripts/refresh_known_actors.py` + `.github/workflows/refresh-known-actors.yml`(매일 cron — 시장 신규 CB/유상증자 인수자를 등재 인물과 매칭해 `auto_matched` 근거 추가, master 자동 push). 운영자는 GitHub repo Secret `DART_API_KEY` 등록 필요.
-> 자동 발굴: `scripts/discover_actors.py`(같은 cron)는 시장 '문제 회사'(자금조달+불안정 신호 동반)의 개인 인수자를 **sightings로 누적**(12개월 윈도우)하고, 서로 다른 문제 회사 2곳+(N=2)에 반복 등장하는 인물을 known_actors에 `auto_matched`(자동 발굴)로 등재 + 제작자 이메일. **노출 경계**: sightings(1회 포함, 미검증)는 **private repo `dart-risk-mcp-sightings`**(제작자만, `SIGHTINGS_REPO_TOKEN` PAT), known_actors(N=2 등재)만 public. 임원·조합명 제외(개인명만).
+> 동봉 데이터: `dart_risk_mcp/data/known_actors.json`(빈 스켈레톤 — v1.5.0부터 인물 데이터 미포함). 레지스트리 원본은 제작자 비공개 Notion DB. DB 셋업: `scripts/setup_known_actors_db.py`(+`setup-known-actors-db.yml`, 1회성).
+> 레지스트리 로드: `load_known_actors()` 우선순위 = `DART_KNOWN_ACTORS_PATH`(로컬 JSON) > Notion(`NOTION_TOKEN`+`DB_KNOWN_ACTORS` env, 24h 캐시 `~/.cache/dart-risk-mcp/known_actors_notion.json`) > 동봉(빈 스켈레톤). Notion 미설정 시 네트워크 시도 없이 graceful 비활성화. 자동 갱신: `scripts/refresh_known_actors.py` + `.github/workflows/refresh-known-actors.yml`(매일 cron — 시장 신규 CB/유상증자 인수자를 등재 인물과 표기 정규화 매칭해 `auto_matched` 근거를 Notion에 기록, public 커밋 없음). 운영자 Secrets: `DART_API_KEY`, `NOTION_TOKEN`, `DB_KNOWN_ACTORS`.
+> 자동 발굴: `scripts/discover_actors.py`(같은 cron)는 시장 '문제 회사'(자금조달+불안정 신호 동반)의 개인 인수자를 **sightings로 누적**(12개월 윈도우)하고, 서로 다른 문제 회사 2곳+(N=2)에 반복 등장하는 인물을 레지스트리(비공개 Notion)에 `auto_matched`(자동 발굴)로 등재 + 제작자 이메일. **노출 경계**: sightings(1회 포함, 미검증)는 **private repo `dart-risk-mcp-sightings`**(제작자만, `SIGHTINGS_REPO_TOKEN` PAT), 레지스트리도 **비공개 Notion**(접근은 opt-in, README 참고) — public 레포에는 어떤 인물 데이터도 커밋하지 않는다. 임원·조합명 제외(개인명만). 베이스 백필: `scripts/backfill_sightings.py`(+`backfill-sightings.yml`).
 
 ---
 
@@ -280,10 +280,10 @@ dart_risk_mcp/
 인물명으로 **공개기록 행위자 레지스트리**를 조회합니다 (사실 표기 — 판정 아님).
 
 - 출처가 명확한 공개기록(DART 임원현황·CB/유상증자 인수)에 그 인물이 어느 상장사에 등장했는지를 사실로만 반환. **위험 판정·점수·등급 없음**, 동명이인·원본 확인 면책 동반
-- 데이터: 동봉 `data/known_actors.json`. `core/known_actors.py`의 `lookup_actor`로 조회
+- 데이터: 비공개 Notion DB(opt-in). `core/known_actors.py`의 `lookup_actor`로 조회(표기 정규화 매칭)
 - `find_actor_overlap`도 탐지된 인물을 이 레지스트리와 자동 대조해 "공개기록 참고" 섹션으로 표면화
 - **status 3단계:** `verified`(회사 직접 조회 근거) / `maintainer_seed`(제작자 등록, 근거 미확보) / `auto_matched`(**동명이인 미확인** — 두 경로: 등재 인물의 시장 이름 매칭 `refresh_known_actors`, 또는 문제회사 N=2 반복 자동 발굴 `discover_actors`). 자동 매칭은 verified로 자동 승격하지 않으며 강한 동명이인 경고를 동반
-- **등재 기준:** 공개 출처가 확인된 경우에만 등재. 근거(회사·연도·출처)는 `scripts/build_known_actors.py`(수동 부트스트랩) 또는 `scripts/refresh_known_actors.py`(매일 자동)가 DART에서 집계(사람은 회사 단서만 제공). 단정 표현 금지. 명단은 제작자가 직접 관리·연락(GitHub 프로필 연락처). 변경 시 제작자 Gmail 통지(`refresh_known_actors.py`의 `send_mail`, 자격증명 `MAIL_USER`/`MAIL_APP_PASSWORD`/`MAIL_TO` Secret)
+- **등재 기준:** 공개 출처가 확인된 경우에만 등재. 근거(회사·연도·출처)는 `scripts/refresh_known_actors.py`·`scripts/discover_actors.py`(매일 자동)가 DART에서 집계해 Notion에 기록(사람은 검토·승격만). 단정 표현 금지. 명단은 제작자가 직접 관리·연락(GitHub 프로필 연락처). 변경 시 제작자 Gmail 통지(`refresh_known_actors.py`의 `send_mail`, 자격증명 `MAIL_USER`/`MAIL_APP_PASSWORD`/`MAIL_TO` Secret)
 
 ---
 
