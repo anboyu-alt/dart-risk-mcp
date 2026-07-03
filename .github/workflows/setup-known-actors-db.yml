@@ -1,0 +1,30 @@
+name: Setup known_actors Notion DB
+
+# 1회성 셋업 — 레지스트리 Notion DB를 생성하고 기존 데이터를 시딩한다.
+# 실행 전: NOTION_TOKEN, NOTION_PARENT_PAGE_ID Secrets 등록 필요.
+# 실행 후: 로그에 출력된 DB id를 DB_KNOWN_ACTORS Secret으로 등록.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # 시딩 폴백이 히스토리 커밋에서 기존 데이터를 읽음
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install package
+        run: pip install -e .
+      - name: Create and seed registry DB
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_PARENT_PAGE_ID: ${{ secrets.NOTION_PARENT_PAGE_ID }}
+        run: python scripts/setup_known_actors_db.py

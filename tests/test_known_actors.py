@@ -64,18 +64,31 @@ class TestKnownActors(unittest.TestCase):
         Path(self._path).write_text("{ broken", encoding="utf-8")
         self.assertEqual(load_known_actors(), {"version": 1, "actors": {}})
 
-    def test_override_skips_remote(self):
-        # DART_KNOWN_ACTORS_PATH 지정 시 원격 fetch를 호출하지 않는다
+    def test_override_skips_notion(self):
+        # DART_KNOWN_ACTORS_PATH 지정 시 Notion 조회를 호출하지 않는다
         from unittest.mock import patch as _p
         from dart_risk_mcp.core import known_actors as ka
         self._write({"version": 1, "actors": {"X": [{"source": "s", "evidence": "e"}]}})
-        with _p("dart_risk_mcp.core.known_actors.requests.get") as get:
+        with _p("dart_risk_mcp.core.known_actors.requests.post") as post:
             data = ka.load_known_actors()
-        get.assert_not_called()
+        post.assert_not_called()
         self.assertIn("X", data["actors"])
 
-    def test_remote_fetch_when_no_cache(self):
-        # 캐시 없음 + 원격 성공 → 원격 데이터 반환 + 캐시 저장
+    def _notion_page(self, name, source="자동 발굴", status="auto_matched", rcept=""):
+        props = {
+            "인물명": {"title": [{"plain_text": name}]},
+            "source": {"rich_text": [{"plain_text": source}]},
+            "status": {"select": {"name": status}},
+            "evidence": {"rich_text": [{"plain_text": "e"}]},
+            "url": {"url": "https://dart.fss.or.kr"},
+            "date": {"rich_text": [{"plain_text": "2026-07"}]},
+            "tags": {"multi_select": [{"name": "자동 발굴"}]},
+            "rcept_no": {"rich_text": [{"plain_text": rcept}] if rcept else []},
+        }
+        return {"properties": props}
+
+    def test_notion_fetch_when_env_set(self):
+        # env 설정 + Notion 성공 → 파싱된 레지스트리 반환 + 캐시 저장
         import os
         import tempfile
         from unittest.mock import patch as _p, MagicMock
@@ -84,23 +97,33 @@ class TestKnownActors(unittest.TestCase):
         self._env.stop()
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                cache = Path(tmp) / "remote.json"
+                cache = Path(tmp) / "notion.json"
                 resp = MagicMock()
                 resp.status_code = 200
-                resp.json.return_value = {"version": 1, "actors": {
-                    "원격인물": [{"source": "DART", "evidence": "e"}]}}
+                resp.json.return_value = {
+                    "results": [self._notion_page("LIU HUAN", rcept="R1"),
+                                self._notion_page("LIU HUAN", rcept="R2"),
+                                self._notion_page("신승수", source="DART 임원현황",
+                                                  status="verified")],
+                    "has_more": False,
+                }
                 with _p("dart_risk_mcp.core.known_actors._CACHE_FILE", cache), \
-                     _p("dart_risk_mcp.core.known_actors.requests.get", return_value=resp) as get:
+                     _p("dart_risk_mcp.core.known_actors.requests.post",
+                        return_value=resp) as post, \
+                     _p.dict("os.environ", {"NOTION_TOKEN": "t",
+                                            "DB_KNOWN_ACTORS": "db"}):
                     os.environ.pop("DART_KNOWN_ACTORS_PATH", None)
                     data = ka.load_known_actors()
-                get.assert_called_once()
-                self.assertIn("원격인물", data["actors"])
+                post.assert_called_once()
+                self.assertEqual(len(data["actors"]["LIU HUAN"]), 2)
+                self.assertEqual(data["actors"]["LIU HUAN"][0]["rcept_no"], "R1")
+                self.assertEqual(data["actors"]["신승수"][0]["status"], "verified")
                 self.assertTrue(cache.exists())
         finally:
             self._env.start()
 
-    def test_remote_failure_falls_back_to_bundled(self):
-        # 원격 실패 → 동봉 데이터 fallback (예외 없음)
+    def test_notion_failure_falls_back_to_bundled(self):
+        # Notion 실패 → 동봉 데이터 fallback (예외 없음)
         import os
         import tempfile
         from unittest.mock import patch as _p
@@ -109,14 +132,65 @@ class TestKnownActors(unittest.TestCase):
         self._env.stop()
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                cache = Path(tmp) / "remote.json"
+                cache = Path(tmp) / "notion.json"
                 with _p("dart_risk_mcp.core.known_actors._CACHE_FILE", cache), \
-                     _p("dart_risk_mcp.core.known_actors.requests.get", side_effect=Exception("net")):
+                     _p("dart_risk_mcp.core.known_actors.requests.post",
+                        side_effect=Exception("net")), \
+                     _p.dict("os.environ", {"NOTION_TOKEN": "t",
+                                            "DB_KNOWN_ACTORS": "db"}):
                     os.environ.pop("DART_KNOWN_ACTORS_PATH", None)
                     data = ka.load_known_actors()
                 self.assertIsInstance(data.get("actors"), dict)
         finally:
             self._env.start()
+
+    def test_no_notion_env_uses_bundled_without_network(self):
+        # opt-in — env 미설정 시 네트워크 시도 없이 동봉 데이터 사용
+        import os
+        from unittest.mock import patch as _p
+        from dart_risk_mcp.core import known_actors as ka
+        self._env.stop()
+        try:
+            with _p("dart_risk_mcp.core.known_actors.requests.post") as post:
+                for k in ("NOTION_TOKEN", "DB_KNOWN_ACTORS", "DART_KNOWN_ACTORS_PATH"):
+                    os.environ.pop(k, None)
+                data = ka.load_known_actors()
+            post.assert_not_called()
+            self.assertIsInstance(data.get("actors"), dict)
+        finally:
+            self._env.start()
+
+    def test_add_registry_record_skips_without_env(self):
+        import os
+        from unittest.mock import patch as _p
+        from dart_risk_mcp.core.known_actors import add_registry_record
+        with _p("dart_risk_mcp.core.known_actors.requests.post") as post:
+            for k in ("NOTION_TOKEN", "DB_KNOWN_ACTORS"):
+                os.environ.pop(k, None)
+            ok = add_registry_record("홍길동", {"source": "자동 발굴", "evidence": "e"})
+        self.assertFalse(ok)
+        post.assert_not_called()
+
+    def test_add_registry_record_writes_with_env(self):
+        from unittest.mock import patch as _p, MagicMock
+        from dart_risk_mcp.core.known_actors import add_registry_record
+        resp = MagicMock()
+        resp.status_code = 200
+        with _p("dart_risk_mcp.core.known_actors.requests.post",
+                return_value=resp) as post:
+            ok = add_registry_record(
+                "홍길동",
+                {"source": "자동 발굴", "status": "auto_matched", "evidence": "e",
+                 "url": "https://dart.fss.or.kr", "date": "2026-07",
+                 "tags": ["자동 발굴"], "rcept_no": "R1"},
+                token="t", db_id="db")
+        self.assertTrue(ok)
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["parent"]["database_id"], "db")
+        self.assertEqual(
+            payload["properties"]["인물명"]["title"][0]["text"]["content"], "홍길동")
+        self.assertEqual(
+            payload["properties"]["rcept_no"]["rich_text"][0]["text"]["content"], "R1")
 
 
 if __name__ == "__main__":

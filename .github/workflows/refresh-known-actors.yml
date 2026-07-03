@@ -5,8 +5,9 @@ on:
     - cron: "0 19 * * *"   # UTC 19:00 = 한국 04:00
   workflow_dispatch: {}
 
+# 레지스트리 원본은 비공개 Notion DB — 이 레포에는 인물 데이터를 커밋하지 않는다.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   refresh:
@@ -21,6 +22,8 @@ jobs:
       - name: Refresh known_actors
         env:
           DART_API_KEY: ${{ secrets.DART_API_KEY }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          DB_KNOWN_ACTORS: ${{ secrets.DB_KNOWN_ACTORS }}
           MAIL_USER: ${{ secrets.MAIL_USER }}
           MAIL_APP_PASSWORD: ${{ secrets.MAIL_APP_PASSWORD }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
@@ -34,6 +37,8 @@ jobs:
       - name: Discover actors
         env:
           DART_API_KEY: ${{ secrets.DART_API_KEY }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          DB_KNOWN_ACTORS: ${{ secrets.DB_KNOWN_ACTORS }}
           MAIL_USER: ${{ secrets.MAIL_USER }}
           MAIL_APP_PASSWORD: ${{ secrets.MAIL_APP_PASSWORD }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
@@ -50,17 +55,4 @@ jobs:
             git push
           else
             echo "sightings 변경 없음"
-          fi
-      # known_actors.json public 자동 커밋 보류 (2026-07):
-      # 개인 워치리스트를 public 레포에 싣지 않기로 방침 결정 — 레지스트리를
-      # Notion(비공개, opt-in 공유)으로 이전할 때까지 등재·근거 변경은 메일
-      # 리포트로만 통지하고 커밋하지 않는다. 이전 완료 후 이 워크플로우가
-      # Notion에 직접 쓰도록 교체 예정.
-      - name: Report pending registry changes (public commit 보류)
-        run: |
-          if ! git diff --quiet dart_risk_mcp/data/known_actors.json; then
-            echo "::notice::known_actors 변경분 있음 — public 커밋 보류 중 (Notion 이전 대기)"
-            git --no-pager diff --stat dart_risk_mcp/data/known_actors.json
-          else
-            echo "변경 없음"
           fi

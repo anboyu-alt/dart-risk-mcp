@@ -33,6 +33,27 @@
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-07-03
+
+**known_actors 레지스트리 데이터 비공개 이전.** 레지스트리 원본이 배포물·public 레포에서 제작자의 비공개 Notion DB로 이동한다. 인물 데이터는 opt-in 접근으로만 제공되며, 도구 기능(레지스트리 대조·`lookup_known_actor`)은 그대로 유지된다.
+
+### Added
+
+- `load_known_actors()` Notion 소스 opt-in — `NOTION_TOKEN` + `DB_KNOWN_ACTORS` env 설정 시 비공개 Notion DB에서 레지스트리를 조회(24h 캐시). 미설정 시 동봉 데이터(빈 스켈레톤)로 graceful fallback.
+- 코어 `fetch_registry_from_notion()`·`add_registry_record()` — 레지스트리 Notion I/O.
+- `scripts/setup_known_actors_db.py` + `setup-known-actors-db.yml`(workflow_dispatch) — 레지스트리 DB 1회성 생성·기존 데이터 시딩.
+
+### Changed
+
+- 일일 자동 발굴·갱신 크론이 등재·근거를 public JSON 커밋 대신 비공개 Notion DB에 기록. env 미설정 시 기록을 스킵하고 메일 통지만 수행.
+- 동봉 `known_actors.json`이 빈 스켈레톤으로 교체 — 배포물에 인물 데이터를 싣지 않는다.
+- 레지스트리 로드 우선순위: `DART_KNOWN_ACTORS_PATH` > Notion(캐시) > 동봉.
+
+### Removed
+
+- `load_known_actors()`의 GitHub raw master 원격 fetch — 릴리스 게이트 없이 전체 사용자의 레지스트리 데이터가 바뀌던 경로 제거. 데이터 접근은 Notion opt-in으로 일원화.
+- 동봉 레지스트리의 개인 데이터(maintainer_seed 등) — 공개 배포 부적합 판단.
+
 ## [1.4.0] — 2026-06-21
 
 **조회 기간 다년 확장.** 4개 도구가 `lookback_years`(1~5)를 받아 과거 위기 사이클을 한 번에 추적한다.
