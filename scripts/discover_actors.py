@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from dart_risk_mcp.core.dart_client import fetch_market_disclosures, fetch_company_disclosures
-from dart_risk_mcp.core.cb_extractor import extract_cb_investors
+from dart_risk_mcp.core.cb_extractor import extract_cb_investors, extract_fund_backers
 from dart_risk_mcp.core.investor_extractor import extract_rights_offering_investors
 from dart_risk_mcp.core.signals import (
     match_signals,
@@ -100,6 +100,7 @@ def collect_funding_sightings_range(api_key, bgn_de, end_de,
         api_key, bgn_de, end_de, pblntf_ty="B", max_pages=max_pages) or []
     sightings = []
     n_funding = 0
+    n_backers = 0
     for d in discs:
         rn = d.get("rcept_no", "")
         rnm = d.get("report_nm", "")
@@ -119,16 +120,36 @@ def collect_funding_sightings_range(api_key, bgn_de, end_de,
             invs += extract_rights_offering_investors(rn, api_key, cc) or []
         rdt = d.get("rcept_dt", "") or ""
         date = f"{rdt[:4]}-{rdt[4:6]}" if len(rdt) >= 6 else ""
+        filing_new = []
         for inv in invs:
             nm = (inv.get("name") or "").strip()
             kind = classify_actor(nm)
             if kind not in _TRACKED_KINDS:
                 continue  # 제도권 기관·노이즈 제외
-            sightings.append({
+            filing_new.append({
                 "name": nm, "corp": corp, "corp_code": cc,
                 "date": date, "rcept_no": rn, "kind": kind,
                 "signals": sorted(keys & (FUNDING_KEYS | INSTABILITY_KEYS)),
             })
+        # 조합 인수자의 배후(대표조합원·최대출자자)도 같은 회사 sighting으로
+        # 추적 — 회사마다 새 조합을 만드는 '조합 갈아타기' 회피를 GP 단위에서
+        # 잡는다. 원문 1회 추가 조회(조합 포함 공시에 한함).
+        funds = [s["name"] for s in filing_new if s["kind"] == "fund"]
+        if funds:
+            seen_nm = {s["name"] for s in filing_new}
+            for b in (extract_fund_backers(rn, api_key, funds) or []):
+                bkind = classify_actor(b["name"])
+                if bkind not in _TRACKED_KINDS or b["name"] in seen_nm:
+                    continue
+                seen_nm.add(b["name"])
+                n_backers += 1
+                filing_new.append({
+                    "name": b["name"], "corp": corp, "corp_code": cc,
+                    "date": date, "rcept_no": rn, "kind": bkind,
+                    "via": f"{b['fund']} {b['role']}",
+                    "signals": sorted(keys & (FUNDING_KEYS | INSTABILITY_KEYS)),
+                })
+        sightings.extend(filing_new)
         if pace_sec:
             _time.sleep(pace_sec)
     n_persons = sum(1 for s in sightings if s["kind"] == "person")
@@ -138,6 +159,7 @@ def collect_funding_sightings_range(api_key, bgn_de, end_de,
         "extracted": len(sightings),
         "extracted_persons": n_persons,
         "extracted_entities": len(sightings) - n_persons,
+        "extracted_backers": n_backers,
         "truncated": len(discs) >= max_pages * 100,
     }
     return sightings, stats
@@ -164,7 +186,7 @@ def merge_sightings(data: dict, new: list, window_months: int = WINDOW_MONTHS) -
         if any(e.get("rcept_no") == rec.get("rcept_no") and
                e.get("corp_code") == rec.get("corp_code") for e in lst):
             continue
-        lst.append({k: rec[k] for k in ("corp", "corp_code", "date", "rcept_no", "signals", "kind") if k in rec})
+        lst.append({k: rec[k] for k in ("corp", "corp_code", "date", "rcept_no", "signals", "kind", "via") if k in rec})
         changed = True
     cutoff = (datetime.now() - timedelta(days=window_months * 30)).strftime("%Y-%m")
     for nm in list(s.keys()):
@@ -208,13 +230,17 @@ def promote_repeat_actors(sightings_data: dict, known_data: dict,
         corp_names = sorted({r.get("corp") for r in recs
                              if r.get("corp") and r.get("corp_code") in problem_codes})
         same_name_tag = "동명이인 미확인" if kind == "person" else "동명 법인·조합 미확인"
+        tags = ["자동 발굴", same_name_tag, "반복 등장"]
+        vias = sorted({r["via"] for r in recs if r.get("via")})
+        if vias:
+            tags.append("조합 배후 인물")
         actors.setdefault(nm, []).append({
             "source": "자동 발굴",
             "status": "auto_matched",
             "evidence": f"문제 회사 {len(problem_codes)}곳 인수자 반복 등장: {'·'.join(corp_names[:5])}",
             "url": "https://dart.fss.or.kr",
             "date": "",
-            "tags": ["자동 발굴", same_name_tag, "반복 등장"],
+            "tags": tags,
             "companies": corp_names,
             "kind": KIND_LABELS[kind],
         })
@@ -223,7 +249,7 @@ def promote_repeat_actors(sightings_data: dict, known_data: dict,
 
 
 def build_daily_report(sdata: dict, kdata: dict, s_changed: bool, promoted: list,
-                       stats: dict | None = None) -> str:
+                       stats: dict | None = None, watch: list | None = None) -> str:
     """매일 발송하는 heartbeat 요약(변경 없어도 작동 확인용).
 
     stats가 있으면 수집 규모를 함께 표기한다 — '신규 등재 0명'이 정상
@@ -247,7 +273,8 @@ def build_daily_report(sdata: dict, kdata: dict, s_changed: bool, promoted: list
             f"자금조달 {stats.get('funding', 0)}건 · "
             f"인수자 {stats.get('extracted', 0)}건 추출"
             f" (개인 {stats.get('extracted_persons', 0)} · "
-            f"조합/법인 {stats.get('extracted_entities', 0)})"
+            f"조합/법인 {stats.get('extracted_entities', 0)} · "
+            f"조합 배후 {stats.get('extracted_backers', 0)})"
         )
         if stats.get("truncated"):
             lines.append("· ⚠️ 수집 페이지 상한 도달 — 공시 일부 누락 가능")
@@ -255,6 +282,11 @@ def build_daily_report(sdata: dict, kdata: dict, s_changed: bool, promoted: list
         f"· sightings: {'갱신' if s_changed else '무변경'} "
         f"(추적 인물 {len(sdata.get('sightings', {}))}명)",
         f"· 신규 등재: {len(promoted)}명" + (": " + ", ".join(promoted) if promoted else ""),
+    ]
+    if watch:
+        top = " · ".join(f"{nm}({nc}개사, 문제 {np}곳)" for nm, nc, np in watch[:10])
+        lines.append(f"· 등재 임박 후보(문제 회사 1곳 더 걸리면 등재): {top}")
+    lines += [
         f"· 현재 등재: verified {counts['verified']} · "
         f"maintainer_seed {counts['maintainer_seed']} · auto_matched {counts['auto_matched']}",
         "",
@@ -292,6 +324,22 @@ def main():
 
     promoted = promote_repeat_actors(sdata, kdata, is_problem_fn=_is_problem)
 
+    # 등재 임박 워치 — 2개사+ 등장했지만 문제 회사 수 미달인 후보.
+    # promote가 이미 같은 후보군을 평가해 problem_cache가 차 있어 추가 콜 없음.
+    watch = []
+    for nm, recs in sdata.get("sightings", {}).items():
+        if nm in promoted or classify_actor(nm) not in _TRACKED_KINDS:
+            continue
+        if any(r.get("source") == "자동 발굴" for r in kdata.get("actors", {}).get(nm, [])):
+            continue
+        ccs = {r.get("corp_code") for r in recs if r.get("corp_code")}
+        if len(ccs) < N_THRESHOLD:
+            continue
+        nprob = sum(1 for cc2 in ccs if _is_problem(cc2))
+        if 0 < nprob < N_THRESHOLD:
+            watch.append((nm, len(ccs), nprob))
+    watch.sort(key=lambda w: (-w[2], -w[1]))
+
     if s_changed:
         sightings_path.parent.mkdir(parents=True, exist_ok=True)
         sdata["updated"] = datetime.now().strftime("%Y-%m-%d")
@@ -304,7 +352,8 @@ def main():
             written += 1
 
     # 변경 여부와 무관하게 매일 heartbeat 리포트 발송 (작동 확인용)
-    report = build_daily_report(sdata, kdata, s_changed, promoted, stats=stats)
+    report = build_daily_report(sdata, kdata, s_changed, promoted, stats=stats,
+                                watch=watch)
     if promoted:
         report += (f"\n※ Notion 레지스트리 기록: {written}/{len(promoted)}건"
                    + ("" if written == len(promoted)
