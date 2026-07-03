@@ -3,12 +3,13 @@ from unittest.mock import patch, MagicMock
 
 
 class TestBackfillKnownCompanies(unittest.TestCase):
-    def _page(self, name, existing_companies=None):
+    def _page(self, name, existing_companies=None, kind=""):
         return {
             "id": f"pid-{name}",
             "properties": {
                 "인물명": {"title": [{"plain_text": name}]},
                 "관련기업": {"multi_select": [{"name": c} for c in (existing_companies or [])]},
+                "구분": {"select": {"name": kind} if kind else None},
             },
         }
 
@@ -26,7 +27,8 @@ class TestBackfillKnownCompanies(unittest.TestCase):
         with patch.object(sdb.requests, "post", return_value=query_resp), \
              patch.object(sdb.requests, "patch", return_value=patch_resp) as patch_call:
             updated = sdb.backfill_known_companies("t", "db")
-        self.assertEqual(updated, 2)  # LIU HUAN, 신승수만
+        # LIU HUAN·신승수는 관련기업+구분, 외톨이는 구분(개인) 소급 → 3건 모두 갱신
+        self.assertEqual(updated, 3)
         # LIU HUAN 페이로드에 씨엑스아이·헝셩그룹이 포함되는지 확인
         liu_call = next(c for c in patch_call.call_args_list
                         if "pid-LIU HUAN" in c.args[0])
@@ -34,13 +36,14 @@ class TestBackfillKnownCompanies(unittest.TestCase):
                 liu_call.kwargs["json"]["properties"]["관련기업"]["multi_select"]}
         self.assertEqual(names, {"씨엑스아이", "헝셩그룹"})
 
-    def test_skips_already_tagged_rows(self):
-        # 이미 관련기업이 채워진 행은 덮어쓰지 않는다
+    def test_skips_fully_tagged_rows(self):
+        # 관련기업·구분이 모두 채워진 행은 건드리지 않는다
         import scripts.setup_known_actors_db as sdb
         query_resp = MagicMock()
         query_resp.status_code = 200
         query_resp.json.return_value = {
-            "results": [self._page("LIU HUAN", existing_companies=["기존태그"])],
+            "results": [self._page("LIU HUAN", existing_companies=["기존태그"],
+                                   kind="개인")],
             "has_more": False,
         }
         with patch.object(sdb.requests, "post", return_value=query_resp), \
@@ -48,6 +51,25 @@ class TestBackfillKnownCompanies(unittest.TestCase):
             updated = sdb.backfill_known_companies("t", "db")
         self.assertEqual(updated, 0)
         patch_call.assert_not_called()
+
+    def test_backfills_kind_only_when_companies_already_set(self):
+        # 관련기업은 있는데 구분이 빈 행 → 구분(개인)만 소급, 관련기업 유지
+        import scripts.setup_known_actors_db as sdb
+        query_resp = MagicMock()
+        query_resp.status_code = 200
+        query_resp.json.return_value = {
+            "results": [self._page("LIU HUAN", existing_companies=["기존태그"])],
+            "has_more": False,
+        }
+        patch_resp = MagicMock()
+        patch_resp.status_code = 200
+        with patch.object(sdb.requests, "post", return_value=query_resp), \
+             patch.object(sdb.requests, "patch", return_value=patch_resp) as patch_call:
+            updated = sdb.backfill_known_companies("t", "db")
+        self.assertEqual(updated, 1)
+        props = patch_call.call_args.kwargs["json"]["properties"]
+        self.assertEqual(props["구분"]["select"]["name"], "개인")
+        self.assertNotIn("관련기업", props)
 
     def test_paginates_through_all_results(self):
         import scripts.setup_known_actors_db as sdb
@@ -76,7 +98,7 @@ class TestMainDispatch(unittest.TestCase):
         # DB_KNOWN_ACTORS 설정 시 create 경로를 타지 않고 마이그레이션만 수행
         import scripts.setup_known_actors_db as sdb
         with patch.dict("os.environ", {"NOTION_TOKEN": "t", "DB_KNOWN_ACTORS": "db"}), \
-             patch.object(sdb, "ensure_company_property", return_value=True) as ensure_call, \
+             patch.object(sdb, "ensure_registry_schema", return_value=True) as ensure_call, \
              patch.object(sdb, "backfill_known_companies", return_value=3) as backfill_call, \
              patch.object(sdb, "create_registry_db") as create_call:
             sdb.main()
@@ -98,7 +120,7 @@ class TestMainDispatch(unittest.TestCase):
     def test_main_raises_when_migration_property_fails(self):
         import scripts.setup_known_actors_db as sdb
         with patch.dict("os.environ", {"NOTION_TOKEN": "t", "DB_KNOWN_ACTORS": "db"}), \
-             patch.object(sdb, "ensure_company_property", return_value=False):
+             patch.object(sdb, "ensure_registry_schema", return_value=False):
             with self.assertRaises(SystemExit):
                 sdb.main()
 

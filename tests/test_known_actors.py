@@ -237,28 +237,63 @@ class TestKnownActors(unittest.TestCase):
         self.assertEqual(name, "홍길동")
         self.assertEqual(set(rec["companies"]), {"A전자", "B바이오"})
 
-    def test_ensure_company_property_skips_without_env(self):
+    def test_ensure_registry_schema_skips_without_env(self):
         import os
         from unittest.mock import patch as _p
-        from dart_risk_mcp.core.known_actors import ensure_company_property
+        from dart_risk_mcp.core.known_actors import ensure_registry_schema
         with _p("dart_risk_mcp.core.known_actors.requests.patch") as patch_call:
             for k in ("NOTION_TOKEN", "DB_KNOWN_ACTORS"):
                 os.environ.pop(k, None)
-            ok = ensure_company_property()
+            ok = ensure_registry_schema()
         self.assertFalse(ok)
         patch_call.assert_not_called()
 
-    def test_ensure_company_property_patches_with_env(self):
+    def test_ensure_registry_schema_patches_with_env(self):
         from unittest.mock import patch as _p, MagicMock
-        from dart_risk_mcp.core.known_actors import ensure_company_property
+        from dart_risk_mcp.core.known_actors import ensure_registry_schema
         resp = MagicMock()
         resp.status_code = 200
         with _p("dart_risk_mcp.core.known_actors.requests.patch",
                 return_value=resp) as patch_call:
-            ok = ensure_company_property(token="t", db_id="db")
+            ok = ensure_registry_schema(token="t", db_id="db")
         self.assertTrue(ok)
         payload = patch_call.call_args.kwargs["json"]
         self.assertIn("관련기업", payload["properties"])
+        self.assertIn("구분", payload["properties"])
+
+    def test_classify_actor_tiers(self):
+        from dart_risk_mcp.core.known_actors import classify_actor
+        # 개인
+        self.assertEqual(classify_actor("홍길동"), "person")
+        self.assertEqual(classify_actor("DING SHAO BIN"), "person")
+        # 조합·사모 비히클 (최고 관심 — 기관 패턴보다 우선)
+        self.assertEqual(classify_actor("아레스1호투자조합"), "fund")
+        self.assertEqual(classify_actor("르퓨쳐 코스닥벤처 일반사모투자신탁"), "fund")
+        # 일반·외국 법인
+        self.assertEqual(classify_actor("(주)스마트에쿼티파트너스"), "corp")
+        self.assertEqual(classify_actor("베이스100"), "corp")
+        self.assertEqual(classify_actor("ZHUOHUA INVESTMENT HOLDINGS PTE. LTD"), "corp")
+        # 제도권 기관 (수집 제외)
+        self.assertEqual(classify_actor("한국투자증권"), "institution")
+        self.assertEqual(classify_actor("한국산업은행(첨단전략산업기금의 관리,운용기관)"),
+                         "institution")
+        self.assertEqual(classify_actor("미래에셋자산운용"), "institution")
+        self.assertEqual(classify_actor("Citibank, N.A."), "institution")
+        # 노이즈
+        self.assertEqual(classify_actor(""), "noise")
+
+    def test_add_registry_record_writes_kind(self):
+        from unittest.mock import patch as _p, MagicMock
+        from dart_risk_mcp.core.known_actors import add_registry_record
+        resp = MagicMock()
+        resp.status_code = 200
+        with _p("dart_risk_mcp.core.known_actors.requests.post",
+                return_value=resp) as post:
+            add_registry_record("아레스1호투자조합",
+                                {"source": "자동 발굴", "evidence": "e", "kind": "조합"},
+                                token="t", db_id="db")
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["properties"]["구분"]["select"]["name"], "조합")
 
 
 if __name__ == "__main__":

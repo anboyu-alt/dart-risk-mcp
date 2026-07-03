@@ -24,7 +24,7 @@ from dart_risk_mcp.core.known_actors import (
     _NOTION_BASE,
     _notion_headers,
     add_registry_record,
-    ensure_company_property,
+    ensure_registry_schema,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -49,6 +49,11 @@ DB_SCHEMA = {
     "rcept_no": {"rich_text": {}},
     "tags": {"multi_select": {}},
     "관련기업": {"multi_select": {}},
+    "구분": {"select": {"options": [
+        {"name": "개인", "color": "default"},
+        {"name": "조합", "color": "orange"},
+        {"name": "법인", "color": "purple"},
+    ]}},
 }
 
 # 기존 행 소급 백필용 — 코드가 companies를 기록하기 전에 생성된 알려진
@@ -123,17 +128,20 @@ def backfill_known_companies(token: str, db_id: str) -> int:
             props = page.get("properties", {})
             name = "".join(t.get("plain_text", "")
                            for t in props.get("인물명", {}).get("title", []))
+            patch_props: dict = {}
             companies = _KNOWN_COMPANY_BACKFILL.get(name)
-            if not companies:
-                continue
             existing = props.get("관련기업", {}).get("multi_select", [])
-            if existing:
-                continue  # 이미 태깅됨 — 덮어쓰지 않음
+            if companies and not existing:  # 이미 태깅된 행은 덮어쓰지 않음
+                patch_props["관련기업"] = {
+                    "multi_select": [{"name": c} for c in companies]}
+            # 구분 도입(entity 추적) 전에 생성된 행은 전부 개인 — 미설정 시 소급
+            if not (props.get("구분", {}).get("select") or {}).get("name"):
+                patch_props["구분"] = {"select": {"name": "개인"}}
+            if not patch_props:
+                continue
             patch = requests.patch(
                 f"{_NOTION_BASE}/pages/{page['id']}", headers=_notion_headers(token),
-                json={"properties": {"관련기업": {
-                    "multi_select": [{"name": c} for c in companies]}}},
-                timeout=15)
+                json={"properties": patch_props}, timeout=15)
             if patch.status_code == 200:
                 updated += 1
         if not data.get("has_more"):
@@ -150,11 +158,11 @@ def main():
         # 재실행 = 스키마 마이그레이션 (기존 DB 유지, 속성 추가 + 소급 백필)
         if not token:
             raise SystemExit("Missing env var: NOTION_TOKEN")
-        ok = ensure_company_property(token, db_id)
+        ok = ensure_registry_schema(token, db_id)
         if not ok:
-            raise SystemExit("관련기업 속성 추가 실패 — DB_KNOWN_ACTORS/권한 확인 필요")
+            raise SystemExit("스키마 속성 추가 실패 — DB_KNOWN_ACTORS/권한 확인 필요")
         updated = backfill_known_companies(token, db_id)
-        print(f"[OK] 스키마 마이그레이션 완료 · 관련기업 속성 확인 · 기존 행 {updated}건 소급 백필")
+        print(f"[OK] 스키마 마이그레이션 완료 · 속성(관련기업·구분) 확인 · 기존 행 {updated}건 소급 보정")
         return
 
     parent = os.environ.get("NOTION_PARENT_PAGE_ID", "")

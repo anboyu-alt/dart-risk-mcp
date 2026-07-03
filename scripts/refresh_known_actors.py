@@ -24,6 +24,8 @@ from dart_risk_mcp.core.known_actors import (
     load_known_actors,
     fetch_registry_from_notion,
     add_registry_record,
+    classify_actor,
+    KIND_LABELS,
 )
 from dart_risk_mcp.core.signals import match_signals, strip_amendment_prefix
 
@@ -74,6 +76,9 @@ def collect_auto_matches(api_key, known_names, window_days=WINDOW_DAYS, max_page
             nm = (inv.get("name") or "").strip()
             canon = norm_to_canon.get(normalize_name(nm)) if nm else None
             if canon:
+                kind = classify_actor(canon)
+                same_name_tag = ("동명이인 미확인" if kind == "person"
+                                 else "동명 법인·조합 미확인")
                 matches.setdefault(canon, []).append({
                     "source": f"DART {label}(자동매칭)",
                     "status": "auto_matched",
@@ -81,8 +86,9 @@ def collect_auto_matches(api_key, known_names, window_days=WINDOW_DAYS, max_page
                     "url": "https://dart.fss.or.kr",
                     "date": date,
                     "rcept_no": rn,
-                    "tags": ["자동 매칭", "동명이인 미확인"],
+                    "tags": ["자동 매칭", same_name_tag],
                     "companies": [corp] if corp else [],
+                    "kind": KIND_LABELS.get(kind, "개인"),
                 })
     return matches
 
