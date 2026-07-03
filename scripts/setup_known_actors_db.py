@@ -1,12 +1,16 @@
-"""known_actors 레지스트리 Notion DB 1회성 셋업.
+"""known_actors 레지스트리 Notion DB 셋업·스키마 마이그레이션 진입점.
 
-NOTION_PARENT_PAGE_ID 아래에 레지스트리 DB를 생성하고, 동봉
-known_actors.json의 기존 데이터(있으면)를 시딩한 뒤 DB id를 출력한다.
-출력된 id를 GitHub Secrets에 DB_KNOWN_ACTORS로 등록하면 일일 크론이
-이 DB를 레지스트리 원본으로 사용한다.
+DB_KNOWN_ACTORS 미설정 시(최초 실행): NOTION_PARENT_PAGE_ID 아래에
+레지스트리 DB를 생성하고 동봉 known_actors.json 또는 히스토리 커밋의
+기존 데이터를 시딩한 뒤 DB id를 출력한다. 출력된 id를 GitHub Secrets에
+DB_KNOWN_ACTORS로 등록하면 일일 크론이 이 DB를 레지스트리 원본으로 사용.
+
+DB_KNOWN_ACTORS 설정 시(재실행 = 스키마 마이그레이션): 기존 DB를
+건드리지 않고 신규 속성만 추가(관련기업 등)한 뒤, 알려진 기존 행에
+한해 회사 태그를 소급 백필한다. 재실행은 항상 안전(추가만, 삭제 없음).
 
 사용: python scripts/setup_known_actors_db.py
-환경: NOTION_TOKEN, NOTION_PARENT_PAGE_ID
+환경: NOTION_TOKEN, NOTION_PARENT_PAGE_ID(최초) 또는 DB_KNOWN_ACTORS(재실행)
 """
 import json
 import os
@@ -20,6 +24,7 @@ from dart_risk_mcp.core.known_actors import (
     _NOTION_BASE,
     _notion_headers,
     add_registry_record,
+    ensure_company_property,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -43,6 +48,14 @@ DB_SCHEMA = {
     "date": {"rich_text": {}},
     "rcept_no": {"rich_text": {}},
     "tags": {"multi_select": {}},
+    "관련기업": {"multi_select": {}},
+}
+
+# 기존 행 소급 백필용 — 코드가 companies를 기록하기 전에 생성된 알려진
+# 행만 대상. 이후 신규 행은 파이프라인이 자동으로 관련기업을 채운다.
+_KNOWN_COMPANY_BACKFILL = {
+    "신승수": ["CG인바이츠", "제이케이시냅스", "헬스커넥트"],
+    "LIU HUAN": ["씨엑스아이", "헝셩그룹"],
 }
 
 
@@ -94,8 +107,56 @@ def seed_from_json(token: str, db_id: str) -> int:
     return n
 
 
+def backfill_known_companies(token: str, db_id: str) -> int:
+    """_KNOWN_COMPANY_BACKFILL에 있는 인물명의 기존 행 중 관련기업이 비어있는
+    행에 한해 태깅. 페이지네이션 전체 순회. 갱신된 행 수 반환."""
+    updated = 0
+    payload: dict = {"page_size": 100}
+    while True:
+        resp = requests.post(
+            f"{_NOTION_BASE}/databases/{db_id}/query",
+            headers=_notion_headers(token), json=payload, timeout=15)
+        if resp.status_code != 200:
+            break
+        data = resp.json()
+        for page in data.get("results", []):
+            props = page.get("properties", {})
+            name = "".join(t.get("plain_text", "")
+                           for t in props.get("인물명", {}).get("title", []))
+            companies = _KNOWN_COMPANY_BACKFILL.get(name)
+            if not companies:
+                continue
+            existing = props.get("관련기업", {}).get("multi_select", [])
+            if existing:
+                continue  # 이미 태깅됨 — 덮어쓰지 않음
+            patch = requests.patch(
+                f"{_NOTION_BASE}/pages/{page['id']}", headers=_notion_headers(token),
+                json={"properties": {"관련기업": {
+                    "multi_select": [{"name": c} for c in companies]}}},
+                timeout=15)
+            if patch.status_code == 200:
+                updated += 1
+        if not data.get("has_more"):
+            break
+        payload["start_cursor"] = data.get("next_cursor")
+    return updated
+
+
 def main():
     token = os.environ.get("NOTION_TOKEN", "")
+    db_id = os.environ.get("DB_KNOWN_ACTORS", "")
+
+    if db_id:
+        # 재실행 = 스키마 마이그레이션 (기존 DB 유지, 속성 추가 + 소급 백필)
+        if not token:
+            raise SystemExit("Missing env var: NOTION_TOKEN")
+        ok = ensure_company_property(token, db_id)
+        if not ok:
+            raise SystemExit("관련기업 속성 추가 실패 — DB_KNOWN_ACTORS/권한 확인 필요")
+        updated = backfill_known_companies(token, db_id)
+        print(f"[OK] 스키마 마이그레이션 완료 · 관련기업 속성 확인 · 기존 행 {updated}건 소급 백필")
+        return
+
     parent = os.environ.get("NOTION_PARENT_PAGE_ID", "")
     if not (token and parent):
         raise SystemExit("Missing env vars: NOTION_TOKEN, NOTION_PARENT_PAGE_ID")

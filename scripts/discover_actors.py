@@ -224,6 +224,7 @@ def promote_repeat_actors(sightings_data: dict, known_data: dict,
             "url": "https://dart.fss.or.kr",
             "date": "",
             "tags": ["자동 발굴", "동명이인 미확인", "반복 등장"],
+            "companies": corp_names,
         })
         promoted.append(nm)
     return promoted

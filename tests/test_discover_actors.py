@@ -168,6 +168,7 @@ class TestMergeAndPromote(unittest.TestCase):
         self.assertEqual(promoted, ["홍길동"])
         self.assertIn("홍길동", kd["actors"])
         self.assertEqual(kd["actors"]["홍길동"][0]["status"], "auto_matched")
+        self.assertEqual(kd["actors"]["홍길동"][0]["companies"], ["A", "B"])
 
     def test_promote_applies_problem_gate_at_promotion_time(self):
         # 회사 상태 판정은 등재 시점에 수행 — 문제 회사 2곳 미만이면 등재 안 함
@@ -203,6 +204,8 @@ class TestMergeAndPromote(unittest.TestCase):
         self.assertIn("A", ev)
         self.assertIn("C", ev)
         self.assertNotIn("B", ev)
+        # companies 태그도 문제 회사만 포함 (B 제외)
+        self.assertEqual(kd["actors"]["홍길동"][0]["companies"], ["A", "C"])
 
     def test_promote_skips_non_person_legacy_keys(self):
         # 과거 수집분에 남은 법인·기관 키는 등재하지 않는다

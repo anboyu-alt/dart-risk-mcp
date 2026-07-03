@@ -82,6 +82,7 @@ def collect_auto_matches(api_key, known_names, window_days=WINDOW_DAYS, max_page
                     "date": date,
                     "rcept_no": rn,
                     "tags": ["자동 매칭", "동명이인 미확인"],
+                    "companies": [corp] if corp else [],
                 })
     return matches
 
