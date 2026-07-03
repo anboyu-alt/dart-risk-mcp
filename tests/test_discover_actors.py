@@ -72,9 +72,10 @@ class TestCollectSightings(unittest.TestCase):
             patch.object(da, "extract_rights_offering_investors", return_value=rights_invs),
         ]
 
-    def test_collects_persons_from_all_funding_filings(self):
+    def test_collects_persons_funds_corps_but_not_institutions(self):
         # 문제 회사 필터는 수집 시점에 적용하지 않는다 — 아직 깨끗한 회사의
         # 인수자도 기록해야 이후 회사가 무너질 때 추적 가능(등재 시점 재평가).
+        # 개인·조합·법인은 수집하고, 제도권 기관(반복 등장이 정상)만 제외한다.
         import scripts.discover_actors as da
         from contextlib import ExitStack
         discs = [{"rcept_no": "R1", "report_nm": "전환사채권발행결정",
@@ -82,19 +83,24 @@ class TestCollectSightings(unittest.TestCase):
                  {"rcept_no": "R2", "report_nm": "전환사채권발행결정",
                   "corp_name": "아직깨끗전자", "corp_code": "c2", "rcept_dt": "20260612"}]
         signal_map = {"전환사채권발행결정": [{"key": "CB_BW"}]}
+        invs = [{"name": "홍길동"}, {"name": "아레스1호투자조합"},
+                {"name": "(주)스마트에쿼티파트너스"}, {"name": "한국투자증권"}]
         with ExitStack() as st:
-            for p in self._patches(da, discs, signal_map,
-                                   [{"name": "홍길동"}, {"name": "아레스1호투자조합"}], []):
+            for p in self._patches(da, discs, signal_map, invs, []):
                 st.enter_context(p)
             sightings, stats = da.collect_funding_sightings("key")
-        names = [s["name"] for s in sightings]
-        self.assertIn("홍길동", names)              # 개인 수집
-        self.assertNotIn("아레스1호투자조합", names)  # 조합 제외
+        by_name = {s["name"]: s["kind"] for s in sightings}
+        self.assertEqual(by_name.get("홍길동"), "person")
+        self.assertEqual(by_name.get("아레스1호투자조합"), "fund")
+        self.assertEqual(by_name.get("(주)스마트에쿼티파트너스"), "corp")
+        self.assertNotIn("한국투자증권", by_name)   # 제도권 기관 제외
         corp_codes = {s["corp_code"] for s in sightings}
         self.assertEqual(corp_codes, {"c1", "c2"})  # 두 회사 모두 수집
         self.assertEqual(stats["scanned"], 2)
         self.assertEqual(stats["funding"], 2)
-        self.assertEqual(stats["extracted"], 2)
+        self.assertEqual(stats["extracted"], 6)     # (개인+조합+법인) × 공시 2건
+        self.assertEqual(stats["extracted_persons"], 2)
+        self.assertEqual(stats["extracted_entities"], 4)
         self.assertFalse(stats["truncated"])
 
     def test_collects_from_amendment_filings(self):
@@ -207,15 +213,40 @@ class TestMergeAndPromote(unittest.TestCase):
         # companies 태그도 문제 회사만 포함 (B 제외)
         self.assertEqual(kd["actors"]["홍길동"][0]["companies"], ["A", "C"])
 
-    def test_promote_skips_non_person_legacy_keys(self):
-        # 과거 수집분에 남은 법인·기관 키는 등재하지 않는다
+    def test_promote_skips_institution_keys(self):
+        # 제도권 기관은 반복 등장이 정상 — 등재하지 않는다
         import scripts.discover_actors as da
-        sd = {"sightings": {"베이스100": [
+        sd = {"sightings": {"한국투자증권": [
             {"corp_code": "c1", "corp": "A", "rcept_no": "R1", "date": "2026-06"},
             {"corp_code": "c2", "corp": "B", "rcept_no": "R2", "date": "2026-06"}]}}
         kd = {"actors": {}}
         self.assertEqual(da.promote_repeat_actors(sd, kd, n=2), [])
         self.assertEqual(kd["actors"], {})
+
+    def test_promote_registers_fund_with_kind_and_tag(self):
+        # 조합도 문제 회사 2곳+ 반복이면 등재 — 구분·태그가 법인용으로 표기
+        import scripts.discover_actors as da
+        sd = {"sightings": {"아레스1호투자조합": [
+            {"corp_code": "c1", "corp": "A", "rcept_no": "R1", "date": "2026-06"},
+            {"corp_code": "c2", "corp": "B", "rcept_no": "R2", "date": "2026-06"}]}}
+        kd = {"actors": {}}
+        promoted = da.promote_repeat_actors(sd, kd, n=2)
+        self.assertEqual(promoted, ["아레스1호투자조합"])
+        rec = kd["actors"]["아레스1호투자조합"][0]
+        self.assertEqual(rec["kind"], "조합")
+        self.assertIn("동명 법인·조합 미확인", rec["tags"])
+        self.assertNotIn("동명이인 미확인", rec["tags"])
+
+    def test_promote_registers_person_with_kind(self):
+        import scripts.discover_actors as da
+        sd = {"sightings": {"홍길동": [
+            {"corp_code": "c1", "corp": "A", "rcept_no": "R1", "date": "2026-06"},
+            {"corp_code": "c2", "corp": "B", "rcept_no": "R2", "date": "2026-06"}]}}
+        kd = {"actors": {}}
+        da.promote_repeat_actors(sd, kd, n=2)
+        rec = kd["actors"]["홍길동"][0]
+        self.assertEqual(rec["kind"], "개인")
+        self.assertIn("동명이인 미확인", rec["tags"])
 
     def test_promote_skips_single_company(self):
         import scripts.discover_actors as da
@@ -258,12 +289,14 @@ class TestDailyReport(unittest.TestCase):
     def test_build_daily_report_includes_collection_stats(self):
         # 수집 통계가 리포트에 실려야 '0명'이 정상인지 수집 고장인지 판별 가능
         import scripts.discover_actors as da
-        stats = {"scanned": 312, "funding": 41, "extracted": 7, "truncated": False}
+        stats = {"scanned": 312, "funding": 41, "extracted": 7,
+                 "extracted_persons": 5, "extracted_entities": 2, "truncated": False}
         r = da.build_daily_report({"sightings": {"X": []}}, {"actors": {}}, True, [],
                                   stats=stats)
         self.assertIn("공시 312건 스캔", r)
         self.assertIn("자금조달 41건", r)
-        self.assertIn("개인 인수자 7명 추출", r)
+        self.assertIn("인수자 7건 추출", r)
+        self.assertIn("개인 5 · 조합/법인 2", r)
         self.assertIn("추적 인물 1명", r)
         self.assertNotIn("페이지 상한", r)
 

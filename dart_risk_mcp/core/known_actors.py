@@ -33,6 +33,61 @@ def normalize_name(name: str) -> str:
     return _WS_RE.sub(" ", (name or "").strip()).upper()
 
 
+# ── 행위자 분류 ──────────────────────────────────────────────────
+# 작전 추적 관점의 관심도별 분류. 조합(투자조합·사모펀드류)은 CB 작전의
+# 대표 비히클이라 개인과 동급으로 추적하고, 일반 법인도 추적한다.
+# 제도권 기관(증권사·은행·연기금 등)은 정상적으로 수십 개사 딜에 등장해
+# '반복 등장' 신호가 무의미하므로 수집에서 제외한다.
+
+# 조합·사모 비히클 (기관 패턴보다 먼저 판정 — '일반사모투자신탁'류 포섭)
+_FUND_PAT = re.compile(r"조합|합자회사|사모투자|사모펀드|사모 펀드")
+
+# 제도권 기관 — 반복 등장이 정상인 주체
+_INSTITUTION_PAT = re.compile(
+    r"은행|증권|보험|공제회|연기금|연금공단|공단|공사|금고|저축은행|종합금융|종금|"
+    r"캐피탈|카드|자산운용|투자신탁|한국거래소|예탁결제원|"
+    r"bank\b|securities|insurance",
+    re.IGNORECASE,
+)
+
+# 법인·기관성 패턴 (개인이 아님을 판정)
+_ORG_PAT = re.compile(
+    r"조합|투자|신탁|펀드|주식회사|\(주\)|㈜|유한|법인|파트너스|캐피탈|자산운용|"
+    r"벤처|컴퍼니|코프|홀딩스|그룹|은행|공사|기금|시스템|"
+    r"\b(?:co|ltd|llc|inc|corp)\b\.?|"
+    r"limited|holdings|investment|bank|fund|trust|partners|capital|company",
+    re.IGNORECASE,
+)
+
+# 개인명치고 지나치게 많은 공백 분리 토큰 — 프로그램/기관명 설명구 필터
+_MAX_PERSON_TOKENS = 4
+
+
+def classify_actor(name: str) -> str:
+    """인수자명 분류: "person" | "fund" | "corp" | "institution" | "noise".
+
+    - person: 개인명 (추적 대상)
+    - fund: 조합·사모 비히클 (추적 대상 — CB 작전 대표 창구)
+    - corp: 일반·외국 법인 (추적 대상)
+    - institution: 제도권 기관 (수집 제외 — 반복 등장이 정상)
+    - noise: 빈 문자열 등
+    """
+    if not name or not name.strip():
+        return "noise"
+    if _FUND_PAT.search(name):
+        return "fund"
+    if _INSTITUTION_PAT.search(name):
+        return "institution"
+    if re.search(r"\d", name) or _ORG_PAT.search(name) \
+            or len(re.split(r"\s+", name.strip())) > _MAX_PERSON_TOKENS:
+        return "corp"
+    return "person"
+
+
+# classify_actor kind → 레지스트리 구분(select) 표기
+KIND_LABELS = {"person": "개인", "fund": "조합", "corp": "법인"}
+
+
 def _valid(data) -> bool:
     return isinstance(data, dict) and isinstance(data.get("actors"), dict)
 
@@ -80,6 +135,7 @@ def _page_to_record(page: dict) -> tuple[str, dict]:
         "date": _plain(p.get("date", {}).get("rich_text")),
         "tags": [t.get("name", "") for t in p.get("tags", {}).get("multi_select", [])],
         "companies": [t.get("name", "") for t in p.get("관련기업", {}).get("multi_select", [])],
+        "kind": (p.get("구분", {}).get("select") or {}).get("name", ""),
     }
     rcept = _plain(p.get("rcept_no", {}).get("rich_text"))
     if rcept:
@@ -141,6 +197,8 @@ def add_registry_record(name: str, record: dict, token: str = "", db_id: str = "
     companies = [c[:100] for c in (record.get("companies") or []) if c][:20]
     if companies:
         props["관련기업"] = {"multi_select": [{"name": c} for c in companies]}
+    if record.get("kind"):
+        props["구분"] = {"select": {"name": record["kind"]}}
     if record.get("url"):
         props["url"] = {"url": record["url"]}
     if record.get("rcept_no"):
@@ -154,10 +212,11 @@ def add_registry_record(name: str, record: dict, token: str = "", db_id: str = "
         return False
 
 
-def ensure_company_property(token: str = "", db_id: str = "") -> bool:
-    """레지스트리 DB에 관련기업(multi_select) 속성이 없으면 추가. 있으면 no-op.
+def ensure_registry_schema(token: str = "", db_id: str = "") -> bool:
+    """레지스트리 DB에 신규 속성(관련기업·구분)이 없으면 추가. 있으면 no-op.
 
     PATCH는 속성을 병합(추가)하는 방식이라 기존 속성·데이터를 건드리지 않는다.
+    스키마가 진화할 때마다 이 함수에 속성을 추가하고 셋업 워크플로우를 재실행.
     """
     if not (token and db_id):
         token, db_id = _notion_env()
@@ -166,7 +225,14 @@ def ensure_company_property(token: str = "", db_id: str = "") -> bool:
     try:
         resp = requests.patch(
             f"{_NOTION_BASE}/databases/{db_id}", headers=_notion_headers(token),
-            json={"properties": {"관련기업": {"multi_select": {}}}}, timeout=15)
+            json={"properties": {
+                "관련기업": {"multi_select": {}},
+                "구분": {"select": {"options": [
+                    {"name": "개인", "color": "default"},
+                    {"name": "조합", "color": "orange"},
+                    {"name": "법인", "color": "purple"},
+                ]}},
+            }}, timeout=15)
         return resp.status_code == 200
     except Exception:
         return False
