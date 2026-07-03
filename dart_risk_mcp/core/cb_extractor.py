@@ -287,4 +287,50 @@ def extract_cb_investors(rcept_no: str, api_key: str, corp_code: str = "") -> li
     return _legacy_html_extract(rcept_no, api_key)
 
 
-__all__ = ["extract_cb_investors"]
+_BACKER_PATS = [
+    ("대표조합원", re.compile(
+        r"(?:업무\s*집행\s*조합원|대표\s*조합원|업무집행사원)\s*[::]?\s*([^\n\r\t,;:()【]{2,40})")),
+    ("최대출자자", re.compile(
+        r"최대\s*(?:출자자|지분\s*보유\s*조합원)\s*[::]?\s*([^\n\r\t,;:()【]{2,40})")),
+]
+
+
+def extract_fund_backers(rcept_no: str, api_key: str, fund_names: list) -> list[dict]:
+    """조합 인수자의 배후(대표조합원·최대출자자)를 공시 원문에서 추출.
+
+    2021년 말 공시 서식 개정으로 대상자가 조합인 경우 기본정보(업무집행조합원·
+    최대출자자 등) 기재가 의무화됐다. 구조화 API에는 없어 원문 텍스트에서
+    조합명 주변(뒤 1,500자)을 스캔한다. 개정 전 공시·부실 기재는 빈 결과.
+
+    Returns: [{"fund": 조합명, "role": "대표조합원"|"최대출자자", "name": ...}]
+    """
+    if not fund_names:
+        return []
+    raw = _fetch_text(rcept_no, api_key)
+    if not raw:
+        return []
+    text = re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", raw))
+    out: list[dict] = []
+    seen: set = set()
+    for fund in fund_names:
+        for m in re.finditer(re.escape(fund), text):
+            window = text[m.end():m.end() + 1500]
+            for role, pat in _BACKER_PATS:
+                bm = pat.search(window)
+                if not bm:
+                    continue
+                # 태그 제거로 공백이 붕괴돼 다음 셀 라벨까지 붙어올 수 있음 —
+                # 후속 라벨 키워드에서 자르고 최대 3토큰으로 제한
+                nm = re.split(
+                    r"최대\s*출자자|업무\s*집행|대표\s*조합원|지분|출자|설립|조합원\s*수|비고|주\)",
+                    bm.group(1).strip())[0]
+                nm = " ".join(nm.split()[:3]).strip(" .·-")
+                key = (fund, role, nm)
+                if not (2 <= len(nm) <= 40) or nm in _NOISE_NAMES or key in seen:
+                    continue
+                seen.add(key)
+                out.append({"fund": fund, "role": role, "name": nm})
+    return out
+
+
+__all__ = ["extract_cb_investors", "extract_fund_backers"]

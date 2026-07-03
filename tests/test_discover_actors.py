@@ -132,6 +132,71 @@ class TestCollectSightings(unittest.TestCase):
         self.assertTrue(stats["truncated"])
 
 
+class TestFundBackers(unittest.TestCase):
+    def test_extract_fund_backers_from_document(self):
+        from unittest.mock import patch
+        from dart_risk_mcp.core import cb_extractor as ce
+        doc = ("<TABLE>발행 대상자: 아레스1호투자조합 (조합 기본정보) "
+               "업무집행조합원: 김지피 최대출자자: 박엘피 지분율 45%</TABLE>")
+        with patch.object(ce, "_fetch_text", return_value=doc):
+            out = ce.extract_fund_backers("R1", "key", ["아레스1호투자조합"])
+        got = {(b["role"], b["name"]) for b in out}
+        self.assertIn(("대표조합원", "김지피"), got)
+        self.assertIn(("최대출자자", "박엘피"), got)
+        self.assertTrue(all(b["fund"] == "아레스1호투자조합" for b in out))
+
+    def test_extract_fund_backers_empty_when_absent(self):
+        # 서식 개정 전 공시 등 기재 없음 → 빈 결과 (graceful)
+        from unittest.mock import patch
+        from dart_risk_mcp.core import cb_extractor as ce
+        with patch.object(ce, "_fetch_text", return_value="조합 언급만 아레스1호투자조합"):
+            self.assertEqual(ce.extract_fund_backers("R1", "key", ["아레스1호투자조합"]), [])
+
+    def test_collect_adds_backer_sightings_with_via(self):
+        import scripts.discover_actors as da
+        from contextlib import ExitStack
+        from unittest.mock import patch
+        discs = [{"rcept_no": "R1", "report_nm": "전환사채권발행결정",
+                  "corp_name": "문제전자", "corp_code": "c1", "rcept_dt": "20260612"}]
+        signal_map = {"전환사채권발행결정": [{"key": "CB_BW"}]}
+        backers = [{"fund": "아레스1호투자조합", "role": "대표조합원", "name": "김지피"}]
+        with ExitStack() as st:
+            for p in self._patches if False else []:
+                pass
+            with patch.object(da, "fetch_market_disclosures", return_value=discs), \
+                 patch.object(da, "match_signals",
+                              side_effect=lambda n: signal_map.get(n, [])), \
+                 patch.object(da, "extract_cb_investors",
+                              return_value=[{"name": "아레스1호투자조합"}]), \
+                 patch.object(da, "extract_rights_offering_investors", return_value=[]), \
+                 patch.object(da, "extract_fund_backers", return_value=backers) as bc:
+                sightings, stats = da.collect_funding_sightings("key")
+        bc.assert_called_once_with("R1", "key", ["아레스1호투자조합"])
+        by_name = {s["name"]: s for s in sightings}
+        self.assertIn("김지피", by_name)
+        self.assertEqual(by_name["김지피"]["via"], "아레스1호투자조합 대표조합원")
+        self.assertEqual(by_name["김지피"]["kind"], "person")
+        self.assertEqual(stats["extracted_backers"], 1)
+
+    def test_promote_tags_fund_backer(self):
+        import scripts.discover_actors as da
+        sd = {"sightings": {"김지피": [
+            {"corp_code": "c1", "corp": "A", "rcept_no": "R1", "date": "2026-06",
+             "via": "아레스1호투자조합 대표조합원"},
+            {"corp_code": "c2", "corp": "B", "rcept_no": "R2", "date": "2026-06",
+             "via": "제네시스2호조합 대표조합원"}]}}
+        kd = {"actors": {}}
+        self.assertEqual(da.promote_repeat_actors(sd, kd, n=2), ["김지피"])
+        self.assertIn("조합 배후 인물", kd["actors"]["김지피"][0]["tags"])
+
+    def test_report_shows_watch_candidates(self):
+        import scripts.discover_actors as da
+        r = da.build_daily_report({"sightings": {}}, {"actors": {}}, True, [],
+                                  watch=[("홍길동", 3, 1)])
+        self.assertIn("등재 임박 후보", r)
+        self.assertIn("홍길동(3개사, 문제 1곳)", r)
+
+
 class TestMergeAndPromote(unittest.TestCase):
     def test_merge_dedup_and_window(self):
         import scripts.discover_actors as da
