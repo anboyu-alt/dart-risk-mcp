@@ -79,6 +79,7 @@ def _page_to_record(page: dict) -> tuple[str, dict]:
         "url": p.get("url", {}).get("url") or "",
         "date": _plain(p.get("date", {}).get("rich_text")),
         "tags": [t.get("name", "") for t in p.get("tags", {}).get("multi_select", [])],
+        "companies": [t.get("name", "") for t in p.get("관련기업", {}).get("multi_select", [])],
     }
     rcept = _plain(p.get("rcept_no", {}).get("rich_text"))
     if rcept:
@@ -119,7 +120,12 @@ def fetch_registry_from_notion(token: str = "", db_id: str = "") -> dict | None:
 
 
 def add_registry_record(name: str, record: dict, token: str = "", db_id: str = "") -> bool:
-    """레지스트리 DB에 기록 행 추가. env 미설정/실패 시 False (graceful skip)."""
+    """레지스트리 DB에 기록 행 추가. env 미설정/실패 시 False (graceful skip).
+
+    record에 "companies"(list[str])가 있으면 관련기업 multi_select로 태깅해
+    Notion에서 회사별로 필터링·추적 가능하게 한다. 이름 100자·목록 20개 상한
+    (Notion multi_select 옵션 제약).
+    """
     if not (token and db_id):
         token, db_id = _notion_env()
     if not (token and db_id):
@@ -132,6 +138,9 @@ def add_registry_record(name: str, record: dict, token: str = "", db_id: str = "
         "date": {"rich_text": [{"text": {"content": record.get("date", "")}}]},
         "tags": {"multi_select": [{"name": t} for t in record.get("tags", []) if t]},
     }
+    companies = [c[:100] for c in (record.get("companies") or []) if c][:20]
+    if companies:
+        props["관련기업"] = {"multi_select": [{"name": c} for c in companies]}
     if record.get("url"):
         props["url"] = {"url": record["url"]}
     if record.get("rcept_no"):
@@ -140,6 +149,24 @@ def add_registry_record(name: str, record: dict, token: str = "", db_id: str = "
         resp = requests.post(
             f"{_NOTION_BASE}/pages", headers=_notion_headers(token),
             json={"parent": {"database_id": db_id}, "properties": props}, timeout=15)
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+
+def ensure_company_property(token: str = "", db_id: str = "") -> bool:
+    """레지스트리 DB에 관련기업(multi_select) 속성이 없으면 추가. 있으면 no-op.
+
+    PATCH는 속성을 병합(추가)하는 방식이라 기존 속성·데이터를 건드리지 않는다.
+    """
+    if not (token and db_id):
+        token, db_id = _notion_env()
+    if not (token and db_id):
+        return False
+    try:
+        resp = requests.patch(
+            f"{_NOTION_BASE}/databases/{db_id}", headers=_notion_headers(token),
+            json={"properties": {"관련기업": {"multi_select": {}}}}, timeout=15)
         return resp.status_code == 200
     except Exception:
         return False

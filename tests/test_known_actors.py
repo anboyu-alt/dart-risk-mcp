@@ -192,6 +192,74 @@ class TestKnownActors(unittest.TestCase):
         self.assertEqual(
             payload["properties"]["rcept_no"]["rich_text"][0]["text"]["content"], "R1")
 
+    def test_add_registry_record_tags_companies(self):
+        from unittest.mock import patch as _p, MagicMock
+        from dart_risk_mcp.core.known_actors import add_registry_record
+        resp = MagicMock()
+        resp.status_code = 200
+        with _p("dart_risk_mcp.core.known_actors.requests.post",
+                return_value=resp) as post:
+            ok = add_registry_record(
+                "홍길동",
+                {"source": "자동 발굴", "evidence": "e",
+                 "companies": ["A전자", "B바이오"]},
+                token="t", db_id="db")
+        self.assertTrue(ok)
+        payload = post.call_args.kwargs["json"]
+        names = {o["name"] for o in payload["properties"]["관련기업"]["multi_select"]}
+        self.assertEqual(names, {"A전자", "B바이오"})
+
+    def test_add_registry_record_omits_company_prop_when_empty(self):
+        from unittest.mock import patch as _p, MagicMock
+        from dart_risk_mcp.core.known_actors import add_registry_record
+        resp = MagicMock()
+        resp.status_code = 200
+        with _p("dart_risk_mcp.core.known_actors.requests.post",
+                return_value=resp) as post:
+            add_registry_record("홍길동", {"source": "s", "evidence": "e"},
+                                token="t", db_id="db")
+        payload = post.call_args.kwargs["json"]
+        self.assertNotIn("관련기업", payload["properties"])
+
+    def test_page_to_record_roundtrips_companies(self):
+        from dart_risk_mcp.core.known_actors import _page_to_record
+        page = {"properties": {
+            "인물명": {"title": [{"plain_text": "홍길동"}]},
+            "source": {"rich_text": [{"plain_text": "s"}]},
+            "status": {"select": {"name": "auto_matched"}},
+            "evidence": {"rich_text": [{"plain_text": "e"}]},
+            "url": {"url": ""},
+            "date": {"rich_text": []},
+            "tags": {"multi_select": []},
+            "관련기업": {"multi_select": [{"name": "A전자"}, {"name": "B바이오"}]},
+        }}
+        name, rec = _page_to_record(page)
+        self.assertEqual(name, "홍길동")
+        self.assertEqual(set(rec["companies"]), {"A전자", "B바이오"})
+
+    def test_ensure_company_property_skips_without_env(self):
+        import os
+        from unittest.mock import patch as _p
+        from dart_risk_mcp.core.known_actors import ensure_company_property
+        with _p("dart_risk_mcp.core.known_actors.requests.patch") as patch_call:
+            for k in ("NOTION_TOKEN", "DB_KNOWN_ACTORS"):
+                os.environ.pop(k, None)
+            ok = ensure_company_property()
+        self.assertFalse(ok)
+        patch_call.assert_not_called()
+
+    def test_ensure_company_property_patches_with_env(self):
+        from unittest.mock import patch as _p, MagicMock
+        from dart_risk_mcp.core.known_actors import ensure_company_property
+        resp = MagicMock()
+        resp.status_code = 200
+        with _p("dart_risk_mcp.core.known_actors.requests.patch",
+                return_value=resp) as patch_call:
+            ok = ensure_company_property(token="t", db_id="db")
+        self.assertTrue(ok)
+        payload = patch_call.call_args.kwargs["json"]
+        self.assertIn("관련기업", payload["properties"])
+
 
 if __name__ == "__main__":
     unittest.main()

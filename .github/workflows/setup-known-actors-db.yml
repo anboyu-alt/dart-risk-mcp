@@ -1,8 +1,15 @@
 name: Setup known_actors Notion DB
 
-# 1회성 셋업 — 레지스트리 Notion DB를 생성하고 기존 데이터를 시딩한다.
-# 실행 전: NOTION_TOKEN, NOTION_PARENT_PAGE_ID Secrets 등록 필요.
-# 실행 후: 로그에 출력된 DB id를 DB_KNOWN_ACTORS Secret으로 등록.
+# 레지스트리 DB 관리 진입점 — 두 가지 동작을 겸한다.
+#
+# 최초 실행(DB_KNOWN_ACTORS Secret 미등록 상태): DB를 생성하고 기존
+# 데이터를 시딩한다. 실행 후 로그에 출력된 id를 DB_KNOWN_ACTORS Secret으로
+# 등록할 것. 사전 조건: NOTION_TOKEN, NOTION_PARENT_PAGE_ID Secrets 등록.
+#
+# 이후 재실행(DB_KNOWN_ACTORS Secret 등록된 상태): 스키마 마이그레이션
+# 모드로 전환 — 기존 DB를 유지한 채 신규 속성만 추가하고 알려진 기존
+# 행을 소급 보정한다. 스키마를 바꿀 때마다(예: 새 multi_select 속성
+# 추가) 이 워크플로우를 다시 실행하면 된다.
 
 on:
   workflow_dispatch: {}
@@ -23,8 +30,9 @@ jobs:
           python-version: "3.11"
       - name: Install package
         run: pip install -e .
-      - name: Create and seed registry DB
+      - name: Create/migrate registry DB
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_PARENT_PAGE_ID: ${{ secrets.NOTION_PARENT_PAGE_ID }}
+          DB_KNOWN_ACTORS: ${{ secrets.DB_KNOWN_ACTORS }}
         run: python scripts/setup_known_actors_db.py
