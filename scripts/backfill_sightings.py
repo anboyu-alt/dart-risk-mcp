@@ -64,6 +64,7 @@ def run_backfill(api_key: str, sightings_path: Path, start: datetime, end: datet
     total_extracted = 0
     done_chunks = 0
     truncated_chunks = []
+    zero_scan = ""
     finished = True
 
     for cstart, cend in chunks:
@@ -77,6 +78,15 @@ def run_backfill(api_key: str, sightings_path: Path, start: datetime, end: datet
         sightings, stats = collect_funding_sightings_range(
             api_key, cstart.strftime("%Y%m%d"), cend.strftime("%Y%m%d"),
             max_pages=CHUNK_MAX_PAGES, pace_sec=PACE_SEC)
+        if stats["scanned"] == 0 and (cend - cstart).days + 1 >= 3:
+            # 한국 시장에서 3일+ 구간에 B타입 공시 0건은 사실상 불가능 —
+            # API 장애·쿼터 소진 의심. 완료로 마킹하면 조용한 데이터 구멍이
+            # 되므로 미완으로 남기고 중단한다 (다음 실행이 같은 청크 재시도).
+            finished = False
+            zero_scan = f"{cstart:%Y-%m-%d}~{cend:%Y-%m-%d}"
+            print(f"[WARN] {zero_scan} 공시 0건 — API 오류/쿼터 소진 의심, "
+                  "청크를 미완으로 남기고 중단")
+            break
         merge_sightings(sdata, sightings)
         state["done_until"] = cend.strftime("%Y%m%d")
         sdata["updated"] = datetime.now().strftime("%Y-%m-%d")
@@ -105,6 +115,7 @@ def run_backfill(api_key: str, sightings_path: Path, start: datetime, end: datet
         "names_total": len(names),
         "names_multi": multi,
         "truncated_chunks": truncated_chunks,
+        "zero_scan": zero_scan,
         "finished": finished,
     }
 
@@ -130,6 +141,9 @@ def build_backfill_report(summary: dict, start: datetime, end: datetime) -> str:
     if summary["truncated_chunks"]:
         lines.append("· ⚠️ 목록 상한 도달 청크: " + ", ".join(summary["truncated_chunks"])
                      + " — 해당 주는 --chunk-days를 줄여 재수집 권장")
+    if summary.get("zero_scan"):
+        lines.append(f"· ⚠️ {summary['zero_scan']} 공시 0건 — API 오류/쿼터 소진 의심. "
+                     "청크는 미완으로 보존, 다음 실행이 재시도")
     lines += ["", "자동 발굴은 동명이인 미확인 — 원본 공시로 확인 필요. 판정 아님."]
     return "\n".join(lines)
 

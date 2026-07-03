@@ -92,6 +92,42 @@ class TestRunBackfill(unittest.TestCase):
         self.assertFalse(summary["finished"])
         self.assertEqual(summary["done_until"], "20260614")
 
+    def test_zero_scan_chunk_not_marked_done(self):
+        # API 장애·쿼터 소진으로 공시 0건이 오면 그 청크를 완료로 마킹하지 않고
+        # 중단해야 한다 — 조용한 데이터 구멍 방지 (다음 실행이 재시도)
+        calls = []
+
+        def _collect(key, bgn, end, **kw):
+            calls.append(bgn)
+            return ([], self._stats(funding=0, scanned=0))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            summary, path, _ = self._run(tmp, _collect, "2026-06-01", "2026-06-14")
+        self.assertEqual(len(calls), 1)               # 첫 청크에서 즉시 중단
+        self.assertFalse(summary["finished"])
+        self.assertEqual(summary["done_until"], "")   # 완료 마킹 없음
+        self.assertIn("2026-06-01", summary["zero_scan"])
+
+    def test_zero_scan_guard_skipped_for_short_chunks(self):
+        # 1~2일 청크는 주말·휴일로 정당하게 0건일 수 있어 가드를 적용하지 않는다
+        import scripts.backfill_sightings as bs
+        calls = []
+
+        def _collect(key, bgn, end, **kw):
+            calls.append(bgn)
+            return ([], self._stats(funding=0, scanned=0))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sightings.json"
+            with patch.object(bs, "collect_funding_sightings_range",
+                              side_effect=_collect), \
+                 patch.object(bs.time, "sleep"):
+                summary = bs.run_backfill("key", path, _dt("2026-06-06"),
+                                          _dt("2026-06-07"), chunk_days=1)
+        self.assertEqual(len(calls), 2)               # 두 청크 모두 진행
+        self.assertTrue(summary["finished"])
+        self.assertEqual(summary["done_until"], "20260607")
+
     def test_summary_counts_multi_corp_names(self):
         def _collect(key, bgn, end, **kw):
             return ([{"name": "홍길동", "corp": "A", "corp_code": "c1",
