@@ -6,7 +6,9 @@
 
 - 재개(resume): 진행 상황을 sightings.json의 backfill.done_until에 기록.
   중단·재실행 시 그 다음 청크부터 이어간다 (청크 중복은 rcept_no+corp_code
-  dedup으로 무해).
+  dedup으로 무해). 단, done_until은 단일 전진 마커라 이미 완료한 구간보다
+  더 과거의 --start로 다시 돌리려면 sightings.json에서 backfill 키를 지우고
+  실행해야 한다.
 - 예산(budget): DART 일일 쿼터(키당 2만 콜) 보호를 위해 자금조달 공시 처리
   건수에 상한을 둔다(건당 API 콜 약 2.5회 — 기본 3,500건 ≈ 9천 콜, 쿼터의
   절반). 초과 시 진행 상황을 저장하고 종료 — 다음 실행이 이어받는다.
@@ -107,6 +109,12 @@ def run_backfill(api_key: str, sightings_path: Path, start: datetime, end: datet
     }
 
 
+def should_send_report(summary: dict) -> bool:
+    """리포트 발송 여부 — 이미 완료된 상태의 no-op 재실행(스케줄 잔여 발화 등)은
+    스팸 방지를 위해 조용히 끝낸다. 작업했거나 미완이면 발송."""
+    return summary["done_chunks"] > 0 or not summary["finished"]
+
+
 def build_backfill_report(summary: dict, start: datetime, end: datetime) -> str:
     lines = [
         f"sightings 백필 리포트 ({datetime.now().strftime('%Y-%m-%d %H:%M')})",
@@ -150,9 +158,12 @@ def main():
                            chunk_days=args.chunk_days, max_funding=args.max_funding)
 
     report = build_backfill_report(summary, start, end)
-    sent = send_mail("[known_actors] sightings 백필 리포트", report)
     print(report)
-    print("리포트 발송" if sent else "리포트 스킵(자격증명 없음)")
+    if should_send_report(summary):
+        sent = send_mail("[known_actors] sightings 백필 리포트", report)
+        print("리포트 발송" if sent else "리포트 스킵(자격증명 없음)")
+    else:
+        print("no-op 실행 (이미 완료) — 리포트 스킵")
 
 
 if __name__ == "__main__":

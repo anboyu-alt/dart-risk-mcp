@@ -108,6 +108,18 @@ class TestRunBackfill(unittest.TestCase):
         self.assertEqual(summary["names_multi"], 1)  # 홍길동만 2개사+
 
 
+class TestShouldSendReport(unittest.TestCase):
+    def test_sends_when_work_done_or_unfinished(self):
+        import scripts.backfill_sightings as bs
+        self.assertTrue(bs.should_send_report({"done_chunks": 3, "finished": True}))
+        self.assertTrue(bs.should_send_report({"done_chunks": 0, "finished": False}))
+
+    def test_skips_noop_rerun_after_completion(self):
+        # 완료 후 스케줄 잔여 발화 → 조용히 종료 (메일 스팸 방지)
+        import scripts.backfill_sightings as bs
+        self.assertFalse(bs.should_send_report({"done_chunks": 0, "finished": True}))
+
+
 class TestBackfillReport(unittest.TestCase):
     def test_report_shows_progress_and_warnings(self):
         import scripts.backfill_sightings as bs
