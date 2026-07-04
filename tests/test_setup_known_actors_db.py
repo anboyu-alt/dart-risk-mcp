@@ -93,6 +93,34 @@ class TestBackfillKnownCompanies(unittest.TestCase):
         self.assertEqual(post_call.call_args_list[1].kwargs["json"]["start_cursor"], "c1")
 
 
+class TestEvidenceRecovery(unittest.TestCase):
+    def _page_ev(self, name, evidence):
+        return {"id": f"pid-{name}", "properties": {
+            "인물명": {"title": [{"plain_text": name}]},
+            "관련기업": {"multi_select": []},
+            "구분": {"select": {"name": "조합"}},
+            "evidence": {"rich_text": [{"plain_text": evidence}]},
+        }}
+
+    def test_recovers_companies_from_promotion_evidence(self):
+        # 재PATCH 사고로 소거된 관련기업을 evidence 텍스트에서 재구성
+        import scripts.setup_known_actors_db as sdb
+        q = MagicMock(); q.status_code = 200
+        q.json.return_value = {"results": [
+            self._page_ev("에스디비조합", "문제 회사 2곳 인수자 반복 등장: CSA 코스믹·블루샤크"),
+            self._page_ev("이준민", "△△전자 CB인수 인수자로 등장"),
+        ], "has_more": False}
+        p = MagicMock(); p.status_code = 200
+        with patch.object(sdb.requests, "post", return_value=q), \
+             patch.object(sdb.requests, "patch", return_value=p) as pc:
+            updated = sdb.backfill_known_companies("t", "db")
+        self.assertEqual(updated, 2)
+        first = pc.call_args_list[0].kwargs["json"]["properties"]["관련기업"]["multi_select"]
+        self.assertEqual([o["name"] for o in first], ["CSA 코스믹", "블루샤크"])
+        second = pc.call_args_list[1].kwargs["json"]["properties"]["관련기업"]["multi_select"]
+        self.assertEqual([o["name"] for o in second], ["△△전자"])
+
+
 class TestMainDispatch(unittest.TestCase):
     def test_main_migrates_when_db_id_present(self):
         # DB_KNOWN_ACTORS 설정 시 create 경로를 타지 않고 마이그레이션만 수행

@@ -129,11 +129,22 @@ def backfill_known_companies(token: str, db_id: str) -> int:
             name = "".join(t.get("plain_text", "")
                            for t in props.get("인물명", {}).get("title", []))
             patch_props: dict = {}
-            companies = _KNOWN_COMPANY_BACKFILL.get(name)
             existing = props.get("관련기업", {}).get("multi_select", [])
+            companies = _KNOWN_COMPANY_BACKFILL.get(name)
+            if not companies and not existing:
+                # 자동 발굴/자동 매칭 행은 evidence에 회사 목록이 남아 있음
+                # ("... 반복 등장: A·B·C" 또는 "A CB인수 인수자로 등장") — 파싱 복구
+                ev = "".join(t.get("plain_text", "")
+                             for t in props.get("evidence", {}).get("rich_text", []))
+                if "반복 등장: " in ev:
+                    companies = [x.strip() for x in
+                                 ev.split("반복 등장: ", 1)[1].split("·") if x.strip()]
+                elif ev.endswith("인수자로 등장"):
+                    first = ev.split(" ", 1)[0].strip()
+                    companies = [first] if first else []
             if companies and not existing:  # 이미 태깅된 행은 덮어쓰지 않음
                 patch_props["관련기업"] = {
-                    "multi_select": [{"name": c} for c in companies]}
+                    "multi_select": [{"name": c[:100]} for c in companies][:20]}
             # 구분 도입(entity 추적) 전에 생성된 행은 전부 개인 — 미설정 시 소급
             if not (props.get("구분", {}).get("select") or {}).get("name"):
                 patch_props["구분"] = {"select": {"name": "개인"}}
