@@ -222,17 +222,29 @@ def ensure_registry_schema(token: str = "", db_id: str = "") -> bool:
         token, db_id = _notion_env()
     if not (token and db_id):
         return False
+    wanted = {
+        "관련기업": {"multi_select": {}},
+        "구분": {"select": {"options": [
+            {"name": "개인", "color": "default"},
+            {"name": "조합", "color": "orange"},
+            {"name": "법인", "color": "purple"},
+        ]}},
+    }
     try:
+        # 이미 존재하는 속성은 절대 재PATCH하지 않는다 — 동일 속성 재PATCH가
+        # 전체 행의 값을 소거하는 사고가 있었음 (2026-07-04). 누락분만 추가.
+        cur = requests.get(
+            f"{_NOTION_BASE}/databases/{db_id}",
+            headers=_notion_headers(token), timeout=15)
+        if cur.status_code != 200:
+            return False
+        existing = set((cur.json().get("properties") or {}).keys())
+        missing = {k: v for k, v in wanted.items() if k not in existing}
+        if not missing:
+            return True  # 전부 존재 — no-op
         resp = requests.patch(
             f"{_NOTION_BASE}/databases/{db_id}", headers=_notion_headers(token),
-            json={"properties": {
-                "관련기업": {"multi_select": {}},
-                "구분": {"select": {"options": [
-                    {"name": "개인", "color": "default"},
-                    {"name": "조합", "color": "orange"},
-                    {"name": "법인", "color": "purple"},
-                ]}},
-            }}, timeout=15)
+            json={"properties": missing}, timeout=15)
         return resp.status_code == 200
     except Exception:
         return False

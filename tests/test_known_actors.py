@@ -248,18 +248,34 @@ class TestKnownActors(unittest.TestCase):
         self.assertFalse(ok)
         patch_call.assert_not_called()
 
-    def test_ensure_registry_schema_patches_with_env(self):
+    def test_ensure_registry_schema_adds_only_missing(self):
+        # 관련기업은 이미 존재 → PATCH 페이로드에서 제외 (재PATCH가 값을 지우는 사고 방지)
         from unittest.mock import patch as _p, MagicMock
         from dart_risk_mcp.core.known_actors import ensure_registry_schema
-        resp = MagicMock()
-        resp.status_code = 200
-        with _p("dart_risk_mcp.core.known_actors.requests.patch",
-                return_value=resp) as patch_call:
+        get_resp = MagicMock(); get_resp.status_code = 200
+        get_resp.json.return_value = {"properties": {"인물명": {}, "관련기업": {}}}
+        patch_resp = MagicMock(); patch_resp.status_code = 200
+        with _p("dart_risk_mcp.core.known_actors.requests.get",
+                return_value=get_resp), \
+             _p("dart_risk_mcp.core.known_actors.requests.patch",
+                return_value=patch_resp) as patch_call:
             ok = ensure_registry_schema(token="t", db_id="db")
         self.assertTrue(ok)
         payload = patch_call.call_args.kwargs["json"]
-        self.assertIn("관련기업", payload["properties"])
+        self.assertNotIn("관련기업", payload["properties"])  # 기존 속성 재PATCH 금지
         self.assertIn("구분", payload["properties"])
+
+    def test_ensure_registry_schema_noop_when_all_exist(self):
+        from unittest.mock import patch as _p, MagicMock
+        from dart_risk_mcp.core.known_actors import ensure_registry_schema
+        get_resp = MagicMock(); get_resp.status_code = 200
+        get_resp.json.return_value = {"properties": {"관련기업": {}, "구분": {}}}
+        with _p("dart_risk_mcp.core.known_actors.requests.get",
+                return_value=get_resp), \
+             _p("dart_risk_mcp.core.known_actors.requests.patch") as patch_call:
+            ok = ensure_registry_schema(token="t", db_id="db")
+        self.assertTrue(ok)
+        patch_call.assert_not_called()
 
     def test_classify_actor_tiers(self):
         from dart_risk_mcp.core.known_actors import classify_actor
