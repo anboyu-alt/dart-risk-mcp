@@ -83,7 +83,7 @@ def collect_auto_matches(api_key, known_names, window_days=WINDOW_DAYS, max_page
                     "source": f"DART {label}(자동매칭)",
                     "status": "auto_matched",
                     "evidence": f"{corp} {label} 인수자로 등장",
-                    "url": "https://dart.fss.or.kr",
+                    "url": f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rn}",
                     "date": date,
                     "rcept_no": rn,
                     "tags": ["자동 매칭", same_name_tag],
