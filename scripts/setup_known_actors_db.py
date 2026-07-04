@@ -137,6 +137,13 @@ def backfill_known_companies(token: str, db_id: str) -> int:
             # 구분 도입(entity 추적) 전에 생성된 행은 전부 개인 — 미설정 시 소급
             if not (props.get("구분", {}).get("select") or {}).get("name"):
                 patch_props["구분"] = {"select": {"name": "개인"}}
+            # 접수번호가 있는데 url이 맨몸 홈페이지면 공시 뷰어 링크로 소급
+            rcpt = "".join(t.get("plain_text", "")
+                           for t in props.get("rcept_no", {}).get("rich_text", []))
+            cur_url = (props.get("url", {}) or {}).get("url") or ""
+            if rcpt and cur_url.rstrip("/") in ("", "https://dart.fss.or.kr"):
+                patch_props["url"] = {
+                    "url": f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcpt}"}
             if not patch_props:
                 continue
             patch = requests.patch(

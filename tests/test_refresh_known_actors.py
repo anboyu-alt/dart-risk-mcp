@@ -22,6 +22,8 @@ class TestRefreshKnownActors(unittest.TestCase):
         self.assertEqual(matches["이준민"][0]["status"], "auto_matched")
         self.assertEqual(matches["이준민"][0]["rcept_no"], "R1")
         self.assertEqual(matches["이준민"][0]["companies"], ["△△전자"])
+        self.assertEqual(matches["이준민"][0]["url"],
+                         "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=R1")
 
     def test_collect_matches_case_variant_of_registered_actor(self):
         # 레지스트리 'Yoo Andy C' vs 공시 'YOO ANDY C' — 표기 정규화로 매칭,
