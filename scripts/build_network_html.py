@@ -25,6 +25,16 @@ _TEMPLATE = Path(__file__).resolve().parent / "network_template.html"
 _TRACKED = ("person", "fund", "corp")
 _PLACEHOLDER = '/*__GRAPH_DATA__*/{"nodes":[],"links":[]}/*__END__*/'
 
+# DART corp_cls → (시장 라벨, 코드). Y=유가증권(KOSPI)·K=코스닥·N=코넥스·
+# E/기타/미상=비상장. 회사 노드 시장 태깅용.
+_MARKET = {"Y": ("KOSPI", "kospi"), "K": ("KOSDAQ", "kosdaq"),
+           "N": ("KONEX", "konex"), "E": ("비상장", "unlisted")}
+
+
+def market_of(cls: str):
+    """corp_cls 코드 → (라벨, 코드). 미상·빈값은 비상장으로 폴백."""
+    return _MARKET.get((cls or "").strip().upper(), ("비상장", "unlisted"))
+
 
 def build_graph(sightings: dict, min_companies: int = 2) -> dict:
     """sightings → {nodes, links}. min_companies 미만/비추적 행위자 제외."""
@@ -32,6 +42,7 @@ def build_graph(sightings: dict, min_companies: int = 2) -> dict:
     nodes, links = [], []
     company_label: dict = {}       # corp_code -> corp_name
     company_deg: dict = {}         # corp_code -> {actor_id}
+    company_cls: dict = {}         # corp_code -> corp_cls (첫 비어있지 않은 값)
 
     for name, recs in s.items():
         kind = classify_actor(name)
@@ -46,12 +57,16 @@ def build_graph(sightings: dict, min_companies: int = 2) -> dict:
             if rc and rc > (latest.get(cc, ("", ""))[0]):
                 latest[cc] = (rc, corp or cc)
             company_label.setdefault(cc, corp or cc)
+            cls = (r.get("corp_cls") or "").strip()
+            if cls and not company_cls.get(cc):
+                company_cls[cc] = cls
         if len(latest) < min_companies:
             continue
         aid = "a:" + name
         companies = []
         for cc, (rc, corp) in sorted(latest.items(), key=lambda kv: kv[1][0], reverse=True):
-            companies.append({"name": corp, "url": disclosure_url(rc)})
+            _, mkt = market_of(company_cls.get(cc, ""))
+            companies.append({"name": corp, "url": disclosure_url(rc), "mkt": mkt})
             links.append({"source": aid, "target": "c:" + cc})
             company_deg.setdefault(cc, set()).add(aid)
         nodes.append({
@@ -60,8 +75,10 @@ def build_graph(sightings: dict, min_companies: int = 2) -> dict:
         })
 
     for cc, actors in company_deg.items():
+        label, mkt = market_of(company_cls.get(cc, ""))
         nodes.append({"id": "c:" + cc, "label": company_label.get(cc, cc),
-                      "type": "company", "deg": len(actors)})
+                      "type": "company", "deg": len(actors),
+                      "market": label, "mkt": mkt})
     return {"nodes": nodes, "links": links}
 
 
