@@ -59,5 +59,8 @@ jobs:
             echo "::notice::Cloudflare Secrets 미설정 — 배포 스킵 (빌드만 검증)"
             exit 0
           fi
+          # 프로젝트가 없으면 자동 생성(대시보드 수동 생성 불필요). 이미 있으면 무시.
+          npx --yes wrangler@3 pages project create "$CF_PAGES_PROJECT" \
+            --production-branch=production 2>/dev/null || true
           npx --yes wrangler@3 pages deploy dist \
             --project-name="$CF_PAGES_PROJECT" --branch=production --commit-dirty=true
