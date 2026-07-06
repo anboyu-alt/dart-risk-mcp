@@ -2108,7 +2108,9 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
             return None
         if src == "elestock":
             holder = (rec.get("repror") or "").strip()
-            ratio = _parse_ratio(rec.get("stkqy_rt"))
+            # elestock(임원·주요주주 소유보고)의 소유비율 필드는 sp_stock_lmp_rate.
+            # (과거 stkqy_rt는 응답에 없어 항상 None이었음 — 구필드 폴백 유지)
+            ratio = _parse_ratio(rec.get("sp_stock_lmp_rate") or rec.get("stkqy_rt"))
             date = _normalize_date(rec.get("rcept_dt"))
         elif src == "hyslr_chg":
             holder = (rec.get("mxmm_shrholdr_nm") or "").strip()
