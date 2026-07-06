@@ -5,10 +5,11 @@
 닫힌 관계로 보존한다(merge_sightings가 닫힌 관계는 window와 무관하게 유지).
 
 이탈 소스
-  - 5% 대량보유 감소 (elestock) — 보고자=진입 행위자, 보유비율 감소 → 개별 귀속.
+  - 5% 대량보유 감소 (majorstock, 주식등 대량보유상황보고) — 보고자=진입 행위자,
+    보유비율 증감(stkrt_irds)<0 → 개별 귀속 이탈.
   - 전환청구권행사 — 회사 단위 이벤트(company_events)로 별도 기록(개별 귀속 안 함).
 
-진입만 있는 회사(대부분)는 elestock가 비어 no-op. 회사당 2콜(elestock + 공시목록),
+진입만 있는 회사(대부분)는 대량보유 보고가 비어 no-op. 회사당 2콜(majorstock + 공시목록),
 0.3s 페이싱. 멱등 — 같은 접수·회사·이벤트는 중복 스킵.
 
 사용: SIGHTINGS_PATH=_sightings/sightings.json python scripts/backfill_exits.py
@@ -19,7 +20,7 @@ import os
 import time
 from pathlib import Path
 
-from dart_risk_mcp.core.dart_client import fetch_bulk_holdings, fetch_company_disclosures
+from dart_risk_mcp.core.dart_client import fetch_major_holdings, fetch_company_disclosures
 from dart_risk_mcp.core.exit_extractor import extract_holding_exits, scan_conversion_events
 from dart_risk_mcp.core.known_actors import classify_actor
 from dart_risk_mcp.core.signals import is_amendment_disclosure
@@ -74,7 +75,7 @@ def main():
         tracked_norm = set(entrants.keys())
 
         # 1) 5% 대량보유 감소 → 개별 이탈
-        for ev in extract_holding_exits(fetch_bulk_holdings(cc, key), tracked_norm):
+        for ev in extract_holding_exits(fetch_major_holdings(cc, key), tracked_norm):
             info = entrants.get(ev["norm"], {})
             exit_recs.append({
                 "name": ev["name"], "corp": meta["corp"], "corp_code": cc,

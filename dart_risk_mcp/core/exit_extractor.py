@@ -29,46 +29,54 @@ def _yyyymm(rcept_dt: str) -> str:
     return f"{d[:4]}-{d[4:6]}" if len(d) >= 6 else ""
 
 
-def extract_holding_exits(elestock_records: list, tracked_norm: set) -> list:
-    """elestock 이력에서 추적 행위자의 보유비율 감소(=이탈) 이벤트 추출.
+def extract_holding_exits(major_records: list, tracked_norm: set) -> list:
+    """대량보유(majorstock) 이력에서 추적 행위자의 보유비율 감소(=이탈) 추출.
+
+    DART가 보유비율 증감(stkrt_irds)을 직접 신고하므로 그 값이 음수면 처분(이탈).
+    증감 결측 시엔 보유비율(stkrt) 시계열의 감소로 폴백 판정한다.
 
     Args:
-        elestock_records: fetch_bulk_holdings 결과(한 회사 전체 이력).
+        major_records: fetch_major_holdings 결과(한 회사 대량보유 전체 이력).
         tracked_norm: 추적 대상 정규화 이름 집합.
 
     Returns:
-        [{"name": 보고자 원표기, "norm": 정규화, "date": "YYYY-MM",
-          "pct": 감소 후 비율, "prev_pct": 이전 비율, "rcept_no": 접수번호,
-          "event": "out", "event_type": "지분감소"}] — 보고자별 시간순 감소 이벤트.
+        [{"name","norm","date":"YYYY-MM","pct":감소후 비율,"prev_pct","delta",
+          "rcept_no","event":"out","event_type":"지분감소"}] — 시간순 감소 이벤트.
     """
-    # 보고자별 (date8, ratio, rcept_no) 시계열
+    # 보고자별 (date8, 보유비율 stkrt, 증감 stkrt_irds, rcept_no, 원표기)
     series: dict = {}
-    for rec in elestock_records or []:
+    for rec in major_records or []:
         nm = (rec.get("repror") or "").strip()
         if not nm:
             continue
         norm = normalize_name(nm)
         if norm not in tracked_norm:
             continue
-        ratio = _ratio(rec.get("stkqy_rt"))
         d8 = "".join(ch for ch in str(rec.get("rcept_dt") or "") if ch.isdigit())[:8]
-        if ratio is None or len(d8) < 8:
+        if len(d8) < 8:
             continue
-        series.setdefault(norm, []).append((d8, ratio, rec.get("rcept_no", ""), nm))
+        series.setdefault(norm, []).append(
+            (d8, _ratio(rec.get("stkrt")), _ratio(rec.get("stkrt_irds")),
+             rec.get("rcept_no", ""), nm))
 
     events = []
     for norm, rows in series.items():
         rows.sort(key=lambda r: r[0])
         prev = None
-        for d8, ratio, rcept, nm in rows:
-            if prev is not None and ratio < prev - 1e-9:   # 감소 = 이탈 이벤트
+        for d8, rt, ird, rcept, nm in rows:
+            # 증감(ird) 음수 = 처분. 증감 결측이면 보유비율 하락으로 폴백.
+            decreased = (ird is not None and ird < 0) or \
+                        (ird is None and prev is not None and rt is not None and rt < prev - 1e-9)
+            if decreased:
                 events.append({
                     "name": nm, "norm": norm,
                     "date": f"{d8[:4]}-{d8[4:6]}",
-                    "pct": ratio, "prev_pct": prev, "rcept_no": rcept,
+                    "pct": rt, "prev_pct": prev,
+                    "delta": ird, "rcept_no": rcept,
                     "event": "out", "event_type": "지분감소",
                 })
-            prev = ratio
+            if rt is not None:
+                prev = rt
     return events
 
 
