@@ -380,15 +380,20 @@ const rOf = n => n.type === "company"
 // ── summary + legend ──
 const actorNodes = nodes.filter(n => n.type !== "company");
 const companyNodes = nodes.filter(n => n.type === "company");
-document.getElementById("s-actors").textContent = actorNodes.length;
-document.getElementById("s-corps").textContent = companyNodes.length;
-document.getElementById("s-links").textContent = links.length;
+// 코어 = 2사+ 지문 그래프(기본 표시). exit_only는 이탈 때문에 포함됐지만
+// 기본 숨김 → 통계·범례는 코어만 센다.
+const coreActors = actorNodes.filter(n => !n.exit_only);
+const coreCompanies = companyNodes.filter(n => !n.exit_only);
 const exitedLinks = links.filter(l => l.status === "exited");
+document.getElementById("s-actors").textContent = coreActors.length;
+document.getElementById("s-corps").textContent = coreCompanies.length;
+document.getElementById("s-links").textContent =
+  links.filter(l => !l.source.exit_only && !l.target.exit_only).length;
 document.getElementById("s-exits").textContent = exitedLinks.length;
 const legend = document.getElementById("legend");
 ["fund","corp","person","company"].forEach(k => {
-  const c = k === "company" ? companyNodes.length
-                            : actorNodes.filter(n => n.type === k).length;
+  const c = k === "company" ? coreCompanies.length
+                            : coreActors.filter(n => n.type === k).length;
   const row = document.createElement("div"); row.className = "lg-row";
   row.innerHTML = `<span class="dot" style="background:var(${KIND[k].varname})"></span>
     ${KIND[k].ko}<span class="lg-count mono">${c}</span>`;
@@ -398,7 +403,7 @@ const legend = document.getElementById("legend");
 const mktLegend = document.getElementById("legend-mkt");
 mktLegend.innerHTML = `<div class="lg-title">회사 시장구분 (링)</div>`;
 ["kospi","kosdaq","konex","unlisted"].forEach(m => {
-  const c = companyNodes.filter(n => (n.mkt || "unlisted") === m).length;
+  const c = coreCompanies.filter(n => (n.mkt || "unlisted") === m).length;
   if (!c) return;
   const row = document.createElement("div"); row.className = "lg-row";
   row.innerHTML = `<span class="ring" style="color:var(${MARKET[m].varname})"></span>
@@ -706,8 +711,10 @@ function applyFilter() {
                        if (visActor.has(l.target.id)) visCompany.add(l.source.id); });
   nodeVisF.clear();
   nodeEls.forEach(({ g, n }) => {
-    let vis = n.type === "company" ? visCompany.has(n.id) : visActor.has(n.id);
-    if (vis && onlyExit) vis = exitNodeIds.has(n.id);   // 이탈 엣지에 닿는 노드만
+    // 이탈만 보기: 차수 필터를 우회해 이탈 엣지 끝점(단일 회사 이탈 포함)만.
+    // 기본: 2사+ 코어 그래프(exit_only는 차수<2라 자동 제외).
+    let vis = onlyExit ? exitNodeIds.has(n.id)
+                       : (n.type === "company" ? visCompany.has(n.id) : visActor.has(n.id));
     if (vis && term) {
       const hit = n.label.toLowerCase().includes(term) ||
         (n.companies || []).some(c => c.name.toLowerCase().includes(term));
@@ -777,7 +784,7 @@ playBtn.addEventListener("click", () => {
   if (asOf === null || asOf >= MONTHS.length - 1) asOf = 0;
   playBtn.textContent = "⏸"; step(); playTimer = setInterval(step, 750);
 });
-applyTime();   // 초기: 전체 기간 + 이탈 엣지 점선
+applyFilter();   // 초기: 코어 필터 적용(exit_only 기본 숨김) + 시점/이탈 점선
 
 // ── theme toggle ──
 document.getElementById("theme").addEventListener("click", () => {
