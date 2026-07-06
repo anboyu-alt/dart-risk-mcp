@@ -1,0 +1,32 @@
+name: Diagnose edges
+
+# 이탈 엣지(점선)가 실제로 그래프에 생성되는지 진단. DART 조회 없이
+# 커밋된 sightings로 build_graph를 돌려 링크 상태만 센다(로그만, 커밋 없음).
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install package
+        run: pip install -e .
+      - name: Checkout sightings (private)
+        uses: actions/checkout@v5
+        with:
+          repository: anboyu-alt/dart-risk-mcp-sightings
+          token: ${{ secrets.SIGHTINGS_REPO_TOKEN }}
+          path: _sightings
+      - name: Diagnose edges
+        env:
+          SIGHTINGS_PATH: _sightings/sightings.json
+        run: python scripts/diagnose_edges.py
