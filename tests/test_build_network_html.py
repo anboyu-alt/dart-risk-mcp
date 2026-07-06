@@ -90,6 +90,47 @@ def test_edge_intervals_and_status():
     assert g["span"] == {"min": "2024-03", "max": "2025-02"}
 
 
+def test_single_company_exiter_included_as_exit_only():
+    """이탈이 있으면 2사 미만 행위자도 포함하되 exit_only로 표시(기본 숨김)."""
+    s = {
+        "sightings": {
+            "조합갑": [  # 2사(A,B), B 이탈 → 코어
+                {"corp": "A", "corp_code": "001", "rcept_no": "i1", "date": "2024-03",
+                 "kind": "fund", "event": "in"},
+                {"corp": "B", "corp_code": "002", "rcept_no": "i2", "date": "2024-06",
+                 "kind": "fund", "event": "in"},
+                {"corp": "B", "corp_code": "002", "rcept_no": "o1", "date": "2025-01",
+                 "kind": "fund", "event": "out", "event_type": "지분감소", "pct": 3.1},
+            ],
+            "단발병": [  # 1사(C), C 이탈 → exit_only 로 포함
+                {"corp": "C", "corp_code": "003", "rcept_no": "i3", "date": "2024-05",
+                 "kind": "fund", "event": "in"},
+                {"corp": "C", "corp_code": "003", "rcept_no": "o2", "date": "2025-02",
+                 "kind": "fund", "event": "out", "event_type": "지분감소", "pct": 2.0},
+            ],
+            "평범정": [  # 2사(A,D), 이탈 없음 → 코어
+                {"corp": "A", "corp_code": "001", "rcept_no": "i4", "date": "2024-04",
+                 "kind": "fund", "event": "in"},
+                {"corp": "D", "corp_code": "004", "rcept_no": "i5", "date": "2024-07",
+                 "kind": "fund", "event": "in"},
+            ],
+        },
+    }
+    g = build_graph(s, min_companies=2)
+    by_label = {n["label"]: n for n in g["nodes"] if n["type"] != "company"}
+    assert by_label["단발병"]["exit_only"] is True and by_label["단발병"]["deg"] == 1
+    assert by_label["조합갑"]["exit_only"] is False
+    assert by_label["평범정"]["exit_only"] is False
+    # 이탈 엣지는 코어(조합갑→B) + 단일회사(단발병→C) 둘 다
+    exited = {(l["source"], l["target"]) for l in g["links"] if l["status"] == "exited"}
+    assert ("a:조합갑", "c:002") in exited
+    assert ("a:단발병", "c:003") in exited
+    # 단발병만 닿는 회사 C도 exit_only(기본 숨김)
+    cmap = {n["label"]: n for n in g["nodes"] if n["type"] == "company"}
+    assert cmap["C"]["exit_only"] is True
+    assert cmap["A"]["exit_only"] is False
+
+
 def test_company_timeline_events_and_conversion():
     g = build_graph(_temporal_sightings(), min_companies=2)
     hong = next(n for n in g["nodes"] if n["label"] == "홍길동")

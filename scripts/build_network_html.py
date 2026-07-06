@@ -45,6 +45,7 @@ def build_graph(sightings: dict, min_companies: int = 2) -> dict:
     company_deg: dict = {}         # corp_code -> {actor_id}
     company_cls: dict = {}         # corp_code -> corp_cls (첫 비어있지 않은 값)
     months: set = set()            # 스크러버용 전체 월(YYYY-MM) 집합
+    exit_only_actors: set = set()  # 이탈이 있어 포함됐지만 2사 미만인 행위자 id
 
     for name, recs in s.items():
         kind = classify_actor(name)
@@ -74,9 +75,14 @@ def build_graph(sightings: dict, min_companies: int = 2) -> dict:
                 d["latest"] = rc
         # 진입(in)이 있는 회사만 엣지 형성 — 이탈만 있고 진입 없는 관계는 그리지 않음
         cc_in = {cc: d for cc, d in by_cc.items() if d["ins"]}
-        if len(cc_in) < min_companies:
+        # 2사 미만이어도 '이탈' 기록이 있으면 포함(기본 숨김, '이탈만' 토글로 노출).
+        has_out = any(d["outs"] for d in cc_in.values())
+        if len(cc_in) < min_companies and not has_out:
             continue
         aid = "a:" + name
+        exit_only = len(cc_in) < min_companies
+        if exit_only:
+            exit_only_actors.add(aid)
         companies = []
         for cc, d in sorted(cc_in.items(), key=lambda kv: kv[1]["latest"], reverse=True):
             _, mkt = market_of(company_cls.get(cc, ""))
@@ -110,6 +116,7 @@ def build_graph(sightings: dict, min_companies: int = 2) -> dict:
         nodes.append({
             "id": aid, "label": name, "type": kind,
             "deg": len(cc_in), "sight": len(recs), "companies": companies,
+            "exit_only": exit_only,
         })
 
     for cc, actors in company_deg.items():
@@ -117,9 +124,12 @@ def build_graph(sightings: dict, min_companies: int = 2) -> dict:
         cev = [{"date": e.get("date", ""), "type": e.get("event_type", "전환청구"),
                 "url": disclosure_url(e.get("rcept_no", ""))}
                for e in comp_events_raw.get(cc, [])]
+        # 회사도 이탈-only 행위자에만 연결되면 exit_only(기본 숨김)
+        c_exit_only = actors.issubset(exit_only_actors)
         nodes.append({"id": "c:" + cc, "label": company_label.get(cc, cc),
                       "type": "company", "deg": len(actors),
-                      "market": label, "mkt": mkt, "events": cev})
+                      "market": label, "mkt": mkt, "events": cev,
+                      "exit_only": c_exit_only})
     span = {"min": min(months), "max": max(months)} if months else {"min": "", "max": ""}
     return {"nodes": nodes, "links": links, "span": span}
 
