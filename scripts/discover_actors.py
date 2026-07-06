@@ -121,6 +121,9 @@ def collect_funding_sightings_range(api_key, bgn_de, end_de,
             invs += extract_rights_offering_investors(rn, api_key, cc) or []
         rdt = d.get("rcept_dt", "") or ""
         date = f"{rdt[:4]}-{rdt[4:6]}" if len(rdt) >= 6 else ""
+        # 시장 구분(Y=유가/KOSPI, K=코스닥, N=코넥스, E=기타·비상장) — list.json이
+        # 이미 실어 주므로 추가 조회 없이 회사 노드 시장 태깅에 활용.
+        cls = (d.get("corp_cls") or "").strip()
         filing_new = []
         for inv in invs:
             nm = (inv.get("name") or "").strip()
@@ -128,7 +131,7 @@ def collect_funding_sightings_range(api_key, bgn_de, end_de,
             if kind not in _TRACKED_KINDS:
                 continue  # 제도권 기관·노이즈 제외
             filing_new.append({
-                "name": nm, "corp": corp, "corp_code": cc,
+                "name": nm, "corp": corp, "corp_code": cc, "corp_cls": cls,
                 "date": date, "rcept_no": rn, "kind": kind,
                 "signals": sorted(keys & (FUNDING_KEYS | INSTABILITY_KEYS)),
             })
@@ -145,7 +148,7 @@ def collect_funding_sightings_range(api_key, bgn_de, end_de,
                 seen_nm.add(b["name"])
                 n_backers += 1
                 filing_new.append({
-                    "name": b["name"], "corp": corp, "corp_code": cc,
+                    "name": b["name"], "corp": corp, "corp_code": cc, "corp_cls": cls,
                     "date": date, "rcept_no": rn, "kind": bkind,
                     "via": f"{b['fund']} {b['role']}",
                     "signals": sorted(keys & (FUNDING_KEYS | INSTABILITY_KEYS)),
@@ -187,7 +190,7 @@ def merge_sightings(data: dict, new: list, window_months: int = WINDOW_MONTHS) -
         if any(e.get("rcept_no") == rec.get("rcept_no") and
                e.get("corp_code") == rec.get("corp_code") for e in lst):
             continue
-        lst.append({k: rec[k] for k in ("corp", "corp_code", "date", "rcept_no", "signals", "kind", "via") if k in rec})
+        lst.append({k: rec[k] for k in ("corp", "corp_code", "corp_cls", "date", "rcept_no", "signals", "kind", "via") if k in rec})
         changed = True
     cutoff = (datetime.now() - timedelta(days=window_months * 30)).strftime("%Y-%m")
     for nm in list(s.keys()):

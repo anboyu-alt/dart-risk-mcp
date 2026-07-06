@@ -1,0 +1,48 @@
+name: Backfill market cls
+
+# 기존 sightings.json의 회사에 시장구분(corp_cls: KOSPI/KOSDAQ/코넥스/비상장)을
+# 1회 소급 채운다. discover_actors는 이제 수집 시점에 corp_cls를 담으므로,
+# 이 백필은 그 이전에 쌓인 회사에만 필요 — 완료 후 재발화는 사실상 no-op
+# (이미 값이 있는 회사는 조회하지 않음). 회사당 company.json 1콜(0.3s 페이싱).
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install package
+        run: pip install -e .
+      - name: Checkout sightings (private)
+        uses: actions/checkout@v5
+        with:
+          repository: anboyu-alt/dart-risk-mcp-sightings
+          token: ${{ secrets.SIGHTINGS_REPO_TOKEN }}
+          path: _sightings
+      - name: Backfill market cls
+        env:
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+          SIGHTINGS_PATH: _sightings/sightings.json
+        run: python scripts/backfill_market_cls.py
+      - name: Commit sightings (private)
+        if: always()
+        working-directory: _sightings
+        run: |
+          if [ -n "$(git status --porcelain sightings.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add sightings.json
+            git commit -m "chore: 시장구분(corp_cls) 백필"
+            git push
+          else
+            echo "sightings 변경 없음"
+          fi

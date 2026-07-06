@@ -18,6 +18,11 @@
     --edge: rgba(90,100,115,.22);
     --edge-hi: rgba(42,120,214,.75);
     --shadow: 0 6px 24px rgba(20,28,40,.14);
+    /* 회사 시장구분 링 (개인·조합·법인 채움색과 겹치지 않는 계열) */
+    --mkt-kospi: #1f9d76;    /* KOSPI  — 유가증권 */
+    --mkt-kosdaq: #c98a1e;   /* KOSDAQ */
+    --mkt-konex: #8a5cd0;    /* 코넥스 */
+    --mkt-unlisted: #aab2bd; /* 비상장 (약한 링) */
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -27,6 +32,8 @@
       --fund: #d95926; --corp: #3987e5; --person: #d55181; --accent: #3987e5;
       --edge: rgba(150,162,178,.16); --edge-hi: rgba(57,135,229,.8);
       --shadow: 0 8px 30px rgba(0,0,0,.5);
+      --mkt-kospi: #2bb98c; --mkt-kosdaq: #e0a53a; --mkt-konex: #a578e0;
+      --mkt-unlisted: #5c6470;
     }
   }
   :root[data-theme="light"] {
@@ -36,6 +43,8 @@
     --fund: #eb6834; --corp: #2a78d6; --person: #d55181; --accent: #2a78d6;
     --edge: rgba(90,100,115,.22); --edge-hi: rgba(42,120,214,.75);
     --shadow: 0 6px 24px rgba(20,28,40,.14);
+    --mkt-kospi: #1f9d76; --mkt-kosdaq: #c98a1e; --mkt-konex: #8a5cd0;
+    --mkt-unlisted: #aab2bd;
   }
   :root[data-theme="dark"] {
     --bg: #14161a; --panel: #1c1f25; --panel-line: #2c313a;
@@ -44,6 +53,8 @@
     --fund: #d95926; --corp: #3987e5; --person: #d55181; --accent: #3987e5;
     --edge: rgba(150,162,178,.16); --edge-hi: rgba(57,135,229,.8);
     --shadow: 0 8px 30px rgba(0,0,0,.5);
+    --mkt-kospi: #2bb98c; --mkt-kosdaq: #e0a53a; --mkt-konex: #a578e0;
+    --mkt-unlisted: #5c6470;
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
@@ -56,10 +67,17 @@
   .mono { font-family: ui-monospace, "SF Mono", "SFMono-Regular", Menlo,
           Consolas, monospace; font-variant-numeric: tabular-nums; }
   #stage { position: fixed; inset: 0; }
-  svg { width: 100%; height: 100%; display: block; touch-action: none; }
+  svg { width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+  svg.panning { cursor: grabbing; }
   .edge { stroke: var(--edge); stroke-width: 1; }
   .edge.hi { stroke: var(--edge-hi); stroke-width: 1.6; }
   .node circle { cursor: pointer; stroke: var(--bg); stroke-width: 1.5; }
+  /* 회사 노드는 시장구분 링으로 상장 여부를 표시 (상장사=색 링, 비상장=약한 링) */
+  .node.company circle { stroke-width: 2; }
+  .node.mkt-kospi    circle { stroke: var(--mkt-kospi); }
+  .node.mkt-kosdaq   circle { stroke: var(--mkt-kosdaq); }
+  .node.mkt-konex    circle { stroke: var(--mkt-konex); }
+  .node.mkt-unlisted circle { stroke: var(--mkt-unlisted); }
   .node.dim { opacity: .12; transition: opacity .15s; }
   .edge.dim { opacity: .04; transition: opacity .15s; }
   .node text {
@@ -68,6 +86,9 @@
     stroke-linejoin: round;
   }
   .node.big text { fill: var(--ink); font-size: 12px; font-weight: 600; }
+  /* 2차 라벨(회사·저차수 행위자)은 확대 시에만 노출 — 옵시디언식 */
+  .node text.lbl2 { opacity: 0; transition: opacity .15s; }
+  svg.zoomed .node text.lbl2 { opacity: 1; }
 
   /* ── overlays ── */
   .overlay { position: fixed; z-index: 5; }
@@ -82,12 +103,16 @@
   .stat span { font-size: 10.5px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .06em; }
 
   .tr { top: 18px; right: 20px; display: flex; flex-direction: column;
-        gap: 12px; align-items: flex-end; }
+        gap: 12px; align-items: flex-end; max-height: calc(100vh - 36px); overflow: auto; }
   .card { background: var(--panel); border: 1px solid var(--panel-line);
           border-radius: 12px; box-shadow: var(--shadow); padding: 12px 14px; }
   .legend { display: flex; flex-direction: column; gap: 8px; }
+  .lg-title { font-size: 10px; color: var(--ink-3); text-transform: uppercase;
+              letter-spacing: .07em; margin: 2px 0 -2px; }
   .lg-row { display: flex; align-items: center; gap: 9px; font-size: 12.5px; }
   .dot { width: 11px; height: 11px; border-radius: 50%; flex: none; }
+  .ring { width: 11px; height: 11px; border-radius: 50%; flex: none;
+          background: var(--company); box-shadow: 0 0 0 2px var(--panel), 0 0 0 3.4px currentColor; }
   .lg-count { margin-left: auto; color: var(--ink-3); font-size: 11px; }
   .controls { display: flex; flex-direction: column; gap: 10px; min-width: 210px; }
   .ctl-label { font-size: 10.5px; color: var(--ink-3); text-transform: uppercase;
@@ -102,6 +127,14 @@
     border: 1px solid var(--panel-line); border-radius: 8px; color: var(--ink-2);
     font-size: 12px; padding: 6px 10px; }
 
+  /* ── zoom controls (bottom-right) ── */
+  .zoom { position: fixed; right: 20px; bottom: 16px; z-index: 6;
+    display: flex; flex-direction: column; gap: 6px; }
+  .zoom button { width: 34px; height: 34px; border-radius: 9px; cursor: pointer;
+    background: var(--panel); border: 1px solid var(--panel-line); color: var(--ink-2);
+    font-size: 17px; line-height: 1; box-shadow: var(--shadow); }
+  .zoom button:hover { color: var(--ink); }
+
   /* ── tooltip ── */
   #tip { position: fixed; z-index: 8; pointer-events: none; opacity: 0;
     background: var(--panel); border: 1px solid var(--panel-line);
@@ -109,6 +142,14 @@
     font-size: 12.5px; max-width: 260px; transition: opacity .1s; }
   #tip b { display: block; margin-bottom: 2px; font-size: 13px; }
   #tip .k { font-size: 11px; color: var(--ink-3); }
+
+  /* ── market tag (badge) ── */
+  .mtag { display: inline-flex; align-items: center; font-size: 10.5px; font-weight: 600;
+    padding: 1px 7px; border-radius: 20px; letter-spacing: .02em; white-space: nowrap; }
+  .mtag.mkt-kospi    { color: var(--mkt-kospi);    background: color-mix(in srgb, var(--mkt-kospi) 15%, transparent); }
+  .mtag.mkt-kosdaq   { color: var(--mkt-kosdaq);   background: color-mix(in srgb, var(--mkt-kosdaq) 15%, transparent); }
+  .mtag.mkt-konex    { color: var(--mkt-konex);    background: color-mix(in srgb, var(--mkt-konex) 15%, transparent); }
+  .mtag.mkt-unlisted { color: var(--ink-3);        background: color-mix(in srgb, var(--ink-3) 13%, transparent); }
 
   /* ── detail panel ── */
   #detail { position: fixed; top: 0; right: 0; height: 100%; width: 340px;
@@ -121,14 +162,15 @@
   .dt-kind { display: inline-flex; align-items: center; gap: 6px; font-size: 11px;
     font-weight: 600; padding: 3px 9px; border-radius: 20px; }
   .dt-name { margin: 10px 0 2px; font-size: 18px; font-weight: 700; word-break: keep-all; line-height: 1.3; }
-  .dt-meta { font-size: 12px; color: var(--ink-2); }
+  .dt-meta { font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .dt-body { padding: 8px 12px 20px; overflow-y: auto; }
   .dt-sec { font-size: 10.5px; color: var(--ink-3); text-transform: uppercase;
     letter-spacing: .06em; padding: 12px 8px 6px; }
   .co { display: flex; align-items: center; gap: 8px; padding: 9px 10px;
     border-radius: 9px; text-decoration: none; color: var(--ink); font-size: 13.5px; }
   .co:hover { background: var(--bg); }
-  .co .arrow { margin-left: auto; color: var(--ink-3); font-size: 12px; }
+  .co .cname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .co .arrow { margin-left: auto; color: var(--ink-3); font-size: 12px; flex: none; padding-left: 6px; }
   .co.nolink { color: var(--ink-2); cursor: default; }
   .dt-close { position: absolute; top: 14px; right: 14px; cursor: pointer;
     background: none; border: none; color: var(--ink-3); font-size: 20px; line-height: 1; padding: 4px; }
@@ -157,6 +199,7 @@
 <div class="overlay tr">
   <button class="theme-btn" id="theme" aria-label="테마 전환">◐ 테마</button>
   <div class="card legend" id="legend"></div>
+  <div class="card legend" id="legend-mkt"></div>
   <div class="card controls">
     <label class="ctl-label" for="q">검색</label>
     <input type="search" id="q" placeholder="이름·회사…" autocomplete="off">
@@ -165,8 +208,15 @@
   </div>
 </div>
 
+<div class="zoom">
+  <button id="z-in" aria-label="확대" title="확대">+</button>
+  <button id="z-out" aria-label="축소" title="축소">−</button>
+  <button id="z-fit" aria-label="전체 보기" title="전체 보기">⤢</button>
+</div>
+
 <div class="foot">사실 표기 — 판정 아님. 등장은 공시 인수자 명단 기준이며 동명이인·동명 법인은 미확인.
-  각 회사명을 열면 원본 공시로 이동.</div>
+  회사 노드 링 색은 시장구분(KOSPI·KOSDAQ·코넥스·비상장). 회사명을 열면 원본 공시로 이동.
+  스크롤=확대/축소, 빈 곳 드래그=이동, 노드 드래그=배치.</div>
 
 <div id="tip"></div>
 
@@ -187,6 +237,13 @@ const KIND = {
   corp:    { ko: "법인", varname: "--corp" },
   person:  { ko: "개인", varname: "--person" },
   company: { ko: "회사", varname: "--company" },
+};
+// 시장구분 — 회사 노드 링·배지·범례 공용. mkt 코드는 빌드 스크립트와 일치.
+const MARKET = {
+  kospi:    { ko: "KOSPI",  varname: "--mkt-kospi" },
+  kosdaq:   { ko: "KOSDAQ", varname: "--mkt-kosdaq" },
+  konex:    { ko: "코넥스",  varname: "--mkt-konex" },
+  unlisted: { ko: "비상장",  varname: "--mkt-unlisted" },
 };
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 
@@ -210,50 +267,86 @@ const rOf = n => n.type === "company"
 
 // ── summary + legend ──
 const actorNodes = nodes.filter(n => n.type !== "company");
+const companyNodes = nodes.filter(n => n.type === "company");
 document.getElementById("s-actors").textContent = actorNodes.length;
-document.getElementById("s-corps").textContent = nodes.length - actorNodes.length;
+document.getElementById("s-corps").textContent = companyNodes.length;
 document.getElementById("s-links").textContent = links.length;
 const legend = document.getElementById("legend");
 ["fund","corp","person","company"].forEach(k => {
-  const c = actorNodes.filter(n => n.type === k).length ||
-            (k === "company" ? nodes.length - actorNodes.length : 0);
+  const c = k === "company" ? companyNodes.length
+                            : actorNodes.filter(n => n.type === k).length;
   const row = document.createElement("div"); row.className = "lg-row";
   row.innerHTML = `<span class="dot" style="background:var(${KIND[k].varname})"></span>
     ${KIND[k].ko}<span class="lg-count mono">${c}</span>`;
   legend.appendChild(row);
 });
+// 시장구분 범례 (회사 노드 링) — 실제 존재하는 구분만 표기
+const mktLegend = document.getElementById("legend-mkt");
+mktLegend.innerHTML = `<div class="lg-title">회사 시장구분 (링)</div>`;
+["kospi","kosdaq","konex","unlisted"].forEach(m => {
+  const c = companyNodes.filter(n => (n.mkt || "unlisted") === m).length;
+  if (!c) return;
+  const row = document.createElement("div"); row.className = "lg-row";
+  row.innerHTML = `<span class="ring" style="color:var(${MARKET[m].varname})"></span>
+    ${MARKET[m].ko}<span class="lg-count mono">${c}</span>`;
+  mktLegend.appendChild(row);
+});
 
-// ── svg layers ──
+// ── svg layers (viewport g로 감싸 줌/팬 변환 적용) ──
+const vp = document.createElementNS(NS, "g"); vp.setAttribute("id", "vp");
+svg.appendChild(vp);
 const gEdge = document.createElementNS(NS, "g");
 const gNode = document.createElementNS(NS, "g");
-svg.append(gEdge, gNode);
+vp.append(gEdge, gNode);
 const edgeEls = links.map(l => {
   const e = document.createElementNS(NS, "line"); e.setAttribute("class", "edge");
   gEdge.appendChild(e); return e;
 });
 const nodeEls = nodes.map(n => {
   const g = document.createElementNS(NS, "g");
-  g.setAttribute("class", "node" + (n.deg >= 4 && n.type !== "company" ? " big" : ""));
+  const big = n.deg >= 4 && n.type !== "company";
+  let cls = "node" + (big ? " big" : "");
+  if (n.type === "company") cls += " company mkt-" + (n.mkt || "unlisted");
+  g.setAttribute("class", cls);
   const c = document.createElementNS(NS, "circle");
   c.setAttribute("r", rOf(n));
   c.setAttribute("fill", css(KIND[n.type].varname));
   g.appendChild(c);
-  if (n.type !== "company" && n.deg >= 3) {
-    const t = document.createElementNS(NS, "text");
-    t.setAttribute("x", rOf(n) + 3); t.setAttribute("y", 3.5);
-    t.textContent = n.label.length > 16 ? n.label.slice(0, 15) + "…" : n.label;
-    g.appendChild(t);
-  }
+  // 라벨: 행위자 deg>=3 은 상시, 나머지(회사·저차수 행위자)는 확대 시(lbl2)만 노출
+  const primary = n.type !== "company" && n.deg >= 3;
+  const t = document.createElementNS(NS, "text");
+  t.setAttribute("x", rOf(n) + 3); t.setAttribute("y", 3.5);
+  t.textContent = n.label.length > 16 ? n.label.slice(0, 15) + "…" : n.label;
+  if (!primary) t.setAttribute("class", "lbl2");
+  g.appendChild(t);
   gNode.appendChild(g);
   return { g, c, n };
 });
 
-// ── force simulation (velocity Verlet) ──
-let dragging = null, dragMoved = false;   // referenced in tick(); declared before loop starts
+// ── viewport transform (zoom / pan) ──
+const view = { x: 0, y: 0, k: 1 };
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+function applyView() {
+  vp.setAttribute("transform", `translate(${view.x},${view.y}) scale(${view.k})`);
+  svg.classList.toggle("zoomed", view.k >= 1.7);
+}
+function zoomAt(cx, cy, factor) {
+  const nk = clamp(view.k * factor, 0.2, 6);
+  const f = nk / view.k;
+  view.x = cx - (cx - view.x) * f;
+  view.y = cy - (cy - view.y) * f;
+  view.k = nk;
+  applyView();
+}
+const worldX = ev => (ev.clientX - view.x) / view.k;
+const worldY = ev => (ev.clientY - view.y) / view.k;
+applyView();
+
+// ── force simulation (velocity Verlet, world-space) ──
+let dragging = null, dragMoved = false, panning = false, panStart = null;
 let alpha = 1;
 function tick() {
   const k = alpha;
-  // repulsion (O(n^2), fine at this scale)
   for (let i = 0; i < nodes.length; i++) {
     const a = nodes[i];
     for (let j = i + 1; j < nodes.length; j++) {
@@ -265,7 +358,6 @@ function tick() {
       a.vx += dx*f; a.vy += dy*f; b.vx -= dx*f; b.vy -= dy*f;
     }
   }
-  // link springs
   for (const l of links) {
     const a = l.source, b = l.target;
     let dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1;
@@ -273,15 +365,12 @@ function tick() {
     const f = (d - ideal) * 0.04 * k; dx /= d; dy /= d;
     a.vx += dx*f; a.vy += dy*f; b.vx -= dx*f; b.vy -= dy*f;
   }
-  // centering + integrate
   for (const n of nodes) {
     n.vx += (W/2 - n.x) * 0.0038 * k;
     n.vy += (H/2 - n.y) * 0.0038 * k;
     if (n === dragging) continue;
     n.vx *= 0.86; n.vy *= 0.86;
     n.x += n.vx; n.y += n.vy;
-    n.x = Math.max(20, Math.min(W - 20, n.x));
-    n.y = Math.max(20, Math.min(H - 20, n.y));
   }
   alpha *= 0.994; if (alpha < 0.02) alpha = 0.02;
   draw();
@@ -312,67 +401,101 @@ function highlight(id) {
     e.classList.toggle("dim", !!id && !on);
   });
 }
+function tipHtml(n) {
+  if (n.type === "company") {
+    const m = MARKET[n.mkt || "unlisted"];
+    return `<b>${esc(n.label)}</b><span class="k">${m.ko} · 접점 행위자 ${n.deg}명</span>`;
+  }
+  return `<b>${esc(n.label)}</b><span class="k">${KIND[n.type].ko} · ` +
+    `회사 ${n.deg}곳 · 등장 ${n.sight}건</span>`;
+}
 nodeEls.forEach(({ g, n }) => {
   g.addEventListener("pointerenter", ev => {
-    if (dragging) return;
+    if (dragging || panning) return;
     focused = n.id; highlight(n.id);
-    tip.style.opacity = 1;
-    tip.innerHTML = `<b>${esc(n.label)}</b><span class="k">${KIND[n.type].ko} · ` +
-      (n.type === "company" ? `행위자 ${n.deg}명 접점` : `회사 ${n.deg}곳 · 등장 ${n.sight}건`) + `</span>`;
+    tip.style.opacity = 1; tip.innerHTML = tipHtml(n);
   });
   g.addEventListener("pointermove", ev => {
     tip.style.left = Math.min(ev.clientX + 14, innerWidth - tip.offsetWidth - 8) + "px";
     tip.style.top = (ev.clientY + 14) + "px";
   });
   g.addEventListener("pointerleave", () => {
-    if (dragging) return;
+    if (dragging || panning) return;
     focused = null; highlight(null); tip.style.opacity = 0;
   });
-  g.addEventListener("click", ev => { ev.stopPropagation(); openDetail(n); });
 });
-svg.addEventListener("click", () => { closeDetail(); });
 
-// ── drag ──
+// ── drag node / pan background ──
+let panMoved = false;
 svg.addEventListener("pointerdown", ev => {
-  const hit = nodeEls.find(({ n }) => Math.hypot(n.x - px(ev), n.y - py(ev)) < rOf(n) + 4);
-  if (!hit) return;
-  dragging = hit.n; dragMoved = false; alpha = Math.max(alpha, .5);
+  const wx = worldX(ev), wy = worldY(ev);
+  const hit = nodeEls.find(({ n }) => Math.hypot(n.x - wx, n.y - wy) < rOf(n) + 6/view.k);
+  if (hit) {
+    dragging = hit.n; dragMoved = false; alpha = Math.max(alpha, .5);
+  } else {
+    panning = true; panMoved = false;
+    panStart = { x: ev.clientX - view.x, y: ev.clientY - view.y };
+    svg.classList.add("panning"); tip.style.opacity = 0;
+  }
   svg.setPointerCapture(ev.pointerId);
 });
 svg.addEventListener("pointermove", ev => {
-  if (!dragging) return;
-  dragMoved = true;
-  dragging.x = px(ev); dragging.y = py(ev); dragging.vx = dragging.vy = 0;
-  if (reduce) draw();
+  if (dragging) {
+    dragMoved = true;
+    dragging.x = worldX(ev); dragging.y = worldY(ev); dragging.vx = dragging.vy = 0;
+    alpha = Math.max(alpha, .3);
+    if (reduce) draw();
+  } else if (panning) {
+    panMoved = true;
+    view.x = ev.clientX - panStart.x; view.y = ev.clientY - panStart.y;
+    applyView();
+  }
 });
 svg.addEventListener("pointerup", ev => {
   if (dragging && !dragMoved) openDetail(dragging);
-  dragging = null;
+  else if (panning && !panMoved) closeDetail();  // 빈 곳 '탭' → 패널 닫기 (드래그 팬은 유지)
+  dragging = null; panning = false; svg.classList.remove("panning");
 });
-const px = ev => (ev.clientX);
-const py = ev => (ev.clientY);
+
+// ── wheel zoom + zoom buttons ──
+svg.addEventListener("wheel", ev => {
+  ev.preventDefault();
+  zoomAt(ev.clientX, ev.clientY, ev.deltaY < 0 ? 1.12 : 1/1.12);
+}, { passive: false });
+document.getElementById("z-in").onclick = () => zoomAt(W/2, H/2, 1.3);
+document.getElementById("z-out").onclick = () => zoomAt(W/2, H/2, 1/1.3);
+document.getElementById("z-fit").onclick = () => {
+  view.x = 0; view.y = 0; view.k = 1; applyView(); alpha = Math.max(alpha, .3);
+};
 
 // ── detail panel ──
 const detail = document.getElementById("detail");
+function mtag(mkt) {
+  const m = MARKET[mkt || "unlisted"];
+  return `<span class="mtag mkt-${mkt || "unlisted"}">${m.ko}</span>`;
+}
 function openDetail(n) {
-  highlight(n.id);
+  highlight(n.id); focused = n.id;
   const kv = css(KIND[n.type].varname);
   const kind = document.getElementById("dt-kind");
   kind.textContent = KIND[n.type].ko;
   kind.style.background = kv + "22"; kind.style.color = kv;
   document.getElementById("dt-name").textContent = n.label;
-  document.getElementById("dt-meta").textContent = n.type === "company"
-    ? `이 회사에 접점을 가진 추적 행위자 ${n.deg}명`
-    : `문제 회사 ${n.deg}곳 · 공시 등장 ${n.sight}건`;
+  const meta = document.getElementById("dt-meta");
+  if (n.type === "company") {
+    meta.innerHTML = mtag(n.mkt) + `<span>접점 추적 행위자 ${n.deg}명</span>`;
+  } else {
+    meta.innerHTML = `<span>문제 회사 ${n.deg}곳 · 공시 등장 ${n.sight}건</span>`;
+  }
   const body = document.getElementById("dt-body");
   body.innerHTML = "";
   if (n.type === "company") {
     body.innerHTML = `<div class="dt-sec">이 회사에 등장한 행위자</div>`;
     [...adj[n.id]].map(id => byId[id]).sort((a,b)=>b.deg-a.deg).forEach(a => {
       const row = document.createElement("div"); row.className = "co nolink";
-      row.innerHTML = `<span class="dot" style="background:var(${KIND[a.type].varname})"></span>${esc(a.label)}`;
-      row.style.cursor = "pointer";
-      row.onclick = () => openDetail(a);
+      row.innerHTML = `<span class="dot" style="background:var(${KIND[a.type].varname})"></span>` +
+        `<span class="cname">${esc(a.label)}</span>`;
+      row.style.cursor = "pointer"; row.onclick = () => openDetail(a);
       body.appendChild(row);
     });
   } else {
@@ -381,20 +504,21 @@ function openDetail(n) {
       const a = document.createElement(co.url ? "a" : "div");
       a.className = "co" + (co.url ? "" : " nolink");
       if (co.url) { a.href = co.url; a.target = "_blank"; a.rel = "noopener"; }
-      a.innerHTML = `<span class="dot" style="background:var(--company)"></span>` +
-        `${esc(co.name)}` + (co.url ? `<span class="arrow">공시 ↗</span>` : "");
+      a.innerHTML = `<span class="cname">${esc(co.name)}</span>` + mtag(co.mkt) +
+        (co.url ? `<span class="arrow">공시 ↗</span>` : "");
       body.appendChild(a);
     });
   }
   detail.classList.add("open");
 }
-function closeDetail() { detail.classList.remove("open"); highlight(focused); }
+function closeDetail() { detail.classList.remove("open"); highlight(focused = null); }
 document.getElementById("dt-close").addEventListener("click", closeDetail);
 
 // ── filter + search ──
 const degSlider = document.getElementById("deg");
 const degVal = document.getElementById("deg-val");
 const q = document.getElementById("q");
+const idx = new Map(nodes.map((n, i) => [n, i]));
 function applyFilter() {
   const minDeg = +degSlider.value;
   const term = q.value.trim().toLowerCase();
@@ -415,8 +539,8 @@ function applyFilter() {
   });
   edgeEls.forEach((e, i) => {
     const l = links[i];
-    const on = nodeEls[nodes.indexOf(l.source)].g.style.display !== "none" &&
-               nodeEls[nodes.indexOf(l.target)].g.style.display !== "none";
+    const on = nodeEls[idx.get(l.source)].g.style.display !== "none" &&
+               nodeEls[idx.get(l.target)].g.style.display !== "none";
     e.style.display = on ? "" : "none";
   });
   alpha = Math.max(alpha, .3);
