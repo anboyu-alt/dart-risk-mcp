@@ -52,6 +52,7 @@ def main():
     exact_pairs = []           # (회사, 행위자, 보유비율들)
     near_pairs = []            # (회사, 행위자, elestock보고자)
     shown = 0
+    dumped = 0                 # 원시 레코드 덤프한 회사 수
 
     for i, (cc, meta) in enumerate(sorted(cidx.items()), 1):
         entrants = set(meta["entrants"].keys())      # 정규화된 진입자
@@ -72,6 +73,18 @@ def main():
         exact = entrants & set(reporters.keys())
         for e in exact:
             exact_pairs.append((meta["corp"], e, sorted(reporters[e])))
+        # 매칭된 회사 첫 2곳은 원시 elestock 레코드를 통째로 덤프 →
+        # 어떤 필드가 '보유비율'인지 확정(현 stkqy_rt가 None인 원인 규명).
+        if exact and dumped < 2:
+            dumped += 1
+            print(f"[RAW] {meta['corp']} — 매칭 보고자 {sorted(exact)} 원시 레코드:")
+            for r in recs:
+                if normalize_name((r.get('repror') or '').strip()) in exact:
+                    kv = {k: v for k, v in r.items() if v not in (None, "", "-")}
+                    print(f"[RAW]   {json.dumps(kv, ensure_ascii=False)}")
+            if dumped >= 2:
+                print("[RAW] 원시 덤프 2건 확보 — 조기 종료(필드명 확정용).")
+                break
         # 근접(이름 갭 후보)
         near_here = False
         for e in entrants:
