@@ -1104,10 +1104,11 @@ def fetch_shareholder_status(
 
 
 def fetch_bulk_holdings(corp_code: str, api_key: str) -> list[dict]:
-    """DART /elestock.json — 5% 대량보유 상황보고 전체 이력(1회 호출).
+    """DART /elestock.json — 임원·주요주주 특정증권 소유보고 전체 이력(1회 호출).
 
-    행위자 진입/이탈 추적용 경량 조회. 각 레코드 주요 필드:
-      repror(보고자) · stkqy_rt(보유비율%) · rcept_dt(YYYYMMDD) · rcept_no.
+    각 레코드 주요 필드: repror(보고자) · sp_stock_lmp_rate(소유비율%) ·
+    sp_stock_lmp_irds_rate(소유비율 증감) · rcept_dt · rcept_no.
+    ※ 등기임원·지배주주 중심. 외부 5% 투자자 진입/이탈은 fetch_major_holdings 사용.
     status≠000 또는 오류 시 빈 리스트.
     """
     if not api_key:
@@ -1120,9 +1121,33 @@ def fetch_bulk_holdings(corp_code: str, api_key: str) -> list[dict]:
         data = resp.json()
         if data.get("status") == "000":
             return data.get("list", []) or []
-        _log_dart_status(data.get("status", "?"), f"대량보유이력 corp_code={corp_code}")
+        _log_dart_status(data.get("status", "?"), f"임원소유보고 corp_code={corp_code}")
     except Exception as e:
-        log.debug("대량보유 이력 조회 실패 (%s): %s", corp_code, e)
+        log.debug("임원 소유보고 조회 실패 (%s): %s", corp_code, e)
+    return []
+
+
+def fetch_major_holdings(corp_code: str, api_key: str) -> list[dict]:
+    """DART /majorstock.json — 주식등의 대량보유상황보고서(5% rule) 전체 이력(1회 호출).
+
+    외부 투자자(투자조합·법인 등)의 5% 진입·이탈이 신고되는 핵심 소스.
+    각 레코드 주요 필드: repror(보고자) · stkrt(보유비율%) ·
+    stkrt_irds(보유비율 증감, 음수=처분) · rcept_dt · rcept_no · report_tp(보고구분).
+    status≠000 또는 오류 시 빈 리스트.
+    """
+    if not api_key:
+        return []
+    try:
+        resp = _retry(
+            "GET", f"{DART_BASE}/majorstock.json",
+            params={"crtfc_key": api_key, "corp_code": corp_code},
+        )
+        data = resp.json()
+        if data.get("status") == "000":
+            return data.get("list", []) or []
+        _log_dart_status(data.get("status", "?"), f"대량보유보고 corp_code={corp_code}")
+    except Exception as e:
+        log.debug("대량보유 보고 조회 실패 (%s): %s", corp_code, e)
     return []
 
 
