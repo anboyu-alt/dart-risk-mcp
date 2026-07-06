@@ -1,0 +1,66 @@
+name: Publish network viz
+
+# 행위자 연결망 HTML을 매일 빌드해 Cloudflare Pages(비공개 시크릿 URL)에 배포.
+# refresh-known-actors(04:00 KST)가 sightings를 갱신한 뒤 돌도록 04:40 KST에 예약.
+#
+# 비공개 원리: 무인증이되 (1) 랜덤 *.pages.dev 프로젝트명 (2) 경로에 시크릿
+# 토큰 (3) noindex 메타 → 주소를 모르면 사실상 접근 불가.
+#
+# 필요한 Secrets (없으면 배포 스텝은 조용히 스킵):
+#   CLOUDFLARE_API_TOKEN   — Pages 편집 권한 토큰
+#   CLOUDFLARE_ACCOUNT_ID  — Cloudflare 계정 ID
+#   CF_PAGES_PROJECT       — Pages 프로젝트명 (서브도메인이 됨, 비공개 유지)
+#   NETWORK_URL_TOKEN      — URL 경로 시크릿 토큰 (예: 무작위 20자)
+#   SIGHTINGS_REPO_TOKEN   — private sightings 저장소 읽기용 (기존 재사용)
+
+on:
+  schedule:
+    - cron: "40 19 * * *"   # UTC 19:40 = 한국 04:40 (refresh 이후)
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install package
+        run: pip install -e .
+      - name: Checkout sightings (private)
+        uses: actions/checkout@v5
+        with:
+          repository: anboyu-alt/dart-risk-mcp-sightings
+          token: ${{ secrets.SIGHTINGS_REPO_TOKEN }}
+          path: _sightings
+      - name: Build network HTML
+        env:
+          SIGHTINGS_PATH: _sightings/sightings.json
+          NETWORK_URL_TOKEN: ${{ secrets.NETWORK_URL_TOKEN }}
+        run: |
+          TOKEN="${NETWORK_URL_TOKEN:-preview}"
+          mkdir -p "dist/$TOKEN"
+          python scripts/build_network_html.py --out "dist/$TOKEN/index.html"
+          # 루트는 빈 페이지(디렉터리 리스팅 방지) — 토큰 경로로만 접근
+          printf '<!doctype html><title>.</title>' > dist/index.html
+          echo "빌드 경로: /$TOKEN/"
+      - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CF_PAGES_PROJECT: ${{ secrets.CF_PAGES_PROJECT }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CF_PAGES_PROJECT" ]; then
+            echo "::notice::Cloudflare Secrets 미설정 — 배포 스킵 (빌드만 검증)"
+            exit 0
+          fi
+          # 프로젝트가 없으면 자동 생성(대시보드 수동 생성 불필요). 이미 있으면 무시.
+          npx --yes wrangler@3 pages project create "$CF_PAGES_PROJECT" \
+            --production-branch=production 2>/dev/null || true
+          npx --yes wrangler@3 pages deploy dist \
+            --project-name="$CF_PAGES_PROJECT" --branch=production --commit-dirty=true

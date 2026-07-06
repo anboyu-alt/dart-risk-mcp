@@ -1,0 +1,439 @@
+<title>행위자 연결망 — DART 자금조달 공시</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<style>
+  :root {
+    --bg: #f4f6f8;           /* blue-slate biased light ground */
+    --panel: #ffffff;
+    --panel-line: #dbe0e6;
+    --ink: #12161c;
+    --ink-2: #59616c;
+    --ink-3: #8b929c;
+    --company: #9aa4b2;      /* recessive connective tissue */
+    --company-line: #c3cad3;
+    --fund: #eb6834;         /* 조합 — highest interest */
+    --corp: #2a78d6;         /* 법인 */
+    --person: #d55181;       /* 개인 */
+    --accent: #2a78d6;
+    --edge: rgba(90,100,115,.22);
+    --edge-hi: rgba(42,120,214,.75);
+    --shadow: 0 6px 24px rgba(20,28,40,.14);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a; --panel: #1c1f25; --panel-line: #2c313a;
+      --ink: #eef1f5; --ink-2: #a6adb8; --ink-3: #6d7580;
+      --company: #6b7482; --company-line: #3a414c;
+      --fund: #d95926; --corp: #3987e5; --person: #d55181; --accent: #3987e5;
+      --edge: rgba(150,162,178,.16); --edge-hi: rgba(57,135,229,.8);
+      --shadow: 0 8px 30px rgba(0,0,0,.5);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f4f6f8; --panel: #ffffff; --panel-line: #dbe0e6;
+    --ink: #12161c; --ink-2: #59616c; --ink-3: #8b929c;
+    --company: #9aa4b2; --company-line: #c3cad3;
+    --fund: #eb6834; --corp: #2a78d6; --person: #d55181; --accent: #2a78d6;
+    --edge: rgba(90,100,115,.22); --edge-hi: rgba(42,120,214,.75);
+    --shadow: 0 6px 24px rgba(20,28,40,.14);
+  }
+  :root[data-theme="dark"] {
+    --bg: #14161a; --panel: #1c1f25; --panel-line: #2c313a;
+    --ink: #eef1f5; --ink-2: #a6adb8; --ink-3: #6d7580;
+    --company: #6b7482; --company-line: #3a414c;
+    --fund: #d95926; --corp: #3987e5; --person: #d55181; --accent: #3987e5;
+    --edge: rgba(150,162,178,.16); --edge-hi: rgba(57,135,229,.8);
+    --shadow: 0 8px 30px rgba(0,0,0,.5);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink); overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: ui-monospace, "SF Mono", "SFMono-Regular", Menlo,
+          Consolas, monospace; font-variant-numeric: tabular-nums; }
+  #stage { position: fixed; inset: 0; }
+  svg { width: 100%; height: 100%; display: block; touch-action: none; }
+  .edge { stroke: var(--edge); stroke-width: 1; }
+  .edge.hi { stroke: var(--edge-hi); stroke-width: 1.6; }
+  .node circle { cursor: pointer; stroke: var(--bg); stroke-width: 1.5; }
+  .node.dim { opacity: .12; transition: opacity .15s; }
+  .edge.dim { opacity: .04; transition: opacity .15s; }
+  .node text {
+    fill: var(--ink-2); font-size: 10px; pointer-events: none;
+    paint-order: stroke; stroke: var(--bg); stroke-width: 3px;
+    stroke-linejoin: round;
+  }
+  .node.big text { fill: var(--ink); font-size: 12px; font-weight: 600; }
+
+  /* ── overlays ── */
+  .overlay { position: fixed; z-index: 5; }
+  .tl { top: 18px; left: 20px; max-width: 340px; pointer-events: none;
+        padding: 4px 8px 8px; border-radius: 14px;
+        background: radial-gradient(120% 100% at 0% 0%, var(--bg) 55%, transparent 100%); }
+  h1 { margin: 0; font-size: 19px; letter-spacing: -.01em; font-weight: 700; }
+  .sub { margin: 4px 0 12px; font-size: 12.5px; color: var(--ink-2); line-height: 1.5; }
+  .stats { display: flex; gap: 16px; }
+  .stat { display: flex; flex-direction: column; }
+  .stat b { font-size: 21px; font-weight: 700; letter-spacing: -.02em; }
+  .stat span { font-size: 10.5px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .06em; }
+
+  .tr { top: 18px; right: 20px; display: flex; flex-direction: column;
+        gap: 12px; align-items: flex-end; }
+  .card { background: var(--panel); border: 1px solid var(--panel-line);
+          border-radius: 12px; box-shadow: var(--shadow); padding: 12px 14px; }
+  .legend { display: flex; flex-direction: column; gap: 8px; }
+  .lg-row { display: flex; align-items: center; gap: 9px; font-size: 12.5px; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; flex: none; }
+  .lg-count { margin-left: auto; color: var(--ink-3); font-size: 11px; }
+  .controls { display: flex; flex-direction: column; gap: 10px; min-width: 210px; }
+  .ctl-label { font-size: 10.5px; color: var(--ink-3); text-transform: uppercase;
+               letter-spacing: .06em; display: flex; justify-content: space-between; }
+  input[type=search] {
+    width: 100%; padding: 7px 10px; border-radius: 8px; font-size: 13px;
+    border: 1px solid var(--panel-line); background: var(--bg); color: var(--ink);
+  }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .theme-btn { pointer-events: auto; cursor: pointer; background: var(--panel);
+    border: 1px solid var(--panel-line); border-radius: 8px; color: var(--ink-2);
+    font-size: 12px; padding: 6px 10px; }
+
+  /* ── tooltip ── */
+  #tip { position: fixed; z-index: 8; pointer-events: none; opacity: 0;
+    background: var(--panel); border: 1px solid var(--panel-line);
+    border-radius: 9px; box-shadow: var(--shadow); padding: 8px 11px;
+    font-size: 12.5px; max-width: 260px; transition: opacity .1s; }
+  #tip b { display: block; margin-bottom: 2px; font-size: 13px; }
+  #tip .k { font-size: 11px; color: var(--ink-3); }
+
+  /* ── detail panel ── */
+  #detail { position: fixed; top: 0; right: 0; height: 100%; width: 340px;
+    background: var(--panel); border-left: 1px solid var(--panel-line);
+    box-shadow: var(--shadow); z-index: 9; transform: translateX(100%);
+    transition: transform .22s cubic-bezier(.4,0,.2,1); display: flex;
+    flex-direction: column; }
+  #detail.open { transform: none; }
+  .dt-head { padding: 20px 20px 14px; border-bottom: 1px solid var(--panel-line); }
+  .dt-kind { display: inline-flex; align-items: center; gap: 6px; font-size: 11px;
+    font-weight: 600; padding: 3px 9px; border-radius: 20px; }
+  .dt-name { margin: 10px 0 2px; font-size: 18px; font-weight: 700; word-break: keep-all; line-height: 1.3; }
+  .dt-meta { font-size: 12px; color: var(--ink-2); }
+  .dt-body { padding: 8px 12px 20px; overflow-y: auto; }
+  .dt-sec { font-size: 10.5px; color: var(--ink-3); text-transform: uppercase;
+    letter-spacing: .06em; padding: 12px 8px 6px; }
+  .co { display: flex; align-items: center; gap: 8px; padding: 9px 10px;
+    border-radius: 9px; text-decoration: none; color: var(--ink); font-size: 13.5px; }
+  .co:hover { background: var(--bg); }
+  .co .arrow { margin-left: auto; color: var(--ink-3); font-size: 12px; }
+  .co.nolink { color: var(--ink-2); cursor: default; }
+  .dt-close { position: absolute; top: 14px; right: 14px; cursor: pointer;
+    background: none; border: none; color: var(--ink-3); font-size: 20px; line-height: 1; padding: 4px; }
+  .foot { position: fixed; bottom: 12px; left: 20px; z-index: 5;
+    font-size: 11px; color: var(--ink-3); max-width: 420px; line-height: 1.5; }
+  @media (max-width: 640px) {
+    .tr { display: none; } #detail { width: 100%; } .tl { max-width: 62%; }
+  }
+</style>
+
+<div id="stage">
+  <svg id="svg" role="img" aria-label="행위자-회사 연결망 그래프"></svg>
+</div>
+
+<div class="overlay tl">
+  <h1>행위자 연결망</h1>
+  <p class="sub">서로 다른 문제 회사 <b>2곳 이상</b>에 반복 등장한 개인·조합·법인과
+    그들이 인수자로 나타난 회사의 연결. 한 회사군을 공유하는 행위자 무리가 곧 세력의 지문.</p>
+  <div class="stats">
+    <div class="stat"><b class="mono" id="s-actors">0</b><span>행위자</span></div>
+    <div class="stat"><b class="mono" id="s-corps">0</b><span>회사</span></div>
+    <div class="stat"><b class="mono" id="s-links">0</b><span>연결</span></div>
+  </div>
+</div>
+
+<div class="overlay tr">
+  <button class="theme-btn" id="theme" aria-label="테마 전환">◐ 테마</button>
+  <div class="card legend" id="legend"></div>
+  <div class="card controls">
+    <label class="ctl-label" for="q">검색</label>
+    <input type="search" id="q" placeholder="이름·회사…" autocomplete="off">
+    <div class="ctl-label"><span for="deg">최소 회사 수</span><span class="mono" id="deg-val">2</span></div>
+    <input type="range" id="deg" min="2" max="8" value="2" step="1">
+  </div>
+</div>
+
+<div class="foot">사실 표기 — 판정 아님. 등장은 공시 인수자 명단 기준이며 동명이인·동명 법인은 미확인.
+  각 회사명을 열면 원본 공시로 이동.</div>
+
+<div id="tip"></div>
+
+<aside id="detail" aria-live="polite">
+  <div class="dt-head">
+    <button class="dt-close" id="dt-close" aria-label="닫기">×</button>
+    <span class="dt-kind" id="dt-kind"></span>
+    <h2 class="dt-name" id="dt-name"></h2>
+    <div class="dt-meta" id="dt-meta"></div>
+  </div>
+  <div class="dt-body" id="dt-body"></div>
+</aside>
+
+<script>
+const GRAPH = /*__GRAPH_DATA__*/{"nodes":[],"links":[]}/*__END__*/;
+const KIND = {
+  fund:    { ko: "조합", varname: "--fund" },
+  corp:    { ko: "법인", varname: "--corp" },
+  person:  { ko: "개인", varname: "--person" },
+  company: { ko: "회사", varname: "--company" },
+};
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+const svg = document.getElementById("svg");
+const NS = "http://www.w3.org/2000/svg";
+let W = innerWidth, H = innerHeight;
+
+// ── build node/link objects ──
+const nodes = GRAPH.nodes.map(n => ({ ...n,
+  x: W/2 + (Math.random()-.5)*Math.min(W,H)*.34,
+  y: H/2 + (Math.random()-.5)*Math.min(W,H)*.34, vx:0, vy:0 }));
+const byId = Object.fromEntries(nodes.map(n => [n.id, n]));
+const links = GRAPH.links.map(l => ({ source: byId[l.source], target: byId[l.target] }))
+                         .filter(l => l.source && l.target);
+const adj = {}; nodes.forEach(n => adj[n.id] = new Set());
+links.forEach(l => { adj[l.source.id].add(l.target.id); adj[l.target.id].add(l.source.id); });
+
+const rOf = n => n.type === "company"
+  ? 3 + Math.sqrt(n.deg) * 1.4
+  : 4 + Math.sqrt(n.deg) * 2.4;
+
+// ── summary + legend ──
+const actorNodes = nodes.filter(n => n.type !== "company");
+document.getElementById("s-actors").textContent = actorNodes.length;
+document.getElementById("s-corps").textContent = nodes.length - actorNodes.length;
+document.getElementById("s-links").textContent = links.length;
+const legend = document.getElementById("legend");
+["fund","corp","person","company"].forEach(k => {
+  const c = actorNodes.filter(n => n.type === k).length ||
+            (k === "company" ? nodes.length - actorNodes.length : 0);
+  const row = document.createElement("div"); row.className = "lg-row";
+  row.innerHTML = `<span class="dot" style="background:var(${KIND[k].varname})"></span>
+    ${KIND[k].ko}<span class="lg-count mono">${c}</span>`;
+  legend.appendChild(row);
+});
+
+// ── svg layers ──
+const gEdge = document.createElementNS(NS, "g");
+const gNode = document.createElementNS(NS, "g");
+svg.append(gEdge, gNode);
+const edgeEls = links.map(l => {
+  const e = document.createElementNS(NS, "line"); e.setAttribute("class", "edge");
+  gEdge.appendChild(e); return e;
+});
+const nodeEls = nodes.map(n => {
+  const g = document.createElementNS(NS, "g");
+  g.setAttribute("class", "node" + (n.deg >= 4 && n.type !== "company" ? " big" : ""));
+  const c = document.createElementNS(NS, "circle");
+  c.setAttribute("r", rOf(n));
+  c.setAttribute("fill", css(KIND[n.type].varname));
+  g.appendChild(c);
+  if (n.type !== "company" && n.deg >= 3) {
+    const t = document.createElementNS(NS, "text");
+    t.setAttribute("x", rOf(n) + 3); t.setAttribute("y", 3.5);
+    t.textContent = n.label.length > 16 ? n.label.slice(0, 15) + "…" : n.label;
+    g.appendChild(t);
+  }
+  gNode.appendChild(g);
+  return { g, c, n };
+});
+
+// ── force simulation (velocity Verlet) ──
+let dragging = null, dragMoved = false;   // referenced in tick(); declared before loop starts
+let alpha = 1;
+function tick() {
+  const k = alpha;
+  // repulsion (O(n^2), fine at this scale)
+  for (let i = 0; i < nodes.length; i++) {
+    const a = nodes[i];
+    for (let j = i + 1; j < nodes.length; j++) {
+      const b = nodes[j];
+      let dx = a.x - b.x, dy = a.y - b.y, d2 = dx*dx + dy*dy || 1;
+      if (d2 > 90000) continue;
+      const f = (1500 * k) / d2;
+      const d = Math.sqrt(d2); dx /= d; dy /= d;
+      a.vx += dx*f; a.vy += dy*f; b.vx -= dx*f; b.vy -= dy*f;
+    }
+  }
+  // link springs
+  for (const l of links) {
+    const a = l.source, b = l.target;
+    let dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1;
+    const ideal = 46 + rOf(a) + rOf(b);
+    const f = (d - ideal) * 0.04 * k; dx /= d; dy /= d;
+    a.vx += dx*f; a.vy += dy*f; b.vx -= dx*f; b.vy -= dy*f;
+  }
+  // centering + integrate
+  for (const n of nodes) {
+    n.vx += (W/2 - n.x) * 0.0038 * k;
+    n.vy += (H/2 - n.y) * 0.0038 * k;
+    if (n === dragging) continue;
+    n.vx *= 0.86; n.vy *= 0.86;
+    n.x += n.vx; n.y += n.vy;
+    n.x = Math.max(20, Math.min(W - 20, n.x));
+    n.y = Math.max(20, Math.min(H - 20, n.y));
+  }
+  alpha *= 0.994; if (alpha < 0.02) alpha = 0.02;
+  draw();
+}
+function draw() {
+  for (let i = 0; i < links.length; i++) {
+    const l = links[i], e = edgeEls[i];
+    e.setAttribute("x1", l.source.x); e.setAttribute("y1", l.source.y);
+    e.setAttribute("x2", l.target.x); e.setAttribute("y2", l.target.y);
+  }
+  for (const { g, n } of nodeEls) g.setAttribute("transform", `translate(${n.x},${n.y})`);
+}
+let raf; function loop() { tick(); raf = requestAnimationFrame(loop); }
+const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+if (reduce) { for (let i = 0; i < 500; i++) tick(); alpha = 0.02; draw(); }
+else loop();
+
+// ── interaction: hover highlight ──
+const tip = document.getElementById("tip");
+let focused = null;
+function highlight(id) {
+  const nb = id ? adj[id] : null;
+  nodeEls.forEach(({ g, n }) =>
+    g.classList.toggle("dim", !!id && n.id !== id && !nb.has(n.id)));
+  edgeEls.forEach((e, i) => {
+    const l = links[i], on = id && (l.source.id === id || l.target.id === id);
+    e.classList.toggle("hi", !!on);
+    e.classList.toggle("dim", !!id && !on);
+  });
+}
+nodeEls.forEach(({ g, n }) => {
+  g.addEventListener("pointerenter", ev => {
+    if (dragging) return;
+    focused = n.id; highlight(n.id);
+    tip.style.opacity = 1;
+    tip.innerHTML = `<b>${esc(n.label)}</b><span class="k">${KIND[n.type].ko} · ` +
+      (n.type === "company" ? `행위자 ${n.deg}명 접점` : `회사 ${n.deg}곳 · 등장 ${n.sight}건`) + `</span>`;
+  });
+  g.addEventListener("pointermove", ev => {
+    tip.style.left = Math.min(ev.clientX + 14, innerWidth - tip.offsetWidth - 8) + "px";
+    tip.style.top = (ev.clientY + 14) + "px";
+  });
+  g.addEventListener("pointerleave", () => {
+    if (dragging) return;
+    focused = null; highlight(null); tip.style.opacity = 0;
+  });
+  g.addEventListener("click", ev => { ev.stopPropagation(); openDetail(n); });
+});
+svg.addEventListener("click", () => { closeDetail(); });
+
+// ── drag ──
+svg.addEventListener("pointerdown", ev => {
+  const hit = nodeEls.find(({ n }) => Math.hypot(n.x - px(ev), n.y - py(ev)) < rOf(n) + 4);
+  if (!hit) return;
+  dragging = hit.n; dragMoved = false; alpha = Math.max(alpha, .5);
+  svg.setPointerCapture(ev.pointerId);
+});
+svg.addEventListener("pointermove", ev => {
+  if (!dragging) return;
+  dragMoved = true;
+  dragging.x = px(ev); dragging.y = py(ev); dragging.vx = dragging.vy = 0;
+  if (reduce) draw();
+});
+svg.addEventListener("pointerup", ev => {
+  if (dragging && !dragMoved) openDetail(dragging);
+  dragging = null;
+});
+const px = ev => (ev.clientX);
+const py = ev => (ev.clientY);
+
+// ── detail panel ──
+const detail = document.getElementById("detail");
+function openDetail(n) {
+  highlight(n.id);
+  const kv = css(KIND[n.type].varname);
+  const kind = document.getElementById("dt-kind");
+  kind.textContent = KIND[n.type].ko;
+  kind.style.background = kv + "22"; kind.style.color = kv;
+  document.getElementById("dt-name").textContent = n.label;
+  document.getElementById("dt-meta").textContent = n.type === "company"
+    ? `이 회사에 접점을 가진 추적 행위자 ${n.deg}명`
+    : `문제 회사 ${n.deg}곳 · 공시 등장 ${n.sight}건`;
+  const body = document.getElementById("dt-body");
+  body.innerHTML = "";
+  if (n.type === "company") {
+    body.innerHTML = `<div class="dt-sec">이 회사에 등장한 행위자</div>`;
+    [...adj[n.id]].map(id => byId[id]).sort((a,b)=>b.deg-a.deg).forEach(a => {
+      const row = document.createElement("div"); row.className = "co nolink";
+      row.innerHTML = `<span class="dot" style="background:var(${KIND[a.type].varname})"></span>${esc(a.label)}`;
+      row.style.cursor = "pointer";
+      row.onclick = () => openDetail(a);
+      body.appendChild(row);
+    });
+  } else {
+    body.innerHTML = `<div class="dt-sec">등장한 회사 — 원본 공시</div>`;
+    (n.companies || []).forEach(co => {
+      const a = document.createElement(co.url ? "a" : "div");
+      a.className = "co" + (co.url ? "" : " nolink");
+      if (co.url) { a.href = co.url; a.target = "_blank"; a.rel = "noopener"; }
+      a.innerHTML = `<span class="dot" style="background:var(--company)"></span>` +
+        `${esc(co.name)}` + (co.url ? `<span class="arrow">공시 ↗</span>` : "");
+      body.appendChild(a);
+    });
+  }
+  detail.classList.add("open");
+}
+function closeDetail() { detail.classList.remove("open"); highlight(focused); }
+document.getElementById("dt-close").addEventListener("click", closeDetail);
+
+// ── filter + search ──
+const degSlider = document.getElementById("deg");
+const degVal = document.getElementById("deg-val");
+const q = document.getElementById("q");
+function applyFilter() {
+  const minDeg = +degSlider.value;
+  const term = q.value.trim().toLowerCase();
+  degVal.textContent = minDeg;
+  const visActor = new Set(actorNodes.filter(n => n.deg >= minDeg).map(n => n.id));
+  const visCompany = new Set();
+  links.forEach(l => { if (visActor.has(l.source.id)) visCompany.add(l.target.id);
+                       if (visActor.has(l.target.id)) visCompany.add(l.source.id); });
+  nodeEls.forEach(({ g, n }) => {
+    let vis = n.type === "company" ? visCompany.has(n.id) : visActor.has(n.id);
+    if (vis && term) {
+      const hit = n.label.toLowerCase().includes(term) ||
+        (n.companies || []).some(c => c.name.toLowerCase().includes(term));
+      vis = hit || (n.type === "company" && [...adj[n.id]].some(id =>
+        byId[id].label.toLowerCase().includes(term)));
+    }
+    g.style.display = vis ? "" : "none";
+  });
+  edgeEls.forEach((e, i) => {
+    const l = links[i];
+    const on = nodeEls[nodes.indexOf(l.source)].g.style.display !== "none" &&
+               nodeEls[nodes.indexOf(l.target)].g.style.display !== "none";
+    e.style.display = on ? "" : "none";
+  });
+  alpha = Math.max(alpha, .3);
+}
+degSlider.addEventListener("input", applyFilter);
+q.addEventListener("input", applyFilter);
+
+// ── theme toggle ──
+document.getElementById("theme").addEventListener("click", () => {
+  const cur = document.documentElement.getAttribute("data-theme");
+  const dark = cur ? cur === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
+  nodeEls.forEach(({ c, n }) => c.setAttribute("fill", css(KIND[n.type].varname)));
+});
+
+// ── util ──
+function esc(s) { return String(s).replace(/[&<>"]/g, m =>
+  ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[m])); }
+addEventListener("resize", () => { W = innerWidth; H = innerHeight; alpha = Math.max(alpha,.2); });
+</script>
