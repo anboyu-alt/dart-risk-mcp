@@ -155,11 +155,22 @@ def main():
     ap.add_argument("--chunk-days", type=int, default=CHUNK_DAYS)
     ap.add_argument("--max-funding", type=int, default=MAX_FUNDING,
                     help="자금조달 공시 처리 상한 (쿼터 보호)")
+    ap.add_argument("--reset", action="store_true",
+                    help="진행 마커(backfill.done_until) 초기화 — --start를 더 과거로 "
+                         "돌려 재수집할 때 사용(기존 sightings 데이터는 보존, dedup으로 무해)")
     args = ap.parse_args()
 
     key = _api_key()
     if not key:
         raise SystemExit("DART_API_KEY 또는 tmp/_apikey.txt 필요")
+
+    if args.reset:
+        sp = Path(os.environ.get("SIGHTINGS_PATH") or _DEFAULT_SIGHTINGS)
+        if sp.exists():
+            sd = _load(sp, {"version": 1, "sightings": {}})
+            if sd.pop("backfill", None) is not None:
+                sp.write_text(json.dumps(sd, ensure_ascii=False, indent=1), encoding="utf-8")
+                print("[RESET] backfill 진행 마커 초기화 — --start부터 재수집")
 
     end = datetime.strptime(args.end, "%Y-%m-%d") if args.end else datetime.now()
     start = (datetime.strptime(args.start, "%Y-%m-%d") if args.start
