@@ -121,6 +121,29 @@ class TestEvidenceRecovery(unittest.TestCase):
         self.assertEqual([o["name"] for o in second], ["△△전자"])
 
 
+class TestArchiveFragments(unittest.TestCase):
+    def _page(self, name):
+        return {"id": f"pid-{name}", "properties": {
+            "인물명": {"title": [{"plain_text": name}]}}}
+
+    def test_archives_only_fragment_named_rows(self):
+        import scripts.setup_known_actors_db as sdb
+        q = MagicMock(); q.status_code = 200
+        q.json.return_value = {"results": [
+            self._page("으로서 결성 및"), self._page("등의 다른회사 등기임원"),
+            self._page("홍길동"), self._page("교보 신기술사업투자조합"),
+        ], "has_more": False}
+        a = MagicMock(); a.status_code = 200
+        with patch.object(sdb.requests, "post", return_value=q), \
+             patch.object(sdb.requests, "patch", return_value=a) as pc:
+            removed = sdb.archive_fragment_rows("t", "db")
+        self.assertEqual(removed, 2)  # 조각 2개만
+        archived_ids = [call.args[0] for call in pc.call_args_list]
+        self.assertTrue(all("pid-홍길동" not in i for i in archived_ids))
+        for call in pc.call_args_list:
+            self.assertEqual(call.kwargs["json"], {"archived": True})
+
+
 class TestMainDispatch(unittest.TestCase):
     def test_main_migrates_when_db_id_present(self):
         # DB_KNOWN_ACTORS 설정 시 create 경로를 타지 않고 마이그레이션만 수행
@@ -128,10 +151,12 @@ class TestMainDispatch(unittest.TestCase):
         with patch.dict("os.environ", {"NOTION_TOKEN": "t", "DB_KNOWN_ACTORS": "db"}), \
              patch.object(sdb, "ensure_registry_schema", return_value=True) as ensure_call, \
              patch.object(sdb, "backfill_known_companies", return_value=3) as backfill_call, \
+             patch.object(sdb, "archive_fragment_rows", return_value=2) as archive_call, \
              patch.object(sdb, "create_registry_db") as create_call:
             sdb.main()
         ensure_call.assert_called_once_with("t", "db")
         backfill_call.assert_called_once_with("t", "db")
+        archive_call.assert_called_once_with("t", "db")
         create_call.assert_not_called()
 
     def test_main_creates_when_db_id_absent(self):

@@ -221,6 +221,18 @@ class TestMergeAndPromote(unittest.TestCase):
         rcepts = {e["rcept_no"] for e in data["sightings"]["LIU HUAN"]}
         self.assertEqual(rcepts, {"R1", "R2"})
 
+    def test_merge_prunes_fragment_keys(self):
+        # 추출 조각 키는 병합 시 제거 (오염 데이터 자기정화)
+        import scripts.discover_actors as da
+        data = {"sightings": {
+            "으로서 결성 및": [{"corp_code": "c1", "rcept_no": "R1", "date": "2026-06"}],
+            "홍길동": [{"corp_code": "c2", "rcept_no": "R2", "date": "2026-06"}],
+        }}
+        changed = da.merge_sightings(data, [], window_months=12)
+        self.assertTrue(changed)
+        self.assertNotIn("으로서 결성 및", data["sightings"])
+        self.assertIn("홍길동", data["sightings"])
+
     def test_merge_drops_old_outside_window(self):
         import scripts.discover_actors as da
         data = {"sightings": {"김갑": [

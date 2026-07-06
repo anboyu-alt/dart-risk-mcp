@@ -190,6 +190,11 @@ def merge_sightings(data: dict, new: list, window_months: int = WINDOW_MONTHS) -
         changed = True
     cutoff = (datetime.now() - timedelta(days=window_months * 30)).strftime("%Y-%m")
     for nm in list(s.keys()):
+        # 추출 조각 등 비추적 키는 제거 (오염 데이터 자기정화)
+        if classify_actor(nm) not in _TRACKED_KINDS:
+            del s[nm]
+            changed = True
+            continue
         kept = [e for e in s[nm] if (e.get("date") or "9999-99") >= cutoff]
         if len(kept) != len(s[nm]):
             changed = True
