@@ -39,6 +39,22 @@ def normalize_name(name: str) -> str:
 # 제도권 기관(증권사·은행·연기금 등)은 정상적으로 수십 개사 딜에 등장해
 # '반복 등장' 신호가 무의미하므로 수집에서 제외한다.
 
+# 문장 조각(추출 오류) 판정 — 원문 파싱이 이름 대신 보일러플레이트를
+# 긁어온 경우. 공백 분리 토큰 중 순수 문법 조사·연결어가 있으면 조각.
+# (실명·조합·법인명은 이런 표준 조사를 토큰으로 갖지 않는다.)
+_FRAGMENT_TOKENS = {
+    "으로서", "으로", "로서", "및", "등의", "등을", "에", "해당하는",
+    "이며", "이고", "하며", "되어", "하여", "위해", "위한", "관련",
+    "통해", "따라", "의한", "대한",
+}
+
+
+def _is_name_fragment(name: str) -> bool:
+    """추출 오류로 인한 문장 조각 여부. 2토큰 이상 + 문법 조사 포함."""
+    toks = name.split()
+    return len(toks) >= 2 and any(t in _FRAGMENT_TOKENS for t in toks)
+
+
 # 조합·사모 비히클 (기관 패턴보다 먼저 판정 — '일반사모투자신탁'류 포섭)
 _FUND_PAT = re.compile(r"조합|합자회사|사모투자|사모펀드|사모 펀드")
 
@@ -74,6 +90,8 @@ def classify_actor(name: str) -> str:
     """
     if not name or not name.strip():
         return "noise"
+    if _is_name_fragment(name):
+        return "noise"  # 원문 파싱 조각 (예: "으로서 결성 및") 차단
     if _FUND_PAT.search(name):
         return "fund"
     if _INSTITUTION_PAT.search(name):

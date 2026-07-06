@@ -25,6 +25,7 @@ from dart_risk_mcp.core.known_actors import (
     _notion_headers,
     add_registry_record,
     ensure_registry_schema,
+    classify_actor,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -168,6 +169,37 @@ def backfill_known_companies(token: str, db_id: str) -> int:
     return updated
 
 
+def archive_fragment_rows(token: str, db_id: str) -> int:
+    """인물명이 추출 조각(classify_actor=="noise")인 행을 아카이브(삭제).
+
+    원문 파싱이 이름 대신 보일러플레이트를 긁어 등재된 오염 행 정리.
+    archived=true는 뷰에서 제거하되 복구 가능(감사 목적). 갯수 반환.
+    """
+    removed = 0
+    payload: dict = {"page_size": 100}
+    while True:
+        resp = requests.post(
+            f"{_NOTION_BASE}/databases/{db_id}/query",
+            headers=_notion_headers(token), json=payload, timeout=15)
+        if resp.status_code != 200:
+            break
+        data = resp.json()
+        for page in data.get("results", []):
+            name = "".join(t.get("plain_text", "") for t in
+                           page.get("properties", {}).get("인물명", {}).get("title", []))
+            if name and classify_actor(name) == "noise":
+                a = requests.patch(
+                    f"{_NOTION_BASE}/pages/{page['id']}",
+                    headers=_notion_headers(token),
+                    json={"archived": True}, timeout=15)
+                if a.status_code == 200:
+                    removed += 1
+        if not data.get("has_more"):
+            break
+        payload["start_cursor"] = data.get("next_cursor")
+    return removed
+
+
 def main():
     token = os.environ.get("NOTION_TOKEN", "")
     db_id = os.environ.get("DB_KNOWN_ACTORS", "")
@@ -180,7 +212,9 @@ def main():
         if not ok:
             raise SystemExit("스키마 속성 추가 실패 — DB_KNOWN_ACTORS/권한 확인 필요")
         updated = backfill_known_companies(token, db_id)
-        print(f"[OK] 스키마 마이그레이션 완료 · 속성(관련기업·구분) 확인 · 기존 행 {updated}건 소급 보정")
+        removed = archive_fragment_rows(token, db_id)
+        print(f"[OK] 스키마 마이그레이션 완료 · 속성(관련기업·구분) 확인 · "
+              f"기존 행 {updated}건 소급 보정 · 조각 행 {removed}건 아카이브")
         return
 
     parent = os.environ.get("NOTION_PARENT_PAGE_ID", "")

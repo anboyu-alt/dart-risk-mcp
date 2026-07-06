@@ -298,6 +298,22 @@ class TestKnownActors(unittest.TestCase):
         # 노이즈
         self.assertEqual(classify_actor(""), "noise")
 
+    def test_classify_actor_rejects_extraction_fragments(self):
+        from dart_risk_mcp.core.known_actors import classify_actor
+        # 원문 파싱 조각 → noise
+        self.assertEqual(classify_actor("으로서 결성 및"), "noise")
+        self.assertEqual(classify_actor("등의 다른회사 등기임원"), "noise")
+        self.assertEqual(classify_actor("및 공동"), "noise")
+        self.assertEqual(classify_actor("에 해당하는"), "noise")
+        self.assertEqual(classify_actor("으로 있는 사모투자합자회사"), "noise")
+        # 실명은 보존 — 끝글자가 조사와 같아도 단일 토큰이면 통과
+        self.assertEqual(classify_actor("여경은"), "person")
+        self.assertEqual(classify_actor("이정은"), "person")
+        self.assertEqual(classify_actor("홍길동"), "person")
+        # 정상 다토큰 조합/외국인명 보존
+        self.assertEqual(classify_actor("SUN YANE"), "person")
+        self.assertEqual(classify_actor("교보 KDBC 머니볼 신기술사업투자조합"), "fund")
+
     def test_add_registry_record_writes_kind(self):
         from unittest.mock import patch as _p, MagicMock
         from dart_risk_mcp.core.known_actors import add_registry_record
