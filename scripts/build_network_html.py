@@ -39,47 +39,89 @@ def market_of(cls: str):
 def build_graph(sightings: dict, min_companies: int = 2) -> dict:
     """sightings → {nodes, links}. min_companies 미만/비추적 행위자 제외."""
     s = sightings.get("sightings", {})
+    comp_events_raw: dict = sightings.get("company_events", {})   # cc -> [{date,rcept_no,event_type}]
     nodes, links = [], []
     company_label: dict = {}       # corp_code -> corp_name
     company_deg: dict = {}         # corp_code -> {actor_id}
     company_cls: dict = {}         # corp_code -> corp_cls (첫 비어있지 않은 값)
+    months: set = set()            # 스크러버용 전체 월(YYYY-MM) 집합
 
     for name, recs in s.items():
         kind = classify_actor(name)
         if kind not in _TRACKED:
             continue
-        # 회사별 최신 rcept (공시 링크용)
-        latest: dict = {}          # corp_code -> (rcept, corp_name)
+        # 회사별 진입(in)·이탈(out) 이벤트 집계
+        by_cc: dict = {}
         for r in recs:
-            cc, corp, rc = r.get("corp_code"), r.get("corp"), r.get("rcept_no")
+            cc = r.get("corp_code")
             if not cc:
                 continue
-            if rc and rc > (latest.get(cc, ("", ""))[0]):
-                latest[cc] = (rc, corp or cc)
-            company_label.setdefault(cc, corp or cc)
+            corp = r.get("corp") or cc
+            d = by_cc.setdefault(cc, {"corp": corp, "ins": [], "outs": [], "latest": ""})
+            d["corp"] = corp
+            company_label.setdefault(cc, corp)
             cls = (r.get("corp_cls") or "").strip()
             if cls and not company_cls.get(cc):
                 company_cls[cc] = cls
-        if len(latest) < min_companies:
+            rc, dt, ev = r.get("rcept_no", ""), r.get("date", ""), r.get("event", "in")
+            if dt:
+                months.add(dt)
+            if ev == "out":
+                d["outs"].append((dt, rc, r.get("event_type", "이탈"), r.get("pct")))
+            else:
+                d["ins"].append((dt, rc))
+            if rc and rc > d["latest"]:
+                d["latest"] = rc
+        # 진입(in)이 있는 회사만 엣지 형성 — 이탈만 있고 진입 없는 관계는 그리지 않음
+        cc_in = {cc: d for cc, d in by_cc.items() if d["ins"]}
+        if len(cc_in) < min_companies:
             continue
         aid = "a:" + name
         companies = []
-        for cc, (rc, corp) in sorted(latest.items(), key=lambda kv: kv[1][0], reverse=True):
+        for cc, d in sorted(cc_in.items(), key=lambda kv: kv[1]["latest"], reverse=True):
             _, mkt = market_of(company_cls.get(cc, ""))
-            companies.append({"name": corp, "url": disclosure_url(rc), "mkt": mkt})
-            links.append({"source": aid, "target": "c:" + cc})
+            in_dates = sorted(dt for dt, _ in d["ins"] if dt)
+            out_dates = sorted(dt for dt, _, _, _ in d["outs"] if dt)
+            t_in = in_dates[0] if in_dates else ""
+            t_out = out_dates[-1] if out_dates else ""
+            status = "exited" if (t_out and (not t_in or t_out >= t_in)) else "active"
+            # 이벤트 타임라인(진입·이탈) — 회사 단위 전환청구도 회사기준으로 병합
+            evs = [{"date": dt, "dir": "in", "type": "인수·투자", "url": disclosure_url(rc)}
+                   for dt, rc in d["ins"]]
+            for dt, rc, ty, pct in d["outs"]:
+                e = {"date": dt, "dir": "out", "type": ty, "url": disclosure_url(rc)}
+                if pct is not None:
+                    e["pct"] = pct
+                evs.append(e)
+            for ce in comp_events_raw.get(cc, []):
+                cdt = ce.get("date", "")
+                if cdt:
+                    months.add(cdt)
+                evs.append({"date": cdt, "dir": "out", "company_level": True,
+                            "type": ce.get("event_type", "전환청구") + "·회사기준",
+                            "url": disclosure_url(ce.get("rcept_no", ""))})
+            evs.sort(key=lambda e: e.get("date") or "")
+            companies.append({"name": d["corp"], "url": disclosure_url(d["latest"]),
+                              "mkt": mkt, "t_in": t_in, "t_out": t_out,
+                              "status": status, "events": evs})
+            links.append({"source": aid, "target": "c:" + cc,
+                          "t_in": t_in, "t_out": t_out, "status": status})
             company_deg.setdefault(cc, set()).add(aid)
         nodes.append({
             "id": aid, "label": name, "type": kind,
-            "deg": len(latest), "sight": len(recs), "companies": companies,
+            "deg": len(cc_in), "sight": len(recs), "companies": companies,
         })
 
     for cc, actors in company_deg.items():
         label, mkt = market_of(company_cls.get(cc, ""))
+        cev = [{"date": e.get("date", ""), "type": e.get("event_type", "전환청구"),
+                "url": disclosure_url(e.get("rcept_no", ""))}
+               for e in comp_events_raw.get(cc, [])]
         nodes.append({"id": "c:" + cc, "label": company_label.get(cc, cc),
                       "type": "company", "deg": len(actors),
-                      "market": label, "mkt": mkt})
-    return {"nodes": nodes, "links": links}
+                      "market": label, "mkt": mkt, "events": cev})
+    span = {"min": min(months), "max": max(months)} if months else {"min": "", "max": ""}
+    return {"nodes": nodes, "links": links, "span": span}
 
 
 def render_html(graph: dict) -> str:
