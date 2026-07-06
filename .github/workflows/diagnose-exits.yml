@@ -1,0 +1,39 @@
+name: Diagnose exits
+
+# '지분감소 0건'이 (A) 5% 미만이라 정상인지 (B) 이름 매칭 갭인지 진단.
+# elestock만 조회(회사당 1콜)라 빠르고, 로그만 출력한다(커밋 없음, 읽기 전용).
+
+on:
+  workflow_dispatch:
+    inputs:
+      show:
+        description: "상세 출력 회사 수 (기본 20)"
+        required: false
+        default: "20"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install package
+        run: pip install -e .
+      - name: Checkout sightings (private)
+        uses: actions/checkout@v5
+        with:
+          repository: anboyu-alt/dart-risk-mcp-sightings
+          token: ${{ secrets.SIGHTINGS_REPO_TOKEN }}
+          path: _sightings
+      - name: Diagnose exits
+        env:
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+          SIGHTINGS_PATH: _sightings/sightings.json
+          DIAG_SHOW: ${{ inputs.show }}
+        run: python scripts/diagnose_exits.py
