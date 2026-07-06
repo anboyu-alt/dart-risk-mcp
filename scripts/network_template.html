@@ -23,6 +23,7 @@
     --mkt-kosdaq: #c98a1e;   /* KOSDAQ */
     --mkt-konex: #8a5cd0;    /* 코넥스 */
     --mkt-unlisted: #aab2bd; /* 비상장 (약한 링) */
+    --exit: #d64545;         /* 이탈(닫힌) 연결 */
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -33,7 +34,7 @@
       --edge: rgba(150,162,178,.16); --edge-hi: rgba(57,135,229,.8);
       --shadow: 0 8px 30px rgba(0,0,0,.5);
       --mkt-kospi: #2bb98c; --mkt-kosdaq: #e0a53a; --mkt-konex: #a578e0;
-      --mkt-unlisted: #5c6470;
+      --mkt-unlisted: #5c6470; --exit: #ef6b6b;
     }
   }
   :root[data-theme="light"] {
@@ -44,7 +45,7 @@
     --edge: rgba(90,100,115,.22); --edge-hi: rgba(42,120,214,.75);
     --shadow: 0 6px 24px rgba(20,28,40,.14);
     --mkt-kospi: #1f9d76; --mkt-kosdaq: #c98a1e; --mkt-konex: #8a5cd0;
-    --mkt-unlisted: #aab2bd;
+    --mkt-unlisted: #aab2bd; --exit: #d64545;
   }
   :root[data-theme="dark"] {
     --bg: #14161a; --panel: #1c1f25; --panel-line: #2c313a;
@@ -54,7 +55,7 @@
     --edge: rgba(150,162,178,.16); --edge-hi: rgba(57,135,229,.8);
     --shadow: 0 8px 30px rgba(0,0,0,.5);
     --mkt-kospi: #2bb98c; --mkt-kosdaq: #e0a53a; --mkt-konex: #a578e0;
-    --mkt-unlisted: #5c6470;
+    --mkt-unlisted: #5c6470; --exit: #ef6b6b;
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
@@ -71,9 +72,10 @@
   svg.panning { cursor: grabbing; }
   .edge { stroke: var(--edge); stroke-width: 1; }
   .edge.hi { stroke: var(--edge-hi); stroke-width: 1.6; }
-  /* 이탈(닫힌) 연결 — 점선+흐림으로 보존하되 진행중과 구분 */
-  .edge.past { stroke-dasharray: 3 4; opacity: .32; }
-  .edge.past.hi { opacity: .7; }
+  /* 이탈(닫힌) 연결 — 경고색 굵은 점선으로 진행중과 뚜렷이 구분 */
+  .edge.past { stroke: var(--exit); stroke-width: 2; stroke-dasharray: 4 3; opacity: .9; }
+  .edge.past.hi { stroke-width: 2.4; opacity: 1; }
+  .edge.past.dim { opacity: .25; }
   /* 시간/필터 숨김은 클래스로 합성(둘 중 하나만 있어도 숨김) */
   .node.fhide, .node.thide, .edge.fhide, .edge.thide { display: none; }
   .node circle { cursor: pointer; stroke: var(--bg); stroke-width: 1.5; }
@@ -127,6 +129,9 @@
     border: 1px solid var(--panel-line); background: var(--bg); color: var(--ink);
   }
   input[type=range] { width: 100%; accent-color: var(--accent); }
+  .exit-toggle { display: flex; align-items: center; gap: 7px; font-size: 12.5px;
+    color: var(--ink-2); cursor: pointer; margin-top: 2px; }
+  .exit-toggle input { accent-color: var(--exit); }
   input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .theme-btn { pointer-events: auto; cursor: pointer; background: var(--panel);
     border: 1px solid var(--panel-line); border-radius: 8px; color: var(--ink-2);
@@ -283,6 +288,7 @@
     <div class="stat"><b class="mono" id="s-actors">0</b><span>행위자</span></div>
     <div class="stat"><b class="mono" id="s-corps">0</b><span>회사</span></div>
     <div class="stat"><b class="mono" id="s-links">0</b><span>연결</span></div>
+    <div class="stat"><b class="mono" id="s-exits" style="color:var(--exit)">0</b><span>이탈</span></div>
   </div>
 </div>
 
@@ -299,6 +305,7 @@
     <input type="search" id="q" placeholder="이름·회사…" autocomplete="off">
     <div class="ctl-label"><span for="deg">최소 회사 수</span><span class="mono" id="deg-val">2</span></div>
     <input type="range" id="deg" min="2" max="8" value="2" step="1">
+    <label class="exit-toggle"><input type="checkbox" id="only-exit"> 이탈 있는 관계만</label>
   </div>
   <div class="sheet-hint">한 손가락 드래그로 이동 · 두 손가락으로 확대/축소 ·
     노드를 탭하면 진입→이탈 타임라인과 공시 링크. 실선=진행중 / 점선=이탈.
@@ -376,6 +383,8 @@ const companyNodes = nodes.filter(n => n.type === "company");
 document.getElementById("s-actors").textContent = actorNodes.length;
 document.getElementById("s-corps").textContent = companyNodes.length;
 document.getElementById("s-links").textContent = links.length;
+const exitedLinks = links.filter(l => l.status === "exited");
+document.getElementById("s-exits").textContent = exitedLinks.length;
 const legend = document.getElementById("legend");
 ["fund","corp","person","company"].forEach(k => {
   const c = k === "company" ? companyNodes.length
@@ -684,9 +693,12 @@ const degSlider = document.getElementById("deg");
 const degVal = document.getElementById("deg-val");
 const q = document.getElementById("q");
 const nodeVisF = new Set();      // 필터 통과 노드 id
+const onlyExitBox = document.getElementById("only-exit");
+const exitNodeIds = new Set(exitedLinks.flatMap(l => [l.source.id, l.target.id]));
 function applyFilter() {
   const minDeg = +degSlider.value;
   const term = q.value.trim().toLowerCase();
+  const onlyExit = onlyExitBox.checked;
   degVal.textContent = minDeg;
   const visActor = new Set(actorNodes.filter(n => n.deg >= minDeg).map(n => n.id));
   const visCompany = new Set();
@@ -695,6 +707,7 @@ function applyFilter() {
   nodeVisF.clear();
   nodeEls.forEach(({ g, n }) => {
     let vis = n.type === "company" ? visCompany.has(n.id) : visActor.has(n.id);
+    if (vis && onlyExit) vis = exitNodeIds.has(n.id);   // 이탈 엣지에 닿는 노드만
     if (vis && term) {
       const hit = n.label.toLowerCase().includes(term) ||
         (n.companies || []).some(c => c.name.toLowerCase().includes(term));
@@ -706,13 +719,16 @@ function applyFilter() {
   });
   edgeEls.forEach((e, i) => {
     const l = links[i];
-    e.classList.toggle("fhide", !(nodeVisF.has(l.source.id) && nodeVisF.has(l.target.id)));
+    let on = nodeVisF.has(l.source.id) && nodeVisF.has(l.target.id);
+    if (on && onlyExit) on = l.status === "exited";     // 이탈 엣지만
+    e.classList.toggle("fhide", !on);
   });
   applyTime();
   alpha = Math.max(alpha, .3);
 }
 degSlider.addEventListener("input", applyFilter);
 q.addEventListener("input", applyFilter);
+onlyExitBox.addEventListener("change", applyFilter);
 
 // ── 시간축 스크러버 (진입~이탈 시점) ──
 const MONTHS = [...new Set(links.flatMap(l => [l.t_in, l.t_out]).filter(Boolean))].sort();
