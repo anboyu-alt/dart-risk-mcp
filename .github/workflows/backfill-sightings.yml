@@ -1,16 +1,17 @@
 name: Backfill sightings
 
-# 12개월 sightings 베이스 백필. 예산(max_funding=3500 ≈ 9천 콜)으로 보통
-# 2회 실행에 완료. 진행 상황은 sightings.json의 backfill.done_until에
-# 저장돼 재실행 시 자동으로 이어감. 완료 후 재발화는 no-op(API 콜 0).
+# 과거 자금조달 공시 sightings 백필. 진행은 sightings.json의 backfill.done_until에
+# 저장돼 재실행 시 이어감(청크 중복은 dedup으로 무해). 완료 후 재발화는 no-op.
 #
-# ⚠️ schedule 블록은 2026-07 첫 주말 자동 실행용 임시 설정 —
-#    백필 완료 확인 후 이 블록을 제거할 것 (남아 있어도 no-op이지만 청소 권장).
+# 5년 확장 모드: 하루 2회(02:00·14:00 UTC) 회당 자금조달 3,000건씩 갈아,
+# 2021-07-06~2026-07-06 전 구간을 약 5~7일에 완주(자동 재개, 미완이어도 안 깨짐).
+# 라이브 파이프라인(discover 19:00 UTC · exits 일 18:30 UTC)과 시간대를 벌려 쿼터 충돌 방지.
+# 완주 후엔 조용히 no-op. 다 끝나면 이 스케줄 블록을 제거할 것.
 
 on:
   schedule:
-    - cron: "0 13 3 7 *"   # 7/3 22:00 KST (토요일 밤)
-    - cron: "0 1 4,5 7 *"  # 7/4·7/5 10:00 KST (일·월 오전, 미완 시 이어달리기)
+    - cron: "0 2 * * *"    # 02:00 UTC (11:00 KST)
+    - cron: "0 14 * * *"   # 14:00 UTC (23:00 KST)
   workflow_dispatch:
     inputs:
       start_date:
@@ -22,9 +23,19 @@ on:
         required: false
         default: ""
       max_funding:
-        description: "자금조달 공시 처리 상한 (기본 3500 ≈ 9천 콜, 일일 쿼터의 절반)"
+        description: "자금조달 공시 처리 상한 (기본 3000)"
         required: false
-        default: "3500"
+        default: "3000"
+      reset:
+        description: "진행 마커 초기화(더 과거로 재수집 시작할 때만 true)"
+        required: false
+        default: "false"
+
+# 5년 확장 목표 구간 — 스케줄 실행이 참조(자기 종결). 완주 후 --end 갱신 불필요.
+env:
+  BF_START: "2021-07-06"
+  BF_END: "2026-07-06"
+  BF_MAXFUNDING: "3000"
 
 permissions:
   contents: read
@@ -55,13 +66,14 @@ jobs:
           SIGHTINGS_PATH: _sightings/sightings.json
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            # 스케줄 실행: 종료일을 고정해 백필이 자기 종결되도록 함
-            # (움직이는 '오늘'을 쫓지 않음 — 최신분은 일일 크론 담당)
-            python scripts/backfill_sightings.py --end 2026-07-03 --max-funding 3500
+            # 스케줄: 5년 고정 구간을 done_until 기준으로 이어달리기(자기 종결)
+            python scripts/backfill_sightings.py \
+              --start "$BF_START" --end "$BF_END" --max-funding "$BF_MAXFUNDING"
           else
             ARGS=""
             [ -n "${{ inputs.start_date }}" ] && ARGS="$ARGS --start ${{ inputs.start_date }}"
             [ -n "${{ inputs.end_date }}" ]   && ARGS="$ARGS --end ${{ inputs.end_date }}"
+            [ "${{ inputs.reset }}" = "true" ] && ARGS="$ARGS --reset"
             python scripts/backfill_sightings.py $ARGS --max-funding ${{ inputs.max_funding }}
           fi
       - name: Commit sightings (private)
@@ -72,7 +84,7 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add sightings.json
-            git commit -m "chore: sightings 백필"
+            git commit -m "chore: sightings 5년 백필"
             git push
           else
             echo "sightings 변경 없음"
