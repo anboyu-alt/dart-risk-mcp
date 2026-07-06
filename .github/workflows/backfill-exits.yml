@@ -1,0 +1,50 @@
+name: Backfill exits
+
+# 행위자 이탈(exit) 스윕 — 진입한 회사에서의 지분 처분(5% 대량보유 감소)·
+# 전환청구권행사를 찾아 sightings에 'out' 이벤트로 누적한다. 진입만 있는
+# 회사는 no-op. 회사당 2콜(elestock + 공시목록)·0.3s 페이싱이라 시간이 걸려
+# 매일이 아닌 주 1회로 돈다. 멱등 — 같은 접수·회사·이벤트는 중복 스킵.
+
+on:
+  schedule:
+    - cron: "30 18 * * 0"   # 매주 일요일 UTC 18:30 = 월 03:30 KST (refresh 이전)
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  exits:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install package
+        run: pip install -e .
+      - name: Checkout sightings (private)
+        uses: actions/checkout@v5
+        with:
+          repository: anboyu-alt/dart-risk-mcp-sightings
+          token: ${{ secrets.SIGHTINGS_REPO_TOKEN }}
+          path: _sightings
+      - name: Backfill exits
+        env:
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+          SIGHTINGS_PATH: _sightings/sightings.json
+        run: python scripts/backfill_exits.py
+      - name: Commit sightings (private)
+        if: always()
+        working-directory: _sightings
+        run: |
+          if [ -n "$(git status --porcelain sightings.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add sightings.json
+            git commit -m "chore: 행위자 이탈(exit) 스윕"
+            git push
+          else
+            echo "sightings 변경 없음"
+          fi

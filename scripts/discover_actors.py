@@ -181,16 +181,20 @@ def merge_sightings(data: dict, new: list, window_months: int = WINDOW_MONTHS) -
     """new sighting을 data에 병합. (corp_code,rcept_no) 중복 스킵, window 밖 제거. 변경 여부."""
     s = data.setdefault("sightings", {})
     changed = False
+    _FIELDS = ("corp", "corp_code", "corp_cls", "date", "rcept_no",
+               "signals", "kind", "via", "event", "event_type", "pct")
     for rec in new:
         nm = rec.get("name", "")
         if not nm:
             continue
         key = normalize_name(nm)
         lst = s.setdefault(key, [])
+        # 같은 접수·회사·이벤트 유형이면 중복 (진입/이탈은 event로 구분)
         if any(e.get("rcept_no") == rec.get("rcept_no") and
-               e.get("corp_code") == rec.get("corp_code") for e in lst):
+               e.get("corp_code") == rec.get("corp_code") and
+               e.get("event", "in") == rec.get("event", "in") for e in lst):
             continue
-        lst.append({k: rec[k] for k in ("corp", "corp_code", "corp_cls", "date", "rcept_no", "signals", "kind", "via") if k in rec})
+        lst.append({k: rec[k] for k in _FIELDS if k in rec})
         changed = True
     cutoff = (datetime.now() - timedelta(days=window_months * 30)).strftime("%Y-%m")
     for nm in list(s.keys()):
@@ -199,7 +203,10 @@ def merge_sightings(data: dict, new: list, window_months: int = WINDOW_MONTHS) -
             del s[nm]
             changed = True
             continue
-        kept = [e for e in s[nm] if (e.get("date") or "9999-99") >= cutoff]
+        # '닫힌 관계'(이탈 기록이 있는 회사)는 진입이 오래됐어도 이력으로 보존
+        closed_ccs = {e.get("corp_code") for e in s[nm] if e.get("event") == "out"}
+        kept = [e for e in s[nm]
+                if (e.get("date") or "9999-99") >= cutoff or e.get("corp_code") in closed_ccs]
         if len(kept) != len(s[nm]):
             changed = True
         if kept:

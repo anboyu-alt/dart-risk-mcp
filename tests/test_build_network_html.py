@@ -52,3 +52,53 @@ def test_actor_company_links_carry_market():
     # 공시 링크는 살아있는 뷰어 URL
     assert all(c["url"].startswith("https://dart.fss.or.kr/dsaf001/main.do?rcpNo=")
                for c in actor["companies"])
+
+
+def _temporal_sightings():
+    return {
+        "company_events": {"003": [
+            {"date": "2025-02", "rcept_no": "conv1", "event_type": "전환청구"}]},
+        "sightings": {
+            "홍길동": [
+                {"corp": "에이스", "corp_code": "001", "corp_cls": "Y",
+                 "rcept_no": "i1", "date": "2024-03", "kind": "person", "event": "in"},
+                {"corp": "베타", "corp_code": "002", "corp_cls": "K",
+                 "rcept_no": "i2", "date": "2024-06", "kind": "person", "event": "in"},
+                {"corp": "베타", "corp_code": "002", "corp_cls": "K",
+                 "rcept_no": "o1", "date": "2025-01", "kind": "person",
+                 "event": "out", "event_type": "지분감소", "pct": 3.2},
+            ],
+            "가나조합제1호": [
+                {"corp": "베타", "corp_code": "002", "corp_cls": "K",
+                 "rcept_no": "i3", "date": "2024-06", "kind": "fund", "event": "in"},
+                {"corp": "감마", "corp_code": "003", "corp_cls": "E",
+                 "rcept_no": "i4", "date": "2024-08", "kind": "fund", "event": "in"},
+            ],
+        },
+    }
+
+
+def test_edge_intervals_and_status():
+    g = build_graph(_temporal_sightings(), min_companies=2)
+    edges = {(l["source"], l["target"]): l for l in g["links"]}
+    beta = edges[("a:홍길동", "c:002")]
+    assert beta["t_in"] == "2024-06" and beta["t_out"] == "2025-01"
+    assert beta["status"] == "exited"
+    ace = edges[("a:홍길동", "c:001")]
+    assert ace["t_in"] == "2024-03" and ace["t_out"] == "" and ace["status"] == "active"
+    # 스크러버용 시점 범위 — 진입·이탈·전환청구 월 모두 포함
+    assert g["span"] == {"min": "2024-03", "max": "2025-02"}
+
+
+def test_company_timeline_events_and_conversion():
+    g = build_graph(_temporal_sightings(), min_companies=2)
+    hong = next(n for n in g["nodes"] if n["label"] == "홍길동")
+    beta = next(c for c in hong["companies"] if c["name"] == "베타")
+    dirs = [(e["dir"], e["date"]) for e in beta["events"]]
+    assert dirs == [("in", "2024-06"), ("out", "2025-01")]
+    assert beta["events"][1]["type"] == "지분감소" and beta["events"][1]["pct"] == 3.2
+    # 전환청구는 회사기준 이벤트로 감마 타임라인에 병합
+    gana = next(n for n in g["nodes"] if n["label"] == "가나조합제1호")
+    gamma = next(c for c in gana["companies"] if c["name"] == "감마")
+    conv = [e for e in gamma["events"] if e.get("company_level")]
+    assert conv and "전환청구" in conv[0]["type"]

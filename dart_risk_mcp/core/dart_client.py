@@ -1103,6 +1103,29 @@ def fetch_shareholder_status(
     return result
 
 
+def fetch_bulk_holdings(corp_code: str, api_key: str) -> list[dict]:
+    """DART /elestock.json — 5% 대량보유 상황보고 전체 이력(1회 호출).
+
+    행위자 진입/이탈 추적용 경량 조회. 각 레코드 주요 필드:
+      repror(보고자) · stkqy_rt(보유비율%) · rcept_dt(YYYYMMDD) · rcept_no.
+    status≠000 또는 오류 시 빈 리스트.
+    """
+    if not api_key:
+        return []
+    try:
+        resp = _retry(
+            "GET", f"{DART_BASE}/elestock.json",
+            params={"crtfc_key": api_key, "corp_code": corp_code},
+        )
+        data = resp.json()
+        if data.get("status") == "000":
+            return data.get("list", []) or []
+        _log_dart_status(data.get("status", "?"), f"대량보유이력 corp_code={corp_code}")
+    except Exception as e:
+        log.debug("대량보유 이력 조회 실패 (%s): %s", corp_code, e)
+    return []
+
+
 def fetch_executive_compensation(
     corp_code: str,
     api_key: str,
