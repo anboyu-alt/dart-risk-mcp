@@ -26,6 +26,9 @@ from dart_risk_mcp.core.known_actors import (
     add_registry_record,
     ensure_registry_schema,
     classify_actor,
+    normalize_name,
+    disclosure_url,
+    _evidence_rich_text,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -200,6 +203,76 @@ def archive_fragment_rows(token: str, db_id: str) -> int:
     return removed
 
 
+def _load_sightings_map(path: str) -> dict:
+    """sightings.json → {정규화 인물명: {회사명: 최신 rcept_no}}."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    out: dict = {}
+    for name, recs in (data.get("sightings") or {}).items():
+        m = out.setdefault(name, {})  # sightings 키는 이미 정규화됨
+        for r in recs:
+            c, rc = r.get("corp"), r.get("rcept_no")
+            if c and rc and rc > m.get(c, ""):
+                m[c] = rc
+    return out
+
+
+def backfill_evidence_links(token: str, db_id: str, sightings_path: str = "") -> int:
+    """기존 행의 evidence 회사명을 해당 공시 링크로 소급. 갱신 행 수 반환.
+
+    - 자동 매칭(단일 공시) 행: 행의 rcept_no로 회사 링크.
+    - 자동 발굴(다중 공시) 행: sightings에서 회사별 최신 rcept 조회.
+    이미 링크가 걸린 행(evidence에 href 존재)은 건너뜀(멱등)."""
+    sight = _load_sightings_map(sightings_path) if sightings_path else {}
+    updated = 0
+    payload: dict = {"page_size": 100}
+    while True:
+        resp = requests.post(
+            f"{_NOTION_BASE}/databases/{db_id}/query",
+            headers=_notion_headers(token), json=payload, timeout=15)
+        if resp.status_code != 200:
+            break
+        data = resp.json()
+        for page in data.get("results", []):
+            props = page.get("properties", {})
+            ev_rich = props.get("evidence", {}).get("rich_text", [])
+            if any(t.get("href") for t in ev_rich):
+                continue  # 이미 링크됨
+            name = "".join(t.get("plain_text", "") for t in
+                           props.get("인물명", {}).get("title", []))
+            companies = [o.get("name") for o in
+                         props.get("관련기업", {}).get("multi_select", []) if o.get("name")]
+            if not companies:
+                continue
+            row_rcept = "".join(t.get("plain_text", "") for t in
+                                props.get("rcept_no", {}).get("rich_text", []))
+            if row_rcept:  # 단일 공시(자동 매칭)
+                company_url = {c: disclosure_url(row_rcept) for c in companies}
+                rep = row_rcept
+            else:  # 다중 공시(자동 발굴) — sightings에서 회사별 rcept
+                m = sight.get(normalize_name(name), {})
+                company_url = {c: disclosure_url(m[c]) for c in companies if m.get(c)}
+                rep = max((m[c] for c in companies if m.get(c)), default="")
+            if not company_url:
+                continue
+            plain_ev = "".join(t.get("plain_text", "") for t in ev_rich)
+            patch_props = {"evidence": {"rich_text": _evidence_rich_text(plain_ev, company_url)}}
+            cur_url = (props.get("url", {}) or {}).get("url") or ""
+            if rep and cur_url.rstrip("/") in ("", "https://dart.fss.or.kr"):
+                patch_props["url"] = {"url": disclosure_url(rep)}
+            p = requests.patch(
+                f"{_NOTION_BASE}/pages/{page['id']}", headers=_notion_headers(token),
+                json={"properties": patch_props}, timeout=15)
+            if p.status_code == 200:
+                updated += 1
+        if not data.get("has_more"):
+            break
+        payload["start_cursor"] = data.get("next_cursor")
+    return updated
+
+
 def main():
     token = os.environ.get("NOTION_TOKEN", "")
     db_id = os.environ.get("DB_KNOWN_ACTORS", "")
@@ -213,8 +286,10 @@ def main():
             raise SystemExit("스키마 속성 추가 실패 — DB_KNOWN_ACTORS/권한 확인 필요")
         updated = backfill_known_companies(token, db_id)
         removed = archive_fragment_rows(token, db_id)
+        linked = backfill_evidence_links(token, db_id, os.environ.get("SIGHTINGS_PATH", ""))
         print(f"[OK] 스키마 마이그레이션 완료 · 속성(관련기업·구분) 확인 · "
-              f"기존 행 {updated}건 소급 보정 · 조각 행 {removed}건 아카이브")
+              f"기존 행 {updated}건 소급 보정 · 조각 행 {removed}건 아카이브 · "
+              f"공시 링크 {linked}건 소급")
         return
 
     parent = os.environ.get("NOTION_PARENT_PAGE_ID", "")

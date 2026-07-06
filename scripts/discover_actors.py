@@ -35,6 +35,7 @@ from dart_risk_mcp.core.known_actors import (
     add_registry_record,
     classify_actor,
     KIND_LABELS,
+    disclosure_url,
 )
 from scripts.refresh_known_actors import send_mail, _api_key
 
@@ -234,6 +235,16 @@ def promote_repeat_actors(sightings_data: dict, known_data: dict,
             continue
         corp_names = sorted({r.get("corp") for r in recs
                              if r.get("corp") and r.get("corp_code") in problem_codes})
+        # 문제 회사별 최신 공시 rcept → evidence 회사명 하이퍼링크용
+        latest_by_corp: dict = {}
+        for r in recs:
+            if r.get("corp_code") not in problem_codes:
+                continue
+            corp, rc = r.get("corp"), r.get("rcept_no")
+            if corp and rc and rc > latest_by_corp.get(corp, ""):
+                latest_by_corp[corp] = rc
+        company_links = {corp: disclosure_url(rc) for corp, rc in latest_by_corp.items()}
+        rep_rcept = max(latest_by_corp.values(), default="")
         same_name_tag = "동명이인 미확인" if kind == "person" else "동명 법인·조합 미확인"
         tags = ["자동 발굴", same_name_tag, "반복 등장"]
         vias = sorted({r["via"] for r in recs if r.get("via")})
@@ -243,10 +254,11 @@ def promote_repeat_actors(sightings_data: dict, known_data: dict,
             "source": "자동 발굴",
             "status": "auto_matched",
             "evidence": f"문제 회사 {len(problem_codes)}곳 인수자 반복 등장: {'·'.join(corp_names[:5])}",
-            "url": "https://dart.fss.or.kr",
+            "url": disclosure_url(rep_rcept) or "https://dart.fss.or.kr",
             "date": "",
             "tags": tags,
             "companies": corp_names,
+            "company_links": company_links,
             "kind": KIND_LABELS[kind],
         })
         promoted.append(nm)

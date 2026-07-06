@@ -314,6 +314,42 @@ class TestKnownActors(unittest.TestCase):
         self.assertEqual(classify_actor("SUN YANE"), "person")
         self.assertEqual(classify_actor("교보 KDBC 머니볼 신기술사업투자조합"), "fund")
 
+    def test_disclosure_url(self):
+        from dart_risk_mcp.core.known_actors import disclosure_url
+        self.assertEqual(disclosure_url("20260421000499"),
+                         "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260421000499")
+        self.assertEqual(disclosure_url(""), "")
+
+    def test_evidence_rich_text_hyperlinks_companies(self):
+        from dart_risk_mcp.core.known_actors import _evidence_rich_text
+        text = "문제 회사 2곳 인수자 반복 등장: 에이디테크놀로지·태웅로직스"
+        urls = {"에이디테크놀로지": "https://x/1", "태웅로직스": "https://x/2"}
+        rich = _evidence_rich_text(text, urls)
+        # 회사명 span만 link, 나머지는 평문
+        linked = {s["text"]["content"]: s["text"].get("link", {}).get("url")
+                  for s in rich if s["text"].get("link")}
+        self.assertEqual(linked, {"에이디테크놀로지": "https://x/1", "태웅로직스": "https://x/2"})
+        self.assertEqual("".join(s["text"]["content"] for s in rich), text)
+
+    def test_evidence_rich_text_plain_when_no_links(self):
+        from dart_risk_mcp.core.known_actors import _evidence_rich_text
+        rich = _evidence_rich_text("그냥 평문", None)
+        self.assertEqual(rich, [{"type": "text", "text": {"content": "그냥 평문"}}])
+
+    def test_add_registry_record_hyperlinks_evidence(self):
+        from unittest.mock import patch as _p, MagicMock
+        from dart_risk_mcp.core.known_actors import add_registry_record
+        resp = MagicMock(); resp.status_code = 200
+        with _p("dart_risk_mcp.core.known_actors.requests.post",
+                return_value=resp) as post:
+            add_registry_record("김조합",
+                {"source": "자동 발굴", "evidence": "문제 회사 2곳 인수자 반복 등장: A·B",
+                 "company_links": {"A": "https://x/1", "B": "https://x/2"}},
+                token="t", db_id="db")
+        rich = post.call_args.kwargs["json"]["properties"]["evidence"]["rich_text"]
+        linked = {s["text"]["content"] for s in rich if s["text"].get("link")}
+        self.assertEqual(linked, {"A", "B"})
+
     def test_add_registry_record_writes_kind(self):
         from unittest.mock import patch as _p, MagicMock
         from dart_risk_mcp.core.known_actors import add_registry_record

@@ -26,6 +26,7 @@ from dart_risk_mcp.core.known_actors import (
     add_registry_record,
     classify_actor,
     KIND_LABELS,
+    disclosure_url,
 )
 from dart_risk_mcp.core.signals import match_signals, strip_amendment_prefix
 
@@ -88,6 +89,7 @@ def collect_auto_matches(api_key, known_names, window_days=WINDOW_DAYS, max_page
                     "rcept_no": rn,
                     "tags": ["자동 매칭", same_name_tag],
                     "companies": [corp] if corp else [],
+                    "company_links": {corp: disclosure_url(rn)} if corp else {},
                     "kind": KIND_LABELS.get(kind, "개인"),
                 })
     return matches
