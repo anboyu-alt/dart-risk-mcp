@@ -174,11 +174,52 @@
   .co.nolink { color: var(--ink-2); cursor: default; }
   .dt-close { position: absolute; top: 14px; right: 14px; cursor: pointer;
     background: none; border: none; color: var(--ink-3); font-size: 20px; line-height: 1; padding: 4px; }
-  .foot { position: fixed; bottom: 12px; left: 20px; z-index: 5;
+  .foot { position: fixed; bottom: 12px; left: 20px; z-index: 5; pointer-events: none;
     font-size: 11px; color: var(--ink-3); max-width: 420px; line-height: 1.5; }
+
+  /* ── mobile controls: 바텀시트 토글 + 백드롭 (데스크톱 숨김) ── */
+  .sheet-toggle { display: none; position: fixed; top: 16px; right: 16px; z-index: 8;
+    pointer-events: auto; cursor: pointer; align-items: center; gap: 6px;
+    background: var(--panel); border: 1px solid var(--panel-line); border-radius: 10px;
+    color: var(--ink); font-size: 13px; font-weight: 600; padding: 9px 13px; box-shadow: var(--shadow); }
+  .sheet-bg { display: none; position: fixed; inset: 0; z-index: 6;
+    background: rgba(0,0,0,.32); opacity: 0; pointer-events: none; transition: opacity .2s; }
+  .sheet-grip { display: none; }
+
   @media (max-width: 640px) {
-    .tr { display: none; } #detail { width: 100%; } .tl { max-width: 62%; }
+    #detail { width: 100%; }
+    .tl { max-width: 100%; left: 16px; right: 66px; padding-right: 0; }
+    .tl .sub { display: none; }                 /* 긴 설명은 시트 안내로 대체 */
+    .tl h1 { font-size: 17px; }
+    .stat b { font-size: 18px; }
+    .foot { display: none; }                     /* 조작법은 시트 하단 안내로 이동 */
+
+    .sheet-toggle { display: inline-flex; }
+    .sheet-bg { display: block; }
+    .sheet-bg.open { opacity: 1; pointer-events: auto; }
+    .sheet-grip { display: block; width: 38px; height: 4px; border-radius: 3px;
+      background: var(--panel-line); margin: 2px auto 8px; }
+
+    /* .tr → 하단 시트 */
+    .overlay.tr { top: auto; bottom: 0; left: 0; right: 0; z-index: 7;
+      max-height: 74vh; overflow-y: auto; align-items: stretch; gap: 12px;
+      padding: 10px 18px calc(20px + env(safe-area-inset-bottom));
+      background: var(--panel); border-top: 1px solid var(--panel-line);
+      border-radius: 18px 18px 0 0; box-shadow: 0 -8px 30px rgba(0,0,0,.28);
+      transform: translateY(105%); transition: transform .26s cubic-bezier(.4,0,.2,1); }
+    .overlay.tr.open { transform: none; }
+    .overlay.tr .card { box-shadow: none; border: none; padding: 2px 0; background: transparent; }
+    .overlay.tr .theme-btn { align-self: flex-start; }
+    .controls { min-width: 0; }
+    input[type=search] { font-size: 16px; }     /* iOS 자동 확대 방지 */
+    .sheet-hint { font-size: 11.5px; color: var(--ink-3); line-height: 1.6;
+      border-top: 1px solid var(--panel-line); padding-top: 10px; }
+
+    /* 줌 버튼: 하단 텍스트와 겹치지 않게 우측 중앙으로 */
+    .zoom { bottom: auto; top: 50%; transform: translateY(-50%); right: 12px; }
+    .zoom button { width: 38px; height: 38px; }
   }
+  @media not all and (max-width: 640px) { .sheet-hint { display: none; } }
 </style>
 
 <div id="stage">
@@ -196,7 +237,11 @@
   </div>
 </div>
 
-<div class="overlay tr">
+<button class="sheet-toggle" id="sheet-toggle" aria-label="검색·범례 열기">☰ 범례·검색</button>
+<div class="sheet-bg" id="sheet-bg"></div>
+
+<div class="overlay tr" id="panel">
+  <div class="sheet-grip"></div>
   <button class="theme-btn" id="theme" aria-label="테마 전환">◐ 테마</button>
   <div class="card legend" id="legend"></div>
   <div class="card legend" id="legend-mkt"></div>
@@ -206,6 +251,8 @@
     <div class="ctl-label"><span for="deg">최소 회사 수</span><span class="mono" id="deg-val">2</span></div>
     <input type="range" id="deg" min="2" max="8" value="2" step="1">
   </div>
+  <div class="sheet-hint">한 손가락 드래그로 이동 · 두 손가락으로 확대/축소 ·
+    노드를 탭하면 원본 공시 링크. 회사 노드 링 색은 시장구분.</div>
 </div>
 
 <div class="zoom">
@@ -425,9 +472,24 @@ nodeEls.forEach(({ g, n }) => {
   });
 });
 
-// ── drag node / pan background ──
+// ── drag node / pan background / pinch zoom (마우스·터치 통합) ──
 let panMoved = false;
+const pointers = new Map();          // pointerId -> {x, y}
+let pinchPrev = null;                // 두 손가락 핀치 baseline (있으면 핀치 모드)
+function twoPointerState() {
+  const p = [...pointers.values()];
+  const dx = p[0].x - p[1].x, dy = p[0].y - p[1].y;
+  return { dist: Math.hypot(dx, dy) || 1, mx: (p[0].x + p[1].x) / 2, my: (p[0].y + p[1].y) / 2 };
+}
 svg.addEventListener("pointerdown", ev => {
+  pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+  try { svg.setPointerCapture(ev.pointerId); } catch (_) {}  // 캡처 실패해도 상호작용 유지
+  if (pointers.size === 2) {                 // 두 번째 손가락 → 핀치 시작(노드드래그·팬 취소)
+    dragging = null; panning = false; svg.classList.remove("panning");
+    tip.style.opacity = 0; pinchPrev = twoPointerState();
+    return;
+  }
+  if (pointers.size > 2) return;
   const wx = worldX(ev), wy = worldY(ev);
   const hit = nodeEls.find(({ n }) => Math.hypot(n.x - wx, n.y - wy) < rOf(n) + 6/view.k);
   if (hit) {
@@ -437,9 +499,15 @@ svg.addEventListener("pointerdown", ev => {
     panStart = { x: ev.clientX - view.x, y: ev.clientY - view.y };
     svg.classList.add("panning"); tip.style.opacity = 0;
   }
-  svg.setPointerCapture(ev.pointerId);
 });
 svg.addEventListener("pointermove", ev => {
+  if (pointers.has(ev.pointerId)) pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+  if (pinchPrev && pointers.size >= 2) {     // 핀치: 중점 이동=팬, 거리비=줌
+    const s = twoPointerState();
+    view.x += s.mx - pinchPrev.mx; view.y += s.my - pinchPrev.my; applyView();
+    zoomAt(s.mx, s.my, s.dist / pinchPrev.dist);
+    pinchPrev = s; return;
+  }
   if (dragging) {
     dragMoved = true;
     dragging.x = worldX(ev); dragging.y = worldY(ev); dragging.vx = dragging.vy = 0;
@@ -451,10 +519,20 @@ svg.addEventListener("pointermove", ev => {
     applyView();
   }
 });
+function endPointer(ev) {
+  pointers.delete(ev.pointerId);
+  if (pointers.size < 2) pinchPrev = null;   // 한 손가락만 남으면 핀치 종료
+}
 svg.addEventListener("pointerup", ev => {
-  if (dragging && !dragMoved) openDetail(dragging);
-  else if (panning && !panMoved) closeDetail();  // 빈 곳 '탭' → 패널 닫기 (드래그 팬은 유지)
+  if (!pinchPrev) {
+    if (dragging && !dragMoved) openDetail(dragging);
+    else if (panning && !panMoved) closeDetail();  // 빈 곳 '탭' → 패널 닫기
+  }
   dragging = null; panning = false; svg.classList.remove("panning");
+  endPointer(ev);
+});
+svg.addEventListener("pointercancel", ev => {
+  dragging = null; panning = false; svg.classList.remove("panning"); endPointer(ev);
 });
 
 // ── wheel zoom + zoom buttons ──
@@ -467,6 +545,17 @@ document.getElementById("z-out").onclick = () => zoomAt(W/2, H/2, 1/1.3);
 document.getElementById("z-fit").onclick = () => {
   view.x = 0; view.y = 0; view.k = 1; applyView(); alpha = Math.max(alpha, .3);
 };
+
+// ── mobile controls sheet (검색·범례 바텀시트) ──
+const panel = document.getElementById("panel");
+const sheetBg = document.getElementById("sheet-bg");
+function toggleSheet(open) {
+  const o = open === undefined ? !panel.classList.contains("open") : open;
+  panel.classList.toggle("open", o);
+  sheetBg.classList.toggle("open", o);
+}
+document.getElementById("sheet-toggle").onclick = () => toggleSheet();
+sheetBg.onclick = () => toggleSheet(false);
 
 // ── detail panel ──
 const detail = document.getElementById("detail");
