@@ -11,3 +11,4 @@ venv/
 .mcp.json
 .claude/
 tmp/
+tmp/network.html
