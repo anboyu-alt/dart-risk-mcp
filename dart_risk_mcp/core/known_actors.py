@@ -141,6 +141,39 @@ def _plain(prop_items) -> str:
     return "".join(t.get("plain_text", "") for t in (prop_items or []))
 
 
+_DART_VIEWER = "https://dart.fss.or.kr/dsaf001/main.do?rcpNo="
+
+
+def disclosure_url(rcept_no: str) -> str:
+    """접수번호 → DART 공시 뷰어 URL. 빈 값이면 빈 문자열."""
+    return f"{_DART_VIEWER}{rcept_no}" if rcept_no else ""
+
+
+def _evidence_rich_text(text: str, company_url: dict | None) -> list:
+    """evidence 평문에서 회사명 구간을 해당 공시 링크로 감싼 Notion rich_text.
+
+    company_url: {회사명: 공시URL}. 없으면 전체 평문 단일 span.
+    회사명이 서로 부분 문자열일 수 있어 긴 이름부터 매칭(비겹침).
+    """
+    text = (text or "")[:1900]
+    urls = {k: v for k, v in (company_url or {}).items() if k and v}
+    if not urls:
+        return [{"type": "text", "text": {"content": text}}]
+    names = sorted(urls, key=len, reverse=True)
+    pat = re.compile("|".join(re.escape(n) for n in names))
+    out, pos = [], 0
+    for m in pat.finditer(text):
+        if m.start() > pos:
+            out.append({"type": "text", "text": {"content": text[pos:m.start()]}})
+        nm = m.group(0)
+        out.append({"type": "text",
+                    "text": {"content": nm, "link": {"url": urls[nm]}}})
+        pos = m.end()
+    if pos < len(text):
+        out.append({"type": "text", "text": {"content": text[pos:]}})
+    return out or [{"type": "text", "text": {"content": text}}]
+
+
 def _page_to_record(page: dict) -> tuple[str, dict]:
     """Notion 페이지 → (인물명, 기록 dict). JSON 레지스트리 스키마와 동일 형태."""
     p = page.get("properties", {})
@@ -208,7 +241,8 @@ def add_registry_record(name: str, record: dict, token: str = "", db_id: str = "
         "인물명": {"title": [{"text": {"content": name}}]},
         "status": {"select": {"name": record.get("status") or "auto_matched"}},
         "source": {"rich_text": [{"text": {"content": record.get("source", "")}}]},
-        "evidence": {"rich_text": [{"text": {"content": (record.get("evidence") or "")[:1900]}}]},
+        "evidence": {"rich_text": _evidence_rich_text(
+            record.get("evidence"), record.get("company_links"))},
         "date": {"rich_text": [{"text": {"content": record.get("date", "")}}]},
         "tags": {"multi_select": [{"name": t} for t in record.get("tags", []) if t]},
     }

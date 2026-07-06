@@ -144,6 +144,68 @@ class TestArchiveFragments(unittest.TestCase):
             self.assertEqual(call.kwargs["json"], {"archived": True})
 
 
+class TestBackfillEvidenceLinks(unittest.TestCase):
+    def _page(self, name, companies, rcept="", url="https://dart.fss.or.kr",
+              evidence="", linked=False):
+        ev = [{"plain_text": evidence, "href": ("x" if linked else None)}]
+        return {"id": f"pid-{name}", "properties": {
+            "인물명": {"title": [{"plain_text": name}]},
+            "관련기업": {"multi_select": [{"name": c} for c in companies]},
+            "rcept_no": {"rich_text": [{"plain_text": rcept}] if rcept else []},
+            "url": {"url": url},
+            "evidence": {"rich_text": ev},
+        }}
+
+    def test_refresh_row_links_from_row_rcept(self):
+        import scripts.setup_known_actors_db as sdb
+        q = MagicMock(); q.status_code = 200
+        q.json.return_value = {"results": [self._page(
+            "김인수", ["△△전자"], rcept="20260101000123",
+            evidence="△△전자 CB인수 인수자로 등장")], "has_more": False}
+        p = MagicMock(); p.status_code = 200
+        with patch.object(sdb.requests, "post", return_value=q), \
+             patch.object(sdb.requests, "patch", return_value=p) as pc:
+            n = sdb.backfill_evidence_links("t", "db", sightings_path="")
+        self.assertEqual(n, 1)
+        rich = pc.call_args.kwargs["json"]["properties"]["evidence"]["rich_text"]
+        link = next(s for s in rich if s["text"].get("link"))
+        self.assertIn("rcpNo=20260101000123", link["text"]["link"]["url"])
+
+    def test_promoted_row_links_from_sightings(self):
+        import scripts.setup_known_actors_db as sdb
+        q = MagicMock(); q.status_code = 200
+        q.json.return_value = {"results": [self._page(
+            "김조합", ["에이디테크놀로지", "태웅로직스"],
+            evidence="문제 회사 2곳 인수자 반복 등장: 에이디테크놀로지·태웅로직스")],
+            "has_more": False}
+        p = MagicMock(); p.status_code = 200
+        sight = {"김조합": {"에이디테크놀로지": "20260421000499",
+                          "태웅로직스": "20260422000229"}}
+        with patch.object(sdb.requests, "post", return_value=q), \
+             patch.object(sdb.requests, "patch", return_value=p) as pc, \
+             patch.object(sdb, "_load_sightings_map", return_value=sight):
+            n = sdb.backfill_evidence_links("t", "db", sightings_path="x.json")
+        self.assertEqual(n, 1)
+        props = pc.call_args.kwargs["json"]["properties"]
+        linked = {s["text"]["content"] for s in props["evidence"]["rich_text"]
+                  if s["text"].get("link")}
+        self.assertEqual(linked, {"에이디테크놀로지", "태웅로직스"})
+        # 대표 url도 맨몸→최신 공시로
+        self.assertIn("rcpNo=20260422000229", props["url"]["url"])
+
+    def test_skips_already_linked_rows(self):
+        import scripts.setup_known_actors_db as sdb
+        q = MagicMock(); q.status_code = 200
+        q.json.return_value = {"results": [self._page(
+            "김조합", ["A"], evidence="...", linked=True)], "has_more": False}
+        with patch.object(sdb.requests, "post", return_value=q), \
+             patch.object(sdb.requests, "patch") as pc, \
+             patch.object(sdb, "_load_sightings_map", return_value={}):
+            n = sdb.backfill_evidence_links("t", "db", sightings_path="x.json")
+        self.assertEqual(n, 0)
+        pc.assert_not_called()
+
+
 class TestMainDispatch(unittest.TestCase):
     def test_main_migrates_when_db_id_present(self):
         # DB_KNOWN_ACTORS 설정 시 create 경로를 타지 않고 마이그레이션만 수행
@@ -152,6 +214,7 @@ class TestMainDispatch(unittest.TestCase):
              patch.object(sdb, "ensure_registry_schema", return_value=True) as ensure_call, \
              patch.object(sdb, "backfill_known_companies", return_value=3) as backfill_call, \
              patch.object(sdb, "archive_fragment_rows", return_value=2) as archive_call, \
+             patch.object(sdb, "backfill_evidence_links", return_value=5), \
              patch.object(sdb, "create_registry_db") as create_call:
             sdb.main()
         ensure_call.assert_called_once_with("t", "db")

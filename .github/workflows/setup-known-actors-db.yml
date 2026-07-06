@@ -30,9 +30,16 @@ jobs:
           python-version: "3.11"
       - name: Install package
         run: pip install -e .
+      - name: Checkout sightings (private)
+        uses: actions/checkout@v5
+        with:
+          repository: anboyu-alt/dart-risk-mcp-sightings
+          token: ${{ secrets.SIGHTINGS_REPO_TOKEN }}
+          path: _sightings
       - name: Create/migrate registry DB
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_PARENT_PAGE_ID: ${{ secrets.NOTION_PARENT_PAGE_ID }}
           DB_KNOWN_ACTORS: ${{ secrets.DB_KNOWN_ACTORS }}
+          SIGHTINGS_PATH: _sightings/sightings.json
         run: python scripts/setup_known_actors_db.py
