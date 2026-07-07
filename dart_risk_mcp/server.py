@@ -20,6 +20,7 @@ from .core import (
     detect_capital_churn,
     detect_debt_rollover,
     detect_dividend_drain,
+    compute_beneish_variables,
     detect_financial_anomaly,
     detect_insider_pre_disclosure,
     estimate_crisis_timeline,
@@ -3100,6 +3101,19 @@ def scan_financial_anomaly(
             lines.append(
                 f"- {m['name']}  {pv:.2f}{unit} → {cv:.2f}{unit}  ({trend})"
             )
+
+    # Beneish 연구 변수 6종 — 지수 사실 표기만, 합산 점수·판정 없음(v0.8.5 원칙)
+    _beneish = compute_beneish_variables(current, prior)
+    if _beneish:
+        lines.append("")
+        lines.append("**이익조작 연구 변수 (Beneish 개별 변수 — 사실 표기, 합산·판정 없음)**")
+        for b in _beneish:
+            lines.append(f"- {b['key']}({b['name']}): {b['value']:.2f} — {b['meaning']}")
+        lines.append(
+            "  ※ 지수는 전년=1.00 기준 상대값입니다. 개별 변수만으로 이익조작을 "
+            "판정할 수 없으며, 학계 모형(M-Score) 합산은 본 도구의 점수 금지 "
+            "원칙에 따라 제공하지 않습니다."
+        )
 
     lines.append("")
     if flagged_metrics:

@@ -248,6 +248,7 @@ dart_risk_mcp/
 - 내부 흐름: `resolve_corp` → `fetch_financial_statements_all` (CFS→OFS 폴백) → `_fs_response_to_periods` → **`fetch_company_indicators` × 2(당기/전기)** → `detect_financial_anomaly(current, prior, current_indx, prior_indx)`
 - 이상 플래그 5종: `AR_SURGE`, `INVENTORY_SURGE`, `CASH_GAP`, `CAPITAL_IMPAIRMENT`(절대 임계) + `CFS_OFS_REVERSAL`(별도>연결 당기순이익 역전 — 종속회사 합산 손실, 격차 ≥10%일 때만. 정상 대기업의 연결>별도 괴리는 플래그하지 않음 — 삼성전자 +46% 라이브 검증)
 - 발생액 비율 (순이익−영업현금흐름)/|순이익| 을 당기/전기/Δ로 사실 표기(플래그 없음, kreports accrual_ratio 이식). 연결/별도 비교는 `fnlttSinglAcnt` 1회 추가 호출로 CFS/OFS 당기순이익 쌍 추출(`extract_cfs_ofs_ni`)
+- "이익조작 연구 변수" 블록(`compute_beneish_variables`, kreports 이식/Apache 2.0): Beneish 개별 변수 6종(DSRI·GMI·AQI·SGI·SGAI·LVGI)을 전년=1.00 기준 지수로 사실 표기. **M-Score 합산·임계 판정 없음**(v0.8.5 원칙, 안내 문구 자동 첨부). DEPI·TATA는 감가상각비 미노출로 제외(라이브 검증), LVGI는 부채총계/자산총계 기준(명칭에 명시)
 - v0.8.8 추가: `fnlttSinglIndx` 4카테고리(M210000 수익성·M220000 안정성·M230000 성장성·M240000 활동성)에서 핵심 7종(순이익률·자기자본비율·부채비율·유동비율·매출액증가율·매출채권회전율·재고자산회전율)을 `12.30%p → 8.10%p (전년 대비 -34.1%)` 형식으로 표기. 점수 가산 없음, 사실 표기만(v0.8.5 원칙).
 - `report_type` 허용값: `annual`·`half`·`q1`·`q3`
 - 결과 하단 "업종별 유의 회계정책 (참고)" 블록: `fetch_company_info`의 KSIC 업종코드로 `core/sector_policy.py` 정적 맵(kreports 이식, Apache 2.0)을 조회해 해당 업종에서 회계처리 판단 영향이 큰 항목을 [핵심]/[참고] 라벨로 안내. 업종 일반 참고 자료이며 기업 판정·점수 아님(v0.8.5 원칙)
@@ -336,6 +337,7 @@ dart_risk_mcp/
 | `detect_dividend_drain(dividend_records, current_fs)` | 적자 시점 배당 유출(DIVIDEND_DRAIN) 패턴 — 당기순이익 음수 + 현금배당 양수 시 flag (v0.9.0) |
 | `fetch_affiliate_investments(corp_code, api_key, year, report_type)` | 타법인 출자현황(otrCprInvstmntSttus) 조회 + 합계 행 제거 |
 | `scan_note_titles(rcept_no, api_key)` | 공시 ZIP 전 파일 `<TITLE>` 태그 스캔 → 주석 카테고리 제목 검출 (섹션 추출 보완 경로) |
+| `compute_beneish_variables(current, prior)` | Beneish 개별 변수 6종 YoY 지수 계산 — 합산·판정 없음, 사실 표기 전용 |
 | `extract_cfs_ofs_ni(fs_rows)` | fnlttSinglAcnt rows에서 (연결, 별도) 당기순이익 쌍 추출 — CFS_OFS_REVERSAL 판정 입력 |
 | `fetch_fund_usage(corp_code, api_key, corp_cls, lookback_years)` | 공모·사모 자금사용 2개 엔드포인트 통합 + 이상 플래그 탐지 |
 | `fetch_major_decision(rcept_no, corp_cls, decision_type)` | 12개 DS005 주요결정 엔드포인트 중 decision_type에 따라 자동 선택 |
