@@ -33,9 +33,29 @@
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-07-07
+
+**kreports 이식 시리즈.** [capitalparser/kreports-dart-mcp](https://github.com/capitalparser/kreports-dart-mcp)(Apache 2.0)의 회계 이상 탐지 로직을 본 도구의 원칙(점수·등급 없음, 로컬 DB 없음, 외부 라이브러리 없음)에 맞게 재설계해 이식했다. 이식 항목·수정 내용은 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 참조.
+
 ### Added
 
+- **`get_affiliate_investments` 신규 도구 (26번째)** — 타법인 출자현황(`otrCprInvstmntSttus`). 피출자 법인·출자목적·기말지분율·장부가액·피투자사 재무를 사실 나열, SPC·자회사망 추적 축. 라이브: 삼성전자 137건·제이스코 2건 (#41)
+- `scan_financial_anomaly` 이상 플래그 4→8종: `CFS_OFS_REVERSAL`(별도>연결 순이익 역전, 셀트리온 라이브 매칭 -58.3%), `RESTATEMENT`(전기 수치 재작성 — 연도 간 보고값 대조, 셀트리온·두산 라이브 매칭), `OPNET_POS_NEG`/`OPNET_NEG_POS`(영업↔순이익 부호 괴리) (#40, #44)
+- `scan_financial_anomaly` 사실 표기 블록 4종: 발생액 비율, Beneish 개별 변수 6종(M-Score 합산 미제공 — 점수 금지 원칙), 연구개발비/매출액 비중 3개년(사업보고서 원문 추출, 5/6사 라이브), 업종별 유의 회계정책(KSIC 정적 맵) (#39, #40, #43, #45)
+- `get_audit_opinion_history`: 감사인명 별칭 정규화("삼정KPMG"→"삼정회계법인", 13법인 — 교체·재직연수 오탐 방지) + 연속 적자 연수 블록(헬릭스미스 5년 라이브 매칭) (#39, #45)
+- `list_disclosure_sections`: 재무제표 주석 카테고리 감지 10종(계속기업·특수관계자·우발부채 등) — 섹션 태그 + 원문 `<TITLE>` 스캔 보완 경로(`scan_note_titles`) (#42)
 - 행위자 자동 발굴을 개인 → **개인·조합·법인 3분류**로 확대. `core.known_actors.classify_actor()`(person/fund/corp/institution/noise) 신설 — 조합(투자조합·사모 비히클)은 CB 작전 대표 창구로 개인과 동급 추적, 제도권 기관(증권사·은행·연기금 등)은 반복 등장이 정상이라 수집 제외. 레지스트리에 `구분`(select: 개인/조합/법인) 속성 추가, 법인·조합 등재에는 "동명 법인·조합 미확인" 태그.
+
+### Changed
+
+- `_FS_ALIASES` 계정 별칭 대폭 확장(매출 11종·당기순이익 7종 등) — 기업별 계정명 이질성 흡수 (#39)
+- 감사인 교체·재직연수 비교가 정규화된 표준명 기준으로 변경 (#39)
+
+### Docs
+
+- README: 재무제표 기반 이상 플래그 절 신설, 라이브 검증 매트릭스 7행 추가, 제3자 코드 고지 (#46)
+- LICENSE(MIT, anboyu-alt)·THIRD_PARTY_NOTICES.md(Apache 2.0 고지) 신설 (#46)
+- 테스트 317 → 396 (+79), 골든 매트릭스 14개 도구로 확장
 
 ## [1.5.0] — 2026-07-03
 
