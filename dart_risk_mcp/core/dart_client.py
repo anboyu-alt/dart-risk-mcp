@@ -1730,6 +1730,7 @@ _FS_ALIASES = {
               "당기순손익", "분기순이익", "반기순이익", "연결당기순이익"],
     "자본총계": ["자본총계", "자본 총계", "자본합계"],
     "자본금": ["자본금"],
+    "영업이익": ["영업이익", "영업이익(손실)", "영업손익", "영업이익(영업손실)"],
     # Beneish 변수 계산용 (v1.5.x — compute_beneish_variables)
     "매출총이익": ["매출총이익", "매출총이익(손실)"],
     "매출원가": ["매출원가"],
@@ -1893,6 +1894,112 @@ def detect_financial_anomaly(
             })
 
     return flags, metrics
+
+
+def detect_profit_direction_divergence(current: dict) -> tuple[list[str], list[dict]]:
+    """영업이익과 순이익의 '부호 방향' 괴리 탐지 (kreports op_net_divergence 이식·확장).
+
+    - 영업흑자 + 순손실 → OPNET_POS_NEG (영업외 손실: CB 평가손실·자산손상 등)
+    - 영업적자 + 순이익 흑자 → OPNET_NEG_POS (일회성 처분이익으로 적자를 가리는
+      패턴 — 상폐 요건 회피와 연관, kreports에 없는 역방향 확장)
+
+    Returns:
+        (flags, metrics) — detect_financial_anomaly와 동일 형식.
+        metric에 flag_key를 포함해 지표명 1개가 두 플래그 중 하나로 매핑됨.
+    """
+    op = _pick_account(current, _FS_ALIASES["영업이익"])
+    ni = _pick_account(current, _FS_ALIASES["당기순이익"])
+    flags: list[str] = []
+    metrics: list[dict] = []
+    if op is None or ni is None:
+        return flags, metrics
+    m = {"name": "영업이익 vs 순이익", "current_op": op, "current_ni": ni,
+         "flagged": False, "flag_key": ""}
+    if op > 0 > ni:
+        flags.append("OPNET_POS_NEG")
+        m["flagged"] = True
+        m["flag_key"] = "OPNET_POS_NEG"
+    elif op < 0 < ni:
+        flags.append("OPNET_NEG_POS")
+        m["flagged"] = True
+        m["flag_key"] = "OPNET_NEG_POS"
+    metrics.append(m)
+    return flags, metrics
+
+
+# 재작성 감지 대상 핵심 계정 (std key → 표시명)
+_RESTATE_ACCOUNTS = {
+    "매출": "매출액",
+    "영업이익": "영업이익",
+    "당기순이익": "당기순이익",
+    "자산총계": "자산총계",
+    "부채총계": "부채총계",
+    "자본총계": "자본총계",
+}
+
+
+def detect_restatement(
+    current_rows: list[dict],
+    prior_rows: list[dict],
+    tolerance: float = 0.005,
+) -> list[dict]:
+    """전기 수치 재작성 감지 (kreports detect_restatement의 요약계정 재설계).
+
+    올해 보고서에 적힌 '전기(frmtrm)' 값과 작년 보고서에 적힌 '당기(thstrm)'
+    값을 6개 핵심 계정 × fs_div(CFS/OFS)별로 대조한다. tolerance(기본 0.5%)
+    초과 차이 = 전기 수치가 재작성됐다는 사실. 원인(전기오류수정 vs 회계정책
+    변경·재분류)은 판정하지 않는다 — 주석 확인 안내는 렌더 층에서.
+
+    Args:
+        current_rows: 당기 연도 fnlttSinglAcnt rows
+        prior_rows: 직전 연도 fnlttSinglAcnt rows
+
+    Returns:
+        [{"fs_div", "account", "prior_reported", "restated", "diff_pct"}]
+        — |diff_pct| 내림차순. diff_pct는 작년 보고값 기준 %(작년 값 0이면 None).
+    """
+    def _build(rows, field):
+        m: dict[tuple, int] = {}
+        for r in rows or []:
+            fs = (r.get("fs_div") or "").strip().upper()
+            if fs not in ("CFS", "OFS"):
+                continue
+            nm = (r.get("account_nm") or "").strip()
+            std = next(
+                (k for k in _RESTATE_ACCOUNTS if nm in _FS_ALIASES.get(k, ())),
+                None,
+            )
+            if std is None:
+                continue
+            v = _parse_fs_amount(r.get(field))
+            if v is not None and (fs, std) not in m:
+                m[(fs, std)] = v
+        return m
+
+    cur_frmtrm = _build(current_rows, "frmtrm_amount")
+    pri_thstrm = _build(prior_rows, "thstrm_amount")
+
+    out: list[dict] = []
+    for key in cur_frmtrm.keys() & pri_thstrm.keys():
+        orig = pri_thstrm[key]     # 작년 보고서의 당기 값
+        restated = cur_frmtrm[key]  # 올해 보고서의 전기 값
+        if orig == 0:
+            if restated == 0:
+                continue
+            diff_pct = None
+        else:
+            ratio = (restated - orig) / abs(orig)
+            if abs(ratio) <= tolerance:
+                continue
+            diff_pct = ratio * 100
+        out.append({
+            "fs_div": key[0],
+            "account": _RESTATE_ACCOUNTS[key[1]],
+            "prior_reported": orig,
+            "restated": restated,
+            "diff_pct": diff_pct,
+        })
+    return sorted(out, key=lambda x: -abs(x["diff_pct"] or float("inf")))
 
 
 def compute_beneish_variables(current: dict, prior: dict) -> list[dict]:

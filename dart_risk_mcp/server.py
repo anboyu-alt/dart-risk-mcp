@@ -23,6 +23,8 @@ from .core import (
     compute_beneish_variables,
     detect_financial_anomaly,
     detect_insider_pre_disclosure,
+    detect_profit_direction_divergence,
+    detect_restatement,
     estimate_crisis_timeline,
     extract_cb_investors,
     extract_cfs_ofs_ni,
@@ -3031,6 +3033,29 @@ def scan_financial_anomaly(
         cfs_ni=_cfs_ni, ofs_ni=_ofs_ni,
     )
 
+    # 영업이익 vs 순이익 부호 괴리 (kreports op_net_divergence 이식·확장)
+    _pd_flags, _pd_metrics = detect_profit_direction_divergence(current)
+    flags.extend(_pd_flags)
+    metrics.extend(_pd_metrics)
+
+    # 전기 수치 재작성 감지 — 직전 연도 fnlttSinglAcnt 1회 추가 호출 후 대조
+    _restate: list = []
+    try:
+        if year.isdigit():
+            _prev_rows = fetch_financial_statements(
+                corp_code, api_key, str(int(year) - 1), report_type)
+            _restate = detect_restatement(_acnt_rows, _prev_rows)
+    except Exception:
+        _restate = []
+    if _restate:
+        flags.append("RESTATEMENT")
+        metrics.append({
+            "name": "전기 수치 재작성",
+            "details": _restate,
+            "flagged": True,
+            "flag_key": "RESTATEMENT",
+        })
+
     # 상단 한 줄 요약
     flagged_metrics = [m for m in metrics if m.get("flagged")]
     if flagged_metrics:
@@ -3074,6 +3099,20 @@ def scan_financial_anomaly(
             pri = "-"
             gp = m.get("gap_pct")
             delta = f"연결-별도 {gp:+.1f}%" if gp is not None else "-"
+        elif name == "영업이익 vs 순이익":
+            cur = (
+                f"영업이익 {m['current_op']:,} / "
+                f"순이익 {m['current_ni']:,}"
+            )
+            pri = "-"
+            delta = "-"
+        elif name == "전기 수치 재작성":
+            _det = m.get("details") or []
+            _top = _det[0] if _det else {}
+            _tp = _top.get("diff_pct")
+            cur = f"{len(_det)}개 계정 불일치"
+            pri = "-"
+            delta = f"최대 {_tp:+.1f}%" if _tp is not None else "-"
         elif "current" in m and "prior" in m:
             cur = f"{m['current']:.1f}{m.get('unit','')}"
             pri = f"{m['prior']:.1f}{m.get('unit','')}"
@@ -3120,7 +3159,7 @@ def scan_financial_anomaly(
         lines.append("### 이 지표가 말하는 것")
         lines.append("")
         for m in flagged_metrics:
-            flag_key = _METRIC_TO_FLAG.get(m["name"], "")
+            flag_key = m.get("flag_key") or _METRIC_TO_FLAG.get(m["name"], "")
             if not flag_key:
                 continue
             title, body = flag_to_prose(flag_key, m)
