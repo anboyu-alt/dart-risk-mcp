@@ -29,6 +29,8 @@ from .core import (
     fetch_company_disclosures,
     fetch_market_disclosures,
     fetch_company_info,
+    get_critical_items,
+    get_induty_name,
     fetch_debt_balance,
     fetch_disclosure_full,
     fetch_distress_events,
@@ -2972,6 +2974,26 @@ def scan_financial_anomaly(
             "수 있어 스크리닝 참고용으로만 활용하세요."
         )
         lines.append("")
+
+    # 업종별 유의 회계정책 — 업종 일반의 정적 참고 자료 (기업 판정·점수 아님, v0.8.5 원칙)
+    try:
+        _comp = fetch_company_info(corp_code, api_key)
+        _induty = (_comp or {}).get("induty_code", "")
+    except Exception:
+        _induty = ""
+    if _induty:
+        _items = get_critical_items(_induty)
+        if _items:
+            lines.append("### 업종별 유의 회계정책 (참고)")
+            lines.append(f"업종: {get_induty_name(_induty)} (KSIC {_induty})")
+            for _key, _title, _priority, _desc in _items:
+                _tag = "핵심" if _priority == "high" else "참고"
+                lines.append(f"- [{_tag}] {_title} — {_desc}")
+            lines.append(
+                "※ 위 항목은 이 업종 일반에서 회계처리 판단의 영향이 큰 영역을 "
+                "안내하는 정적 자료로, 이 기업에 대한 판정이 아닙니다."
+            )
+            lines.append("")
 
     lines.append(
         "📎 참고: DART 공시 기준 수치입니다. 감사 전 수치가 포함될 수 있고, "

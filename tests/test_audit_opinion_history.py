@@ -73,8 +73,9 @@ class TestFetchAuditOpinionHistory(unittest.TestCase):
         )
         r = dart_client.fetch_audit_opinion_history("00000001", "KEY", 5)
         self.assertEqual(len(r["auditor_changes"]), 1)
-        self.assertEqual(r["auditor_changes"][0]["from"], "한영")
-        self.assertEqual(r["auditor_changes"][0]["to"], "삼일")
+        # 감사인명은 별칭 정규화를 거쳐 표준명으로 저장됨 ("한영" → "한영회계법인")
+        self.assertEqual(r["auditor_changes"][0]["from"], "한영회계법인")
+        self.assertEqual(r["auditor_changes"][0]["to"], "삼일회계법인")
 
     @patch("dart_risk_mcp.core.dart_client._retry")
     def test_no_change_when_same_auditor(self, mock_retry):

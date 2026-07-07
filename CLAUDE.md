@@ -28,6 +28,7 @@ dart_risk_mcp/
     ├── signals.py       # 37개 신호 유형 (8개 카테고리) + 키워드 매칭 (v0.4.0 카탈로그 기반 보강)
     ├── catalog.py       # 금감원·금융위 MD 카탈로그 로더 (load_catalog_excerpt)
     ├── cb_extractor.py  # CB/BW 인수자명 추출
+    ├── sector_policy.py # 업종별 유의 회계정책 정적 맵 (KSIC 조회, kreports 이식/Apache 2.0)
     ├── watchlist.py     # 인물↔회사군 영속 워치리스트 (순수 파일 I/O)
     ├── known_actors.py  # 공개기록 행위자 레지스트리 로드/조회 (비공개 Notion opt-in)
     └── taxonomy.py      # 27개 신호 분류 + 위험 점수 + 패턴
@@ -246,6 +247,7 @@ dart_risk_mcp/
 - 이상 플래그 4종(절대 임계): `AR_SURGE`, `INVENTORY_SURGE`, `CASH_GAP`, `CAPITAL_IMPAIRMENT`
 - v0.8.8 추가: `fnlttSinglIndx` 4카테고리(M210000 수익성·M220000 안정성·M230000 성장성·M240000 활동성)에서 핵심 7종(순이익률·자기자본비율·부채비율·유동비율·매출액증가율·매출채권회전율·재고자산회전율)을 `12.30%p → 8.10%p (전년 대비 -34.1%)` 형식으로 표기. 점수 가산 없음, 사실 표기만(v0.8.5 원칙).
 - `report_type` 허용값: `annual`·`half`·`q1`·`q3`
+- 결과 하단 "업종별 유의 회계정책 (참고)" 블록: `fetch_company_info`의 KSIC 업종코드로 `core/sector_policy.py` 정적 맵(kreports 이식, Apache 2.0)을 조회해 해당 업종에서 회계처리 판단 영향이 큰 항목을 [핵심]/[참고] 라벨로 안내. 업종 일반 참고 자료이며 기업 판정·점수 아님(v0.8.5 원칙)
 - ※ DART API는 업종 평균을 직접 제공하지 않습니다(검증 완료). 본 도구는 **회사 자체 YoY 추세**로 false-positive를 완화합니다.
 
 ### 22. `get_audit_opinion_history(company_name, lookback_years=5)` ✨ v0.8.0
@@ -255,6 +257,7 @@ dart_risk_mcp/
 - 내부 흐름: `resolve_corp` → `fetch_audit_opinion_history` (3개 엔드포인트 × 연도 루프)
 - 반환: 연도별 감사의견 + 연속 재직 연수, 감사인 교체 이력, 비감사용역 비중 30% 초과 연도 경고
 - `lookback_years` 범위: 1~10년
+- 감사인명은 `_normalize_auditor` 별칭 정규화("삼정KPMG"→"삼정회계법인", 13법인·kreports 이식/Apache 2.0) 후 저장·비교 — 표기 혼재로 인한 교체·재직연수 오탐 방지
 - DART 감사보수 절대 금액 표시는 단위(천원/백만원) 혼용으로 v0.8.0에서 생략. 비중(%)만 경고 섹션에서 제공
 
 ### 23. `track_debt_balance(company_name, year="")` ✨ v0.8.0
