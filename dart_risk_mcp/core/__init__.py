@@ -52,6 +52,13 @@ from .investor_extractor import extract_rights_offering_investors
 from .taxonomy import calculate_risk_score, find_pattern_match, estimate_crisis_timeline
 from .catalog import load_catalog_excerpt
 from .sector_policy import get_critical_items, get_induty_name
+from .notes import (
+    NOTE_CATEGORIES,
+    classify_note_title,
+    summarize_note_sections,
+    build_note_summary,
+)
+from .dart_client import scan_note_titles
 from .explain import (
     flag_to_prose,
     signal_to_prose,
@@ -90,6 +97,11 @@ __all__ = [
     "load_catalog_excerpt",
     "get_critical_items",
     "get_induty_name",
+    "NOTE_CATEGORIES",
+    "classify_note_title",
+    "summarize_note_sections",
+    "build_note_summary",
+    "scan_note_titles",
     "detect_capital_churn",
     "detect_financial_anomaly",
     "extract_cfs_ofs_ni",
