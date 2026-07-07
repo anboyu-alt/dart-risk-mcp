@@ -2,7 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![Python](https://img.shields.io/pypi/pyversions/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![License](https://img.shields.io/pypi/l/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![Release](https://img.shields.io/github/v/release/anboyu-alt/dart-risk-mcp)](https://github.com/anboyu-alt/dart-risk-mcp/releases) [![Downloads](https://static.pepy.tech/badge/dart-risk-mcp/month)](https://pepy.tech/project/dart-risk-mcp) [![Last commit](https://img.shields.io/github/last-commit/anboyu-alt/dart-risk-mcp)](https://github.com/anboyu-alt/dart-risk-mcp/commits/master) [![Commit activity](https://img.shields.io/github/commit-activity/m/anboyu-alt/dart-risk-mcp)](https://github.com/anboyu-alt/dart-risk-mcp/graphs/commit-activity)
 
-**버전:** v1.4.0 · **공시 기반 불공정거래 위험 모니터링** · **설치:** `pip install dart-risk-mcp` → `python -m dart_risk_mcp.setup`
+**공시 기반 불공정거래 위험 모니터링** · **설치:** `pip install dart-risk-mcp` → `python -m dart_risk_mcp.setup` (버전은 상단 배지 참조)
 
 DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 
@@ -1631,7 +1631,7 @@ python -c "import dart_risk_mcp; print(dart_risk_mcp.__version__)"
 ## 참고 자료
 
 - **[OpenDART API 개발가이드 (한글 정리본)](opendart_api_guide.md)** — 이 MCP가 사용하는 DART OpenAPI 전체 명세. 엔드포인트·요청 파라미터·응답 필드·공통 에러코드(`010`~`901`)를 8개 섹션(DS001 공시정보 ~ DS008 증권신고서)으로 정리했습니다. 새 도구를 추가하거나 기존 응답을 디버깅할 때, 공식 문서([opendart.fss.or.kr/guide](https://opendart.fss.or.kr/guide/main.do)) 대신 이 파일을 빠르게 훑어볼 수 있습니다.
-- **[CHANGELOG.md](CHANGELOG.md)** — 버전별 변경 내역 (현재 v1.0.1).
+- **[CHANGELOG.md](CHANGELOG.md)** — 버전별 변경 내역.
 - **[CLAUDE.md](CLAUDE.md)** — 프로젝트 내부 개발자 가이드 (디렉토리 구조, 핵심 함수, 도구 추가 절차).
 
 ---
