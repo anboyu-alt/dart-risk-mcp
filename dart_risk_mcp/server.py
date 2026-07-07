@@ -26,6 +26,10 @@ from .core import (
     extract_cb_investors,
     extract_cfs_ofs_ni,
     fetch_affiliate_investments,
+    NOTE_CATEGORIES,
+    classify_note_title,
+    build_note_summary,
+    scan_note_titles,
     extract_rights_offering_investors,
     fetch_audit_opinion_history,
     fetch_company_disclosures,
@@ -1588,7 +1592,29 @@ def list_disclosure_sections(rcept_no: str) -> str:
         lines.append(f"━━ 파일 {f['file_index']}: {f['doc_title']} ━━")
         lines.append(f"   파일명: {f['filename']} | 전체 {f['char_length']:,}자")
         for sec in f["sections"]:
-            lines.append(f"   [{sec['id']}] {sec['title']}")
+            tags = classify_note_title(sec.get("title", ""))
+            suffix = ""
+            if tags:
+                labels = "·".join(NOTE_CATEGORIES[k][0] for k in tags)
+                suffix = f"  ⟨주석: {labels}⟩"
+            lines.append(f"   [{sec['id']}] {sec['title']}{suffix}")
+        lines.append("")
+
+    # 주석 카테고리 요약 — 섹션 제목 + 원문 <TITLE> 스캔 병합 (kreports NOTE_KEYWORDS 이식).
+    # 사업보고서 주석 항목은 섹션으로 안 잡히는 경우가 많아 TITLE 스캔이 주 경로.
+    try:
+        _title_hits = scan_note_titles(rcept_no, _DART_API_KEY)
+    except Exception:
+        _title_hits = []
+    note_summary = build_note_summary(file_list, _title_hits)
+    if note_summary:
+        lines.append("🔎 **주석 카테고리 감지** (제목 키워드 기준 — 원문 확인 필요)")
+        for label, entries in note_summary:
+            lines.append(f"   {label}: {', '.join(entries)}")
+        lines.append(
+            "   ↳ 섹션 id는 view_disclosure(section_id=...)로, "
+            "'파일N (약 X% 지점)'은 view_disclosure(rcept_no, page=...)로 근처 페이지를 여세요."
+        )
         lines.append("")
 
     lines.append("💡 view_disclosure(rcept_no, section_id=\"...\") 로 특정 섹션을 읽을 수 있습니다.")

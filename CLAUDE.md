@@ -29,6 +29,7 @@ dart_risk_mcp/
     ├── catalog.py       # 금감원·금융위 MD 카탈로그 로더 (load_catalog_excerpt)
     ├── cb_extractor.py  # CB/BW 인수자명 추출
     ├── sector_policy.py # 업종별 유의 회계정책 정적 맵 (KSIC 조회, kreports 이식/Apache 2.0)
+    ├── notes.py         # 재무제표 주석 카테고리 분류 (제목 키워드 10종, kreports 이식/Apache 2.0)
     ├── watchlist.py     # 인물↔회사군 영속 워치리스트 (순수 파일 I/O)
     ├── known_actors.py  # 공개기록 행위자 레지스트리 로드/조회 (비공개 Notion opt-in)
     └── taxonomy.py      # 27개 신호 분류 + 위험 점수 + 패턴
@@ -126,6 +127,7 @@ dart_risk_mcp/
 - `<h1>`~`<h4>`, DART 전용 `<SECTION-N>` 태그에서 섹션 추출
 - 각 섹션에 `id` 부여 (예: `f0s2` = 파일0의 3번째 섹션)
 - `view_disclosure`에서 `section_id`로 사용
+- **주석 카테고리 감지**(kreports NOTE_KEYWORDS 이식/Apache 2.0): 섹션 제목 태그 `⟨주석: 라벨⟩` + 하단 "🔎 주석 카테고리 감지" 요약. 10카테고리(계속기업·특수관계자·우발부채·종속기업·금융상품·수익인식·리스·충당부채·자산손상·후속사건), 우선순위순 최대 2태그/제목. 섹션에 안 잡히는 주석 헤딩은 `scan_note_titles`(원문 `<TITLE>` 태그 스캔)로 보완 — "파일N '제목' (약 X% 지점)" 형식. 제목 80자 초과는 본문 오인으로 태깅 제외. 사실 라벨만, 판정 없음
 
 ### 9. `view_disclosure(rcept_no, section_id="", page=1, page_size=4000)` ✨
 
@@ -333,6 +335,7 @@ dart_risk_mcp/
 | `fetch_dividend_history(corp_code, api_key, lookback_years)` | alotMatter을 분기 4코드 × N년 호출. 각 record에 bsns_year/reprt_code 부착 (v0.9.0) |
 | `detect_dividend_drain(dividend_records, current_fs)` | 적자 시점 배당 유출(DIVIDEND_DRAIN) 패턴 — 당기순이익 음수 + 현금배당 양수 시 flag (v0.9.0) |
 | `fetch_affiliate_investments(corp_code, api_key, year, report_type)` | 타법인 출자현황(otrCprInvstmntSttus) 조회 + 합계 행 제거 |
+| `scan_note_titles(rcept_no, api_key)` | 공시 ZIP 전 파일 `<TITLE>` 태그 스캔 → 주석 카테고리 제목 검출 (섹션 추출 보완 경로) |
 | `extract_cfs_ofs_ni(fs_rows)` | fnlttSinglAcnt rows에서 (연결, 별도) 당기순이익 쌍 추출 — CFS_OFS_REVERSAL 판정 입력 |
 | `fetch_fund_usage(corp_code, api_key, corp_cls, lookback_years)` | 공모·사모 자금사용 2개 엔드포인트 통합 + 이상 플래그 탐지 |
 | `fetch_major_decision(rcept_no, corp_cls, decision_type)` | 12개 DS005 주요결정 엔드포인트 중 decision_type에 따라 자동 선택 |

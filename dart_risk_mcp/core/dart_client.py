@@ -752,6 +752,53 @@ def list_document_sections(rcept_no: str, api_key: str) -> list[dict]:
     return result
 
 
+def scan_note_titles(rcept_no: str, api_key: str) -> list[dict]:
+    """공시 ZIP 전체에서 DART <TITLE> 태그를 스캔해 주석 카테고리 제목을 찾는다.
+
+    사업보고서의 재무제표 주석 항목("32. 우발부채와 약정사항" 등)은 h1~h4
+    헤딩이 아닌 <TITLE> 태그로 들어 있어 list_document_sections 섹션에
+    안 잡힌다 (kreports report_section_parser의 TITLE 스캔 방식 이식,
+    Apache 2.0). 섹션 추출과 별도의 추가 경로 — 기존 반환 구조 무변경.
+
+    Returns:
+        [{"file_index": int, "title": str, "categories": [key,...],
+          "position_pct": int}]  # position_pct = 파일 내 대략 위치(%)
+    """
+    from .notes import classify_note_title
+
+    zf = _fetch_document_zip(rcept_no, api_key)
+    if not zf:
+        return []
+
+    results: list[dict] = []
+    seen: set[tuple] = set()
+    doc_files = [n for n in zf.namelist() if n.lower().endswith((".xml", ".html", ".htm"))]
+    for file_index, filename in enumerate(doc_files):
+        content = _decode_zip_file(zf, filename)
+        if not content:
+            continue
+        total = len(content)
+        for m in _TITLE_RE.finditer(content):
+            title = re.sub(r"\s+", " ", _strip_tags(m.group(1))).strip()
+            if not title or len(title) > 100:
+                continue
+            cats = classify_note_title(title)
+            if not cats:
+                continue
+            key = (file_index, title)
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append({
+                "file_index": file_index,
+                "title": title,
+                "categories": cats,
+                "position_pct": int(m.start() / total * 100) if total else 0,
+            })
+    zf.close()
+    return results
+
+
 # ── 페이지네이션 문서 내용 조회 ────────────────────────────────
 
 def _split_pages(text: str, page_size: int) -> list[str]:
