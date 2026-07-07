@@ -249,6 +249,7 @@ dart_risk_mcp/
 - 이상 플래그 8종: `AR_SURGE`, `INVENTORY_SURGE`, `CASH_GAP`, `CAPITAL_IMPAIRMENT`(절대 임계) + `CFS_OFS_REVERSAL`(별도>연결 당기순이익 역전 — 종속회사 합산 손실, 격차 ≥10%일 때만. 정상 대기업의 연결>별도 괴리는 플래그하지 않음 — 삼성전자 +46% 라이브 검증) + `OPNET_POS_NEG`(영업흑자·순손실 — 영업외 손실)·`OPNET_NEG_POS`(영업적자·순이익 흑자 — 일회성 이익 의심, 상폐 요건 회피 연관) + `RESTATEMENT`(전기 수치 재작성 — 올해 보고서의 전기값 vs 작년 보고서의 당기값을 6계정×fs_div 대조, 0.5% 허용오차. `detect_restatement`, 직전 연도 `fnlttSinglAcnt` 1회 추가 호출)
 - 발생액 비율 (순이익−영업현금흐름)/|순이익| 을 당기/전기/Δ로 사실 표기(플래그 없음, kreports accrual_ratio 이식). 연결/별도 비교는 `fnlttSinglAcnt` 1회 추가 호출로 CFS/OFS 당기순이익 쌍 추출(`extract_cfs_ofs_ni`)
 - "이익조작 연구 변수" 블록(`compute_beneish_variables`, kreports 이식/Apache 2.0): Beneish 개별 변수 6종(DSRI·GMI·AQI·SGI·SGAI·LVGI)을 전년=1.00 기준 지수로 사실 표기. **M-Score 합산·임계 판정 없음**(v0.8.5 원칙, 안내 문구 자동 첨부). DEPI·TATA는 감가상각비 미노출로 제외(라이브 검증), LVGI는 부채총계/자산총계 기준(명칭에 명시)
+- "연구개발비 비중 (사업보고서 기재)" 블록(`extract_rd_ratio_from_report`, kreports business_insights 이식/Apache 2.0): 최근 사업보고서 원문의 "연구개발비/매출액 비율" 표에서 최근 3개 연도 값을 regex 추출해 사실 표기 (annual만, ZIP 다운로드 +1회). % 생략 변형은 인접 소수점 연속 규칙으로 흡수, 산정 기준 상이 안내 자동 첨부. 라이브 검증 5/6사(제이스코는 R&D 표 없음 — 정상 미검출)
 - v0.8.8 추가: `fnlttSinglIndx` 4카테고리(M210000 수익성·M220000 안정성·M230000 성장성·M240000 활동성)에서 핵심 7종(순이익률·자기자본비율·부채비율·유동비율·매출액증가율·매출채권회전율·재고자산회전율)을 `12.30%p → 8.10%p (전년 대비 -34.1%)` 형식으로 표기. 점수 가산 없음, 사실 표기만(v0.8.5 원칙).
 - `report_type` 허용값: `annual`·`half`·`q1`·`q3`
 - 결과 하단 "업종별 유의 회계정책 (참고)" 블록: `fetch_company_info`의 KSIC 업종코드로 `core/sector_policy.py` 정적 맵(kreports 이식, Apache 2.0)을 조회해 해당 업종에서 회계처리 판단 영향이 큰 항목을 [핵심]/[참고] 라벨로 안내. 업종 일반 참고 자료이며 기업 판정·점수 아님(v0.8.5 원칙)
@@ -262,6 +263,7 @@ dart_risk_mcp/
 - 반환: 연도별 감사의견 + 연속 재직 연수, 감사인 교체 이력, 비감사용역 비중 30% 초과 연도 경고
 - `lookback_years` 범위: 1~10년
 - 감사인명은 `_normalize_auditor` 별칭 정규화("삼정KPMG"→"삼정회계법인", 13법인·kreports 이식/Apache 2.0) 후 저장·비교 — 표기 혼재로 인한 교체·재직연수 오탐 방지
+- "연속 적자 (참고)" 블록(`fetch_loss_streak`): 연도별 `fnlttSinglAcnt` 루프(최대 5회 추가 호출)로 영업손실·순손실 연속 연수를 최신 연도부터 계산해 2년 이상일 때만 사실 표기. 데이터 없는 연도는 보수적으로 연속 중단. 라이브: 헬릭스미스 5년·제이스코 영업 4년/순손실 5년 연속 매칭
 - DART 감사보수 절대 금액 표시는 단위(천원/백만원) 혼용으로 v0.8.0에서 생략. 비중(%)만 경고 섹션에서 제공
 
 ### 23. `track_debt_balance(company_name, year="")` ✨ v0.8.0
@@ -340,6 +342,8 @@ dart_risk_mcp/
 | `compute_beneish_variables(current, prior)` | Beneish 개별 변수 6종 YoY 지수 계산 — 합산·판정 없음, 사실 표기 전용 |
 | `detect_profit_direction_divergence(current)` | 영업이익↔순이익 부호 괴리 (OPNET_POS_NEG / OPNET_NEG_POS) |
 | `detect_restatement(current_rows, prior_rows)` | 전기 수치 재작성 감지 — 연도 간 보고값 대조, 원인 판정 없음 (RESTATEMENT) |
+| `extract_rd_ratio_from_report(corp_code, api_key)` | 최근 사업보고서 원문에서 연구개발비/매출액 비율(최근 3개 연도) regex 추출 |
+| `fetch_loss_streak(corp_code, api_key, lookback_years)` | 연도별 영업이익·순이익 부호 → 최신 연도부터 연속 적자 연수 |
 | `extract_cfs_ofs_ni(fs_rows)` | fnlttSinglAcnt rows에서 (연결, 별도) 당기순이익 쌍 추출 — CFS_OFS_REVERSAL 판정 입력 |
 | `fetch_fund_usage(corp_code, api_key, corp_cls, lookback_years)` | 공모·사모 자금사용 2개 엔드포인트 통합 + 이상 플래그 탐지 |
 | `fetch_major_decision(rcept_no, corp_cls, decision_type)` | 12개 DS005 주요결정 엔드포인트 중 decision_type에 따라 자동 선택 |
@@ -454,6 +458,8 @@ PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설
 | `get_affiliate_investments` | ✅ | 6사 골드 `*_affiliates.txt` (삼성전자 137건·제이스코 2건 등 라이브) |
 | `scan_financial_anomaly` 의 `RESTATEMENT` | ✅ | 셀트리온(최대 +1.4%)·두산(최대 -15.1%) 라이브 매칭, 골드 `*_scan_fs.txt` |
 | `scan_financial_anomaly` 의 `OPNET_POS_NEG`/`OPNET_NEG_POS` | ⚠ | 6사 매트릭스 미발화(모두 부호 동일) — 위험사례 발굴 시 골드 추가 |
+| `scan_financial_anomaly` 의 R&D 비중 블록 | ✅ | 5/6사 라이브 추출(삼성 11.3%·헬릭스미스 115.8% 등), 제이스코는 R&D 표 없음(정상) |
+| `get_audit_opinion_history` 의 연속 적자 블록 | ✅ | 헬릭스미스 5년·제이스코 영업 4년/순손실 5년 라이브 매칭 |
 | `find_actor_overlap` 임원 겸직 매칭 | ✅ | 신승수군 3개사 겸직 라이브 매칭(신용규·이호영 동행 포함), 골드 `tests/fixtures/sample_outputs/actor_overlap.txt` |
 | `TREASURY_TRUST` (v0.8.7) | ⚠ | 자사주 신탁 발생 빈도 낮음 |
 | `INSIDER_PRE_DISCLOSURE` (v0.8.6) | ⚠ | 매도 ±30일 부정 공시 |
