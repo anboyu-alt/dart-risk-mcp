@@ -1700,6 +1700,8 @@ def detect_financial_anomaly(
     prior: dict,
     current_indx: dict | None = None,
     prior_indx: dict | None = None,
+    cfs_ni: int | None = None,
+    ofs_ni: int | None = None,
 ) -> tuple[list[str], list[dict]]:
     """
     당기·전기 재무 dict를 받아 4개 이상 지표 판정.
@@ -1710,12 +1712,18 @@ def detect_financial_anomaly(
         current_indx: (v0.8.8) 당기 fnlttSinglIndx 결과 {idx_nm: float, ...}.
         prior_indx: (v0.8.8) 전기 fnlttSinglIndx 결과. 둘 다 주어지면
             핵심 지표 7종에 대한 YoY 변동률 metric을 추가한다(절대 임계 없음, flagged=False).
+        cfs_ni: 연결 당기순이익. ofs_ni와 함께 주어지면 연결/별도 괴리 metric을
+            추가하고, 별도>연결 역전(종속회사 합산 손실)이 뚜렷하면
+            CFS_OFS_REVERSAL 플래그를 세운다. 미지정 시 종전 동작과 동일.
+        ofs_ni: 별도 당기순이익.
 
     Returns:
         (flags, metrics)
-        flags: ["AR_SURGE", "INVENTORY_SURGE", "CASH_GAP", "CAPITAL_IMPAIRMENT"] 부분집합
+        flags: ["AR_SURGE", "INVENTORY_SURGE", "CASH_GAP", "CAPITAL_IMPAIRMENT",
+                "CFS_OFS_REVERSAL"] 부분집합
         metrics: [{"name", "current", "prior", "delta", "unit", "flagged"} ...]
                  v0.8.8: indx 기반 항목은 source="indx", delta_pct(float|None) 키를 가짐.
+                 발생액 비율 항목은 사실 표기 전용(flagged 항상 False).
     """
     flags: list[str] = []
     metrics: list[dict] = []
@@ -1727,7 +1735,9 @@ def detect_financial_anomaly(
     inv_c = _pick_account(current, _FS_ALIASES["재고자산"])
     inv_p = _pick_account(prior, _FS_ALIASES["재고자산"])
     ni_c = _pick_account(current, _FS_ALIASES["당기순이익"])
+    ni_p = _pick_account(prior, _FS_ALIASES["당기순이익"])
     ocf_c = _pick_account(current, _FS_ALIASES["영업현금흐름"])
+    ocf_p = _pick_account(prior, _FS_ALIASES["영업현금흐름"])
     eq_c = _pick_account(current, _FS_ALIASES["자본총계"])
     cap_c = _pick_account(current, _FS_ALIASES["자본금"])
 
@@ -1767,6 +1777,35 @@ def detect_financial_anomaly(
         m = {"name": "자본총계/자본금", "current": ratio, "unit": "%", "flagged": False}
         if ratio < 200:
             flags.append("CAPITAL_IMPAIRMENT")
+            m["flagged"] = True
+        metrics.append(m)
+
+    # 발생액 비율 (kreports accrual_ratio 이식) — (순이익-영업현금흐름)/|순이익|.
+    # 높을수록 장부 이익 대비 현금화가 부진. 절대 임계 없음, 사실 표기만(v0.8.5 원칙).
+    if ni_c is not None and ocf_c is not None and ni_c != 0:
+        acc_c = (ni_c - ocf_c) / abs(ni_c) * 100
+        m = {"name": "발생액 비율", "current": acc_c, "unit": "%", "flagged": False}
+        if ni_p is not None and ocf_p is not None and ni_p != 0:
+            acc_p = (ni_p - ocf_p) / abs(ni_p) * 100
+            m["prior"] = acc_p
+            m["delta"] = acc_c - acc_p
+        metrics.append(m)
+
+    # 연결/별도 당기순이익 비교 (kreports cfs_ofs_gap 재설계).
+    # 정상 대기업은 연결>별도가 일반적(자회사 이익 합산 — 라이브 검증: 삼성전자 괴리 31%)
+    # 이라 단순 괴리율 임계는 오탐. '별도>연결 역전'(종속회사 합산 손실)만 플래그.
+    if cfs_ni is not None and ofs_ni is not None:
+        gap = cfs_ni - ofs_ni
+        gap_pct = (gap / abs(ofs_ni) * 100) if ofs_ni != 0 else None
+        m = {
+            "name": "연결/별도 당기순이익",
+            "current_cfs": cfs_ni,
+            "current_ofs": ofs_ni,
+            "gap_pct": gap_pct,
+            "flagged": False,
+        }
+        if ofs_ni > cfs_ni and (ofs_ni - cfs_ni) >= abs(ofs_ni) * 0.10:
+            flags.append("CFS_OFS_REVERSAL")
             m["flagged"] = True
         metrics.append(m)
 
@@ -1823,6 +1862,47 @@ _INDX_UNIT: dict[str, str] = {
 }
 
 
+def _parse_fs_amount(s):
+    """DART 재무제표 금액 문자열 → int. 콤마·괄호(음수)·null 처리. 실패 시 None."""
+    if s is None:
+        return None
+    s = str(s).replace(",", "").replace(" ", "").strip()
+    if not s or s in ("-", "null"):
+        return None
+    # 괄호는 음수 표기
+    if s.startswith("(") and s.endswith(")"):
+        s = "-" + s[1:-1]
+    try:
+        return int(s)
+    except ValueError:
+        try:
+            return int(float(s))
+        except ValueError:
+            return None
+
+
+def extract_cfs_ofs_ni(fs_rows: list[dict]) -> tuple[int | None, int | None]:
+    """fnlttSinglAcnt 응답 rows에서 (연결 당기순이익, 별도 당기순이익) 추출.
+
+    fnlttSinglAcnt는 fs_div=CFS/OFS 행을 한 응답에 함께 준다. fs_div별로
+    당기순이익 별칭에 정확 일치하는 첫 행의 당기 금액을 취한다.
+    해당 구분이 없으면(연결 미작성 등) None.
+    """
+    result: dict[str, int] = {}
+    aliases = _FS_ALIASES["당기순이익"]
+    for row in fs_rows or []:
+        fs_div = (row.get("fs_div") or "").strip().upper()
+        if fs_div not in ("CFS", "OFS") or fs_div in result:
+            continue
+        name = (row.get("account_nm") or "").strip()
+        if name not in aliases:
+            continue
+        v = _parse_fs_amount(row.get("thstrm_amount"))
+        if v is not None:
+            result[fs_div] = v
+    return result.get("CFS"), result.get("OFS")
+
+
 def _fs_response_to_periods(fs_data: dict) -> tuple[dict, dict]:
     """
     fetch_financial_statements 응답(list of account items) → (current, prior) 두 기간 dict.
@@ -1834,29 +1914,12 @@ def _fs_response_to_periods(fs_data: dict) -> tuple[dict, dict]:
     current: dict = {}
     prior: dict = {}
 
-    def _parse(s):
-        if s is None:
-            return None
-        s = str(s).replace(",", "").replace(" ", "").strip()
-        if not s or s in ("-", "null"):
-            return None
-        # 괄호는 음수 표기
-        if s.startswith("(") and s.endswith(")"):
-            s = "-" + s[1:-1]
-        try:
-            return int(s)
-        except ValueError:
-            try:
-                return int(float(s))
-            except ValueError:
-                return None
-
     for item in fs_data.get("list", []) if isinstance(fs_data, dict) else []:
         name = (item.get("account_nm") or "").strip()
         if not name:
             continue
-        cur_v = _parse(item.get("thstrm_amount"))
-        pri_v = _parse(item.get("frmtrm_amount"))
+        cur_v = _parse_fs_amount(item.get("thstrm_amount"))
+        pri_v = _parse_fs_amount(item.get("frmtrm_amount"))
         # 이미 채워진 키는 덮어쓰지 않음 (CFS가 먼저 나오는 DART 관행 활용)
         if cur_v is not None and name not in current:
             current[name] = cur_v

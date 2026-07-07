@@ -67,6 +67,19 @@ FLAG_PROSE: dict[str, dict] = {
             "것으로 봅니다."
         ),
     },
+    "CFS_OFS_REVERSAL": {
+        "title": "연결 순이익이 별도보다 뚜렷하게 작습니다",
+        "body": (
+            "'별도'는 모회사 혼자의 성적표, '연결'은 자회사까지 합친 성적표입니다. "
+            "보통은 자회사 이익이 더해져 연결이 별도보다 크거나 비슷한데, 연결이 "
+            "별도보다 뚜렷하게 작다면 크게 두 가지 경우입니다. ① 종속회사들이 "
+            "합산 기준으로 손실을 내고 있거나(자회사에 부실을 옮겨 두는 구조 포함), "
+            "② 계열사向 매출 비중이 커서 내부거래 미실현이익이 연결에서 제거되는 "
+            "구조입니다. 어느 쪽이든 모회사 별도 장부만으로는 실적을 판단하기 "
+            "어렵다는 신호이므로, 종속회사 목록과 특수관계자 거래·내부거래 주석을 "
+            "함께 확인할 필요가 있습니다."
+        ),
+    },
     "CAPITAL_CHURN": {
         "title": "12개월 안에 자본 관련 공시가 지나치게 자주 반복되고 있습니다",
         "body": (
@@ -156,6 +169,15 @@ def _metric_amendments(flag: str, metric: dict | None) -> str:
         if cur is None:
             return ""
         return f"\n\n이번 분석: 자본총계가 자본금의 {cur:.0f}% 수준입니다."
+    if flag == "CFS_OFS_REVERSAL":
+        cfs = metric.get("current_cfs")
+        ofs = metric.get("current_ofs")
+        if cfs is None or ofs is None:
+            return ""
+        return (
+            f"\n\n이번 분석: 별도 당기순이익 {ofs:,}원, 연결 당기순이익 "
+            f"{cfs:,}원으로 종속회사 합산 효과가 {cfs - ofs:+,}원입니다."
+        )
     if flag == "CAPITAL_CHURN":
         total = metric.get("total_events")
         max12m = metric.get("max_12m_count")
