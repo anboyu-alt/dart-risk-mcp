@@ -25,6 +25,8 @@ from .core import (
     detect_insider_pre_disclosure,
     detect_profit_direction_divergence,
     detect_restatement,
+    extract_rd_ratio_from_report,
+    fetch_loss_streak,
     estimate_crisis_timeline,
     extract_cb_investors,
     extract_cfs_ofs_ni,
@@ -2495,6 +2497,30 @@ def get_audit_opinion_history(company_name: str, lookback_years: int = 5) -> str
         )
         lines.append("")
 
+    # 연속 적자 연수 — 계속기업 맥락의 사실 표기 (kreports going_concern 다년 확장)
+    try:
+        _streak = fetch_loss_streak(info["corp_code"], api_key, min(lookback_years, 5))
+    except Exception:
+        _streak = {}
+    _op_n = _streak.get("op_loss_streak", 0)
+    _ni_n = _streak.get("ni_loss_streak", 0)
+    if _op_n >= 2 or _ni_n >= 2:
+        _yrs = _streak.get("years", [])
+        _latest = _yrs[0]["year"] if _yrs else "?"
+        lines.append("**연속 적자 (참고)**")
+        parts = []
+        if _op_n >= 2:
+            parts.append(f"영업손실 {_op_n}년 연속({_latest - _op_n + 1}~{_latest})")
+        if _ni_n >= 2:
+            parts.append(f"순손실 {_ni_n}년 연속({_latest - _ni_n + 1}~{_latest})")
+        lines.append("- " + " · ".join(parts))
+        lines.append(
+            "  사업보고서 기준 사실 표기입니다. 코스닥 관리종목 지정 요건은 "
+            "장기 영업손실 등과 연관되므로 거래소 공시·별도 기준 수치를 함께 "
+            "확인하세요."
+        )
+        lines.append("")
+
     lines.append(
         "📎 참고: DART 사업보고서 기준 감사의견입니다. 반기·분기 감사인 리뷰 "
         "의견은 별도 공시로 조회하세요."
@@ -3153,6 +3179,31 @@ def scan_financial_anomaly(
             "판정할 수 없으며, 학계 모형(M-Score) 합산은 본 도구의 점수 금지 "
             "원칙에 따라 제공하지 않습니다."
         )
+
+    # 연구개발비 비중 — 사업보고서 기재값 사실 표기 (kreports 이식, annual만)
+    if report_type == "annual":
+        try:
+            _rd = extract_rd_ratio_from_report(corp_code, api_key)
+        except Exception:
+            _rd = {}
+        _rd_vals = _rd.get("values") or []
+        if _rd_vals:
+            trail = " → ".join(f"{v:.2f}%" for v in _rd_vals)
+            lines.append("")
+            lines.append("**연구개발비 비중 (사업보고서 기재)**")
+            lines.append(f"- 연구개발비/매출액: {trail} (당기부터 과거 순, {_rd.get('report_nm', '사업보고서')})")
+            if len(_rd_vals) >= 2:
+                if _rd_vals[0] > _rd_vals[-1]:
+                    lines.append("- 당기 비중은 과거 대비 높아진 수준입니다.")
+                elif _rd_vals[0] < _rd_vals[-1]:
+                    lines.append(
+                        "- 당기 비중은 과거 대비 낮아진 수준입니다. 신사업·신기술 "
+                        "발표가 잦은데 연구개발 비중이 낮아지는 경우 발표의 실체를 "
+                        "원문으로 확인하세요."
+                    )
+                else:
+                    lines.append("- 당기 비중은 과거와 유사한 수준입니다.")
+            lines.append("  ※ 산정 기준(정부보조금 차감 여부 등)이 회사마다 달라 원문 표 확인이 필요합니다.")
 
     lines.append("")
     if flagged_metrics:

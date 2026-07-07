@@ -1896,6 +1896,113 @@ def detect_financial_anomaly(
     return flags, metrics
 
 
+# R&D 비중 추출 (kreports business_insights.extract_rd_ratio 이식·강화, Apache 2.0)
+# 사업보고서 '연구개발활동' 표의 "연구개발비/매출액 비율" 행에서 최근 3개 연도 값 추출.
+_RD_HEAD_RE = re.compile(
+    r"(?:연구개발비(?:용)?\s*/\s*매출액\s*비율"
+    r"|매출액\s*대비\s*연구개발비(?:용)?\s*(?:비율|비중))"
+)
+_RD_VAL_RE = re.compile(r"[^%]{0,30}?(\d+\.?\d*)\s*%")
+# 첫 값 뒤 %가 생략된 표 변형(라이브: 헬릭스미스 "115.80% 173.25 562.34") —
+# 소수점 필수 + 즉시 인접(공백 ≤3자)일 때만 연속 값으로 인정해 오탐 차단
+_RD_BARE_RE = re.compile(r"\s{0,3}(\d+\.\d{1,2})\s*%?")
+
+
+def extract_rd_ratio_from_report(corp_code: str, api_key: str,
+                                 lookback_days: int = 550) -> dict:
+    """최근 사업보고서에서 연구개발비/매출액 비율(최근 3개 연도)을 추출.
+
+    Returns:
+        {"rcept_no", "report_nm", "values": [float, ...]}  # 원문 기재 순(당기부터)
+        미검출·실패 시 {}.
+    """
+    try:
+        discs = fetch_company_disclosures(corp_code, api_key, lookback_days=lookback_days)
+        biz = next((d for d in discs
+                    if d.get("report_nm", "").startswith("사업보고서")), None)
+        if not biz:
+            return {}
+        zf = _fetch_document_zip(biz["rcept_no"], api_key)
+        if not zf:
+            return {}
+        best = ""
+        for fn in [n for n in zf.namelist()
+                   if n.lower().endswith((".xml", ".html", ".htm"))]:
+            c = _decode_zip_file(zf, fn) or ""
+            if len(c) > len(best):
+                best = c
+        zf.close()
+        text = re.sub(r"\s+", " ", _strip_tags(best))
+        return {"rcept_no": biz["rcept_no"],
+                "report_nm": biz.get("report_nm", "사업보고서"),
+                "values": extract_rd_values(text)} if best else {}
+    except Exception as e:
+        log.debug("R&D 비중 추출 실패 (%s): %s", corp_code, e)
+        return {}
+
+
+def extract_rd_values(text: str, max_values: int = 3) -> list[float]:
+    """공백 정규화된 본문에서 R&D/매출 비율 값 목록 추출 (당기부터, 최대 3개)."""
+    m = _RD_HEAD_RE.search(text or "")
+    if not m:
+        return []
+    tail = text[m.end(): m.end() + 200]
+    values: list[float] = []
+    pos = 0
+    vm = _RD_VAL_RE.match(tail, pos)
+    while vm and len(values) < max_values:
+        try:
+            values.append(float(vm.group(1)))
+        except ValueError:
+            break
+        pos = vm.end()
+        # 이후 값: % 붙은 정식 형태 우선, 없으면 즉시 인접 소수점 값
+        nxt = _RD_VAL_RE.match(tail, pos)
+        if not nxt:
+            nxt = _RD_BARE_RE.match(tail, pos)
+        vm = nxt
+    return values
+
+
+def fetch_loss_streak(corp_code: str, api_key: str, lookback_years: int = 5) -> dict:
+    """연도별 영업이익·당기순이익 부호를 조회해 최신 연도부터의 연속 적자 연수 계산.
+
+    fnlttSinglAcnt를 연도 루프로 호출(lookback_years회). 데이터 없는 연도는
+    연속 계산을 보수적으로 끊는다 (kreports going_concern_flag의 다년 확장).
+
+    Returns:
+        {"years": [{"year", "op", "ni"}, ...(최신부터)],
+         "op_loss_streak": int, "ni_loss_streak": int}
+    """
+    this_year = datetime.now().year
+    years: list[dict] = []
+    for y in range(this_year - 1, this_year - 1 - lookback_years, -1):
+        op = ni = None
+        try:
+            rows = fetch_financial_statements(corp_code, api_key, str(y), "annual")
+            if rows:
+                cur, _ = _fs_response_to_periods({"list": rows})
+                op = _pick_account(cur, _FS_ALIASES["영업이익"])
+                ni = _pick_account(cur, _FS_ALIASES["당기순이익"])
+        except Exception:
+            pass
+        years.append({"year": y, "op": op, "ni": ni})
+
+    def _streak(key: str) -> int:
+        n = 0
+        for item in years:
+            v = item[key]
+            if v is not None and v < 0:
+                n += 1
+            else:
+                break
+        return n
+
+    return {"years": years,
+            "op_loss_streak": _streak("op"),
+            "ni_loss_streak": _streak("ni")}
+
+
 def detect_profit_direction_divergence(current: dict) -> tuple[list[str], list[dict]]:
     """영업이익과 순이익의 '부호 방향' 괴리 탐지 (kreports op_net_divergence 이식·확장).
 
