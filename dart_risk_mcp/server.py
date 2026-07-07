@@ -24,6 +24,7 @@ from .core import (
     detect_insider_pre_disclosure,
     estimate_crisis_timeline,
     extract_cb_investors,
+    extract_cfs_ofs_ni,
     extract_rights_offering_investors,
     fetch_audit_opinion_history,
     fetch_company_disclosures,
@@ -2833,6 +2834,7 @@ _METRIC_TO_FLAG: dict[str, str] = {
     "재고자산/매출": "INVENTORY_SURGE",
     "순이익 vs 영업현금흐름": "CASH_GAP",
     "자본총계/자본금": "CAPITAL_IMPAIRMENT",
+    "연결/별도 당기순이익": "CFS_OFS_REVERSAL",
 }
 
 
@@ -2844,7 +2846,8 @@ def scan_financial_anomaly(
 ) -> str:
     """
     재무제표 4개 지표(매출채권·재고자산·현금흐름·자본잠식)를 전년 대비로 비교해
-    분식·부실 초기 조짐을 탐지합니다.
+    분식·부실 초기 조짐을 탐지합니다. 발생액 비율(사실 표기)과 연결/별도
+    당기순이익 비교(별도>연결 역전 시 종속회사 합산 손실 플래그)를 함께 표기합니다.
 
     Args:
         company_name: 기업명 또는 종목코드(6자리).
@@ -2878,6 +2881,14 @@ def scan_financial_anomaly(
 
     current, prior = _fs_response_to_periods({"list": fs_list})
 
+    # 연결/별도 당기순이익 비교용 — fnlttSinglAcnt는 CFS/OFS 행을 한 응답에 함께 준다.
+    _cfs_ni, _ofs_ni = None, None
+    try:
+        _acnt_rows = fetch_financial_statements(corp_code, api_key, year, report_type)
+        _cfs_ni, _ofs_ni = extract_cfs_ofs_ni(_acnt_rows)
+    except Exception:
+        pass
+
     # v0.8.8: 단일회사 주요 재무지표 — 당기·전기 동시 조회 (전년 대비 추세 표기)
     _reprt_map = {"annual": "11011", "half": "11012", "q1": "11013", "q3": "11014"}
     _reprt = _reprt_map.get(report_type, "11011")
@@ -2891,6 +2902,7 @@ def scan_financial_anomaly(
     flags, metrics = detect_financial_anomaly(
         current, prior,
         current_indx=_current_indx, prior_indx=_prior_indx,
+        cfs_ni=_cfs_ni, ofs_ni=_ofs_ni,
     )
 
     # 상단 한 줄 요약
@@ -2928,6 +2940,14 @@ def scan_financial_anomaly(
             )
             pri = "-"
             delta = "-"
+        elif name == "연결/별도 당기순이익":
+            cur = (
+                f"연결 {m['current_cfs']:,} / "
+                f"별도 {m['current_ofs']:,}"
+            )
+            pri = "-"
+            gp = m.get("gap_pct")
+            delta = f"연결-별도 {gp:+.1f}%" if gp is not None else "-"
         elif "current" in m and "prior" in m:
             cur = f"{m['current']:.1f}{m.get('unit','')}"
             pri = f"{m['prior']:.1f}{m.get('unit','')}"
