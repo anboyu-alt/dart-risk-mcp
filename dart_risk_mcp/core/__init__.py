@@ -48,6 +48,7 @@ from .cb_extractor import extract_cb_investors
 from .investor_extractor import extract_rights_offering_investors
 from .taxonomy import calculate_risk_score, find_pattern_match, estimate_crisis_timeline
 from .catalog import load_catalog_excerpt
+from .sector_policy import get_critical_items, get_induty_name
 from .explain import (
     flag_to_prose,
     signal_to_prose,
@@ -84,6 +85,8 @@ __all__ = [
     "fetch_major_decision",
     "resolve_decision_type",
     "load_catalog_excerpt",
+    "get_critical_items",
+    "get_induty_name",
     "detect_capital_churn",
     "detect_financial_anomaly",
     "CAPITAL_EVENT_KEYS",

@@ -1670,13 +1670,18 @@ def detect_capital_churn(events: list[dict], lookback_years: int) -> dict:
     }
 
 
+# 계정과목명 별칭: DART account_nm은 기업마다 표기가 다르다. 우선순위(정확명 먼저)대로 조회.
+# 별칭 목록 일부는 capitalparser/kreports-dart-mcp account_map.py에서 이식 (Apache 2.0).
 _FS_ALIASES = {
-    "매출": ["매출액", "영업수익"],
+    "매출": ["매출액", "영업수익", "수익(매출액)", "영업수익(매출액)", "매출",
+           "순매출액", "수입금액", "매출수익", "영업수입", "영업매출액", "수익"],
     "매출채권": ["매출채권", "매출채권및기타채권"],
     "재고자산": ["재고자산"],
-    "영업현금흐름": ["영업활동현금흐름", "영업활동으로인한현금흐름"],
-    "당기순이익": ["당기순이익", "당기순이익(손실)"],
-    "자본총계": ["자본총계"],
+    "영업현금흐름": ["영업활동현금흐름", "영업활동으로인한현금흐름",
+               "영업활동으로 인한 현금흐름", "영업활동 현금흐름"],
+    "당기순이익": ["당기순이익", "당기순이익(손실)", "당기순이익(당기순손실)",
+              "당기순손익", "분기순이익", "반기순이익", "연결당기순이익"],
+    "자본총계": ["자본총계", "자본 총계", "자본합계"],
     "자본금": ["자본금"],
 }
 
@@ -2021,6 +2026,35 @@ def fetch_executive_roster(
     return roster
 
 
+# 감사인명 별칭 → 표준명. DART adtor 필드는 "삼정"/"삼정KPMG"/"삼정회계법인" 등
+# 표기가 혼재해 그대로 비교하면 감사인 교체·연속 재직이 오탐된다.
+# capitalparser/kreports-dart-mcp audit_parser.py에서 이식 (Apache 2.0).
+_AUDITOR_ALIASES: dict[str, str] = {
+    "삼일": "삼일회계법인",
+    "삼일피더블유씨": "삼일회계법인",
+    "pwc삼일": "삼일회계법인",
+    "삼정": "삼정회계법인",
+    "삼정kpmg": "삼정회계법인",
+    "kpmg삼정": "삼정회계법인",
+    "안진": "안진회계법인",
+    "딜로이트안진": "안진회계법인",
+    "한영": "한영회계법인",
+    "ey한영": "한영회계법인",
+    "대주": "대주회계법인",
+    "신한": "신한회계법인",
+    "태성": "태성회계법인",
+    "삼화": "삼화회계법인",
+    "이촌": "이촌회계법인",
+    "세일": "세일회계법인",
+}
+
+
+def _normalize_auditor(raw_nm: str) -> str:
+    """감사인명 별칭을 표준명으로 변환. XML 엔티티·공백 제거 후 매핑."""
+    cleaned = re.sub(r"&[a-z]+;|\s+", "", raw_nm).strip()
+    return _AUDITOR_ALIASES.get(cleaned.lower(), cleaned)
+
+
 def fetch_audit_opinion_history(
     corp_code: str,
     api_key: str,
@@ -2091,7 +2125,7 @@ def fetch_audit_opinion_history(
         by_year.setdefault(y, {"year": y})
         # 동일 연도 내 (연결/별도) 중복 엔트리 중 비어있지 않은 값을 우선
         op_new = (item.get("adt_opinion") or "").strip()
-        ad_new = (item.get("adtor") or "").strip()
+        ad_new = _normalize_auditor((item.get("adtor") or "").strip())
         if op_new and not by_year[y].get("opinion"):
             by_year[y]["opinion"] = op_new
         elif "opinion" not in by_year[y]:

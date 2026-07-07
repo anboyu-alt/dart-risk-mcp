@@ -12,3 +12,4 @@ venv/
 .claude/
 tmp/
 tmp/network.html
+pytest-of-*/
