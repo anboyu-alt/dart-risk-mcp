@@ -52,6 +52,7 @@ from dart_risk_mcp.server import (  # noqa: E402
     find_actor_overlap,
     find_risk_precedents,
     get_audit_opinion_history,
+    get_affiliate_investments,
     get_company_info,
     get_disclosure_document,
     get_executive_compensation,
@@ -84,7 +85,7 @@ COMPANIES = [
 ]
 
 # ────────────────────────────────────────────────────────────────────────────
-# A. 회사명 단일 인자 13개 도구 — (단축명, 호출 함수)
+# A. 회사명 단일 인자 14개 도구 — (단축명, 호출 함수)
 # 단축명은 기존 골드 파일 호환을 위해 변경 금지.
 # ────────────────────────────────────────────────────────────────────────────
 COMPANY_TOOL_MATRIX: list[tuple[str, Callable[[dict], str]]] = [
@@ -101,6 +102,7 @@ COMPANY_TOOL_MATRIX: list[tuple[str, Callable[[dict], str]]] = [
     ("fund_usage",    lambda c: track_fund_usage(c["name"], 3)),
     ("scan_fs",       lambda c: scan_financial_anomaly(c["name"], "2024", "annual")),
     ("capital",       lambda c: track_capital_structure(c["name"], 3)),
+    ("affiliates",    lambda c: get_affiliate_investments(c["name"], "2024")),
 ]
 
 # B. 종목코드 인자 1개 도구

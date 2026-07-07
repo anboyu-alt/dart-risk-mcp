@@ -41,7 +41,7 @@ dart_risk_mcp/
 
 ---
 
-## MCP 도구 25개
+## MCP 도구 26개
 
 ### 1. `analyze_company_risk(company_name, lookback_years=1)`
 
@@ -290,6 +290,16 @@ dart_risk_mcp/
 - **status 3단계:** `verified`(회사 직접 조회 근거) / `maintainer_seed`(제작자 등록, 근거 미확보) / `auto_matched`(**동명이인 미확인** — 두 경로: 등재 인물의 시장 이름 매칭 `refresh_known_actors`, 또는 문제회사 N=2 반복 자동 발굴 `discover_actors`). 자동 매칭은 verified로 자동 승격하지 않으며 강한 동명이인 경고를 동반
 - **등재 기준:** 공개 출처가 확인된 경우에만 등재. 근거(회사·연도·출처)는 `scripts/refresh_known_actors.py`·`scripts/discover_actors.py`(매일 자동)가 DART에서 집계해 Notion에 기록(사람은 검토·승격만). 단정 표현 금지. 명단은 제작자가 직접 관리·연락(GitHub 프로필 연락처). 변경 시 제작자 Gmail 통지(`refresh_known_actors.py`의 `send_mail`, 자격증명 `MAIL_USER`/`MAIL_APP_PASSWORD`/`MAIL_TO` Secret)
 
+### 26. `get_affiliate_investments(company_name, year="")` ✨
+
+타법인 출자현황(이 회사가 어떤 법인들에 돈을 넣었는지)을 사실로 나열합니다 (DS002 `otrCprInvstmntSttus`).
+
+- 내부 흐름: `resolve_corp` → `fetch_affiliate_investments` (합계 행 제거)
+- 반환: 피출자 법인·출자목적·기말지분율·장부가액·최초취득일·피투자사 최근 순이익 표(장부가액 상위 30건) + 요약 사실(총 건수·지분율 50%+ 건수·피투자사 적자 건수·해당연도 신규 취득 건수)
+- 용도: 무자본 M&A 세력의 SPC·자회사망 추적, `related_party_hollowing` 패턴·`find_actor_overlap`·`scan_financial_anomaly`(CFS_OFS_REVERSAL)와 교차 확인
+- 금액은 DART 응답 원문 표기 그대로(보고서별 단위 혼용 가능 → 단위 유의 안내 자동 첨부). 점수·등급 없음
+- `year` 미입력 시 직전 연도. 표 셀은 개행·파이프 정제(`_cell`) — 원문 개행이 표를 깨지 않음
+
 ---
 
 ## 핵심 내부 함수
@@ -322,6 +332,8 @@ dart_risk_mcp/
 | `fetch_distress_events(corp_code, api_key, lookback_years)` | 부도·영업정지·회생절차·해산사유 4엔드포인트 통합. key=DISTRESS_EVENT + subtype 라벨 (v0.9.0) |
 | `fetch_dividend_history(corp_code, api_key, lookback_years)` | alotMatter을 분기 4코드 × N년 호출. 각 record에 bsns_year/reprt_code 부착 (v0.9.0) |
 | `detect_dividend_drain(dividend_records, current_fs)` | 적자 시점 배당 유출(DIVIDEND_DRAIN) 패턴 — 당기순이익 음수 + 현금배당 양수 시 flag (v0.9.0) |
+| `fetch_affiliate_investments(corp_code, api_key, year, report_type)` | 타법인 출자현황(otrCprInvstmntSttus) 조회 + 합계 행 제거 |
+| `extract_cfs_ofs_ni(fs_rows)` | fnlttSinglAcnt rows에서 (연결, 별도) 당기순이익 쌍 추출 — CFS_OFS_REVERSAL 판정 입력 |
 | `fetch_fund_usage(corp_code, api_key, corp_cls, lookback_years)` | 공모·사모 자금사용 2개 엔드포인트 통합 + 이상 플래그 탐지 |
 | `fetch_major_decision(rcept_no, corp_cls, decision_type)` | 12개 DS005 주요결정 엔드포인트 중 decision_type에 따라 자동 선택 |
 | `resolve_decision_type(report_nm)` | 공시명 → decision_type 키 자동 추론 (`[기재정정]` 등 접두어 제거) |
@@ -359,6 +371,7 @@ dart_risk_mcp/
 | `GET /api/dsRsOcr.json` | 해산사유 발생 (corp_code, bgn_de, end_de) — v0.9.0 통합 |
 | `GET /api/alotMatter.json` | 배당에 관한 사항 (corp_code, bsns_year, reprt_code) — v0.9.0 통합 |
 | `GET /api/otcprStkInvscrTrfDecsn.json` / `otcprStkInvscrAcqsDecsn.json` | 타법인 주식 양수/양도 |
+| `GET /api/otrCprInvstmntSttus.json` | 타법인 출자현황 (corp_code, bsns_year, reprt_code) — get_affiliate_investments |
 | `GET /api/bdwtIsDecsn.json` / `cvbdIsDecsn.json` | 채권 인수/발행 결정 |
 | `GET /api/cmpMgDecsn.json` / `cmpDvDecsn.json` / `cmpDvmgDecsn.json` | 합병·분할·분할합병 결정 |
 | `GET /api/stkExtrDecsn.json` | 주식교환·이전 결정 |
@@ -431,6 +444,7 @@ PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설
 | `search_market_disclosures` 12개 preset | ✅ | v1.0.3에서 8개 추가, 골드 `tests/fixtures/sample_outputs/market_*.txt` 12개 |
 | `track_capital_structure` 의 `capital_churn_anomaly` | ✅ | 제이스코홀딩스 라이브 매칭 |
 | `scan_financial_anomaly` 의 `CFS_OFS_REVERSAL` | ✅ | 셀트리온 라이브 매칭 (연결 4,189억 < 별도 1조48억, -58.3%), 골드 `셀트리온_scan_fs.txt` |
+| `get_affiliate_investments` | ✅ | 6사 골드 `*_affiliates.txt` (삼성전자 137건·제이스코 2건 등 라이브) |
 | `find_actor_overlap` 임원 겸직 매칭 | ✅ | 신승수군 3개사 겸직 라이브 매칭(신용규·이호영 동행 포함), 골드 `tests/fixtures/sample_outputs/actor_overlap.txt` |
 | `TREASURY_TRUST` (v0.8.7) | ⚠ | 자사주 신탁 발생 빈도 낮음 |
 | `INSIDER_PRE_DISCLOSURE` (v0.8.6) | ⚠ | 매도 ±30일 부정 공시 |

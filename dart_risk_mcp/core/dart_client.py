@@ -2089,6 +2089,47 @@ def fetch_executive_roster(
     return roster
 
 
+def fetch_affiliate_investments(
+    corp_code: str,
+    api_key: str,
+    year: str = "",
+    report_type: str = "annual",
+) -> list[dict]:
+    """DART /otrCprInvstmntSttus.json — 타법인 출자현황 (정기보고서 주요정보).
+
+    회사가 다른 법인에 출자한 내역: 피출자 법인명(inv_prm)·출자목적·
+    기초/기말 지분율·장부가액·최초취득일·피투자사 최근 총자산/순이익.
+    합계 행("계"/"합계")은 제거하고 반환. 실패 시 [].
+    """
+    if not api_key or not corp_code:
+        return []
+    if not year:
+        year = str(datetime.now().year - 1)
+    reprt_code = _REPORT_CODES.get(report_type, "11011")
+    try:
+        resp = _retry(
+            "GET", f"{DART_BASE}/otrCprInvstmntSttus.json",
+            params={
+                "crtfc_key": api_key,
+                "corp_code": corp_code,
+                "bsns_year": year,
+                "reprt_code": reprt_code,
+            },
+        )
+        data = resp.json()
+        if data.get("status") != "000":
+            _log_dart_status(data.get("status", "?"), f"타법인출자 corp_code={corp_code}")
+            return []
+        rows = data.get("list", []) or []
+        return [
+            r for r in rows
+            if (r.get("inv_prm") or "").strip() not in ("", "계", "합계", "총계")
+        ]
+    except Exception as e:
+        log.debug("타법인출자 조회 실패 (%s): %s", corp_code, e)
+        return []
+
+
 # 감사인명 별칭 → 표준명. DART adtor 필드는 "삼정"/"삼정KPMG"/"삼정회계법인" 등
 # 표기가 혼재해 그대로 비교하면 감사인 교체·연속 재직이 오탐된다.
 # capitalparser/kreports-dart-mcp audit_parser.py에서 이식 (Apache 2.0).
