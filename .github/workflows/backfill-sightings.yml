@@ -78,14 +78,26 @@ jobs:
           fi
       - name: Commit sightings (private)
         if: always()
-        working-directory: _sightings
         run: |
-          if [ -n "$(git status --porcelain sightings.json)" ]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add sightings.json
-            git commit -m "chore: sightings 5년 백필"
-            git push
-          else
-            echo "sightings 변경 없음"
+          cd _sightings
+          if [ -z "$(git status --porcelain sightings.json)" ]; then
+            echo "sightings 변경 없음"; exit 0
           fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # 긴 백필이 도는 동안 다른 워크플로(일일 discover 등)가 먼저 push하면
+          # non-fast-forward로 거부된다. 그때 원격을 받아 우리 수집분을 재병합
+          # (dedup)한 뒤 재시도 — 최대 5회.
+          for attempt in 1 2 3 4 5; do
+            git add sightings.json
+            git commit -m "chore: sightings 5년 백필" || true
+            if git push; then echo "push 성공 (시도 $attempt)"; exit 0; fi
+            echo "::warning::push 거부 — 원격 재병합 후 재시도 ($attempt)"
+            cp sightings.json /tmp/ours.json
+            git fetch origin main
+            git reset --hard origin/main
+            ( cd "$GITHUB_WORKSPACE" \
+              && python -m scripts.merge_sightings_files /tmp/ours.json _sightings/sightings.json )
+            sleep 3
+          done
+          echo "::error::5회 재시도 후에도 push 실패"; exit 1
