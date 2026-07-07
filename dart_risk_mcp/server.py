@@ -25,6 +25,7 @@ from .core import (
     estimate_crisis_timeline,
     extract_cb_investors,
     extract_cfs_ofs_ni,
+    fetch_affiliate_investments,
     extract_rights_offering_investors,
     fetch_audit_opinion_history,
     fetch_company_disclosures,
@@ -69,6 +70,7 @@ from .core import (
     SIGNAL_KEY_TO_TAXONOMY,
     SIGNAL_TYPES,
     _fs_response_to_periods,
+    _parse_fs_amount,
 )
 
 mcp = FastMCP("dart-risk-analyzer")
@@ -1896,6 +1898,103 @@ _PRESET_TO_SIGNALS: dict[str, list[str]] = {
     "inquiry":            ["INQUIRY"],
     "all_risk":           [],  # 모든 신호
 }
+
+
+@mcp.tool()
+def get_affiliate_investments(company_name: str, year: str = "") -> str:
+    """
+    타법인 출자현황을 조회합니다 — 이 회사가 어떤 법인들에 돈을 넣었는지.
+
+    피출자 법인명·출자목적·기말 지분율·장부가액·최초취득일·피투자사
+    최근 재무(총자산/순이익)를 사실로 나열합니다. 무자본 M&A 세력의
+    SPC·자회사망 추적, 특수관계자 자산 공동화 패턴 확인에 활용합니다.
+
+    Args:
+        company_name: 기업명 또는 종목코드(6자리).
+        year: 사업연도(예: "2024"). 빈 값이면 직전 연도.
+
+    Returns:
+        출자 내역 표(장부가액 상위 30건) + 요약 사실 + 단위 유의 안내.
+    """
+    api_key = os.environ.get("DART_API_KEY", "")
+    if not api_key:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+
+    corp_info = resolve_corp(company_name, api_key)
+    if not corp_info[1]:
+        return f"❌ 기업 '{company_name}'을(를) 찾을 수 없습니다."
+    corp_name, info = corp_info
+    corp_code = info["corp_code"]
+
+    if not year:
+        from datetime import datetime
+        year = str(datetime.now().year - 1)
+
+    rows = fetch_affiliate_investments(corp_code, api_key, year)
+    if not rows:
+        return (f"🏢 **{corp_name}** ({info.get('stock_code','')}) — 타법인 출자현황 ({year})\n\n"
+                "해당 연도 사업보고서에서 타법인 출자 내역을 찾지 못했습니다. "
+                "(출자가 없거나, 보고서 미제출·데이터 미제공일 수 있습니다)")
+
+    def _ratio(r):
+        try:
+            return float(str(r.get("trmend_blce_qota_rt", "")).replace(",", ""))
+        except (TypeError, ValueError):
+            return None
+
+    def _book(r):
+        v = _parse_fs_amount(r.get("trmend_blce_acntbk_amount"))
+        return v if v is not None else -1
+
+    # 요약 사실
+    total = len(rows)
+    majority = sum(1 for r in rows if (_ratio(r) or 0) >= 50)
+    loss_cnt = 0
+    for r in rows:
+        ni = _parse_fs_amount(r.get("recent_bsns_year_fnnr_sttus_thstrm_ntpf"))
+        if ni is not None and ni < 0:
+            loss_cnt += 1
+    new_cnt = sum(1 for r in rows if str(r.get("frst_acqs_de", "")).startswith(year))
+
+    lines = [
+        f"🏢 **{corp_name}** ({info.get('stock_code','')}) — 타법인 출자현황 ({year} 사업보고서 기준)",
+        "",
+        f"총 {total}건 · 기말 지분율 50% 이상 {majority}건 · "
+        f"피투자사 최근 사업연도 순이익 적자 {loss_cnt}건 · {year}년 신규 취득 {new_cnt}건",
+        "",
+        "| 피출자 법인 | 출자목적 | 기말지분율(%) | 기말장부가액 | 최초취득일 | 피투자사 순이익 |",
+        "|---|---|---|---|---|---|",
+    ]
+
+    def _cell(v) -> str:
+        """마크다운 표 셀 정제 — 개행·파이프가 표 구조를 깨지 않게."""
+        s = str(v if v not in (None, "") else "-").strip()
+        return " ".join(s.replace("|", "／").split())
+
+    shown = sorted(rows, key=_book, reverse=True)[:30]
+    for r in shown:
+        lines.append(
+            f"| {_cell(r.get('inv_prm'))} | {_cell(r.get('invstmnt_purps'))} "
+            f"| {_cell(r.get('trmend_blce_qota_rt'))} | {_cell(r.get('trmend_blce_acntbk_amount'))} "
+            f"| {_cell(r.get('frst_acqs_de'))} | {_cell(r.get('recent_bsns_year_fnnr_sttus_thstrm_ntpf'))} |"
+        )
+
+    if total > len(shown):
+        lines.append("")
+        lines.append(f"... 외 {total - len(shown)}건 (장부가액 상위 30건만 표시)")
+
+    lines.append("")
+    lines.append(
+        "📎 참고: 금액은 DART 응답 원문 표기 그대로이며 보고서에 따라 단위(천원/백만원)가 "
+        "다를 수 있습니다 — 정확한 단위는 공시 원문을 확인하세요. 지분율 50% 이상이라도 "
+        "연결 종속 여부는 실질지배력 판단에 따릅니다."
+    )
+    lines.append(
+        "💡 같은 인물·조합이 여러 회사에 등장하는지는 `find_actor_overlap`, "
+        "연결/별도 순이익 역전 여부는 `scan_financial_anomaly`와 함께 보면 "
+        "출자망의 의미를 입체적으로 볼 수 있습니다."
+    )
+    return "\n".join(lines)
 
 
 @mcp.tool()
