@@ -246,7 +246,7 @@ dart_risk_mcp/
 재무제표 4개 지표(매출채권·재고자산·현금흐름·자본잠식)를 전년 대비 비교해 이상을 탐지하고, **단일회사 주요 재무지표 7종의 YoY 추세**를 별도 블록으로 표기합니다.
 
 - 내부 흐름: `resolve_corp` → `fetch_financial_statements_all` (CFS→OFS 폴백) → `_fs_response_to_periods` → **`fetch_company_indicators` × 2(당기/전기)** → `detect_financial_anomaly(current, prior, current_indx, prior_indx)`
-- 이상 플래그 5종: `AR_SURGE`, `INVENTORY_SURGE`, `CASH_GAP`, `CAPITAL_IMPAIRMENT`(절대 임계) + `CFS_OFS_REVERSAL`(별도>연결 당기순이익 역전 — 종속회사 합산 손실, 격차 ≥10%일 때만. 정상 대기업의 연결>별도 괴리는 플래그하지 않음 — 삼성전자 +46% 라이브 검증)
+- 이상 플래그 8종: `AR_SURGE`, `INVENTORY_SURGE`, `CASH_GAP`, `CAPITAL_IMPAIRMENT`(절대 임계) + `CFS_OFS_REVERSAL`(별도>연결 당기순이익 역전 — 종속회사 합산 손실, 격차 ≥10%일 때만. 정상 대기업의 연결>별도 괴리는 플래그하지 않음 — 삼성전자 +46% 라이브 검증) + `OPNET_POS_NEG`(영업흑자·순손실 — 영업외 손실)·`OPNET_NEG_POS`(영업적자·순이익 흑자 — 일회성 이익 의심, 상폐 요건 회피 연관) + `RESTATEMENT`(전기 수치 재작성 — 올해 보고서의 전기값 vs 작년 보고서의 당기값을 6계정×fs_div 대조, 0.5% 허용오차. `detect_restatement`, 직전 연도 `fnlttSinglAcnt` 1회 추가 호출)
 - 발생액 비율 (순이익−영업현금흐름)/|순이익| 을 당기/전기/Δ로 사실 표기(플래그 없음, kreports accrual_ratio 이식). 연결/별도 비교는 `fnlttSinglAcnt` 1회 추가 호출로 CFS/OFS 당기순이익 쌍 추출(`extract_cfs_ofs_ni`)
 - "이익조작 연구 변수" 블록(`compute_beneish_variables`, kreports 이식/Apache 2.0): Beneish 개별 변수 6종(DSRI·GMI·AQI·SGI·SGAI·LVGI)을 전년=1.00 기준 지수로 사실 표기. **M-Score 합산·임계 판정 없음**(v0.8.5 원칙, 안내 문구 자동 첨부). DEPI·TATA는 감가상각비 미노출로 제외(라이브 검증), LVGI는 부채총계/자산총계 기준(명칭에 명시)
 - v0.8.8 추가: `fnlttSinglIndx` 4카테고리(M210000 수익성·M220000 안정성·M230000 성장성·M240000 활동성)에서 핵심 7종(순이익률·자기자본비율·부채비율·유동비율·매출액증가율·매출채권회전율·재고자산회전율)을 `12.30%p → 8.10%p (전년 대비 -34.1%)` 형식으로 표기. 점수 가산 없음, 사실 표기만(v0.8.5 원칙).
@@ -338,6 +338,8 @@ dart_risk_mcp/
 | `fetch_affiliate_investments(corp_code, api_key, year, report_type)` | 타법인 출자현황(otrCprInvstmntSttus) 조회 + 합계 행 제거 |
 | `scan_note_titles(rcept_no, api_key)` | 공시 ZIP 전 파일 `<TITLE>` 태그 스캔 → 주석 카테고리 제목 검출 (섹션 추출 보완 경로) |
 | `compute_beneish_variables(current, prior)` | Beneish 개별 변수 6종 YoY 지수 계산 — 합산·판정 없음, 사실 표기 전용 |
+| `detect_profit_direction_divergence(current)` | 영업이익↔순이익 부호 괴리 (OPNET_POS_NEG / OPNET_NEG_POS) |
+| `detect_restatement(current_rows, prior_rows)` | 전기 수치 재작성 감지 — 연도 간 보고값 대조, 원인 판정 없음 (RESTATEMENT) |
 | `extract_cfs_ofs_ni(fs_rows)` | fnlttSinglAcnt rows에서 (연결, 별도) 당기순이익 쌍 추출 — CFS_OFS_REVERSAL 판정 입력 |
 | `fetch_fund_usage(corp_code, api_key, corp_cls, lookback_years)` | 공모·사모 자금사용 2개 엔드포인트 통합 + 이상 플래그 탐지 |
 | `fetch_major_decision(rcept_no, corp_cls, decision_type)` | 12개 DS005 주요결정 엔드포인트 중 decision_type에 따라 자동 선택 |
@@ -450,6 +452,8 @@ PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설
 | `track_capital_structure` 의 `capital_churn_anomaly` | ✅ | 제이스코홀딩스 라이브 매칭 |
 | `scan_financial_anomaly` 의 `CFS_OFS_REVERSAL` | ✅ | 셀트리온 라이브 매칭 (연결 4,189억 < 별도 1조48억, -58.3%), 골드 `셀트리온_scan_fs.txt` |
 | `get_affiliate_investments` | ✅ | 6사 골드 `*_affiliates.txt` (삼성전자 137건·제이스코 2건 등 라이브) |
+| `scan_financial_anomaly` 의 `RESTATEMENT` | ✅ | 셀트리온(최대 +1.4%)·두산(최대 -15.1%) 라이브 매칭, 골드 `*_scan_fs.txt` |
+| `scan_financial_anomaly` 의 `OPNET_POS_NEG`/`OPNET_NEG_POS` | ⚠ | 6사 매트릭스 미발화(모두 부호 동일) — 위험사례 발굴 시 골드 추가 |
 | `find_actor_overlap` 임원 겸직 매칭 | ✅ | 신승수군 3개사 겸직 라이브 매칭(신용규·이호영 동행 포함), 골드 `tests/fixtures/sample_outputs/actor_overlap.txt` |
 | `TREASURY_TRUST` (v0.8.7) | ⚠ | 자사주 신탁 발생 빈도 낮음 |
 | `INSIDER_PRE_DISCLOSURE` (v0.8.6) | ⚠ | 매도 ±30일 부정 공시 |

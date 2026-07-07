@@ -67,6 +67,40 @@ FLAG_PROSE: dict[str, dict] = {
             "것으로 봅니다."
         ),
     },
+    "OPNET_POS_NEG": {
+        "title": "영업은 흑자인데 최종 성적표는 순손실입니다",
+        "body": (
+            "본업(영업이익)은 돈을 벌었는데 영업외 항목에서 큰 손실이 나 "
+            "당기순손실로 마감된 상태입니다. CB·파생상품 평가손실, 자산 "
+            "손상차손, 이자비용, 관계회사 손실 같은 영업외 요인이 원인일 수 "
+            "있습니다. 특히 CB를 반복 발행한 회사라면 전환가 조정에 따른 "
+            "평가손실이 여기로 들어오므로, 손익계산서의 영업외 비용 내역을 "
+            "확인할 필요가 있습니다."
+        ),
+    },
+    "OPNET_NEG_POS": {
+        "title": "본업은 적자인데 순이익이 흑자로 마감됐습니다",
+        "body": (
+            "영업이익은 적자인데 최종 순이익이 흑자입니다. 자산·자회사 매각 "
+            "같은 일회성 처분이익이 본업 적자를 덮었을 가능성이 있습니다. "
+            "코스닥 관리종목·상장폐지 요건은 영업손실·법인세차감전손실 등을 "
+            "기준으로 하기 때문에, 요건 회피 시점에 맞춘 일회성 이익 만들기는 "
+            "감독당국이 주시하는 패턴입니다. 어떤 항목이 이익을 만들었는지 "
+            "영업외 수익 내역 확인이 필요합니다."
+        ),
+    },
+    "RESTATEMENT": {
+        "title": "작년에 보고했던 숫자가 올해 보고서에서 달라져 있습니다",
+        "body": (
+            "올해 보고서에 비교 표시된 '전기' 수치가, 작년 보고서에 실제로 "
+            "실렸던 수치와 다릅니다. 전기 재무제표가 재작성됐다는 뜻입니다. "
+            "원인은 전기오류수정(과거 분식·오류가 드러난 경우)일 수도, "
+            "회계정책 변경이나 계정 재분류(정상적 사유)일 수도 있습니다 — "
+            "어느 쪽인지는 재무제표 주석의 '전기오류수정' 또는 '회계정책 "
+            "변경' 항목에서 확인해야 합니다. 전기오류수정이라면 과거 공시를 "
+            "믿고 내린 판단들이 잘못된 숫자 위에 있었다는 의미가 됩니다."
+        ),
+    },
     "CFS_OFS_REVERSAL": {
         "title": "연결 순이익이 별도보다 뚜렷하게 작습니다",
         "body": (
@@ -169,6 +203,30 @@ def _metric_amendments(flag: str, metric: dict | None) -> str:
         if cur is None:
             return ""
         return f"\n\n이번 분석: 자본총계가 자본금의 {cur:.0f}% 수준입니다."
+    if flag in ("OPNET_POS_NEG", "OPNET_NEG_POS"):
+        op = metric.get("current_op")
+        ni = metric.get("current_ni")
+        if op is None or ni is None:
+            return ""
+        return (
+            f"\n\n이번 분석: 영업이익 {op:,}원, 당기순이익 {ni:,}원으로 "
+            "부호가 서로 다릅니다."
+        )
+    if flag == "RESTATEMENT":
+        details = metric.get("details") or []
+        if not details:
+            return ""
+        parts = []
+        _fs_kr = {"CFS": "연결", "OFS": "별도"}
+        for d in details[:3]:
+            dp = d.get("diff_pct")
+            dp_s = f"{dp:+.1f}%" if dp is not None else "0→비0 변동"
+            fs = _fs_kr.get(d.get("fs_div", ""), d.get("fs_div", ""))
+            parts.append(f"{d['account']}({fs}) {dp_s}")
+        return (
+            f"\n\n이번 분석: {len(details)}개 계정에서 전기 수치 불일치 — "
+            + ", ".join(parts) + "."
+        )
     if flag == "CFS_OFS_REVERSAL":
         cfs = metric.get("current_cfs")
         ofs = metric.get("current_ofs")
