@@ -1730,6 +1730,14 @@ _FS_ALIASES = {
               "당기순손익", "분기순이익", "반기순이익", "연결당기순이익"],
     "자본총계": ["자본총계", "자본 총계", "자본합계"],
     "자본금": ["자본금"],
+    # Beneish 변수 계산용 (v1.5.x — compute_beneish_variables)
+    "매출총이익": ["매출총이익", "매출총이익(손실)"],
+    "매출원가": ["매출원가"],
+    "유동자산": ["유동자산"],
+    "유형자산": ["유형자산"],
+    "자산총계": ["자산총계", "자산 총계"],
+    "부채총계": ["부채총계", "부채 총계"],
+    "판매비와관리비": ["판매비와관리비", "판매비와 관리비", "판매비및관리비", "판매관리비"],
 }
 
 
@@ -1885,6 +1893,108 @@ def detect_financial_anomaly(
             })
 
     return flags, metrics
+
+
+def compute_beneish_variables(current: dict, prior: dict) -> list[dict]:
+    """Beneish 이익조작 연구의 개별 변수 6종을 YoY 지수로 계산 (사실 표기 전용).
+
+    kreports beneish.py(Apache 2.0)에서 이식하되 재설계:
+    - M-Score 합산·임계 판정은 하지 않는다 (v0.8.5 점수·등급 금지 원칙).
+      개별 변수의 지수값만 사실로 반환하며, 해석은 방향 서술로 한정.
+    - DEPI·TATA는 감가상각비가 fnlttSinglAcntAll에 노출되지 않아 제외
+      (2026-07 라이브 검증). LVGI는 원식(장기차입금+유동부채) 대신
+      부채총계/자산총계 기준 — 명칭에 명시.
+
+    Args:
+        current/prior: {account_nm: int} (_fs_response_to_periods 산출물)
+
+    Returns:
+        [{"key", "name", "value", "meaning"}] — 계산 가능한 변수만.
+        value는 지수(전년=1.0 기준), meaning은 '1보다 크면 …' 방향 서술.
+    """
+    def _ratio(num, den):
+        if num is None or den is None or den == 0:
+            return None
+        return num / den
+
+    def _idx(cur_ratio, pri_ratio):
+        if cur_ratio is None or pri_ratio is None or pri_ratio == 0:
+            return None
+        return cur_ratio / pri_ratio
+
+    def _pick(fs, key):
+        return _pick_account(fs, _FS_ALIASES[key])
+
+    rev_c, rev_p = _pick(current, "매출"), _pick(prior, "매출")
+    out: list[dict] = []
+
+    # DSRI — 매출채권 지수
+    dsri = _idx(_ratio(_pick(current, "매출채권"), rev_c),
+                _ratio(_pick(prior, "매출채권"), rev_p))
+    if dsri is not None:
+        out.append({
+            "key": "DSRI", "name": "매출채권 지수", "value": dsri,
+            "meaning": "1보다 크면 매출 대비 외상값(매출채권) 비중이 전년보다 커짐",
+        })
+
+    # GMI — 매출총이익률 지수 (전년/당기 — 1보다 크면 마진 악화)
+    def _gross(fs, rev):
+        gm = _pick(fs, "매출총이익")
+        if gm is None:
+            cogs = _pick(fs, "매출원가")
+            if cogs is not None and rev is not None:
+                gm = rev - cogs
+        return gm
+
+    gmi = _idx(_ratio(_gross(prior, rev_p), rev_p),
+               _ratio(_gross(current, rev_c), rev_c))
+    if gmi is not None:
+        out.append({
+            "key": "GMI", "name": "매출총이익률 지수", "value": gmi,
+            "meaning": "1보다 크면 매출총이익률이 전년보다 나빠짐",
+        })
+
+    # AQI — 자산 품질 지수
+    def _soft_assets(fs):
+        ca, ppe, ta = _pick(fs, "유동자산"), _pick(fs, "유형자산"), _pick(fs, "자산총계")
+        if ca is None or ppe is None or ta is None or ta == 0:
+            return None
+        return 1 - (ca + ppe) / ta
+
+    aqi = _idx(_soft_assets(current), _soft_assets(prior))
+    if aqi is not None:
+        out.append({
+            "key": "AQI", "name": "자산 품질 지수", "value": aqi,
+            "meaning": "1보다 크면 유동·유형자산 외 자산(무형자산 등) 비중이 전년보다 커짐",
+        })
+
+    # SGI — 매출 성장 지수
+    sgi = _idx(rev_c, rev_p)
+    if sgi is not None:
+        out.append({
+            "key": "SGI", "name": "매출 성장 지수", "value": sgi,
+            "meaning": "1보다 크면 매출이 전년보다 증가",
+        })
+
+    # SGAI — 판관비 지수
+    sgai = _idx(_ratio(_pick(current, "판매비와관리비"), rev_c),
+                _ratio(_pick(prior, "판매비와관리비"), rev_p))
+    if sgai is not None:
+        out.append({
+            "key": "SGAI", "name": "판관비 지수", "value": sgai,
+            "meaning": "1보다 크면 매출 대비 판관비 비중이 전년보다 커짐",
+        })
+
+    # LVGI — 부채 레버리지 지수 (부채총계/자산총계 기준)
+    lvgi = _idx(_ratio(_pick(current, "부채총계"), _pick(current, "자산총계")),
+                _ratio(_pick(prior, "부채총계"), _pick(prior, "자산총계")))
+    if lvgi is not None:
+        out.append({
+            "key": "LVGI", "name": "부채 레버리지 지수(총부채/총자산 기준)", "value": lvgi,
+            "meaning": "1보다 크면 자산 대비 부채 비중이 전년보다 커짐",
+        })
+
+    return out
 
 
 # v0.8.8: fnlttSinglIndx 핵심 지표 7종 (사용자 출력에 표기) -----------------
