@@ -19,10 +19,10 @@ DART 공시에서 불공정거래 위험 신호를 탐지하는 도구입니다.
 총 **26개 MCP 도구**를 6개 그룹으로 분류합니다(자세한 시그니처는 [CLAUDE.md](CLAUDE.md) 참고).
 
 - **공시 시계열 재구성** — 한 기업의 최근 **1~5년**(`lookback_years`, 기본 1년) 공시를 자동 정렬·신호 분류·복합 패턴 매칭. 다년 조회로 과거 위기 사이클을 한 번에 추적. (`analyze_company_risk`, `build_event_timeline`)
-- **자본·재무·내부자 추세 분석** — 자본구조 12개월 churn, 재무 4지표 YoY 추세, 분기 보고 단위 보유 비율 변동, 채무증권 5종 잔액·만기. (`track_capital_structure`, `scan_financial_anomaly`, `track_insider_trading`, `track_debt_balance`)
-- **자금 흐름·감사·배당 검증** — 공모/사모 조달 자금 계획 vs 실제 집행, 5년 감사의견 이력, 적자 시점 배당 이상. (`track_fund_usage`, `get_audit_opinion_history`)
+- **자본·재무·내부자 추세 분석** — 자본구조 12개월 churn, 재무 8개 이상 플래그(매출채권·재고·현금흐름·자본잠식 + **전기 수치 재작성·연결/별도 순이익 역전·영업/순이익 부호 괴리**), 발생액 비율·Beneish 개별 변수 6종·연구개발비 비중·업종별 유의 회계정책 사실 표기, 분기 보고 단위 보유 비율 변동, 채무증권 5종 잔액·만기. (`track_capital_structure`, `scan_financial_anomaly`, `track_insider_trading`, `track_debt_balance`)
+- **자금 흐름·감사·배당 검증** — 공모/사모 조달 자금 계획 vs 실제 집행, 5년 감사의견 이력(감사인명 별칭 정규화로 교체·재직연수 오탐 방지) + **연속 적자 연수**, 적자 시점 배당 이상. (`track_fund_usage`, `get_audit_opinion_history`)
 - **행위자·세력·DS005·기업 정보 조회** — 공통 CB/BW 인수자 **+ 등기임원 겸직** 교차 비교(조합명이 달라도 사람 이름으로 세력 포착), 인물↔회사군 워치리스트 관리, 공개기록 행위자 조회(사실·출처만, 판정 아님), 타법인 출자현황(SPC·자회사망 추적), 12종 주요결정 공시, 임원 보수, 주주 현황, 재무 비교, 기업 개요. (`find_actor_overlap`, `manage_watchlist`, `lookup_known_actor`, `get_affiliate_investments`, `get_major_decision`, `get_executive_compensation`, `get_shareholder_info`, `compare_financials`, `get_company_info`, `get_financial_summary`)
-- **공시 원문·접수번호 조회** — 종목코드·접수번호로 공시 목록·원문·섹션·페이지네이션. (`list_disclosures_by_stock`, `get_disclosure_document`, `list_disclosure_sections`, `view_disclosure`, `check_disclosure_risk`, `check_disclosure_anomaly`)
+- **공시 원문·접수번호 조회** — 종목코드·접수번호로 공시 목록·원문·섹션·페이지네이션 + **재무제표 주석 카테고리 감지**(계속기업·특수관계자·우발부채 등 10종 — 목차에 안 잡히는 주석 헤딩을 원문 스캔으로 찾아 위치 안내). (`list_disclosures_by_stock`, `get_disclosure_document`, `list_disclosure_sections`, `view_disclosure`, `check_disclosure_risk`, `check_disclosure_anomaly`)
 - **시장 전체·신호 해설** — preset 기반 시장 일괄 스캔, 신호 키 조합별 위기 타임라인·복합 패턴 해설. (`search_market_disclosures`, `find_risk_precedents`)
 
 ## 이 도구가 하지 않는 것
@@ -47,7 +47,7 @@ v1.5.0부터 행위자 레지스트리 **데이터**는 이 레포·배포물에
 - **설정**: 발급받은 값을 MCP 서버 환경변수로 지정하면 됩니다 — `NOTION_TOKEN`(발급 토큰), `DB_KNOWN_ACTORS`(DB id). 미설정 시 레지스트리 대조는 조용히 비활성화되며 다른 기능에 영향이 없습니다.
 - **자체 레지스트리**: 자신만의 명단을 쓰려면 `DART_KNOWN_ACTORS_PATH`에 동일 스키마의 로컬 JSON 경로를 지정하세요(Notion보다 우선).
 
-## 라이브 검증 매트릭스 (v1.2.0 기준)
+## 라이브 검증 매트릭스
 
 각 도구·신호 키가 **실제 DART API 응답으로 매칭된 적 있는지** 정직하게 표기합니다. ⚠는 "코드와 단위 테스트는 있지만 라이브 매칭 사례가 아직 없음" — 사례가 발견되면 골드 매트릭스에 추가하고 ⚠를 제거합니다.
 
@@ -63,6 +63,13 @@ v1.5.0부터 행위자 레지스트리 **데이터**는 이 레포·배포물에
 | `analyze_company_risk` 의 `DISTRESS_EVENT` (부도/영업정지/회생/해산 4종) | ⚠ | 헬릭스미스조차 미발화, 라이브 매칭 사례 0 |
 | `get_major_decision` 12개 decision_type (DS005) | ⚠ | 발생 빈도 낮음, 단위 테스트만, 6 회사 365일 매트릭스 0건 |
 | `find_actor_overlap` 의 임원 겸직 매칭 | ✅ | 신승수군 3개사 겸직 라이브 매칭(신용규·이호영 동행 포함), 골드 `actor_overlap.txt` (v1.1.0) |
+| `scan_financial_anomaly` 의 `CFS_OFS_REVERSAL` (연결/별도 역전) | ✅ | 셀트리온 라이브 매칭 (연결 4,189억 < 별도 1조48억) |
+| `scan_financial_anomaly` 의 `RESTATEMENT` (전기 재작성) | ✅ | 셀트리온·두산 라이브 매칭 (두산 최대 -15.1%) |
+| `scan_financial_anomaly` 의 `OPNET_POS_NEG`/`OPNET_NEG_POS` | ⚠ | 6 회사 매트릭스 미발화(모두 부호 동일) — 오탐 없음은 확인 |
+| `scan_financial_anomaly` 의 연구개발비 비중 블록 | ✅ | 5/6사 라이브 추출 (삼성전자 11.3%·헬릭스미스 115.8% 등) |
+| `get_affiliate_investments` (타법인 출자현황) | ✅ | 6사 골드 (삼성전자 137건·제이스코 2건 등) |
+| `get_audit_opinion_history` 의 연속 적자 블록 | ✅ | 헬릭스미스 5년·제이스코 영업 4년/순손실 5년 라이브 매칭 |
+| `list_disclosure_sections` 의 주석 카테고리 감지 | ✅ | 제이스코·헬릭스미스 사업보고서에서 우발부채·종속회사 헤딩 검출 |
 | `find_risk_precedents` 9개 복합 패턴 중 8개 (`founder_fade`·`debt_spiral`·`reverse_split_spiral`·`related_party_hollowing`·`zombie_ma`·`audit_insider_dump`·`delisting_evasion`·`fake_new_biz`) | ⚠ | 카탈로그·키워드 정의는 있으나 라이브 매칭 사례 0 (capital_churn_anomaly만 검증) |
 
 **해석:** 도구 26개 자체는 모두 라이브 검증돼 정상 작동합니다. ⚠ 표시는 도구 안의 **특정 신호 키·패턴이 실제로 발화하는 사례를 아직 발견 못 함**을 의미. 코드는 사례가 발생하면 자동으로 매칭하도록 작성돼 있으니, 부실/사기/M&A 의심 회사 사례를 발견하시면 [GitHub Issues](https://github.com/anboyu-alt/dart-risk-mcp/issues)로 제보 주시면 골드 매트릭스에 반영하겠습니다.
@@ -286,6 +293,24 @@ v0.4.0에서 **11개 신호 유형의 탐지 키워드**를 금감원 실제 적
 | `INQUIRY` | 조회공시요구, 거래량급증 |
 
 이 덕분에 "가장납입성 유상증자 결정", "미공개정보이용 혐의", "정치테마주 조회공시요구" 같은 공시 제목이 이전에는 매칭되지 않던 것이 이제 해당 신호로 탐지됩니다.
+
+#### 재무제표 기반 이상 플래그 — `scan_financial_anomaly`
+
+공시 키워드와 별개로, 재무제표 수치를 전년·타 보고서와 대조해 잡는 플래그 8종입니다. [kreports-dart-mcp](https://github.com/capitalparser/kreports-dart-mcp)(Apache 2.0)의 탐지 로직을 이 도구의 원칙(점수·등급 없음, 로컬 DB 없음)에 맞게 재설계해 이식했습니다.
+
+| 플래그 | 쉬운 설명 |
+|--------|-----------|
+| `AR_SURGE` / `INVENTORY_SURGE` | 매출은 그대로인데 외상값(매출채권)·재고만 급증 — 장부 매출 부풀리기의 초기 신호 |
+| `CASH_GAP` | 장부상 순이익은 흑자인데 실제 영업현금흐름은 마이너스 |
+| `CAPITAL_IMPAIRMENT` | 자본총계가 자본금 대비 바닥으로 — 자본잠식 접근 |
+| `RESTATEMENT` | **작년에 보고했던 숫자가 올해 보고서에서 달라짐** — 전기 재무제표 재작성. 전기오류수정(과거 분식이 드러난 흔적)인지 회계정책 변경인지 주석 확인 안내 |
+| `CFS_OFS_REVERSAL` | 연결 순이익이 별도보다 뚜렷하게 작음 — 종속회사 합산 손실 또는 내부거래 미실현이익 제거 구조 |
+| `OPNET_POS_NEG` | 영업은 흑자인데 순손실 — CB 평가손실·자산손상 같은 영업외 손실 |
+| `OPNET_NEG_POS` | 본업은 적자인데 순이익 흑자 — 일회성 처분이익으로 적자를 가리는 패턴(상폐 요건 회피와 연관) |
+
+플래그와 별개로 **사실 표기 블록** 4종이 함께 출력됩니다(판정·점수 없음): ① 발생액 비율(순이익 대비 현금화 부진 정도) ② Beneish 이익조작 연구의 개별 변수 6종(DSRI·GMI·AQI·SGI·SGAI·LVGI — 지수값만 제공, M-Score 합산은 점수 금지 원칙에 따라 미제공) ③ 연구개발비/매출액 비중 최근 3개 연도(사업보고서 기재값 — 신사업 발표의 실체 검증 보조) ④ 업종별 유의 회계정책(KSIC 업종 기준 정적 참고).
+
+또한 `get_audit_opinion_history`는 감사의견 이력과 함께 **연속 적자 연수**(영업손실·순손실, 2년 이상일 때만)를 계속기업 맥락의 사실로 표기합니다.
 
 ---
 
@@ -1614,6 +1639,19 @@ python -c "import dart_risk_mcp; print(dart_risk_mcp.__version__)"
 ## 9. 라이선스
 
 MIT License — 자유롭게 사용, 수정, 배포할 수 있습니다.
+
+### 제3자 코드 고지
+
+일부 탐지 로직·정적 데이터는 [capitalparser/kreports-dart-mcp](https://github.com/capitalparser/kreports-dart-mcp) (**Apache License 2.0**)에서 이식·수정했습니다. 이식 대상과 수정 내용:
+
+| 이식 항목 | 원본 | 본 프로젝트에서의 재설계 |
+|---|---|---|
+| 감사인명 별칭 사전(13법인)·계정과목 별칭 | `audit_parser.py`, `account_map.py` | 그대로 이식 + 별칭 확장 |
+| 업종별 유의 회계정책 맵 (`core/sector_policy.py`) | `sector_policy_map.py` | 정적 참고 자료로 이식 (기업 판정에 미사용) |
+| 재무제표 주석 카테고리 키워드 (`core/notes.py`) | `note_parser.py` | 범용 키워드 제거·제목 길이 게이트 등 오탐 방지 조정 |
+| Beneish 변수·발생액 비율·연결/별도 괴리·전기 재작성·영업/순이익 괴리·R&D 비율 | `beneish.py`, `flags.py`, `business_insights.py` 등 | **M-Score 등 점수 합산 제거**(사실 표기만), 로컬 DB 없이 DART API 직접 호출로 재구현, 임계값 라이브 재검증 후 재설계 |
+
+각 이식 파일 상단 주석과 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)에 출처를 명시했습니다. 원본 저장소의 Apache 2.0 라이선스 조건(저작권·라이선스 고지 유지)을 따릅니다.
 
 이 도구는 **정보 제공 목적**으로만 사용하세요.  
 분석 결과는 투자 조언이 아니며, 실제 투자 결정은 본인의 판단과 책임 하에 이루어져야 합니다.
