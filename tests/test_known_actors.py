@@ -314,6 +314,38 @@ class TestKnownActors(unittest.TestCase):
         self.assertEqual(classify_actor("SUN YANE"), "person")
         self.assertEqual(classify_actor("교보 KDBC 머니볼 신기술사업투자조합"), "fund")
 
+    def test_classify_actor_rejects_table_artifacts(self):
+        from dart_risk_mcp.core.known_actors import classify_actor
+        # 인수자 명단 표의 헤더·합계행 등이 이름으로 잘못 추출된 경우 → noise
+        for junk in ("합계", "합 계", "소계", "총계", "계", "기타", "합",
+                     "성명", "주주명", "구분", "비고", "순번", "번호",
+                     "으로", "으로서", "및", "등", "등의"):
+            self.assertEqual(classify_actor(junk), "noise", junk)
+        # 공백·대소문자 변형도 동일 차단
+        self.assertEqual(classify_actor(" 합  계 "), "noise")
+        # 실명과 겹칠 수 있는 값은 노이즈로 넣지 않음 — '이상'(李箱)은 실명 보존
+        self.assertEqual(classify_actor("이상"), "person")
+        # 실명·법인명은 보존 (표 헤더 목록과 정확히 일치하지 않음)
+        self.assertEqual(classify_actor("김기타"), "person")   # '기타'로 끝나도 실명
+        self.assertEqual(classify_actor("등지"), "person")
+        self.assertEqual(classify_actor("홍길동"), "person")
+
+    def test_canonical_name_maps_aliases(self):
+        from dart_risk_mcp.core.known_actors import canonical_name, normalize_name
+        # 가공의 예시 — 실제 별칭 매핑은 비공개 sightings 저장소에만 둔다
+        aliases = {normalize_name("김철수"): normalize_name("KIM CHULSOO"),
+                   normalize_name("철수"): normalize_name("KIM CHULSOO")}
+        # 별칭 → 정본
+        self.assertEqual(canonical_name("김철수", aliases), normalize_name("KIM CHULSOO"))
+        self.assertEqual(canonical_name(" 철수 ", aliases), normalize_name("KIM CHULSOO"))
+        # 정본 자신은 그대로
+        self.assertEqual(canonical_name("KIM CHULSOO", aliases), normalize_name("KIM CHULSOO"))
+        # 별칭에 없는 이름은 정규화만
+        self.assertEqual(canonical_name("홍길동", aliases), "홍길동")
+        # aliases 없으면 normalize_name과 동일
+        self.assertEqual(canonical_name("Liu  Huan"), "LIU HUAN")
+        self.assertEqual(canonical_name("Liu  Huan", None), "LIU HUAN")
+
     def test_disclosure_url(self):
         from dart_risk_mcp.core.known_actors import disclosure_url
         self.assertEqual(disclosure_url("20260421000499"),

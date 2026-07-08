@@ -31,6 +31,7 @@ from dart_risk_mcp.core.signals import (
 )
 from dart_risk_mcp.core.known_actors import (
     normalize_name,
+    canonical_name,
     load_known_actors,
     add_registry_record,
     classify_actor,
@@ -182,22 +183,39 @@ def collect_funding_sightings(api_key, window_days=WINDOW_DAYS, max_pages=MAX_PA
 def merge_sightings(data: dict, new: list, window_months: int = WINDOW_MONTHS) -> bool:
     """new sighting을 data에 병합. (corp_code,rcept_no) 중복 스킵, window 밖 제거. 변경 여부."""
     s = data.setdefault("sightings", {})
+    aliases = data.get("aliases") or {}   # {정규화 별칭: 정규화 정본} — 같은 인물 합치기
     changed = False
     _FIELDS = ("corp", "corp_code", "corp_cls", "date", "rcept_no",
                "signals", "kind", "via", "event", "event_type", "pct")
+
+    def _is_dup(lst, rec):  # 같은 접수·회사·이벤트 유형이면 중복(진입/이탈은 event로 구분)
+        return any(e.get("rcept_no") == rec.get("rcept_no") and
+                   e.get("corp_code") == rec.get("corp_code") and
+                   e.get("event", "in") == rec.get("event", "in") for e in lst)
+
     for rec in new:
         nm = rec.get("name", "")
         if not nm:
             continue
-        key = normalize_name(nm)
+        key = canonical_name(nm, aliases)   # 별칭이면 정본 키로 합류
         lst = s.setdefault(key, [])
-        # 같은 접수·회사·이벤트 유형이면 중복 (진입/이탈은 event로 구분)
-        if any(e.get("rcept_no") == rec.get("rcept_no") and
-               e.get("corp_code") == rec.get("corp_code") and
-               e.get("event", "in") == rec.get("event", "in") for e in lst):
+        if _is_dup(lst, rec):
             continue
         lst.append({k: rec[k] for k in _FIELDS if k in rec})
         changed = True
+
+    # 기존 별칭 키 → 정본 키로 합치기 (별칭 맵 갱신 시 과거 데이터 self-heal)
+    if aliases:
+        for k in list(s.keys()):
+            canon = aliases.get(k)
+            if canon and canon != k:
+                dst = s.setdefault(canon, [])
+                for rec in s[k]:
+                    if not _is_dup(dst, rec):
+                        dst.append(rec)
+                del s[k]
+                changed = True
+
     cutoff = (datetime.now() - timedelta(days=window_months * 30)).strftime("%Y-%m")
     for nm in list(s.keys()):
         # 추출 조각 등 비추적 키는 제거 (오염 데이터 자기정화)

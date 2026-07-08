@@ -40,6 +40,10 @@ def build_graph(sightings: dict, min_companies: int = 2) -> dict:
     """sightings → {nodes, links}. min_companies 미만/비추적 행위자 제외."""
     s = sightings.get("sightings", {})
     comp_events_raw: dict = sightings.get("company_events", {})   # cc -> [{date,rcept_no,event_type}]
+    # 별칭 역맵: 정본 → [별칭…] (같은 인물의 다른 표기를 상세 패널에 표시)
+    alias_rev: dict = {}
+    for a, c in (sightings.get("aliases") or {}).items():
+        alias_rev.setdefault(c, []).append(a)
     nodes, links = [], []
     company_label: dict = {}       # corp_code -> corp_name
     company_deg: dict = {}         # corp_code -> {actor_id}
@@ -113,11 +117,14 @@ def build_graph(sightings: dict, min_companies: int = 2) -> dict:
             links.append({"source": aid, "target": "c:" + cc,
                           "t_in": t_in, "t_out": t_out, "status": status})
             company_deg.setdefault(cc, set()).add(aid)
-        nodes.append({
+        node = {
             "id": aid, "label": name, "type": kind,
             "deg": len(cc_in), "sight": len(recs), "companies": companies,
             "exit_only": exit_only,
-        })
+        }
+        if alias_rev.get(name):
+            node["aliases"] = sorted(alias_rev[name])
+        nodes.append(node)
 
     for cc, actors in company_deg.items():
         label, mkt = market_of(company_cls.get(cc, ""))

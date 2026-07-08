@@ -55,6 +55,35 @@ def _is_name_fragment(name: str) -> bool:
     return len(toks) >= 2 and any(t in _FRAGMENT_TOKENS for t in toks)
 
 
+# 표(表) 파싱 아티팩트 — 인수자 명단 표의 헤더·합계행·조각이 이름으로 잘못
+# 추출된 경우. 공백 제거·대문자 정규화 후 '정확히' 이 목록과 같으면 노이즈.
+# (실명·조합·법인명이 이 값과 정확히 일치할 일은 없다.)
+_NOISE_NAMES = {
+    "합계", "소계", "총계", "중계", "계", "기타", "합", "소 계", "총 계",
+    "비고", "구분", "순번", "번호", "성명", "주주명", "주주", "이름", "명", "주",
+    "으로", "으로서", "및", "등", "등의", "합 계",
+}
+# 주의: 실명과 정확히 겹칠 수 있는 값은 넣지 않는다. 예) '이상'(李箱)은 실명
+# 이므로 제외 — 표의 '5% 이상' 같은 조각이라도 실명 오탐·오삭제 위험이 크다.
+_NOISE_NOSPACE = {_WS_RE.sub("", n).upper() for n in _NOISE_NAMES}
+
+
+def _is_noise_name(name: str) -> bool:
+    """표 헤더·합계행 등 파싱 아티팩트 여부(공백 제거 후 정확 일치)."""
+    return _WS_RE.sub("", (name or "").strip()).upper() in _NOISE_NOSPACE
+
+
+def canonical_name(name: str, aliases: dict | None = None) -> str:
+    """정규화 + 별칭 정본화. 같은 인물의 여러 표기를 한 정본 키로 합친다.
+
+    aliases: {정규화된 별칭: 정규화된 정본}. 한 인물이 공시에 여러 표기(가명·
+    로마자·오기 등)로 등장할 때 한 행위자로 합쳐 추적하기 위함. 실제 별칭 매핑은
+    투자 대상 식별 정보이므로 비공개 sightings 저장소의 aliases 맵에만 둔다.
+    """
+    n = normalize_name(name)
+    return aliases.get(n, n) if aliases else n
+
+
 # 조합·사모 비히클 (기관 패턴보다 먼저 판정 — '일반사모투자신탁'류 포섭)
 _FUND_PAT = re.compile(r"조합|합자회사|사모투자|사모펀드|사모 펀드")
 
@@ -90,6 +119,8 @@ def classify_actor(name: str) -> str:
     """
     if not name or not name.strip():
         return "noise"
+    if _is_noise_name(name):
+        return "noise"  # 표 헤더·합계행 등 (예: "합계", "기타", "으로") 차단
     if _is_name_fragment(name):
         return "noise"  # 원문 파싱 조각 (예: "으로서 결성 및") 차단
     if _FUND_PAT.search(name):
