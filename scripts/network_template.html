@@ -212,6 +212,8 @@
     font-weight: 600; padding: 3px 9px; border-radius: 20px; }
   .dt-name { margin: 10px 0 2px; font-size: 18px; font-weight: 700; word-break: keep-all; line-height: 1.3; }
   .dt-meta { font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .aka { flex-basis: 100%; font-size: 12px; font-weight: 600; color: var(--exit);
+    background: color-mix(in srgb, var(--exit) 12%, transparent); padding: 3px 9px; border-radius: 7px; }
   .dt-body { padding: 8px 12px 20px; overflow-y: auto; }
   .dt-sec { font-size: 10.5px; color: var(--ink-3); text-transform: uppercase;
     letter-spacing: .06em; padding: 12px 8px 6px; }
@@ -649,6 +651,9 @@ function openDetail(n) {
     meta.innerHTML = mtag(n.mkt) + `<span>접점 추적 행위자 ${n.deg}명</span>`;
   } else {
     meta.innerHTML = `<span>문제 회사 ${n.deg}곳 · 공시 등장 ${n.sight}건</span>`;
+    if ((n.aliases || []).length) {
+      meta.innerHTML += `<span class="aka">⚑ 다른 이름: ${n.aliases.map(esc).join(", ")}</span>`;
+    }
   }
   const body = document.getElementById("dt-body");
   body.innerHTML = "";

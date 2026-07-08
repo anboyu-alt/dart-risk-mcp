@@ -233,6 +233,52 @@ class TestMergeAndPromote(unittest.TestCase):
         self.assertNotIn("으로서 결성 및", data["sightings"])
         self.assertIn("홍길동", data["sightings"])
 
+    def test_merge_canonicalizes_new_alias_records(self):
+        # 신규 레코드가 별칭이면 정본 키로 합류 (같은 인물 = 여러 이름)
+        import scripts.discover_actors as da
+        from dart_risk_mcp.core.known_actors import normalize_name
+        # 가공의 예시 — 실제 별칭은 비공개 sightings 저장소에만 둔다
+        canon = normalize_name("KIM CHULSOO")
+        data = {"sightings": {}, "aliases": {
+            normalize_name("김철수"): canon, normalize_name("철수"): canon}}
+        new = [{"name": "김철수", "corp_code": "c1", "rcept_no": "R1", "date": "2026-06"},
+               {"name": "철수", "corp_code": "c2", "rcept_no": "R2", "date": "2026-06"},
+               {"name": "KIM CHULSOO", "corp_code": "c3", "rcept_no": "R3", "date": "2026-06"}]
+        changed = da.merge_sightings(data, new, window_months=12)
+        self.assertTrue(changed)
+        self.assertEqual(set(data["sightings"].keys()), {canon})
+        rcepts = {e["rcept_no"] for e in data["sightings"][canon]}
+        self.assertEqual(rcepts, {"R1", "R2", "R3"})
+
+    def test_merge_rekeys_existing_alias_keys(self):
+        # 별칭 맵 갱신 후 과거에 별칭 키로 쌓인 데이터를 정본으로 self-heal
+        import scripts.discover_actors as da
+        from dart_risk_mcp.core.known_actors import normalize_name
+        canon = normalize_name("KIM CHULSOO")
+        data = {"sightings": {
+            normalize_name("김철수"): [
+                {"corp_code": "c1", "rcept_no": "R1", "date": "2026-06"}],
+            canon: [{"corp_code": "c2", "rcept_no": "R2", "date": "2026-06"}],
+        }, "aliases": {normalize_name("김철수"): canon}}
+        changed = da.merge_sightings(data, [], window_months=12)
+        self.assertTrue(changed)
+        self.assertEqual(set(data["sightings"].keys()), {canon})
+        rcepts = {e["rcept_no"] for e in data["sightings"][canon]}
+        self.assertEqual(rcepts, {"R1", "R2"})
+
+    def test_merge_prunes_noise_table_artifact_keys(self):
+        # 표 헤더·합계행이 이름으로 잘못 들어온 키는 병합 시 제거
+        import scripts.discover_actors as da
+        data = {"sightings": {
+            "합계": [{"corp_code": "c1", "rcept_no": "R1", "date": "2026-06"}],
+            "으로": [{"corp_code": "c2", "rcept_no": "R2", "date": "2026-06"}],
+            "기타": [{"corp_code": "c3", "rcept_no": "R3", "date": "2026-06"}],
+            "홍길동": [{"corp_code": "c4", "rcept_no": "R4", "date": "2026-06"}],
+        }}
+        changed = da.merge_sightings(data, [], window_months=12)
+        self.assertTrue(changed)
+        self.assertEqual(set(data["sightings"].keys()), {"홍길동"})
+
     def test_merge_drops_old_outside_window(self):
         import scripts.discover_actors as da
         data = {"sightings": {"김갑": [
