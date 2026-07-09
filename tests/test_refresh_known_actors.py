@@ -126,5 +126,45 @@ class TestRefreshKnownActors(unittest.TestCase):
         srv.send_message.assert_called_once()
 
 
+class TestMainNoiseSweep(unittest.TestCase):
+    def _run_main(self, env, registry):
+        import scripts.refresh_known_actors as rk
+        captured = {}
+
+        def _collect(key, known_names, **kw):
+            captured["known_names"] = known_names
+            return {}
+
+        with patch.dict("os.environ", env, clear=False), \
+             patch.object(rk, "_api_key", return_value="k"), \
+             patch.object(rk, "archive_fragment_rows", return_value=3) as arch, \
+             patch.object(rk, "fetch_registry_from_notion", return_value=registry), \
+             patch.object(rk, "collect_auto_matches", side_effect=_collect):
+            rk.main()
+        return arch, captured
+
+    def test_main_sweeps_noise_rows_when_notion_configured(self):
+        # 크론 실행마다 노션 레지스트리의 노이즈 행('합계' 등)을 아카이브
+        arch, _ = self._run_main(
+            {"NOTION_TOKEN": "t", "DB_KNOWN_ACTORS": "db"},
+            {"actors": {"홍길동": [{"source": "x"}]}})
+        arch.assert_called_once_with("t", "db")
+
+    def test_main_skips_sweep_without_notion_env(self):
+        env = {k: "" for k in ("NOTION_TOKEN", "DB_KNOWN_ACTORS")}
+        arch, _ = self._run_main(env, {"actors": {}})
+        arch.assert_not_called()
+
+    def test_main_excludes_noise_keys_from_matching(self):
+        # 잔존 노이즈 행에 새 공시 근거가 자동 매칭돼 불어나는 것 차단
+        _, captured = self._run_main(
+            {"NOTION_TOKEN": "t", "DB_KNOWN_ACTORS": "db"},
+            {"actors": {
+                "합계": [{"source": "오염"}], "으로": [{"source": "오염"}],
+                "홍길동": [{"source": "정상"}], "이준민": [{"source": "정상"}],
+            }})
+        self.assertEqual(captured["known_names"], {"홍길동", "이준민"})
+
+
 if __name__ == "__main__":
     unittest.main()
