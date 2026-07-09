@@ -30,6 +30,11 @@ from dart_risk_mcp.core.known_actors import (
 )
 from dart_risk_mcp.core.signals import match_signals, strip_amendment_prefix
 
+try:  # pytest 등 패키지 경로 임포트
+    from scripts.setup_known_actors_db import archive_fragment_rows
+except ImportError:  # `python scripts/refresh_known_actors.py` 직접 실행 시
+    from setup_known_actors_db import archive_fragment_rows
+
 WINDOW_DAYS = 2
 MAX_PAGES = 10
 
@@ -166,9 +171,20 @@ def main():
     key = _api_key()
     if not key:
         raise SystemExit("DART_API_KEY 또는 tmp/_apikey.txt 필요")
+    # 노이즈 행 일일 청소 — 표 헤더·합계행('합계'·'으로' 등)이 과거 유입됐거나
+    # 필터를 우회해 등재된 경우 아카이브(복구 가능)로 자기정화한다.
+    token = os.environ.get("NOTION_TOKEN", "")
+    db_id = os.environ.get("DB_KNOWN_ACTORS", "")
+    if token and db_id:
+        removed = archive_fragment_rows(token, db_id)
+        if removed:
+            print(f"[OK] 레지스트리 노이즈 행 {removed}건 아카이브")
     # 크론 실행은 캐시를 우회해 항상 최신 레지스트리로 중복 판정한다
     data = fetch_registry_from_notion() or load_known_actors()
-    known_names = set(data.get("actors", {}).keys())
+    # 노이즈 키는 매칭 대상에서 제외 — 남아 있으면 '으로'·'합계' 같은 행에
+    # 새 공시 근거가 계속 자동 매칭돼 관련기업이 불어난다.
+    known_names = {n for n in data.get("actors", {})
+                   if classify_actor(n) != "noise"}
     matches = collect_auto_matches(key, known_names)
     added = merge_auto_matches(data, matches)
     if added:
