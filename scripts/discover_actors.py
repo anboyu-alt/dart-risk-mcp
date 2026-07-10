@@ -45,9 +45,10 @@ INSTABILITY_KEYS = {"SHAREHOLDER", "REVERSE_SPLIT", "GAMJA_MERGE", "INQUIRY",
                     "AUDIT", "MGMT_DISPUTE", "DISCLOSURE_VIOL"}
 WINDOW_DAYS = 2
 MAX_PAGES = 10
-# sightings 보존 창 — 5년 백필을 담기 위해 66개월(5.5년, 경계 프루닝 버퍼).
+# sightings 보존 창 — 2015년까지 백필을 담기 위해 140개월(11.7년, 경계 프루닝
+# 버퍼 포함). 이보다 좁으면 과거 백필 데이터가 병합 즉시 프루닝된다.
 # merge_sightings의 기본값이라 백필·일일 크론 양쪽 프루닝에 적용된다.
-WINDOW_MONTHS = 66
+WINDOW_MONTHS = 140
 N_THRESHOLD = 2
 # 등재 시점 문제 회사 판정용 lookback — 최근 불안정 신호 기준이라 1년 유지.
 PROBLEM_LOOKBACK_DAYS = 365
