@@ -369,8 +369,12 @@ let W = innerWidth, H = innerHeight;
 
 // ── 원형 레이아웃 파라미터 ──
 // R = 노드 간격(SPACING) 기준 적응 반경. 노드가 늘면 √N으로 커져 밀도 일정 유지.
-const SPACING = 16;
+// SPACING 26 → 평균 간격 ≈46px로 스프링 이상 길이(55~70px)와 정합, 압착 완화.
+const SPACING = 26;
 const R = Math.max(240, SPACING * Math.sqrt(GRAPH.nodes.length));
+// 브라운 지터 — 평형을 매 틱 미세 섭동해 PC·모바일 동일한 은은한 탄성 유지.
+// 0.5 → 평형에서 평균 ~0.3px/프레임(체감되되 라벨 가독 유지).
+const JITTER = 0.5;
 
 // ── build node/link objects ──
 // 초기 배치를 원판 균등 분포로(반경 √uniform) — 시작부터 원형이라 초기 폭발 없음.
@@ -387,6 +391,7 @@ links.forEach(l => { adj[l.source.id].add(l.target.id); adj[l.target.id].add(l.s
 const rOf = n => n.type === "company"
   ? 3 + Math.sqrt(n.deg) * 1.4
   : 4 + Math.sqrt(n.deg) * 2.4;
+nodes.forEach(n => n.r = rOf(n));   // 반경 캐시 — 물리 핫루프의 충돌 분리에 사용
 
 // ── summary + legend ──
 const actorNodes = nodes.filter(n => n.type !== "company");
@@ -494,6 +499,12 @@ function tick() {
       const f = (1500 * k) / d2;
       const d = Math.sqrt(d2); dx /= d; dy /= d;
       a.vx += dx*f; a.vy += dy*f; b.vx -= dx*f; b.vy -= dy*f;
+      // 충돌 분리 — 반경합+6보다 가까우면 alpha 무관 분리력(비연결 노드 겹침 제거)
+      const minD = a.r + b.r + 6;
+      if (d < minD) {
+        const push = (minD - d) * 0.25;
+        a.vx += dx*push; a.vy += dy*push; b.vx -= dx*push; b.vy -= dy*push;
+      }
     }
   }
   for (const l of links) {
@@ -514,6 +525,8 @@ function tick() {
       n.vx -= (bx / br) * bf; n.vy -= (by / br) * bf;
     }
     if (n === dragging) continue;
+    // 브라운 지터 — alpha 무관 상시 섭동. reduce 모드는 정적이라 제외.
+    if (!reduce) { n.vx += (Math.random() - .5) * JITTER; n.vy += (Math.random() - .5) * JITTER; }
     n.vx *= 0.86; n.vy *= 0.86;
     n.x += n.vx; n.y += n.vy;
     // 하드 클램프 — 적분 후에도 R을 넘으면 경계로 되돌리고 바깥 속도 성분 제거.
@@ -849,5 +862,12 @@ document.getElementById("theme").addEventListener("click", () => {
 // ── util ──
 function esc(s) { return String(s).replace(/[&<>"]/g, m =>
   ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[m])); }
-addEventListener("resize", () => { W = innerWidth; H = innerHeight; alpha = Math.max(alpha,.2); });
+// 실질 리사이즈일 때만 재가열 — 모바일 주소창 토글(세로 ~60~100px)의 잦은
+// resize가 alpha를 재가열해 과탄성을 만들던 부작용 제거(탄성은 지터가 담당).
+let prevW = W, prevH = H;
+addEventListener("resize", () => {
+  const dw = Math.abs(innerWidth - prevW), dh = Math.abs(innerHeight - prevH);
+  W = innerWidth; H = innerHeight;
+  if (dw > 4 || dh > 150) { alpha = Math.max(alpha, .2); prevW = W; prevH = H; }
+});
 </script>
