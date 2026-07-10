@@ -87,8 +87,8 @@
   .node.mkt-kosdaq   circle { stroke: var(--mkt-kosdaq); }
   .node.mkt-konex    circle { stroke: var(--mkt-konex); }
   .node.mkt-unlisted circle { stroke: var(--mkt-unlisted); }
-  .node.dim { opacity: .12; transition: opacity .15s; }
-  .edge.dim { opacity: .04; transition: opacity .15s; }
+  .node.dim { opacity: .22; transition: opacity .15s; }
+  .edge.dim { opacity: .07; transition: opacity .15s; }
   .node text {
     fill: var(--ink-2); font-size: 10px; pointer-events: none;
     paint-order: stroke; stroke: var(--bg); stroke-width: 3px;
@@ -570,14 +570,17 @@ else loop();
 
 // ── interaction: hover highlight ──
 let focused = null;
-function highlight(id) {
+// full=true(클릭 선택): 이웃 외 전체 디밍. full=false(호버): 해당 노드의
+// 연결선만 강조하고 디밍 없음 — 확대 상태에서 이웃이 화면 밖이면 호버 한
+// 번에 화면 전체가 사라져 보이던 문제 방지.
+function highlight(id, full = true) {
   const nb = id ? adj[id] : null;
   nodeEls.forEach(({ g, n }) =>
-    g.classList.toggle("dim", !!id && n.id !== id && !nb.has(n.id)));
+    g.classList.toggle("dim", full && !!id && n.id !== id && !nb.has(n.id)));
   edgeEls.forEach((e, i) => {
     const l = links[i], on = id && (l.source.id === id || l.target.id === id);
     e.classList.toggle("hi", !!on);
-    e.classList.toggle("dim", !!id && !on);
+    e.classList.toggle("dim", full && !!id && !on);
   });
 }
 // 호버 툴팁 없음 — 노드 정보는 모바일과 동일하게 클릭(상세 패널)으로만.
@@ -585,12 +588,13 @@ function highlight(id) {
 nodeEls.forEach(({ g, n }) => {
   g.addEventListener("pointerenter", () => {
     if (dragging || panning) return;
-    focused = n.id; highlight(n.id); g.classList.add("hov");
+    g.classList.add("hov");
+    if (!focused) highlight(n.id, false);   // 선택 없을 때만 — 연결선 강조(디밍 없음)
   });
   g.addEventListener("pointerleave", () => {
     g.classList.remove("hov");
     if (dragging || panning) return;
-    focused = null; highlight(null);
+    if (!focused) highlight(null);          // 선택 중이면 선택 하이라이트 유지
   });
 });
 
