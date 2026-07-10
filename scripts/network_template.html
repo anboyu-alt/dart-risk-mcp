@@ -98,9 +98,17 @@
   /* 2차 라벨(회사·저차수 행위자)은 확대 시에만 노출 — 옵시디언식 */
   .node text.lbl2 { opacity: 0; transition: opacity .15s; }
   svg.zoomed .node text.lbl2 { opacity: 1; }
+  /* 이름 표시 기본 OFF — '이름 표시' 스위치로 전환. 호버 노드는 예외 노출 */
+  svg.labels-off .node text { display: none; }
+  svg.labels-off .node.hov text { display: inline; opacity: 1; }
 
   /* ── overlays ── */
   .overlay { position: fixed; z-index: 5; }
+  .about-btn { pointer-events: auto; cursor: pointer; border: 1px solid var(--panel-line);
+    background: var(--panel); color: var(--ink-2); border-radius: 50%; width: 22px; height: 22px;
+    font-size: 12px; line-height: 1; vertical-align: 2px; margin-left: 6px; }
+  .tl .sub { display: none; }
+  .tl.about-open .sub { display: block; }
   .tl { top: 18px; left: 20px; max-width: 340px; pointer-events: none;
         padding: 4px 8px 8px; border-radius: 14px;
         background: radial-gradient(120% 100% at 0% 0%, var(--bg) 55%, transparent 100%); }
@@ -186,13 +194,6 @@
   .tlrow .tlink:hover { text-decoration: underline; }
   .tlrow .tpct { color: var(--ink-3); font-size: 11px; }
 
-  /* ── tooltip ── */
-  #tip { position: fixed; z-index: 8; pointer-events: none; opacity: 0;
-    background: var(--panel); border: 1px solid var(--panel-line);
-    border-radius: 9px; box-shadow: var(--shadow); padding: 8px 11px;
-    font-size: 12.5px; max-width: 260px; transition: opacity .1s; }
-  #tip b { display: block; margin-bottom: 2px; font-size: 13px; }
-  #tip .k { font-size: 11px; color: var(--ink-3); }
 
   /* ── market tag (badge) ── */
   .mtag { display: inline-flex; align-items: center; font-size: 10.5px; font-weight: 600;
@@ -227,6 +228,9 @@
   .co.nolink { color: var(--ink-2); cursor: default; }
   .dt-close { position: absolute; top: 14px; right: 14px; cursor: pointer;
     background: none; border: none; color: var(--ink-3); font-size: 20px; line-height: 1; padding: 4px; }
+  .foot .foot-body { display: none; }
+  .foot.open .foot-body { display: inline; }
+  .foot #foot-btn { width: auto; height: auto; border-radius: 9px; padding: 5px 10px; font-size: 12px; }
   .foot { position: fixed; bottom: 12px; left: 20px; z-index: 5; pointer-events: none;
     font-size: 11px; color: var(--ink-3); max-width: 420px; line-height: 1.5; }
 
@@ -284,8 +288,8 @@
   <svg id="svg" role="img" aria-label="행위자-회사 연결망 그래프"></svg>
 </div>
 
-<div class="overlay tl">
-  <h1>행위자 연결망</h1>
+<div class="overlay tl" id="tl">
+  <h1>행위자 연결망 <button class="about-btn" id="about-btn" aria-label="설명 보기" title="설명 보기">ⓘ</button></h1>
   <p class="sub">서로 다른 문제 회사 <b>2곳 이상</b>에 반복 등장한 개인·조합·법인과
     그들이 인수자로 나타난 회사의 연결. 한 회사군을 공유하는 행위자 무리가 곧 세력의 지문.</p>
   <div class="stats">
@@ -302,15 +306,16 @@
 <div class="overlay tr" id="panel">
   <div class="sheet-grip"></div>
   <button class="theme-btn" id="theme" aria-label="테마 전환">◐ 테마</button>
-  <div class="card legend" id="legend"></div>
-  <div class="card legend" id="legend-mkt"></div>
   <div class="card controls">
     <label class="ctl-label" for="q">검색</label>
     <input type="search" id="q" placeholder="이름·회사…" autocomplete="off">
     <div class="ctl-label"><span for="deg">최소 회사 수</span><span class="mono" id="deg-val">2</span></div>
     <input type="range" id="deg" min="2" max="8" value="2" step="1">
     <label class="exit-toggle"><input type="checkbox" id="only-exit"> 이탈 있는 관계만</label>
+    <label class="exit-toggle"><input type="checkbox" id="show-labels"> 이름 표시</label>
   </div>
+  <div class="card legend" id="legend"></div>
+  <div class="card legend" id="legend-mkt"></div>
   <div class="sheet-hint">한 손가락 드래그로 이동 · 두 손가락으로 확대/축소 ·
     노드를 탭하면 진입→이탈 타임라인과 공시 링크. 실선=진행중 / 점선=이탈.
     회사 노드 링 색은 시장구분. 하단 시점바로 시점 재생.</div>
@@ -329,12 +334,11 @@
   <button id="time-all" class="on" title="전체 기간 보기">전체</button>
 </div>
 
-<div class="foot">사실 표기 — 판정 아님. 등장은 공시 인수자 명단 기준이며 동명이인·동명 법인은 미확인.
+<div class="foot" id="foot"><button class="about-btn" id="foot-btn" aria-label="사실 표기 보기" title="사실 표기 보기">ⓘ 사실 표기</button><span class="foot-body">사실 표기 — 판정 아님. 등장은 공시 인수자 명단 기준이며 동명이인·동명 법인은 미확인.
   <b>실선=진행중 / 점선=이탈(기록 보존)</b>. 이탈은 5% 대량보유 감소·전환청구 기준이라
   부분 관측(장외·5% 미만 처분은 미포착). 하단 시점바로 진입→이탈 흐름을 재생.
-  노드를 열면 관계 타임라인과 원본 공시. 스크롤=확대, 빈 곳 드래그=이동.</div>
+  노드를 열면 관계 타임라인과 원본 공시. 스크롤=확대, 빈 곳 드래그=이동.</span></div>
 
-<div id="tip"></div>
 
 <aside id="detail" aria-live="polite">
   <div class="dt-head">
@@ -369,8 +373,9 @@ let W = innerWidth, H = innerHeight;
 
 // ── 원형 레이아웃 파라미터 ──
 // R = 노드 간격(SPACING) 기준 적응 반경. 노드가 늘면 √N으로 커져 밀도 일정 유지.
-// SPACING 26 → 평균 간격 ≈46px로 스프링 이상 길이(55~70px)와 정합, 압착 완화.
-const SPACING = 26;
+// SPACING 34 → 평균 간격 ≈60px로 스프링 이상 길이(55~70px)와 동급 — 압착 없음.
+// 원이 넓어 기본 fit은 멀리서 보이지만, 확대·검색으로 탐색하는 편이 쾌적.
+const SPACING = 34;
 const R = Math.max(240, SPACING * Math.sqrt(GRAPH.nodes.length));
 // 브라운 지터 — 평형을 매 틱 미세 섭동해 PC·모바일 동일한 은은한 탄성 유지.
 // 0.5 → 평형에서 평균 ~0.3px/프레임(체감되되 라벨 가독 유지).
@@ -380,7 +385,8 @@ const JITTER = 0.5;
 // 초기 배치를 원판 균등 분포로(반경 √uniform) — 시작부터 원형이라 초기 폭발 없음.
 const nodes = GRAPH.nodes.map(n => {
   const t = Math.random() * 2 * Math.PI, rr = R * 0.9 * Math.sqrt(Math.random());
-  return { ...n, x: W/2 + Math.cos(t) * rr, y: H/2 + Math.sin(t) * rr, vx: 0, vy: 0 };
+  return { ...n, x: W/2 + Math.cos(t) * rr, y: H/2 + Math.sin(t) * rr, vx: 0, vy: 0,
+           home: R * 0.92 * Math.sqrt(Math.random()) };   // 균등 원판 목표 반경(가운데 쏠림 방지)
 });
 const byId = Object.fromEntries(nodes.map(n => [n.id, n]));
 const links = GRAPH.links.map(l => ({ ...l, source: byId[l.source], target: byId[l.target] }))
@@ -487,16 +493,18 @@ fitView();
 
 // ── force simulation (velocity Verlet, world-space) ──
 let dragging = null, dragMoved = false, panning = false, panStart = null;
-let alpha = 1;
+let alpha = 0.5;   // 원판 균등 배치라 폭발적 초기 정렬 불필요 — 낮게 시작해 초기 과활동 방지
 function tick() {
   const k = alpha;
+  // 지터를 줌 역비례로 — 어느 배율에서든 화면 기준 미세 진폭이 일정(축소 fit에서도 보임)
+  const jAmp = JITTER / Math.max(view.k, 0.25);
   for (let i = 0; i < nodes.length; i++) {
     const a = nodes[i];
     for (let j = i + 1; j < nodes.length; j++) {
       const b = nodes[j];
       let dx = a.x - b.x, dy = a.y - b.y, d2 = dx*dx + dy*dy || 1;
       if (d2 > 90000) continue;
-      const f = (1500 * k) / d2;
+      const f = (3000 * k) / d2;
       const d = Math.sqrt(d2); dx /= d; dy /= d;
       a.vx += dx*f; a.vy += dy*f; b.vx -= dx*f; b.vy -= dy*f;
       // 충돌 분리 — 반경합+6보다 가까우면 alpha 무관 분리력(비연결 노드 겹침 제거)
@@ -510,24 +518,30 @@ function tick() {
   for (const l of links) {
     const a = l.source, b = l.target;
     let dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1;
-    const ideal = 46 + rOf(a) + rOf(b);
-    const f = (d - ideal) * 0.04 * k; dx /= d; dy /= d;
+    // 선 길이 가변 — 허브(고차수) 연결일수록 길게 → 허브 군집이 퍼져 분포 개선.
+    const ideal = 40 + a.r + b.r + 28 * (Math.sqrt(a.deg || 1) + Math.sqrt(b.deg || 1));
+    // 허브 스프링 약화(d3 방식) — 허브 그물이 전체를 중앙으로 조이는 것 방지.
+    const str = 1 / Math.max(1, Math.min(a.deg || 1, b.deg || 1) * 0.5);
+    const f = (d - ideal) * 0.04 * k * str; dx /= d; dy /= d;
     a.vx += dx*f; a.vy += dy*f; b.vx -= dx*f; b.vy -= dy*f;
   }
   for (const n of nodes) {
-    n.vx += (W/2 - n.x) * 0.0038 * k;
-    n.vy += (H/2 - n.y) * 0.0038 * k;
+    // 라디얼 호밍 — 중심 인력 대신 노드별 목표 반경(home)으로 극약한 복원.
+    // 중심 인력은 전부를 가운데로 모아 쏠림을 만들지만, 호밍은 원판 전체에
+    // 골고루 분포시킨다(방향은 자유, 반경만 유도).
+    const bx = n.x - W/2, by = n.y - H/2, br = Math.hypot(bx, by) || 1;
+    const hf = (n.home - br) * 0.012 * k;
+    n.vx += (bx / br) * hf; n.vy += (by / br) * hf;
     // 소프트 원형 경계 — 반경 R 밖이면 초과 거리 비례 복원력. alpha(k)를 곱하지
     // 않아 상시 작동 → 식은 뒤에도 미아 노드가 구조적으로 불가능.
-    const bx = n.x - W/2, by = n.y - H/2, br = Math.hypot(bx, by);
     if (br > R) {
       const bf = (br - R) * 0.03;
       n.vx -= (bx / br) * bf; n.vy -= (by / br) * bf;
     }
     if (n === dragging) continue;
     // 브라운 지터 — alpha 무관 상시 섭동. reduce 모드는 정적이라 제외.
-    if (!reduce) { n.vx += (Math.random() - .5) * JITTER; n.vy += (Math.random() - .5) * JITTER; }
-    n.vx *= 0.86; n.vy *= 0.86;
+    if (!reduce) { n.vx += (Math.random() - .5) * jAmp; n.vy += (Math.random() - .5) * jAmp; }
+    n.vx *= 0.80; n.vy *= 0.80;
     n.x += n.vx; n.y += n.vy;
     // 하드 클램프 — 적분 후에도 R을 넘으면 경계로 되돌리고 바깥 속도 성분 제거.
     // 수렴 중·라이브 어떤 상태에서도 원 밖 노드가 물리적으로 불가능(미아 방지).
@@ -538,7 +552,7 @@ function tick() {
       if (vr > 0) { n.vx -= vr * cx2 / cr; n.vy -= vr * cy2 / cr; }
     }
   }
-  alpha *= 0.994; if (alpha < 0.055) alpha = 0.055;
+  alpha *= 0.988; if (alpha < 0.055) alpha = 0.055;
   draw();
 }
 function draw() {
@@ -555,7 +569,6 @@ if (reduce) { for (let i = 0; i < 500; i++) tick(); alpha = 0.02; draw(); }
 else loop();
 
 // ── interaction: hover highlight ──
-const tip = document.getElementById("tip");
 let focused = null;
 function highlight(id) {
   const nb = id ? adj[id] : null;
@@ -567,29 +580,17 @@ function highlight(id) {
     e.classList.toggle("dim", !!id && !on);
   });
 }
-function tipHtml(n) {
-  if (n.type === "company") {
-    const m = MARKET[n.mkt || "unlisted"];
-    return `<b>${esc(n.label)}</b><span class="k">${m.ko} · 접점 행위자 ${n.deg}명</span>`;
-  }
-  const exited = (n.companies || []).filter(c => c.status === "exited").length;
-  const tail = exited ? ` · 이탈 ${exited}` : "";
-  return `<b>${esc(n.label)}</b><span class="k">${KIND[n.type].ko} · ` +
-    `회사 ${n.deg}곳${tail} · 등장 ${n.sight}건</span>`;
-}
+// 호버 툴팁 없음 — 노드 정보는 모바일과 동일하게 클릭(상세 패널)으로만.
+// 호버는 연결 하이라이트 + (이름표시 OFF일 때) 해당 노드 이름만 노출.
 nodeEls.forEach(({ g, n }) => {
-  g.addEventListener("pointerenter", ev => {
+  g.addEventListener("pointerenter", () => {
     if (dragging || panning) return;
-    focused = n.id; highlight(n.id);
-    tip.style.opacity = 1; tip.innerHTML = tipHtml(n);
-  });
-  g.addEventListener("pointermove", ev => {
-    tip.style.left = Math.min(ev.clientX + 14, innerWidth - tip.offsetWidth - 8) + "px";
-    tip.style.top = (ev.clientY + 14) + "px";
+    focused = n.id; highlight(n.id); g.classList.add("hov");
   });
   g.addEventListener("pointerleave", () => {
+    g.classList.remove("hov");
     if (dragging || panning) return;
-    focused = null; highlight(null); tip.style.opacity = 0;
+    focused = null; highlight(null);
   });
 });
 
@@ -607,18 +608,18 @@ svg.addEventListener("pointerdown", ev => {
   try { svg.setPointerCapture(ev.pointerId); } catch (_) {}  // 캡처 실패해도 상호작용 유지
   if (pointers.size === 2) {                 // 두 번째 손가락 → 핀치 시작(노드드래그·팬 취소)
     dragging = null; panning = false; svg.classList.remove("panning");
-    tip.style.opacity = 0; pinchPrev = twoPointerState();
+    pinchPrev = twoPointerState();
     return;
   }
   if (pointers.size > 2) return;
   const wx = worldX(ev), wy = worldY(ev);
   const hit = nodeEls.find(({ n }) => Math.hypot(n.x - wx, n.y - wy) < rOf(n) + 6/view.k);
   if (hit) {
-    dragging = hit.n; dragMoved = false; alpha = Math.max(alpha, .5);
+    dragging = hit.n; dragMoved = false; alpha = Math.max(alpha, .2);
   } else {
     panning = true; panMoved = false;
     panStart = { x: ev.clientX - view.x, y: ev.clientY - view.y };
-    svg.classList.add("panning"); tip.style.opacity = 0;
+    svg.classList.add("panning");
   }
 });
 svg.addEventListener("pointermove", ev => {
@@ -632,7 +633,7 @@ svg.addEventListener("pointermove", ev => {
   if (dragging) {
     dragMoved = true;
     dragging.x = worldX(ev); dragging.y = worldY(ev); dragging.vx = dragging.vy = 0;
-    alpha = Math.max(alpha, .3);
+    alpha = Math.max(alpha, .12);
     if (reduce) draw();
   } else if (panning) {
     panMoved = true;
@@ -656,7 +657,7 @@ svg.addEventListener("pointerup", ev => {
                 Math.hypot(ev.clientX - lastTap.x, ev.clientY - lastTap.y) < 30;
     if (dbl) {
       zoomAt(ev.clientX, ev.clientY, 1.6);
-      alpha = Math.max(alpha, .3);
+      alpha = Math.max(alpha, .1);
       lastTap.t = 0;                               // 소비 → 트리플탭 방지
     } else {
       if (dragging && !dragMoved) openDetail(dragging);
@@ -676,10 +677,18 @@ svg.addEventListener("wheel", ev => {
   ev.preventDefault();
   zoomAt(ev.clientX, ev.clientY, ev.deltaY < 0 ? 1.12 : 1/1.12);
 }, { passive: false });
+svg.classList.add("labels-off");   // 이름 표시 기본 OFF
+document.getElementById("show-labels").addEventListener("change", ev => {
+  svg.classList.toggle("labels-off", !ev.target.checked);
+});
+document.getElementById("about-btn").onclick = () =>
+  document.getElementById("tl").classList.toggle("about-open");
+document.getElementById("foot-btn").onclick = () =>
+  document.getElementById("foot").classList.toggle("open");
 document.getElementById("z-in").onclick = () => zoomAt(W/2, H/2, 1.3);
 document.getElementById("z-out").onclick = () => zoomAt(W/2, H/2, 1/1.3);
 document.getElementById("z-fit").onclick = () => {
-  fitView(); alpha = Math.max(alpha, .3);
+  fitView(); alpha = Math.max(alpha, .1);
 };
 
 // ── mobile controls sheet (검색·범례 바텀시트) ──
@@ -796,7 +805,7 @@ function applyFilter() {
     e.classList.toggle("fhide", !on);
   });
   applyTime();
-  alpha = Math.max(alpha, .3);
+  alpha = Math.max(alpha, .15);
 }
 degSlider.addEventListener("input", applyFilter);
 q.addEventListener("input", applyFilter);
@@ -868,6 +877,6 @@ let prevW = W, prevH = H;
 addEventListener("resize", () => {
   const dw = Math.abs(innerWidth - prevW), dh = Math.abs(innerHeight - prevH);
   W = innerWidth; H = innerHeight;
-  if (dw > 4 || dh > 150) { alpha = Math.max(alpha, .2); prevW = W; prevH = H; }
+  if (dw > 4 || dh > 150) { alpha = Math.max(alpha, .15); prevW = W; prevH = H; }
 });
 </script>
