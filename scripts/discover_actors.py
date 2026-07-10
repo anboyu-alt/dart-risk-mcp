@@ -32,6 +32,7 @@ from dart_risk_mcp.core.signals import (
 from dart_risk_mcp.core.known_actors import (
     normalize_name,
     canonical_name,
+    fold_name,
     load_known_actors,
     add_registry_record,
     classify_actor,
@@ -204,6 +205,29 @@ def merge_sightings(data: dict, new: list, window_months: int = WINDOW_MONTHS) -
             continue
         lst.append({k: rec[k] for k in _FIELDS if k in rec})
         changed = True
+
+    # 표기 변형 자동 병합 — 접사((주)·주식회사)·공백·라틴↔한글 음차 폴딩이
+    # 같은 키들을 별칭으로 자동 등록. 정본은 별칭이 아닌 키 중 레코드 최다 표기.
+    # (예: 'DB금융투자 주식회사' 7가지 표기 → 한 노드) 실제 병합은 아래
+    # 재키잉 루프가 수행하고, 등록된 별칭은 그래프에 '다른 이름'으로 표시된다.
+    folds: dict = {}
+    for k in s:
+        if classify_actor(k) in _TRACKED_KINDS:
+            folds.setdefault(fold_name(k), []).append(k)
+    fold_added = 0
+    for ks in folds.values():
+        if len(ks) < 2:
+            continue
+        cands = [k for k in ks if k not in aliases] or ks   # 별칭 아닌 키 우선(체인 방지)
+        canon = max(cands, key=lambda k: len(s[k]))
+        for k in ks:
+            if k != canon and aliases.get(k) != canon:
+                aliases[k] = canon
+                fold_added += 1
+    if fold_added:
+        data["aliases"] = aliases
+        changed = True
+        print(f"[FOLD] 표기 변형 자동 별칭 등록: {fold_added}건")
 
     # 기존 별칭 키 → 정본 키로 합치기 (별칭 맵 갱신 시 과거 데이터 self-heal)
     if aliases:

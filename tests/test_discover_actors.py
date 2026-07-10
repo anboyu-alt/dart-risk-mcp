@@ -432,3 +432,62 @@ class TestDailyReport(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFoldDedupe(unittest.TestCase):
+    def _rec(self, cc, rn):
+        return {"corp_code": cc, "rcept_no": rn, "date": "2026-06"}
+
+    def test_merge_folds_corp_suffix_variants(self):
+        # (주)·㈜·주식회사 접사 변형이 최다 레코드 표기로 자동 병합
+        import scripts.discover_actors as da
+        data = {"sightings": {
+            "(주)베이트리": [self._rec("c1", "R1"), self._rec("c2", "R2")],
+            "주식회사 베이트리": [self._rec("c3", "R3")],
+            "베이트리": [self._rec("c4", "R4")],
+        }}
+        changed = da.merge_sightings(data, [], window_months=12)
+        self.assertTrue(changed)
+        self.assertEqual(set(data["sightings"].keys()), {"(주)베이트리"})
+        self.assertEqual(len(data["sightings"]["(주)베이트리"]), 4)
+        self.assertEqual(data["aliases"]["베이트리"], "(주)베이트리")
+
+    def test_merge_folds_latin_phonetic(self):
+        # DB금융투자 ↔ 디비금융투자 (라틴↔한글 음차)
+        import scripts.discover_actors as da
+        data = {"sightings": {
+            "DB금융투자 주식회사": [self._rec("c1", "R1"), self._rec("c2", "R2")],
+            "디비금융투자 주식회사": [self._rec("c3", "R3")],
+        }}
+        da.merge_sightings(data, [], window_months=12)
+        self.assertEqual(set(data["sightings"].keys()), {"DB금융투자 주식회사"})
+
+    def test_merge_folds_spaced_person(self):
+        # '정 상 용' ↔ '정상용' (개인명 공백 변형)
+        import scripts.discover_actors as da
+        data = {"sightings": {
+            "정상용": [self._rec("c1", "R1"), self._rec("c2", "R2")],
+            "정 상 용": [self._rec("c3", "R3")],
+        }}
+        da.merge_sightings(data, [], window_months=12)
+        self.assertEqual(set(data["sightings"].keys()), {"정상용"})
+
+    def test_merge_does_not_fold_distinct_names(self):
+        import scripts.discover_actors as da
+        data = {"sightings": {
+            "베이트리": [self._rec("c1", "R1")],
+            "베이스트리": [self._rec("c2", "R2")],
+        }}
+        da.merge_sightings(data, [], window_months=12)
+        self.assertEqual(set(data["sightings"].keys()), {"베이트리", "베이스트리"})
+
+    def test_fold_canon_prefers_non_alias_key(self):
+        # 수동 별칭의 정본이 이미 있으면 폴딩 정본 선정에서 별칭 키를 피함(체인 방지)
+        import scripts.discover_actors as da
+        data = {"sightings": {
+            "(주)씨알엠": [self._rec("c1", "R1")],
+            "씨알엠": [self._rec("c2", "R2"), self._rec("c3", "R3")],
+        }, "aliases": {"씨알엠": "CRM홀딩스"}}   # 씨알엠은 이미 다른 정본의 별칭
+        da.merge_sightings(data, [], window_months=12)
+        # 별칭이 아닌 '(주)씨알엠'이 정본 — 체인 없이 병합
+        self.assertIn("(주)씨알엠", data["aliases"].values())

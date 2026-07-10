@@ -84,6 +84,31 @@ def canonical_name(name: str, aliases: dict | None = None) -> str:
     return aliases.get(n, n) if aliases else n
 
 
+# 라틴 문자 → 한글 음차 (금융권 관행 표기: DB↔디비, HLB↔에이치엘비 등)
+_LATIN_PHON = {
+    "A": "에이", "B": "비", "C": "씨", "D": "디", "E": "이", "F": "에프",
+    "G": "지", "H": "에이치", "I": "아이", "J": "제이", "K": "케이", "L": "엘",
+    "M": "엠", "N": "엔", "O": "오", "P": "피", "Q": "큐", "R": "알",
+    "S": "에스", "T": "티", "U": "유", "V": "브이", "W": "더블유",
+    "X": "엑스", "Y": "와이", "Z": "지",
+}
+_CORP_SUFFIX_RE = re.compile(r"(주식회사|유한회사|유한책임회사|\(주\)|㈜)")
+_FOLD_STRIP_RE = re.compile(r"[\s·\-\.]+")
+
+
+def fold_name(name: str) -> str:
+    """표기 변형 비교용 폴딩 — 같은 주체의 다른 표기가 한 값으로 수렴한다.
+
+    법인 접사((주)·㈜·주식회사 등) 제거, 공백·중점·하이픈 제거, 라틴 문자를
+    한글 음차로 변환. 예) '(주)베이트리'·'주식회사 베이트리'·'베이트리',
+    'DB금융투자 주식회사'·'디비금융투자', '정 상 용'·'정상용'이 각각 동일
+    폴딩. 비교 전용 — 표시·저장 키는 normalize_name/정본을 그대로 쓴다.
+    """
+    s = _CORP_SUFFIX_RE.sub("", (name or ""))
+    s = _FOLD_STRIP_RE.sub("", s).upper()
+    return "".join(_LATIN_PHON.get(ch, ch) for ch in s)
+
+
 # 조합·사모 비히클 (기관 패턴보다 먼저 판정 — '일반사모투자신탁'류 포섭)
 _FUND_PAT = re.compile(r"조합|합자회사|사모투자|사모펀드|사모 펀드")
 
