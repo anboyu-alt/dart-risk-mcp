@@ -3,8 +3,10 @@ name: Backfill sightings
 # 과거 자금조달 공시 sightings 백필. 진행은 sightings.json의 backfill.done_until에
 # 저장돼 재실행 시 이어감(청크 중복은 dedup으로 무해). 완료 후 재발화는 no-op.
 #
-# 5년 확장 모드: 하루 2회(02:00·14:00 UTC) 회당 자금조달 3,000건씩 갈아,
-# 2021-07-06~2026-07-06 전 구간을 약 5~7일에 완주(자동 재개, 미완이어도 안 깨짐).
+# 2015 확장 모드: 5년 구간(2021-07-06~2026-07-06) 완주 후, 더 과거
+# 2015-01-01~2021-07-05 구간을 이어받는다. 착수 시 reset=true 디스패치 1회로
+# 전진 마커를 초기화해야 한다(마커가 이미 2026까지 가 있어 그냥은 no-op).
+# 하루 2회(02:00·14:00 UTC) 회당 자금조달 3,000건씩, 약 7~12일 예상.
 # 라이브 파이프라인(discover 19:00 UTC · exits 일 18:30 UTC)과 시간대를 벌려 쿼터 충돌 방지.
 # 완주 후엔 조용히 no-op. 다 끝나면 이 스케줄 블록을 제거할 것.
 
@@ -31,10 +33,11 @@ on:
         required: false
         default: "false"
 
-# 5년 확장 목표 구간 — 스케줄 실행이 참조(자기 종결). 완주 후 --end 갱신 불필요.
+# 2015 확장 목표 구간 — 스케줄 실행이 참조(자기 종결). 2021-07-06 이후는
+# 이미 완주된 구간이라 재스캔하지 않는다(쿼터 절약).
 env:
-  BF_START: "2021-07-06"
-  BF_END: "2026-07-06"
+  BF_START: "2015-01-01"
+  BF_END: "2021-07-05"
   BF_MAXFUNDING: "3000"
 
 permissions:
@@ -66,7 +69,7 @@ jobs:
           SIGHTINGS_PATH: _sightings/sightings.json
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            # 스케줄: 5년 고정 구간을 done_until 기준으로 이어달리기(자기 종결)
+            # 스케줄: 고정 구간을 done_until 기준으로 이어달리기(자기 종결)
             python scripts/backfill_sightings.py \
               --start "$BF_START" --end "$BF_END" --max-funding "$BF_MAXFUNDING"
           else
@@ -90,7 +93,7 @@ jobs:
           # (dedup)한 뒤 재시도 — 최대 5회.
           for attempt in 1 2 3 4 5; do
             git add sightings.json
-            git commit -m "chore: sightings 5년 백필" || true
+            git commit -m "chore: sightings 과거 백필" || true
             if git push; then echo "push 성공 (시도 $attempt)"; exit 0; fi
             echo "::warning::push 거부 — 원격 재병합 후 재시도 ($attempt)"
             cp sightings.json /tmp/ours.json
