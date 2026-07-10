@@ -80,6 +80,9 @@
   .edge.past.dim { opacity: .25; }
   /* 시간/필터 숨김은 클래스로 합성(둘 중 하나만 있어도 숨김) */
   .node.fhide, .node.thide, .edge.fhide, .edge.thide { display: none; }
+  /* 단계 탐색(reach) 중에는 검색·차수 필터로 숨겨진 노드도 노출 — 검색으로
+     좁힌 뒤 슬라이더를 넓히면 이어지는 연결망이 화면에 나타나야 한다 */
+  .node.reach, .edge.reach { display: inline !important; }
   .node circle { cursor: pointer; stroke: var(--bg); stroke-width: 1.5; }
   /* 회사 노드는 시장구분 링으로 상장 여부를 표시 (상장사=색 링, 비상장=약한 링) */
   .node.company circle { stroke-width: 2; }
@@ -223,6 +226,7 @@
   .aka { flex-basis: 100%; font-size: 12px; font-weight: 600; color: var(--exit);
     background: color-mix(in srgb, var(--exit) 12%, transparent); padding: 3px 9px; border-radius: 7px; }
   .dt-body { padding: 8px 12px 20px; overflow-y: auto; }
+  .dstep { margin-left: auto; font-size: 10.5px; color: var(--ink-3); flex: none; }
   .dt-sec { font-size: 10.5px; color: var(--ink-3); text-transform: uppercase;
     letter-spacing: .06em; padding: 12px 8px 6px; }
   .co { display: flex; align-items: center; gap: 8px; padding: 9px 10px;
@@ -783,19 +787,51 @@ function highlightDepth(id, d) {
     const inSet = dist.has(n.id);
     if (inSet && !n.exit_only) reach++;
     g.classList.toggle("dim", !inSet);
+    g.classList.toggle("reach", inSet);   // 필터로 숨겨져 있어도 노출
   });
   edgeEls.forEach((e, i) => {
     const l = links[i];
     const on = dist.has(l.source.id) && dist.has(l.target.id);
     e.classList.toggle("hi", on && (l.source.id === id || l.target.id === id));
     e.classList.toggle("dim", !on);
+    e.classList.toggle("reach", on);
   });
-  return reach;
+  return { reach, dist };
+}
+function clearReach() {
+  nodeEls.forEach(({ g }) => g.classList.remove("reach"));
+  edgeEls.forEach(e => e.classList.remove("reach"));
+}
+// 상세 하단 '단계 내 도달 노드' 목록 — 슬라이더에 따라 갱신 (행 수 상한으로 가볍게)
+const REACH_ROWS_MAX = 120;
+function renderReachList(dist) {
+  const wrap = document.getElementById("dt-reach");
+  if (!wrap) return;
+  const rows = [...dist.entries()]
+    .filter(([nid, dd]) => dd > 0 && !byId[nid].exit_only)
+    .sort((a, b) => a[1] - b[1]);
+  let html = `<div class="dt-sec">연결 단계 내 도달 노드 (${egoDepth}단계 · ${rows.length}개)</div>`;
+  wrap.innerHTML = html;
+  rows.slice(0, REACH_ROWS_MAX).forEach(([nid, dd]) => {
+    const m = byId[nid];
+    const row = document.createElement("div"); row.className = "co nolink";
+    row.innerHTML = `<span class="dot" style="background:var(${KIND[m.type].varname})"></span>` +
+      `<span class="cname">${esc(m.label)}</span>` +
+      `<span class="dstep mono">${dd}단계</span>`;
+    row.style.cursor = "pointer"; row.onclick = () => openDetail(m);
+    wrap.appendChild(row);
+  });
+  if (rows.length > REACH_ROWS_MAX) {
+    const more = document.createElement("div"); more.className = "dt-sec";
+    more.textContent = `… 외 ${rows.length - REACH_ROWS_MAX}개 (슬라이더를 줄여 좁혀보세요)`;
+    wrap.appendChild(more);
+  }
 }
 function applyDepth() {
   if (!focused) return;
-  const reach = highlightDepth(focused, egoDepth);
+  const { reach, dist } = highlightDepth(focused, egoDepth);
   depthVal.textContent = `${egoDepth}단계 · ${reach}개 노드`;
+  renderReachList(dist);
 }
 depthSlider.addEventListener("input", () => {
   egoDepth = +depthSlider.value;
@@ -804,7 +840,6 @@ depthSlider.addEventListener("input", () => {
 function openDetail(n) {
   focused = n.id;
   depthSlider.value = egoDepth;
-  applyDepth();
   const kv = css(KIND[n.type].varname);
   const kind = document.getElementById("dt-kind");
   kind.textContent = KIND[n.type].ko;
@@ -852,6 +887,9 @@ function openDetail(n) {
       body.appendChild(wrap);
     });
   }
+  const reachWrap = document.createElement("div");
+  reachWrap.id = "dt-reach"; body.appendChild(reachWrap);
+  applyDepth();   // 하이라이트 + 도달 노드 목록(방금 만든 컨테이너) 렌더
   detail.classList.add("open");
 }
 // 타임라인 한 행(진입 초록·이탈 빨강·회사기준 회색) — 공시로 링크
@@ -865,7 +903,7 @@ function tlRow(ev) {
     (ev.url ? `<span class="tlink">공시 ↗</span>` : "");
   return row;
 }
-function closeDetail() { detail.classList.remove("open"); highlight(focused = null); }
+function closeDetail() { detail.classList.remove("open"); clearReach(); highlight(focused = null); }
 document.getElementById("dt-close").addEventListener("click", closeDetail);
 
 // ── filter + search (클래스 .fhide로 처리, 시점 .thide와 합성) ──
