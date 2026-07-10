@@ -172,3 +172,61 @@ $CHROME --headless --disable-gpu --no-sandbox --force-prefers-reduced-motion \
 4. before/after 스크린샷을 사용자에게 제시 → 승인 후 PR 생성 (머지는 사용자).
 5. 커밋·PR 본문에 모델명 금지, 실명 데이터 금지 (스크린샷은 채팅으로만 공유,
    레포·PR에 첨부 금지 — 실명 라벨이 담긴다).
+
+---
+
+## 8. v2 — 밀도 완화 + 지터 탄성 (1차 배포 후 사용자 피드백 반영)
+
+1차(PR #51) 배포 후 보고 2건: ① 밀도가 너무 높아 비연결 노드끼리 겹쳐
+한 덩어리로 보임(연결 노드는 스프링으로 벌어지는데), ② PC에서 여전히
+탄성이 느껴지지 않음.
+
+### 8-1. 진단 (수치 확인됨)
+
+- **밀도**: SPACING=16 → R=578px(N=1307), 평균 노드 간격 28px. 스프링 이상
+  길이는 46+rOf(a)+rOf(b) ≈ 55~70px. 원 면적이 필요량의 절반 이하라 스프링
+  압력이 비연결 노드를 짓눌러 겹침. 비연결 노드 간 최소 분리력도 부재.
+- **탄성**: 평형 도달 시 잔여 힘=0이므로 alpha 바닥을 올려도(0.055) 움직임이
+  생기지 않는다(1차 시도의 원리적 한계). 움직임에는 평형을 깨는 섭동이 필요.
+  모바일의 출렁임은 주소창 접힘 resize가 alpha를 0.2로 재가열하는 부작용.
+
+### 8-2. 변경 명세
+
+1. **SPACING 16 → 26** (평균 간격 ≈46px, 스프링 길이와 정합). 튜닝 22~28.
+2. **충돌 분리력**: 기존 쌍별 반발 루프 안에서, `d < rOf(a)+rOf(b)+6`이면
+   alpha 무관 분리력 적용 — 비연결 노드 겹침 직접 제거:
+   ```js
+   const minD = rOf(a) + rOf(b) + 6;
+   if (d < minD) { const push = (minD - d) * 0.25;   // k 미적용
+     a.vx += dx*push; a.vy += dy*push; b.vx -= dx*push; b.vy -= dy*push; }
+   ```
+   (dx,dy는 정규화된 방향. rOf 호출이 비싸면 노드 생성 시 n.r로 캐시.)
+3. **브라운 지터**: 노드 적분 직전 매 틱 `n.vx += (Math.random()-.5)*J`
+   (y 동일), J=0.2 (튜닝 0.1~0.35). alpha 무관 상시 — 평형을 계속 깨는
+   섭동으로 PC·모바일 동일한 은은한 숨쉬기. dragging 노드 제외.
+   reduced-motion 정적 렌더는 1회 draw라 무영향(지터를 reduce 모드에서
+   끄면 더 깔끔: `if (!reduce) ...`).
+4. **resize 재가열 조건화**: 이전 W/H를 기억, `가로 변화>4px 또는 세로
+   변화>150px`일 때만 `alpha=max(alpha,.2)`. 주소창 토글(세로 ~60~100px)로
+   인한 모바일 과탄성 제거 → 두 플랫폼 탄성이 지터로 통일.
+5. alpha 바닥은 0.055 유지(지터가 탄성 담당, 바닥은 반응성 담당).
+
+### 8-3. 검증 (§6 프로토콜 + 추가)
+
+- 밀도·겹침: PC/모바일 스크린샷에서 비연결 노드 겹침이 없고 원형 유지.
+- **지터 정량 확인**: 같은 페이지를 가상시간 차이를 두고 2회 캡처
+  (`--virtual-time-budget=20000` vs `30000`), 픽셀 diff가 0이 아니어야 한다:
+  ```bash
+  python3 -c "
+  from PIL import Image; import numpy as np
+  a=np.asarray(Image.open('t1.png'),dtype=int); b=np.asarray(Image.open('t2.png'),dtype=int)
+  print('diff px:', (np.abs(a-b).sum(axis=-1)>10).sum())"
+  ```
+  (PIL 없으면 `cmp -l t1.png t2.png | wc -l`로 대체 — 0이면 정지=실패.)
+- 밀도 상향으로 fit 배율이 낮아짐(k≈0.34) — 노드가 너무 작아 보이면
+  SPACING을 22~24로 낮춰 재캡처.
+
+### 8-4. 절차
+
+브랜치 `feat/network-density-elasticity`(생성됨). 구현→문법 검증→스크린샷
+튜닝→before(1차 배포본)/after 채팅 제시→승인 후 PR. §7 보안 규칙 동일.
