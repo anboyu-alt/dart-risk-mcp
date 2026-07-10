@@ -215,6 +215,12 @@
     font-weight: 600; padding: 3px 9px; border-radius: 20px; }
   .dt-name { margin: 10px 0 2px; font-size: 18px; font-weight: 700; word-break: keep-all; line-height: 1.3; }
   .dt-meta { font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .dt-meta .chain { flex-basis: 100%; font-size: 12px; font-weight: 600; color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    padding: 3px 9px; border-radius: 7px; }
+  .comp-btn { cursor: pointer; font-size: 11.5px; padding: 4px 10px; border-radius: 8px;
+    border: 1px solid var(--panel-line); background: var(--panel); color: var(--ink-2); }
+  .comp-btn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
   .aka { flex-basis: 100%; font-size: 12px; font-weight: 600; color: var(--exit);
     background: color-mix(in srgb, var(--exit) 12%, transparent); padding: 3px 9px; border-radius: 7px; }
   .dt-body { padding: 8px 12px 20px; overflow-y: auto; }
@@ -297,6 +303,7 @@
     <div class="stat"><b class="mono" id="s-corps">0</b><span>회사</span></div>
     <div class="stat"><b class="mono" id="s-links">0</b><span>연결</span></div>
     <div class="stat"><b class="mono" id="s-exits" style="color:var(--exit)">0</b><span>이탈</span></div>
+    <div class="stat"><b class="mono" id="s-comp">0</b><span>최대 세력망</span></div>
   </div>
 </div>
 
@@ -311,6 +318,8 @@
     <input type="search" id="q" placeholder="이름·회사…" autocomplete="off">
     <div class="ctl-label"><span for="deg">최소 회사 수</span><span class="mono" id="deg-val">2</span></div>
     <input type="range" id="deg" min="2" max="8" value="2" step="1">
+    <div class="ctl-label"><span>최소 세력망 크기</span><span class="mono" id="comp-val">2</span></div>
+    <input type="range" id="comp-min" min="2" max="9" value="2" step="1">
     <label class="exit-toggle"><input type="checkbox" id="only-exit"> 이탈 있는 관계만</label>
     <label class="exit-toggle"><input type="checkbox" id="show-labels"> 이름 표시</label>
   </div>
@@ -399,6 +408,47 @@ const rOf = n => n.type === "company"
   : 4 + Math.sqrt(n.deg) * 2.4;
 nodes.forEach(n => n.r = rOf(n));   // 반경 캐시 — 물리 핫루프의 충돌 분리에 사용
 
+// ── 세력망(연결 요소) 분해 — 투자의 선을 따라 간접으로 엮인 덩어리 단위 ──
+// 코어(exit_only 제외) 그래프 기준. 각 노드에 comp(세력망 index)를 달고,
+// comps[i] = { size, actors, corps, diam(최장 사슬 단계수) }.
+const coreSet = new Set(nodes.filter(n => !n.exit_only).map(n => n.id));
+function bfsFar(startId) {           // coreSet 안에서 최장 도달 거리·끝 노드
+  const dist = new Map([[startId, 0]]); const qq = [startId];
+  let far = 0, farId = startId;
+  for (let h = 0; h < qq.length; h++) {
+    const id = qq[h], d = dist.get(id);
+    for (const nb of adj[id]) {
+      if (!coreSet.has(nb) || dist.has(nb)) continue;
+      dist.set(nb, d + 1); qq.push(nb);
+      if (d + 1 > far) { far = d + 1; farId = nb; }
+    }
+  }
+  return { far, farId, seen: qq };
+}
+const comps = [];
+{
+  const assigned = new Set();
+  for (const n of nodes) {
+    if (n.exit_only || assigned.has(n.id)) continue;
+    const { seen } = bfsFar(n.id);
+    const ci = comps.length;
+    let actors = 0, corps = 0;
+    for (const id of seen) {
+      assigned.add(id); byId[id].comp = ci;
+      if (byId[id].type === "company") corps++; else actors++;
+    }
+    // 최장 사슬(지름): 소형은 전수 BFS로 정확히, 대형은 이중 스윕 근사(하한)
+    let diam = 0;
+    if (seen.length <= 800) {
+      for (const id of seen) { const f = bfsFar(id).far; if (f > diam) diam = f; }
+    } else {
+      const a = bfsFar(seen[0]); diam = bfsFar(a.farId).far;
+    }
+    comps.push({ size: seen.length, actors, corps, diam });
+  }
+}
+const maxComp = comps.reduce((m, c) => Math.max(m, c.size), 0);
+
 // ── summary + legend ──
 const actorNodes = nodes.filter(n => n.type !== "company");
 const companyNodes = nodes.filter(n => n.type === "company");
@@ -412,6 +462,7 @@ document.getElementById("s-corps").textContent = coreCompanies.length;
 document.getElementById("s-links").textContent =
   links.filter(l => !l.source.exit_only && !l.target.exit_only).length;
 document.getElementById("s-exits").textContent = exitedLinks.length;
+document.getElementById("s-comp").textContent = maxComp;
 const legend = document.getElementById("legend");
 ["fund","corp","person","company"].forEach(k => {
   const c = k === "company" ? coreCompanies.length
@@ -712,7 +763,17 @@ function mtag(mkt) {
   const m = MARKET[mkt || "unlisted"];
   return `<span class="mtag mkt-${mkt || "unlisted"}">${m.ko}</span>`;
 }
+// 세력망 전체 강조 — 클릭 노드가 속한 덩어리 전체를 하이라이트(이웃 강조와 토글)
+let compFocus = null;
+function highlightComp(ci) {
+  nodeEls.forEach(({ g, n }) => g.classList.toggle("dim", n.comp !== ci));
+  edgeEls.forEach((e, i) => {
+    const on = links[i].source.comp === ci;
+    e.classList.toggle("hi", on); e.classList.toggle("dim", !on);
+  });
+}
 function openDetail(n) {
+  compFocus = null;
   highlight(n.id); focused = n.id;
   const kv = css(KIND[n.type].varname);
   const kind = document.getElementById("dt-kind");
@@ -727,6 +788,22 @@ function openDetail(n) {
     if ((n.aliases || []).length) {
       meta.innerHTML += `<span class="aka">⚑ 다른 이름: ${n.aliases.map(esc).join(", ")}</span>`;
     }
+  }
+  // 세력망(연쇄) 지표 — 투자의 선으로 간접 연결된 덩어리 전체의 규모
+  if (n.comp !== undefined) {
+    const c = comps[n.comp];
+    meta.innerHTML += `<span class="chain">⛓ 세력망 ${c.size}개 노드` +
+      `(행위자 ${c.actors}·회사 ${c.corps}) · 최장 ${c.diam}단계</span>` +
+      `<button class="comp-btn" id="dt-comp">세력망 강조</button>`;
+    document.getElementById("dt-comp").onclick = () => {
+      if (compFocus === n.comp) {           // 다시 누르면 이웃 강조로 복귀
+        compFocus = null; highlight(n.id);
+        document.getElementById("dt-comp").classList.remove("on");
+      } else {
+        compFocus = n.comp; highlightComp(n.comp);
+        document.getElementById("dt-comp").classList.add("on");
+      }
+    };
   }
   const body = document.getElementById("dt-body");
   body.innerHTML = "";
@@ -768,21 +845,26 @@ function tlRow(ev) {
     (ev.url ? `<span class="tlink">공시 ↗</span>` : "");
   return row;
 }
-function closeDetail() { detail.classList.remove("open"); highlight(focused = null); }
+function closeDetail() { detail.classList.remove("open"); compFocus = null; highlight(focused = null); }
 document.getElementById("dt-close").addEventListener("click", closeDetail);
 
 // ── filter + search (클래스 .fhide로 처리, 시점 .thide와 합성) ──
 const degSlider = document.getElementById("deg");
 const degVal = document.getElementById("deg-val");
+const compSlider = document.getElementById("comp-min");
+const compVal = document.getElementById("comp-val");
+compSlider.max = Math.max(3, maxComp);   // 실데이터 최대 세력망 크기에 맞춤
 const q = document.getElementById("q");
 const nodeVisF = new Set();      // 필터 통과 노드 id
 const onlyExitBox = document.getElementById("only-exit");
 const exitNodeIds = new Set(exitedLinks.flatMap(l => [l.source.id, l.target.id]));
 function applyFilter() {
   const minDeg = +degSlider.value;
+  const minComp = +compSlider.value;
   const term = q.value.trim().toLowerCase();
   const onlyExit = onlyExitBox.checked;
   degVal.textContent = minDeg;
+  compVal.textContent = minComp;
   const visActor = new Set(actorNodes.filter(n => n.deg >= minDeg).map(n => n.id));
   const visCompany = new Set();
   links.forEach(l => { if (visActor.has(l.source.id)) visCompany.add(l.target.id);
@@ -793,6 +875,9 @@ function applyFilter() {
     // 기본: 2사+ 코어 그래프(exit_only는 차수<2라 자동 제외).
     let vis = onlyExit ? exitNodeIds.has(n.id)
                        : (n.type === "company" ? visCompany.has(n.id) : visActor.has(n.id));
+    // 세력망 크기 필터 — 작은 덩어리 숨기고 길게 엮인 연쇄만 (이탈만 모드 제외)
+    if (vis && !onlyExit && minComp > 2)
+      vis = n.comp !== undefined && comps[n.comp].size >= minComp;
     if (vis && term) {
       const hit = n.label.toLowerCase().includes(term) ||
         (n.companies || []).some(c => c.name.toLowerCase().includes(term));
@@ -812,6 +897,7 @@ function applyFilter() {
   alpha = Math.max(alpha, .15);
 }
 degSlider.addEventListener("input", applyFilter);
+compSlider.addEventListener("input", applyFilter);
 q.addEventListener("input", applyFilter);
 onlyExitBox.addEventListener("change", applyFilter);
 
