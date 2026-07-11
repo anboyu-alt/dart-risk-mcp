@@ -672,8 +672,11 @@ function draw() {
 let raf, _fr = 0;
 function loop() { if ((_fr++ & 1) === 0) tick(); raf = requestAnimationFrame(loop); }
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-if (reduce) { for (let i = 0; i < 500; i++) tick(); alpha = 0.02; draw(); }
-else loop();
+// reduce(모션 최소화) 모드도 비동기 루프 사용 — 이전의 500틱 '동기' 사전수렴은
+// 대형 그래프에서 메인스레드를 십수 초 블록하는 주범이었다(3천 노드 ≈ 20초+).
+// reduce 사용자는 지터(위 !reduce 게이트)와 화면 이동 애니메이션만 꺼지고,
+// 레이아웃 정착의 짧은 모션은 유지된다(수 초 내 정지).
+loop();
 console.log(`[PERF] init ${Math.round(performance.now() - _t0)}ms · 노드 ${nodes.length} · 엣지 ${links.length}`);
 
 // ── interaction: hover highlight ──
