@@ -700,7 +700,13 @@ svg.addEventListener("pointerdown", ev => {
   }
   if (pointers.size > 2) return;
   const wx = worldX(ev), wy = worldY(ev);
-  const hit = nodeEls.find(({ n }) => Math.hypot(n.x - wx, n.y - wy) < rOf(n) + 6/view.k);
+  // 숨김(검색·시점 필터) 노드는 클릭 대상에서 제외 — 단계 탐색으로 노출(reach)된
+  // 노드는 예외. 빈 곳으로 취급해 팬/줌이 자연스럽게 동작한다.
+  const hit = nodeEls.find(({ g, n }) => {
+    const hidden = (g.classList.contains("fhide") || g.classList.contains("thide"))
+                   && !g.classList.contains("reach");
+    return !hidden && Math.hypot(n.x - wx, n.y - wy) < n.r + 6/view.k;
+  });
   if (hit) {
     dragging = hit.n; dragMoved = false; alpha = Math.max(alpha, .2);
   } else {
@@ -904,6 +910,16 @@ function openDetail(n) {
       `(행위자 ${c.actors}·회사 ${c.corps}) · 최장 ${c.diam}단계</span>`;
   }
   const body = document.getElementById("dt-body");
+  body.innerHTML = `<div class="dt-sec">공시 타임라인 불러오는 중…</div>`;
+  applyDepth();   // 하이라이트는 즉시 (목록 컨테이너는 본문 렌더 후 채움)
+  hydrate(n).then(() => {
+    if (focused === n.id) { renderDetailBody(n); applyDepth(); }
+  });
+  detail.classList.add("open");
+}
+// 상세 본문 렌더 — 타임라인·공시 링크는 hydrate(details.json) 후 호출
+function renderDetailBody(n) {
+  const body = document.getElementById("dt-body");
   body.innerHTML = "";
   if (n.type === "company") {
     body.innerHTML = `<div class="dt-sec">이 회사에 등장한 행위자</div>`;
@@ -932,8 +948,26 @@ function openDetail(n) {
   }
   const reachWrap = document.createElement("div");
   reachWrap.id = "dt-reach"; body.appendChild(reachWrap);
-  applyDepth();   // 하이라이트 + 도달 노드 목록(방금 만든 컨테이너) 렌더
-  detail.classList.add("open");
+}
+// 상세 데이터(타임라인·공시 URL) 지연 로딩 — 첫 로딩을 그래프 구조만으로 가볍게.
+// 실패(오프라인 등) 시에도 경량 정보(회사명·상태)로 우아하게 저하.
+let _details = null, _detailsP = null;
+function loadDetails() {
+  if (_details) return Promise.resolve(_details);
+  if (!_detailsP) {
+    _detailsP = fetch("details.json").then(r => r.json())
+      .then(d => (_details = d)).catch(() => (_details = {}));
+  }
+  return _detailsP;
+}
+function hydrate(n) {
+  if (n._hyd) return Promise.resolve();
+  return loadDetails().then(d => {
+    const x = d[n.id] || {};
+    if (n.type === "company") n.events = x.events || n.events || [];
+    else if (x.companies) n.companies = x.companies;
+    n._hyd = true;
+  });
 }
 // 타임라인 한 행(진입 초록·이탈 빨강·회사기준 회색) — 공시로 링크
 function tlRow(ev) {
