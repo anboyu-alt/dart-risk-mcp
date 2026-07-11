@@ -141,6 +141,27 @@ def build_graph(sightings: dict, min_companies: int = 2) -> dict:
     return {"nodes": nodes, "links": links, "span": span}
 
 
+def split_details(graph: dict) -> dict:
+    """무거운 타임라인·공시 링크를 details로 분리 — 첫 로딩 경량화.
+
+    그래프(HTML 내장)에는 검색·필터·배지에 필요한 경량 필드만 남기고,
+    상세 패널용 이벤트·URL은 details.json으로 빼서 노드 클릭 시 지연 로딩.
+    (전체 이벤트·URL이 페이로드의 대부분이라 메인스레드 파싱 블록의 주범)
+    """
+    details: dict = {}
+    for n in graph["nodes"]:
+        if n["type"] == "company":
+            evs = n.pop("events", [])
+            if evs:
+                details[n["id"]] = {"events": evs}
+        else:
+            full = n.get("companies", [])
+            details[n["id"]] = {"companies": full}
+            n["companies"] = [{"name": c["name"], "mkt": c["mkt"],
+                               "status": c["status"]} for c in full]
+    return details
+
+
 def render_html(graph: dict) -> str:
     tpl = _TEMPLATE.read_text(encoding="utf-8")
     payload = json.dumps(graph, ensure_ascii=False)
@@ -157,13 +178,18 @@ def main():
     sightings = json.loads(sightings_path.read_text(encoding="utf-8"))
     graph = build_graph(sightings, min_companies=args.min)
 
+    details = split_details(graph)
+
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(render_html(graph), encoding="utf-8")
+    dpath = out.parent / "details.json"
+    dpath.write_text(json.dumps(details, ensure_ascii=False), encoding="utf-8")
 
     actors = sum(1 for n in graph["nodes"] if n["type"] != "company")
-    print(f"[OK] {out} · 행위자 {actors} · 회사 {len(graph['nodes']) - actors} · "
-          f"연결 {len(graph['links'])}")
+    print(f"[OK] {out} ({out.stat().st_size//1024}KB) + details.json "
+          f"({dpath.stat().st_size//1024}KB) · 행위자 {actors} · "
+          f"회사 {len(graph['nodes']) - actors} · 연결 {len(graph['links'])}")
 
 
 if __name__ == "__main__":
