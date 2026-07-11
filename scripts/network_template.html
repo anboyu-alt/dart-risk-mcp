@@ -153,6 +153,7 @@
   .qr-none { font-size: 12px; color: var(--ink-3); padding: 6px; }
   .q-row button { flex: none; padding: 0 12px; border-radius: 8px; font-size: 12.5px;
     cursor: pointer; border: 1px solid var(--accent); background: var(--accent); color: #fff; }
+  .q-row #q-reset { background: var(--panel); color: var(--ink-2); border-color: var(--panel-line); }
   input[type=range] { width: 100%; accent-color: var(--accent); }
   .exit-toggle { display: flex; align-items: center; gap: 7px; font-size: 12.5px;
     color: var(--ink-2); cursor: pointer; margin-top: 2px; }
@@ -337,6 +338,7 @@
     <div class="q-row">
       <input type="search" id="q" placeholder="이름·회사…" autocomplete="off">
       <button id="q-go" aria-label="검색 실행">검색</button>
+      <button id="q-reset" aria-label="초기화" title="검색·필터·화면 초기화">초기화</button>
     </div>
     <div id="q-results"></div>
     <div class="ctl-label"><span for="deg">최소 회사 수</span><span class="mono" id="deg-val">3</span></div>
@@ -386,6 +388,7 @@
 </aside>
 
 <script>
+const _t0 = performance.now();   // [PERF] 초기화 계측 시작
 const GRAPH = /*__GRAPH_DATA__*/{"nodes":[],"links":[]}/*__END__*/;
 const KIND = {
   fund:    { ko: "조합", varname: "--fund" },
@@ -452,7 +455,10 @@ function bfsFar(startId) {           // coreSet 안에서 최장 도달 거리·
   return { far, farId, seen: qq };
 }
 const comps = [];
-{
+let maxComp = 0;
+// 세력망 분해(BFS)는 첫 페인트 뒤로 지연 — 초기 스크립트 블록 단축.
+// 완료 전에는 상세의 ⛓ 배지·상단 통계만 잠시 비어 있다(클릭 시점엔 대부분 완료).
+setTimeout(() => {
   const assigned = new Set();
   for (const n of nodes) {
     if (n.exit_only || assigned.has(n.id)) continue;
@@ -472,8 +478,9 @@ const comps = [];
     }
     comps.push({ size: seen.length, actors, corps, diam });
   }
-}
-const maxComp = comps.reduce((m, c) => Math.max(m, c.size), 0);
+  maxComp = comps.reduce((m, c) => Math.max(m, c.size), 0);
+  document.getElementById("s-comp").textContent = maxComp;
+}, 0);
 
 // ── summary + legend ──
 const actorNodes = nodes.filter(n => n.type !== "company");
@@ -488,7 +495,6 @@ document.getElementById("s-corps").textContent = coreCompanies.length;
 document.getElementById("s-links").textContent =
   links.filter(l => !l.source.exit_only && !l.target.exit_only).length;
 document.getElementById("s-exits").textContent = exitedLinks.length;
-document.getElementById("s-comp").textContent = maxComp;
 const legend = document.getElementById("legend");
 ["fund","corp","person","company"].forEach(k => {
   const c = k === "company" ? coreCompanies.length
@@ -654,10 +660,13 @@ function draw() {
     if (!n._fh && !n._th) el.g.setAttribute("transform", `translate(${n.x},${n.y})`);
   }
 }
-let raf; function loop() { tick(); raf = requestAnimationFrame(loop); }
+// 시뮬은 30fps로 스로틀 — 대형 캔버스(PC)에서 정착 구간 CPU 반감, 체감 차이 없음
+let raf, _fr = 0;
+function loop() { if ((_fr++ & 1) === 0) tick(); raf = requestAnimationFrame(loop); }
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 if (reduce) { for (let i = 0; i < 500; i++) tick(); alpha = 0.02; draw(); }
 else loop();
+console.log(`[PERF] init ${Math.round(performance.now() - _t0)}ms · 노드 ${nodes.length} · 엣지 ${links.length}`);
 
 // ── interaction: hover highlight ──
 let focused = null;
@@ -1076,6 +1085,18 @@ function renderSearchResults(term) {
 degSlider.addEventListener("input", applyFilter);
 // 검색은 실시간이 아니라 버튼/Enter로만 — 글자마다 전체 필터를 도는 부하 제거
 document.getElementById("q-go").addEventListener("click", applyFilter);
+// 초기화 — 검색·필터·시점·상세·화면을 첫 상태로
+document.getElementById("q-reset").addEventListener("click", () => {
+  q.value = "";
+  degSlider.value = 3;
+  onlyExitBox.checked = false;
+  stopPlay();
+  asOf = null; if (MONTHS.length >= 2) timeSlider.value = MONTHS.length - 1;
+  closeDetail();
+  applyFilter();
+  fitView();
+  alpha = Math.max(alpha, .2);
+});
 q.addEventListener("keydown", ev => { if (ev.key === "Enter") applyFilter(); });
 q.addEventListener("search", applyFilter);   // 검색창 X(지우기) 버튼도 반영
 onlyExitBox.addEventListener("change", applyFilter);
