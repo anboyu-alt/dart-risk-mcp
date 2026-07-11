@@ -521,7 +521,14 @@ const vp = document.createElementNS(NS, "g"); vp.setAttribute("id", "vp");
 svg.appendChild(vp);
 const gEdge = document.createElementNS(NS, "g");
 const gNode = document.createElementNS(NS, "g");
-vp.append(gEdge, gNode);
+// 색상 캐시 — 노드마다 getComputedStyle을 부르면 직전 append로 더러워진 트리의
+// 스타일 재계산이 매번 강제돼 대형 그래프에서 초기화가 제곱으로 느려진다
+// (3천 노드에서 수십 초). 종류별 1회만 조회하고, 테마 전환 시 갱신.
+let KIND_COLOR = {};
+function refreshKindColors() {
+  for (const k in KIND) KIND_COLOR[k] = css(KIND[k].varname);
+}
+refreshKindColors();
 const edgeEls = links.map(l => {
   const e = document.createElementNS(NS, "line"); e.setAttribute("class", "edge");
   gEdge.appendChild(e); l._el = e; return e;
@@ -534,11 +541,12 @@ const nodeEls = nodes.map(n => {
   g.setAttribute("class", cls);
   const c = document.createElementNS(NS, "circle");
   c.setAttribute("r", rOf(n));
-  c.setAttribute("fill", css(KIND[n.type].varname));
+  c.setAttribute("fill", KIND_COLOR[n.type]);
   g.appendChild(c);
   gNode.appendChild(g);
   return { g, c, n, t: null };   // 라벨(<text>)은 필요 시 지연 생성 — 초기 DOM 절반 절감
 });
+vp.append(gEdge, gNode);   // 분리 상태에서 8천 요소를 채운 뒤 한 번에 부착
 // 라벨 지연 생성 — '이름 표시' 켤 때/호버 시에만 만든다.
 // 행위자 deg>=3은 상시 라벨, 나머지는 확대 시(lbl2)만 노출(기존 규칙 유지).
 function ensureLabel(el) {
@@ -1158,7 +1166,8 @@ document.getElementById("theme").addEventListener("click", () => {
   const cur = document.documentElement.getAttribute("data-theme");
   const dark = cur ? cur === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
   document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
-  nodeEls.forEach(({ c, n }) => c.setAttribute("fill", css(KIND[n.type].varname)));
+  refreshKindColors();
+  nodeEls.forEach(({ c, n }) => c.setAttribute("fill", KIND_COLOR[n.type]));
 });
 
 // ── util ──
