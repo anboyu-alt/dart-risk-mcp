@@ -165,7 +165,10 @@ def split_details(graph: dict) -> dict:
 def render_html(graph: dict) -> str:
     tpl = _TEMPLATE.read_text(encoding="utf-8")
     payload = json.dumps(graph, ensure_ascii=False)
-    return tpl.replace(_PLACEHOLDER, payload, 1)
+    # JSON.parse("...") 임베딩 — 대형 페이로드는 JS 객체 리터럴 평가보다
+    # 문자열 JSON 파싱이 훨씬 빨라 첫 화면 스크립트 블록 시간을 줄인다.
+    embedded = "JSON.parse(" + json.dumps(payload, ensure_ascii=False).replace("</", "<\\/") + ")"
+    return tpl.replace(_PLACEHOLDER, embedded, 1)
 
 
 def main():
