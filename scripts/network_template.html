@@ -142,6 +142,15 @@
     border: 1px solid var(--panel-line); background: var(--bg); color: var(--ink);
   }
   .q-row { display: flex; gap: 6px; }
+  /* 검색 결과 목록 — 탭하면 해당 노드 상세로 이동(모바일 노드 직접 탭 대체) */
+  #q-results { display: flex; flex-direction: column; max-height: 250px;
+    overflow-y: auto; margin-top: 2px; }
+  .qr-row { display: flex; align-items: center; gap: 8px; padding: 6px;
+    border-radius: 8px; cursor: pointer; font-size: 12.5px; }
+  .qr-row:hover { background: var(--bg); }
+  .qr-row .cname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .qr-row .qr-kind { margin-left: auto; flex: none; font-size: 10.5px; color: var(--ink-3); }
+  .qr-none { font-size: 12px; color: var(--ink-3); padding: 6px; }
   .q-row button { flex: none; padding: 0 12px; border-radius: 8px; font-size: 12.5px;
     cursor: pointer; border: 1px solid var(--accent); background: var(--accent); color: #fff; }
   input[type=range] { width: 100%; accent-color: var(--accent); }
@@ -329,6 +338,7 @@
       <input type="search" id="q" placeholder="이름·회사…" autocomplete="off">
       <button id="q-go" aria-label="검색 실행">검색</button>
     </div>
+    <div id="q-results"></div>
     <div class="ctl-label"><span for="deg">최소 회사 수</span><span class="mono" id="deg-val">3</span></div>
     <input type="range" id="deg" min="2" max="8" value="3" step="1">
     <label class="exit-toggle"><input type="checkbox" id="only-exit"> 이탈 있는 관계만</label>
@@ -1024,7 +1034,44 @@ function applyFilter() {
   });
   applyTime();
   rebuildSim();
+  renderSearchResults(term);
   alpha = Math.max(alpha, .15);
+}
+// 검색 결과 목록 — 이름 매치 노드를 나열(접두 일치 우선, 차수순). 탭하면
+// 상세 열림+화면 이동. 모바일은 노드를 손가락으로 정확히 탭하기 어려워
+// 이 목록이 주 진입점이 된다. 시트는 닫아 그래프·상세가 보이게.
+const qResults = document.getElementById("q-results");
+const QR_MAX = 30;
+function renderSearchResults(term) {
+  qResults.innerHTML = "";
+  if (!term) return;
+  const t = term.toLowerCase();
+  const hits = nodes.filter(n => !n.exit_only && n.label.toLowerCase().includes(t))
+    .sort((a, b) => {
+      const ap = a.label.toLowerCase().startsWith(t) ? 0 : 1;
+      const bp = b.label.toLowerCase().startsWith(t) ? 0 : 1;
+      return ap - bp || b.deg - a.deg;
+    });
+  if (!hits.length) {
+    qResults.innerHTML = `<div class="qr-none">검색 결과 없음</div>`;
+    return;
+  }
+  hits.slice(0, QR_MAX).forEach(n => {
+    const row = document.createElement("div"); row.className = "qr-row";
+    row.innerHTML = `<span class="dot" style="background:var(${KIND[n.type].varname})"></span>` +
+      `<span class="cname">${esc(n.label)}</span>` +
+      `<span class="qr-kind">${KIND[n.type].ko}</span>`;
+    row.onclick = () => {
+      if (matchMedia("(max-width: 640px)").matches) toggleSheet(false);
+      openDetail(n);
+    };
+    qResults.appendChild(row);
+  });
+  if (hits.length > QR_MAX) {
+    const more = document.createElement("div"); more.className = "qr-none";
+    more.textContent = `… 외 ${hits.length - QR_MAX}개 — 검색어를 좁혀보세요`;
+    qResults.appendChild(more);
+  }
 }
 degSlider.addEventListener("input", applyFilter);
 // 검색은 실시간이 아니라 버튼/Enter로만 — 글자마다 전체 필터를 도는 부하 제거
