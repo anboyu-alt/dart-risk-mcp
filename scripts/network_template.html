@@ -416,8 +416,8 @@ let W = innerWidth, H = innerHeight;
 const SPACING = 34;
 const R = Math.max(240, SPACING * Math.sqrt(GRAPH.nodes.length));
 // 브라운 지터 — 평형을 매 틱 미세 섭동해 PC·모바일 동일한 은은한 탄성 유지.
-// 0.5 → 평형에서 평균 ~0.3px/프레임(체감되되 라벨 가독 유지).
-const JITTER = 0.5;
+// 0.35 → 평형에서 평균 ~0.2px/프레임 — 은은한 숨쉬기(격하지 않게).
+const JITTER = 0.35;
 
 // ── build node/link objects ──
 // 초기 배치를 원판 균등 분포로(반경 √uniform) — 시작부터 원형이라 초기 폭발 없음.
@@ -594,7 +594,7 @@ function rebuildSim() {
   simLinks = links.filter(l => !l._fh && !l._th);
 }
 let dragging = null, dragMoved = false, panning = false, panStart = null;
-let alpha = 0.5;   // 원판 균등 배치라 폭발적 초기 정렬 불필요 — 낮게 시작해 초기 과활동 방지
+let alpha = 0.35;  // 원판 균등 배치라 폭발적 초기 정렬 불필요 — 낮게 시작해 초기 과활동 방지
 function tick() {
   const k = alpha;
   // 지터를 줌 역비례로 — 어느 배율에서든 화면 기준 미세 진폭이 일정(축소 fit에서도 보임)
@@ -611,7 +611,7 @@ function tick() {
       // 충돌 분리 — 반경합+6보다 가까우면 alpha 무관 분리력(비연결 노드 겹침 제거)
       const minD = a.r + b.r + 6;
       if (d < minD) {
-        const push = (minD - d) * 0.25;
+        const push = (minD - d) * 0.15;   // 상시 성분 — 세면 정착 후에도 들썩인다
         a.vx += dx*push; a.vy += dy*push; b.vx -= dx*push; b.vy -= dy*push;
       }
     }
@@ -642,7 +642,11 @@ function tick() {
     if (n === dragging) continue;
     // 브라운 지터 — alpha 무관 상시 섭동. reduce 모드는 정적이라 제외.
     if (!reduce) { n.vx += (Math.random() - .5) * jAmp; n.vy += (Math.random() - .5) * jAmp; }
-    n.vx *= 0.80; n.vy *= 0.80;
+    // 저알파 수면 — 정착 후에는 감쇠를 강화하고 미소 속도를 끊어, 충돌·경계
+    // 같은 상시력의 미세 진동이 영구히 들썩이지 않게 한다(지터만 은은히 남음).
+    const damp = k <= 0.045 ? 0.70 : 0.80;
+    n.vx *= damp; n.vy *= damp;
+    if (k <= 0.045 && n.vx * n.vx + n.vy * n.vy < 0.0009) { n.vx = 0; n.vy = 0; }
     n.x += n.vx; n.y += n.vy;
     // 하드 클램프 — 적분 후에도 R을 넘으면 경계로 되돌리고 바깥 속도 성분 제거.
     // 수렴 중·라이브 어떤 상태에서도 원 밖 노드가 물리적으로 불가능(미아 방지).
@@ -653,7 +657,7 @@ function tick() {
       if (vr > 0) { n.vx -= vr * cx2 / cr; n.vy -= vr * cy2 / cr; }
     }
   }
-  alpha *= 0.988; if (alpha < 0.055) alpha = 0.055;
+  alpha *= 0.985; if (alpha < 0.04) alpha = 0.04;
   draw();
 }
 function draw() {
