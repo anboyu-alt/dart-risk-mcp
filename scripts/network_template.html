@@ -141,6 +141,9 @@
     width: 100%; padding: 7px 10px; border-radius: 8px; font-size: 13px;
     border: 1px solid var(--panel-line); background: var(--bg); color: var(--ink);
   }
+  .q-row { display: flex; gap: 6px; }
+  .q-row button { flex: none; padding: 0 12px; border-radius: 8px; font-size: 12.5px;
+    cursor: pointer; border: 1px solid var(--accent); background: var(--accent); color: #fff; }
   input[type=range] { width: 100%; accent-color: var(--accent); }
   .exit-toggle { display: flex; align-items: center; gap: 7px; font-size: 12.5px;
     color: var(--ink-2); cursor: pointer; margin-top: 2px; }
@@ -253,7 +256,11 @@
   .sheet-grip { display: none; }
 
   @media (max-width: 640px) {
-    #detail { width: 100%; }
+    /* 상세도 하단 반화면 시트 — 연결망을 가리지 않는다 */
+    #detail { width: 100%; height: 50vh; top: auto; bottom: 0;
+      border-left: none; border-top: 1px solid var(--panel-line);
+      border-radius: 18px 18px 0 0; transform: translateY(105%); }
+    #detail.open { transform: none; }
     .tl { max-width: 100%; left: 16px; right: 66px; padding-right: 0; }
     .tl .sub { display: none; }                 /* 긴 설명은 시트 안내로 대체 */
     .tl h1 { font-size: 17px; }
@@ -268,7 +275,7 @@
 
     /* .tr → 하단 시트 */
     .overlay.tr { top: auto; bottom: 0; left: 0; right: 0; z-index: 7;
-      max-height: 74vh; overflow-y: auto; align-items: stretch; gap: 12px;
+      max-height: 50vh; overflow-y: auto; align-items: stretch; gap: 12px;
       padding: 10px 18px calc(20px + env(safe-area-inset-bottom));
       background: var(--panel); border-top: 1px solid var(--panel-line);
       border-radius: 18px 18px 0 0; box-shadow: 0 -8px 30px rgba(0,0,0,.28);
@@ -318,9 +325,12 @@
   <button class="theme-btn" id="theme" aria-label="테마 전환">◐ 테마</button>
   <div class="card controls">
     <label class="ctl-label" for="q">검색</label>
-    <input type="search" id="q" placeholder="이름·회사…" autocomplete="off">
-    <div class="ctl-label"><span for="deg">최소 회사 수</span><span class="mono" id="deg-val">2</span></div>
-    <input type="range" id="deg" min="2" max="8" value="2" step="1">
+    <div class="q-row">
+      <input type="search" id="q" placeholder="이름·회사…" autocomplete="off">
+      <button id="q-go" aria-label="검색 실행">검색</button>
+    </div>
+    <div class="ctl-label"><span for="deg">최소 회사 수</span><span class="mono" id="deg-val">3</span></div>
+    <input type="range" id="deg" min="2" max="8" value="3" step="1">
     <label class="exit-toggle"><input type="checkbox" id="only-exit"> 이탈 있는 관계만</label>
     <label class="exit-toggle"><input type="checkbox" id="show-labels"> 이름 표시</label>
   </div>
@@ -498,7 +508,7 @@ const gNode = document.createElementNS(NS, "g");
 vp.append(gEdge, gNode);
 const edgeEls = links.map(l => {
   const e = document.createElementNS(NS, "line"); e.setAttribute("class", "edge");
-  gEdge.appendChild(e); return e;
+  gEdge.appendChild(e); l._el = e; return e;
 });
 const nodeEls = nodes.map(n => {
   const g = document.createElementNS(NS, "g");
@@ -510,16 +520,19 @@ const nodeEls = nodes.map(n => {
   c.setAttribute("r", rOf(n));
   c.setAttribute("fill", css(KIND[n.type].varname));
   g.appendChild(c);
-  // 라벨: 행위자 deg>=3 은 상시, 나머지(회사·저차수 행위자)는 확대 시(lbl2)만 노출
-  const primary = n.type !== "company" && n.deg >= 3;
-  const t = document.createElementNS(NS, "text");
-  t.setAttribute("x", rOf(n) + 3); t.setAttribute("y", 3.5);
-  t.textContent = n.label.length > 16 ? n.label.slice(0, 15) + "…" : n.label;
-  if (!primary) t.setAttribute("class", "lbl2");
-  g.appendChild(t);
   gNode.appendChild(g);
-  return { g, c, n };
+  return { g, c, n, t: null };   // 라벨(<text>)은 필요 시 지연 생성 — 초기 DOM 절반 절감
 });
+// 라벨 지연 생성 — '이름 표시' 켤 때/호버 시에만 만든다.
+// 행위자 deg>=3은 상시 라벨, 나머지는 확대 시(lbl2)만 노출(기존 규칙 유지).
+function ensureLabel(el) {
+  if (el.t) return;
+  const n = el.n, t = document.createElementNS(NS, "text");
+  t.setAttribute("x", n.r + 3); t.setAttribute("y", 3.5);
+  t.textContent = n.label.length > 16 ? n.label.slice(0, 15) + "…" : n.label;
+  if (!(n.type !== "company" && n.deg >= 3)) t.setAttribute("class", "lbl2");
+  el.g.appendChild(t); el.t = t;
+}
 
 // ── viewport transform (zoom / pan) ──
 const view = { x: 0, y: 0, k: 1 };
@@ -549,16 +562,23 @@ const worldY = ev => (ev.clientY - view.y) / view.k;
 fitView();
 
 // ── force simulation (velocity Verlet, world-space) ──
+// 숨김(필터·시점) 노드는 시뮬레이션에서 제외 — 필터가 실제 부하를 줄인다.
+// 숨겨진 노드는 마지막 위치에 동결되고, 다시 보이면 그 자리에서 재합류.
+let simNodes = nodes, simLinks = links;
+function rebuildSim() {
+  simNodes = nodes.filter(n => !n._fh && !n._th);
+  simLinks = links.filter(l => !l._fh && !l._th);
+}
 let dragging = null, dragMoved = false, panning = false, panStart = null;
 let alpha = 0.5;   // 원판 균등 배치라 폭발적 초기 정렬 불필요 — 낮게 시작해 초기 과활동 방지
 function tick() {
   const k = alpha;
   // 지터를 줌 역비례로 — 어느 배율에서든 화면 기준 미세 진폭이 일정(축소 fit에서도 보임)
   const jAmp = JITTER / Math.max(view.k, 0.25);
-  for (let i = 0; i < nodes.length; i++) {
-    const a = nodes[i];
-    for (let j = i + 1; j < nodes.length; j++) {
-      const b = nodes[j];
+  for (let i = 0; i < simNodes.length; i++) {
+    const a = simNodes[i];
+    for (let j = i + 1; j < simNodes.length; j++) {
+      const b = simNodes[j];
       let dx = a.x - b.x, dy = a.y - b.y, d2 = dx*dx + dy*dy || 1;
       if (d2 > 90000) continue;
       const f = (3000 * k) / d2;
@@ -572,7 +592,7 @@ function tick() {
       }
     }
   }
-  for (const l of links) {
+  for (const l of simLinks) {
     const a = l.source, b = l.target;
     let dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1;
     // 선 길이 가변 — 허브(고차수) 연결일수록 길게 → 허브 군집이 퍼져 분포 개선.
@@ -582,7 +602,7 @@ function tick() {
     const f = (d - ideal) * 0.04 * k * str; dx /= d; dy /= d;
     a.vx += dx*f; a.vy += dy*f; b.vx -= dx*f; b.vy -= dy*f;
   }
-  for (const n of nodes) {
+  for (const n of simNodes) {
     // 라디얼 호밍 — 중심 인력 대신 노드별 목표 반경(home)으로 극약한 복원.
     // 중심 인력은 전부를 가운데로 모아 쏠림을 만들지만, 호밍은 원판 전체에
     // 골고루 분포시킨다(방향은 자유, 반경만 유도).
@@ -613,12 +633,16 @@ function tick() {
   draw();
 }
 function draw() {
-  for (let i = 0; i < links.length; i++) {
-    const l = links[i], e = edgeEls[i];
+  // 활성(시뮬레이션 중) 집합만 갱신 — 숨김 요소는 움직이지 않아 좌표가 이미 맞다
+  for (const l of simLinks) {
+    const e = l._el;
     e.setAttribute("x1", l.source.x); e.setAttribute("y1", l.source.y);
     e.setAttribute("x2", l.target.x); e.setAttribute("y2", l.target.y);
   }
-  for (const { g, n } of nodeEls) g.setAttribute("transform", `translate(${n.x},${n.y})`);
+  for (const el of nodeEls) {
+    const n = el.n;
+    if (!n._fh && !n._th) el.g.setAttribute("transform", `translate(${n.x},${n.y})`);
+  }
 }
 let raf; function loop() { tick(); raf = requestAnimationFrame(loop); }
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -642,9 +666,11 @@ function highlight(id, full = true) {
 }
 // 호버 툴팁 없음 — 노드 정보는 모바일과 동일하게 클릭(상세 패널)으로만.
 // 호버는 연결 하이라이트 + (이름표시 OFF일 때) 해당 노드 이름만 노출.
-nodeEls.forEach(({ g, n }) => {
+nodeEls.forEach(el => {
+  const { g, n } = el;
   g.addEventListener("pointerenter", () => {
     if (dragging || panning) return;
+    ensureLabel(el);                        // 호버 라벨 지연 생성
     g.classList.add("hov");
     if (!focused) highlight(n.id, false);   // 선택 없을 때만 — 연결선 강조(디밍 없음)
   });
@@ -740,6 +766,7 @@ svg.addEventListener("wheel", ev => {
 }, { passive: false });
 svg.classList.add("labels-off");   // 이름 표시 기본 OFF
 document.getElementById("show-labels").addEventListener("change", ev => {
+  if (ev.target.checked) nodeEls.forEach(ensureLabel);   // 라벨 지연 생성(최초 1회)
   svg.classList.toggle("labels-off", !ev.target.checked);
 });
 document.getElementById("about-btn").onclick = () =>
@@ -837,8 +864,24 @@ depthSlider.addEventListener("input", () => {
   egoDepth = +depthSlider.value;
   applyDepth();
 });
+// 선택 노드가 화면 중앙(모바일은 상단부 — 하단 시트를 피함)에 오도록 부드럽게 이동.
+// 검색·도달 목록·행위자 목록에서 노드를 열 때 위치를 바로 알 수 있다.
+function centerOn(n) {
+  const mobile = matchMedia("(max-width: 640px)").matches;
+  const cx = mobile ? W * 0.5 : (W - 340) / 2;   // PC: 우측 상세 패널(340px) 감안
+  const cy = mobile ? H * 0.28 : H * 0.5;
+  const tx = cx - n.x * view.k, ty = cy - n.y * view.k;
+  if (reduce) { view.x = tx; view.y = ty; applyView(); return; }
+  const sx = view.x, sy = view.y, t0 = performance.now(), D = 400;
+  (function anim() {
+    const p = Math.min(1, (performance.now() - t0) / D), e = p * (2 - p);
+    view.x = sx + (tx - sx) * e; view.y = sy + (ty - sy) * e; applyView();
+    if (p < 1) requestAnimationFrame(anim);
+  })();
+}
 function openDetail(n) {
   focused = n.id;
+  centerOn(n);
   depthSlider.value = egoDepth;
   const kv = css(KIND[n.type].varname);
   const kind = document.getElementById("dt-kind");
@@ -935,6 +978,7 @@ function applyFilter() {
         byId[id].label.toLowerCase().includes(term)));
     }
     g.classList.toggle("fhide", !vis);
+    n._fh = !vis;
     if (vis) nodeVisF.add(n.id);
   });
   edgeEls.forEach((e, i) => {
@@ -942,12 +986,17 @@ function applyFilter() {
     let on = nodeVisF.has(l.source.id) && nodeVisF.has(l.target.id);
     if (on && onlyExit) on = l.status === "exited";     // 이탈 엣지만
     e.classList.toggle("fhide", !on);
+    l._fh = !on;
   });
   applyTime();
+  rebuildSim();
   alpha = Math.max(alpha, .15);
 }
 degSlider.addEventListener("input", applyFilter);
-q.addEventListener("input", applyFilter);
+// 검색은 실시간이 아니라 버튼/Enter로만 — 글자마다 전체 필터를 도는 부하 제거
+document.getElementById("q-go").addEventListener("click", applyFilter);
+q.addEventListener("keydown", ev => { if (ev.key === "Enter") applyFilter(); });
+q.addEventListener("search", applyFilter);   // 검색창 X(지우기) 버튼도 반영
 onlyExitBox.addEventListener("change", applyFilter);
 
 // ── 시간축 스크러버 (진입~이탈 시점) ──
@@ -973,14 +1022,17 @@ function applyTime() {
     else if (l.t_out && l.t_out < m) past = true;           // 시점: 이미 이탈(고스트)
     e.classList.toggle("past", past);
     e.classList.toggle("thide", thide);
+    l._th = thide;
   });
   if (m === null) {
-    nodeEls.forEach(({ g }) => g.classList.remove("thide"));
+    nodeEls.forEach(({ g, n }) => { g.classList.remove("thide"); n._th = false; });
   } else {
     const seen = new Set();
     links.forEach(l => { if (!(l.t_in && l.t_in > m)) { seen.add(l.source.id); seen.add(l.target.id); } });
-    nodeEls.forEach(({ g, n }) => g.classList.toggle("thide", !seen.has(n.id)));
+    nodeEls.forEach(({ g, n }) => { const h = !seen.has(n.id);
+      g.classList.toggle("thide", h); n._th = h; });
   }
+  rebuildSim();
 }
 timeSlider.addEventListener("input", () => { asOf = +timeSlider.value; stopPlay(); applyTime(); });
 timeAll.addEventListener("click", () => { asOf = null; stopPlay(); timeSlider.value = MONTHS.length - 1; applyTime(); });
