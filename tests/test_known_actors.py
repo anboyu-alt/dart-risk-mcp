@@ -395,6 +395,50 @@ class TestKnownActors(unittest.TestCase):
         payload = post.call_args.kwargs["json"]
         self.assertEqual(payload["properties"]["구분"]["select"]["name"], "조합")
 
+    def test_lookup_by_company_matches(self):
+        from dart_risk_mcp.core.known_actors import lookup_actors_by_company
+        self._write({"version": 1, "actors": {
+            "신승수": [
+                {"source": "DART 임원현황", "evidence": "CG인바이츠 등기임원",
+                 "date": "2024", "status": "verified",
+                 "companies": ["CG인바이츠", "이엠앤아이"]},
+                {"source": "CB 인수", "evidence": "티쓰리 CB",
+                 "date": "2023", "status": "verified", "companies": ["티쓰리"]},
+            ],
+            "이호영": [
+                {"source": "DART 임원현황", "evidence": "이엠앤아이 등기임원",
+                 "date": "2024", "status": "auto_matched",
+                 "companies": ["이엠앤아이"]},
+            ],
+        }})
+        hits = lookup_actors_by_company("이엠앤아이")
+        # 인물명 오름차순, 해당 회사가 태깅된 기록만
+        self.assertEqual([(n, r["source"]) for n, r in hits],
+                         [("신승수", "DART 임원현황"), ("이호영", "DART 임원현황")])
+
+    def test_lookup_by_company_normalized_match(self):
+        from dart_risk_mcp.core.known_actors import lookup_actors_by_company
+        self._write({"version": 1, "actors": {
+            "LIU HUAN": [{"source": "자동 발굴", "evidence": "e",
+                          "companies": ["ABC Holdings"]}],
+        }})
+        self.assertEqual(len(lookup_actors_by_company("abc  holdings")), 1)
+
+    def test_lookup_by_company_no_match_or_blank(self):
+        from dart_risk_mcp.core.known_actors import lookup_actors_by_company
+        self._write({"version": 1, "actors": {
+            "신승수": [{"source": "X", "evidence": "y", "companies": ["티쓰리"]}],
+            "구기록": [{"source": "X", "evidence": "y"}],  # companies 필드 없는 구 기록
+        }})
+        self.assertEqual(lookup_actors_by_company("없는회사"), [])
+        self.assertEqual(lookup_actors_by_company(""), [])
+        self.assertEqual(lookup_actors_by_company("   "), [])
+
+    def test_lookup_by_company_empty_registry(self):
+        from dart_risk_mcp.core.known_actors import lookup_actors_by_company
+        self._write({"version": 1, "actors": {}})
+        self.assertEqual(lookup_actors_by_company("티쓰리"), [])
+
 
 if __name__ == "__main__":
     unittest.main()
