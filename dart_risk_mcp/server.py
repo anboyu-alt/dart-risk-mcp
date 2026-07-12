@@ -287,6 +287,9 @@ def analyze_company_risk(
 ) -> str:
     """기업명 또는 종목코드로 최근 공시 기반 투자 위험도를 분석한다.
 
+    공개기록 레지스트리(opt-in)가 설정돼 있고 이 회사가 등재 행위자의
+    관련기업으로 태깅된 경우, 리포트 말미에 공개기록 참고 섹션이 추가된다.
+
     Args:
         company_name: 기업명 (예: "에코프로") 또는 종목코드 6자리 (예: "086520")
         lookback_years: 조회 기간(년). 기본 1년, 1~5년 범위.
@@ -689,6 +692,10 @@ def analyze_company_risk(
     if catalog:
         lines += ["", catalog]
 
+    reg_section = _registry_company_section(corp_name)
+    if reg_section:
+        lines += [""] + reg_section
+
     return _append_size_footer("\n".join(lines), lookback_years)
 
 
@@ -931,6 +938,9 @@ def build_event_timeline(
     각 이벤트를 진입기(자금 조달/경영권 진입), 심화기(지배구조 변화),
     탈출기(의심/수사/부실) 단계로 분류하고, 알려진 위기 패턴과 매칭한다.
 
+    공개기록 레지스트리(opt-in)가 설정돼 있고 이 회사가 등재 행위자의
+    관련기업으로 태깅된 경우, 리포트 말미에 공개기록 참고 섹션이 추가된다.
+
     Args:
         company_name: 기업명 (예: "에코프로") 또는 종목코드 6자리 (예: "086520")
         lookback_years: 조회 기간(년). 기본 1년, 1~5년 범위.
@@ -1135,6 +1145,10 @@ def build_event_timeline(
                 lines.append("")
     except Exception:
         pass
+
+    reg_section = _registry_company_section(corp_name)
+    if reg_section:
+        lines += reg_section + [""]
 
     lines.append("⚠️ 이 타임라인은 공시 제목 기반 자동 분류이며, 실제 상황과 다를 수 있습니다.")
     return _append_size_footer("\n".join(lines), lookback_years)
