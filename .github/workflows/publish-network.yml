@@ -3,8 +3,18 @@ name: Publish network viz
 # 행위자 연결망 HTML을 매일 빌드해 Cloudflare Pages(비공개 시크릿 URL)에 배포.
 # refresh-known-actors(04:00 KST)가 sightings를 갱신한 뒤 돌도록 04:40 KST에 예약.
 #
-# 비공개 원리: 무인증이되 (1) 랜덤 *.pages.dev 프로젝트명 (2) 경로에 시크릿
-# 토큰 (3) noindex 메타 → 주소를 모르면 사실상 접근 불가.
+# 접근 통제 4중 모델 (클로즈베타):
+#   (1) Cloudflare Access 이메일 OTP 로그인 — 기본 거부(deny-by-default),
+#       허용 명단은 Zero Trust 대시보드의 Rule group으로 관리.
+#       Access 애플리케이션 2개 필요: 프로덕션(<프로젝트>.pages.dev)용 +
+#       프리뷰(*.<프로젝트>.pages.dev)용. Pages의 "Enable access policy"
+#       토글만으로는 프리뷰만 보호되므로 프로덕션용은 별도 구성.
+#   (2) 허용 이메일 명단 — 대시보드에서만 관리, 레포에 두지 않음.
+#   (3) 랜덤 *.pages.dev 프로젝트명 + 경로 시크릿 토큰 — Access 설정이
+#       풀리는 사고에 대비한 심층방어로 유지. 루트는 빈 미끼 페이지.
+#   (4) noindex 메타.
+# 배포는 Access와 무관: wrangler는 api.cloudflare.com API로 업로드하므로
+# 보호된 호스트네임을 거치지 않음. 이 워크플로우는 수정 불필요.
 #
 # 필요한 Secrets (없으면 배포 스텝은 조용히 스킵):
 #   CLOUDFLARE_API_TOKEN   — Pages 편집 권한 토큰
