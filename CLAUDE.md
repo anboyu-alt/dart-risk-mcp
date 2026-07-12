@@ -31,7 +31,7 @@ dart_risk_mcp/
     ├── sector_policy.py # 업종별 유의 회계정책 정적 맵 (KSIC 조회, kreports 이식/Apache 2.0)
     ├── notes.py         # 재무제표 주석 카테고리 분류 (제목 키워드 10종, kreports 이식/Apache 2.0)
     ├── watchlist.py     # 인물↔회사군 영속 워치리스트 (순수 파일 I/O)
-    ├── known_actors.py  # 공개기록 행위자 레지스트리 로드/조회 (비공개 Notion opt-in)
+    ├── known_actors.py  # 공개기록 행위자 레지스트리 로드/조회, 회사명 역방향 조회 포함 (비공개 Notion opt-in)
     └── taxonomy.py      # 27개 신호 분류 + 위험 점수 + 패턴
 ```
 
@@ -51,6 +51,7 @@ dart_risk_mcp/
 - 내부 흐름: `resolve_corp` → `fetch_company_disclosures` → `match_signals` × N → `calculate_risk_score` → `find_pattern_match` → `extract_cb_investors`
 - 반환: 위험 등급, 탐지 신호 목록, 복합 패턴, CB 인수자, 위기 타임라인
 - `lookback_years` 범위 1~5, 기본 1년. 다년(>1년) 조회 시 결과 하단에 예상 출력 규모(문자·토큰 추정) 푸터 표기.
+- 공개기록 레지스트리(opt-in) 설정 시, 이 회사가 등재 행위자의 관련기업으로 태깅돼 있으면 리포트 말미에 "📎 공개기록 참고" 섹션 자동 표면화 (`lookup_actors_by_company` 역방향 조회 — 사실 표기, 판정 없음)
 
 ### 2. `check_disclosure_risk(rcept_no="", report_name="")`
 
@@ -87,6 +88,7 @@ dart_risk_mcp/
 - CB 인수자(행위자) 정보도 함께 표시
 - 정정공시는 자동 제외
 - `lookback_years` 범위 1~5, 기본 1년. 다년(>1년) 조회 시 결과 하단에 예상 출력 규모(문자·토큰 추정) 푸터 표기.
+- 공개기록 레지스트리(opt-in) 설정 시, 이 회사가 등재 행위자의 관련기업으로 태깅돼 있으면 리포트 말미에 "📎 공개기록 참고" 섹션 자동 표면화 (`lookup_actors_by_company` 역방향 조회 — 사실 표기, 판정 없음)
 
 ### 5. `find_actor_overlap(company_names, lookback_years=1, watchlist="")` ✨
 

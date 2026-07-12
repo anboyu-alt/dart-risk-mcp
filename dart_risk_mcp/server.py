@@ -51,8 +51,10 @@ from .core import (
     add_person,
     get_person_companies,
     list_persons,
+    load_known_actors,
     load_watchlist,
     lookup_actor,
+    lookup_actors_by_company,
     remove_person,
     fetch_executive_compensation,
     fetch_executive_roster,
@@ -237,6 +239,47 @@ def _compose_top_signal_sentence(label: str, prose: str) -> str:
     return f"가장 무게 있는 신호는 '{label}'이며, {prose}"
 
 
+def _registry_company_section(corp_name: str) -> list[str]:
+    """회사→인물 레지스트리 역방향 대조 섹션 (매칭 없으면 []).
+
+    사실 표기 전용 — 판정·점수 없음(v0.8.5). 해당 회사가 태깅된 기록만
+    표시하고, 그 인물의 나머지 기록은 lookup_known_actor 안내로 위임한다.
+    """
+    hits = lookup_actors_by_company(corp_name)
+    if not hits:
+        return []
+    lines = [
+        "📎 공개기록 참고 (사실 표기 — 판정 아님): "
+        "이 회사에 등장 기록이 있는 등재 행위자",
+    ]
+    has_auto = has_seed = False
+    shown_counts: dict[str, int] = {}
+    for nm, r in hits:
+        st = r.get("status", "")
+        has_auto = has_auto or st == "auto_matched"
+        has_seed = has_seed or st == "maintainer_seed"
+        prefix = "[자동 매칭 · 동명이인 미확인] " if st == "auto_matched" else ""
+        src = r.get("source", "")
+        date = r.get("date", "")
+        tag = f"{src}({date})" if date else src
+        lines.append(f"  • {prefix}{nm} — {tag}: {r.get('evidence', '')}")
+        shown_counts[nm] = shown_counts.get(nm, 0) + 1
+    registry_actors = load_known_actors().get("actors", {})
+    for nm, n_shown in shown_counts.items():
+        total = len(registry_actors.get(nm, []))
+        if total > n_shown:
+            lines.append(
+                f"    ({nm} 레지스트리 전체 기록 {total}건 — "
+                f'자세히: lookup_known_actor("{nm}"))'
+            )
+    if has_auto:
+        lines.append("  ⚠ 일부는 시장 공시 자동 매칭 (동일인 여부 미확인)")
+    if has_seed:
+        lines.append("  ⚠ 일부는 제작자 모니터링 등록 (공시 자동매칭 아님, 혐의·확정 아님)")
+    lines.append("  ⚠ 원본 공시로 사실 확인 권장 · 동명이인 가능성 있음")
+    return lines
+
+
 # ── 도구 1: 기업 종합 위험 분석 ────────────────────────────────────────────
 
 
@@ -245,6 +288,9 @@ def analyze_company_risk(
     company_name: str, lookback_years: int = 1, lookback_days: int | None = None
 ) -> str:
     """기업명 또는 종목코드로 최근 공시 기반 투자 위험도를 분석한다.
+
+    공개기록 레지스트리(opt-in)가 설정돼 있고 이 회사가 등재 행위자의
+    관련기업으로 태깅된 경우, 리포트 말미에 공개기록 참고 섹션이 추가된다.
 
     Args:
         company_name: 기업명 (예: "에코프로") 또는 종목코드 6자리 (예: "086520")
@@ -648,6 +694,10 @@ def analyze_company_risk(
     if catalog:
         lines += ["", catalog]
 
+    reg_section = _registry_company_section(corp_name)
+    if reg_section:
+        lines += [""] + reg_section
+
     return _append_size_footer("\n".join(lines), lookback_years)
 
 
@@ -890,6 +940,9 @@ def build_event_timeline(
     각 이벤트를 진입기(자금 조달/경영권 진입), 심화기(지배구조 변화),
     탈출기(의심/수사/부실) 단계로 분류하고, 알려진 위기 패턴과 매칭한다.
 
+    공개기록 레지스트리(opt-in)가 설정돼 있고 이 회사가 등재 행위자의
+    관련기업으로 태깅된 경우, 리포트 말미에 공개기록 참고 섹션이 추가된다.
+
     Args:
         company_name: 기업명 (예: "에코프로") 또는 종목코드 6자리 (예: "086520")
         lookback_years: 조회 기간(년). 기본 1년, 1~5년 범위.
@@ -1094,6 +1147,10 @@ def build_event_timeline(
                 lines.append("")
     except Exception:
         pass
+
+    reg_section = _registry_company_section(corp_name)
+    if reg_section:
+        lines += reg_section + [""]
 
     lines.append("⚠️ 이 타임라인은 공시 제목 기반 자동 분류이며, 실제 상황과 다를 수 있습니다.")
     return _append_size_footer("\n".join(lines), lookback_years)

@@ -416,3 +416,22 @@ def lookup_actor(name: str) -> list[dict]:
         if normalize_name(key) == want:
             return list(recs)
     return []
+
+
+def lookup_actors_by_company(company_name: str) -> list[tuple[str, dict]]:
+    """회사명 역방향 조회 → [(인물명, 기록)] (없으면 []).
+
+    각 기록의 companies(레지스트리 '관련기업' 태그)와 정규화 비교한다.
+    반환은 인물명 오름차순 — 렌더 결정성(테스트 안정성) 보장.
+    """
+    if not company_name or not company_name.strip():
+        return []
+    want = normalize_name(company_name)
+    actors = load_known_actors().get("actors", {})
+    hits: list[tuple[str, dict]] = []
+    for name in sorted(actors.keys()):
+        for rec in actors[name]:
+            comps = rec.get("companies") or []
+            if any(normalize_name(c) == want for c in comps):
+                hits.append((name, rec))
+    return hits
