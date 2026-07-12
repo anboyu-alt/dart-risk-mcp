@@ -51,6 +51,7 @@ from .core import (
     add_person,
     get_person_companies,
     list_persons,
+    load_known_actors,
     load_watchlist,
     lookup_actor,
     lookup_actors_by_company,
@@ -263,8 +264,9 @@ def _registry_company_section(corp_name: str) -> list[str]:
         tag = f"{src}({date})" if date else src
         lines.append(f"  • {prefix}{nm} — {tag}: {r.get('evidence', '')}")
         shown_counts[nm] = shown_counts.get(nm, 0) + 1
+    registry_actors = load_known_actors().get("actors", {})
     for nm, n_shown in shown_counts.items():
-        total = len(lookup_actor(nm))
+        total = len(registry_actors.get(nm, []))
         if total > n_shown:
             lines.append(
                 f"    ({nm} 레지스트리 전체 기록 {total}건 — "
