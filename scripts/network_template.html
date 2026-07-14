@@ -106,13 +106,28 @@
   svg.labels-off .node.hov text { display: inline; opacity: 1; }
 
   /* ── 선택 노드 화면 강조(#sel-emph) — vp 밖 화면좌표 오버레이. 줌 배율과
-     무관하게 항상 같은 화면 크기로 이름·헤일로를 그려 어느 배율에서든 즉시 찾게 한다 */
+     무관하게 항상 같은 화면 크기로 후광·이름 pill을 그려, 복잡한 그래프 위에서도
+     선택 노드가 확 도드라지게 한다. 색은 KIND_COLOR(테마 전환 시 갱신). */
   #sel-emph { pointer-events: none; }
-  #sel-emph .halo  { fill: none; stroke-width: 2.5px; }
-  #sel-emph .halo2 { fill: none; stroke: var(--bg); stroke-width: 6px; opacity: .75; }
+  /* glow: 바깥 은은한 후광(넓은 저투명 링) — reduce 아니면 미세 펄스 */
+  #sel-emph .glow   { fill: none; stroke-width: 8px; opacity: .24;
+    animation: sel-pulse 1.8s ease-in-out infinite; }
+  /* halo2: 배경색 백킹 링 — 컬러 헤일로 대비 강화(복잡한 배경에서도 또렷) */
+  #sel-emph .halo2  { fill: none; stroke: var(--bg); stroke-width: 9px; opacity: .95; }
+  /* halo: 굵은 컬러 링(노드와 간격을 둬 '후광'으로 읽힘) */
+  #sel-emph .halo   { fill: none; stroke-width: 4px; }
+  /* seldot: 노드 위 반투명 강조 점(노드가 커 보이게) */
+  #sel-emph .seldot { opacity: .32; }
+  /* pill: 이름 배경(둥근 사각) — 배경색 채움 + 노드색 얇은 테두리 */
+  #sel-emph .pill   { fill: var(--bg); stroke-width: 1.7px;
+    filter: drop-shadow(0 1px 3px rgba(0,0,0,.28)); }
   #sel-emph text {
-    text-anchor: middle; fill: var(--ink); font-size: 14.5px; font-weight: 700;
-    paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round;
+    text-anchor: middle; fill: var(--ink); font-size: 16px; font-weight: 800;
+    letter-spacing: -.01em;
+  }
+  @keyframes sel-pulse { 0%,100% { opacity: .14; } 50% { opacity: .44; } }
+  @media (prefers-reduced-motion: reduce) {
+    #sel-emph .glow { animation: none; opacity: .3; }
   }
 
   /* ── overlays ── */
@@ -624,11 +639,23 @@ vp.append(gEdge, gNode);   // 분리 상태에서 8천 요소를 채운 뒤 한 
 const selEmph = document.createElementNS(NS, "g");
 selEmph.setAttribute("id", "sel-emph");
 selEmph.style.display = "none";
+// 렌더 순서(아래→위): 후광 → 배경 백킹 링 → 컬러 헤일로 → 노드 강조 점 → 이름 pill → 이름
+const selGlow  = document.createElementNS(NS, "circle"); selGlow.setAttribute("class", "glow");
 const selHalo2 = document.createElementNS(NS, "circle"); selHalo2.setAttribute("class", "halo2");
 const selHalo  = document.createElementNS(NS, "circle"); selHalo.setAttribute("class", "halo");
+const selDot   = document.createElementNS(NS, "circle"); selDot.setAttribute("class", "seldot");
+const selPill  = document.createElementNS(NS, "rect");   selPill.setAttribute("class", "pill");
 const selText  = document.createElementNS(NS, "text");
-selEmph.append(selHalo2, selHalo, selText);
+selEmph.append(selGlow, selHalo2, selHalo, selDot, selPill, selText);
 svg.appendChild(selEmph);
+let selTextW = 0;   // 이름 폭 캐시(pill 크기 계산용) — openDetail에서 측정
+// 강조 요소 색을 선택 노드 종류색으로 일괄 지정(테마 전환 시 갱신)
+function setEmphColor(hc) {
+  selGlow.setAttribute("stroke", hc);
+  selHalo.setAttribute("stroke", hc);
+  selDot.setAttribute("fill", hc);
+  selPill.setAttribute("stroke", hc);
+}
 // 라벨 지연 생성 — '이름 표시' 켤 때/호버 시에만 만든다.
 // 행위자 deg>=3은 상시 라벨, 나머지는 확대 시(lbl2)만 노출(기존 규칙 유지).
 function ensureLabel(el) {
@@ -756,15 +783,23 @@ function draw() {
     const n = el.n;
     if (!n._fh && !n._th) el.g.setAttribute("transform", `translate(${n.x},${n.y})`);
   }
-  // 선택 노드 화면 강조 — 노드의 화면좌표(월드→스크린)로 헤일로·이름을 배치.
-  // r은 노드의 화면 반경에 여유를 더하되 최소 10px 보장(작은 노드도 눈에 띄게).
+  // 선택 노드 화면 강조 — 노드의 화면좌표(월드→스크린)로 후광·헤일로·이름 pill을 배치.
+  // 헤일로 r은 노드 화면 반경에 여유(+10)를 더하되 최소 14px(작은 노드도 후광으로 도드라지게).
   if (focused && byId[focused]) {
     const fn = byId[focused];
     const sx = fn.x * view.k + view.x, sy = fn.y * view.k + view.y;
-    const rr = Math.max(fn.r * view.k + 6, 10);
-    selHalo.setAttribute("cx", sx);  selHalo.setAttribute("cy", sy);  selHalo.setAttribute("r", rr);
-    selHalo2.setAttribute("cx", sx); selHalo2.setAttribute("cy", sy); selHalo2.setAttribute("r", rr);
-    selText.setAttribute("x", sx);   selText.setAttribute("y", sy - rr - 7);
+    const nr = fn.r * view.k;
+    const haloR = Math.max(nr + 10, 14);
+    selGlow.setAttribute("cx", sx);  selGlow.setAttribute("cy", sy);  selGlow.setAttribute("r", haloR + 6);
+    selHalo2.setAttribute("cx", sx); selHalo2.setAttribute("cy", sy); selHalo2.setAttribute("r", haloR);
+    selHalo.setAttribute("cx", sx);  selHalo.setAttribute("cy", sy);  selHalo.setAttribute("r", haloR);
+    selDot.setAttribute("cx", sx);   selDot.setAttribute("cy", sy);   selDot.setAttribute("r", Math.max(nr + 3, 6));
+    const ty = sy - haloR - 13;      // 이름 pill을 후광 위에
+    selText.setAttribute("x", sx);   selText.setAttribute("y", ty);
+    const pw = selTextW + 18, ph = 24;
+    selPill.setAttribute("x", sx - pw / 2); selPill.setAttribute("y", ty - 16.5);
+    selPill.setAttribute("width", pw);      selPill.setAttribute("height", ph);
+    selPill.setAttribute("rx", 12);
     selEmph.style.display = "";
   } else {
     selEmph.style.display = "none";
@@ -1029,10 +1064,11 @@ function centerOn(n) {
 }
 function openDetail(n) {
   focused = n.id;
-  // 화면 강조 오버레이 준비 — 이름(>20자 …로 절단)·헤일로 색. 위치는 draw()가 채운다.
+  // 화면 강조 오버레이 준비 — 이름(>20자 …로 절단)·종류색·pill 폭. 위치는 draw()가 채운다.
   selText.textContent = n.label.length > 20 ? n.label.slice(0, 19) + "…" : n.label;
-  selHalo.setAttribute("stroke", KIND_COLOR[n.type] || css(KIND[n.type].varname));
+  setEmphColor(KIND_COLOR[n.type] || css(KIND[n.type].varname));
   selEmph.style.display = "";
+  try { selTextW = selText.getBBox().width; } catch (_) { selTextW = selText.textContent.length * 9; }
   centerOn(n);
   depthSlider.value = egoDepth;
   const kv = css(KIND[n.type].varname);
@@ -1306,8 +1342,8 @@ document.getElementById("theme").addEventListener("click", () => {
     c.setAttribute("fill", KIND_COLOR[n.type]);
     if (inner) inner.setAttribute("fill", KIND_COLOR[n.actor_kind] || KIND_COLOR.corp);
   });
-  // 선택 강조 헤일로 색도 새 테마 종류색으로 갱신(라벨 stroke/fill은 CSS 변수로 자동)
-  if (focused && byId[focused]) selHalo.setAttribute("stroke", KIND_COLOR[byId[focused].type]);
+  // 선택 강조 색도 새 테마 종류색으로 갱신(pill 채움·이름은 CSS 변수로 자동)
+  if (focused && byId[focused]) setEmphColor(KIND_COLOR[byId[focused].type]);
 });
 
 // ── util ──
