@@ -280,11 +280,25 @@
   .co.nolink { color: var(--ink-2); cursor: default; }
   .dt-close { position: absolute; top: 14px; right: 14px; cursor: pointer;
     background: none; border: none; color: var(--ink-3); font-size: 20px; line-height: 1; padding: 4px; }
-  .foot .foot-body { display: none; }
-  .foot.open .foot-body { display: inline; }
-  .foot #foot-btn { width: auto; height: auto; border-radius: 9px; padding: 5px 10px; font-size: 12px; }
+  /* 하단 좌측 바 — 사실 표기 버튼 + 테마 버튼 나란히. 컨테이너는 클릭 통과,
+     버튼·팝오버만 pointer-events:auto */
   .foot { position: fixed; bottom: 12px; left: 20px; z-index: 5; pointer-events: none;
-    font-size: 11px; color: var(--ink-3); max-width: 420px; line-height: 1.5; }
+    display: flex; align-items: center; gap: 8px; }
+  .foot #foot-btn, .foot #theme { pointer-events: auto; }
+  .foot #foot-btn { width: auto; height: auto; border-radius: 9px; padding: 5px 10px;
+    font-size: 12px; margin-left: 0; }
+  /* 범례·시장구분·사실 표기 본문은 사실 표기 팝오버 안에만 노출 — 위로 열림 */
+  .foot .foot-body { display: none; }
+  .foot.open .foot-body {
+    display: flex; flex-direction: column; gap: 10px;
+    position: absolute; left: 0; bottom: calc(100% + 8px);
+    width: min(320px, 92vw); max-height: calc(100vh - 80px); overflow: auto;
+    pointer-events: auto;
+    background: var(--panel); border: 1px solid var(--panel-line); border-radius: 12px;
+    box-shadow: var(--shadow); padding: 12px 14px; }
+  .foot .foot-body .foot-note { margin: 0; font-size: 11px; color: var(--ink-3); line-height: 1.5; }
+  /* 팝오버 안 범례 카드는 테두리·그림자 제거(이중 테두리 방지) */
+  .foot .foot-body .card { border: none; box-shadow: none; padding: 0; background: transparent; }
 
   /* ── mobile controls: 바텀시트 토글 + 백드롭 (데스크톱 숨김) ── */
   .sheet-toggle { display: none; position: fixed; top: 16px; right: 16px; z-index: 8;
@@ -305,7 +319,9 @@
     .tl .sub { display: none; }                 /* 긴 설명은 시트 안내로 대체 */
     .tl h1 { font-size: 17px; }
     .stat b { font-size: 18px; }
-    .foot { display: none; }                     /* 조작법은 시트 하단 안내로 이동 */
+    /* 하단 사실 표기 바는 모바일에서도 유지 — 범례·시장구분이 팝오버 안에 있다.
+       타임바(하단 중앙)와 겹치지 않게 그 위로 올린다 */
+    .foot { bottom: calc(64px + env(safe-area-inset-bottom)); }
 
     .sheet-toggle { display: inline-flex; }
     .sheet-bg { display: block; }
@@ -322,7 +338,6 @@
       transform: translateY(105%); transition: transform .26s cubic-bezier(.4,0,.2,1); }
     .overlay.tr.open { transform: none; }
     .overlay.tr .card { box-shadow: none; border: none; padding: 2px 0; background: transparent; }
-    .overlay.tr .theme-btn { align-self: flex-start; }
     .controls { min-width: 0; }
     input[type=search] { font-size: 16px; }     /* iOS 자동 확대 방지 */
     .sheet-hint { font-size: 11.5px; color: var(--ink-3); line-height: 1.6;
@@ -381,7 +396,7 @@
   </div>
 </div>
 
-<button class="sheet-toggle" id="sheet-toggle" aria-label="검색·범례 열기">☰ 범례·검색</button>
+<button class="sheet-toggle" id="sheet-toggle" aria-label="검색 열기">☰ 검색</button>
 <div class="sheet-bg" id="sheet-bg"></div>
 
 <div class="card" id="about-panel" role="dialog" aria-label="그래프 설명">
@@ -402,7 +417,6 @@
 
 <div class="overlay tr" id="panel">
   <div class="sheet-grip"></div>
-  <button class="theme-btn" id="theme" aria-label="테마 전환">◐ 테마</button>
   <div class="card controls">
     <label class="ctl-label" for="q">검색</label>
     <div class="q-row">
@@ -417,8 +431,6 @@
     <label class="exit-toggle"><input type="checkbox" id="show-etc"> 기타 기관</label>
     <label class="exit-toggle"><input type="checkbox" id="show-labels"> 이름 표시</label>
   </div>
-  <div class="card legend" id="legend"></div>
-  <div class="card legend" id="legend-mkt"></div>
   <div class="sheet-hint">한 손가락 드래그로 이동 · 두 손가락으로 확대/축소 ·
     노드를 탭하면 진입→이탈 타임라인과 공시 링크. 실선=진행중 / 점선=이탈.
     회사 노드 링 색은 시장구분. 하단 시점바로 시점 재생.</div>
@@ -437,10 +449,17 @@
   <button id="time-all" class="on" title="전체 기간 보기">전체</button>
 </div>
 
-<div class="foot" id="foot"><button class="about-btn" id="foot-btn" aria-label="사실 표기 보기" title="사실 표기 보기">ⓘ 사실 표기</button><span class="foot-body">사실 표기 — 판정 아님. 등장은 공시 인수자 명단 기준이며 동명이인·동명 법인은 미확인.
-  <b>실선=진행중 / 점선=이탈(기록 보존)</b>. 이탈은 5% 대량보유 감소·전환청구 기준이라
-  부분 관측(장외·5% 미만 처분은 미포착). 하단 시점바로 진입→이탈 흐름을 재생.
-  노드를 열면 관계 타임라인과 원본 공시. 스크롤=확대, 빈 곳 드래그=이동.</span></div>
+<div class="foot" id="foot">
+  <button class="about-btn" id="foot-btn" aria-label="사실 표기·범례 보기" title="사실 표기·범례 보기">ⓘ 사실 표기</button>
+  <button class="theme-btn" id="theme" aria-label="테마 전환">◐ 테마</button>
+  <div class="foot-body">
+    <p class="foot-note">사실 표기 — 판정 아님. 등장은 공시 인수자 명단 기준이며 동명이인·동명 법인은 미확인.
+      <b>실선=진행중 / 점선=이탈(기록 보존)</b>. 이탈은 5% 대량보유 감소·전환청구 기준이라
+      부분 관측(장외·5% 미만 처분은 미포착). 하단 시점바로 진입→이탈 흐름을 재생.
+      노드를 열면 관계 타임라인과 원본 공시. 스크롤=확대, 빈 곳 드래그=이동.</p>
+    <div class="card legend" id="legend"></div>
+    <div class="card legend" id="legend-mkt"></div>
+  </div></div>
 
 
 <aside id="detail" aria-live="polite">
