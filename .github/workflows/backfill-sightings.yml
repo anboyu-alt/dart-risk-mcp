@@ -3,17 +3,12 @@ name: Backfill sightings
 # 과거 자금조달 공시 sightings 백필. 진행은 sightings.json의 backfill.done_until에
 # 저장돼 재실행 시 이어감(청크 중복은 dedup으로 무해). 완료 후 재발화는 no-op.
 #
-# 2015 확장 모드: 5년 구간(2021-07-06~2026-07-06) 완주 후, 더 과거
-# 2015-01-01~2021-07-05 구간을 이어받는다. 착수 시 reset=true 디스패치 1회로
-# 전진 마커를 초기화해야 한다(마커가 이미 2026까지 가 있어 그냥은 no-op).
-# 하루 2회(02:00·14:00 UTC) 회당 자금조달 3,000건씩, 약 7~12일 예상.
-# 라이브 파이프라인(discover 19:00 UTC · exits 일 18:30 UTC)과 시간대를 벌려 쿼터 충돌 방지.
-# 완주 후엔 조용히 no-op. 다 끝나면 이 스케줄 블록을 제거할 것.
+# 백필 완주(2015-01-01~2026-07-06 전 구간, done_until=BF_END 도달)로 스케줄
+# 블록은 제거했다. 필요 시 workflow_dispatch로 임의 구간을 수동 실행할 수 있고,
+# 더 과거로 재확장할 때는 BF_START/BF_END 조정 후 reset=true 디스패치 1회로
+# 전진 마커를 초기화한 뒤 스케줄 블록을 되살리면 된다.
 
 on:
-  schedule:
-    - cron: "0 2 * * *"    # 02:00 UTC (11:00 KST)
-    - cron: "0 14 * * *"   # 14:00 UTC (23:00 KST)
   workflow_dispatch:
     inputs:
       start_date:
