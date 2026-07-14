@@ -105,6 +105,16 @@
   svg.labels-off .node text { display: none; }
   svg.labels-off .node.hov text { display: inline; opacity: 1; }
 
+  /* ── 선택 노드 화면 강조(#sel-emph) — vp 밖 화면좌표 오버레이. 줌 배율과
+     무관하게 항상 같은 화면 크기로 이름·헤일로를 그려 어느 배율에서든 즉시 찾게 한다 */
+  #sel-emph { pointer-events: none; }
+  #sel-emph .halo  { fill: none; stroke-width: 2.5px; }
+  #sel-emph .halo2 { fill: none; stroke: var(--bg); stroke-width: 6px; opacity: .75; }
+  #sel-emph text {
+    text-anchor: middle; fill: var(--ink); font-size: 14.5px; font-weight: 700;
+    paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round;
+  }
+
   /* ── overlays ── */
   .overlay { position: fixed; z-index: 5; }
   .about-btn { pointer-events: auto; cursor: pointer; border: 1px solid var(--panel-line);
@@ -608,6 +618,17 @@ const nodeEls = nodes.map(n => {
   return { g, c, n, inner, t: null };   // 라벨(<text>)은 필요 시 지연 생성 — 초기 DOM 절반 절감
 });
 vp.append(gEdge, gNode);   // 분리 상태에서 8천 요소를 채운 뒤 한 번에 부착
+// ── 선택 노드 화면 강조 오버레이 — vp '밖'(svg 루트, vp 뒤)에 부착해 줌 변환을
+// 받지 않는다. 좌표는 draw()에서 매 프레임 노드의 화면좌표로 갱신 → 어느 배율에서든
+// 이름+헤일로가 항상 같은 크기로 보인다. 색은 선택 노드 종류색(테마 전환 시 갱신).
+const selEmph = document.createElementNS(NS, "g");
+selEmph.setAttribute("id", "sel-emph");
+selEmph.style.display = "none";
+const selHalo2 = document.createElementNS(NS, "circle"); selHalo2.setAttribute("class", "halo2");
+const selHalo  = document.createElementNS(NS, "circle"); selHalo.setAttribute("class", "halo");
+const selText  = document.createElementNS(NS, "text");
+selEmph.append(selHalo2, selHalo, selText);
+svg.appendChild(selEmph);
 // 라벨 지연 생성 — '이름 표시' 켤 때/호버 시에만 만든다.
 // 행위자 deg>=3은 상시 라벨, 나머지는 확대 시(lbl2)만 노출(기존 규칙 유지).
 function ensureLabel(el) {
@@ -620,6 +641,9 @@ function ensureLabel(el) {
 }
 
 // ── viewport transform (zoom / pan) ──
+// focused(선택 노드 id)는 draw()의 선택 강조에서 읽으므로, loop() 시작보다 먼저
+// 선언해야 한다(TDZ 방지). 실제 선택/해제는 openDetail·closeDetail에서.
+let focused = null;
 const view = { x: 0, y: 0, k: 1 };
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 function applyView() {
@@ -732,6 +756,19 @@ function draw() {
     const n = el.n;
     if (!n._fh && !n._th) el.g.setAttribute("transform", `translate(${n.x},${n.y})`);
   }
+  // 선택 노드 화면 강조 — 노드의 화면좌표(월드→스크린)로 헤일로·이름을 배치.
+  // r은 노드의 화면 반경에 여유를 더하되 최소 10px 보장(작은 노드도 눈에 띄게).
+  if (focused && byId[focused]) {
+    const fn = byId[focused];
+    const sx = fn.x * view.k + view.x, sy = fn.y * view.k + view.y;
+    const rr = Math.max(fn.r * view.k + 6, 10);
+    selHalo.setAttribute("cx", sx);  selHalo.setAttribute("cy", sy);  selHalo.setAttribute("r", rr);
+    selHalo2.setAttribute("cx", sx); selHalo2.setAttribute("cy", sy); selHalo2.setAttribute("r", rr);
+    selText.setAttribute("x", sx);   selText.setAttribute("y", sy - rr - 7);
+    selEmph.style.display = "";
+  } else {
+    selEmph.style.display = "none";
+  }
 }
 // 시뮬은 30fps로 스로틀 — 대형 캔버스(PC)에서 정착 구간 CPU 반감, 체감 차이 없음
 let raf, _fr = 0;
@@ -745,7 +782,6 @@ loop();
 console.log(`[PERF] init ${Math.round(performance.now() - _t0)}ms · 노드 ${nodes.length} · 엣지 ${links.length}`);
 
 // ── interaction: hover highlight ──
-let focused = null;
 // full=true(클릭 선택): 이웃 외 전체 디밍. full=false(호버): 해당 노드의
 // 연결선만 강조하고 디밍 없음 — 확대 상태에서 이웃이 화면 밖이면 호버 한
 // 번에 화면 전체가 사라져 보이던 문제 방지.
@@ -978,17 +1014,25 @@ function centerOn(n) {
   const mobile = matchMedia("(max-width: 640px)").matches;
   const cx = mobile ? W * 0.5 : (W - 340) / 2;   // PC: 우측 상세 패널(340px) 감안
   const cy = mobile ? H * 0.28 : H * 0.5;
-  const tx = cx - n.x * view.k, ty = cy - n.y * view.k;
-  if (reduce) { view.x = tx; view.y = ty; applyView(); return; }
-  const sx = view.x, sy = view.y, t0 = performance.now(), D = 400;
+  // 가독 하한 — 축소(fit) 상태에서 열면 노드가 미세하게 남는다. k를 1.6까지 끌어올려
+  // 중앙 정렬과 동시에 읽을 수 있는 배율로. 이미 1.6 이상이면 현재 배율 유지(팬만).
+  const k1 = Math.min(6, Math.max(view.k, 1.6));   // zoomAt 클램프(≤6) 준수
+  const tx = cx - n.x * k1, ty = cy - n.y * k1;    // 팬 목표는 최종 배율 기준으로 재계산
+  if (reduce) { view.k = k1; view.x = tx; view.y = ty; applyView(); return; }
+  const sx = view.x, sy = view.y, sk = view.k, t0 = performance.now(), D = 400;
   (function anim() {
     const p = Math.min(1, (performance.now() - t0) / D), e = p * (2 - p);
+    view.k = sk + (k1 - sk) * e;                    // 배율·팬을 함께 400ms ease-out
     view.x = sx + (tx - sx) * e; view.y = sy + (ty - sy) * e; applyView();
     if (p < 1) requestAnimationFrame(anim);
   })();
 }
 function openDetail(n) {
   focused = n.id;
+  // 화면 강조 오버레이 준비 — 이름(>20자 …로 절단)·헤일로 색. 위치는 draw()가 채운다.
+  selText.textContent = n.label.length > 20 ? n.label.slice(0, 19) + "…" : n.label;
+  selHalo.setAttribute("stroke", KIND_COLOR[n.type] || css(KIND[n.type].varname));
+  selEmph.style.display = "";
   centerOn(n);
   depthSlider.value = egoDepth;
   const kv = css(KIND[n.type].varname);
@@ -1094,7 +1138,7 @@ function tlRow(ev) {
     (ev.url ? `<span class="tlink">공시 ↗</span>` : "");
   return row;
 }
-function closeDetail() { detail.classList.remove("open"); clearReach(); highlight(focused = null); }
+function closeDetail() { detail.classList.remove("open"); clearReach(); selEmph.style.display = "none"; highlight(focused = null); }
 document.getElementById("dt-close").addEventListener("click", closeDetail);
 
 // ── filter + search (클래스 .fhide로 처리, 시점 .thide와 합성) ──
@@ -1262,6 +1306,8 @@ document.getElementById("theme").addEventListener("click", () => {
     c.setAttribute("fill", KIND_COLOR[n.type]);
     if (inner) inner.setAttribute("fill", KIND_COLOR[n.actor_kind] || KIND_COLOR.corp);
   });
+  // 선택 강조 헤일로 색도 새 테마 종류색으로 갱신(라벨 stroke/fill은 CSS 변수로 자동)
+  if (focused && byId[focused]) selHalo.setAttribute("stroke", KIND_COLOR[byId[focused].type]);
 });
 
 // ── util ──
