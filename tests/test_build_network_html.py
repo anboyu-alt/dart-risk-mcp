@@ -143,3 +143,89 @@ def test_company_timeline_events_and_conversion():
     gamma = next(c for c in gana["companies"] if c["name"] == "감마")
     conv = [e for e in gamma["events"] if e.get("company_level")]
     assert conv and "전환청구" in conv[0]["type"]
+
+
+# ── 단일 엔티티 병합 (같은 실체 = 한 노드) ──────────────────────────
+
+def _merge_sightings():
+    """엔켐(cc=100, 투자받음) + '주식회사 엔켐'(2개사 투자)이 fold 일치."""
+    return {"sightings": {
+        # 투자자갑: 2개사(엔켐·다른회사)에 투자 → 코어. 엔켐은 여기서 투자받음.
+        "투자자갑": [
+            {"corp": "엔켐", "corp_code": "100", "corp_cls": "K", "rcept_no": "r1",
+             "date": "2024-01", "kind": "corp", "event": "in"},
+            {"corp": "다른회사", "corp_code": "200", "corp_cls": "K", "rcept_no": "r2",
+             "date": "2024-02", "kind": "corp", "event": "in"},
+        ],
+        # 행위자 '주식회사 엔켐'(fold == 엔켐)이 2개사에 투자 → c:100로 병합.
+        "주식회사 엔켐": [
+            {"corp": "타겟일", "corp_code": "300", "corp_cls": "K", "rcept_no": "r3",
+             "date": "2024-03", "kind": "corp", "event": "in"},
+            {"corp": "타겟이", "corp_code": "400", "corp_cls": "K", "rcept_no": "r4",
+             "date": "2024-04", "kind": "corp", "event": "in"},
+        ],
+    }}
+
+
+def test_enchem_single_entity_merge():
+    g = build_graph(_merge_sightings(), min_companies=2)
+    ids = {n["id"] for n in g["nodes"]}
+    # 별도 행위자 노드가 사라지고 회사 코드로 단일화
+    assert "a:주식회사 엔켐" not in ids
+    node = {n["id"]: n for n in g["nodes"]}["c:100"]
+    assert node["type"] == "company"
+    assert node["dual"] is True
+    assert node["label"] == "엔켐"
+    assert "주식회사 엔켐" in node.get("aliases", [])
+    # out(투자) 2건 + in(투자받음) 1건 이상
+    assert node["out_deg"] == 2 and node["in_deg"] >= 1
+    outs = [l for l in g["links"] if l["source"] == "c:100"]
+    assert len(outs) == 2 and {l["target"] for l in outs} == {"c:300", "c:400"}
+    ins = [l for l in g["links"] if l["target"] == "c:100"]
+    assert len(ins) >= 1 and ins[0]["source"] == "a:투자자갑"
+
+
+def test_self_loop_skipped():
+    """병합된 노드가 자기 자신에 투자한 관계는 링크·companies에서 스킵."""
+    s = _merge_sightings()
+    s["sightings"]["주식회사 엔켐"].append(
+        {"corp": "엔켐", "corp_code": "100", "corp_cls": "K", "rcept_no": "r5",
+         "date": "2024-05", "kind": "corp", "event": "in"})
+    g = build_graph(s, min_companies=2)
+    assert not any(l["source"] == "c:100" and l["target"] == "c:100"
+                   for l in g["links"])
+    node = {n["id"]: n for n in g["nodes"]}["c:100"]
+    assert all(c["name"] != "엔켐" for c in node.get("companies", []))
+    assert node["out_deg"] == 2   # 자기 자신 제외 유지
+
+
+def test_fold_collision_not_merged():
+    """한 fold가 복수 corp_code로 접히면(모호) 자동 병합 금지 — a: 유지."""
+    s = {"sightings": {
+        # 서로 다른 corp_code(501·502)가 같은 fold('베이트리')로 접힘 → 충돌
+        "투자자을": [
+            {"corp": "베이트리", "corp_code": "501", "rcept_no": "c1", "date": "2024-01",
+             "kind": "corp", "event": "in"},
+            {"corp": "무관회사", "corp_code": "999", "rcept_no": "c2", "date": "2024-01",
+             "kind": "corp", "event": "in"},
+        ],
+        "투자자병": [
+            {"corp": "(주)베이트리", "corp_code": "502", "rcept_no": "c3", "date": "2024-02",
+             "kind": "corp", "event": "in"},
+            {"corp": "무관회사2", "corp_code": "998", "rcept_no": "c4", "date": "2024-02",
+             "kind": "corp", "event": "in"},
+        ],
+        # fold('베이트리')로 접히는 행위자 — 충돌이라 미병합, a: 유지
+        "주식회사 베이트리": [
+            {"corp": "타겟삼", "corp_code": "601", "rcept_no": "c5", "date": "2024-03",
+             "kind": "corp", "event": "in"},
+            {"corp": "타겟사", "corp_code": "602", "rcept_no": "c6", "date": "2024-03",
+             "kind": "corp", "event": "in"},
+        ],
+    }}
+    g = build_graph(s, min_companies=2)
+    ids = {n["id"] for n in g["nodes"]}
+    assert "a:주식회사 베이트리" in ids                       # 충돌로 미병합
+    byid = {n["id"]: n for n in g["nodes"]}
+    assert byid["c:501"].get("dual") is not True
+    assert byid["c:502"].get("dual") is not True
