@@ -1,8 +1,10 @@
 """행위자 연결망 시각화 HTML 생성.
 
 sightings.json에서 서로 다른 문제 회사 2곳+에 반복 등장한 추적 행위자
-(개인·조합·법인, classify_actor 기준)와 그 회사를 이분 그래프로 뽑아,
-자체 완결형 HTML(외부 CDN 없음)로 렌더한다. 조각·제도권 기관은 제외.
+(개인·조합·법인 + 기타 기관, should_store 기준)와 그 회사를 이분 그래프로
+뽑아, 자체 완결형 HTML(외부 CDN 없음)로 렌더한다. 증권·은행·조각은 제외.
+자문·PE·VC·자산운용 등 기타 기관은 sector="기타기관"으로 태깅해 뷰에서
+기본 숨김(토글 노출) 처리한다.
 
 각 행위자→회사 엣지는 해당 회사에서의 최신 공시 링크를 담아, 상세 패널의
 회사명을 열면 원본 공시로 이동한다.
@@ -18,11 +20,11 @@ import json
 import os
 from pathlib import Path
 
-from dart_risk_mcp.core.known_actors import classify_actor, disclosure_url, fold_name
+from dart_risk_mcp.core.known_actors import (
+    classify_actor, disclosure_url, fold_name, sector_of, should_store)
 
 _ROOT = Path(__file__).resolve().parents[1]
 _TEMPLATE = Path(__file__).resolve().parent / "network_template.html"
-_TRACKED = ("person", "fund", "corp")
 _PLACEHOLDER = '/*__GRAPH_DATA__*/{"nodes":[],"links":[]}/*__END__*/'
 
 # DART corp_cls → (시장 라벨, 코드). Y=유가증권(KOSPI)·K=코스닥·N=코넥스·
@@ -84,9 +86,13 @@ def build_graph(sightings: dict, min_companies: int = 2) -> dict:
 
     # ── Phase C: 노드 레지스트리 병합 ──
     for name, recs in s.items():
+        if not should_store(name):
+            continue  # 증권·은행·노이즈 제외 (기타 기관은 보존)
         kind = classify_actor(name)
-        if kind not in _TRACKED:
-            continue
+        # 기타 기관 중 제도권 기관(institution)은 법인 색으로 렌더하고
+        # 가시성은 sector 필드로 제어한다(증권·은행은 위에서 이미 제외).
+        if kind == "institution":
+            kind = "corp"
         # 회사별 진입(in)·이탈(out) 이벤트 집계
         by_cc: dict = {}
         for r in recs:
@@ -157,6 +163,11 @@ def build_graph(sightings: dict, min_companies: int = 2) -> dict:
         reg["actor_exit_only"] = exit_only
         if not aid.startswith("c:"):
             reg["label"] = name
+            # 기타 기관(자문·PE·VC·자산운용 등)만 sector 태깅 → 기본 숨김.
+            # 회사로 병합된 노드(c:)는 투자받은 종목이라 항상 표시(태깅 안 함).
+            sec = sector_of(name)
+            if sec:
+                reg["sector"] = sec
         # 별칭: 정본 별칭 + (병합 시) 행위자 원표기를 aliases로 보존
         al = set(reg.get("aliases", []))
         al.update(alias_rev.get(name, []))

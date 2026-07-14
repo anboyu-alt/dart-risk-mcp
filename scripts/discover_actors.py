@@ -36,6 +36,7 @@ from dart_risk_mcp.core.known_actors import (
     load_known_actors,
     add_registry_record,
     classify_actor,
+    should_store,
     KIND_LABELS,
     disclosure_url,
 )
@@ -132,9 +133,9 @@ def collect_funding_sightings_range(api_key, bgn_de, end_de,
         filing_new = []
         for inv in invs:
             nm = (inv.get("name") or "").strip()
+            if not should_store(nm):
+                continue  # 증권·은행·노이즈 제외 (기타 기관은 보존)
             kind = classify_actor(nm)
-            if kind not in _TRACKED_KINDS:
-                continue  # 제도권 기관·노이즈 제외
             filing_new.append({
                 "name": nm, "corp": corp, "corp_code": cc, "corp_cls": cls,
                 "date": date, "rcept_no": rn, "kind": kind,
@@ -147,9 +148,9 @@ def collect_funding_sightings_range(api_key, bgn_de, end_de,
         if funds:
             seen_nm = {s["name"] for s in filing_new}
             for b in (extract_fund_backers(rn, api_key, funds) or []):
-                bkind = classify_actor(b["name"])
-                if bkind not in _TRACKED_KINDS or b["name"] in seen_nm:
+                if not should_store(b["name"]) or b["name"] in seen_nm:
                     continue
+                bkind = classify_actor(b["name"])
                 seen_nm.add(b["name"])
                 n_backers += 1
                 filing_new.append({
@@ -226,7 +227,7 @@ def merge_sightings(data: dict, new: list, window_months: int = WINDOW_MONTHS) -
     # 재키잉 루프가 수행하고, 등록된 별칭은 그래프에 '다른 이름'으로 표시된다.
     folds: dict = {}
     for k in s:
-        if classify_actor(k) in _TRACKED_KINDS:
+        if should_store(k):
             folds.setdefault(fold_name(k), []).append(k)
     fold_added = 0
     for ks in folds.values():
@@ -257,8 +258,9 @@ def merge_sightings(data: dict, new: list, window_months: int = WINDOW_MONTHS) -
 
     cutoff = (datetime.now() - timedelta(days=window_months * 30)).strftime("%Y-%m")
     for nm in list(s.keys()):
-        # 추출 조각 등 비추적 키는 제거 (오염 데이터 자기정화)
-        if classify_actor(nm) not in _TRACKED_KINDS:
+        # 증권·은행·추출 조각 등 비저장 키는 제거 (오염 데이터 자기정화).
+        # 기타 기관(자산운용·보험·자문·PE 등)은 should_store가 보존한다.
+        if not should_store(nm):
             del s[nm]
             changed = True
             continue

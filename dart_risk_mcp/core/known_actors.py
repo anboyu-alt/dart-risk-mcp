@@ -255,6 +255,65 @@ def classify_actor(name: str) -> str:
 KIND_LABELS = {"person": "개인", "fund": "조합", "corp": "법인"}
 
 
+# ── 섹터 구분 (증권·은행 제외 / 기타 기관 태깅) ──────────────────────
+# 증권사·은행은 신탁·커스터디 역할로 대부분의 딜에 정상 등장해 신호가
+# 무의미하므로 수집 자체를 하지 않는다. 반면 자산운용·보험·연기금·캐피탈
+# 등 기타 제도권 기관과 자문·PE·VC 성 법인은 수집하되 그래프에서 기본
+# 숨김(토글 노출) 처리한다. 이를 위한 섹터 판별 헬퍼.
+_SECURITIES_PAT = re.compile(r"증권|투자증권|금융투자|미래에셋대우|미래애셋대우")
+_BANK_PAT = re.compile(r"은행")
+# 자문·PE·VC 성 법인(현재 classify_actor=="corp") — 사명 키워드로 식별.
+_ADVISORY_PAT = re.compile(
+    r"투자자문|자문|파트너스|인베스트먼트|인베스트|벤처투자|프라이빗에쿼티|에쿼티")
+
+
+def sector_of(name: str) -> str | None:
+    """행위자 섹터 구분: "증권" | "은행" | "기타기관" | None.
+
+    strip_role_qualifier로 역할 괄호를 벗긴 기저 실체명 기준으로 판정한다.
+    - 증권: 증권·투자증권·금융투자·미래에셋대우(관측 오기 포함)
+    - 은행: 은행
+    - 기타기관: 위 둘을 제외한 제도권 기관(classify_actor=="institution",
+      예 자산운용·보험·연기금·캐피탈·종금·공공기관) + 자문·PE·VC 성 법인
+      (투자자문·파트너스·인베스트먼트·벤처투자·에쿼티 등, classify=="corp")
+    - None: 개인·조합·일반법인 등 정상 추적 대상(항상 표시)
+
+    ※ 조합(fund)은 CB 작전의 핵심 추적 대상이라 사명에 '파트너스' 등이
+      섞여도 기타기관으로 강등하지 않는다(항상 표시 원칙 보존).
+    """
+    base = strip_role_qualifier(name)
+    if not base:
+        return None
+    if _SECURITIES_PAT.search(base):
+        return "증권"
+    if _BANK_PAT.search(base):
+        return "은행"
+    k = classify_actor(base)
+    if k == "institution":
+        return "기타기관"
+    # 자문·PE·VC 사명 키워드는 개인·조합과 겹치지 않는 불명확 없는 법인 표지라
+    # kind와 무관하게 기타기관으로 본다. 단, 조합(fund)은 CB 작전의 핵심
+    # 추적 대상이므로 강등하지 않는다(항상 표시 원칙).
+    if k != "fund" and _ADVISORY_PAT.search(base):
+        return "기타기관"
+    return None
+
+
+def should_store(name: str) -> bool:
+    """수집(저장) 대상 여부 — 증권·은행·노이즈만 버리고 기타 기관은 보존.
+
+    - person·fund·corp: 항상 저장(추적 대상)
+    - institution: 기타기관(증권·은행 제외한 제도권 기관)만 저장, 증권·은행 제외
+    - noise: 저장 안 함
+    """
+    k = classify_actor(name)
+    if k in ("person", "fund", "corp"):
+        return True
+    if k == "institution":
+        return sector_of(name) == "기타기관"
+    return False
+
+
 def _valid(data) -> bool:
     return isinstance(data, dict) and isinstance(data.get("actors"), dict)
 

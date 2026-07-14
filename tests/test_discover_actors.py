@@ -233,6 +233,23 @@ class TestMergeAndPromote(unittest.TestCase):
         self.assertNotIn("으로서 결성 및", data["sightings"])
         self.assertIn("홍길동", data["sightings"])
 
+    def test_merge_keeps_other_institutions_prunes_securities_banks(self):
+        # 증권·은행은 프루닝하되, 자산운용 등 기타 제도권 기관은 보존한다.
+        import scripts.discover_actors as da
+        data = {"sightings": {
+            "가나자산운용": [{"corp_code": "c1", "rcept_no": "R1", "date": "2026-06"}],
+            "가나증권": [{"corp_code": "c2", "rcept_no": "R2", "date": "2026-06"}],
+            "가나은행": [{"corp_code": "c3", "rcept_no": "R3", "date": "2026-06"}],
+            "홍길동": [{"corp_code": "c4", "rcept_no": "R4", "date": "2026-06"}],
+        }}
+        changed = da.merge_sightings(data, [], window_months=12)
+        self.assertTrue(changed)
+        # 기타 기관(자산운용)과 개인은 보존, 증권·은행은 제거
+        self.assertIn("가나자산운용", data["sightings"])
+        self.assertIn("홍길동", data["sightings"])
+        self.assertNotIn("가나증권", data["sightings"])
+        self.assertNotIn("가나은행", data["sightings"])
+
     def test_merge_canonicalizes_new_alias_records(self):
         # 신규 레코드가 별칭이면 정본 키로 합류 (같은 인물 = 여러 이름)
         import scripts.discover_actors as da

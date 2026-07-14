@@ -54,6 +54,67 @@ def test_actor_company_links_carry_market():
                for c in actor["companies"])
 
 
+def _sector_sightings():
+    """자문/파트너스·자산운용(기타기관)과 개인·일반법인(정상) 혼합."""
+    return {"sightings": {
+        # 자문·PE 성 법인 — sector "기타기관"으로 태깅되어야
+        "가나에쿼티파트너스": [
+            {"corp": "에이스", "corp_code": "001", "corp_cls": "K",
+             "rcept_no": "r1", "date": "2024-01", "kind": "corp", "event": "in"},
+            {"corp": "베타", "corp_code": "002", "corp_cls": "K",
+             "rcept_no": "r2", "date": "2024-02", "kind": "corp", "event": "in"},
+        ],
+        # 자산운용(제도권 기관) — sector "기타기관"
+        "가나자산운용": [
+            {"corp": "에이스", "corp_code": "001", "corp_cls": "K",
+             "rcept_no": "r3", "date": "2024-01", "kind": "institution", "event": "in"},
+            {"corp": "감마", "corp_code": "003", "corp_cls": "E",
+             "rcept_no": "r4", "date": "2024-03", "kind": "institution", "event": "in"},
+        ],
+        # 개인 — sector 없음(항상 표시)
+        "홍길동": [
+            {"corp": "에이스", "corp_code": "001", "corp_cls": "K",
+             "rcept_no": "r5", "date": "2024-01", "kind": "person", "event": "in"},
+            {"corp": "감마", "corp_code": "003", "corp_cls": "E",
+             "rcept_no": "r6", "date": "2024-04", "kind": "person", "event": "in"},
+        ],
+    }}
+
+
+def test_other_institution_nodes_tagged_sector():
+    g = build_graph(_sector_sightings(), min_companies=2)
+    by_label = {n["label"]: n for n in g["nodes"] if n["type"] != "company"}
+    # 자문·PE 법인과 자산운용 기관은 "기타기관"으로 태깅
+    assert by_label["가나에쿼티파트너스"]["sector"] == "기타기관"
+    assert by_label["가나자산운용"]["sector"] == "기타기관"
+    # 제도권 기관(institution)은 법인 색으로 렌더(type=corp)하되 sector로 숨김 제어
+    assert by_label["가나자산운용"]["type"] == "corp"
+    # 개인은 sector 없음(None/부재) — 항상 표시
+    assert by_label["홍길동"].get("sector") is None
+
+
+def test_securities_bank_actors_excluded_from_graph():
+    # 증권·은행 인수자는 그래프 노드로 등장하지 않는다(should_store 제외)
+    s = {"sightings": {
+        "가나증권": [
+            {"corp": "에이스", "corp_code": "001", "rcept_no": "r1",
+             "date": "2024-01", "kind": "institution", "event": "in"},
+            {"corp": "베타", "corp_code": "002", "rcept_no": "r2",
+             "date": "2024-02", "kind": "institution", "event": "in"},
+        ],
+        "홍길동": [
+            {"corp": "에이스", "corp_code": "001", "rcept_no": "r3",
+             "date": "2024-01", "kind": "person", "event": "in"},
+            {"corp": "베타", "corp_code": "002", "rcept_no": "r4",
+             "date": "2024-02", "kind": "person", "event": "in"},
+        ],
+    }}
+    g = build_graph(s, min_companies=2)
+    labels = {n["label"] for n in g["nodes"] if n["type"] != "company"}
+    assert "가나증권" not in labels
+    assert "홍길동" in labels
+
+
 def _temporal_sightings():
     return {
         "company_events": {"003": [
