@@ -305,6 +305,39 @@ class TestMergeAndPromote(unittest.TestCase):
         rcepts = {e["rcept_no"] for e in data["sightings"]["가나파트너스"]}
         self.assertEqual(rcepts, {"R1", "R2"})
 
+    def test_merge_self_heals_entity_and_bracket_keys(self):
+        # HTML 엔티티('&CR;')·대괄호 역할 수식이 붙은 기존 키가 기저 실체 키로
+        # self-heal. 'X&CR;'와 'X'가 한 키로 수렴하고, 미래에셋대우류 기저는
+        # 기관으로 프루닝된다. 모두 가공 이름.
+        import scripts.discover_actors as da
+        data = {"sightings": {
+            "가나파트너스&CR;": [
+                {"corp_code": "c1", "rcept_no": "R1", "date": "2026-06"}],
+            "가나파트너스": [
+                {"corp_code": "c2", "rcept_no": "R2", "date": "2026-06"}],
+            "가나펀드&CR;[업무집행조합원: 나다인베스트먼트 주식회사]": [
+                {"corp_code": "c3", "rcept_no": "R3", "date": "2026-06"}],
+            "미래에셋대우 주식회사&CR;": [
+                {"corp_code": "c4", "rcept_no": "R4", "date": "2026-06"}],
+            "홍길동": [{"corp_code": "c5", "rcept_no": "R5", "date": "2026-06"}],
+        }}
+        changed = da.merge_sightings(data, [], window_months=12)
+        self.assertTrue(changed)
+        keys = set(data["sightings"].keys())
+        # 'X&CR;'와 'X'가 한 키로 수렴 (엔티티 제거 후 정규화)
+        self.assertIn("가나파트너스", keys)
+        self.assertNotIn("가나파트너스&CR;", keys)
+        rcepts = {e["rcept_no"] for e in data["sightings"]["가나파트너스"]}
+        self.assertEqual(rcepts, {"R1", "R2"})
+        # 엔티티 + 대괄호 역할 수식 키는 기저 '가나펀드'로 self-heal
+        self.assertIn("가나펀드", keys)
+        self.assertNotIn(
+            "가나펀드&CR;[업무집행조합원: 나다인베스트먼트 주식회사]", keys)
+        # 미래에셋대우 기저 키는 기관으로 프루닝(엔티티 붙어도)
+        self.assertNotIn("미래에셋대우 주식회사&CR;", keys)
+        self.assertNotIn("미래에셋대우 주식회사", keys)
+        self.assertIn("홍길동", keys)
+
     def test_merge_drops_old_outside_window(self):
         import scripts.discover_actors as da
         data = {"sightings": {"김갑": [

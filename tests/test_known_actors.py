@@ -107,6 +107,44 @@ class TestKnownActors(unittest.TestCase):
         self.assertEqual(normalize_name("  Liu   Huan "), "LIU HUAN")
         self.assertEqual(normalize_name("(주)베이트리"), "(주)베이트리")
 
+    def test_strip_role_qualifier_removes_html_entities(self):
+        from dart_risk_mcp.core.known_actors import strip_role_qualifier
+        # 비표준 '&CR;' 제거 — 후행·선행·중간 위치 불문
+        self.assertEqual(strip_role_qualifier("가나실체&CR;"), "가나실체")
+        self.assertEqual(strip_role_qualifier("&CR;가나실체"), "가나실체")
+        self.assertEqual(
+            strip_role_qualifier("가나에셋대우 주식회사&CR;"), "가나에셋대우 주식회사")
+        # '&CR;' 제거가 대괄호 역할 수식 제거보다 먼저 — 엔티티가 정규식을 깨지 않음
+        self.assertEqual(
+            strip_role_qualifier("가나펀드&CR;[업무집행조합원: (주)나다인베스트먼트]"),
+            "가나펀드")
+        # 표준·숫자 엔티티는 html.unescape로 디코드
+        self.assertEqual(strip_role_qualifier("&#28070;가나"), "润가나")
+        self.assertEqual(strip_role_qualifier("가나 &amp; 나다"), "가나 & 나다")
+        # ⚠ 순수 '&'(세미콜론 없음)는 보존 — 'S&T'·'R&D'
+        self.assertEqual(strip_role_qualifier("S&T중공업"), "S&T중공업")
+        self.assertEqual(strip_role_qualifier("R&D파트너스"), "R&D파트너스")
+
+    def test_strip_role_qualifier_removes_bracket_qualifiers(self):
+        from dart_risk_mcp.core.known_actors import strip_role_qualifier
+        # 역할 키워드 있는 대괄호 제거 (ASCII·전각). 가공 예시.
+        self.assertEqual(
+            strip_role_qualifier("가나펀드[업무집행조합원: 나다인베스트먼트 주식회사]"),
+            "가나펀드")
+        self.assertEqual(
+            strip_role_qualifier("가나증권 주식회사 [나다의 신탁업자 지위에서]"),
+            "가나증권 주식회사")
+        self.assertEqual(
+            strip_role_qualifier("가나펀드［업무집행조합원: 나다인베스트먼트］"),
+            "가나펀드")
+        # 대괄호 안 '(주)' 중첩돼도 통째로 삼킴 — stray 괄호 잔여 없음
+        r = strip_role_qualifier("가나펀드[업무집행조합원: (주)나다인베스트먼트]")
+        self.assertEqual(r, "가나펀드")
+        for _p in ("[", "]", "［", "］", "(", ")"):
+            self.assertNotIn(_p, r)
+        # 역할 키워드 없는 대괄호는 보존 (가공 분류 태그)
+        self.assertEqual(strip_role_qualifier("가나상품[에너지]"), "가나상품[에너지]")
+
     def test_load_missing_file_returns_empty(self):
         from dart_risk_mcp.core.known_actors import load_known_actors
         # 파일 미생성 상태
@@ -403,6 +441,24 @@ class TestKnownActors(unittest.TestCase):
         self.assertEqual(
             classify_actor("(주)스마트에쿼티파트너스 (본건 펀드의 업무집행 지위에서)"),
             "corp")
+
+    def test_classify_actor_excludes_miraeasset_daewoo(self):
+        from dart_risk_mcp.core.known_actors import classify_actor
+        # 미래에셋대우: 사명에 '증권/금융투자'가 없어 이전엔 corp로 오분류되던
+        # 지배적 오탐 허브. 리터럴로 institution 처리(수집 제외).
+        self.assertEqual(classify_actor("미래에셋대우 주식회사"), "institution")
+        # HTML 엔티티 붙어도 정제 후 동일 판정
+        self.assertEqual(classify_actor("미래에셋대우 주식회사&CR;"), "institution")
+        self.assertEqual(classify_actor("&CR;미래에셋대우 주식회사"), "institution")
+        # 관측된 오기 '미래애셋대우'도 제외
+        self.assertEqual(classify_actor("미래애셋대우"), "institution")
+        # ⚠ NEGATIVE: 'bare 대우'를 넣지 않으므로 아래는 기관으로 오제외되지 않는다
+        self.assertNotEqual(classify_actor("대우건설"), "institution")
+        self.assertNotEqual(classify_actor("(주)대우건설"), "institution")
+        self.assertEqual(classify_actor("(주)대우건설"), "corp")
+        self.assertNotEqual(classify_actor("대우조선해양"), "institution")
+        # 가공 인물 '박대우'는 인물로 보존
+        self.assertEqual(classify_actor("박대우"), "person")
 
     def test_canonical_name_maps_aliases(self):
         from dart_risk_mcp.core.known_actors import canonical_name, normalize_name
