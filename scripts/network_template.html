@@ -110,8 +110,7 @@
   .about-btn { pointer-events: auto; cursor: pointer; border: 1px solid var(--panel-line);
     background: var(--panel); color: var(--ink-2); border-radius: 50%; width: 22px; height: 22px;
     font-size: 12px; line-height: 1; vertical-align: 2px; margin-left: 6px; }
-  .tl .sub { display: none; }
-  .tl.about-open .sub { display: block; }
+  .tl .sub { display: block; }
   .tl { top: 18px; left: 20px; max-width: 340px; pointer-events: none;
         padding: 4px 8px 8px; border-radius: 14px;
         background: radial-gradient(120% 100% at 0% 0%, var(--bg) 55%, transparent 100%); }
@@ -308,6 +307,30 @@
     #time-label { min-width: 54px; font-size: 12px; }
   }
   @media not all and (max-width: 640px) { .sheet-hint { display: none; } }
+
+  /* ── 이중역할 dot (범례·검색·설명 패널) — 회색 바탕 + 안쪽 색점 ── */
+  .dot.dual-dot { position: relative; background: var(--company); }
+  .dot.dual-dot::after { content: ""; position: absolute; inset: 3px;
+    border-radius: 50%; background: var(--corp); }
+  /* 상세 섹션 헤더 밑 마이크로카피 */
+  .dt-note { font-size: 11px; color: var(--ink-3); line-height: 1.5; padding: 0 8px 6px; }
+
+  /* ── 설명 패널(about) — .card/.legend 재사용. PC 고정카드 / 모바일 바텀시트 ── */
+  #about-panel { position: fixed; top: 18px; left: 20px; z-index: 10; width: 340px;
+    max-height: calc(100vh - 36px); overflow-y: auto; display: none; }
+  #about-panel.open { display: block; }
+  #about-panel .ap-title { font-size: 15px; font-weight: 700; margin: 0 0 8px; }
+  #about-panel .ap-line { font-size: 12.5px; color: var(--ink-2); line-height: 1.55; margin: 4px 0; }
+  #about-panel .ap-line b { color: var(--ink); }
+  #about-panel .legend { margin: 2px 0 10px; }
+  #about-panel .lg-row { align-items: flex-start; font-size: 12.5px; line-height: 1.5; }
+  #about-panel .lg-row .dot { margin-top: 3px; }
+  .ap-close { position: absolute; top: 10px; right: 12px; cursor: pointer; padding: 4px;
+    background: none; border: none; color: var(--ink-3); font-size: 18px; line-height: 1; }
+  @media (max-width: 640px) {
+    #about-panel { top: auto; bottom: 0; left: 0; right: 0; width: 100%;
+      border-radius: 18px 18px 0 0; max-height: 62vh; }
+  }
 </style>
 
 <div id="stage">
@@ -329,6 +352,21 @@
 
 <button class="sheet-toggle" id="sheet-toggle" aria-label="검색·범례 열기">☰ 범례·검색</button>
 <div class="sheet-bg" id="sheet-bg"></div>
+
+<div class="card" id="about-panel" role="dialog" aria-label="그래프 설명">
+  <button class="ap-close" id="about-close" aria-label="닫기">×</button>
+  <p class="ap-title">이 그래프 읽는 법</p>
+  <div class="legend">
+    <div class="lg-row"><span class="dot" style="background:var(--company)"></span>회사 — 투자를 받은 상장·비상장 종목. 링 색은 시장구분(KOSPI·코스닥·코넥스·비상장).</div>
+    <div class="lg-row"><span class="dot" style="background:var(--corp)"></span>법인 — 다른 종목에 인수자로 등장한 회사·외국법인.</div>
+    <div class="lg-row"><span class="dot" style="background:var(--fund)"></span>조합 — 투자조합·사모 비히클. 전환사채(CB) 작전의 대표 창구.</div>
+    <div class="lg-row"><span class="dot" style="background:var(--person)"></span>개인 — 서로 다른 회사에 반복 등장한 개인 인수자.</div>
+    <div class="lg-row"><span class="dot dual-dot"></span>이중역할 — 투자를 받은 회사이면서 다른 종목에도 투자한 주체. 돈이 들어오고 나가는 통로다. 회색 바탕에 안쪽 색점으로 표시하고, 상세에서 투자받은 쪽과 투자한 쪽을 모두 본다.</div>
+  </div>
+  <p class="ap-line"><b>세력망</b> — 투자의 선으로 간접 연결된 노드 덩어리. 한 세력망을 공유하는 무리가 곧 세력의 지문이다.</p>
+  <p class="ap-line"><b>연결 단계</b> — 한 노드에서 몇 다리 건너 닿는지. 상세 패널의 슬라이더로 조절한다.</p>
+  <p class="ap-line"><b>도달 노드</b> — 지정한 단계 안에서 이 노드로부터 닿는 다른 노드들.</p>
+</div>
 
 <div class="overlay tr" id="panel">
   <div class="sheet-grip"></div>
@@ -431,6 +469,11 @@ const links = GRAPH.links.map(l => ({ ...l, source: byId[l.source], target: byId
                          .filter(l => l.source && l.target);
 const adj = {}; nodes.forEach(n => adj[n.id] = new Set());
 links.forEach(l => { adj[l.source.id].add(l.target.id); adj[l.target.id].add(l.source.id); });
+// 방향성 인접맵 — out(투자한 대상)·in(투자·참여한 행위자). 상세 패널 양방향 표시용.
+// reach/세력망/physics는 무방향 adj 그대로 사용(방향 도입 금지).
+const outAdj = {}, inAdj = {};
+nodes.forEach(n => { outAdj[n.id] = new Set(); inAdj[n.id] = new Set(); });
+links.forEach(l => { outAdj[l.source.id].add(l.target.id); inAdj[l.target.id].add(l.source.id); });
 
 const rOf = n => n.type === "company"
   ? 3 + Math.sqrt(n.deg) * 1.4
@@ -489,6 +532,8 @@ const companyNodes = nodes.filter(n => n.type === "company");
 // 기본 숨김 → 통계·범례는 코어만 센다.
 const coreActors = actorNodes.filter(n => !n.exit_only);
 const coreCompanies = companyNodes.filter(n => !n.exit_only);
+// 이중역할 — 투자를 받으면서(in) 다른 종목에도 투자한(out) 통과형 노드
+const dualNodes = nodes.filter(n => n.dual && !n.exit_only);
 const exitedLinks = links.filter(l => l.status === "exited");
 document.getElementById("s-actors").textContent = coreActors.length;
 document.getElementById("s-corps").textContent = coreCompanies.length;
@@ -504,6 +549,13 @@ const legend = document.getElementById("legend");
     ${KIND[k].ko}<span class="lg-count mono">${c}</span>`;
   legend.appendChild(row);
 });
+// 이중역할 행 — 회색 바탕 + 안쪽 색점(투자도 받고 투자도 하는 통과형)
+if (dualNodes.length) {
+  const drow = document.createElement("div"); drow.className = "lg-row";
+  drow.innerHTML = `<span class="dot dual-dot"></span>이중역할 (투자도·투자받기도)` +
+    `<span class="lg-count mono">${dualNodes.length}</span>`;
+  legend.appendChild(drow);
+}
 // 시장구분 범례 (회사 노드 링) — 실제 존재하는 구분만 표기
 const mktLegend = document.getElementById("legend-mkt");
 mktLegend.innerHTML = `<div class="lg-title">회사 시장구분 (링)</div>`;
@@ -543,8 +595,17 @@ const nodeEls = nodes.map(n => {
   c.setAttribute("r", rOf(n));
   c.setAttribute("fill", KIND_COLOR[n.type]);
   g.appendChild(c);
+  // 이중역할 dot — 회색 company 바탕 위에 안쪽 actor_kind 색점(r≈0.45)
+  let inner = null;
+  if (n.dual) {
+    inner = document.createElementNS(NS, "circle");
+    inner.setAttribute("r", (rOf(n) * 0.45).toFixed(2));
+    inner.setAttribute("fill", KIND_COLOR[n.actor_kind] || KIND_COLOR.corp);
+    inner.setAttribute("pointer-events", "none");
+    g.appendChild(inner);
+  }
   gNode.appendChild(g);
-  return { g, c, n, t: null };   // 라벨(<text>)은 필요 시 지연 생성 — 초기 DOM 절반 절감
+  return { g, c, n, inner, t: null };   // 라벨(<text>)은 필요 시 지연 생성 — 초기 DOM 절반 절감
 });
 vp.append(gEdge, gNode);   // 분리 상태에서 8천 요소를 채운 뒤 한 번에 부착
 // 라벨 지연 생성 — '이름 표시' 켤 때/호버 시에만 만든다.
@@ -809,8 +870,15 @@ document.getElementById("show-labels").addEventListener("change", ev => {
   if (ev.target.checked) nodeEls.forEach(ensureLabel);   // 라벨 지연 생성(최초 1회)
   svg.classList.toggle("labels-off", !ev.target.checked);
 });
-document.getElementById("about-btn").onclick = () =>
-  document.getElementById("tl").classList.toggle("about-open");
+// 헤더 ⓘ — 설명 패널(#about-panel) 오버레이 토글(기존 .sub 인라인 토글 대체)
+const aboutPanel = document.getElementById("about-panel");
+function toggleAbout(open) {
+  const o = open === undefined ? !aboutPanel.classList.contains("open") : open;
+  aboutPanel.classList.toggle("open", o);
+  document.getElementById("sheet-bg").classList.toggle("open", o);
+}
+document.getElementById("about-btn").onclick = () => toggleAbout();
+document.getElementById("about-close").onclick = () => toggleAbout(false);
 document.getElementById("foot-btn").onclick = () =>
   document.getElementById("foot").classList.toggle("open");
 document.getElementById("z-in").onclick = () => zoomAt(W/2, H/2, 1.3);
@@ -828,7 +896,7 @@ function toggleSheet(open) {
   sheetBg.classList.toggle("open", o);
 }
 document.getElementById("sheet-toggle").onclick = () => toggleSheet();
-sheetBg.onclick = () => toggleSheet(false);
+sheetBg.onclick = () => { toggleSheet(false); toggleAbout(false); };
 
 // ── detail panel ──
 const detail = document.getElementById("detail");
@@ -925,18 +993,19 @@ function openDetail(n) {
   depthSlider.value = egoDepth;
   const kv = css(KIND[n.type].varname);
   const kind = document.getElementById("dt-kind");
-  kind.textContent = KIND[n.type].ko;
+  kind.textContent = n.dual ? "회사 · 투자자" : KIND[n.type].ko;
   kind.style.background = kv + "22"; kind.style.color = kv;
   document.getElementById("dt-name").textContent = n.label;
+  // 메타 — 데이터 유무 기반(타입 분기 제거). 투자자면 out, 투자받으면 in 표기.
   const meta = document.getElementById("dt-meta");
-  if (n.type === "company") {
-    meta.innerHTML = mtag(n.mkt) + `<span>접점 추적 행위자 ${n.deg}명</span>`;
-  } else {
-    meta.innerHTML = `<span>문제 회사 ${n.deg}곳 · 공시 등장 ${n.sight}건</span>`;
-    if ((n.aliases || []).length) {
-      meta.innerHTML += `<span class="aka">⚑ 다른 이름: ${n.aliases.map(esc).join(", ")}</span>`;
-    }
-  }
+  meta.innerHTML = "";
+  if (n.mkt) meta.innerHTML += mtag(n.mkt);
+  if ((n.out_deg || 0) > 0)
+    meta.innerHTML += `<span>문제 회사 ${n.out_deg}곳 · 공시 등장 ${n.sight || 0}건</span>`;
+  if ((n.in_deg || 0) > 0)
+    meta.innerHTML += `<span>접점 추적 행위자 ${n.in_deg}명</span>`;
+  if ((n.aliases || []).length)
+    meta.innerHTML += `<span class="aka">⚑ 다른 이름: ${n.aliases.map(esc).join(", ")}</span>`;
   // 세력망(연쇄) 지표 — 투자의 선으로 간접 연결된 덩어리 전체의 규모
   if (n.comp !== undefined) {
     const c = comps[n.comp];
@@ -955,23 +1024,13 @@ function openDetail(n) {
 function renderDetailBody(n) {
   const body = document.getElementById("dt-body");
   body.innerHTML = "";
-  if (n.type === "company") {
-    body.innerHTML = `<div class="dt-sec">이 회사에 등장한 행위자</div>`;
-    [...adj[n.id]].map(id => byId[id]).sort((a,b)=>b.deg-a.deg).forEach(a => {
-      const row = document.createElement("div"); row.className = "co nolink";
-      row.innerHTML = `<span class="dot" style="background:var(${KIND[a.type].varname})"></span>` +
-        `<span class="cname">${esc(a.label)}</span>`;
-      row.style.cursor = "pointer"; row.onclick = () => openDetail(a);
-      body.appendChild(row);
-    });
-    if ((n.events || []).length) {
-      const sec = document.createElement("div"); sec.className = "dt-sec";
-      sec.textContent = "회사 단위 이벤트 (전환청구 등)"; body.appendChild(sec);
-      n.events.forEach(ev => body.appendChild(tlRow({ ...ev, dir: "out", company_level: true })));
-    }
-  } else {
-    body.innerHTML = `<div class="dt-sec">관계 타임라인 — 진입 → 이탈</div>`;
-    (n.companies || []).forEach(co => {
+  // 데이터 유무 기반 섹션(타입 분기 제거) — 이중역할 노드는 세 섹션 모두 표시.
+  // 1) 이 노드가 투자한 회사(out) — 진입 → 이탈 타임라인
+  if ((n.companies || []).length) {
+    body.insertAdjacentHTML("beforeend",
+      `<div class="dt-sec">이 행위자가 진입한 회사 — 진입 → 이탈</div>` +
+      `<div class="dt-note">서로 다른 회사에 인수자·지분참여로 등장한 이력. 실선=진행중 / 점선=이탈.</div>`);
+    n.companies.forEach(co => {
       const wrap = document.createElement("div"); wrap.className = "tlco";
       const stKo = co.status === "exited" ? "이탈(기록 보존)" : "진행중";
       wrap.innerHTML = `<div class="tlco-h"><span class="cname">${esc(co.name)}</span>` +
@@ -979,6 +1038,26 @@ function renderDetailBody(n) {
       (co.events || []).forEach(ev => wrap.appendChild(tlRow(ev)));
       body.appendChild(wrap);
     });
+  }
+  // 2) 이 노드에 투자·참여한 행위자(in) — 역방향
+  if (inAdj[n.id] && inAdj[n.id].size) {
+    body.insertAdjacentHTML("beforeend",
+      `<div class="dt-sec">이 회사·법인에 투자·지분 참여한 행위자</div>` +
+      `<div class="dt-note">이 종목의 인수자 명단에 등장한 개인·조합·법인.</div>`);
+    [...inAdj[n.id]].map(id => byId[id]).sort((a,b)=>b.deg-a.deg).forEach(a => {
+      const row = document.createElement("div"); row.className = "co nolink";
+      row.innerHTML = `<span class="dot" style="background:var(${KIND[a.type].varname})"></span>` +
+        `<span class="cname">${esc(a.label)}</span>`;
+      row.style.cursor = "pointer"; row.onclick = () => openDetail(a);
+      body.appendChild(row);
+    });
+  }
+  // 3) 회사 단위 이벤트(전환청구 등)
+  if ((n.events || []).length) {
+    body.insertAdjacentHTML("beforeend",
+      `<div class="dt-sec">회사 단위 이벤트 (전환청구 등)</div>` +
+      `<div class="dt-note">회사 기준 공시(전환청구 등) — 특정 인수자와 무관한 종목 레벨 사건.</div>`);
+    n.events.forEach(ev => body.appendChild(tlRow({ ...ev, dir: "out", company_level: true })));
   }
   const reachWrap = document.createElement("div");
   reachWrap.id = "dt-reach"; body.appendChild(reachWrap);
@@ -998,8 +1077,9 @@ function hydrate(n) {
   if (n._hyd) return Promise.resolve();
   return loadDetails().then(d => {
     const x = d[n.id] || {};
-    if (n.type === "company") n.events = x.events || n.events || [];
-    else if (x.companies) n.companies = x.companies;
+    // 이중역할 노드는 companies·events 둘 다 로드(데이터 유무 기반)
+    if (x.companies) n.companies = x.companies;
+    if (x.events) n.events = x.events;
     n._hyd = true;
   });
 }
@@ -1029,21 +1109,22 @@ function applyFilter() {
   const term = q.value.trim().toLowerCase();
   const onlyExit = onlyExitBox.checked;
   degVal.textContent = minDeg;
-  const visActor = new Set(actorNodes.filter(n => n.deg >= minDeg).map(n => n.id));
-  const visCompany = new Set();
-  links.forEach(l => { if (visActor.has(l.source.id)) visCompany.add(l.target.id);
-                       if (visActor.has(l.target.id)) visCompany.add(l.source.id); });
+  // 방향 기반 — 투자자 = out_deg>=minDeg(엔켐 등 이중역할 포함). "최소 회사 수"
+  // 슬라이더 의미(서로 다른 회사 N곳 이상에 투자) 유지. 대상 = 그 투자자의 out 이웃.
+  const visInvestor = new Set(nodes.filter(n => (n.out_deg || 0) >= minDeg).map(n => n.id));
+  const visTarget = new Set();
+  visInvestor.forEach(id => outAdj[id].forEach(t => visTarget.add(t)));
   nodeVisF.clear();
   nodeEls.forEach(({ g, n }) => {
     // 이탈만 보기: 차수 필터를 우회해 이탈 엣지 끝점(단일 회사 이탈 포함)만.
-    // 기본: 2사+ 코어 그래프(exit_only는 차수<2라 자동 제외).
+    // 기본: 자격 투자자 OR 그 투자자의 대상(exit_only는 out_deg<2라 자동 제외).
     let vis = onlyExit ? exitNodeIds.has(n.id)
-                       : (n.type === "company" ? visCompany.has(n.id) : visActor.has(n.id));
+                       : (visInvestor.has(n.id) || visTarget.has(n.id));
     if (vis && term) {
       const hit = n.label.toLowerCase().includes(term) ||
         (n.companies || []).some(c => c.name.toLowerCase().includes(term));
-      vis = hit || (n.type === "company" && [...adj[n.id]].some(id =>
-        byId[id].label.toLowerCase().includes(term)));
+      // 검색 확장(무방향) — 검색어 노드의 이웃이면 노출
+      vis = hit || [...adj[n.id]].some(id => byId[id].label.toLowerCase().includes(term));
     }
     g.classList.toggle("fhide", !vis);
     n._fh = !vis;
@@ -1082,9 +1163,12 @@ function renderSearchResults(term) {
   }
   hits.slice(0, QR_MAX).forEach(n => {
     const row = document.createElement("div"); row.className = "qr-row";
-    row.innerHTML = `<span class="dot" style="background:var(${KIND[n.type].varname})"></span>` +
+    const dotCls = n.dual ? "dot dual-dot" : "dot";
+    const dotStyle = n.dual ? "" : ` style="background:var(${KIND[n.type].varname})"`;
+    const kindKo = n.dual ? "회사 · 투자자" : KIND[n.type].ko;
+    row.innerHTML = `<span class="${dotCls}"${dotStyle}></span>` +
       `<span class="cname">${esc(n.label)}</span>` +
-      `<span class="qr-kind">${KIND[n.type].ko}</span>`;
+      `<span class="qr-kind">${kindKo}</span>`;
     row.onclick = () => {
       if (matchMedia("(max-width: 640px)").matches) toggleSheet(false);
       openDetail(n);
@@ -1174,7 +1258,10 @@ document.getElementById("theme").addEventListener("click", () => {
   const dark = cur ? cur === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
   document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
   refreshKindColors();
-  nodeEls.forEach(({ c, n }) => c.setAttribute("fill", KIND_COLOR[n.type]));
+  nodeEls.forEach(({ c, n, inner }) => {
+    c.setAttribute("fill", KIND_COLOR[n.type]);
+    if (inner) inner.setAttribute("fill", KIND_COLOR[n.actor_kind] || KIND_COLOR.corp);
+  });
 });
 
 // ── util ──
