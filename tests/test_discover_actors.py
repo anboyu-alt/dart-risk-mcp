@@ -279,6 +279,32 @@ class TestMergeAndPromote(unittest.TestCase):
         self.assertTrue(changed)
         self.assertEqual(set(data["sightings"].keys()), {"홍길동"})
 
+    def test_merge_self_heals_role_qualifier_keys(self):
+        # 역할 괄호가 붙은 기존 키가 기저 실체 키로 self-heal.
+        # 법인 기저(가나파트너스)는 후행·선행 괄호 변형이 한 키로 합쳐지고,
+        # 증권사 기저(가나증권)는 기관으로 프루닝된다. 모두 가공 이름.
+        import scripts.discover_actors as da
+        data = {"sightings": {
+            "가나파트너스 (본건 펀드1의 신탁업자 지위에서)": [
+                {"corp_code": "c1", "rcept_no": "R1", "date": "2026-06"}],
+            "(본건 펀드2의 신탁업자 지위에서) 가나파트너스": [
+                {"corp_code": "c2", "rcept_no": "R2", "date": "2026-06"}],
+            "가나증권 주식회사 (밸류 사모투자신탁의 신탁업자 지위에서)": [
+                {"corp_code": "c3", "rcept_no": "R3", "date": "2026-06"}],
+            "홍길동": [{"corp_code": "c4", "rcept_no": "R4", "date": "2026-06"}],
+        }}
+        changed = da.merge_sightings(data, [], window_months=12)
+        self.assertTrue(changed)
+        keys = set(data["sightings"].keys())
+        # 증권사 기저 키는 기관으로 프루닝 (역할 괄호 안 사모투자신탁에도 불구)
+        self.assertNotIn("가나증권 주식회사 (밸류 사모투자신탁의 신탁업자 지위에서)", keys)
+        self.assertNotIn("가나증권 주식회사", keys)
+        # 법인 기저는 두 괄호 변형이 한 키로 수렴
+        self.assertIn("가나파트너스", keys)
+        self.assertIn("홍길동", keys)
+        rcepts = {e["rcept_no"] for e in data["sightings"]["가나파트너스"]}
+        self.assertEqual(rcepts, {"R1", "R2"})
+
     def test_merge_drops_old_outside_window(self):
         import scripts.discover_actors as da
         data = {"sightings": {"김갑": [
@@ -453,14 +479,15 @@ class TestFoldDedupe(unittest.TestCase):
         self.assertEqual(data["aliases"]["베이트리"], "(주)베이트리")
 
     def test_merge_folds_latin_phonetic(self):
-        # DB금융투자 ↔ 디비금융투자 (라틴↔한글 음차)
+        # ABC바이오 ↔ 에이비씨바이오 (라틴↔한글 음차). 가공 법인명 —
+        # '금융투자'는 이제 제도권 기관으로 분류·제외되므로 폴딩 예시로 부적합.
         import scripts.discover_actors as da
         data = {"sightings": {
-            "DB금융투자 주식회사": [self._rec("c1", "R1"), self._rec("c2", "R2")],
-            "디비금융투자 주식회사": [self._rec("c3", "R3")],
+            "ABC바이오 주식회사": [self._rec("c1", "R1"), self._rec("c2", "R2")],
+            "에이비씨바이오 주식회사": [self._rec("c3", "R3")],
         }}
         da.merge_sightings(data, [], window_months=12)
-        self.assertEqual(set(data["sightings"].keys()), {"DB금융투자 주식회사"})
+        self.assertEqual(set(data["sightings"].keys()), {"ABC바이오 주식회사"})
 
     def test_merge_folds_spaced_person(self):
         # '정 상 용' ↔ '정상용' (개인명 공백 변형)

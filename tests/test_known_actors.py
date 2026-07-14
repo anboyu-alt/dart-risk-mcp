@@ -54,6 +54,46 @@ class TestKnownActors(unittest.TestCase):
         self.assertEqual(normalize_name("홍길동"), "홍길동")
         self.assertEqual(normalize_name(""), "")
 
+    def test_strip_role_qualifier(self):
+        from dart_risk_mcp.core.known_actors import strip_role_qualifier
+        # 후행 역할 괄호 제거 (가공 예시)
+        self.assertEqual(
+            strip_role_qualifier("가나금융투자 주식회사 (본건 펀드7의 신탁업자 지위에서)"),
+            "가나금융투자 주식회사")
+        # 선행 역할 괄호 제거
+        self.assertEqual(
+            strip_role_qualifier("(본건 펀드3의 신탁업자 지위에서) 가나금융투자 주식회사"),
+            "가나금융투자 주식회사")
+        # 전각 괄호도 제거
+        self.assertEqual(
+            strip_role_qualifier("가나은행（첨단기금의 관리,운용기관）"), "가나은행")
+        # ASCII 괄호 + 관리/운용 키워드
+        self.assertEqual(
+            strip_role_qualifier("가나은행(첨단전략산업기금의 관리,운용기관)"), "가나은행")
+        # 법인 접사 '(주)'는 보존 (역할 키워드 없음)
+        self.assertEqual(strip_role_qualifier("(주)베이트리"), "(주)베이트리")
+        # 역할 키워드 없는 괄호는 보존
+        self.assertEqual(
+            strip_role_qualifier("BOLD (Business Opportunities)"),
+            "BOLD (Business Opportunities)")
+        # 개인명·빈값·None
+        self.assertEqual(strip_role_qualifier("홍길동"), "홍길동")
+        self.assertEqual(strip_role_qualifier(""), "")
+        self.assertEqual(strip_role_qualifier(None), "")
+
+    def test_normalize_name_strips_role_qualifier(self):
+        from dart_risk_mcp.core.known_actors import normalize_name
+        # 역할 괄호 제거 후 정규화 (선행·후행 변형이 동일 기저 키로 수렴)
+        self.assertEqual(
+            normalize_name("가나금융투자 주식회사 (본건 펀드7의 신탁업자 지위에서)"),
+            normalize_name("가나금융투자 주식회사"))
+        self.assertEqual(
+            normalize_name("(본건 펀드3의 신탁업자 지위에서) 가나금융투자 주식회사"),
+            normalize_name("가나금융투자 주식회사"))
+        # 기존 동작 보존
+        self.assertEqual(normalize_name("  Liu   Huan "), "LIU HUAN")
+        self.assertEqual(normalize_name("(주)베이트리"), "(주)베이트리")
+
     def test_load_missing_file_returns_empty(self):
         from dart_risk_mcp.core.known_actors import load_known_actors
         # 파일 미생성 상태
@@ -329,6 +369,27 @@ class TestKnownActors(unittest.TestCase):
         self.assertEqual(classify_actor("김기타"), "person")   # '기타'로 끝나도 실명
         self.assertEqual(classify_actor("등지"), "person")
         self.assertEqual(classify_actor("홍길동"), "person")
+
+    def test_classify_actor_strips_role_qualifier(self):
+        from dart_risk_mcp.core.known_actors import classify_actor
+        # 증권사 기저 + 역할 괄호 → institution (수집 제외). 가공 예시.
+        self.assertEqual(
+            classify_actor("가나증권 주식회사 (밸류 전문투자형 사모투자신탁의 신탁업자 지위에서)"),
+            "institution")
+        # 금융투자사 기저 → institution (신한금융투자류)
+        self.assertEqual(
+            classify_actor("가나금융투자 주식회사 (본건 펀드7의 신탁업자 지위에서)"),
+            "institution")
+        # 선행 괄호 형태도 동일 기저 → institution
+        self.assertEqual(
+            classify_actor("(본건 펀드3의 신탁업자 지위에서) 가나금융투자 주식회사"),
+            "institution")
+        # 금융투자 단독 (접사 없이도) institution
+        self.assertEqual(classify_actor("가나금융투자"), "institution")
+        # 법인 기저 + 역할 괄호 → corp (추적 유지)
+        self.assertEqual(
+            classify_actor("(주)스마트에쿼티파트너스 (본건 펀드의 업무집행 지위에서)"),
+            "corp")
 
     def test_canonical_name_maps_aliases(self):
         from dart_risk_mcp.core.known_actors import canonical_name, normalize_name

@@ -195,6 +195,20 @@ def merge_sightings(data: dict, new: list, window_months: int = WINDOW_MONTHS) -
                    e.get("corp_code") == rec.get("corp_code") and
                    e.get("event", "in") == rec.get("event", "in") for e in lst)
 
+    # 기존 키 정규화 재키잉(1회) — normalize_name 강화(역할 괄호 제거)로
+    # '증권사 (…신탁업자 지위에서)'처럼 이미 저장된 괄호 키가 기저 실체 키로
+    # 수렴한다. 이후 프루닝 루프가 기저가 기관인 키를 제거한다. (별칭 재키잉은
+    # 폴드 루프 뒤 기존 루프가 담당하므로 여기선 순수 정규화만 적용한다.)
+    for k in list(s.keys()):
+        nk = normalize_name(k)
+        if nk != k:
+            dst = s.setdefault(nk, [])
+            for rec in s[k]:
+                if not _is_dup(dst, rec):
+                    dst.append(rec)
+            del s[k]
+            changed = True
+
     for rec in new:
         nm = rec.get("name", "")
         if not nm:
