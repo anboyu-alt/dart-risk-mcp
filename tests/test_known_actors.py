@@ -460,6 +460,68 @@ class TestKnownActors(unittest.TestCase):
         # 가공 인물 '박대우'는 인물로 보존
         self.assertEqual(classify_actor("박대우"), "person")
 
+    def test_sector_of_securities_and_banks(self):
+        from dart_risk_mcp.core.known_actors import sector_of
+        # 증권·금융투자·미래에셋대우(오기 포함) → "증권" (수집 제외 대상)
+        self.assertEqual(sector_of("가나증권"), "증권")
+        self.assertEqual(sector_of("가나투자증권 주식회사"), "증권")
+        self.assertEqual(sector_of("가나금융투자"), "증권")
+        self.assertEqual(sector_of("미래에셋대우 주식회사"), "증권")
+        self.assertEqual(sector_of("미래애셋대우"), "증권")
+        # 역할 괄호가 붙어도 기저 실체로 판정
+        self.assertEqual(
+            sector_of("가나증권 주식회사 (본건 펀드의 신탁업자 지위에서)"), "증권")
+        # 은행 → "은행" (수집 제외 대상)
+        self.assertEqual(sector_of("가나은행"), "은행")
+        self.assertEqual(sector_of("한국산업은행(첨단전략산업기금의 관리,운용기관)"), "은행")
+
+    def test_sector_of_other_institutions(self):
+        from dart_risk_mcp.core.known_actors import sector_of
+        # 증권·은행이 아닌 제도권 기관 → "기타기관"
+        self.assertEqual(sector_of("가나자산운용"), "기타기관")
+        self.assertEqual(sector_of("가나생명보험"), "기타기관")
+        self.assertEqual(sector_of("가나캐피탈"), "기타기관")
+        self.assertEqual(sector_of("교직원공제회"), "기타기관")
+
+    def test_sector_of_advisory_pe_vc(self):
+        from dart_risk_mcp.core.known_actors import sector_of
+        # 현재 corp로 분류되는 자문·PE·VC 성 법인 → "기타기관"
+        self.assertEqual(sector_of("가나투자자문"), "기타기관")
+        self.assertEqual(sector_of("(주)스마트에쿼티파트너스"), "기타기관")
+        self.assertEqual(sector_of("가나인베스트먼트"), "기타기관")
+
+    def test_sector_of_normal_actors_none(self):
+        from dart_risk_mcp.core.known_actors import sector_of
+        # 개인·조합·일반법인은 섹터 없음(None) — 항상 표시 대상
+        self.assertIsNone(sector_of("홍길동"))
+        self.assertIsNone(sector_of("아레스1호투자조합"))
+        self.assertIsNone(sector_of("베이스100"))
+        self.assertIsNone(sector_of("(주)대우건설"))
+        self.assertIsNone(sector_of(""))
+
+    def test_should_store_keeps_trackables_and_other_institutions(self):
+        from dart_risk_mcp.core.known_actors import should_store
+        # 개인·조합·일반법인 저장
+        self.assertTrue(should_store("홍길동"))
+        self.assertTrue(should_store("아레스1호투자조합"))
+        self.assertTrue(should_store("(주)대우건설"))
+        # 증권·은행 제외한 제도권 기관(자산운용 등)은 저장
+        self.assertTrue(should_store("가나자산운용"))
+        self.assertTrue(should_store("가나생명보험"))
+        # 자문·PE·VC(corp)도 저장
+        self.assertTrue(should_store("(주)스마트에쿼티파트너스"))
+
+    def test_should_store_drops_securities_banks_and_noise(self):
+        from dart_risk_mcp.core.known_actors import should_store
+        # 증권·은행은 저장 안 함
+        self.assertFalse(should_store("가나증권"))
+        self.assertFalse(should_store("가나금융투자"))
+        self.assertFalse(should_store("미래에셋대우 주식회사"))
+        self.assertFalse(should_store("가나은행"))
+        # 노이즈(표 헤더·빈값)도 저장 안 함
+        self.assertFalse(should_store("합계"))
+        self.assertFalse(should_store(""))
+
     def test_canonical_name_maps_aliases(self):
         from dart_risk_mcp.core.known_actors import canonical_name, normalize_name
         # 가공의 예시 — 실제 별칭 매핑은 비공개 sightings 저장소에만 둔다

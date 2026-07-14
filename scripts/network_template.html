@@ -391,6 +391,7 @@
   <p class="ap-line"><b>세력망</b> — 투자의 선으로 간접 연결된 노드 덩어리. 한 세력망을 공유하는 무리가 곧 세력의 지문이다.</p>
   <p class="ap-line"><b>연결 단계</b> — 한 노드에서 몇 다리 건너 닿는지. 상세 패널의 슬라이더로 조절한다.</p>
   <p class="ap-line"><b>도달 노드</b> — 지정한 단계 안에서 이 노드로부터 닿는 다른 노드들.</p>
+  <p class="ap-line"><b>수집 범위</b> — 증권사·은행은 신탁·커스터디 역할로 대부분의 딜에 정상적으로 등장해 신호가 무의미하므로 수집하지 않는다. 자산운용·투자자문·PE·VC 등 <b>기타 기관</b> 투자자는 수집하되 기본적으로 숨겨져 있으며, 상단 <b>'기타 기관'</b> 토글로 켜서 볼 수 있다.</p>
 </div>
 
 <div class="overlay tr" id="panel">
@@ -407,6 +408,7 @@
     <div class="ctl-label"><span for="deg">최소 회사 수</span><span class="mono" id="deg-val">3</span></div>
     <input type="range" id="deg" min="2" max="8" value="3" step="1">
     <label class="exit-toggle"><input type="checkbox" id="only-exit"> 이탈 있는 관계만</label>
+    <label class="exit-toggle"><input type="checkbox" id="show-etc"> 기타 기관</label>
     <label class="exit-toggle"><input type="checkbox" id="show-labels"> 이름 표시</label>
   </div>
   <div class="card legend" id="legend"></div>
@@ -580,6 +582,15 @@ if (dualNodes.length) {
   drow.innerHTML = `<span class="dot dual-dot"></span>이중역할 (투자도·투자받기도)` +
     `<span class="lg-count mono">${dualNodes.length}</span>`;
   legend.appendChild(drow);
+}
+// 기타 기관 행 — 자문·PE·VC·자산운용 등. 기본 숨김, 상단 토글로 노출.
+const etcNodes = actorNodes.filter(n => n.sector === "기타기관");
+if (etcNodes.length) {
+  const erow = document.createElement("div"); erow.className = "lg-row";
+  erow.innerHTML = `<span class="dot" style="background:var(--corp);opacity:.55"></span>` +
+    `기타 기관 (자문·PE·자산운용 등 · 기본 숨김, '기타 기관' 토글)` +
+    `<span class="lg-count mono">${etcNodes.length}</span>`;
+  legend.appendChild(erow);
 }
 // 시장구분 범례 (회사 노드 링) — 실제 존재하는 구분만 표기
 const mktLegend = document.getElementById("legend-mkt");
@@ -1200,11 +1211,13 @@ const degVal = document.getElementById("deg-val");
 const q = document.getElementById("q");
 const nodeVisF = new Set();      // 필터 통과 노드 id
 const onlyExitBox = document.getElementById("only-exit");
+const etcBox = document.getElementById("show-etc");   // 기타 기관 토글(기본 OFF)
 const exitNodeIds = new Set(exitedLinks.flatMap(l => [l.source.id, l.target.id]));
 function applyFilter() {
   const minDeg = +degSlider.value;
   const term = q.value.trim().toLowerCase();
   const onlyExit = onlyExitBox.checked;
+  const showEtc = etcBox.checked;
   degVal.textContent = minDeg;
   // 방향 기반 — 투자자 = out_deg>=minDeg(엔켐 등 이중역할 포함). "최소 회사 수"
   // 슬라이더 의미(서로 다른 회사 N곳 이상에 투자) 유지. 대상 = 그 투자자의 out 이웃.
@@ -1223,6 +1236,8 @@ function applyFilter() {
       // 검색 확장(무방향) — 검색어 노드의 이웃이면 노출
       vis = hit || [...adj[n.id]].some(id => byId[id].label.toLowerCase().includes(term));
     }
+    // 기타 기관(자문·PE·VC·자산운용 등)은 토글 OFF면 검색·필터 통과와 무관하게 숨김
+    if (vis && n.sector === "기타기관" && !showEtc) vis = false;
     g.classList.toggle("fhide", !vis);
     n._fh = !vis;
     if (vis) nodeVisF.add(n.id);
@@ -1248,7 +1263,8 @@ function renderSearchResults(term) {
   qResults.innerHTML = "";
   if (!term) return;
   const t = term.toLowerCase();
-  const hits = nodes.filter(n => !n.exit_only && n.label.toLowerCase().includes(t))
+  const hits = nodes.filter(n => !n.exit_only && n.label.toLowerCase().includes(t)
+      && !(n.sector === "기타기관" && !etcBox.checked))   // 기타 기관 토글 OFF면 목록에서도 숨김
     .sort((a, b) => {
       const ap = a.label.toLowerCase().startsWith(t) ? 0 : 1;
       const bp = b.label.toLowerCase().startsWith(t) ? 0 : 1;
@@ -1286,6 +1302,7 @@ document.getElementById("q-reset").addEventListener("click", () => {
   q.value = "";
   degSlider.value = 3;
   onlyExitBox.checked = false;
+  etcBox.checked = false;   // 기타 기관 기본 숨김으로 복귀
   stopPlay();
   asOf = null; if (MONTHS.length >= 2) timeSlider.value = MONTHS.length - 1;
   closeDetail();
@@ -1296,6 +1313,7 @@ document.getElementById("q-reset").addEventListener("click", () => {
 q.addEventListener("keydown", ev => { if (ev.key === "Enter") applyFilter(); });
 q.addEventListener("search", applyFilter);   // 검색창 X(지우기) 버튼도 반영
 onlyExitBox.addEventListener("change", applyFilter);
+etcBox.addEventListener("change", applyFilter);
 
 // ── 시간축 스크러버 (진입~이탈 시점) ──
 const MONTHS = [...new Set(links.flatMap(l => [l.t_in, l.t_out]).filter(Boolean))].sort();

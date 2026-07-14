@@ -3,6 +3,11 @@ name: Publish network viz
 # 행위자 연결망 HTML을 매일 빌드해 Cloudflare Pages(비공개 시크릿 URL)에 배포.
 # refresh-known-actors(04:00 KST)가 sightings를 갱신한 뒤 돌도록 04:40 KST에 예약.
 #
+# 수집 정책: 증권사·은행은 신탁·커스터디 역할로 대부분의 딜에 정상 등장해
+#   신호가 무의미하므로 수집 제외. 자산운용·보험·연기금·캐피탈 등 기타 제도권
+#   기관과 자문·PE·VC는 수집하되 sector="기타기관"으로 태깅해 그래프에서
+#   기본 숨김 — 상단 '기타 기관' 토글로 노출한다.
+#
 # 접근 통제 4중 모델 (클로즈베타):
 #   (1) Cloudflare Access 이메일 OTP 로그인 — 기본 거부(deny-by-default),
 #       허용 명단은 Zero Trust 대시보드의 Rule group으로 관리.
