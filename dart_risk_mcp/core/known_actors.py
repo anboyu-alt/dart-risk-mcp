@@ -30,8 +30,39 @@ _WS_RE = re.compile(r"\s+")
 _ROLE_QUALIFIER_KW = (
     r"지위|신탁|수탁|업무집행|운용|관리|대리|보관|위탁|사무|관리인|청산인"
 )
+# 괄호 내용 조각 — 다른 괄호는 삼키지 않되(별개 괄호 2개 동시 제거 방지),
+# 역할 괄호 안에 중첩되는 법인 접사 '(주)'·㈜만 예외로 허용한다. 예:
+# '(업무집행조합원 : (주)코오롱인베스트먼트)'에서 내부 '(주)'에 끊겨 stray ')'가
+# 남던 문제를 없앤다.
+_ROLE_PAREN_INNER = r"(?:[^()（）]|\(주\)|㈜)*"
 _ROLE_PAREN_RE = re.compile(
-    r"[(（][^)）]*(?:" + _ROLE_QUALIFIER_KW + r")[^)）]*[)）]")
+    r"[(（]" + _ROLE_PAREN_INNER + r"(?:" + _ROLE_QUALIFIER_KW + r")"
+    + _ROLE_PAREN_INNER + r"[)）]")
+
+
+def _drop_unbalanced_parens(s: str) -> str:
+    """짝 없는 괄호 제거 — 균형 잡힌 쌍('(주)' 등)은 보존.
+
+    역할 괄호 제거 후 남을 수 있는 고아 여는/닫는 괄호를 정리한다.
+    스택으로 매칭되지 않는 여는/닫는 괄호만 골라 삭제해 정상 '(주)'·
+    '(Business…)'처럼 짝이 맞는 괄호는 그대로 둔다.
+    """
+    out: list = []
+    stack: list = []
+    for ch in s:
+        if ch in "(（":
+            stack.append(len(out))
+            out.append(ch)
+        elif ch in ")）":
+            if stack:
+                stack.pop()
+                out.append(ch)
+            # 짝 없는 닫는 괄호는 버림
+        else:
+            out.append(ch)
+    for idx in stack:      # 짝 없는 여는 괄호도 버림
+        out[idx] = None
+    return "".join(c for c in out if c is not None)
 
 
 def strip_role_qualifier(name: str) -> str:
@@ -39,15 +70,19 @@ def strip_role_qualifier(name: str) -> str:
 
     괄호 내용에 역할 키워드(지위·신탁·수탁·업무집행 등)가 있는 구간만
     선행·후행·중간 위치 불문 모두 제거하고 공백을 단일화한다. 법인 접사
-    '(주)'·역할 키워드 없는 괄호는 보존한다. 예)
+    '(주)'·역할 키워드 없는 괄호는 보존한다. 역할 괄호 안에 '(주)'가 중첩돼도
+    괄호 전체를 삼키고, 제거 후 남는 짝 없는 괄호는 정리한다. 예)
     '신한금융투자 주식회사 (본건 펀드7의 신탁업자 지위에서)' → '신한금융투자 주식회사',
     '(본건 펀드3의 신탁업자 지위에서) 신한금융투자 주식회사' → '신한금융투자 주식회사',
     '한국산업은행(첨단전략산업기금의 관리,운용기관)' → '한국산업은행',
+    '코오롱 투자조합(업무집행조합원 : (주)코오롱인베스트먼트)' → '코오롱 투자조합',
     '(주)베이트리' → '(주)베이트리'(불변), '홍길동' → '홍길동'.
     """
     if not name:
         return ""
     s = _ROLE_PAREN_RE.sub(" ", name)
+    if ")" in s or "）" in s or "(" in s or "（" in s:
+        s = _drop_unbalanced_parens(s)
     return _WS_RE.sub(" ", s).strip()
 
 

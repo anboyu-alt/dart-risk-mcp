@@ -72,6 +72,19 @@ class TestKnownActors(unittest.TestCase):
             strip_role_qualifier("가나은행(첨단전략산업기금의 관리,운용기관)"), "가나은행")
         # 법인 접사 '(주)'는 보존 (역할 키워드 없음)
         self.assertEqual(strip_role_qualifier("(주)베이트리"), "(주)베이트리")
+        # 역할 괄호 안에 '(주)'가 중첩돼도 괄호 전체 제거 — stray ')' 잔여 없음
+        self.assertEqual(
+            strip_role_qualifier(
+                "코오롱 2021 이노베이션 투자조합(업무집행조합원 : (주)코오롱인베스트먼트)"),
+            "코오롱 2021 이노베이션 투자조합")
+        self.assertEqual(
+            strip_role_qualifier("가나조합(업무집행조합원 ㈜가나인베스트먼트)"), "가나조합")
+        # 중첩 케이스 결과에 짝 없는 괄호가 남지 않는다
+        for _probe in ("(", ")", "（", "）"):
+            self.assertNotIn(
+                _probe,
+                strip_role_qualifier(
+                    "코오롱 2021 이노베이션 투자조합(업무집행조합원 : (주)코오롱인베스트먼트)"))
         # 역할 키워드 없는 괄호는 보존
         self.assertEqual(
             strip_role_qualifier("BOLD (Business Opportunities)"),
