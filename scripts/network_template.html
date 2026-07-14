@@ -701,9 +701,13 @@ fitView();
 // 숨김(필터·시점) 노드는 시뮬레이션에서 제외 — 필터가 실제 부하를 줄인다.
 // 숨겨진 노드는 마지막 위치에 동결되고, 다시 보이면 그 자리에서 재합류.
 let simNodes = nodes, simLinks = links;
+// 단계 탐색(reach)으로 노출된 ego 노드 id 집합 — 필터·시점으로 숨겨졌더라도
+// 물리 활성 집합에 포함시켜 좌표가 계속 갱신되게 한다(엣지가 stale 좌표로 끊기는 문제 방지).
+let reachSet = new Set();
 function rebuildSim() {
-  simNodes = nodes.filter(n => !n._fh && !n._th);
-  simLinks = links.filter(l => !l._fh && !l._th);
+  simNodes = nodes.filter(n => (!n._fh && !n._th) || reachSet.has(n.id));
+  simLinks = links.filter(l => (!l._fh && !l._th) ||
+    (reachSet.has(l.source.id) && reachSet.has(l.target.id)));
 }
 let dragging = null, dragMoved = false, panning = false, panStart = null;
 let alpha = 0.35;  // 원판 균등 배치라 폭발적 초기 정렬 불필요 — 낮게 시작해 초기 과활동 방지
@@ -781,7 +785,9 @@ function draw() {
   }
   for (const el of nodeEls) {
     const n = el.n;
-    if (!n._fh && !n._th) el.g.setAttribute("transform", `translate(${n.x},${n.y})`);
+    // 활성 노드 + reach로 노출된(숨김이지만 물리 활성) 노드 모두 좌표 갱신
+    if ((!n._fh && !n._th) || reachSet.has(n.id))
+      el.g.setAttribute("transform", `translate(${n.x},${n.y})`);
   }
   // 선택 노드 화면 강조 — 노드의 화면좌표(월드→스크린)로 후광·헤일로·이름 pill을 배치.
   // 헤일로 r은 노드 화면 반경에 여유(+10)를 더하되 최소 14px(작은 노드도 후광으로 도드라지게).
@@ -1002,11 +1008,22 @@ function highlightDepth(id, d) {
     e.classList.toggle("dim", !on);
     e.classList.toggle("reach", on);
   });
+  // reach 집합을 물리 활성 집합에 반영. 단, 실제로 숨겨진(_fh/_th) 노드를
+  // 새로 활성화할 때만 rebuildSim + 은은한 리히트 — 필터가 없어 아무것도
+  // 숨겨지지 않은 상태(정착된 그래프)를 흔들지 않도록 방지(회귀 방지).
+  reachSet = new Set(dist.keys());
+  const addsHidden = [...reachSet].some(nid => { const m = byId[nid]; return m && (m._fh || m._th); });
+  if (addsHidden) {
+    rebuildSim();   // reduce 여부와 무관 — 노출된 노드 좌표가 갱신돼야 하므로
+    alpha = Math.max(alpha, 0.2);   // 완만한 리히트: 노출 노드가 이웃 곁으로 정착
+  }
   return { reach, dist };
 }
 function clearReach() {
   nodeEls.forEach(({ g }) => g.classList.remove("reach"));
   edgeEls.forEach(e => e.classList.remove("reach"));
+  reachSet = new Set();
+  rebuildSim();   // 필터 전용 활성 집합으로 복귀
 }
 // 상세 하단 '단계 내 도달 노드' 목록 — 슬라이더에 따라 갱신 (행 수 상한으로 가볍게)
 const REACH_ROWS_MAX = 120;
