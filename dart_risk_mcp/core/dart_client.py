@@ -1772,6 +1772,10 @@ _FS_ALIASES = {
     "자산총계": ["자산총계", "자산 총계"],
     "부채총계": ["부채총계", "부채 총계"],
     "판매비와관리비": ["판매비와관리비", "판매비와 관리비", "판매비및관리비", "판매관리비"],
+    # TATA 계산용 (v1.6.x — XBRL 감가상각비 복원과 함께 추가)
+    "유동부채": ["유동부채", "유동부채 합계"],
+    "현금및현금성자산": ["현금및현금성자산", "현금 및 현금성자산",
+                 "현금및현금성 자산", "현금및현금등가물"],
 }
 
 
@@ -2142,22 +2146,206 @@ def detect_restatement(
     return sorted(out, key=lambda x: -abs(x["diff_pct"] or float("inf")))
 
 
-def compute_beneish_variables(current: dict, prior: dict) -> list[dict]:
-    """Beneish 이익조작 연구의 개별 변수 6종을 YoY 지수로 계산 (사실 표기 전용).
+# v1.6.x: XBRL 감가상각비 좁은 추출 — Beneish DEPI·TATA 복원용 -----------------
+# 전면 XBRL 파싱(택소노미 계층)은 비채택 — tmp/xbrl_feasibility/REPORT.md B안.
+_XBRL_DEP_TAGS: tuple[str, ...] = (
+    "ifrs-full:AdjustmentsForDepreciationAndAmortisationExpense",
+    "ifrs-full:DepreciationAndAmortisationExpense",
+    "ifrs-full:AdjustmentsForDepreciationExpense",
+    "ifrs-full:DepreciationExpense",
+    "ifrs-full:DepreciationPropertyPlantAndEquipment",
+)
+_xbrl_dep_cache: dict[str, tuple[float, dict]] = {}
+_XBRL_DEP_CACHE_MAX = 10
+
+
+def parse_xbrl_depreciation(instance_xml: str, fs_div: str = "CFS") -> dict:
+    """XBRL 인스턴스에서 감가상각비 당기/전기 값을 추출 (연간 duration만).
+
+    컨텍스트 선별 규칙:
+    - 연결/별도 축(ConsolidatedAndSeparateFinancialStatementsAxis)의
+      멤버만 허용. 그 외 차원(영업부문 등)이 붙은 컨텍스트는 제외
+    - fs_div="CFS" → ConsolidatedMember, "OFS" → SeparateMember.
+      축 자체가 없는 인스턴스(별도만 공시하는 소형사)는 무차원 컨텍스트로 폴백
+    - 기간 300일 미만(분기·반기) 컨텍스트 제외
+
+    Returns:
+        {"current": int|None, "prior": int|None, "tag": str|None}
+    """
+    from datetime import date
+
+    # 1) 유효 컨텍스트: id → (종료연도, 멤버)
+    contexts: dict[str, tuple[int, str | None]] = {}
+    for m in re.finditer(
+            r'<(?:xbrli:)?context id="([^"]+)">(.*?)</(?:xbrli:)?context>',
+            instance_xml, re.S):
+        ctx_id, body = m.group(1), m.group(2)
+        sd = re.search(r"<(?:xbrli:)?startDate>(\d{4})-(\d{2})-(\d{2})<", body)
+        ed = re.search(r"<(?:xbrli:)?endDate>(\d{4})-(\d{2})-(\d{2})<", body)
+        if not sd or not ed:
+            continue  # instant(시점) 컨텍스트
+        start = date(int(sd.group(1)), int(sd.group(2)), int(sd.group(3)))
+        end = date(int(ed.group(1)), int(ed.group(2)), int(ed.group(3)))
+        if (end - start).days < 300:
+            continue
+        member: str | None = None
+        other_axis = False
+        for raw in re.findall(
+                r"<(?:xbrldi:)?explicitMember[^>]*>([^<]+)<", body):
+            local = raw.strip().split(":")[-1]
+            if local in ("ConsolidatedMember", "SeparateMember"):
+                member = local
+            else:
+                other_axis = True  # 영업부문 등 다른 축 → 컨텍스트 제외
+        if other_axis:
+            continue
+        contexts[ctx_id] = (end.year, member)
+
+    target = "SeparateMember" if fs_div == "OFS" else "ConsolidatedMember"
+
+    # 2) 태그 우선순위대로 당기·전기 쌍이 성립하는 첫 태그 채택
+    for tag in _XBRL_DEP_TAGS:
+        matched: list[tuple[int, str | None, int]] = []
+        for fm in re.finditer(
+                rf'<{re.escape(tag)}\s[^>]*contextRef="([^"]+)"[^>]*>(-?\d+)</',
+                instance_xml):
+            ctx = contexts.get(fm.group(1))
+            if ctx is not None:
+                matched.append((ctx[0], ctx[1], int(fm.group(2))))
+        chosen = ([f for f in matched if f[1] == target]
+                  or [f for f in matched if f[1] is None])
+        if not chosen:
+            continue
+        by_year: dict[int, int] = {}
+        for year, _member, val in chosen:
+            by_year.setdefault(year, val)
+        cur_year = max(by_year)
+        prior_val = by_year.get(cur_year - 1)
+        if prior_val is not None:
+            return {"current": by_year[cur_year], "prior": prior_val, "tag": tag}
+    return {"current": None, "prior": None, "tag": None}
+
+
+def _find_annual_report_rcept(corp_code: str, api_key: str, year: str = "") -> dict:
+    """사업보고서 접수 건 탐색 — pblntf_ty=A(정기공시)만 조회.
+
+    fetch_company_disclosures는 대량공시 기업(삼성전자 등 1000건 초과)에서
+    오래된 건이 잘려 사업보고서를 놓칠 수 있어, 정기공시 유형으로 좁혀 조회한다.
+    year 지정 시 해당 사업연도 보고서("사업보고서 (2024.12)")는 이듬해 제출되므로
+    조회 창을 year+1 연도로 잡는다. [기재정정] 등 정정본은 제외(원본 XBRL 대상).
+
+    Returns: 공시 목록 항목 dict — 미발견·실패 시 {}.
+    """
+    from datetime import date, timedelta
+
+    if year.isdigit():
+        bgn, end = f"{int(year) + 1}0101", f"{int(year) + 1}1231"
+    else:
+        today = date.today()
+        bgn = (today - timedelta(days=550)).strftime("%Y%m%d")
+        end = today.strftime("%Y%m%d")
+    try:
+        resp = _retry("GET", f"{DART_BASE}/list.json",
+                      params={"crtfc_key": api_key, "corp_code": corp_code,
+                              "bgn_de": bgn, "end_de": end,
+                              "pblntf_ty": "A", "page_no": 1, "page_count": 100},
+                      timeout=15)
+        data = resp.json()
+        if data.get("status") != "000":
+            return {}
+        for d in data.get("list", []):
+            nm = d.get("report_nm", "")
+            if nm.startswith("사업보고서") and (not year or f"({year}." in nm):
+                return d
+    except Exception as e:
+        log.debug("사업보고서 탐색 실패 (%s): %s", corp_code, e)
+    return {}
+
+
+def extract_xbrl_depreciation(corp_code: str, api_key: str, fs_div: str = "CFS",
+                              year: str = "") -> dict:
+    """사업보고서의 XBRL 원본(fnlttXbrl.xml)에서 감가상각비를 추출.
+
+    fnlttSinglAcntAll이 노출하지 않는 감가상각비를 사업보고서 XBRL 인스턴스에서
+    좁게 추출한다 (ZIP +1회, _is_zip_safe 가드 적용, 10분 캐시).
+
+    Args:
+        year: 사업연도(예: "2024"). 지정 시 해당 연도 사업보고서
+              ("사업보고서 (2024.12)")만 선택 — 재무제표 조회 연도와 정합 유지.
+              빈 값이면 최근 사업보고서.
+
+    Returns:
+        {"current", "prior", "tag", "rcept_no"} — 실패·미검출 시 {}.
+    """
+    if not corp_code or not api_key:
+        return {}
+    cache_key = f"{corp_code}:{fs_div}:{year}"
+    now = time.time()
+    if cache_key in _xbrl_dep_cache:
+        ts, data = _xbrl_dep_cache[cache_key]
+        if now - ts < _ZIP_CACHE_TTL:
+            return data
+    try:
+        biz = _find_annual_report_rcept(corp_code, api_key, year)
+        if not biz:
+            return {}
+        resp = _retry("GET", f"{DART_BASE}/fnlttXbrl.xml",
+                      params={"crtfc_key": api_key, "rcept_no": biz["rcept_no"],
+                              "reprt_code": "11011"}, timeout=30)
+        if resp.status_code != 200:
+            return {}
+        try:
+            zf = zipfile.ZipFile(io.BytesIO(resp.content))
+        except zipfile.BadZipFile:
+            return {}
+        if not _is_zip_safe(zf):
+            log.warning("XBRL ZIP 안전 상한 초과로 거부 (%s)", biz["rcept_no"])
+            return {}
+        inst_name = next((n for n in zf.namelist()
+                          if n.lower().endswith(".xbrl")), None)
+        if not inst_name:
+            return {}
+        inst = zf.read(inst_name).decode("utf-8", errors="replace")
+        zf.close()
+        parsed = parse_xbrl_depreciation(inst, fs_div)
+        result = ({} if parsed["current"] is None
+                  else {**parsed, "rcept_no": biz["rcept_no"]})
+        if len(_xbrl_dep_cache) >= _XBRL_DEP_CACHE_MAX:
+            oldest = min(_xbrl_dep_cache, key=lambda k: _xbrl_dep_cache[k][0])
+            del _xbrl_dep_cache[oldest]
+        _xbrl_dep_cache[cache_key] = (now, result)
+        return result
+    except Exception as e:
+        log.debug("XBRL 감가상각 추출 실패 (%s): %s", corp_code, e)
+        return {}
+
+
+def compute_beneish_variables(
+    current: dict,
+    prior: dict,
+    dep_current: int | None = None,
+    dep_prior: int | None = None,
+) -> list[dict]:
+    """Beneish 이익조작 연구의 개별 변수를 YoY 지수로 계산 (사실 표기 전용).
 
     kreports beneish.py(Apache 2.0)에서 이식하되 재설계:
     - M-Score 합산·임계 판정은 하지 않는다 (v0.8.5 점수·등급 금지 원칙).
       개별 변수의 지수값만 사실로 반환하며, 해석은 방향 서술로 한정.
-    - DEPI·TATA는 감가상각비가 fnlttSinglAcntAll에 노출되지 않아 제외
-      (2026-07 라이브 검증). LVGI는 원식(장기차입금+유동부채) 대신
-      부채총계/자산총계 기준 — 명칭에 명시.
+    - 감가상각비는 fnlttSinglAcntAll에 노출되지 않아 DEPI·TATA는
+      dep_current/dep_prior(XBRL 인스턴스에서 추출, extract_xbrl_depreciation)가
+      주어질 때만 계산 — 미제공 시 기존 6종만 반환(하위 호환).
+      TATA는 축약식(ΔCA − Δ현금 − ΔCL − 감가상각비)/총자산 — 원식의
+      Δ유동성장기부채·Δ미지급법인세 항은 계정 미노출로 생략, 명칭에 명시.
+    - LVGI는 원식(장기차입금+유동부채) 대신 부채총계/자산총계 기준 — 명칭에 명시.
 
     Args:
         current/prior: {account_nm: int} (_fs_response_to_periods 산출물)
+        dep_current/dep_prior: 당기/전기 감가상각비 (XBRL 기재값, 선택)
 
     Returns:
         [{"key", "name", "value", "meaning"}] — 계산 가능한 변수만.
         value는 지수(전년=1.0 기준), meaning은 '1보다 크면 …' 방향 서술.
+        예외: TATA는 지수가 아닌 당기 비율(0 기준) — 명칭·서술에 명시.
     """
     def _ratio(num, den):
         if num is None or den is None or den == 0:
@@ -2240,6 +2428,40 @@ def compute_beneish_variables(current: dict, prior: dict) -> list[dict]:
             "key": "LVGI", "name": "부채 레버리지 지수(총부채/총자산 기준)", "value": lvgi,
             "meaning": "1보다 크면 자산 대비 부채 비중이 전년보다 커짐",
         })
+
+    # DEPI — 감가상각률 지수 (XBRL 기재 감가상각비 기준, v1.6.x 복원)
+    if dep_current is not None and dep_prior is not None:
+        ppe_c, ppe_p = _pick(current, "유형자산"), _pick(prior, "유형자산")
+        rate_c = _ratio(dep_current, dep_current + ppe_c) if ppe_c is not None else None
+        rate_p = _ratio(dep_prior, dep_prior + ppe_p) if ppe_p is not None else None
+        depi = _idx(rate_p, rate_c)  # 원식 방향: 전기 상각률 / 당기 상각률
+        if depi is not None:
+            out.append({
+                "key": "DEPI",
+                "name": "감가상각률 지수(XBRL 기재 감가상각비 기준)",
+                "value": depi,
+                "meaning": "1보다 크면 감가상각 속도가 전년보다 느려짐"
+                           "(내용연수 연장 등 회계추정 변경 가능성)",
+            })
+
+    # TATA — 총발생액/총자산 (축약식, 당기 비율 — 지수 아님)
+    if dep_current is not None:
+        ca_c, ca_p = _pick(current, "유동자산"), _pick(prior, "유동자산")
+        cash_c = _pick(current, "현금및현금성자산")
+        cash_p = _pick(prior, "현금및현금성자산")
+        cl_c, cl_p = _pick(current, "유동부채"), _pick(prior, "유동부채")
+        ta_c = _pick(current, "자산총계")
+        if (None not in (ca_c, ca_p, cash_c, cash_p, cl_c, cl_p, ta_c)
+                and ta_c != 0):
+            tata = ((ca_c - ca_p) - (cash_c - cash_p)
+                    - (cl_c - cl_p) - dep_current) / ta_c
+            out.append({
+                "key": "TATA",
+                "name": "총발생액 비율(축약식, 당기 비율)",
+                "value": tata,
+                "meaning": "0보다 크면 이익 중 현금이 뒷받침되지 않는 발생액 "
+                           "비중이 큼 (전년=1 지수가 아닌 당기 비율)",
+            })
 
     return out
 

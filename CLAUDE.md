@@ -250,7 +250,7 @@ dart_risk_mcp/
 - 내부 흐름: `resolve_corp` → `fetch_financial_statements_all` (CFS→OFS 폴백) → `_fs_response_to_periods` → **`fetch_company_indicators` × 2(당기/전기)** → `detect_financial_anomaly(current, prior, current_indx, prior_indx)`
 - 이상 플래그 8종: `AR_SURGE`, `INVENTORY_SURGE`, `CASH_GAP`, `CAPITAL_IMPAIRMENT`(절대 임계) + `CFS_OFS_REVERSAL`(별도>연결 당기순이익 역전 — 종속회사 합산 손실, 격차 ≥10%일 때만. 정상 대기업의 연결>별도 괴리는 플래그하지 않음 — 삼성전자 +46% 라이브 검증) + `OPNET_POS_NEG`(영업흑자·순손실 — 영업외 손실)·`OPNET_NEG_POS`(영업적자·순이익 흑자 — 일회성 이익 의심, 상폐 요건 회피 연관) + `RESTATEMENT`(전기 수치 재작성 — 올해 보고서의 전기값 vs 작년 보고서의 당기값을 6계정×fs_div 대조, 0.5% 허용오차. `detect_restatement`, 직전 연도 `fnlttSinglAcnt` 1회 추가 호출)
 - 발생액 비율 (순이익−영업현금흐름)/|순이익| 을 당기/전기/Δ로 사실 표기(플래그 없음, kreports accrual_ratio 이식). 연결/별도 비교는 `fnlttSinglAcnt` 1회 추가 호출로 CFS/OFS 당기순이익 쌍 추출(`extract_cfs_ofs_ni`)
-- "이익조작 연구 변수" 블록(`compute_beneish_variables`, kreports 이식/Apache 2.0): Beneish 개별 변수 6종(DSRI·GMI·AQI·SGI·SGAI·LVGI)을 전년=1.00 기준 지수로 사실 표기. **M-Score 합산·임계 판정 없음**(v0.8.5 원칙, 안내 문구 자동 첨부). DEPI·TATA는 감가상각비 미노출로 제외(라이브 검증), LVGI는 부채총계/자산총계 기준(명칭에 명시)
+- "이익조작 연구 변수" 블록(`compute_beneish_variables`, kreports 이식/Apache 2.0): Beneish 개별 변수 최대 8종(DSRI·GMI·AQI·SGI·SGAI·LVGI + DEPI·TATA)을 전년=1.00 기준 지수로 사실 표기(단, TATA는 당기 비율). **M-Score 합산·임계 판정 없음**(v0.8.5 원칙, 안내 문구 자동 첨부). DEPI·TATA의 감가상각비는 fnlttSinglAcntAll 미노출이라 사업보고서 XBRL 인스턴스에서 좁게 추출(`extract_xbrl_depreciation`, annual만, ZIP +1회, `_is_zip_safe` 가드) — 소형사는 XBRL 재무 태깅이 없어(기업개황 dart-gcd만) 미발화가 정상이며 이때 기존 6종만 표기. TATA는 축약식(ΔCA−Δ현금−ΔCL−감가상각비)/총자산, LVGI는 부채총계/자산총계 기준(명칭에 명시). 라이브 발화: 삼성전자·셀트리온·두산·두산에너빌리티 4/6사
 - "연구개발비 비중 (사업보고서 기재)" 블록(`extract_rd_ratio_from_report`, kreports business_insights 이식/Apache 2.0): 최근 사업보고서 원문의 "연구개발비/매출액 비율" 표에서 최근 3개 연도 값을 regex 추출해 사실 표기 (annual만, ZIP 다운로드 +1회). % 생략 변형은 인접 소수점 연속 규칙으로 흡수, 산정 기준 상이 안내 자동 첨부. 라이브 검증 5/6사(제이스코는 R&D 표 없음 — 정상 미검출)
 - v0.8.8 추가: `fnlttSinglIndx` 4카테고리(M210000 수익성·M220000 안정성·M230000 성장성·M240000 활동성)에서 핵심 7종(순이익률·자기자본비율·부채비율·유동비율·매출액증가율·매출채권회전율·재고자산회전율)을 `12.30%p → 8.10%p (전년 대비 -34.1%)` 형식으로 표기. 점수 가산 없음, 사실 표기만(v0.8.5 원칙).
 - `report_type` 허용값: `annual`·`half`·`q1`·`q3`
@@ -341,7 +341,9 @@ dart_risk_mcp/
 | `detect_dividend_drain(dividend_records, current_fs)` | 적자 시점 배당 유출(DIVIDEND_DRAIN) 패턴 — 당기순이익 음수 + 현금배당 양수 시 flag (v0.9.0) |
 | `fetch_affiliate_investments(corp_code, api_key, year, report_type)` | 타법인 출자현황(otrCprInvstmntSttus) 조회 + 합계 행 제거 |
 | `scan_note_titles(rcept_no, api_key)` | 공시 ZIP 전 파일 `<TITLE>` 태그 스캔 → 주석 카테고리 제목 검출 (섹션 추출 보완 경로) |
-| `compute_beneish_variables(current, prior)` | Beneish 개별 변수 6종 YoY 지수 계산 — 합산·판정 없음, 사실 표기 전용 |
+| `compute_beneish_variables(current, prior, dep_current, dep_prior)` | Beneish 개별 변수 최대 8종 계산(감가상각비 인자 제공 시 DEPI·TATA 포함) — 합산·판정 없음, 사실 표기 전용 |
+| `extract_xbrl_depreciation(corp_code, api_key, fs_div, year)` | 사업보고서 XBRL 인스턴스(fnlttXbrl.xml)에서 감가상각비 당기/전기 좁은 추출 — 연결/별도 축 매칭, 분기·세그먼트 컨텍스트 제외, 10분 캐시 |
+| `parse_xbrl_depreciation(instance_xml, fs_div)` | XBRL 인스턴스 텍스트 → 감가상각비 {current, prior, tag} 순수 파서 (extract의 코어) |
 | `detect_profit_direction_divergence(current)` | 영업이익↔순이익 부호 괴리 (OPNET_POS_NEG / OPNET_NEG_POS) |
 | `detect_restatement(current_rows, prior_rows)` | 전기 수치 재작성 감지 — 연도 간 보고값 대조, 원인 판정 없음 (RESTATEMENT) |
 | `extract_rd_ratio_from_report(corp_code, api_key)` | 최근 사업보고서 원문에서 연구개발비/매출액 비율(최근 3개 연도) regex 추출 |
@@ -366,6 +368,7 @@ dart_risk_mcp/
 | `GET /api/company.json` | 기업 개요 정보 (corp_code) |
 | `GET /api/fnlttSinglAcnt.json` | 단일 기업 재무제표 (corp_code, 연도, 보고서 유형) |
 | `GET /api/fnlttMultiAcnt.json` | 다중 기업 재무 비교 (corp_codes 목록) |
+| `GET /api/fnlttXbrl.xml` | 사업보고서 XBRL 원본 ZIP (rcept_no) — 감가상각비 좁은 추출 전용 (v1.6.0) |
 | `GET /api/majorstock.json` | 최대주주 현황 (corp_code, 연도) |
 | `GET /api/elestock.json` | 5% 이상 대량보유 현황 (corp_code, 연도) |
 | `GET /api/hyslrSttus.json` | 최대주주 현황 (corp_code, bsns_year, reprt_code) |
@@ -411,6 +414,7 @@ dart_risk_mcp/
 | 주요결정 공시 | 메모리 `_major_decision_cache` (최대 50건) | 10분 |
 | 감사의견 이력 | 메모리 `_audit_history_cache` (최대 20건) | 10분 |
 | 채무증권 잔액 | 메모리 `_debt_balance_cache` (최대 20건) | 10분 |
+| XBRL 감가상각비 | 메모리 `_xbrl_dep_cache` (최대 10건) | 10분 |
 | 워치리스트(영속, 캐시 아님) | `~/.config/dart-risk-mcp/watchlist.json` (`DART_WATCHLIST_PATH`로 오버라이드) | 영속(비휘발) |
 | 공개기록 원격 캐시 | `~/.cache/dart-risk-mcp/known_actors_remote.json` (GitHub raw fetch) | 24시간 |
 

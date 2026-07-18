@@ -26,6 +26,7 @@ from .core import (
     detect_profit_direction_divergence,
     detect_restatement,
     extract_rd_ratio_from_report,
+    extract_xbrl_depreciation,
     fetch_loss_streak,
     estimate_crisis_timeline,
     extract_cb_investors,
@@ -3084,8 +3085,10 @@ def scan_financial_anomaly(
 
     # 전체 계정 과목 필요 (매출채권·재고자산 포함) → fnlttSinglAcntAll 사용. CFS 우선, 없으면 OFS.
     fs_list = fetch_financial_statements_all(corp_code, api_key, year, report_type, "CFS")
+    _fs_div_used = "CFS"
     if not fs_list:
         fs_list = fetch_financial_statements_all(corp_code, api_key, year, report_type, "OFS")
+        _fs_div_used = "OFS"
     if not fs_list:
         return (f"📊 **{corp_name}** ({info.get('stock_code','')}) — {year} {report_type}\n\n"
                 "재무제표 조회 불가(데이터 없음 또는 권한 부족).")
@@ -3224,18 +3227,32 @@ def scan_financial_anomaly(
                 f"- {m['name']}  {pv:.2f}{unit} → {cv:.2f}{unit}  ({trend})"
             )
 
-    # Beneish 연구 변수 6종 — 지수 사실 표기만, 합산 점수·판정 없음(v0.8.5 원칙)
-    _beneish = compute_beneish_variables(current, prior)
+    # Beneish 연구 변수 — 지수 사실 표기만, 합산 점수·판정 없음(v0.8.5 원칙).
+    # 감가상각비는 사업보고서 XBRL 기재값에서 좁게 추출해 DEPI·TATA 복원 (annual만).
+    _dep = {}
+    if report_type == "annual":
+        try:
+            _dep = extract_xbrl_depreciation(corp_code, api_key, _fs_div_used, year=year)
+        except Exception:
+            _dep = {}
+    _beneish = compute_beneish_variables(
+        current, prior,
+        dep_current=_dep.get("current"), dep_prior=_dep.get("prior"),
+    )
     if _beneish:
         lines.append("")
         lines.append("**이익조작 연구 변수 (Beneish 개별 변수 — 사실 표기, 합산·판정 없음)**")
         for b in _beneish:
             lines.append(f"- {b['key']}({b['name']}): {b['value']:.2f} — {b['meaning']}")
         lines.append(
-            "  ※ 지수는 전년=1.00 기준 상대값입니다. 개별 변수만으로 이익조작을 "
-            "판정할 수 없으며, 학계 모형(M-Score) 합산은 본 도구의 점수 금지 "
-            "원칙에 따라 제공하지 않습니다."
+            "  ※ 지수는 전년=1.00 기준 상대값입니다(단, TATA는 당기 비율). "
+            "개별 변수만으로 이익조작을 판정할 수 없으며, 학계 모형(M-Score) "
+            "합산은 본 도구의 점수 금지 원칙에 따라 제공하지 않습니다."
         )
+        if _dep:
+            lines.append(
+                "  ※ DEPI·TATA의 감가상각비는 최근 사업보고서 XBRL 기재값입니다."
+            )
 
     # 연구개발비 비중 — 사업보고서 기재값 사실 표기 (kreports 이식, annual만)
     if report_type == "annual":
