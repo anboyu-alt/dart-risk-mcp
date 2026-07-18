@@ -287,7 +287,7 @@ def _registry_company_section(corp_name: str) -> list[str]:
 def analyze_company_risk(
     company_name: str, lookback_years: int = 1, lookback_days: int | None = None
 ) -> str:
-    """기업명 또는 종목코드로 최근 공시 기반 투자 위험도를 분석한다.
+    """기업명 또는 종목코드로 최근 공시 기반 불공정거래 위험 신호를 분석한다.
 
     공개기록 레지스트리(opt-in)가 설정돼 있고 이 회사가 등재 행위자의
     관련기업으로 태깅된 경우, 리포트 말미에 공개기록 참고 섹션이 추가된다.
