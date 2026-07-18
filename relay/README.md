@@ -21,6 +21,9 @@ DART(opendart.fss.or.kr)는 **해외 IP 대역의 접속을 차단**합니다
 이미 지정해 두어, **배포 하나로 도구 페이지 + 릴레이가 같은 주소에서**
 서빙됩니다(릴레이 주소 설정 불필요).
 
+> 운영 배포: **https://dart-risk-mcp.vercel.app** (도구 + 릴레이, 2026-07-18
+> DART 통과 확인). 아래는 포크·셀프호스트용 절차입니다.
+
 1. [vercel.com](https://vercel.com) 가입 (GitHub 계정으로, 무료·카드 불필요)
 2. **Add New… → Project** → `dart-risk-mcp` 저장소 **Import**
 3. Framework Preset: **Other** 그대로 → **Deploy**
