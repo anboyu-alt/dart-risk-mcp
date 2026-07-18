@@ -303,9 +303,9 @@
         </div>
         <div class="chips" style="margin-top:14px">
           <span style="color:var(--dim);align-self:center;font-size:12px">기간</span>
-          <span class="chip" data-days="365">12M</span>
-          <span class="chip" data-days="180">6M</span>
-          <span class="chip" data-days="90">3M</span>
+          <span class="chip" data-days="365">1Y</span>
+          <span class="chip" data-days="1095">3Y</span>
+          <span class="chip" data-days="1825">5Y</span>
         </div>
         <div class="status" id="status"></div>
         <details class="settings">
@@ -378,7 +378,9 @@
 "use strict";
 /* ── 설정 ─────────────────────────────────────── */
 const DEFAULT_RELAY = "https://dart-risk-mcp.vercel.app";
-const MAX_PAGES = 10;
+// 기간이 길수록 페이지 상한 확대 (100건/페이지): 1Y=10p, 3Y=20p, 5Y=30p
+function maxPages() { return LOOKBACK_DAYS <= 365 ? 10 : LOOKBACK_DAYS <= 1095 ? 20 : 30; }
+function windowLabel() { return LOOKBACK_DAYS <= 365 ? "1Y" : LOOKBACK_DAYS <= 1095 ? "3Y" : "5Y"; }
 const LS_KEY = "dart_tool_key", LS_RELAY = "dart_tool_relay", LS_RECENT = "dart_tool_recent";
 
 const $ = (id) => document.getElementById(id);
@@ -559,10 +561,12 @@ async function analyze(name) {
   st.className = "status";
   const end = new Date(), bgn = new Date(Date.now() - LOOKBACK_DAYS * 86400e3);
   const items = [];
+  let totalCount = 0;
   try {
     let totalPage = 1;
-    for (let p = 1; p <= Math.min(MAX_PAGES, totalPage); p++) {
-      st.innerHTML = `<span class="spinner"></span>SCANNING ${esc(name)} — page ${p}${totalPage > 1 ? "/" + Math.min(MAX_PAGES, totalPage) : ""}`;
+    const cap = maxPages();
+    for (let p = 1; p <= Math.min(cap, totalPage); p++) {
+      st.innerHTML = `<span class="spinner"></span>SCANNING ${esc(name)} — page ${p}${totalPage > 1 ? "/" + Math.min(cap, totalPage) : ""}`;
       const j = await dartGet("list.json", {
         corp_code: corpCode, bgn_de: ymd(bgn), end_de: ymd(end),
         page_no: p, page_count: 100,
@@ -570,10 +574,11 @@ async function analyze(name) {
       if (j.status === "013") break;
       if (j.status !== "000") throw new Error(DART_ERR[j.status] || `DART 오류 (${j.status}) ${j.message || ""}`);
       totalPage = j.total_page || 1;
+      totalCount = j.total_count || 0;
       items.push(...(j.list || []));
     }
     st.textContent = "";
-    buildResult(name, stockCode, corpCode, items, bgn, end);
+    buildResult(name, stockCode, corpCode, items, bgn, end, totalCount);
   } catch (e) {
     st.className = "status err";
     st.textContent = "⚠ " + e.message;
@@ -587,7 +592,7 @@ function dartUrl(rcept) { return "https://dart.fss.or.kr/dsaf001/main.do?rcpNo="
 function fmtDate(d8) { return d8.slice(0, 4) + "." + d8.slice(4, 6) + "." + d8.slice(6, 8); }
 function mmdd(d8) { return d8.slice(2, 4) + "." + d8.slice(4, 6); }
 
-function buildResult(name, stockCode, corpCode, items, bgn, end) {
+function buildResult(name, stockCode, corpCode, items, bgn, end, totalCount) {
   const events = [];
   let amendCount = 0;
   const rows = [];   // 피드용 전체 행
@@ -617,7 +622,8 @@ function buildResult(name, stockCode, corpCode, items, bgn, end) {
 
   CUR = { name, stockCode, corpCode, items, rows, events, amendCount, amendRate,
           patterns, capitalEvents, catCount, typeCount, detectedTypes, heaviest,
-          crisisEvents, bgn, end };
+          crisisEvents, bgn, end,
+          truncated: totalCount > items.length ? totalCount : 0 };
   $("topCompany").textContent = `${name} · ${stockCode}`;
   enableNav();
   pushRecent({ n: name, s: stockCode, sig: events.length, corr: amendRate });
@@ -631,8 +637,8 @@ function buildResult(name, stockCode, corpCode, items, bgn, end) {
 /* ── 02 피드 ──────────────────────────────────── */
 function renderFeed() {
   const { rows, events, name, catCount } = CUR;
-  const windowLabel = LOOKBACK_DAYS === 365 ? "T-365D" : LOOKBACK_DAYS === 180 ? "T-180D" : "T-90D";
-  $("feedMeta").textContent = `${CUR.items.length}건 중 신호 ${events.length}건 · ${windowLabel}`;
+  $("feedMeta").textContent = `${CUR.items.length}건 중 신호 ${events.length}건 · T-${windowLabel()}` +
+    (CUR.truncated ? ` · 전체 ${CUR.truncated}건 중 최근 ${CUR.items.length}건` : "");
 
   const cats = Object.keys(catCount).map(Number).sort((a, b) => catCount[b] - catCount[a]);
   let chips = `<span class="chip solid ${FEED_FILTER.mode === "all" ? "on" : ""}" data-m="all">전체 ${CUR.items.length}</span>`;
@@ -738,12 +744,11 @@ function renderDash() {
   const { name, stockCode, corpCode, items, events, amendCount, amendRate, patterns,
           capitalEvents, catCount, typeCount, detectedTypes, heaviest, crisisEvents,
           bgn, end } = CUR;
-  const windowLabel = LOOKBACK_DAYS === 365 ? "T-365D" : LOOKBACK_DAYS === 180 ? "T-180D" : "T-90D";
 
   let html = `<div class="panel amber">
     <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
       <h2 style="font-size:22px;font-weight:800;margin:0;letter-spacing:-0.01em">${esc(name)}</h2>
-      <span class="mm" style="letter-spacing:0.06em">${esc(stockCode)} · ${windowLabel} SCAN · ${fmtDate(ymd(new Date()))}</span>
+      <span class="mm" style="letter-spacing:0.06em">${esc(stockCode)} · T-${windowLabel()} SCAN · ${fmtDate(ymd(new Date()))}</span>
     </div>
     <div class="kpis">
       <div class="kpi"><div class="v">${items.length}</div><div class="k">전체 공시</div></div>
@@ -752,6 +757,7 @@ function renderDash() {
       <div class="kpi"><div class="v">${amendCount}</div><div class="k">정정공시</div></div>
       <div class="kpi ${amendRate >= 20 ? "alert" : ""}"><div class="v">${amendRate}%</div><div class="k">정정 비율</div></div>
     </div>
+    ${CUR.truncated ? `<p class="dim" style="font-size:0.82rem;margin-top:0.7rem">※ 이 기간 전체 공시는 ${CUR.truncated}건이며, 최근 ${items.length}건까지만 수집·분석했습니다(공시 다량 기업). 더 긴 전수 분석은 MCP 대화를 이용하세요.</p>` : ""}
     ${amendRate >= 10 ? `<p class="dim" style="font-size:0.82rem;margin-top:0.7rem">※ 정정공시 비율 ${amendRate}% — 정상 기업은 대체로 5% 이내이며, 20% 초과는 최초 공시의 품질·정보 통제 의도를 따져보는 기준선으로 통용됩니다.</p>` : ""}
     ${events.length === 0 ? `<p class="dim" style="margin-top:0.8rem">이 기간 공시 ${items.length}건에서 등록된 위험 신호 유형이 감지되지 않았습니다. 신호가 없다는 것이 "안전하다"는 판정은 아닙니다 — 본 도구는 공시 제목 기반 신호만 봅니다.</p>` : ""}
   </div>`;
@@ -788,9 +794,22 @@ function renderDash() {
         `<div><span class="tag" style="background:var(--c${s.category})">${esc(s.label)}</span> <span class="mono" style="font-size:0.78rem;color:var(--dim2)">×${typeCount[s.key]}</span>
          <div class="p">${esc(s.prose || "등록된 해설이 없는 신호 유형입니다.")}</div></div>`).join("") +
       `</div></div>`;
-    if (capitalEvents.length >= 3) {
+    // 자본 리듬 — 12개월 슬라이딩 윈도우 최대 집중도 (MCP detect_capital_churn과 동일 관점)
+    const capDates = [...capitalEvents].map((e) => e.date).sort();
+    let cap12max = 0;
+    for (let i = 0; i < capDates.length; i++) {
+      let c = 0;
+      const d0 = new Date(capDates[i].slice(0,4)+"-"+capDates[i].slice(4,6)+"-"+capDates[i].slice(6,8));
+      for (let jj = i; jj < capDates.length; jj++) {
+        const d1 = new Date(capDates[jj].slice(0,4)+"-"+capDates[jj].slice(4,6)+"-"+capDates[jj].slice(6,8));
+        if ((d1 - d0) / 86400e3 <= 365) c++;
+      }
+      cap12max = Math.max(cap12max, c);
+    }
+    if (cap12max >= 3) {
       html += `<div class="panel"><div class="slabel amber">▍CAPITAL RHYTHM</div>
-        <p class="dim">이 기간 자본 관련 공시(증자·감자·자사주·CB/BW/EB/RCPS)가 <strong style="color:var(--tx)">${capitalEvents.length}건</strong>입니다.
+        <p class="dim">이 기간 자본 관련 공시(증자·감자·자사주·CB/BW/EB/RCPS)가 총 <strong style="color:var(--tx)">${capitalEvents.length}건</strong>,
+        12개월 최대 집중도 <strong style="color:var(--tx)">${cap12max}건</strong>입니다.
         12개월 내 3건 이상은 등록 패턴(capital churn)의 관찰 조건에 해당합니다 — 각 건의 원문을 확인해 보세요.</p></div>`;
     }
     if (patterns.length) {
@@ -881,11 +900,12 @@ function timelinePanel(events, bgn, end) {
     if (bucket) { bucket.n++; bucket.maxCat = Math.max(bucket.maxCat, ...e.signals.map((s) => s.category)); }
   }
   const dmax = Math.max(1, ...months.map((x) => x.n));
+  const longWin = months.length > 14;   // 3Y·5Y — 월 라벨은 1월(연도)만
   const density = `<div class="slabel" style="margin-top:4px">▍SIGNAL DENSITY</div>
     <div class="density" style="grid-template-columns:repeat(${months.length},1fr)">` +
     months.map((x) => `<div class="dcell">${x.n ? `<span class="dfill" style="height:${Math.round(x.n / dmax * 92)}%;background:var(--c${x.maxCat >= 7 ? 7 : x.maxCat || 2});${x.maxCat >= 7 ? "box-shadow:0 0 8px rgba(224,86,74,0.6);" : ""}"></span>` : ""}</div>`).join("") +
     `</div><div class="dlabels" style="grid-template-columns:repeat(${months.length},1fr)">` +
-    months.map((x) => `<span>${x.m === 0 ? (x.y % 100) + "·1" : x.m + 1}</span>`).join("") + `</div>`;
+    months.map((x) => `<span>${longWin ? (x.m === 0 ? "'" + (x.y % 100) : "") : (x.m === 0 ? (x.y % 100) + "·1" : x.m + 1)}</span>`).join("") + `</div>`;
 
   // 레인 타임라인 (SVG)
   const cats = [...new Set(events.flatMap((e) => e.signals.map((s) => s.category)))].sort();
@@ -899,10 +919,11 @@ function timelinePanel(events, bgn, end) {
     lanes += `<line x1="${padL}" y1="${y}" x2="${W - 12}" y2="${y}" stroke="#171d27" stroke-width="1"/>`;
     lanes += `<text x="${padL - 8}" y="${y + 4}" text-anchor="end" font-size="11.5" fill="#7c8797" font-family="'Apple SD Gothic Neo','Malgun Gothic',sans-serif">${esc(DATA.categories[String(c)])}</text>`;
   });
+  const labelEvery = LOOKBACK_DAYS <= 365 ? 2 : LOOKBACK_DAYS <= 1095 ? 6 : 12;
   for (let m = new Date(bgn.getFullYear(), bgn.getMonth() + 1, 1); m < end; m.setMonth(m.getMonth() + 1)) {
     const mx = padL + ((m.getTime() - t0) / (t1 - t0)) * (W - padL - 20);
     grid += `<line x1="${mx}" y1="${padT - 8}" x2="${mx}" y2="${H - padB + 4}" stroke="#171d27" stroke-width="1"/>`;
-    if (m.getMonth() % 2 === 0) grid += `<text x="${mx}" y="${H - 8}" text-anchor="middle" font-size="10" fill="#5e6a78">${m.getFullYear() % 100}.${String(m.getMonth() + 1).padStart(2, "0")}</text>`;
+    if (m.getMonth() % labelEvery === 0) grid += `<text x="${mx}" y="${H - 8}" text-anchor="middle" font-size="10" fill="#5e6a78">${m.getFullYear() % 100}.${String(m.getMonth() + 1).padStart(2, "0")}</text>`;
   }
   for (const e of events) {
     for (const s of e.signals) {
@@ -916,7 +937,7 @@ function timelinePanel(events, bgn, end) {
   }
   const legend = cats.map((c) => `<span><i style="background:var(--c${c})"></i>${esc(DATA.categories[String(c)])} ${CUR.catCount[c]}</span>`).join("");
   return `<div class="panel"><div style="display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px 20px">
-      <div class="slabel" style="margin:0">▍OBSERVATION TIMELINE — ${LOOKBACK_DAYS === 365 ? "12M" : LOOKBACK_DAYS === 180 ? "6M" : "3M"} SCAN</div>
+      <div class="slabel" style="margin:0">▍OBSERVATION TIMELINE — ${windowLabel()} SCAN</div>
       <div class="mm" style="font-size:11px">${fmtDate(ymd(bgn))} — ${fmtDate(ymd(end))}</div></div>
     ${density}
     <div class="chartwrap" style="margin-top:14px"><svg viewBox="0 0 ${W} ${H}" width="100%" style="min-width:640px">${grid}${lanes}${dots}</svg></div>
