@@ -69,9 +69,12 @@ class TestBuildSignalsData(unittest.TestCase):
 
     def test_fs_aliases_exported(self):
         fa = self.data["fs_aliases"]
-        for k in ("매출", "영업이익", "당기순이익", "자본총계", "자본금"):
+        for k in ("매출", "영업이익", "당기순이익", "자본총계", "자본금",
+                  "이익잉여금"):
             self.assertIn(k, fa)
             self.assertIsInstance(fa[k], list)
+        # 이익잉여금은 결손금 병기 표기도 흡수해야 함
+        self.assertIn("이익잉여금(결손금)", fa["이익잉여금"])
 
     def test_patterns_exported_with_sequence(self):
         p = next(x for x in self.data["patterns"] if x["key"] == "zombie_ma")

@@ -532,6 +532,8 @@ function render(name, stockCode, corpCode, items, bgn, end) {
       <div class="kpi"><div class="v">${amendCount}</div><div class="k">정정공시</div></div>
       <div class="kpi"><div class="v">${items.length ? Math.round(amendCount / items.length * 100) : 0}%</div><div class="k">정정 비율</div></div>
     </div>
+    ${(items.length && Math.round(amendCount / items.length * 100) >= 10)
+      ? `<p class="dim" style="font-size:0.83rem;margin-top:0.5rem">※ 정정공시 비율 ${Math.round(amendCount / items.length * 100)}% — 정상 기업은 대체로 5% 이내이며, 20% 초과는 최초 공시의 품질·정보 통제 의도를 따져보는 기준선으로 통용됩니다.</p>` : ""}
     ${heaviest ? `<div class="headline">🎯 이 기간 가장 무게 있는 신호: <b>${esc(heaviest.label)}</b> (${typeCount[heaviest.key]}건)<br>
       <span style="color:var(--text-dim)">${esc(heaviest.prose || "")}</span></div>` : ""}
     ${events.length === 0 ? `<p class="dim" style="margin-top:0.8rem">최근 12개월 공시 ${items.length}건에서 등록된 위험 신호 유형이 감지되지 않았습니다. 신호가 없다는 것이 "안전하다"는 판정은 아닙니다 — 본 도구는 공시 제목 기반 신호만 봅니다.</p>` : ""}
@@ -548,6 +550,7 @@ function render(name, stockCode, corpCode, items, bgn, end) {
   }
 
   if (events.length) {
+    html += flowPanel(events);
     html += timelinePanel(events, bgn, end);
     html += `<div class="panel"><h2>관찰된 신호 해설 <span style="font-weight:400;font-size:0.8rem;color:var(--text-dim)">무게순 · 사실 서술</span></h2>
       <div class="proselist">` + detectedTypes.map((s) =>
@@ -573,8 +576,11 @@ function render(name, stockCode, corpCode, items, bgn, end) {
   // 심화 블록 — 추가 API 호출로 뒤이어 채움 (실패해도 위 결과는 유지)
   html += `<div class="panel"><h2>재무 핵심 <span style="font-weight:400;font-size:0.8rem;color:var(--text-dim)">최근 사업보고서 기준 · 사실 표기</span></h2>
     <div id="finCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">재무제표 조회 중…</span></div></div>`;
+  html += `<div class="panel"><h2>대량보유(5%) 지분 변동 <span style="font-weight:400;font-size:0.8rem;color:var(--text-dim)">보고 시계열 · 사실 표기</span></h2>
+    <div id="holdCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">대량보유 보고 조회 중…</span></div></div>`;
   html += `<div class="panel"><h2>감사의견 3개년 <span style="font-weight:400;font-size:0.8rem;color:var(--text-dim)">사업보고서 기재 · 사실 표기</span></h2>
     <div id="auditCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">감사보고 조회 중…</span></div></div>`;
+  html += convoPanel(name);
   $("result").innerHTML = html;
   loadDeepBlocks(corpCode);
 }
@@ -606,9 +612,62 @@ function loadDeepBlocks(corpCode) {
   loadFinancialCore(corpCode).catch((e) => {
     $("finCore").innerHTML = `<span class="dim" style="font-size:0.88rem">조회 실패: ${esc(e.message)}</span>`;
   });
+  loadHoldings(corpCode).catch((e) => {
+    $("holdCore").innerHTML = `<span class="dim" style="font-size:0.88rem">조회 실패: ${esc(e.message)}</span>`;
+  });
   loadAuditOpinions(corpCode).catch((e) => {
     $("auditCore").innerHTML = `<span class="dim" style="font-size:0.88rem">조회 실패: ${esc(e.message)}</span>`;
   });
+}
+
+async function loadHoldings(corpCode) {
+  const el = $("holdCore");
+  const j = await dartGet("elestock.json", { corp_code: corpCode });
+  const rows = j.status === "000" ? j.list || [] : [];
+  if (!rows.length) {
+    el.innerHTML = `<span class="dim" style="font-size:0.88rem">5% 대량보유 보고 이력이 없습니다.</span>`;
+    return;
+  }
+  // 보고자별 시계열 (날짜순), 합계 행 제외
+  const byRep = new Map();
+  for (const r of rows) {
+    const who = (r.repror || "").trim();
+    const rate = parseFloat(r.sp_stock_lmp_rate);
+    if (!who || who === "계" || who === "합계" || !Number.isFinite(rate)) continue;
+    if (!byRep.has(who)) byRep.set(who, []);
+    byRep.get(who).push({ d: (r.rcept_dt || "").replace(/-/g, ""), rate, rcept: r.rcept_no });
+  }
+  const dayDiff = (a, b) => (new Date(b.slice(0,4)+"-"+b.slice(4,6)+"-"+b.slice(6,8)) -
+                             new Date(a.slice(0,4)+"-"+a.slice(4,6)+"-"+a.slice(6,8))) / 86400e3;
+  const mmdd = (d8) => d8.slice(2, 4) + "." + d8.slice(4, 6) + "." + d8.slice(6, 8);
+  const reps = [...byRep.entries()].map(([who, pts]) => {
+    pts.sort((a, b) => a.d < b.d ? -1 : 1);
+    return [who, pts];
+  }).sort((a, b) => b[1].length - a[1].length).slice(0, 5);
+
+  let html = "", accumNotes = [];
+  for (const [who, pts] of reps) {
+    const series = pts.slice(-10).map((p) =>
+      `<a href="${dartUrl(p.rcept)}" target="_blank" rel="noopener" title="${esc(mmdd(p.d))} 보고">` +
+      `${esc(mmdd(p.d))} <b>${p.rate.toFixed(2)}%</b></a>`).join(`<span style="color:var(--text-dim)"> → </span>`);
+    html += `<div class="factline">· <b>${esc(who)}</b>: ${series}</div>`;
+    // 60일 내 +1.0%p 이상 상승 = 단기 매집 흐름
+    for (let i = 0; i < pts.length; i++) {
+      for (let jj = i + 1; jj < pts.length && dayDiff(pts[i].d, pts[jj].d) <= 60; jj++) {
+        if (pts[jj].rate - pts[i].rate >= 1.0) {
+          accumNotes.push(`${who}: ${mmdd(pts[i].d)} ${pts[i].rate.toFixed(2)}% → ${mmdd(pts[jj].d)} ${pts[jj].rate.toFixed(2)}% (+${(pts[jj].rate - pts[i].rate).toFixed(2)}%p / ${Math.round(dayDiff(pts[i].d, pts[jj].d))}일)`);
+          i = pts.length; break;
+        }
+      }
+    }
+  }
+  if (accumNotes.length) {
+    html += `<div class="factwarn">📈 <b>단기 매집 흐름 관찰</b> — 60일 안에 보유비율이 1%p 이상 늘어난 보고자가 있습니다:<br>` +
+      accumNotes.map(esc).join("<br>") +
+      `<br><span class="dim" style="font-size:0.8rem">계단식 매집은 지배 재편·경영권 경합 국면에서 반복 관찰되는 형태입니다 — 각 보고서의 취득 자금 출처·보고 사유를 원문에서 확인하세요.</span></div>`;
+  }
+  html += `<p class="dim" style="font-size:0.8rem;margin-top:0.5rem">※ DART 5% 대량보유 보고(elestock)의 공개 기록 미러링입니다. 최대주주 현황·임원 지분까지 통합한 시계열은 MCP 대화의 track_insider_trading이 제공합니다.</p>`;
+  el.innerHTML = html;
 }
 
 async function loadFinancialCore(corpCode) {
@@ -632,6 +691,7 @@ async function loadFinancialCore(corpCode) {
   const ni  = [pickAmt(fs, A["당기순이익"], "thstrm_amount"), pickAmt(fs, A["당기순이익"], "frmtrm_amount")];
   const eq  = pickAmt(fs, A["자본총계"], "thstrm_amount");
   const cap = pickAmt(fs, A["자본금"], "thstrm_amount");
+  const re  = pickAmt(fs, A["이익잉여금"], "thstrm_amount");
 
   const line = (label, cur, pri) => {
     if (cur === null) return "";
@@ -650,8 +710,14 @@ async function loadFinancialCore(corpCode) {
   };
   let html = `<p class="dim" style="font-size:0.82rem;margin-bottom:0.4rem">${year} 사업연도 · ${div === "CFS" ? "연결" : "별도"} 재무제표</p>`;
   html += line("매출액", rev[0], rev[1]) + line("영업이익", op[0], op[1]) + line("당기순이익", ni[0], ni[1]);
+  if (re !== null) html += `<div class="factline">· 이익잉여금: ${re < 0 ? `<span class="neg">${fmtKRW(re)} (결손)</span>` : fmtKRW(re)}</div>`;
 
   const warns = [];
+  if (re !== null && re > 0 && op[0] !== null && op[0] < 0) {
+    warns.push(`이익잉여금 ${fmtKRW(re)} 위에 영업적자가 얹힌 '현금성 자본·본업 부실' 구조입니다 — ` +
+      `자본이 두둑한데 본업이 이익을 못 내는 상장사는 무자본 M&A·자금 유용의 표적이 되기 쉽다는 것이 ` +
+      `금감원 적발 사례에서 반복 관찰되는 패턴입니다. 지배구조 변동과 함께 읽어보세요.`);
+  }
   if (op[0] !== null && op[1] !== null && op[0] < 0 && op[1] < 0) warns.push("2개 연도 연속 영업적자입니다.");
   if (ni[0] !== null && ni[1] !== null && ni[0] < 0 && ni[1] < 0) warns.push("2개 연도 연속 순손실입니다.");
   if (eq !== null && eq < 0) warns.push(`완전 자본잠식 상태입니다 — 자본총계 ${fmtKRW(eq)}.`);
@@ -699,6 +765,75 @@ async function loadAuditOpinions(corpCode) {
   if (hasBad) html += `<div class="factwarn">⚠️ 적정 외 감사의견이 관찰됐습니다 — 상장폐지 사유·개선기간과 직결될 수 있는 가장 무거운 회계 신호입니다. 감사보고서 원문을 확인하세요.</div>`;
   if (changed) html += `<div class="factline dim" style="font-size:0.85rem">· 기간 중 감사인 교체가 관찰됐습니다 (표기 차이일 수 있음 — 원문 확인).</div>`;
   el.innerHTML = html;
+}
+
+/* ── 흐름 읽기: 이벤트 배열을 서사 체인으로 ───── */
+function flowPanel(events) {
+  const asc = [...events].reverse();   // 오래된 → 최신
+  // 연속 동일 신호 묶기
+  const groups = [];
+  for (const e of asc) {
+    const s = e.signals[0];            // 무게순 첫 신호를 대표로
+    const last = groups[groups.length - 1];
+    if (last && last.key === s.key) { last.n++; last.to = e.date; }
+    else groups.push({ key: s.key, label: s.label, cat: s.category, from: e.date, to: e.date, n: 1 });
+  }
+  const mmdd = (d8) => d8.slice(2, 4) + "." + d8.slice(4, 6);
+  const chain = groups.slice(-12).map((g) =>
+    `<span class="tag" style="background:var(--c${g.cat})">${esc(mmdd(g.from))}${g.n > 1 ? "~" + esc(mmdd(g.to)) : ""} ${esc(g.label)}${g.n > 1 ? " ×" + g.n : ""}</span>`
+  ).join(`<span style="color:var(--text-dim)"> → </span>`);
+
+  const dayDiff = (a, b) => (new Date(b.slice(0,4)+"-"+b.slice(4,6)+"-"+b.slice(6,8)) -
+                             new Date(a.slice(0,4)+"-"+a.slice(4,6)+"-"+a.slice(6,8))) / 86400e3;
+  const notes = [];
+  // 규칙 1: 병합·감자 뒤 120일 내 경영권 이벤트 2건+
+  const rs = asc.find((e) => e.signals.some((s) => ["REVERSE_SPLIT", "GAMJA_MERGE"].includes(s.key)));
+  if (rs) {
+    const after = asc.filter((e) => dayDiff(rs.date, e.date) > 0 && dayDiff(rs.date, e.date) <= 120 &&
+      e.signals.some((s) => ["EXEC", "SHAREHOLDER", "MGMT", "MGMT_DISPUTE"].includes(s.key)));
+    if (after.length >= 2) {
+      notes.push(`주식병합·감자(${mmdd(rs.date)}) 뒤 120일 안에 경영권 관련 이벤트가 ${after.length}건 이어지는 배열입니다. ` +
+        `병합은 그 자체로 위법이 아니지만, 유통주식 수 축소와 지배지분 재편이 맞물린 구간인지는 병합 전후 지분율·상장 유지 요건을 원문에서 확인해 볼 지점입니다.`);
+    }
+  }
+  // 규칙 2: 90일 내 대량보유 보고 5건+
+  const shDates = asc.filter((e) => e.signals.some((s) => s.key === "SHAREHOLDER")).map((e) => e.date);
+  let maxIn90 = 0;
+  for (let i = 0; i < shDates.length; i++) {
+    let c = 0;
+    for (let jj = i; jj < shDates.length && dayDiff(shDates[i], shDates[jj]) <= 90; jj++) c++;
+    maxIn90 = Math.max(maxIn90, c);
+  }
+  if (maxIn90 >= 5) {
+    notes.push(`90일 안에 대량보유·최대주주 관련 보고가 ${maxIn90}건 집중됐습니다. 짧은 기간 보고가 연쇄되는 것은 ` +
+      `특정 세력의 지분 매집 또는 지배 세력 간 경합 국면에서 반복 관찰되는 형태입니다 — 보고자와 보고 사유를 원문에서 확인하세요.`);
+  }
+  return `<div class="panel"><h2>흐름 읽기 <span style="font-weight:400;font-size:0.8rem;color:var(--text-dim)">이벤트 배열 — 순서가 곧 서사입니다</span></h2>
+    <div style="display:flex;flex-wrap:wrap;align-items:center;gap:0.25rem;line-height:2">${chain}</div>` +
+    notes.map((t) => `<div class="factwarn">🧭 ${esc(t)}</div>`).join("") +
+    `</div>`;
+}
+
+/* ── 대화 안내 ────────────────────────────────── */
+function convoPanel(name) {
+  const q = (t) => esc(`"${t}"`);
+  return `<div class="panel"><h2>🗣 이 화면은 입구입니다 — 대화에서 훨씬 깊이 들어갑니다</h2>
+    <p class="dim">이 뷰어는 공시 제목과 주요 계정 수준의 요약입니다. MCP를 설치해 AI와 대화하면 같은 공시 데이터로 이런 것까지 봅니다:</p>
+    <ul class="dim" style="font-size:0.88rem;color:var(--text-dim);margin:0.5rem 0 0 1.2rem">
+      <li>최대주주 변경 공시 <strong>원문을 열어</strong> 변경 전후 지분율·인수 자금 출처·특수관계 구성까지 정리</li>
+      <li>유상증자·CB로 조달한 돈의 <strong>계획 vs 실제 집행</strong> 대조 (track_fund_usage)</li>
+      <li>CB·유상증자 <strong>인수자 이름 추출</strong> + 여러 회사 교차 + 워치리스트 저장 (find_actor_overlap)</li>
+      <li>재무 정밀 스캔 — 매출채권·재고 급증, 전기 수치 재작성, Beneish 변수 8종 (scan_financial_anomaly)</li>
+      <li>모든 답에 <strong>접수번호가 붙어</strong> 원문 검증 가능 + 후속 질문으로 꼬리를 물며 심화</li>
+    </ul>
+    <p style="font-size:0.9rem;margin-top:0.8rem"><b>이렇게 물어보세요</b> <span class="dim" style="font-size:0.8rem">(설치 후 그대로 복사해 쓰세요)</span></p>
+    <pre style="font-size:0.84rem">${q(`${name} 최근 1년 공시 흐름 분석해줘 — 최대주주 변경 원문까지 열어서`)}
+${q(`${name} 대주주 지분 변동 시계열 추적해줘`)}
+${q(`${name} 유상증자·CB로 모은 돈, 계획대로 썼는지 대조해줘`)}
+${q(`${name} 재무제표 이상 신호 정밀 스캔해줘`)}
+${q(`${name}랑 ○○·△△에 공통으로 등장하는 인물 있어?`)}</pre>
+    <p class="dim" style="font-size:0.85rem">설치는 2분입니다: <code>pip install dart-risk-mcp</code> → <code>python -m dart_risk_mcp.setup</code> — <a href="../#start">상세 안내</a></p>
+  </div>`;
 }
 
 function timelinePanel(events, bgn, end) {
