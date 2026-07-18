@@ -253,6 +253,35 @@ _zip_cache: dict[str, tuple[float, bytes]] = {}
 _ZIP_CACHE_MAX = 5
 _ZIP_CACHE_TTL = 600  # 10분
 
+# ZIP bomb 방어 상한 — 인메모리로만 읽으므로 Zip Slip은 해당 없음
+_ZIP_MAX_ENTRIES = 5000
+_ZIP_MAX_ENTRY_SIZE = 100 * 1024 * 1024   # 엔트리당 압축해제 100MB
+_ZIP_MAX_TOTAL_SIZE = 200 * 1024 * 1024   # 총 압축해제 200MB
+
+
+def _is_zip_safe(
+    zf: "zipfile.ZipFile",
+    max_entries: int | None = None,
+    max_entry_size: int | None = None,
+    max_total_size: int | None = None,
+) -> bool:
+    """압축해제 전 중앙 디렉터리 메타데이터로 ZIP bomb 여부 검사."""
+    max_entries = _ZIP_MAX_ENTRIES if max_entries is None else max_entries
+    max_entry_size = _ZIP_MAX_ENTRY_SIZE if max_entry_size is None else max_entry_size
+    max_total_size = _ZIP_MAX_TOTAL_SIZE if max_total_size is None else max_total_size
+
+    infos = zf.infolist()
+    if len(infos) > max_entries:
+        return False
+    total = 0
+    for info in infos:
+        if info.file_size > max_entry_size:
+            return False
+        total += info.file_size
+        if total > max_total_size:
+            return False
+    return True
+
 # v0.5.0: fund_usage / major_decision LRU 캐시 ------------------
 _fund_usage_cache: dict[tuple, tuple[float, list]] = {}
 _FUND_CACHE_MAX = 20
@@ -445,6 +474,10 @@ def _fetch_document_zip(rcept_no: str, api_key: str) -> zipfile.ZipFile | None:
         try:
             zf = zipfile.ZipFile(io.BytesIO(raw), metadata_encoding="cp949")
         except zipfile.BadZipFile:
+            return None
+
+        if not _is_zip_safe(zf):
+            log.warning("ZIP 안전 상한 초과로 거부 (%s)", rcept_no)
             return None
 
         # LRU: 오래된 항목 제거
