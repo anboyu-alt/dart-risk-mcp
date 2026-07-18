@@ -30,6 +30,11 @@ from dart_risk_mcp.core.dart_client import _FS_ALIASES  # noqa: E402
 # 뷰어 심화 블록(재무 핵심)에서 쓰는 계정 별칭 부분집합
 _FS_ALIAS_KEYS = ("매출", "영업이익", "당기순이익", "자본총계", "자본금")
 
+# 뷰어 전용 추가 별칭 — core _FS_ALIASES에 없는 계정 (fnlttSinglAcnt 주요계정)
+_VIEWER_EXTRA_ALIASES = {
+    "이익잉여금": ["이익잉여금", "이익잉여금(결손금)", "이익잉여금(결손금)계"],
+}
+
 # taxonomy ID 첫 자리 → 사용자용 카테고리 라벨 (CLAUDE.md 카테고리 표와 동일)
 CATEGORY_LABELS = {
     "0": "기타",
@@ -96,7 +101,8 @@ def build_signals_data() -> dict:
         "categories": CATEGORY_LABELS,
         "capital_event_keys": sorted(CAPITAL_EVENT_KEYS),
         "amendment_pattern": _AMENDMENT_RE.pattern,
-        "fs_aliases": {k: list(_FS_ALIASES[k]) for k in _FS_ALIAS_KEYS},
+        "fs_aliases": {**{k: list(_FS_ALIASES[k]) for k in _FS_ALIAS_KEYS},
+                       **_VIEWER_EXTRA_ALIASES},
     }
 
 

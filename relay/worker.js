@@ -19,6 +19,7 @@ const ALLOWED_ENDPOINTS = new Set([
   "fnlttSinglAcnt.json",
   "accnutAdtorNmNdAdtOpinion.json",
   "exctvSttus.json",
+  "elestock.json",
 ]);
 
 const CORS_HEADERS = {
