@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DART 리스크 뷰어 — 종목명 입력, 실시간 신호 시각화</title>
+<meta name="description" content="종목명을 입력하면 본인의 DART API 키로 최근 12개월 공시를 실시간 스캔해 불공정거래 위험 신호를 시각화합니다. 점수 없이 사실만.">
+<style>
+  :root {
+    --bg: #fafaf8; --surface: #ffffff; --text: #1c1c1e; --text-dim: #55555e;
+    --accent: #2d5f8a; --accent-strong: #1e4668; --accent-soft: #e8f0f7;
+    --border: #e2e2df; --code-bg: #f1f1ee;
+    --warn-bg: #fdf3e7; --warn-border: #e8c9a0;
+    --mono: "SF Mono", "Cascadia Code", Consolas, monospace;
+    /* 카테고리 8색 (0=기타) — 라이트/다크 공용 */
+    --c0: #8e8e93; --c1: #c0662a; --c2: #2d5f8a; --c3: #7a4fb0;
+    --c4: #b03a6b; --c5: #2a8a62; --c6: #a08a1e; --c7: #c03a3a; --c8: #4a4a55;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181d; --surface: #1e2128; --text: #e8e8ea; --text-dim: #a0a0ab;
+      --accent: #7ab3e0; --accent-strong: #a3cdf0; --accent-soft: #24303c;
+      --border: #33363e; --code-bg: #262a32;
+      --warn-bg: #2e2820; --warn-border: #5a4a30;
+      --c0: #98989f; --c1: #e0925a; --c2: #7ab3e0; --c3: #ab84dd;
+      --c4: #dd7aa3; --c5: #5ec297; --c6: #cfc063; --c7: #e07a7a; --c8: #b8b8c2;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text); font-size: 16px; line-height: 1.7;
+    font-family: "Apple SD Gothic Neo", "Malgun Gothic", "맑은 고딕", Pretendard, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font-family: var(--mono); font-size: 0.86em; background: var(--code-bg); border-radius: 5px; padding: 0.1em 0.4em; }
+  main { max-width: 980px; margin: 0 auto; padding: 1.6rem 1.2rem 5rem; }
+
+  header.top { display: flex; align-items: baseline; gap: 0.8rem; flex-wrap: wrap; padding: 0.4rem 0 1.4rem; }
+  header.top h1 { font-size: 1.25rem; font-weight: 850; }
+  header.top h1 span { color: var(--accent); }
+  header.top .links { margin-left: auto; font-size: 0.85rem; display: flex; gap: 0.9rem; }
+  header.top .links a { color: var(--text-dim); }
+
+  .panel {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; padding: 1.3rem 1.4rem; margin-bottom: 1.1rem;
+  }
+  .panel h2 { font-size: 1.05rem; font-weight: 800; margin-bottom: 0.6rem; }
+  .panel p.dim { font-size: 0.88rem; color: var(--text-dim); }
+
+  label { display: block; font-size: 0.82rem; font-weight: 700; color: var(--text-dim); margin: 0.7rem 0 0.25rem; }
+  input[type="text"], input[type="password"] {
+    width: 100%; padding: 0.62rem 0.85rem; font-size: 0.95rem;
+    border: 1px solid var(--border); border-radius: 10px;
+    background: var(--bg); color: var(--text); outline: none;
+  }
+  input:focus { border-color: var(--accent); }
+  button {
+    padding: 0.6rem 1.25rem; border-radius: 10px; border: 1px solid var(--accent);
+    background: var(--accent); color: #fff; font-weight: 700; font-size: 0.92rem;
+    cursor: pointer; font-family: inherit;
+  }
+  button:hover { background: var(--accent-strong); }
+  button.ghost { background: transparent; color: var(--accent); }
+
+  /* 검색 자동완성 */
+  .searchwrap { position: relative; }
+  .suggest {
+    position: absolute; left: 0; right: 0; top: 100%; z-index: 20;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    margin-top: 4px; max-height: 300px; overflow-y: auto; display: none;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+  }
+  .suggest div { padding: 0.5rem 0.9rem; cursor: pointer; font-size: 0.92rem; display: flex; gap: 0.6rem; }
+  .suggest div:hover, .suggest div.active { background: var(--accent-soft); }
+  .suggest .code { color: var(--text-dim); font-family: var(--mono); font-size: 0.8rem; }
+
+  /* 진행/오류 */
+  .status { font-size: 0.9rem; color: var(--text-dim); padding: 0.4rem 0.2rem; min-height: 1.6rem; }
+  .status.err { color: var(--c7); font-weight: 700; }
+  .spinner { display: inline-block; width: 0.85em; height: 0.85em; border: 2px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite;
+    vertical-align: -0.1em; margin-right: 0.4em; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* 결과 */
+  .kpis { display: flex; flex-wrap: wrap; gap: 0.9rem 2rem; margin: 0.5rem 0 0.2rem; }
+  .kpi .v { font-size: 1.4rem; font-weight: 850; }
+  .kpi .k { font-size: 0.78rem; color: var(--text-dim); }
+  .legend { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; font-size: 0.78rem; color: var(--text-dim); margin: 0.6rem 0 0.3rem; }
+  .legend i { display: inline-block; width: 0.65em; height: 0.65em; border-radius: 50%; margin-right: 0.3em; }
+  .chartwrap { overflow-x: auto; }
+  svg text { font-family: inherit; }
+
+  .bars { display: grid; gap: 0.45rem; margin-top: 0.6rem; }
+  .bar { display: grid; grid-template-columns: 7.5rem 1fr 2.5rem; align-items: center; gap: 0.6rem; font-size: 0.85rem; }
+  .bar .track { background: var(--code-bg); border-radius: 6px; height: 0.9rem; overflow: hidden; }
+  .bar .fill { height: 100%; border-radius: 6px; }
+  .bar .n { text-align: right; font-family: var(--mono); font-size: 0.8rem; color: var(--text-dim); }
+
+  .patterncard { border-left: 3px solid var(--warn-border); background: var(--warn-bg);
+    border-radius: 10px; padding: 0.9rem 1.1rem; margin-top: 0.7rem; font-size: 0.9rem; }
+  .patterncard b { display: block; margin-bottom: 0.2rem; }
+  .patterncard .sigs { font-size: 0.8rem; color: var(--text-dim); margin-top: 0.3rem; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 0.85rem; margin-top: 0.6rem; }
+  th, td { border-bottom: 1px solid var(--border); padding: 0.45rem 0.5rem; text-align: left; vertical-align: top; }
+  th { color: var(--text-dim); font-weight: 700; font-size: 0.78rem; white-space: nowrap; }
+  td.date { white-space: nowrap; font-family: var(--mono); font-size: 0.78rem; color: var(--text-dim); }
+  .tag { display: inline-block; font-size: 0.72rem; font-weight: 700; border-radius: 999px;
+    padding: 0.05rem 0.55rem; margin: 0.08rem 0.15rem 0.08rem 0; color: #fff; white-space: nowrap; }
+
+  .disclaimer { font-size: 0.8rem; color: var(--text-dim); border-top: 1px solid var(--border);
+    margin-top: 2.2rem; padding-top: 1rem; }
+  details.settings { margin-top: 0.8rem; font-size: 0.88rem; }
+  details.settings summary { cursor: pointer; font-weight: 700; color: var(--accent); font-size: 0.85rem; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+
+<header class="top">
+  <h1>DART <span>리스크 뷰어</span></h1>
+  <div class="links">
+    <a href="../">프로젝트 소개</a>
+    <a href="https://github.com/anboyu-alt/dart-risk-mcp">GitHub</a>
+  </div>
+</header>
+
+<!-- 최초 설정 -->
+<div class="panel" id="setupPanel">
+  <h2>1분 설정 — 본인 DART API 키로 조회합니다</h2>
+  <p class="dim">
+    이 도구는 서버에 데이터를 쌓지 않습니다. 입력한 키는 <strong>이 브라우저에만 저장</strong>되고,
+    공개 코드로 검증 가능한 <a href="https://github.com/anboyu-alt/dart-risk-mcp/tree/master/relay">무저장 릴레이</a>를
+    거쳐 금융감독원 DART로만 전송됩니다. 키가 없다면
+    <a href="https://opendart.fss.or.kr" target="_blank" rel="noopener">opendart.fss.or.kr</a>에서
+    이메일 인증으로 2분 만에 무료 발급됩니다(일 20,000건).
+  </p>
+  <label for="keyInput">DART API 키 (40자)</label>
+  <input type="password" id="keyInput" placeholder="발급받은 인증키를 붙여넣으세요" autocomplete="off">
+  <div style="margin-top:0.8rem"><button id="saveKey">저장하고 시작</button></div>
+  <details class="settings">
+    <summary>고급 — 릴레이 주소 직접 지정 (셀프호스트)</summary>
+    <label for="relayInput">릴레이 URL (비우면 기본 릴레이)</label>
+    <input type="text" id="relayInput" placeholder="https://…workers.dev 또는 http://127.0.0.1:8787">
+  </details>
+</div>
+
+<!-- 검색 -->
+<div class="panel hidden" id="searchPanel">
+  <h2>종목명 또는 종목코드 입력</h2>
+  <div class="searchwrap">
+    <input type="text" id="q" placeholder="예: 제이스코홀딩스, 005930 …" autocomplete="off">
+    <div class="suggest" id="suggest"></div>
+  </div>
+  <div class="status" id="status"></div>
+  <details class="settings">
+    <summary>설정</summary>
+    <p class="dim" style="margin-top:0.4rem">
+      저장된 키: <span id="keyMask"></span>
+      <button class="ghost" id="resetKey" style="padding:0.2rem 0.7rem;font-size:0.8rem;margin-left:0.5rem">키 변경</button>
+    </p>
+  </details>
+</div>
+
+<!-- 결과 -->
+<div id="result"></div>
+
+<p class="disclaimer">
+  본 도구의 모든 표시는 DART 공시라는 공개 기록의 <strong>사실 표기</strong>이며, 특정 기업에 대한
+  판정·점수·등급·투자 권유가 아닙니다. 신호는 "원문을 확인해 볼 지점"의 표시일 뿐입니다 — 각 항목을
+  클릭해 반드시 DART 원문을 확인하세요. 조회는 사용자의 API 키로 사용자가 시작하며, 이 페이지는
+  어떤 데이터도 서버에 저장하지 않습니다. ·
+  <a href="https://github.com/anboyu-alt/dart-risk-mcp">dart-risk-mcp</a> (MIT)
+</p>
+
+</main>
+
+<script>
+"use strict";
+/* ── 설정 ─────────────────────────────────────── */
+const DEFAULT_RELAY = "";           // Cloudflare Worker 배포 후 URL 기입
+const LOOKBACK_DAYS = 365;
+const MAX_PAGES = 5;                // 100건 × 5 = 최대 500건 (MCP와 동일)
+const LS_KEY = "dart_tool_key", LS_RELAY = "dart_tool_relay";
+
+const $ = (id) => document.getElementById(id);
+let DATA = null, CORPS = null;      // signals-data.json / corp-map.json
+let AMEND_RE = null;
+
+/* ── 릴레이 주소 결정: 저장값 > 기본값 > 같은 출처 /api ── */
+function relayBase() {
+  const v = (localStorage.getItem(LS_RELAY) || "").trim().replace(/\/+$/, "");
+  if (v) return v;
+  if (DEFAULT_RELAY) return DEFAULT_RELAY.replace(/\/+$/, "");
+  return "";                        // 같은 출처 (dev_relay / 셀프호스트)
+}
+
+/* ── 초기화 ───────────────────────────────────── */
+async function boot() {
+  const [sig, corps] = await Promise.all([
+    fetch("signals-data.json").then((r) => r.json()),
+    fetch("corp-map.json").then((r) => r.json()),
+  ]);
+  DATA = sig; CORPS = corps;
+  AMEND_RE = new RegExp(DATA.amendment_pattern);
+  if (localStorage.getItem(LS_KEY)) showSearch();
+}
+function showSearch() {
+  $("setupPanel").classList.add("hidden");
+  $("searchPanel").classList.remove("hidden");
+  const k = localStorage.getItem(LS_KEY) || "";
+  $("keyMask").textContent = k ? k.slice(0, 4) + "…" + k.slice(-4) : "(없음)";
+  $("q").focus();
+}
+$("saveKey").onclick = () => {
+  const k = $("keyInput").value.trim();
+  if (k.length !== 40) { alert("DART API 키는 40자입니다. 다시 확인해 주세요."); return; }
+  localStorage.setItem(LS_KEY, k);
+  const relay = $("relayInput").value.trim();
+  if (relay) localStorage.setItem(LS_RELAY, relay);
+  showSearch();
+};
+$("resetKey").onclick = () => {
+  localStorage.removeItem(LS_KEY);
+  $("searchPanel").classList.add("hidden");
+  $("setupPanel").classList.remove("hidden");
+};
+
+/* ── 자동완성 ─────────────────────────────────── */
+let names = null, activeIdx = -1;
+function suggestions(qs) {
+  if (!names) names = Object.keys(CORPS);
+  const q = qs.trim();
+  if (!q) return [];
+  if (/^\d{6}$/.test(q)) {
+    return names.filter((n) => CORPS[n][1] === q).slice(0, 12);
+  }
+  const starts = [], incl = [];
+  for (const n of names) {
+    if (n.startsWith(q)) starts.push(n);
+    else if (n.includes(q)) incl.push(n);
+    if (starts.length >= 12) break;
+  }
+  return starts.concat(incl).slice(0, 12);
+}
+function renderSuggest(list) {
+  const box = $("suggest");
+  if (!list.length) { box.style.display = "none"; box.innerHTML = ""; return; }
+  box.innerHTML = list.map((n, i) =>
+    `<div data-n="${n}" class="${i === activeIdx ? "active" : ""}">` +
+    `<span>${n}</span><span class="code">${CORPS[n][1]}</span></div>`).join("");
+  box.style.display = "block";
+  box.querySelectorAll("div").forEach((el) => {
+    el.onmousedown = (e) => { e.preventDefault(); pick(el.dataset.n); };
+  });
+}
+function pick(name) {
+  $("q").value = name; $("suggest").style.display = "none"; activeIdx = -1;
+  analyze(name);
+}
+$("q").addEventListener("input", () => { activeIdx = -1; renderSuggest(suggestions($("q").value)); });
+$("q").addEventListener("keydown", (e) => {
+  const list = suggestions($("q").value);
+  if (e.key === "ArrowDown") { activeIdx = Math.min(activeIdx + 1, list.length - 1); renderSuggest(list); e.preventDefault(); }
+  else if (e.key === "ArrowUp") { activeIdx = Math.max(activeIdx - 1, 0); renderSuggest(list); e.preventDefault(); }
+  else if (e.key === "Enter") {
+    const chosen = list[activeIdx >= 0 ? activeIdx : 0];
+    if (chosen) pick(chosen);
+  } else if (e.key === "Escape") { $("suggest").style.display = "none"; }
+});
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".searchwrap")) $("suggest").style.display = "none";
+});
+
+/* ── DART 호출 ────────────────────────────────── */
+function ymd(d) { return d.toISOString().slice(0, 10).replace(/-/g, ""); }
+async function dartGet(endpoint, params) {
+  const usp = new URLSearchParams({ crtfc_key: localStorage.getItem(LS_KEY), ...params });
+  const url = `${relayBase()}/api/${endpoint}?${usp}`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`릴레이 오류 (HTTP ${r.status}) — 설정에서 릴레이 주소를 확인하세요`);
+  return r.json();
+}
+const DART_ERR = {
+  "010": "등록되지 않은 API 키입니다 — 키를 확인하세요",
+  "011": "사용할 수 없는 키입니다 (발급 후 활성화까지 몇 분 걸릴 수 있음)",
+  "020": "오늘 이 키의 조회 한도(20,000건)를 초과했습니다",
+  "800": "DART 시스템 점검 중입니다",
+};
+
+/* ── 분석 ─────────────────────────────────────── */
+function matchSignals(reportNm) {
+  const out = [];
+  for (const s of DATA.signals) {
+    for (const kw of s.keywords) {
+      if (reportNm.includes(kw)) { out.push(s); break; }
+    }
+  }
+  return out;
+}
+
+async function analyze(name) {
+  const [corpCode, stockCode] = CORPS[name];
+  const st = $("status"); const res = $("result");
+  res.innerHTML = ""; st.className = "status";
+  const end = new Date(), bgn = new Date(Date.now() - LOOKBACK_DAYS * 86400e3);
+  const items = [];
+  try {
+    let totalPage = 1;
+    for (let p = 1; p <= Math.min(MAX_PAGES, totalPage); p++) {
+      st.innerHTML = `<span class="spinner"></span>${name} — DART 실시간 스캔 중… (페이지 ${p}${totalPage > 1 ? "/" + Math.min(MAX_PAGES, totalPage) : ""})`;
+      const j = await dartGet("list.json", {
+        corp_code: corpCode, bgn_de: ymd(bgn), end_de: ymd(end),
+        page_no: p, page_count: 100,
+      });
+      if (j.status === "013") break;                       // 조회 결과 없음
+      if (j.status !== "000") throw new Error(DART_ERR[j.status] || `DART 오류 (${j.status}) ${j.message || ""}`);
+      totalPage = j.total_page || 1;
+      items.push(...(j.list || []));
+    }
+    st.textContent = "";
+    render(name, stockCode, items, bgn, end);
+  } catch (e) {
+    st.className = "status err";
+    st.textContent = "⚠ " + e.message;
+  }
+}
+
+/* ── 렌더 ─────────────────────────────────────── */
+function catColor(c) { return getComputedStyle(document.documentElement).getPropertyValue("--c" + c).trim(); }
+function esc(s) { return s.replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m])); }
+function dartUrl(rcept) { return "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=" + rcept; }
+function fmtDate(d8) { return d8.slice(0, 4) + "." + d8.slice(4, 6) + "." + d8.slice(6, 8); }
+
+function render(name, stockCode, items, bgn, end) {
+  const events = [];              // {date, nm, rcept, signals[]}
+  let amendCount = 0;
+  for (const it of items) {
+    const nm = it.report_nm || "";
+    if (AMEND_RE.test(nm)) { amendCount++; continue; }
+    const sigs = matchSignals(nm);
+    if (sigs.length) events.push({ date: it.rcept_dt, nm, rcept: it.rcept_no, signals: sigs });
+  }
+  events.sort((a, b) => a.date < b.date ? 1 : -1);
+
+  const detectedTax = new Set(events.flatMap((e) => e.signals.map((s) => s.taxonomy)).filter(Boolean));
+  const patterns = DATA.patterns.filter((p) => p.signal_sequence.every((t) => detectedTax.has(t)));
+  const capitalKeys = new Set(DATA.capital_event_keys);
+  const capitalEvents = events.filter((e) => e.signals.some((s) => capitalKeys.has(s.key)));
+
+  const catCount = {};
+  for (const e of events) for (const s of e.signals) catCount[s.category] = (catCount[s.category] || 0) + 1;
+
+  let html = `<div class="panel">
+    <h2>📊 ${esc(name)} <span style="color:var(--text-dim);font-weight:400">(${stockCode}) · 최근 12개월 · 실시간 조회 ${fmtDate(ymd(new Date()))}</span></h2>
+    <div class="kpis">
+      <div class="kpi"><div class="v">${items.length}</div><div class="k">전체 공시</div></div>
+      <div class="kpi"><div class="v">${events.length}</div><div class="k">신호 감지 공시</div></div>
+      <div class="kpi"><div class="v">${capitalEvents.length}</div><div class="k">자본 이벤트</div></div>
+      <div class="kpi"><div class="v">${amendCount}</div><div class="k">정정공시</div></div>
+      <div class="kpi"><div class="v">${items.length ? Math.round(amendCount / items.length * 100) : 0}%</div><div class="k">정정 비율</div></div>
+    </div>
+    ${events.length === 0 ? `<p class="dim" style="margin-top:0.8rem">최근 12개월 공시 ${items.length}건에서 등록된 위험 신호 유형이 감지되지 않았습니다. 신호가 없다는 것이 "안전하다"는 판정은 아닙니다 — 본 도구는 공시 제목 기반 신호만 봅니다.</p>` : ""}
+  </div>`;
+
+  if (events.length) {
+    html += timelinePanel(events, bgn, end);
+    html += categoryPanel(catCount, events.length);
+    if (capitalEvents.length >= 3) {
+      html += `<div class="panel"><h2>자본 이벤트 리듬</h2>
+        <p class="dim">최근 12개월 자본 관련 공시(증자·감자·자사주·CB/BW/EB/RCPS)가 <strong>${capitalEvents.length}건</strong>입니다.
+        12개월 내 3건 이상은 등록 패턴(capital churn)의 관찰 조건에 해당합니다 — 각 건의 원문을 확인해 보세요.</p></div>`;
+    }
+    if (patterns.length) {
+      html += `<div class="panel"><h2>복합 패턴 조건 충족</h2>
+        <p class="dim">아래 패턴의 구성 신호가 모두 관찰됐습니다. 패턴 "조건 충족"은 사실 관찰이며 판정이 아닙니다.</p>` +
+        patterns.map((p) => `<div class="patterncard"><b>${esc(p.name)}</b>${esc(p.description)}
+          <div class="sigs">구성 신호 taxonomy: ${p.signal_sequence.join(" + ")} · 관찰 윈도우 ${p.timeline_months}개월</div></div>`).join("") +
+        `</div>`;
+    }
+    html += listPanel(events);
+  }
+  $("result").innerHTML = html;
+}
+
+function timelinePanel(events, bgn, end) {
+  const cats = [...new Set(events.flatMap((e) => e.signals.map((s) => s.category)))].sort();
+  const W = 1000, laneH = 34, padL = 86, padT = 26, padB = 30;
+  const H = padT + cats.length * laneH + padB;
+  const t0 = bgn.getTime(), t1 = end.getTime();
+  const x = (d8) => padL + ((new Date(d8.slice(0, 4) + "-" + d8.slice(4, 6) + "-" + d8.slice(6, 8)).getTime() - t0) / (t1 - t0)) * (W - padL - 20);
+
+  let dots = "", lanes = "", months = "";
+  cats.forEach((c, i) => {
+    const y = padT + i * laneH + laneH / 2;
+    lanes += `<line x1="${padL}" y1="${y}" x2="${W - 12}" y2="${y}" stroke="var(--border)" stroke-width="1"/>`;
+    lanes += `<text x="${padL - 8}" y="${y + 4}" text-anchor="end" font-size="11.5" fill="var(--text-dim)">${esc(DATA.categories[String(c)])}</text>`;
+  });
+  for (let m = new Date(bgn.getFullYear(), bgn.getMonth() + 1, 1); m < end; m.setMonth(m.getMonth() + 1)) {
+    const mx = padL + ((m.getTime() - t0) / (t1 - t0)) * (W - padL - 20);
+    months += `<line x1="${mx}" y1="${padT - 8}" x2="${mx}" y2="${H - padB + 4}" stroke="var(--border)" stroke-dasharray="2 4" stroke-width="0.7"/>`;
+    if (m.getMonth() % 2 === 0) months += `<text x="${mx}" y="${H - 8}" text-anchor="middle" font-size="10.5" fill="var(--text-dim)">${m.getFullYear() % 100}.${String(m.getMonth() + 1).padStart(2, "0")}</text>`;
+  }
+  for (const e of events) {
+    for (const s of e.signals) {
+      const yi = cats.indexOf(s.category);
+      const y = padT + yi * laneH + laneH / 2;
+      dots += `<a href="${dartUrl(e.rcept)}" target="_blank" rel="noopener">` +
+        `<circle cx="${x(e.date).toFixed(1)}" cy="${y}" r="5.5" fill="var(--c${s.category})" fill-opacity="0.85">` +
+        `<title>${esc(fmtDate(e.date))} · ${esc(s.label)}\n${esc(e.nm)}\n(클릭 → DART 원문)</title></circle></a>`;
+    }
+  }
+  const legend = cats.map((c) => `<span><i style="background:var(--c${c})"></i>${esc(DATA.categories[String(c)])}</span>`).join("");
+  return `<div class="panel"><h2>신호 타임라인 <span style="font-weight:400;font-size:0.8rem;color:var(--text-dim)">점 클릭 → DART 원문</span></h2>
+    <div class="legend">${legend}</div>
+    <div class="chartwrap"><svg viewBox="0 0 ${W} ${H}" width="100%" style="min-width:640px">${months}${lanes}${dots}</svg></div></div>`;
+}
+
+function categoryPanel(catCount, total) {
+  const entries = Object.entries(catCount).sort((a, b) => b[1] - a[1]);
+  const max = Math.max(...entries.map((e) => e[1]));
+  return `<div class="panel"><h2>카테고리 분포 <span style="font-weight:400;font-size:0.8rem;color:var(--text-dim)">신호 건수 — 점수 아님</span></h2>
+    <div class="bars">` + entries.map(([c, n]) =>
+      `<div class="bar"><span>${esc(DATA.categories[String(c)])}</span>
+        <div class="track"><div class="fill" style="width:${(n / max * 100).toFixed(0)}%;background:var(--c${c})"></div></div>
+        <span class="n">${n}</span></div>`).join("") + `</div></div>`;
+}
+
+function listPanel(events) {
+  const rows = events.slice(0, 40).map((e) =>
+    `<tr><td class="date">${fmtDate(e.date)}</td>
+      <td><a href="${dartUrl(e.rcept)}" target="_blank" rel="noopener">${esc(e.nm)}</a></td>
+      <td>${e.signals.map((s) => `<span class="tag" style="background:var(--c${s.category})">${esc(s.label)}</span>`).join("")}</td></tr>`).join("");
+  return `<div class="panel"><h2>신호 감지 공시 목록 <span style="font-weight:400;font-size:0.8rem;color:var(--text-dim)">최근순 · 최대 40건</span></h2>
+    <table><thead><tr><th>날짜</th><th>공시명 (클릭 → 원문)</th><th>신호</th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="dim" style="margin-top:0.7rem">더 깊은 분석(재무 이상 스캔, 자금 사용 대조, 행위자 추적)은
+    <a href="../#start">MCP를 설치해 AI와의 대화</a>로 이어가세요 — 이 페이지는 공시 제목 기반 신호까지만 봅니다.</p></div>`;
+}
+
+boot().catch((e) => { $("status").className = "status err"; $("status").textContent = "초기화 실패: " + e.message; });
+</script>
+</body>
+</html>
