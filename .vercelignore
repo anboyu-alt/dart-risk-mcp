@@ -1,0 +1,9 @@
+# Vercel 배포에는 도구 페이지(docs/tool)와 릴레이 함수(api/)만 필요하다.
+# 루트의 pyproject.toml 때문에 Python 앱으로 오인 빌드되는 것을 차단
+# ("No python entrypoint found" — 2026-07 실측).
+/*
+!api
+!docs
+!vercel.json
+docs/*
+!docs/tool
