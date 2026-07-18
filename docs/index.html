@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DART 리스크 분석 MCP — 공시에서 불공정거래 위험 신호를 읽는 도구</title>
+<meta name="description" content="한국 금융감독원 DART 전자공시에서 불공정거래 위험 신호를 탐지하는 오픈소스 MCP 서버. 26개 도구, 37개 신호, 9개 복합 패턴. 점수 없이 사실만.">
+<style>
+  :root {
+    --bg: #fafaf8;
+    --surface: #ffffff;
+    --text: #1c1c1e;
+    --text-dim: #55555e;
+    --accent: #2d5f8a;
+    --accent-strong: #1e4668;
+    --accent-soft: #e8f0f7;
+    --border: #e2e2df;
+    --code-bg: #f1f1ee;
+    --warn-bg: #fdf3e7;
+    --warn-border: #e8c9a0;
+    --mono: "SF Mono", "Cascadia Code", Consolas, "Nanum Gothic Coding", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181d;
+      --surface: #1e2128;
+      --text: #e8e8ea;
+      --text-dim: #a0a0ab;
+      --accent: #7ab3e0;
+      --accent-strong: #a3cdf0;
+      --accent-soft: #24303c;
+      --border: #33363e;
+      --code-bg: #262a32;
+      --warn-bg: #2e2820;
+      --warn-border: #5a4a30;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; scroll-padding-top: 4.5rem; }
+  @media (max-width: 760px) { html { scroll-padding-top: 8.5rem; } }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: "Apple SD Gothic Neo", "Malgun Gothic", "맑은 고딕", Pretendard, sans-serif;
+    line-height: 1.75; font-size: 16.5px;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    font-family: var(--mono); font-size: 0.86em;
+    background: var(--code-bg); border-radius: 5px; padding: 0.12em 0.42em;
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1rem 1.2rem; overflow-x: auto;
+    font-size: 0.86rem; line-height: 1.6; margin: 0.8rem 0;
+  }
+  pre code { background: none; padding: 0; font-size: 1em; }
+
+  /* ── 상단 내비게이션 ─────────────────────────── */
+  nav {
+    position: sticky; top: 0; z-index: 50;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-inner {
+    max-width: 1060px; margin: 0 auto; padding: 0.7rem 1.2rem;
+    display: flex; align-items: center; gap: 1.1rem; flex-wrap: wrap;
+  }
+  .nav-brand { font-weight: 800; font-size: 1rem; color: var(--text); white-space: nowrap; }
+  .nav-brand span { color: var(--accent); }
+  .nav-links { display: flex; gap: 0.95rem; flex-wrap: wrap; font-size: 0.86rem; }
+  .nav-links a { color: var(--text-dim); }
+  .nav-links a:hover { color: var(--accent); text-decoration: none; }
+
+  main { max-width: 1060px; margin: 0 auto; padding: 0 1.2rem 5rem; }
+
+  /* ── 히어로 ─────────────────────────────────── */
+  .hero { padding: 5rem 0 3.4rem; }
+  .hero h1 {
+    font-size: clamp(1.9rem, 5vw, 3.1rem); font-weight: 900;
+    line-height: 1.28; letter-spacing: -0.02em;
+  }
+  .hero h1 em { font-style: normal; color: var(--accent); }
+  .hero .sub {
+    margin-top: 1.15rem; font-size: 1.08rem; color: var(--text-dim); max-width: 46rem;
+  }
+  .chips { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1.5rem; }
+  .chip {
+    font-size: 0.8rem; font-weight: 600; padding: 0.3rem 0.75rem;
+    border: 1px solid var(--border); border-radius: 999px;
+    background: var(--surface); color: var(--text-dim);
+  }
+  .chip.hl { background: var(--accent-soft); border-color: transparent; color: var(--accent-strong); }
+  .cta { display: flex; gap: 0.7rem; margin-top: 1.9rem; flex-wrap: wrap; }
+  .btn {
+    display: inline-block; padding: 0.68rem 1.4rem; border-radius: 10px;
+    font-weight: 700; font-size: 0.95rem; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text);
+  }
+  .btn:hover { text-decoration: none; border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
+
+  /* ── 공통 섹션 ──────────────────────────────── */
+  section { padding: 3.2rem 0 0.6rem; }
+  .kicker {
+    font-size: 0.78rem; font-weight: 800; letter-spacing: 0.14em;
+    color: var(--accent); text-transform: uppercase;
+  }
+  section > h2 {
+    font-size: clamp(1.45rem, 3.4vw, 2rem); font-weight: 850;
+    margin: 0.35rem 0 0.9rem; letter-spacing: -0.01em; line-height: 1.35;
+  }
+  section > .lead { color: var(--text-dim); max-width: 47rem; margin-bottom: 1.6rem; }
+
+  .grid { display: grid; gap: 1rem; }
+  .grid.c3 { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .grid.c2 { grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; padding: 1.35rem 1.4rem;
+  }
+  .card h3 { font-size: 1.02rem; font-weight: 800; margin-bottom: 0.5rem; }
+  .card p { font-size: 0.92rem; color: var(--text-dim); }
+  .card .num {
+    display: inline-block; font-family: var(--mono); font-size: 0.75rem;
+    color: var(--accent); font-weight: 700; margin-bottom: 0.55rem;
+  }
+
+  /* ── 용어 사전 ──────────────────────────────── */
+  .term { border-left: 3px solid var(--accent); }
+  .term h3 code { font-size: 0.8em; }
+
+  /* ── 타임라인 (무자본 M&A 예시) ─────────────── */
+  .timeline { margin: 1.4rem 0 0.6rem; border-left: 2px solid var(--border); padding-left: 1.4rem; }
+  .tl-item { position: relative; padding-bottom: 1.25rem; }
+  .tl-item::before {
+    content: ""; position: absolute; left: -1.79rem; top: 0.42rem;
+    width: 11px; height: 11px; border-radius: 50%;
+    background: var(--surface); border: 2.5px solid var(--accent);
+  }
+  .tl-item.alarm::before { border-color: #c0662a; }
+  .tl-when { font-family: var(--mono); font-size: 0.74rem; color: var(--text-dim); }
+  .tl-what { font-weight: 700; font-size: 0.95rem; }
+  .tl-note { font-size: 0.86rem; color: var(--text-dim); }
+
+  /* ── 도구 그룹 ──────────────────────────────── */
+  .toolgroup { margin-bottom: 1.6rem; }
+  .toolgroup h3 {
+    font-size: 1.08rem; font-weight: 800; margin-bottom: 0.7rem;
+    display: flex; align-items: baseline; gap: 0.55rem;
+  }
+  .toolgroup h3 .q { color: var(--accent); }
+  .tools { display: grid; gap: 0.55rem; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); }
+  .tool {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 0.72rem 0.95rem; font-size: 0.88rem;
+  }
+  .tool code { font-weight: 700; }
+  .tool .d { color: var(--text-dim); display: block; margin-top: 0.15rem; font-size: 0.85rem; }
+
+  /* ── 실측 사례 ──────────────────────────────── */
+  .case { display: flex; flex-direction: column; gap: 0.6rem; }
+  .case .tag {
+    align-self: flex-start; font-size: 0.72rem; font-weight: 800;
+    background: var(--accent-soft); color: var(--accent-strong);
+    padding: 0.18rem 0.6rem; border-radius: 999px;
+  }
+  .case .fig {
+    font-family: var(--mono); font-size: 0.84rem; background: var(--code-bg);
+    border-radius: 8px; padding: 0.7rem 0.9rem; overflow-x: auto; white-space: pre;
+  }
+
+  /* ── 단계 안내 ──────────────────────────────── */
+  .steps { counter-reset: step; display: grid; gap: 1rem; margin-top: 0.4rem; }
+  .step {
+    counter-increment: step; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 14px; padding: 1.3rem 1.4rem 1.3rem 4rem;
+    position: relative;
+  }
+  .step::before {
+    content: counter(step); position: absolute; left: 1.15rem; top: 1.25rem;
+    width: 2rem; height: 2rem; border-radius: 50%;
+    background: var(--accent); color: #fff; font-weight: 800;
+    display: flex; align-items: center; justify-content: center; font-size: 0.95rem;
+  }
+  .step h3 { font-size: 1rem; font-weight: 800; margin-bottom: 0.4rem; }
+  .step p { font-size: 0.91rem; color: var(--text-dim); }
+  details {
+    margin-top: 0.7rem; border: 1px solid var(--border); border-radius: 10px;
+    padding: 0.6rem 0.9rem; font-size: 0.9rem; background: var(--bg);
+  }
+  summary { cursor: pointer; font-weight: 700; color: var(--accent); font-size: 0.88rem; }
+
+  /* ── 원칙 / 하지 않는 것 ────────────────────── */
+  .dont { border-left: 3px solid var(--warn-border); background: var(--warn-bg); }
+  table { border-collapse: collapse; width: 100%; font-size: 0.89rem; margin: 0.8rem 0; }
+  .tablewrap { overflow-x: auto; }
+  th, td { border: 1px solid var(--border); padding: 0.5rem 0.8rem; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); font-weight: 750; white-space: nowrap; }
+  td:first-child { white-space: nowrap; font-weight: 600; }
+
+  /* ── 비공개 안내 ────────────────────────────── */
+  .private {
+    border: 1px dashed var(--border); border-radius: 14px;
+    padding: 1.4rem 1.5rem; background: var(--surface);
+  }
+  .private h3 { font-size: 1.02rem; font-weight: 800; margin-bottom: 0.5rem; }
+  .private p { font-size: 0.92rem; color: var(--text-dim); }
+
+  /* ── FAQ ────────────────────────────────────── */
+  .faq { border-bottom: 1px solid var(--border); padding: 1.05rem 0.2rem; }
+  .faq:first-of-type { border-top: 1px solid var(--border); }
+  .faq h3 { font-size: 0.98rem; font-weight: 800; margin-bottom: 0.35rem; }
+  .faq p { font-size: 0.91rem; color: var(--text-dim); }
+
+  footer {
+    border-top: 1px solid var(--border); margin-top: 4rem;
+    padding: 2rem 1.2rem 3rem; text-align: center;
+    font-size: 0.84rem; color: var(--text-dim);
+  }
+  .disclaimer {
+    max-width: 1060px; margin: 1.2rem auto 0; font-size: 0.8rem; color: var(--text-dim);
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <div class="nav-brand">DART <span>리스크 분석</span> MCP</div>
+    <div class="nav-links">
+      <a href="#why">왜 필요한가</a>
+      <a href="#what">무엇을 하나</a>
+      <a href="#tools">도구 26개</a>
+      <a href="#cases">실측 사례</a>
+      <a href="#start">시작하기</a>
+      <a href="#principles">원칙</a>
+      <a href="#faq">FAQ</a>
+      <a href="https://github.com/anboyu-alt/dart-risk-mcp">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<main>
+
+<!-- ═══════════ 히어로 ═══════════ -->
+<div class="hero">
+  <h1>공시는 누구에게나 공개돼 있다.<br><em>신호</em>는 숨어 있다.</h1>
+  <p class="sub">
+    한국 금융감독원 전자공시(DART)에서 <strong>불공정거래 위험 신호</strong>를 읽어내는
+    오픈소스 MCP 서버입니다. Claude 같은 AI에게
+    <em>"이 회사, 요즘 공시에 이상한 흐름 있어?"</em>라고 물으면 —
+    공시 수백 건을 가져와 신호·패턴·행위자를 정리해 줍니다.
+  </p>
+  <div class="chips">
+    <span class="chip hl">도구 26개</span>
+    <span class="chip hl">위험 신호 37종</span>
+    <span class="chip hl">복합 패턴 9종</span>
+    <span class="chip">점수·등급 없음 — 사실만</span>
+    <span class="chip">Python · MIT</span>
+    <span class="chip">실측 검증 6개사 골드 133건</span>
+  </div>
+  <div class="cta">
+    <a class="btn primary" href="#start">5분 만에 시작하기</a>
+    <a class="btn" href="https://github.com/anboyu-alt/dart-risk-mcp">GitHub에서 코드 보기</a>
+  </div>
+</div>
+
+<!-- ═══════════ 처음이라면 ═══════════ -->
+<section id="basics">
+  <div class="kicker">Zero background</div>
+  <h2>처음이라면 — 이 세 가지만 알면 됩니다</h2>
+  <p class="lead">주식이나 공시를 몰라도 괜찮습니다. 이 페이지는 용어 세 개에서 시작합니다.</p>
+  <div class="grid c3">
+    <div class="card term">
+      <h3>DART <span style="font-weight:400;color:var(--text-dim)">다트</span></h3>
+      <p>금융감독원이 운영하는 <strong>전자공시 시스템</strong>입니다. 한국의 모든 상장회사는
+      중요한 일(돈을 빌림, 대주주가 바뀜, 감사를 받음…)이 생기면 여기에 <strong>의무적으로 보고</strong>해야
+      합니다. 누구나 무료로 열람할 수 있는 공식 기록 보관소입니다.</p>
+    </div>
+    <div class="card term">
+      <h3>공시 <span style="font-weight:400;color:var(--text-dim)">公示</span></h3>
+      <p>회사가 시장에 알리는 <strong>공식 문서 한 건 한 건</strong>입니다. "전환사채 발행 결정",
+      "최대주주 변경", "감사보고서 제출" 같은 제목이 붙습니다. 문제는 — 한 회사가 1년에
+      수십~수백 건을 내기 때문에, 사람이 흐름을 읽기 어렵다는 것입니다.</p>
+    </div>
+    <div class="card term">
+      <h3>MCP</h3>
+      <p><strong>AI에 도구를 꽂는 표준 규격</strong>(Model Context Protocol)입니다. 이 서버를
+      설치하면 Claude 같은 AI가 DART에 직접 접속해 공시를 읽고 분석할 수 있게 됩니다.
+      여러분은 그냥 <strong>한국어로 질문</strong>하면 됩니다.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ 왜 필요한가 ═══════════ -->
+<section id="why">
+  <div class="kicker">The problem</div>
+  <h2>공시를 열어 봐도 보이지 않는 세 가지</h2>
+  <p class="lead">
+    DART는 모든 것을 공개하지만, <strong>한 건씩 따로</strong> 공개합니다.
+    불공정거래의 신호는 낱장이 아니라 <strong>흐름과 연결</strong>에 있습니다.
+  </p>
+  <div class="grid c3">
+    <div class="card">
+      <span class="num">01</span>
+      <h3>시계열이 없다</h3>
+      <p>"전환사채 발행"이라는 공시 한 건은 평범합니다. 그런데 <strong>12개월 안에 자본을
+      세 번 이상 주무르고</strong> 그 사이 공시 의무 위반이 끼어 있다면 — 이야기가 달라집니다.
+      낱장 공시에는 이 리듬이 보이지 않습니다.</p>
+    </div>
+    <div class="card">
+      <span class="num">02</span>
+      <h3>행위자가 흩어져 있다</h3>
+      <p>문제 세력은 회사를 인수할 때마다 <strong>새 투자조합·SPC를 만들어 이름을
+      바꿉니다</strong>. 조합명으로는 추적이 안 됩니다. 하지만 등기임원 이름은 공시에 남는
+      고정점입니다 — 여러 회사의 임원 명단을 겹쳐 보면 같은 사람이 드러납니다.</p>
+    </div>
+    <div class="card">
+      <span class="num">03</span>
+      <h3>계획과 실제가 따로 논다</h3>
+      <p>"신사업 투자를 위해 300억을 조달합니다"라는 공시와, 그 돈이 <strong>실제로 어디에
+      쓰였는지</strong>의 보고는 서로 다른 문서에 있습니다. 조달 명분과 집행 내역을 대조해야
+      용도 변경이 보입니다.</p>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:1.2rem">
+    <h3>예를 들면 — 교과서적인 '무자본 M&A' 시나리오</h3>
+    <p style="margin-bottom:0.3rem">실제 금융감독원 적발 사례들에서 반복 관찰되는 전개입니다.
+    각 단계는 전부 <strong>합법적인 공시 한 건</strong>으로 보입니다. 붙여 놓아야 패턴이 됩니다.</p>
+    <div class="timeline">
+      <div class="tl-item">
+        <div class="tl-when">D+0</div>
+        <div class="tl-what">전환사채(CB) 발행 결정</div>
+        <div class="tl-note">인수자는 처음 보는 이름의 투자조합 — 자기 돈 없이 회사 돈으로 회사를 사는 첫 단추</div>
+      </div>
+      <div class="tl-item">
+        <div class="tl-when">D+40</div>
+        <div class="tl-what">최대주주 변경</div>
+        <div class="tl-note">경영권이 넘어가고, 임원이 대거 교체됨</div>
+      </div>
+      <div class="tl-item">
+        <div class="tl-when">D+90</div>
+        <div class="tl-what">2차전지·바이오… 신사업 진출 발표</div>
+        <div class="tl-note">주가를 띄울 재료 — 실제 매출 근거는 없는 경우가 많음</div>
+      </div>
+      <div class="tl-item alarm">
+        <div class="tl-when">D+200</div>
+        <div class="tl-what">유상증자 또 결정, 조회공시 요구</div>
+        <div class="tl-note">거래소가 "주가 왜 이래요?"라고 공식으로 묻기 시작</div>
+      </div>
+      <div class="tl-item alarm">
+        <div class="tl-when">D+400</div>
+        <div class="tl-what">감사의견 거절 · 횡령 혐의 공시</div>
+        <div class="tl-note">돈은 이미 빠져나감 — 남은 것은 소액주주의 손실</div>
+      </div>
+    </div>
+    <p style="font-size:0.86rem">이 도구의 복합 패턴 <code>zombie_ma</code>(무자본 M&A)는 위 신호 조합이
+    실제 공시에서 함께 나타나는지를 봅니다. 같은 방식의 패턴이 9종 등록돼 있습니다.</p>
+  </div>
+</section>
+
+<!-- ═══════════ 무엇을 하나 ═══════════ -->
+<section id="what">
+  <div class="kicker">What it does</div>
+  <h2>네 개의 축으로 공시를 다시 읽습니다</h2>
+  <div class="grid c2">
+    <div class="card">
+      <span class="num">A</span>
+      <h3>신호 탐지 — 37종</h3>
+      <p>전환사채·무상감자·최대주주 변경·감사의견 이슈·조회공시·회생절차 등 위험과 상관이
+      높은 공시 유형 37종을 8개 카테고리로 분류해 자동 표시합니다. 금감원·금융위의 공개
+      적발 사례를 근거로 키워드가 보강돼 있습니다.</p>
+    </div>
+    <div class="card">
+      <span class="num">B</span>
+      <h3>패턴 인식 — 9종</h3>
+      <p>신호 하나가 아니라 <strong>조합</strong>을 봅니다. 무자본 M&A(<code>zombie_ma</code>),
+      상장폐지 회피(<code>delisting_evasion</code>), 허위 신사업 주가부양(<code>fake_new_biz</code>),
+      자본 이벤트 과다 반복(<code>capital_churn_anomaly</code>) 등 실제 적발 사례에서 추출한
+      9개 시퀀스와 대조합니다.</p>
+    </div>
+    <div class="card">
+      <span class="num">C</span>
+      <h3>행위자 추적</h3>
+      <p>여러 회사의 CB 인수자·유상증자 참여자·<strong>등기임원 명단을 다년으로 겹쳐</strong>
+      공통 인물을 찾습니다. 조합 이름은 매번 바뀌어도 임원 이름은 남기 때문입니다.
+      관심 인물은 워치리스트로 저장해 회사군을 계속 추적할 수 있습니다.</p>
+    </div>
+    <div class="card">
+      <span class="num">D</span>
+      <h3>재무 이상 스캔</h3>
+      <p>매출채권·재고 급증, 이익과 현금흐름의 괴리, 자본잠식, 전기 수치 재작성(RESTATEMENT),
+      연결·별도 순이익 역전까지 재무제표를 전년과 대조합니다. 사업보고서 XBRL 원본에서
+      감가상각비를 추출해 <strong>이익조작 연구 변수(Beneish) 8종</strong>을 지수로 표기합니다 —
+      판정은 하지 않습니다.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ 도구 26개 ═══════════ -->
+<section id="tools">
+  <div class="kicker">26 tools</div>
+  <h2>도구는 "질문"으로 찾으세요</h2>
+  <p class="lead">도구 이름을 외울 필요 없습니다. AI에게 아래 질문을 그대로 던지면 알맞은 도구가 호출됩니다.</p>
+
+  <div class="toolgroup">
+    <h3><span class="q">"이 회사, 괜찮은 거야?"</span> — 종합 진단</h3>
+    <div class="tools">
+      <div class="tool"><code>analyze_company_risk</code><span class="d">최근 공시 전체를 스캔해 신호·패턴·CB 인수자를 한 번에 정리한 종합 리포트</span></div>
+      <div class="tool"><code>build_event_timeline</code><span class="d">공시 이벤트를 진입기→심화기→탈출기 시간순 서사로 재구성</span></div>
+      <div class="tool"><code>check_disclosure_anomaly</code><span class="d">정정공시 비율·감사 이슈·공시의무 위반 등 구조 지표 5종 집계</span></div>
+      <div class="tool"><code>get_company_info</code><span class="d">대표자·업종·설립일 등 기업 개요</span></div>
+    </div>
+  </div>
+
+  <div class="toolgroup">
+    <h3><span class="q">"공시 원문을 직접 읽고 싶어"</span> — 원문 열람</h3>
+    <div class="tools">
+      <div class="tool"><code>list_disclosures_by_stock</code><span class="d">종목코드로 최근 공시 목록과 접수번호 조회</span></div>
+      <div class="tool"><code>get_disclosure_document</code><span class="d">접수번호 하나로 공시 원문 전체를 구조 보존 마크다운으로</span></div>
+      <div class="tool"><code>list_disclosure_sections</code><span class="d">긴 공시의 목차 + 재무제표 주석 카테고리 자동 라벨</span></div>
+      <div class="tool"><code>view_disclosure</code><span class="d">섹션·페이지 단위로 끊어 읽기</span></div>
+      <div class="tool"><code>check_disclosure_risk</code><span class="d">공시 한 건의 신호 분석 + 원문 미리보기</span></div>
+    </div>
+  </div>
+
+  <div class="toolgroup">
+    <h3><span class="q">"재무제표가 수상해"</span> — 재무 분석</h3>
+    <div class="tools">
+      <div class="tool"><code>scan_financial_anomaly</code><span class="d">4대 이상 지표 + 재작성 감지 + Beneish 변수 8종 + 업종별 유의 회계정책</span></div>
+      <div class="tool"><code>get_financial_summary</code><span class="d">매출·이익·자산·부채 핵심 계정</span></div>
+      <div class="tool"><code>compare_financials</code><span class="d">2~5개 회사 나란히 비교</span></div>
+      <div class="tool"><code>get_audit_opinion_history</code><span class="d">5년 감사의견·감사인 교체·비감사용역 비중·연속 적자</span></div>
+      <div class="tool"><code>track_debt_balance</code><span class="d">채무증권 5종 잔액 + 1년 내 만기 비중(차환 압박)</span></div>
+    </div>
+  </div>
+
+  <div class="toolgroup">
+    <h3><span class="q">"돈이 어디로 갔는지 쫓고 싶어"</span> — 자금 흐름</h3>
+    <div class="tools">
+      <div class="tool"><code>track_fund_usage</code><span class="d">증자·CB로 모은 돈의 계획 vs 실제 집행 대조 — 용도 변경 플래그</span></div>
+      <div class="tool"><code>track_capital_structure</code><span class="d">증자·감자·자사주·CB류 자본 이벤트의 리듬 추적</span></div>
+      <div class="tool"><code>get_major_decision</code><span class="d">합병·분할·자산 양수도의 상대방·규모·외부평가 여부</span></div>
+      <div class="tool"><code>get_affiliate_investments</code><span class="d">이 회사가 어떤 법인들에 출자했는지 — SPC·자회사망 추적</span></div>
+    </div>
+  </div>
+
+  <div class="toolgroup">
+    <h3><span class="q">"사람을 쫓고 싶어"</span> — 행위자 추적</h3>
+    <div class="tools">
+      <div class="tool"><code>find_actor_overlap</code><span class="d">여러 회사의 인수자+임원을 겹쳐 공통 행위자 탐지 — 이 도구의 간판</span></div>
+      <div class="tool"><code>track_insider_trading</code><span class="d">대주주·임원 지분 변동 시계열 + 매도 직후 악재 공시 동시 발생 표기</span></div>
+      <div class="tool"><code>get_shareholder_info</code><span class="d">최대주주·특수관계인·5% 보유자 현황</span></div>
+      <div class="tool"><code>get_executive_compensation</code><span class="d">임원 보수 4개 섹션</span></div>
+      <div class="tool"><code>manage_watchlist</code><span class="d">인물↔회사군 워치리스트 저장·재조회</span></div>
+      <div class="tool"><code>lookup_known_actor</code><span class="d">공개기록 행위자 레지스트리 조회(opt-in) — 사실·출처만, 판정 없음</span></div>
+    </div>
+  </div>
+
+  <div class="toolgroup">
+    <h3><span class="q">"시장 전체를 훑고 싶어"</span> — 시장 스캔 · 배경지식</h3>
+    <div class="tools">
+      <div class="tool"><code>search_market_disclosures</code><span class="d">시장 전체를 12개 프리셋(CB 발행·무상감자·조회공시·횡령…)으로 배치 스캔</span></div>
+      <div class="tool"><code>find_risk_precedents</code><span class="d">신호의 의미·위기 타임라인·연관 패턴 해설</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ 실측 사례 ═══════════ -->
+<section id="cases">
+  <div class="kicker">Field-tested</div>
+  <h2>전부 실제 DART 응답으로 검증된 결과입니다</h2>
+  <p class="lead">
+    아래는 실제 API 호출에서 나온 출력 그대로입니다(해당 시점 기준).
+    이 프로젝트는 6개사 × 23개 도구의 실측 골드 출력 133건으로 매 변경마다 회귀 검증합니다.
+  </p>
+  <div class="grid c2">
+    <div class="card case">
+      <span class="tag">find_actor_overlap</span>
+      <h3>이름이 매번 바뀌는 세력, 임원 겸직으로 잡다</h3>
+      <p>서로 무관해 보이는 5개 상장사를 넣고 3년 조회 —
+      같은 인물이 <strong>3개사에 등기임원으로 겹치고</strong>, 함께 움직이는 동행 인물 2명이
+      추가로 드러났습니다. 투자조합 이름으로는 절대 안 보이는 연결입니다.</p>
+      <div class="fig">입력: 5개사, lookback 3년
+→ 공통 행위자: 신○수 [임원] 3개사 겹침
+→ 동행 인물 2명 동시 탐지  (공개기록 대조 표기 동반)</div>
+    </div>
+    <div class="card case">
+      <span class="tag">track_capital_structure</span>
+      <h3>'자본 주무르기' 리듬이 수치로 보인다</h3>
+      <p>한 코스닥 상장사에서 12개월 슬라이딩 윈도우 안에 자본 이벤트가 반복 집중되고 공시의무
+      위반이 겹침 — 등록 패턴 <code>capital_churn_anomaly</code>가 라이브 데이터에서 그대로
+      발화했습니다.</p>
+      <div class="fig">12개월 내 자본 이벤트 ≥ 3건 + 공시의무 위반
+→ ⚠ capital_churn_anomaly 패턴 감지
+   (정상 기업에서는 거의 관찰되지 않는 조합)</div>
+    </div>
+    <div class="card case">
+      <span class="tag">scan_financial_anomaly</span>
+      <h3>연결이 별도보다 작다? — 종속회사가 까먹고 있다</h3>
+      <p>연결 당기순이익이 별도보다 <strong>58% 작은</strong> 사례를 자동 표시.
+      모회사 혼자는 이익인데 종속회사를 합치면 이익이 깎이는 구조 — 원문을 확인해야 할
+      지점을 정확히 짚어 줍니다.</p>
+      <div class="fig">연결 순이익 4,189억  <  별도 1조 48억  (−58.3%)
+→ CFS_OFS_REVERSAL 표시 (사실 표기, 판정 없음)</div>
+    </div>
+    <div class="card case">
+      <span class="tag">scan_financial_anomaly · XBRL</span>
+      <h3>재무제표에 없는 숫자는 XBRL에서 파온다</h3>
+      <p>DART 요약 재무 API에는 감가상각비가 없습니다. 사업보고서의 XBRL 원본을 열어
+      해당 계정만 좁게 추출 — 이익조작 연구 변수(Beneish)를 6종에서 <strong>8종으로 복원</strong>
+      했습니다. 합산 점수(M-Score)는 원칙상 제공하지 않습니다.</p>
+      <div class="fig">ifrs-full:DepreciationExpense (연결)
+당기 43.6조 / 전기 39.6조 실추출
+→ DEPI 0.99 · TATA −0.02  (지수·비율 사실 표기)</div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ 시작하기 ═══════════ -->
+<section id="start">
+  <div class="kicker">Get started</div>
+  <h2>5분 설치 — 명령어 두 줄이면 끝</h2>
+  <p class="lead">Python 3.11 이상이 설치돼 있다면 아래 세 단계로 끝납니다. 전부 무료입니다.</p>
+  <div class="steps">
+    <div class="step">
+      <h3>DART API 키 무료 발급 (2분)</h3>
+      <p><a href="https://opendart.fss.or.kr">opendart.fss.or.kr</a> → 인증키 신청 →
+      이메일 인증만 하면 즉시 발급됩니다. 하루 2만 건까지 무료 — 개인 사용에 충분합니다.</p>
+    </div>
+    <div class="step">
+      <h3>설치 + 자동 등록</h3>
+      <pre><code>pip install dart-risk-mcp
+python -m dart_risk_mcp.setup</code></pre>
+      <p>자동 셋업이 Claude Desktop·Claude Code 등 설치된 MCP 클라이언트를 찾아 등록하고
+      API 키를 물어봅니다. 기존에 등록된 다른 MCP 설정은 건드리지 않습니다.</p>
+      <details>
+        <summary>JSON을 직접 편집하고 싶다면 (수동 설정)</summary>
+        <pre><code>{
+  "mcpServers": {
+    "dart-risk": {
+      "command": "python",
+      "args": ["-m", "dart_risk_mcp"],
+      "env": { "DART_API_KEY": "발급받은_키" }
+    }
+  }
+}</code></pre>
+        <p>uv 사용자는 <code>"command": "uvx", "args": ["dart-risk-mcp"]</code>로 대체할 수 있습니다.</p>
+      </details>
+    </div>
+    <div class="step">
+      <h3>클라이언트 재시작 후, 한국어로 질문</h3>
+      <pre><code>"삼성전자 최근 1년 공시 흐름 요약해줘"
+"○○홀딩스 자본 이벤트 리듬 추적해줘"
+"이 다섯 회사에 공통으로 등장하는 인물 있어?"</code></pre>
+      <p>도구 이름을 몰라도 됩니다 — AI가 질문에 맞는 도구를 알아서 고릅니다.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ 원칙 ═══════════ -->
+<section id="principles">
+  <div class="kicker">Principles</div>
+  <h2>점수를 매기지 않는 이유</h2>
+  <p class="lead">
+    이 도구의 가장 중요한 설계 결정은 <strong>"무엇을 하지 않는가"</strong>입니다.
+  </p>
+  <div class="grid c3">
+    <div class="card">
+      <h3>점수·등급 없음</h3>
+      <p>"위험도 82점", "고위험 등급" 같은 표기를 일절 하지 않습니다. 정량화된 낙인은 그
+      자체로 판정이 되고, 투자 권유·법적 판단으로 오독됩니다. 신호와 근거 공시를 나열할 뿐,
+      결론은 사람이 원문을 확인하고 내립니다. 이 원칙은 자동 회귀 테스트가 기계적으로
+      지킵니다.</p>
+    </div>
+    <div class="card">
+      <h3>사실 표기, 판정 없음</h3>
+      <p>"연결 순이익이 별도보다 58% 작습니다"까지만 말합니다. "분식 의심"이라고 말하지
+      않습니다. 모든 출력에는 근거 공시의 접수번호가 붙어 원문으로 바로 검증할 수 있습니다.</p>
+    </div>
+    <div class="card">
+      <h3>인물 낙인 없음</h3>
+      <p>행위자 조회는 출처가 확인된 <strong>공개기록에 등장했다는 사실</strong>만 반환합니다.
+      "문제 인물" 같은 판정은 없으며, 항상 동명이인 가능성과 원본 확인 필요를 함께
+      고지합니다.</p>
+    </div>
+  </div>
+
+  <div class="card dont" style="margin-top:1.2rem">
+    <h3>이 도구가 하지 않는 것</h3>
+    <div class="tablewrap"><table>
+      <tr><th>안 하는 것</th><th>이유</th></tr>
+      <tr><td>매수·매도 추천, 가격 예측</td><td>출력은 투자 판단의 근거가 아닙니다</td></tr>
+      <tr><td>위험 점수·등급 부여</td><td>정량화는 판정·투자 권유로 해석될 수 있음</td></tr>
+      <tr><td>실시간 알림·자동 감시</td><td>조회는 항상 사용자가 시작합니다</td></tr>
+      <tr><td>업종 평균 비교</td><td>DART가 제공하지 않는 데이터 — 회사 자체의 전년 대비 추세만 사용</td></tr>
+      <tr><td>인물 데이터 배포</td><td>레지스트리 데이터는 저장소·배포물에 포함되지 않음(opt-in)</td></tr>
+    </table></div>
+  </div>
+</section>
+
+<!-- ═══════════ 행위자 연결망 (비공개) ═══════════ -->
+<section id="network">
+  <div class="kicker">Private</div>
+  <h2>행위자 연결망 — 별도 운영 중</h2>
+  <div class="private">
+    <h3>🕸 공개기록 기반 행위자 ↔ 회사 연결망 시각화</h3>
+    <p>
+      이 프로젝트의 데이터 파이프라인 위에서, 여러 문제 회사에 반복 등장한 행위자와 회사의
+      연결망을 인터랙티브 그래프로 보여주는 화면을 <strong>별도로 운영</strong>하고 있습니다.
+      실명이 포함되는 특성상 <strong>승인된 로그인 사용자만 접근</strong>할 수 있으며, 링크는
+      공개하지 않습니다.
+    </p>
+    <p style="margin-top:0.6rem">
+      접근 요청·데이터 관련 문의(공개기록 레지스트리 opt-in 참여 포함)는
+      <a href="https://github.com/anboyu-alt">제작자 GitHub 프로필의 연락처</a>로 따로
+      보내 주세요.
+    </p>
+  </div>
+</section>
+
+<!-- ═══════════ FAQ ═══════════ -->
+<section id="faq">
+  <div class="kicker">FAQ</div>
+  <h2>자주 묻는 질문</h2>
+  <div class="faq">
+    <h3>Q. 이거 투자 조언인가요?</h3>
+    <p>아닙니다. 이 도구는 공시라는 <strong>공개 기록을 읽기 쉽게 정리</strong>할 뿐입니다.
+    어떤 출력도 매수·매도 판단의 근거가 아니며, 점수·등급·추천을 제공하지 않습니다.</p>
+  </div>
+  <div class="faq">
+    <h3>Q. "신호가 감지됐다"면 나쁜 회사인가요?</h3>
+    <p>아닙니다. 예컨대 전환사채 발행은 정상 기업도 흔히 하는 자금 조달입니다. 신호는
+    "원문을 확인해 볼 지점"의 표시일 뿐이고, 의미가 생기는 것은 여러 신호가 특정 순서로
+    겹칠 때입니다. 그 판단을 돕기 위해 모든 출력에 근거 공시 접수번호가 붙습니다.</p>
+  </div>
+  <div class="faq">
+    <h3>Q. 비용이 드나요?</h3>
+    <p>소프트웨어는 MIT 라이선스 오픈소스로 무료입니다. DART API 키도 무료(일 2만 건 한도)
+    입니다. 필요한 것은 MCP를 지원하는 AI 클라이언트(Claude Desktop 등)뿐입니다.</p>
+  </div>
+  <div class="faq">
+    <h3>Q. 데이터는 어디서 오고, 어디에 저장되나요?</h3>
+    <p>모든 데이터는 조회 시점에 금융감독원 DART OpenAPI에서 실시간으로 가져옵니다.
+    분석 결과를 외부로 전송하거나 서버에 쌓지 않으며, 임시 캐시는 사용자 로컬에만 남습니다.</p>
+  </div>
+  <div class="faq">
+    <h3>Q. 사람 이름이 나오는 기능은 위험하지 않나요?</h3>
+    <p>행위자 레지스트리 데이터는 저장소와 배포물에 포함되지 않습니다(빈 스켈레톤만 동봉).
+    조회 기능을 쓰려면 제작자에게 별도로 opt-in 접근을 요청해야 하고, 결과는 항상 공개기록
+    출처와 동명이인 경고를 동반한 사실 표기입니다.</p>
+  </div>
+  <div class="faq">
+    <h3>Q. 어떤 회사·데이터로 검증됐나요?</h3>
+    <p>대형·중견·소형(유가증권·코스닥) 6개사에 대해 23개 도구를 실제 API로 호출한 골드 출력
+    133건이 저장소에 있으며, 모든 변경은 이 실측 출력과 459개 테스트로 회귀 검증됩니다.
+    라이브로 재현되지 않은 신호는 문서에 정직하게 ⚠ 미검증으로 표기합니다.</p>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div>
+    <strong>DART 리스크 분석 MCP</strong> · MIT License ·
+    <a href="https://github.com/anboyu-alt/dart-risk-mcp">GitHub</a> ·
+    <a href="https://pypi.org/project/dart-risk-mcp/">PyPI</a>
+  </div>
+  <div style="margin-top:0.4rem">
+    일부 재무 분석 로직은 kreports(Apache 2.0)에서 이식했습니다.
+    데이터 출처: 금융감독원 DART OpenAPI.
+  </div>
+  <p class="disclaimer">
+    본 도구의 모든 출력은 공시라는 공개 기록의 사실 표기이며, 특정 기업·인물에 대한 판정이나
+    투자 권유가 아닙니다. 중요한 판단 전에는 반드시 DART 원문 공시를 직접 확인하세요.
+  </p>
+</footer>
+
+</body>
+</html>
