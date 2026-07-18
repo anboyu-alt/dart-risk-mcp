@@ -1,0 +1,712 @@
+{
+ "signals": [
+  {
+   "key": "CB_BW",
+   "label": "CB/BW발행",
+   "keywords": [
+    "전환사채권발행결정",
+    "신주인수권부사채권발행결정",
+    "전환사채",
+    "신주인수권부사채",
+    "전환가액의조정",
+    "리픽싱",
+    "전환가액조정",
+    "전환가액인하",
+    "콜옵션",
+    "사모전환사채"
+   ],
+   "taxonomy": "1.1",
+   "category": 1
+  },
+  {
+   "key": "CB_REPAY",
+   "label": "CB조기상환",
+   "keywords": [
+    "전환사채상환",
+    "CB상환",
+    "사채상환",
+    "배당금상환",
+    "자회사배당",
+    "내부배당",
+    "배당을통한상환"
+   ],
+   "taxonomy": "1.2",
+   "category": 1
+  },
+  {
+   "key": "EB",
+   "label": "교환사채(EB)발행",
+   "keywords": [
+    "교환사채권발행결정",
+    "교환사채",
+    "교환채발행",
+    "EB발행",
+    "제3자배정교환채",
+    "EB배임"
+   ],
+   "taxonomy": "1.3",
+   "category": 1
+  },
+  {
+   "key": "RCPS",
+   "label": "상환전환우선주(RCPS)",
+   "keywords": [
+    "상환전환우선주",
+    "RCPS",
+    "전환우선주",
+    "우선주발행"
+   ],
+   "taxonomy": "1.4",
+   "category": 1
+  },
+  {
+   "key": "CB_ROLLOVER",
+   "label": "CB돌려막기",
+   "keywords": [
+    "돌려막기",
+    "CB돌려막기",
+    "EB돌려막기",
+    "리파이낸싱",
+    "차환",
+    "연속CB발행",
+    "연속차입"
+   ],
+   "taxonomy": "1.5",
+   "category": 1
+  },
+  {
+   "key": "CB_BUYBACK",
+   "label": "자사채매입",
+   "keywords": [
+    "자사채매입",
+    "사채매입",
+    "저가상환",
+    "조기상환"
+   ],
+   "taxonomy": "1.6",
+   "category": 1
+  },
+  {
+   "key": "TREASURY_EB",
+   "label": "자사주EB",
+   "keywords": [
+    "자사주EB",
+    "자사주연동",
+    "자기주식EB",
+    "자기주식연동"
+   ],
+   "taxonomy": "1.7",
+   "category": 1
+  },
+  {
+   "key": "REVERSE_SPLIT",
+   "label": "무상감자/주식병합",
+   "keywords": [
+    "무상감자",
+    "감자결정",
+    "주식병합",
+    "자본감소",
+    "감자공시"
+   ],
+   "taxonomy": "2.1",
+   "category": 2
+  },
+  {
+   "key": "CAPITAL_RED",
+   "label": "유상감자/손실보전감자",
+   "keywords": [
+    "유상감자",
+    "손실보전감자",
+    "이익배당으로서감자"
+   ],
+   "taxonomy": "2.2",
+   "category": 2
+  },
+  {
+   "key": "GAMJA_MERGE",
+   "label": "감자병합",
+   "keywords": [
+    "감자병합",
+    "감자및병합",
+    "감자와병합"
+   ],
+   "taxonomy": "2.3",
+   "category": 2
+  },
+  {
+   "key": "3PCA",
+   "label": "제3자배정유상증자",
+   "keywords": [
+    "제3자배정",
+    "유상증자결정",
+    "유상증자",
+    "가장납입",
+    "상폐요건면탈"
+   ],
+   "taxonomy": "2.4",
+   "category": 2
+  },
+  {
+   "key": "RIGHTS_UNDER",
+   "label": "공모미달",
+   "keywords": [
+    "유상증자미달",
+    "공모미달",
+    "청약미달"
+   ],
+   "taxonomy": "2.5",
+   "category": 2
+  },
+  {
+   "key": "TREASURY",
+   "label": "자사주매입/처분",
+   "keywords": [
+    "자기주식취득",
+    "자기주식처분",
+    "자사주매입",
+    "자사주처분"
+   ],
+   "taxonomy": "2.6",
+   "category": 2
+  },
+  {
+   "key": "SHAREHOLDER",
+   "label": "최대주주변경",
+   "keywords": [
+    "최대주주변경",
+    "최대주주 변경",
+    "대주주변경",
+    "지분매각",
+    "경영권이양",
+    "무자본M&A",
+    "대량보유상황보고"
+   ],
+   "taxonomy": "3.1",
+   "category": 3
+  },
+  {
+   "key": "EXEC",
+   "label": "임원변경",
+   "keywords": [
+    "임원의변동",
+    "대표이사변경",
+    "대표이사 변경",
+    "경영진교체",
+    "이사진교체"
+   ],
+   "taxonomy": "3.3",
+   "category": 3
+  },
+  {
+   "key": "MGMT_DISPUTE",
+   "label": "경영권분쟁",
+   "keywords": [
+    "경영권분쟁",
+    "경영권 분쟁",
+    "경영권다툼",
+    "경영진분쟁"
+   ],
+   "taxonomy": "3.4",
+   "category": 3
+  },
+  {
+   "key": "CIRCULAR",
+   "label": "순환출자",
+   "keywords": [
+    "순환출자",
+    "순환구조",
+    "지분연쇄"
+   ],
+   "taxonomy": "3.5",
+   "category": 3
+  },
+  {
+   "key": "ACTIVIST",
+   "label": "주주행동주의",
+   "keywords": [
+    "활동주의펀드",
+    "주주행동주의",
+    "주주제안"
+   ],
+   "taxonomy": "3.3",
+   "category": 3
+  },
+  {
+   "key": "MEETING_VIOL",
+   "label": "주총절차위반",
+   "keywords": [
+    "주총위반",
+    "소집절차위반",
+    "의결정족수미달"
+   ],
+   "taxonomy": "4.1",
+   "category": 4
+  },
+  {
+   "key": "DISCLOSURE_VIOL",
+   "label": "공시의무위반",
+   "keywords": [
+    "공시의무위반",
+    "공시누락",
+    "중요정보누락",
+    "발행철회",
+    "공시철회"
+   ],
+   "taxonomy": "4.3",
+   "category": 4
+  },
+  {
+   "key": "RELATED_PARTY",
+   "label": "특수관계자거래",
+   "keywords": [
+    "특수관계자거래",
+    "관련자거래",
+    "관계회사거래",
+    "비정상거래"
+   ],
+   "taxonomy": "4.2",
+   "category": 4
+  },
+  {
+   "key": "AUDIT",
+   "label": "감사의견",
+   "keywords": [
+    "한정의견",
+    "부적정의견",
+    "의견거절",
+    "계속기업불확실성",
+    "감사범위제한",
+    "감사인교체"
+   ],
+   "taxonomy": "4.4",
+   "category": 4
+  },
+  {
+   "key": "EQUITY_SPLIT",
+   "label": "주식분할/액면분할",
+   "keywords": [
+    "주식분할결정",
+    "액면분할결정",
+    "주식배당결정"
+   ],
+   "taxonomy": "5.1",
+   "category": 5
+  },
+  {
+   "key": "BUYBACK_NEG",
+   "label": "재무위기중자사주매입",
+   "keywords": [
+    "부도직전매입",
+    "자금난속매입"
+   ],
+   "taxonomy": "5.2",
+   "category": 5
+  },
+  {
+   "key": "DISTRESS_MA",
+   "label": "위기중인수합병",
+   "keywords": [
+    "위기속인수",
+    "부실기업인수",
+    "자금난속합병"
+   ],
+   "taxonomy": "5.4",
+   "category": 5
+  },
+  {
+   "key": "ASSET_TRANSFER",
+   "label": "자산매각/유출",
+   "keywords": [
+    "자산매각",
+    "사옥매각",
+    "자회사매각",
+    "사업양도",
+    "저가매각"
+   ],
+   "taxonomy": "5.3",
+   "category": 5
+  },
+  {
+   "key": "DEMERGER",
+   "label": "회사분할",
+   "keywords": [
+    "분할결정",
+    "사업분할",
+    "분할합병"
+   ],
+   "taxonomy": "5.5",
+   "category": 5
+  },
+  {
+   "key": "MGMT",
+   "label": "경영권변동",
+   "keywords": [
+    "경영권변동",
+    "경영권 변동",
+    "주식양수도",
+    "공개매수",
+    "합병결정",
+    "인수합병"
+   ],
+   "taxonomy": "3.4",
+   "category": 3
+  },
+  {
+   "key": "REVENUE_IRREG",
+   "label": "수익인식이상",
+   "keywords": [
+    "수익인식",
+    "매출인식",
+    "수익조정",
+    "분식회계",
+    "선수금",
+    "미수금급증",
+    "매출과대계상"
+   ],
+   "taxonomy": "6.1",
+   "category": 6
+  },
+  {
+   "key": "CONTINGENT",
+   "label": "우발채무",
+   "keywords": [
+    "우발채무",
+    "우발성채무",
+    "보증채무"
+   ],
+   "taxonomy": "6.2",
+   "category": 6
+  },
+  {
+   "key": "THEME_STOCK",
+   "label": "테마주/작전주",
+   "keywords": [
+    "테마주",
+    "작전주",
+    "테마편승",
+    "정치테마주",
+    "핀플루언서"
+   ],
+   "taxonomy": "7.2",
+   "category": 7
+  },
+  {
+   "key": "INQUIRY",
+   "label": "조회공시",
+   "keywords": [
+    "조회공시",
+    "풍문또는보도",
+    "주가이상",
+    "거래정지",
+    "매매정지",
+    "이상거래",
+    "조회공시요구",
+    "거래량급증"
+   ],
+   "taxonomy": "4.3",
+   "category": 4
+  },
+  {
+   "key": "EMBEZZLE",
+   "label": "횡령배임",
+   "keywords": [
+    "횡령",
+    "배임",
+    "불공정거래",
+    "주가조작",
+    "시세조종",
+    "미공개정보이용",
+    "미공개중요정보",
+    "선행매매",
+    "차명"
+   ],
+   "taxonomy": "5.3",
+   "category": 5
+  },
+  {
+   "key": "INSOLVENCY",
+   "label": "자본잠식/부도",
+   "keywords": [
+    "자본잠식",
+    "부도",
+    "어음부도",
+    "의도적부도"
+   ],
+   "taxonomy": "8.1",
+   "category": 8
+  },
+  {
+   "key": "DEBT_RESTR",
+   "label": "채무조정/구조조정",
+   "keywords": [
+    "구조조정",
+    "채무조정",
+    "채무면제",
+    "워크아웃"
+   ],
+   "taxonomy": "8.2",
+   "category": 8
+  },
+  {
+   "key": "ASSET_SPIRAL",
+   "label": "자산연쇄처분",
+   "keywords": [
+    "연쇄매각",
+    "긴급자산처분"
+   ],
+   "taxonomy": "8.3",
+   "category": 8
+  },
+  {
+   "key": "GOING_CONCERN",
+   "label": "계속기업불확실",
+   "keywords": [
+    "계속기업가정불확실",
+    "계속기업불확실",
+    "회생절차",
+    "파산절차"
+   ],
+   "taxonomy": "8.4",
+   "category": 8
+  },
+  {
+   "key": "FUND_DIVERSION",
+   "label": "조달자금 목적외 사용",
+   "keywords": [],
+   "taxonomy": "5.3",
+   "category": 5
+  },
+  {
+   "key": "FUND_UNREPORTED",
+   "label": "자금사용내역 미기재",
+   "keywords": [],
+   "taxonomy": "4.3",
+   "category": 4
+  },
+  {
+   "key": "DECISION_RELATED_PARTY",
+   "label": "특수관계인 대상 결정",
+   "keywords": [],
+   "taxonomy": "4.2",
+   "category": 4
+  },
+  {
+   "key": "DECISION_OVERSIZED",
+   "label": "자산대비 대형 결정",
+   "keywords": [],
+   "taxonomy": "5.3",
+   "category": 5
+  },
+  {
+   "key": "DECISION_NO_EXTVAL",
+   "label": "외부평가 미실시 결정",
+   "keywords": [],
+   "taxonomy": "4.3",
+   "category": 4
+  },
+  {
+   "key": "CAPITAL_CHURN",
+   "label": "자본 이벤트 과다 반복",
+   "keywords": [],
+   "taxonomy": "2.7",
+   "category": 2
+  },
+  {
+   "key": "AR_SURGE",
+   "label": "매출채권/매출 비율 급등",
+   "keywords": [],
+   "taxonomy": "6.1",
+   "category": 6
+  },
+  {
+   "key": "INVENTORY_SURGE",
+   "label": "재고자산/매출 비율 급등",
+   "keywords": [],
+   "taxonomy": "6.1",
+   "category": 6
+  },
+  {
+   "key": "CASH_GAP",
+   "label": "순이익·현금흐름 괴리",
+   "keywords": [],
+   "taxonomy": "6.1",
+   "category": 6
+  },
+  {
+   "key": "CAPITAL_IMPAIRMENT",
+   "label": "자본잠식 근접",
+   "keywords": [],
+   "taxonomy": "8.2",
+   "category": 8
+  },
+  {
+   "key": "INSIDER_PRE_DISCLOSURE",
+   "label": "임원·대주주 매도 후 부정 공시",
+   "keywords": [],
+   "taxonomy": "3.6",
+   "category": 3
+  },
+  {
+   "key": "TREASURY_TRUST",
+   "label": "자사주 신탁계약",
+   "keywords": [],
+   "taxonomy": "2.8",
+   "category": 2
+  },
+  {
+   "key": "DISTRESS_EVENT",
+   "label": "부실 단계 진입",
+   "keywords": [],
+   "taxonomy": "8.5",
+   "category": 8
+  },
+  {
+   "key": "DIVIDEND_DRAIN",
+   "label": "적자 시점 배당 유출",
+   "keywords": [],
+   "taxonomy": "5.6",
+   "category": 5
+  }
+ ],
+ "patterns": [
+  {
+   "key": "founder_fade",
+   "name": "The Founder Fade",
+   "description": "Sequential founder ownership dilution → control loss → exit",
+   "signal_sequence": [
+    "3.2",
+    "3.1",
+    "4.1",
+    "5.3",
+    "8.1"
+   ],
+   "timeline_months": 18
+  },
+  {
+   "key": "debt_spiral",
+   "name": "The Debt Spiral",
+   "description": "CB issuance → rollover cycle → refinancing crises → insolvency",
+   "signal_sequence": [
+    "1.4",
+    "1.5",
+    "1.3",
+    "2.6",
+    "8.2"
+   ],
+   "timeline_months": 12
+  },
+  {
+   "key": "reverse_split_spiral",
+   "name": "The Reverse Split Spiral",
+   "description": "Reverse split → capital reduction → distressed asset sales → delisting",
+   "signal_sequence": [
+    "2.1",
+    "2.2",
+    "6.1",
+    "7.2",
+    "8.3"
+   ],
+   "timeline_months": 18
+  },
+  {
+   "key": "related_party_hollowing",
+   "name": "The Related-Party Hollowing",
+   "description": "Related-party transactions → asset siphoning → insolvency → bankruptcy",
+   "signal_sequence": [
+    "4.2",
+    "5.3",
+    "3.2",
+    "2.5",
+    "8.4"
+   ],
+   "timeline_months": 15
+  },
+  {
+   "key": "zombie_ma",
+   "name": "The Zombie M&A",
+   "description": "무자본 M&A 세력이 차명·투자조합으로 경영권 인수 → 사모CB 대량발행·허위자금조달 → 허위 신사업 발표 → 주가부양 후 고가매도",
+   "signal_sequence": [
+    "3.1",
+    "2.4",
+    "1.2",
+    "4.3",
+    "7.1",
+    "2.7"
+   ],
+   "timeline_months": 12
+  },
+  {
+   "key": "audit_insider_dump",
+   "name": "The Audit Insider Dump",
+   "description": "감사의견거절·비적정 미공개정보를 임원·최대주주가 직무상 취득 후 공시 전 주식 전량매도",
+   "signal_sequence": [
+    "4.4",
+    "7.1",
+    "3.1"
+   ],
+   "timeline_months": 6
+  },
+  {
+   "key": "delisting_evasion",
+   "name": "The Delisting Evasion",
+   "description": "자본잠식·영업손실로 상장폐지 위기 → 연말 거액 유상증자(가장납입) + 재무제표 과대계상 → 요건 면탈 → 횡령",
+   "signal_sequence": [
+    "8.1",
+    "2.4",
+    "6.1",
+    "4.3",
+    "2.7",
+    "8.2"
+   ],
+   "timeline_months": 9
+  },
+  {
+   "key": "fake_new_biz",
+   "name": "The Fake New Business Pump",
+   "description": "주업과 무관한 테마사업(2차전지·AI·우주항공 등) 허위 발표 + 형식적 MOU·페이퍼컴퍼니 → 테마주 편승 주가급등 → 최대주주 주식 고가매도",
+   "signal_sequence": [
+    "5.4",
+    "4.3",
+    "7.2",
+    "7.1"
+   ],
+   "timeline_months": 6
+  },
+  {
+   "key": "capital_churn_anomaly",
+   "name": "capital_churn_anomaly",
+   "description": "잦은 자본 변동과 공시 지연·위반이 겹치면 자본 투명성 훼손 우려",
+   "signal_sequence": [
+    "2.7",
+    "4.3"
+   ],
+   "timeline_months": 12
+  }
+ ],
+ "categories": {
+  "0": "기타",
+  "1": "CB/채권",
+  "2": "자본구조",
+  "3": "경영권",
+  "4": "거버넌스",
+  "5": "기업활동",
+  "6": "회계/재무",
+  "7": "시장조작",
+  "8": "위기/부실"
+ },
+ "capital_event_keys": [
+  "3PCA",
+  "CB_BUYBACK",
+  "CB_BW",
+  "CB_ROLLOVER",
+  "EB",
+  "GAMJA_MERGE",
+  "RCPS",
+  "REVERSE_SPLIT",
+  "RIGHTS_UNDER",
+  "TREASURY",
+  "TREASURY_EB",
+  "TREASURY_TRUST"
+ ],
+ "amendment_pattern": "^\\[(?:기재정정|첨부추가|정정)[^\\]]*\\]\\s*"
+}
