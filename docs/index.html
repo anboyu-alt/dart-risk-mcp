@@ -146,6 +146,29 @@
   .tl-what { font-weight: 700; font-size: 0.95rem; }
   .tl-note { font-size: 0.86rem; color: var(--text-dim); }
 
+  /* ── 대화 데모 ──────────────────────────────── */
+  .chat {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 16px; padding: 1.5rem; display: flex;
+    flex-direction: column; gap: 1rem; max-width: 47rem;
+  }
+  .msg { display: flex; flex-direction: column; max-width: 92%; }
+  .msg.user { align-self: flex-end; align-items: flex-end; }
+  .msg.ai { align-self: flex-start; }
+  .bubble {
+    border-radius: 14px; padding: 0.75rem 1.05rem; font-size: 0.9rem; line-height: 1.7;
+  }
+  .msg.user .bubble {
+    background: var(--accent); color: #fff; border-bottom-right-radius: 4px;
+  }
+  .msg.ai .bubble {
+    background: var(--code-bg); border: 1px solid var(--border);
+    border-bottom-left-radius: 4px; white-space: pre-line;
+  }
+  .msg .who { font-size: 0.72rem; color: var(--text-dim); margin-bottom: 0.25rem; padding: 0 0.3rem; }
+  .msg.ai .bubble .snip { color: var(--text-dim); font-size: 0.82rem; }
+  .chat-note { font-size: 0.82rem; color: var(--text-dim); margin-top: 0.8rem; }
+
   /* ── 도구 그룹 ──────────────────────────────── */
   .toolgroup { margin-bottom: 1.6rem; }
   .toolgroup h3 {
@@ -234,6 +257,7 @@
     <div class="nav-links">
       <a href="#why">왜 필요한가</a>
       <a href="#what">무엇을 하나</a>
+      <a href="#demo">대화 데모</a>
       <a href="#tools">도구 26개</a>
       <a href="#cases">실측 사례</a>
       <a href="#start">시작하기</a>
@@ -400,6 +424,71 @@
       판정은 하지 않습니다.</p>
     </div>
   </div>
+</section>
+
+<!-- ═══════════ 대화 데모 ═══════════ -->
+<section id="demo">
+  <div class="kicker">Conversation</div>
+  <h2>결과물은 "대화" 속에서 나옵니다</h2>
+  <p class="lead">
+    이 도구는 표를 반환하는 API가 아닙니다. AI와의 대화 안에서 서술형 리포트가 흘러나오고,
+    후속 질문으로 꼬리를 물며 깊어집니다. 아래는 이 페이지를 만들면서 <strong>실제로 MCP를
+    호출해 받은 응답(2026-07-18)</strong>을 그대로 발췌한 대화입니다.
+  </p>
+
+  <div class="chat">
+    <div class="msg user">
+      <div class="who">사용자</div>
+      <div class="bubble">제이스코홀딩스, 요즘 공시에 이상한 흐름 있어?</div>
+    </div>
+    <div class="msg ai">
+      <div class="who">AI + dart-risk-mcp · track_capital_structure</div>
+      <div class="bubble">📊 <strong>제이스코홀딩스</strong> (023440) — 자본구조 추적 (최근 3년)
+
+🎯 <strong>12개월 안에 자본 관련 공시가 지나치게 자주 반복되고 있습니다</strong>
+
+증자·감자·자사주·CB/BW/EB/RCPS 같은 자본 구조 변경이 12개월 안에 3건 이상 몰리는 상태입니다. 정상적인 기업은 자본 구조를 자주 건드리지 않습니다. 짧은 기간 이런 이벤트가 반복되면 주가 희석을 통한 지분 재편, 부실 기업의 연명식 자금조달, 상장폐지 요건 회피 같은 목적이 뒤에 있을 가능성이 있습니다.
+
+자본 이벤트 총 <strong>47건</strong> · 12개월 최대 집중도: <strong>26건</strong>
+
+<span class="snip">— 연도별 집계·시계열 47건 생략 —</span>
+
+📎 참고: 이 도구는 공시 '횟수·리듬'을 잡아냅니다. 정확한 희석률이나 실제 조달 금액은 get_major_decision 또는 get_disclosure_document로 개별 공시를 열어 확인해야 합니다.</div>
+    </div>
+    <div class="msg user">
+      <div class="who">사용자</div>
+      <div class="bubble">이름 바꿔가면서 여러 회사를 드나드는 세력은 어떻게 잡아? 이 다섯 회사에 공통 인물 있는지 봐줘 — 이엠앤아이, 제이케이시냅스, CG인바이츠, 헬스커넥트, 티쓰리</div>
+    </div>
+    <div class="msg ai">
+      <div class="who">AI + dart-risk-mcp · find_actor_overlap (lookback 3년)</div>
+      <div class="bubble">🔍 <strong>여러 회사를 동시에 드나든 '돈을 댄 사람'(공통 행위자) 분석</strong>
+
+이번 비교(이엠앤아이, 제이케이시냅스, CG인바이츠, 헬스커넥트, 티쓰리 · 5개 회사)에서 2곳 이상에 동시에 등장한 인수자가 <strong>3명/건</strong> 발견됐습니다.
+
+━━ 여러 회사에 동시에 등장한 인수자 ━━
+  ⚠️ <strong>신○수</strong> — 3개 회사에 [임원] 경로로 등장: CG인바이츠, 제이케이시냅스, 헬스커넥트
+  ⚠️ <strong>신○규</strong> — 2개 회사에 [임원] 경로로 등장: CG인바이츠, 헬스커넥트
+  ⚠️ <strong>이○영</strong> — 2개 회사에 [임원] 경로로 등장: CG인바이츠, 헬스커넥트
+
+<span class="snip">— 회사별 전체 임원·인수자 명단, 공개기록 대조·면책 고지 생략 —</span></div>
+    </div>
+    <div class="msg user">
+      <div class="who">사용자</div>
+      <div class="bubble">저 사람 워치리스트에 올려두고, 다음에 회사 늘려서 다시 봐줘</div>
+    </div>
+    <div class="msg ai">
+      <div class="who">AI + dart-risk-mcp · manage_watchlist</div>
+      <div class="bubble">✅ '신○수' 갱신 — 총 3개사: CG인바이츠, 제이케이시냅스, 헬스커넥트
+
+<span class="snip">이제 find_actor_overlap(watchlist="…") 한 번으로 저장된 회사군 전체를 다시 조회할 수 있습니다.</span></div>
+    </div>
+  </div>
+  <p class="chat-note">
+    ※ AI 응답은 2026-07-18 실제 MCP 호출로 받은 도구 출력 원문에서 발췌했습니다(생략 구간은
+    "— 생략 —"으로 표시). 같은 도구의 저장된 출력이 <code>tests/fixtures/sample_outputs/</code>에
+    실측 골드로 보존돼 회귀 검증에 쓰입니다. 임원 재직은 DART 공시의 공개 사실이며, 개인 식별
+    부담을 줄이기 위해 이 페이지에서는 이름을 마스킹했습니다 — 어떤 판정도 아닙니다.
+  </p>
 </section>
 
 <!-- ═══════════ 도구 26개 ═══════════ -->
