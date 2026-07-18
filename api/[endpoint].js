@@ -10,7 +10,12 @@
  * 허용 목록 밖 엔드포인트·GET 외 메서드는 403.
  */
 
-const ALLOWED_ENDPOINTS = new Set(["list.json", "company.json"]);
+const ALLOWED_ENDPOINTS = new Set([
+  "list.json",
+  "company.json",
+  "fnlttSinglAcnt.json",              // 주요 재무계정 (뷰어 심화 블록)
+  "accnutAdtorNmNdAdtOpinion.json",   // 감사인·감사의견 (뷰어 심화 블록)
+]);
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
