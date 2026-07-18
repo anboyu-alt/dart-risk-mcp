@@ -158,6 +158,7 @@ class TestCheckDisclosureAnomalyAuditBonus(unittest.TestCase):
     def setUp(self):
         dart_client._audit_history_cache.clear()
 
+    @patch("dart_risk_mcp.server._DART_API_KEY", "KEY")
     @patch("dart_risk_mcp.server.fetch_audit_opinion_history")
     @patch("dart_risk_mcp.server.match_signals")
     @patch("dart_risk_mcp.server.fetch_company_disclosures")
@@ -185,6 +186,7 @@ class TestCheckDisclosureAnomalyAuditBonus(unittest.TestCase):
         # v0.8.5: 점수 가산(+5점) 표기 제거 — 경고 문구만 확인
         self.assertIn("감사 독립성", result)
 
+    @patch("dart_risk_mcp.server._DART_API_KEY", "KEY")
     @patch("dart_risk_mcp.server.fetch_audit_opinion_history")
     @patch("dart_risk_mcp.server.match_signals")
     @patch("dart_risk_mcp.server.fetch_company_disclosures")
