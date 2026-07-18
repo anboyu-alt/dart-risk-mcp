@@ -183,7 +183,7 @@
 <script>
 "use strict";
 /* ── 설정 ─────────────────────────────────────── */
-const DEFAULT_RELAY = "";           // Cloudflare Worker 배포 후 URL 기입
+const DEFAULT_RELAY = "https://dart-risk-mcp.vercel.app";  // Vercel 서울 리전 릴레이 (같은 출처면 무시)
 const LOOKBACK_DAYS = 365;
 const MAX_PAGES = 5;                // 100건 × 5 = 최대 500건 (MCP와 동일)
 const LS_KEY = "dart_tool_key", LS_RELAY = "dart_tool_relay";
@@ -196,8 +196,11 @@ let AMEND_RE = null;
 function relayBase() {
   const v = (localStorage.getItem(LS_RELAY) || "").trim().replace(/\/+$/, "");
   if (v) return v;
+  // 로컬 개발(dev_relay)·Vercel 자체 배포는 같은 출처 /api 사용
+  if (/^(127\.0\.0\.1|localhost)$/.test(location.hostname) ||
+      location.hostname.endsWith(".vercel.app")) return "";
   if (DEFAULT_RELAY) return DEFAULT_RELAY.replace(/\/+$/, "");
-  return "";                        // 같은 출처 (dev_relay / 셀프호스트)
+  return "";
 }
 
 /* ── 초기화 ───────────────────────────────────── */
