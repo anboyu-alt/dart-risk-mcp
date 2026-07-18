@@ -105,6 +105,21 @@
   .patterncard b { display: block; margin-bottom: 0.2rem; }
   .patterncard .sigs { font-size: 0.8rem; color: var(--text-dim); margin-top: 0.3rem; }
 
+  /* 헤드라인·콜아웃·해설·심화 */
+  .headline { background: var(--accent-soft); border-radius: 10px;
+    padding: 0.95rem 1.15rem; margin-top: 0.9rem; font-size: 0.93rem; }
+  .headline b { font-size: 1rem; }
+  .callout { border-left: 3px solid var(--c7); background: var(--warn-bg);
+    border-radius: 10px; padding: 0.95rem 1.15rem; margin-top: 0.8rem; font-size: 0.9rem; }
+  .callout ul { margin: 0.4rem 0 0 1.1rem; }
+  .callout li { margin: 0.15rem 0; }
+  .proselist { display: grid; gap: 0.55rem; margin-top: 0.6rem; font-size: 0.88rem; }
+  .proselist .p { color: var(--text-dim); }
+  .factline { font-size: 0.9rem; padding: 0.18rem 0; }
+  .factline .neg { color: var(--c7); font-weight: 750; }
+  .factwarn { border-left: 3px solid var(--c7); background: var(--warn-bg);
+    border-radius: 8px; padding: 0.6rem 0.9rem; margin-top: 0.5rem; font-size: 0.9rem; }
+
   table { border-collapse: collapse; width: 100%; font-size: 0.85rem; margin-top: 0.6rem; }
   th, td { border-bottom: 1px solid var(--border); padding: 0.45rem 0.5rem; text-align: left; vertical-align: top; }
   th { color: var(--text-dim); font-weight: 700; font-size: 0.78rem; white-space: nowrap; }
@@ -185,7 +200,7 @@
 /* ── 설정 ─────────────────────────────────────── */
 const DEFAULT_RELAY = "";           // Cloudflare Worker 배포 후 URL 기입
 const LOOKBACK_DAYS = 365;
-const MAX_PAGES = 5;                // 100건 × 5 = 최대 500건 (MCP와 동일)
+const MAX_PAGES = 10;               // 100건 × 10 = 최대 1,000건 (MCP와 동일)
 const LS_KEY = "dart_tool_key", LS_RELAY = "dart_tool_relay";
 
 const $ = (id) => document.getElementById(id);
@@ -324,7 +339,7 @@ async function analyze(name) {
       items.push(...(j.list || []));
     }
     st.textContent = "";
-    render(name, stockCode, items, bgn, end);
+    render(name, stockCode, corpCode, items, bgn, end);
   } catch (e) {
     st.className = "status err";
     st.textContent = "⚠ " + e.message;
@@ -337,7 +352,7 @@ function esc(s) { return s.replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;
 function dartUrl(rcept) { return "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=" + rcept; }
 function fmtDate(d8) { return d8.slice(0, 4) + "." + d8.slice(4, 6) + "." + d8.slice(6, 8); }
 
-function render(name, stockCode, items, bgn, end) {
+function render(name, stockCode, corpCode, items, bgn, end) {
   const events = [];              // {date, nm, rcept, signals[]}
   let amendCount = 0;
   for (const it of items) {
@@ -348,13 +363,20 @@ function render(name, stockCode, items, bgn, end) {
   }
   events.sort((a, b) => a.date < b.date ? 1 : -1);
 
-  const detectedTax = new Set(events.flatMap((e) => e.signals.map((s) => s.taxonomy)).filter(Boolean));
+  const detectedTax = new Set(events.flatMap((e) => e.signals.flatMap((s) => s.taxonomies || [])));
   const patterns = DATA.patterns.filter((p) => p.signal_sequence.every((t) => detectedTax.has(t)));
   const capitalKeys = new Set(DATA.capital_event_keys);
   const capitalEvents = events.filter((e) => e.signals.some((s) => capitalKeys.has(s.key)));
 
   const catCount = {};
   for (const e of events) for (const s of e.signals) catCount[s.category] = (catCount[s.category] || 0) + 1;
+
+  // 신호 유형별 건수 (DATA.signals 순서 = 내부 우선순위)
+  const typeCount = {};
+  for (const e of events) for (const s of e.signals) typeCount[s.key] = (typeCount[s.key] || 0) + 1;
+  const detectedTypes = DATA.signals.filter((s) => typeCount[s.key]);
+  const heaviest = detectedTypes[0] || null;
+  const crisisEvents = events.filter((e) => e.signals.some((s) => s.category >= 7));
 
   let html = `<div class="panel">
     <h2>📊 ${esc(name)} <span style="color:var(--text-dim);font-weight:400">(${stockCode}) · 최근 12개월 · 실시간 조회 ${fmtDate(ymd(new Date()))}</span></h2>
@@ -365,11 +387,28 @@ function render(name, stockCode, items, bgn, end) {
       <div class="kpi"><div class="v">${amendCount}</div><div class="k">정정공시</div></div>
       <div class="kpi"><div class="v">${items.length ? Math.round(amendCount / items.length * 100) : 0}%</div><div class="k">정정 비율</div></div>
     </div>
+    ${heaviest ? `<div class="headline">🎯 이 기간 가장 무게 있는 신호: <b>${esc(heaviest.label)}</b> (${typeCount[heaviest.key]}건)<br>
+      <span style="color:var(--text-dim)">${esc(heaviest.prose || "")}</span></div>` : ""}
     ${events.length === 0 ? `<p class="dim" style="margin-top:0.8rem">최근 12개월 공시 ${items.length}건에서 등록된 위험 신호 유형이 감지되지 않았습니다. 신호가 없다는 것이 "안전하다"는 판정은 아닙니다 — 본 도구는 공시 제목 기반 신호만 봅니다.</p>` : ""}
   </div>`;
 
+  if (crisisEvents.length) {
+    html += `<div class="panel"><div class="callout">
+      ⚠️ <b>시장조작·위기/부실 카테고리 공시 ${crisisEvents.length}건 관찰</b> —
+      거래정지·상장폐지 관련·횡령 등 가장 무거운 유형입니다. 아래 각 건의 원문을 반드시 확인하세요. (사실 관찰이며 판정이 아닙니다)
+      <ul>` + crisisEvents.slice(0, 6).map((e) =>
+        `<li><a href="${dartUrl(e.rcept)}" target="_blank" rel="noopener">${esc(fmtDate(e.date))} · ${esc(e.nm)}</a></li>`).join("") +
+      (crisisEvents.length > 6 ? `<li>… 외 ${crisisEvents.length - 6}건 (아래 목록)</li>` : "") +
+      `</ul></div></div>`;
+  }
+
   if (events.length) {
     html += timelinePanel(events, bgn, end);
+    html += `<div class="panel"><h2>관찰된 신호 해설 <span style="font-weight:400;font-size:0.8rem;color:var(--text-dim)">무게순 · 사실 서술</span></h2>
+      <div class="proselist">` + detectedTypes.map((s) =>
+        `<div><span class="tag" style="background:var(--c${s.category})">${esc(s.label)}</span> ×${typeCount[s.key]}
+         <div class="p">${esc(s.prose || "등록된 해설이 없는 신호 유형입니다.")}</div></div>`).join("") +
+      `</div></div>`;
     html += categoryPanel(catCount, events.length);
     if (capitalEvents.length >= 3) {
       html += `<div class="panel"><h2>자본 이벤트 리듬</h2>
@@ -385,7 +424,136 @@ function render(name, stockCode, items, bgn, end) {
     }
     html += listPanel(events);
   }
+
+  // 심화 블록 — 추가 API 호출로 뒤이어 채움 (실패해도 위 결과는 유지)
+  html += `<div class="panel"><h2>재무 핵심 <span style="font-weight:400;font-size:0.8rem;color:var(--text-dim)">최근 사업보고서 기준 · 사실 표기</span></h2>
+    <div id="finCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">재무제표 조회 중…</span></div></div>`;
+  html += `<div class="panel"><h2>감사의견 3개년 <span style="font-weight:400;font-size:0.8rem;color:var(--text-dim)">사업보고서 기재 · 사실 표기</span></h2>
+    <div id="auditCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">감사보고 조회 중…</span></div></div>`;
   $("result").innerHTML = html;
+  loadDeepBlocks(corpCode);
+}
+
+/* ── 심화 블록: 재무 핵심 + 감사의견 ─────────── */
+function parseAmt(v) {
+  if (v === undefined || v === null) return null;
+  const s = String(v).replace(/,/g, "").trim();
+  if (!s || s === "-") return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+function fmtKRW(n) {
+  if (n === null) return "―";
+  const sign = n < 0 ? "-" : "";
+  const a = Math.abs(n);
+  if (a >= 1e12) return sign + (a / 1e12).toFixed(1) + "조";
+  if (a >= 1e8) return sign + Math.round(a / 1e8).toLocaleString() + "억";
+  return n.toLocaleString() + "원";
+}
+function pickAmt(rows, aliases, field) {
+  for (const a of aliases) {
+    const r = rows.find((x) => (x.account_nm || "").trim() === a);
+    if (r) { const v = parseAmt(r[field]); if (v !== null) return v; }
+  }
+  return null;
+}
+function loadDeepBlocks(corpCode) {
+  loadFinancialCore(corpCode).catch((e) => {
+    $("finCore").innerHTML = `<span class="dim" style="font-size:0.88rem">조회 실패: ${esc(e.message)}</span>`;
+  });
+  loadAuditOpinions(corpCode).catch((e) => {
+    $("auditCore").innerHTML = `<span class="dim" style="font-size:0.88rem">조회 실패: ${esc(e.message)}</span>`;
+  });
+}
+
+async function loadFinancialCore(corpCode) {
+  const el = $("finCore");
+  const thisYear = new Date().getFullYear();
+  let rows = null, year = null;
+  for (const y of [thisYear - 1, thisYear - 2]) {
+    const j = await dartGet("fnlttSinglAcnt.json",
+      { corp_code: corpCode, bsns_year: y, reprt_code: "11011" });
+    if (j.status === "000" && (j.list || []).length) { rows = j.list; year = y; break; }
+  }
+  if (!rows) {
+    el.innerHTML = `<span class="dim" style="font-size:0.88rem">최근 2개 연도 사업보고서 재무 데이터가 없습니다 (신규 상장·비공시 등).</span>`;
+    return;
+  }
+  const div = rows.some((r) => r.fs_div === "CFS") ? "CFS" : "OFS";
+  const fs = rows.filter((r) => r.fs_div === div);
+  const A = DATA.fs_aliases;
+  const rev = [pickAmt(fs, A["매출"], "thstrm_amount"), pickAmt(fs, A["매출"], "frmtrm_amount")];
+  const op  = [pickAmt(fs, A["영업이익"], "thstrm_amount"), pickAmt(fs, A["영업이익"], "frmtrm_amount")];
+  const ni  = [pickAmt(fs, A["당기순이익"], "thstrm_amount"), pickAmt(fs, A["당기순이익"], "frmtrm_amount")];
+  const eq  = pickAmt(fs, A["자본총계"], "thstrm_amount");
+  const cap = pickAmt(fs, A["자본금"], "thstrm_amount");
+
+  const line = (label, cur, pri) => {
+    if (cur === null) return "";
+    const curTxt = cur < 0 ? `<span class="neg">${fmtKRW(cur)} (적자)</span>` : fmtKRW(cur);
+    const priTxt = pri === null ? "―" : (pri < 0 ? `${fmtKRW(pri)} (적자)` : fmtKRW(pri));
+    let yoy = "";
+    if (pri !== null && pri !== 0) {
+      // 적자가 낀 비교는 %가 오독되기 쉬움 → 부호 기반 서술
+      if (pri < 0 && cur < 0) yoy = Math.abs(cur) < Math.abs(pri) ? "적자 축소" : "적자 확대";
+      else if (pri < 0 && cur >= 0) yoy = "흑자 전환";
+      else if (pri >= 0 && cur < 0) yoy = "적자 전환";
+      else yoy = `전기 대비 ${(((cur - pri) / pri) * 100).toFixed(1)}%`;
+      yoy = ` <span class="dim" style="font-size:0.8rem">(${yoy})</span>`;
+    }
+    return `<div class="factline">· ${label}: 전기 ${priTxt} → 당기 ${curTxt}${yoy}</div>`;
+  };
+  let html = `<p class="dim" style="font-size:0.82rem;margin-bottom:0.4rem">${year} 사업연도 · ${div === "CFS" ? "연결" : "별도"} 재무제표</p>`;
+  html += line("매출액", rev[0], rev[1]) + line("영업이익", op[0], op[1]) + line("당기순이익", ni[0], ni[1]);
+
+  const warns = [];
+  if (op[0] !== null && op[1] !== null && op[0] < 0 && op[1] < 0) warns.push("2개 연도 연속 영업적자입니다.");
+  if (ni[0] !== null && ni[1] !== null && ni[0] < 0 && ni[1] < 0) warns.push("2개 연도 연속 순손실입니다.");
+  if (eq !== null && eq < 0) warns.push(`완전 자본잠식 상태입니다 — 자본총계 ${fmtKRW(eq)}.`);
+  else if (eq !== null && cap !== null && eq < cap) warns.push(`부분 자본잠식 상태입니다 — 자본총계(${fmtKRW(eq)})가 자본금(${fmtKRW(cap)})보다 작습니다.`);
+  if (warns.length) {
+    html += `<div class="factwarn">⚠️ ${warns.map(esc).join("<br>⚠️ ")}<br><span class="dim" style="font-size:0.8rem">사실 표기입니다 — 정확한 맥락은 감사보고서·사업보고서 원문에서 확인하세요.</span></div>`;
+  } else if (rev[0] !== null || ni[0] !== null) {
+    html += `<p class="dim" style="font-size:0.85rem;margin-top:0.4rem">연속 적자·자본잠식에 해당하는 관찰 없음.</p>`;
+  }
+  html += `<p class="dim" style="font-size:0.8rem;margin-top:0.5rem">더 깊은 재무 이상 스캔(매출채권·재고 급증, Beneish 변수 8종, 전기 재작성 감지)은 <a href="../#start">MCP 대화</a>의 scan_financial_anomaly가 제공합니다.</p>`;
+  el.innerHTML = html;
+}
+
+async function loadAuditOpinions(corpCode) {
+  const el = $("auditCore");
+  const thisYear = new Date().getFullYear();
+  // 응답의 bsns_year는 "제16기(당기)" 형식 — 요청 연도를 라벨로 쓰고,
+  // 그 해 보고서의 (당기) 행을 그 연도의 의견으로 취한다.
+  const byYear = new Map();
+  for (const y of [thisYear - 1, thisYear - 2, thisYear - 3]) {
+    const j = await dartGet("accnutAdtorNmNdAdtOpinion.json",
+      { corp_code: corpCode, bsns_year: y, reprt_code: "11011" });
+    const rows = j.status === "000" ? j.list || [] : [];
+    const r = rows.find((x) => (x.bsns_year || "").includes("당기")) || rows[0];
+    if (r && !byYear.has(String(y))) byYear.set(String(y), r);
+  }
+  if (!byYear.size) {
+    el.innerHTML = `<span class="dim" style="font-size:0.88rem">감사의견 데이터가 없습니다.</span>`;
+    return;
+  }
+  const years = [...byYear.keys()].sort().reverse().slice(0, 3);
+  let prevAuditor = null, changed = false, hasBad = false;
+  let html = "";
+  for (const yr of years) {
+    const r = byYear.get(yr);
+    const op = (r.adt_opinion || "").trim() || "―";
+    const auditor = (r.adtor || "").trim() || "―";
+    const bad = op && op !== "―" && !op.includes("적정");
+    const rejected = op.includes("거절") || op.includes("부적정") || op.includes("한정");
+    if (bad || rejected) hasBad = true;
+    html += `<div class="factline">· ${esc(yr)}년: ${rejected || bad ? `<span class="neg">${esc(op)}</span>` : esc(op)} — ${esc(auditor)}</div>`;
+    if (prevAuditor && auditor !== "―" && prevAuditor !== "―" && auditor !== prevAuditor) changed = true;
+    prevAuditor = auditor;
+  }
+  if (hasBad) html += `<div class="factwarn">⚠️ 적정 외 감사의견이 관찰됐습니다 — 상장폐지 사유·개선기간과 직결될 수 있는 가장 무거운 회계 신호입니다. 감사보고서 원문을 확인하세요.</div>`;
+  if (changed) html += `<div class="factline dim" style="font-size:0.85rem">· 기간 중 감사인 교체가 관찰됐습니다 (표기 차이일 수 있음 — 원문 확인).</div>`;
+  el.innerHTML = html;
 }
 
 function timelinePanel(events, bgn, end) {
@@ -410,8 +578,9 @@ function timelinePanel(events, bgn, end) {
     for (const s of e.signals) {
       const yi = cats.indexOf(s.category);
       const y = padT + yi * laneH + laneH / 2;
+      const heavy = s.category >= 7;
       dots += `<a href="${dartUrl(e.rcept)}" target="_blank" rel="noopener">` +
-        `<circle cx="${x(e.date).toFixed(1)}" cy="${y}" r="5.5" fill="var(--c${s.category})" fill-opacity="0.85">` +
+        `<circle cx="${x(e.date).toFixed(1)}" cy="${y}" r="${heavy ? 7.5 : 5.5}" fill="var(--c${s.category})" fill-opacity="${heavy ? 1 : 0.8}"${heavy ? ' stroke="var(--text)" stroke-width="1.6"' : ""}>` +
         `<title>${esc(fmtDate(e.date))} · ${esc(s.label)}\n${esc(e.nm)}\n(클릭 → DART 원문)</title></circle></a>`;
     }
   }

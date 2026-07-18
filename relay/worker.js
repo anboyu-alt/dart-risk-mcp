@@ -13,7 +13,12 @@
  * 셀프호스트 대안: python scripts/dev_relay.py (동일 계약).
  */
 
-const ALLOWED_ENDPOINTS = new Set(["list.json", "company.json"]);
+const ALLOWED_ENDPOINTS = new Set([
+  "list.json",
+  "company.json",
+  "fnlttSinglAcnt.json",
+  "accnutAdtorNmNdAdtOpinion.json",
+]);
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",

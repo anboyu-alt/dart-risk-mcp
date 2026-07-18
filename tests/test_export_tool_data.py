@@ -45,6 +45,34 @@ class TestBuildSignalsData(unittest.TestCase):
         self.assertEqual(self.data["categories"]["1"], "CB/채권")
         self.assertEqual(self.data["categories"]["8"], "위기/부실")
 
+    def test_category_uses_heaviest_taxonomy(self):
+        # 복수 taxonomy 매핑 신호는 무거운 쪽(높은 카테고리 번호)을 대표로.
+        # EMBEZZLE ['5.3','8.1'] → 8(위기/부실), INQUIRY ['4.3','7.1'] → 7(시장조작).
+        by_key = {s["key"]: s for s in self.data["signals"]}
+        self.assertEqual(by_key["EMBEZZLE"]["category"], 8)
+        self.assertEqual(by_key["INQUIRY"]["category"], 7)
+        # 패턴 대조용으로 전체 taxonomy 목록도 보존
+        self.assertIn("8.1", by_key["EMBEZZLE"]["taxonomies"])
+        self.assertIn("5.3", by_key["EMBEZZLE"]["taxonomies"])
+
+    def test_signals_sorted_by_internal_weight(self):
+        # 배열 순서 = 내부 우선순위 (숫자 score는 미노출). 헤드라인 선정에 사용.
+        scores = {s["key"]: s["score"] for s in SIGNAL_TYPES}
+        exported = [s["key"] for s in self.data["signals"]]
+        self.assertEqual(exported,
+                         sorted(exported, key=lambda k: -scores[k]))
+
+    def test_signal_prose_exported(self):
+        by_key = {s["key"]: s for s in self.data["signals"]}
+        self.assertIn("횡령", by_key["EMBEZZLE"]["prose"])
+        self.assertIn("자사주", by_key["TREASURY"]["prose"])
+
+    def test_fs_aliases_exported(self):
+        fa = self.data["fs_aliases"]
+        for k in ("매출", "영업이익", "당기순이익", "자본총계", "자본금"):
+            self.assertIn(k, fa)
+            self.assertIsInstance(fa[k], list)
+
     def test_patterns_exported_with_sequence(self):
         p = next(x for x in self.data["patterns"] if x["key"] == "zombie_ma")
         self.assertTrue(p["description"])

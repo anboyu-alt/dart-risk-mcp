@@ -1,126 +1,54 @@
 {
  "signals": [
   {
-   "key": "CB_BW",
-   "label": "CB/BW발행",
-   "keywords": [
-    "전환사채권발행결정",
-    "신주인수권부사채권발행결정",
-    "전환사채",
-    "신주인수권부사채",
-    "전환가액의조정",
-    "리픽싱",
-    "전환가액조정",
-    "전환가액인하",
-    "콜옵션",
-    "사모전환사채"
+   "key": "CAPITAL_IMPAIRMENT",
+   "label": "자본잠식 근접",
+   "keywords": [],
+   "taxonomies": [
+    "8.2"
    ],
-   "taxonomy": "1.1",
-   "category": 1
+   "category": 8,
+   "prose": ""
   },
   {
-   "key": "CB_REPAY",
-   "label": "CB조기상환",
-   "keywords": [
-    "전환사채상환",
-    "CB상환",
-    "사채상환",
-    "배당금상환",
-    "자회사배당",
-    "내부배당",
-    "배당을통한상환"
+   "key": "AR_SURGE",
+   "label": "매출채권/매출 비율 급등",
+   "keywords": [],
+   "taxonomies": [
+    "6.1"
    ],
-   "taxonomy": "1.2",
-   "category": 1
+   "category": 6,
+   "prose": ""
   },
   {
-   "key": "EB",
-   "label": "교환사채(EB)발행",
-   "keywords": [
-    "교환사채권발행결정",
-    "교환사채",
-    "교환채발행",
-    "EB발행",
-    "제3자배정교환채",
-    "EB배임"
+   "key": "CASH_GAP",
+   "label": "순이익·현금흐름 괴리",
+   "keywords": [],
+   "taxonomies": [
+    "6.1"
    ],
-   "taxonomy": "1.3",
-   "category": 1
+   "category": 6,
+   "prose": ""
   },
   {
-   "key": "RCPS",
-   "label": "상환전환우선주(RCPS)",
-   "keywords": [
-    "상환전환우선주",
-    "RCPS",
-    "전환우선주",
-    "우선주발행"
+   "key": "CAPITAL_CHURN",
+   "label": "자본 이벤트 과다 반복",
+   "keywords": [],
+   "taxonomies": [
+    "2.7"
    ],
-   "taxonomy": "1.4",
-   "category": 1
+   "category": 2,
+   "prose": ""
   },
   {
-   "key": "CB_ROLLOVER",
-   "label": "CB돌려막기",
-   "keywords": [
-    "돌려막기",
-    "CB돌려막기",
-    "EB돌려막기",
-    "리파이낸싱",
-    "차환",
-    "연속CB발행",
-    "연속차입"
+   "key": "INVENTORY_SURGE",
+   "label": "재고자산/매출 비율 급등",
+   "keywords": [],
+   "taxonomies": [
+    "6.1"
    ],
-   "taxonomy": "1.5",
-   "category": 1
-  },
-  {
-   "key": "CB_BUYBACK",
-   "label": "자사채매입",
-   "keywords": [
-    "자사채매입",
-    "사채매입",
-    "저가상환",
-    "조기상환"
-   ],
-   "taxonomy": "1.6",
-   "category": 1
-  },
-  {
-   "key": "TREASURY_EB",
-   "label": "자사주EB",
-   "keywords": [
-    "자사주EB",
-    "자사주연동",
-    "자기주식EB",
-    "자기주식연동"
-   ],
-   "taxonomy": "1.7",
-   "category": 1
-  },
-  {
-   "key": "REVERSE_SPLIT",
-   "label": "무상감자/주식병합",
-   "keywords": [
-    "무상감자",
-    "감자결정",
-    "주식병합",
-    "자본감소",
-    "감자공시"
-   ],
-   "taxonomy": "2.1",
-   "category": 2
-  },
-  {
-   "key": "CAPITAL_RED",
-   "label": "유상감자/손실보전감자",
-   "keywords": [
-    "유상감자",
-    "손실보전감자",
-    "이익배당으로서감자"
-   ],
-   "taxonomy": "2.2",
-   "category": 2
+   "category": 6,
+   "prose": ""
   },
   {
    "key": "GAMJA_MERGE",
@@ -130,281 +58,11 @@
     "감자및병합",
     "감자와병합"
    ],
-   "taxonomy": "2.3",
-   "category": 2
-  },
-  {
-   "key": "3PCA",
-   "label": "제3자배정유상증자",
-   "keywords": [
-    "제3자배정",
-    "유상증자결정",
-    "유상증자",
-    "가장납입",
-    "상폐요건면탈"
+   "taxonomies": [
+    "2.3"
    ],
-   "taxonomy": "2.4",
-   "category": 2
-  },
-  {
-   "key": "RIGHTS_UNDER",
-   "label": "공모미달",
-   "keywords": [
-    "유상증자미달",
-    "공모미달",
-    "청약미달"
-   ],
-   "taxonomy": "2.5",
-   "category": 2
-  },
-  {
-   "key": "TREASURY",
-   "label": "자사주매입/처분",
-   "keywords": [
-    "자기주식취득",
-    "자기주식처분",
-    "자사주매입",
-    "자사주처분"
-   ],
-   "taxonomy": "2.6",
-   "category": 2
-  },
-  {
-   "key": "SHAREHOLDER",
-   "label": "최대주주변경",
-   "keywords": [
-    "최대주주변경",
-    "최대주주 변경",
-    "대주주변경",
-    "지분매각",
-    "경영권이양",
-    "무자본M&A",
-    "대량보유상황보고"
-   ],
-   "taxonomy": "3.1",
-   "category": 3
-  },
-  {
-   "key": "EXEC",
-   "label": "임원변경",
-   "keywords": [
-    "임원의변동",
-    "대표이사변경",
-    "대표이사 변경",
-    "경영진교체",
-    "이사진교체"
-   ],
-   "taxonomy": "3.3",
-   "category": 3
-  },
-  {
-   "key": "MGMT_DISPUTE",
-   "label": "경영권분쟁",
-   "keywords": [
-    "경영권분쟁",
-    "경영권 분쟁",
-    "경영권다툼",
-    "경영진분쟁"
-   ],
-   "taxonomy": "3.4",
-   "category": 3
-  },
-  {
-   "key": "CIRCULAR",
-   "label": "순환출자",
-   "keywords": [
-    "순환출자",
-    "순환구조",
-    "지분연쇄"
-   ],
-   "taxonomy": "3.5",
-   "category": 3
-  },
-  {
-   "key": "ACTIVIST",
-   "label": "주주행동주의",
-   "keywords": [
-    "활동주의펀드",
-    "주주행동주의",
-    "주주제안"
-   ],
-   "taxonomy": "3.3",
-   "category": 3
-  },
-  {
-   "key": "MEETING_VIOL",
-   "label": "주총절차위반",
-   "keywords": [
-    "주총위반",
-    "소집절차위반",
-    "의결정족수미달"
-   ],
-   "taxonomy": "4.1",
-   "category": 4
-  },
-  {
-   "key": "DISCLOSURE_VIOL",
-   "label": "공시의무위반",
-   "keywords": [
-    "공시의무위반",
-    "공시누락",
-    "중요정보누락",
-    "발행철회",
-    "공시철회"
-   ],
-   "taxonomy": "4.3",
-   "category": 4
-  },
-  {
-   "key": "RELATED_PARTY",
-   "label": "특수관계자거래",
-   "keywords": [
-    "특수관계자거래",
-    "관련자거래",
-    "관계회사거래",
-    "비정상거래"
-   ],
-   "taxonomy": "4.2",
-   "category": 4
-  },
-  {
-   "key": "AUDIT",
-   "label": "감사의견",
-   "keywords": [
-    "한정의견",
-    "부적정의견",
-    "의견거절",
-    "계속기업불확실성",
-    "감사범위제한",
-    "감사인교체"
-   ],
-   "taxonomy": "4.4",
-   "category": 4
-  },
-  {
-   "key": "EQUITY_SPLIT",
-   "label": "주식분할/액면분할",
-   "keywords": [
-    "주식분할결정",
-    "액면분할결정",
-    "주식배당결정"
-   ],
-   "taxonomy": "5.1",
-   "category": 5
-  },
-  {
-   "key": "BUYBACK_NEG",
-   "label": "재무위기중자사주매입",
-   "keywords": [
-    "부도직전매입",
-    "자금난속매입"
-   ],
-   "taxonomy": "5.2",
-   "category": 5
-  },
-  {
-   "key": "DISTRESS_MA",
-   "label": "위기중인수합병",
-   "keywords": [
-    "위기속인수",
-    "부실기업인수",
-    "자금난속합병"
-   ],
-   "taxonomy": "5.4",
-   "category": 5
-  },
-  {
-   "key": "ASSET_TRANSFER",
-   "label": "자산매각/유출",
-   "keywords": [
-    "자산매각",
-    "사옥매각",
-    "자회사매각",
-    "사업양도",
-    "저가매각"
-   ],
-   "taxonomy": "5.3",
-   "category": 5
-  },
-  {
-   "key": "DEMERGER",
-   "label": "회사분할",
-   "keywords": [
-    "분할결정",
-    "사업분할",
-    "분할합병"
-   ],
-   "taxonomy": "5.5",
-   "category": 5
-  },
-  {
-   "key": "MGMT",
-   "label": "경영권변동",
-   "keywords": [
-    "경영권변동",
-    "경영권 변동",
-    "주식양수도",
-    "공개매수",
-    "합병결정",
-    "인수합병"
-   ],
-   "taxonomy": "3.4",
-   "category": 3
-  },
-  {
-   "key": "REVENUE_IRREG",
-   "label": "수익인식이상",
-   "keywords": [
-    "수익인식",
-    "매출인식",
-    "수익조정",
-    "분식회계",
-    "선수금",
-    "미수금급증",
-    "매출과대계상"
-   ],
-   "taxonomy": "6.1",
-   "category": 6
-  },
-  {
-   "key": "CONTINGENT",
-   "label": "우발채무",
-   "keywords": [
-    "우발채무",
-    "우발성채무",
-    "보증채무"
-   ],
-   "taxonomy": "6.2",
-   "category": 6
-  },
-  {
-   "key": "THEME_STOCK",
-   "label": "테마주/작전주",
-   "keywords": [
-    "테마주",
-    "작전주",
-    "테마편승",
-    "정치테마주",
-    "핀플루언서"
-   ],
-   "taxonomy": "7.2",
-   "category": 7
-  },
-  {
-   "key": "INQUIRY",
-   "label": "조회공시",
-   "keywords": [
-    "조회공시",
-    "풍문또는보도",
-    "주가이상",
-    "거래정지",
-    "매매정지",
-    "이상거래",
-    "조회공시요구",
-    "거래량급증"
-   ],
-   "taxonomy": "4.3",
-   "category": 4
+   "category": 2,
+   "prose": "감자 후 증자 또는 감자를 동반한 합병 공시입니다. 기존 주주 지분율을 크게 낮춘 뒤 신규 발행으로 특정 세력에 지분을 몰아주는 구조로 이어질 수 있습니다."
   },
   {
    "key": "EMBEZZLE",
@@ -420,8 +78,12 @@
     "선행매매",
     "차명"
    ],
-   "taxonomy": "5.3",
-   "category": 5
+   "taxonomies": [
+    "5.3",
+    "8.1"
+   ],
+   "category": 8,
+   "prose": "횡령·배임·미공개정보 이용 같은 가장 무거운 신호입니다. 수사·기소·검찰 고발 단계와 맞물려 주가 충격이 확정적인 유형입니다."
   },
   {
    "key": "INSOLVENCY",
@@ -432,30 +94,11 @@
     "어음부도",
     "의도적부도"
    ],
-   "taxonomy": "8.1",
-   "category": 8
-  },
-  {
-   "key": "DEBT_RESTR",
-   "label": "채무조정/구조조정",
-   "keywords": [
-    "구조조정",
-    "채무조정",
-    "채무면제",
-    "워크아웃"
+   "taxonomies": [
+    "8.1"
    ],
-   "taxonomy": "8.2",
-   "category": 8
-  },
-  {
-   "key": "ASSET_SPIRAL",
-   "label": "자산연쇄처분",
-   "keywords": [
-    "연쇄매각",
-    "긴급자산처분"
-   ],
-   "taxonomy": "8.3",
-   "category": 8
+   "category": 8,
+   "prose": "회생·파산 절차 신청이나 관련 공시입니다. 회사 존속 자체가 법정 절차에 넘어간 상태입니다."
   },
   {
    "key": "GOING_CONCERN",
@@ -466,106 +109,625 @@
     "회생절차",
     "파산절차"
    ],
-   "taxonomy": "8.4",
-   "category": 8
+   "taxonomies": [
+    "8.4"
+   ],
+   "category": 8,
+   "prose": "감사보고서에 '계속기업 가정 불확실성'이 기재된 공시입니다. 감사인이 '이 회사가 1년 안에 망하지 않는다고 장담하기 어렵다'고 공식화한 것으로, 회생·파산·상장폐지의 직전 단계에서 자주 등장합니다."
+  },
+  {
+   "key": "CB_REPAY",
+   "label": "CB조기상환",
+   "keywords": [
+    "전환사채상환",
+    "CB상환",
+    "사채상환",
+    "배당금상환",
+    "자회사배당",
+    "내부배당",
+    "배당을통한상환"
+   ],
+   "taxonomies": [
+    "1.2"
+   ],
+   "category": 1,
+   "prose": "이미 발행한 전환사채를 현금으로 갚는다는 공시입니다. 상환 재원이 자회사 배당 같은 내부 자금이면 그룹 전체 현금흐름에 부담을 주는 조기 상환 패턴일 수 있습니다."
+  },
+  {
+   "key": "EB",
+   "label": "교환사채(EB)발행",
+   "keywords": [
+    "교환사채권발행결정",
+    "교환사채",
+    "교환채발행",
+    "EB발행",
+    "제3자배정교환채",
+    "EB배임"
+   ],
+   "taxonomies": [
+    "1.3"
+   ],
+   "category": 1,
+   "prose": "교환사채(EB) 발행입니다. 회사가 보유한 다른 회사 주식이나 자기주식으로 나중에 교환할 수 있는 채권이라, 자사주 매각 통로로 변질될 가능성이 있습니다."
+  },
+  {
+   "key": "RCPS",
+   "label": "상환전환우선주(RCPS)",
+   "keywords": [
+    "상환전환우선주",
+    "RCPS",
+    "전환우선주",
+    "우선주발행"
+   ],
+   "taxonomies": [
+    "1.4"
+   ],
+   "category": 1,
+   "prose": "상환전환우선주(RCPS) 발행입니다. 우선주처럼 배당을 받다가 보통주 전환이나 현금 상환을 선택할 수 있어, 조건에 따라 주가를 짓누르는 매도 압력이 될 수 있습니다."
+  },
+  {
+   "key": "CB_ROLLOVER",
+   "label": "CB돌려막기",
+   "keywords": [
+    "돌려막기",
+    "CB돌려막기",
+    "EB돌려막기",
+    "리파이낸싱",
+    "차환",
+    "연속CB발행",
+    "연속차입"
+   ],
+   "taxonomies": [
+    "1.5"
+   ],
+   "category": 1,
+   "prose": "기존 전환사채를 갚지 않고 새 전환사채로 '돌려막기'하는 공시입니다. 자체 현금으로 상환하지 못하는 상태가 이어지고 있다는 신호입니다."
+  },
+  {
+   "key": "3PCA",
+   "label": "제3자배정유상증자",
+   "keywords": [
+    "제3자배정",
+    "유상증자결정",
+    "유상증자",
+    "가장납입",
+    "상폐요건면탈"
+   ],
+   "taxonomies": [
+    "2.4"
+   ],
+   "category": 2,
+   "prose": "제3자 배정 유상증자 공시입니다. 기존 주주가 아닌 특정 개인이나 법인에게만 신주를 주는 방식으로, 경영권 이전이나 특수관계자 이익 제공 경로로 반복 악용됩니다."
+  },
+  {
+   "key": "AUDIT",
+   "label": "감사의견",
+   "keywords": [
+    "한정의견",
+    "부적정의견",
+    "의견거절",
+    "계속기업불확실성",
+    "감사범위제한",
+    "감사인교체"
+   ],
+   "taxonomies": [
+    "4.4",
+    "8.4"
+   ],
+   "category": 8,
+   "prose": "감사의견·감사인 관련 공시입니다. 한정·거절 의견이나 감사인 중도 교체는 코스닥에서 상장폐지로 직결될 수 있는 가장 무거운 신호 중 하나입니다."
+  },
+  {
+   "key": "ASSET_TRANSFER",
+   "label": "자산매각/유출",
+   "keywords": [
+    "자산매각",
+    "사옥매각",
+    "자회사매각",
+    "사업양도",
+    "저가매각"
+   ],
+   "taxonomies": [
+    "5.3"
+   ],
+   "category": 5,
+   "prose": "자산·영업 양수도 공시입니다. 상대방이 특수관계인인지, 외부 평가를 거쳤는지, 회사 자산 대비 금액이 과도한지가 위험 판단의 핵심입니다."
+  },
+  {
+   "key": "DEMERGER",
+   "label": "회사분할",
+   "keywords": [
+    "분할결정",
+    "사업분할",
+    "분할합병"
+   ],
+   "taxonomies": [
+    "5.5"
+   ],
+   "category": 5,
+   "prose": "회사 분할 공시입니다. 핵심 사업과 부실 사업을 분리하거나 상장 가치를 새로 띄우는 목적이 있어, 주주 가치에 미치는 영향을 계산해봐야 합니다."
+  },
+  {
+   "key": "DEBT_RESTR",
+   "label": "채무조정/구조조정",
+   "keywords": [
+    "구조조정",
+    "채무조정",
+    "채무면제",
+    "워크아웃"
+   ],
+   "taxonomies": [
+    "8.2"
+   ],
+   "category": 8,
+   "prose": "채무 재조정·워크아웃·출자전환 공시입니다. 금융권 빚을 갚을 수 없어 구조조정에 들어간 상태를 뜻합니다."
   },
   {
    "key": "FUND_DIVERSION",
    "label": "조달자금 목적외 사용",
    "keywords": [],
-   "taxonomy": "5.3",
-   "category": 5
-  },
-  {
-   "key": "FUND_UNREPORTED",
-   "label": "자금사용내역 미기재",
-   "keywords": [],
-   "taxonomy": "4.3",
-   "category": 4
+   "taxonomies": [
+    "5.3",
+    "8.1"
+   ],
+   "category": 8,
+   "prose": ""
   },
   {
    "key": "DECISION_RELATED_PARTY",
    "label": "특수관계인 대상 결정",
    "keywords": [],
-   "taxonomy": "4.2",
-   "category": 4
+   "taxonomies": [
+    "4.2"
+   ],
+   "category": 4,
+   "prose": ""
+  },
+  {
+   "key": "CB_BW",
+   "label": "CB/BW발행",
+   "keywords": [
+    "전환사채권발행결정",
+    "신주인수권부사채권발행결정",
+    "전환사채",
+    "신주인수권부사채",
+    "전환가액의조정",
+    "리픽싱",
+    "전환가액조정",
+    "전환가액인하",
+    "콜옵션",
+    "사모전환사채"
+   ],
+   "taxonomies": [
+    "1.1",
+    "1.5",
+    "1.6"
+   ],
+   "category": 1,
+   "prose": "전환사채·신주인수권부사채 발행입니다. 빚으로 돈을 들여오지만 나중에 주식으로 바꿀 수 있어, 누가 이 채권을 받았는지에 따라 주가 희석이나 특정 세력의 지분 취득 통로가 됩니다."
+  },
+  {
+   "key": "CB_BUYBACK",
+   "label": "자사채매입",
+   "keywords": [
+    "자사채매입",
+    "사채매입",
+    "저가상환",
+    "조기상환"
+   ],
+   "taxonomies": [
+    "1.6"
+   ],
+   "category": 1,
+   "prose": "회사가 자기가 발행한 전환사채를 되사는 공시입니다. 시장가보다 낮은 가격에 매입해 사채권자와 이익을 분배하는 방식이면 소액주주 피해가 커질 수 있어 감독당국이 주시합니다."
+  },
+  {
+   "key": "TREASURY_EB",
+   "label": "자사주EB",
+   "keywords": [
+    "자사주EB",
+    "자사주연동",
+    "자기주식EB",
+    "자기주식연동"
+   ],
+   "taxonomies": [
+    "1.7"
+   ],
+   "category": 1,
+   "prose": "자사주를 기초로 교환사채(EB)를 발행하는 공시입니다. 자사주 직접 매각 제한을 우회해 특정 세력에 지분을 넘기는 통로가 될 수 있습니다."
+  },
+  {
+   "key": "REVERSE_SPLIT",
+   "label": "무상감자/주식병합",
+   "keywords": [
+    "무상감자",
+    "감자결정",
+    "주식병합",
+    "자본감소",
+    "감자공시"
+   ],
+   "taxonomies": [
+    "2.1"
+   ],
+   "category": 2,
+   "prose": "주식 병합(액면병합) 공시입니다. 여러 주를 하나로 묶어 주식 수를 줄이는 작업인데, 주가가 낮아 상장폐지 기준에 걸리는 기업이 이를 피하기 위해 꺼내드는 카드로 자주 쓰입니다."
+  },
+  {
+   "key": "CAPITAL_RED",
+   "label": "유상감자/손실보전감자",
+   "keywords": [
+    "유상감자",
+    "손실보전감자",
+    "이익배당으로서감자"
+   ],
+   "taxonomies": [
+    "2.2"
+   ],
+   "category": 2,
+   "prose": "자본금 감소(유상감자·무상감자) 공시입니다. 자본잠식 해소 목적이면 정당하지만, 대주주 자금 회수 수단으로 변질되는 사례가 반복됩니다."
+  },
+  {
+   "key": "TREASURY",
+   "label": "자사주매입/처분",
+   "keywords": [
+    "자기주식취득",
+    "자기주식처분",
+    "자사주매입",
+    "자사주처분"
+   ],
+   "taxonomies": [
+    "2.6"
+   ],
+   "category": 2,
+   "prose": "자사주 취득·처분 공시입니다. 주주 환원으로 긍정적일 수도 있지만, 신탁 계약·장내매수·사모 매각이 특정 타이밍에 몰리면 주가 조작이나 경영권 방어 도구로 악용되기도 합니다."
+  },
+  {
+   "key": "SHAREHOLDER",
+   "label": "최대주주변경",
+   "keywords": [
+    "최대주주변경",
+    "최대주주 변경",
+    "대주주변경",
+    "지분매각",
+    "경영권이양",
+    "무자본M&A",
+    "대량보유상황보고"
+   ],
+   "taxonomies": [
+    "3.1",
+    "3.2"
+   ],
+   "category": 3,
+   "prose": "최대주주가 바뀌는 공시입니다. 회사 지배구조의 핵심 사건으로, 새 지배 세력의 의도(정상 인수인지 무자본 M&A인지)를 다른 공시들과 함께 살펴봐야 합니다."
+  },
+  {
+   "key": "MGMT_DISPUTE",
+   "label": "경영권분쟁",
+   "keywords": [
+    "경영권분쟁",
+    "경영권 분쟁",
+    "경영권다툼",
+    "경영진분쟁"
+   ],
+   "taxonomies": [
+    "3.4"
+   ],
+   "category": 3,
+   "prose": "경영권 분쟁이 드러난 공시입니다. 주총 의결권 경합, 임원 해임 가처분 등 소송·분쟁이 진행 중이라는 신호입니다."
+  },
+  {
+   "key": "CIRCULAR",
+   "label": "순환출자",
+   "keywords": [
+    "순환출자",
+    "순환구조",
+    "지분연쇄"
+   ],
+   "taxonomies": [
+    "3.5"
+   ],
+   "category": 3,
+   "prose": "순환출자 구조가 포함된 지분 이동 공시입니다. 계열사 간 지분을 돌려 실질 지배주주 지분을 키우는 방식으로, 공정위 규제의 주 표적입니다."
+  },
+  {
+   "key": "MEETING_VIOL",
+   "label": "주총절차위반",
+   "keywords": [
+    "주총위반",
+    "소집절차위반",
+    "의결정족수미달"
+   ],
+   "taxonomies": [
+    "4.1"
+   ],
+   "category": 4,
+   "prose": ""
+  },
+  {
+   "key": "DISCLOSURE_VIOL",
+   "label": "공시의무위반",
+   "keywords": [
+    "공시의무위반",
+    "공시누락",
+    "중요정보누락",
+    "발행철회",
+    "공시철회"
+   ],
+   "taxonomies": [
+    "4.3"
+   ],
+   "category": 4,
+   "prose": "공시 의무를 어겨 거래소가 제재한 공시입니다. 공시 철회·발행 철회·불성실 공시 지정 등이 해당하며, 회사의 기본 거버넌스가 흔들리고 있다는 신호입니다."
+  },
+  {
+   "key": "RELATED_PARTY",
+   "label": "특수관계자거래",
+   "keywords": [
+    "특수관계자거래",
+    "관련자거래",
+    "관계회사거래",
+    "비정상거래"
+   ],
+   "taxonomies": [
+    "4.2"
+   ],
+   "category": 4,
+   "prose": "특수관계자와의 거래 공시입니다. 최대주주·임원·계열사와의 거래는 시장가보다 유리·불리한 조건이 설정되기 쉬워 회계 감사 지적 대상이 자주 됩니다."
+  },
+  {
+   "key": "MGMT",
+   "label": "경영권변동",
+   "keywords": [
+    "경영권변동",
+    "경영권 변동",
+    "주식양수도",
+    "공개매수",
+    "합병결정",
+    "인수합병"
+   ],
+   "taxonomies": [
+    "3.4",
+    "5.4"
+   ],
+   "category": 5,
+   "prose": "경영 관련 주요 결정 공시입니다. 합병·분할·사업 양수도 등 회사 구조를 크게 바꾸는 이벤트라 상대방과 가격 조건을 꼼꼼히 살펴야 합니다."
+  },
+  {
+   "key": "REVENUE_IRREG",
+   "label": "수익인식이상",
+   "keywords": [
+    "수익인식",
+    "매출인식",
+    "수익조정",
+    "분식회계",
+    "선수금",
+    "미수금급증",
+    "매출과대계상"
+   ],
+   "taxonomies": [
+    "6.1"
+   ],
+   "category": 6,
+   "prose": "매출 관련 이상 공시입니다. 선수금 급증, 미수금 증가, 매출 과대계상 등 장부상 숫자와 실제 현금흐름이 어긋나는 단서들을 뜻합니다."
+  },
+  {
+   "key": "CONTINGENT",
+   "label": "우발채무",
+   "keywords": [
+    "우발채무",
+    "우발성채무",
+    "보증채무"
+   ],
+   "taxonomies": [
+    "6.2"
+   ],
+   "category": 6,
+   "prose": "우발채무·소송 관련 공시입니다. 아직 확정되지 않았지만 회사가 크게 물어낼 가능성이 있는 부담으로, 규모에 따라 재무 건전성을 뒤흔들 수 있습니다."
+  },
+  {
+   "key": "INQUIRY",
+   "label": "조회공시",
+   "keywords": [
+    "조회공시",
+    "풍문또는보도",
+    "주가이상",
+    "거래정지",
+    "매매정지",
+    "이상거래",
+    "조회공시요구",
+    "거래량급증"
+   ],
+   "taxonomies": [
+    "4.3",
+    "7.1"
+   ],
+   "category": 7,
+   "prose": "거래소가 이상 징후를 감지해 회사에 해명을 요구한 '조회공시' 공시입니다. 주가·거래량 급변 뒤에 숨은 정보가 있는지 따져 묻는 절차입니다."
+  },
+  {
+   "key": "ASSET_SPIRAL",
+   "label": "자산연쇄처분",
+   "keywords": [
+    "연쇄매각",
+    "긴급자산처분"
+   ],
+   "taxonomies": [
+    "8.3"
+   ],
+   "category": 8,
+   "prose": ""
+  },
+  {
+   "key": "FUND_UNREPORTED",
+   "label": "자금사용내역 미기재",
+   "keywords": [],
+   "taxonomies": [
+    "4.3"
+   ],
+   "category": 4,
+   "prose": ""
   },
   {
    "key": "DECISION_OVERSIZED",
    "label": "자산대비 대형 결정",
    "keywords": [],
-   "taxonomy": "5.3",
-   "category": 5
+   "taxonomies": [
+    "5.3"
+   ],
+   "category": 5,
+   "prose": ""
   },
   {
    "key": "DECISION_NO_EXTVAL",
    "label": "외부평가 미실시 결정",
    "keywords": [],
-   "taxonomy": "4.3",
-   "category": 4
+   "taxonomies": [
+    "4.3"
+   ],
+   "category": 4,
+   "prose": ""
   },
   {
-   "key": "CAPITAL_CHURN",
-   "label": "자본 이벤트 과다 반복",
-   "keywords": [],
-   "taxonomy": "2.7",
-   "category": 2
+   "key": "RIGHTS_UNDER",
+   "label": "공모미달",
+   "keywords": [
+    "유상증자미달",
+    "공모미달",
+    "청약미달"
+   ],
+   "taxonomies": [
+    "2.5"
+   ],
+   "category": 2,
+   "prose": "주주배정 유상증자가 미달·실권으로 이어진 공시입니다. 기존 주주가 참여를 거부했다는 뜻이라, 시장 신뢰가 흔들리는 시점에 자주 나옵니다."
   },
   {
-   "key": "AR_SURGE",
-   "label": "매출채권/매출 비율 급등",
-   "keywords": [],
-   "taxonomy": "6.1",
-   "category": 6
+   "key": "EXEC",
+   "label": "임원변경",
+   "keywords": [
+    "임원의변동",
+    "대표이사변경",
+    "대표이사 변경",
+    "경영진교체",
+    "이사진교체"
+   ],
+   "taxonomies": [
+    "3.3",
+    "3.4"
+   ],
+   "category": 3,
+   "prose": "대표이사·이사 등 핵심 임원이 바뀌는 공시입니다. 단기간에 연이은 교체는 내부 갈등·경영권 분쟁·사전 정리 작업의 전형적 패턴입니다."
   },
   {
-   "key": "INVENTORY_SURGE",
-   "label": "재고자산/매출 비율 급등",
-   "keywords": [],
-   "taxonomy": "6.1",
-   "category": 6
+   "key": "ACTIVIST",
+   "label": "주주행동주의",
+   "keywords": [
+    "활동주의펀드",
+    "주주행동주의",
+    "주주제안"
+   ],
+   "taxonomies": [
+    "3.3"
+   ],
+   "category": 3,
+   "prose": ""
   },
   {
-   "key": "CASH_GAP",
-   "label": "순이익·현금흐름 괴리",
-   "keywords": [],
-   "taxonomy": "6.1",
-   "category": 6
+   "key": "EQUITY_SPLIT",
+   "label": "주식분할/액면분할",
+   "keywords": [
+    "주식분할결정",
+    "액면분할결정",
+    "주식배당결정"
+   ],
+   "taxonomies": [
+    "5.1"
+   ],
+   "category": 5,
+   "prose": ""
   },
   {
-   "key": "CAPITAL_IMPAIRMENT",
-   "label": "자본잠식 근접",
-   "keywords": [],
-   "taxonomy": "8.2",
-   "category": 8
+   "key": "BUYBACK_NEG",
+   "label": "재무위기중자사주매입",
+   "keywords": [
+    "부도직전매입",
+    "자금난속매입"
+   ],
+   "taxonomies": [
+    "5.2"
+   ],
+   "category": 5,
+   "prose": ""
+  },
+  {
+   "key": "DISTRESS_MA",
+   "label": "위기중인수합병",
+   "keywords": [
+    "위기속인수",
+    "부실기업인수",
+    "자금난속합병"
+   ],
+   "taxonomies": [
+    "5.4"
+   ],
+   "category": 5,
+   "prose": ""
+  },
+  {
+   "key": "THEME_STOCK",
+   "label": "테마주/작전주",
+   "keywords": [
+    "테마주",
+    "작전주",
+    "테마편승",
+    "정치테마주",
+    "핀플루언서"
+   ],
+   "taxonomies": [
+    "7.2"
+   ],
+   "category": 7,
+   "prose": "정치테마주·세력 작전 대상으로 거론된 공시입니다. 핀플루언서 언급, 테마 편승 공시 등 펀더멘털과 무관한 가격 변동을 유발하는 요인이 감지된 상태입니다."
   },
   {
    "key": "INSIDER_PRE_DISCLOSURE",
    "label": "임원·대주주 매도 후 부정 공시",
    "keywords": [],
-   "taxonomy": "3.6",
-   "category": 3
+   "taxonomies": [
+    "3.6"
+   ],
+   "category": 3,
+   "prose": ""
   },
   {
    "key": "TREASURY_TRUST",
    "label": "자사주 신탁계약",
    "keywords": [],
-   "taxonomy": "2.8",
-   "category": 2
+   "taxonomies": [
+    "2.8"
+   ],
+   "category": 2,
+   "prose": "자사주 신탁계약 체결 또는 해지 공시입니다. 직접 매입과 다르게 신탁회사를 거치는 우회 경로로, 직접 매입과 같은 시기에 반복되거나 단기간 안에 체결-해지가 이어지면 자본 리듬 관리 신호로 읽을 수 있습니다."
   },
   {
    "key": "DISTRESS_EVENT",
    "label": "부실 단계 진입",
    "keywords": [],
-   "taxonomy": "8.5",
-   "category": 8
+   "taxonomies": [
+    "8.5"
+   ],
+   "category": 8,
+   "prose": ""
   },
   {
    "key": "DIVIDEND_DRAIN",
    "label": "적자 시점 배당 유출",
    "keywords": [],
-   "taxonomy": "5.6",
-   "category": 5
+   "taxonomies": [
+    "5.6"
+   ],
+   "category": 5,
+   "prose": ""
   }
  ],
  "patterns": [
@@ -708,5 +870,43 @@
   "TREASURY_EB",
   "TREASURY_TRUST"
  ],
- "amendment_pattern": "^\\[(?:기재정정|첨부추가|정정)[^\\]]*\\]\\s*"
+ "amendment_pattern": "^\\[(?:기재정정|첨부추가|정정)[^\\]]*\\]\\s*",
+ "fs_aliases": {
+  "매출": [
+   "매출액",
+   "영업수익",
+   "수익(매출액)",
+   "영업수익(매출액)",
+   "매출",
+   "순매출액",
+   "수입금액",
+   "매출수익",
+   "영업수입",
+   "영업매출액",
+   "수익"
+  ],
+  "영업이익": [
+   "영업이익",
+   "영업이익(손실)",
+   "영업손익",
+   "영업이익(영업손실)"
+  ],
+  "당기순이익": [
+   "당기순이익",
+   "당기순이익(손실)",
+   "당기순이익(당기순손실)",
+   "당기순손익",
+   "분기순이익",
+   "반기순이익",
+   "연결당기순이익"
+  ],
+  "자본총계": [
+   "자본총계",
+   "자본 총계",
+   "자본합계"
+  ],
+  "자본금": [
+   "자본금"
+  ]
+ }
 }
