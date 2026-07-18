@@ -119,6 +119,10 @@
   .factline .neg { color: var(--c7); font-weight: 750; }
   .factwarn { border-left: 3px solid var(--c7); background: var(--warn-bg);
     border-radius: 8px; padding: 0.6rem 0.9rem; margin-top: 0.5rem; font-size: 0.9rem; }
+  .chipItem { display: inline-flex; align-items: center; gap: 0.4rem;
+    background: var(--accent-soft); color: var(--accent-strong);
+    border-radius: 999px; padding: 0.25rem 0.8rem; font-size: 0.86rem; font-weight: 600; }
+  .chipItem a { color: var(--accent-strong); text-decoration: none; font-weight: 800; }
 
   table { border-collapse: collapse; width: 100%; font-size: 0.85rem; margin-top: 0.6rem; }
   th, td { border-bottom: 1px solid var(--border); padding: 0.45rem 0.5rem; text-align: left; vertical-align: top; }
@@ -173,6 +177,7 @@
     <div class="suggest" id="suggest"></div>
   </div>
   <div class="status" id="status"></div>
+  <p style="font-size:0.85rem;margin-top:0.3rem"><a href="#" id="toCompare">🤝 여러 회사 임원 겸직 비교 모드 →</a></p>
   <details class="settings">
     <summary>설정</summary>
     <p class="dim" style="margin-top:0.4rem">
@@ -180,6 +185,26 @@
       <button class="ghost" id="resetKey" style="padding:0.2rem 0.7rem;font-size:0.8rem;margin-left:0.5rem">키 변경</button>
     </p>
   </details>
+</div>
+
+<!-- 겸직 비교 모드 -->
+<div class="panel hidden" id="comparePanel">
+  <h2>임원 겸직 비교 <span style="font-weight:400;font-size:0.8rem;color:var(--text-dim)">2~5개사 · 최근 4개 사업연도 임원현황 교집합</span></h2>
+  <p class="dim">
+    문제 세력은 회사를 인수할 때마다 투자조합 이름을 바꾸지만, <strong>등기임원 이름은 공시에 남는
+    고정점</strong>입니다. 비교할 회사들을 추가하면 DART 임원현황을 겹쳐 2개사 이상에 등장하는
+    인물을 찾습니다. (MCP <code>find_actor_overlap</code>의 임원 차원과 동일 로직)
+  </p>
+  <div class="searchwrap" style="margin-top:0.6rem">
+    <input type="text" id="cq" placeholder="회사를 검색해 하나씩 추가 (2~5개)" autocomplete="off">
+    <div class="suggest" id="csuggest"></div>
+  </div>
+  <div id="chips" style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-top:0.6rem"></div>
+  <div style="margin-top:0.8rem;display:flex;gap:0.6rem;flex-wrap:wrap">
+    <button id="runCompare">겸직 비교 실행</button>
+    <button class="ghost" id="backSingle">← 단일 회사 분석으로</button>
+  </div>
+  <div class="status" id="cstatus"></div>
 </div>
 
 <!-- 결과 -->
@@ -249,8 +274,8 @@ $("resetKey").onclick = () => {
   $("setupPanel").classList.remove("hidden");
 };
 
-/* ── 자동완성 ─────────────────────────────────── */
-let names = null, activeIdx = -1;
+/* ── 자동완성 (단일/비교 두 입력 공용) ─────────── */
+let names = null;
 function suggestions(qs) {
   if (!names) names = Object.keys(CORPS);
   const q = qs.trim();
@@ -266,34 +291,151 @@ function suggestions(qs) {
   }
   return starts.concat(incl).slice(0, 12);
 }
-function renderSuggest(list) {
-  const box = $("suggest");
-  if (!list.length) { box.style.display = "none"; box.innerHTML = ""; return; }
-  box.innerHTML = list.map((n, i) =>
-    `<div data-n="${n}" class="${i === activeIdx ? "active" : ""}">` +
-    `<span>${n}</span><span class="code">${CORPS[n][1]}</span></div>`).join("");
-  box.style.display = "block";
-  box.querySelectorAll("div").forEach((el) => {
-    el.onmousedown = (e) => { e.preventDefault(); pick(el.dataset.n); };
+function attachAutocomplete(input, box, onPick) {
+  let activeIdx = -1;
+  const renderSuggest = (list) => {
+    if (!list.length) { box.style.display = "none"; box.innerHTML = ""; return; }
+    box.innerHTML = list.map((n, i) =>
+      `<div data-n="${n}" class="${i === activeIdx ? "active" : ""}">` +
+      `<span>${n}</span><span class="code">${CORPS[n][1]}</span></div>`).join("");
+    box.style.display = "block";
+    box.querySelectorAll("div").forEach((el) => {
+      el.onmousedown = (e) => { e.preventDefault(); choose(el.dataset.n); };
+    });
+  };
+  const choose = (name) => {
+    box.style.display = "none"; activeIdx = -1;
+    onPick(name);
+  };
+  input.addEventListener("input", () => { activeIdx = -1; renderSuggest(suggestions(input.value)); });
+  input.addEventListener("keydown", (e) => {
+    const list = suggestions(input.value);
+    if (e.key === "ArrowDown") { activeIdx = Math.min(activeIdx + 1, list.length - 1); renderSuggest(list); e.preventDefault(); }
+    else if (e.key === "ArrowUp") { activeIdx = Math.max(activeIdx - 1, 0); renderSuggest(list); e.preventDefault(); }
+    else if (e.key === "Enter") {
+      const chosen = list[activeIdx >= 0 ? activeIdx : 0];
+      if (chosen) choose(chosen);
+    } else if (e.key === "Escape") { box.style.display = "none"; }
   });
 }
-function pick(name) {
-  $("q").value = name; $("suggest").style.display = "none"; activeIdx = -1;
-  analyze(name);
-}
-$("q").addEventListener("input", () => { activeIdx = -1; renderSuggest(suggestions($("q").value)); });
-$("q").addEventListener("keydown", (e) => {
-  const list = suggestions($("q").value);
-  if (e.key === "ArrowDown") { activeIdx = Math.min(activeIdx + 1, list.length - 1); renderSuggest(list); e.preventDefault(); }
-  else if (e.key === "ArrowUp") { activeIdx = Math.max(activeIdx - 1, 0); renderSuggest(list); e.preventDefault(); }
-  else if (e.key === "Enter") {
-    const chosen = list[activeIdx >= 0 ? activeIdx : 0];
-    if (chosen) pick(chosen);
-  } else if (e.key === "Escape") { $("suggest").style.display = "none"; }
-});
+attachAutocomplete($("q"), $("suggest"), (name) => { $("q").value = name; analyze(name); });
+attachAutocomplete($("cq"), $("csuggest"), (name) => { $("cq").value = ""; addCompareCompany(name); });
 document.addEventListener("click", (e) => {
-  if (!e.target.closest(".searchwrap")) $("suggest").style.display = "none";
+  if (!e.target.closest(".searchwrap")) {
+    $("suggest").style.display = "none"; $("csuggest").style.display = "none";
+  }
 });
+
+/* ── 겸직 비교 모드 ───────────────────────────── */
+const compareList = [];
+function setMode(compare) {
+  $("comparePanel").classList.toggle("hidden", !compare);
+  $("searchPanel").classList.toggle("hidden", compare);
+  $("result").innerHTML = "";
+  if (compare) $("cq").focus(); else $("q").focus();
+}
+$("toCompare").onclick = (e) => { e.preventDefault(); setMode(true); };
+$("backSingle").onclick = () => setMode(false);
+function addCompareCompany(name) {
+  if (compareList.includes(name)) return;
+  if (compareList.length >= 5) { $("cstatus").textContent = "최대 5개사까지 비교할 수 있습니다."; return; }
+  compareList.push(name);
+  renderChips();
+}
+window.openCompareWith = (name) => {
+  if (localStorage.getItem(LS_KEY)) {
+    setMode(true);
+    addCompareCompany(name);
+  }
+};
+function renderChips() {
+  $("chips").innerHTML = compareList.map((n) =>
+    `<span class="chipItem">${esc(n)} <a href="#" data-n="${esc(n)}" title="제거">✕</a></span>`).join("");
+  $("chips").querySelectorAll("a").forEach((a) => {
+    a.onclick = (e) => {
+      e.preventDefault();
+      compareList.splice(compareList.indexOf(a.dataset.n), 1);
+      renderChips();
+    };
+  });
+}
+$("runCompare").onclick = () => compareActors();
+
+async function fetchRoster(corpCode, onYear) {
+  // MCP fetch_executive_roster 미러: 최근 4개 사업연도 합집합, 계/합계 제외
+  const thisYear = new Date().getFullYear();
+  const roster = new Map();   // nm → Set(연도)
+  for (let y = thisYear - 3; y <= thisYear; y++) {
+    onYear(y);
+    try {
+      const j = await dartGet("exctvSttus.json",
+        { corp_code: corpCode, bsns_year: y, reprt_code: "11011" });
+      if (j.status !== "000") continue;
+      for (const row of j.list || []) {
+        const nm = (row.nm || "").trim();
+        if (!nm || nm === "계" || nm === "합계") continue;
+        if (!roster.has(nm)) roster.set(nm, new Set());
+        roster.get(nm).add(String(y));
+      }
+    } catch (e) { /* 연도 단위 실패는 건너뜀 */ }
+  }
+  return roster;
+}
+
+async function compareActors() {
+  const st = $("cstatus");
+  if (compareList.length < 2) { st.textContent = "비교하려면 회사를 2개 이상 추가하세요."; return; }
+  st.className = "status";
+  const rosters = new Map();  // 회사 → (nm → Set(연도))
+  try {
+    for (const name of compareList) {
+      const roster = await fetchRoster(CORPS[name][0], (y) => {
+        st.innerHTML = `<span class="spinner"></span>${esc(name)} 임원현황 수집 중… (${y} 사업연도)`;
+      });
+      rosters.set(name, roster);
+    }
+  } catch (e) {
+    st.className = "status err"; st.textContent = "⚠ " + e.message; return;
+  }
+  st.textContent = "";
+
+  // 인물 → 등장 회사 집계
+  const byPerson = new Map();  // nm → Map(회사 → 연도들)
+  for (const [company, roster] of rosters) {
+    for (const [nm, years] of roster) {
+      if (!byPerson.has(nm)) byPerson.set(nm, new Map());
+      byPerson.get(nm).set(company, [...years].sort());
+    }
+  }
+  const overlaps = [...byPerson.entries()]
+    .filter(([, m]) => m.size >= 2)
+    .sort((a, b) => b[1].size - a[1].size);
+
+  let html = `<div class="panel">
+    <h2>🤝 임원 겸직 비교 결과 <span style="font-weight:400;font-size:0.8rem;color:var(--text-dim)">${compareList.map(esc).join(" · ")} · 최근 4개 사업연도</span></h2>`;
+  if (overlaps.length) {
+    html += `<div class="callout">⚠️ <b>2개사 이상에 등기임원으로 등장한 인물 ${overlaps.length}명</b>
+      — 서로 무관해 보이는 회사들을 같은 사람이 오간 기록입니다. 아래는 DART 공시 사실이며 판정이 아닙니다.
+      <ul>` + overlaps.map(([nm, m]) =>
+        `<li><b>${esc(nm)}</b> — ${m.size}개사: ` +
+        [...m.entries()].map(([c, ys]) => `${esc(c)}(${ys.join(", ")})`).join(" · ") + `</li>`).join("") +
+      `</ul></div>`;
+  } else {
+    html += `<p class="dim" style="margin-top:0.5rem">최근 4개 사업연도 임원현황에서 2개사 이상에 등장하는 인물이 없습니다.
+      '겸직 없음'이 '연결 없음'을 뜻하지는 않습니다 — 인수자(CB·유상증자) 경로는 이 화면이 다루지 않습니다.</p>`;
+  }
+  html += `<details style="margin-top:0.8rem;font-size:0.88rem"><summary style="cursor:pointer;color:var(--accent);font-weight:700">회사별 전체 임원 명단 보기</summary>` +
+    [...rosters.entries()].map(([c, roster]) =>
+      `<p style="margin-top:0.6rem"><b>${esc(c)}</b> — ${roster.size}명<br><span class="dim" style="font-size:0.84rem">` +
+      [...roster.entries()].map(([nm, ys]) => `${esc(nm)}(${[...ys].sort().join(",")})`).join(" · ") +
+      `</span></p>`).join("") + `</details>`;
+  html += `<p class="dim" style="font-size:0.8rem;margin-top:0.8rem">
+    ※ 임원현황은 DART 사업보고서에 공시된 공개 기록이며, 이 화면은 그것을 실시간으로 겹쳐 보여줄 뿐입니다.
+    <strong>동명이인 가능성이 항상 있습니다</strong> — 생년·경력은 각 사 사업보고서 원문에서 확인하세요.
+    돈을 댄 사람(CB·유상증자 인수자) 차원까지 겹쳐 보려면 <a href="../#start">MCP 대화</a>의 find_actor_overlap을 사용하세요.
+    공개기록 행위자 레지스트리·연결망 시각화는 별도 운영(승인제)입니다.</p></div>`;
+  $("result").innerHTML = html;
+}
 
 /* ── DART 호출 ────────────────────────────────── */
 function ymd(d) { return d.toISOString().slice(0, 10).replace(/-/g, ""); }
@@ -425,7 +567,7 @@ function render(name, stockCode, corpCode, items, bgn, end) {
           <div class="sigs">구성 신호 taxonomy: ${p.signal_sequence.join(" + ")} · 관찰 윈도우 ${p.timeline_months}개월</div></div>`).join("") +
         `</div>`;
     }
-    html += listPanel(events);
+    html += listPanel(events, name);
   }
 
   // 심화 블록 — 추가 API 호출로 뒤이어 채움 (실패해도 위 결과는 유지)
@@ -603,15 +745,17 @@ function categoryPanel(catCount, total) {
         <span class="n">${n}</span></div>`).join("") + `</div></div>`;
 }
 
-function listPanel(events) {
+function listPanel(events, companyName) {
   const rows = events.slice(0, 40).map((e) =>
     `<tr><td class="date">${fmtDate(e.date)}</td>
       <td><a href="${dartUrl(e.rcept)}" target="_blank" rel="noopener">${esc(e.nm)}</a></td>
       <td>${e.signals.map((s) => `<span class="tag" style="background:var(--c${s.category})">${esc(s.label)}</span>`).join("")}</td></tr>`).join("");
   return `<div class="panel"><h2>신호 감지 공시 목록 <span style="font-weight:400;font-size:0.8rem;color:var(--text-dim)">최근순 · 최대 40건</span></h2>
     <table><thead><tr><th>날짜</th><th>공시명 (클릭 → 원문)</th><th>신호</th></tr></thead><tbody>${rows}</tbody></table>
-    <p class="dim" style="margin-top:0.7rem">더 깊은 분석(재무 이상 스캔, 자금 사용 대조, 행위자 추적)은
-    <a href="../#start">MCP를 설치해 AI와의 대화</a>로 이어가세요 — 이 페이지는 공시 제목 기반 신호까지만 봅니다.</p></div>`;
+    <p class="dim" style="margin-top:0.7rem">🤝 이 회사를 거쳐간 임원이 <strong>다른 회사에도 등장하는지</strong> 보려면
+    <a href="#" onclick="event.preventDefault(); openCompareWith(this.dataset.n)" data-n="${esc(companyName)}">겸직 비교 모드</a>로 —
+    더 깊은 분석(자금 사용 대조, 인수자 추적, 재무 이상 스캔)은
+    <a href="../#start">MCP 대화</a>로 이어가세요.</p></div>`;
 }
 
 boot().catch((e) => { $("status").className = "status err"; $("status").textContent = "초기화 실패: " + e.message; });

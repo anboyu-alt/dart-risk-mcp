@@ -15,6 +15,7 @@ const ALLOWED_ENDPOINTS = new Set([
   "company.json",
   "fnlttSinglAcnt.json",              // 주요 재무계정 (뷰어 심화 블록)
   "accnutAdtorNmNdAdtOpinion.json",   // 감사인·감사의견 (뷰어 심화 블록)
+  "exctvSttus.json",                  // 임원현황 (뷰어 겸직 비교 모드)
 ]);
 
 export default async function handler(req, res) {
