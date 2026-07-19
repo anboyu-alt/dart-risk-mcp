@@ -508,6 +508,11 @@ const R = Math.max(240, SPACING * Math.sqrt(GRAPH.nodes.length));
 // 브라운 지터 — 평형을 매 틱 미세 섭동해 PC·모바일 동일한 은은한 탄성 유지.
 // 0.35 → 평형에서 평균 ~0.2px/프레임 — 은은한 숨쉬기(격하지 않게).
 const JITTER = 0.35;
+// 활성 노드가 이 수를 넘으면 지터를 끈다 — 상시 섭동은 매 프레임 전체 SVG
+// 갱신을 강제해 최소 회사 수=2(전체 노출)에서 프레임 저하의 주범. 지터가
+// 꺼지면 저알파 수면 클램프로 노드가 실제 정지하고 시뮬레이션은 settled
+// 게이트로 완전히 쉰다(드래그·필터 등 alpha 재가열 시 자동 재개).
+const JITTER_MAX_N = 1500;
 
 // ── build node/link objects ──
 // 초기 배치를 원판 균등 분포로(반경 √uniform) — 시작부터 원형이라 초기 폭발 없음.
@@ -521,6 +526,9 @@ const links = GRAPH.links.map(l => ({ ...l, source: byId[l.source], target: byId
                          .filter(l => l.source && l.target);
 const adj = {}; nodes.forEach(n => adj[n.id] = new Set());
 links.forEach(l => { adj[l.source.id].add(l.target.id); adj[l.target.id].add(l.source.id); });
+// 노드별 인접 엣지 목록 — 호버 강조가 전체 엣지 루프 대신 이것만 토글한다.
+const incid = {}; nodes.forEach(n => incid[n.id] = []);
+links.forEach(l => { incid[l.source.id].push(l); incid[l.target.id].push(l); });
 // 방향성 인접맵 — out(투자한 대상)·in(투자·참여한 행위자). 상세 패널 양방향 표시용.
 // reach/세력망/physics는 무방향 adj 그대로 사용(방향 도입 금지).
 const outAdj = {}, inAdj = {};
@@ -712,6 +720,8 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 function applyView() {
   vp.setAttribute("transform", `translate(${view.x},${view.y}) scale(${view.k})`);
   svg.classList.toggle("zoomed", view.k >= 1.7);
+  // 선택 강조는 화면좌표 오버레이 — 시뮬 수면 중에도 팬/줌을 즉시 따라가야 한다
+  updateSelEmph();
 }
 function zoomAt(cx, cy, factor) {
   const nk = clamp(view.k * factor, 0.2, 6);
@@ -744,28 +754,49 @@ function rebuildSim() {
   simNodes = nodes.filter(n => (!n._fh && !n._th) || reachSet.has(n.id));
   simLinks = links.filter(l => (!l._fh && !l._th) ||
     (reachSet.has(l.source.id) && reachSet.has(l.target.id)));
+  // 활성 집합이 바뀌면 1회 전체 draw + 수면 해제 — 재노출된 엣지가 숨김 중
+  // 움직인 끝점의 stale 좌표로 그려지는 것 방지(시점 스크러버 등 alpha 무재가열 경로 포함)
+  needFullDraw = true;
+  settled = false;
 }
 let dragging = null, dragMoved = false, panning = false, panStart = null;
 let alpha = 0.35;  // 원판 균등 배치라 폭발적 초기 정렬 불필요 — 낮게 시작해 초기 과활동 방지
+let settled = false;   // 수면 상태 — 지터 OFF(대형 그래프)에서 전 노드 정지 시 tick 중단
 function tick() {
   const k = alpha;
+  const jitterOn = !reduce && simNodes.length <= JITTER_MAX_N;
   // 지터를 줌 역비례로 — 어느 배율에서든 화면 기준 미세 진폭이 일정(축소 fit에서도 보임)
   const jAmp = JITTER / Math.max(view.k, 0.25);
-  for (let i = 0; i < simNodes.length; i++) {
-    const a = simNodes[i];
-    for (let j = i + 1; j < simNodes.length; j++) {
-      const b = simNodes[j];
-      let dx = a.x - b.x, dy = a.y - b.y, d2 = dx*dx + dy*dy || 1;
-      if (d2 > 90000) continue;
-      const f = (3000 * k) / d2;
-      const d = Math.sqrt(d2); dx /= d; dy /= d;
-      a.vx += dx*f; a.vy += dy*f; b.vx -= dx*f; b.vy -= dy*f;
-      // 충돌 분리 — 반경합+6보다 가까우면 alpha 무관 분리력(비연결 노드 겹침 제거)
-      const minD = a.r + b.r + 6;
-      if (d < minD) {
-        const push = (minD - d) * 0.15;   // 상시 성분 — 세면 정착 후에도 들썩인다
-        a.vx += dx*push; a.vy += dy*push; b.vx -= dx*push; b.vy -= dy*push;
-      }
+  // 반발력·충돌 분리 — 컷오프(300px)와 같은 셀의 공간 격자로 이웃 셀만 검사.
+  // O(N²) 전쌍(4천 노드 ≈ 프레임당 750만 쌍)이 최소 회사 수=2에서 버벅임의
+  // 주범이라 격자로 대체. 힘 계산식은 기존과 동일 — 레이아웃 결과 불변.
+  const CELL = 300, GOFF = 2048, GDIM = 4096;
+  const grid = new Map();
+  for (const n of simNodes) {
+    const key = (Math.floor(n.x / CELL) + GOFF) * GDIM + (Math.floor(n.y / CELL) + GOFF);
+    const cell = grid.get(key);
+    if (cell) cell.push(n); else grid.set(key, [n]);
+  }
+  const pair = (a, b) => {
+    let dx = a.x - b.x, dy = a.y - b.y, d2 = dx*dx + dy*dy || 1;
+    if (d2 > 90000) return;
+    const f = (3000 * k) / d2;
+    const d = Math.sqrt(d2); dx /= d; dy /= d;
+    a.vx += dx*f; a.vy += dy*f; b.vx -= dx*f; b.vy -= dy*f;
+    // 충돌 분리 — 반경합+6보다 가까우면 alpha 무관 분리력(비연결 노드 겹침 제거)
+    const minD = a.r + b.r + 6;
+    if (d < minD) {
+      const push = (minD - d) * 0.15;   // 상시 성분 — 세면 정착 후에도 들썩인다
+      a.vx += dx*push; a.vy += dy*push; b.vx -= dx*push; b.vy -= dy*push;
+    }
+  };
+  // 셀 내 전쌍 + 전방 4개 이웃 셀 — 각 쌍을 정확히 1회 검사
+  for (const [key, cell] of grid) {
+    for (let i = 0; i < cell.length; i++)
+      for (let j = i + 1; j < cell.length; j++) pair(cell[i], cell[j]);
+    for (const off of [GDIM, GDIM + 1, 1, -GDIM + 1]) {   // (1,0)(1,1)(0,1)(-1,1)
+      const nb = grid.get(key + off);
+      if (nb) for (const a of cell) for (const b of nb) pair(a, b);
     }
   }
   for (const l of simLinks) {
@@ -778,6 +809,7 @@ function tick() {
     const f = (d - ideal) * 0.04 * k * str; dx /= d; dy /= d;
     a.vx += dx*f; a.vy += dy*f; b.vx -= dx*f; b.vy -= dy*f;
   }
+  let movedN = 0;   // 이번 틱에 실제 움직인 노드 수 — 수면 판정 + 부분 draw
   for (const n of simNodes) {
     // 라디얼 호밍 — 중심 인력 대신 노드별 목표 반경(home)으로 극약한 복원.
     // 중심 인력은 전부를 가운데로 모아 쏠림을 만들지만, 호밍은 원판 전체에
@@ -791,14 +823,20 @@ function tick() {
       const bf = (br - R) * 0.03;
       n.vx -= (bx / br) * bf; n.vy -= (by / br) * bf;
     }
-    if (n === dragging) continue;
-    // 브라운 지터 — alpha 무관 상시 섭동. reduce 모드는 정적이라 제외.
-    if (!reduce) { n.vx += (Math.random() - .5) * jAmp; n.vy += (Math.random() - .5) * jAmp; }
+    if (n === dragging) { n._mv = 1; movedN++; continue; }
+    // 브라운 지터 — alpha 무관 상시 섭동. reduce 모드·대형 그래프는 제외.
+    if (jitterOn) { n.vx += (Math.random() - .5) * jAmp; n.vy += (Math.random() - .5) * jAmp; }
     // 저알파 수면 — 정착 후에는 감쇠를 강화하고 미소 속도를 끊어, 충돌·경계
     // 같은 상시력의 미세 진동이 영구히 들썩이지 않게 한다(지터만 은은히 남음).
     const damp = k <= 0.045 ? 0.70 : 0.80;
     n.vx *= damp; n.vy *= damp;
-    if (k <= 0.045 && n.vx * n.vx + n.vy * n.vy < 0.0009) { n.vx = 0; n.vy = 0; }
+    // 수면 임계 — 지터 OFF(대형 그래프)에서는 0.2px/틱 미만을 정지로 간주.
+    // 충돌·호밍 상시력의 미세 진동(0.03~0.2px)이 수면 진입을 영구히 막아
+    // tick·DOM 갱신이 멈추지 않던 문제 방지. 0.2px는 시각적으로 정지와 동일.
+    const sleepV2 = jitterOn ? 0.0009 : 0.04;
+    if (k <= 0.045 && n.vx * n.vx + n.vy * n.vy < sleepV2) { n.vx = 0; n.vy = 0; }
+    if (n.vx === 0 && n.vy === 0) { n._mv = 0; continue; }   // 정지 노드 — DOM 갱신 생략
+    n._mv = 1; movedN++;
     n.x += n.vx; n.y += n.vy;
     // 하드 클램프 — 적분 후에도 R을 넘으면 경계로 되돌리고 바깥 속도 성분 제거.
     // 수렴 중·라이브 어떤 상태에서도 원 밖 노드가 물리적으로 불가능(미아 방지).
@@ -810,21 +848,32 @@ function tick() {
     }
   }
   alpha *= 0.985; if (alpha < 0.04) alpha = 0.04;
+  // 수면 — 지터 OFF에서 전 노드 정지 + 저알파면 tick 자체를 멈춘다(loop 게이트).
+  // 드래그·필터·리사이즈 등 alpha 재가열(>0.045) 시 loop가 자동으로 깨운다.
+  settled = !dragging && movedN === 0 && alpha <= 0.045;
   draw();
 }
+let needFullDraw = true;   // rebuildSim 직후 1회 전체 갱신 — 재노출 요소의 좌표 동기화
 function draw() {
-  // 활성(시뮬레이션 중) 집합만 갱신 — 숨김 요소는 움직이지 않아 좌표가 이미 맞다
+  // 활성(시뮬레이션 중) 집합만 갱신 — 숨김 요소는 움직이지 않아 좌표가 이미 맞다.
+  // 평시에는 이번 틱에 움직인(_mv) 노드·그 인접 엣지만 써서 DOM 갱신을 최소화.
+  const full = needFullDraw; needFullDraw = false;
   for (const l of simLinks) {
+    if (!full && !l.source._mv && !l.target._mv) continue;
     const e = l._el;
     e.setAttribute("x1", l.source.x); e.setAttribute("y1", l.source.y);
     e.setAttribute("x2", l.target.x); e.setAttribute("y2", l.target.y);
   }
   for (const el of nodeEls) {
     const n = el.n;
+    if (!full && !n._mv) continue;
     // 활성 노드 + reach로 노출된(숨김이지만 물리 활성) 노드 모두 좌표 갱신
     if ((!n._fh && !n._th) || reachSet.has(n.id))
       el.g.setAttribute("transform", `translate(${n.x},${n.y})`);
   }
+  updateSelEmph();
+}
+function updateSelEmph() {
   // 선택 노드 화면 강조 — 노드의 화면좌표(월드→스크린)로 후광·헤일로·이름 pill을 배치.
   // 헤일로 r은 노드 화면 반경에 여유(+10)를 더하되 최소 14px(작은 노드도 후광으로 도드라지게).
   if (focused && byId[focused]) {
@@ -847,9 +896,13 @@ function draw() {
     selEmph.style.display = "none";
   }
 }
-// 시뮬은 30fps로 스로틀 — 대형 캔버스(PC)에서 정착 구간 CPU 반감, 체감 차이 없음
+// 시뮬은 30fps로 스로틀 — 대형 캔버스(PC)에서 정착 구간 CPU 반감, 체감 차이 없음.
+// settled(대형 그래프 수면)면 tick 생략 — alpha 재가열(>0.045)이 자동으로 깨운다.
 let raf, _fr = 0;
-function loop() { if ((_fr++ & 1) === 0) tick(); raf = requestAnimationFrame(loop); }
+function loop() {
+  if ((alpha > 0.045 || !settled) && (_fr++ & 1) === 0) tick();
+  raf = requestAnimationFrame(loop);
+}
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 // reduce(모션 최소화) 모드도 비동기 루프 사용 — 이전의 500틱 '동기' 사전수렴은
 // 대형 그래프에서 메인스레드를 십수 초 블록하는 주범이었다(3천 노드 ≈ 20초+).
@@ -874,18 +927,29 @@ function highlight(id, full = true) {
 }
 // 호버 툴팁 없음 — 노드 정보는 모바일과 동일하게 클릭(상세 패널)으로만.
 // 호버는 연결 하이라이트 + (이름표시 OFF일 때) 해당 노드 이름만 노출.
+// 인접 엣지(incid)만 토글 — 이전의 전 노드·엣지 루프는 밀집 그래프 위에서
+// 마우스만 움직여도 초당 수만 회 classList 연산을 만들어 프레임을 깎았다.
+let hovEdges = [];
+function clearHovEdges() {
+  for (const l of hovEdges) l._el.classList.remove("hi");
+  hovEdges = [];
+}
 nodeEls.forEach(el => {
   const { g, n } = el;
   g.addEventListener("pointerenter", () => {
     if (dragging || panning) return;
     ensureLabel(el);                        // 호버 라벨 지연 생성
     g.classList.add("hov");
-    if (!focused) highlight(n.id, false);   // 선택 없을 때만 — 연결선 강조(디밍 없음)
+    if (!focused) {                         // 선택 없을 때만 — 연결선 강조(디밍 없음)
+      clearHovEdges();
+      hovEdges = incid[n.id];
+      for (const l of hovEdges) l._el.classList.add("hi");
+    }
   });
   g.addEventListener("pointerleave", () => {
     g.classList.remove("hov");
     if (dragging || panning) return;
-    if (!focused) highlight(null);          // 선택 중이면 선택 하이라이트 유지
+    if (!focused) clearHovEdges();          // 선택 중이면 선택 하이라이트 유지
   });
 });
 
