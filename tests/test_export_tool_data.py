@@ -44,6 +44,8 @@ class TestBuildSignalsData(unittest.TestCase):
         # 카테고리 라벨 맵 (1~8 + 0=기타)
         self.assertEqual(self.data["categories"]["1"], "CB/채권")
         self.assertEqual(self.data["categories"]["8"], "위기/부실")
+        # '시장조작'은 단정적 표현이라 공개 라벨은 '시장감시'로 (2026-07 UX 결정)
+        self.assertEqual(self.data["categories"]["7"], "시장감시")
 
     def test_category_uses_heaviest_taxonomy(self):
         # 복수 taxonomy 매핑 신호는 무거운 쪽(높은 카테고리 번호)을 대표로.

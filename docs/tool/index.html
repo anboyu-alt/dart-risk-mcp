@@ -62,6 +62,8 @@
   .navitem.disabled { opacity: 0.38; cursor: default; }
   .navitem.disabled:hover { background: transparent; }
   .navitem .no { font-family: var(--mono); font-size: 11px; color: #5e6a78; }
+  .navitem.sub { padding-left: 40px; font-size: 13px; }
+  .navitem.sub .no { font-size: 12px; }
   .railfoot { margin-top: auto; padding: 16px 22px 0; font-family: var(--mono);
     font-size: 10.5px; color: var(--faint); letter-spacing: 0.1em; line-height: 1.9; }
   .railfoot .lv { color: var(--green); }
@@ -253,10 +255,10 @@
     <div class="brand"><span class="live"></span>DART <b>RV</b></div>
     <div class="navitem active" id="nav-scan" onclick="showScreen('scan')"><span class="no">01</span>스캔 입력</div>
     <div class="navitem disabled" id="nav-feed" onclick="showScreen('feed')"><span class="no">02</span>공시 피드</div>
-    <div class="navitem disabled" id="nav-detail" onclick="showScreen('detail')"><span class="no">03</span>공시 상세</div>
-    <div class="navitem disabled" id="nav-dash" onclick="showScreen('dash')"><span class="no">04</span>결과 대시보드</div>
-    <div class="navitem" id="nav-compare" onclick="showScreen('compare')"><span class="no">05</span>임원 겸직 비교</div>
-    <div class="raillinks"><a href="../">프로젝트 소개</a><a href="https://github.com/anboyu-alt/dart-risk-mcp">GitHub</a></div>
+    <div class="navitem sub disabled" id="nav-detail" onclick="showScreen('detail')"><span class="no">└</span>공시 상세</div>
+    <div class="navitem disabled" id="nav-dash" onclick="showScreen('dash')"><span class="no">03</span>결과 대시보드</div>
+    <div class="navitem" id="nav-compare" onclick="showScreen('compare')"><span class="no">04</span>임원 겸직 비교</div>
+    <div class="raillinks"><a href="https://anboyu-alt.github.io/dart-risk-mcp/" target="_blank" rel="noopener">프로젝트 소개 ↗</a><a href="https://github.com/anboyu-alt/dart-risk-mcp" target="_blank" rel="noopener">GitHub ↗</a></div>
     <div class="railfoot">SESSION · KST<br><span id="clock">—</span><br><span class="lv">● SIGNAL FEED LIVE</span></div>
   </nav>
 
@@ -271,6 +273,21 @@
     <section class="screen on" id="scr-scan">
       <h1 class="screen-title">종목 스캔</h1>
       <p class="screen-sub">종목을 입력하면 최근 공시를 훑어 신호를 감지합니다. 사실 관찰이며 판정이 아닙니다.</p>
+
+      <!-- 처음 온 사람을 위한 소개 -->
+      <div class="panel" style="max-width:720px">
+        <div class="slabel">▍WHAT IS THIS — 이 페이지가 하는 일</div>
+        <p style="font-size:0.92rem">
+          한국 상장사의 이름을 입력하면, 금융감독원 전자공시(DART)에서 그 회사의 최근 공시를
+          <strong>그 자리에서 실시간으로 수집</strong>해 불공정거래와 상관이 높은
+          위험 신호(횡령·거래정지·무상감자·CB 반복 발행 등 51종)를 타임라인과 해설로 보여줍니다.
+        </p>
+        <ul class="dim" style="font-size:0.86rem;margin:0.5rem 0 0 1.2rem">
+          <li>조회에는 <strong style="color:var(--tx)">본인의 무료 DART API 키</strong>가 필요합니다 — 키는 이 브라우저에만 저장되고, 서버에 아무것도 남지 않습니다</li>
+          <li>점수·등급·매수 추천은 없습니다 — <strong style="color:var(--tx)">공시라는 공개 기록의 사실 표기</strong>와 원문 링크만 제공합니다</li>
+          <li>이 페이지는 오픈소스 분석 엔진 <a href="https://anboyu-alt.github.io/dart-risk-mcp/" target="_blank" rel="noopener">dart-risk-mcp</a>의 웹 축약판입니다 — AI와의 대화(MCP)에서는 원문 열람·자금 추적까지 더 깊이 들어갑니다</li>
+        </ul>
+      </div>
 
       <!-- 키 설정 (최초 1회) -->
       <div class="panel amber" id="setupPanel" style="max-width:720px">
@@ -770,7 +787,7 @@ function renderDash() {
           <div class="dim" style="margin-top:0.4rem">${esc(heaviest.prose || "")}</div>
         </div>
         ${crisisEvents.length ? `<div class="callout"><div class="slabel red" style="margin-bottom:8px">▍WATCH</div>
-          <b>시장조작·위기/부실 카테고리 공시 ${crisisEvents.length}건 관찰</b> — 거래정지·상장폐지 관련·횡령 등 가장 무거운 유형입니다.
+          <b>시장감시·위기/부실 카테고리 공시 ${crisisEvents.length}건 관찰</b> — 거래정지·상장폐지 관련·횡령 등 가장 무거운 유형입니다.
           <ul>` + crisisEvents.slice(0, 6).map((e) =>
             `<li><a href="${dartUrl(e.rcept)}" target="_blank" rel="noopener" style="color:var(--tx)">${esc(fmtDate(e.date))} · ${esc(e.nm)}</a></li>`).join("") +
           (crisisEvents.length > 6 ? `<li>… 외 ${crisisEvents.length - 6}건 (공시 피드)</li>` : "") +
@@ -941,7 +958,7 @@ function timelinePanel(events, bgn, end) {
       <div class="mm" style="font-size:11px">${fmtDate(ymd(bgn))} — ${fmtDate(ymd(end))}</div></div>
     ${density}
     <div class="chartwrap" style="margin-top:14px"><svg viewBox="0 0 ${W} ${H}" width="100%" style="min-width:640px">${grid}${lanes}${dots}</svg></div>
-    <div class="legend">${legend}<span style="margin-left:auto;color:var(--amber);font-family:var(--mono);font-size:10.5px">▍ 큰 점 = 시장조작·위기/부실 · 점 클릭 → 원문</span></div></div>`;
+    <div class="legend">${legend}<span style="margin-left:auto;color:var(--amber);font-family:var(--mono);font-size:10.5px">▍ 큰 점 = 시장감시·위기/부실 · 점 클릭 → 원문</span></div></div>`;
 }
 
 /* ── 심화 블록 (재무·지분·감사) ─────────────────── */
