@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <title>행위자 연결망 — DART 자금조달 공시</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="robots" content="noindex, nofollow, noarchive">
@@ -767,10 +768,14 @@ function tick() {
   const jitterOn = !reduce && simNodes.length <= JITTER_MAX_N;
   // 지터를 줌 역비례로 — 어느 배율에서든 화면 기준 미세 진폭이 일정(축소 fit에서도 보임)
   const jAmp = JITTER / Math.max(view.k, 0.25);
-  // 반발력·충돌 분리 — 컷오프(300px)와 같은 셀의 공간 격자로 이웃 셀만 검사.
+  // 반발력·충돌 분리 — 컷오프와 같은 셀 크기의 공간 격자로 이웃 셀만 검사.
   // O(N²) 전쌍(4천 노드 ≈ 프레임당 750만 쌍)이 최소 회사 수=2에서 버벅임의
-  // 주범이라 격자로 대체. 힘 계산식은 기존과 동일 — 레이아웃 결과 불변.
-  const CELL = 300, GOFF = 2048, GDIM = 4096;
+  // 주범이라 격자로 대체. 힘 계산식은 기존과 동일.
+  // 컷오프는 소형 300px / 대형 150px — 실데이터는 허브 밀집(중앙 클럼프)으로
+  // 300px 셀 하나에 수백 노드가 몰려 셀 내부가 도로 O(m²)이 된다. 150px이면
+  // 밀집부 쌍 수 ~1/4. 원거리 반발(150~300px, f=3000k/d²≤0.13k)은 스프링·
+  // 호밍 대비 미미해 대형 레이아웃 영향이 작다.
+  const CELL = jitterOn ? 300 : 150, CUT2 = CELL * CELL, GOFF = 2048, GDIM = 4096;
   const grid = new Map();
   for (const n of simNodes) {
     const key = (Math.floor(n.x / CELL) + GOFF) * GDIM + (Math.floor(n.y / CELL) + GOFF);
@@ -779,7 +784,7 @@ function tick() {
   }
   const pair = (a, b) => {
     let dx = a.x - b.x, dy = a.y - b.y, d2 = dx*dx + dy*dy || 1;
-    if (d2 > 90000) return;
+    if (d2 > CUT2) return;
     const f = (3000 * k) / d2;
     const d = Math.sqrt(d2); dx /= d; dy /= d;
     a.vx += dx*f; a.vy += dy*f; b.vx -= dx*f; b.vy -= dy*f;
@@ -896,11 +901,18 @@ function updateSelEmph() {
     selEmph.style.display = "none";
   }
 }
-// 시뮬은 30fps로 스로틀 — 대형 캔버스(PC)에서 정착 구간 CPU 반감, 체감 차이 없음.
+// 시뮬은 기본 30fps(2프레임당 1틱) 스로틀 — 정착 구간 CPU 반감, 체감 차이 없음.
 // settled(대형 그래프 수면)면 tick 생략 — alpha 재가열(>0.045)이 자동으로 깨운다.
-let raf, _fr = 0;
+// 적응 스트라이드 — 대형 그래프에서 틱이 무거우면(>25/45ms) 3~4프레임당 1틱으로
+// 낮춰, 수렴 중에도 팬·줌·호버가 도는 여유 프레임을 확보(수렴은 조금 느려짐).
+let raf, _fr = 0, _stride = 2;
 function loop() {
-  if ((alpha > 0.045 || !settled) && (_fr++ & 1) === 0) tick();
+  if ((alpha > 0.045 || !settled) && (_fr++ % _stride) === 0) {
+    const t0 = performance.now();
+    tick();
+    const ms = performance.now() - t0;
+    _stride = ms > 45 ? 4 : ms > 25 ? 3 : 2;
+  }
   raf = requestAnimationFrame(loop);
 }
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
