@@ -28,6 +28,10 @@
 
 > 파이썬을 직접 설치할 필요 없이 Claude Desktop이 알아서 처리합니다.
 
+![Claude Desktop 확장 프로그램 설치 화면](docs/images/install/a1-extension-drop.png)
+
+*Claude Desktop → 설정 → 확장 프로그램. 이 화면에 `.mcpb` 파일을 끌어다 놓으면 설치됩니다.*
+
 ### 방법 B — 터미널로 설치 (Cursor·Windsurf·Claude Code 등 그 외 클라이언트)
 
 처음이라도 순서대로만 따라오면 약 10분이면 끝납니다.
@@ -49,6 +53,10 @@
 
 이 창이 앞으로 명령어를 입력할 곳입니다. **채팅창이 아니라 이 창입니다.**
 
+![명령 프롬프트(cmd) 창](docs/images/install/b1-terminal.png)
+
+*이렇게 검은 창이 뜨면 준비 완료. (Windows 예시 — `cmd`든 `powershell`이든 괜찮습니다.)*
+
 ---
 
 ### 2단계 — 파이썬(Python)이 설치돼 있는지 확인
@@ -60,6 +68,8 @@
 ```bash
 python --version
 ```
+
+![python --version 입력 화면](docs/images/install/b2-python-version.png)
 
 - `Python 3.11.x` 처럼 **3.11 이상** 숫자가 나오면 → 통과. **3단계로 가세요.**
 - `Python 2.x` 가 나오거나, `'python'은(는) 내부 또는 외부 명령... 이 아닙니다` / `command not found` 같은 오류가 나오면 → 아직 없는 것입니다. 아래에서 설치하세요.
@@ -96,9 +106,13 @@ DART(금융감독원 전자공시)에서 데이터를 가져오려면 본인 전
 pip install dart-risk-mcp
 ```
 
+![pip install dart-risk-mcp 입력 화면](docs/images/install/b3-pip-install.png)
+
 ```bash
 python -m dart_risk_mcp.setup
 ```
+
+![python -m dart_risk_mcp.setup 입력 화면](docs/images/install/b4-setup.png)
 
 - 첫 줄(`pip install ...`)은 도구를 내려받아 설치합니다. 글자가 주르륵 지나가다 멈추면 완료된 것입니다.
 - 둘째 줄(`python -m dart_risk_mcp.setup`)은 컴퓨터에 깔린 AI 프로그램(Claude Desktop 등)을 **자동으로 찾아 연결**해 줍니다. 중간에 **"API 키를 입력하세요"** 라고 물으면, 3단계에서 복사해 둔 키를 붙여넣고 Enter를 누르세요.
@@ -124,6 +138,10 @@ python -m dart_risk_mcp.setup
    > **"삼성전자 최근 1년 공시 흐름 요약해줘"**
 
 도구 이름을 외울 필요가 전혀 없습니다. 질문만 하면 AI가 알아서 알맞은 도구를 골라 씁니다. 잘 안 된다면 아래 "자주 막히는 부분"을 보세요.
+
+![도구 사용 권한 허용 화면](docs/images/install/success-permission.png)
+
+*질문하면 이렇게 도구 사용 권한을 묻는 창이 뜹니다. **"항상 허용"**을 누르면 다음부터 묻지 않습니다 — 이 화면이 보이면 설치 성공입니다.*
 
 ---
 

@@ -627,82 +627,12 @@
       <li>뜨는 칸에 <strong>DART API 키</strong>를 붙여넣으면 끝 — 파이썬도 터미널도 필요 없습니다. (키 발급은 아래 3단계, 무료 2분)</li>
     </ol>
   </div>
-  <p style="font-size:0.9rem;color:var(--text-dim);margin:0 0 1.3rem;">Cursor·Windsurf·Claude Code 등 다른 클라이언트를 쓰거나 터미널이 편하다면 <strong>방법 B</strong>로 설치하세요 ↓</p>
+  <p style="font-size:0.95rem;color:var(--text-dim);margin:0 0 1rem;">Cursor·Windsurf·Claude Code 등 다른 클라이언트를 쓰거나 터미널이 편하다면 <strong>방법 B(터미널 설치)</strong>를 쓰세요.</p>
 
-  <div style="background:var(--warn-bg);border:1px solid var(--warn-border);border-left:4px solid var(--warn-border);border-radius:12px;padding:1rem 1.2rem;margin:0.6rem 0 1.3rem;font-size:0.93rem;line-height:1.65;">
-    <strong>⛔ 딱 하나만 기억하세요</strong><br>
-    아래에 나오는 <code>pip install …</code> 같은 명령어는
-    <strong>Claude·ChatGPT 같은 AI 채팅창에 입력하는 게 아닙니다.</strong>
-    컴퓨터의 <strong>“터미널”</strong>(명령어를 입력하는 검은 창)에 입력하는 것입니다.
-    채팅창에 붙여넣으면 아무 일도 일어나지 않아요. 터미널 여는 법은 바로 아래 <strong>1단계</strong>에 있습니다.
-  </div>
-
-  <div class="steps">
-    <div class="step">
-      <h3>터미널(명령어 입력하는 창) 열기</h3>
-      <p><strong>Windows</strong> — 키보드에서 <code>⊞ Windows</code> 키를 누르고 <code>powershell</code>이라고 입력한 뒤 Enter.<br>
-      <strong>Mac</strong> — <code>⌘ Command + Space</code>로 검색을 열고 <code>터미널</code>이라고 입력한 뒤 Enter.<br>
-      뜨는 창이 앞으로 명령어를 입력할 곳입니다 — <strong>채팅창이 아니라 이 창</strong>입니다.</p>
-    </div>
-    <div class="step">
-      <h3>파이썬(Python)이 있는지 확인</h3>
-      <p>이 도구는 파이썬 위에서 돌아갑니다. 터미널에 아래를 그대로 입력하고 Enter:</p>
-      <pre><code>python --version</code></pre>
-      <p><code>Python 3.11</code> 이상이 나오면 통과 — 3단계로. 오류가 나거나 숫자가 낮으면 아래를 펼쳐 설치하세요.</p>
-      <details>
-        <summary>👉 파이썬 설치하는 법 (오류가 났다면 펼치기)</summary>
-        <p><a href="https://www.python.org/downloads/">python.org/downloads</a>에서 노란 다운로드 버튼을 눌러 설치.
-        <strong>⚠️ Windows에서는 설치 첫 화면 맨 아래의 <code>Add python.exe to PATH</code> 체크박스에 반드시 체크</strong>한 뒤 <code>Install Now</code>를 누르세요(안 하면 나중에 명령을 못 찾습니다).
-        설치 후 <strong>터미널을 껐다 다시 열고</strong> <code>python --version</code>을 다시 확인.
-        Mac에서 <code>python</code>이 안 되면 <code>python3</code>로 시도하고, 이후 나오는 <code>python</code>을 전부 <code>python3</code>로 바꿔 입력하면 됩니다.</p>
-      </details>
-    </div>
-    <div class="step">
-      <h3>DART API 키 무료 발급 (2분)</h3>
-      <p><a href="https://opendart.fss.or.kr">opendart.fss.or.kr</a> → 오픈API 신청 → 인증키 신청 →
-      이메일 인증만 하면 <strong>길고 복잡한 문자열</strong> 하나(=API 키)를 즉시 받습니다.
-      메모장에 잠깐 복사해 두세요. 하루 2만 건까지 무료 — 개인 사용에 충분합니다.</p>
-    </div>
-    <div class="step">
-      <h3>설치 + 자동 등록</h3>
-      <p>터미널로 돌아와 아래 두 줄을 <strong>한 줄씩</strong> 입력하고 각각 Enter:</p>
-      <pre><code>pip install dart-risk-mcp
-python -m dart_risk_mcp.setup</code></pre>
-      <p>첫 줄이 도구를 설치하고, 둘째 줄이 Claude Desktop·Claude Code 등 설치된 AI 프로그램을 찾아 자동 등록합니다.
-      중간에 <strong>“API 키를 입력하세요”</strong>라고 물으면 3단계의 키를 붙여넣고 Enter
-      (붙여넣기: Windows는 마우스 오른쪽 클릭, Mac은 <code>⌘ V</code>). 기존 MCP 설정은 건드리지 않습니다.</p>
-      <details>
-        <summary>❓ <code>pip</code>에서 오류가 나거나 · JSON을 직접 편집하고 싶다면</summary>
-        <p><code>'pip'은(는) … 명령이 아닙니다</code> → <code>python -m pip install dart-risk-mcp</code>로 시도.
-        Mac에서 <code>python</code>이 안 됐다면 <code>pip3</code>·<code>python3 -m …</code>로.
-        권한 오류(<code>Permission denied</code>)면 끝에 <code> --user</code>를 붙이세요.</p>
-        <p>수동 설정(설정 파일 직접 편집)은 <code>발급받은_키</code> 자리에 3단계 키를 넣습니다:</p>
-        <pre><code>{
-  "mcpServers": {
-    "dart-risk": {
-      "command": "python",
-      "args": ["-m", "dart_risk_mcp"],
-      "env": { "DART_API_KEY": "발급받은_키" }
-    }
-  }
-}</code></pre>
-        <p>uv 사용자는 <code>"command": "uvx", "args": ["dart-risk-mcp"]</code>로 대체할 수 있습니다.</p>
-      </details>
-    </div>
-    <div class="step">
-      <h3>AI 프로그램 재시작 후, 한국어로 질문</h3>
-      <p>Claude Desktop(또는 쓰는 AI 프로그램)을 <strong>완전히 껐다 다시 켠 뒤</strong> 채팅창에 평소처럼 물어보세요:</p>
-      <pre><code>"삼성전자 최근 1년 공시 흐름 요약해줘"
-"○○홀딩스 자본 이벤트 리듬 추적해줘"
-"이 다섯 회사에 공통으로 등장하는 인물 있어?"</code></pre>
-      <p>도구 이름을 몰라도 됩니다 — AI가 질문에 맞는 도구를 알아서 고릅니다.</p>
-      <details>
-        <summary>🛠 안 될 때 (펼치기)</summary>
-        <p><strong>“그런 도구가 없다”</strong>고 하면 → AI 프로그램을 완전히 껐다 켰는지 확인(백그라운드에 남아 있으면 재시작이 안 된 것).
-        <strong>“DART_API_KEY가 없다”</strong>는 오류면 → <code>python -m dart_risk_mcp.setup</code>을 다시 실행해 키를 넣으세요.
-        그래도 안 되면 <a href="https://github.com/anboyu-alt/dart-risk-mcp/issues">GitHub 이슈</a>에 오류 메시지를 그대로 올려 주시면 도와드립니다.</p>
-      </details>
-    </div>
+  <div style="border:1px solid var(--border);border-radius:12px;padding:1.2rem 1.4rem;">
+    <strong>방법 B — 터미널로 설치 (스크린샷 포함 단계별 가이드)</strong>
+    <p style="font-size:0.92rem;color:var(--text-dim);margin:0.5rem 0 1rem;line-height:1.75;">파이썬 확인 → DART API 키 무료 발급 → <code>pip install</code> → 자동 등록까지, 컴퓨터가 처음이라도 그대로 따라올 수 있게 <strong>스크린샷과 함께</strong> GitHub README에 자세히 정리해 뒀습니다.</p>
+    <a class="btn primary" href="https://github.com/anboyu-alt/dart-risk-mcp#설치하기">📖 GitHub README 설치 가이드 보기 →</a>
   </div>
 </section>
 
