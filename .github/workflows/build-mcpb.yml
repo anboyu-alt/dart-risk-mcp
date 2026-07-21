@@ -1,0 +1,44 @@
+name: Build MCPB bundle
+
+# 원클릭 설치용 .mcpb(Desktop Extension) 번들을 만들어 릴리스에 첨부합니다.
+# - 릴리스 발행 시: 번들을 packing해 해당 릴리스에 자동 첨부
+# - 수동 실행(workflow_dispatch): 번들을 워크플로 아티팩트로만 생성(검증용)
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install MCPB CLI
+        run: npm install -g @anthropic-ai/mcpb
+
+      - name: Validate manifest
+        run: mcpb validate extension/manifest.json
+
+      - name: Pack bundle
+        run: mcpb pack extension dart-risk-mcp.mcpb
+
+      - name: Upload bundle as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dart-risk-mcp-mcpb
+          path: dart-risk-mcp.mcpb
+
+      - name: Attach bundle to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" dart-risk-mcp.mcpb --clobber

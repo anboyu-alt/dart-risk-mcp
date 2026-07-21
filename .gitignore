@@ -13,3 +13,6 @@ venv/
 tmp/
 tmp/network.html
 pytest-of-*/
+
+# MCPB build output (CI가 릴리스에 생성·첨부)
+*.mcpb

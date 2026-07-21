@@ -1,0 +1,17 @@
+# MCPB(uv 런타임) 확장용 프로젝트 정의.
+#
+# 이 파일은 PyPI에 배포하지 않습니다. Claude Desktop이 확장을 실행할 때
+# `uv run`이 이 pyproject를 읽어 아래 의존성으로 격리 환경을 만들고 src/server.py를 실행합니다.
+# 실제 서버 로직은 PyPI 패키지 dart-risk-mcp가 제공합니다(버전 고정 → 재현성).
+[project]
+name = "dart-risk-mcp-extension"
+version = "1.6.0"
+description = "MCPB(uv) launcher for dart-risk-mcp"
+requires-python = ">=3.11"
+dependencies = [
+    "dart-risk-mcp==1.6.0",
+]
+
+# 이 프로젝트 자체는 패키지가 아니라 런처일 뿐 — uv가 빌드/설치를 시도하지 않도록 함.
+[tool.uv]
+package = false

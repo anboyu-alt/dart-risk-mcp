@@ -1,0 +1,47 @@
+{
+  "manifest_version": "0.4",
+  "name": "dart-risk-mcp",
+  "display_name": "DART 리스크 분석 (불공정거래 위험 모니터링)",
+  "version": "1.6.0",
+  "description": "공시 기반 불공정거래 위험 모니터링 — 금융감독원 전자공시(DART)에서 위험 신호를 읽는 MCP 서버",
+  "long_description": "DART 전자공시를 흐름과 연결로 읽어 불공정거래 위험 신호를 표면화합니다. 자본 이벤트 리듬, 회사마다 이름을 바꾸는 투자조합 뒤의 같은 임원, 조달 명분과 다른 곳으로 흘러간 자금 등을 26개 도구로 조회합니다. 점수·등급을 매기지 않고 사실만 표기합니다. DART API 키(무료)가 필요합니다.",
+  "author": {
+    "name": "anboyu-alt",
+    "url": "https://github.com/anboyu-alt"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anboyu-alt/dart-risk-mcp.git"
+  },
+  "homepage": "https://anboyu-alt.github.io/dart-risk-mcp/",
+  "documentation": "https://github.com/anboyu-alt/dart-risk-mcp/blob/master/README.md",
+  "support": "https://github.com/anboyu-alt/dart-risk-mcp/issues",
+  "license": "MIT",
+  "keywords": ["dart", "mcp", "korea", "stock", "risk", "disclosure"],
+  "server": {
+    "type": "uv",
+    "entry_point": "src/server.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": ["run", "--directory", "${__dirname}", "src/server.py"],
+      "env": {
+        "DART_API_KEY": "${user_config.dart_api_key}"
+      }
+    }
+  },
+  "user_config": {
+    "dart_api_key": {
+      "type": "string",
+      "title": "DART API 키",
+      "description": "DART OpenAPI 인증키(무료). https://opendart.fss.or.kr 에서 이메일 인증으로 즉시 발급 — 하루 2만 건.",
+      "sensitive": true,
+      "required": true
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "python": ">=3.11"
+    }
+  }
+}
