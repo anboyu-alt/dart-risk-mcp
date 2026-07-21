@@ -82,9 +82,9 @@
 
   /* ── 공용 패널 ── */
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 5px;
-    padding: 20px 24px; margin-bottom: 16px; position: relative; overflow: hidden; }
+    padding: 20px 24px; margin-bottom: 16px; position: relative; }
   .panel.amber::before, .panel.red::before { content: ""; position: absolute;
-    left: 0; top: 0; bottom: 0; width: 3px; }
+    left: 0; top: 0; bottom: 0; width: 3px; border-radius: 5px 0 0 5px; }
   .panel.amber::before { background: var(--amber); }
   .panel.red::before { background: var(--red); }
   .slabel { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.2em;
