@@ -27,11 +27,28 @@ jobs:
           python-version: "3.11"
       - name: Install package
         run: pip install -e .
-      - name: Audit registry (summary to log, full report to mail)
+      - name: Checkout sightings (private)
+        uses: actions/checkout@v5
+        with:
+          repository: anboyu-alt/dart-risk-mcp-sightings
+          token: ${{ secrets.SIGHTINGS_REPO_TOKEN }}
+          path: _sightings
+      - name: Audit registry (summary to log, full report to mail + private repo)
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           DB_KNOWN_ACTORS: ${{ secrets.DB_KNOWN_ACTORS }}
           MAIL_USER: ${{ secrets.MAIL_USER }}
           MAIL_APP_PASSWORD: ${{ secrets.MAIL_APP_PASSWORD }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
-        run: python scripts/audit_registry_names.py --mail
+        run: python scripts/audit_registry_names.py --mail --out _sightings/registry_audit.txt
+      - name: Commit report (private)
+        run: |
+          cd _sightings
+          if [ -z "$(git status --porcelain registry_audit.txt)" ]; then
+            echo "보고서 변경 없음"; exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add registry_audit.txt
+          git commit -m "chore: 레지스트리 표기 변형 감사 보고"
+          git push || { git pull --rebase origin main && git push; }
