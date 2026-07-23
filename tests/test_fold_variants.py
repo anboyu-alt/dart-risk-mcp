@@ -94,5 +94,41 @@ class TestDiscoverMergeBilingual(unittest.TestCase):
         self.assertEqual(set(data["aliases"].values()), {canon})
 
 
+class TestRegistryFoldLookup(unittest.TestCase):
+    """레지스트리 조회 경로의 표기 변형 폴백 — 노션 등재 표기와 조회 표기가 달라도 매칭."""
+
+    _REGISTRY = {"actors": {
+        "주식회사 액션": [{"status": "verified", "source": "DART",
+                          "companies": ["(주)베이트리"]}],
+        "정소영(DING SHAO YING)": [{"status": "auto_matched", "source": "DART",
+                                    "companies": []}],
+    }}
+
+    def _patched(self):
+        from unittest.mock import patch
+        return patch("dart_risk_mcp.core.known_actors.load_known_actors",
+                     return_value=self._REGISTRY)
+
+    def test_lookup_actor_corp_suffix_variant(self):
+        from dart_risk_mcp.core.known_actors import lookup_actor
+        with self._patched():
+            self.assertTrue(lookup_actor("(주)액션"))
+            self.assertTrue(lookup_actor("액션 주식회사"))
+            self.assertFalse(lookup_actor("(주)액션홀딩스"))   # 다른 실체는 미스
+
+    def test_lookup_actor_bilingual_variant(self):
+        from dart_risk_mcp.core.known_actors import lookup_actor
+        with self._patched():
+            self.assertTrue(lookup_actor("DING SHAO YING"))
+            self.assertTrue(lookup_actor("정소영"))
+
+    def test_lookup_by_company_suffix_variant(self):
+        from dart_risk_mcp.core.known_actors import lookup_actors_by_company
+        with self._patched():
+            hits = lookup_actors_by_company("주식회사 베이트리")
+            self.assertEqual([h[0] for h in hits], ["주식회사 액션"])
+            self.assertFalse(lookup_actors_by_company("주식회사 베이"))
+
+
 if __name__ == "__main__":
     unittest.main()

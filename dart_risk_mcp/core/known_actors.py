@@ -597,8 +597,10 @@ def load_known_actors() -> dict:
 def lookup_actor(name: str) -> list[dict]:
     """인물명 매칭 → 기록 리스트(없으면 []).
 
-    정확 일치 우선, 실패 시 표기 정규화(공백·대소문자) 일치로 폴백 —
-    레지스트리 키가 'LIU HUAN'일 때 'Liu Huan' 조회도 매칭된다.
+    정확 일치 → 표기 정규화(공백·대소문자) 일치 → 폴딩 변형(fold_variants)
+    일치 순으로 폴백. 레지스트리 키가 'LIU HUAN'일 때 'Liu Huan' 조회,
+    '주식회사 액션' 등재일 때 '(주)액션' 조회, '정소영(DING SHAO YING)'
+    등재일 때 'DING SHAO YING' 조회가 각각 매칭된다.
     """
     if not name or not name.strip():
         return []
@@ -610,23 +612,31 @@ def lookup_actor(name: str) -> list[dict]:
     for key, recs in actors.items():
         if normalize_name(key) == want:
             return list(recs)
+    wf = set(fold_variants(want))
+    for key, recs in actors.items():
+        if wf & set(fold_variants(normalize_name(key))):
+            return list(recs)
     return []
 
 
 def lookup_actors_by_company(company_name: str) -> list[tuple[str, dict]]:
     """회사명 역방향 조회 → [(인물명, 기록)] (없으면 []).
 
-    각 기록의 companies(레지스트리 '관련기업' 태그)와 정규화 비교한다.
+    각 기록의 companies(레지스트리 '관련기업' 태그)와 정규화 + 폴딩 변형
+    비교한다 — 태그가 '(주)베이트리'일 때 '주식회사 베이트리' 조회도 매칭.
     반환은 인물명 오름차순 — 렌더 결정성(테스트 안정성) 보장.
     """
     if not company_name or not company_name.strip():
         return []
     want = normalize_name(company_name)
+    wf = set(fold_variants(want))
     actors = load_known_actors().get("actors", {})
     hits: list[tuple[str, dict]] = []
     for name in sorted(actors.keys()):
         for rec in actors[name]:
             comps = rec.get("companies") or []
-            if any(normalize_name(c) == want for c in comps):
+            if any(normalize_name(c) == want
+                   or wf & set(fold_variants(normalize_name(c)))
+                   for c in comps):
                 hits.append((name, rec))
     return hits

@@ -21,6 +21,7 @@ from dart_risk_mcp.core.cb_extractor import extract_cb_investors
 from dart_risk_mcp.core.investor_extractor import extract_rights_offering_investors
 from dart_risk_mcp.core.known_actors import (
     normalize_name,
+    fold_variants,
     load_known_actors,
     fetch_registry_from_notion,
     add_registry_record,
@@ -62,6 +63,11 @@ def collect_auto_matches(api_key, known_names, window_days=WINDOW_DAYS, max_page
         api_key, start.strftime("%Y%m%d"), end.strftime("%Y%m%d"),
         pblntf_ty="B", max_pages=max_pages) or []
     norm_to_canon = {normalize_name(k): k for k in known_names}
+    # 폴딩 변형 폴백 — 등재 '주식회사 액션' ↔ 시장 '(주)액션', 병기 표기 포함
+    fold_to_canon: dict = {}
+    for k in known_names:
+        for f in fold_variants(normalize_name(k)):
+            fold_to_canon.setdefault(f, k)
     matches = {}
     for d in discs:
         rn = d.get("rcept_no", "")
@@ -81,6 +87,11 @@ def collect_auto_matches(api_key, known_names, window_days=WINDOW_DAYS, max_page
         for label, inv in invs:
             nm = (inv.get("name") or "").strip()
             canon = norm_to_canon.get(normalize_name(nm)) if nm else None
+            if nm and not canon:
+                for f in fold_variants(normalize_name(nm)):
+                    canon = fold_to_canon.get(f)
+                    if canon:
+                        break
             if canon:
                 kind = classify_actor(canon)
                 same_name_tag = ("동명이인 미확인" if kind == "person"
