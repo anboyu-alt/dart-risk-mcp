@@ -63,12 +63,18 @@ def build_graph(sightings: dict, min_companies: int = 2) -> dict:
 
     # ── Phase A: 사전 스캔 — 병합 판정 전에 전체 회사 라벨·시장구분 확보 ──
     # (병합 시점에 회사가 아직 안 채워지는 순서 의존을 제거)
+    # 개명 이력: 같은 corp_code에 관측된 모든 표기(fold 기준)를 보존해
+    # 옛 사명 명의 행위자도 회사 노드로 접히게 한다 (corp_code는 개명 불변).
+    _label_hist: dict = {}         # corp_code -> {fold: label}
     for _name, _recs in s.items():
         for r in _recs:
             cc = r.get("corp_code")
             if not cc:
                 continue
             company_label.setdefault(cc, r.get("corp") or cc)
+            lab = (r.get("corp") or "").strip()
+            if lab:
+                _label_hist.setdefault(cc, {})[fold_name(lab)] = lab
             cls = (r.get("corp_cls") or "").strip()
             if cls and not company_cls.get(cc):
                 company_cls[cc] = cls
@@ -77,6 +83,9 @@ def build_graph(sightings: dict, min_companies: int = 2) -> dict:
     _fold_ccs: dict = {}
     for cc, lab in company_label.items():
         _fold_ccs.setdefault(fold_name(lab), set()).add(cc)
+    for cc, labs in _label_hist.items():   # 개명 전 표기도 같은 cc로 접기
+        for f in labs:
+            _fold_ccs.setdefault(f, set()).add(cc)
     # 한 fold가 복수 corp_code면 모호 → 자동 병합 금지(맵에서 제외)
     fold2cc = {f: next(iter(ccs)) for f, ccs in _fold_ccs.items() if len(ccs) == 1}
 

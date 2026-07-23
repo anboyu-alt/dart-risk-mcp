@@ -1,0 +1,37 @@
+name: Audit registry name variants
+
+# known_actors 노션 레지스트리 표기 변형 중복 감사 (읽기 전용, 수동 실행).
+#
+# 같은 실체가 다른 표기('주식회사 액션' vs '(주)액션', 한/영 병기 등)로
+# 별도 행 등재됐는지 fold_variants로 점검한다. public 레포 Actions 로그에는
+# 건수 요약만 출력하고, 실명이 담긴 전문은 제작자 이메일로만 발송한다
+# (노출 경계: public 어디에도 인물 데이터를 남기지 않음).
+#
+# 사전 조건 Secrets: NOTION_TOKEN, DB_KNOWN_ACTORS,
+#                    MAIL_USER, MAIL_APP_PASSWORD, MAIL_TO
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install package
+        run: pip install -e .
+      - name: Audit registry (summary to log, full report to mail)
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          DB_KNOWN_ACTORS: ${{ secrets.DB_KNOWN_ACTORS }}
+          MAIL_USER: ${{ secrets.MAIL_USER }}
+          MAIL_APP_PASSWORD: ${{ secrets.MAIL_APP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+        run: python scripts/audit_registry_names.py --mail

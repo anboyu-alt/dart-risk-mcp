@@ -1,0 +1,67 @@
+name: Backfill corp renames
+
+# '상호변경안내' 공시 백필 — 소급 개명 맵(corp_renames) 구축 + 옛 사명
+# 행위자 키 병합. actor_corp_ids(일일 discover)가 '앞으로의' 개명을 잡고,
+# 이 백필이 '지난' 개명을 소급 수정한다. 1회성(필요 시 구간 지정 재실행).
+#
+# 로그에는 회사 개명 이력(공개 사실)과 건수만 출력된다 — 인물 데이터 없음.
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "수집 시작일 YYYY-MM-DD (기본: 2015-01-01, sightings 백필 구간)"
+        required: false
+        default: "2015-01-01"
+      end_date:
+        description: "수집 종료일 YYYY-MM-DD (기본: 오늘)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install package
+        run: pip install -e .
+      - name: Checkout sightings (private)
+        uses: actions/checkout@v5
+        with:
+          repository: anboyu-alt/dart-risk-mcp-sightings
+          token: ${{ secrets.SIGHTINGS_REPO_TOKEN }}
+          path: _sightings
+      - name: Backfill corp renames
+        env:
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+          SIGHTINGS_PATH: _sightings/sightings.json
+        run: |
+          ARGS="--start ${{ inputs.start_date }}"
+          [ -n "${{ inputs.end_date }}" ] && ARGS="$ARGS --end ${{ inputs.end_date }}"
+          python scripts/backfill_renames.py $ARGS
+      - name: Commit sightings (private)
+        if: always()
+        run: |
+          cd _sightings
+          if [ -z "$(git status --porcelain sightings.json)" ]; then
+            echo "sightings 변경 없음"; exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3; do
+            git add sightings.json
+            git commit -m "chore: 상호변경(개명) 소급 백필" || true
+            if git push; then echo "push 성공 (시도 $attempt)"; exit 0; fi
+            echo "::warning::push 거부 — 원격 리베이스 후 재시도 ($attempt)"
+            git fetch origin main
+            git pull --rebase origin main || git rebase --abort
+            sleep 3
+          done
+          echo "::error::재시도 후에도 push 실패 — 워크플로우 재실행 필요"; exit 1
