@@ -248,6 +248,34 @@ def merge_sightings(data: dict, new: list, window_months: int = WINDOW_MONTHS) -
         changed = True
         print(f"[FOLD] 표기 변형 자동 별칭 등록: {fold_added}건")
 
+    # 개명 이력 병합 — 같은 corp_code에 붙은 서로 다른 회사 표기(사명 변경)가
+    # 각각 행위자 키로도 존재하면 같은 실체로 별칭 등록. DART list.json은
+    # 조회 시점의 '현재' 사명을 주므로, 개명 후 신규 수집분과 개명 전 저장분이
+    # 어긋나기 시작할 때 corp_code 불변성을 다리로 self-heal한다.
+    cc_label_folds: dict = {}
+    for recs in s.values():
+        for r in recs:
+            cc, corp = r.get("corp_code"), (r.get("corp") or "").strip()
+            if cc and corp:
+                cc_label_folds.setdefault(cc, set()).add(fold_name(corp))
+    rename_added = 0
+    for fset in cc_label_folds.values():
+        if len(fset) < 2:
+            continue
+        ks = sorted({k for f in fset for k in folds.get(f, [])})
+        if len(ks) < 2:
+            continue
+        cands = [k for k in ks if k not in aliases] or ks
+        canon = max(cands, key=lambda k: len(s[k]))
+        for k in ks:
+            if k != canon and aliases.get(k) != canon:
+                aliases[k] = canon
+                rename_added += 1
+    if rename_added:
+        data["aliases"] = aliases
+        changed = True
+        print(f"[RENAME] 개명 이력 별칭 등록: {rename_added}건")
+
     # 기존 별칭 키 → 정본 키로 합치기 (별칭 맵 갱신 시 과거 데이터 self-heal)
     if aliases:
         for k in list(s.keys()):

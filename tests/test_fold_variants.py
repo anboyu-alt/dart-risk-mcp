@@ -130,5 +130,52 @@ class TestRegistryFoldLookup(unittest.TestCase):
             self.assertFalse(lookup_actors_by_company("주식회사 베이"))
 
 
+class TestRenameSelfHeal(unittest.TestCase):
+    """법인명 변경(같은 corp_code, 다른 사명) 자기치유 — 행위자·회사 병합."""
+
+    @staticmethod
+    def _rec(cc, corp, rc="r1", date="2099-01"):
+        return {"corp_code": cc, "corp": corp, "rcept_no": rc,
+                "date": date, "event": "in"}
+
+    def test_merge_sightings_rename_aliases_actor_keys(self):
+        """corp_code c5가 '(주)암니스'→'(주)폴루스바이오팜'으로 개명 관측되고,
+        두 사명이 각각 행위자 키로도 존재하면 한 키로 병합된다."""
+        import scripts.discover_actors as da
+        data = {"sightings": {
+            # 행위자 두 표기 — 개명 전/후 사명으로 각각 타사에 투자
+            "(주)암니스": [self._rec("c1", "회사1", "a1")],
+            "(주)폴루스바이오팜": [self._rec("c2", "회사2", "a2"),
+                                   self._rec("c3", "회사3", "a3")],
+            # 제3의 행위자 기록에서 c5의 개명 이력(옛/새 사명)이 관측됨
+            "홍길동": [self._rec("c5", "(주)암니스", "b1", "2098-01"),
+                       self._rec("c5", "(주)폴루스바이오팜", "b2", "2099-01")],
+        }, "aliases": {}}
+        da.merge_sightings(data, [], window_months=12000)
+        keys = set(data["sightings"].keys())
+        self.assertIn("홍길동", keys)
+        merged = keys - {"홍길동"}
+        self.assertEqual(merged, {"(주)폴루스바이오팜"})   # 레코드 최다 표기가 정본
+        self.assertEqual(len(data["sightings"]["(주)폴루스바이오팜"]), 3)
+        self.assertEqual(data["aliases"].get("(주)암니스"), "(주)폴루스바이오팜")
+
+    def test_build_graph_rename_folds_actor_into_company(self):
+        """회사 cc=100의 과거 사명으로 활동한 행위자가 c:100 노드로 접힌다."""
+        from scripts.build_network_html import build_graph
+        sightings = {"sightings": {
+            # cc=100은 회사로서 옛/새 사명 모두 관측됨 (개명 이력)
+            "투자자甲": [self._rec("100", "암니스", "x1", "2098-01"),
+                         self._rec("100", "폴루스바이오팜", "x2", "2099-01"),
+                         self._rec("200", "다른회사", "x3")],
+            # 옛 사명 '주식회사 암니스' 명의로 2개사에 투자한 행위자
+            "주식회사 암니스": [self._rec("300", "회사3", "y1"),
+                               self._rec("400", "회사4", "y2")],
+        }}
+        g = build_graph(sightings, min_companies=2)
+        ids = {n["id"] for n in g["nodes"]}
+        self.assertNotIn("a:주식회사 암니스", ids)   # 별도 행위자 노드 아님
+        self.assertIn("c:100", ids)                  # 회사 노드로 병합
+
+
 if __name__ == "__main__":
     unittest.main()
