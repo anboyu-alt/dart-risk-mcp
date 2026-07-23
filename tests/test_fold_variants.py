@@ -267,5 +267,26 @@ class TestBackfillRenames(unittest.TestCase):
         self.assertEqual(data["actor_corp_ids"]["cc7"], "주식회사 퀀텀레일")
 
 
+class TestMergeRegistryDupes(unittest.TestCase):
+    """레지스트리 중복 병합의 정본 선택 규칙."""
+
+    def test_pick_canon_prefers_current_corp_name(self):
+        from scripts.merge_registry_dupes import pick_canon
+        from dart_risk_mcp.core.known_actors import fold_name
+        rows = {"(주)암니스": [1, 2, 3], "(주)폴루스바이오팜": [1]}
+        # 현재 명부에 있는 사명(폴루스바이오팜)이 행 수 열세여도 정본
+        corp_folds = {fold_name("(주)폴루스바이오팜")}
+        self.assertEqual(
+            pick_canon(["(주)암니스", "(주)폴루스바이오팜"], rows, corp_folds),
+            "(주)폴루스바이오팜")
+
+    def test_pick_canon_falls_back_to_row_count(self):
+        from scripts.merge_registry_dupes import pick_canon
+        rows = {"LIM ALEXANDRA": [1, 2], "LIM, ALEXANDRA": [1]}
+        self.assertEqual(
+            pick_canon(["LIM ALEXANDRA", "LIM, ALEXANDRA"], rows, set()),
+            "LIM ALEXANDRA")
+
+
 if __name__ == "__main__":
     unittest.main()

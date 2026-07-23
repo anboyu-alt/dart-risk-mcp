@@ -48,7 +48,8 @@ def fetch_rows(token: str, db_id: str) -> list[dict]:
             comps = [o.get("name", "") for o in
                      props.get("관련기업", {}).get("multi_select", [])]
             if name.strip():
-                rows.append({"name": name.strip(), "companies": comps})
+                rows.append({"id": page.get("id", ""),
+                             "name": name.strip(), "companies": comps})
         if not data.get("has_more"):
             return rows
         cursor = data.get("next_cursor")
