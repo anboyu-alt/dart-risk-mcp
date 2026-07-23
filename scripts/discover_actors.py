@@ -184,6 +184,13 @@ def collect_funding_sightings(api_key, window_days=WINDOW_DAYS, max_pages=MAX_PA
         api_key, start.strftime("%Y%m%d"), end.strftime("%Y%m%d"), max_pages=max_pages)
 
 
+def _is_dup(lst, rec):
+    """같은 접수·회사·이벤트 유형이면 중복(진입/이탈은 event로 구분)."""
+    return any(e.get("rcept_no") == rec.get("rcept_no") and
+               e.get("corp_code") == rec.get("corp_code") and
+               e.get("event", "in") == rec.get("event", "in") for e in lst)
+
+
 def merge_sightings(data: dict, new: list, window_months: int = WINDOW_MONTHS) -> bool:
     """new sighting을 data에 병합. (corp_code,rcept_no) 중복 스킵, window 밖 제거. 변경 여부."""
     s = data.setdefault("sightings", {})
@@ -191,11 +198,6 @@ def merge_sightings(data: dict, new: list, window_months: int = WINDOW_MONTHS) -
     changed = False
     _FIELDS = ("corp", "corp_code", "corp_cls", "date", "rcept_no",
                "signals", "kind", "via", "event", "event_type", "pct")
-
-    def _is_dup(lst, rec):  # 같은 접수·회사·이벤트 유형이면 중복(진입/이탈은 event로 구분)
-        return any(e.get("rcept_no") == rec.get("rcept_no") and
-                   e.get("corp_code") == rec.get("corp_code") and
-                   e.get("event", "in") == rec.get("event", "in") for e in lst)
 
     # 기존 키 정규화 재키잉(1회) — normalize_name 강화(역할 괄호 제거)로
     # '증권사 (…신탁업자 지위에서)'처럼 이미 저장된 괄호 키가 기저 실체 키로
@@ -307,6 +309,68 @@ def merge_sightings(data: dict, new: list, window_months: int = WINDOW_MONTHS) -
         else:
             del s[nm]
             changed = True
+    return changed
+
+
+def _corp_name_index(api_key: str) -> dict:
+    """corpCode 명부 → {fold_name(현재 사명): set(corp_code)}.
+
+    reconcile_corp_renames의 입력. 24시간 파일 캐시(_load_corp_codes) 재사용
+    — 추가 API 호출 없음(일일 첫 실행만 1회 다운로드).
+    """
+    from dart_risk_mcp.core import dart_client as _dc
+    _dc._load_corp_codes(api_key)
+    idx: dict = {}
+    for name, info in (_dc._corp_cache or {}).items():
+        cc = info.get("corp_code")
+        if cc:
+            idx.setdefault(fold_name(name), set()).add(cc)
+    return idx
+
+
+def reconcile_corp_renames(data: dict, corp_index: dict) -> bool:
+    """corpCode 명부로 행위자 키(법인·조합)를 corp_code로 해석해 영속 추적.
+
+    행위자명은 공시 원문 파싱이라 제출 시점 사명으로 동결된다 — 개명하면
+    옛 사명 키와 새 사명 키로 갈라진다. corp_code는 개명 불변이므로,
+    {corp_code: 행위자 키} 맵(actor_corp_ids)을 sightings에 영속 저장하고
+    같은 corp_code가 다른 키로 재해석되는 순간(=사명 변경) 같은 실체로
+    별칭 등록 + 병합한다. 정본은 현재 명부에 있는 새 사명.
+
+    가드: 개인 키는 해석 안 함, 한 fold가 복수 corp_code면(동명 회사) 제외.
+    """
+    s = data.get("sightings", {})
+    aliases = data.setdefault("aliases", {})
+    ids = data.setdefault("actor_corp_ids", {})
+    changed = False
+    renamed = 0
+    for k in list(s.keys()):
+        if classify_actor(k) == "person":
+            continue
+        ccs: set = set()
+        for f in fold_variants(k):
+            ccs |= corp_index.get(f, set())
+        if len(ccs) != 1:
+            continue                      # 미등록 또는 동명 회사 모호 → 스킵
+        cc = next(iter(ccs))
+        prev = ids.get(cc)
+        if prev and prev != k and prev in s and aliases.get(prev) != k:
+            aliases[prev] = k             # 옛 사명 → 새 사명(현재 명부) 정본
+            renamed += 1
+        if prev != k:
+            ids[cc] = k
+            changed = True
+    if renamed:
+        print(f"[RENAME] corp_code 재해석 개명 병합: {renamed}건")
+        for k in list(s.keys()):          # 방금 등록된 별칭 즉시 재키잉
+            canon = aliases.get(k)
+            if canon and canon != k:
+                dst = s.setdefault(canon, [])
+                for rec in s[k]:
+                    if not _is_dup(dst, rec):
+                        dst.append(rec)
+                del s[k]
+        changed = True
     return changed
 
 
@@ -432,6 +496,9 @@ def main():
 
     new, stats = collect_funding_sightings(key)
     s_changed = merge_sightings(sdata, new)
+    # 법인 행위자 개명 추적 — corpCode 명부(24h 캐시) 기반, 추가 API 호출 없음
+    if reconcile_corp_renames(sdata, _corp_name_index(key)):
+        s_changed = True
 
     # 문제 회사 판정은 등재 후보에 한해 지연 평가 (실행 내 캐시)
     problem_cache: dict = {}

@@ -177,5 +177,53 @@ class TestRenameSelfHeal(unittest.TestCase):
         self.assertIn("c:100", ids)                  # 회사 노드로 병합
 
 
+class TestReconcileCorpRenames(unittest.TestCase):
+    """corpCode 명부 기반 행위자 개명 추적 — 같은 corp_code가 다른 키로
+    재해석되면(=사명 변경) 같은 실체로 병합."""
+
+    @staticmethod
+    def _rec(cc, corp, rc):
+        return {"corp_code": cc, "corp": corp, "rcept_no": rc,
+                "date": "2099-01", "event": "in"}
+
+    def test_rename_detected_via_corp_id(self):
+        import scripts.discover_actors as da
+        from dart_risk_mcp.core.known_actors import fold_name
+        data = {"sightings": {
+            "(주)암니스": [self._rec("c1", "회사1", "a1"),
+                           self._rec("c2", "회사2", "a2")],
+            "(주)폴루스바이오팜": [self._rec("c3", "회사3", "a3")],
+        }, "aliases": {},
+            # 이전 실행에서 '(주)암니스'가 corp_code cc9로 해석돼 있었음
+            "actor_corp_ids": {"cc9": "(주)암니스"}}
+        # 현재 corpCode 명부: cc9의 현재 사명은 폴루스바이오팜 (개명 완료)
+        corp_index = {fold_name("(주)폴루스바이오팜"): {"cc9"}}
+        self.assertTrue(da.reconcile_corp_renames(data, corp_index))
+        s = data["sightings"]
+        self.assertNotIn("(주)암니스", s)                       # 옛 키 병합됨
+        self.assertEqual(len(s["(주)폴루스바이오팜"]), 3)       # 새 사명이 정본
+        self.assertEqual(data["aliases"].get("(주)암니스"), "(주)폴루스바이오팜")
+        self.assertEqual(data["actor_corp_ids"]["cc9"], "(주)폴루스바이오팜")
+
+    def test_ambiguous_fold_skipped(self):
+        import scripts.discover_actors as da
+        from dart_risk_mcp.core.known_actors import fold_name
+        data = {"sightings": {"(주)액션": [self._rec("c1", "회사1", "a1")]},
+                "aliases": {}, "actor_corp_ids": {}}
+        # 동명 회사 2곳 → 모호 → 매핑·병합 없음
+        corp_index = {fold_name("(주)액션"): {"cc1", "cc2"}}
+        da.reconcile_corp_renames(data, corp_index)
+        self.assertEqual(data["actor_corp_ids"], {})
+
+    def test_person_key_not_resolved(self):
+        import scripts.discover_actors as da
+        from dart_risk_mcp.core.known_actors import fold_name
+        data = {"sightings": {"홍길동": [self._rec("c1", "회사1", "a1")]},
+                "aliases": {}, "actor_corp_ids": {}}
+        corp_index = {fold_name("홍길동"): {"cc1"}}   # 우연히 동명 회사 존재해도
+        da.reconcile_corp_renames(data, corp_index)
+        self.assertEqual(data["actor_corp_ids"], {})   # 개인 키는 해석 안 함
+
+
 if __name__ == "__main__":
     unittest.main()
