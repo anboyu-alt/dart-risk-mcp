@@ -110,8 +110,18 @@ def main():
     if not token or not db_id:
         raise SystemExit("NOTION_TOKEN / DB_KNOWN_ACTORS 환경변수 필요")
     mail_mode = "--mail" in sys.argv
+    out_path = ""
+    if "--out" in sys.argv:
+        i = sys.argv.index("--out")
+        out_path = sys.argv[i + 1] if i + 1 < len(sys.argv) else ""
     rows = fetch_rows(token, db_id)
     summary, full = build_report(rows)
+    if out_path:
+        # private 저장소(sightings) 체크아웃 경로에 전문 저장 — 메일 유실 대비
+        # 영속 열람 경로. public 경로에 쓰면 안 됨(호출자 책임: 워크플로우는
+        # _sightings/ 아래로만 지정).
+        Path(out_path).write_text(full + "\n", encoding="utf-8")
+        print(f"전문 저장: {out_path}")
     if mail_mode:
         # public 레포 Actions 로그에는 건수만 — 실명 전문은 이메일로만.
         from scripts.refresh_known_actors import send_mail
@@ -121,7 +131,7 @@ def main():
         else:
             print("경고: 메일 자격증명 미설정/발송 실패 — 전문 미출력(노출 방지). "
                   "MAIL_USER/MAIL_APP_PASSWORD/MAIL_TO Secrets 확인.")
-    else:
+    elif not out_path:
         print(full)
 
 
