@@ -33,6 +33,7 @@ from dart_risk_mcp.core.known_actors import (
     normalize_name,
     canonical_name,
     fold_name,
+    fold_variants,
     load_known_actors,
     add_registry_record,
     classify_actor,
@@ -228,7 +229,10 @@ def merge_sightings(data: dict, new: list, window_months: int = WINDOW_MONTHS) -
     folds: dict = {}
     for k in s:
         if should_store(k):
-            folds.setdefault(fold_name(k), []).append(k)
+            # 병기 표기('정소영(DING SHAO YING)'·'…(구. 옛이름)')는 구성 표기
+            # 폴드로도 그룹에 참여 → 단독 표기 키와 같은 실체로 접힌다.
+            for f in fold_variants(k):
+                folds.setdefault(f, []).append(k)
     fold_added = 0
     for ks in folds.values():
         if len(ks) < 2:

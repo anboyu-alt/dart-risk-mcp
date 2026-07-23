@@ -178,20 +178,63 @@ _LATIN_PHON = {
     "X": "엑스", "Y": "와이", "Z": "지",
 }
 _CORP_SUFFIX_RE = re.compile(r"(주식회사|유한회사|유한책임회사|\(주\)|㈜)")
-_FOLD_STRIP_RE = re.compile(r"[\s·\-\.]+")
+# 영문 법인 접사 — 이름 '꼬리'의 토큰만 제거('CBI USA, INC.' ↔ 'CBI USA').
+# 앞에 구분자([\s,.]+)를 요구해 이름 중간·선두의 CO 등은 보존한다.
+_EN_LEGAL_SUFFIX_RE = re.compile(
+    r"(?:[\s,\.，．]+(?:CO|LTD|INC|CORP|CORPORATION|LLC|LLP|LIMITED)\.?)+[\s,\.，．]*$",
+    re.IGNORECASE)
+_FOLD_STRIP_RE = re.compile(r"[\s·\-\.,，．]+")
 
 
 def fold_name(name: str) -> str:
     """표기 변형 비교용 폴딩 — 같은 주체의 다른 표기가 한 값으로 수렴한다.
 
-    법인 접사((주)·㈜·주식회사 등) 제거, 공백·중점·하이픈 제거, 라틴 문자를
-    한글 음차로 변환. 예) '(주)베이트리'·'주식회사 베이트리'·'베이트리',
-    'DB금융투자 주식회사'·'디비금융투자', '정 상 용'·'정상용'이 각각 동일
-    폴딩. 비교 전용 — 표시·저장 키는 normalize_name/정본을 그대로 쓴다.
+    법인 접사((주)·㈜·주식회사·꼬리의 Co/Ltd/Inc 등) 제거, 공백·중점·하이픈·
+    쉼표·마침표 제거, 라틴 문자를 한글 음차로 변환. 예) '(주)베이트리'·
+    '주식회사 베이트리'·'베이트리', 'DB금융투자 주식회사'·'디비금융투자',
+    'LIM, CHARLES'·'LIM CHARLES', 'CBI USA, INC.'·'CBI USA'가 각각 동일
+    폴딩. 한글 '컴퍼니'는 실명 일부('컴퍼니케이파트너스')일 수 있어 접사로
+    취급하지 않는다. 비교 전용 — 표시·저장 키는 normalize_name/정본 그대로.
     """
     s = _CORP_SUFFIX_RE.sub("", (name or ""))
+    s = _EN_LEGAL_SUFFIX_RE.sub("", s.strip())
     s = _FOLD_STRIP_RE.sub("", s).upper()
     return "".join(_LATIN_PHON.get(ch, ch) for ch in s)
+
+
+# 한글(로마자) 병기 — '정소영(DING SHAO YING)'처럼 한 공시가 두 표기를 함께
+# 쓴 경우. 괄호 안은 라틴 문자로 시작해야 하므로 한글 괄호에는 매칭 안 됨.
+_BILINGUAL_RE = re.compile(
+    r"^(?P<base>[가-힣][가-힣\s\d]*?)\s*[(（](?P<latin>[A-Za-z][A-Za-z\s\.,'\-]*)[)）]$")
+# 구명칭 병기 — '(구. 옛이름)' / '[舊 (주)옛이름]'. 개명 전 표기와 같은 실체.
+_FORMER_PAREN_RE = re.compile(r"[(（]\s*(?:구|舊)\s*[\.．]?\s*(?P<old>[^()（）]+?)\s*[)）]")
+_FORMER_BRACKET_RE = re.compile(r"[\[［]\s*(?:구|舊)\s*[\.．]?\s*(?P<old>[^\[\]［］]+?)\s*[\]］]")
+
+
+def fold_variants(name: str) -> list:
+    """fold_name + 병기 표기가 만드는 대체 폴드 목록 (첫 원소 = 기본 폴드).
+
+    한글(로마자) 병기·구명칭 병기는 한 문자열이 두 실체 표기를 담고 있어
+    글자 단위 폴딩만으로는 단독 표기('DING SHAO YING'·'센시오2호투자조합')와
+    수렴하지 않는다. 각 구성 표기의 폴드를 변형으로 추가해 sightings 병합이
+    같은 실체로 접게 한다. 1글자 구성 표기('김(K)')는 오병합 위험이 커 제외.
+    """
+    primary = fold_name(name)
+    out = [primary]
+    parts = []
+    m = _BILINGUAL_RE.match((name or "").strip())
+    if m:
+        parts += [m.group("base"), m.group("latin")]
+    for rx in (_FORMER_PAREN_RE, _FORMER_BRACKET_RE):
+        fm = rx.search(name or "")
+        if fm:
+            parts.append(fm.group("old"))       # 옛 이름 단독 표기
+            parts.append(rx.sub(" ", name))     # 병기 제거한 현재명 단독 표기
+    for p in parts:
+        f = fold_name(p)
+        if len(p.strip()) >= 2 and len(f) >= 2 and f not in out:
+            out.append(f)
+    return out
 
 
 # 조합·사모 비히클 (기관 패턴보다 먼저 판정 — '일반사모투자신탁'류 포섭)
