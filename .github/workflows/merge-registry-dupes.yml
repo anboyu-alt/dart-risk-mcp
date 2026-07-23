@@ -1,0 +1,57 @@
+name: Merge registry name dupes
+
+# 감사(audit-registry-names)로 검출된 표기 변형 중복 그룹을 병합한다.
+# 제작자가 감사 보고를 검토·확정한 뒤에만 수동 실행할 것.
+#
+# 행 삭제 없음 — 변형 표기 행들의 '인물명' title만 정본으로 통일.
+# 상세 로그(실명)는 private sightings repo에만 커밋, public 로그엔 건수만.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "true면 변경 없이 병합 계획만 로그 파일로 저장"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install package
+        run: pip install -e .
+      - name: Checkout sightings (private)
+        uses: actions/checkout@v5
+        with:
+          repository: anboyu-alt/dart-risk-mcp-sightings
+          token: ${{ secrets.SIGHTINGS_REPO_TOKEN }}
+          path: _sightings
+      - name: Merge duplicate names
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          DB_KNOWN_ACTORS: ${{ secrets.DB_KNOWN_ACTORS }}
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+        run: |
+          ARGS="--out _sightings/registry_merge_log.txt"
+          [ "${{ inputs.dry_run }}" = "true" ] && ARGS="$ARGS --dry-run"
+          python scripts/merge_registry_dupes.py $ARGS
+      - name: Commit merge log (private)
+        if: always()
+        run: |
+          cd _sightings
+          if [ -z "$(git status --porcelain registry_merge_log.txt)" ]; then
+            echo "로그 변경 없음"; exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add registry_merge_log.txt
+          git commit -m "chore: 레지스트리 표기 변형 병합 로그"
+          git push || { git pull --rebase origin main && git push; }
