@@ -225,5 +225,47 @@ class TestReconcileCorpRenames(unittest.TestCase):
         self.assertEqual(data["actor_corp_ids"], {})   # 개인 키는 해석 안 함
 
 
+class TestBackfillRenames(unittest.TestCase):
+    """상호변경안내 원문 추출 + legacy_index 소급 병합."""
+
+    # 엑스큐어(20260722900410) 라이브 원문 구조 기반
+    _SAMPLE = ("상호변경안내 1. 변경내용 가. 변경전 국문 엑스큐어 주식회사 "
+               "영문 Xcure Corp. 나. 변경후 국문 주식회사 퀀텀레일 영문 "
+               "QuantumRail Inc. 2. 변경사유 기업 성장 전략 강화 "
+               "4. 과거 상호변경 내역 2020.03.03 상호변경공시(변경전: "
+               "한솔시큐어 주식회사 → 변경후: 엑스큐어 주식회사")
+
+    def test_extract_before_after_and_history(self):
+        from scripts.backfill_renames import extract_renames_from_text
+        olds, after = extract_renames_from_text(self._SAMPLE)
+        self.assertEqual(after, "주식회사 퀀텀레일")
+        self.assertIn("엑스큐어 주식회사", olds)
+        self.assertIn("한솔시큐어 주식회사", olds)   # 과거 내역까지 소급
+        self.assertNotIn("주식회사 퀀텀레일", olds)  # 새 사명은 제외
+
+    def test_reconcile_legacy_merges_old_name_key(self):
+        import scripts.discover_actors as da
+        from dart_risk_mcp.core.known_actors import fold_name
+        rec = TestReconcileCorpRenames._rec
+        data = {"sightings": {
+            # 옛 사명 키가 레코드 최다여도 정본은 현재 명부 쪽
+            "엑스큐어 주식회사": [rec("c1", "회사1", "a1"),
+                                  rec("c2", "회사2", "a2")],
+            "주식회사 퀀텀레일": [rec("c3", "회사3", "a3")],
+        }, "aliases": {}, "actor_corp_ids": {},
+            "corp_renames": {"cc7": {"names": ["엑스큐어 주식회사",
+                                               "한솔시큐어 주식회사"],
+                                     "events": []}}}
+        corp_index = {fold_name("주식회사 퀀텀레일"): {"cc7"}}   # 현재 명부
+        legacy = da._legacy_name_index(data)
+        self.assertTrue(da.reconcile_corp_renames(data, corp_index, legacy))
+        s = data["sightings"]
+        self.assertEqual(set(s.keys()), {"주식회사 퀀텀레일"})
+        self.assertEqual(len(s["주식회사 퀀텀레일"]), 3)
+        self.assertEqual(data["aliases"].get("엑스큐어 주식회사"),
+                         "주식회사 퀀텀레일")
+        self.assertEqual(data["actor_corp_ids"]["cc7"], "주식회사 퀀텀레일")
+
+
 if __name__ == "__main__":
     unittest.main()

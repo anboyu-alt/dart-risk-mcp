@@ -328,14 +328,33 @@ def _corp_name_index(api_key: str) -> dict:
     return idx
 
 
-def reconcile_corp_renames(data: dict, corp_index: dict) -> bool:
+def _legacy_name_index(data: dict) -> dict:
+    """sightings의 corp_renames(상호변경 백필) → {fold(과거 사명): set(corp_code)}.
+
+    reconcile_corp_renames의 legacy_index 입력. 모호 가드(len==1)는 reconcile이
+    수행하므로 여기선 전체 매핑을 그대로 반환한다.
+    """
+    idx: dict = {}
+    for cc, ent in (data.get("corp_renames") or {}).items():
+        for nm in ent.get("names", []):
+            f = fold_name(nm)
+            if f:
+                idx.setdefault(f, set()).add(cc)
+    return idx
+
+
+def reconcile_corp_renames(data: dict, corp_index: dict,
+                           legacy_index: dict | None = None) -> bool:
     """corpCode 명부로 행위자 키(법인·조합)를 corp_code로 해석해 영속 추적.
 
     행위자명은 공시 원문 파싱이라 제출 시점 사명으로 동결된다 — 개명하면
     옛 사명 키와 새 사명 키로 갈라진다. corp_code는 개명 불변이므로,
     {corp_code: 행위자 키} 맵(actor_corp_ids)을 sightings에 영속 저장하고
-    같은 corp_code가 다른 키로 재해석되는 순간(=사명 변경) 같은 실체로
-    별칭 등록 + 병합한다. 정본은 현재 명부에 있는 새 사명.
+    같은 corp_code로 해석되는 키들을 같은 실체로 별칭 등록 + 병합한다.
+
+    legacy_index: {fold(과거 사명): set(corp_code)} — '상호변경안내' 공시
+    백필(backfill_renames.py)이 만든 소급 개명 맵. 현재 명부에서 해석
+    실패한 키만 이 맵으로 2차 해석한다. 정본은 항상 현재 명부 쪽 키.
 
     가드: 개인 키는 해석 안 함, 한 fold가 복수 corp_code면(동명 회사) 제외.
     """
@@ -344,21 +363,47 @@ def reconcile_corp_renames(data: dict, corp_index: dict) -> bool:
     ids = data.setdefault("actor_corp_ids", {})
     changed = False
     renamed = 0
-    for k in list(s.keys()):
-        if classify_actor(k) == "person":
-            continue
+
+    def _resolve(k):
+        """키 → (corp_code|None, 현재 명부 여부). 모호(복수 cc)는 None."""
         ccs: set = set()
         for f in fold_variants(k):
             ccs |= corp_index.get(f, set())
-        if len(ccs) != 1:
-            continue                      # 미등록 또는 동명 회사 모호 → 스킵
-        cc = next(iter(ccs))
+        if len(ccs) == 1:
+            return next(iter(ccs)), True
+        if not ccs and legacy_index:
+            lcs: set = set()
+            for f in fold_variants(k):
+                lcs |= legacy_index.get(f, set())
+            if len(lcs) == 1:
+                return next(iter(lcs)), False
+        return None, False
+
+    # 1패스: corp_code별 현재/과거 사명 키 그룹
+    groups: dict = {}
+    for k in s:
+        if classify_actor(k) == "person":
+            continue
+        cc, is_cur = _resolve(k)
+        if cc:
+            groups.setdefault(cc, {"cur": [], "old": []})[
+                "cur" if is_cur else "old"].append(k)
+
+    # 2패스: 그룹별 정본 결정(현재 명부 키 우선, 동률이면 레코드 최다) + 별칭
+    for cc, g in groups.items():
+        keys = g["cur"] + g["old"]
+        cands = g["cur"] or keys
+        canon = max(cands, key=lambda k: len(s[k]))
         prev = ids.get(cc)
-        if prev and prev != k and prev in s and aliases.get(prev) != k:
-            aliases[prev] = k             # 옛 사명 → 새 사명(현재 명부) 정본
+        for k in keys:
+            if k != canon and aliases.get(k) != canon:
+                aliases[k] = canon
+                renamed += 1
+        if prev and prev != canon and prev in s and aliases.get(prev) != canon:
+            aliases[prev] = canon         # 이전 실행 키가 개명으로 대체됨
             renamed += 1
-        if prev != k:
-            ids[cc] = k
+        if ids.get(cc) != canon:
+            ids[cc] = canon
             changed = True
     if renamed:
         print(f"[RENAME] corp_code 재해석 개명 병합: {renamed}건")
@@ -496,8 +541,10 @@ def main():
 
     new, stats = collect_funding_sightings(key)
     s_changed = merge_sightings(sdata, new)
-    # 법인 행위자 개명 추적 — corpCode 명부(24h 캐시) 기반, 추가 API 호출 없음
-    if reconcile_corp_renames(sdata, _corp_name_index(key)):
+    # 법인 행위자 개명 추적 — corpCode 명부(24h 캐시) + 상호변경 백필 맵
+    # (corp_renames, backfill_renames.py) 기반. 추가 API 호출 없음
+    if reconcile_corp_renames(sdata, _corp_name_index(key),
+                              _legacy_name_index(sdata)):
         s_changed = True
 
     # 문제 회사 판정은 등재 후보에 한해 지연 평가 (실행 내 캐시)
