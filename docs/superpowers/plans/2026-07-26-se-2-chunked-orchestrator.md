@@ -623,8 +623,14 @@ from se_server.jobs.store import MemoryJobStore, new_job_id
 
 
 def _job(job_id="j1"):
+    """테스트용 작업.
+
+    params를 **비워두면 안 된다.** WorkItem.from_dict의
+    `params=data.get("params") or {}`는 빈 dict가 falsy라 매번 새 dict를
+    만들어 주므로, 참조 공유 버그가 가려지는 거짓 안전이 생긴다.
+    """
     return Job(job_id=job_id, company="테스트", corp_code="0", lookback_years=1,
-               items=[WorkItem(key="a", stage=1, kind="fetch", params={})])
+               items=[WorkItem(key="a", stage=1, kind="fetch", params={"seed": 1})])
 
 
 class TestMemoryJobStore(unittest.TestCase):
