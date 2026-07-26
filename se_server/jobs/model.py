@@ -64,6 +64,9 @@ class Job:
     items: list[WorkItem] = field(default_factory=list)
     status: str = "running"
     stage2_expanded: bool = False
+    # 소유자. 빈 문자열이면 소유자 검사를 하지 않는다(CLI 경로).
+    # job_id만으로 조회하게 두면 id가 곧 자격증명이 된다.
+    user_id: str = ""
 
     def pending_items(self) -> list[WorkItem]:
         return [i for i in self.items if i.status == PENDING]
@@ -82,6 +85,7 @@ class Job:
             "items": [i.to_dict() for i in self.items],
             "status": self.status,
             "stage2_expanded": self.stage2_expanded,
+            "user_id": self.user_id,
         }
 
     @classmethod
@@ -94,4 +98,6 @@ class Job:
             items=[WorkItem.from_dict(d) for d in data.get("items") or []],
             status=data.get("status", "running"),
             stage2_expanded=bool(data.get("stage2_expanded", False)),
+            # SE-2가 만든 기존 레코드에는 이 키가 없다.
+            user_id=data.get("user_id", ""),
         )
