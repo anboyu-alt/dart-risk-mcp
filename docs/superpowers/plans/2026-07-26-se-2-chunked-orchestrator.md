@@ -658,6 +658,39 @@ class TestMemoryJobStore(unittest.TestCase):
         loaded.status = "오염"
         self.assertEqual(store.load("j1").status, "running")
 
+    def test_nested_item_dicts_are_detached(self):
+        """항목의 params·result까지 분리돼야 한다.
+
+        WorkItem.from_dict는 params·result를 참조로 대입하므로, 저장소가
+        내부 dict를 그대로 넘기면 load()가 돌려준 객체의 result를 채우는
+        순간 save() 전에 저장분이 오염된다. 중간 결과를 채워 넣으며 여러 번
+        호출하는 게 이 모듈의 존재 이유라 이 공유는 곧 재개 버그다.
+        """
+        store = MemoryJobStore()
+        store.save(_job())
+
+        loaded = store.load("j1")
+        loaded.items[0].params["오염"] = True
+        loaded.items[0].result = {"값": 1}
+
+        again = store.load("j1")
+        self.assertNotIn("오염", again.items[0].params)
+        self.assertIsNone(again.items[0].result)
+
+    def test_separate_loads_do_not_share_objects(self):
+        a = MemoryJobStore()
+        a.save(_job())
+        first, second = a.load("j1"), a.load("j1")
+        self.assertIsNot(first.items[0].params, second.items[0].params)
+
+    def test_saved_job_is_detached_from_caller(self):
+        """저장 후 호출자가 원본을 고쳐도 저장분이 바뀌면 안 된다."""
+        store = MemoryJobStore()
+        job = _job()
+        store.save(job)
+        job.items[0].params["나중에"] = 1
+        self.assertNotIn("나중에", store.load("j1").items[0].params)
+
 
 class TestNewJobId(unittest.TestCase):
     def test_ids_are_unique(self):
@@ -686,6 +719,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'se_server.jobs.store'`
 """작업 저장소 인터페이스와 인메모리 구현."""
 from __future__ import annotations
 
+import copy
 import secrets
 from typing import Protocol
 
@@ -713,19 +747,26 @@ class MemoryJobStore:
     저장·조회 모두 dict를 거쳐 복사본을 만든다. 실제 저장소(Postgres)는
     항상 새 객체를 돌려주므로, 참조를 공유하면 테스트가 실서비스와 다르게
     동작해 재개 버그를 놓치게 된다.
+
+    **깊은 복사가 필요한 이유:** WorkItem.from_dict는 params·result를 참조로
+    대입한다(얕은 복사). 저장소 내부 dict를 그대로 넘기면 load()가 돌려준
+    객체의 item.result를 채우는 순간 save() 전에 저장분이 오염된다.
+    중간 결과를 항목에 채워 넣으며 여러 번 호출하는 게 이 모듈의 존재
+    이유이므로, 이 공유는 곧바로 재개 버그가 된다.
     """
 
     def __init__(self) -> None:
         self._jobs: dict[str, dict] = {}
 
     def save(self, job: Job) -> None:
+        # to_dict()가 asdict()를 거쳐 깊은 복사를 만들므로 여기선 추가 복사 불필요.
         self._jobs[job.job_id] = job.to_dict()
 
     def load(self, job_id: str) -> Job | None:
         data = self._jobs.get(job_id)
         if data is None:
             return None
-        return Job.from_dict(data)
+        return Job.from_dict(copy.deepcopy(data))
 ```
 
 `se_server/jobs/__init__.py`를 아래로 교체:
@@ -741,7 +782,7 @@ __all__ = ["Job", "WorkItem", "JobStore", "MemoryJobStore", "new_job_id"]
 - [ ] **Step 4: 테스트 통과 확인**
 
 Run: `python -m pytest tests/se/test_job_store.py -v`
-Expected: PASS — 6 passed
+Expected: PASS — 9 passed
 
 - [ ] **Step 5: 커밋**
 
