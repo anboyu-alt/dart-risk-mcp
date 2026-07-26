@@ -176,3 +176,17 @@ def _get(deps: Deps, user_id: str, job_id: str) -> Response:
         ],
         "sections": sections,
     })
+
+
+def build_deps() -> Deps:
+    """환경변수에서 의존성을 조립한다. Vercel 어댑터가 요청마다 호출한다."""
+    from se_server.api.auth import SupabaseAuth
+    from se_server.cache import SupabaseCache
+    from se_server.config import SEConfig
+    from se_server.http_cache import install
+    from se_server.jobs.supabase_store import SupabaseJobStore
+
+    config = SEConfig.from_env()
+    # DART 응답 캐시를 core 시임에 주입한다(SE-1).
+    install(SupabaseCache(config))
+    return Deps(store=SupabaseJobStore(config), auth=SupabaseAuth(config))

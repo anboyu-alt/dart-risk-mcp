@@ -2,7 +2,9 @@
 
 Vercel의 파일 기반 동적 라우팅(api/[id].py) 대신 코드로 라우팅한다.
 파일 배치에 라우팅이 있으면 단위 테스트로 검증할 수 없기 때문이다.
-vercel.json이 /api/* 전부를 단일 함수로 rewrite한다.
+vercel.json이 /api/analyze 및 그 하위 경로만 이 단일 함수로 rewrite한다
+(그 외 /api/* — 예: /api/list.json — 는 기존 CORS 릴레이
+api/[endpoint].js가 파일 기반 라우팅으로 그대로 처리한다).
 """
 from __future__ import annotations
 
