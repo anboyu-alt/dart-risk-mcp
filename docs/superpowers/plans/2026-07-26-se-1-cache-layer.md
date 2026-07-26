@@ -1239,7 +1239,7 @@ alter table se_cache enable row level security;
 - [ ] **Step 6: 테스트 통과 확인**
 
 Run: `python -m pytest tests/se/test_supabase_cache.py -v`
-Expected: PASS — 11 passed
+Expected: PASS — 12 passed
 
 - [ ] **Step 7: 커밋**
 
