@@ -15,6 +15,7 @@ import requests
 
 from se_server.config import SEConfig
 from se_server.jobs.model import Job
+from se_server.supabase_rest import auth_headers
 
 _TABLE = "se_jobs"
 
@@ -25,8 +26,7 @@ class SupabaseJobStore:
         self.session = session or requests.Session()
 
     def _headers(self) -> dict:
-        key = self.config.supabase_service_key
-        return {"Authorization": f"Bearer {key}", "apikey": key}
+        return auth_headers(self.config.supabase_service_key)
 
     def _table_url(self) -> str:
         return f"{self.config.supabase_url}/rest/v1/{_TABLE}"

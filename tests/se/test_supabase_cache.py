@@ -45,7 +45,24 @@ class TestBlob(unittest.TestCase):
         cache.put_blob("document.xml/abc", b"ZIPDATA")
         headers = session.post.call_args[1]["headers"]
         self.assertEqual(headers["x-upsert"], "true")
-        self.assertEqual(headers["Authorization"], "Bearer SERVICE_KEY")
+        # CFG의 서비스 키("SERVICE_KEY")는 JWT 형태가 아니므로 Authorization
+        # 헤더는 붙지 않는다 — apikey로 서비스 키 전달을 검증한다.
+        self.assertEqual(headers["apikey"], "SERVICE_KEY")
+
+    def test_put_blob_new_format_key_omits_authorization(self):
+        """신형 secret 키(sb_secret_...)도 apikey 헤더만으로 정상 동작한다."""
+        new_key_cfg = SEConfig(
+            supabase_url="https://proj.supabase.co",
+            supabase_service_key="sb_secret_EXAMPLE-NOT-REAL",
+            cache_bucket="se-cache",
+        )
+        session = mock.Mock()
+        session.post.return_value = _resp(200)
+        cache = SupabaseCache(new_key_cfg, session=session)
+        cache.put_blob("document.xml/abc", b"ZIPDATA")
+        headers = session.post.call_args[1]["headers"]
+        self.assertEqual(headers["apikey"], "sb_secret_EXAMPLE-NOT-REAL")
+        self.assertNotIn("Authorization", headers)
 
     def test_blob_write_failure_does_not_propagate(self):
         """캐시 쓰기 실패가 분석 전체를 중단시키면 안 된다.
