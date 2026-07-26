@@ -39,6 +39,58 @@ class TestCacheKey(unittest.TestCase):
         b = http.cache_key(DOC_URL, {"corp_code": "001"})
         self.assertNotEqual(a, b)
 
+    def test_delimiters_in_values_do_not_collide(self):
+        """값에 `&`나 `=`가 섞여도 다른 파라미터 조합은 다른 키를 낳는다.
+
+        단순 문자열 결합이면 아래 둘이 모두 "...?a=b&c=d"로 축약돼 충돌한다.
+        """
+        http = CachingHttp(MemoryCache())
+        a = http.cache_key(LIST_URL, {"a": "b&c=d"})
+        b = http.cache_key(LIST_URL, {"a": "b", "c": "d"})
+        self.assertNotEqual(a, b)
+
+
+class TestBlobPoisoningGuard(unittest.TestCase):
+    """DART는 오류 시에도 HTTP 200 + JSON/텍스트 바디로 응답할 수 있다.
+
+    blob은 TTL 없이 영구 보관되고 캐시 키가 crtfc_key를 제외해 전 사용자가
+    공유하므로, 오류 바디가 한 번 저장되면 해당 rcept_no가 모두에게 영구히
+    조회 불가가 된다. 실제 ZIP만 저장해야 한다.
+    """
+
+    def test_json_error_body_is_not_stored_as_blob(self):
+        backend = MemoryCache()
+        http = CachingHttp(backend)
+        params = {"rcept_no": "2024030100001"}
+        http.put(DOC_URL, params, 200,
+                 {"Content-Type": "application/json"},
+                 b'{"status":"013","message":"\xec\xa1\xb0\xed\x9a\x8c\xeb\x90\x9c \xeb\x8d\xb0\xec\x9d\xb4\xed\x84\xb0 \xec\x97\x86\xec\x9d\x8c"}')
+        self.assertIsNone(backend.get_blob(http.cache_key(DOC_URL, params)))
+        self.assertIsNone(http.get(DOC_URL, params))
+
+    def test_text_error_body_is_not_stored_as_blob(self):
+        backend = MemoryCache()
+        http = CachingHttp(backend)
+        params = {"rcept_no": "2024030100002"}
+        http.put(DOC_URL, params, 200, {"Content-Type": "text/html"}, b"<html>error</html>")
+        self.assertIsNone(backend.get_blob(http.cache_key(DOC_URL, params)))
+
+    def test_real_zip_is_still_stored(self):
+        """가드가 정상 ZIP까지 막아서는 안 된다."""
+        backend = MemoryCache()
+        http = CachingHttp(backend)
+        params = {"rcept_no": "2024030100003"}
+        http.put(DOC_URL, params, 200, {"Content-Type": "application/zip"}, b"PK\x03\x04REAL")
+        self.assertEqual(backend.get_blob(http.cache_key(DOC_URL, params)), b"PK\x03\x04REAL")
+
+    def test_xbrl_endpoint_gets_same_guard(self):
+        xbrl_url = "https://opendart.fss.or.kr/api/fnlttXbrl.xml"
+        backend = MemoryCache()
+        http = CachingHttp(backend)
+        params = {"rcept_no": "2024030100004"}
+        http.put(xbrl_url, params, 200, {"Content-Type": "application/json"}, b'{"status":"013"}')
+        self.assertIsNone(backend.get_blob(http.cache_key(xbrl_url, params)))
+
 
 class TestPolicyRouting(unittest.TestCase):
     def test_document_xml_stored_as_blob(self):

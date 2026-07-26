@@ -15,10 +15,13 @@ from __future__ import annotations
 
 import base64
 import hashlib
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 from dart_risk_mcp.core import dart_client
 from se_server.cache.base import CacheBackend
+
+# ZIP 파일 매직 바이트. blob 저장 전 실제 ZIP인지 확인하는 데 쓴다.
+_ZIP_MAGIC = b"PK\x03\x04"
 
 # 캐시 키에서 제외할 파라미터 — 사용자 식별자에 해당한다.
 _EXCLUDED_PARAMS = frozenset({"crtfc_key"})
@@ -49,14 +52,19 @@ class CachingHttp:
         self.json_ttl_seconds = json_ttl_seconds
 
     def cache_key(self, url: str, params: dict) -> str:
-        """(엔드포인트, 사용자 키를 제외한 파라미터)로 안정적인 키를 만든다."""
+        """(엔드포인트, 사용자 키를 제외한 파라미터)로 안정적인 키를 만든다.
+
+        값을 URL 인코딩해 정규화한다. 단순 문자열 결합은 값에 `&`나 `=`가
+        섞이면 서로 다른 파라미터 조합이 같은 문자열로 축약돼 키가 충돌한다
+        (예: {"a": "b&c=d"} 와 {"a": "b", "c": "d"}).
+        """
         endpoint = _endpoint_of(url)
         items = sorted(
             (str(k), str(v))
             for k, v in (params or {}).items()
             if k not in _EXCLUDED_PARAMS
         )
-        canonical = endpoint + "?" + "&".join(f"{k}={v}" for k, v in items)
+        canonical = endpoint + "?" + urlencode(items)
         digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
         return f"{endpoint}/{digest}"
 
@@ -87,6 +95,15 @@ class CachingHttp:
             return
         key = self.cache_key(url, params)
         if self._is_blob(url):
+            # DART /document.xml은 키 오류·조회 실패 시에도 HTTP 200으로
+            # 응답하면서 바디에 JSON/텍스트 오류 메시지를 담는다(core의
+            # _fetch_document_zip이 같은 이유로 Content-Type을 검사한다).
+            # blob은 TTL 없이 영구 보관되고 캐시 키가 crtfc_key를 제외해
+            # 전 사용자가 공유하므로, 오류 바디가 한 번 들어가면 해당
+            # rcept_no가 모두에게 영구히 조회 불가가 된다. 실제 ZIP인지
+            # 확인한 뒤에만 저장한다.
+            if not body.startswith(_ZIP_MAGIC):
+                return
             self.backend.put_blob(key, body)
             return
         self.backend.put_json(
