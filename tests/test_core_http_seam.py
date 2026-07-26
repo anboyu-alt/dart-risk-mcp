@@ -47,6 +47,58 @@ class TestHttpSeamDefault(unittest.TestCase):
         self.assertEqual(req.call_count, 1)
 
 
+class TestRetrySemanticsUnchanged(unittest.TestCase):
+    """캐시 훅을 달면서 기존 재시도·예외 동작이 바뀌지 않았는지 고정한다.
+
+    _retry는 거의 모든 core 함수가 쓰므로 이 계약이 깨지면 광범위한 회귀가 난다.
+    """
+
+    def tearDown(self):
+        dart_client.set_http_cache(None)
+
+    def test_4xx_is_returned_not_raised(self):
+        """404 등 비재시도 4xx는 예외 없이 그대로 반환된다.
+
+        _fetch_document_zip을 비롯한 호출자들이 `resp.status_code != 200`으로
+        분기하므로, 여기서 raise하면 그 분기가 죽는다.
+        """
+        resp404 = _fake_response(status=404)
+        with mock.patch.object(dart_client.requests, "request", return_value=resp404) as req:
+            result = dart_client._retry("GET", "https://example.test/api/list.json", params={})
+        self.assertEqual(result.status_code, 404)
+        self.assertEqual(req.call_count, 1)  # 4xx는 재시도하지 않는다
+        resp404.raise_for_status.assert_not_called()
+
+    def test_4xx_not_retried_with_cache_enabled(self):
+        """캐시가 켜져 있어도 4xx 동작은 같아야 한다."""
+        dart_client.set_http_cache(FakeCache(preload=None))
+        resp403 = _fake_response(status=403)
+        with mock.patch.object(dart_client.requests, "request", return_value=resp403):
+            result = dart_client._retry("GET", "https://example.test/api/list.json", params={})
+        self.assertEqual(result.status_code, 403)
+        resp403.raise_for_status.assert_not_called()
+
+    def test_persistent_5xx_exhausts_retries_then_raises(self):
+        """재시도를 모두 소진한 5xx는 기존대로 raise_for_status를 호출한다."""
+        resp500 = _fake_response(status=500)
+        resp500.raise_for_status.side_effect = RuntimeError("500")
+        with mock.patch.object(dart_client.requests, "request", return_value=resp500) as req, \
+                mock.patch.object(dart_client.time, "sleep"):
+            with self.assertRaises(RuntimeError):
+                dart_client._retry("GET", "https://example.test/api/list.json", params={})
+        self.assertEqual(req.call_count, 3)
+
+    def test_429_is_retried_then_succeeds(self):
+        """429 후 200이 오면 재시도해서 성공 응답을 반환한다."""
+        responses = [_fake_response(status=429), _fake_response(status=200, body=b'{"ok":1}')]
+        with mock.patch.object(
+            dart_client.requests, "request", side_effect=responses
+        ) as req, mock.patch.object(dart_client.time, "sleep"):
+            result = dart_client._retry("GET", "https://example.test/api/list.json", params={})
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(req.call_count, 2)
+
+
 class TestHttpSeamWithCache(unittest.TestCase):
     def tearDown(self):
         dart_client.set_http_cache(None)

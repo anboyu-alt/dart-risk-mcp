@@ -77,10 +77,12 @@ def _retry(method: str, url: str, **kwargs) -> requests.Response:
             return _response_from_cache(status, headers, body)
 
     last: requests.Response | None = None
+    exhausted = True  # 재시도를 모두 소진했는가 (아래 raise_for_status 조건)
     for i in range(3):
         try:
             last = requests.request(method, url, **kwargs)
             if last.status_code not in (429, 500, 502, 503, 504):
+                exhausted = False
                 break
             if i < 2:
                 time.sleep(min(2 ** i, 10))
@@ -92,7 +94,11 @@ def _retry(method: str, url: str, **kwargs) -> requests.Response:
     if cacheable and last is not None and last.status_code == 200:
         cache.put(url, params, last.status_code, dict(last.headers), last.content)
 
-    if last is not None and last.status_code >= 400:
+    # 기존 동작 보존: 비재시도 응답(404 등)은 그대로 반환하고, 재시도를 모두
+    # 소진한 429/5xx일 때만 예외를 던진다. `exhausted` 없이 상태 코드만 보면
+    # 404가 raise_for_status로 흘러가 호출자의 `status_code != 200` 분기가
+    # 죽는다 (_fetch_document_zip 등이 이 분기에 의존한다).
+    if exhausted and last is not None and last.status_code >= 400:
         last.raise_for_status()
     return last  # type: ignore
 
