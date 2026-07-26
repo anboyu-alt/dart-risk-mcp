@@ -329,9 +329,60 @@ class TestSpecs(unittest.TestCase):
 
     def test_every_param_name_is_supported(self):
         """param_names는 실행기가 채울 수 있는 이름이어야 한다."""
-        allowed = {"corp_code", "lookback_years", "year", "bsns_year"}
+        allowed = {"corp_code", "lookback_years", "lookback_days", "year", "bsns_year"}
         for spec in STAGE1_SPECS:
             self.assertTrue(set(spec.param_names) <= allowed, spec.key)
+
+    def test_param_names_match_real_signatures(self):
+        """선언한 param_names가 core 함수가 실제로 받는 인자인지 대조한다.
+
+        전역 허용집합만 검사하면 함수마다 다른 인자명을 놓친다 —
+        fetch_company_disclosures는 lookback_years가 아니라 lookback_days를
+        받는다. 실행기는 func(api_key=api_key, **params)로 호출하므로
+        이름이 틀리면 런타임 TypeError가 난다.
+        """
+        import inspect
+
+        for spec in STAGE1_SPECS:
+            accepted = set(inspect.signature(resolve_callable(spec.func_name)).parameters)
+            unknown = set(spec.param_names) - accepted
+            self.assertFalse(
+                unknown,
+                f"{spec.key}: {spec.func_name}가 받지 않는 인자 {unknown}",
+            )
+
+    def test_required_params_are_all_supplied(self):
+        """기본값 없는 필수 인자를 빠뜨리지 않았는지 확인한다.
+
+        api_key는 실행기가 따로 넘기므로 제외한다.
+        """
+        import inspect
+
+        items = {i.key: i for i in build_stage1_items("00126380", 1)}
+        for spec in STAGE1_SPECS:
+            sig = inspect.signature(resolve_callable(spec.func_name))
+            required = {
+                name
+                for name, p in sig.parameters.items()
+                if p.default is inspect.Parameter.empty
+                and p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
+                and name != "api_key"
+            }
+            missing = required - set(items[spec.key].params)
+            self.assertFalse(missing, f"{spec.key}: 필수 인자 누락 {missing}")
+
+    def test_oversized_only_for_year_proportional_functions(self):
+        """oversized 기준: 호출 수가 lookback_years에 비례하는 함수만.
+
+        엔드포인트 몇 개를 1회씩 도는 함수는 연수와 무관한 상수 시간이다.
+        """
+        by_key = {s.key: s for s in STAGE1_SPECS}
+        for key in ("fund_usage", "insider_timeline", "executive_roster",
+                    "audit_history", "dividends", "disclosures"):
+            self.assertTrue(by_key[key].oversized, f"{key}는 oversized여야 한다")
+        for key in ("company_info", "affiliates", "financials", "indicators",
+                    "shareholders", "debt_balance", "distress"):
+            self.assertFalse(by_key[key].oversized, f"{key}는 oversized가 아니어야 한다")
 
     def test_unknown_func_name_raises(self):
         with self.assertRaises(KeyError):
@@ -418,8 +469,17 @@ _MAX_YEARS = 5
 class Stage1Spec:
     """1단 항목 하나의 정의.
 
-    oversized=True는 함수 내부에서 수십 콜을 도는 것을 뜻한다. 실행기는 이런
-    항목을 예산이 넉넉할 때만 시작한다 — 한 번 시작하면 중간에 끊을 수 없다.
+    param_names는 **해당 core 함수가 실제로 받는 키워드 인자 이름**이어야 한다.
+    실행기가 `func(api_key=api_key, **item.params)`로 호출하므로, 이름이
+    틀리면 런타임 TypeError가 난다. 예: fetch_company_disclosures는
+    lookback_years가 아니라 lookback_days(단위도 일)를 받는다.
+
+    oversized=True의 기준: **호출 수가 lookback_years에 비례하는 함수**
+    (연도·분기 루프를 도는 것). 이런 항목은 lookback_years=5에서 수십 콜이
+    되어 시간 예산을 통째로 넘길 수 있다. 실행기는 예산이 넉넉할 때만
+    시작한다 — 한 번 시작하면 중간에 끊을 수 없기 때문이다.
+    엔드포인트 몇 개를 1회씩 도는 함수(fetch_distress_events 4개,
+    fetch_debt_balance 5개)는 연수와 무관하게 상수 시간이라 해당하지 않는다.
     """
 
     key: str
@@ -431,8 +491,9 @@ class Stage1Spec:
 
 STAGE1_SPECS: tuple[Stage1Spec, ...] = (
     Stage1Spec("company_info", "헤더", "fetch_company_info", ("corp_code",)),
+    # 페이지네이션으로 최대 10회 호출한다(max_pages 기본값).
     Stage1Spec("disclosures", "자금", "fetch_company_disclosures",
-               ("corp_code", "lookback_years"), oversized=True),
+               ("corp_code", "lookback_days"), oversized=True),
     Stage1Spec("fund_usage", "자금", "fetch_fund_usage",
                ("corp_code", "lookback_years"), oversized=True),
     Stage1Spec("affiliates", "자금", "fetch_affiliate_investments", ("corp_code",)),
@@ -446,8 +507,9 @@ STAGE1_SPECS: tuple[Stage1Spec, ...] = (
     Stage1Spec("audit_history", "감사부실", "fetch_audit_opinion_history",
                ("corp_code", "lookback_years"), oversized=True),
     Stage1Spec("debt_balance", "감사부실", "fetch_debt_balance", ("corp_code",)),
+    # 4개 엔드포인트를 1회씩만 호출한다 — 연수와 무관한 상수 시간이라 oversized 아님.
     Stage1Spec("distress", "감사부실", "fetch_distress_events",
-               ("corp_code", "lookback_years"), oversized=True),
+               ("corp_code", "lookback_years")),
     Stage1Spec("dividends", "감사부실", "fetch_dividend_history",
                ("corp_code", "lookback_years"), oversized=True),
 )
@@ -481,8 +543,13 @@ def build_stage1_items(corp_code: str, lookback_years: int) -> list[WorkItem]:
                 params["corp_code"] = corp_code
             elif name == "lookback_years":
                 params["lookback_years"] = years
+            elif name == "lookback_days":
+                # fetch_company_disclosures만 일 단위로 받는다.
+                params["lookback_days"] = years * 365
             elif name in ("year", "bsns_year"):
                 params[name] = bsns_year
+            else:  # pragma: no cover - 아래 테스트가 이 경로를 막는다
+                raise ValueError(f"채울 수 없는 param 이름: {spec.key}.{name}")
         items.append(WorkItem(key=spec.key, stage=1, kind=spec.func_name, params=params))
     return items
 
@@ -497,7 +564,7 @@ def _previous_business_year() -> int:
 - [ ] **Step 4: 테스트 통과 확인**
 
 Run: `python -m pytest tests/se/test_job_registry.py -v`
-Expected: PASS — 10 passed
+Expected: PASS — 13 passed
 
 - [ ] **Step 5: 커밋**
 
