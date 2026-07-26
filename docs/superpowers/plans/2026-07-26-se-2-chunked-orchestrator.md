@@ -329,9 +329,23 @@ class TestSpecs(unittest.TestCase):
 
     def test_every_param_name_is_supported(self):
         """param_names는 실행기가 채울 수 있는 이름이어야 한다."""
-        allowed = {"corp_code", "lookback_years", "lookback_days", "year", "bsns_year"}
+        allowed = {"corp_code", "lookback_years", "lookback_days", "max_pages",
+                   "year", "bsns_year"}
         for spec in STAGE1_SPECS:
             self.assertTrue(set(spec.param_names) <= allowed, spec.key)
+
+    def test_disclosures_raises_pagination_cap_with_years(self):
+        """다년 조회에서 공시가 조용히 잘리지 않도록 max_pages를 함께 넘긴다.
+
+        core의 fetch_company_disclosures는 max_pages 기본값 10에서 1000건을
+        넘으면 log.warning만 남기고 break한다 — 예외가 아니라 침묵 누락이라
+        호출자가 알아채지 못한다. 기존 MCP 도구도 같은 이유로 years*10을
+        넘긴다(server.py _resolve_lookback).
+        """
+        for years, expected in ((1, 10), (3, 30), (5, 50)):
+            item = {i.key: i for i in build_stage1_items("0", years)}["disclosures"]
+            self.assertEqual(item.params["max_pages"], expected)
+            self.assertEqual(item.params["lookback_days"], years * 365)
 
     def test_param_names_match_real_signatures(self):
         """선언한 param_names가 core 함수가 실제로 받는 인자인지 대조한다.
@@ -491,9 +505,12 @@ class Stage1Spec:
 
 STAGE1_SPECS: tuple[Stage1Spec, ...] = (
     Stage1Spec("company_info", "헤더", "fetch_company_info", ("corp_code",)),
-    # 페이지네이션으로 최대 10회 호출한다(max_pages 기본값).
+    # 페이지네이션 상한을 반드시 함께 넘긴다. max_pages 기본값 10은 1000건에서
+    # 조용히 잘리며(core가 log.warning만 남기고 break) 다년 조회에서 오래된
+    # 공시 위주로 결과가 누락된다. 기존 MCP 도구도 같은 이유로 years*10을
+    # 넘긴다(server.py `_resolve_lookback`, CHANGELOG "다년 누락 방지").
     Stage1Spec("disclosures", "자금", "fetch_company_disclosures",
-               ("corp_code", "lookback_days"), oversized=True),
+               ("corp_code", "lookback_days", "max_pages"), oversized=True),
     Stage1Spec("fund_usage", "자금", "fetch_fund_usage",
                ("corp_code", "lookback_years"), oversized=True),
     Stage1Spec("affiliates", "자금", "fetch_affiliate_investments", ("corp_code",)),
@@ -546,6 +563,10 @@ def build_stage1_items(corp_code: str, lookback_years: int) -> list[WorkItem]:
             elif name == "lookback_days":
                 # fetch_company_disclosures만 일 단위로 받는다.
                 params["lookback_days"] = years * 365
+            elif name == "max_pages":
+                # server.py _resolve_lookback과 같은 공식. 기본값 10을 쓰면
+                # 1000건에서 조용히 잘려 다년 조회의 공시가 누락된다.
+                params["max_pages"] = years * 10
             elif name in ("year", "bsns_year"):
                 params[name] = bsns_year
             else:  # pragma: no cover - 아래 테스트가 이 경로를 막는다
@@ -564,7 +585,7 @@ def _previous_business_year() -> int:
 - [ ] **Step 4: 테스트 통과 확인**
 
 Run: `python -m pytest tests/se/test_job_registry.py -v`
-Expected: PASS — 13 passed
+Expected: PASS — 14 passed
 
 - [ ] **Step 5: 커밋**
 
