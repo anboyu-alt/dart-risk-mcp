@@ -7,7 +7,6 @@
   "outputDirectory": "docs/tool",
   "trailingSlash": false,
   "rewrites": [
-    { "source": "/api/analyze", "destination": "/api/index" },
-    { "source": "/api/analyze/(.*)", "destination": "/api/index" }
+    { "source": "/api/se/(.*)", "destination": "/api/index" }
   ]
 }

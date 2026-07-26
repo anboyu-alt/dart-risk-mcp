@@ -31,9 +31,9 @@ class TestAuthBoundary(unittest.TestCase):
     def test_every_route_rejects_missing_token(self):
         deps = Deps(store=mock.Mock(), auth=_Auth())
         for method, path in (
-            ("POST", "/api/analyze"),
-            ("POST", "/api/analyze/j1/step"),
-            ("GET", "/api/analyze/j1"),
+            ("POST", "/api/se/analyze"),
+            ("POST", "/api/se/analyze/j1/step"),
+            ("GET", "/api/se/analyze/j1"),
         ):
             with self.subTest(path=path):
                 resp = handle(_req(method, path, {"company": "회사"}, user_token=""),
@@ -50,7 +50,7 @@ class TestFullFlow(unittest.TestCase):
 
         with mock.patch("se_server.api.handlers.resolve_corp",
                         return_value=("셀트리온", {"corp_code": "00421045"})):
-            created = handle(_req("POST", "/api/analyze",
+            created = handle(_req("POST", "/api/se/analyze",
                                   {"company": "셀트리온", "lookback_years": 1}), deps)
         self.assertEqual(created.status, 201)
         job_id = created.body["job_id"]
@@ -60,14 +60,14 @@ class TestFullFlow(unittest.TestCase):
                 mock.patch("se_server.jobs.runner.fetch_disclosure_full",
                            return_value={"text": ""}):
             for _ in range(20):
-                stepped = handle(_req("POST", f"/api/analyze/{job_id}/step"), deps)
+                stepped = handle(_req("POST", f"/api/se/analyze/{job_id}/step"), deps)
                 self.assertEqual(stepped.status, 200)
                 if stepped.body["done"]:
                     break
             else:
                 self.fail("20단계 안에 완료되지 않았습니다")
 
-        final = handle(_req("GET", f"/api/analyze/{job_id}"), deps)
+        final = handle(_req("GET", f"/api/se/analyze/{job_id}"), deps)
         self.assertEqual(final.body["status"], "done")
         self.assertEqual(final.body["finished"], final.body["total"])
 
@@ -80,15 +80,15 @@ class TestCrossUserIsolation(unittest.TestCase):
 
         with mock.patch("se_server.api.handlers.resolve_corp",
                         return_value=("회사", {"corp_code": "0"})):
-            created = handle(_req("POST", "/api/analyze", {"company": "회사"}), a)
+            created = handle(_req("POST", "/api/se/analyze", {"company": "회사"}), a)
         job_id = created.body["job_id"]
 
-        self.assertEqual(handle(_req("GET", f"/api/analyze/{job_id}"), b).status, 404)
+        self.assertEqual(handle(_req("GET", f"/api/se/analyze/{job_id}"), b).status, 404)
         self.assertEqual(
-            handle(_req("POST", f"/api/analyze/{job_id}/step"), b).status, 404
+            handle(_req("POST", f"/api/se/analyze/{job_id}/step"), b).status, 404
         )
         # A는 여전히 접근 가능해야 한다.
-        self.assertEqual(handle(_req("GET", f"/api/analyze/{job_id}"), a).status, 200)
+        self.assertEqual(handle(_req("GET", f"/api/se/analyze/{job_id}"), a).status, 200)
 
 
 if __name__ == "__main__":

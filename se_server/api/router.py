@@ -2,9 +2,18 @@
 
 Vercel의 파일 기반 동적 라우팅(api/[id].py) 대신 코드로 라우팅한다.
 파일 배치에 라우팅이 있으면 단위 테스트로 검증할 수 없기 때문이다.
-vercel.json이 /api/analyze 및 그 하위 경로만 이 단일 함수로 rewrite한다
+vercel.json이 /api/se/ 이하만 이 단일 함수로 rewrite한다
 (그 외 /api/* — 예: /api/list.json — 는 기존 CORS 릴레이
 api/[endpoint].js가 파일 기반 라우팅으로 그대로 처리한다).
+
+경로에 /se/ 세그먼트를 두는 이유: 기존 CORS 릴레이(api/[endpoint].js)가
+`/api/:endpoint` 형태의 단일 세그먼트 동적 라우트를 차지하고 있다.
+`/api/analyze`를 그대로 쓰면 그 정규식과 같은 세그먼트를 다투게 되어
+rewrite와 릴레이의 파일 기반 라우팅 중 무엇이 이기는지가 Vercel 내부
+우선순위에 달린다. 릴레이로 새면 403 {"error":"forbidden"}이 나오는데
+하위 경로(/api/analyze/{id}/step)는 경쟁자가 없어 정상 동작하는
+**비대칭 실패**라 원인 파악이 매우 어렵다. 두 세그먼트(/api/se/analyze)면
+릴레이 정규식이 구조적으로 매칭 불가라 우선순위에 의존하지 않는다.
 """
 from __future__ import annotations
 
@@ -16,9 +25,9 @@ _JOB_ID = r"(?P<job_id>[A-Za-z0-9_-]+)"
 
 # fullmatch로 대조하므로 ^...$ 앵커를 쓰지 않는다.
 _ROUTES: tuple[tuple[str, re.Pattern, str], ...] = (
-    ("POST", re.compile(r"/api/analyze"), "create"),
-    ("POST", re.compile(rf"/api/analyze/{_JOB_ID}/step"), "step"),
-    ("GET", re.compile(rf"/api/analyze/{_JOB_ID}"), "get"),
+    ("POST", re.compile(r"/api/se/analyze"), "create"),
+    ("POST", re.compile(rf"/api/se/analyze/{_JOB_ID}/step"), "step"),
+    ("GET", re.compile(rf"/api/se/analyze/{_JOB_ID}"), "get"),
 )
 
 
