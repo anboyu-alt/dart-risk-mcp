@@ -16,6 +16,8 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from scripts._console import use_utf8_stdout  # noqa: E402
+
 from dart_risk_mcp.core.dart_client import resolve_corp  # noqa: E402
 from se_server.cache import MemoryCache  # noqa: E402
 from se_server.http_cache import install  # noqa: E402
@@ -88,10 +90,7 @@ def run_to_completion(company, api_key, lookback_years, store, budget_seconds, n
 
 def main() -> int:
     # Windows 콘솔 기본 코드페이지(cp949)는 "—" 같은 문자를 인코딩하지 못해
-    # UnicodeEncodeError로 죽는다(라이브 실측 중 실제로 재현). PYTHONIOENCODING을
-    # 강제하는 대신 여기서 stdout을 utf-8로 재설정해 별도 환경변수 없이도 동작하게 한다.
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
+    use_utf8_stdout()
 
     parser = argparse.ArgumentParser(description="SE 분석 작업 실행")
     parser.add_argument("company", help="기업명 또는 종목코드")
