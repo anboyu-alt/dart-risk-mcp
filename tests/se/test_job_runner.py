@@ -66,7 +66,15 @@ class TestRunStepBudget(unittest.TestCase):
         self.assertTrue(second.done)
 
     def test_oversized_item_needs_reserve(self):
-        """oversized 항목은 남은 예산이 충분할 때만 시작한다."""
+        """oversized 항목은 남은 예산이 충분할 때만 시작한다.
+
+        budget_seconds는 OVERSIZED_RESERVE보다 커야 한다(그렇지 않으면
+        run_step이 ValueError를 던진다 — test_budget_at_or_below_reserve_is_rejected
+        참고). 대신 시간이 흐르는 가짜 시계(step=2.0)를 써서, 이번 호출의
+        remaining이 실행 도중 OVERSIZED_RESERVE 아래로 떨어지는 상황을
+        재현한다 — "영원히 불가능"이 아니라 "이번 예산으로는 부족"인
+        정상적인 케이스다.
+        """
         store = MemoryJobStore()
         item = WorkItem(key="insider_timeline", stage=1, kind="fetch_insider_timeline",
                         params={"corp_code": "0", "lookback_years": 5})
@@ -75,8 +83,8 @@ class TestRunStepBudget(unittest.TestCase):
         with mock.patch.object(runner, "resolve_callable",
                                return_value=lambda **kw: called.append(1) or {"ok": 1}):
             result = runner.run_step("j1", "KEY", store,
-                                     budget_seconds=runner.OVERSIZED_RESERVE - 1.0,
-                                     now=_Clock(0.0))
+                                     budget_seconds=runner.OVERSIZED_RESERVE + 1.0,
+                                     now=_Clock(2.0))
         self.assertEqual(called, [])
         self.assertFalse(result.done)
 
@@ -85,6 +93,11 @@ class TestRunStepBudget(unittest.TestCase):
 
         이 신호가 없으면 호출자는 "예산 소진(진행 중)"과 "영구 정지"를
         구분하지 못해 같은 예산으로 무한 반복한다.
+
+        budget_seconds는 OVERSIZED_RESERVE보다 커야 진입 가드를 통과한다
+        (test_budget_at_or_below_reserve_is_rejected 참고). step=2.0인
+        가짜 시계로 이번 호출 중 remaining이 OVERSIZED_RESERVE 아래로
+        떨어지는 상황을 재현해 원래 검증하려던 "정체 신호"는 그대로 살린다.
         """
         store = MemoryJobStore()
         item = WorkItem(key="insider_timeline", stage=1, kind="fetch_insider_timeline",
@@ -92,8 +105,8 @@ class TestRunStepBudget(unittest.TestCase):
         store.save(_job_with([item]))
         with mock.patch.object(runner, "resolve_callable", return_value=lambda **kw: {}):
             result = runner.run_step("j1", "KEY", store,
-                                     budget_seconds=runner.OVERSIZED_RESERVE - 1.0,
-                                     now=_Clock(0.0))
+                                     budget_seconds=runner.OVERSIZED_RESERVE + 1.0,
+                                     now=_Clock(2.0))
         self.assertTrue(result.stalled)
         self.assertEqual(result.processed, 0)
 
@@ -118,15 +131,46 @@ class TestRunStepBudget(unittest.TestCase):
                        params={"corp_code": "0", "lookback_years": 5})
         store.save(_job_with([big, _stage1("small1"), _stage1("small2")]))
 
+        # budget_seconds는 OVERSIZED_RESERVE보다 커야 진입 가드를 통과한다
+        # (test_budget_at_or_below_reserve_is_rejected 참고). step=2.0인
+        # 가짜 시계로 매 반복마다 remaining이 OVERSIZED_RESERVE 아래로
+        # 떨어지게 해, 원래 검증하려던 head-of-line 방지 동작은 그대로 살린다.
         with mock.patch.object(runner, "resolve_callable", return_value=lambda **kw: {}):
             result = runner.run_step("j1", "KEY", store,
-                                     budget_seconds=runner.OVERSIZED_RESERVE - 1.0,
-                                     now=_Clock(0.1))
+                                     budget_seconds=runner.OVERSIZED_RESERVE + 1.0,
+                                     now=_Clock(2.0))
 
         job = store.load("j1")
         self.assertEqual(result.processed, 2)   # 작은 항목 둘은 처리됐다
         self.assertFalse(result.stalled)        # 진행이 있었으므로 정체 아님
         self.assertEqual(job.items[0].status, "pending")  # oversized는 그대로 대기
+
+    def test_budget_at_or_below_reserve_is_rejected(self):
+        """예산이 RESERVE 이하면 oversized 항목을 영원히 시작할 수 없다.
+
+        remaining = budget - elapsed 이고 elapsed > 0이므로
+        remaining < budget <= RESERVE 가 항상 참이다. 조용히 고착되게 두지
+        않고 설정 오류로 즉시 알린다.
+        라이브 실측에서 --budget 20(=RESERVE)이 7/13에서 영구 고착되며 발견됐다.
+        """
+        store = MemoryJobStore()
+        big = WorkItem(key="insider_timeline", stage=1, kind="fetch_insider_timeline",
+                       params={"corp_code": "0", "lookback_years": 5})
+        store.save(_job_with([big, _stage1("small")]))
+        for bad in (runner.OVERSIZED_RESERVE, runner.OVERSIZED_RESERVE - 5.0, 1.0):
+            with self.subTest(budget=bad):
+                with self.assertRaises(ValueError):
+                    runner.run_step("j1", "KEY", store, budget_seconds=bad,
+                                    now=_Clock(0.1))
+
+    def test_small_budget_allowed_when_no_oversized_pending(self):
+        """oversized 항목이 없으면 작은 예산도 정상이다."""
+        store = MemoryJobStore()
+        store.save(_job_with([_stage1("small")]))
+        with mock.patch.object(runner, "resolve_callable", return_value=lambda **kw: {}):
+            result = runner.run_step("j1", "KEY", store, budget_seconds=1.0,
+                                     now=_Clock(0.1))
+        self.assertTrue(result.done)
 
     def test_stalled_only_when_all_remaining_are_oversized(self):
         store = MemoryJobStore()
@@ -135,10 +179,12 @@ class TestRunStepBudget(unittest.TestCase):
         big2 = WorkItem(key="audit_history", stage=1, kind="fetch_audit_opinion_history",
                         params={"corp_code": "0", "lookback_years": 5})
         store.save(_job_with([big, big2]))
+        # budget_seconds > OVERSIZED_RESERVE로 진입 가드는 통과시키되, step=2.0
+        # 가짜 시계로 이번 호출 중 remaining이 RESERVE 아래로 떨어지게 한다.
         with mock.patch.object(runner, "resolve_callable", return_value=lambda **kw: {}):
             result = runner.run_step("j1", "KEY", store,
-                                     budget_seconds=runner.OVERSIZED_RESERVE - 1.0,
-                                     now=_Clock(0.1))
+                                     budget_seconds=runner.OVERSIZED_RESERVE + 1.0,
+                                     now=_Clock(2.0))
         self.assertTrue(result.stalled)
         self.assertEqual(result.processed, 0)
 

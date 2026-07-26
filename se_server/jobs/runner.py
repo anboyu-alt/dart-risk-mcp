@@ -204,10 +204,34 @@ def run_step(
     budget_seconds: float = 45.0,
     now: Callable[[], float] = time.monotonic,
 ) -> StepResult:
-    """예산 안에서 처리 가능한 만큼 항목을 실행하고 상태를 저장한다."""
+    """예산 안에서 처리 가능한 만큼 항목을 실행하고 상태를 저장한다.
+
+    budget_seconds가 OVERSIZED_RESERVE 이하이고 대기 중인 oversized 항목이
+    있으면 ValueError를 던진다. remaining = budget_seconds - elapsed이고
+    elapsed는 첫 now() 측정부터 항상 0보다 크므로, 이 조건에서는
+    remaining < OVERSIZED_RESERVE가 **항상** 참이 되어 oversized 항목을
+    절대 시작할 수 없다 — 조용히 고착되게 두는 대신 설정 오류로 즉시
+    알린다. oversized 항목이 남아있지 않다면 작은 예산도 정상 동작한다.
+
+    라이브 실측: `--budget 20`(=OVERSIZED_RESERVE)으로 셀트리온 1년 분석을
+    돌리자 13개 항목 중 작은 7개만 처리되고 oversized 6개는 영원히
+    시작되지 못한 채 영구 고착됐다.
+    """
     job = store.load(job_id)
     if job is None:
         raise ValueError(f"작업을 찾을 수 없습니다: {job_id}")
+
+    if budget_seconds <= OVERSIZED_RESERVE:
+        pending_oversized = [i for i in job.pending_items() if _is_oversized(i)]
+        if pending_oversized:
+            keys = ", ".join(sorted(i.key for i in pending_oversized))
+            raise ValueError(
+                f"budget_seconds={budget_seconds:.1f}초가 OVERSIZED_RESERVE="
+                f"{OVERSIZED_RESERVE:.1f}초 이하입니다. remaining = budget_seconds - "
+                "elapsed이고 elapsed는 항상 0보다 크므로, 이 예산으로는 대기 중인 "
+                f"oversized 항목({keys})을 영원히 시작할 수 없습니다. "
+                "budget_seconds를 OVERSIZED_RESERVE보다 크게 설정하세요."
+            )
 
     started = now()
     processed = 0

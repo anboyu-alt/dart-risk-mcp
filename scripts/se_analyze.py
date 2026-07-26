@@ -90,7 +90,10 @@ def main() -> int:
     parser.add_argument("company", help="기업명 또는 종목코드")
     parser.add_argument("--years", type=int, default=1, help="조회 연수 (기본 1)")
     parser.add_argument("--budget", type=float, default=45.0,
-                        help="단계당 시간 예산 초 (기본 45)")
+                        help="단계당 시간 예산 초 (기본 45). "
+                             "runner.OVERSIZED_RESERVE(20초)보다 커야 한다 — "
+                             "이하이면 oversized 항목을 영원히 시작할 수 없어 "
+                             "run_step이 즉시 ValueError로 거부한다")
     args = parser.parse_args()
 
     api_key = _load_api_key()
