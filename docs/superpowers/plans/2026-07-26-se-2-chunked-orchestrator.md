@@ -1288,6 +1288,10 @@ MAX_ATTEMPTS = 2
 # 시작한 항목은 끊을 수 없으므로, 예산이 얼마 안 남았을 때 시작하면 상한을 넘긴다.
 OVERSIZED_RESERVE = 20.0
 
+# 중간 저장 간격(초). 함수가 죽어도 이 간격만큼만 유실된다. 매 항목마다
+# 저장하면 state가 커질수록 페이로드가 O(n²)이 되므로 시간으로 조절한다.
+SAVE_INTERVAL = 5.0
+
 # 오류 메시지에서 지울 자격증명 패턴. 작업 레코드는 공유 저장소에 남는다.
 _SECRET_RE = re.compile(r"(crtfc_key|api_key|apikey)=[^\s&'\"]+", re.IGNORECASE)
 
@@ -1373,7 +1377,22 @@ def _execute(item: WorkItem, api_key: str) -> dict:
     else:
         func: Callable = resolve_callable(item.kind)
         value = func(api_key=api_key, **item.params)
-    return {"value": _jsonable(value)}
+    # 반환값도 스크럽한다. core의 일부 함수는 실패를 예외가 아니라
+    # {"error": "DART 조회 실패: <요청 URL 전체>"} 같은 **값**으로 돌려주며,
+    # 그 URL에는 crtfc_key가 박혀 있다. 작업 레코드는 공유 저장소에 남으므로
+    # error 필드만 스크럽해서는 부족하다.
+    return {"value": _scrub_values(_jsonable(value), api_key)}
+
+
+def _scrub_values(value, api_key: str):
+    """중첩 구조 안의 모든 문자열에서 자격증명을 지운다."""
+    if isinstance(value, str):
+        return _scrub(value, api_key)
+    if isinstance(value, dict):
+        return {k: _scrub_values(v, api_key) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_scrub_values(v, api_key) for v in value]
+    return value
 
 
 def _jsonable(value):
@@ -1460,6 +1479,7 @@ def run_step(
     store: JobStore,
     budget_seconds: float = 45.0,
     now: Callable[[], float] = time.monotonic,
+    save_interval_seconds: float = SAVE_INTERVAL,
 ) -> StepResult:
     """예산 안에서 처리 가능한 만큼 항목을 실행하고 상태를 저장한다."""
     job = store.load(job_id)
@@ -1482,8 +1502,8 @@ def run_step(
         )
 
     started = now()
+    last_saved = started
     processed = 0
-    blocked_by_reserve = False
 
     while True:
         # 1단이 모두 끝났으면 2단 항목을 확장한다.
@@ -1511,9 +1531,7 @@ def run_step(
             break
 
         if item is None:
-            # 남은 항목이 전부 oversized인데 예산이 부족하다. 아무것도 처리하지
-            # 못한 채 나가면 호출자가 같은 예산으로 무한 반복하므로 신호를 남긴다.
-            blocked_by_reserve = True
+            # 남은 항목이 전부 oversized인데 예산이 부족하다.
             break
 
         item.attempts += 1
@@ -1527,6 +1545,15 @@ def run_step(
                 item.status = FAILED
         processed += 1
 
+        # 중간 저장. 루프 끝에서 한 번만 저장하면, Vercel이 마지막 항목의
+        # 예산 초과분에서 함수를 죽였을 때 그 단계의 결과가 **전부** 유실되고
+        # attempts조차 남지 않아 같은 지점에서 영구 반복한다.
+        # 매 항목마다 전량 upsert하면 state가 커질수록 페이로드가 O(n²)이 되므로
+        # 시간 간격으로 조절한다.
+        if now() - last_saved >= save_interval_seconds:
+            store.save(job)
+            last_saved = now()
+
     if not job.pending_items() and job.stage2_expanded:
         job.status = "done"
     store.save(job)
@@ -1538,7 +1565,11 @@ def run_step(
         processed=processed,
         finished=finished,
         total=total,
-        stalled=blocked_by_reserve and processed == 0 and not done,
+        # 아무것도 처리하지 못한 채 끝났다면 이 예산으로는 진행이 불가능하다.
+        # 사유(예약분 부족 / 예산 소진)를 구분하지 않는다 — 호출자의 대응은
+        # 어느 쪽이든 "예산을 올리거나 실패 처리"로 같고, 구분하려 들면
+        # budget<=0처럼 신호가 빠지는 구멍이 생긴다.
+        stalled=processed == 0 and not done,
     )
 ```
 
