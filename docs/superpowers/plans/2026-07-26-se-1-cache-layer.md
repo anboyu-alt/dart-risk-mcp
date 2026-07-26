@@ -316,6 +316,58 @@ class TestHttpSeamDefault(unittest.TestCase):
         self.assertEqual(req.call_count, 1)
 
 
+class TestRetrySemanticsUnchanged(unittest.TestCase):
+    """캐시 훅을 달면서 기존 재시도·예외 동작이 바뀌지 않았는지 고정한다.
+
+    _retry는 거의 모든 core 함수가 쓰므로 이 계약이 깨지면 광범위한 회귀가 난다.
+    """
+
+    def tearDown(self):
+        dart_client.set_http_cache(None)
+
+    def test_4xx_is_returned_not_raised(self):
+        """404 등 비재시도 4xx는 예외 없이 그대로 반환된다.
+
+        _fetch_document_zip을 비롯한 호출자들이 `resp.status_code != 200`으로
+        분기하므로, 여기서 raise하면 그 분기가 죽는다.
+        """
+        resp404 = _fake_response(status=404)
+        with mock.patch.object(dart_client.requests, "request", return_value=resp404) as req:
+            result = dart_client._retry("GET", "https://example.test/api/list.json", params={})
+        self.assertEqual(result.status_code, 404)
+        self.assertEqual(req.call_count, 1)  # 4xx는 재시도하지 않는다
+        resp404.raise_for_status.assert_not_called()
+
+    def test_4xx_not_retried_with_cache_enabled(self):
+        """캐시가 켜져 있어도 4xx 동작은 같아야 한다."""
+        dart_client.set_http_cache(FakeCache(preload=None))
+        resp403 = _fake_response(status=403)
+        with mock.patch.object(dart_client.requests, "request", return_value=resp403):
+            result = dart_client._retry("GET", "https://example.test/api/list.json", params={})
+        self.assertEqual(result.status_code, 403)
+        resp403.raise_for_status.assert_not_called()
+
+    def test_persistent_5xx_exhausts_retries_then_raises(self):
+        """재시도를 모두 소진한 5xx는 기존대로 raise_for_status를 호출한다."""
+        resp500 = _fake_response(status=500)
+        resp500.raise_for_status.side_effect = RuntimeError("500")
+        with mock.patch.object(dart_client.requests, "request", return_value=resp500) as req, \
+                mock.patch.object(dart_client.time, "sleep"):
+            with self.assertRaises(RuntimeError):
+                dart_client._retry("GET", "https://example.test/api/list.json", params={})
+        self.assertEqual(req.call_count, 3)
+
+    def test_429_is_retried_then_succeeds(self):
+        """429 후 200이 오면 재시도해서 성공 응답을 반환한다."""
+        responses = [_fake_response(status=429), _fake_response(status=200, body=b'{"ok":1}')]
+        with mock.patch.object(
+            dart_client.requests, "request", side_effect=responses
+        ) as req, mock.patch.object(dart_client.time, "sleep"):
+            result = dart_client._retry("GET", "https://example.test/api/list.json", params={})
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(req.call_count, 2)
+
+
 class TestHttpSeamWithCache(unittest.TestCase):
     def tearDown(self):
         dart_client.set_http_cache(None)
@@ -432,10 +484,12 @@ def _retry(method: str, url: str, **kwargs) -> requests.Response:
             return _response_from_cache(status, headers, body)
 
     last: requests.Response | None = None
+    exhausted = True  # 재시도를 모두 소진했는가 (아래 raise_for_status 조건)
     for i in range(3):
         try:
             last = requests.request(method, url, **kwargs)
             if last.status_code not in (429, 500, 502, 503, 504):
+                exhausted = False
                 break
             if i < 2:
                 time.sleep(min(2 ** i, 10))
@@ -447,17 +501,21 @@ def _retry(method: str, url: str, **kwargs) -> requests.Response:
     if cacheable and last is not None and last.status_code == 200:
         cache.put(url, params, last.status_code, dict(last.headers), last.content)
 
-    if last is not None and last.status_code >= 400:
+    # 기존 동작 보존: 비재시도 응답(404 등)은 그대로 반환하고, 재시도를 모두
+    # 소진한 429/5xx일 때만 예외를 던진다. `exhausted` 없이 상태 코드만 보면
+    # 404가 raise_for_status로 흘러가 호출자의 `status_code != 200` 분기가
+    # 죽는다 (_fetch_document_zip 등이 이 분기에 의존한다).
+    if exhausted and last is not None and last.status_code >= 400:
         last.raise_for_status()
     return last  # type: ignore
 ```
 
-> 주의: 기존 구현은 성공 시 루프 안에서 `return last` 했다. 위 코드는 캐시 저장을 위해 `break`로 바꾸고 루프 밖에서 반환한다. `raise_for_status` 호출 위치는 기존과 동일하다.
+> 주의: 기존 구현은 비재시도 응답을 만나면 루프 안에서 곧바로 `return last` 했고, 말미의 `raise_for_status`는 **재시도 소진 시에만** 도달했다. 캐시 저장 훅을 달려면 루프 밖으로 나와야 하므로 `break`로 바꾸되, `exhausted` 플래그로 원래의 예외 조건을 그대로 재현해야 한다. 이 플래그를 빠뜨리면 모든 4xx가 예외로 바뀌는 광범위한 회귀가 난다.
 
 - [ ] **Step 4: 테스트 통과 확인**
 
 Run: `python -m pytest tests/test_core_http_seam.py -v`
-Expected: PASS — 6 passed
+Expected: PASS — 10 passed
 
 - [ ] **Step 5: 기존 테스트 전체 회귀 확인**
 
