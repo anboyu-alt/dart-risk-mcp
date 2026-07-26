@@ -20,9 +20,60 @@ class TestSpecs(unittest.TestCase):
 
     def test_every_param_name_is_supported(self):
         """param_names는 실행기가 채울 수 있는 이름이어야 한다."""
-        allowed = {"corp_code", "lookback_years", "year", "bsns_year"}
+        allowed = {"corp_code", "lookback_years", "lookback_days", "year", "bsns_year"}
         for spec in STAGE1_SPECS:
             self.assertTrue(set(spec.param_names) <= allowed, spec.key)
+
+    def test_param_names_match_real_signatures(self):
+        """선언한 param_names가 core 함수가 실제로 받는 인자인지 대조한다.
+
+        전역 허용집합만 검사하면 함수마다 다른 인자명을 놓친다 —
+        fetch_company_disclosures는 lookback_years가 아니라 lookback_days를
+        받는다. 실행기는 func(api_key=api_key, **params)로 호출하므로
+        이름이 틀리면 런타임 TypeError가 난다.
+        """
+        import inspect
+
+        for spec in STAGE1_SPECS:
+            accepted = set(inspect.signature(resolve_callable(spec.func_name)).parameters)
+            unknown = set(spec.param_names) - accepted
+            self.assertFalse(
+                unknown,
+                f"{spec.key}: {spec.func_name}가 받지 않는 인자 {unknown}",
+            )
+
+    def test_required_params_are_all_supplied(self):
+        """기본값 없는 필수 인자를 빠뜨리지 않았는지 확인한다.
+
+        api_key는 실행기가 따로 넘기므로 제외한다.
+        """
+        import inspect
+
+        items = {i.key: i for i in build_stage1_items("00126380", 1)}
+        for spec in STAGE1_SPECS:
+            sig = inspect.signature(resolve_callable(spec.func_name))
+            required = {
+                name
+                for name, p in sig.parameters.items()
+                if p.default is inspect.Parameter.empty
+                and p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
+                and name != "api_key"
+            }
+            missing = required - set(items[spec.key].params)
+            self.assertFalse(missing, f"{spec.key}: 필수 인자 누락 {missing}")
+
+    def test_oversized_only_for_year_proportional_functions(self):
+        """oversized 기준: 호출 수가 lookback_years에 비례하는 함수만.
+
+        엔드포인트 몇 개를 1회씩 도는 함수는 연수와 무관한 상수 시간이다.
+        """
+        by_key = {s.key: s for s in STAGE1_SPECS}
+        for key in ("fund_usage", "insider_timeline", "executive_roster",
+                    "audit_history", "dividends", "disclosures"):
+            self.assertTrue(by_key[key].oversized, f"{key}는 oversized여야 한다")
+        for key in ("company_info", "affiliates", "financials", "indicators",
+                    "shareholders", "debt_balance", "distress"):
+            self.assertFalse(by_key[key].oversized, f"{key}는 oversized가 아니어야 한다")
 
     def test_unknown_func_name_raises(self):
         with self.assertRaises(KeyError):

@@ -26,8 +26,17 @@ _MAX_YEARS = 5
 class Stage1Spec:
     """1단 항목 하나의 정의.
 
-    oversized=True는 함수 내부에서 수십 콜을 도는 것을 뜻한다. 실행기는 이런
-    항목을 예산이 넉넉할 때만 시작한다 — 한 번 시작하면 중간에 끊을 수 없다.
+    param_names는 **해당 core 함수가 실제로 받는 키워드 인자 이름**이어야 한다.
+    실행기가 `func(api_key=api_key, **item.params)`로 호출하므로, 이름이
+    틀리면 런타임 TypeError가 난다. 예: fetch_company_disclosures는
+    lookback_years가 아니라 lookback_days(단위도 일)를 받는다.
+
+    oversized=True의 기준: **호출 수가 lookback_years에 비례하는 함수**
+    (연도·분기 루프를 도는 것). 이런 항목은 lookback_years=5에서 수십 콜이
+    되어 시간 예산을 통째로 넘길 수 있다. 실행기는 예산이 넉넉할 때만
+    시작한다 — 한 번 시작하면 중간에 끊을 수 없기 때문이다.
+    엔드포인트 몇 개를 1회씩 도는 함수(fetch_distress_events 4개,
+    fetch_debt_balance 5개)는 연수와 무관하게 상수 시간이라 해당하지 않는다.
     """
 
     key: str
@@ -39,8 +48,9 @@ class Stage1Spec:
 
 STAGE1_SPECS: tuple[Stage1Spec, ...] = (
     Stage1Spec("company_info", "헤더", "fetch_company_info", ("corp_code",)),
+    # 페이지네이션으로 최대 10회 호출한다(max_pages 기본값).
     Stage1Spec("disclosures", "자금", "fetch_company_disclosures",
-               ("corp_code", "lookback_years"), oversized=True),
+               ("corp_code", "lookback_days"), oversized=True),
     Stage1Spec("fund_usage", "자금", "fetch_fund_usage",
                ("corp_code", "lookback_years"), oversized=True),
     Stage1Spec("affiliates", "자금", "fetch_affiliate_investments", ("corp_code",)),
@@ -54,8 +64,9 @@ STAGE1_SPECS: tuple[Stage1Spec, ...] = (
     Stage1Spec("audit_history", "감사부실", "fetch_audit_opinion_history",
                ("corp_code", "lookback_years"), oversized=True),
     Stage1Spec("debt_balance", "감사부실", "fetch_debt_balance", ("corp_code",)),
+    # 4개 엔드포인트를 1회씩만 호출한다 — 연수와 무관한 상수 시간이라 oversized 아님.
     Stage1Spec("distress", "감사부실", "fetch_distress_events",
-               ("corp_code", "lookback_years"), oversized=True),
+               ("corp_code", "lookback_years")),
     Stage1Spec("dividends", "감사부실", "fetch_dividend_history",
                ("corp_code", "lookback_years"), oversized=True),
 )
@@ -89,8 +100,13 @@ def build_stage1_items(corp_code: str, lookback_years: int) -> list[WorkItem]:
                 params["corp_code"] = corp_code
             elif name == "lookback_years":
                 params["lookback_years"] = years
+            elif name == "lookback_days":
+                # fetch_company_disclosures만 일 단위로 받는다.
+                params["lookback_days"] = years * 365
             elif name in ("year", "bsns_year"):
                 params[name] = bsns_year
+            else:  # pragma: no cover - 위 테스트(test_param_names_match_real_signatures)가 이 경로를 막는다
+                raise ValueError(f"채울 수 없는 param 이름: {spec.key}.{name}")
         items.append(WorkItem(key=spec.key, stage=1, kind=spec.func_name, params=params))
     return items
 
