@@ -80,6 +80,42 @@ class TestRunStepBudget(unittest.TestCase):
         self.assertEqual(called, [])
         self.assertFalse(result.done)
 
+    def test_reserve_block_reports_stalled(self):
+        """예산이 작아 아무것도 시작 못 하면 정체를 알려야 한다.
+
+        이 신호가 없으면 호출자는 "예산 소진(진행 중)"과 "영구 정지"를
+        구분하지 못해 같은 예산으로 무한 반복한다.
+        """
+        store = MemoryJobStore()
+        item = WorkItem(key="insider_timeline", stage=1, kind="fetch_insider_timeline",
+                        params={"corp_code": "0", "lookback_years": 5})
+        store.save(_job_with([item]))
+        with mock.patch.object(runner, "resolve_callable", return_value=lambda **kw: {}):
+            result = runner.run_step("j1", "KEY", store,
+                                     budget_seconds=runner.OVERSIZED_RESERVE - 1.0,
+                                     now=_Clock(0.0))
+        self.assertTrue(result.stalled)
+        self.assertEqual(result.processed, 0)
+
+    def test_progress_is_not_reported_as_stalled(self):
+        """진행이 있었으면 정체가 아니다."""
+        store = MemoryJobStore()
+        store.save(_job_with([_stage1("k0"), _stage1("k1")]))
+        with mock.patch.object(runner, "resolve_callable", return_value=lambda **kw: {}):
+            result = runner.run_step("j1", "KEY", store, budget_seconds=1.5,
+                                     now=_Clock(1.0))
+        self.assertFalse(result.stalled)
+        self.assertGreater(result.processed, 0)
+
+    def test_completed_job_is_not_stalled(self):
+        store = MemoryJobStore()
+        done_item = _stage1("k0")
+        done_item.status = "done"
+        store.save(_job_with([done_item], stage2_expanded=True))
+        result = runner.run_step("j1", "KEY", store, budget_seconds=100.0, now=_Clock(1.0))
+        self.assertTrue(result.done)
+        self.assertFalse(result.stalled)
+
     def test_completed_job_reports_done_without_work(self):
         store = MemoryJobStore()
         store.save(_job_with([_stage1("k0")], status="done", stage2_expanded=True))
@@ -133,6 +169,34 @@ class TestFailureIsolation(unittest.TestCase):
         with mock.patch.object(runner, "resolve_callable", return_value=fn):
             runner.run_step("j1", "KEY", store, budget_seconds=100.0, now=_Clock(0.1))
         self.assertNotIn("SECRET_KEY_VALUE", store.load("j1").items[0].error)
+
+
+class TestScrub(unittest.TestCase):
+    """키가 노출되는 형태는 다양하다. 정규식만으로는 대부분을 놓친다."""
+
+    KEY = "SECRETKEY123"
+
+    def test_removes_all_observed_shapes(self):
+        shapes = [
+            f'요청 실패: crtfc_key={self.KEY}',
+            f'{{"crtfc_key": "{self.KEY}"}}',
+            f'crtfc_key="{self.KEY}"',
+            f'crtfc_key = {self.KEY}',
+            f'https://opendart.fss.or.kr/api/list.json?crtfc_key={self.KEY}&corp_code=1',
+            f'인증 실패 ({self.KEY})',
+            self.KEY,
+        ]
+        for raw in shapes:
+            with self.subTest(raw=raw):
+                self.assertNotIn(self.KEY, runner._scrub(raw, self.KEY))
+
+    def test_works_without_api_key_argument(self):
+        """키를 모를 때도 정규식 경로는 살아 있어야 한다."""
+        self.assertNotIn("OTHERKEY", runner._scrub("crtfc_key=OTHERKEY"))
+
+    def test_preserves_useful_message(self):
+        cleaned = runner._scrub(f"DART 오류 (020): crtfc_key={self.KEY}", self.KEY)
+        self.assertIn("DART 오류 (020)", cleaned)
 
 
 class TestExpandStage2(unittest.TestCase):
@@ -196,6 +260,79 @@ class TestExpandStage2(unittest.TestCase):
             {"rcept_no": "1", "report_nm": "전환사채권 발행결정"},
         ])
         self.assertEqual(runner.expand_stage2(job), 1)
+
+
+class TestRegistryCoupling(unittest.TestCase):
+    """expand_stage2가 찾는 키가 registry와 어긋나면 2단이 조용히 죽는다."""
+
+    def test_disclosures_key_exists_in_registry(self):
+        from se_server.jobs.registry import STAGE1_SPECS
+
+        self.assertIn(runner.DISCLOSURES_KEY, {s.key for s in STAGE1_SPECS})
+
+    def test_expand_uses_the_registry_key(self):
+        """리터럴이 아니라 상수를 통해 결합돼 있는지 확인한다."""
+        from se_server.jobs.registry import build_stage1_items
+
+        items = build_stage1_items("00126380", 1)
+        target = [i for i in items if i.key == runner.DISCLOSURES_KEY]
+        self.assertEqual(len(target), 1)
+
+
+class TestEndToEnd(unittest.TestCase):
+    """1단 → 2단 확장 → 2단 실행 → done이 실제로 이어지는지 확인한다.
+
+    다른 2단 테스트는 stage2_expanded=True를 선주입하므로 이 경로를 밟지 않는다.
+    """
+
+    def test_full_cycle_reaches_done(self):
+        store = MemoryJobStore()
+        disc = _stage1("disclosures", kind="fetch_company_disclosures")
+        store.save(_job_with([disc]))
+
+        def fake_list(**kw):
+            return [{"rcept_no": "1", "report_nm": "전환사채권 발행결정"}]
+
+        with mock.patch.object(runner, "resolve_callable", return_value=fake_list), \
+                mock.patch.object(runner, "fetch_disclosure_full",
+                                  return_value={"text": "본문"}) as fetch:
+            result = runner.run_step("j1", "KEY", store, budget_seconds=100.0,
+                                     now=_Clock(0.1))
+
+        self.assertTrue(result.done)
+        fetch.assert_called_once()
+        job = store.load("j1")
+        self.assertTrue(job.stage2_expanded)
+        self.assertEqual(len([i for i in job.items if i.stage == 2]), 1)
+        self.assertTrue(all(i.status == "done" for i in job.items))
+
+
+class TestJsonable(unittest.TestCase):
+    """core 반환 타입은 제각각이라 JSONB에 넣기 전 정규화가 필요하다."""
+
+    def test_converts_set_of_strings(self):
+        """fetch_executive_roster는 dict[str, set[str]]을 돌려준다."""
+        self.assertEqual(runner._jsonable({"홍길동": {"2024", "2023"}}),
+                         {"홍길동": ["2023", "2024"]})
+
+    def test_result_is_json_serializable(self):
+        import json
+        value = runner._jsonable({"a": {"2024"}, "b": [(1, 2)], "c": None})
+        json.dumps(value)  # 예외가 나면 실패
+
+    def test_non_string_dict_keys_become_strings(self):
+        import json
+        json.dumps(runner._jsonable({(1, 2): "값"}))
+
+    def test_unknown_type_degrades_to_str(self):
+        """저장 직전에 터지면 진행이 통째로 유실되므로 낮춰서라도 살린다."""
+        import json
+
+        class Odd:
+            def __str__(self):
+                return "odd"
+
+        json.dumps(runner._jsonable({"x": Odd()}))
 
 
 class TestStage2Execution(unittest.TestCase):

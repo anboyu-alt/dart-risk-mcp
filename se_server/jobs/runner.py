@@ -34,13 +34,32 @@ OVERSIZED_RESERVE = 20.0
 # 오류 메시지에서 지울 자격증명 패턴. 작업 레코드는 공유 저장소에 남는다.
 _SECRET_RE = re.compile(r"(crtfc_key|api_key|apikey)=[^\s&'\"]+", re.IGNORECASE)
 
+# 2단 확장의 입력이 되는 1단 항목 키. registry.STAGE1_SPECS와 반드시 일치해야
+# 하며, 어긋나면 2단이 통째로 조용히 비활성화된다(테스트가 이를 고정한다).
+DISCLOSURES_KEY = "disclosures"
+
 
 @dataclass
 class StepResult:
+    """한 단계 실행 결과.
+
+    stalled=True는 **이 예산으로는 영원히 진행되지 않는다**는 뜻이다.
+    남은 항목이 전부 oversized인데 예산이 OVERSIZED_RESERVE보다 작으면
+    아무것도 시작하지 못한 채 반환된다. 이 신호가 없으면 호출자는
+    "예산 소진(진행 중)"과 "영구 정지"를 구분할 수 없어 같은 예산으로
+    무한 반복하게 된다.
+
+    호출자는 stalled를 만나면 예산을 올리거나 작업을 실패로 처리해야 한다.
+    실행기가 예산을 무시하고 강제 실행하지 않는 이유: Vercel 상한을 넘기면
+    함수가 항목 도중에 죽어 save()조차 실행되지 않고, attempts도 남지 않아
+    오히려 진짜 무한 루프가 된다.
+    """
+
     done: bool
     processed: int
     finished: int
     total: int
+    stalled: bool = False
 
 
 def create_job(company: str, corp_code: str, lookback_years: int, store: JobStore) -> Job:
@@ -56,9 +75,19 @@ def create_job(company: str, corp_code: str, lookback_years: int, store: JobStor
     return job
 
 
-def _scrub(message: str) -> str:
-    """오류 메시지에서 자격증명을 지운다."""
-    return _SECRET_RE.sub(r"\1=***", message)
+def _scrub(message: str, api_key: str = "") -> str:
+    """오류 메시지에서 자격증명을 지운다.
+
+    정규식만으로는 부족하다 — `{"crtfc_key": "V"}`(콜론), `crtfc_key="V"`
+    (따옴표), `crtfc_key = V`(공백), URL 경로에 박힌 값, 파라미터명 없이
+    노출된 값을 모두 놓친다. 실제 키 문자열을 알고 있으므로 그것을 직접
+    치환하는 것이 가장 확실하다. 정규식은 다른 사용자의 키나 형태 변형을
+    잡는 보조 수단으로 남긴다.
+    """
+    scrubbed = message
+    if api_key:
+        scrubbed = scrubbed.replace(api_key, "***")
+    return _SECRET_RE.sub(r"\1=***", scrubbed)
 
 
 def _is_oversized(item: WorkItem) -> bool:
@@ -85,14 +114,28 @@ def _execute(item: WorkItem, api_key: str) -> dict:
 
 
 def _jsonable(value):
-    """set 등 JSON으로 직렬화되지 않는 타입을 변환한다."""
-    if isinstance(value, set):
-        return sorted(value)
+    """JSON으로 직렬화되지 않는 타입을 변환한다.
+
+    core 함수는 반환 타입이 제각각이라(list·dict·set) 통일이 필요하다.
+    특히 fetch_executive_roster는 dict[str, set[str]]을 돌려준다.
+
+    저장소(JSONB)에 넣기 직전에 터지면 진행이 통째로 유실되므로, 알 수 없는
+    타입은 예외를 던지는 대신 str()로 낮춘다 — 데이터 형태가 조금 나빠지는
+    것이 작업 전체를 잃는 것보다 낫다.
+    """
+    if isinstance(value, (set, frozenset)):
+        return sorted(_jsonable(v) for v in value)
     if isinstance(value, dict):
-        return {k: _jsonable(v) for k, v in value.items()}
+        # JSON 객체 키는 문자열이어야 한다. tuple 키 등은 str로 낮춘다.
+        return {
+            k if isinstance(k, str) else str(k): _jsonable(v)
+            for k, v in value.items()
+        }
     if isinstance(value, (list, tuple)):
         return [_jsonable(v) for v in value]
-    return value
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
 
 
 def expand_stage2(job: Job) -> int:
@@ -101,22 +144,24 @@ def expand_stage2(job: Job) -> int:
     2단 대상은 1단이 끝나야 알 수 있으므로 작업 계획을 미리 다 만들 수 없다.
     이미 확장했으면 아무것도 하지 않는다(멱등).
 
-    **완료 표시 규칙:** 1단에 남은 항목이 있으면 아직 확장할 때가 아니므로
-    표시하지 않는다. 1단이 끝났다면 공시 결과가 없거나(조회 실패) 비어 있어도
-    확장 패스는 수행된 것이므로 표시한다 — 표시하지 않으면 추가할 항목이
-    없는데도 job.status가 영원히 "running"에 머물러 호출자가 무한 루프에 빠진다.
+    **완료 표시 규칙:** 남은 항목이 있으면 아직 확장할 때가 아니므로
+    표시하지 않는다(이 함수는 1단만 있는 시점에 호출되므로 실질적으로
+    "1단이 진행 중"과 같다). 남은 항목이 없다면 공시 결과가 없거나(조회 실패)
+    비어 있어도 확장 패스는 수행된 것이므로 표시한다 — 표시하지 않으면
+    추가할 항목이 없는데도 job.status가 영원히 "running"에 머물러 호출자가
+    무한 루프에 빠진다.
 
     반환: 추가된 항목 수.
     """
     if job.stage2_expanded:
         return 0
     if job.pending_items():
-        # 1단이 아직 진행 중이다. 공시 목록이 확정되지 않았다.
+        # 아직 처리할 항목이 남았다. 공시 목록이 확정되지 않았다.
         return 0
 
     disclosures = None
     for item in job.items:
-        if item.key == "disclosures" and item.status == DONE and item.result:
+        if item.key == DISCLOSURES_KEY and item.status == DONE and item.result:
             disclosures = item.result.get("value")
             break
     if disclosures is None:
@@ -160,6 +205,7 @@ def run_step(
 
     started = now()
     processed = 0
+    blocked_by_reserve = False
 
     while True:
         # 1단이 모두 끝났으면 2단 항목을 확장한다.
@@ -176,6 +222,9 @@ def run_step(
         if remaining <= 0:
             break
         if _is_oversized(item) and remaining < OVERSIZED_RESERVE:
+            # 예산이 이 항목을 감당하지 못한다. 아무것도 처리하지 못한 채
+            # 나가면 호출자가 같은 예산으로 무한 반복하므로 신호를 남긴다.
+            blocked_by_reserve = True
             break
 
         item.attempts += 1
@@ -184,7 +233,7 @@ def run_step(
             item.status = DONE
             item.error = ""
         except Exception as exc:  # noqa: BLE001 — 한 항목의 실패가 작업을 멈추면 안 된다
-            item.error = _scrub(str(exc))
+            item.error = _scrub(str(exc), api_key)
             if item.attempts >= MAX_ATTEMPTS:
                 item.status = FAILED
         processed += 1
@@ -194,9 +243,11 @@ def run_step(
     store.save(job)
 
     finished, total = job.progress()
+    done = job.status == "done"
     return StepResult(
-        done=job.status == "done",
+        done=done,
         processed=processed,
         finished=finished,
         total=total,
+        stalled=blocked_by_reserve and processed == 0 and not done,
     )
