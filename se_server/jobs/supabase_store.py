@@ -9,6 +9,8 @@ SE-1의 캐시와 달리 **실패를 삼키지 않는다.** 캐시는 성능 최
 """
 from __future__ import annotations
 
+import datetime as _dt
+
 import requests
 
 from se_server.config import SEConfig
@@ -36,7 +38,17 @@ class SupabaseJobStore:
         resp = self.session.post(
             self._table_url(),
             headers=headers,
-            json={"job_id": job.job_id, "state": job.to_dict(), "status": job.status},
+            json={
+                "job_id": job.job_id,
+                "state": job.to_dict(),
+                "status": job.status,
+                # updated_at을 페이로드에 반드시 넣는다. 스키마의 default now()는
+                # INSERT에만 적용되고, PostgREST의 merge-duplicates upsert는
+                # 페이로드에 있는 컬럼만 SET하므로, 빼면 최초 삽입 시각에
+                # 영원히 고정된다. 이 계층은 항목마다 저장을 반복하는 것이
+                # 존재 이유라 그 값은 곧바로 거짓이 된다.
+                "updated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+            },
             timeout=15,
         )
         if resp.status_code >= 300:

@@ -1,4 +1,5 @@
 """SupabaseJobStore의 HTTP 계약. 실제 네트워크는 타지 않는다."""
+import datetime as _dt
 import unittest
 from unittest import mock
 
@@ -61,6 +62,21 @@ class TestSave(unittest.TestCase):
         SupabaseJobStore(CFG, session=session).save(_job())
         import json
         self.assertNotIn("SERVICE_KEY", json.dumps(session.post.call_args[1]["json"]))
+
+    def test_updated_at_is_sent_explicitly(self):
+        """upsert는 페이로드에 있는 컬럼만 SET하므로 매번 보내야 한다.
+
+        스키마의 default now()는 INSERT에만 적용된다. 빼면 반복 저장에도
+        최초 삽입 시각에 고정돼 작업 신선도 판단이 조용히 틀리게 된다.
+        """
+        session = mock.Mock()
+        session.post.return_value = _resp(201)
+        SupabaseJobStore(CFG, session=session).save(_job())
+        payload = session.post.call_args[1]["json"]
+        self.assertIn("updated_at", payload)
+        # ISO 8601 + 시간대 정보가 있어야 timestamptz로 정확히 해석된다.
+        parsed = _dt.datetime.fromisoformat(payload["updated_at"])
+        self.assertIsNotNone(parsed.tzinfo)
 
 
 class TestLoad(unittest.TestCase):
