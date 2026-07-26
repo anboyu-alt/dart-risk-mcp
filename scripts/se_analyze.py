@@ -47,9 +47,12 @@ def run_to_completion(company, api_key, lookback_years, store, budget_seconds, n
 
     반환: (job_id, 단계별 StepResult 목록)
     """
-    corp_name, info = resolve_corp(company, api_key)
-    if not info:
+    # resolve_corp는 실패 시 None을 반환한다. 곧바로 언패킹하면 TypeError가 나서
+    # 아래의 친절한 오류 메시지에 도달하지 못한다.
+    resolved = resolve_corp(company, api_key)
+    if not resolved:
         raise ValueError(f"기업을 찾지 못했습니다: {company}")
+    corp_name, info = resolved
 
     job = runner.create_job(corp_name or company, info["corp_code"], lookback_years, store)
     steps = []

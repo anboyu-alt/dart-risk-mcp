@@ -89,9 +89,12 @@ def _load_api_key() -> str:
 def run_once(company: str, api_key: str, lookback_years: int) -> dict:
     """회사 하나를 스펙 §6.1의 1·2단 범위로 조회하고 소요 시간을 잰다."""
     started = time.monotonic()
-    corp_name, info = resolve_corp(company, api_key)
-    if not info:
+    # resolve_corp는 실패 시 None을 반환한다. 곧바로 언패킹하면 TypeError가 나서
+    # 아래의 친절한 오류 메시지에 도달하지 못한다.
+    resolved = resolve_corp(company, api_key)
+    if not resolved:
         raise ValueError(f"기업을 찾지 못했습니다: {company}")
+    corp_name, info = resolved
 
     items = fetch_company_disclosures(
         info["corp_code"], api_key, lookback_days=365 * lookback_years
