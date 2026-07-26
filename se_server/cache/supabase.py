@@ -83,9 +83,19 @@ class SupabaseCache:
         if expires_at:
             try:
                 deadline = _dt.datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-            except ValueError:
-                return None
-            if _dt.datetime.now(_dt.timezone.utc) >= deadline:
+                if deadline.tzinfo is None:
+                    # PostgREST가 offset 없이 직렬화한 경우 UTC로 간주한다.
+                    # 이 보정이 없으면 aware/naive 비교가 TypeError를 던진다.
+                    deadline = deadline.replace(tzinfo=_dt.timezone.utc)
+                if _dt.datetime.now(_dt.timezone.utc) >= deadline:
+                    return None
+            except (ValueError, TypeError, AttributeError):
+                # 만료 시각을 해석할 수 없으면(형식 오류·문자열이 아님 등)
+                # 보수적으로 미스 처리한다. 비교까지 try 안에 두는 이유:
+                # 이 함수는 "읽기 실패는 미스"를 계약으로 삼으므로 어떤
+                # 예외도 호출자로 새면 안 된다. expires_at이 문자열이 아닌
+                # 경우(int 등) .replace() 호출 자체가 AttributeError이므로
+                # 함께 잡는다.
                 return None
         return row.get("value")
 

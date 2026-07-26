@@ -1,4 +1,5 @@
 """SupabaseCache의 HTTP 계약. 실제 네트워크는 타지 않는다."""
+import datetime as _dt
 import unittest
 from unittest import mock
 
@@ -100,6 +101,39 @@ class TestJson(unittest.TestCase):
         cache.put_json("k", {"a": 1}, ttl_seconds=None)
         payload = session.post.call_args[1]["json"]
         self.assertIsNone(payload["expires_at"])
+
+
+class TestJsonExpiryParsing(unittest.TestCase):
+    """만료 시각 해석은 어떤 입력에도 예외를 밖으로 내보내지 않아야 한다.
+
+    이 함수의 계약은 "읽기 실패는 미스로 처리"이므로, 형식이 깨졌거나
+    시간대 정보가 없는 값이 와도 호출자에게 예외가 전파되면 안 된다.
+    """
+
+    def _cache_returning(self, expires_at):
+        session = mock.Mock()
+        session.get.return_value = _resp(
+            200, json_body=[{"key": "k", "value": {"a": 1}, "expires_at": expires_at}]
+        )
+        return SupabaseCache(CFG, session=session)
+
+    def test_naive_future_timestamp_is_treated_as_utc_and_valid(self):
+        future = (
+            _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(hours=1)
+        ).replace(tzinfo=None).isoformat()
+        self.assertEqual(self._cache_returning(future).get_json("k"), {"a": 1})
+
+    def test_naive_past_timestamp_is_expired(self):
+        past = (
+            _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=1)
+        ).replace(tzinfo=None).isoformat()
+        self.assertIsNone(self._cache_returning(past).get_json("k"))
+
+    def test_unparseable_timestamp_is_a_miss(self):
+        self.assertIsNone(self._cache_returning("쓰레기값").get_json("k"))
+
+    def test_non_string_timestamp_is_a_miss(self):
+        self.assertIsNone(self._cache_returning(12345).get_json("k"))
 
 
 class TestConfig(unittest.TestCase):
