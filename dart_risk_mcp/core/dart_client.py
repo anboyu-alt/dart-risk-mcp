@@ -25,22 +25,118 @@ DART_BASE = "https://opendart.fss.or.kr/api"
 _CACHE_DIR = Path.home() / ".cache" / "dart-risk-mcp"
 
 
+# ── 선택적 HTTP 캐시 시임 ─────────────────────────────
+# se_server 등 외부 소비자가 DART 응답 캐시를 주입하는 유일한 지점.
+# 기본값 None이면 캐시 없이 직접 호출한다(MCP 서버의 기존 동작).
+#
+# 주입 객체는 아래 두 메서드를 제공해야 한다:
+#   get(url, params) -> (status_code, headers, body) | None
+#   put(url, params, status, headers, body) -> None
+#
+# 캐시 키 계산은 주입 측 책임이다. 특히 params의 crtfc_key(사용자 API 키)를
+# 키에서 제외하는 것은 주입 측에서 처리한다.
+#
+# 계약: 캐시 구현은 get/put에 전달받은 params dict를 변형해서는 안 된다
+# (예: crtfc_key를 키에서 빼려고 pop()하면 안 되고, 필요하면 복사해서
+# 다뤄야 한다). _retry는 방어적으로 복사본을 넘기지만, 이 계약은 그와
+# 별개로 지켜져야 한다.
+_http_cache = None
+
+
+def set_http_cache(cache) -> None:
+    """DART HTTP 응답 캐시를 주입한다. None이면 캐시를 사용하지 않는다."""
+    global _http_cache
+    _http_cache = cache
+
+
+def get_http_cache():
+    """현재 주입된 HTTP 캐시를 반환한다 (미설정 시 None)."""
+    return _http_cache
+
+
+def _response_from_cache(status: int, headers: dict, body: bytes) -> requests.Response:
+    """캐시된 (status, headers, body)로 requests.Response를 합성한다."""
+    resp = requests.Response()
+    resp.status_code = status
+    resp._content = body
+    resp.headers.update(headers or {})
+    return resp
+
+
 def _retry(method: str, url: str, **kwargs) -> requests.Response:
-    """429/5xx 지수 백오프 재시도 (최대 3회). 3회 후에도 4xx/5xx면 raise_for_status."""
+    """재시도 대상(429/5xx)이 3회 소진되면 raise_for_status.
+    404 등 재시도 대상이 아닌 4xx는 재시도 없이 즉시 그대로 반환한다.
+
+    _http_cache가 설정돼 있으면 GET 요청에 한해 캐시를 먼저 조회하고,
+    200 응답만 캐시에 저장한다. 캐시 조회/저장이 예외를 던지거나(혹은
+    조회 결과가 계약과 다른 형태를 반환하거나) 조용히 무시하고 네트워크
+    호출로 진행한다 — 캐시는 성능 최적화일 뿐 정확성의 일부가 아니므로,
+    캐시 구현의 버그가 DART 요청 자체를 죽여서는 안 된다. 다만 진단이
+    가능하도록 두 경우 모두 warning 레벨로 로그를 남긴다(URL만, params는
+    사용자 DART API 키를 담고 있으므로 로그에 남기지 않는다).
+    """
     kwargs.setdefault("timeout", 15)
+
+    cache = _http_cache
+    cacheable = cache is not None and method.upper() == "GET"
+    params = kwargs.get("params") or {}
+
+    if cacheable:
+        # cache.get/put에는 kwargs["params"]와 동일한 객체가 아니라 복사본을
+        # 넘긴다. 캐시 구현은 전달받은 params를 변형해서는 안 되지만(예:
+        # 캐시 키 계산을 위해 crtfc_key를 pop하는 실수), 그런 변형이 원본
+        # kwargs["params"]까지 건드리면 requests.request에도 반영되어
+        # 캐시 미스일 때만 API 키 없는 요청이 나가는, 재현이 극히 어려운
+        # 인증 실패 버그가 생긴다. 방어적으로 복사본을 넘겨 원본을 보호한다.
+        try:
+            hit = cache.get(url, dict(params))
+            if hit is not None:
+                # 언팩과 응답 합성도 try 안에서 수행한다. 캐시 구현이 예외
+                # 대신 잘못된 형태(예: 3-튜플이 아닌 값)를 반환하면 여기서
+                # ValueError 등이 나는데, 이 시임의 계약은 "캐시 조회/저장
+                # 실패는 조용히 무시하고 네트워크 호출로 진행한다"이므로
+                # try 밖에 두면 그 계약이 깨진다.
+                status, headers, body = hit
+                return _response_from_cache(status, headers, body)
+        except Exception:
+            # 캐시 조회(혹은 그 결과의 언팩·합성) 실패는 미스로 간주하고
+            # 아래에서 네트워크 호출로 진행한다. 넓게 잡는 이유: 캐시
+            # 구현이 어떤 예외를 던지든(직렬화 오류, 파일 I/O 오류, 반환
+            # 형태 오류 등) DART 요청 자체는 계속돼야 한다.
+            # params는 사용자 DART API 키(crtfc_key)를 담고 있으므로 로그에
+            # 남기지 않는다.
+            log.warning("HTTP 캐시 조회 실패, 네트워크 호출로 폴백: url=%s", url, exc_info=True)
+
     last: requests.Response | None = None
+    exhausted = True  # 재시도를 모두 소진했는가 (아래 raise_for_status 조건)
     for i in range(3):
         try:
             last = requests.request(method, url, **kwargs)
             if last.status_code not in (429, 500, 502, 503, 504):
-                return last
+                exhausted = False
+                break
             if i < 2:
                 time.sleep(min(2 ** i, 10))
-        except requests.RequestException as e:
+        except requests.RequestException:
             if i == 2:
                 raise
             time.sleep(min(2 ** i, 10))
-    if last is not None and last.status_code >= 400:
+
+    if cacheable and last is not None and last.status_code == 200:
+        try:
+            cache.put(url, dict(params), last.status_code, dict(last.headers), last.content)
+        except Exception:
+            # 저장 실패도 조용히 무시한다 — 응답은 이미 확보했으므로 호출자
+            # 에게는 정상적으로 반환해야 한다(넓게 잡는 이유는 위와 동일).
+            # params는 사용자 DART API 키(crtfc_key)를 담고 있으므로 로그에
+            # 남기지 않는다.
+            log.warning("HTTP 캐시 저장 실패, 응답은 정상 반환: url=%s", url, exc_info=True)
+
+    # 기존 동작 보존: 비재시도 응답(404 등)은 그대로 반환하고, 재시도를 모두
+    # 소진한 429/5xx일 때만 예외를 던진다. `exhausted` 없이 상태 코드만 보면
+    # 404가 raise_for_status로 흘러가 호출자의 `status_code != 200` 분기가
+    # 죽는다 (_fetch_document_zip 등이 이 분기에 의존한다).
+    if exhausted and last is not None and last.status_code >= 400:
         last.raise_for_status()
     return last  # type: ignore
 

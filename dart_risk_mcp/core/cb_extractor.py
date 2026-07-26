@@ -13,11 +13,10 @@ import logging
 import re
 import zipfile
 
-import requests
-
 log = logging.getLogger(__name__)
 
 from .dart_client import (
+    _retry,
     fetch_cb_issue_decision,
     fetch_bw_issue_decision,
     fetch_eb_issue_decision,
@@ -69,7 +68,8 @@ def _fetch_text(rcept_no: str, api_key: str) -> str:
     if not api_key:
         return ""
     try:
-        resp = requests.get(
+        resp = _retry(
+            "GET",
             f"{DART_BASE}/document.xml",
             params={"crtfc_key": api_key, "rcept_no": rcept_no},
             timeout=30,

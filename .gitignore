@@ -16,3 +16,6 @@ pytest-of-*/
 
 # MCPB build output (CI가 릴리스에 생성·첨부)
 *.mcpb
+
+# 브레인스토밍 비주얼 컴패니언 + 서브에이전트 실행 작업 파일(원장·브리프·리뷰 패키지)
+.superpowers/

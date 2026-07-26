@@ -12,9 +12,7 @@ import logging
 import re
 import zipfile
 
-import requests
-
-from .dart_client import fetch_piic_decision, fetch_pifric_decision
+from .dart_client import _retry, fetch_piic_decision, fetch_pifric_decision
 from .cb_extractor import (
     _extract_investor_table,
     _RIGHTS_SECTION_RE,
@@ -74,7 +72,8 @@ def _fetch_rights_html_text(rcept_no: str, api_key: str) -> str:
     if not api_key:
         return ""
     try:
-        resp = requests.get(
+        resp = _retry(
+            "GET",
             f"{DART_BASE}/document.xml",
             params={"crtfc_key": api_key, "rcept_no": rcept_no},
             timeout=30,
