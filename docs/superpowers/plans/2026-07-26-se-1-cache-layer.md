@@ -814,7 +814,7 @@ def install(backend: CacheBackend, json_ttl_seconds: int = _DEFAULT_JSON_TTL) ->
 - [ ] **Step 4: 테스트 통과 확인**
 
 Run: `python -m pytest tests/se/test_http_cache.py -v`
-Expected: PASS — 12 passed
+Expected: PASS — 14 passed
 
 - [ ] **Step 5: 커밋**
 
