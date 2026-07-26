@@ -1218,10 +1218,12 @@ class SupabaseCache:
                     deadline = deadline.replace(tzinfo=_dt.timezone.utc)
                 if _dt.datetime.now(_dt.timezone.utc) >= deadline:
                     return None
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, AttributeError):
                 # 만료 시각을 해석할 수 없으면 보수적으로 미스 처리한다.
                 # 비교까지 try 안에 두는 이유: 이 함수는 "읽기 실패는 미스"를
                 # 계약으로 삼으므로 어떤 예외도 호출자로 새면 안 된다.
+                # AttributeError는 expires_at이 문자열이 아닐 때(.replace 없음),
+                # TypeError는 aware/naive 비교, ValueError는 형식 오류에 대응한다.
                 return None
         return row.get("value")
 
