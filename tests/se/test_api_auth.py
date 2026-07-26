@@ -33,6 +33,12 @@ class TestExtractBearer(unittest.TestCase):
         self.assertEqual(extract_bearer("Bearer"), "")
         self.assertEqual(extract_bearer("Bearer "), "")
 
+    def test_rejects_non_string(self):
+        """어댑터가 예상 밖 타입을 넘겨도 500이 아니라 401로 떨어져야 한다."""
+        for bad in (123, b"tok", None, [], {}):
+            with self.subTest(value=bad):
+                self.assertEqual(extract_bearer(bad), "")
+
     def test_rejects_empty(self):
         self.assertEqual(extract_bearer(""), "")
 
@@ -73,6 +79,59 @@ class TestVerify(unittest.TestCase):
         with self.assertRaises(AuthError):
             SupabaseAuth(CFG, session=session).verify("TOKEN")
 
+    def test_server_errors_raise_503_not_401(self):
+        """게이트웨이 5xx·429를 401로 보고하면 사용자가 자기 탓으로 오해한다.
+
+        호스티드 서비스에서는 전송 실패보다 이쪽이 흔하다.
+        """
+        for status in (500, 502, 503, 504, 429):
+            with self.subTest(status=status):
+                session = mock.Mock()
+                session.get.return_value = _resp(status)
+                with self.assertRaises(AuthError) as ctx:
+                    SupabaseAuth(CFG, session=session).verify("TOKEN")
+                self.assertEqual(ctx.exception.status, 503)
+
+    def test_client_errors_still_raise_401(self):
+        for status in (400, 401, 403, 404):
+            with self.subTest(status=status):
+                session = mock.Mock()
+                session.get.return_value = _resp(status)
+                with self.assertRaises(AuthError) as ctx:
+                    SupabaseAuth(CFG, session=session).verify("TOKEN")
+                self.assertEqual(ctx.exception.status, 401)
+
+    def test_non_dict_body_raises_401_not_500(self):
+        for body in (["x"], "문자열", 42):
+            with self.subTest(body=body):
+                session = mock.Mock()
+                session.get.return_value = _resp(200, body)
+                with self.assertRaises(AuthError):
+                    SupabaseAuth(CFG, session=session).verify("TOKEN")
+
+    def test_non_string_id_is_rejected(self):
+        """id가 숫자면 -> str 선언이 거짓이 된다."""
+        for bad in (42, {"nested": 1}, ["list"]):
+            with self.subTest(id=bad):
+                session = mock.Mock()
+                session.get.return_value = _resp(200, {"id": bad})
+                with self.assertRaises(AuthError):
+                    SupabaseAuth(CFG, session=session).verify("TOKEN")
+
+    def test_sends_service_key_as_apikey(self):
+        """apikey를 빈 값으로 바꿔도 기존 테스트는 통과했다 — 값을 고정한다."""
+        session = mock.Mock()
+        session.get.return_value = _resp(200, {"id": "u1"})
+        SupabaseAuth(CFG, session=session).verify("TOKEN")
+        self.assertEqual(session.get.call_args[1]["headers"]["apikey"], "SERVICE_KEY")
+
+    def test_sends_timeout(self):
+        """타임아웃이 없으면 Vercel 함수가 인증에서 통째로 멈출 수 있다."""
+        session = mock.Mock()
+        session.get.return_value = _resp(200, {"id": "u1"})
+        SupabaseAuth(CFG, session=session).verify("TOKEN")
+        self.assertIn("timeout", session.get.call_args[1])
+
     def test_network_error_raises_503_not_401(self):
         """Supabase 장애를 인증 실패로 보고하면 사용자가 자기 탓으로 오해한다."""
         session = mock.Mock()
@@ -101,6 +160,34 @@ class TestCache(unittest.TestCase):
         auth.verify("TOKEN")
         auth.verify("TOKEN")
         self.assertEqual(session.get.call_count, 1)
+
+    def test_cache_is_fail_closed_at_exact_expiry(self):
+        """정확히 만료 시각이면 재검증해야 한다(< 대신 <= 면 통과해버린다)."""
+        session = mock.Mock()
+        session.get.return_value = _resp(200, {"id": "user-1"})
+        state, now = self._clock()
+        a = SupabaseAuth(CFG, session=session, ttl_seconds=60.0, now=now)
+        a.verify("TOKEN")
+        state["t"] = 60.0
+        a.verify("TOKEN")
+        self.assertEqual(session.get.call_count, 2)
+
+    def test_expired_entries_are_swept(self):
+        """만료 항목이 쌓이면 메모리 누수가 된다.
+
+        회전된 JWT는 재등장하지 않으므로 덮어쓰기로는 정리되지 않는다.
+        """
+        from se_server.api import auth as auth_mod
+
+        session = mock.Mock()
+        session.get.return_value = _resp(200, {"id": "u1"})
+        state, now = self._clock()
+        a = SupabaseAuth(CFG, session=session, ttl_seconds=1.0, now=now)
+        for i in range(auth_mod._CACHE_SWEEP_AT + 1):
+            a.verify(f"TOKEN{i}")
+        state["t"] = 1000.0
+        a.verify("최신토큰")
+        self.assertLess(len(a._cache), auth_mod._CACHE_SWEEP_AT)
 
     def test_cache_expires(self):
         session = mock.Mock()
