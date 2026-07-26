@@ -35,6 +35,11 @@ _CACHE_DIR = Path.home() / ".cache" / "dart-risk-mcp"
 #
 # 캐시 키 계산은 주입 측 책임이다. 특히 params의 crtfc_key(사용자 API 키)를
 # 키에서 제외하는 것은 주입 측에서 처리한다.
+#
+# 계약: 캐시 구현은 get/put에 전달받은 params dict를 변형해서는 안 된다
+# (예: crtfc_key를 키에서 빼려고 pop()하면 안 되고, 필요하면 복사해서
+# 다뤄야 한다). _retry는 방어적으로 복사본을 넘기지만, 이 계약은 그와
+# 별개로 지켜져야 한다.
 _http_cache = None
 
 
@@ -59,10 +64,13 @@ def _response_from_cache(status: int, headers: dict, body: bytes) -> requests.Re
 
 
 def _retry(method: str, url: str, **kwargs) -> requests.Response:
-    """429/5xx 지수 백오프 재시도 (최대 3회). 3회 후에도 4xx/5xx면 raise_for_status.
+    """재시도 대상(429/5xx)이 3회 소진되면 raise_for_status.
+    404 등 재시도 대상이 아닌 4xx는 재시도 없이 즉시 그대로 반환한다.
 
     _http_cache가 설정돼 있으면 GET 요청에 한해 캐시를 먼저 조회하고,
-    200 응답만 캐시에 저장한다.
+    200 응답만 캐시에 저장한다. 캐시 조회/저장이 예외를 던지면 조용히
+    무시하고 네트워크 호출로 진행한다 — 캐시는 성능 최적화일 뿐 정확성의
+    일부가 아니므로, 캐시 구현의 버그가 DART 요청 자체를 죽여서는 안 된다.
     """
     kwargs.setdefault("timeout", 15)
 
@@ -71,7 +79,19 @@ def _retry(method: str, url: str, **kwargs) -> requests.Response:
     params = kwargs.get("params") or {}
 
     if cacheable:
-        hit = cache.get(url, params)
+        # cache.get/put에는 kwargs["params"]와 동일한 객체가 아니라 복사본을
+        # 넘긴다. 캐시 구현은 전달받은 params를 변형해서는 안 되지만(예:
+        # 캐시 키 계산을 위해 crtfc_key를 pop하는 실수), 그런 변형이 원본
+        # kwargs["params"]까지 건드리면 requests.request에도 반영되어
+        # 캐시 미스일 때만 API 키 없는 요청이 나가는, 재현이 극히 어려운
+        # 인증 실패 버그가 생긴다. 방어적으로 복사본을 넘겨 원본을 보호한다.
+        try:
+            hit = cache.get(url, dict(params))
+        except Exception:
+            # 캐시 조회 실패는 미스로 간주하고 아래에서 네트워크 호출로
+            # 진행한다. 넓게 잡는 이유: 캐시 구현이 어떤 예외를 던지든
+            # (직렬화 오류, 파일 I/O 오류 등) DART 요청 자체는 계속돼야 한다.
+            hit = None
         if hit is not None:
             status, headers, body = hit
             return _response_from_cache(status, headers, body)
@@ -92,7 +112,12 @@ def _retry(method: str, url: str, **kwargs) -> requests.Response:
             time.sleep(min(2 ** i, 10))
 
     if cacheable and last is not None and last.status_code == 200:
-        cache.put(url, params, last.status_code, dict(last.headers), last.content)
+        try:
+            cache.put(url, dict(params), last.status_code, dict(last.headers), last.content)
+        except Exception:
+            # 저장 실패도 조용히 무시한다 — 응답은 이미 확보했으므로 호출자
+            # 에게는 정상적으로 반환해야 한다(넓게 잡는 이유는 위와 동일).
+            pass
 
     # 기존 동작 보존: 비재시도 응답(404 등)은 그대로 반환하고, 재시도를 모두
     # 소진한 429/5xx일 때만 예외를 던진다. `exhausted` 없이 상태 코드만 보면

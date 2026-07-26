@@ -148,6 +148,123 @@ class TestHttpSeamWithCache(unittest.TestCase):
         self.assertEqual(cache.gets, [])
         self.assertEqual(cache.puts, [])
 
+    def test_missing_params_kwarg_falls_back_to_empty_dict(self):
+        """params kwarg 자체를 생략해도(`or {}` 분기) 캐시 경로가 정상 동작한다."""
+        cache = FakeCache(preload=None)
+        dart_client.set_http_cache(cache)
+        with mock.patch.object(
+            dart_client.requests, "request",
+            return_value=_fake_response(body=b'{"status":"000"}')
+        ) as req:
+            resp = dart_client._retry("GET", "https://example.test/api/list.json")
+        req.assert_called_once()
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(cache.gets, [("https://example.test/api/list.json", {})])
+        self.assertEqual(len(cache.puts), 1)
+        self.assertEqual(cache.puts[0][1], {})
+
+    def test_cache_hit_restores_headers(self):
+        """캐시 히트 시 저장돼 있던 headers가 합성 응답에 복원된다."""
+        cache = FakeCache(preload=(200, {"X-Custom": "abc", "Content-Type": "text/xml"}, b"<xml/>"))
+        dart_client.set_http_cache(cache)
+        with mock.patch.object(dart_client.requests, "request") as req:
+            resp = dart_client._retry("GET", "https://example.test/api/list.json", params={})
+        req.assert_not_called()
+        self.assertEqual(resp.headers.get("X-Custom"), "abc")
+        self.assertEqual(resp.headers.get("Content-Type"), "text/xml")
+
+
+class MutatingCache:
+    """캐시 키 계산 중 전달받은 params를 실수로 변형하는 캐시 구현을 흉내낸다.
+
+    Important 1 회귀 고정용: 이런 구현이 붙어도 requests.request에 넘어가는
+    kwargs["params"]는 온전해야 한다(예: crtfc_key가 제거되면 안 된다).
+    """
+
+    def __init__(self):
+        self.get_seen = []
+        self.put_seen = []
+
+    def get(self, url, params):
+        self.get_seen.append(dict(params))
+        params.pop("crtfc_key", None)  # 방어 복사가 없었다면 원본을 오염시킨다
+        return None
+
+    def put(self, url, params, status, headers, body):
+        self.put_seen.append(dict(params))
+        params.pop("crtfc_key", None)
+
+
+class TestCacheParamsIsolation(unittest.TestCase):
+    def tearDown(self):
+        dart_client.set_http_cache(None)
+
+    def test_cache_mutation_does_not_leak_into_request_params(self):
+        cache = MutatingCache()
+        dart_client.set_http_cache(cache)
+        captured = {}
+
+        def fake_request(method, url, **kwargs):
+            captured["params"] = kwargs.get("params")
+            return _fake_response(body=b'{"status":"000"}')
+
+        with mock.patch.object(dart_client.requests, "request", side_effect=fake_request):
+            dart_client._retry(
+                "GET", "https://example.test/api/list.json",
+                params={"crtfc_key": "SECRET", "corp_code": "001"},
+            )
+
+        # 캐시 구현이 get()에서 params를 변형했더라도, requests.request에
+        # 실제로 전달된 params 객체는 crtfc_key를 그대로 유지해야 한다.
+        self.assertEqual(captured["params"], {"crtfc_key": "SECRET", "corp_code": "001"})
+        # 캐시가 관찰한 값도(변형 이전 시점 기준) crtfc_key를 포함해야 한다.
+        self.assertEqual(cache.get_seen[0], {"crtfc_key": "SECRET", "corp_code": "001"})
+        self.assertEqual(cache.put_seen[0], {"crtfc_key": "SECRET", "corp_code": "001"})
+
+
+class RaisingGetCache:
+    def get(self, url, params):
+        raise RuntimeError("cache backend down")
+
+    def put(self, url, params, status, headers, body):
+        pass
+
+
+class RaisingPutCache:
+    def get(self, url, params):
+        return None
+
+    def put(self, url, params, status, headers, body):
+        raise RuntimeError("cache backend down")
+
+
+class TestCacheFailuresDoNotBreakRequests(unittest.TestCase):
+    def tearDown(self):
+        dart_client.set_http_cache(None)
+
+    def test_get_exception_falls_back_to_network(self):
+        """cache.get이 예외를 던져도 네트워크 호출로 폴백해 정상 응답을 반환한다."""
+        dart_client.set_http_cache(RaisingGetCache())
+        with mock.patch.object(
+            dart_client.requests, "request",
+            return_value=_fake_response(body=b'{"status":"000"}')
+        ) as req:
+            resp = dart_client._retry("GET", "https://example.test/api/list.json", params={})
+        req.assert_called_once()
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.content, b'{"status":"000"}')
+
+    def test_put_exception_still_returns_response(self):
+        """cache.put이 예외를 던져도 응답은 정상적으로 반환된다."""
+        dart_client.set_http_cache(RaisingPutCache())
+        with mock.patch.object(
+            dart_client.requests, "request",
+            return_value=_fake_response(body=b'{"status":"000"}')
+        ):
+            resp = dart_client._retry("GET", "https://example.test/api/list.json", params={})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.content, b'{"status":"000"}')
+
 
 if __name__ == "__main__":
     unittest.main()
