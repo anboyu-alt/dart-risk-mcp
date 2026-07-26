@@ -23,8 +23,11 @@ from se_server.jobs import MemoryJobStore  # noqa: E402
 from se_server.jobs import runner  # noqa: E402
 
 # 진행이 전혀 없는 단계가 이만큼 연속되면 중단한다(무한 루프 방지).
-# stalled=True(남은 항목이 전부 oversized인데 예산 부족)는 이 카운트를 기다리지
-# 않고 즉시 중단한다 — 같은 예산으로 반복해도 영원히 나아지지 않기 때문이다.
+# result.stalled(processed==0 and not done — oversized 예약분 부족이든
+# budget_seconds<=0이든 원인 무관)는 이 카운트를 기다리지 않고 즉시 중단한다 —
+# 같은 예산으로 반복해도 영원히 나아지지 않기 때문이다. 이 카운터는
+# run_step이 언젠가 stalled를 세팅하지 않는 새로운 정체 형태를 도입하더라도
+# 무한 루프에 빠지지 않도록 하는 방어선으로 남겨 둔다.
 _MAX_STALLED_STEPS = 3
 
 
@@ -60,8 +63,9 @@ def run_to_completion(company, api_key, lookback_years, store, budget_seconds, n
         if result.done:
             break
         if result.stalled:
-            # 남은 항목이 전부 oversized인데 예산이 부족해 아무것도 시작하지
-            # 못했다. 같은 예산으로 다시 돌아도 결과가 같으므로 즉시 중단한다.
+            # 이 단계에서 항목을 하나도 처리하지 못했다(oversized 예약분 부족,
+            # budget_seconds<=0 등 원인 무관). 같은 예산으로 다시 돌아도 결과가
+            # 같으므로 즉시 중단한다.
             raise RuntimeError(
                 f"예산 부족으로 정체되었습니다 ({result.finished}/{result.total} 완료). "
                 "--budget을 늘려 재실행하세요."

@@ -435,5 +435,159 @@ class TestStage2Execution(unittest.TestCase):
         self.assertEqual(store.load("j1").items[0].status, "done")
 
 
+class TestResultScrubbing(unittest.TestCase):
+    """core 함수가 실패를 예외가 아니라 값으로 돌려줄 때도 키가 새면 안 된다.
+
+    dart_client.fetch_major_decision 같은 함수는
+    {"error": f"DART 조회 실패: {e}"}를 예외가 아니라 **반환값**으로 돌려주며,
+    requests 예외의 str(e)에는 crtfc_key가 박힌 요청 URL 전체가 들어간다.
+    _execute가 item.error뿐 아니라 반환값 자체도 스크럽하지 않으면, 나중에
+    DS005 계열 spec을 registry에 하나 추가하는 순간 공유 state JSONB에
+    DART API 키가 그대로 남는다.
+    """
+
+    KEY = "SECRETRESULTKEY99"
+
+    def test_key_in_error_value_field_is_scrubbed(self):
+        store = MemoryJobStore()
+        store.save(_job_with([_stage1("bad")]))
+        leaking = {
+            "error": (
+                "DART 조회 실패: https://opendart.fss.or.kr/api/list.json?"
+                f"crtfc_key={self.KEY}&corp_code=1"
+            ),
+        }
+        with mock.patch.object(runner, "resolve_callable", return_value=lambda **kw: leaking):
+            runner.run_step("j1", self.KEY, store, budget_seconds=100.0, now=_Clock(0.1))
+        result = store.load("j1").items[0].result
+        self.assertNotIn(self.KEY, str(result))
+
+    def test_key_nested_inside_list_of_dicts_is_scrubbed(self):
+        """dict 안 list 안 dict처럼 여러 겹 중첩돼도 재귀적으로 스크럽돼야 한다."""
+        store = MemoryJobStore()
+        store.save(_job_with([_stage1("bad")]))
+        leaking = {
+            "rows": [
+                {"note": "정상"},
+                {"note": f"crtfc_key={self.KEY} 조회 실패"},
+            ]
+        }
+        with mock.patch.object(runner, "resolve_callable", return_value=lambda **kw: leaking):
+            runner.run_step("j1", self.KEY, store, budget_seconds=100.0, now=_Clock(0.1))
+        result = store.load("j1").items[0].result
+        self.assertNotIn(self.KEY, str(result))
+        # 스크럽이 구조를 통째로 지우는 게 아니라 문자열만 치환했는지도 확인한다.
+        self.assertEqual(result["value"]["rows"][0]["note"], "정상")
+
+    def test_key_in_list_of_dicts_at_top_level_is_scrubbed(self):
+        store = MemoryJobStore()
+        store.save(_job_with([_stage1("bad")]))
+        leaking = [{"error": f"crtfc_key={self.KEY}"}, {"ok": True}]
+        with mock.patch.object(runner, "resolve_callable", return_value=lambda **kw: leaking):
+            runner.run_step("j1", self.KEY, store, budget_seconds=100.0, now=_Clock(0.1))
+        result = store.load("j1").items[0].result
+        self.assertNotIn(self.KEY, str(result))
+
+
+class TestIntermediateSave(unittest.TestCase):
+    """중간 저장이 없으면 함수가 죽었을 때 그 단계 전체가 유실된다.
+
+    store.save가 루프 종료 후 1회뿐이면, Vercel이 마지막 항목의 예산
+    초과분에서 함수를 죽였을 때 그 단계의 결과가 전부 사라지고 attempts조차
+    남지 않아 같은 지점에서 영구 반복한다.
+    """
+
+    def test_store_save_called_more_than_once_when_interval_elapses(self):
+        store = MemoryJobStore()
+        store.save(_job_with([_stage1(f"k{i}") for i in range(6)]))
+
+        calls = {"n": 0}
+        original_save = store.save
+
+        def counting_save(job):
+            calls["n"] += 1
+            original_save(job)
+
+        store.save = counting_save
+
+        with mock.patch.object(runner, "resolve_callable", return_value=lambda **kw: {"ok": 1}):
+            runner.run_step("j1", "KEY", store, budget_seconds=100.0,
+                            now=_Clock(2.0), save_interval_seconds=3.0)
+
+        # 루프 도중 저장이 최소 한 번 + 루프 종료 후 마지막 저장 한 번,
+        # 최소 2회는 있어야 "1회뿐"이라는 결함이 재현되지 않는다.
+        self.assertGreater(calls["n"], 1)
+
+    def test_default_save_interval_matches_module_constant(self):
+        """save_interval_seconds를 안 넘겨도 SAVE_INTERVAL 기본값이 적용된다."""
+        store = MemoryJobStore()
+        store.save(_job_with([_stage1(f"k{i}") for i in range(10)]))
+
+        calls = {"n": 0}
+        original_save = store.save
+
+        def counting_save(job):
+            calls["n"] += 1
+            original_save(job)
+
+        store.save = counting_save
+
+        with mock.patch.object(runner, "resolve_callable", return_value=lambda **kw: {"ok": 1}):
+            runner.run_step("j1", "KEY", store, budget_seconds=1000.0,
+                            now=_Clock(runner.SAVE_INTERVAL))
+
+        self.assertGreater(calls["n"], 1)
+
+
+class TestStalledSimplification(unittest.TestCase):
+    """stalled = processed == 0 and not done 단순화 이후의 경계값들.
+
+    이전 구현은 blocked_by_reserve 플래그가 설 때만 stalled=True였다.
+    budget_seconds<=0이고 남은 항목이 oversized가 아니면, remaining<=0으로
+    루프가 즉시 break하며 blocked_by_reserve는 한 번도 세팅되지 않아
+    processed=0인데도 stalled=False로 조용히 반환됐다.
+    """
+
+    def test_zero_budget_reports_stalled(self):
+        store = MemoryJobStore()
+        store.save(_job_with([_stage1("k0")]))  # oversized 아님 → ValueError 가드 미발동
+        result = runner.run_step("j1", "KEY", store, budget_seconds=0.0, now=_Clock(1.0))
+        self.assertEqual(result.processed, 0)
+        self.assertFalse(result.done)
+        self.assertTrue(result.stalled)
+
+    def test_negative_budget_reports_stalled(self):
+        store = MemoryJobStore()
+        store.save(_job_with([_stage1("k0")]))
+        result = runner.run_step("j1", "KEY", store, budget_seconds=-5.0, now=_Clock(1.0))
+        self.assertEqual(result.processed, 0)
+        self.assertTrue(result.stalled)
+
+    def test_reserve_block_stalled_semantics_preserved(self):
+        """단순화 이후에도 예약분 부족으로 인한 정체는 여전히 True로 남아야 한다."""
+        store = MemoryJobStore()
+        item = WorkItem(key="insider_timeline", stage=1, kind="fetch_insider_timeline",
+                        params={"corp_code": "0", "lookback_years": 5})
+        store.save(_job_with([item]))
+        with mock.patch.object(runner, "resolve_callable", return_value=lambda **kw: {}):
+            result = runner.run_step("j1", "KEY", store,
+                                     budget_seconds=runner.OVERSIZED_RESERVE + 1.0,
+                                     now=_Clock(2.0))
+        self.assertEqual(result.processed, 0)
+        self.assertTrue(result.stalled)
+
+    def test_zero_budget_with_pending_oversized_still_raises(self):
+        """budget<=0이어도 대기 중인 oversized 항목이 있으면 여전히 ValueError다.
+
+        stalled 단순화가 이 가드를 우회하는 새 구멍을 만들지 않는지 확인한다.
+        """
+        store = MemoryJobStore()
+        item = WorkItem(key="insider_timeline", stage=1, kind="fetch_insider_timeline",
+                        params={"corp_code": "0", "lookback_years": 5})
+        store.save(_job_with([item]))
+        with self.assertRaises(ValueError):
+            runner.run_step("j1", "KEY", store, budget_seconds=0.0, now=_Clock(1.0))
+
+
 if __name__ == "__main__":
     unittest.main()
