@@ -931,6 +931,41 @@ class TestRunStepBudget(unittest.TestCase):
         self.assertFalse(result.stalled)
         self.assertGreater(result.processed, 0)
 
+    def test_oversized_does_not_block_smaller_items_behind_it(self):
+        """앞의 oversized 항목이 뒤의 작은 항목을 막으면 안 된다.
+
+        목록 순서를 그대로 따르면 예산이 작은 환경에서 실행 가능한 항목이
+        많이 남았는데도 작업이 통째로 멈춘다(head-of-line 블로킹).
+        """
+        store = MemoryJobStore()
+        big = WorkItem(key="insider_timeline", stage=1, kind="fetch_insider_timeline",
+                       params={"corp_code": "0", "lookback_years": 5})
+        store.save(_job_with([big, _stage1("small1"), _stage1("small2")]))
+
+        with mock.patch.object(runner, "resolve_callable", return_value=lambda **kw: {}):
+            result = runner.run_step("j1", "KEY", store,
+                                     budget_seconds=runner.OVERSIZED_RESERVE - 1.0,
+                                     now=_Clock(0.1))
+
+        job = store.load("j1")
+        self.assertEqual(result.processed, 2)   # 작은 항목 둘은 처리됐다
+        self.assertFalse(result.stalled)        # 진행이 있었으므로 정체 아님
+        self.assertEqual(job.items[0].status, "pending")  # oversized는 그대로 대기
+
+    def test_stalled_only_when_all_remaining_are_oversized(self):
+        store = MemoryJobStore()
+        big = WorkItem(key="insider_timeline", stage=1, kind="fetch_insider_timeline",
+                       params={"corp_code": "0", "lookback_years": 5})
+        big2 = WorkItem(key="audit_history", stage=1, kind="fetch_audit_opinion_history",
+                        params={"corp_code": "0", "lookback_years": 5})
+        store.save(_job_with([big, big2]))
+        with mock.patch.object(runner, "resolve_callable", return_value=lambda **kw: {}):
+            result = runner.run_step("j1", "KEY", store,
+                                     budget_seconds=runner.OVERSIZED_RESERVE - 1.0,
+                                     now=_Clock(0.1))
+        self.assertTrue(result.stalled)
+        self.assertEqual(result.processed, 0)
+
     def test_completed_job_is_not_stalled(self):
         store = MemoryJobStore()
         done_item = _stage1("k0")
@@ -1018,6 +1053,11 @@ class TestScrub(unittest.TestCase):
     def test_works_without_api_key_argument(self):
         """키를 모를 때도 정규식 경로는 살아 있어야 한다."""
         self.assertNotIn("OTHERKEY", runner._scrub("crtfc_key=OTHERKEY"))
+
+    def test_short_key_is_not_substituted(self):
+        """짧은 값을 치환하면 무관한 문자까지 지워 진단이 불가능해진다."""
+        message = "HTTP 500 at line 1 (attempt 1)"
+        self.assertEqual(runner._scrub(message, "1"), message)
 
     def test_preserves_useful_message(self):
         cleaned = runner._scrub(f"DART 오류 (020): crtfc_key={self.KEY}", self.KEY)
@@ -1228,6 +1268,10 @@ _SECRET_RE = re.compile(r"(crtfc_key|api_key|apikey)=[^\s&'\"]+", re.IGNORECASE)
 # 하며, 어긋나면 2단이 통째로 조용히 비활성화된다(테스트가 이를 고정한다).
 DISCLOSURES_KEY = "disclosures"
 
+# 이보다 짧은 api_key는 오류 메시지에서 치환하지 않는다. 실제 DART 키는 40자이며,
+# 한 글자짜리 값을 치환하면 메시지의 무관한 문자까지 지워 진단이 불가능해진다.
+_MIN_SCRUB_LEN = 8
+
 
 @dataclass
 class StepResult:
@@ -1275,7 +1319,9 @@ def _scrub(message: str, api_key: str = "") -> str:
     잡는 보조 수단으로 남긴다.
     """
     scrubbed = message
-    if api_key:
+    # 너무 짧은 키는 치환하지 않는다 — "1" 같은 값이면 메시지의 숫자를
+    # 전부 지워 진단 정보가 사라진다. 실제 DART 키는 40자다.
+    if len(api_key) >= _MIN_SCRUB_LEN:
         scrubbed = scrubbed.replace(api_key, "***")
     return _SECRET_RE.sub(r"\1=***", scrubbed)
 
@@ -1406,14 +1452,25 @@ def run_step(
         if not pending:
             break
 
-        item = pending[0]
         elapsed = now() - started
         remaining = budget_seconds - elapsed
         if remaining <= 0:
             break
-        if _is_oversized(item) and remaining < OVERSIZED_RESERVE:
-            # 예산이 이 항목을 감당하지 못한다. 아무것도 처리하지 못한 채
-            # 나가면 호출자가 같은 예산으로 무한 반복하므로 신호를 남긴다.
+
+        # 남은 예산으로 시작할 수 있는 첫 항목을 고른다. 목록 순서를 그대로
+        # 따르면(pending[0] 고정) 앞에 놓인 oversized 항목 하나가 뒤의 작은
+        # 항목 전부를 막는다(head-of-line 블로킹) — 예산이 작은 환경에서는
+        # 실행 가능한 항목이 많이 남았는데도 작업이 통째로 멈춘다.
+        item = None
+        for candidate in pending:
+            if _is_oversized(candidate) and remaining < OVERSIZED_RESERVE:
+                continue
+            item = candidate
+            break
+
+        if item is None:
+            # 남은 항목이 전부 oversized인데 예산이 부족하다. 아무것도 처리하지
+            # 못한 채 나가면 호출자가 같은 예산으로 무한 반복하므로 신호를 남긴다.
             blocked_by_reserve = True
             break
 
@@ -1446,7 +1503,7 @@ def run_step(
 - [ ] **Step 4: 테스트 통과 확인**
 
 Run: `python -m pytest tests/se/test_job_runner.py -v`
-Expected: PASS — 30 passed (+ 서브테스트 7)
+Expected: PASS — 33 passed (+ 서브테스트 7)
 
 - [ ] **Step 5: 전체 회귀 확인**
 
