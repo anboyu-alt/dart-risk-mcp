@@ -40,6 +40,18 @@ class TestMatch(unittest.TestCase):
     def test_empty_job_id_is_not_matched(self):
         self.assertIsNone(match("GET", "/api/analyze//step"))
 
+    def test_trailing_newline_is_not_matched(self):
+        """Python re의 `$`는 줄바꿈 직전에서도 매치된다.
+
+        `match` + `$`를 쓰면 "/api/analyze/abc\n"이 통과한다. 라우터는
+        보안 경계이므로 fullmatch로 이 함정을 막는다.
+        """
+        self.assertIsNone(match("GET", "/api/analyze/abc\n"))
+        self.assertIsNone(match("POST", "/api/analyze\n"))
+
+    def test_embedded_newline_is_not_matched(self):
+        self.assertIsNone(match("GET", "/api/analyze/ab\ncd"))
+
 
 class TestRequestHeaders(unittest.TestCase):
     def test_header_lookup_is_case_insensitive(self):

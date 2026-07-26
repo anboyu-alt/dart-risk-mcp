@@ -12,10 +12,11 @@ import re
 # 이 문자 집합을 벗어나는 값(경로 순회 등)은 애초에 매칭되지 않는다.
 _JOB_ID = r"(?P<job_id>[A-Za-z0-9_-]+)"
 
+# fullmatch로 대조하므로 ^...$ 앵커를 쓰지 않는다.
 _ROUTES: tuple[tuple[str, re.Pattern, str], ...] = (
-    ("POST", re.compile(r"^/api/analyze$"), "create"),
-    ("POST", re.compile(rf"^/api/analyze/{_JOB_ID}/step$"), "step"),
-    ("GET", re.compile(rf"^/api/analyze/{_JOB_ID}$"), "get"),
+    ("POST", re.compile(r"/api/analyze"), "create"),
+    ("POST", re.compile(rf"/api/analyze/{_JOB_ID}/step"), "step"),
+    ("GET", re.compile(rf"/api/analyze/{_JOB_ID}"), "get"),
 )
 
 
@@ -27,7 +28,10 @@ def match(method: str, path: str) -> tuple[str, dict] | None:
     for route_method, pattern, name in _ROUTES:
         if route_method != method.upper():
             continue
-        m = pattern.match(clean)
+        # fullmatch를 쓴다. Python re의 `$`는 문자열 끝뿐 아니라 줄바꿈
+        # 직전에서도 매치되므로, match + $면 "/api/analyze/abc\n"이
+        # 통과한다. 라우터는 보안 경계라 이 함정을 남겨두지 않는다.
+        m = pattern.fullmatch(clean)
         if m:
             return name, dict(m.groupdict())
     return None
