@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 from urllib.parse import urlencode, urlsplit
 
 from dart_risk_mcp.core import dart_client
@@ -42,6 +43,21 @@ _DEFAULT_JSON_TTL = 7 * 24 * 3600  # 7일
 def _endpoint_of(url: str) -> str:
     """URL 경로의 마지막 조각(엔드포인트 파일명)을 반환한다."""
     return urlsplit(url).path.rsplit("/", 1)[-1]
+
+
+def _is_successful_dart_json(body: bytes) -> bool:
+    """DART JSON 응답이 성공(status == "000")인지 판정한다.
+
+    DART는 실패를 HTTP 상태가 아니라 바디의 status 필드로 알린다
+    (020 한도 초과, 800 점검, 900 키 오류 등). 파싱할 수 없거나 status가
+    없으면 보수적으로 실패 취급해 캐시에 넣지 않는다 — 잘못 저장된 항목은
+    TTL이 끝날 때까지 전 사용자에게 노출되므로, 저장하지 않는 쪽이 안전하다.
+    """
+    try:
+        parsed = json.loads(body.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return False
+    return isinstance(parsed, dict) and parsed.get("status") == "000"
 
 
 class CachingHttp:
@@ -105,6 +121,14 @@ class CachingHttp:
             if not body.startswith(_ZIP_MAGIC):
                 return
             self.backend.put_blob(key, body)
+            return
+        # DART는 쿼터 초과(020)·시스템 점검(800)·키 오류(900)에도 HTTP 200으로
+        # 응답하면서 바디의 status 필드로만 실패를 알린다(core도 .json()["status"]로
+        # 판정한다). 캐시 키가 crtfc_key를 제외해 전 사용자가 공유하므로, 한
+        # 사용자의 쿼터 소진 응답이 저장되면 다른 모든 사용자가 TTL 기간(7일)
+        # 내내 그 오류를 받는다. blob 경로의 ZIP 매직바이트 가드와 같은 문제다.
+        # 성공(000)으로 확인된 응답만 저장한다. 파싱 실패도 저장하지 않는다.
+        if not _is_successful_dart_json(body):
             return
         self.backend.put_json(
             key,

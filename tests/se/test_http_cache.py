@@ -92,6 +92,64 @@ class TestBlobPoisoningGuard(unittest.TestCase):
         self.assertIsNone(backend.get_blob(http.cache_key(xbrl_url, params)))
 
 
+class TestJsonErrorBodyGuard(unittest.TestCase):
+    """DART는 JSON 엔드포인트도 쿼터 초과(020)·점검(800)·키 오류(900) 등을
+
+    HTTP 200 + 바디의 status 필드로만 알린다. 캐시 키가 crtfc_key를
+    제외해 전 사용자가 공유하므로, 한 사용자의 오류 응답이 저장되면
+    다른 모든 사용자가 TTL(7일) 동안 그 오류를 받는다. status가 "000"인
+    응답만 저장해야 한다.
+    """
+
+    def test_status_020_quota_exceeded_is_not_stored(self):
+        backend = MemoryCache()
+        http = CachingHttp(backend)
+        params = {"corp_code": "001"}
+        http.put(LIST_URL, params, 200, {"Content-Type": "application/json"},
+                 b'{"status":"020","message":"\xec\x9a\x94\xec\xb2\xad \xed\x95\x9c\xeb\x8f\x84 \xec\xb4\x88\xea\xb3\xbc"}')
+        self.assertIsNone(backend.get_json(http.cache_key(LIST_URL, params)))
+        self.assertIsNone(http.get(LIST_URL, params))
+
+    def test_status_800_system_check_is_not_stored(self):
+        backend = MemoryCache()
+        http = CachingHttp(backend)
+        params = {"corp_code": "002"}
+        http.put(LIST_URL, params, 200, {"Content-Type": "application/json"},
+                 b'{"status":"800","message":"check"}')
+        self.assertIsNone(backend.get_json(http.cache_key(LIST_URL, params)))
+
+    def test_status_013_no_data_is_not_stored(self):
+        backend = MemoryCache()
+        http = CachingHttp(backend)
+        params = {"corp_code": "003"}
+        http.put(LIST_URL, params, 200, {"Content-Type": "application/json"},
+                 b'{"status":"013","message":"no data"}')
+        self.assertIsNone(backend.get_json(http.cache_key(LIST_URL, params)))
+
+    def test_status_000_success_is_stored(self):
+        backend = MemoryCache()
+        http = CachingHttp(backend)
+        params = {"corp_code": "004"}
+        http.put(LIST_URL, params, 200, {"Content-Type": "application/json"},
+                 b'{"status":"000","message":"ok"}')
+        self.assertIsNotNone(backend.get_json(http.cache_key(LIST_URL, params)))
+        self.assertIsNotNone(http.get(LIST_URL, params))
+
+    def test_unparseable_body_is_not_stored(self):
+        backend = MemoryCache()
+        http = CachingHttp(backend)
+        params = {"corp_code": "005"}
+        http.put(LIST_URL, params, 200, {"Content-Type": "application/json"}, b"not json at all")
+        self.assertIsNone(backend.get_json(http.cache_key(LIST_URL, params)))
+
+    def test_body_without_status_field_is_not_stored(self):
+        backend = MemoryCache()
+        http = CachingHttp(backend)
+        params = {"corp_code": "006"}
+        http.put(LIST_URL, params, 200, {"Content-Type": "application/json"}, b'{"list":[]}')
+        self.assertIsNone(backend.get_json(http.cache_key(LIST_URL, params)))
+
+
 class TestPolicyRouting(unittest.TestCase):
     def test_document_xml_stored_as_blob(self):
         backend = MemoryCache()

@@ -159,6 +159,29 @@ class TestConfig(unittest.TestCase):
             cfg = SEConfig.from_env()
         self.assertEqual(cfg.supabase_url, "https://x.supabase.co")
 
+    def test_repr_does_not_expose_service_key(self):
+        """service_role 키는 RLS를 우회하는 최고 권한 자격증명이다.
+
+        기본 dataclass __repr__은 모든 필드를 그대로 출력하므로, 로그나
+        예외 문자열에 config 객체가 한 번만 찍혀도 키가 유출된다.
+        """
+        cfg = SEConfig(
+            supabase_url="https://x.supabase.co",
+            supabase_service_key="SUPER_SECRET_SERVICE_ROLE_KEY",
+        )
+        self.assertNotIn("SUPER_SECRET_SERVICE_ROLE_KEY", repr(cfg))
+        self.assertNotIn("SUPER_SECRET_SERVICE_ROLE_KEY", str(cfg))
+
+    def test_repr_still_shows_non_secret_fields(self):
+        """repr=False는 service_key에만 적용돼야 하고, 다른 필드는 그대로 보여야 한다."""
+        cfg = SEConfig(
+            supabase_url="https://x.supabase.co",
+            supabase_service_key="SECRET",
+            cache_bucket="my-bucket",
+        )
+        self.assertIn("https://x.supabase.co", repr(cfg))
+        self.assertIn("my-bucket", repr(cfg))
+
 
 if __name__ == "__main__":
     unittest.main()

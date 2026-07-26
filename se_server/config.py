@@ -6,13 +6,15 @@ Vercel 환경변수에서 읽는다. DART API 키는 여기에 없다 — 사용
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
 class SEConfig:
     supabase_url: str
-    supabase_service_key: str
+    # repr=False: service_role 키는 RLS를 우회하는 최고 권한 자격증명이다.
+    # dataclass 기본 __repr__에 노출되면 로그·예외 문자열 한 번으로 유출된다.
+    supabase_service_key: str = field(repr=False)
     cache_bucket: str = "se-cache"
 
     @classmethod

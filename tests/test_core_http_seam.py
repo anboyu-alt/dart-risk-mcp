@@ -238,6 +238,20 @@ class RaisingPutCache:
         raise RuntimeError("cache backend down")
 
 
+class BadShapeGetCache:
+    """cache.get이 예외 대신 계약과 다른 형태(3-튜플이 아님)를 반환하는 구현.
+
+    머지 전 지적 ③ 회귀 고정용: get()의 반환값이 튜플이 아니거나 언팩이
+    실패해도 _retry는 예외를 전파하지 않고 네트워크 호출로 폴백해야 한다.
+    """
+
+    def get(self, url, params):
+        return (200, {"Content-Type": "application/json"})  # 3-튜플이 아니라 2-튜플
+
+    def put(self, url, params, status, headers, body):
+        pass
+
+
 class TestCacheFailuresDoNotBreakRequests(unittest.TestCase):
     def tearDown(self):
         dart_client.set_http_cache(None)
@@ -264,6 +278,77 @@ class TestCacheFailuresDoNotBreakRequests(unittest.TestCase):
             resp = dart_client._retry("GET", "https://example.test/api/list.json", params={})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.content, b'{"status":"000"}')
+
+    def test_get_returns_wrong_shape_falls_back_to_network(self):
+        """머지 전 지적 ③: cache.get이 3-튜플이 아닌 값을 반환해도
+
+        (예: 2-튜플) ValueError가 호출자에게 전파되지 않고 캐시 미스로
+        처리되어 네트워크 호출로 폴백해 정상 응답을 반환해야 한다.
+        """
+        dart_client.set_http_cache(BadShapeGetCache())
+        with mock.patch.object(
+            dart_client.requests, "request",
+            return_value=_fake_response(body=b'{"status":"000"}')
+        ) as req:
+            resp = dart_client._retry("GET", "https://example.test/api/list.json", params={})
+        req.assert_called_once()
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.content, b'{"status":"000"}')
+
+
+class TestCacheFailureLogging(unittest.TestCase):
+    """머지 전 지적 ④: 캐시 실패는 warning 레벨로 로그를 남기되,
+
+    params(사용자 DART API 키 crtfc_key를 담고 있음)는 절대 로그에
+    포함하지 않는다.
+    """
+
+    def tearDown(self):
+        dart_client.set_http_cache(None)
+
+    def test_get_failure_logs_warning_without_api_key(self):
+        dart_client.set_http_cache(RaisingGetCache())
+        with self.assertLogs(dart_client.log.name, level="WARNING") as cm:
+            with mock.patch.object(
+                dart_client.requests, "request",
+                return_value=_fake_response(body=b'{"status":"000"}')
+            ):
+                dart_client._retry(
+                    "GET", "https://example.test/api/list.json",
+                    params={"crtfc_key": "SECRET_API_KEY_VALUE_GET"},
+                )
+        combined = "\n".join(cm.output)
+        self.assertNotIn("SECRET_API_KEY_VALUE_GET", combined)
+        self.assertTrue(any("캐시" in line for line in cm.output))
+
+    def test_put_failure_logs_warning_without_api_key(self):
+        dart_client.set_http_cache(RaisingPutCache())
+        with self.assertLogs(dart_client.log.name, level="WARNING") as cm:
+            with mock.patch.object(
+                dart_client.requests, "request",
+                return_value=_fake_response(body=b'{"status":"000"}')
+            ):
+                dart_client._retry(
+                    "GET", "https://example.test/api/list.json",
+                    params={"crtfc_key": "SECRET_API_KEY_VALUE_PUT"},
+                )
+        combined = "\n".join(cm.output)
+        self.assertNotIn("SECRET_API_KEY_VALUE_PUT", combined)
+        self.assertTrue(any("캐시" in line for line in cm.output))
+
+    def test_bad_shape_get_logs_warning_without_api_key(self):
+        dart_client.set_http_cache(BadShapeGetCache())
+        with self.assertLogs(dart_client.log.name, level="WARNING") as cm:
+            with mock.patch.object(
+                dart_client.requests, "request",
+                return_value=_fake_response(body=b'{"status":"000"}')
+            ):
+                dart_client._retry(
+                    "GET", "https://example.test/api/list.json",
+                    params={"crtfc_key": "SECRET_API_KEY_VALUE_SHAPE"},
+                )
+        combined = "\n".join(cm.output)
+        self.assertNotIn("SECRET_API_KEY_VALUE_SHAPE", combined)
 
 
 if __name__ == "__main__":

@@ -68,9 +68,12 @@ def _retry(method: str, url: str, **kwargs) -> requests.Response:
     404 등 재시도 대상이 아닌 4xx는 재시도 없이 즉시 그대로 반환한다.
 
     _http_cache가 설정돼 있으면 GET 요청에 한해 캐시를 먼저 조회하고,
-    200 응답만 캐시에 저장한다. 캐시 조회/저장이 예외를 던지면 조용히
-    무시하고 네트워크 호출로 진행한다 — 캐시는 성능 최적화일 뿐 정확성의
-    일부가 아니므로, 캐시 구현의 버그가 DART 요청 자체를 죽여서는 안 된다.
+    200 응답만 캐시에 저장한다. 캐시 조회/저장이 예외를 던지거나(혹은
+    조회 결과가 계약과 다른 형태를 반환하거나) 조용히 무시하고 네트워크
+    호출로 진행한다 — 캐시는 성능 최적화일 뿐 정확성의 일부가 아니므로,
+    캐시 구현의 버그가 DART 요청 자체를 죽여서는 안 된다. 다만 진단이
+    가능하도록 두 경우 모두 warning 레벨로 로그를 남긴다(URL만, params는
+    사용자 DART API 키를 담고 있으므로 로그에 남기지 않는다).
     """
     kwargs.setdefault("timeout", 15)
 
@@ -87,14 +90,22 @@ def _retry(method: str, url: str, **kwargs) -> requests.Response:
         # 인증 실패 버그가 생긴다. 방어적으로 복사본을 넘겨 원본을 보호한다.
         try:
             hit = cache.get(url, dict(params))
+            if hit is not None:
+                # 언팩과 응답 합성도 try 안에서 수행한다. 캐시 구현이 예외
+                # 대신 잘못된 형태(예: 3-튜플이 아닌 값)를 반환하면 여기서
+                # ValueError 등이 나는데, 이 시임의 계약은 "캐시 조회/저장
+                # 실패는 조용히 무시하고 네트워크 호출로 진행한다"이므로
+                # try 밖에 두면 그 계약이 깨진다.
+                status, headers, body = hit
+                return _response_from_cache(status, headers, body)
         except Exception:
-            # 캐시 조회 실패는 미스로 간주하고 아래에서 네트워크 호출로
-            # 진행한다. 넓게 잡는 이유: 캐시 구현이 어떤 예외를 던지든
-            # (직렬화 오류, 파일 I/O 오류 등) DART 요청 자체는 계속돼야 한다.
-            hit = None
-        if hit is not None:
-            status, headers, body = hit
-            return _response_from_cache(status, headers, body)
+            # 캐시 조회(혹은 그 결과의 언팩·합성) 실패는 미스로 간주하고
+            # 아래에서 네트워크 호출로 진행한다. 넓게 잡는 이유: 캐시
+            # 구현이 어떤 예외를 던지든(직렬화 오류, 파일 I/O 오류, 반환
+            # 형태 오류 등) DART 요청 자체는 계속돼야 한다.
+            # params는 사용자 DART API 키(crtfc_key)를 담고 있으므로 로그에
+            # 남기지 않는다.
+            log.warning("HTTP 캐시 조회 실패, 네트워크 호출로 폴백: url=%s", url, exc_info=True)
 
     last: requests.Response | None = None
     exhausted = True  # 재시도를 모두 소진했는가 (아래 raise_for_status 조건)
@@ -117,7 +128,9 @@ def _retry(method: str, url: str, **kwargs) -> requests.Response:
         except Exception:
             # 저장 실패도 조용히 무시한다 — 응답은 이미 확보했으므로 호출자
             # 에게는 정상적으로 반환해야 한다(넓게 잡는 이유는 위와 동일).
-            pass
+            # params는 사용자 DART API 키(crtfc_key)를 담고 있으므로 로그에
+            # 남기지 않는다.
+            log.warning("HTTP 캐시 저장 실패, 응답은 정상 반환: url=%s", url, exc_info=True)
 
     # 기존 동작 보존: 비재시도 응답(404 등)은 그대로 반환하고, 재시도를 모두
     # 소진한 429/5xx일 때만 예외를 던진다. `exhausted` 없이 상태 코드만 보면
