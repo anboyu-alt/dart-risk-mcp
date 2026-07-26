@@ -1446,7 +1446,7 @@ def run_step(
 - [ ] **Step 4: 테스트 통과 확인**
 
 Run: `python -m pytest tests/se/test_job_runner.py -v`
-Expected: PASS — 31 passed
+Expected: PASS — 30 passed (+ 서브테스트 7)
 
 - [ ] **Step 5: 전체 회귀 확인**
 
