@@ -592,6 +592,31 @@ class TestPolicyRouting(unittest.TestCase):
         self.assertIsNone(http.get(LIST_URL, params))
 
 
+class TestNeverCache(unittest.TestCase):
+    """corpCode.xml은 신규 상장으로 계속 바뀌므로 캐시 대상이 아니다.
+
+    core의 _load_corp_codes가 24시간 파일 캐시를 이미 두고 있어, 여기서 다시
+    캐시하면 그 갱신 주기가 무력화되고 기업 목록이 고정된다.
+    """
+
+    CORP_URL = "https://opendart.fss.or.kr/api/corpCode.xml"
+
+    def test_put_stores_nothing(self):
+        backend = MemoryCache()
+        http = CachingHttp(backend)
+        http.put(self.CORP_URL, {}, 200, {"Content-Type": "application/zip"}, b"PK\x03\x04")
+        key = http.cache_key(self.CORP_URL, {})
+        self.assertIsNone(backend.get_blob(key))
+        self.assertIsNone(backend.get_json(key))
+
+    def test_get_always_misses(self):
+        backend = MemoryCache()
+        http = CachingHttp(backend)
+        # 백엔드에 직접 심어두더라도 조회 경로에서 걸러져야 한다.
+        backend.put_blob(http.cache_key(self.CORP_URL, {}), b"STALE")
+        self.assertIsNone(http.get(self.CORP_URL, {}))
+
+
 class TestInstall(unittest.TestCase):
     def tearDown(self):
         from dart_risk_mcp.core import dart_client
@@ -644,8 +669,15 @@ from se_server.cache.base import CacheBackend
 # 캐시 키에서 제외할 파라미터 — 사용자 식별자에 해당한다.
 _EXCLUDED_PARAMS = frozenset({"crtfc_key"})
 
-# 바이너리(ZIP)로 응답하는 엔드포인트. blob 네임스페이스로 보낸다.
-_BLOB_ENDPOINTS = frozenset({"document.xml", "fnlttXbrl.xml", "corpCode.xml"})
+# 바이너리(ZIP)로 응답하는 엔드포인트. blob 네임스페이스에 영구 저장한다.
+# rcept_no가 불변 식별자이므로 stale이 발생하지 않는 것들만 넣는다.
+_BLOB_ENDPOINTS = frozenset({"document.xml", "fnlttXbrl.xml"})
+
+# 캐시하지 않는 엔드포인트.
+# corpCode.xml(전체 기업 코드 목록)은 신규 상장으로 계속 바뀌므로 불변이 아니다.
+# core의 _load_corp_codes가 이미 24시간 파일 캐시를 두고 있으며, 여기서 다시
+# 캐시하면 그 갱신 주기를 무력화한다.
+_NEVER_CACHE = frozenset({"corpCode.xml"})
 
 _DEFAULT_JSON_TTL = 7 * 24 * 3600  # 7일
 
@@ -677,7 +709,12 @@ class CachingHttp:
     def _is_blob(self, url: str) -> bool:
         return _endpoint_of(url) in _BLOB_ENDPOINTS
 
+    def _is_cacheable(self, url: str) -> bool:
+        return _endpoint_of(url) not in _NEVER_CACHE
+
     def get(self, url: str, params: dict) -> tuple[int, dict, bytes] | None:
+        if not self._is_cacheable(url):
+            return None
         key = self.cache_key(url, params)
         if self._is_blob(url):
             body = self.backend.get_blob(key)
@@ -692,7 +729,7 @@ class CachingHttp:
         return int(entry["status"]), dict(entry.get("headers") or {}), body
 
     def put(self, url: str, params: dict, status: int, headers: dict, body: bytes) -> None:
-        if status != 200:
+        if status != 200 or not self._is_cacheable(url):
             return
         key = self.cache_key(url, params)
         if self._is_blob(url):
@@ -798,12 +835,28 @@ class TestBlob(unittest.TestCase):
         self.assertEqual(headers["x-upsert"], "true")
         self.assertEqual(headers["Authorization"], "Bearer SERVICE_KEY")
 
-    def test_blob_failure_is_swallowed(self):
-        """캐시 쓰기 실패가 분석 전체를 중단시키면 안 된다."""
+    def test_blob_write_failure_does_not_propagate(self):
+        """캐시 쓰기 실패가 분석 전체를 중단시키면 안 된다.
+
+        캐시는 성능 최적화이지 정확성의 일부가 아니다. 저장에 실패하면
+        조용히 포기하고 호출자는 계속 진행해야 한다.
+        """
         session = mock.Mock()
         session.post.side_effect = RuntimeError("네트워크 오류")
         cache = SupabaseCache(CFG, session=session)
-        cache.put_blob("k", b"x")  # 예외가 새어나오지 않아야 한다
+
+        try:
+            cache.put_blob("k", b"x")
+        except Exception as exc:  # pragma: no cover - 실패 시 진단용
+            self.fail(f"put_blob이 예외를 전파했습니다: {exc!r}")
+
+        self.assertEqual(session.post.call_count, 1)
+
+    def test_blob_read_failure_is_a_miss(self):
+        session = mock.Mock()
+        session.get.side_effect = RuntimeError("네트워크 오류")
+        cache = SupabaseCache(CFG, session=session)
+        self.assertIsNone(cache.get_blob("k"))
 
 
 class TestJson(unittest.TestCase):
