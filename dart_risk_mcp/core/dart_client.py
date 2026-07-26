@@ -25,21 +25,73 @@ DART_BASE = "https://opendart.fss.or.kr/api"
 _CACHE_DIR = Path.home() / ".cache" / "dart-risk-mcp"
 
 
+# ── 선택적 HTTP 캐시 시임 ─────────────────────────────
+# se_server 등 외부 소비자가 DART 응답 캐시를 주입하는 유일한 지점.
+# 기본값 None이면 캐시 없이 직접 호출한다(MCP 서버의 기존 동작).
+#
+# 주입 객체는 아래 두 메서드를 제공해야 한다:
+#   get(url, params) -> (status_code, headers, body) | None
+#   put(url, params, status, headers, body) -> None
+#
+# 캐시 키 계산은 주입 측 책임이다. 특히 params의 crtfc_key(사용자 API 키)를
+# 키에서 제외하는 것은 주입 측에서 처리한다.
+_http_cache = None
+
+
+def set_http_cache(cache) -> None:
+    """DART HTTP 응답 캐시를 주입한다. None이면 캐시를 사용하지 않는다."""
+    global _http_cache
+    _http_cache = cache
+
+
+def get_http_cache():
+    """현재 주입된 HTTP 캐시를 반환한다 (미설정 시 None)."""
+    return _http_cache
+
+
+def _response_from_cache(status: int, headers: dict, body: bytes) -> requests.Response:
+    """캐시된 (status, headers, body)로 requests.Response를 합성한다."""
+    resp = requests.Response()
+    resp.status_code = status
+    resp._content = body
+    resp.headers.update(headers or {})
+    return resp
+
+
 def _retry(method: str, url: str, **kwargs) -> requests.Response:
-    """429/5xx 지수 백오프 재시도 (최대 3회). 3회 후에도 4xx/5xx면 raise_for_status."""
+    """429/5xx 지수 백오프 재시도 (최대 3회). 3회 후에도 4xx/5xx면 raise_for_status.
+
+    _http_cache가 설정돼 있으면 GET 요청에 한해 캐시를 먼저 조회하고,
+    200 응답만 캐시에 저장한다.
+    """
     kwargs.setdefault("timeout", 15)
+
+    cache = _http_cache
+    cacheable = cache is not None and method.upper() == "GET"
+    params = kwargs.get("params") or {}
+
+    if cacheable:
+        hit = cache.get(url, params)
+        if hit is not None:
+            status, headers, body = hit
+            return _response_from_cache(status, headers, body)
+
     last: requests.Response | None = None
     for i in range(3):
         try:
             last = requests.request(method, url, **kwargs)
             if last.status_code not in (429, 500, 502, 503, 504):
-                return last
+                break
             if i < 2:
                 time.sleep(min(2 ** i, 10))
-        except requests.RequestException as e:
+        except requests.RequestException:
             if i == 2:
                 raise
             time.sleep(min(2 ** i, 10))
+
+    if cacheable and last is not None and last.status_code == 200:
+        cache.put(url, params, last.status_code, dict(last.headers), last.content)
+
     if last is not None and last.status_code >= 400:
         last.raise_for_status()
     return last  # type: ignore
