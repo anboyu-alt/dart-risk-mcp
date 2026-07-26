@@ -83,6 +83,7 @@
 
 ```python
 """작업 자료구조와 직렬화."""
+import json
 import unittest
 
 from se_server.jobs.model import Job, WorkItem
@@ -136,7 +137,6 @@ class TestJob(unittest.TestCase):
 
     def test_to_dict_is_json_serializable(self):
         """저장소가 JSONB로 넣으므로 순수 JSON 타입만 담겨야 한다."""
-        import json
         job = Job(job_id="j1", company="테스트", corp_code="0", lookback_years=1,
                   items=[_item("a")])
         json.dumps(job.to_dict())  # 예외가 나면 실패
@@ -146,9 +146,6 @@ class TestJob(unittest.TestCase):
         job = Job(job_id="j1", company="테스트", corp_code="0", lookback_years=1,
                   items=[_item("a")])
         self.assertNotIn("crtfc_key", json.dumps(job.to_dict()))
-
-
-import json  # noqa: E402  (위 테스트에서 사용)
 
 
 if __name__ == "__main__":
@@ -717,7 +714,7 @@ def _job_with(items, **kw):
                lookback_years=1, items=items, **kw)
 
 
-def _stage1(key, kind="fetch_company_info", oversized_key=False):
+def _stage1(key, kind="fetch_company_info"):
     return WorkItem(key=key, stage=1, kind=kind, params={"corp_code": "00126380"})
 
 
@@ -855,10 +852,32 @@ class TestExpandStage2(unittest.TestCase):
         runner.expand_stage2(job)
         self.assertTrue(job.stage2_expanded)
 
-    def test_no_disclosures_result_expands_nothing(self):
+    def test_does_not_expand_while_stage1_pending(self):
+        """1단이 진행 중이면 공시 목록이 확정되지 않았으므로 확장하지 않는다."""
         job = _job_with([_stage1("disclosures", kind="fetch_company_disclosures")])
         self.assertEqual(runner.expand_stage2(job), 0)
         self.assertFalse(job.stage2_expanded)
+
+    def test_marks_expanded_when_disclosures_missing(self):
+        """공시 조회가 실패해도 확장 패스는 끝난 것으로 표시해야 한다.
+
+        표시하지 않으면 추가할 항목이 없는데도 job.status가 영원히 running에
+        머물러 호출자가 무한 루프에 빠진다.
+        """
+        item = _stage1("company_info")
+        item.status = "done"
+        item.result = {"value": {}}
+        job = _job_with([item])  # disclosures 항목 자체가 없다
+        self.assertEqual(runner.expand_stage2(job), 0)
+        self.assertTrue(job.stage2_expanded)
+
+    def test_marks_expanded_when_disclosures_failed(self):
+        item = _stage1("disclosures", kind="fetch_company_disclosures")
+        item.status = "failed"
+        item.error = "DART 오류"
+        job = _job_with([item])
+        self.assertEqual(runner.expand_stage2(job), 0)
+        self.assertTrue(job.stage2_expanded)
 
     def test_deduplicates_repeated_rcept_no(self):
         job = self._job_with_disclosures([
@@ -999,9 +1018,17 @@ def expand_stage2(job: Job) -> int:
     2단 대상은 1단이 끝나야 알 수 있으므로 작업 계획을 미리 다 만들 수 없다.
     이미 확장했으면 아무것도 하지 않는다(멱등).
 
+    **완료 표시 규칙:** 1단에 남은 항목이 있으면 아직 확장할 때가 아니므로
+    표시하지 않는다. 1단이 끝났다면 공시 결과가 없거나(조회 실패) 비어 있어도
+    확장 패스는 수행된 것이므로 표시한다 — 표시하지 않으면 추가할 항목이
+    없는데도 job.status가 영원히 "running"에 머물러 호출자가 무한 루프에 빠진다.
+
     반환: 추가된 항목 수.
     """
     if job.stage2_expanded:
+        return 0
+    if job.pending_items():
+        # 1단이 아직 진행 중이다. 공시 목록이 확정되지 않았다.
         return 0
 
     disclosures = None
@@ -1010,6 +1037,9 @@ def expand_stage2(job: Job) -> int:
             disclosures = item.result.get("value")
             break
     if disclosures is None:
+        # 공시 조회가 실패했거나 항목 자체가 없다. 추가할 2단 항목은 없지만
+        # 확장 패스는 끝났으므로 표시해야 작업이 완료될 수 있다.
+        job.stage2_expanded = True
         return 0
 
     existing = {i.params.get("rcept_no") for i in job.items if i.stage == 2}
@@ -1092,7 +1122,7 @@ def run_step(
 - [ ] **Step 4: 테스트 통과 확인**
 
 Run: `python -m pytest tests/se/test_job_runner.py -v`
-Expected: PASS — 15 passed
+Expected: PASS — 17 passed
 
 - [ ] **Step 5: 전체 회귀 확인**
 
