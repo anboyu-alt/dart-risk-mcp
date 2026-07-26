@@ -107,6 +107,41 @@ class TestRunStepBudget(unittest.TestCase):
         self.assertFalse(result.stalled)
         self.assertGreater(result.processed, 0)
 
+    def test_oversized_does_not_block_smaller_items_behind_it(self):
+        """앞의 oversized 항목이 뒤의 작은 항목을 막으면 안 된다.
+
+        목록 순서를 그대로 따르면 예산이 작은 환경에서 실행 가능한 항목이
+        많이 남았는데도 작업이 통째로 멈춘다(head-of-line 블로킹).
+        """
+        store = MemoryJobStore()
+        big = WorkItem(key="insider_timeline", stage=1, kind="fetch_insider_timeline",
+                       params={"corp_code": "0", "lookback_years": 5})
+        store.save(_job_with([big, _stage1("small1"), _stage1("small2")]))
+
+        with mock.patch.object(runner, "resolve_callable", return_value=lambda **kw: {}):
+            result = runner.run_step("j1", "KEY", store,
+                                     budget_seconds=runner.OVERSIZED_RESERVE - 1.0,
+                                     now=_Clock(0.1))
+
+        job = store.load("j1")
+        self.assertEqual(result.processed, 2)   # 작은 항목 둘은 처리됐다
+        self.assertFalse(result.stalled)        # 진행이 있었으므로 정체 아님
+        self.assertEqual(job.items[0].status, "pending")  # oversized는 그대로 대기
+
+    def test_stalled_only_when_all_remaining_are_oversized(self):
+        store = MemoryJobStore()
+        big = WorkItem(key="insider_timeline", stage=1, kind="fetch_insider_timeline",
+                       params={"corp_code": "0", "lookback_years": 5})
+        big2 = WorkItem(key="audit_history", stage=1, kind="fetch_audit_opinion_history",
+                        params={"corp_code": "0", "lookback_years": 5})
+        store.save(_job_with([big, big2]))
+        with mock.patch.object(runner, "resolve_callable", return_value=lambda **kw: {}):
+            result = runner.run_step("j1", "KEY", store,
+                                     budget_seconds=runner.OVERSIZED_RESERVE - 1.0,
+                                     now=_Clock(0.1))
+        self.assertTrue(result.stalled)
+        self.assertEqual(result.processed, 0)
+
     def test_completed_job_is_not_stalled(self):
         store = MemoryJobStore()
         done_item = _stage1("k0")
@@ -193,6 +228,11 @@ class TestScrub(unittest.TestCase):
     def test_works_without_api_key_argument(self):
         """키를 모를 때도 정규식 경로는 살아 있어야 한다."""
         self.assertNotIn("OTHERKEY", runner._scrub("crtfc_key=OTHERKEY"))
+
+    def test_short_key_is_not_substituted(self):
+        """짧은 값을 치환하면 무관한 문자까지 지워 진단이 불가능해진다."""
+        message = "HTTP 500 at line 1 (attempt 1)"
+        self.assertEqual(runner._scrub(message, "1"), message)
 
     def test_preserves_useful_message(self):
         cleaned = runner._scrub(f"DART 오류 (020): crtfc_key={self.KEY}", self.KEY)

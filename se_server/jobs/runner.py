@@ -38,6 +38,10 @@ _SECRET_RE = re.compile(r"(crtfc_key|api_key|apikey)=[^\s&'\"]+", re.IGNORECASE)
 # 하며, 어긋나면 2단이 통째로 조용히 비활성화된다(테스트가 이를 고정한다).
 DISCLOSURES_KEY = "disclosures"
 
+# 이보다 짧은 api_key는 오류 메시지에서 치환하지 않는다. 실제 DART 키는 40자이며,
+# 한 글자짜리 값을 치환하면 메시지의 무관한 문자까지 지워 진단이 불가능해진다.
+_MIN_SCRUB_LEN = 8
+
 
 @dataclass
 class StepResult:
@@ -85,7 +89,9 @@ def _scrub(message: str, api_key: str = "") -> str:
     잡는 보조 수단으로 남긴다.
     """
     scrubbed = message
-    if api_key:
+    # 너무 짧은 키는 치환하지 않는다 — "1" 같은 값이면 메시지의 숫자를
+    # 전부 지워 진단 정보가 사라진다. 실제 DART 키는 40자다.
+    if len(api_key) >= _MIN_SCRUB_LEN:
         scrubbed = scrubbed.replace(api_key, "***")
     return _SECRET_RE.sub(r"\1=***", scrubbed)
 
@@ -216,14 +222,25 @@ def run_step(
         if not pending:
             break
 
-        item = pending[0]
         elapsed = now() - started
         remaining = budget_seconds - elapsed
         if remaining <= 0:
             break
-        if _is_oversized(item) and remaining < OVERSIZED_RESERVE:
-            # 예산이 이 항목을 감당하지 못한다. 아무것도 처리하지 못한 채
-            # 나가면 호출자가 같은 예산으로 무한 반복하므로 신호를 남긴다.
+
+        # 남은 예산으로 시작할 수 있는 첫 항목을 고른다. 목록 순서를 그대로
+        # 따르면(pending[0] 고정) 앞에 놓인 oversized 항목 하나가 뒤의 작은
+        # 항목 전부를 막는다(head-of-line 블로킹) — 예산이 작은 환경에서는
+        # 실행 가능한 항목이 많이 남았는데도 작업이 통째로 멈춘다.
+        item = None
+        for candidate in pending:
+            if _is_oversized(candidate) and remaining < OVERSIZED_RESERVE:
+                continue
+            item = candidate
+            break
+
+        if item is None:
+            # 남은 항목이 전부 oversized인데 예산이 부족하다. 아무것도 처리하지
+            # 못한 채 나가면 호출자가 같은 예산으로 무한 반복하므로 신호를 남긴다.
             blocked_by_reserve = True
             break
 
