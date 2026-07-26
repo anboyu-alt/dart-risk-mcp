@@ -5,6 +5,7 @@ from unittest import mock
 from se_server.api.auth import AuthError
 from se_server.api.handlers import Deps, handle
 from se_server.api.types import Request
+from se_server.jobs import runner
 from se_server.jobs.store import MemoryJobStore
 
 
@@ -124,6 +125,72 @@ class TestStep(unittest.TestCase):
         resp = handle(_req("POST", f"/api/analyze/{job_id}/step", dart_key=""),
                       _deps(store=store))
         self.assertEqual(resp.status, 400)
+
+
+class TestUserIdGuard(unittest.TestCase):
+    """빈 user_id는 저장소의 소유자 검사를 통째로 끈다.
+
+    Deps.auth가 덕 타이핑이라 계약이 강제되지 않으므로 핸들러가 방어한다.
+    """
+
+    def test_empty_user_id_is_rejected(self):
+        for bad in ("", None, 123):
+            with self.subTest(user_id=bad):
+                resp = handle(_req("GET", "/api/analyze/j1"),
+                              _deps(auth=_Auth(user_id=bad)))
+                self.assertEqual(resp.status, 401)
+
+    def test_empty_user_id_never_touches_store(self):
+        store = mock.Mock()
+        handle(_req("GET", "/api/analyze/j1"),
+               Deps(store=store, auth=_Auth(user_id="")))
+        store.load.assert_not_called()
+
+
+class TestMalformedBody(unittest.TestCase):
+    """JSON 배열·null·문자열 본문이 500이 되면 안 된다."""
+
+    def test_non_dict_body_is_400_not_500(self):
+        for body in (None, ["x"], "문자열", 42):
+            with self.subTest(body=body):
+                req = Request("POST", "/api/analyze",
+                              {"Authorization": "Bearer T", "X-DART-Key": "K12345678"},
+                              body)
+                resp = handle(req, _deps())
+                self.assertEqual(resp.status, 400)
+
+
+class TestStepOwnershipIsPassedThrough(unittest.TestCase):
+    """핸들러의 사전 확인만으로는 부족하다 — run_step에도 user_id가 가야 한다.
+
+    저장소가 user_id를 무시하도록 만든 더블로, 사전 확인이 통과한 뒤
+    run_step이 소유자를 다시 확인하는지 본다.
+    """
+
+    class _IgnoresOwner(MemoryJobStore):
+        def load(self, job_id, user_id=""):
+            return super().load(job_id)  # 소유자 검사를 일부러 건너뛴다
+
+    def test_run_step_receives_user_id(self):
+        store = self._IgnoresOwner()
+        with mock.patch("se_server.api.handlers.resolve_corp",
+                        return_value=("회사", {"corp_code": "0"})):
+            created = handle(_req("POST", "/api/analyze", {"company": "회사"}),
+                             Deps(store=store, auth=_Auth(user_id="owner")))
+        job_id = created.body["job_id"]
+
+        captured = {}
+        real_run_step = runner.run_step
+
+        def spy(*args, **kwargs):
+            captured["user_id"] = kwargs.get("user_id")
+            return real_run_step(*args, **kwargs)
+
+        with mock.patch.object(runner, "run_step", side_effect=spy), \
+                mock.patch.object(runner, "resolve_callable", return_value=lambda **kw: {}):
+            handle(_req("POST", f"/api/analyze/{job_id}/step"),
+                   Deps(store=store, auth=_Auth(user_id="침입자")))
+        self.assertEqual(captured.get("user_id"), "침입자")
 
 
 class TestGet(unittest.TestCase):

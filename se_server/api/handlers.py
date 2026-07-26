@@ -44,11 +44,22 @@ def handle(request: Request, deps: Deps) -> Response:
     except AuthError as exc:
         return Response.error(exc.status, exc.message)
 
+    # 빈 user_id는 저장소에서 소유자 검사를 **통째로 끄는** 값이다
+    # (JobStore.load의 `if user_id:` 분기). Deps.auth는 덕 타이핑이라
+    # 계약이 강제되지 않으므로 핸들러가 스스로 방어한다 — 가드가 조용히
+    # 꺼지느니 인증 실패로 떨어뜨리는 편이 안전하다.
+    if not isinstance(user_id, str) or not user_id:
+        return Response.error(401, "인증에 실패했습니다")
+
     if name == "create":
         return _create(request, deps, user_id)
     if name == "step":
         return _step(request, deps, user_id, path_vars["job_id"])
-    return _get(deps, user_id, path_vars["job_id"])
+    if name == "get":
+        return _get(deps, user_id, path_vars["job_id"])
+    # 라우트가 늘었는데 분기를 빠뜨리면 조용히 엉뚱한 핸들러로 새지 않고
+    # 여기서 드러난다.
+    return Response.error(404, "존재하지 않는 경로입니다")
 
 
 def _dart_key(request: Request) -> str:
@@ -67,8 +78,18 @@ def _clamp_years(raw) -> int:
     return max(_MIN_YEARS, min(_MAX_YEARS, value))
 
 
+def _body(request: Request) -> dict:
+    """본문을 dict로 정규화한다.
+
+    JSON 배열·null·문자열 본문이 오면 .get()에서 AttributeError가 나
+    핸들러 밖으로 전파된다(400이 아니라 500이 된다).
+    """
+    return request.body if isinstance(request.body, dict) else {}
+
+
 def _create(request: Request, deps: Deps, user_id: str) -> Response:
-    company = str(request.body.get("company") or "").strip()
+    body = _body(request)
+    company = str(body.get("company") or "").strip()
     if not company:
         return Response.error(400, "company가 필요합니다")
 
@@ -86,7 +107,7 @@ def _create(request: Request, deps: Deps, user_id: str) -> Response:
     job = runner.create_job(
         corp_name or company,
         info["corp_code"],
-        _clamp_years(request.body.get("lookback_years", 1)),
+        _clamp_years(body.get("lookback_years", 1)),
         deps.store,
         user_id=user_id,
     )
@@ -112,8 +133,14 @@ def _step(request: Request, deps: Deps, user_id: str, job_id: str) -> Response:
             job_id, api_key, deps.store,
             budget_seconds=deps.budget_seconds, user_id=user_id,
         )
-    except ValueError as exc:
-        return Response.error(400, str(exc))
+    except ValueError:
+        # run_step의 ValueError는 두 가지다. 어느 쪽이든 사용자가 고칠 수
+        # 있는 게 아니므로 내부 문구를 그대로 돌려주지 않는다:
+        #   - 작업 없음(사전 확인 이후 사라진 경우) → 404
+        #   - 예산이 OVERSIZED_RESERVE 이하 → 서버 설정 오류(500)
+        if deps.store.load(job_id, user_id=user_id) is None:
+            return Response.error(404, "작업을 찾을 수 없습니다")
+        return Response.error(500, "서버 설정 오류로 작업을 진행할 수 없습니다")
 
     return Response(200, {
         "done": result.done,
