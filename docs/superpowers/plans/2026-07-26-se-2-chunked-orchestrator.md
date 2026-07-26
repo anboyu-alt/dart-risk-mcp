@@ -273,7 +273,7 @@ class Job:
 - [ ] **Step 4: 테스트 통과 확인**
 
 Run: `python -m pytest tests/se/test_job_model.py -v`
-Expected: PASS — 9 passed
+Expected: PASS — 10 passed
 
 - [ ] **Step 5: 커밋**
 
@@ -788,7 +788,7 @@ __all__ = ["Job", "WorkItem", "JobStore", "MemoryJobStore", "new_job_id"]
 - [ ] **Step 4: 테스트 통과 확인**
 
 Run: `python -m pytest tests/se/test_job_store.py -v`
-Expected: PASS — 9 passed
+Expected: PASS — 10 passed
 
 - [ ] **Step 5: 커밋**
 
@@ -1540,6 +1540,7 @@ git commit -m "feat(se): 청크 실행기 — 예산 기반 실행·재개·2단
 
 ```python
 """SupabaseJobStore의 HTTP 계약. 실제 네트워크는 타지 않는다."""
+import datetime as _dt
 import unittest
 from unittest import mock
 
@@ -1603,6 +1604,21 @@ class TestSave(unittest.TestCase):
         import json
         self.assertNotIn("SERVICE_KEY", json.dumps(session.post.call_args[1]["json"]))
 
+    def test_updated_at_is_sent_explicitly(self):
+        """upsert는 페이로드에 있는 컬럼만 SET하므로 매번 보내야 한다.
+
+        스키마의 default now()는 INSERT에만 적용된다. 빼면 반복 저장에도
+        최초 삽입 시각에 고정돼 작업 신선도 판단이 조용히 틀리게 된다.
+        """
+        session = mock.Mock()
+        session.post.return_value = _resp(201)
+        SupabaseJobStore(CFG, session=session).save(_job())
+        payload = session.post.call_args[1]["json"]
+        self.assertIn("updated_at", payload)
+        # ISO 8601 + 시간대 정보가 있어야 timestamptz로 정확히 해석된다.
+        parsed = _dt.datetime.fromisoformat(payload["updated_at"])
+        self.assertIsNotNone(parsed.tzinfo)
+
 
 class TestLoad(unittest.TestCase):
     def test_returns_job(self):
@@ -1656,6 +1672,8 @@ SE-1의 캐시와 달리 **실패를 삼키지 않는다.** 캐시는 성능 최
 """
 from __future__ import annotations
 
+import datetime as _dt
+
 import requests
 
 from se_server.config import SEConfig
@@ -1683,7 +1701,17 @@ class SupabaseJobStore:
         resp = self.session.post(
             self._table_url(),
             headers=headers,
-            json={"job_id": job.job_id, "state": job.to_dict(), "status": job.status},
+            json={
+                "job_id": job.job_id,
+                "state": job.to_dict(),
+                "status": job.status,
+                # updated_at을 페이로드에 반드시 넣는다. 스키마의 default now()는
+                # INSERT에만 적용되고, PostgREST의 merge-duplicates upsert는
+                # 페이로드에 있는 컬럼만 SET하므로, 빼면 최초 삽입 시각에
+                # 영원히 고정된다. 이 계층은 항목마다 저장을 반복하는 것이
+                # 존재 이유라 그 값은 곧바로 거짓이 된다.
+                "updated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+            },
             timeout=15,
         )
         if resp.status_code >= 300:
@@ -1739,7 +1767,7 @@ __all__ = [
 - [ ] **Step 4: 테스트 통과 확인**
 
 Run: `python -m pytest tests/se/test_supabase_job_store.py -v`
-Expected: PASS — 9 passed
+Expected: PASS — 10 passed
 
 - [ ] **Step 5: 커밋**
 
