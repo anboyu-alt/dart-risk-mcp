@@ -97,8 +97,9 @@ class TestJsonErrorBodyGuard(unittest.TestCase):
 
     HTTP 200 + 바디의 status 필드로만 알린다. 캐시 키가 crtfc_key를
     제외해 전 사용자가 공유하므로, 한 사용자의 오류 응답이 저장되면
-    다른 모든 사용자가 TTL(7일) 동안 그 오류를 받는다. status가 "000"인
-    응답만 저장해야 한다.
+    다른 모든 사용자가 TTL(7일) 동안 그 오류를 받는다. status가 "000"
+    (정상) 또는 "013"(데이터 없음 — 일시적 장애가 아닌 안정적인 정상
+    답변)인 응답만 저장해야 한다.
     """
 
     def test_status_020_quota_exceeded_is_not_stored(self):
@@ -118,13 +119,32 @@ class TestJsonErrorBodyGuard(unittest.TestCase):
                  b'{"status":"800","message":"check"}')
         self.assertIsNone(backend.get_json(http.cache_key(LIST_URL, params)))
 
-    def test_status_013_no_data_is_not_stored(self):
+    def test_status_013_no_data_is_stored(self):
+        """013(데이터 없음)은 일시적 장애가 아니라 안정적인 정상 답변이므로
+
+        000과 동일하게 캐시 대상이다. 이를 배제하면 fetch_insider_timeline·
+        fetch_fund_usage 같은 고팬아웃 루프가 013 지배적인 응답을 매 요청마다
+        DART에 다시 물어보게 되어, 이 가드가 막으려던 쿼터 소진(020)을 스스로
+        유발한다.
+        """
         backend = MemoryCache()
         http = CachingHttp(backend)
         params = {"corp_code": "003"}
         http.put(LIST_URL, params, 200, {"Content-Type": "application/json"},
                  b'{"status":"013","message":"no data"}')
-        self.assertIsNone(backend.get_json(http.cache_key(LIST_URL, params)))
+        self.assertIsNotNone(backend.get_json(http.cache_key(LIST_URL, params)))
+
+    def test_status_013_roundtrips_through_get(self):
+        backend = MemoryCache()
+        http = CachingHttp(backend)
+        params = {"corp_code": "003b"}
+        body = b'{"status":"013","message":"no data"}'
+        http.put(LIST_URL, params, 200, {"Content-Type": "application/json"}, body)
+        hit = http.get(LIST_URL, params)
+        self.assertIsNotNone(hit)
+        status, headers, stored_body = hit
+        self.assertEqual(status, 200)
+        self.assertEqual(stored_body, body)
 
     def test_status_000_success_is_stored(self):
         backend = MemoryCache()

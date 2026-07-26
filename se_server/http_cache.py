@@ -45,19 +45,32 @@ def _endpoint_of(url: str) -> str:
     return urlsplit(url).path.rsplit("/", 1)[-1]
 
 
-def _is_successful_dart_json(body: bytes) -> bool:
-    """DART JSON 응답이 성공(status == "000")인지 판정한다.
+# 캐시해도 되는 DART 응답 status.
+#   000 — 정상 조회
+#   013 — 데이터 없음. 일시적 장애가 아니라 "그 조건에는 자료가 없다"는
+#         안정적인 답변이므로 000과 같은 자격으로 캐시한다. 이를 배제하면
+#         fetch_insider_timeline(최대 60콜)·fetch_fund_usage(최대 48콜) 같은
+#         고팬아웃 루프가 매 요청마다 DART를 다시 때린다 — 아래 가드가 막으려던
+#         쿼터 소진(020)을 스스로 유발하게 된다.
+# 나머지(020 한도 초과, 800 점검, 900 키 오류 등)는 일시적 장애이므로 제외한다.
+_CACHEABLE_STATUSES = frozenset({"000", "013"})
 
-    DART는 실패를 HTTP 상태가 아니라 바디의 status 필드로 알린다
-    (020 한도 초과, 800 점검, 900 키 오류 등). 파싱할 수 없거나 status가
-    없으면 보수적으로 실패 취급해 캐시에 넣지 않는다 — 잘못 저장된 항목은
-    TTL이 끝날 때까지 전 사용자에게 노출되므로, 저장하지 않는 쪽이 안전하다.
+
+def _is_cacheable_dart_json(body: bytes) -> bool:
+    """DART JSON 응답을 캐시해도 되는지 판정한다.
+
+    DART는 실패를 HTTP 상태가 아니라 바디의 status 필드로 알린다. 캐시 키가
+    crtfc_key를 제외해 전 사용자가 공유하므로, 한 사용자의 쿼터 소진 응답이
+    저장되면 TTL 기간 내내 모두가 그 오류를 받는다.
+
+    파싱할 수 없거나 status가 없으면 보수적으로 저장하지 않는다 — 잘못 저장된
+    항목은 TTL이 끝날 때까지 전 사용자에게 노출된다.
     """
     try:
         parsed = json.loads(body.decode("utf-8"))
     except (ValueError, UnicodeDecodeError):
         return False
-    return isinstance(parsed, dict) and parsed.get("status") == "000"
+    return isinstance(parsed, dict) and parsed.get("status") in _CACHEABLE_STATUSES
 
 
 class CachingHttp:
@@ -127,8 +140,9 @@ class CachingHttp:
         # 판정한다). 캐시 키가 crtfc_key를 제외해 전 사용자가 공유하므로, 한
         # 사용자의 쿼터 소진 응답이 저장되면 다른 모든 사용자가 TTL 기간(7일)
         # 내내 그 오류를 받는다. blob 경로의 ZIP 매직바이트 가드와 같은 문제다.
-        # 성공(000)으로 확인된 응답만 저장한다. 파싱 실패도 저장하지 않는다.
-        if not _is_successful_dart_json(body):
+        # 캐시 가능한 status(000 정상, 013 데이터 없음)만 저장한다.
+        # 파싱 실패나 status 부재도 저장하지 않는다.
+        if not _is_cacheable_dart_json(body):
             return
         self.backend.put_json(
             key,
