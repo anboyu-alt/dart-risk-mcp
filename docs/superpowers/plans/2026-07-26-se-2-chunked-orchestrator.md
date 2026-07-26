@@ -952,6 +952,33 @@ class TestRunStepBudget(unittest.TestCase):
         self.assertFalse(result.stalled)        # 진행이 있었으므로 정체 아님
         self.assertEqual(job.items[0].status, "pending")  # oversized는 그대로 대기
 
+    def test_budget_at_or_below_reserve_is_rejected(self):
+        """예산이 RESERVE 이하면 oversized 항목을 영원히 시작할 수 없다.
+
+        remaining = budget - elapsed 이고 elapsed > 0이므로
+        remaining < budget <= RESERVE 가 항상 참이다. 조용히 고착되게 두지
+        않고 설정 오류로 즉시 알린다.
+        라이브 실측에서 --budget 20(=RESERVE)이 7/13에서 영구 고착되며 발견됐다.
+        """
+        store = MemoryJobStore()
+        big = WorkItem(key="insider_timeline", stage=1, kind="fetch_insider_timeline",
+                       params={"corp_code": "0", "lookback_years": 5})
+        store.save(_job_with([big, _stage1("small")]))
+        for bad in (runner.OVERSIZED_RESERVE, runner.OVERSIZED_RESERVE - 5.0, 1.0):
+            with self.subTest(budget=bad):
+                with self.assertRaises(ValueError):
+                    runner.run_step("j1", "KEY", store, budget_seconds=bad,
+                                    now=_Clock(0.1))
+
+    def test_small_budget_allowed_when_no_oversized_pending(self):
+        """oversized 항목이 없으면 작은 예산도 정상이다."""
+        store = MemoryJobStore()
+        store.save(_job_with([_stage1("small")]))
+        with mock.patch.object(runner, "resolve_callable", return_value=lambda **kw: {}):
+            result = runner.run_step("j1", "KEY", store, budget_seconds=1.0,
+                                     now=_Clock(0.1))
+        self.assertTrue(result.done)
+
     def test_stalled_only_when_all_remaining_are_oversized(self):
         store = MemoryJobStore()
         big = WorkItem(key="insider_timeline", stage=1, kind="fetch_insider_timeline",
@@ -1439,6 +1466,21 @@ def run_step(
     if job is None:
         raise ValueError(f"작업을 찾을 수 없습니다: {job_id}")
 
+    # 예산이 OVERSIZED_RESERVE 이하면 oversized 항목은 **영원히** 시작할 수
+    # 없다. remaining = budget - elapsed 이고 elapsed는 첫 측정부터 0보다
+    # 크므로 remaining < budget <= RESERVE 가 항상 참이기 때문이다.
+    # 작은 항목만 처리하다 정체로 끝나므로, 조용히 고착되게 두지 않고
+    # 설정 오류로 즉시 알린다. 라이브 실측에서 --budget 20(=RESERVE)이
+    # 7/13에서 영구 고착되며 발견된 경계다.
+    if budget_seconds <= OVERSIZED_RESERVE and any(
+        _is_oversized(i) for i in job.pending_items()
+    ):
+        raise ValueError(
+            f"budget_seconds({budget_seconds})가 OVERSIZED_RESERVE"
+            f"({OVERSIZED_RESERVE})보다 커야 합니다. 이 예산으로는 다건 조회"
+            f" 항목을 시작할 수 없어 작업이 완료되지 않습니다."
+        )
+
     started = now()
     processed = 0
     blocked_by_reserve = False
@@ -1503,7 +1545,7 @@ def run_step(
 - [ ] **Step 4: 테스트 통과 확인**
 
 Run: `python -m pytest tests/se/test_job_runner.py -v`
-Expected: PASS — 33 passed (+ 서브테스트 7)
+Expected: PASS — 35 passed (+ 서브테스트 10)
 
 - [ ] **Step 5: 전체 회귀 확인**
 
@@ -1953,7 +1995,8 @@ def main() -> int:
     parser.add_argument("company", help="기업명 또는 종목코드")
     parser.add_argument("--years", type=int, default=1, help="조회 연수 (기본 1)")
     parser.add_argument("--budget", type=float, default=45.0,
-                        help="단계당 시간 예산 초 (기본 45)")
+                        help=f"단계당 시간 예산 초 (기본 45). "
+                             f"OVERSIZED_RESERVE({runner.OVERSIZED_RESERVE})보다 커야 한다")
     args = parser.parse_args()
 
     api_key = _load_api_key()
@@ -1995,7 +2038,9 @@ Expected: 실패 0
 
 - [ ] **Step 6: 라이브 실측 (API 키 필요)**
 
-Run: `python scripts/se_analyze.py 셀트리온 --years 1 --budget 20`
+Run: `python scripts/se_analyze.py 셀트리온 --years 1 --budget 30`
+
+> `--budget`은 `OVERSIZED_RESERVE`(20)보다 **커야** 한다. 20 이하면 다건 조회 항목을 시작할 수 없어 `run_step`이 설정 오류를 던진다.
 
 Expected: **여러 단계로 나뉘어 실행되고 마지막에 완료된다.** 확인할 것:
 - 단계가 2개 이상인가 (1개면 예산이 너무 커서 청크 실행이 검증되지 않은 것이다 — `--budget`을 낮춰 재실행)
