@@ -48,9 +48,12 @@ class Stage1Spec:
 
 STAGE1_SPECS: tuple[Stage1Spec, ...] = (
     Stage1Spec("company_info", "헤더", "fetch_company_info", ("corp_code",)),
-    # 페이지네이션으로 최대 10회 호출한다(max_pages 기본값).
+    # 페이지네이션 상한을 반드시 함께 넘긴다. max_pages 기본값 10은 1000건에서
+    # 조용히 잘리며(core가 log.warning만 남기고 break) 다년 조회에서 오래된
+    # 공시 위주로 결과가 누락된다. 기존 MCP 도구도 같은 이유로 years*10을
+    # 넘긴다(server.py `_resolve_lookback`, CHANGELOG "다년 누락 방지").
     Stage1Spec("disclosures", "자금", "fetch_company_disclosures",
-               ("corp_code", "lookback_days"), oversized=True),
+               ("corp_code", "lookback_days", "max_pages"), oversized=True),
     Stage1Spec("fund_usage", "자금", "fetch_fund_usage",
                ("corp_code", "lookback_years"), oversized=True),
     Stage1Spec("affiliates", "자금", "fetch_affiliate_investments", ("corp_code",)),
@@ -103,6 +106,10 @@ def build_stage1_items(corp_code: str, lookback_years: int) -> list[WorkItem]:
             elif name == "lookback_days":
                 # fetch_company_disclosures만 일 단위로 받는다.
                 params["lookback_days"] = years * 365
+            elif name == "max_pages":
+                # server.py _resolve_lookback과 같은 공식. 기본값 10을 쓰면
+                # 1000건에서 조용히 잘려 다년 조회의 공시가 누락된다.
+                params["max_pages"] = years * 10
             elif name in ("year", "bsns_year"):
                 params[name] = bsns_year
             else:  # pragma: no cover - 위 테스트(test_param_names_match_real_signatures)가 이 경로를 막는다

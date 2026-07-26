@@ -20,9 +20,23 @@ class TestSpecs(unittest.TestCase):
 
     def test_every_param_name_is_supported(self):
         """param_names는 실행기가 채울 수 있는 이름이어야 한다."""
-        allowed = {"corp_code", "lookback_years", "lookback_days", "year", "bsns_year"}
+        allowed = {"corp_code", "lookback_years", "lookback_days", "max_pages",
+                   "year", "bsns_year"}
         for spec in STAGE1_SPECS:
             self.assertTrue(set(spec.param_names) <= allowed, spec.key)
+
+    def test_disclosures_raises_pagination_cap_with_years(self):
+        """다년 조회에서 공시가 조용히 잘리지 않도록 max_pages를 함께 넘긴다.
+
+        core의 fetch_company_disclosures는 max_pages 기본값 10에서 1000건을
+        넘으면 log.warning만 남기고 break한다 — 예외가 아니라 침묵 누락이라
+        호출자가 알아채지 못한다. 기존 MCP 도구도 같은 이유로 years*10을
+        넘긴다(server.py _resolve_lookback).
+        """
+        for years, expected in ((1, 10), (3, 30), (5, 50)):
+            item = {i.key: i for i in build_stage1_items("0", years)}["disclosures"]
+            self.assertEqual(item.params["max_pages"], expected)
+            self.assertEqual(item.params["lookback_days"], years * 365)
 
     def test_param_names_match_real_signatures(self):
         """선언한 param_names가 core 함수가 실제로 받는 인자인지 대조한다.
