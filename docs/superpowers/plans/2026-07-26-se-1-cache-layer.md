@@ -915,6 +915,7 @@ git commit -m "feat(se): CachingHttp — 캐시 키 계산과 blob/json 정책 �
 
 ```python
 """SupabaseCache의 HTTP 계약. 실제 네트워크는 타지 않는다."""
+import datetime as _dt
 import unittest
 from unittest import mock
 
@@ -1016,6 +1017,39 @@ class TestJson(unittest.TestCase):
         cache.put_json("k", {"a": 1}, ttl_seconds=None)
         payload = session.post.call_args[1]["json"]
         self.assertIsNone(payload["expires_at"])
+
+
+class TestJsonExpiryParsing(unittest.TestCase):
+    """만료 시각 해석은 어떤 입력에도 예외를 밖으로 내보내지 않아야 한다.
+
+    이 함수의 계약은 "읽기 실패는 미스로 처리"이므로, 형식이 깨졌거나
+    시간대 정보가 없는 값이 와도 호출자에게 예외가 전파되면 안 된다.
+    """
+
+    def _cache_returning(self, expires_at):
+        session = mock.Mock()
+        session.get.return_value = _resp(
+            200, json_body=[{"key": "k", "value": {"a": 1}, "expires_at": expires_at}]
+        )
+        return SupabaseCache(CFG, session=session)
+
+    def test_naive_future_timestamp_is_treated_as_utc_and_valid(self):
+        future = (
+            _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(hours=1)
+        ).replace(tzinfo=None).isoformat()
+        self.assertEqual(self._cache_returning(future).get_json("k"), {"a": 1})
+
+    def test_naive_past_timestamp_is_expired(self):
+        past = (
+            _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=1)
+        ).replace(tzinfo=None).isoformat()
+        self.assertIsNone(self._cache_returning(past).get_json("k"))
+
+    def test_unparseable_timestamp_is_a_miss(self):
+        self.assertIsNone(self._cache_returning("쓰레기값").get_json("k"))
+
+    def test_non_string_timestamp_is_a_miss(self):
+        self.assertIsNone(self._cache_returning(12345).get_json("k"))
 
 
 class TestConfig(unittest.TestCase):
@@ -1178,9 +1212,16 @@ class SupabaseCache:
         if expires_at:
             try:
                 deadline = _dt.datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-            except ValueError:
-                return None
-            if _dt.datetime.now(_dt.timezone.utc) >= deadline:
+                if deadline.tzinfo is None:
+                    # PostgREST가 offset 없이 직렬화한 경우 UTC로 간주한다.
+                    # 이 보정이 없으면 aware/naive 비교가 TypeError를 던진다.
+                    deadline = deadline.replace(tzinfo=_dt.timezone.utc)
+                if _dt.datetime.now(_dt.timezone.utc) >= deadline:
+                    return None
+            except (ValueError, TypeError):
+                # 만료 시각을 해석할 수 없으면 보수적으로 미스 처리한다.
+                # 비교까지 try 안에 두는 이유: 이 함수는 "읽기 실패는 미스"를
+                # 계약으로 삼으므로 어떤 예외도 호출자로 새면 안 된다.
                 return None
         return row.get("value")
 
@@ -1239,7 +1280,7 @@ alter table se_cache enable row level security;
 - [ ] **Step 6: 테스트 통과 확인**
 
 Run: `python -m pytest tests/se/test_supabase_cache.py -v`
-Expected: PASS — 12 passed
+Expected: PASS — 16 passed
 
 - [ ] **Step 7: 커밋**
 
