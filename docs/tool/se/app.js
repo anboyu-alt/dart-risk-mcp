@@ -955,17 +955,30 @@ const CHART_SPECS = Object.assign(Object.create(null), {
   // fetch_fund_usage(dart_client.py)는 연도(bsns_year) × 보고서코드 4종
   // (11011 사업·11012 반기·11013 1분기·11014 3분기)을 루프 돌며 모으므로
   // **같은 회차(tm)가 보고 시점마다 반복 수집된다** — 정규화된 레코드에는
-  // reprt_code가 남지 않지만 year(그 루프의 bsns_year)는 남는다. x를
-  // tm 하나로만 잡으면 같은 회차의 서로 다른 연도 보고(예: 2024년 보고
-  // 50억 vs 2025년 보고 130.8억, 실제 회귀 사례)가 한 x축 점에서 뒤
-  // 레코드가 앞을 조용히 덮어 표(같은 회차 두 행을 그대로 보여준다)와
-  // 다른 값을 말하게 된다(리뷰 지적 ①). compositeXFields로 x를
-  // "회차 (연도)" 형태로 쪼개면 두 보고가 서로 다른 x축 점이 되어 값이
-  // 사라지지 않는다 — year가 없는 레코드(예: 테스트 픽스처)는
-  // compositeXValue가 tm 하나로 자연히 폴백한다.
+  // reprt_code가 남지 않지만 year(그 루프의 bsns_year)·kind(공모/사모)는
+  // 남는다. x를 tm 하나로만 잡으면 같은 회차의 서로 다른 연도 보고(예:
+  // 2024년 보고 50억 vs 2025년 보고 130.8억, 실제 회귀 사례)가 한 x축
+  // 점에서 뒤 레코드가 앞을 조용히 덮어 표(같은 회차 두 행을 그대로
+  // 보여준다)와 다른 값을 말하게 된다(리뷰 지적 ①). compositeXFields로
+  // x를 "회차 (연도, 구분)" 형태로 쪼개면 서로 다른 보고가 서로 다른
+  // x축 점이 되어 값이 사라지지 않는다 — year·kind가 없는 레코드(예:
+  // 테스트 픽스처)는 compositeXValue가 있는 필드만으로 자연히 폴백한다.
+  //
+  // **kind를 더해도 여전히 다 갈라지지 않는다(라이브 재리뷰 Critical).**
+  // 공모(kind="public") 건은 tm 실측값이 "-"(회차 없음)인 경우가 있고,
+  // 같은 연도·같은 kind 안에서도 보고서(reprt_code — 정규화 과정
+  // (_normalize_fund_usage)에서 탈락해 여기서는 되살릴 수 없다)마다
+  // 계획금액이 다른 레코드가 3건까지 나온다(실측: 130.82억/352.91억/
+  // 476.57억). reprt_code 없이는 이 세 값을 서로 다른 x축 점으로 가를
+  // 방법이 없다 — 이런 진짜 충돌은 chartData 하단의 범용 충돌 감지
+  // (writeChartCell)가 그 x축 점을 null로 만든다(표는 여전히 3행 모두
+  // 보여준다 — 값을 지어내지 않을 뿐 숨기지도 않는다). reprt_code를
+  // 되살리려면 dart_client.py를 고쳐야 하는데 이 브랜치는 core를
+  // 읽기만 한다 — 여기서 할 수 있는 최선은 "쪼갤 수 있는 만큼 쪼개고,
+  // 남는 충돌은 숨기지 않는다"이다.
   fund_usage: {
-    kind: "bar", title: "자금 사용 — 계획 대비 실제 (회차·보고연도별)",
-    x: "tm", compositeXFields: ["tm", "year"], yLabel: "금액", xScale: "category",
+    kind: "bar", title: "자금 사용 — 계획 대비 실제 (회차·보고연도·구분별)",
+    x: "tm", compositeXFields: ["tm", "year", "kind"], yLabel: "금액", xScale: "category",
     series: [
       { key: "plan_amount", label: "계획 금액" },
       { key: "real_dtls_amount", label: "실제 집행 금액" },
@@ -979,10 +992,31 @@ const CHART_SPECS = Object.assign(Object.create(null), {
   // 원화 단위 항목만 계열로 만든다(끝이 정확히 "(원)"인 항목만 — "(백만원)"
   // 은 마지막 3글자가 "만원)"이라 걸리지 않는다, chartData 주석 참고).
   // 제외된 항목(%·백만원·주)은 차트에서만 빠질 뿐 표에는 그대로 남는다.
+  //
+  // **fetch_dividend_history(dart_client.py)도 4개 reprt_code(11011·
+  // 11012·11013·11014) × N년 루프다(fund_usage와 같은 부류의 반복
+  // 수집) — 그런데 x는 bsns_year 하나뿐이었다(라이브 재리뷰 Critical,
+  // fund_usage와 달리 이 섹션은 손도 안 댄 채였다). 같은 연도·같은
+  // 항목(se)에 보고서마다 다른 값이 조용히 하나로 덮이고, 부호까지
+  // 뒤집힌다(실측 2025년 (연결)주당순이익(원): -3,154/1,817/2,750/121 —
+  // 첫 보고는 적자인데 마지막 값(121)만 남아 흑자로 보였다). dividend
+  // 레코드는 fund_usage와 달리 reprt_code가 정규화 과정에서 탈락하지
+  // 않고 그대로 남는다(fetch_dividend_history 주석) — compositeXFields로
+  // x를 "연도 (보고서코드)"로 쪼개 네 보고를 각자 다른 x축 점으로 남긴다.
+  //
+  // stock_knd(보통주/우선주)도 groupBy(se) 하나에 안 담기면 같은 항목의
+  // 우선주 배당이 보통주 값과 한 계열에서 충돌한다 — compositeGroupFields로
+  // 계열 이름도 "항목 (주식종류)"로 쪼갠다. groupFilterSuffix 판정은
+  // 계열 이름이 아니라 원래 필드(se)를 그대로 보므로("(원)"으로 끝나는지)
+  // 계열을 쪼개도 원 단위 필터링은 그대로 동작한다(chartData의
+  // groupFilterField 처리 참고). reprt_code·stock_knd가 없는 레코드
+  // (기존 픽스처 등)는 compositeXValue가 있는 필드만으로 자연히 폴백해
+  // 이전 동작과 같다.
   dividends: {
-    kind: "line", title: "배당 지표 추이 (원 단위 항목만)",
-    x: "bsns_year", y: "thstrm", groupBy: "se", yLabel: "금액 (원)",
-    xScale: "category", groupFilterSuffix: "(원)",
+    kind: "line", title: "배당 지표 추이 (원 단위 항목만, 연도·보고서코드별)",
+    x: "bsns_year", compositeXFields: ["bsns_year", "reprt_code"],
+    y: "thstrm", groupBy: "se", compositeGroupFields: ["se", "stock_knd"],
+    yLabel: "금액 (원)", xScale: "category", groupFilterSuffix: "(원)",
   },
   // debt_balance.by_kind는 dict라 레코드 리스트가 아니다 — sectionBlocks의
   // 특수 경로(normalizeDebtByKind)가 종류를 debt_kind 열로 뒤집은 레코드를
@@ -1116,6 +1150,42 @@ function compositeXValue(row, fields) {
   return parts[0] + " (" + parts.slice(1).join(", ") + ")";
 }
 
+/** data[i]에 값을 채운다. 아직 비어 있으면 그대로 채우고, 이미 다른
+ *  non-null 값이 있는데 새 값이 다르면(진짜 충돌) 그 자리를 null로
+ *  되돌리고 다시는 채우지 않는다.
+ *
+ *  **왜 필요한가.** fund_usage(같은 회차가 보고 시점마다 반복 수집)와
+ *  dividends(같은 항목이 분기 보고서마다 반복 수집)에서 실제로 났던
+ *  사고가 같은 뿌리다 — 같은 x축 점(같은 회차, 같은 연도)에 서로 다른
+ *  값(계획금액 130.82억 vs 352.91억 vs 476.57억, 또는 주당순이익
+ *  -3,154원 vs 121원처럼 부호까지 다른 값)이 들어오면, 이전에는 뒤
+ *  레코드가 앞을 조용히 덮어 마지막 값 하나만 살아남았다 — 표는 그
+ *  값들을 전부 보여주는데 차트는 그중 하나가 "the" 값인 것처럼 그렸다.
+ *  compositeXFields·compositeGroupFields로 x/계열 키를 넓혀 우선 최대한
+ *  갈라내지만(위 CHART_SPECS.fund_usage·dividends 주석), 정규화 과정에서
+ *  탈락한 필드(예: fund_usage의 reprt_code)가 있으면 키를 아무리 넓혀도
+ *  가끔 여전히 충돌한다 — 이 함수는 그 **남는** 충돌을 잡는 마지막 방어선
+ *  이다. 어느 쪽이 맞는지 차트가 판정해 하나를 고르면 안 된다(v0.8.5,
+ *  이 화면의 "조용히 하나만 남기지 않는다" 원칙) — 그래서 고르지 않고
+ *  null로 만든다. 표(block.records)는 이 함수를 거치지 않으므로 값이
+ *  사라지지 않는다.
+ *
+ *  같은 값이 반복되는 것은 충돌이 아니다(data[i] !== v로 실제 값 차이만
+ *  본다) — 같은 레코드가 우연히 두 번 들어와도 차트가 사라지면 안 된다.
+ *
+ *  conflicted는 xs와 같은 길이의 boolean 배열이다. 한 번 충돌한 자리는
+ *  잠가서, 세 번째 레코드가 먼저 두 값 중 하나와 우연히 같아도(예: v1,
+ *  v2, v1 순서) 충돌 사실이 사라지고 값이 되살아나는 일이 없게 한다. */
+function writeChartCell(data, conflicted, i, v) {
+  if (conflicted[i]) return;
+  if (data[i] === null) {
+    data[i] = v;
+  } else if (data[i] !== v) {
+    data[i] = null;
+    conflicted[i] = true;
+  }
+}
+
 /** 레코드 목록을 Chart.js가 받는 형태로 바꾼다. 그릴 게 없으면 null. */
 function chartData(records, spec) {
   if (!Array.isArray(records) || records.length === 0 || !spec) return null;
@@ -1149,6 +1219,25 @@ function chartData(records, spec) {
       return copy;
     });
     spec = Object.assign({}, spec, { x: "__composite_x" });
+  }
+
+  if (spec.compositeGroupFields) {
+    // dividends(라이브 재리뷰 Critical ②) — stock_knd(보통주/우선주)가
+    // groupBy(se) 하나에 안 담기면 같은 항목의 우선주 배당이 보통주 값과
+    // 한 계열에서 충돌한다. __composite_group을 만들어 spec.groupBy를
+    // 그쪽으로 돌린다 — compositeXFields와 같은 방식(새 렌더 분기를
+    // 만들지 않는다)이지만, groupFilterSuffix 판정(예: "(원)"으로
+    // 끝나는지)은 계열 이름이 아니라 **원래** 필드(예: se)를 봐야 하므로
+    // groupFilterField에 원래 groupBy를 남겨 둔다 — 아래 groupBy 분기가
+    // 이 필드로 필터링하고, 계열 이름 자체는 합성 필드를 쓴다.
+    const gfields = spec.compositeGroupFields;
+    const filterField = spec.groupFilterField || spec.groupBy;
+    rows = rows.map(function (r) {
+      const copy = Object.assign({}, r);
+      copy.__composite_group = compositeXValue(r, gfields);
+      return copy;
+    });
+    spec = Object.assign({}, spec, { groupBy: "__composite_group", groupFilterField: filterField });
   }
 
   const xs = [];
@@ -1188,22 +1277,28 @@ function chartData(records, spec) {
     // 같은 x에 여러 계열(계획 vs 실제 등)
     for (const s of spec.series) {
       const data = xs.map(function () { return null; });
+      // 충돌 감지(writeChartCell)는 x축 점 단위(conflicted[i])로 잠긴다 —
+      // 계열(series)마다 별도 배열이어야 한다. 같은 x에서 "계획 금액"이
+      // 충돌해도 "실제 집행 금액"까지 덩달아 null이 되면 안 된다.
+      const conflicted = xs.map(function () { return false; });
       for (const r of rows) {
         const i = at.get(String(r[spec.x]));
         if (i === undefined) continue;
         const v = numeric(r[s.key]);
         // 같은 x(예: 같은 tm)에 레코드가 둘 이상 있을 수 있다(실측: kind가
-        // 상수열이 아니라 회차가 겹친다) — 뒤 레코드에 이 필드 값이 없다고
-        // (v === null) 앞 레코드가 채운 실값을 지우면 "값이 있는데
-        // 빈칸"이라는, 0으로 채우는 것 못지않은 거짓말이 된다(리뷰 지적
-        // ③). null은 그냥 건너뛴다 — 덮어쓰지 않는다.
-        if (v !== null) data[i] = v;
+        // 상수열이 아니라 회차가 겹친다) — 값이 없는 레코드(v === null)는
+        // 건너뛴다(0으로 채우는 것과 같은 부류의 거짓말이 되므로). 값이
+        // 있는데 이미 채운 값과 다르면(진짜 충돌) writeChartCell이 그
+        // 자리를 null로 되돌린다 — 조용히 마지막 값만 남기지 않는다(위
+        // writeChartCell 주석 참고, 실제 사례: fund_usage 리뷰 지적 ①).
+        if (v !== null) writeChartCell(data, conflicted, i, v);
       }
       datasets.push({ label: s.label, data: data });
     }
   } else {
     // groupBy로 계열을 나눈다(보고자별 등)
     const groups = new Map();
+    const groupConflicts = new Map();
     for (const r of rows) {
       const g = r[spec.groupBy];
       if (g === null || g === undefined || g === "") continue;
@@ -1211,19 +1306,31 @@ function chartData(records, spec) {
       // dividends의 se(항목)처럼 그룹 이름에 단위가 다른 값(원/%/백만원/주)이
       // 섞여 있으면 한 축에 그리는 순간 스케일을 왜곡해 보여준다(위
       // CHART_SPECS.dividends 주석 참고) — groupFilterSuffix가 있으면 그
-      // 접미어로 끝나는 이름만 계열로 만든다. 제외된 항목은 차트에서만
-      // 빠질 뿐 표(block.records)에는 그대로 남는다.
-      if (spec.groupFilterSuffix &&
-          name.slice(-spec.groupFilterSuffix.length) !== spec.groupFilterSuffix) {
-        continue;
+      // 접미어로 끝나는 이름만 계열로 만든다. 판정은 groupFilterField(없으면
+      // groupBy 자신)로 한다 — compositeGroupFields로 groupBy가 합성
+      // 필드(__composite_group)로 바뀐 경우에도, 필터는 항상 원래 필드
+      // (예: se)의 값을 봐야 "(원)"으로 끝나는지를 정확히 판단한다(합성된
+      // "항목 (주식종류)"는 "(원)"으로 끝나지 않으니 계열 이름으로 판정하면
+      // 전부 걸러진다). 제외된 항목은 차트에서만 빠질 뿐 표(block.records)
+      // 에는 그대로 남는다.
+      if (spec.groupFilterSuffix) {
+        const filterField = spec.groupFilterField || spec.groupBy;
+        const fv = r[filterField];
+        const filterName = (fv === null || fv === undefined) ? "" : String(fv);
+        if (filterName.slice(-spec.groupFilterSuffix.length) !== spec.groupFilterSuffix) {
+          continue;
+        }
       }
-      if (!groups.has(name)) groups.set(name, xs.map(function () { return null; }));
+      if (!groups.has(name)) {
+        groups.set(name, xs.map(function () { return null; }));
+        groupConflicts.set(name, xs.map(function () { return false; }));
+      }
       const i = at.get(String(r[spec.x]));
       if (i === undefined) continue;
       const v = numeric(r[spec.y]);
-      // 위 series 분기와 같은 이유 — 같은 그룹·같은 x에 값 없는 레코드가
-      // 뒤따라와도 이미 채운 실값을 null로 덮지 않는다.
-      if (v !== null) groups.get(name)[i] = v;
+      // 위 series 분기와 같은 이유·같은 함수(writeChartCell) — 값 없는
+      // 레코드는 건너뛰고, 값이 있는데 다른 값과 충돌하면 null로 되돌린다.
+      if (v !== null) writeChartCell(groups.get(name), groupConflicts.get(name), i, v);
     }
     for (const [name, data] of groups) datasets.push({ label: name, data: data });
   }
