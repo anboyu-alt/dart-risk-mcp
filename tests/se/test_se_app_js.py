@@ -739,6 +739,122 @@ class TestSectionBlocks(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestInsiderTimelineSourceSplit(unittest.TestCase):
+    """insider_timeline은 elestock·hyslr·hyslr_chg·exec_treasury 4개
+    엔드포인트를 합친 결과다(dart_client.fetch_insider_timeline). 레코드마다
+    자기 엔드포인트 필드만 채우고 나머지는 전부 null이라, 한 표로 그리면
+    실측(field-inventory)에서 접힌 26개 항목 중 값이 있는 열이 0개인 행이
+    나왔다 — 펼쳐도 내용이 없어 보이는 원인. source별로 표를 나누고, 그
+    안에서도 전부 빈 열은 뺀다(값이 하나라도 있으면 반드시 남긴다).
+    """
+
+    def test_records_with_source_split_into_one_table_per_source(self):
+        records = [
+            {"source": "elestock", "corp_name": "엔켐", "rcept_no": "1", "nm": "오정강"},
+            {"source": "elestock", "corp_name": "엔켐", "rcept_no": "2", "nm": "이승호"},
+            {"source": "hyslr", "corp_name": "엔켐", "mxmm_shrholdr_nm": "오정강 외 2인"},
+        ]
+        got = run_js(f"sectionBlocks({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(len(got), 2, "source별로 표가 나뉘지 않았습니다")
+        titles = [b["title"] for b in got]
+        self.assertEqual(len(set(titles)), 2, "표 제목이 source별로 구분되지 않습니다")
+
+    def test_each_table_only_has_its_own_endpoint_fields(self):
+        """elestock 표에는 hyslr 전용 필드가, hyslr 표에는 elestock 전용
+        필드가 나오면 안 된다 — 서로 다른 엔드포인트 필드가 한 표에 섞이면
+        빈 칸 문제가 되돌아온다."""
+        records = [
+            {"source": "elestock", "nm": "오정강"},
+            {"source": "hyslr", "mxmm_shrholdr_nm": "오정강 외 2인"},
+        ]
+        got = run_js(f"sectionBlocks({json.dumps(records, ensure_ascii=False)})")
+        by_title = {b["title"]: b["table"] for b in got}
+        elestock_table = by_title["5% 대량보유 이력"]
+        hyslr_table = by_title["최대주주 현황"]
+        self.assertNotIn("mxmm_shrholdr_nm", elestock_table["keys"])
+        self.assertNotIn("nm", hyslr_table["keys"])
+
+    def test_column_empty_in_every_row_of_its_group_is_dropped(self):
+        """같은 source 그룹 안에서도 값이 전부 비어 있는 열은 빼되, 값이
+        하나라도 있는 열은 반드시 남아야 한다."""
+        records = [
+            {"source": "hyslr_chg", "corp_name": "엔켐", "change_cause": "장내매도", "rm": None},
+            {"source": "hyslr_chg", "corp_name": "엔켐", "change_cause": None, "rm": None},
+        ]
+        got = run_js(f"sectionBlocks({json.dumps(records, ensure_ascii=False)})")
+        table = got[0]["table"]
+        present = set(table["keys"]) | {c["key"] for c in table["caption"]}
+        self.assertNotIn("rm", present, "모든 행이 비어 있는 열이 남아 있습니다")
+        self.assertIn("change_cause", present, "값이 하나라도 있는 열이 사라졌습니다")
+
+    def test_no_block_has_a_column_where_every_visible_row_is_blank(self):
+        """엔켐 실측과 같은 규모(4개 source 혼합)로도 어떤 표에도 완전히
+        빈 열이 남지 않아야 한다(세로·가로 표 모두)."""
+        records = [
+            {"source": "elestock", "rcept_no": "1", "nm": "오정강", "relate": None},
+            {"source": "elestock", "rcept_no": "2", "nm": "이승호", "relate": None},
+            {"source": "hyslr", "bsns_year": "2026", "mxmm_shrholdr_nm": "오정강", "rm": None},
+            {"source": "hyslr_chg", "bsns_year": "2026", "change_cause": "장내매도", "rm": None},
+            {"source": "exec_treasury", "bsns_year": "2026", "repror": "오정강", "bsis_qy": None},
+        ]
+        got = run_js(f"sectionBlocks({json.dumps(records, ensure_ascii=False)})")
+        for block in got:
+            t = block["table"]
+            if t["orientation"] == "vertical":
+                for pair in t["rows"]:
+                    self.assertNotEqual(
+                        pair[1], "",
+                        f"{block['title']} 표의 '{pair[0]}' 값이 비어 있는데 열로 남아 있습니다",
+                    )
+                continue
+            for i, k in enumerate(t["keys"]):
+                col_values = [row[i] for row in t["rows"]]
+                self.assertTrue(
+                    any(v != "" for v in col_values),
+                    f"{block['title']} 표의 '{k}' 열이 전부 빈칸입니다",
+                )
+
+    def test_records_without_source_field_are_not_split(self):
+        """source가 없는 다른 섹션에는 이 분리가 적용되면 안 된다."""
+        got = run_js('sectionBlocks([{a:1},{a:2}])')
+        self.assertEqual(len(got), 1)
+
+    def test_partial_source_presence_falls_back_to_a_single_table(self):
+        """일부 레코드만 source를 가지면(예상 밖 응답) 안전하게 단일
+        표로 그린다 — 어중간하게 갈라 데이터를 잃는 쪽보다 낫다."""
+        got = run_js('sectionBlocks([{source:"elestock",a:1},{a:2}])')
+        self.assertEqual(len(got), 1)
+
+    def test_source_group_title_does_not_collide_with_bulk_holders_label(self):
+        """bulk_holders 섹션(fetch_shareholder_status, 최신 현황)과
+        elestock(fetch_insider_timeline, 전체 이력)은 서로 다른 데이터라
+        같은 "5% 대량보유" 라벨을 쓰면 라벨 충돌 검사에 걸리고 사용자도
+        두 표를 구분할 수 없다."""
+        got = run_js('sectionBlocks([{source:"elestock",a:1}])')
+        self.assertNotEqual(got[0]["title"], "5% 대량보유")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestInsiderTimelineRenderWiring(unittest.TestCase):
+    """sectionBlocks 단독 검증만으로는 renderSection(ui.js) 호출부가 실제로
+    이 분기를 타는지 못 잡는다(이 저장소에서 이미 여러 번 난 "정의만 있고
+    호출부가 안 바뀐" 사고 유형) — app.js·ui.js를 실제로 함께 실행해
+    소제목(h3)이 실제 DOM에 여러 개 나오는지 확인한다.
+    """
+
+    def test_multiple_source_tables_render_as_separate_titled_blocks(self):
+        records = [
+            {"source": "elestock", "rcept_no": "1", "nm": "오정강"},
+            {"source": "hyslr", "mxmm_shrholdr_nm": "오정강 외 2인"},
+        ]
+        got = run_render_section(
+            '"insider_timeline"', json.dumps(records, ensure_ascii=False)
+        )
+        self.assertIn("5% 대량보유 이력", got["titles"])
+        self.assertIn("최대주주 현황", got["titles"])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestGroupRouting(unittest.TestCase):
     """SECTION_GROUPS를 실제로 소비하는 groupTitleFor/groupOrderIndex 검증.
 
@@ -1114,6 +1230,55 @@ class TestFormatValue(unittest.TestCase):
         got = run_js('formatValue("x", [{"a":1},{"b":2}])')
         self.assertIn('"a":1', got.replace(" ", ""))
         self.assertIn('"b":2', got.replace(" ", ""))
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestDocKeyRceptNo(unittest.TestCase):
+    """registry.py의 expand_stage2가 만드는 `f"doc:{rcept_no}"` 키에서
+    접수번호를 뽑는다 — ui.js가 이 값으로 본문 목록 통합(addDocListEntry)
+    분기를 태운다."""
+
+    def test_extracts_rcept_no_from_doc_prefixed_key(self):
+        self.assertEqual(
+            run_js('docKeyRceptNo("doc:20260715900769")'), "20260715900769"
+        )
+
+    def test_non_doc_key_is_null(self):
+        for expr in (
+            'docKeyRceptNo("insider_timeline")',
+            'docKeyRceptNo("doc")',
+            "docKeyRceptNo(null)",
+            "docKeyRceptNo(123)",
+        ):
+            self.assertIsNone(run_js(expr), f"{expr}가 doc: 키로 잘못 인식됐습니다")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestDocListRow(unittest.TestCase):
+    """doc:<접수번호> 섹션 값(원문 최대 20,000자 포함)을 본문 목록 한 줄로
+    줄인다 — 원문 자체는 목록에 넣지 않는다(사용자 승인 방향: 원문은
+    우측 패널에서 본다), 몇 자짜리 문서인지·잘렸는지는 남긴다.
+    """
+
+    def test_row_carries_rcept_no_char_count_and_truncated(self):
+        got = run_js(
+            'docListRow("20260715900769",'
+            ' {text:"본문 내용", char_count:3988, truncated:false})'
+        )
+        self.assertEqual(got["rcept_no"], "20260715900769")
+        self.assertEqual(got["char_count"], 3988)
+        self.assertEqual(got["truncated"], False)
+
+    def test_full_text_is_not_carried_into_the_row(self):
+        """행에 원문 전체가 실리면 목록으로 나눈 의미가 없다."""
+        got = run_js(
+            'docListRow("1", {text:"가".repeat(4000), char_count:4000, truncated:false})'
+        )
+        self.assertNotIn("text", got, "원문 전체가 목록 행에 그대로 남아 있습니다")
+
+    def test_missing_value_does_not_crash(self):
+        got = run_js('docListRow("1", null)')
+        self.assertEqual(got["rcept_no"], "1")
 
 
 @unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 클릭 배선을 검증할 수 없습니다")
@@ -1911,6 +2076,336 @@ class TestDocPanelRendersDocumentBlocks(unittest.TestCase):
         }, ensure_ascii=False)
         got = run_doc_panel(body)
         self.assertIn("12,345자 중 일부입니다", got["flat"])
+
+
+# ── doc: 섹션 본문 목록 통합(ui.js의 addDocListEntry) ──────────────────
+#
+# 원인: documentBlocks(파이프를 표로 복원)는 openDocPanel(우측 패널)에만
+# 쓰이고, 본문의 doc: 섹션은 여전히 {title:"본문", text: 수천 자}로 그대로
+# 나갔다(엔켐 실측 34건 × 약 13만 자). 승인된 수정 방향: 본문에서는 doc:
+# 원문 전체를 걷어내고 "어떤 공시를 가져왔는지" 목록 하나만 남긴다 —
+# 원문은 접수번호를 클릭해 우측 패널에서 본다.
+#
+# 여기서는 app.js·ui.js를 실제로 같은 vm 컨텍스트에서 실행해(문자열 검사가
+# 아니라) addDocListEntry를 여러 번 불렀을 때 h2가 하나만 생기는지, 그리고
+# 목록의 각 행을 실제로 클릭하면 openDocPanel이 정확한 접수번호로 불리는지
+# 확인한다 — "정의만 있고 호출부가 안 바뀐" 사고가 이 프로젝트에서 이미
+# 여러 번 났다(브리프 지적).
+_DOC_LIST_HARNESS = r"""
+const vm = require("vm");
+const fs = require("fs");
+
+const ELEMENTS = Object.create(null);
+
+class FakeEl {
+  constructor(tag) {
+    this.tag = tag;
+    this.children = [];
+    this._text = "";
+    this._className = "";
+    this._id = "";
+    this.dataset = {};
+    this._listeners = {};
+  }
+  appendChild(c) { this.children.push(c); return c; }
+  insertBefore(node, ref) {
+    const idx = ref ? this.children.indexOf(ref) : -1;
+    if (idx === -1) this.children.push(node);
+    else this.children.splice(idx, 0, node);
+    return node;
+  }
+  removeChild(c) {
+    const idx = this.children.indexOf(c);
+    if (idx !== -1) this.children.splice(idx, 1);
+    return c;
+  }
+  get firstChild() { return this.children.length ? this.children[0] : null; }
+  insertRow() { const tr = new FakeEl("tr"); this.appendChild(tr); return tr; }
+  insertCell() { const td = new FakeEl("td"); this.appendChild(td); return td; }
+  createTHead() { const el = new FakeEl("thead"); this.appendChild(el); return el; }
+  createTBody() { const el = new FakeEl("tbody"); this.appendChild(el); return el; }
+  addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); }
+  dispatch(type) { (this._listeners[type] || []).forEach(function (fn) { fn({}); }); }
+  set textContent(v) { this._text = String(v); this.children = []; }
+  get textContent() { return this._text; }
+  set className(v) { this._className = v; }
+  get className() { return this._className; }
+  set id(v) { this._id = v; ELEMENTS[v] = this; }
+  get id() { return this._id; }
+}
+
+const bodyEl = new FakeEl("div");
+bodyEl.id = "body";
+
+function collectByTag(node, tag, out) {
+  out = out || [];
+  if (!node) return out;
+  if (node.tag === tag) out.push(node);
+  (node.children || []).forEach(function (c) { collectByTag(c, tag, out); });
+  return out;
+}
+
+function collectDocEls(node, out) {
+  out = out || [];
+  if (!node) return out;
+  if (node.className === "doc") out.push(node);
+  (node.children || []).forEach(function (c) { collectDocEls(c, out); });
+  return out;
+}
+
+const sandbox = {
+  console: console,
+  document: {
+    createElement: function (tag) { return new FakeEl(tag); },
+    createDocumentFragment: function () { return new FakeEl("#fragment"); },
+    createTextNode: function (t) { const n = new FakeEl("#text"); n.textContent = t; return n; },
+    addEventListener: function () {},
+    getElementById: function (id) { return ELEMENTS[id] || null; },
+  },
+  localStorage: {
+    getItem: function () { return null; },
+    setItem: function () {},
+    removeItem: function () {},
+  },
+  fetch: function () { return Promise.reject(new Error("no network in test")); },
+};
+vm.createContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[1], "utf-8"), { filename: "app.js" }).runInContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).runInContext(sandbox);
+
+const CAPTURED = [];
+sandbox.openDocPanel = function (rceptNo) { CAPTURED.push(rceptNo); };
+
+const entries = %(entries)s;
+entries.forEach(function (e) { sandbox.addDocListEntry(e.rcept_no, e.value); });
+
+const h2s = collectByTag(bodyEl, "h2", []);
+const docEls = collectDocEls(bodyEl, []);
+docEls.forEach(function (e) { e.dispatch("click"); });
+
+process.stdout.write(JSON.stringify({
+  h2Texts: h2s.map(function (h) { return h.textContent; }),
+  docCellCount: docEls.length,
+  captured: CAPTURED,
+}));
+"""
+
+
+def run_doc_list(entries_js: str):
+    script = _DOC_LIST_HARNESS % {"entries": entries_js}
+    out = subprocess.run(
+        [_NODE, "-e", script, str(_APP), str(_UI)],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    if out.returncode != 0:
+        raise AssertionError(f"node 실행 실패:\n{out.stderr}")
+    return json.loads(out.stdout)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 목록 렌더링을 검증할 수 없습니다")
+class TestDocListConsolidation(unittest.TestCase):
+    """doc:<접수번호> 섹션이 도착할 때마다 새 h2로 원문 전체를 쏟아내던
+    문제(엔켐 실측 34건 × 약 13만 자)의 수정 — 본문에는 "어떤 공시를
+    가져왔는지" 목록 하나만 남고, 각 행에서 우측 패널을 열 수 있어야 한다
+    (그러지 않으면 원문을 볼 방법이 사라져 진짜로 숨기는 게 된다).
+    """
+
+    _ENTRIES = json.dumps([
+        {"rcept_no": "20260715900769",
+         "value": {"text": "엔켐/회사합병 결정" + ("가" * 3900),
+                    "char_count": 3988, "truncated": False}},
+        {"rcept_no": "20260708900785",
+         "value": {"text": "엔켐/전환사채" + ("나" * 1600),
+                    "char_count": 1676, "truncated": False}},
+        {"rcept_no": "20260123000072",
+         "value": {"text": "", "char_count": 0, "truncated": False}},
+    ], ensure_ascii=False)
+
+    def test_all_entries_collapse_into_a_single_titled_section(self):
+        got = run_doc_list(self._ENTRIES)
+        matches = [t for t in got["h2Texts"] if t == "공시 원문 목록"]
+        self.assertEqual(
+            len(matches), 1,
+            f"doc: 섹션이 여러 개의 h2로 흩어졌거나 목록 자체가 없습니다 "
+            f"(h2: {got['h2Texts']})",
+        )
+
+    def test_every_entry_is_clickable_and_opens_its_own_doc_panel(self):
+        got = run_doc_list(self._ENTRIES)
+        self.assertEqual(got["docCellCount"], 3, "목록 행 수만큼 클릭 가능한 셀이 없습니다")
+        self.assertEqual(
+            sorted(got["captured"]),
+            sorted(["20260715900769", "20260708900785", "20260123000072"]),
+            "목록 항목을 클릭해도 우측 패널(openDocPanel)이 열리지 않습니다",
+        )
+
+
+# 위 _DOC_LIST_HARNESS는 addDocListEntry만 재현한다 — showGate()·
+# renderHeadPlaceholder()가 실제로 DOC_LIST_ROWS를 비우는지는 그 두 함수가
+# 참조하는 #gate·#main·#panel 등 추가 DOM이 필요해 별도 하네스로 확인한다
+# (브리프 제약: "showGate()가 패널·#body 등을 비우는 성질을 깨뜨리지
+# 말 것 — 새로 만드는 목록도 이 정리에 포함돼야 한다").
+_DOC_LIST_RESET_HARNESS = r"""
+const vm = require("vm");
+const fs = require("fs");
+
+const ELEMENTS = Object.create(null);
+
+class FakeClassList {
+  constructor() { this._set = new Set(); }
+  add(c) { this._set.add(c); }
+  remove(c) { this._set.delete(c); }
+  contains(c) { return this._set.has(c); }
+}
+
+// 실제 브라우저의 document.getElementById()는 문서(연결된 트리)에서만
+// 찾는다 — 노드를 removeChild로 떼어내면 그 id는 더 이상 찾히지 않는다.
+// 이 하네스의 ELEMENTS는 한 번 등록되면 지워지지 않는 평평한 사전이라
+// 그 성질을 흉내 내지 못하면(떼어낸 뒤에도 여전히 찾힌다), showGate()
+// 이후 sectionHolder()/groupHolder()가 실제로는 새 노드를 만들어야 할
+// 자리에서 여전히 붙어 있는 것처럼 착각한 옛(분리된) 노드를 재사용해
+// buggy하지 않은 실제 동작을 buggy한 것처럼 오검출한다 — removeChild에서
+// 떼어낸 서브트리 전체의 id를 여기서 지워 실제 DOM과 같은 성질을 맞춘다.
+function deregister(node) {
+  if (!node) return;
+  if (node._id) delete ELEMENTS[node._id];
+  (node.children || []).forEach(deregister);
+}
+
+class FakeEl {
+  constructor(tag) {
+    this.tag = tag;
+    this.children = [];
+    this._text = "";
+    this._className = "";
+    this._id = "";
+    this.dataset = {};
+    this._listeners = {};
+    this.hidden = false;
+    this.classList = new FakeClassList();
+  }
+  appendChild(c) { this.children.push(c); return c; }
+  insertBefore(node, ref) {
+    const idx = ref ? this.children.indexOf(ref) : -1;
+    if (idx === -1) this.children.push(node);
+    else this.children.splice(idx, 0, node);
+    return node;
+  }
+  removeChild(c) {
+    const idx = this.children.indexOf(c);
+    if (idx !== -1) this.children.splice(idx, 1);
+    deregister(c);
+    return c;
+  }
+  get firstChild() { return this.children.length ? this.children[0] : null; }
+  insertRow() { const tr = new FakeEl("tr"); this.appendChild(tr); return tr; }
+  insertCell() { const td = new FakeEl("td"); this.appendChild(td); return td; }
+  createTHead() { const el = new FakeEl("thead"); this.appendChild(el); return el; }
+  createTBody() { const el = new FakeEl("tbody"); this.appendChild(el); return el; }
+  addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); }
+  dispatch(type) { (this._listeners[type] || []).forEach(function (fn) { fn({}); }); }
+  set textContent(v) { this._text = String(v); this.children = []; }
+  get textContent() { return this._text; }
+  set className(v) { this._className = v; }
+  get className() { return this._className; }
+  set id(v) { this._id = v; ELEMENTS[v] = this; }
+  get id() { return this._id; }
+}
+
+function makeEl(tag, id) {
+  const el = new FakeEl(tag);
+  if (id) el.id = id;
+  return el;
+}
+
+const bodyEl = makeEl("div", "body");
+makeEl("nav", "toc");
+makeEl("div", "company-info");
+makeEl("section", "gate");
+makeEl("main", "main");
+makeEl("p", "gate-msg");
+makeEl("aside", "panel");
+makeEl("div", "panel-body");
+makeEl("span", "head-name");
+makeEl("div", "bar");
+makeEl("button", "actor-btn");
+
+function collectDocEls(node, out) {
+  out = out || [];
+  if (!node) return out;
+  if (node.className === "doc") out.push(node);
+  (node.children || []).forEach(function (c) { collectDocEls(c, out); });
+  return out;
+}
+
+const sandbox = {
+  console: console,
+  document: {
+    createElement: function (tag) { return new FakeEl(tag); },
+    createDocumentFragment: function () { return new FakeEl("#fragment"); },
+    createTextNode: function (t) { const n = new FakeEl("#text"); n.textContent = t; return n; },
+    addEventListener: function () {},
+    getElementById: function (id) { return ELEMENTS[id] || null; },
+  },
+  localStorage: {
+    getItem: function () { return null; },
+    setItem: function () {},
+    removeItem: function () {},
+  },
+  fetch: function () { return Promise.reject(new Error("no network in test")); },
+};
+vm.createContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[1], "utf-8"), { filename: "app.js" }).runInContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).runInContext(sandbox);
+
+sandbox.openDocPanel = function () {};
+
+sandbox.addDocListEntry("1", { text: "a", char_count: 1, truncated: false });
+sandbox.addDocListEntry("2", { text: "b", char_count: 1, truncated: false });
+const beforeReset = collectDocEls(bodyEl, []).length;
+
+%(reset_call)s;
+
+sandbox.addDocListEntry("3", { text: "c", char_count: 1, truncated: false });
+const afterReset = collectDocEls(bodyEl, []).length;
+
+process.stdout.write(JSON.stringify({ beforeReset: beforeReset, afterReset: afterReset }));
+"""
+
+
+def run_doc_list_reset(reset_call: str):
+    script = _DOC_LIST_RESET_HARNESS % {"reset_call": reset_call}
+    out = subprocess.run(
+        [_NODE, "-e", script, str(_APP), str(_UI)],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    if out.returncode != 0:
+        raise AssertionError(f"node 실행 실패:\n{out.stderr}")
+    return json.loads(out.stdout)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestDocListResetsWithShowGateAndPlaceholder(unittest.TestCase):
+    """showGate()·renderHeadPlaceholder()가 패널·#body·헤더 등을 비우는
+    성질(브리프 제약)에 이 새 목록(DOC_LIST_ROWS)도 포함돼야 한다 — 안
+    그러면 로그아웃 후 다음 사용자가, 또는 새 회사를 분석한 사용자가
+    이전 회사의 공시 목록 행이 이어붙은 화면을 보게 된다.
+    """
+
+    def test_show_gate_starts_a_fresh_doc_list(self):
+        got = run_doc_list_reset("sandbox.showGate()")
+        self.assertEqual(got["beforeReset"], 2)
+        self.assertEqual(
+            got["afterReset"], 1,
+            "showGate() 이후에도 이전 목록 행이 새 목록에 남아 있습니다",
+        )
+
+    def test_render_head_placeholder_starts_a_fresh_doc_list(self):
+        got = run_doc_list_reset('sandbox.renderHeadPlaceholder("새 회사")')
+        self.assertEqual(
+            got["afterReset"], 1,
+            "renderHeadPlaceholder() 이후에도 이전 목록 행이 남아 있습니다",
+        )
 
 
 # ── #body(그리드)와 .sec 사이 DOM 중간 요소가 전부 display:contents인지 ──
