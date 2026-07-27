@@ -1684,6 +1684,34 @@ class TestDocumentBlocks(unittest.TestCase):
         table = [b for b in got if b["kind"] == "table"][0]
         self.assertNotIn(["---", "---"], table["rows"])
 
+    def test_markdown_heading_hash_is_stripped_from_prose(self):
+        """Minor 5(리뷰 지적): dart_client.py의 _html_to_structured_text가
+        <h1>~<h6>를 "#" * level + " " 마크다운 헤더로 바꾼다(구조 보존용
+        중간 표현) — 이 화면은 마크다운을 렌더링하지 않고 <p>에 textContent
+        로 그대로 보여주므로, 그 표시를 그대로 두면 "### 회사합병 결정"처럼
+        원문(HTML)에는 없던 기호가 사용자에게 그대로 노출된다. 제목
+        내용(텍스트)은 그대로 두고 마크다운 기호만 벗겨야 한다."""
+        got = run_js(r'documentBlocks("## 회사합병 결정\n본문 문단")')
+        texts = " ".join(b.get("text", "") for b in got if b["kind"] == "text")
+        self.assertIn("회사합병 결정", texts, "제목 내용이 사라졌습니다")
+        self.assertNotIn("#", texts, "마크다운 헤더 기호(#)가 그대로 노출됩니다")
+
+    def test_markdown_heading_hash_stripped_for_all_levels(self):
+        for level in range(1, 7):
+            hashes = "#" * level
+            got = run_js(f'documentBlocks({json.dumps(hashes + " 제목" + str(level))})')
+            texts = " ".join(b.get("text", "") for b in got if b["kind"] == "text")
+            self.assertIn(f"제목{level}", texts)
+            self.assertNotIn("#", texts, f"레벨 {level} 헤더의 #이 남아 있습니다")
+
+    def test_hash_not_followed_by_space_is_left_alone(self):
+        """마크다운 헤더 문법(# + 공백)이 아닌, 우연히 #으로 시작하는 본문
+        (예: "#1233 관련")까지 지우면 원문을 훼손한다 — 헤더 패턴이 아니면
+        건드리지 않는다."""
+        got = run_js(r'documentBlocks("#1233 관련 안건")')
+        texts = " ".join(b.get("text", "") for b in got if b["kind"] == "text")
+        self.assertIn("#1233 관련 안건", texts)
+
     def test_real_world_flattened_pipes_lose_nothing(self):
         """사장님이 실제로 붙여넣은 엔켐 회사합병 결정 공시 조각 — 행 구분이
         (붙여넣는 과정에서였는지) 줄바꿈 없이 공백만으로 이어져 있었다.
@@ -2065,6 +2093,261 @@ class TestSectionIsAnActualGridItem(unittest.TestCase):
             ".sec이 그리드의 직속 아이템이 되지 못해 .sec.wide가 무효화됩니다:\n  "
             + "\n  ".join(offenders),
         )
+
+
+# ── 목차 순서·클릭·active 강조·resetToc 실제 동작 재현용 가짜 DOM ───────
+#
+# 리뷰 지적 ①·②: 목차는 groupHolder()의 insertBefore 순서 대신 무조건
+# appendChild로 쌓여, company_info(STAGE1_SPECS 첫 항목이라 항상 먼저
+# 도착)가 매번 목차 맨 위를 차지했지만 화면(#body)에서는 groupOrderIndex가
+# 가장 커서 맨 아래였다. 그리고 "목차 클릭 → scrollIntoView", "active
+# 강조", "showGate/renderHeadPlaceholder의 resetToc() 호출"은 문자열
+# 존재만 확인하는 정적 검사로 지켜지고 있었는데, 뮤테이션으로 실제
+# 확인한 결과 이 세 가지는 그런 정적 검사조차 없어 관련 코드를 지워도
+# 아무 테스트도 실패하지 않았다.
+#
+# 이 하네스는 #toc·#body·#company-info·#gate·#main·#panel 등 showGate·
+# renderHeadPlaceholder·renderCompanyInfo·renderSection이 실제로 참조하는
+# 엘리먼트를 전부 등록하고, IntersectionObserver도 흉내 내(node에는 원래
+# 없다) TOC_OBSERVER 콜백을 직접 호출할 수 있게 한다.
+_TOC_BEHAVIOR_HARNESS = r"""
+const vm = require("vm");
+const fs = require("fs");
+
+const ELEMENTS = Object.create(null);
+const SCROLLS = [];
+let OBSERVE_CALLS = [];
+let OBSERVER_CALLBACK = null;
+let DISCONNECT_COUNT = 0;
+
+function titleOf(node) {
+  if (!node || !node.children || !node.children[0]) return "";
+  const first = node.children[0];
+  if (first.tag === "h1" || first.tag === "h2") return first.textContent;
+  return "";
+}
+
+class FakeClassList {
+  constructor() { this._set = new Set(); }
+  add(c) { this._set.add(c); }
+  remove(c) { this._set.delete(c); }
+  contains(c) { return this._set.has(c); }
+}
+
+class FakeIntersectionObserver {
+  constructor(cb) { OBSERVER_CALLBACK = cb; }
+  observe(el) { OBSERVE_CALLS.push(el); }
+  disconnect() { DISCONNECT_COUNT += 1; OBSERVE_CALLS = []; }
+}
+
+class FakeEl {
+  constructor(tag) {
+    this.tag = tag;
+    this.children = [];
+    this._text = "";
+    this._className = "";
+    this._id = "";
+    this.dataset = {};
+    this._listeners = {};
+    this.hidden = false;
+    this.classList = new FakeClassList();
+  }
+  appendChild(c) { this.children.push(c); return c; }
+  insertBefore(node, ref) {
+    const idx = ref ? this.children.indexOf(ref) : -1;
+    if (idx === -1) this.children.push(node);
+    else this.children.splice(idx, 0, node);
+    return node;
+  }
+  removeChild(c) {
+    const idx = this.children.indexOf(c);
+    if (idx !== -1) this.children.splice(idx, 1);
+    return c;
+  }
+  get firstChild() { return this.children.length ? this.children[0] : null; }
+  insertRow() { const tr = new FakeEl("tr"); this.appendChild(tr); return tr; }
+  insertCell() { const td = new FakeEl("td"); this.appendChild(td); return td; }
+  createTHead() { const el = new FakeEl("thead"); this.appendChild(el); return el; }
+  createTBody() { const el = new FakeEl("tbody"); this.appendChild(el); return el; }
+  addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); }
+  dispatch(type) { (this._listeners[type] || []).forEach(function (fn) { fn({}); }); }
+  scrollIntoView(opts) { SCROLLS.push({ title: titleOf(this), opts: opts }); }
+  set textContent(v) { this._text = String(v); this.children = []; }
+  get textContent() { return this._text; }
+  set className(v) { this._className = v; }
+  get className() { return this._className; }
+  set id(v) { this._id = v; ELEMENTS[v] = this; }
+  get id() { return this._id; }
+}
+
+function makeEl(tag, id) {
+  const el = new FakeEl(tag);
+  if (id) el.id = id;
+  return el;
+}
+
+const bodyEl = makeEl("div", "body");
+const tocEl = makeEl("nav", "toc");
+const companyInfoEl = makeEl("div", "company-info");
+makeEl("section", "gate");
+makeEl("main", "main");
+makeEl("p", "gate-msg");
+makeEl("aside", "panel");
+makeEl("div", "panel-body");
+makeEl("span", "head-name");
+makeEl("div", "bar");
+makeEl("button", "actor-btn");
+
+function tocLinkTexts() {
+  return tocEl.children.map(function (c) { return c.textContent; });
+}
+
+const sandbox = {
+  console: console,
+  IntersectionObserver: FakeIntersectionObserver,
+  document: {
+    createElement: function (tag) { return new FakeEl(tag); },
+    createDocumentFragment: function () { return new FakeEl("#fragment"); },
+    createTextNode: function (t) { const n = new FakeEl("#text"); n.textContent = t; return n; },
+    addEventListener: function () {},
+    getElementById: function (id) { return ELEMENTS[id] || null; },
+  },
+  localStorage: {
+    getItem: function () { return null; },
+    setItem: function () {},
+    removeItem: function () {},
+  },
+  fetch: function () { return Promise.reject(new Error("no network in test")); },
+};
+vm.createContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[1], "utf-8"), { filename: "app.js" }).runInContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).runInContext(sandbox);
+
+sandbox.openDocPanel = function () {};
+
+// 1) company_info(헤더)가 실측대로 가장 먼저 도착한다(STAGE1_SPECS 첫 항목).
+sandbox.renderCompanyInfo({ ceo_nm: "홍길동" });
+// 2) "감사·부실"(groupOrderIndex 3) 섹션이 "자금"(groupOrderIndex 0)보다
+//    먼저 도착한다 — 폴링 응답 순서는 서버가 준 순서라 그룹 정의 순서를
+//    보장하지 않는다. 목차가 도착 순서 그대로 쌓이면(이전 버전의 버그)
+//    "감사·부실"이 "자금"보다 앞에 남는다.
+sandbox.renderSection("distress", [{ a: 1 }]);
+sandbox.renderSection("fund_usage", [{ a: 1 }, { a: 2 }]);
+
+const orderAfterRender = tocLinkTexts();
+
+// 클릭 배선 — 목차 항목을 실제로 클릭해 scrollIntoView가 그 항목이
+// 가리키는 대상(targetEl)에서 호출되는지 확인한다.
+tocEl.children.forEach(function (c) { c.dispatch("click"); });
+const scrollTitles = SCROLLS.map(function (s) { return s.title; });
+
+// active 강조 — IntersectionObserver 콜백을 직접 흉내 내 company_info
+// 박스가 화면에 보이는 상태로 들어왔다고 알린 뒤, 그 목차 링크에 active가
+// 붙는지/사라지는지 확인한다.
+const firstLink = tocEl.children[0];
+OBSERVER_CALLBACK([{ target: companyInfoEl, isIntersecting: true }]);
+const activeWhileVisible = firstLink.classList.contains("active");
+OBSERVER_CALLBACK([{ target: companyInfoEl, isIntersecting: false }]);
+const activeAfterLeaving = firstLink.classList.contains("active");
+
+// showGate — 목차·company-info·body가 실제로 비는지, 옵저버가 disconnect
+// 되는지 확인한다.
+sandbox.showGate("메시지");
+const afterShowGate = {
+  tocCount: tocEl.children.length,
+  companyInfoCount: companyInfoEl.children.length,
+  bodyCount: bodyEl.children.length,
+  disconnectCount: DISCONNECT_COUNT,
+};
+
+// 다시 채운 뒤 renderHeadPlaceholder로도 같은 성질을 확인한다.
+sandbox.renderCompanyInfo({ ceo_nm: "홍길동" });
+sandbox.renderSection("fund_usage", [{ a: 1 }, { a: 2 }]);
+sandbox.renderHeadPlaceholder("새 회사");
+const afterPlaceholder = {
+  tocCount: tocEl.children.length,
+  companyInfoCount: companyInfoEl.children.length,
+  bodyCount: bodyEl.children.length,
+};
+
+process.stdout.write(JSON.stringify({
+  orderAfterRender: orderAfterRender,
+  scrollTitles: scrollTitles,
+  activeWhileVisible: activeWhileVisible,
+  activeAfterLeaving: activeAfterLeaving,
+  afterShowGate: afterShowGate,
+  afterPlaceholder: afterPlaceholder,
+}));
+"""
+
+
+def run_toc_behavior():
+    out = subprocess.run(
+        [_NODE, "-e", _TOC_BEHAVIOR_HARNESS, str(_APP), str(_UI)],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    if out.returncode != 0:
+        raise AssertionError(f"node 실행 실패:\n{out.stderr}")
+    return json.loads(out.stdout)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 목차 동작을 검증할 수 없습니다")
+class TestTocMatchesScreenOrderAndBehavesOnInteraction(unittest.TestCase):
+    """리뷰 지적 ①(High)·②의 행동 검사 부분(목차 클릭·active 강조·
+    resetToc 호출)을 실제 렌더·클릭·옵저버 콜백으로 확인한다.
+    """
+
+    def test_toc_order_matches_document_order_not_arrival_order(self):
+        """company_info가 항상 먼저 도착해도(실측), 화면(#body)에서는
+        groupOrderIndex가 가장 커서 맨 아래에 있다 — 목차도 그 순서를
+        따라야 한다. "감사·부실"이 "자금"보다 먼저 도착해도 최종 목차
+        에서는 "자금"이 앞에 와야 한다(groupOrderIndex 순서)."""
+        got = run_toc_behavior()
+        self.assertEqual(
+            got["orderAfterRender"],
+            ["기업 개요", "자금", "자금 사용 내역", "감사·부실", "부실 징후"],
+            "목차 순서가 화면(DOM) 순서와 다릅니다",
+        )
+
+    def test_clicking_each_toc_item_scrolls_to_its_own_target(self):
+        got = run_toc_behavior()
+        self.assertEqual(
+            got["scrollTitles"], got["orderAfterRender"],
+            "목차 항목을 클릭해도 해당 섹션으로 스크롤되지 않습니다 — "
+            "scrollIntoView 배선이 없거나 엉뚱한 대상을 가리킵니다",
+        )
+
+    def test_intersecting_section_gets_active_class_and_loses_it_on_leave(self):
+        got = run_toc_behavior()
+        self.assertTrue(got["activeWhileVisible"],
+                        "섹션이 화면에 들어와도 목차 링크에 active가 붙지 않습니다")
+        self.assertFalse(got["activeAfterLeaving"],
+                         "섹션이 화면을 벗어나도 active가 그대로 남아 있습니다")
+
+    def test_show_gate_empties_toc_company_info_and_body_and_disconnects_observer(self):
+        got = run_toc_behavior()
+        after = got["afterShowGate"]
+        self.assertEqual(after["tocCount"], 0,
+                         "showGate() 이후에도 목차 항목이 남아 있습니다 — 죽은 링크가 됩니다")
+        self.assertEqual(after["companyInfoCount"], 0,
+                         "showGate() 이후에도 기업 개요 박스에 내용이 남아 있습니다")
+        self.assertEqual(after["bodyCount"], 0,
+                         "showGate() 이후에도 본문(#body)에 섹션이 남아 있습니다")
+        self.assertGreaterEqual(after["disconnectCount"], 1,
+                                "showGate()가 IntersectionObserver를 disconnect하지 않습니다")
+
+    def test_render_head_placeholder_also_empties_toc_and_company_info(self):
+        got = run_toc_behavior()
+        after = got["afterPlaceholder"]
+        self.assertEqual(after["tocCount"], 0,
+                         "renderHeadPlaceholder() 이후에도 이전 회사의 목차 항목이 "
+                         "남아 있습니다")
+        self.assertEqual(after["companyInfoCount"], 0,
+                         "renderHeadPlaceholder() 이후에도 이전 회사의 기업 개요가 "
+                         "남아 있습니다")
+        self.assertEqual(after["bodyCount"], 0,
+                         "renderHeadPlaceholder() 이후에도 이전 회사의 본문 섹션이 "
+                         "남아 있습니다")
 
 
 if __name__ == "__main__":

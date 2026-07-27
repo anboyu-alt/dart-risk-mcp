@@ -184,8 +184,20 @@ function ensureTocObserver() {
 /** 목차 항목 하나를 추가한다. #toc가 없는 환경(가짜 DOM 테스트)에서는
  *  아무 것도 만들지 않는다 — groupHolder·sectionHolder는 실제 브라우저
  *  밖에서도(node vm 테스트) 호출되므로 여기서 막아야 그 테스트들이
- *  안전하다. */
-function addTocEntry(titleText, targetEl, isSection) {
+ *  안전하다.
+ *
+ *  order는 이 항목이 속한 그룹의 groupOrderIndex다 — 그룹 자신도, 그
+ *  그룹 소속 섹션도 같은 값을 쓴다(groupHolder·sectionHolder가 넘긴다).
+ *  groupHolder()는 이미 이 값으로 #body 안 DOM 위치를 insertBefore로
+ *  정하고 있다 — 목차가 언제나 `appendChild`로만 쌓이면(이전 버전) 그
+ *  순서와 어긋난다. 실측 회귀: company_info가 STAGE1_SPECS 첫 항목이라
+ *  다른 어떤 섹션보다 먼저 도착하므로, company_info가 속한(당시)
+ *  "기타" 그룹이 매번 목차 맨 위를 차지했지만, 화면(#body)에서는
+ *  groupOrderIndex가 가장 커서 항상 맨 아래였다 — 사이드바 클릭과 실제
+ *  스크롤 위치가 어긋났다. TOC_ITEMS에 이미 들어 있는 항목 중 order가
+ *  더 큰 첫 항목 앞에 끼워 넣으면(같은 order끼리는 도착 순서 그대로
+ *  뒤에 붙는다) groupHolder()의 insertBefore 로직과 같은 결과가 된다. */
+function addTocEntry(titleText, targetEl, isSection, order) {
   const tocEl = document.getElementById("toc");
   if (!tocEl) return;
   const link = document.createElement("div");
@@ -194,8 +206,12 @@ function addTocEntry(titleText, targetEl, isSection) {
   link.addEventListener("click", function () {
     targetEl.scrollIntoView({ behavior: "smooth", block: "start" });
   });
-  tocEl.appendChild(link);
-  TOC_ITEMS.push({ el: targetEl, link: link });
+  let before = null;
+  for (const item of TOC_ITEMS) {
+    if (item.order > order) { before = item.link; break; }
+  }
+  tocEl.insertBefore(link, before);
+  TOC_ITEMS.push({ el: targetEl, link: link, order: order });
   const obs = ensureTocObserver();
   if (obs) obs.observe(targetEl);
 }
@@ -252,6 +268,14 @@ function showGate(msg) {
   const bodyBox = document.getElementById("body");
   if (bodyBox) {
     while (bodyBox.firstChild) bodyBox.removeChild(bodyBox.firstChild);
+  }
+  // company_info(헤더)는 #body 밖의 별도 고정 박스(#company-info)에
+  // 그려진다(renderCompanyInfo 참고) — #body를 비우는 것만으로는 이
+  // 박스가 비워지지 않으므로 따로 비워야 한다. 안 그러면 로그아웃 후
+  // 로그인 화면 위로 이전 사용자가 조회한 회사의 대표자·주소 등이 남는다.
+  const companyInfoBox = document.getElementById("company-info");
+  if (companyInfoBox) {
+    while (companyInfoBox.firstChild) companyInfoBox.removeChild(companyInfoBox.firstChild);
   }
   resetToc(); // #body를 비우는 자리와 같이 — 목차만 남으면 죽은 링크가 된다
   CURRENT_COMPANY = null;
@@ -409,6 +433,12 @@ function renderHeadPlaceholder(name, message) {
   const bodyBox = document.getElementById("body");
   if (bodyBox) {
     while (bodyBox.firstChild) bodyBox.removeChild(bodyBox.firstChild);
+  }
+  // showGate()와 같은 이유 — company_info 고정 박스는 #body 밖에 있어
+  // 따로 비워야 이전 회사의 대표자·주소 등이 새 회사 화면 위에 남지 않는다.
+  const companyInfoBox = document.getElementById("company-info");
+  if (companyInfoBox) {
+    while (companyInfoBox.firstChild) companyInfoBox.removeChild(companyInfoBox.firstChild);
   }
   resetToc(); // 같은 이유 — 새 회사의 목차를 처음부터 다시 쌓는다
   CURRENT_COMPANY = name;
@@ -596,7 +626,7 @@ function groupHolder(title) {
     if (groupOrderIndex(child.dataset.title) > idx) { before = child; break; }
   }
   body.insertBefore(wrap, before);
-  addTocEntry(title, wrap, false);
+  addTocEntry(title, wrap, false, idx);
   return holder;
 }
 
@@ -622,7 +652,8 @@ function sectionHolder(key) {
   let holder = document.getElementById(id);
   if (holder) return holder;
 
-  const group = groupHolder(groupTitleFor(key));
+  const groupTitle = groupTitleFor(key);
+  const group = groupHolder(groupTitle);
 
   const wrap = document.createElement("div");
   wrap.className = "sec";
@@ -638,7 +669,9 @@ function sectionHolder(key) {
 
   group.appendChild(wrap);
   SEC_WRAP[key] = wrap;
-  addTocEntry(label(key), wrap, true);
+  // 자기 그룹과 같은 order를 써야 목차에서 그룹 항목 바로 뒤(같은 order
+  // 블록 안)에 붙는다 — addTocEntry 주석 참고.
+  addTocEntry(label(key), wrap, true, groupOrderIndex(groupTitle));
   return holder;
 }
 
@@ -699,6 +732,49 @@ function renderSection(key, value) {
     return;
   }
   for (const block of blocks) holder.appendChild(blockEl(block));
+}
+
+/** company_info(STAGE1_SPECS의 "헤더" 섹션)를 본문 맨 위 고정 박스
+ *  (#company-info)에 그린다.
+ *
+ *  일반 섹션(renderSection)과 달리 groupHolder/sectionHolder(그룹별
+ *  정렬)를 거치지 않는다 — 헤더는 어떤 그룹보다도 항상 맨 위에 고정이어야
+ *  하기 때문이다(design 문서 §7.1: 섹션 0 "헤더" — 회사명·종목코드·업종·
+ *  대표자·조회 시점). 이전에는 company_info도 다른 섹션과 똑같이
+ *  renderSection()을 타서, SECTION_GROUPS에 없는 키라 "기타" 그룹으로
+ *  밀려나 화면 맨 아래(약 18,000px 지점)에 나타났다.
+ *
+ *  값은 sectionBlocks()가 만드는 표를 그대로 쓴다 — 어떤 필드도 골라내거나
+ *  숨기지 않는다(이 화면의 "데이터를 조용히 숨기지 않는다" 원칙과 동일).
+ */
+function renderCompanyInfo(value) {
+  const box = document.getElementById("company-info");
+  if (!box) return;
+  while (box.firstChild) box.removeChild(box.firstChild);
+
+  const h2 = document.createElement("h2");
+  h2.textContent = label("company_info");
+  box.appendChild(h2);
+
+  const blocks = sectionBlocks(value, 0, "company_info");
+  if (blocks.length === 0) {
+    const p = document.createElement("p");
+    p.className = "note";
+    p.textContent = "표시할 데이터가 없습니다.";
+    box.appendChild(p);
+  } else {
+    for (const block of blocks) box.appendChild(blockEl(block));
+  }
+
+  // 그룹(groupHolder)을 거치지 않는 유일한 섹션이라 목차 항목도 여기서
+  // 직접 추가한다. order=-1로 항상 그룹 목차(0 이상)보다 앞에 오게 해
+  // 화면 맨 위 고정 위치와 목차 순서를 맞춘다. company_info는 폴링
+  // 프로토콜상 한 번만 오지만(analyze() 쪽에서 fetched로 중복을 막는다),
+  // 방어적으로 이미 이 박스를 가리키는 목차 항목이 있으면 다시 추가하지
+  // 않는다 — 그러지 않으면 재호출 시 목차에 "기업 개요"가 중복된다.
+  if (!TOC_ITEMS.some(function (it) { return it.el === box; })) {
+    addTocEntry(label("company_info"), box, false, -1);
+  }
 }
 
 /** 가져오지 못한 항목을 보여준다.
@@ -823,7 +899,12 @@ async function pollUntilDone(jobId, dartKey, gen) {
           // api()는 {status, body}를 준다. 섹션 키는 sec.body.key에 있다.
           if (sec.status === 200) {
             fetched.add(key);
-            renderSection(sec.body.key || key, sec.body.value);
+            const secKey = sec.body.key || key;
+            // company_info(헤더)는 그룹 정렬과 무관하게 항상 화면 맨
+            // 위 고정이어야 한다(renderCompanyInfo 주석 참고) — 일반
+            // renderSection(그룹별 정렬) 경로를 타지 않는다.
+            if (secKey === "company_info") renderCompanyInfo(sec.body.value);
+            else renderSection(secKey, sec.body.value);
           } else {
             // 성공했을 때만 "받음"으로 친다 — 다음 폴링에서 자동 재시도된다.
             // 동시에 renderFailures로 넘겨 화면에도 보이게 한다(무한 재시도로

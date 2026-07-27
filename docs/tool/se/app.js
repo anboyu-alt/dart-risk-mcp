@@ -649,6 +649,17 @@ function actorLine(actor) {
  * 않는다(셀 전부가 `-`만으로 이뤄진 줄만 걸러낸다 — 실제 데이터 줄에
  * "-"가 섞여 있어도 다른 셀이 남아 있으면 걸러지지 않는다).
  */
+// dart_client.py의 _html_to_structured_text가 <h1>~<h6>를 "#" * level + " "
+// 마크다운 헤더로 바꾼다(구조 보존용 중간 표현) — 이 화면은 마크다운을
+// 렌더링하지 않고 문단을 <p>에 textContent로 그대로 보여주므로, 이 표시를
+// 그대로 두면 "### 회사합병 결정"처럼 원문 화면(HTML)에는 없던 기호가
+// 사용자에게 노출된다. 제목 내용(텍스트)은 그대로 두고 마크다운 문법
+// 기호만 벗긴다 — 요약·판정이 아니라 표시 방식의 변환일 뿐이다(v0.8.5
+// 원칙과 무관: 구조를 재구성하지 않는다, 줄 자체는 그대로 한 문단이다).
+function stripMarkdownHeadingHash(line) {
+  return line.replace(/^(\s*)#{1,6}(?=\s|$)\s*/, "$1");
+}
+
 function documentBlocks(text) {
   if (!text || typeof text !== "string") return [];
   const blocks = [];
@@ -674,7 +685,7 @@ function documentBlocks(text) {
       if (cells.length) { flushProse(); table.push(cells); continue; }
     }
     flushTable();
-    prose.push(raw);
+    prose.push(stripMarkdownHeadingHash(raw));
   }
   flushTable();
   flushProse();

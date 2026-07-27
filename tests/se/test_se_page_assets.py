@@ -1536,5 +1536,244 @@ class TestLayoutAndTheme(unittest.TestCase):
         self.assertRegex(_sources()["index.html"], r"@media[^{]*max-width")
 
 
+def _strip_css_comments(css_text: str) -> str:
+    """`/* ... */` CSS 주석을 지운다.
+
+    이 파일의 CSS 주석은 설명을 위해 실제 선택자·선언 문법을 그대로
+    인용한다(예: "`.sec.wide{grid-column:\\n1/-1}`이 완전히 무효화되고…").
+    주석을 지우지 않고 `_css_rule()`을 그대로 쓰면, 그 인용문이 진짜 규칙보다
+    먼저 등장해 정규식이 주석 속 문구를 "규칙"으로 착각한다 — 실제로
+    `.sec.wide{grid-column:1/-1}`을 지우는 뮤테이션을 넣어도 주석 속 인용문이
+    대신 매칭돼 계속 통과했다(뮤테이션으로 실측 확인됨, `[^}]*`가 줄바꿈도
+    삼켜 여러 줄에 걸친 주석 인용도 한 규칙처럼 보였다). `_strip_js_comments`
+    (같은 파일의 JS 주석 제거)와 같은 목적의 CSS 버전이다.
+    """
+    return re.sub(r"/\*.*?\*/", "", css_text, flags=re.S)
+
+
+def _split_media_and_base(html: str) -> tuple[str, str]:
+    """CSS를 "미디어쿼리 밖"과 "미디어쿼리 안"으로 나눈다.
+
+    리뷰 지적 ②의 핵심: `assertRegex(html, r"grid-template-columns")`처럼
+    전체 HTML을 문자열로만 훑으면, `#body{display:block}`으로 2단 그리드를
+    통째로 지워도 반응형 미디어쿼리 **안**의 `#body{grid-template-columns:1fr}`가
+    같은 문자열("grid-template-columns")을 대신 매칭해 통과해버린다(뮤테이션
+    으로 실측 확인됨). 이 함수는 `@media (max-width:1100px){...}` 블록
+    (`_extract_braced_block`과 같은 중괄호 균형 카운팅)을 통째로 떼어내
+    "밖"과 "안"을 분리한다 — 아래 `_css_rule()`이 이 둘을 따로 검사해야
+    "2단 레이아웃 규칙이 살아있다"와 "좁은 화면에서만 1단으로 되돌린다"를
+    서로 다른 것으로 구분해 검사할 수 있다.
+    """
+    html = _strip_css_comments(html)
+    m = re.search(r"@media\s*\(max-width:\s*(\d+)px\)\s*\{", html)
+    if m is None:
+        raise AssertionError("index.html에서 반응형 미디어쿼리(@media max-width)를 찾지 못했습니다")
+    open_idx = html.index("{", m.start())
+    media_block = _extract_braced_block(html, open_idx)  # '{'…'}' 포함
+    end_idx = open_idx + len(media_block)  # 닫는 '}' 바로 다음 인덱스
+    base = html[:m.start()] + html[end_idx:]
+    return base, media_block[1:-1]
+
+
+def _css_rule(css_text: str, selector: str) -> str | None:
+    """`css_text` 안에서 정확히 `selector{ 선언들 }` 형태인 규칙의 선언부만
+    돌려준다. 이 파일의 관련 규칙은 전부 콤마 없는 단순 클래스/id
+    선택자라 이 정도 정규식으로 충분하다(중첩 `{}`가 없어 `[^}]*`로
+    안전하게 블록 경계를 잡을 수 있다 — calc()의 괄호는 중괄호가 아니라
+    영향 없다).
+    """
+    m = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", css_text)
+    return m.group(1) if m else None
+
+
+class TestLayoutCssRuleStructure(unittest.TestCase):
+    """리뷰 지적 ②(High): 2단 레이아웃을 이루는 CSS 규칙 7가지를 문자열
+    존재가 아니라 **선택자별 선언**으로 검사한다.
+
+    리뷰어가 뮤테이션으로 실측한 결과, 기존 검사(`test_toc_and_two_column_grid_exist`
+    의 `assertRegex(html, r"grid-template-columns")` 하나)는 아래 표의 모든
+    변경에서 계속 초록이었다:
+
+      - `.sec.wide{grid-column:1/-1}` 삭제 → 넓은 표가 1124→546px로 좁아짐
+      - `#body{display:grid}` → `display:block` → 2단 배치 붕괴
+      - `#layout{display:flex}` → `display:block` → 사이드바 나란히 배치 붕괴
+      - `#toc{position:sticky}` → `position:static` → 스크롤 시 목차 사라짐
+      - 브레이크포인트 1100→1px → 반응형 붕괴
+
+    아래 각 테스트는 `_split_media_and_base()`로 "미디어쿼리 밖(기본 2단
+    레이아웃)"과 "미디어쿼리 안(좁은 화면 1단 대체)"을 분리한 뒤, 문제의
+    선택자가 **그 쪽**에서 실제로 그 선언을 갖는지를 직접 확인한다 —
+    반대쪽(미디어쿼리 안)의 같은 선택자 이름에 속아 통과하지 않는다.
+    """
+
+    def test_wide_section_spans_the_full_grid_width_outside_media_query(self):
+        html = _sources()["index.html"]
+        base, _ = _split_media_and_base(html)
+        rule = _css_rule(base, ".sec.wide")
+        self.assertIsNotNone(rule, ".sec.wide 규칙이 미디어쿼리 밖에 없습니다")
+        self.assertRegex(rule, r"grid-column\s*:\s*1\s*/\s*-1",
+                         ".sec.wide가 grid-column:1/-1(전체 폭)을 갖지 않습니다 — "
+                         "넓은 표가 2단 중 한 칸으로 다시 좁아질 수 있습니다")
+
+    def test_body_is_a_two_column_grid_outside_media_query(self):
+        html = _sources()["index.html"]
+        base, _ = _split_media_and_base(html)
+        rule = _css_rule(base, "#body")
+        self.assertIsNotNone(rule, "#body 규칙이 미디어쿼리 밖에 없습니다")
+        self.assertRegex(rule, r"display\s*:\s*grid",
+                         "#body가 미디어쿼리 밖에서 grid가 아닙니다 — 2단 배치가 "
+                         "무너질 수 있습니다")
+        self.assertRegex(rule, r"grid-template-columns\s*:\s*1fr\s+1fr",
+                         "#body가 미디어쿼리 밖에서 2열(1fr 1fr)이 아닙니다")
+
+    def test_layout_is_a_flex_row_outside_media_query(self):
+        html = _sources()["index.html"]
+        base, _ = _split_media_and_base(html)
+        rule = _css_rule(base, "#layout")
+        self.assertIsNotNone(rule, "#layout 규칙이 미디어쿼리 밖에 없습니다")
+        self.assertRegex(rule, r"display\s*:\s*flex",
+                         "#layout이 미디어쿼리 밖에서 flex가 아닙니다 — 사이드바가 "
+                         "본문과 나란히 배치되지 않을 수 있습니다")
+
+    def test_toc_is_sticky_outside_media_query(self):
+        html = _sources()["index.html"]
+        base, _ = _split_media_and_base(html)
+        rule = _css_rule(base, "#toc")
+        self.assertIsNotNone(rule, "#toc 규칙이 미디어쿼리 밖에 없습니다")
+        self.assertRegex(rule, r"position\s*:\s*sticky",
+                         "#toc가 미디어쿼리 밖에서 sticky가 아닙니다 — 스크롤하면 "
+                         "목차가 화면에서 사라질 수 있습니다")
+
+    def test_narrow_breakpoint_is_exactly_1100px(self):
+        """1100→1px처럼 브레이크포인트 숫자 자체가 뭉개져도 "@media…max-width"
+        문자열은 여전히 존재하므로, 값을 직접 대조해야 잡힌다."""
+        html = _strip_css_comments(_sources()["index.html"])
+        m = re.search(r"@media\s*\(max-width:\s*(\d+)px\)", html)
+        self.assertIsNotNone(m, "반응형 미디어쿼리를 찾지 못했습니다")
+        self.assertEqual(m.group(1), "1100",
+                         f"브레이크포인트가 1100px이 아니라 {m.group(1)}px입니다")
+
+    def test_layout_becomes_a_single_column_block_inside_media_query(self):
+        html = _sources()["index.html"]
+        _, media = _split_media_and_base(html)
+        rule = _css_rule(media, "#layout")
+        self.assertIsNotNone(rule, "#layout 오버라이드가 미디어쿼리 안에 없습니다")
+        self.assertRegex(rule, r"display\s*:\s*block",
+                         "좁은 화면에서 #layout이 block으로 되돌아가지 않습니다")
+
+    def test_toc_becomes_static_inside_media_query(self):
+        html = _sources()["index.html"]
+        _, media = _split_media_and_base(html)
+        rule = _css_rule(media, "#toc")
+        self.assertIsNotNone(rule, "#toc 오버라이드가 미디어쿼리 안에 없습니다")
+        self.assertRegex(rule, r"position\s*:\s*static",
+                         "좁은 화면에서 #toc가 static으로 되돌아가지 않습니다 — "
+                         "sticky가 좁은 화면에서도 그대로 남아 레이아웃을 어지럽힐 "
+                         "수 있습니다")
+
+    def test_body_collapses_to_one_column_inside_media_query(self):
+        html = _sources()["index.html"]
+        _, media = _split_media_and_base(html)
+        rule = _css_rule(media, "#body")
+        self.assertIsNotNone(rule, "#body 오버라이드가 미디어쿼리 안에 없습니다")
+        self.assertRegex(rule, r"grid-template-columns\s*:\s*1fr\s*;?\s*$",
+                         "좁은 화면에서 #body가 1열로 접히지 않습니다")
+        self.assertNotRegex(rule, r"1fr\s+1fr",
+                            "좁은 화면 오버라이드에 2열(1fr 1fr)이 그대로 남아 "
+                            "있습니다")
+
+
+class TestCompanyInfoIsAHeaderNotAnOrphanSection(unittest.TestCase):
+    """리뷰 지적 ③(Medium): company_info(STAGE1_SPECS의 "헤더")가 그룹이
+    없다는 이유로 "기타" 섹션으로 밀려나 화면 맨 아래(약 18,000px 지점)에
+    있었다. design 문서(§7.1)는 이를 "섹션 0 헤더"로 정의한다 — 본문 맨
+    위에 있어야 한다.
+    """
+
+    def test_markup_has_a_fixed_company_info_box_before_body(self):
+        html = _sources()["index.html"]
+        self.assertIn('id="company-info"', html,
+                      "기업 개요를 그릴 고정 박스(#company-info)가 마크업에 없습니다")
+        # #head → #company-info → #body 순서여야 헤더가 본문 맨 위에 온다.
+        self.assertLess(html.index('id="head"'), html.index('id="company-info"'))
+        self.assertLess(html.index('id="company-info"'), html.index('id="body"'))
+
+    def test_render_company_info_is_defined_and_reachable(self):
+        src = _sources()["ui.js"]
+        _extract_function_body(src, "renderCompanyInfo")  # 정의 자체가 있는지 먼저 확인
+        self.assertTrue(
+            _has_real_call_site(src, "renderCompanyInfo"),
+            "renderCompanyInfo 정의만 있고 부르는 곳이 없습니다 — company_info가 "
+            "여전히 화면에 나오지 않을 수 있습니다",
+        )
+
+    def test_poll_loop_routes_company_info_key_to_render_company_info(self):
+        """company_info가 일반 renderSection(그룹 정렬) 경로를 타면 다시
+        "기타" 그룹으로 밀려난다 — 폴링 루프가 이 키만 다른 함수로 분기하는지
+        확인한다."""
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "pollUntilDone")
+        self.assertRegex(
+            body, r'===\s*["\']company_info["\']',
+            "pollUntilDone이 company_info 키를 따로 분기하지 않습니다",
+        )
+        self.assertRegex(
+            body, r'company_info["\']\s*\)\s*renderCompanyInfo\(',
+            "company_info 분기가 renderCompanyInfo를 부르지 않습니다",
+        )
+
+    def test_render_company_info_does_not_drop_any_field(self):
+        """어떤 값도 사라지면 안 된다(브리프 제약) — sectionBlocks()를 그대로
+        써서 모든 필드를 표로 만들어야 한다(선별해 일부만 보여주면 안 된다).
+        """
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "renderCompanyInfo")
+        self.assertRegex(
+            body, r'sectionBlocks\(\s*value\s*,\s*0\s*,\s*["\']company_info["\']\s*\)',
+            "renderCompanyInfo가 sectionBlocks()로 전체 값을 넘기지 않습니다 — "
+            "일부 필드만 골라 보여주면 나머지가 조용히 사라집니다",
+        )
+
+    def test_show_gate_and_render_head_placeholder_clear_company_info_box(self):
+        """#body를 비우는 두 지점(showGate·renderHeadPlaceholder) 모두
+        #company-info도 함께 비워야 한다 — 안 그러면 로그아웃 후 로그인
+        화면 위나 다음 회사 조회 화면 위에 이전 회사의 대표자·주소 등이
+        남는다."""
+        src = _sources()["ui.js"]
+        for name in ("showGate", "renderHeadPlaceholder"):
+            body = _extract_function_body(src, name)
+            m = re.search(
+                r'(\w+)\s*=\s*document\.getElementById\(\s*["\']company-info["\']\s*\)',
+                body,
+            )
+            self.assertIsNotNone(
+                m, f"{name}이 company-info 엘리먼트를 참조하지 않습니다",
+            )
+            self.assertRegex(
+                body,
+                r"while\s*\(\s*" + re.escape(m.group(1)) + r"\.firstChild\s*\)\s*"
+                + re.escape(m.group(1)) + r"\.removeChild\(",
+                f"{name}이 company-info 박스의 기존 내용을 비우는 while 루프를 "
+                "갖고 있지 않습니다",
+            )
+
+
+class TestNoDeadPersonCssClass(unittest.TestCase):
+    """Minor 4: `.person` 클래스가 붙는 곳이 없는 죽은 CSS 규칙이었다 —
+    ui.js는 오직 "doc" 클래스만 부여한다.
+    """
+
+    def test_person_class_is_not_defined(self):
+        html = _sources()["index.html"]
+        self.assertNotIn(".person", html,
+                         "index.html에 죽은 CSS 클래스 .person이 남아 있습니다")
+
+    def test_doc_class_style_still_present(self):
+        """.person을 지우면서 .doc 스타일 자체까지 실수로 지우지 않았는지
+        확인한다."""
+        html = _sources()["index.html"].replace(" ", "")
+        self.assertIn(".doc{", html, ".doc 클래스 스타일이 사라졌습니다")
+
+
 if __name__ == "__main__":
     unittest.main()

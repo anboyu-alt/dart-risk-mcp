@@ -44,7 +44,7 @@ table{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:12px
 th,td{border:1px solid var(--line);padding:4px 8px;text-align:left;
       vertical-align:top;max-width:280px;overflow-wrap:anywhere}
 th{color:var(--dim2);background:var(--rail);font-weight:normal}
-.person,.doc{color:var(--amber);cursor:pointer;text-decoration:underline dotted}
+.doc{color:var(--amber);cursor:pointer;text-decoration:underline dotted}
 .cap{color:var(--dim2);font-size:12px;margin:0 0 6px;font-family:var(--mono)}
 .cap b{color:var(--tx);font-weight:normal}
 .fold-btn{font-size:11px;padding:2px 6px;color:var(--dim2)}
@@ -156,6 +156,11 @@ th{color:var(--dim2);background:var(--rail);font-weight:normal}
       <span id="head-name"></span>
       <button id="actor-btn" hidden>공개기록 보기</button>
     </div>
+    <!-- 기업 개요(company_info, STAGE1_SPECS의 "헤더")는 그룹 정렬을 거치는
+         일반 섹션이 아니라 여기 고정된 자리에 그린다(design 문서 §7.1:
+         섹션 0 "헤더" — 회사명·종목코드·업종·대표자·조회 시점은 본문 맨
+         위에 있어야 한다). ui.js의 renderCompanyInfo()가 채운다. -->
+    <div id="company-info" class="sec"></div>
     <div id="body"></div>
     <div class="sec">
       <h2>출처·면책</h2>
