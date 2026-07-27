@@ -3,6 +3,9 @@
 let CONFIG = null;      // {supabase_url, supabase_anon_key}
 let SESSION = null;     // {access_token, refresh_token, expires_at}
 let LOGGING_IN = false; // 로그인 버튼 연타로 중복 인증 요청이 나가는 것을 막는다
+let ANALYZING = false;  // 분석 버튼 연타로 중복 작업이 생성되는 것을 막는다 —
+                         // 분석은 수 분이 걸리고, 중복 생성되면 사용자의
+                         // DART 호출 한도를 태운다.
 let CURRENT_COMPANY = null; // 지금 화면에 떠 있는 분석의 회사명 — 행위자
                              // 패널을 "이 회사"로 열 때 쓴다(누가 사람인지
                              // 추측하지 않고, 헤더 버튼 하나로만 연다).
@@ -209,6 +212,16 @@ function doLogout() {
 async function init() {
   document.getElementById("login").addEventListener("click", doLogin);
   document.getElementById("logout").addEventListener("click", doLogout);
+  // 회사 입력 폼 — 버튼 클릭과 입력창 Enter 둘 다 doAnalyze()로 이어진다.
+  // Enter는 select(lookback-years)가 아니라 company-input에만 건다 — select의
+  // 기본 Enter 동작(옵션 확정)과 충돌하지 않기 위해서다.
+  document.getElementById("analyze-btn").addEventListener("click", doAnalyze);
+  document.getElementById("company-input").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      doAnalyze();
+    }
+  });
   // 행위자 패널은 회사 단위 API(GET /api/se/actors?company=)라서, 본문
   // 어느 열이 사람 이름인지 추측할 필요가 없다 — 헤더 버튼 하나로
   // "지금 분석 중인 회사"를 그대로 연다.
@@ -260,6 +273,15 @@ function renderHeadPlaceholder(name, message) {
   closePanel();
   const panelBox = document.getElementById("panel-body");
   if (panelBox) panelBox.textContent = "";
+  // 이전 회사의 섹션·오류 블록이 새 회사 화면 위에 남아 섞이지 않도록
+  // 본문을 비운다. sectionHolder/groupHolder/renderFailures는 모두
+  // "sec-<key>" 같은 고정 id 노드를 재사용하므로, 여기서 비우지 않으면
+  // 새 회사가 채우지 않는 섹션(예: 이전 회사에만 있던 신호)이 그대로
+  // 남아 두 회사의 정보가 뒤섞여 보인다.
+  const bodyBox = document.getElementById("body");
+  if (bodyBox) {
+    while (bodyBox.firstChild) bodyBox.removeChild(bodyBox.firstChild);
+  }
   CURRENT_COMPANY = name;
   const btn = document.getElementById("actor-btn");
   if (btn) btn.hidden = false;
@@ -531,6 +553,41 @@ async function pollUntilDone(jobId, dartKey) {
       }
       break;
     }
+  }
+}
+
+/** 회사 입력 폼 핸들러 — 분석 버튼 클릭과 입력창 Enter가 공유한다.
+ *
+ * 연타 방지: 분석은 수 분이 걸린다. 진행 중에 또 누르면 작업이 중복
+ * 생성돼 사용자의 DART 호출 한도를 태운다 — doLogin()의 LOGGING_IN과
+ * 같은 방식으로 ANALYZING을 가드로 쓴다. 빈 입력은 서버로 보내지
+ * 않는다. analyze()는 reject할 수 있으므로(token() 실패, 서버 오류 등)
+ * 여기서 받아 화면 문구로 바꾼다 — 그러지 않으면 클릭 핸들러 밖에서
+ * unhandled rejection으로 조용히 사라진다.
+ */
+async function doAnalyze() {
+  if (ANALYZING) return;
+  const msgEl = document.getElementById("analyze-msg");
+  msgEl.textContent = "";
+  const company = document.getElementById("company-input").value.trim();
+  if (!company) {
+    msgEl.textContent = "회사명 또는 종목코드를 입력하세요.";
+    return;
+  }
+  // 서버 계약(se_server/api/handlers.py _clamp_years)은 1~5년이고 범위
+  // 밖 값도 알아서 클램프하지만, select 옵션 자체를 1~5로만 두었으므로
+  // 여기서는 숫자로만 안전하게 바꾼다(파싱 실패 시 기본 1년).
+  const years = Number(document.getElementById("lookback-years").value) || 1;
+  const btn = document.getElementById("analyze-btn");
+  ANALYZING = true;
+  if (btn) btn.disabled = true;
+  try {
+    await analyze(company, years);
+  } catch (e) {
+    msgEl.textContent = safeMessage(e, "분석을 시작하지 못했습니다.");
+  } finally {
+    ANALYZING = false;
+    if (btn) btn.disabled = false;
   }
 }
 

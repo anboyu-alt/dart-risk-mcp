@@ -56,6 +56,18 @@ th{color:var(--dim2);background:var(--rail);font-weight:normal}
 
 <main id="main" hidden>
   <div id="bar"></div>
+  <div id="analyze-form" class="sec">
+    <input id="company-input" type="text" placeholder="회사명 또는 종목코드">
+    <select id="lookback-years">
+      <option value="1">최근 1년</option>
+      <option value="2">최근 2년</option>
+      <option value="3">최근 3년</option>
+      <option value="4">최근 4년</option>
+      <option value="5">최근 5년</option>
+    </select>
+    <button id="analyze-btn">분석 시작</button>
+    <p id="analyze-msg" class="warn"></p>
+  </div>
   <div id="head" class="sec">
     <span id="head-name"></span>
     <button id="actor-btn" hidden>공개기록 보기</button>

@@ -944,5 +944,149 @@ class TestAnalyzeAndResumeShareThePollingLoop(unittest.TestCase):
         )
 
 
+class TestAnalyzeFormIsWiredAndReachable(unittest.TestCase):
+    """회사를 입력해 analyze()를 시작하는 UI가 실제로 존재하고 도달
+    가능한지 검사한다.
+
+    앞서 우측 패널(openActorPanel/openDocPanel)이 정의만 있고 호출부가
+    없어 죽은 코드였던 것과 같은 부류의 결함이다 — analyze()와
+    resumeIfAny()는 구현돼 있었지만, 회사명을 입력해 analyze()를 부를
+    폼·버튼 자체가 화면에 없어 로그인해도 아무 일도 일어나지 않았다.
+    이 클래스는 그 배선이 다시 빠지는 것을 기계적으로 잡는다.
+    """
+
+    def test_company_input_form_exists_in_markup(self):
+        html = _sources()["index.html"]
+        self.assertIn('id="company-input"', html,
+                      "회사명(또는 종목코드) 입력창이 마크업에 없습니다")
+        self.assertIn('id="analyze-btn"', html,
+                      "분석 시작 버튼이 마크업에 없습니다")
+        self.assertIn('id="lookback-years"', html,
+                      "조회 범위(lookback_years) 선택 UI가 마크업에 없습니다")
+
+    def test_lookback_years_select_offers_only_server_contract_range(self):
+        """서버 계약(se_server/api/handlers.py `_MIN_YEARS=1`,
+        `_MAX_YEARS=5`)을 벗어난 값을 고를 수 있으면 안 된다 — 서버가
+        결국 clamp하더라도, 선택지 자체가 계약과 다르면 사용자가 고른
+        값과 실제 적용된 값이 달라 혼란을 준다."""
+        html = _sources()["index.html"]
+        m = re.search(r'<select id="lookback-years">(.*?)</select>', html, re.S)
+        self.assertIsNotNone(m, "lookback-years select를 찾지 못했습니다")
+        values = sorted(int(v) for v in re.findall(r'<option value="(\d+)"', m.group(1)))
+        self.assertEqual(values, [1, 2, 3, 4, 5],
+                         "조회 범위 선택지가 서버 계약(1~5년)과 다릅니다")
+
+    def test_analyze_button_is_wired_to_a_handler_that_calls_analyze(self):
+        src = _sources()["ui.js"]
+        self.assertRegex(
+            src,
+            r'getElementById\(\s*["\']analyze-btn["\']\s*\)'
+            r'[^;]*addEventListener\(\s*["\']click["\']',
+            "analyze-btn에 클릭 리스너가 연결돼 있지 않습니다",
+        )
+        # 리스너만 걸려 있고 정작 analyze()에 도달하지 않으면 여전히
+        # 회사를 입력해도 아무 일도 일어나지 않는다 — 핸들러 본문을
+        # 파싱해 실제로 analyze()를 부르는지까지 확인한다.
+        body = _extract_function_body(src, "doAnalyze")
+        self.assertRegex(body, r"\banalyze\s*\(",
+                         "doAnalyze가 analyze()를 부르지 않습니다")
+
+    def test_company_input_enter_key_also_reaches_analyze(self):
+        src = _sources()["ui.js"]
+        self.assertRegex(
+            src,
+            r'getElementById\(\s*["\']company-input["\']\s*\)'
+            r'[^;]*addEventListener\(\s*["\']keydown["\']',
+            "company-input에 키 입력 리스너가 연결돼 있지 않습니다 — "
+            "입력창 Enter로 분석을 시작할 수 없습니다",
+        )
+
+    def test_do_analyze_is_not_dead_code(self):
+        """단순 등장 횟수는 설명 주석 속 함수 이름 언급까지 "호출부"로
+        착각한다(openActorPanel이 한때 그랬던 사고, 위 클래스들 참고) —
+        주석을 지운 뒤 선언을 제외한 자리에 실제 호출이 있는지 확인한다.
+        """
+        src = _sources()["ui.js"]
+        _extract_function_body(src, "doAnalyze")  # 정의 자체가 있는지 먼저 확인
+        self.assertTrue(
+            _has_real_call_site(src, "doAnalyze"),
+            "doAnalyze 정의만 있고 부르는 곳이 없습니다 — 회사 입력 폼에서 "
+            "분석을 시작할 방법이 없습니다",
+        )
+
+    def test_analyze_itself_is_reachable_not_only_resume_if_any(self):
+        """이 태스크 이전에는 resumeIfAny()만 호출부가 있고 analyze()는
+        정의만 있는 죽은 코드였다(회사 입력 폼이 없었으므로) — analyze()도
+        독립적으로 도달 가능해야 한다."""
+        src = _sources()["ui.js"]
+        self.assertTrue(
+            _has_real_call_site(src, "analyze"),
+            "analyze 정의만 있고 부르는 곳이 없습니다 — 새 분석을 시작할 "
+            "방법이 없습니다",
+        )
+
+    def test_do_analyze_rejects_empty_company_without_calling_analyze(self):
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "doAnalyze")
+        if_m = re.search(r"if\s*\(\s*!company\s*\)\s*\{", body)
+        self.assertIsNotNone(
+            if_m, "doAnalyze가 빈 입력을 걸러내지 않습니다 — 빈 회사명이 "
+                  "서버로 그대로 나갈 수 있습니다",
+        )
+        guard_block = _extract_braced_block(body, if_m.end() - 1)
+        self.assertNotIn("analyze(", guard_block,
+                         "빈 입력 분기 안에서 analyze()를 부르면 안 됩니다")
+        self.assertIn("return", guard_block,
+                      "빈 입력이면 doAnalyze가 더 진행하지 않고 돌아가야 "
+                      "합니다")
+
+    def test_do_analyze_guards_against_double_submission(self):
+        """분석은 수 분이 걸린다 — 진행 중 재클릭이 새 작업을 또 만들면
+        사용자의 DART 호출 한도를 태운다. doLogin()의 LOGGING_IN 가드와
+        같은 부류의 재진입 가드가 있어야 한다."""
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "doAnalyze")
+        m = re.search(r"if\s*\(\s*(\w+)\s*\)\s*return\s*;", body)
+        self.assertIsNotNone(
+            m, "doAnalyze가 연타 방지 가드(진행 중이면 즉시 반환)를 갖고 "
+               "있지 않습니다",
+        )
+        guard_name = m.group(1)
+        # 가드 변수를 선언만 하고 실제로 안 쓰면(true/false로 안 바뀌면)
+        # 여전히 무력하다 — analyze() 호출 전후로 실제 갱신되는지 확인한다.
+        self.assertRegex(
+            body, re.escape(guard_name) + r"\s*=\s*true",
+            f"{guard_name}을 true로 설정하는 코드가 없습니다 — 가드가 "
+            "실제로 걸리지 않습니다",
+        )
+        self.assertRegex(
+            body, re.escape(guard_name) + r"\s*=\s*false",
+            f"{guard_name}을 false로 되돌리는 코드가 없습니다 — 한 번 "
+            "분석을 시작하면 다시는 못 합니다",
+        )
+
+    def test_new_analysis_clears_previous_bodys_sections(self):
+        """이전 회사의 섹션이 새 회사 화면에 남아 섞이면 안 된다.
+        renderHeadPlaceholder는 analyze()와 resumeIfAny() 양쪽 모두에서
+        새 분석/재개 시작 시 불리는 지점이므로, 여기서 #body를 비워야
+        두 경로 모두 덮인다(패널을 닫는 처리가 이미 여기 있는 것과 같은
+        이유 — 한 곳에서 정리하면 모든 경로가 한 번에 덮인다)."""
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "renderHeadPlaceholder")
+        m_var = re.search(
+            r'(\w+)\s*=\s*document\.getElementById\(\s*["\']body["\']\s*\)', body
+        )
+        self.assertIsNotNone(
+            m_var, "renderHeadPlaceholder가 #body를 참조하지 않습니다 — "
+                   "이전 회사의 섹션이 남을 수 있습니다",
+        )
+        self.assertRegex(
+            body, r"removeChild\(",
+            "renderHeadPlaceholder가 #body의 기존 내용을 비우지 않습니다 — "
+            "새 회사 분석 시작 시 이전 회사의 섹션이 그대로 남을 수 "
+            "있습니다",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
