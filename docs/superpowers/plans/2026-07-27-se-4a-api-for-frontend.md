@@ -609,7 +609,8 @@ def _deps():
 class TestDisclosure(unittest.TestCase):
     def test_returns_text(self):
         with mock.patch("se_server.api.handlers.fetch_disclosure_full",
-                        return_value={"text": "본문 내용", "truncated": False}) as f:
+                        return_value={"text": "본문 내용", "char_count": 5,
+                                      "truncated": False}) as f:
             resp = handle(_req("/api/se/disclosure/20240301000001"), _deps())
         self.assertEqual(resp.status, 200)
         self.assertEqual(resp.body["rcept_no"], "20240301000001")
@@ -709,6 +710,7 @@ def _disclosure(request: Request, deps: Deps, rcept_no: str) -> Response:
     return Response(200, {
         "rcept_no": rcept_no,
         "text": text,
+        "char_count": result.get("char_count", len(text)),
         "truncated": bool(result.get("truncated")),
     })
 ```
@@ -856,7 +858,7 @@ if __name__ == "__main__":
 `Request`에 쿼리 파싱이 없으므로 핸들러에서 처리한다(라우터는 이미 `?` 앞만 매칭한다):
 
 ```python
-from urllib.parse import parse_qs, unquote, urlsplit  # handlers.py 상단
+from urllib.parse import parse_qs, urlsplit  # handlers.py 상단
 from dart_risk_mcp.core.known_actors import lookup_actors_by_company
 
 _ACTOR_DISCLAIMER = (
@@ -866,8 +868,13 @@ _ACTOR_DISCLAIMER = (
 
 
 def _query(request: Request, name: str) -> str:
+    """쿼리 파라미터 하나를 읽는다.
+
+    parse_qs가 이미 퍼센트 디코딩을 하므로 unquote를 또 부르면 안 된다 —
+    값에 리터럴 `%`가 있으면(`100%증자`) 이중 디코딩으로 손상된다.
+    """
     values = parse_qs(urlsplit(request.path).query).get(name) or []
-    return unquote(values[0]).strip() if values else ""
+    return values[0].strip() if values else ""
 
 
 def _actors(request: Request, deps: Deps) -> Response:
