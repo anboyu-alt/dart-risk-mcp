@@ -5,6 +5,9 @@ const LS_DART_KEY = "se_dart_key";
 const LS_SESSION = "se_session";
 const LS_JOB = "se_job"; // 진행 중인 분석 작업의 job_id — 상태 자체는
                           // 서버(Postgres)에 있고 브라우저는 이 id만 든다.
+const LS_THEME = "se_theme"; // 다크/라이트 선택. 기본은 다크(값이 없거나
+                              // "dark")이고, 저장된 값이 "light"일 때만
+                              // 라이트로 그린다(ui.js의 applyTheme 참고).
 
 // 이어받기 유효 시간. 이보다 오래된 작업은 새로 시작한다 —
 // 며칠 전 작업을 조용히 재개하면 사용자는 새 분석을 받았다고 오해한다.
@@ -636,7 +639,7 @@ function actorLine(actor) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    LS_DART_KEY, LS_SESSION, LS_JOB, SECTION_GROUPS, formatCount,
+    LS_DART_KEY, LS_SESSION, LS_JOB, LS_THEME, SECTION_GROUPS, formatCount,
     nextKeysToFetch, pollDecision, toRecords, tableLayout, LABELS, label,
     formatValue, formatAmount, AMOUNT_FIELDS, DATE_FIELDS,
     sectionBlocks, groupTitleFor, groupOrderIndex, normalizeRoster,

@@ -128,6 +128,88 @@ async function token() {
   return SESSION.access_token;
 }
 
+// ── 다크/라이트 테마 ───────────────────────────────────────────────
+
+/** theme("light"|그 외 전부 다크)을 <html data-theme>·토글 버튼 문구에
+ *  반영한다. 기본(다크)은 속성을 아예 안 붙인다 — index.html의
+ *  `:root[data-theme="light"]`만 오버라이드고, 다크는 `:root`
+ *  자체이므로 속성이 없어도 다크로 보인다. */
+function applyTheme(theme) {
+  const isLight = theme === "light";
+  document.documentElement.setAttribute("data-theme", isLight ? "light" : "dark");
+  const btn = document.getElementById("theme-toggle");
+  // 버튼은 "지금 누르면 바뀔 모드"가 아니라 "지금 상태"를 보여준다 —
+  // 라이트 화면이면 "라이트 모드"가 눌린 채로 이미 켜져 있다는 뜻이라
+  // 다음 행동(다크로 돌아가기)을 안내하는 편이 낫다.
+  if (btn) btn.textContent = isLight ? "다크 모드" : "라이트 모드";
+}
+
+/** 테마 토글 버튼 핸들러 — 선택을 localStorage(LS_THEME)에 기억한다. */
+function toggleTheme() {
+  const current = localStorage.getItem(LS_THEME) === "light" ? "light" : "dark";
+  const next = current === "light" ? "dark" : "light";
+  localStorage.setItem(LS_THEME, next);
+  applyTheme(next);
+}
+
+// ── 좌측 목차 ─────────────────────────────────────────────────────
+//
+// TOC_ITEMS: {el, link} 목록. addTocEntry가 그룹(groupHolder)·섹션
+// (sectionHolder)이 처음 만들어질 때마다 채운다 — 섹션은 폴링마다
+// 순차적으로 도착하므로 목차도 그 순서대로 자란다.
+//
+// TOC_OBSERVER: IntersectionObserver 하나를 지연 생성해 모든 항목이
+// 공유한다. 이 파일은 node vm 테스트용 가짜 DOM으로도 실행되는데(위
+// TOC_ITEMS 주석과 같은 이유), 그 가짜 DOM에는 #toc 자체가 없고
+// IntersectionObserver도 없다 — addTocEntry가 document.getElementById("toc")
+// 부터 확인해 없으면 조용히 아무 일도 하지 않으므로 그 환경에서도
+// 안전하다.
+let TOC_ITEMS = [];
+let TOC_OBSERVER = null;
+
+function ensureTocObserver() {
+  if (TOC_OBSERVER || typeof IntersectionObserver === "undefined") return TOC_OBSERVER;
+  TOC_OBSERVER = new IntersectionObserver(function (entries) {
+    for (const entry of entries) {
+      const item = TOC_ITEMS.find(function (t) { return t.el === entry.target; });
+      if (!item) continue;
+      if (entry.isIntersecting) item.link.classList.add("active");
+      else item.link.classList.remove("active");
+    }
+  }, { rootMargin: "-10% 0px -70% 0px" });
+  return TOC_OBSERVER;
+}
+
+/** 목차 항목 하나를 추가한다. #toc가 없는 환경(가짜 DOM 테스트)에서는
+ *  아무 것도 만들지 않는다 — groupHolder·sectionHolder는 실제 브라우저
+ *  밖에서도(node vm 테스트) 호출되므로 여기서 막아야 그 테스트들이
+ *  안전하다. */
+function addTocEntry(titleText, targetEl, isSection) {
+  const tocEl = document.getElementById("toc");
+  if (!tocEl) return;
+  const link = document.createElement("div");
+  link.className = isSection ? "toc-item toc-section" : "toc-item";
+  link.textContent = titleText;
+  link.addEventListener("click", function () {
+    targetEl.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  tocEl.appendChild(link);
+  TOC_ITEMS.push({ el: targetEl, link: link });
+  const obs = ensureTocObserver();
+  if (obs) obs.observe(targetEl);
+}
+
+/** 새 회사 분석을 시작할 때(#body를 비울 때) 목차도 함께 비운다 — 안
+ *  그러면 이전 회사에서 만든 목차 항목이 남아, 클릭해도 이미 사라진
+ *  섹션을 가리키게 된다(showGate()가 #panel·#body를 함께 정리하는 것과
+ *  같은 "한 곳 정리" 이유). */
+function resetToc() {
+  const tocEl = document.getElementById("toc");
+  if (tocEl) { while (tocEl.firstChild) tocEl.removeChild(tocEl.firstChild); }
+  if (TOC_OBSERVER) { TOC_OBSERVER.disconnect(); TOC_OBSERVER = null; }
+  TOC_ITEMS = [];
+}
+
 // ── 화면 전환 + 로컬 저장 ──────────────────────────────────────────
 
 function showMain() {
@@ -162,6 +244,7 @@ function showGate(msg) {
   if (bodyBox) {
     while (bodyBox.firstChild) bodyBox.removeChild(bodyBox.firstChild);
   }
+  resetToc(); // #body를 비우는 자리와 같이 — 목차만 남으면 죽은 링크가 된다
   CURRENT_COMPANY = null;
   const actorBtn = document.getElementById("actor-btn");
   if (actorBtn) actorBtn.hidden = true;
@@ -233,6 +316,13 @@ function doLogout() {
 
 /** 저장된 세션이 있으면 갱신을 시도해 자동 로그인, 없거나 실패하면 로그인 화면. */
 async function init() {
+  // 저장된 테마를 가장 먼저 적용한다 — 기본은 다크(저장된 값이 없거나
+  // "light"가 아니면 다크)이고, 이전에 라이트를 골랐던 사용자만 밝은
+  // 화면으로 시작한다.
+  applyTheme(localStorage.getItem(LS_THEME) === "light" ? "light" : "dark");
+  document.getElementById("theme-toggle").addEventListener("click", toggleTheme);
+  resetToc(); // 페이지를 새로 열 때 목차를 빈 상태로 시작한다
+
   document.getElementById("login").addEventListener("click", doLogin);
   document.getElementById("logout").addEventListener("click", doLogout);
   // 회사 입력 폼 — 버튼 클릭과 입력창 Enter 둘 다 doAnalyze()로 이어진다.
@@ -305,6 +395,7 @@ function renderHeadPlaceholder(name, message) {
   if (bodyBox) {
     while (bodyBox.firstChild) bodyBox.removeChild(bodyBox.firstChild);
   }
+  resetToc(); // 같은 이유 — 새 회사의 목차를 처음부터 다시 쌓는다
   CURRENT_COMPANY = name;
   const btn = document.getElementById("actor-btn");
   if (btn) btn.hidden = false;
@@ -480,6 +571,7 @@ function groupHolder(title) {
     if (groupOrderIndex(child.dataset.title) > idx) { before = child; break; }
   }
   body.insertBefore(wrap, before);
+  addTocEntry(title, wrap, false);
   return holder;
 }
 
@@ -492,6 +584,14 @@ function groupHolder(title) {
  *
  * 자기 그룹(groupTitleFor) 아래에 붙인다 — SECTION_GROUPS를 실제로
  * 쓰지 않으면 그룹 제목도 순서도 화면에 나오지 않는다. */
+// 섹션 키 → 감싸는 .sec 엘리먼트. renderSection이 표 orientation을 보고
+// "wide" 클래스를 붙였다 뗐다 할 때 이 wrap을 찾는 데 쓴다 — holder(내용
+// 칸)는 매 렌더마다 비워지고 다시 채워지지만 wrap(h2를 포함한 바깥
+// 칸)은 sectionHolder가 처음 만들 때 한 번만 생기므로 별도로 기억해
+// 둬야 한다(parentNode를 쓰지 않는 이유: 이 파일은 parentNode를 구현하지
+// 않는 가짜 DOM으로도 실행된다 — 위 TOC_ITEMS 주석 참고).
+const SEC_WRAP = Object.create(null);
+
 function sectionHolder(key) {
   const id = "sec-" + key;
   let holder = document.getElementById(id);
@@ -512,6 +612,8 @@ function sectionHolder(key) {
   wrap.appendChild(holder);
 
   group.appendChild(wrap);
+  SEC_WRAP[key] = wrap;
+  addTocEntry(label(key), wrap, true);
   return holder;
 }
 
@@ -552,6 +654,18 @@ function renderSection(key, value) {
   while (holder.firstChild) holder.removeChild(holder.firstChild);
 
   const blocks = sectionBlocks(value, 0, key);
+
+  // 가로(여러 행) 표가 하나라도 있으면 2단 폭 중 한 칸에 가두지 않고
+  // 전체 폭을 쓴다 — 세로(1건, 키-값) 표는 원래도 좁아 한 칸이면
+  // 충분하다(app.js tableLayout 주석 참고: 세로/가로 구분 기준과 같다).
+  // 앞 태스크에서 12열까지 보이게 넓힌 표가 2단으로 다시 좁아지는
+  // 재발을 막는다.
+  const hasWideTable = blocks.some(function (b) {
+    return b.table && b.table.orientation === "horizontal";
+  });
+  const wrap = SEC_WRAP[key];
+  if (wrap) wrap.className = hasWideTable ? "sec wide" : "sec";
+
   if (blocks.length === 0) {
     const p = document.createElement("p");
     p.className = "note";

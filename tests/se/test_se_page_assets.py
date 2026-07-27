@@ -1465,5 +1465,54 @@ class TestAssetPathsSurviveTrailingSlashRedirect(unittest.TestCase):
             "참조하는 자산 파일이 배포 트리에 없습니다:\n  " + "\n  ".join(missing),
         )
 
+class TestLayoutAndTheme(unittest.TestCase):
+    """Task 5: 2단 레이아웃·좌측 목차·라이트 모드 토글.
+
+    SE-4b에서 "정의만 있고 배선이 없다" 사고가 두 번(우측 패널, 회사 입력
+    폼) 났다 — 여기서도 같은 부류의 사고를 막는다. 라이트 모드는 CSS
+    변수를 일부만 덮으면 배경만 밝아지고 글자는 다크 모드 색 그대로 남아
+    안 보이게 되므로, "일부만 덮음"을 기계적으로 잡는 테스트를 둔다.
+    """
+
+    def test_toc_and_two_column_grid_exist(self):
+        html = _sources()["index.html"]
+        self.assertIn('id="toc"', html)
+        self.assertRegex(html, r"grid-template-columns")
+
+    def test_theme_toggle_is_wired_not_dead(self):
+        """SE-4b에서 배선 없는 함수가 두 번 나왔다. 같은 일을 막는다."""
+        ui = _sources()["ui.js"]
+        body = _extract_function_body(ui, "init")
+        self.assertIn("theme", body, "init에서 테마 토글을 배선하지 않습니다")
+
+    def test_theme_toggle_button_has_a_real_click_listener(self):
+        """위 test_theme_toggle_is_wired_not_dead는 "theme"라는 글자만
+        본다 — document.getElementById("theme-toggle")처럼 아무 동작도
+        없는 참조 한 줄만 남아도 그 글자가 있어 통과해버린다
+        (TestAnalyzeFormIsWiredAndReachable이 analyze-btn에 쓰는 것과
+        같은 더 엄격한 검사를 여기도 둔다)."""
+        src = _sources()["ui.js"]
+        self.assertRegex(
+            src,
+            r'getElementById\(\s*["\']theme-toggle["\']\s*\)'
+            r'[^;]*addEventListener\(\s*["\']click["\']',
+            "theme-toggle 버튼에 클릭 리스너가 연결돼 있지 않습니다",
+        )
+
+    def test_theme_choice_is_persisted(self):
+        self.assertIn("se_theme", _sources()["app.js"] + _sources()["ui.js"])
+
+    def test_light_theme_overrides_every_dark_variable(self):
+        """일부 변수만 덮으면 라이트 모드에서 글자가 안 보인다."""
+        html = _sources()["index.html"]
+        dark = set(re.findall(r"(--[a-z0-9-]+)\s*:", html.split('[data-theme="light"]')[0]))
+        light = set(re.findall(r"(--[a-z0-9-]+)\s*:", html.split('[data-theme="light"]')[1]))
+        missing = sorted(v for v in dark if v not in light and not v.startswith("--mono"))
+        self.assertEqual(missing, [], f"라이트 모드에 없는 변수: {missing}")
+
+    def test_narrow_screen_falls_back_to_one_column(self):
+        self.assertRegex(_sources()["index.html"], r"@media[^{]*max-width")
+
+
 if __name__ == "__main__":
     unittest.main()

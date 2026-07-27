@@ -12,10 +12,26 @@
   --red:#e0564a; --green:#4ad295;
   --mono:Consolas,"Cascadia Code","SF Mono",monospace;
 }
+/* 라이트 모드 — 다크 :root의 색상 변수를 하나도 빠짐없이 다시 정의한다.
+   일부만 덮으면 배경만 밝아지고 글자는 다크 모드 색(밝은 회색 계열)
+   그대로 남아 흰 바탕에 흰 글자처럼 안 보이게 된다(테스트
+   test_light_theme_overrides_every_dark_variable이 이걸 기계적으로
+   막는다). --mono(글꼴 스택)는 색상이 아니라 테마와 무관해 다시
+   정의하지 않는다. ui.js의 applyTheme()이 <html data-theme="light">을
+   붙였다 뗐다 하며 이 블록을 켠다 — 기본은 다크(속성 없음)다. */
+:root[data-theme="light"]{
+  --bg:#f4f5f7; --rail:#ffffff; --panel:#ffffff; --cell:#eef0f3;
+  --line:#d8dce2; --line2:#c2c8d1; --tx:#1c222b; --dim:#5b6472;
+  --dim2:#333c48; --faint:#88909c; --amber:#a8660a; --amber2:#8a5410;
+  --red:#b3261e; --green:#1f7a51;
+}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--tx);
      font:14px/1.6 -apple-system,"Segoe UI","Malgun Gothic",sans-serif}
-#gate,#main{max-width:960px;margin:0 auto;padding:24px}
+#gate{max-width:960px;margin:0 auto;padding:24px}
+/* #main은 좌측 목차 + 2단 본문을 담아야 해서 #gate보다 넓게 잡는다
+   (예전엔 #gate와 한 규칙을 공유했다 — 폭이 서로 달라져 분리했다). */
+#main{max-width:1400px;margin:0 auto;padding:24px}
 #main[hidden],#gate[hidden]{display:none}
 input,button{font:inherit;background:var(--cell);color:var(--tx);
              border:1px solid var(--line2);border-radius:4px;padding:8px 10px}
@@ -43,9 +59,57 @@ th{color:var(--dim2);background:var(--rail);font-weight:normal}
 .warn{color:var(--amber);font-size:12px}
 #head{display:flex;align-items:center;gap:12px;justify-content:space-between}
 #panel-close{float:right}
+
+/* ── 다크/라이트 토글 버튼 — 로그인 화면에서도 눌러야 하므로 #gate·
+   #main 어느 쪽이 보이든 항상 뜨는 고정 위치에 둔다. #panel(z-index:10)
+   보다 위에 있어야 패널이 열려도 가려지지 않는다. */
+#theme-toggle{position:fixed;top:10px;right:12px;z-index:15;
+              font-size:12px;padding:6px 10px}
+
+/* ── 좌측 목차 + 2단 본문 레이아웃 ────────────────────────────────
+   #toc는 #main 안(#layout)에 있으므로 #main[hidden] 하나로 같이
+   숨는다 — 로그인 화면·로그아웃 정리 지점을 따로 늘리지 않는다. */
+#layout{display:flex;gap:28px;align-items:flex-start}
+#toc{position:sticky;top:12px;flex:0 0 200px;width:200px;
+     font-family:var(--mono);font-size:12px;max-height:calc(100vh - 24px);
+     overflow:auto}
+.toc-item{padding:4px 8px;color:var(--dim2);cursor:pointer;
+          border-left:2px solid transparent;overflow-wrap:anywhere}
+.toc-item:hover{color:var(--tx)}
+.toc-item.toc-section{padding-left:18px;color:var(--dim);font-size:11px}
+.toc-item.active{color:var(--amber2);border-left-color:var(--amber)}
+#content{flex:1 1 auto;min-width:0}
+
+/* #body는 그룹(.grp)을 담는 그리드다. .grp 자체는 display:contents로
+   자기 박스를 없애 h1·각 섹션(.sec)이 #body 그리드의 직속 아이템이
+   되게 한다 — 그래야 개별 섹션 단위로 1칸/2칸(전체 폭)을 고를 수
+   있다(.grp가 그대로 그리드 아이템이면 그 안의 넓은 표가 그룹 폭
+   절반에 갇힌다). */
+#body{display:grid;grid-template-columns:1fr 1fr;column-gap:32px}
+.grp{display:contents}
+.grp>h1{grid-column:1/-1;font-size:16px;font-weight:normal;color:var(--dim2);
+        border-bottom:1px solid var(--line);margin:24px 0 4px;padding-bottom:6px}
+.sec{grid-column:auto}
+/* 가로(여러 행) 표가 있는 섹션 — ui.js의 renderSection이 표
+   orientation을 보고 이 클래스를 붙인다. 2단 폭 중 한 칸(원래도 좁던
+   폭)에 갇히면 앞 태스크에서 넓힌 12열 표가 다시 좁아져 같은 문제가
+   재발한다. */
+.sec.wide{grid-column:1/-1}
+
+/* ≤1100px에서는 2단이 오히려 각 열을 더 좁혀 읽기 힘들어진다 — 목차를
+   상단 가로 목록으로 접고 본문을 1단으로 되돌린다. */
+@media (max-width:1100px){
+  #layout{display:block}
+  #toc{position:static;width:auto;max-height:none;
+       display:flex;flex-wrap:wrap;gap:2px 4px;margin-bottom:16px;
+       border-bottom:1px solid var(--line);padding-bottom:8px}
+  .toc-item.toc-section{padding-left:8px}
+  #body{grid-template-columns:1fr}
+}
 </style>
 </head>
 <body>
+<button id="theme-toggle" aria-label="테마 전환">라이트 모드</button>
 <section id="gate">
   <h1>리스크 뷰어 SE</h1>
   <p class="note">인가된 사용자 전용입니다. 계정은 제작자가 발급합니다.</p>
@@ -60,33 +124,38 @@ th{color:var(--dim2);background:var(--rail);font-weight:normal}
 </section>
 
 <main id="main" hidden>
-  <div id="bar"></div>
-  <div id="analyze-form" class="sec">
-    <input id="company-input" type="text" placeholder="회사명 또는 종목코드">
-    <select id="lookback-years">
-      <option value="1">최근 1년</option>
-      <option value="2">최근 2년</option>
-      <option value="3">최근 3년</option>
-      <option value="4">최근 4년</option>
-      <option value="5">최근 5년</option>
-    </select>
-    <button id="analyze-btn">분석 시작</button>
-    <p id="analyze-msg" class="warn"></p>
+<div id="layout">
+  <nav id="toc" aria-label="목차"></nav>
+  <div id="content">
+    <div id="bar"></div>
+    <div id="analyze-form" class="sec">
+      <input id="company-input" type="text" placeholder="회사명 또는 종목코드">
+      <select id="lookback-years">
+        <option value="1">최근 1년</option>
+        <option value="2">최근 2년</option>
+        <option value="3">최근 3년</option>
+        <option value="4">최근 4년</option>
+        <option value="5">최근 5년</option>
+      </select>
+      <button id="analyze-btn">분석 시작</button>
+      <p id="analyze-msg" class="warn"></p>
+    </div>
+    <div id="head" class="sec">
+      <span id="head-name"></span>
+      <button id="actor-btn" hidden>공개기록 보기</button>
+    </div>
+    <div id="body"></div>
+    <div class="sec">
+      <h2>출처·면책</h2>
+      <p class="note">
+        모든 수치와 이름은 금융감독원 전자공시(DART) 공개 자료입니다.
+        이 화면은 사실을 표기할 뿐 위험을 판정하거나 등급을 매기지 않으며,
+        투자 판단의 근거가 아닙니다. 동명이인이 있을 수 있습니다.
+      </p>
+      <button id="logout">로그아웃</button>
+    </div>
   </div>
-  <div id="head" class="sec">
-    <span id="head-name"></span>
-    <button id="actor-btn" hidden>공개기록 보기</button>
-  </div>
-  <div id="body"></div>
-  <div class="sec">
-    <h2>출처·면책</h2>
-    <p class="note">
-      모든 수치와 이름은 금융감독원 전자공시(DART) 공개 자료입니다.
-      이 화면은 사실을 표기할 뿐 위험을 판정하거나 등급을 매기지 않으며,
-      투자 판단의 근거가 아닙니다. 동명이인이 있을 수 있습니다.
-    </p>
-    <button id="logout">로그아웃</button>
-  </div>
+</div>
 </main>
 
 <aside id="panel">

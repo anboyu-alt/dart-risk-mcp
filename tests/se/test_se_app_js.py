@@ -1374,5 +1374,263 @@ class TestFoldButtonWiring(unittest.TestCase):
             self.assertNotIn("접수번호", a["text"])
 
 
+# ── 테마 토글 실제 동작 재현용 가짜 DOM ────────────────────────────────
+#
+# test_se_page_assets.py의 test_theme_toggle_is_wired_not_dead는 init()의
+# 소스 문자열에 "theme"가 있는지만 본다(login/logout 등 기존 단순 버튼과
+# 같은 수준의 정적 확인). 여기서는 그 버튼을 눌렀을 때 실제로 동작하는
+# 엔진(applyTheme/toggleTheme)을 tableEl·renderSection과 같은 방식으로
+# node vm에서 직접 실행해, <html data-theme>·버튼 문구·localStorage
+# 저장까지 실제로 바뀌는지 확인한다.
+_THEME_HARNESS = r"""
+const vm = require("vm");
+const fs = require("fs");
+
+class FakeEl {
+  constructor(tag) {
+    this.tag = tag;
+    this._text = "";
+    this._attrs = {};
+  }
+  setAttribute(k, v) { this._attrs[k] = String(v); }
+  getAttribute(k) {
+    return Object.prototype.hasOwnProperty.call(this._attrs, k) ? this._attrs[k] : null;
+  }
+  set textContent(v) { this._text = String(v); }
+  get textContent() { return this._text; }
+}
+
+const documentElement = new FakeEl("html");
+const themeBtn = new FakeEl("button");
+const STORE = {};
+
+const sandbox = {
+  console: console,
+  document: {
+    documentElement: documentElement,
+    createElement: function (tag) { return new FakeEl(tag); },
+    getElementById: function (id) { return id === "theme-toggle" ? themeBtn : null; },
+    // ui.js 맨 아래 document.addEventListener("DOMContentLoaded", init)이
+    // 파일을 로드하는 시점에 바로 실행된다 — 이 스텁이 없으면 하네스가
+    // 테마 함수를 부르기도 전에 로드 자체가 TypeError로 실패한다.
+    addEventListener: function () {},
+  },
+  localStorage: {
+    getItem: function (k) {
+      return Object.prototype.hasOwnProperty.call(STORE, k) ? STORE[k] : null;
+    },
+    setItem: function (k, v) { STORE[k] = String(v); },
+    removeItem: function (k) { delete STORE[k]; },
+  },
+};
+vm.createContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[1], "utf-8"), { filename: "app.js" }).runInContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).runInContext(sandbox);
+
+// sandbox.LS_THEME는 여기서 못 읽는다 — app.js가 top-level const로
+// 선언한 값은 vm 컨텍스트의 전역 프로퍼티로 노출되지 않는다(함수 선언과
+// 달리 const/let 바인딩은 그 스크립트 안에서만 보인다). app.js가
+// "se_theme"로 고정해 두므로(LS_THEME 정의 참고) 여기서도 그 문자열
+// 그대로 STORE를 읽는다.
+const steps = [];
+function snapshot() {
+  steps.push({
+    attr: documentElement.getAttribute("data-theme"),
+    btnText: themeBtn.textContent,
+    stored: STORE["se_theme"] === undefined ? null : STORE["se_theme"],
+  });
+}
+
+sandbox.applyTheme(sandbox.localStorage.getItem("se_theme") === "light" ? "light" : "dark");
+snapshot(); // init()이 페이지를 열 때 하는 것과 같은 최초 적용 — 저장된 값이 없으니 다크
+sandbox.toggleTheme(); // 버튼 클릭 1회
+snapshot();
+sandbox.toggleTheme(); // 버튼 클릭 2회 — 다시 다크로 돌아와야 한다
+snapshot();
+
+process.stdout.write(JSON.stringify({ steps: steps }));
+"""
+
+
+def run_theme_toggle():
+    out = subprocess.run(
+        [_NODE, "-e", _THEME_HARNESS, str(_APP), str(_UI)],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    if out.returncode != 0:
+        raise AssertionError(f"node 실행 실패:\n{out.stderr}")
+    return json.loads(out.stdout)["steps"]
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 테마 전환을 검증할 수 없습니다")
+class TestThemeToggleEngine(unittest.TestCase):
+    """applyTheme/toggleTheme(ui.js)를 실제로 실행해 <html data-theme>·
+    버튼 문구·localStorage 저장이 함께 바뀌는지 확인한다. 정적 검사
+    (test_theme_toggle_is_wired_not_dead)는 init()이 이 함수들을 부르는지만
+    보므로, 함수 자체가 옳게 동작하는지는 이쪽에서 확인해야 한다."""
+
+    def test_default_start_is_dark_with_no_attribute_override(self):
+        steps = run_theme_toggle()
+        self.assertEqual(steps[0]["attr"], "dark")
+        self.assertEqual(steps[0]["btnText"], "라이트 모드")
+
+    def test_first_toggle_switches_to_light_and_persists(self):
+        steps = run_theme_toggle()
+        self.assertEqual(steps[1]["attr"], "light")
+        self.assertEqual(steps[1]["btnText"], "다크 모드")
+        self.assertEqual(steps[1]["stored"], "light",
+                         "선택이 localStorage(se_theme)에 저장되지 않습니다")
+
+    def test_second_toggle_switches_back_to_dark_and_persists(self):
+        steps = run_theme_toggle()
+        self.assertEqual(steps[2]["attr"], "dark")
+        self.assertEqual(steps[2]["btnText"], "라이트 모드")
+        self.assertEqual(steps[2]["stored"], "dark")
+
+
+# ── 목차·2단 넓은 표 클래스 실제 동작 재현용 가짜 DOM ──────────────────
+#
+# _RENDER_SECTION_HARNESS를 확장해 #toc 엘리먼트를 등록해 둔다 —
+# groupHolder/sectionHolder는 document.getElementById("toc")가 null이면
+# 조용히 건너뛰므로(다른 렌더 테스트들이 그 경로로 통과한다), 목차가
+# 실제로 채워지는지는 #toc가 있는 이 하네스에서만 확인할 수 있다. 표
+# orientation에 따라 감싸는 .sec에 "wide"가 붙는지도 함께 본다 —
+# renderSection()이 실제로 그 판단을 하는 지점이다.
+_TOC_AND_WIDE_HARNESS = r"""
+const vm = require("vm");
+const fs = require("fs");
+
+const ELEMENTS = Object.create(null);
+
+class FakeEl {
+  constructor(tag) {
+    this.tag = tag;
+    this.children = [];
+    this._text = "";
+    this._className = "";
+    this._id = "";
+    this.dataset = {};
+    this._listeners = {};
+  }
+  appendChild(c) { this.children.push(c); return c; }
+  insertBefore(node, ref) {
+    const idx = ref ? this.children.indexOf(ref) : -1;
+    if (idx === -1) this.children.push(node);
+    else this.children.splice(idx, 0, node);
+    return node;
+  }
+  removeChild(c) {
+    const idx = this.children.indexOf(c);
+    if (idx !== -1) this.children.splice(idx, 1);
+    return c;
+  }
+  insertRow() { const tr = new FakeEl("tr"); this.appendChild(tr); return tr; }
+  insertCell() { const td = new FakeEl("td"); this.appendChild(td); return td; }
+  createTHead() { const el = new FakeEl("thead"); this.appendChild(el); return el; }
+  createTBody() { const el = new FakeEl("tbody"); this.appendChild(el); return el; }
+  addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); }
+  dispatch(type) { (this._listeners[type] || []).forEach(function (fn) { fn({}); }); }
+  set textContent(v) { this._text = String(v); this.children = []; }
+  get textContent() { return this._text; }
+  set className(v) { this._className = v; }
+  get className() { return this._className; }
+  set id(v) { this._id = v; ELEMENTS[v] = this; }
+  get id() { return this._id; }
+}
+
+const bodyEl = new FakeEl("div");
+bodyEl.id = "body";
+const tocEl = new FakeEl("nav");
+tocEl.id = "toc";
+
+function collectTocTexts(node, out) {
+  out = out || [];
+  if (!node) return out;
+  if ((node.className || "").indexOf("toc-item") !== -1) out.push(node.textContent);
+  (node.children || []).forEach(function (c) { collectTocTexts(c, out); });
+  return out;
+}
+
+// wrap(class="sec"[ wide])은 h2를 첫 자식으로 둔 div다 — sectionHolder가
+// id를 붙이는 건 안쪽 holder뿐이라 wrap 자체는 id로 못 찾는다(ui.js가
+// parentNode에 기대지 않는 이유와 같다 — 이 가짜 DOM은 parentNode를
+// 구현하지 않는다). h2 텍스트로 어느 섹션의 wrap인지 구분한다.
+function collectSecWraps(node, out) {
+  out = out || [];
+  if (!node) return out;
+  if (node.tag === "div" && node.children[0] && node.children[0].tag === "h2") {
+    out.push({ h2: node.children[0].textContent, className: node.className });
+  }
+  (node.children || []).forEach(function (c) { collectSecWraps(c, out); });
+  return out;
+}
+
+const sandbox = {
+  console: console,
+  document: {
+    createElement: function (tag) { return new FakeEl(tag); },
+    createDocumentFragment: function () { return new FakeEl("#fragment"); },
+    createTextNode: function (t) { const n = new FakeEl("#text"); n.textContent = t; return n; },
+    addEventListener: function () {},
+    getElementById: function (id) { return ELEMENTS[id] || null; },
+  },
+  localStorage: {
+    getItem: function () { return null; },
+    setItem: function () {},
+    removeItem: function () {},
+  },
+  fetch: function () { return Promise.reject(new Error("no network in test")); },
+};
+vm.createContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[1], "utf-8"), { filename: "app.js" }).runInContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).runInContext(sandbox);
+
+sandbox.openDocPanel = function () {};
+// fund_usage(자금 그룹) — 레코드 2건 → 가로(여러 행) 표 → "wide"가 붙어야 한다.
+sandbox.renderSection("fund_usage", [{ a: 1, b: 2 }, { a: 3, b: 4 }]);
+// financials(재무 그룹) — 레코드 1건(평면 객체) → 세로 표 → "wide"가 붙으면 안 된다.
+sandbox.renderSection("financials", { a: 1, b: 2 });
+
+process.stdout.write(JSON.stringify({
+  tocTexts: collectTocTexts(tocEl, []),
+  wraps: collectSecWraps(bodyEl, []),
+}));
+"""
+
+
+def run_toc_and_wide():
+    out = subprocess.run(
+        [_NODE, "-e", _TOC_AND_WIDE_HARNESS, str(_APP), str(_UI)],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    if out.returncode != 0:
+        raise AssertionError(f"node 실행 실패:\n{out.stderr}")
+    return json.loads(out.stdout)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestTocAndWideTableWiring(unittest.TestCase):
+    """목차가 실제로 채워지는지, 가로 표가 있는 섹션만 2단 폭 전체를 쓰는
+    "wide" 클래스를 받는지를 renderSection()의 실제 결과 DOM으로 확인한다.
+    """
+
+    def test_toc_gets_group_and_section_entries(self):
+        got = run_toc_and_wide()
+        self.assertIn("자금", got["tocTexts"], "그룹(자금) 목차 항목이 없습니다")
+        self.assertIn("재무", got["tocTexts"], "그룹(재무) 목차 항목이 없습니다")
+        self.assertIn("자금 사용 내역", got["tocTexts"], "섹션 목차 항목이 없습니다")
+        self.assertIn("재무제표", got["tocTexts"], "섹션 목차 항목이 없습니다")
+
+    def test_horizontal_table_section_gets_wide_class(self):
+        got = run_toc_and_wide()
+        wrap = next(w for w in got["wraps"] if w["h2"] == "자금 사용 내역")
+        self.assertEqual(wrap["className"], "sec wide")
+
+    def test_vertical_table_section_does_not_get_wide_class(self):
+        got = run_toc_and_wide()
+        wrap = next(w for w in got["wraps"] if w["h2"] == "재무제표")
+        self.assertEqual(wrap["className"], "sec")
+
+
 if __name__ == "__main__":
     unittest.main()
