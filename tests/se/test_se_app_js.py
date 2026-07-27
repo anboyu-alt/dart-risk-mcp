@@ -194,6 +194,25 @@ class TestToTable(unittest.TestCase):
         flat = [cell for row in got["rows"] for cell in row]
         self.assertEqual(sorted(flat), ["a", "b"])
 
+    def test_keys_carries_the_raw_field_names_in_column_order(self):
+        """columns는 한국어 라벨(사람이 읽는 값)이고, keys는 라벨링 이전의
+        원본 필드명이어야 한다 — ui.js의 tableEl()이 "이 열이 rcept_no인가"를
+        라벨("접수번호")로 추측하지 않고 keys로 정확히 찾기 때문이다.
+
+        toTable()이 keys를 빠뜨리면(예: columns만 돌려주도록 리팩터링)
+        tableEl()의 `Array.isArray(table.keys) ? table.keys.indexOf(...) : -1`
+        가드가 -1로 떨어져 rcept_no 열을 못 찾고, 공시 원문 패널이 다시
+        도달 불가능해진다 — 정적 검사도 다른 node 테스트도 이 배선 유실을
+        못 잡는다.
+        """
+        got = run_js('toTable([{rcept_dt: "20240301", rcept_no: "20240301000001"}])')
+        self.assertEqual(got["keys"], ["rcept_dt", "rcept_no"])
+        self.assertEqual(got["keys"][1], "rcept_no",
+                         "keys[1]이 라벨이 아니라 원본 키 'rcept_no'여야 합니다")
+        # columns는 라벨(한국어)이어야 하고, keys와 순서가 같아야(라벨↔원본
+        # 키 대응이 어긋나지 않아야) tableEl()의 인덱스 매칭이 맞는다.
+        self.assertEqual(got["columns"], ["접수일자", "접수번호"])
+
     def test_label_lookup_ignores_prototype_keys(self):
         """LABELS가 프로토타입이 있는 일반 객체면 "toString"·"constructor"
         같은 키가 Object.prototype 메서드로 새어나간다 — 컬럼 헤더가 함수

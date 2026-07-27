@@ -129,6 +129,14 @@ function showGate(msg) {
   document.getElementById("main").hidden = true;
   const msgEl = document.getElementById("gate-msg");
   msgEl.textContent = msg || "";
+  // 패널이 열린 채 남으면 로그인 화면 위로 이전 사용자의 실명이 계속
+  // 보인다 — #panel은 #main 밖(형제 노드)이라 #main을 숨겨도 안
+  // 가려진다. showGate()는 로그아웃(doLogout)뿐 아니라 세션 만료
+  // (token() 갱신 실패, init()의 자동 로그인 실패)에서도 불린다 —
+  // 여기 한 곳에서만 정리하면 그 모든 경로가 한 번에 덮인다.
+  closePanel();
+  const panelBox = document.getElementById("panel-body");
+  if (panelBox) panelBox.textContent = "";
 }
 
 function loadStoredSession() {
@@ -185,15 +193,11 @@ function doLogout() {
   if (dartEl) dartEl.value = "";
   const pwEl = document.getElementById("password");
   if (pwEl) pwEl.value = "";
-  // 패널이 열린 채 남으면 로그인 화면 위로 이전 사용자의 실명이 계속
-  // 보인다 — #panel은 #main 밖(형제 노드)이라 showGate()가 #main을
-  // 숨겨도 안 가려진다. 내용까지 비워야 DOM에도 실명이 남지 않는다.
-  closePanel();
-  const panelBox = document.getElementById("panel-body");
-  if (panelBox) panelBox.textContent = "";
   CURRENT_COMPANY = null;
   const actorBtn = document.getElementById("actor-btn");
   if (actorBtn) actorBtn.hidden = true;
+  // 패널을 닫고 내용을 비우는 처리는 showGate() 안으로 옮겼다 — 세션
+  // 만료 경로(token())와 공유하기 위해서다. 여기서 다시 하면 중복이다.
   showGate();
 }
 
@@ -240,6 +244,12 @@ function showProgress(p) {
 }
 function renderHeadPlaceholder(name) {
   document.getElementById("head-name").textContent = name + " 분석을 시작합니다…";
+  // 패널이 이전 회사(실명·공시 원문)를 띄운 채 열려 있으면, 화면은 새
+  // 회사를 보여주는데 패널만 이전 회사 정보로 남는다 — 회사를 바꿔
+  // 다시 분석할 때 특히 실명이 그렇게 남을 수 있다.
+  closePanel();
+  const panelBox = document.getElementById("panel-body");
+  if (panelBox) panelBox.textContent = "";
   CURRENT_COMPANY = name;
   const btn = document.getElementById("actor-btn");
   if (btn) btn.hidden = false;
@@ -504,7 +514,12 @@ async function openActorPanel(company) {
   // 예외가 나 패널이 열리지도 못한다. 조용히 넘어가지 않고 실패로 알린다.
   const actors = Array.isArray(body.actors) ? body.actors : null;
   if (r.status !== 200 || actors === null) {
-    box.textContent = "행위자 정보를 불러오지 못했습니다.";
+    // pollDecision·openDocPanel과 같은 원칙 — 서버가 사용자에게 보여줘도
+    // 되는 문구로 다듬어 보낸 body.error가 있으면 그대로 쓰고, 없을
+    // 때만 일반 문구로 대체한다. 무조건 일반 문구로 덮으면 서버가 이미
+    // 안내한 원인(예: "X-DART-Key 헤더가 필요합니다")이 사라진다.
+    box.textContent = (typeof body.error === "string" && body.error)
+      || "행위자 정보를 불러오지 못했습니다.";
     panel.classList.add("open");
     return;
   }

@@ -68,6 +68,37 @@ def _extract_braced_block(src: str, open_idx: int) -> str:
     raise AssertionError("닫는 중괄호를 찾지 못했습니다")
 
 
+def _strip_js_comments(src: str) -> str:
+    """`//`·`/* */` 주석을 지운다.
+
+    이 저장소의 실제 소스에는 문자열 리터럴 안에 `//`가 등장하지 않으므로
+    (URL은 전부 `+` 연결로 조립돼 있다 — `gotrue()` 참고) 이 단순한 정규식
+    제거로 충분하다. "정의만 있고 호출은 없다"를 검사할 때 설명 주석 속에
+    적힌 함수 이름("openActorPanel과 같은 이유" 같은 문구)이 실제 호출부로
+    잘못 잡히는 것을 막기 위해 쓴다.
+    """
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+    src = re.sub(r"//[^\n]*", "", src)
+    return src
+
+
+def _has_real_call_site(src: str, func_name: str) -> bool:
+    """func_name의 함수 **선언**을 제외하고, 주석을 지운 소스에 실제 호출
+    (`func_name(`)이 하나라도 남아 있는지 확인한다.
+
+    단순 등장 횟수(`len(re.findall(...))>=2`)는 주석 한 줄에 함수 이름이
+    한 번 더 언급되기만 해도 "호출부가 있다"고 착각한다 — 실제로 저장소에서
+    한 번 발생한 사고다. 선언을 도려낸 뒤 나머지에서 호출 패턴을 찾는
+    쪽이, 카운트만 세는 것보다 무엇을 "호출부"로 인정하는지 명확하다.
+    """
+    without_comments = _strip_js_comments(src)
+    decl_pattern = re.compile(
+        r"(?:async\s+)?function\s+" + re.escape(func_name) + r"\s*\([^)]*\)\s*\{"
+    )
+    without_decl = decl_pattern.sub("", without_comments, count=1)
+    return re.search(re.escape(func_name) + r"\s*\(", without_decl) is not None
+
+
 def _is_safe_html_literal(expr: str) -> bool:
     """HTML 싱크에 들어가는 값이 순수 문자열 리터럴인지 판정한다.
 
@@ -507,15 +538,21 @@ class TestAnalyzeLoopSurvivesTokenRefreshFailure(unittest.TestCase):
         )
 
 
-class TestDisclaimerAlwaysRendered(unittest.TestCase):
-    """서버가 주는 면책 문구를 화면이 실제로 그려야 한다.
+class TestDisclaimerRenderedWhenPresent(unittest.TestCase):
+    """서버가 면책 문구를 주면 화면이 실제로 그려야 한다 — 단, 항상은 아니다.
+
+    이 클래스는 예전엔 "TestDisclaimerAlwaysRendered"였지만, 서버가
+    disclaimer를 빠뜨린 예상 밖 응답에서 빈 문단을 만들지 않도록
+    `if (body.disclaimer) {...}` 가드가 들어가면서(Minor 수정) 실제 동작은
+    "있으면 그린다"이지 "항상 그린다"가 아니게 됐다 — 이름이 구현과
+    어긋나 있었다.
 
     이전 검사(`assertIn("disclaimer", src)`)는 주석 한 줄만 있어도 통과하는
     공허한 검사였다 — openActorPanel 본문을 파싱해 disclaimer 값이 실제로
     textContent에 담기고, 그 요소가 appendChild로 DOM에 붙는지까지 확인한다.
     """
 
-    def test_panel_renders_server_disclaimer(self):
+    def test_panel_renders_server_disclaimer_when_present(self):
         src = _sources()["ui.js"]
         body = _extract_function_body(src, "openActorPanel")
 
@@ -533,6 +570,37 @@ class TestDisclaimerAlwaysRendered(unittest.TestCase):
             r"appendChild\(\s*" + re.escape(var_name) + r"\s*\)",
             f"{var_name}를 만들었지만 appendChild로 화면에 붙이지 않습니다 — "
             "면책 문구를 만들기만 하고 화면에 붙이지 않으면 사용자는 못 봅니다",
+        )
+
+    def test_disclaimer_block_is_skipped_when_server_omits_it(self):
+        """disclaimer가 없는 예상 밖 응답에서 빈 문단만 남기지 않는지
+        확인한다 — textContent 대입이 `if (body.disclaimer)` 같은 조건
+        안에 있어야 한다(무조건 실행되면 빈 `<p class="note">`가 남는다).
+        """
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "openActorPanel")
+
+        m = re.search(
+            r"(\w+)\.textContent\s*=\s*[^;\n]*\.disclaimer\b[^;\n]*;",
+            body,
+        )
+        self.assertIsNotNone(m)
+        assign_idx = m.start()
+
+        if_m = re.search(r"if\s*\([^)]*\.disclaimer\b[^)]*\)\s*\{", body)
+        self.assertIsNotNone(
+            if_m,
+            "disclaimer 렌더링이 존재 여부를 확인하는 if 없이 무조건 "
+            "실행됩니다 — 서버가 disclaimer를 빠뜨리면 빈 문단이 남습니다",
+        )
+        open_brace_idx = if_m.end() - 1
+        guard_block = _extract_braced_block(body, open_brace_idx)
+        guard_start = if_m.start()
+        guard_end = open_brace_idx + len(guard_block)  # 닫는 '}' 바로 다음 인덱스
+        self.assertTrue(
+            guard_start <= assign_idx < guard_end,
+            "disclaimer textContent 대입이 존재 여부 확인 if 블록 밖에 "
+            "있습니다 — 조건 없이 실행되면 빈 문단이 남습니다",
         )
 
 
@@ -571,11 +639,17 @@ class TestPanelsAreWiredAndReachable(unittest.TestCase):
                       "actor-btn 클릭 핸들러가 openActorPanel을 부르지 않습니다")
 
     def test_open_actor_panel_is_not_dead_code(self):
+        """단순 등장 횟수(≥2)는 설명 주석 속 함수 이름 언급까지 "호출부"로
+        착각한다(실제로 이 파일의 openDocPanel 옆 주석 "openActorPanel과
+        같은 이유"가 그 경우다) — 주석을 지운 뒤 선언을 제외한 자리에
+        실제 호출이 있는지 확인한다.
+        """
         src = _sources()["ui.js"]
-        occurrences = len(re.findall(r"\bopenActorPanel\b", src))
-        # 정의(함수 선언 1회) + 최소 1회 이상의 호출부가 있어야 한다.
-        self.assertGreaterEqual(
-            occurrences, 2,
+        # 정의 자체가 있는지 먼저 확인한다(없으면 아래 호출부 검사가
+        # 공허하게 통과한다).
+        _extract_function_body(src, "openActorPanel")
+        self.assertTrue(
+            _has_real_call_site(src, "openActorPanel"),
             "openActorPanel 정의만 있고 부르는 곳이 없습니다 — "
             "패널에 도달할 방법이 없습니다",
         )
@@ -592,9 +666,12 @@ class TestPanelsAreWiredAndReachable(unittest.TestCase):
                       "tableEl이 openDocPanel을 부르지 않습니다 — "
                       "공시 원문 패널에 도달할 방법이 없습니다")
 
-        occurrences = len(re.findall(r"\bopenDocPanel\b", src))
-        self.assertGreaterEqual(
-            occurrences, 2,
+        # 단순 등장 횟수 대신 주석을 지운 뒤 실제 호출부를 확인한다
+        # (openActorPanel과 같은 이유 — 위 test_open_actor_panel_is_not_dead_code
+        # 참고). 위에서 이미 tableEl 본문 안 호출을 확인했으니 여기선
+        # "정의만 있고 어디서도 안 불린다"는 극단적 회귀만 잡으면 된다.
+        self.assertTrue(
+            _has_real_call_site(src, "openDocPanel"),
             "openDocPanel 정의만 있고 부르는 곳이 없습니다 — "
             "패널에 도달할 방법이 없습니다",
         )
@@ -633,18 +710,55 @@ class TestPanelsAreWiredAndReachable(unittest.TestCase):
             "panel-close 버튼에 클릭 리스너가 연결돼 있지 않습니다",
         )
 
-    def test_logout_closes_the_panel_so_names_do_not_linger_on_the_gate(self):
+    def test_show_gate_closes_the_panel_so_names_do_not_linger_on_the_gate(self):
         """#panel은 #main 밖(형제 노드)이라 showGate()가 #main을 숨겨도
-        열려 있던 패널은 그대로 보인다 — 로그아웃 후에도 이전 사용자의
-        실명이 로그인 화면 위에 남을 수 있다.
+        열려 있던 패널은 그대로 보인다.
+
+        showGate()는 로그아웃(doLogout)뿐 아니라 세션 만료(token() 갱신
+        실패, init()의 자동 로그인 실패)에서도 불린다 — 패널을 닫는 처리를
+        doLogout() 안에만 두면 로그아웃 경로만 덮이고, 패널이 열린 채로
+        세션이 만료되는 경로(예: 폴링 루프 중 갱신 실패)에서는 여전히
+        이전 사용자의 실명이 로그인 화면 위에 남는다. 그래서 이 검사는
+        doLogout이 아니라 showGate 본문을 직접 본다 — 그래야 두 경로가
+        모두 덮이는지 실제로 확인된다.
+        """
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "showGate")
+        self.assertIn(
+            "closePanel(", body,
+            "showGate가 열려 있을 수 있는 패널을 닫지 않습니다 — "
+            "세션 만료 시에도 이전 사용자의 실명이 화면에 남을 수 있습니다",
+        )
+        # `getElementById("panel-body")`를 변수에 담아 그 변수의
+        # `.textContent`를 비우는 스타일이라, 참조와 대입이 같은 줄에
+        # 붙어 있지 않다 — 변수명을 먼저 찾고 그 변수의 대입까지 확인한다.
+        m_var = re.search(
+            r'(\w+)\s*=\s*document\.getElementById\(\s*["\']panel-body["\']\s*\)', body
+        )
+        self.assertIsNotNone(
+            m_var, "showGate가 panel-body 엘리먼트를 참조하지 않습니다"
+        )
+        self.assertRegex(
+            body,
+            re.escape(m_var.group(1)) + r'\.textContent\s*=\s*["\']["\']',
+            "showGate가 panel-body 내용을 비우지 않습니다 — 패널을 닫아도 "
+            "DOM에 이전 사용자의 실명이 그대로 남아 있을 수 있습니다",
+        )
+
+    def test_logout_delegates_panel_cleanup_to_show_gate_without_duplicating_it(self):
+        """closePanel()+panel-body 비우기가 showGate() 안으로 옮겨졌으므로,
+        doLogout()은 showGate()를 불러 위임하기만 해야 하고 같은 처리를
+        중복해서 갖고 있으면 안 된다(두 곳에 같은 로직이 있으면 한쪽만
+        고치고 잊어버리는 사고가 되풀이된다).
         """
         src = _sources()["ui.js"]
         body = _extract_function_body(src, "doLogout")
-        self.assertRegex(
-            body, r'closePanel\(\)|classList\.remove\(\s*["\']open["\']\s*\)',
-            "doLogout이 열려 있을 수 있는 패널을 닫지 않습니다 — "
-            "로그아웃 후에도 실명이 화면에 남을 수 있습니다",
-        )
+        self.assertIn("showGate(", body,
+                      "doLogout이 showGate()를 부르지 않습니다 — 패널 정리가 "
+                      "이뤄지지 않습니다")
+        self.assertNotIn("closePanel(", body,
+                         "doLogout이 closePanel()을 중복 호출합니다 — "
+                         "이제 showGate() 안에서 처리되므로 여기선 필요 없습니다")
 
 
 class TestPanelResponsesAreValidatedDefensively(unittest.TestCase):
