@@ -128,6 +128,113 @@ async function token() {
   return SESSION.access_token;
 }
 
+// ── 다크/라이트 테마 ───────────────────────────────────────────────
+
+/** theme("light"|그 외 전부 다크)을 <html data-theme>·토글 버튼 문구에
+ *  반영한다. "dark"·"light" 둘 다 속성으로 항상 명시한다(생략하지
+ *  않는다) — index.html의 `:root[data-theme="light"]`만 라이트를
+ *  오버라이드하고 기본 `:root` 자체가 다크 값이라, data-theme="dark"를
+ *  명시해도 다크로 보이는 결과는 같다. */
+function applyTheme(theme) {
+  const isLight = theme === "light";
+  document.documentElement.setAttribute("data-theme", isLight ? "light" : "dark");
+  const btn = document.getElementById("theme-toggle");
+  // 버튼은 "지금 상태"가 아니라 "누르면 바뀔 다음 모드"를 보여준다 —
+  // 라이트 화면이면 클릭했을 때 다크로 돌아가므로 "다크 모드"라고
+  // 안내한다(지금 라이트라는 상태를 다시 알려주는 게 아니다).
+  if (btn) btn.textContent = isLight ? "다크 모드" : "라이트 모드";
+}
+
+/** 테마 토글 버튼 핸들러 — 선택을 localStorage(LS_THEME)에 기억한다. */
+function toggleTheme() {
+  const current = localStorage.getItem(LS_THEME) === "light" ? "light" : "dark";
+  const next = current === "light" ? "dark" : "light";
+  localStorage.setItem(LS_THEME, next);
+  applyTheme(next);
+}
+
+// ── 좌측 목차 ─────────────────────────────────────────────────────
+//
+// TOC_ITEMS: {el, link} 목록. addTocEntry가 그룹(groupHolder)·섹션
+// (sectionHolder)이 처음 만들어질 때마다 채운다 — 섹션은 폴링마다
+// 순차적으로 도착하므로 목차도 그 순서대로 자란다.
+//
+// TOC_OBSERVER: IntersectionObserver 하나를 지연 생성해 모든 항목이
+// 공유한다. 이 파일은 node vm 테스트용 가짜 DOM으로도 실행되는데(위
+// TOC_ITEMS 주석과 같은 이유), 그 가짜 DOM에는 #toc 자체가 없고
+// IntersectionObserver도 없다 — addTocEntry가 document.getElementById("toc")
+// 부터 확인해 없으면 조용히 아무 일도 하지 않으므로 그 환경에서도
+// 안전하다.
+let TOC_ITEMS = [];
+let TOC_OBSERVER = null;
+
+function ensureTocObserver() {
+  if (TOC_OBSERVER || typeof IntersectionObserver === "undefined") return TOC_OBSERVER;
+  TOC_OBSERVER = new IntersectionObserver(function (entries) {
+    for (const entry of entries) {
+      const item = TOC_ITEMS.find(function (t) { return t.el === entry.target; });
+      if (!item) continue;
+      if (entry.isIntersecting) item.link.classList.add("active");
+      else item.link.classList.remove("active");
+    }
+  }, { rootMargin: "-10% 0px -70% 0px" });
+  return TOC_OBSERVER;
+}
+
+/** 목차 항목 하나를 추가한다. #toc가 없는 환경(가짜 DOM 테스트)에서는
+ *  아무 것도 만들지 않는다 — groupHolder·sectionHolder는 실제 브라우저
+ *  밖에서도(node vm 테스트) 호출되므로 여기서 막아야 그 테스트들이
+ *  안전하다.
+ *
+ *  order는 이 항목이 속한 그룹의 groupOrderIndex다 — 그룹 자신도, 그
+ *  그룹 소속 섹션도 같은 값을 쓴다(groupHolder·sectionHolder가 넘긴다).
+ *  groupHolder()는 이미 이 값으로 #body 안 DOM 위치를 insertBefore로
+ *  정하고 있다 — 목차가 언제나 `appendChild`로만 쌓이면(이전 버전) 그
+ *  순서와 어긋난다. 실측 회귀: company_info가 STAGE1_SPECS 첫 항목이라
+ *  다른 어떤 섹션보다 먼저 도착하므로, company_info가 속한(당시)
+ *  "기타" 그룹이 매번 목차 맨 위를 차지했지만, 화면(#body)에서는
+ *  groupOrderIndex가 가장 커서 항상 맨 아래였다 — 사이드바 클릭과 실제
+ *  스크롤 위치가 어긋났다. TOC_ITEMS에 이미 들어 있는 항목 중 order가
+ *  더 큰 첫 항목 앞에 끼워 넣으면(같은 order끼리는 도착 순서 그대로
+ *  뒤에 붙는다) groupHolder()의 insertBefore 로직과 같은 결과가 된다. */
+function addTocEntry(titleText, targetEl, isSection, order) {
+  const tocEl = document.getElementById("toc");
+  if (!tocEl) return;
+  const link = document.createElement("div");
+  link.className = isSection ? "toc-item toc-section" : "toc-item";
+  link.textContent = titleText;
+  link.addEventListener("click", function () {
+    targetEl.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  let before = null;
+  for (const item of TOC_ITEMS) {
+    if (item.order > order) { before = item.link; break; }
+  }
+  tocEl.insertBefore(link, before);
+  TOC_ITEMS.push({ el: targetEl, link: link, order: order });
+  const obs = ensureTocObserver();
+  if (obs) obs.observe(targetEl);
+}
+
+/** 새 회사 분석을 시작할 때(#body를 비울 때) 목차도 함께 비운다 — 안
+ *  그러면 이전 회사에서 만든 목차 항목이 남아, 클릭해도 이미 사라진
+ *  섹션을 가리키게 된다(showGate()가 #panel·#body를 함께 정리하는 것과
+ *  같은 "한 곳 정리" 이유).
+ *
+ *  SEC_WRAP(섹션 키 → .sec 엘리먼트, sectionHolder() 참고)도 여기서
+ *  함께 비운다. #body의 자식 노드를 지우는 곳(showGate()·
+ *  renderHeadPlaceholder())은 모두 이 함수를 바로 뒤이어 부르므로,
+ *  비우지 않으면 이전 회사에만 있던 섹션 키가 새 회사에서 다시
+ *  렌더되지 않는 한 SEC_WRAP에 detached된 옛 엘리먼트 참조가 계속
+ *  남는다. */
+function resetToc() {
+  const tocEl = document.getElementById("toc");
+  if (tocEl) { while (tocEl.firstChild) tocEl.removeChild(tocEl.firstChild); }
+  if (TOC_OBSERVER) { TOC_OBSERVER.disconnect(); TOC_OBSERVER = null; }
+  TOC_ITEMS = [];
+  for (const k in SEC_WRAP) delete SEC_WRAP[k];
+}
+
 // ── 화면 전환 + 로컬 저장 ──────────────────────────────────────────
 
 function showMain() {
@@ -162,6 +269,15 @@ function showGate(msg) {
   if (bodyBox) {
     while (bodyBox.firstChild) bodyBox.removeChild(bodyBox.firstChild);
   }
+  // company_info(헤더)는 #body 밖의 별도 고정 박스(#company-info)에
+  // 그려진다(renderCompanyInfo 참고) — #body를 비우는 것만으로는 이
+  // 박스가 비워지지 않으므로 따로 비워야 한다. 안 그러면 로그아웃 후
+  // 로그인 화면 위로 이전 사용자가 조회한 회사의 대표자·주소 등이 남는다.
+  const companyInfoBox = document.getElementById("company-info");
+  if (companyInfoBox) {
+    while (companyInfoBox.firstChild) companyInfoBox.removeChild(companyInfoBox.firstChild);
+  }
+  resetToc(); // #body를 비우는 자리와 같이 — 목차만 남으면 죽은 링크가 된다
   CURRENT_COMPANY = null;
   const actorBtn = document.getElementById("actor-btn");
   if (actorBtn) actorBtn.hidden = true;
@@ -233,6 +349,19 @@ function doLogout() {
 
 /** 저장된 세션이 있으면 갱신을 시도해 자동 로그인, 없거나 실패하면 로그인 화면. */
 async function init() {
+  // 저장된 테마를 가장 먼저 적용한다 — 기본은 다크(저장된 값이 없거나
+  // "light"가 아니면 다크)이고, 이전에 라이트를 골랐던 사용자만 밝은
+  // 화면으로 시작한다.
+  applyTheme(localStorage.getItem(LS_THEME) === "light" ? "light" : "dark");
+  // 마크업에 #theme-toggle이 없는 예상 밖 상황(배포 실수 등)에서 null에
+  // addEventListener를 호출하면 async init()이 여기서 예외를 던지고,
+  // 그 뒤로 이어지는 login·logout·analyze-btn·actor-btn·panel-close 배선이
+  // 전부 통째로 건너뛰어진다 — 아무 버튼도 반응하지 않는데 오류 안내조차
+  // 없다. 가드로 그 연쇄를 끊는다.
+  const themeToggleBtn = document.getElementById("theme-toggle");
+  if (themeToggleBtn) themeToggleBtn.addEventListener("click", toggleTheme);
+  resetToc(); // 페이지를 새로 열 때 목차를 빈 상태로 시작한다
+
   document.getElementById("login").addEventListener("click", doLogin);
   document.getElementById("logout").addEventListener("click", doLogout);
   // 회사 입력 폼 — 버튼 클릭과 입력창 Enter 둘 다 doAnalyze()로 이어진다.
@@ -305,6 +434,13 @@ function renderHeadPlaceholder(name, message) {
   if (bodyBox) {
     while (bodyBox.firstChild) bodyBox.removeChild(bodyBox.firstChild);
   }
+  // showGate()와 같은 이유 — company_info 고정 박스는 #body 밖에 있어
+  // 따로 비워야 이전 회사의 대표자·주소 등이 새 회사 화면 위에 남지 않는다.
+  const companyInfoBox = document.getElementById("company-info");
+  if (companyInfoBox) {
+    while (companyInfoBox.firstChild) companyInfoBox.removeChild(companyInfoBox.firstChild);
+  }
+  resetToc(); // 같은 이유 — 새 회사의 목차를 처음부터 다시 쌓는다
   CURRENT_COMPANY = name;
   const btn = document.getElementById("actor-btn");
   if (btn) btn.hidden = false;
@@ -313,40 +449,159 @@ function renderHeadPlaceholder(name, message) {
 /** 표를 DOM으로 만든다. 값은 전부 textContent로 넣는다 —
  *  공시 원문과 실명이 그대로 들어오는 자리다.
  *
- *  `rcept_no` 열의 셀만 클릭 가능하게 만든다 — table.keys(toTable()이
+ *  table은 app.js의 tableLayout() 결과다 — {orientation, caption, columns,
+ *  keys, rows, raw}. caption(모든 행의 값이 같아 표 위로 올린 열)이 있으면
+ *  표 앞에 <div class="cap">로 한 번 보여준다 — 숨기는 게 아니라 145줄
+ *  반복 대신 한 번만 보여주는 것이다.
+ *
+ *  `rcept_no` 열의 셀만 클릭 가능하게 만든다 — table.keys(tableLayout()이
  *  라벨과 나란히 남긴 원본 키)로 정확히 그 열을 찾는다. 어느 열이 공시
  *  제목인지, 어느 열이 사람 이름인지는 추측하지 않는다 — 확인되지 않은
  *  필드명을 코드에 박는 것이 이 프로젝트에서 반복해서 사고를 낸 방식이고,
- *  rcept_no만 LABELS·2단 섹션 키(`doc:<접수번호>`)로 이미 확인된 필드다. */
+ *  rcept_no만 LABELS·2단 섹션 키(`doc:<접수번호>`)로 이미 확인된 필드다.
+ *
+ *  orientation이 "vertical"이면 rows[i]는 [라벨, 값] 한 쌍이고 값은
+ *  rows[i][1]에 있다 — 가로(rows[i][col])와 셀 위치가 달라 rcept_no 클릭
+ *  배선도 두 경우를 모두 처리해야 한다(keys[i]가 그 행이 어느 원본
+ *  키인지를 알려준다).
+ *
+ *  rcept_no가 모든 행에서 같으면(affiliates·financials 실측 — 27줄·30줄
+ *  전부 같은 접수번호) tableLayout이 그 열을 caption으로 승격시켜
+ *  table.keys에서 빼버린다 — 위 rceptCol 배선만으로는 그 섹션에서 공시
+ *  원문 패널을 열 방법이 사라진다(캡션 div는 textContent만이라 클릭도
+ *  안 됐다). caption 항목의 key가 "rcept_no"면 그 값도 똑같이 클릭
+ *  가능하게 만들어, "반복 열은 캡션으로 줄인다"와 "공시 원문은 항상 열 수
+ *  있다" 두 성질을 함께 지킨다. */
 function tableEl(table) {
+  const frag = document.createDocumentFragment();
+
+  if (Array.isArray(table.caption) && table.caption.length > 0) {
+    const cap = document.createElement("div");
+    cap.className = "cap";
+    table.caption.forEach(function (c, i) {
+      if (i > 0) cap.appendChild(document.createTextNode(" · "));
+      const b = document.createElement("b");
+      b.textContent = c.label;
+      cap.appendChild(b);
+      cap.appendChild(document.createTextNode(": "));
+      if (c.key === "rcept_no" && c.value) {
+        const span = document.createElement("span");
+        span.className = "doc";
+        span.textContent = c.value;
+        span.addEventListener("click", function () { openDocPanel(c.value); });
+        cap.appendChild(span);
+      } else {
+        cap.appendChild(document.createTextNode(c.value));
+      }
+    });
+    frag.appendChild(cap);
+  }
+
   const t = document.createElement("table");
-  const thead = t.createTHead().insertRow();
-  for (const c of table.columns) {
-    const th = document.createElement("th");
-    th.textContent = c;
-    thead.appendChild(th);
+  const isVertical = table.orientation === "vertical";
+  // 접힌 열은 가로 표에만 있다(세로는 tableLayout이 애초에 접지 않는다 —
+  // app.js 주석 참고). 행마다 접힌 열 수는 같으므로 표 전체에서 한 번만
+  // 판단한다.
+  const hasFolded = !isVertical && Array.isArray(table.foldedKeys) && table.foldedKeys.length > 0;
+  if (!isVertical) {
+    // 세로는 각 행이 이미 [라벨, 값]이라 별도 헤더가 필요 없다 — 헤더를
+    // 넣으면 "항목/값"이 열 제목과 데이터 사이에 낀 군더더기가 된다.
+    const thead = t.createTHead().insertRow();
+    for (const c of table.columns) {
+      const th = document.createElement("th");
+      th.textContent = c;
+      thead.appendChild(th);
+    }
+    if (hasFolded) {
+      // 펼치기 버튼 칸의 헤더 — 내용은 없지만 칸 수를 표 본문과 맞춰야
+      // 열이 밀리지 않는다.
+      thead.appendChild(document.createElement("th"));
+    }
   }
   const rceptCol = Array.isArray(table.keys) ? table.keys.indexOf("rcept_no") : -1;
   const tb = t.createTBody();
-  for (const row of table.rows) {
+  table.rows.forEach(function (row, rowIdx) {
     const tr = tb.insertRow();
     row.forEach(function (v, i) {
       const td = tr.insertCell();
       td.textContent = v;
-      if (i === rceptCol && v) {
+      // 세로: keys[rowIdx]가 이 행의 원본 키다 → 값은 두 번째 칸(i===1).
+      // 가로: keys[i]가 이 칸의 원본 키다 → 값은 그 칸 자신(i===열 위치).
+      const isValueCell = isVertical ? (i === 1) : true;
+      const cellKey = isVertical ? table.keys[rowIdx] : table.keys[i];
+      // 억·조 단위로 줄인 값(td.textContent)만으로는 정확한 원 단위 금액을
+      // 알 수 없다(예: 1,308,239,417 → "13.1억") — AMOUNT_FIELDS(app.js)
+      // 열이면 tableLayout()이 나란히 남긴 raw(원본 값)를 title로 붙여
+      // 마우스를 올리면 정확한 값을 볼 수 있게 한다. raw가 표시값과 같으면
+      // (반올림 없는 작은 수 등) 군더더기 툴팁을 남기지 않는다.
+      if (isValueCell && AMOUNT_FIELDS.has(cellKey) && Array.isArray(table.raw)) {
+        const raw = isVertical ? table.raw[rowIdx] : table.raw[rowIdx][i];
+        if (raw !== undefined && raw !== v) td.title = raw;
+      }
+      const isDocCell = isVertical
+        ? (rowIdx === rceptCol && i === 1)
+        : (i === rceptCol);
+      if (isDocCell && v) {
         td.className = "doc";
         td.addEventListener("click", function () { openDocPanel(v); });
       }
     });
-  }
-  return t;
+
+    if (hasFolded) {
+      // 펼치기 버튼 — 이 행의 접힌 열을 세로(라벨: 값)로 보여준다. 없애는
+      // 게 아니라 접는 것이므로, 클릭하면 언제든 원래 값을 볼 수 있어야
+      // 한다(브리프 원칙).
+      const btnCell = tr.insertCell();
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "fold-btn";
+      btn.textContent = "나머지 " + table.foldedKeys.length + "개 열";
+      btnCell.appendChild(btn);
+
+      // 상세 행은 항상 만들어 두고(위치가 이 행 바로 다음으로 고정된다)
+      // hidden 속성으로만 여닫는다 — 클릭 시점에 특정 위치에 행을
+      // 끼워넣으려 하면(tbody는 append만 지원) 이미 그려진 다음 행들
+      // 뒤로 밀려나 버린다.
+      const detailTr = tb.insertRow();
+      detailTr.className = "fold-detail";
+      detailTr.hidden = true;
+      const detailTd = detailTr.insertCell();
+      detailTd.colSpan = table.columns.length + 1;
+      const foldedForRow = (Array.isArray(table.foldedRows) && table.foldedRows[rowIdx]) || [];
+      // innerHTML을 쓰지 않는다 — 공시 원문·실명이 그대로 섞여 들어오는
+      // 값이라 textContent로만 채운다(각 [라벨, 값] 쌍을 별도 엘리먼트로
+      // 만들고 <br>로 줄바꿈한다).
+      foldedForRow.forEach(function (pair, idx) {
+        if (idx > 0) detailTd.appendChild(document.createElement("br"));
+        const b = document.createElement("b");
+        b.textContent = pair[0];
+        detailTd.appendChild(b);
+        detailTd.appendChild(document.createTextNode(": " + pair[1]));
+      });
+
+      btn.addEventListener("click", function () {
+        detailTr.hidden = !detailTr.hidden;
+      });
+    }
+  });
+  frag.appendChild(t);
+  return frag;
 }
 
 /** 그룹 제목에 해당하는 컨테이너를 찾거나 만든다. SECTION_GROUPS 정의
  *  순서를 따라 DOM 위치를 정한다 — 그룹은 섹션이 도착하는 순서(=완료
  *  순서)와 무관하게 항상 같은 자리에 나와야 한다. 목록에 없는 제목
  *  ("기타" 등, groupOrderIndex가 맨 뒤로 보낸다)은 이미 자리 잡은
- *  그룹들 뒤에 붙는다. */
+ *  그룹들 뒤에 붙는다.
+ *
+ *  반환하는 holder는 sectionHolder()가 이 그룹의 .sec들을 appendChild
+ *  하는 중간 컨테이너다 — id를 고정해 두 번째 호출부터는 기존 노드를
+ *  재사용한다(제목 → 노드 조회용 앵커). class="grp-holder"를 붙이는
+ *  이유: index.html의 `.grp,.grp-holder{display:contents}`가 이 박스를
+ *  없애야 .sec이 #body 그리드의 직속 아이템이 된다 — 안 그러면 .sec은
+ *  이 holder 안의 평범한 블록 자식일 뿐이라 그리드 아이템이 아니게
+ *  되고, .sec.wide{grid-column:1/-1}이 완전히 무효화된다(실측 확인된
+ *  회귀 — wide 표가 그리드 1칸 폭으로 도로 좁아졌다). */
 function groupHolder(title) {
   const id = "grp-" + title;
   let holder = document.getElementById(id);
@@ -361,6 +616,7 @@ function groupHolder(title) {
 
   holder = document.createElement("div");
   holder.id = id;
+  holder.className = "grp-holder";
   wrap.appendChild(holder);
 
   const body = document.getElementById("body");
@@ -370,6 +626,7 @@ function groupHolder(title) {
     if (groupOrderIndex(child.dataset.title) > idx) { before = child; break; }
   }
   body.insertBefore(wrap, before);
+  addTocEntry(title, wrap, false, idx);
   return holder;
 }
 
@@ -382,12 +639,21 @@ function groupHolder(title) {
  *
  * 자기 그룹(groupTitleFor) 아래에 붙인다 — SECTION_GROUPS를 실제로
  * 쓰지 않으면 그룹 제목도 순서도 화면에 나오지 않는다. */
+// 섹션 키 → 감싸는 .sec 엘리먼트. renderSection이 표 orientation을 보고
+// "wide" 클래스를 붙였다 뗐다 할 때 이 wrap을 찾는 데 쓴다 — holder(내용
+// 칸)는 매 렌더마다 비워지고 다시 채워지지만 wrap(h2를 포함한 바깥
+// 칸)은 sectionHolder가 처음 만들 때 한 번만 생기므로 별도로 기억해
+// 둬야 한다(parentNode를 쓰지 않는 이유: 이 파일은 parentNode를 구현하지
+// 않는 가짜 DOM으로도 실행된다 — 위 TOC_ITEMS 주석 참고).
+const SEC_WRAP = Object.create(null);
+
 function sectionHolder(key) {
   const id = "sec-" + key;
   let holder = document.getElementById(id);
   if (holder) return holder;
 
-  const group = groupHolder(groupTitleFor(key));
+  const groupTitle = groupTitleFor(key);
+  const group = groupHolder(groupTitle);
 
   const wrap = document.createElement("div");
   wrap.className = "sec";
@@ -402,6 +668,10 @@ function sectionHolder(key) {
   wrap.appendChild(holder);
 
   group.appendChild(wrap);
+  SEC_WRAP[key] = wrap;
+  // 자기 그룹과 같은 order를 써야 목차에서 그룹 항목 바로 뒤(같은 order
+  // 블록 안)에 붙는다 — addTocEntry 주석 참고.
+  addTocEntry(label(key), wrap, true, groupOrderIndex(groupTitle));
   return holder;
 }
 
@@ -441,7 +711,19 @@ function renderSection(key, value) {
   const holder = sectionHolder(key);
   while (holder.firstChild) holder.removeChild(holder.firstChild);
 
-  const blocks = sectionBlocks(value);
+  const blocks = sectionBlocks(value, 0, key);
+
+  // 가로(여러 행) 표가 하나라도 있으면 2단 폭 중 한 칸에 가두지 않고
+  // 전체 폭을 쓴다 — 세로(1건, 키-값) 표는 원래도 좁아 한 칸이면
+  // 충분하다(app.js tableLayout 주석 참고: 세로/가로 구분 기준과 같다).
+  // 앞 태스크에서 12열까지 보이게 넓힌 표가 2단으로 다시 좁아지는
+  // 재발을 막는다.
+  const hasWideTable = blocks.some(function (b) {
+    return b.table && b.table.orientation === "horizontal";
+  });
+  const wrap = SEC_WRAP[key];
+  if (wrap) wrap.className = hasWideTable ? "sec wide" : "sec";
+
   if (blocks.length === 0) {
     const p = document.createElement("p");
     p.className = "note";
@@ -450,6 +732,49 @@ function renderSection(key, value) {
     return;
   }
   for (const block of blocks) holder.appendChild(blockEl(block));
+}
+
+/** company_info(STAGE1_SPECS의 "헤더" 섹션)를 본문 맨 위 고정 박스
+ *  (#company-info)에 그린다.
+ *
+ *  일반 섹션(renderSection)과 달리 groupHolder/sectionHolder(그룹별
+ *  정렬)를 거치지 않는다 — 헤더는 어떤 그룹보다도 항상 맨 위에 고정이어야
+ *  하기 때문이다(design 문서 §7.1: 섹션 0 "헤더" — 회사명·종목코드·업종·
+ *  대표자·조회 시점). 이전에는 company_info도 다른 섹션과 똑같이
+ *  renderSection()을 타서, SECTION_GROUPS에 없는 키라 "기타" 그룹으로
+ *  밀려나 화면 맨 아래(약 18,000px 지점)에 나타났다.
+ *
+ *  값은 sectionBlocks()가 만드는 표를 그대로 쓴다 — 어떤 필드도 골라내거나
+ *  숨기지 않는다(이 화면의 "데이터를 조용히 숨기지 않는다" 원칙과 동일).
+ */
+function renderCompanyInfo(value) {
+  const box = document.getElementById("company-info");
+  if (!box) return;
+  while (box.firstChild) box.removeChild(box.firstChild);
+
+  const h2 = document.createElement("h2");
+  h2.textContent = label("company_info");
+  box.appendChild(h2);
+
+  const blocks = sectionBlocks(value, 0, "company_info");
+  if (blocks.length === 0) {
+    const p = document.createElement("p");
+    p.className = "note";
+    p.textContent = "표시할 데이터가 없습니다.";
+    box.appendChild(p);
+  } else {
+    for (const block of blocks) box.appendChild(blockEl(block));
+  }
+
+  // 그룹(groupHolder)을 거치지 않는 유일한 섹션이라 목차 항목도 여기서
+  // 직접 추가한다. order=-1로 항상 그룹 목차(0 이상)보다 앞에 오게 해
+  // 화면 맨 위 고정 위치와 목차 순서를 맞춘다. company_info는 폴링
+  // 프로토콜상 한 번만 오지만(analyze() 쪽에서 fetched로 중복을 막는다),
+  // 방어적으로 이미 이 박스를 가리키는 목차 항목이 있으면 다시 추가하지
+  // 않는다 — 그러지 않으면 재호출 시 목차에 "기업 개요"가 중복된다.
+  if (!TOC_ITEMS.some(function (it) { return it.el === box; })) {
+    addTocEntry(label("company_info"), box, false, -1);
+  }
 }
 
 /** 가져오지 못한 항목을 보여준다.
@@ -574,7 +899,12 @@ async function pollUntilDone(jobId, dartKey, gen) {
           // api()는 {status, body}를 준다. 섹션 키는 sec.body.key에 있다.
           if (sec.status === 200) {
             fetched.add(key);
-            renderSection(sec.body.key || key, sec.body.value);
+            const secKey = sec.body.key || key;
+            // company_info(헤더)는 그룹 정렬과 무관하게 항상 화면 맨
+            // 위 고정이어야 한다(renderCompanyInfo 주석 참고) — 일반
+            // renderSection(그룹별 정렬) 경로를 타지 않는다.
+            if (secKey === "company_info") renderCompanyInfo(sec.body.value);
+            else renderSection(secKey, sec.body.value);
           } else {
             // 성공했을 때만 "받음"으로 친다 — 다음 폴링에서 자동 재시도된다.
             // 동시에 renderFailures로 넘겨 화면에도 보이게 한다(무한 재시도로
@@ -802,6 +1132,31 @@ async function openActorPanel(company) {
   panel.classList.add("open");
 }
 
+/** documentBlocks()(app.js)가 만든 블록 하나를 DOM으로 그린다.
+ *
+ * 표 블록은 어떤 셀이 헤더인지 판정하지 않는다 — documentBlocks는 구조만
+ * 복원할 뿐 요약·판정을 하지 않으므로(v0.8.5 원칙), <thead> 없이 모든
+ * 행을 그대로 <tr><td>로 나열한다. 값은 전부 textContent로만 넣는다 —
+ * 공시 원문은 사용자 데이터라 한 줄로 스크립트가 실행되면 안 된다.
+ */
+function docBlockEl(block) {
+  if (block.kind === "table") {
+    const table = document.createElement("table");
+    const tbody = table.createTBody();
+    block.rows.forEach(function (row) {
+      const tr = tbody.insertRow();
+      row.forEach(function (c) {
+        const td = tr.insertCell();
+        td.textContent = c;
+      });
+    });
+    return table;
+  }
+  const p = document.createElement("p");
+  p.textContent = block.text;
+  return p;
+}
+
 /** 공시 원문 패널을 연다. DART 키는 X-DART-Key 헤더로만 보낸다. */
 async function openDocPanel(rceptNo) {
   const box = document.getElementById("panel-body");
@@ -822,15 +1177,18 @@ async function openDocPanel(rceptNo) {
   }
 
   const body = r.body || {};
-  const p = document.createElement("pre");
-  p.style.whiteSpace = "pre-wrap";
-  // 공시 원문 — 반드시 textContent다. 200인데 text가 문자열이 아니면
-  // (예상 밖 응답) 리터럴 "undefined"를 그대로 보여주는 대신 실패로
-  // 취급한다 — "원문 0자 중 일부입니다" 같은 앞뒤 안 맞는 안내도 막는다.
+  // 공시 원문 — 반드시 textContent다(docBlockEl 참고). 200인데 text가
+  // 문자열이 아니면(예상 밖 응답) 리터럴 "undefined"를 그대로 보여주는
+  // 대신 실패로 취급한다 — "원문 0자 중 일부입니다" 같은 앞뒤 안 맞는
+  // 안내도 막는다.
   const text = typeof body.text === "string" ? body.text : "";
   if (r.status === 200 && text) {
-    p.textContent = text;
-    box.appendChild(p);
+    // 한 덩어리 <pre>는 원문에 담긴 파이프 구분 표를 사람이 읽을 수 없게
+    // 만든다 — documentBlocks(app.js)가 복원한 문단·표 구조 그대로
+    // 그린다(요약이 아니라 구조 복원만, v0.8.5 원칙).
+    for (const block of documentBlocks(text)) {
+      box.appendChild(docBlockEl(block));
+    }
     if (body.truncated) {
       const n = document.createElement("p");
       n.className = "note";
@@ -840,6 +1198,7 @@ async function openDocPanel(rceptNo) {
   } else {
     // 오류 경로다 — 공시 원문(실명 아님)만 다루는 패널이라 여기엔 행위자
     // 면책 문구가 필요 없다.
+    const p = document.createElement("p");
     p.textContent = (typeof body.error === "string" && body.error)
       || "원문을 불러오지 못했습니다.";
     box.appendChild(p);

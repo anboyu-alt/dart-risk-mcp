@@ -1,0 +1,775 @@
+{
+  "company_info": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 19,
+    "constant_columns": [],
+    "fields": {
+      "adres": "문자(19자) 예:충청북도 제천시 바이오밸리로 10",
+      "acc_mt": "숫자",
+      "ceo_nm": "문자(3자) 예:오정강",
+      "est_dt": "정수(큰수)",
+      "fax_no": "문자(12자) 예:043)653-0914",
+      "hm_url": "문자(14자) 예:www.enchem.net",
+      "ir_url": "빈값",
+      "phn_no": "문자(12자) 예:041-568-9454",
+      "status": "숫자",
+      "bizr_no": "정수(큰수)",
+      "message": "문자(2자) 예:정상",
+      "corp_cls": "문자(1자) 예:K",
+      "jurir_no": "정수(큰수)",
+      "corp_code": "정수(큰수)",
+      "corp_name": "문자(5자) 예:(주)엔켐",
+      "stock_code": "숫자",
+      "stock_name": "문자(2자) 예:엔켐",
+      "induty_code": "숫자",
+      "corp_name_eng": "문자(16자) 예:Enchem Co., Ltd."
+    }
+  },
+  "disclosures": {
+    "top_type": "list",
+    "record_count": 145,
+    "column_count": 9,
+    "constant_columns": [
+      "corp_cls",
+      "corp_code",
+      "corp_name",
+      "stock_code"
+    ],
+    "fields": {
+      "rm": "문자(1자) 예:코",
+      "flr_nm": "문자(2자) 예:엔켐",
+      "corp_cls": "문자(1자) 예:K",
+      "rcept_dt": "정수(큰수)",
+      "rcept_no": "정수(큰수)",
+      "corp_code": "정수(큰수)",
+      "corp_name": "문자(2자) 예:엔켐",
+      "report_nm": "문자(25자) 예:[기재정정]주요사항보고서(자기전환",
+      "stock_code": "숫자"
+    }
+  },
+  "fund_usage": {
+    "top_type": "list",
+    "record_count": 25,
+    "column_count": 11,
+    "constant_columns": [
+      "flags",
+      "pay_amount",
+      "dffrnc_resn"
+    ],
+    "fields": {
+      "tm": "문자(4자) 예:제14회",
+      "kind": "문자(6자) 예:public",
+      "year": "number",
+      "flags": "list[0]",
+      "pay_de": "숫자",
+      "pay_amount": "number",
+      "dffrnc_resn": "문자(1자) 예:-",
+      "plan_amount": "number",
+      "plan_useprps": "문자(20자) 예:원재료 매입대금 및\n해외공장 증설",
+      "real_dtls_cn": "문자(20자) 예:원재료 매입대금 및\n해외공장 증설",
+      "real_dtls_amount": "number"
+    }
+  },
+  "affiliates": {
+    "top_type": "list",
+    "record_count": 27,
+    "column_count": 20,
+    "constant_columns": [
+      "stlm_dt",
+      "corp_cls",
+      "rcept_no",
+      "corp_code",
+      "corp_name"
+    ],
+    "fields": {
+      "inv_prm": "문자(24자) 예:Enchem Poland Sp. ",
+      "stlm_dt": "문자(10자) 예:2025-12-31",
+      "corp_cls": "문자(1자) 예:K",
+      "rcept_no": "정수(큰수)",
+      "corp_code": "정수(큰수)",
+      "corp_name": "문자(2자) 예:엔켐",
+      "bsis_blce_qy": "문자(7자) 예:131,705",
+      "frst_acqs_de": "숫자",
+      "invstmnt_purps": "문자(4자) 예:경영참여",
+      "trmend_blce_qy": "문자(7자) 예:131,705",
+      "frst_acqs_amount": "정수(큰수)",
+      "bsis_blce_qota_rt": "숫자",
+      "trmend_blce_qota_rt": "숫자",
+      "incrs_dcrs_evl_lstmn": "문자(1자) 예:-",
+      "bsis_blce_acntbk_amount": "정수(큰수)",
+      "incrs_dcrs_acqs_dsps_qy": "문자(1자) 예:-",
+      "trmend_blce_acntbk_amount": "정수(큰수)",
+      "incrs_dcrs_acqs_dsps_amount": "문자(1자) 예:-",
+      "recent_bsns_year_fnnr_sttus_tot_assets": "정수(큰수)",
+      "recent_bsns_year_fnnr_sttus_thstrm_ntpf": "정수(큰수)"
+    }
+  },
+  "financials": {
+    "top_type": "list",
+    "record_count": 30,
+    "column_count": 21,
+    "constant_columns": [
+      "currency",
+      "rcept_no",
+      "bsns_year",
+      "corp_code",
+      "frmtrm_nm",
+      "thstrm_nm",
+      "reprt_code",
+      "stock_code",
+      "bfefrmtrm_nm"
+    ],
+    "fields": {
+      "ord": "숫자",
+      "fs_nm": "문자(6자) 예:연결재무제표",
+      "sj_nm": "문자(5자) 예:재무상태표",
+      "fs_div": "문자(3자) 예:CFS",
+      "sj_div": "문자(2자) 예:BS",
+      "currency": "문자(3자) 예:KRW",
+      "rcept_no": "정수(큰수)",
+      "bsns_year": "숫자",
+      "corp_code": "정수(큰수)",
+      "frmtrm_dt": "문자(13자) 예:2024.12.31 현재",
+      "frmtrm_nm": "문자(6자) 예:제 13 기",
+      "thstrm_dt": "문자(13자) 예:2025.12.31 현재",
+      "thstrm_nm": "문자(6자) 예:제 14 기",
+      "account_nm": "문자(4자) 예:유동자산",
+      "reprt_code": "숫자",
+      "stock_code": "숫자",
+      "bfefrmtrm_dt": "문자(13자) 예:2023.12.31 현재",
+      "bfefrmtrm_nm": "문자(6자) 예:제 12 기",
+      "frmtrm_amount": "정수(큰수)",
+      "thstrm_amount": "정수(큰수)",
+      "bfefrmtrm_amount": "정수(큰수)"
+    }
+  },
+  "indicators": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 49,
+    "constant_columns": [],
+    "fields": {
+      "ROE": "number",
+      "부채비율": "number",
+      "순이익률": "number",
+      "유동비율": "number",
+      "판관비율": "number",
+      "매출원가율": "number",
+      "비유동비율": "number",
+      "자본유보율": "number",
+      "매출총이익률": "number",
+      "비유동적합률": "number",
+      "유동부채비율": "number",
+      "자기자본비율": "number",
+      "자본금회전율": "number",
+      "재무레버리지": "number",
+      "총자산증가율": "number",
+      "총자산회전율": "number",
+      "총포괄이익률": "number",
+      "금융비용부담률": "number",
+      "납입자본이익률": "number",
+      "부채총계증가율": "number",
+      "비유동부채비율": "number",
+      "영업수익경비율": "number",
+      "유동부채증가율": "number",
+      "유동자산증가율": "number",
+      "유형자산증가율": "number",
+      "유형자산회전율": "number",
+      "자기자본증가율": "number",
+      "자기자본회전율": "number",
+      "재고자산증가율": "number",
+      "재고자산회전율": "number",
+      "타인자본회전율": "number",
+      "매출액증가율(YoY)": "number",
+      "순이익증가율(YoY)": "number",
+      "비유동부채증가율": "number",
+      "비유동자산증가율": "number",
+      "비유동자산회전율": "number",
+      "유동자산구성비율": "number",
+      "유형자산구성비율": "number",
+      "자본금영업이익률": "number",
+      "재고자산구성비율": "number",
+      "총자산영업이익률": "number",
+      "매출원가/재고자산": "number",
+      "영업이익증가율(YoY)": "number",
+      "비유동자산구성비율": "number",
+      "자기자본영업이익률": "number",
+      "매출총이익증가율(YoY)": "number",
+      "총포괄이익증가율(YoY)": "number",
+      "재고자산/유동자산비율": "number",
+      "유동자산/비유동자산비율": "number"
+    }
+  },
+  "shareholders": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 2,
+    "constant_columns": [],
+    "fields": {
+      "bulk_holders": "list[23]",
+      "major_holders": "list[7]"
+    }
+  },
+  "insider_timeline": {
+    "top_type": "list",
+    "record_count": 68,
+    "column_count": 38,
+    "constant_columns": [
+      "corp_code",
+      "corp_name"
+    ],
+    "fields": {
+      "repror": "문자(6자) 예:와이어트그룹",
+      "source": "문자(8자) 예:elestock",
+      "rcept_dt": "문자(10자) 예:2026-04-15",
+      "rcept_no": "정수(큰수)",
+      "corp_code": "정수(큰수)",
+      "corp_name": "문자(2자) 예:엔켐",
+      "isu_exctv_ofcps": "문자(1자) 예:-",
+      "sp_stock_lmp_cnt": "정수(큰수)",
+      "isu_main_shrholdr": "문자(7자) 예:사실상지배주주",
+      "sp_stock_lmp_rate": "숫자",
+      "isu_exctv_rgist_at": "문자(1자) 예:-",
+      "sp_stock_lmp_irds_cnt": "정수(큰수)",
+      "sp_stock_lmp_irds_rate": "숫자",
+      "nm": "문자(9자) 예:와이어트그룹(주)",
+      "rm": "문자(3자) 예:주1)",
+      "relate": "문자(4자) 예:최대주주",
+      "stlm_dt": "문자(10자) 예:2026-03-31",
+      "corp_cls": "문자(1자) 예:K",
+      "bsns_year": "숫자",
+      "stock_knd": "문자(3자) 예:보통주",
+      "reprt_code": "숫자",
+      "bsis_posesn_stock_co": "정수(큰수)",
+      "trmend_posesn_stock_co": "정수(큰수)",
+      "bsis_posesn_stock_qota_rt": "숫자",
+      "trmend_posesn_stock_qota_rt": "숫자",
+      "qota_rt": "문자(6자) 예:17.40%",
+      "change_on": "문자(13자) 예:2023년 04월 12일",
+      "change_cause": "문자(24자) 예:기존 최대주주의 시간외 장외매도로",
+      "posesn_stock_co": "정수(큰수)",
+      "mxmm_shrholdr_nm": "문자(8자) 예:오정강 외 2인",
+      "bsis_qy": "문자(1자) 예:-",
+      "acqs_mth1": "문자(1자) 예:-",
+      "acqs_mth2": "문자(1자) 예:-",
+      "acqs_mth3": "문자(1자) 예:-",
+      "trmend_qy": "문자(1자) 예:-",
+      "change_qy_acqs": "문자(1자) 예:-",
+      "change_qy_dsps": "문자(1자) 예:-",
+      "change_qy_incnr": "문자(1자) 예:-"
+    }
+  },
+  "executive_roster": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 7,
+    "constant_columns": [],
+    "fields": {
+      "김기범": "list[1]",
+      "박시묵": "list[1]",
+      "오정강": "list[1]",
+      "오정섭": "list[1]",
+      "유승완": "list[1]",
+      "이승호": "list[1]",
+      "정지선": "list[1]"
+    }
+  },
+  "audit_history": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 3,
+    "constant_columns": [],
+    "fields": {
+      "opinions": "list[0]",
+      "auditor_changes": "list[0]",
+      "independence_warnings": "list[0]"
+    }
+  },
+  "debt_balance": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "year": "number",
+      "total": "number",
+      "by_kind": "dict{}",
+      "equity_ratio": "빈값",
+      "maturity_1y_share": "number"
+    }
+  },
+  "distress": {
+    "top_type": "list",
+    "record_count": 0,
+    "column_count": 0,
+    "constant_columns": [],
+    "fields": {}
+  },
+  "dividends": {
+    "top_type": "list",
+    "record_count": 75,
+    "column_count": 12,
+    "constant_columns": [
+      "corp_cls",
+      "corp_code",
+      "corp_name"
+    ],
+    "fields": {
+      "se": "문자(9자) 예:주당액면가액(원)",
+      "lwfr": "숫자",
+      "frmtrm": "숫자",
+      "thstrm": "숫자",
+      "stlm_dt": "문자(10자) 예:2026-03-31",
+      "corp_cls": "문자(1자) 예:K",
+      "rcept_no": "정수(큰수)",
+      "bsns_year": "숫자",
+      "corp_code": "정수(큰수)",
+      "corp_name": "문자(2자) 예:엔켐",
+      "stock_knd": "문자(1자) 예:-",
+      "reprt_code": "숫자"
+    }
+  },
+  "doc:20260715900769": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(3988자) 예:엔켐/회사합병 결정(종속회사의 주",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20260715900769.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20260708900785": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(1676자) 예:엔켐/전환사채(해외전환사채포함)발",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20260708900785.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20260707000093": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(4769자) 예:주식등의 대량보유상황보고서(일반)",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20260707000093.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20260625000431": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(4915자) 예:주식등의 대량보유상황보고서(일반)",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20260625000431.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20260619900823": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(1086자) 예:엔켐/전환사채(해외전환사채포함)발",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20260619900823.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20260608900730": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(1103자) 예:엔켐/전환가액의조정/(2026.0",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20260608900730.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20260415000535": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(4977자) 예:주식등의 대량보유상황보고서(일반)",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20260415000535.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20260408901386": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(2382자) 예:엔켐/최대주주 변경을 수반하는 주",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20260408901386.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20260327001266": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(5729자) 예:주식등의 대량보유상황보고서(일반)",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20260327001266.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20260325900004": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(2800자) 예:엔켐/최대주주변경/(2026.03",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20260325900004.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20260325900003": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(1802자) 예:엔켐/최대주주 변경을 수반하는 주",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20260325900003.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20260309001601": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(5729자) 예:주식등의 대량보유상황보고서(일반)",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20260309001601.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20260211000793": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(6415자) 예:주식등의 대량보유상황보고서(일반)",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20260211000793.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20260206001653": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(3660자) 예:주식등의 대량보유상황보고서(약식)",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20260206001653.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20260123000072": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "빈값",
+      "files": "list[0]",
+      "main_file": "빈값",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20260122000527": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(3673자) 예:주요사항보고서(전환사채권 발행결정",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20260122000527.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20260120000352": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(3610자) 예:주요사항보고서(전환사채권 발행결정",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20260120000352.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20260105000436": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(5938자) 예:주식등의 대량보유상황보고서(일반)",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20260105000436.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20251230000813": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(2019자) 예:주요사항보고서(자기전환사채매도결정",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20251230000813.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20251230000815": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(2061자) 예:주요사항보고서(자기전환사채매도결정",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20251230000815.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20251226000470": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(2117자) 예:주요사항보고서(자기전환사채매도결정",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20251226000470.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20251226000378": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(3424자) 예:주요사항보고서(전환사채권 발행결정",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20251226000378.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20251226000161": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(3651자) 예:주식등의 대량보유상황보고서(약식)",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20251226000161.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20251204000435": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(2557자) 예:주요사항보고서(자기전환사채매도결정",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20251204000435.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20251121000435": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(4805자) 예:주식등의 대량보유상황보고서(일반)",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20251121000435.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20251114903410": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(233자) 예:주권매매거래정지해제\n\n\n\n\n| 1",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20251114903410.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20251114902922": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(224자) 예:주권매매거래정지\n\n\n\n\n| 1.대",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20251114902922.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20251106000431": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(1976자) 예:주요사항보고서(자기전환사채매도결정",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20251106000431.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20250919900510": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(1240자) 예:엔켐/전환사채(해외전환사채포함)발",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20250919900510.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20250910000457": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(1844자) 예:주요사항보고서(자기전환사채매도결정",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20250910000457.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20250908900489": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(1149자) 예:엔켐/전환사채(해외전환사채포함)발",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20250908900489.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20250828900612": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(1079자) 예:엔켐/전환사채(해외전환사채포함)발",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20250828900612.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20250821000613": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(4770자) 예:주식등의 대량보유상황보고서(일반)",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20250821000613.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  },
+  "doc:20250730900761": {
+    "top_type": "object",
+    "record_count": 1,
+    "column_count": 5,
+    "constant_columns": [],
+    "fields": {
+      "text": "문자(979자) 예:엔켐/전환사채(해외전환사채포함)발",
+      "files": "list[1]",
+      "main_file": "문자(18자) 예:20250730900761.xml",
+      "truncated": "bool",
+      "char_count": "number"
+    }
+  }
+}
