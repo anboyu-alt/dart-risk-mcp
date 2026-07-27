@@ -363,6 +363,10 @@ function tableEl(table) {
 
   const t = document.createElement("table");
   const isVertical = table.orientation === "vertical";
+  // 접힌 열은 가로 표에만 있다(세로는 tableLayout이 애초에 접지 않는다 —
+  // app.js 주석 참고). 행마다 접힌 열 수는 같으므로 표 전체에서 한 번만
+  // 판단한다.
+  const hasFolded = !isVertical && Array.isArray(table.foldedKeys) && table.foldedKeys.length > 0;
   if (!isVertical) {
     // 세로는 각 행이 이미 [라벨, 값]이라 별도 헤더가 필요 없다 — 헤더를
     // 넣으면 "항목/값"이 열 제목과 데이터 사이에 낀 군더더기가 된다.
@@ -371,6 +375,11 @@ function tableEl(table) {
       const th = document.createElement("th");
       th.textContent = c;
       thead.appendChild(th);
+    }
+    if (hasFolded) {
+      // 펼치기 버튼 칸의 헤더 — 내용은 없지만 칸 수를 표 본문과 맞춰야
+      // 열이 밀리지 않는다.
+      thead.appendChild(document.createElement("th"));
     }
   }
   const rceptCol = Array.isArray(table.keys) ? table.keys.indexOf("rcept_no") : -1;
@@ -401,6 +410,43 @@ function tableEl(table) {
         td.addEventListener("click", function () { openDocPanel(v); });
       }
     });
+
+    if (hasFolded) {
+      // 펼치기 버튼 — 이 행의 접힌 열을 세로(라벨: 값)로 보여준다. 없애는
+      // 게 아니라 접는 것이므로, 클릭하면 언제든 원래 값을 볼 수 있어야
+      // 한다(브리프 원칙).
+      const btnCell = tr.insertCell();
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "fold-btn";
+      btn.textContent = "나머지 " + table.foldedKeys.length + "개 열";
+      btnCell.appendChild(btn);
+
+      // 상세 행은 항상 만들어 두고(위치가 이 행 바로 다음으로 고정된다)
+      // hidden 속성으로만 여닫는다 — 클릭 시점에 특정 위치에 행을
+      // 끼워넣으려 하면(tbody는 append만 지원) 이미 그려진 다음 행들
+      // 뒤로 밀려나 버린다.
+      const detailTr = tb.insertRow();
+      detailTr.className = "fold-detail";
+      detailTr.hidden = true;
+      const detailTd = detailTr.insertCell();
+      detailTd.colSpan = table.columns.length + 1;
+      const foldedForRow = (Array.isArray(table.foldedRows) && table.foldedRows[rowIdx]) || [];
+      // innerHTML을 쓰지 않는다 — 공시 원문·실명이 그대로 섞여 들어오는
+      // 값이라 textContent로만 채운다(각 [라벨, 값] 쌍을 별도 엘리먼트로
+      // 만들고 <br>로 줄바꿈한다).
+      foldedForRow.forEach(function (pair, idx) {
+        if (idx > 0) detailTd.appendChild(document.createElement("br"));
+        const b = document.createElement("b");
+        b.textContent = pair[0];
+        detailTd.appendChild(b);
+        detailTd.appendChild(document.createTextNode(": " + pair[1]));
+      });
+
+      btn.addEventListener("click", function () {
+        detailTr.hidden = !detailTr.hidden;
+      });
+    }
   });
   frag.appendChild(t);
   return frag;

@@ -304,6 +304,11 @@ function tableLayout(records) {
       // ui.js가 AMOUNT_FIELDS 열에서 이 원본 값을 title(마우스 오버)로
       // 보여줄 수 있도록 표시용 값과 나란히 남긴다.
       raw: keys.map(function (k) { return cell(rows[0][k]); }),
+      // 세로는 원래 한 줄에 한 항목이라 넓지 않다 — 접지 않는다. 가로와
+      // 반환 모양을 맞추기 위해 빈 배열로 채운다(ui.js가 undefined 분기를
+      // 따로 두지 않아도 되게).
+      foldedKeys: [],
+      foldedRows: [],
     };
     // 세로에서는 rows[i][0]이 라벨, rows[i][1]이 값이다. 가로와 구조가
     // 다르므로 ui.js의 rcept_no 클릭 배선이 두 경우를 모두 처리해야 한다.
@@ -321,6 +326,13 @@ function tableLayout(records) {
   const promote = bodyKeys.length > 0 ? constant : [];
   const finalKeys = bodyKeys.length > 0 ? bodyKeys : keys;
 
+  // insider_timeline(상수열 제외 36열)처럼 MAX_VISIBLE_COLUMNS를 넘으면
+  // 뒤쪽 열을 접는다 — 버리는 게 아니라 ui.js가 행마다 펼칠 수 있게
+  // foldedKeys·foldedRows로 함께 돌려준다(splitVisibleFolded 주석 참고).
+  const split = splitVisibleFolded(finalKeys);
+  const visibleKeys = split.visible;
+  const foldedKeys = split.folded;
+
   return {
     orientation: "horizontal",
     // rcept_no가 모든 행에서 같으면(affiliates·financials 실측 — 27줄·
@@ -333,17 +345,67 @@ function tableLayout(records) {
     caption: promote.map(function (k) {
       return { key: k, label: label(k), value: formatValue(k, rows[0][k]) };
     }),
-    columns: finalKeys.map(label),
-    keys: finalKeys,
+    columns: visibleKeys.map(label),
+    keys: visibleKeys,
     rows: rows.map(function (r) {
-      return finalKeys.map(function (k) { return formatValue(k, r[k]); });
+      return visibleKeys.map(function (k) { return formatValue(k, r[k]); });
     }),
     // 세로와 같은 이유(위 raw 주석 참고) — 가로는 셀마다 있으므로 rows와
     // 같은 모양([행][열])의 원본 값 행렬이다.
     raw: rows.map(function (r) {
-      return finalKeys.map(function (k) { return cell(r[k]); });
+      return visibleKeys.map(function (k) { return cell(r[k]); });
+    }),
+    // 접힌 열의 원본 키 목록 — 개수 표시("나머지 N개 열")와 "열이
+    // 사라지지 않았다"를 확인하는 용도(keys∪foldedKeys∪caption이
+    // finalKeys 전체를 덮어야 한다).
+    foldedKeys: foldedKeys,
+    // 행마다 접힌 열을 [라벨, 값] 쌍의 배열로 미리 만들어 둔다 — ui.js가
+    // 펼치기 버튼을 누르면 이 배열을 세로로 그린다(세로 표의 rows와
+    // 같은 [라벨, 값] 모양이라 별도 렌더 분기를 새로 만들지 않아도 된다).
+    foldedRows: rows.map(function (r) {
+      return foldedKeys.map(function (k) { return [label(k), formatValue(k, r[k])]; });
     }),
   };
+}
+
+// 한 화면에서 읽을 수 있는 열 수의 상한. insider_timeline이 상수열을
+// 빼고도 36열이라 필요하다. 넘는 열은 **접을 뿐 버리지 않는다** — ui.js가
+// 행마다 "나머지 N개 열" 버튼으로 펼칠 수 있게 한다.
+const MAX_VISIBLE_COLUMNS = 12;
+
+// 접기로 밀려나면 안 되는 열. ui.js의 tableEl()은 오직
+// table.keys.indexOf("rcept_no")로만 공시 원문 패널을 여는 셀을 찾는다
+// (앞서 상수열 캡션 승격이 이 열을 빼버려 affiliates·financials에서
+// 패널이 통째로 죽었던 사고와 같은 부류) — 앞에서부터 단순히 12개만
+// 자르면 insider_timeline처럼 rcept_no가 13번째 이후에 나타나는 실측
+// 순서에서 똑같은 사고가 반복된다.
+const ALWAYS_VISIBLE_KEYS = ["rcept_no"];
+
+/** finalKeys(캡션 승격 이후 남은 열)를 visible/folded로 나눈다.
+ *
+ * MAX_VISIBLE_COLUMNS 이하면 전부 visible이다(접을 필요가 없다). 넘으면
+ * ALWAYS_VISIBLE_KEYS에 있는 열을 우선 확보하고, 남은 자리를 원래 순서
+ * 그대로 앞에서부터 채운다 — essential 열이 뒤로 밀려 있었어도 제자리
+ * (원래 열 순서)에서 보이도록 순서 자체는 다시 섞지 않는다. */
+function splitVisibleFolded(finalKeys) {
+  if (finalKeys.length <= MAX_VISIBLE_COLUMNS) {
+    return { visible: finalKeys, folded: [] };
+  }
+  const essential = finalKeys.filter(function (k) {
+    return ALWAYS_VISIBLE_KEYS.indexOf(k) !== -1;
+  });
+  const essentialSet = new Set(essential);
+  const budget = Math.max(MAX_VISIBLE_COLUMNS - essential.length, 0);
+  const rest = finalKeys
+    .filter(function (k) { return !essentialSet.has(k); })
+    .slice(0, budget);
+  const restSet = new Set(rest);
+  const visible = finalKeys.filter(function (k) {
+    return restSet.has(k) || essentialSet.has(k);
+  });
+  const visibleSet = new Set(visible);
+  const folded = finalKeys.filter(function (k) { return !visibleSet.has(k); });
+  return { visible: visible, folded: folded };
 }
 
 function isPlainObject(v) {

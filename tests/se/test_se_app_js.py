@@ -449,6 +449,67 @@ class TestTableLayout(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestWideTableFolding(unittest.TestCase):
+    """insider_timeline(상수열 제외 36열) 대응 — 12열을 넘으면 나머지를
+    접는다. 접는 것이지 없애는 것이 아니다: 어떤 열도 keys·foldedKeys·
+    caption 중 정확히 하나에는 있어야 한다.
+    """
+
+    _WIDE = "Array.from({length:3},(_,i)=>Object.fromEntries(Array.from({length:20},(_,j)=>['f'+j, i+'-'+j])))"
+
+    def test_visible_columns_are_capped(self):
+        got = run_js(f"tableLayout({self._WIDE})")
+        self.assertLessEqual(len(got["keys"]), 12)
+
+    def test_folded_columns_are_reported_not_dropped(self):
+        got = run_js(f"tableLayout({self._WIDE})")
+        self.assertTrue(got["foldedKeys"], "접힌 열 목록이 없습니다")
+
+    def test_every_column_is_either_visible_folded_or_caption(self):
+        got = run_js(f"tableLayout({self._WIDE})")
+        accounted = set(got["keys"]) | set(got["foldedKeys"]) | {c["key"] for c in got["caption"]}
+        self.assertEqual(len(accounted), 20, "열이 사라졌습니다")
+
+    def test_narrow_table_folds_nothing(self):
+        got = run_js('tableLayout([{a:1,b:2},{a:3,b:4}])')
+        self.assertEqual(got["foldedKeys"], [])
+
+    def test_folded_rows_carry_the_hidden_values(self):
+        got = run_js(f"tableLayout({self._WIDE})")
+        self.assertTrue(got["foldedRows"][0], "접힌 값이 비어 있습니다")
+
+    def test_rcept_no_stays_visible_even_when_pushed_past_the_cap(self):
+        """insider_timeline에는 실제로 rcept_no가 있다. ui.js는 오직
+        table.keys.indexOf("rcept_no")로만 공시 원문 패널의 클릭 셀을
+        찾는다 — 앞에서부터 단순히 12개만 자르면, 원본 응답에서 rcept_no가
+        13번째 이후에 나타나는 경우 이 열이 접혀 패널 배선이 끊긴다
+        (affiliates·financials에서 실제로 있었던 사고와 같은 부류).
+        """
+        wide_with_rcept_no = (
+            "Array.from({length:3},(_,i)=>Object.assign("
+            "Object.fromEntries(Array.from({length:20},(_,j)=>['f'+j, i+'-'+j])),"
+            "{rcept_no: '2026010100000'+i}))"
+        )
+        got = run_js(f"tableLayout({wide_with_rcept_no})")
+        self.assertIn("rcept_no", got["keys"],
+                       "rcept_no가 접혀 공시 원문 패널 배선이 끊깁니다")
+        self.assertNotIn("rcept_no", got["foldedKeys"])
+
+    def test_folding_preserves_original_column_order_among_visible(self):
+        """essential 승격이 열 순서를 뒤섞어 "앞 열부터"라는 사용자 기대를
+        깨면 안 된다 — rcept_no를 포함하되 나머지 visible 열은 원래
+        순서를 유지해야 한다."""
+        wide_with_rcept_no = (
+            "Array.from({length:3},(_,i)=>Object.assign("
+            "Object.fromEntries(Array.from({length:20},(_,j)=>['f'+j, i+'-'+j])),"
+            "{rcept_no: '2026010100000'+i}))"
+        )
+        got = run_js(f"tableLayout({wide_with_rcept_no})")
+        non_essential_visible = [k for k in got["keys"] if k != "rcept_no"]
+        self.assertEqual(non_essential_visible, sorted(non_essential_visible, key=lambda k: int(k[1:])))
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestSectionBlocks(unittest.TestCase):
     """dict-of-lists 섹션(shareholders/audit_history/debt_balance 등)을
     소제목 + 개별 표 블록 목록으로 펼치는 sectionBlocks() 검증.
@@ -923,6 +984,172 @@ class TestAmountCellTitleTooltip(unittest.TestCase):
         label_cells = [c for c in got["cells"] if c["text"] == "계획 금액"]
         self.assertTrue(label_cells)
         self.assertTrue(all(c["title"] is None for c in label_cells))
+
+
+# ── 펼치기(⋯) 버튼 클릭 배선 재현용 가짜 DOM ────────────────────────────
+#
+# tableLayout()이 계산만 하고 ui.js가 실제로 그리지 않으면(또는 버튼이
+# innerHTML로 데이터를 섞어 넣으면) "접힌 열이 사라지지 않는다"는 계약이
+# 화면에서는 지켜지지 않는다 — _DOC_CLICK_HARNESS와 같은 이유로 실제 클릭
+# 이벤트를 재현해 확인한다. tbody 자식은 [데이터행0, 상세행0, 데이터행1,
+# 상세행1, ...] 순서로 쌓인다(ui.js tableEl 참고 — 상세 행을 각 데이터
+# 행 직후에 바로 append하기 때문).
+_FOLD_CLICK_HARNESS = r"""
+const vm = require("vm");
+const fs = require("fs");
+
+class FakeEl {
+  constructor(tag) {
+    this.tag = tag;
+    this.children = [];
+    this._text = "";
+    this._className = "";
+    this._listeners = {};
+  }
+  appendChild(c) { this.children.push(c); return c; }
+  insertRow() { const tr = new FakeEl("tr"); this.appendChild(tr); return tr; }
+  insertCell() { const td = new FakeEl("td"); this.appendChild(td); return td; }
+  createTHead() { const el = new FakeEl("thead"); this.appendChild(el); return el; }
+  createTBody() { const el = new FakeEl("tbody"); this.appendChild(el); return el; }
+  addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); }
+  dispatch(type) { (this._listeners[type] || []).forEach(function (fn) { fn({}); }); }
+  set textContent(v) { this._text = String(v); this.children = []; }
+  get textContent() { return this._text; }
+  set className(v) { this._className = v; }
+  get className() { return this._className; }
+}
+
+function findByTag(node, tag, out) {
+  out = out || [];
+  if (!node) return out;
+  if (node.tag === tag) out.push(node);
+  (node.children || []).forEach(function (c) { findByTag(c, tag, out); });
+  return out;
+}
+
+// 실제 브라우저의 textContent는 하위 텍스트 노드를 전부 이어붙인다 — 이
+// 가짜 DOM은 setter로 지정한 값만 저장하므로(appendChild로 쌓은 자식은
+// 반영 안 함), 접힌 상세 칸처럼 자식을 이어붙여 만든 노드는 직접 순회해야
+// 실제로 화면에 뭐가 찍히는지 알 수 있다.
+function textOf(node) {
+  if (!node) return "";
+  if (!node.children || node.children.length === 0) return node.textContent || "";
+  return node.children.map(textOf).join("");
+}
+
+const sandbox = {
+  console: console,
+  document: {
+    createElement: function (tag) { return new FakeEl(tag); },
+    createDocumentFragment: function () { return new FakeEl("#fragment"); },
+    createTextNode: function (t) { const n = new FakeEl("#text"); n.textContent = t; return n; },
+    addEventListener: function () {},
+    getElementById: function () { return null; },
+  },
+  localStorage: {
+    getItem: function () { return null; },
+    setItem: function () {},
+    removeItem: function () {},
+  },
+  fetch: function () { return Promise.reject(new Error("no network in test")); },
+};
+vm.createContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[1], "utf-8"), { filename: "app.js" }).runInContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).runInContext(sandbox);
+
+const records = %(records)s;
+const table = sandbox.tableLayout(records);
+const frag = sandbox.tableEl(table);
+
+const tbody = findByTag(frag, "tbody", [])[0];
+const rows = (tbody && tbody.children) || [];
+const dataRows = rows.filter(function (_, i) { return i %% 2 === 0; });
+const detailRows = rows.filter(function (_, i) { return i %% 2 === 1; });
+const buttons = findByTag(frag, "button", []);
+
+const before = detailRows.map(function (r) { return { hidden: !!r.hidden, text: textOf(r) }; });
+buttons.forEach(function (b) { b.dispatch("click"); });
+const after = detailRows.map(function (r) { return { hidden: !!r.hidden, text: textOf(r) }; });
+
+process.stdout.write(JSON.stringify({
+  foldedKeys: table.foldedKeys,
+  buttonCount: buttons.length,
+  buttonTexts: buttons.map(function (b) { return textOf(b); }),
+  dataRowCount: dataRows.length,
+  before: before,
+  after: after,
+}));
+"""
+
+
+def run_fold_click(records_js: str):
+    """records_js를 tableLayout → tableEl로 그린 뒤, class="fold-btn" 버튼을
+    실제로 클릭해 상세 행의 hidden 상태·내용이 어떻게 바뀌는지 돌려준다.
+    """
+    script = _FOLD_CLICK_HARNESS % {"records": records_js}
+    out = subprocess.run(
+        [_NODE, "-e", script, str(_APP), str(_UI)],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    if out.returncode != 0:
+        raise AssertionError(f"node 실행 실패:\n{out.stderr}")
+    return json.loads(out.stdout)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestFoldButtonWiring(unittest.TestCase):
+    """Step 4: insider_timeline처럼 12열을 넘는 표에서 "나머지 N개 열"
+    버튼이 실제로 그려지고, 클릭하면 접힌 값이 실제로 나타나는지 확인한다.
+    tableLayout()이 foldedKeys·foldedRows를 계산만 하고 ui.js가 그리지
+    않으면(또는 클릭이 배선되지 않으면) 사용자는 여전히 데이터를 볼 방법이
+    없다 — 계산 결과 검증(TestWideTableFolding)만으로는 이 배선 유실을
+    못 잡는다.
+    """
+
+    _WIDE = ("Array.from({length:2},(_,i)=>Object.fromEntries("
+              "Array.from({length:20},(_,j)=>['f'+j, i+'-'+j])))")
+
+    def test_button_appears_once_per_row_with_folded_count(self):
+        got = run_fold_click(self._WIDE)
+        self.assertEqual(got["buttonCount"], got["dataRowCount"])
+        for text in got["buttonTexts"]:
+            self.assertEqual(text, f"나머지 {len(got['foldedKeys'])}개 열")
+
+    def test_detail_row_starts_hidden(self):
+        """접힌 값은 클릭 전까지는 화면을 어지럽히면 안 된다."""
+        got = run_fold_click(self._WIDE)
+        self.assertTrue(all(b["hidden"] for b in got["before"]))
+
+    def test_click_reveals_the_hidden_columns_values(self):
+        """접는 것이지 없애는 것이 아니다 — 클릭하면 실제로 값이 보여야
+        한다."""
+        got = run_fold_click(self._WIDE)
+        self.assertTrue(all(not a["hidden"] for a in got["after"]),
+                         "클릭해도 상세 행이 계속 숨겨져 있습니다")
+        self.assertIn("f12: 0-12", got["after"][0]["text"],
+                       "접힌 첫 열(f12)의 값이 펼친 화면에 없습니다")
+        self.assertIn("f19: 0-19", got["after"][0]["text"],
+                       "접힌 마지막 열(f19)의 값이 펼친 화면에 없습니다")
+
+    def test_narrow_table_has_no_fold_button(self):
+        """12열 이하는 접을 게 없으니 버튼도 없어야 한다 — 빈 접기 UI를
+        남발하면 그 자체가 소음이다."""
+        got = run_fold_click('[{a:1,b:2},{a:3,b:4}]')
+        self.assertEqual(got["buttonCount"], 0)
+
+    def test_essential_column_not_duplicated_in_the_folded_panel(self):
+        """rcept_no는 splitVisibleFolded가 항상 visible에 남기므로
+        foldedKeys에는 나오지 않아야 한다 — 펼친 패널에 다시 나타나면
+        같은 값이 두 군데(본문 열 + 펼친 패널)에 중복 표기된다."""
+        wide_with_rcept_no = (
+            "Array.from({length:2},(_,i)=>Object.assign("
+            "Object.fromEntries(Array.from({length:20},(_,j)=>['f'+j, i+'-'+j])),"
+            "{rcept_no: '2026010100000'+i}))"
+        )
+        got = run_fold_click(wide_with_rcept_no)
+        self.assertNotIn("rcept_no", got["foldedKeys"])
+        for a in got["after"]:
+            self.assertNotIn("접수번호", a["text"])
 
 
 if __name__ == "__main__":
