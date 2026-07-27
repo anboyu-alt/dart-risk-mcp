@@ -882,43 +882,90 @@ function documentBlocks(text) {
 // 요구해 의존성이 하나 더 늘어난다. 날짜를 "2026.04.15" 문자열로 만들어
 // category 축에 넣으면 어댑터 없이 같은 그림이 나온다 — 우리 데이터는
 // 보고 시점이 띄엄띄엄한 이산 값이라 오히려 이쪽이 맞다.
+// financials는 여기 없다 — 실측(field-inventory)에서 fs_div(CFS/OFS)·
+// sj_div(BS/IS)가 상수열이 아니라 30건 안에 연결·별도, 재무상태표·손익계산서가
+// 공존한다. 같은 account_nm("유동자산")이 연결 행과 별도 행 양쪽에 나타나는데,
+// x축(account_nm) 하나에 값 하나만 담는 chartData 구조로는 뒤 레코드가 앞을
+// 조용히 덮어(연결 100이 사라지고 별도 11만 남는 식) 어느 쪽 값인지 표시할
+// 방법이 없다(리뷰 지적 ②). 연결과 별도를 한 그림에 섞느니 차트를 빼고
+// 표(financials 섹션은 fs_div·sj_div·fs_nm·sj_nm 열을 그대로 보여준다)만
+// 남긴다 — 표는 행마다 그 값이 어느 재무제표인지 정확히 말하지만, 차트는
+// 그 구분을 표현할 자리가 없다.
 const CHART_SPECS = Object.assign(Object.create(null), {
   insider_timeline: {
     kind: "line", title: "보고자별 지분율 추이",
     x: "rcept_dt", y: "sp_stock_lmp_rate", groupBy: "repror", yLabel: "지분율 (%)",
+    // Chart.js의 time 축은 별도 날짜 어댑터를 요구한다 — 위 CHART_SPECS
+    // 주석의 결정을 실제로 지키는지 테스트가 확인할 수 있도록 명시한다
+    // (test_no_spec_uses_a_time_scale). renderChart(ui.js)가 이 값을
+    // scales.x.type으로 그대로 쓴다.
+    xScale: "category",
   },
   fund_usage: {
     kind: "bar", title: "자금 사용 — 계획 대비 실제",
-    x: "tm", yLabel: "금액",
+    x: "tm", yLabel: "금액", xScale: "category",
     series: [
       { key: "plan_amount", label: "계획 금액" },
       { key: "real_dtls_amount", label: "실제 집행 금액" },
     ],
   },
-  financials: {
-    kind: "bar", title: "계정과목별 3개 기간",
-    x: "account_nm", yLabel: "금액",
-    series: [
-      { key: "bfefrmtrm_amount", label: "전전기" },
-      { key: "frmtrm_amount", label: "전기" },
-      { key: "thstrm_amount", label: "당기" },
-    ],
-  },
 });
 
-/** "20260415" → "2026.04.15". 날짜가 아니면 원본을 그대로 쓴다. */
+/** "20260415" → "2026.04.15", "2026-04-15" → "2026.04.15". 날짜가 아니면
+ *  원본을 그대로 쓴다.
+ *
+ *  실측(field-inventory)에서 insider_timeline.rcept_dt는 "2026-04-15"처럼
+ *  하이픈이 있는 10자 문자열이다 — 브리프가 예시로 준 8자리 숫자
+ *  ("20260415")와 다르다. 8자리 숫자 분기만 있으면 이 실측 형태가 어느
+ *  분기에도 걸리지 않아 하이픈이 그대로 노출된다(리뷰 지적 ④). 두 형태
+ *  모두 "."로 통일해 화면 표기가 일관되게 한다. */
 function axisLabel(v) {
   const s = v === null || v === undefined ? "" : String(v);
-  return /^\d{8}$/.test(s) ? s.slice(0, 4) + "." + s.slice(4, 6) + "." + s.slice(6, 8) : s;
+  if (/^\d{8}$/.test(s)) return s.slice(0, 4) + "." + s.slice(4, 6) + "." + s.slice(6, 8);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s.replace(/-/g, ".");
+  return s;
 }
 
 /** 숫자로 읽는다. 읽을 수 없으면 null — **0으로 채우지 않는다.**
- *  0으로 채우면 "그 시점에 0이었다"는 거짓말이 된다. */
+ *  0으로 채우면 "그 시점에 0이었다"는 거짓말이 된다.
+ *
+ *  배열·객체는 애초에 숫자가 아니다 — 걸러내지 않으면 String([5])가 "5"로
+ *  우연히 읽혀 배열이 숫자인 척한다(리뷰 지적 ⑦).
+ *
+ *  쉼표는 "13,082,000,000"처럼 천 단위를 3자리씩 묶을 때만 벗긴다.
+ *  "1,2,3"처럼 자릿수가 안 맞는 문자열까지 쉼표를 무조건 지우면
+ *  "123"이라는 없는 숫자를 만들어낸다(리뷰 지적 ⑦) — 쉼표가 있는데
+ *  이 형태에 안 맞으면 애초에 숫자로 보지 않는다. */
 function numeric(v) {
   if (v === null || v === undefined) return null;
-  const s = String(v).replace(/,/g, "").trim();
-  if (s === "" || !/^-?\d*\.?\d+$/.test(s)) return null;
+  if (typeof v === "object") return null;
+  const raw = String(v).trim();
+  if (raw === "") return null;
+  if (raw.indexOf(",") !== -1 && !/^-?\d{1,3}(,\d{3})*(\.\d+)?$/.test(raw)) return null;
+  const s = raw.replace(/,/g, "");
+  if (!/^-?\d*\.?\d+$/.test(s)) return null;
   const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** x축 정렬용 보조키: 문자열에 있는 숫자만 이어붙여 정수로 읽는다. 숫자가
+ *  전혀 없으면(예: "유동자산") null이다.
+ *
+ *  numeric()과 다른 함수다 — numeric()은 "이 값 자체가 숫자다"를 요구하고
+ *  (예: "제14회"는 실패), 이 함수는 "이 값 안에 정렬 기준이 될 숫자가
+ *  있다"만 본다("제14회" → 14). fund_usage.tm의 실측 형태가 "제14회"처럼
+ *  숫자가 아닌 문자로 감싸여 있어(리뷰 지적 ①) numeric()만으로는
+ *  회차 정렬이 항상 실패한다 — 문자열 정렬(사전식)로 빠지면 "제10회"가
+ *  "제9회"보다 앞에 와 그래프가 거짓말을 한다.
+ *
+ *  "20260415"·"2026-04-15"처럼 형식이 섞인 날짜도 숫자만 이으면 같은
+ *  값(20260415)이 되어 시간순이 그대로 유지된다 — 날짜 축은 이 함수
+ *  하나로 8자리·하이픈 두 형태를 모두 옳게 정렬한다. */
+function axisSortKey(v) {
+  const s = v === null || v === undefined ? "" : String(v);
+  const digits = s.replace(/[^0-9]/g, "");
+  if (digits === "") return null;
+  const n = Number(digits);
   return Number.isFinite(n) ? n : null;
 }
 
@@ -937,13 +984,26 @@ function chartData(records, spec) {
     if (!seen.has(key)) { seen.add(key); xs.push(key); }
   }
   if (xs.length === 0) return null;
-  // 전부 숫자로 읽히면 숫자로 정렬한다. 문자열 정렬이면 회차 10이 9보다
-  // 앞에 와서 그래프가 거짓말을 한다. 날짜(YYYYMMDD)는 문자열 정렬이
-  // 곧 시간순이라 그대로 둬도 된다.
+  // 정렬 기준 3단계(리뷰 지적 ①⑤):
+  // 1) 값 전부가 순수 숫자면(예: "9","10") 숫자로 정렬한다.
+  // 2) 아니지만 전부 숫자를 품고 있으면(예: "제14회", "2026-04-15")
+  //    그 숫자로 정렬한다 — axisSortKey가 문자를 벗기고 숫자만 비교하므로
+  //    "제9회"가 "제14회"보다 앞에 온다(회차 정렬이 실제로 통한다).
+  // 3) 숫자가 전혀 없는 순수 범주형(예: "유동자산")은 정렬하지 않고
+  //    원본 등장 순서를 그대로 둔다. **`xs.sort(undefined)`를 여기 쓰면
+  //    안 된다** — comparator 없는 Array.prototype.sort는 기본값이 아니라
+  //    문자열 사전식 비교라 계정과목이 가나다순으로 뒤바뀐다(실제로 났던
+  //    사고, 리뷰 지적 ⑤). 정렬하지 않으려면 sort 자체를 호출하지 않아야
+  //    한다.
   const allNumeric = xs.every(function (v) { return numeric(v) !== null; });
-  xs.sort(allNumeric
-    ? function (a, b) { return numeric(a) - numeric(b); }
-    : undefined);
+  if (allNumeric) {
+    xs.sort(function (a, b) { return numeric(a) - numeric(b); });
+  } else {
+    const allHaveDigits = xs.every(function (v) { return axisSortKey(v) !== null; });
+    if (allHaveDigits) {
+      xs.sort(function (a, b) { return axisSortKey(a) - axisSortKey(b); });
+    }
+  }
   const labels = xs.map(axisLabel);
   const at = new Map(xs.map(function (v, i) { return [v, i]; }));
 
@@ -954,7 +1014,14 @@ function chartData(records, spec) {
       const data = xs.map(function () { return null; });
       for (const r of rows) {
         const i = at.get(String(r[spec.x]));
-        if (i !== undefined) data[i] = numeric(r[s.key]);
+        if (i === undefined) continue;
+        const v = numeric(r[s.key]);
+        // 같은 x(예: 같은 tm)에 레코드가 둘 이상 있을 수 있다(실측: kind가
+        // 상수열이 아니라 회차가 겹친다) — 뒤 레코드에 이 필드 값이 없다고
+        // (v === null) 앞 레코드가 채운 실값을 지우면 "값이 있는데
+        // 빈칸"이라는, 0으로 채우는 것 못지않은 거짓말이 된다(리뷰 지적
+        // ③). null은 그냥 건너뛴다 — 덮어쓰지 않는다.
+        if (v !== null) data[i] = v;
       }
       datasets.push({ label: s.label, data: data });
     }
@@ -967,7 +1034,11 @@ function chartData(records, spec) {
       const name = String(g);
       if (!groups.has(name)) groups.set(name, xs.map(function () { return null; }));
       const i = at.get(String(r[spec.x]));
-      if (i !== undefined) groups.get(name)[i] = numeric(r[spec.y]);
+      if (i === undefined) continue;
+      const v = numeric(r[spec.y]);
+      // 위 series 분기와 같은 이유 — 같은 그룹·같은 x에 값 없는 레코드가
+      // 뒤따라와도 이미 채운 실값을 null로 덮지 않는다.
+      if (v !== null) groups.get(name)[i] = v;
     }
     for (const [name, data] of groups) datasets.push({ label: name, data: data });
   }
@@ -990,6 +1061,6 @@ if (typeof module !== "undefined" && module.exports) {
     ACTOR_STATUS, actorLine, resumeTarget, documentBlocks,
     dropAllEmptyColumns, recordsHaveSourceField, sourceGroupedBlocks,
     DOC_LIST_KEY, docKeyRceptNo, docListRow,
-    CHART_SPECS, chartData, axisLabel, numeric,
+    CHART_SPECS, chartData, axisLabel, numeric, axisSortKey,
   };
 }

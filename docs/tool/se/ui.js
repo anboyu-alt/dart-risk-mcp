@@ -281,7 +281,11 @@ function renderChart(wrap, key, records) {
         },
       },
       scales: {
-        x: { ticks: { color: textColor }, grid: { color: gridColor } },
+        // spec.xScale(app.js CHART_SPECS)을 그대로 쓴다 — "category"만
+        // 있고 "time"은 없다는 설계 결정(별도 날짜 어댑터 회피)을 여기서
+        // 실제로 지킨다. 값이 없으면 Chart.js 기본값과 같은 "category"로
+        // 떨어진다.
+        x: { type: spec.xScale || "category", ticks: { color: textColor }, grid: { color: gridColor } },
         y: {
           ticks: { color: textColor }, grid: { color: gridColor },
           title: { display: !!spec.yLabel, text: spec.yLabel || "", color: textColor },

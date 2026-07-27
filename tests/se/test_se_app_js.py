@@ -3099,10 +3099,13 @@ class TestTocMatchesScreenOrderAndBehavesOnInteraction(unittest.TestCase):
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestChartData(unittest.TestCase):
+    # rcept_dt는 하이픈 있는 "2026-04-15"(10자) 형태다 — 엔켐 실측
+    # (field-inventory)이 그렇다. 브리프가 예시로 준 "20260415"(8자,
+    # 하이픈 없음)는 프로덕션에 존재하지 않는 형태였다(리뷰 지적 ④).
     _INSIDER = """[
-      {source:"elestock", repror:"오정강", rcept_dt:"20260304", sp_stock_lmp_rate:"14.13"},
-      {source:"elestock", repror:"오정강", rcept_dt:"20260327", sp_stock_lmp_rate:"3.60"},
-      {source:"elestock", repror:"와이어트그룹", rcept_dt:"20260415", sp_stock_lmp_rate:"6.53"}
+      {source:"elestock", repror:"오정강", rcept_dt:"2026-03-04", sp_stock_lmp_rate:"14.13"},
+      {source:"elestock", repror:"오정강", rcept_dt:"2026-03-27", sp_stock_lmp_rate:"3.60"},
+      {source:"elestock", repror:"와이어트그룹", rcept_dt:"2026-04-15", sp_stock_lmp_rate:"6.53"}
     ]"""
 
     def test_groups_into_one_dataset_per_reporter(self):
@@ -3123,44 +3126,106 @@ class TestChartData(unittest.TestCase):
 
     def test_zero_is_a_real_value_not_a_gap(self):
         got = run_js('''chartData([
-          {repror:"김", rcept_dt:"20260101", sp_stock_lmp_rate:"0"},
-          {repror:"김", rcept_dt:"20260102", sp_stock_lmp_rate:"1.5"}
+          {repror:"김", rcept_dt:"2026-01-01", sp_stock_lmp_rate:"0"},
+          {repror:"김", rcept_dt:"2026-01-02", sp_stock_lmp_rate:"1.5"}
         ], CHART_SPECS.insider_timeline)''')
         self.assertEqual(got["datasets"][0]["data"], [0, 1.5])
 
     def test_non_numeric_value_becomes_a_gap_not_zero(self):
         got = run_js('''chartData([
-          {repror:"김", rcept_dt:"20260101", sp_stock_lmp_rate:"-"},
-          {repror:"김", rcept_dt:"20260102", sp_stock_lmp_rate:"1.5"}
+          {repror:"김", rcept_dt:"2026-01-01", sp_stock_lmp_rate:"-"},
+          {repror:"김", rcept_dt:"2026-01-02", sp_stock_lmp_rate:"1.5"}
         ], CHART_SPECS.insider_timeline)''')
         self.assertEqual(got["datasets"][0]["data"], [None, 1.5])
 
     def test_comma_separated_number_is_parsed(self):
-        got = run_js('''chartData([{tm:"1", plan_amount:"13,082,000,000",
+        got = run_js('''chartData([{tm:"제1회", plan_amount:"13,082,000,000",
                         real_dtls_amount:"13,082,000,000"}], CHART_SPECS.fund_usage)''')
         self.assertEqual(got["datasets"][0]["data"], [13082000000])
 
     def test_plan_vs_actual_makes_two_datasets(self):
-        got = run_js('''chartData([{tm:"1", plan_amount:"100", real_dtls_amount:"80"}],
+        got = run_js('''chartData([{tm:"제1회", plan_amount:"100", real_dtls_amount:"80"}],
                         CHART_SPECS.fund_usage)''')
         self.assertEqual([d["label"] for d in got["datasets"]], ["계획 금액", "실제 집행 금액"])
 
     def test_numeric_x_axis_sorts_numerically_not_lexically(self):
-        """회차 10이 9보다 앞에 오면 그래프가 거짓말을 한다."""
+        """회차 10이 9보다 앞에 오면 그래프가 거짓말을 한다.
+
+        tm은 순수 숫자 문자열이 아니라 "제9회"·"제10회"처럼 한글이 섞인
+        실측(field-inventory) 형태다 — numeric()은 이 값에서 실패하므로
+        (전체가 숫자가 아니다) 내장된 숫자만 뽑아 비교해야 한다.
+        """
         got = run_js('''chartData([
-          {tm:"9",  plan_amount:"1", real_dtls_amount:"1"},
-          {tm:"10", plan_amount:"2", real_dtls_amount:"2"}
+          {tm:"제9회",  plan_amount:"1", real_dtls_amount:"1"},
+          {tm:"제10회", plan_amount:"2", real_dtls_amount:"2"}
         ], CHART_SPECS.fund_usage)''')
-        self.assertEqual(got["labels"], ["9", "10"])
+        self.assertEqual(got["labels"], ["제9회", "제10회"])
+
+    def test_round_numbers_with_korean_suffix_sort_correctly_even_out_of_order(self):
+        """리뷰 지적 ①의 정확한 재현: 응답 순서가 "제10회", "제14회",
+        "제9회"(사전식으로 이미 뒤섞인 순서)로 와도 회차 순서(9→10→14)로
+        정렬돼야 한다."""
+        got = run_js('''chartData([
+          {tm:"제10회", plan_amount:"1", real_dtls_amount:"1"},
+          {tm:"제14회", plan_amount:"2", real_dtls_amount:"2"},
+          {tm:"제9회",  plan_amount:"3", real_dtls_amount:"3"}
+        ], CHART_SPECS.fund_usage)''')
+        self.assertEqual(got["labels"], ["제9회", "제10회", "제14회"])
 
     def test_date_x_axis_stays_in_time_order(self):
-        """YYYYMMDD는 문자열 정렬이 곧 시간순이다. 숫자 정렬 도입이
-        날짜 축을 깨뜨리지 않는지 확인한다."""
+        """YYYYMMDD·하이픈 ISO 두 형태 모두 시간순이 유지되는지 확인한다
+        (숫자 정렬 도입이 날짜 축을 깨뜨리지 않는지)."""
         got = run_js('''chartData([
-          {repror:"김", rcept_dt:"20261231", sp_stock_lmp_rate:"2"},
-          {repror:"김", rcept_dt:"20260101", sp_stock_lmp_rate:"1"}
+          {repror:"김", rcept_dt:"2026-12-31", sp_stock_lmp_rate:"2"},
+          {repror:"김", rcept_dt:"2026-01-01", sp_stock_lmp_rate:"1"}
         ], CHART_SPECS.insider_timeline)''')
         self.assertEqual(got["labels"], ["2026.01.01", "2026.12.31"])
+
+    def test_categorical_axis_without_any_digits_preserves_original_order(self):
+        """리뷰 지적 ⑤: financials의 account_nm처럼 숫자가 전혀 없는
+        범주형 값은 가나다순으로 재배열되면 안 된다 — DART 표시 순서
+        (원본 등장 순서)를 그대로 지켜야 한다. 여기서는 CHART_SPECS에
+        없는 임의의 스펙으로 chartData 자체의 정렬 규칙만 검증한다."""
+        got = run_js('''chartData([
+          {cat:"유동자산", v:"1"},
+          {cat:"자산총계", v:"2"},
+          {cat:"부채총계", v:"3"}
+        ], {x:"cat", series:[{key:"v", label:"값"}]})''')
+        self.assertEqual(got["labels"], ["유동자산", "자산총계", "부채총계"],
+                         "숫자가 없는 범주형 축이 원본 순서를 잃었습니다")
+
+    def test_second_record_without_a_value_does_not_blank_the_first(self):
+        """리뷰 지적 ③의 정확한 재현: 같은 x(tm)에 레코드가 둘 있고
+        뒤엣것에 이 필드 값이 없으면, 앞 레코드의 실값이 null로 덮이면
+        안 된다."""
+        got = run_js('''chartData([
+          {tm:"제1회", plan_amount:"100"},
+          {tm:"제1회", real_dtls_amount:"80"}
+        ], CHART_SPECS.fund_usage)''')
+        by_label = {d["label"]: d["data"] for d in got["datasets"]}
+        self.assertEqual(by_label["계획 금액"], [100], "값이 있는 레코드가 값 없는 레코드에 덮였습니다")
+        self.assertEqual(by_label["실제 집행 금액"], [80])
+
+    def test_second_record_without_a_value_does_not_blank_the_first_in_group_by_mode(self):
+        """같은 재현을 groupBy 계열(insider_timeline, 보고자별)에서도 확인한다
+        — series 분기만 고치고 groupBy 분기를 놓치면 이쪽에서 다시 난다.
+        고치지 않은 채로는 null이 유일한 값을 지워 차트 자체가 사라진다
+        (그릴 값이 하나도 안 남아 chartData가 null을 반환)."""
+        got = run_js('''chartData([
+          {repror:"김", rcept_dt:"2026-01-01", sp_stock_lmp_rate:"5"},
+          {repror:"김", rcept_dt:"2026-01-01", sp_stock_lmp_rate:null}
+        ], CHART_SPECS.insider_timeline)''')
+        self.assertIsNotNone(got, "실값이 null에 덮여 차트 전체가 사라졌습니다")
+        self.assertEqual(got["datasets"][0]["data"], [5])
+
+    def test_financials_has_no_chart_spec_to_avoid_mixing_cfs_and_ofs(self):
+        """리뷰 지적 ②: financials는 실측에서 fs_div(연결/별도)·sj_div
+        (재무상태표/손익계산서)가 상수열이 아니다 — 같은 account_nm이
+        연결·별도 양쪽에 나타나 한 그림에 그리면 어느 쪽 값인지 알 수
+        없이 뒤섞인다. 나누지 않고 차트 자체를 빼기로 했다(표는 그대로
+        fs_div·sj_div 열을 보여준다) — CHART_SPECS에 이 키가 없어야 한다.
+        """
+        self.assertNotIn("financials", run_js("Object.keys(CHART_SPECS)"))
 
     def test_returns_null_when_no_records(self):
         for expr in ("chartData([], CHART_SPECS.insider_timeline)",
@@ -3173,12 +3238,12 @@ class TestChartData(unittest.TestCase):
         self.assertIsNone(got)
 
     def test_returns_null_when_every_value_is_missing(self):
-        got = run_js('''chartData([{repror:"김", rcept_dt:"20260101",
+        got = run_js('''chartData([{repror:"김", rcept_dt:"2026-01-01",
                         sp_stock_lmp_rate:null}], CHART_SPECS.insider_timeline)''')
         self.assertIsNone(got)
 
     def test_single_point_series_still_charts(self):
-        got = run_js('''chartData([{repror:"김", rcept_dt:"20260101",
+        got = run_js('''chartData([{repror:"김", rcept_dt:"2026-01-01",
                         sp_stock_lmp_rate:"5"}], CHART_SPECS.insider_timeline)''')
         self.assertEqual(got["datasets"][0]["data"], [5])
 
@@ -3193,11 +3258,53 @@ class TestChartData(unittest.TestCase):
         self.assertEqual(unknown, [], f"registry에 없는 섹션 키: {unknown}")
 
     def test_no_spec_uses_a_time_scale(self):
-        """time 축은 별도 어댑터를 요구한다. category 축만 쓴다."""
+        """time 축은 별도 어댑터를 요구한다. category 축만 쓴다.
+
+        리뷰 지적 ⑥: 이전에는 어느 spec에도 xScale 키 자체가 없어
+        spec.get("xScale")가 항상 None이었다(무엇을 해도 통과하는 공허한
+        검사). 이제 CHART_SPECS 각 항목이 xScale을 실제로 갖고
+        renderChart(ui.js)가 이 값을 Chart.js의 scales.x.type으로 쓴다
+        (TestChartRenderExecution이 그 배선을 확인한다) — 이 테스트는
+        그 값이 "category"이고 "time"이 아님을 직접 확인한다.
+        """
         specs = run_js("CHART_SPECS")
+        self.assertTrue(specs, "CHART_SPECS가 비어 있어 이 검사가 아무것도 보지 않습니다")
         for key, spec in specs.items():
-            self.assertNotEqual(spec.get("xScale"), "time",
-                                f"{key}가 time 축을 씁니다 — 어댑터가 필요해집니다")
+            self.assertEqual(spec.get("xScale"), "category",
+                             f"{key}의 xScale이 'category'가 아닙니다: {spec.get('xScale')!r}")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestNumeric(unittest.TestCase):
+    """numeric()의 쉼표·배열 처리(리뷰 지적 ⑦ minor).
+
+    이전에는 쉼표를 무조건 지우고("1,2,3" → "123") 배열을 String()으로
+    문자열화해(String([5]) === "5") 우연히 숫자로 읽었다 — 둘 다 없는
+    숫자를 만들어내는 쪽의 실수다(0으로 채우는 것과 같은 부류의 거짓말).
+    """
+
+    def test_thousands_grouped_comma_is_parsed(self):
+        """정상적인 3자리 그룹 쉼표는 그대로 지원해야 한다(회귀 방지)."""
+        self.assertEqual(run_js('numeric("13,082,000,000")'), 13082000000)
+
+    def test_malformed_comma_grouping_is_not_silently_concatenated(self):
+        """"1,2,3"은 자릿수가 3자리씩 묶이지 않은 잘못된 형태다 — 쉼표를
+        그냥 지우면 없는 숫자 123이 만들어진다."""
+        self.assertIsNone(run_js('numeric("1,2,3")'))
+
+    def test_array_is_not_coerced_into_a_number(self):
+        """String([5]) === "5"라 배열이 우연히 숫자처럼 읽히던 사고."""
+        self.assertIsNone(run_js("numeric([5])"))
+
+    def test_array_of_multiple_items_is_not_coerced_either(self):
+        self.assertIsNone(run_js("numeric([1,2])"))
+
+    def test_plain_number_and_numeric_string_still_work(self):
+        self.assertEqual(run_js("numeric(5)"), 5)
+        self.assertEqual(run_js('numeric("5.5")'), 5.5)
+
+    def test_non_numeric_string_is_null(self):
+        self.assertIsNone(run_js('numeric("-")'))
 
 
 # ── renderChart 실제 렌더 경로 재현용 가짜 DOM ──────────────────────────
@@ -3434,6 +3541,7 @@ process.stdout.write(JSON.stringify({
     { datasetIndex: 1, dataset: { label: "실제 집행 금액" }, parsed: { y: 800000000 } }),
   canvasIdx: canvasIdx,
   tableIdx: tableIdx,
+  fundXScaleType: fundChart.options.scales.x.type,
   fundHasTableCells: fundTags.some(function (t) { return t.tag === "td"; }),
   canvasClassName: canvasIdx === -1 ? null : fundTags[canvasIdx].className,
   chartCountAfterA: 1,
@@ -3474,6 +3582,13 @@ class TestChartRenderExecution(unittest.TestCase):
         )
         self.assertEqual(got["fundDatasets"][0]["data"], [1300000000, 500000000])
         self.assertEqual(got["fundDatasets"][1]["data"], [800000000, 500000000])
+
+    def test_x_scale_type_comes_from_the_spec_not_hardcoded(self):
+        """리뷰 지적 ⑥: CHART_SPECS.fund_usage.xScale("category")이 실제로
+        Chart.js 옵션(scales.x.type)까지 전달되는지 확인한다 — spec에
+        키만 있고 렌더 경로가 안 읽으면 죽은 설정이 된다."""
+        got = run_chart_render()
+        self.assertEqual(got["fundXScaleType"], "category")
 
     def test_tooltip_uses_format_value_so_it_matches_the_table(self):
         """억/조 표기가 표와 어긋나면 같은 값을 두 가지로 말하는 셈이 된다."""
