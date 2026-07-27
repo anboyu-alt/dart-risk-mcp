@@ -57,6 +57,8 @@ def handle(request: Request, deps: Deps) -> Response:
         return _step(request, deps, user_id, path_vars["job_id"])
     if name == "get":
         return _get(deps, user_id, path_vars["job_id"])
+    if name == "section":
+        return _section(deps, user_id, path_vars["job_id"], path_vars["key"])
     # 라우트가 늘었는데 분기를 빠뜨리면 조용히 엉뚱한 핸들러로 새지 않고
     # 여기서 드러난다.
     return Response.error(404, "존재하지 않는 경로입니다")
@@ -157,14 +159,9 @@ def _get(deps: Deps, user_id: str, job_id: str) -> Response:
         return Response.error(404, "작업을 찾을 수 없습니다")
 
     finished, total = job.progress()
-    # 섹션별로 완료된 항목만 노출한다. 아직 안 끝난 항목은 넣지 않는다 —
-    # 부분 결과를 완성된 것처럼 보이게 하면 안 된다.
-    sections: dict[str, dict] = {}
-    for item in job.items:
-        if item.status != "done" or item.result is None:
-            continue
-        sections[item.key] = item.result.get("value")
-
+    # 섹션 **본문은 담지 않는다.** 화면은 이 응답을 수 초 간격으로 폴링하는데,
+    # 본문까지 담으면 같은 데이터를 반복 전송한다(실측 737KB × 폴링 횟수).
+    # 완료된 키만 알려주고, 화면이 새로 생긴 키만 개별 조회한다.
     return Response(200, {
         "job_id": job.job_id,
         "company": job.company,
@@ -174,8 +171,25 @@ def _get(deps: Deps, user_id: str, job_id: str) -> Response:
         "failed": [
             {"key": i.key, "error": i.error} for i in job.items if i.status == "failed"
         ],
-        "sections": sections,
+        "section_keys": [
+            i.key for i in job.items if i.status == "done" and i.result is not None
+        ],
     })
+
+
+def _section(deps: Deps, user_id: str, job_id: str, key: str) -> Response:
+    """완료된 섹션 하나를 돌려준다.
+
+    미완료 섹션은 404다 — 부분 결과를 완성된 것처럼 보이게 하면 안 된다.
+    """
+    job = deps.store.load(job_id, user_id=user_id)
+    if job is None:
+        return Response.error(404, "작업을 찾을 수 없습니다")
+
+    for item in job.items:
+        if item.key == key and item.status == "done" and item.result is not None:
+            return Response(200, {"key": key, "value": item.result.get("value")})
+    return Response.error(404, "섹션을 찾을 수 없습니다")
 
 
 def build_deps() -> Deps:

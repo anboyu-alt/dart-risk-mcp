@@ -213,12 +213,21 @@ def main() -> int:
         code, body = api(session, args.base, "GET", f"/api/se/analyze/{job_id}",
                          alice.access_token)
         if code == 200:
+            keys = body.get("section_keys") or []
             failed = body.get("failed") or []
             print(f"{INFO}{body.get('finished')}/{body.get('total')} 완료 "
-                  f"· 섹션 {len(body.get('sections') or {})}개 · 실패 {len(failed)}건")
+                  f"· 섹션 {len(keys)}개 · 실패 {len(failed)}건")
             for item in failed[:5]:
                 print(f"         실패: {item.get('key')} — {str(item.get('error'))[:70]}")
             check("최종 조회 정상", True)
+            check("진행률 응답이 경량", len(str(body)) < 20000,
+                  f"{len(str(body)):,}자")
+            if keys:
+                c2, b2 = api(session, args.base, "GET",
+                             f"/api/se/analyze/{job_id}/section/{keys[0]}",
+                             alice.access_token)
+                check("섹션 개별 조회", c2 == 200 and b2.get("key") == keys[0],
+                      f"HTTP {c2}")
         else:
             check("최종 조회 정상", False, f"HTTP {code}")
 

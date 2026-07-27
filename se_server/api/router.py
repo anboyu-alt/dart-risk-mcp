@@ -23,10 +23,15 @@ import re
 # 이 문자 집합을 벗어나는 값(경로 순회 등)은 애초에 매칭되지 않는다.
 _JOB_ID = r"(?P<job_id>[A-Za-z0-9_-]+)"
 
+# 섹션 키. registry 키(insider_timeline)와 원문 키(doc:<rcept_no>) 두 형태다.
+# 콜론은 허용하되 `/`·`.`는 배제해 경로 순회를 구조적으로 막는다.
+_SECTION_KEY = r"(?P<key>[A-Za-z0-9_:-]+)"
+
 # fullmatch로 대조하므로 ^...$ 앵커를 쓰지 않는다.
 _ROUTES: tuple[tuple[str, re.Pattern, str], ...] = (
     ("POST", re.compile(r"/api/se/analyze"), "create"),
     ("POST", re.compile(rf"/api/se/analyze/{_JOB_ID}/step"), "step"),
+    ("GET", re.compile(rf"/api/se/analyze/{_JOB_ID}/section/{_SECTION_KEY}"), "section"),
     ("GET", re.compile(rf"/api/se/analyze/{_JOB_ID}"), "get"),
 )
 
