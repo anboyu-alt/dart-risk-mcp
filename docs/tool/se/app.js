@@ -428,6 +428,29 @@ function isLongText(v) {
 // 깊이(2~3단)보다 넉넉히 크게 잡는다.
 const MAX_SECTION_DEPTH = 20;
 
+/** 임원현황을 {이름: 연도들} 에서 레코드 목록으로 바꾼다.
+ *
+ * fetch_executive_roster(dart_client.py)는 {임원명: {연도}}(set)를 돌려주고,
+ * se_server의 _jsonable이 set을 정렬된 list로 낮춰 JSON화한다 — 그 결과
+ * 화면에 오는 값은 {"김기범": ["2025","2026"], ...} 형태다. 이름을 열
+ * 제목으로 쓰면 임원 7명일 때 7열짜리 1행 표가 되어 읽을 수 없다(실측
+ * docs/superpowers/plans/2026-07-27-se-4c-field-inventory.json). 사람이
+ * 행이 되어야 한다.
+ *
+ * 연도 쪽은 배열이 정상 형태지만, 방어적으로 객체(키가 연도인 형태)와
+ * 스칼라/null도 흡수한다 — 어느 쪽이 와도 이름 자체는 잃지 않는다.
+ */
+function normalizeRoster(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  return Object.keys(value).map(function (name) {
+    const raw = value[name];
+    const years = Array.isArray(raw) ? raw
+                : (raw && typeof raw === "object") ? Object.keys(raw)
+                : (raw === null || raw === undefined) ? [] : [String(raw)];
+    return { "성명": name, "재직 연도": years.slice().sort().join(", ") };
+  });
+}
+
 /** 섹션 값을 화면에 그릴 블록 목록 [{title, table}] 또는 [{title, text}]로
  *  바꾼다. title은 없을 수 있다(null). table/text 둘 다 없으면(표로 만들
  *  근거 자체가 없는 하위 키) 그 사실도 블록으로 남긴다 — 하위 항목이
@@ -438,11 +461,18 @@ const MAX_SECTION_DEPTH = 20;
  *  욱여넣지 않고 하위 키마다 재귀적으로 소제목 + 개별 표로 펼친다.
  *  하위 키에 라벨이 없으면 원본 키를 그대로 쓴다.
  *
+ *  executive_roster는 일반 표 규칙이 통하지 않는 특수 형태다(키 자체가
+ *  사람 이름) — 최상위 호출(depth 0)에서 key로 이 섹션임을 알아보면
+ *  dict-of-lists 펼치기 대신 normalizeRoster로 사람을 행으로 뒤집은 뒤
+ *  일반 표 경로(tableLayout)로 보낸다. depth 0에서만 검사하는 이유는
+ *  key가 재귀 호출에는 전달되지 않기 때문이다(하위 어딘가에 우연히
+ *  "executive_roster"라는 이름의 키가 있어도 이 특수 경로를 타지 않는다).
+ *
  *  depth는 내부 재귀 카운터다(호출자는 생략한다 — 기본 0). 상한을
  *  넘으면 재귀를 멈추되, 그 하위 데이터를 조용히 빠뜨리지 않고 상한에
  *  걸렸다는 사실 자체를 텍스트 블록으로 남긴다 — 이 화면의 원칙은
  *  "데이터를 조용히 숨기지 않는다"이다. */
-function sectionBlocks(value, depth) {
+function sectionBlocks(value, depth, key) {
   const d = depth || 0;
   if (value === null || value === undefined) return [];
 
@@ -451,6 +481,11 @@ function sectionBlocks(value, depth) {
       title: null,
       text: "중첩이 너무 깊어(깊이 " + d + ") 더 펼치지 않습니다. 원본 데이터는 있습니다.",
     }];
+  }
+
+  if (d === 0 && key === "executive_roster") {
+    const t = tableLayout(normalizeRoster(value));
+    return t ? [{ title: null, table: t }] : [];
   }
 
   if (Array.isArray(value)) {
@@ -604,7 +639,7 @@ if (typeof module !== "undefined" && module.exports) {
     LS_DART_KEY, LS_SESSION, LS_JOB, SECTION_GROUPS, formatCount,
     nextKeysToFetch, pollDecision, toRecords, tableLayout, LABELS, label,
     formatValue, formatAmount, AMOUNT_FIELDS, DATE_FIELDS,
-    sectionBlocks, groupTitleFor, groupOrderIndex,
+    sectionBlocks, groupTitleFor, groupOrderIndex, normalizeRoster,
     ACTOR_STATUS, actorLine, resumeTarget,
   };
 }

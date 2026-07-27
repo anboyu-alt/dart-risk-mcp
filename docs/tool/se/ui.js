@@ -551,7 +551,7 @@ function renderSection(key, value) {
   const holder = sectionHolder(key);
   while (holder.firstChild) holder.removeChild(holder.firstChild);
 
-  const blocks = sectionBlocks(value);
+  const blocks = sectionBlocks(value, 0, key);
   if (blocks.length === 0) {
     const p = document.createElement("p");
     p.className = "note";

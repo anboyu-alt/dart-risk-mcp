@@ -158,6 +158,120 @@ def run_doc_click(records_js: str):
     return json.loads(out.stdout)
 
 
+# ── renderSection(key, value) 실제 진입점 재현용 가짜 DOM ──────────────
+#
+# 위 _DOC_CLICK_HARNESS는 tableLayout → tableEl까지만 재현한다(그 아래
+# 계층). renderSection은 그 위에서 sectionHolder/groupHolder를 거치며
+# document.getElementById로 기존 노드를 찾고 body.insertBefore로 그룹을
+# 끼워 넣는다 — id 레지스트리와 insertBefore·dataset을 갖춘 가짜 DOM이
+# 따로 필요하다.
+_RENDER_SECTION_HARNESS = r"""
+const vm = require("vm");
+const fs = require("fs");
+
+const ELEMENTS = Object.create(null);
+
+class FakeEl {
+  constructor(tag) {
+    this.tag = tag;
+    this.children = [];
+    this._text = "";
+    this._className = "";
+    this._id = "";
+    this.dataset = {};
+    this._listeners = {};
+  }
+  appendChild(c) { this.children.push(c); return c; }
+  insertBefore(node, ref) {
+    const idx = ref ? this.children.indexOf(ref) : -1;
+    if (idx === -1) this.children.push(node);
+    else this.children.splice(idx, 0, node);
+    return node;
+  }
+  removeChild(c) {
+    const idx = this.children.indexOf(c);
+    if (idx !== -1) this.children.splice(idx, 1);
+    return c;
+  }
+  insertRow() { const tr = new FakeEl("tr"); this.appendChild(tr); return tr; }
+  insertCell() { const td = new FakeEl("td"); this.appendChild(td); return td; }
+  createTHead() { const el = new FakeEl("thead"); this.appendChild(el); return el; }
+  createTBody() { const el = new FakeEl("tbody"); this.appendChild(el); return el; }
+  addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); }
+  dispatch(type) { (this._listeners[type] || []).forEach(function (fn) { fn({}); }); }
+  set textContent(v) { this._text = String(v); this.children = []; }
+  get textContent() { return this._text; }
+  set className(v) { this._className = v; }
+  get className() { return this._className; }
+  set id(v) { this._id = v; ELEMENTS[v] = this; }
+  get id() { return this._id; }
+}
+
+const bodyEl = new FakeEl("div");
+bodyEl.id = "body";
+
+function collectCells(node, out) {
+  out = out || [];
+  if (!node) return out;
+  if (node.tag === "td" || node.tag === "th") out.push(node.textContent);
+  (node.children || []).forEach(function (c) { collectCells(c, out); });
+  return out;
+}
+
+function collectTitles(node, out) {
+  out = out || [];
+  if (!node) return out;
+  if (node.tag === "h3") out.push(node.textContent);
+  (node.children || []).forEach(function (c) { collectTitles(c, out); });
+  return out;
+}
+
+const sandbox = {
+  console: console,
+  document: {
+    createElement: function (tag) { return new FakeEl(tag); },
+    createDocumentFragment: function () { return new FakeEl("#fragment"); },
+    createTextNode: function (t) { const n = new FakeEl("#text"); n.textContent = t; return n; },
+    addEventListener: function () {},
+    getElementById: function (id) { return ELEMENTS[id] || null; },
+  },
+  localStorage: {
+    getItem: function () { return null; },
+    setItem: function () {},
+    removeItem: function () {},
+  },
+  fetch: function () { return Promise.reject(new Error("no network in test")); },
+};
+vm.createContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[1], "utf-8"), { filename: "app.js" }).runInContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).runInContext(sandbox);
+
+sandbox.openDocPanel = function () {};
+sandbox.renderSection(%(key)s, %(value)s);
+
+process.stdout.write(JSON.stringify({
+  cells: collectCells(bodyEl, []),
+  titles: collectTitles(bodyEl, []),
+}));
+"""
+
+
+def run_render_section(key_js: str, value_js: str):
+    """renderSection(key, value)을 실제로 호출해(app.js·ui.js를 같은 vm
+    컨텍스트에서 순서대로 실행) 결과 DOM에서 표 셀 텍스트와 소제목(h3)
+    텍스트를 모은다. sectionBlocks 단독 호출(위 클래스들)로는 못 잡는,
+    ui.js 호출부 자체의 배선 누락(key 전달 누락)을 잡기 위한 것이다.
+    """
+    script = _RENDER_SECTION_HARNESS % {"key": key_js, "value": value_js}
+    out = subprocess.run(
+        [_NODE, "-e", script, str(_APP), str(_UI)],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    if out.returncode != 0:
+        raise AssertionError(f"node 실행 실패:\n{out.stderr}")
+    return json.loads(out.stdout)
+
+
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestNextKeysToFetch(unittest.TestCase):
     def test_returns_keys_not_yet_fetched(self):
@@ -781,6 +895,114 @@ class TestSectionBlocksDepthGuard(unittest.TestCase):
     # test_dict_of_lists_splits_into_titled_blocks가 이미 그대로 수행한다
     # (그쪽이 표 not-None 검사까지 하나 더 있어 오히려 상위호환) — 상한
     # 도입이 정상 케이스를 깨지 않는다는 확인은 그 테스트로 이미 충분하다.
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestExecutiveRoster(unittest.TestCase):
+    """fetch_executive_roster(dart_client.py)는 {임원명: {연도}}(set)를 돌려주고,
+    se_server/jobs/runner.py의 _jsonable이 set을 정렬된 list로 낮춰 JSON화한다
+    (실측 docs/superpowers/plans/2026-07-27-se-4c-field-inventory.json:
+    executive_roster는 1건×7열, 열 이름이 전부 사람 이름이다).
+
+    이름을 열 제목으로 쓰면 임원 7명일 때 7열짜리 1행 표가 되어 못 읽는다
+    — normalizeRoster가 사람을 행으로 뒤집는다.
+    """
+
+    _SAMPLE = '{"김기범":["2025","2026"],"박시묵":["2026"]}'
+
+    def test_names_become_rows_not_columns(self):
+        got = run_js(f'normalizeRoster({self._SAMPLE})')
+        self.assertEqual(len(got), 2)
+        self.assertEqual(got[0]["성명"], "김기범")
+
+    def test_years_are_joined_readably(self):
+        got = run_js(f'normalizeRoster({self._SAMPLE})')
+        self.assertIn("2025", got[0]["재직 연도"])
+        self.assertIn("2026", got[0]["재직 연도"])
+
+    def test_year_set_object_form_is_handled(self):
+        """연도가 배열이 아니라 객체로 올 수도 있다."""
+        got = run_js('normalizeRoster({"김기범":{"2026":true}})')
+        self.assertEqual(got[0]["성명"], "김기범")
+
+    def test_non_object_input_is_empty_list(self):
+        for expr in ("normalizeRoster(null)", 'normalizeRoster("x")', "normalizeRoster([])"):
+            self.assertEqual(run_js(expr), [])
+
+    def test_no_name_is_dropped(self):
+        got = run_js('normalizeRoster({"가":[],"나":[],"다":[]})')
+        self.assertEqual([r["성명"] for r in got], ["가", "나", "다"])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestExecutiveRosterWiredIntoSectionBlocks(unittest.TestCase):
+    """normalizeRoster를 정의만 하고 sectionBlocks 경로에 안 꽂으면(이 저장소에서
+    이미 세 번 난 사고 유형) 화면은 여전히 이름을 열 제목으로 그린다 —
+    normalizeRoster 단독 테스트만으로는 이 배선 누락을 못 잡는다.
+
+    sectionBlocks가 실제로 소비하는 것과 같은 3번째 인자(key)를 그대로
+    넘겨 실제 진입점을 검증한다.
+    """
+
+    def test_executive_roster_key_routes_through_normalize_roster(self):
+        got = run_js(
+            'sectionBlocks({"김기범":["2025","2026"],"박시묵":["2026"]}, 0, "executive_roster")'
+        )
+        self.assertEqual(len(got), 1, "임원현황이 여러 블록으로 쪼개졌습니다")
+        table = got[0]["table"]
+        self.assertIsNotNone(table, "임원현황 표가 없습니다")
+        self.assertIn("성명", table["keys"])
+        self.assertIn("재직 연도", table["keys"])
+        flat = [c for r in table["rows"] for c in r]
+        self.assertIn("김기범", flat)
+        self.assertIn("박시묵", flat)
+
+    def test_other_keys_are_not_affected(self):
+        """key가 "executive_roster"가 아니면 이 특수 경로를 타면 안 된다
+        (예: shareholders는 기존 dict-of-lists 펼치기를 그대로 써야 한다)."""
+        got = run_js(
+            'sectionBlocks({major_holders:[{nm:"a"}]}, 0, "shareholders")'
+        )
+        titles = [b["title"] for b in got]
+        self.assertIn("최대주주", titles)
+
+    def test_nested_field_literally_named_executive_roster_is_unaffected(self):
+        """depth 0이 아닐 때는(재귀 호출) key를 넘기지 않으므로, 하위 키가
+        우연히 "executive_roster"라는 이름이어도 이 특수 경로를 타면 안
+        된다 — 사람 이름이 아닌 일반 dict-of-lists로 그대로 펼쳐져야
+        한다."""
+        got = run_js(
+            'sectionBlocks({executive_roster:{major_holders:[{nm:"a"}]}})'
+        )
+        titles = [b["title"] for b in got]
+        self.assertTrue(any("최대주주" in (t or "") for t in titles),
+                         "중첩된 executive_roster 키가 사람 명단 경로로 잘못 빠졌습니다")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 경로를 검증할 수 없습니다")
+class TestExecutiveRosterRenderWiring(unittest.TestCase):
+    """renderSection(key, value) → sectionBlocks(value, 0, key) 로 실제 key가
+    전달되는지를, app.js·ui.js를 node vm에 함께 실행해 DOM 결과로 확인한다.
+
+    normalizeRoster와 sectionBlocks 안의 분기는 만들어놓고 ui.js의 호출부
+    (renderSection)가 key를 안 넘기면, 화면에서는 여전히 임원 이름이 소제목
+    (h3)으로 하나씩 떨어져 나온다 — 사람이 여전히 열/블록 제목이 되는
+    회귀다. 표 셀 값으로 이름이 나오는지, 그리고 이름이 h3 제목으로
+    떨어지지 않는지를 함께 확인해야 이 경로 전체(진짜 렌더 경로)가
+    배선됐다고 말할 수 있다.
+    """
+
+    def test_names_render_as_table_cells_not_section_titles(self):
+        got = run_render_section(
+            '"executive_roster"',
+            '{"김기범":["2025","2026"],"박시묵":["2026"]}',
+        )
+        self.assertIn("김기범", got["cells"], "임원 이름이 표 셀에 없습니다")
+        self.assertIn("박시묵", got["cells"], "임원 이름이 표 셀에 없습니다")
+        self.assertNotIn("김기범", got["titles"],
+                          "이름이 여전히 소제목(h3)으로 떨어져 나옵니다 — "
+                          "renderSection이 key를 sectionBlocks에 넘기지 않는 회귀입니다")
+        self.assertNotIn("박시묵", got["titles"])
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
