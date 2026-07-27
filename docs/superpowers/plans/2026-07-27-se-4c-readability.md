@@ -185,6 +185,9 @@ const LABELS = Object.assign(Object.create(null), {
   ir_url: "IR 주소", phn_no: "전화", fax_no: "팩스", acc_mt: "결산월",
   induty_code: "업종코드", corp_name_eng: "영문 회사명",
   jurir_no: "법인등록번호", bizr_no: "사업자등록번호",
+  // DART 응답 봉투 필드. 기업 정보는 아니지만 숨기지 않는다 — 응답이
+  // 정상이었는지를 사용자가 확인할 수 있어야 한다.
+  status: "API 응답 코드", message: "API 응답 메시지",
 
   // ── 공시 목록
   flr_nm: "공시제출인", report_nm: "공시명",
@@ -221,12 +224,15 @@ const LABELS = Object.assign(Object.create(null), {
   repror: "보고자", source: "출처", relate: "관계", stock_knd: "주식 종류",
   isu_exctv_ofcps: "직위", isu_exctv_rgist_at: "등기 여부",
   isu_main_shrholdr: "주요주주 구분", mxmm_shrholdr_nm: "최대주주명",
-  sp_stock_lmp_cnt: "소유 주식수", sp_stock_lmp_rate: "소유 비율",
-  sp_stock_lmp_irds_cnt: "증감 주식수", sp_stock_lmp_irds_rate: "증감 비율",
+  // 출자(affiliates)의 "기초/기말 지분율"과 이름이 겹치지 않게 접두어를
+  // 붙인다. 같은 라벨이 두 필드에 걸리면 열을 구분할 수 없다.
+  sp_stock_lmp_cnt: "특정증권 소유 주식수", sp_stock_lmp_rate: "특정증권 소유 비율",
+  sp_stock_lmp_irds_cnt: "특정증권 증감 주식수",
+  sp_stock_lmp_irds_rate: "특정증권 증감 비율",
   bsis_posesn_stock_co: "기초 소유 주식수",
-  bsis_posesn_stock_qota_rt: "기초 지분율",
+  bsis_posesn_stock_qota_rt: "기초 소유 지분율",
   trmend_posesn_stock_co: "기말 소유 주식수",
-  trmend_posesn_stock_qota_rt: "기말 지분율",
+  trmend_posesn_stock_qota_rt: "기말 소유 지분율",
   posesn_stock_co: "소유 주식수", qota_rt: "지분율",
   change_on: "변동일", change_cause: "변동 원인",
   change_qy_acqs: "취득 수량", change_qy_dsps: "처분 수량",
@@ -314,12 +320,27 @@ git commit -m "feat(se): DART 필드 한국어 라벨 사전과 금액·날짜 �
 
 ### Task 2: 세로/가로 자동 판단과 상수열 캡션 승격
 
+**기존 `toTable`과의 관계 — 모호하게 두지 않는다.**
+
+`tableLayout`이 `toTable`을 **대체한다.** `sectionBlocks`가 만드는 블록의
+`table` 필드를 `tableLayout` 결과로 바꾸고, `ui.js`의 `tableEl`도 새 형태를
+받도록 고친다. `toTable`과 그 테스트(8건)는 **삭제하지 말고 이식한다** —
+"모르는 필드를 숨기지 않는다", "0과 false를 잃지 않는다" 같은 성질은
+`tableLayout`에서도 그대로 지켜져야 하며, 그 테스트들이 유일한 방어선이다.
+
+`keys`(원본 키 배열)는 반드시 유지한다. `ui.js`의 공시 패널 배선이
+`keys.indexOf("rcept_no")`로 클릭 가능한 열을 찾는다 — SE-4b에서 배선이
+죽은 채 방치된 사고가 두 번 있었고, 이 배열이 그때 넣은 방어 장치다.
+
 **Files:**
 - Modify: `docs/tool/se/app.js`, `docs/tool/se/ui.js`
 - Test: `tests/se/test_se_app_js.py`
 
 **Interfaces:**
-- Produces: `tableLayout(records)` → `{orientation: "vertical"|"horizontal", caption: [[라벨, 값]], columns, keys, rows}`
+- Produces: `tableLayout(records)` → `{orientation, caption, columns, keys, rows}`
+  - `orientation`: `"vertical"` | `"horizontal"`
+  - `caption`: `[{key, label, value}]` — **원본 키를 함께 담는다.** 라벨만 담으면 어떤 필드가 어디로 갔는지 추적할 수 없고, "데이터가 사라지지 않았다"를 검증할 수 없다
+  - `keys`: 표에 실제로 그려지는 **원본 키** 배열 (공시 패널 배선이 `keys.indexOf("rcept_no")`로 이 값을 쓴다 — 없애면 배선이 죽는다)
 
 **규칙 (실측 근거):**
 
@@ -348,7 +369,7 @@ class TestTableLayout(unittest.TestCase):
     def test_constant_columns_move_to_caption(self):
         got = run_js('tableLayout([{co:"엔켐",n:1},{co:"엔켐",n:2}])')
         self.assertNotIn("co", got["keys"])
-        self.assertTrue(any(c[1] == "엔켐" for c in got["caption"]))
+        self.assertTrue(any(c["value"] == "엔켐" for c in got["caption"]))
 
     def test_varying_column_stays_in_table(self):
         got = run_js('tableLayout([{co:"엔켐",n:1},{co:"엔켐",n:2}])')
@@ -363,9 +384,8 @@ class TestTableLayout(unittest.TestCase):
     def test_no_data_is_lost_between_caption_and_table(self):
         """어떤 열도 캡션에도 표에도 없으면 데이터가 사라진 것이다."""
         got = run_js('tableLayout([{a:"x",b:1},{a:"x",b:2}])')
-        shown = set(got["keys"]) | {c[0] for c in got["caption"]}
-        self.assertEqual(shown, {"비고" if False else "a", "b"} - set() | {"a", "b"} - set(),
-                         "열이 사라졌습니다")
+        shown = set(got["keys"]) | {c["key"] for c in got["caption"]}
+        self.assertEqual(shown, {"a", "b"}, "열이 사라졌습니다")
 
     def test_vertical_rows_are_label_value_pairs(self):
         got = run_js('tableLayout([{rcept_no:"20260724000552"}])')
@@ -414,6 +434,8 @@ function tableLayout(records) {
       keys: keys,
       rows: keys.map(function (k) { return [label(k), formatValue(k, rows[0][k])]; }),
     };
+    // 세로에서는 rows[i][0]이 라벨, rows[i][1]이 값이다. 가로와 구조가
+    // 다르므로 ui.js의 rcept_no 클릭 배선이 두 경우를 모두 처리해야 한다.
   }
 
   // 모든 행이 같은 값인 열은 표 위 캡션으로 올린다. 숨기는 게 아니라
@@ -430,7 +452,9 @@ function tableLayout(records) {
 
   return {
     orientation: "horizontal",
-    caption: promote.map(function (k) { return [label(k), formatValue(k, rows[0][k])]; }),
+    caption: promote.map(function (k) {
+      return { key: k, label: label(k), value: formatValue(k, rows[0][k]) };
+    }),
     columns: finalKeys.map(label),
     keys: finalKeys,
     rows: rows.map(function (r) {
@@ -484,7 +508,7 @@ class TestWideTableFolding(unittest.TestCase):
 
     def test_every_column_is_either_visible_folded_or_caption(self):
         got = run_js(f"tableLayout({self._WIDE})")
-        accounted = set(got["keys"]) | set(got["foldedKeys"]) | {c[0] for c in got["caption"]}
+        accounted = set(got["keys"]) | set(got["foldedKeys"]) | {c["key"] for c in got["caption"]}
         self.assertEqual(len(accounted), 20, "열이 사라졌습니다")
 
     def test_narrow_table_folds_nothing(self):
