@@ -155,6 +155,9 @@ def main() -> int:
     alice = TestUser(session, supabase_url, service_key, "alice")
     bob = TestUser(session, supabase_url, service_key, "bob")
     created_job = ""
+    # [5]에서 채워진다. [6]의 section·disclosure 검증이 재사용한다
+    # (새 작업을 또 만들지 않고 이미 만든 작업의 완료 섹션을 그대로 쓴다).
+    final_keys: list[str] = []
 
     try:
         print(f"대상: {args.base}")
@@ -214,14 +217,18 @@ def main() -> int:
                          alice.access_token)
         if code == 200:
             keys = body.get("section_keys") or []
+            final_keys = keys
             failed = body.get("failed") or []
             print(f"{INFO}{body.get('finished')}/{body.get('total')} 완료 "
                   f"· 섹션 {len(keys)}개 · 실패 {len(failed)}건")
             for item in failed[:5]:
                 print(f"         실패: {item.get('key')} — {str(item.get('error'))[:70]}")
             check("최종 조회 정상", True)
-            check("진행률 응답이 경량", len(str(body)) < 20000,
-                  f"{len(str(body)):,}자")
+            # 이번 계획(SE-4a)의 목적 그 자체 — 진행률 응답이 섹션 본문을
+            # 더는 담지 않으므로, 실측 크기가 이전 737KB에서 수 KB로
+            # 줄었는지 여기서 눈으로 확인한다.
+            resp_size = len(str(body))
+            check("진행률 응답이 경량", resp_size < 20000, f"{resp_size:,}자")
             if keys:
                 c2, b2 = api(session, args.base, "GET",
                              f"/api/se/analyze/{job_id}/section/{keys[0]}",
@@ -230,6 +237,67 @@ def main() -> int:
                       f"HTTP {c2}")
         else:
             check("최종 조회 정상", False, f"HTTP {code}")
+
+        print("\n[6] 신규 엔드포인트")
+
+        print(f"{INFO}config — 인증 없이 열리는 유일한 경로")
+        cfg_resp = session.get(f"{args.base}/api/se/config", timeout=20)
+        cfg_ok = check("config: 인증 없이 200", cfg_resp.status_code == 200,
+                       f"HTTP {cfg_resp.status_code}")
+        try:
+            cfg_body = cfg_resp.json() if cfg_ok else {}
+        except ValueError:
+            cfg_body = {}
+        if cfg_ok:
+            check("config: supabase_url 포함", bool(cfg_body.get("supabase_url")))
+        # 값 자체를 응답 원문에서 찾는다 — 필드명이 아니라 실제 service key가
+        # 새어나갔는지를 직접 검증한다(응답 스키마가 바뀌어도 이 검증은 유효하다).
+        check("config: service key 비노출", service_key not in cfg_resp.text)
+
+        if final_keys:
+            key0 = final_keys[0]
+            print(f"{INFO}section — 소유자·타인 격리")
+            c3, b3 = api(session, args.base, "GET",
+                        f"/api/se/analyze/{job_id}/section/{key0}",
+                        alice.access_token)
+            check("section: 소유자 200", c3 == 200 and b3.get("key") == key0,
+                  f"HTTP {c3}")
+            c3, _ = api(session, args.base, "GET",
+                       f"/api/se/analyze/{job_id}/section/{key0}",
+                       bob.access_token)
+            check("section: 타인 404", c3 == 404, f"HTTP {c3}")
+        else:
+            print(f"{INFO}완료된 섹션이 없어 section 격리 검증을 건너뜁니다"
+                  " (--steps를 늘려주세요)")
+
+        doc_rcept_no = ""
+        for k in final_keys:
+            if k.startswith("doc:"):
+                doc_rcept_no = k.split(":", 1)[1]
+                break
+        print(f"{INFO}disclosure — 인증·실제 공시 원문")
+        c4, _ = api(session, args.base, "GET",
+                   f"/api/se/disclosure/{doc_rcept_no or '00000000000000'}",
+                   "", dart_key)
+        check("disclosure: 인증 없이는 401", c4 == 401, f"HTTP {c4}")
+        if doc_rcept_no:
+            c4, b4 = api(session, args.base, "GET",
+                        f"/api/se/disclosure/{doc_rcept_no}",
+                        alice.access_token, dart_key)
+            check("disclosure: 실제 공시 200", c4 == 200 and bool(b4.get("text")),
+                  f"HTTP {c4} · 본문 {len(str(b4.get('text', ''))):,}자")
+        else:
+            print(f"{INFO}완료된 공시 원문 섹션이 없어 disclosure 실조회를"
+                  " 건너뜁니다 (--steps를 늘려주세요)")
+
+        print(f"{INFO}actors — 인증·면책 동반")
+        c5, _ = api(session, args.base, "GET",
+                   f"/api/se/actors?company={args.company}", "")
+        check("actors: 인증 없이는 401", c5 == 401, f"HTTP {c5}")
+        c5, b5 = api(session, args.base, "GET",
+                    f"/api/se/actors?company={args.company}", alice.access_token)
+        check("actors: 인증되면 200", c5 == 200, f"HTTP {c5}")
+        check("actors: 면책 문구 동반", bool(b5.get("disclaimer")))
 
         return 1 if _failures else 0
 
