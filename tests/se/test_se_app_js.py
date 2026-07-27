@@ -3200,6 +3200,334 @@ class TestChartData(unittest.TestCase):
                                 f"{key}가 time 축을 씁니다 — 어댑터가 필요해집니다")
 
 
+# ── renderChart 실제 렌더 경로 재현용 가짜 DOM ──────────────────────────
+#
+# 위 TestChartData는 chartData()(app.js 순수 함수)만 검증한다 — renderChart
+# (ui.js, DOM을 직접 만진다)는 실제로 canvas를 만들고 Chart를 생성자로
+# 부르고 destroy()하는지까지는 못 잡는다. "정의만 있고 호출부가 없다"가
+# 이 저장소에서 다섯 번 났다는 브리프 경고에 따라, Chart 생성자를 스텁으로
+# 주입해 실제로 어떤 데이터로 불렸는지 기록한다.
+#
+# document.createDocumentFragment로 만든 조각을 appendChild하면(tableEl이
+# 그렇게 만든다) 진짜 브라우저는 조각의 자식을 부모로 옮기고 조각 자체는
+# 사라진다(네이티브 DocumentFragment 동작) — 이 가짜 FakeEl도 그 동작을
+# 흉내 내야 renderChart의 `wrap.querySelector("table")`가 실제 브라우저와
+# 같은 자리에서 <table>을 찾는다(안 그러면 표가 fragment 껍데기 안에
+# 갇혀 canvas를 표 바로 위로 끼워 넣지 못한다).
+_CHART_RENDER_HARNESS = r"""
+const vm = require("vm");
+const fs = require("fs");
+
+const ELEMENTS = Object.create(null);
+const DESTROYED = [];
+const UPDATED = [];
+const CHART_CALLS = [];
+
+class FakeClassList {
+  constructor() { this._set = new Set(); }
+  add(c) { this._set.add(c); }
+  remove(c) { this._set.delete(c); }
+  contains(c) { return this._set.has(c); }
+}
+
+class FakeEl {
+  constructor(tag) {
+    this.tag = tag;
+    this.children = [];
+    this._text = "";
+    this._className = "";
+    this._id = "";
+    this.dataset = {};
+    this._listeners = {};
+    this._attrs = {};
+    this.hidden = false;
+    this.classList = new FakeClassList();
+  }
+  appendChild(c) {
+    // 네이티브 DocumentFragment 동작 재현 — 조각을 그대로 자식으로 넣지
+    // 않고, 조각의 자식을 이 노드로 옮긴다(위 하네스 설명 참고).
+    if (c && c.tag === "#fragment") {
+      while (c.children.length) this.children.push(c.children.shift());
+      return c;
+    }
+    this.children.push(c);
+    return c;
+  }
+  insertBefore(node, ref) {
+    const idx = ref ? this.children.indexOf(ref) : -1;
+    if (idx === -1) this.children.push(node);
+    else this.children.splice(idx, 0, node);
+    return node;
+  }
+  removeChild(c) {
+    const idx = this.children.indexOf(c);
+    if (idx !== -1) this.children.splice(idx, 1);
+    return c;
+  }
+  get firstChild() { return this.children.length ? this.children[0] : null; }
+  insertRow() { const tr = new FakeEl("tr"); this.appendChild(tr); return tr; }
+  insertCell() { const td = new FakeEl("td"); this.appendChild(td); return td; }
+  createTHead() { const el = new FakeEl("thead"); this.appendChild(el); return el; }
+  createTBody() { const el = new FakeEl("tbody"); this.appendChild(el); return el; }
+  addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); }
+  dispatch(type) { (this._listeners[type] || []).forEach(function (fn) { fn({}); }); }
+  setAttribute(k, v) { this._attrs[k] = String(v); }
+  getAttribute(k) {
+    return Object.prototype.hasOwnProperty.call(this._attrs, k) ? this._attrs[k] : null;
+  }
+  set textContent(v) { this._text = String(v); this.children = []; }
+  get textContent() { return this._text; }
+  set className(v) { this._className = v; }
+  get className() { return this._className; }
+  set id(v) { this._id = v; ELEMENTS[v] = this; }
+  get id() { return this._id; }
+  // renderChart가 쓰는 선택자("table")만 최소 지원한다 — 모든 자손을
+  // 재귀로 훑는다(네이티브 querySelector와 같은 범위).
+  querySelector(sel) {
+    if (sel !== "table") return null;
+    const stack = this.children.slice();
+    while (stack.length) {
+      const n = stack.shift();
+      if (!n) continue;
+      if (n.tag === "table") return n;
+      if (n.children && n.children.length) stack.push.apply(stack, n.children);
+    }
+    return null;
+  }
+}
+
+function makeEl(tag, id) {
+  const el = new FakeEl(tag);
+  if (id) el.id = id;
+  return el;
+}
+
+const bodyEl = makeEl("div", "body");
+makeEl("nav", "toc");
+makeEl("div", "company-info");
+makeEl("section", "gate");
+makeEl("main", "main");
+makeEl("p", "gate-msg");
+makeEl("aside", "panel");
+makeEl("div", "panel-body");
+makeEl("span", "head-name");
+makeEl("div", "bar");
+makeEl("button", "actor-btn");
+
+const documentElement = new FakeEl("html");
+
+// 테마별로 다른 값을 주는 CSS 변수 스텁 — index.html의 실제 값 자체를
+// 검증하지 않는다(그건 정적 검사 쪽 몫이다). 여기서는 "테마가 바뀌면
+// 차트에 적용된 색도 실제로 바뀐다"만 확인하면 된다.
+const CSS_VARS = {
+  dark: { "--dim2": "#9fb0c0", "--tx": "#d7dde6",
+          "--c0": "#5b8ff9", "--c1": "#61ddaa", "--c2": "#f6bd16" },
+  light: { "--dim2": "#333c48", "--tx": "#1c222b",
+           "--c0": "#2f5fd0", "--c1": "#1f9d6e", "--c2": "#ad8c00" },
+};
+
+function fakeGetComputedStyle(el) {
+  const theme = el.getAttribute("data-theme") === "light" ? "light" : "dark";
+  const vars = CSS_VARS[theme];
+  return { getPropertyValue: function (name) { return vars[name] || ""; } };
+}
+
+class FakeChart {
+  constructor(canvas, config) {
+    this.canvas = canvas;
+    this.config = config;
+    this.options = config.options;
+    this.data = config.data;
+    CHART_CALLS.push(this);
+  }
+  update() { UPDATED.push(this); }
+  destroy() { DESTROYED.push(this); }
+}
+
+function collectTags(node, out) {
+  out = out || [];
+  if (!node) return out;
+  out.push({ tag: node.tag, className: node.className || "" });
+  (node.children || []).forEach(function (c) { collectTags(c, out); });
+  return out;
+}
+
+const sandbox = {
+  console: console,
+  Chart: FakeChart,
+  getComputedStyle: fakeGetComputedStyle,
+  document: {
+    documentElement: documentElement,
+    createElement: function (tag) { return new FakeEl(tag); },
+    createDocumentFragment: function () { return new FakeEl("#fragment"); },
+    createTextNode: function (t) { const n = new FakeEl("#text"); n.textContent = t; return n; },
+    addEventListener: function () {},
+    getElementById: function (id) { return ELEMENTS[id] || null; },
+  },
+  localStorage: {
+    getItem: function () { return null; },
+    setItem: function () {},
+    removeItem: function () {},
+  },
+  fetch: function () { return Promise.reject(new Error("no network in test")); },
+};
+vm.createContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[1], "utf-8"), { filename: "app.js" }).runInContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).runInContext(sandbox);
+
+sandbox.openDocPanel = function () {};
+
+// A) fund_usage — CHART_SPECS에 series(계획 vs 실제) 정의가 있다.
+sandbox.renderSection("fund_usage", [
+  { tm: "1", plan_amount: "1300000000", real_dtls_amount: "800000000" },
+  { tm: "2", plan_amount: "500000000", real_dtls_amount: "500000000" },
+]);
+const fundTags = collectTags(bodyEl, []);
+const fundChart = CHART_CALLS[0];
+
+// B) insider_timeline — source별로 쪼개진 블록마다 자기 레코드만 받는지
+//    확인한다. elestock 그룹만 CHART_SPECS가 요구하는 필드(rcept_dt·
+//    sp_stock_lmp_rate)를 갖고 있고, hyslr 그룹은 없다 — elestock 블록만
+//    차트가 생겨야 한다.
+sandbox.renderSection("insider_timeline", [
+  { source: "elestock", repror: "오정강", rcept_dt: "20260304", sp_stock_lmp_rate: "14.13" },
+  { source: "elestock", repror: "오정강", rcept_dt: "20260327", sp_stock_lmp_rate: "3.60" },
+  { source: "hyslr", mxmm_shrholdr_nm: "홍길동", posesn_stock_co: "1000" },
+]);
+const chartCountAfterB = CHART_CALLS.length;
+const insiderChart = CHART_CALLS[1];
+
+// C) shareholders — CHART_SPECS에 정의가 아예 없다. 차트가 늘면 안 된다.
+sandbox.renderSection("shareholders", { major_holders: [{ nm: "a" }] });
+const chartCountAfterC = CHART_CALLS.length;
+
+// D) showGate — 지금까지 만든 인스턴스가 전부 destroy()되는지 확인한다.
+sandbox.showGate("메시지");
+const destroyedAfterGate = DESTROYED.length;
+
+// E) 재렌더 후 테마 전환 — repaintCharts가 살아있는 인스턴스의 색을
+//    실제로 바꾸고 update()를 부르는지 확인한다.
+sandbox.renderSection("fund_usage", [
+  { tm: "1", plan_amount: "100", real_dtls_amount: "80" },
+]);
+const themedChart = CHART_CALLS[CHART_CALLS.length - 1];
+const colorBeforeTheme = themedChart.options.scales.x.ticks.color;
+sandbox.applyTheme("light");
+const colorAfterTheme = themedChart.options.scales.x.ticks.color;
+const updatedAfterTheme = UPDATED.indexOf(themedChart) !== -1;
+
+function findIndex(tags, tag) {
+  for (let i = 0; i < tags.length; i++) if (tags[i].tag === tag) return i;
+  return -1;
+}
+const canvasIdx = findIndex(fundTags, "canvas");
+const tableIdx = findIndex(fundTags, "table");
+
+process.stdout.write(JSON.stringify({
+  fundLabels: fundChart.data.labels,
+  fundDatasets: fundChart.data.datasets.map(function (d) {
+    return { label: d.label, data: d.data, color: d.borderColor };
+  }),
+  fundTooltip0: fundChart.config.options.plugins.tooltip.callbacks.label(
+    { datasetIndex: 0, dataset: { label: "계획 금액" }, parsed: { y: 1300000000 } }),
+  fundTooltip1: fundChart.config.options.plugins.tooltip.callbacks.label(
+    { datasetIndex: 1, dataset: { label: "실제 집행 금액" }, parsed: { y: 800000000 } }),
+  canvasIdx: canvasIdx,
+  tableIdx: tableIdx,
+  fundHasTableCells: fundTags.some(function (t) { return t.tag === "td"; }),
+  canvasClassName: canvasIdx === -1 ? null : fundTags[canvasIdx].className,
+  chartCountAfterA: 1,
+  chartCountAfterB: chartCountAfterB,
+  chartCountAfterC: chartCountAfterC,
+  insiderLabels: insiderChart.data.labels,
+  insiderDatasetLabels: insiderChart.data.datasets.map(function (d) { return d.label; }),
+  destroyedAfterGate: destroyedAfterGate,
+  colorBeforeTheme: colorBeforeTheme,
+  colorAfterTheme: colorAfterTheme,
+  updatedAfterTheme: updatedAfterTheme,
+}));
+"""
+
+
+def run_chart_render():
+    out = subprocess.run(
+        [_NODE, "-e", _CHART_RENDER_HARNESS, str(_APP), str(_UI)],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    if out.returncode != 0:
+        raise AssertionError(f"node 실행 실패:\n{out.stderr}")
+    return json.loads(out.stdout)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 차트 렌더 경로를 검증할 수 없습니다")
+class TestChartRenderExecution(unittest.TestCase):
+    """renderChart(ui.js)를 Chart 생성자 스텁으로 실제 실행해, 정의만 있고
+    호출부가 죽어 있는 사고(이 저장소에서 다섯 번 났다)를 문자열 검사가
+    아니라 실제 렌더 결과로 확인한다."""
+
+    def test_chart_is_created_with_labels_and_series_datasets(self):
+        got = run_chart_render()
+        self.assertEqual(got["fundLabels"], ["1", "2"])
+        self.assertEqual(
+            [d["label"] for d in got["fundDatasets"]],
+            ["계획 금액", "실제 집행 금액"],
+        )
+        self.assertEqual(got["fundDatasets"][0]["data"], [1300000000, 500000000])
+        self.assertEqual(got["fundDatasets"][1]["data"], [800000000, 500000000])
+
+    def test_tooltip_uses_format_value_so_it_matches_the_table(self):
+        """억/조 표기가 표와 어긋나면 같은 값을 두 가지로 말하는 셈이 된다."""
+        got = run_chart_render()
+        self.assertEqual(got["fundTooltip0"], "계획 금액: 13억")
+        self.assertEqual(got["fundTooltip1"], "실제 집행 금액: 8억")
+
+    def test_series_colors_differ_and_avoid_the_verdict_red(self):
+        got = run_chart_render()
+        c0 = got["fundDatasets"][0]["color"]
+        c1 = got["fundDatasets"][1]["color"]
+        self.assertNotEqual(c0, c1, "계열 색이 구분되지 않습니다")
+        for c in (c0, c1):
+            self.assertNotIn(c, ("#e0564a", "#b3261e"),
+                             "차트 계열 색이 판정 색(--red)과 같습니다")
+
+    def test_canvas_is_inserted_above_the_table_which_still_renders(self):
+        got = run_chart_render()
+        self.assertNotEqual(got["canvasIdx"], -1, "canvas가 만들어지지 않았습니다")
+        self.assertNotEqual(got["tableIdx"], -1, "표가 사라졌습니다")
+        self.assertLess(got["canvasIdx"], got["tableIdx"],
+                        "차트가 표 위가 아니라 아래(또는 표 대신)에 있습니다")
+        self.assertTrue(got["fundHasTableCells"], "표 셀 데이터가 사라졌습니다")
+        self.assertEqual(got["canvasClassName"], "chart-canvas")
+
+    def test_source_split_block_only_charts_the_group_with_axis_fields(self):
+        """insider_timeline은 source별로 쪼개진다 — CHART_SPECS가 요구하는
+        필드(rcept_dt·sp_stock_lmp_rate)를 가진 elestock 블록만 차트가
+        생기고, 필드가 없는 hyslr 블록은 표만 남아야 한다."""
+        got = run_chart_render()
+        self.assertEqual(got["chartCountAfterB"] - got["chartCountAfterA"], 1,
+                         "source로 쪼개진 블록마다 각각 그려지지 않았거나, "
+                         "필드가 없는 블록에서도 차트가 생겼습니다")
+        self.assertEqual(got["insiderLabels"], ["2026.03.04", "2026.03.27"])
+        self.assertEqual(got["insiderDatasetLabels"], ["오정강"])
+
+    def test_no_chart_spec_means_no_new_chart(self):
+        got = run_chart_render()
+        self.assertEqual(got["chartCountAfterC"], got["chartCountAfterB"],
+                         "CHART_SPECS에 없는 섹션인데 차트가 생겼습니다")
+
+    def test_show_gate_destroys_every_tracked_chart_instance(self):
+        got = run_chart_render()
+        self.assertEqual(got["destroyedAfterGate"], got["chartCountAfterC"],
+                         "showGate()가 그 시점까지 만든 차트를 전부 destroy()하지 않습니다")
+
+    def test_theme_toggle_actually_repaints_an_existing_chart(self):
+        got = run_chart_render()
+        self.assertNotEqual(got["colorBeforeTheme"], got["colorAfterTheme"],
+                            "테마를 바꿔도 이미 그려진 차트의 축 색이 그대로입니다")
+        self.assertTrue(got["updatedAfterTheme"],
+                        "테마를 바꿔도 차트의 update()가 불리지 않습니다")
+
+
 if __name__ == "__main__":
     unittest.main()
 

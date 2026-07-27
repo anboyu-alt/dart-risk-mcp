@@ -17,6 +17,12 @@ let POLL_GEN = 0; // 폴링 세대 토큰. analyze()·resumeIfAny()가 폴링을
                    // (또는 그 반대) 늦게 도착한 옛 루프의 응답이 새 화면
                    // 위에 섞이거나, 옛 루프가 새 작업의 se_job을 지워버리는
                    // 사고를 막기 위해서다.
+let CHART_INSTANCES = []; // renderChart()가 만든 Chart.js 인스턴스 목록.
+                           // resetCharts()가 destroy() 대상으로 쓴다 —
+                           // showGate()·renderHeadPlaceholder()가 #body를
+                           // 비우는 자리와 같은 곳에서 함께 정리한다. 안
+                           // 그러면 회사를 바꾸거나 로그아웃할 때마다
+                           // 캔버스와 메모리가 쌓인다.
 
 /** 사용자에게 그대로 보여줘도 되는 문구로만 만든 오류. 원시 오류(네트워크
  *  실패의 "Failed to fetch" 같은 브라우저 내부 문구, 서버 응답 원문 등)는
@@ -143,6 +149,10 @@ function applyTheme(theme) {
   // 라이트 화면이면 클릭했을 때 다크로 돌아가므로 "다크 모드"라고
   // 안내한다(지금 라이트라는 상태를 다시 알려주는 게 아니다).
   if (btn) btn.textContent = isLight ? "다크 모드" : "라이트 모드";
+  // 이미 그려진 차트가 있으면 새 테마 색으로 다시 칠한다 — 안 그러면
+  // 라이트 모드로 바꿔도 다크 모드 때 정한 밝은 글자색이 그대로 남아
+  // 축·범례가 흰 배경 위에서 안 보인다.
+  repaintCharts();
 }
 
 /** 테마 토글 버튼 핸들러 — 선택을 localStorage(LS_THEME)에 기억한다. */
@@ -151,6 +161,164 @@ function toggleTheme() {
   const next = current === "light" ? "dark" : "light";
   localStorage.setItem(LS_THEME, next);
   applyTheme(next);
+}
+
+// ── 차트 ──────────────────────────────────────────────────────────
+//
+// Chart.js(vendor/chart.umd.js)는 index.html이 app.js·ui.js보다 먼저
+// <script>로 실어 전역 Chart를 만든다. 이 파일은 node vm 가짜 DOM으로도
+// 실행되는데(TOC_ITEMS 주석과 같은 이유) 그 환경에는 Chart도
+// getComputedStyle도 없다 — renderChart()가 가장 먼저 Chart 존재를
+// 확인해, 없으면 표만 그리고 조용히 물러난다(표를 지우지 않는다: 차트는
+// "얹는" 것일 뿐 필수가 아니다).
+
+// 계열 구분에만 쓰는 색 9종. 값에 따라 바뀌지 않는다(v0.8.5 — 판정
+// 색이 되면 안 된다). index.html의 :root/:root[data-theme="light"]가
+// --c0~--c8을 정의한다.
+const CHART_SERIES_VARS = [
+  "--c0", "--c1", "--c2", "--c3", "--c4", "--c5", "--c6", "--c7", "--c8",
+];
+
+/** CSS 변수 값을 읽는다. getComputedStyle이 없는 환경(가짜 DOM 테스트)
+ *  에서는 빈 문자열을 돌려준다 — renderChart()가 Chart 존재를 먼저
+ *  확인하므로 실제로는 Chart.js가 있는 화면에서만 불리지만, 방어적으로
+ *  둔다. */
+function cssVar(name) {
+  if (typeof getComputedStyle !== "function") return "";
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name);
+  return v ? v.trim() : "";
+}
+
+/** i번째 계열의 색. 값과 무관하게 순서로만 정해진다(위 CHART_SERIES_VARS
+ *  주석과 같은 이유) — `--c0`~`--c8`을 순환한다. */
+function chartSeriesColor(i) {
+  return cssVar(CHART_SERIES_VARS[i % CHART_SERIES_VARS.length]);
+}
+
+/** 그려진 Chart 인스턴스를 모두 destroy()하고 목록을 비운다. 인스턴스가
+ *  남으면 회사를 바꾸거나 로그아웃할 때마다 캔버스와 메모리가 계속
+ *  쌓인다 — showGate()·renderHeadPlaceholder()가 #body를 비우는 자리와
+ *  같은 곳(한 곳 정리 패턴, resetToc()과 동일한 이유)에서 부른다. */
+function resetCharts() {
+  for (const c of CHART_INSTANCES) {
+    if (c && typeof c.destroy === "function") {
+      try { c.destroy(); } catch (e) { /* 정리 실패로 나머지 정리까지 막지 않는다 */ }
+    }
+  }
+  CHART_INSTANCES = [];
+}
+
+/** wrap(그 블록의 div) 안에 key에 대응하는 차트를 그린다. records는 그
+ *  블록의 원본 레코드다 — table.rows(formatValue를 거친 문자열)가 아니라
+ *  sectionBlocks가 함께 실어준 숫자 원본이다.
+ *
+ *  CHART_SPECS(app.js)에 이 key 정의가 없거나 chartData가 그릴 게
+ *  없다고 판단하면(null) 아무것도 만들지 않고 false를 돌려준다 — 표만
+ *  남는다(브리프 원칙: 표를 지우지 않는다). 만들면 true를 돌려준다.
+ *
+ *  canvas 안의 숫자는 복사도 검색도 안 되므로, wrap 안에 이미 있는
+ *  <table> 바로 위에 끼워 넣는다 — 표를 대체하지 않는다. 표가 없으면
+ *  (텍스트 블록 등, records 자체가 비어 chartData가 null을 주므로
+ *  실제로는 여기까지 오지 않는다) 방어적으로 끝에 붙인다.
+ *
+ *  색은 계열 구분 용도로만 쓴다(v0.8.5) — `--c0`~`--c8`을 값과 무관하게
+ *  순서대로 배정한다. `--red` 등 판정 색은 여기서 절대 쓰지 않는다.
+ */
+function renderChart(wrap, key, records) {
+  if (typeof Chart === "undefined") return false;
+  const spec = CHART_SPECS[key];
+  if (!spec) return false;
+  const data = chartData(records, spec);
+  if (!data) return false;
+
+  const gridColor = cssVar("--dim2");
+  const textColor = cssVar("--tx") || cssVar("--dim2");
+
+  // series(계획 vs 실제 등) 계열은 데이터셋마다 자기 키(spec.series[i].key)를
+  // 쓰고, groupBy(보고자별 등) 계열은 모든 데이터셋이 같은 y 필드(spec.y)를
+  // 쓴다 — 툴팁이 어느 열의 단위(억/조 등)로 포맷할지 알려면 이 매핑이
+  // 필요하다.
+  const seriesKeys = spec.series
+    ? spec.series.map(function (s) { return s.key; })
+    : null;
+
+  const datasets = data.datasets.map(function (d, i) {
+    const color = chartSeriesColor(i);
+    return Object.assign({}, d, {
+      borderColor: color,
+      backgroundColor: color,
+      // 실제 값끼리만 시간순으로 잇는다 — 추세선·예측선이 아니다(v0.8.5).
+      // Chart.js 기본값(false)을 명시해 null 구간을 이어붙이지 않는다.
+      spanGaps: false,
+    });
+  });
+
+  const canvas = document.createElement("canvas");
+  canvas.className = "chart-canvas";
+  const table = typeof wrap.querySelector === "function" ? wrap.querySelector("table") : null;
+  if (table && typeof wrap.insertBefore === "function") {
+    wrap.insertBefore(canvas, table);
+  } else {
+    wrap.appendChild(canvas);
+  }
+
+  const chart = new Chart(canvas, {
+    type: spec.kind,
+    data: { labels: data.labels, datasets: datasets },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { labels: { color: textColor } },
+        tooltip: {
+          callbacks: {
+            // 툴팁 값은 formatValue로 포맷한다 — 억/조 표기가 표와 어긋나면
+            // 같은 값을 두 가지로 말하는 셈이 된다.
+            label: function (ctx) {
+              const k = seriesKeys ? seriesKeys[ctx.datasetIndex] : spec.y;
+              return ctx.dataset.label + ": " + formatValue(k, ctx.parsed.y);
+            },
+          },
+        },
+      },
+      scales: {
+        x: { ticks: { color: textColor }, grid: { color: gridColor } },
+        y: {
+          ticks: { color: textColor }, grid: { color: gridColor },
+          title: { display: !!spec.yLabel, text: spec.yLabel || "", color: textColor },
+        },
+      },
+    },
+  });
+  CHART_INSTANCES.push(chart);
+  return true;
+}
+
+/** 지금 그려진 모든 차트의 축·범례 색을 다시 칠한다. applyTheme()이
+ *  테마를 바꿀 때마다 부른다 — repaintCharts가 없으면 라이트 모드로
+ *  바꿔도 다크 모드 때 정한 색이 옵션 객체에 그대로 남는다(Chart.js는
+ *  옵션을 스스로 다시 읽지 않는다). */
+function repaintCharts() {
+  if (CHART_INSTANCES.length === 0) return;
+  const gridColor = cssVar("--dim2");
+  const textColor = cssVar("--tx") || cssVar("--dim2");
+  for (const chart of CHART_INSTANCES) {
+    const opts = chart.options || {};
+    if (opts.plugins && opts.plugins.legend && opts.plugins.legend.labels) {
+      opts.plugins.legend.labels.color = textColor;
+    }
+    if (opts.scales) {
+      if (opts.scales.x) {
+        if (opts.scales.x.ticks) opts.scales.x.ticks.color = textColor;
+        if (opts.scales.x.grid) opts.scales.x.grid.color = gridColor;
+      }
+      if (opts.scales.y) {
+        if (opts.scales.y.ticks) opts.scales.y.ticks.color = textColor;
+        if (opts.scales.y.grid) opts.scales.y.grid.color = gridColor;
+        if (opts.scales.y.title) opts.scales.y.title.color = textColor;
+      }
+    }
+    if (typeof chart.update === "function") chart.update();
+  }
 }
 
 // ── 좌측 목차 ─────────────────────────────────────────────────────
@@ -279,6 +447,7 @@ function showGate(msg) {
     while (companyInfoBox.firstChild) companyInfoBox.removeChild(companyInfoBox.firstChild);
   }
   resetToc(); // #body를 비우는 자리와 같이 — 목차만 남으면 죽은 링크가 된다
+  resetCharts(); // 같은 자리 — 인스턴스가 남으면 다음 사용자 화면 위에 이어붙는다
   CURRENT_COMPANY = null;
   const actorBtn = document.getElementById("actor-btn");
   if (actorBtn) actorBtn.hidden = true;
@@ -442,6 +611,7 @@ function renderHeadPlaceholder(name, message) {
     while (companyInfoBox.firstChild) companyInfoBox.removeChild(companyInfoBox.firstChild);
   }
   resetToc(); // 같은 이유 — 새 회사의 목차를 처음부터 다시 쌓는다
+  resetCharts(); // 이전 회사의 차트 인스턴스가 새 회사 화면 위에 남지 않게 정리한다
   CURRENT_COMPANY = name;
   const btn = document.getElementById("actor-btn");
   if (btn) btn.hidden = false;
@@ -739,7 +909,15 @@ function renderSection(key, value) {
     holder.appendChild(p);
     return;
   }
-  for (const block of blocks) holder.appendChild(blockEl(block));
+  for (const block of blocks) {
+    const el = blockEl(block);
+    // 차트는 표 위에 얹는다 — 표를 지우지 않는다. canvas 안의 숫자는
+    // 복사도 검색도 안 되므로 정확한 값은 항상 표가 책임진다(브리프
+    // 원칙). CHART_SPECS에 이 섹션 정의가 없거나 그릴 데이터가 없으면
+    // renderChart가 false를 돌려주고 el을 건드리지 않는다.
+    renderChart(el, key, block.records);
+    holder.appendChild(el);
+  }
 }
 
 /** doc:<접수번호> 섹션이 도착할 때마다 부른다(pollUntilDone).

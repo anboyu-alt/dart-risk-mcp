@@ -1843,5 +1843,34 @@ class TestVendoredChartLibrary(unittest.TestCase):
                          f"vendor에 예상 밖 파일이 있습니다: {names}")
 
 
+class TestChartRendering(unittest.TestCase):
+    def test_chart_is_added_above_the_table_not_instead_of_it(self):
+        """canvas 안의 숫자는 복사도 검색도 안 된다. 표가 근거로 남아야 한다."""
+        ui = _sources()["ui.js"]
+        body = _extract_function_body(ui, "renderSection")
+        self.assertIn("renderChart", body, "renderSection이 차트를 그리지 않습니다")
+        self.assertIn("blockEl", body, "renderSection이 표를 더 이상 그리지 않습니다")
+
+    def test_chart_instances_are_destroyed_on_reset(self):
+        """인스턴스가 남으면 회사를 바꿀 때마다 누적된다."""
+        ui = _sources()["ui.js"]
+        gate = _extract_function_body(ui, "showGate")
+        self.assertRegex(gate, r"destroy|resetCharts",
+                         "showGate가 차트 인스턴스를 정리하지 않습니다")
+
+    def test_theme_toggle_repaints_charts(self):
+        ui = _sources()["ui.js"]
+        body = _extract_function_body(ui, "applyTheme")
+        self.assertRegex(body, r"chart|Chart",
+                         "테마를 바꿔도 차트 색이 그대로입니다")
+
+    def test_no_verdict_coloring_tied_to_values(self):
+        """빨강을 값에 따라 붙이면 판정이 된다(v0.8.5)."""
+        ui = _sources()["ui.js"]
+        body = _extract_function_body(ui, "renderChart")
+        self.assertNotRegex(body, r"--red|#e0564a",
+                            "차트가 판정 색을 씁니다")
+
+
 if __name__ == "__main__":
     unittest.main()

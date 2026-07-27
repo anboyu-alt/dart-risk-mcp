@@ -517,8 +517,12 @@ function sourceGroupedBlocks(records) {
       delete copy.source;
       return copy;
     });
-    const t = tableLayout(dropAllEmptyColumns(withoutSource));
-    if (t) blocks.push({ title: label(s), table: t });
+    const cleaned = dropAllEmptyColumns(withoutSource);
+    const t = tableLayout(cleaned);
+    // records는 표가 실제로 그린 것과 같은 레코드(source 제거·빈 열 제거
+    // 반영 후)를 그대로 싣는다 — 다음 태스크(차트)가 이 레코드로 그리므로
+    // 표와 다른 값을 보여주면 안 된다.
+    if (t) blocks.push({ title: label(s), table: t, records: cleaned });
   }
   return blocks;
 }
@@ -595,8 +599,12 @@ function sectionBlocks(value, depth, key) {
   }
 
   if (d === 0 && key === "executive_roster") {
-    const t = tableLayout(normalizeRoster(value));
-    return t ? [{ title: null, table: t }] : [];
+    const records = normalizeRoster(value);
+    const t = tableLayout(records);
+    // records: 차트(다음 태스크)가 표와 같은 데이터를 그리도록, 표가
+    // 실제로 쓴 레코드를 그대로 함께 싣는다 — table.rows는 이미
+    // formatValue를 거친 문자열이라 차트에는 쓸 수 없다.
+    return t ? [{ title: null, table: t, records: records }] : [];
   }
 
   if (Array.isArray(value)) {
@@ -608,16 +616,19 @@ function sectionBlocks(value, depth, key) {
     // insider_timeline처럼 레코드 전부가 source 필드를 가지면(4개
     // 엔드포인트를 합친 결과) source별로 작은 표 여러 개로 나눈다 —
     // source가 없는 다른 섹션은 이 분기를 타지 않는다(recordsHaveSourceField
-    // 계약).
+    // 계약). 이 경로는 sourceGroupedBlocks가 블록별로 자기 레코드를
+    // 따로 싣는다(source가 레코드에서 빠지므로 섹션 전체 레코드를
+    // 넘기는 방식은 여기서 성립하지 않는다).
     if (recordsHaveSourceField(records)) return sourceGroupedBlocks(records);
     const t = tableLayout(records);
-    return t ? [{ title: null, table: t }] : [];
+    return t ? [{ title: null, table: t, records: records }] : [];
   }
 
   if (!isPlainObject(value)) {
     if (isLongText(value)) return [{ title: null, text: value }];
-    const t = tableLayout(toRecords(value) || []);
-    return t ? [{ title: null, table: t }] : [];
+    const records = toRecords(value) || [];
+    const t = tableLayout(records);
+    return t ? [{ title: null, table: t, records: records }] : [];
   }
 
   const keys = Object.keys(value);
@@ -641,8 +652,9 @@ function sectionBlocks(value, depth, key) {
     for (const k of flatKeys) flat[k] = value[k];
     // flat은 항상 단일 평면 객체다 — 레코드 1건짜리 배열로 감싸 넘긴다.
     // 이 경로가 indicators(1건 49열)를 세로로 바꾸는 핵심 지점이다.
-    const t = tableLayout([flat]);
-    if (t) blocks.push({ title: null, table: t });
+    const records = [flat];
+    const t = tableLayout(records);
+    if (t) blocks.push({ title: null, table: t, records: records });
   }
   for (const k of longTextKeys) {
     blocks.push({ title: label(k), text: value[k] });
@@ -650,7 +662,7 @@ function sectionBlocks(value, depth, key) {
   for (const k of nestedKeys) {
     const sub = sectionBlocks(value[k], d + 1);
     if (sub.length === 0) {
-      blocks.push({ title: label(k), table: null });
+      blocks.push({ title: label(k), table: null, records: null });
       continue;
     }
     for (const sb of sub) {
