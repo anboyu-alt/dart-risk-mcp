@@ -2,6 +2,22 @@
 
 let CONFIG = null;      // {supabase_url, supabase_anon_key}
 let SESSION = null;     // {access_token, refresh_token, expires_at}
+let LOGGING_IN = false; // 로그인 버튼 연타로 중복 인증 요청이 나가는 것을 막는다
+
+/** 사용자에게 그대로 보여줘도 되는 문구로만 만든 오류. 원시 오류(네트워크
+ *  실패의 "Failed to fetch" 같은 브라우저 내부 문구, 서버 응답 원문 등)는
+ *  이 마커가 없으므로 화면에 그대로 노출되지 않는다. */
+function safeError(msg) {
+  const e = new Error(msg);
+  e.userSafe = true;
+  return e;
+}
+
+/** 화면에 표시할 메시지를 고른다 — safeError로 만든 오류만 원문을 쓰고,
+ *  그 외(네트워크 예외 등)는 폴백 문구로 대체한다. */
+function safeMessage(e, fallback) {
+  return (e && e.userSafe && e.message) || fallback;
+}
 
 /** SE API 호출. 이 함수 하나만 네트워크를 만진다. */
 async function api(method, path, opts) {
@@ -24,8 +40,16 @@ async function api(method, path, opts) {
 /** 브라우저 로그인에 필요한 공개 설정. 이 경로만 인증이 없다. */
 async function loadConfig() {
   const r = await api("GET", "/api/se/config");
-  if (r.status !== 200) throw new Error("서버 설정을 불러오지 못했습니다");
-  CONFIG = r.body;
+  if (r.status !== 200) throw safeError("서버 설정을 불러오지 못했습니다");
+  const cfg = r.body || {};
+  // 환경변수(SUPABASE_URL/SUPABASE_ANON_KEY)가 비어 있어도 서버는 200 +
+  // 빈 문자열을 돌려줄 수 있다(se_server/config.py, se_server/api/handlers.py
+  // _config). 여기서 걸러내지 않으면 gotrue()가 상대 경로("/auth/v1/token…")로
+  // 요청해 404를 받고, 사용자에겐 원인 불명의 "로그인 실패"로만 보인다.
+  if (!cfg.supabase_url || !cfg.supabase_anon_key) {
+    throw safeError("서버 설정이 비어 있습니다 — 관리자에게 문의하세요");
+  }
+  CONFIG = cfg;
   return CONFIG;
 }
 
@@ -45,7 +69,12 @@ async function gotrue(grant, payload) {
   const body = await r.json().catch(function () { return {}; });
   if (r.status !== 200 || !body.access_token) {
     // 서버 원문을 그대로 보여주지 않는다 — 계정 존재 여부가 샐 수 있다.
-    throw new Error("로그인에 실패했습니다. 이메일과 비밀번호를 확인하세요.");
+    // 다만 실패 유형은 구분한다: 세션 만료(refresh_token)를 비밀번호 오류로
+    // 안내하면 사용자가 애먼 비밀번호를 의심하며 헤맨다.
+    if (grant === "refresh_token") {
+      throw safeError("세션이 만료되었습니다. 다시 로그인하세요.");
+    }
+    throw safeError("로그인에 실패했습니다. 이메일과 비밀번호를 확인하세요.");
   }
   return body;
 }
@@ -60,11 +89,28 @@ function saveSession(tok) {
   localStorage.setItem(LS_SESSION, JSON.stringify(SESSION));
 }
 
+/** 메모리·로컬 저장소 양쪽에서 세션을 지운다. 갱신 실패·로그아웃이 공유한다. */
+function clearSession() {
+  SESSION = null;
+  localStorage.removeItem(LS_SESSION);
+}
+
 /** 만료됐으면 갱신하고 유효한 access_token을 돌려준다. */
 async function token() {
-  if (!SESSION) throw new Error("로그인이 필요합니다");
+  if (!SESSION) throw safeError("로그인이 필요합니다");
   if (Date.now() < SESSION.expires_at) return SESSION.access_token;
-  saveSession(await gotrue("refresh_token", { refresh_token: SESSION.refresh_token }));
+  try {
+    // CONFIG가 없는 채로 gotrue()를 부르면 CONFIG.supabase_url에서 TypeError가
+    // 난다 — 저장된 세션을 복원하는 경로에서 발생할 수 있으므로 여기서 보장한다.
+    if (!CONFIG) await loadConfig();
+    saveSession(await gotrue("refresh_token", { refresh_token: SESSION.refresh_token }));
+  } catch (e) {
+    // 정리하지 않으면 (Task 2의) 폴링 루프가 매번 같은 실패를 반복하면서
+    // 화면이 본문에 멈춰, 새로고침 전까지 로그인 화면으로 돌아가지 못한다.
+    clearSession();
+    showGate(safeMessage(e, "세션이 만료되었습니다. 다시 로그인하세요."));
+    throw e;
+  }
   return SESSION.access_token;
 }
 
@@ -94,16 +140,13 @@ function loadStoredSession() {
   }
 }
 
-function getDartKey() {
-  return localStorage.getItem(LS_DART_KEY) || "";
-}
-
 function saveDartKey(key) {
   localStorage.setItem(LS_DART_KEY, key);
 }
 
 /** 로그인 버튼 핸들러 — 이메일·비밀번호로 GoTrue 인증 후 DART 키를 저장한다. */
 async function doLogin() {
+  if (LOGGING_IN) return; // 연타 시 중복 인증 요청 방지
   const msgEl = document.getElementById("gate-msg");
   msgEl.textContent = "";
   const email = document.getElementById("email").value.trim();
@@ -113,21 +156,32 @@ async function doLogin() {
     msgEl.textContent = "이메일과 비밀번호를 입력하세요.";
     return;
   }
+  LOGGING_IN = true;
   try {
     if (!CONFIG) await loadConfig();
     const tok = await gotrue("password", { email: email, password: password });
     saveSession(tok);
     if (dartKey) saveDartKey(dartKey);
+    // 인증정보가 DOM에 평문으로 남지 않도록 비운다.
+    document.getElementById("password").value = "";
+    document.getElementById("dartkey").value = "";
     showMain();
   } catch (e) {
-    msgEl.textContent = (e && e.message) || "로그인에 실패했습니다.";
+    msgEl.textContent = safeMessage(e, "로그인에 실패했습니다. 잠시 후 다시 시도하세요.");
+  } finally {
+    LOGGING_IN = false;
   }
 }
 
-/** 로그아웃 — 로컬 세션만 지운다(서버에는 상태가 없다). DART 키는 유지한다. */
+/** 로그아웃 — 세션과 DART 키를 모두 지운다.
+ *  공용 PC에서 다음 사용자가 앞사람의 DART 키로 조회하지 못하게 한다. */
 function doLogout() {
-  SESSION = null;
-  localStorage.removeItem(LS_SESSION);
+  clearSession();
+  localStorage.removeItem(LS_DART_KEY);
+  const dartEl = document.getElementById("dartkey");
+  if (dartEl) dartEl.value = "";
+  const pwEl = document.getElementById("password");
+  if (pwEl) pwEl.value = "";
   showGate();
 }
 
@@ -147,14 +201,12 @@ async function init() {
     await token();
     showMain();
   } catch (e) {
-    localStorage.removeItem(LS_SESSION);
-    SESSION = null;
-    showGate();
+    // token()이 자체 실패 경로에서 이미 정리·안내를 했을 수 있지만(같은 e가
+    // 다시 올라옴), loadConfig() 자체가 실패하는 경우엔 여기가 유일한 안내
+    // 지점이라 다시 한번 확실히 정리한다.
+    clearSession();
+    showGate(safeMessage(e, ""));
   }
 }
 
 document.addEventListener("DOMContentLoaded", init);
-
-if (typeof module !== "undefined" && module.exports) {
-  module.exports = { api, loadConfig, gotrue, saveSession, token };
-}
