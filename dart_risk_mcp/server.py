@@ -6,6 +6,10 @@
 - find_risk_precedents: 신호 조합 → 과거 유사 사례 (제한적 구현)
 """
 
+# PEP 604(`X | None`) 표기를 쓰므로 이 import가 없으면 Python 3.10 미만에서
+# import 시점에 TypeError로 죽는다(3.11+에서는 동작 차이 없음).
+from __future__ import annotations
+
 import os
 import re
 import warnings

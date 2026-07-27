@@ -6,6 +6,11 @@ opt-in으로 조회한다. 동봉 JSON은 빈 스켈레톤이다.
 
 로드 우선순위: DART_KNOWN_ACTORS_PATH(로컬 JSON) > Notion(24h 캐시) > 동봉.
 """
+
+# PEP 604(`X | None`) 표기를 쓰므로 이 import가 없으면 Python 3.10 미만에서
+# **import 시점에** TypeError로 죽는다. 애노테이션을 문자열로 지연 평가해
+# 구버전에서도 모듈이 로드되게 한다(3.11+에서는 동작 차이 없음).
+from __future__ import annotations
 import html
 import json
 import os
