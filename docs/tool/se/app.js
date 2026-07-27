@@ -30,11 +30,20 @@ function resumeTarget(saved, now) {
 
 // registry.STAGE1_SPECS[*].section 과 같은 그룹이다. 서버가 이미 화면
 // 그룹을 알고 있으므로 여기서 새로 정하지 않고 그대로 따른다.
+//
+// "공시 원문 열람"(doc_list)만 예외다 — 이 키는 STAGE1_SPECS에 없다(2단
+// `doc:<접수번호>` 섹션들을 addDocListEntry가 한 목록으로 모은 합성 키,
+// DOC_LIST_KEY 참고). 여기 없으면 groupTitleFor가 catch-all "기타"로
+// 떨어뜨려 본문 맨 끝(다른 어떤 정식 그룹보다도 뒤)으로 밀려난다 —
+// design 문서(2026-07-26-risk-viewer-se-design.md §7.1)는 본문 섹션
+// 순서에서 "⑦ 공시 원문 열람"을 마지막 정식 섹션으로 정의하므로, 그
+// 자리를 그대로 준다(감사·부실 뒤, 아직 "기타"는 아님).
 const SECTION_GROUPS = [
   { title: "자금", keys: ["fund_usage", "affiliates", "disclosures"] },
   { title: "재무", keys: ["financials", "indicators"] },
   { title: "지배구조", keys: ["shareholders", "insider_timeline", "executive_roster"] },
   { title: "감사·부실", keys: ["audit_history", "debt_balance", "distress", "dividends"] },
+  { title: "공시 원문 열람", keys: ["doc_list"] },
 ];
 
 function formatCount(n) {
@@ -497,7 +506,18 @@ function sourceGroupedBlocks(records) {
   }
   const blocks = [];
   for (const s of order) {
-    const t = tableLayout(dropAllEmptyColumns(groups.get(s)));
+    // 그룹 안에서는 source 필드 자체를 뺀다. 값이 그룹 전체에서 같은
+    // 한 값(s)뿐이라 tableLayout이 그대로 두면 상수 열로 캡션에 올라가
+    // "출처: elestock" 식으로 뜨는데, 표 제목(title = label(s), 예: "5%
+    // 대량보유 이력")이 이미 같은 정보를 한국어로 말하고 있다 — 같은
+    // 것을 원본 키 값과 한국어 라벨 두 가지로 부르는 표기 불일치였다.
+    // 숨기는 게 아니다: 값 자체는 title에 여전히 그대로 남는다.
+    const withoutSource = groups.get(s).map(function (r) {
+      const copy = Object.assign({}, r);
+      delete copy.source;
+      return copy;
+    });
+    const t = tableLayout(dropAllEmptyColumns(withoutSource));
     if (t) blocks.push({ title: label(s), table: t });
   }
   return blocks;
@@ -772,12 +792,30 @@ function docKeyRceptNo(key) {
  * 원문은 rcept_no를 클릭해 우측 패널(openDocPanel)에서 본다. 여기서는
  * "어떤 공시를 가져왔는지"만 사실대로 남긴다: 접수번호(rcept_no 키를
  * 그대로 써야 ui.js의 기존 클릭 배선 — table.keys.indexOf("rcept_no") —
- * 이 그대로 작동한다), 글자 수, 잘렸는지 여부.
+ * 이 그대로 작동한다), 주 파일·파일 목록, 글자 수, 잘렸는지 여부.
+ *
+ * main_file·files는 이전에는 본문 표의 열이었다(공시 원문을 doc: 원문
+ * 그대로 내보내던 시절). text를 목록으로 바꾸며 이 둘도 함께 빠졌는데,
+ * se_server/api/handlers.py의 우측 패널 응답(`_disclosure`)은
+ * rcept_no·text·char_count·truncated만 주고 files·main_file은 주지
+ * 않는다 — 그 결과 이 두 필드는 화면 어디에서도 도달 불가능해졌다.
+ * 값이 있는 데이터를 조용히 숨기지 않는다는 이 화면의 원칙(위 LABELS
+ * 주석과 동일)에 따라 목록에 되살린다. 실측(field-inventory) 기준
+ * main_file은 34건 중 33건에 실제 파일명(예: "20260715900769.xml")이
+ * 있고, files도 함께 채워져 있다(파일이 여러 개인 공시도 있어 배열
+ * 그대로 둔다 — formatValue가 원소를 쉼표로 이어 보여준다).
+ *
+ * files가 빈 배열([])이면(ZIP을 아예 못 받은 경우 — handlers.py의
+ * `_disclosure` 주석: "files=[]인 완전한 빈 dict") formatValue(app.js)가
+ * 그 사실 그대로 "없음"으로 보여준다 — 목록 단계에서부터 이 공시는 클릭해도
+ * 원문이 없다는 것을 미리 알 수 있다(판정 어휘 없이 사실만, v0.8.5 원칙).
  */
 function docListRow(rceptNo, value) {
   const v = value || {};
   return {
     rcept_no: rceptNo,
+    main_file: v.main_file,
+    files: Array.isArray(v.files) ? v.files : [],
     char_count: v.char_count,
     truncated: v.truncated,
   };

@@ -353,10 +353,15 @@ class TestSectionGroups(unittest.TestCase):
 
         groups = run_js("SECTION_GROUPS")
         shown = {k for g in groups for k in g["keys"]}
+        # doc_list는 STAGE1_SPECS에 없는 2단 합성 키(개별 doc:<접수번호>
+        # 섹션들을 addDocListEntry가 목록 하나로 모은 것, DOC_LIST_KEY
+        # 참고)다 — 화면에는 나와야 하므로 SECTION_GROUPS에 있지만, 이
+        # 검사는 "1단 API 키가 전부 어딘가에 나오는가"만 보므로 따로 뺀다.
+        shown_stage1 = shown - {"doc_list"}
         expected = {s.key for s in STAGE1_SPECS} - {"company_info"}  # 헤더는 별도
-        self.assertEqual(expected - shown, set(),
+        self.assertEqual(expected - shown_stage1, set(),
                          "화면에 안 나오는 섹션이 있습니다")
-        self.assertEqual(shown - expected, set(),
+        self.assertEqual(shown_stage1 - expected, set(),
                          "registry에 없는 섹션 키를 그리려 합니다")
 
 
@@ -833,6 +838,25 @@ class TestInsiderTimelineSourceSplit(unittest.TestCase):
         got = run_js('sectionBlocks([{source:"elestock",a:1}])')
         self.assertNotEqual(got[0]["title"], "5% 대량보유")
 
+    def test_source_value_is_not_repeated_as_a_mismatched_caption(self):
+        """리뷰 지적 ③: 표 제목이 이미 "5% 대량보유 이력"(label(source))인데
+        바로 아래 캡션에 "출처: elestock"(원본 값)이 다시 떴다 — 같은
+        것을 두 가지로 부르는 표기 불일치. 표 안에서는 source 필드
+        자체를 빼서 이 중복을 없앤다(값은 title에 여전히 남는다 — 숨기는
+        게 아니다).
+        """
+        records = [
+            {"source": "elestock", "rcept_no": "1", "nm": "오정강"},
+            {"source": "elestock", "rcept_no": "2", "nm": "이승호"},
+        ]
+        got = run_js(f"sectionBlocks({json.dumps(records, ensure_ascii=False)})")
+        table = got[0]["table"]
+        self.assertEqual(got[0]["title"], "5% 대량보유 이력")
+        caption_keys = [c["key"] for c in table["caption"]]
+        self.assertNotIn("source", table["keys"])
+        self.assertNotIn("source", caption_keys,
+                         "표 제목이 이미 출처를 말하는데 캡션에도 원본 값이 남아 있습니다")
+
 
 @unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
 class TestInsiderTimelineRenderWiring(unittest.TestCase):
@@ -868,21 +892,45 @@ class TestGroupRouting(unittest.TestCase):
         self.assertEqual(run_js('groupTitleFor("audit_history")'), "감사·부실")
 
     def test_unknown_key_falls_back_to_catchall_group(self):
-        """2단 `doc:<rcept_no>` 키처럼 SECTION_GROUPS에 없는 키도 어딘가에는
-        나와야 한다 — 그룹이 없다고 사라지면 안 된다.
+        """2단 `doc:<rcept_no>` 키(개별 원문 섹션, addDocListEntry가 목록
+        하나로 모으기 전의 원본 키)처럼 SECTION_GROUPS에 없는 키도 어딘가에는
+        나와야 한다 — 그룹이 없다고 사라지면 안 된다. 이 개별 키 자체는
+        renderSection에 직접 넘어가지 않으므로(DOC_LIST_KEY로 모아서만
+        그린다) "기타"로 떨어지는 것이 실제로는 문제가 안 된다 — 아래
+        doc_list(목록 키) 테스트와는 별개다.
         """
         got = run_js('groupTitleFor("doc:20240301000001")')
         self.assertEqual(got, "기타")
 
+    def test_doc_list_gets_its_own_section_not_the_catchall(self):
+        """doc_list(공시 원문 목록, DOC_LIST_KEY)는 STAGE1_SPECS에 없는
+        합성 키지만 실제로 renderSection(ui.js)에 그대로 넘어가 화면에
+        그려진다 — "기타"로 떨어지면 design 문서(§7.1)가 정의한 "⑦ 공시
+        원문 열람" 자리 대신 페이지 맨 끝(다른 어떤 그룹보다도 뒤)으로
+        밀려난다. 리뷰 지적 ②의 재발 방지.
+        """
+        got = run_js('groupTitleFor("doc_list")')
+        self.assertNotEqual(got, "기타")
+        self.assertEqual(got, "공시 원문 열람")
+
     def test_group_order_follows_definition_order(self):
         got = [run_js(f'groupOrderIndex("{t}")') for t in
-               ("자금", "재무", "지배구조", "감사·부실")]
+               ("자금", "재무", "지배구조", "감사·부실", "공시 원문 열람")]
         self.assertEqual(got, sorted(got), "그룹 순서가 정의 순서를 따르지 않습니다")
+
+    def test_doc_list_group_sorts_after_the_last_stage1_group(self):
+        """design 문서 §7.1은 "⑦ 공시 원문 열람"을 감사·부실 뒤 마지막
+        정식 섹션으로 정의한다 — "기타"보다는 앞이어야 한다."""
+        audit = run_js('groupOrderIndex("감사·부실")')
+        doc_list_group = run_js('groupOrderIndex("공시 원문 열람")')
+        catchall = run_js('groupOrderIndex("기타")')
+        self.assertLess(audit, doc_list_group)
+        self.assertLess(doc_list_group, catchall)
 
     def test_unknown_group_sorts_after_all_known_groups(self):
         known_max = max(
             run_js(f'groupOrderIndex("{t}")')
-            for t in ("자금", "재무", "지배구조", "감사·부실")
+            for t in ("자금", "재무", "지배구조", "감사·부실", "공시 원문 열람")
         )
         self.assertGreater(run_js('groupOrderIndex("기타")'), known_max)
 
@@ -1263,7 +1311,8 @@ class TestDocListRow(unittest.TestCase):
     def test_row_carries_rcept_no_char_count_and_truncated(self):
         got = run_js(
             'docListRow("20260715900769",'
-            ' {text:"본문 내용", char_count:3988, truncated:false})'
+            ' {text:"본문 내용", char_count:3988, truncated:false,'
+            '  main_file:"20260715900769.xml", files:["20260715900769.xml"]})'
         )
         self.assertEqual(got["rcept_no"], "20260715900769")
         self.assertEqual(got["char_count"], 3988)
@@ -1279,6 +1328,47 @@ class TestDocListRow(unittest.TestCase):
     def test_missing_value_does_not_crash(self):
         got = run_js('docListRow("1", null)')
         self.assertEqual(got["rcept_no"], "1")
+        self.assertEqual(got["files"], [], "value가 없어도 files는 빈 배열이어야 합니다")
+
+    def test_row_carries_main_file_and_files(self):
+        """리뷰 지적 ①: main_file·files가 본문 어디에서도 도달 불가였다 —
+        se_server/api/handlers.py의 우측 패널 응답(`_disclosure`)은
+        rcept_no·text·char_count·truncated만 주므로, 목록에서마저 빠지면
+        이 두 필드는 화면 전체에서 사라진다. 실측(field-inventory) 기준
+        34건 중 33건이 main_file에 실제 파일명을 갖고 있다.
+        """
+        got = run_js(
+            'docListRow("20260715900769",'
+            ' {text:"x", char_count:1, truncated:false,'
+            '  main_file:"20260715900769.xml", files:["20260715900769.xml"]})'
+        )
+        self.assertEqual(got["main_file"], "20260715900769.xml")
+        self.assertEqual(got["files"], ["20260715900769.xml"])
+
+    def test_row_normalizes_non_array_files_to_empty_list(self):
+        """files가 배열이 아닌 예상 밖 값이면(예상 밖 응답) 조용히 무너지지
+        않고 빈 배열로 안전하게 떨어진다."""
+        got = run_js(
+            'docListRow("1", {char_count:0, truncated:false, files:null})'
+        )
+        self.assertEqual(got["files"], [])
+
+    def test_empty_files_is_shown_as_a_fact_not_a_verdict(self):
+        """리뷰 지적 ④: ZIP을 아예 못 받은 공시는 files가 빈 배열로 온다
+        (se_server/api/handlers.py `_disclosure`의 files=[] 판별 기준과
+        동일). 목록에서 클릭하기 전에 미리 알 수 있어야 하지만, "실패"·
+        "오류" 같은 판정 어휘 없이 사실만 표기해야 한다(v0.8.5 원칙) —
+        formatValue(app.js)의 빈 배열 규칙("없음")이 그 역할을 한다.
+        """
+        row = run_js(
+            'docListRow("20260123000072",'
+            ' {text:"", char_count:0, truncated:false, main_file:"", files:[]})'
+        )
+        self.assertEqual(row["files"], [])
+        rendered = run_js(f'formatValue("files", {json.dumps(row["files"])})')
+        self.assertEqual(rendered, "없음")
+        for verdict_word in ("실패", "오류", "에러"):
+            self.assertNotIn(verdict_word, rendered)
 
 
 @unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 클릭 배선을 검증할 수 없습니다")
@@ -2237,6 +2327,37 @@ class TestDocListConsolidation(unittest.TestCase):
             sorted(got["captured"]),
             sorted(["20260715900769", "20260708900785", "20260123000072"]),
             "목록 항목을 클릭해도 우측 패널(openDocPanel)이 열리지 않습니다",
+        )
+
+    _ENTRIES_WITH_MAIN_FILE = json.dumps([
+        {"rcept_no": "20260715900769",
+         "value": {"text": "엔켐/회사합병 결정" + ("가" * 3900),
+                    "char_count": 3988, "truncated": False,
+                    "main_file": "20260715900769.xml",
+                    "files": ["20260715900769.xml"]}},
+        {"rcept_no": "20260708900785",
+         "value": {"text": "엔켐/전환사채" + ("나" * 1600),
+                    "char_count": 1676, "truncated": False,
+                    "main_file": "20260708900785.xml",
+                    "files": ["20260708900785.xml"]}},
+        # ZIP 수신 실패 사례(files=[]) — 리뷰 지적 ④.
+        {"rcept_no": "20260123000072",
+         "value": {"text": "", "char_count": 0, "truncated": False,
+                    "main_file": "", "files": []}},
+    ], ensure_ascii=False)
+
+    def test_rcept_no_click_path_survives_adding_main_file_and_files_columns(self):
+        """리뷰 지적 ①로 main_file·files 열을 표에 추가하면 열 순서가
+        바뀐다 — rcept_no 클릭 배선(tableEl의 table.keys.indexOf("rcept_no"))이
+        키로 열을 찾는지, 고정된 열 위치를 가정하는지를 여기서 실제로
+        검증한다. 셀 인덱스가 밀려 배선이 끊기면 이 테스트가 잡는다."""
+        got = run_doc_list(self._ENTRIES_WITH_MAIN_FILE)
+        self.assertEqual(got["docCellCount"], 3,
+                         "main_file·files 열이 추가되며 클릭 가능한 셀 수가 달라졌습니다")
+        self.assertEqual(
+            sorted(got["captured"]),
+            sorted(["20260715900769", "20260708900785", "20260123000072"]),
+            "main_file·files 열 추가 후 우측 패널 클릭 경로가 끊겼습니다",
         )
 
 
