@@ -27,12 +27,16 @@ _JOB_ID = r"(?P<job_id>[A-Za-z0-9_-]+)"
 # 콜론은 허용하되 `/`·`.`는 배제해 경로 순회를 구조적으로 막는다.
 _SECTION_KEY = r"(?P<key>[A-Za-z0-9_:-]+)"
 
+# 접수번호는 숫자 14자리다. 숫자만 허용해 경로 순회를 구조적으로 막는다.
+_RCEPT_NO = r"(?P<rcept_no>[0-9]{8,20})"
+
 # fullmatch로 대조하므로 ^...$ 앵커를 쓰지 않는다.
 _ROUTES: tuple[tuple[str, re.Pattern, str], ...] = (
     ("POST", re.compile(r"/api/se/analyze"), "create"),
     ("POST", re.compile(rf"/api/se/analyze/{_JOB_ID}/step"), "step"),
     ("GET", re.compile(rf"/api/se/analyze/{_JOB_ID}/section/{_SECTION_KEY}"), "section"),
     ("GET", re.compile(rf"/api/se/analyze/{_JOB_ID}"), "get"),
+    ("GET", re.compile(rf"/api/se/disclosure/{_RCEPT_NO}"), "disclosure"),
     ("GET", re.compile(r"/api/se/config"), "config"),
 )
 

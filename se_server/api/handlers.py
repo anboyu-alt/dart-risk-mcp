@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from dart_risk_mcp.core.dart_client import resolve_corp
+from dart_risk_mcp.core.dart_client import fetch_disclosure_full, resolve_corp
 from se_server.api.auth import AuthError, extract_bearer
 from se_server.api.router import match
 from se_server.api.types import Request, Response
@@ -64,6 +64,8 @@ def handle(request: Request, deps: Deps) -> Response:
         return _get(deps, user_id, path_vars["job_id"])
     if name == "section":
         return _section(deps, user_id, path_vars["job_id"], path_vars["key"])
+    if name == "disclosure":
+        return _disclosure(request, deps, path_vars["rcept_no"])
     # 라우트가 늘었는데 분기를 빠뜨리면 조용히 엉뚱한 핸들러로 새지 않고
     # 여기서 드러난다.
     return Response.error(404, "존재하지 않는 경로입니다")
@@ -195,6 +197,33 @@ def _section(deps: Deps, user_id: str, job_id: str, key: str) -> Response:
         if item.key == key and item.status == "done" and item.result is not None:
             return Response(200, {"key": key, "value": item.result.get("value")})
     return Response.error(404, "섹션을 찾을 수 없습니다")
+
+
+def _disclosure(request: Request, deps: Deps, rcept_no: str) -> Response:
+    """공시 원문. 우측 패널이 클릭 시 호출한다(3단 로딩).
+
+    작업에 묶지 않는다 — 공시는 공개 데이터라 소유권 개념이 없고, 작업에
+    묶으면 화면이 "이 공시가 어느 작업에서 왔는지"를 추적해야 한다.
+    """
+    api_key = _dart_key(request)
+    if not api_key:
+        return Response.error(400, "X-DART-Key 헤더가 필요합니다")
+
+    try:
+        result = fetch_disclosure_full(rcept_no, api_key) or {}
+    except Exception:
+        # DART 쪽 실패를 500으로 보고하면 우리 버그로 오해된다.
+        return Response.error(502, "공시 원문을 가져오지 못했습니다")
+
+    text = result.get("text") or ""
+    if not text:
+        return Response.error(404, "공시 원문을 찾을 수 없습니다")
+    return Response(200, {
+        "rcept_no": rcept_no,
+        "text": text,
+        "char_count": result.get("char_count", len(text)),
+        "truncated": bool(result.get("truncated")),
+    })
 
 
 def _config(deps: Deps) -> Response:
