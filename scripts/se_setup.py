@@ -18,6 +18,8 @@ SQL(DDL)은 이 스크립트가 할 수 없다. Supabase는 PostgREST로 DDL을 
 **키는 출력하지 않는다.** 형식과 앞 몇 자만 표시한다.
 """
 import argparse
+import base64
+import json
 import os
 import pathlib
 import sys
@@ -59,14 +61,39 @@ def mask(key: str) -> str:
     return f"{key[:12]}… ({len(key)}자)"
 
 
+def _jwt_role(key: str) -> str:
+    """JWT의 role 클레임을 읽는다. 읽을 수 없으면 빈 문자열.
+
+    payload는 암호화가 아니라 base64 인코딩이라 서명 검증 없이 읽을 수 있다.
+    여기서는 "어느 키를 넣었는지" 알려주는 용도라 서명 검증이 필요 없다.
+    """
+    try:
+        payload = key.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        return str(json.loads(base64.urlsafe_b64decode(payload)).get("role") or "")
+    except Exception:
+        return ""
+
+
 def describe_key(key: str) -> str:
+    """키 종류를 판정한다.
+
+    **JWT라는 사실만으로 service_role이라고 단정하면 안 된다** — anon 키도
+    JWT다. role 클레임을 실제로 읽어 구분한다. anon을 넣으면 RLS에 막혀
+    전부 실패하는데, 그 원인이 키라는 걸 모르면 한참 헤맨다.
+    """
     if looks_like_jwt(key):
-        return "legacy service_role (JWT)"
+        role = _jwt_role(key)
+        if role == "service_role":
+            return "legacy service_role (JWT) — 정상"
+        if role == "anon":
+            return "⚠ anon 키입니다 — RLS에 막혀 전부 실패합니다. service_role이 필요합니다"
+        return f"⚠ JWT이지만 role이 '{role or '알 수 없음'}'입니다 — service_role이 필요합니다"
     if key.startswith("sb_secret_"):
-        return "신형 secret"
+        return "신형 secret — 정상"
     if key.startswith("sb_publishable_"):
         return "⚠ publishable — 권한이 부족합니다. secret 키가 필요합니다"
-    return "알 수 없는 형식"
+    return "⚠ 알 수 없는 형식"
 
 
 def check_env() -> tuple[str, str, str]:
