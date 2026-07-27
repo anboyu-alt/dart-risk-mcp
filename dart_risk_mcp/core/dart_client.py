@@ -4,6 +4,11 @@
 의존성: requests 만 사용.
 """
 
+# PEP 604(`X | None`) 표기를 쓰므로 이 import가 없으면 Python 3.10 미만에서
+# **import 시점에** TypeError로 죽는다. 애노테이션을 문자열로 지연 평가해
+# 구버전에서도 모듈이 로드되게 한다(3.11+에서는 동작 차이 없음).
+from __future__ import annotations
+
 import io
 import json
 import logging
