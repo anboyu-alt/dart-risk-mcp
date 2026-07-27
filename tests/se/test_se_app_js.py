@@ -6,6 +6,7 @@ node로 그대로 부를 수 있다.
 """
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 import unittest
@@ -1469,7 +1470,10 @@ class TestThemeToggleEngine(unittest.TestCase):
     (test_theme_toggle_is_wired_not_dead)는 init()이 이 함수들을 부르는지만
     보므로, 함수 자체가 옳게 동작하는지는 이쪽에서 확인해야 한다."""
 
-    def test_default_start_is_dark_with_no_attribute_override(self):
+    def test_default_start_is_dark_with_explicit_attribute(self):
+        """data-theme는 "생략"이 아니라 "dark"로 명시적으로 붙는다 —
+        applyTheme()가 항상 setAttribute를 호출하기 때문이다(속성이
+        없어도 다크로 보이는 게 아니라, 애초에 속성이 항상 있다)."""
         steps = run_theme_toggle()
         self.assertEqual(steps[0]["attr"], "dark")
         self.assertEqual(steps[0]["btnText"], "라이트 모드")
@@ -1879,6 +1883,188 @@ class TestDocPanelRendersDocumentBlocks(unittest.TestCase):
         }, ensure_ascii=False)
         got = run_doc_panel(body)
         self.assertIn("12,345자 중 일부입니다", got["flat"])
+
+
+# ── #body(그리드)와 .sec 사이 DOM 중간 요소가 전부 display:contents인지 ──
+#
+# 리뷰가 잡은 사고: .grp{display:contents}만으로는 부족했다. groupHolder()가
+# .grp(section) 안에 중간 홀더 div(id="grp-<제목>")를 하나 더 만들고
+# sectionHolder()가 .sec을 그 홀더에 붙이는데, 그 홀더는 display:contents가
+# 아니었다 — 그러면 #body 그리드의 직속 아이템은 h1과 그 홀더 박스가 되고
+# .sec은 홀더 안의 평범한 블록 자식일 뿐이라 그리드 아이템이 아니게 된다.
+# .sec.wide{grid-column:1/-1}이 완전히 무효화돼, 넓힌 표가 그리드 1칸
+# 폭으로 도로 좁아졌다 — 그런데도 기존 두 검사
+# (test_horizontal_table_section_gets_wide_class는 wrap.className만,
+# test_toc_and_two_column_grid_exist는 HTML에 "grid-template-columns"
+# 문자열이 있는지만 봐서) 둘 다 초록이었다.
+#
+# 정적 문자열 검사로는 이 사고를 못 잡는다(클래스 이름이 있다는 것과 그
+# 클래스가 실제로 그 요소에 붙어 있다는 것, 그리고 그 요소가 실제로 #body와
+# .sec 사이에 낀 중간 노드라는 것은 서로 다른 사실이다). 그래서 이 검사는
+# renderSection()을 실제로 실행해(node vm, 위 _RENDER_SECTION_HARNESS와
+# 같은 방식) #body부터 각 .sec까지의 DOM 조상 사슬을 그대로 수집하고,
+# index.html의 CSS를 파싱해 각 조상 클래스가 실제로 display:contents
+# 규칙을 갖는지 대조한다. 중간에 하나라도 빠지면 실패한다.
+_SEC_ANCESTORS_HARNESS = r"""
+const vm = require("vm");
+const fs = require("fs");
+
+const ELEMENTS = Object.create(null);
+
+class FakeEl {
+  constructor(tag) {
+    this.tag = tag;
+    this.children = [];
+    this._text = "";
+    this._className = "";
+    this._id = "";
+    this.dataset = {};
+    this._listeners = {};
+  }
+  appendChild(c) { this.children.push(c); return c; }
+  insertBefore(node, ref) {
+    const idx = ref ? this.children.indexOf(ref) : -1;
+    if (idx === -1) this.children.push(node);
+    else this.children.splice(idx, 0, node);
+    return node;
+  }
+  removeChild(c) {
+    const idx = this.children.indexOf(c);
+    if (idx !== -1) this.children.splice(idx, 1);
+    return c;
+  }
+  insertRow() { const tr = new FakeEl("tr"); this.appendChild(tr); return tr; }
+  insertCell() { const td = new FakeEl("td"); this.appendChild(td); return td; }
+  createTHead() { const el = new FakeEl("thead"); this.appendChild(el); return el; }
+  createTBody() { const el = new FakeEl("tbody"); this.appendChild(el); return el; }
+  addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); }
+  dispatch(type) { (this._listeners[type] || []).forEach(function (fn) { fn({}); }); }
+  set textContent(v) { this._text = String(v); this.children = []; }
+  get textContent() { return this._text; }
+  set className(v) { this._className = v; }
+  get className() { return this._className; }
+  set id(v) { this._id = v; ELEMENTS[v] = this; }
+  get id() { return this._id; }
+}
+
+const bodyEl = new FakeEl("div");
+bodyEl.id = "body";
+
+// #body의 자식들에서 시작해 .sec(첫 자식이 h2인 div)에 도달할 때까지
+// 내려가며, .sec 자신은 뺀 "그 사이" 조상만 기록한다. ancestors는 각
+// 단계에서 "지금 서 있는 노드"를 append한 뒤 자식으로 내려가므로, #body
+// 자신(시작점)은 절대 ancestors에 섞이지 않는다.
+function collectSecAncestors(node, ancestors, out) {
+  ancestors = ancestors || [];
+  out = out || [];
+  if (!node) return out;
+  const isSec = node.tag === "div" && node.children[0] && node.children[0].tag === "h2";
+  if (isSec) {
+    out.push({ h2: node.children[0].textContent, ancestors: ancestors.slice() });
+    return out;
+  }
+  const nextAncestors = ancestors.concat([{ tag: node.tag, className: node.className || "" }]);
+  (node.children || []).forEach(function (c) { collectSecAncestors(c, nextAncestors, out); });
+  return out;
+}
+
+const sandbox = {
+  console: console,
+  document: {
+    createElement: function (tag) { return new FakeEl(tag); },
+    createDocumentFragment: function () { return new FakeEl("#fragment"); },
+    createTextNode: function (t) { const n = new FakeEl("#text"); n.textContent = t; return n; },
+    addEventListener: function () {},
+    getElementById: function (id) { return ELEMENTS[id] || null; },
+  },
+  localStorage: {
+    getItem: function () { return null; },
+    setItem: function () {},
+    removeItem: function () {},
+  },
+  fetch: function () { return Promise.reject(new Error("no network in test")); },
+};
+vm.createContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[1], "utf-8"), { filename: "app.js" }).runInContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).runInContext(sandbox);
+
+sandbox.openDocPanel = function () {};
+// 서로 다른 그룹(자금·재무)에 각각 표 하나씩 — 그룹 홀더가 여러 개
+// 만들어지는 일반적인 경우를 재현한다.
+sandbox.renderSection("fund_usage", [{ a: 1, b: 2 }, { a: 3, b: 4 }]);
+sandbox.renderSection("financials", { a: 1, b: 2 });
+
+const paths = [];
+bodyEl.children.forEach(function (c) { collectSecAncestors(c, [], paths); });
+
+process.stdout.write(JSON.stringify({ paths: paths }));
+"""
+
+
+def run_sec_ancestors():
+    out = subprocess.run(
+        [_NODE, "-e", _SEC_ANCESTORS_HARNESS, str(_APP), str(_UI)],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    if out.returncode != 0:
+        raise AssertionError(f"node 실행 실패:\n{out.stderr}")
+    return json.loads(out.stdout)["paths"]
+
+
+def _display_contents_classes(html: str) -> set:
+    """index.html CSS에서 `display:contents`가 걸린 단일 클래스 선택자
+    이름을 모은다(`.a,.b{...}`처럼 콤마로 묶인 선택자 목록도 각각
+    분리해 인식한다). 이 저장소의 관련 규칙은 전부 단순 클래스
+    선택자라 이 정도로 충분하다."""
+    classes = set()
+    for m in re.finditer(r"([.\w,\s>-]+)\{([^}]*)\}", html):
+        selector, body = m.group(1), m.group(2)
+        if not re.search(r"display\s*:\s*contents", body):
+            continue
+        for part in selector.split(","):
+            part = part.strip()
+            if re.fullmatch(r"\.[A-Za-z0-9_-]+", part):
+                classes.add(part[1:])
+    return classes
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 DOM 중첩을 검증할 수 없습니다")
+class TestSectionIsAnActualGridItem(unittest.TestCase):
+    """#body(그리드 컨테이너)와 .sec 사이에 낀 모든 중간 요소가
+    display:contents가 아니면, .sec은 그리드의 직속 아이템이 아니게 되어
+    .sec.wide{grid-column:1/-1}이 무효화된다. 이 검사는 실제 DOM 조상
+    사슬(node vm)과 실제 CSS 규칙(index.html 파싱)을 대조해, 하나라도
+    빠지면 실패한다 — 클래스 이름이나 grid-template-columns 문자열의
+    존재 여부만 보는 정적 검사로는 이 사고를 잡지 못했다(리뷰 지적).
+    """
+
+    def test_every_ancestor_between_body_and_sec_is_display_contents(self):
+        html = (_ROOT / "docs" / "tool" / "se" / "index.html").read_text(encoding="utf-8")
+        contents_classes = _display_contents_classes(html)
+        self.assertTrue(
+            contents_classes,
+            "index.html에서 display:contents 클래스를 하나도 찾지 못했습니다 — "
+            "검사 자체가 무의미해집니다",
+        )
+
+        paths = run_sec_ancestors()
+        self.assertTrue(paths, ".sec 엘리먼트를 하나도 찾지 못했습니다")
+
+        offenders = []
+        for entry in paths:
+            for anc in entry["ancestors"]:
+                classes = (anc["className"] or "").split()
+                if not any(c in contents_classes for c in classes):
+                    offenders.append(
+                        f'{entry["h2"]!r} 섹션의 조상 <{anc["tag"]} class="{anc["className"]}">'
+                        f'가 display:contents가 아닙니다'
+                    )
+        self.assertEqual(
+            offenders, [],
+            "#body와 .sec 사이에 display:contents가 아닌 중간 요소가 있습니다 — "
+            ".sec이 그리드의 직속 아이템이 되지 못해 .sec.wide가 무효화됩니다:\n  "
+            + "\n  ".join(offenders),
+        )
 
 
 if __name__ == "__main__":

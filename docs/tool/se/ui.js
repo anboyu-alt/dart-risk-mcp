@@ -131,16 +131,17 @@ async function token() {
 // ── 다크/라이트 테마 ───────────────────────────────────────────────
 
 /** theme("light"|그 외 전부 다크)을 <html data-theme>·토글 버튼 문구에
- *  반영한다. 기본(다크)은 속성을 아예 안 붙인다 — index.html의
- *  `:root[data-theme="light"]`만 오버라이드고, 다크는 `:root`
- *  자체이므로 속성이 없어도 다크로 보인다. */
+ *  반영한다. "dark"·"light" 둘 다 속성으로 항상 명시한다(생략하지
+ *  않는다) — index.html의 `:root[data-theme="light"]`만 라이트를
+ *  오버라이드하고 기본 `:root` 자체가 다크 값이라, data-theme="dark"를
+ *  명시해도 다크로 보이는 결과는 같다. */
 function applyTheme(theme) {
   const isLight = theme === "light";
   document.documentElement.setAttribute("data-theme", isLight ? "light" : "dark");
   const btn = document.getElementById("theme-toggle");
-  // 버튼은 "지금 누르면 바뀔 모드"가 아니라 "지금 상태"를 보여준다 —
-  // 라이트 화면이면 "라이트 모드"가 눌린 채로 이미 켜져 있다는 뜻이라
-  // 다음 행동(다크로 돌아가기)을 안내하는 편이 낫다.
+  // 버튼은 "지금 상태"가 아니라 "누르면 바뀔 다음 모드"를 보여준다 —
+  // 라이트 화면이면 클릭했을 때 다크로 돌아가므로 "다크 모드"라고
+  // 안내한다(지금 라이트라는 상태를 다시 알려주는 게 아니다).
   if (btn) btn.textContent = isLight ? "다크 모드" : "라이트 모드";
 }
 
@@ -202,12 +203,20 @@ function addTocEntry(titleText, targetEl, isSection) {
 /** 새 회사 분석을 시작할 때(#body를 비울 때) 목차도 함께 비운다 — 안
  *  그러면 이전 회사에서 만든 목차 항목이 남아, 클릭해도 이미 사라진
  *  섹션을 가리키게 된다(showGate()가 #panel·#body를 함께 정리하는 것과
- *  같은 "한 곳 정리" 이유). */
+ *  같은 "한 곳 정리" 이유).
+ *
+ *  SEC_WRAP(섹션 키 → .sec 엘리먼트, sectionHolder() 참고)도 여기서
+ *  함께 비운다. #body의 자식 노드를 지우는 곳(showGate()·
+ *  renderHeadPlaceholder())은 모두 이 함수를 바로 뒤이어 부르므로,
+ *  비우지 않으면 이전 회사에만 있던 섹션 키가 새 회사에서 다시
+ *  렌더되지 않는 한 SEC_WRAP에 detached된 옛 엘리먼트 참조가 계속
+ *  남는다. */
 function resetToc() {
   const tocEl = document.getElementById("toc");
   if (tocEl) { while (tocEl.firstChild) tocEl.removeChild(tocEl.firstChild); }
   if (TOC_OBSERVER) { TOC_OBSERVER.disconnect(); TOC_OBSERVER = null; }
   TOC_ITEMS = [];
+  for (const k in SEC_WRAP) delete SEC_WRAP[k];
 }
 
 // ── 화면 전환 + 로컬 저장 ──────────────────────────────────────────
@@ -320,7 +329,13 @@ async function init() {
   // "light"가 아니면 다크)이고, 이전에 라이트를 골랐던 사용자만 밝은
   // 화면으로 시작한다.
   applyTheme(localStorage.getItem(LS_THEME) === "light" ? "light" : "dark");
-  document.getElementById("theme-toggle").addEventListener("click", toggleTheme);
+  // 마크업에 #theme-toggle이 없는 예상 밖 상황(배포 실수 등)에서 null에
+  // addEventListener를 호출하면 async init()이 여기서 예외를 던지고,
+  // 그 뒤로 이어지는 login·logout·analyze-btn·actor-btn·panel-close 배선이
+  // 전부 통째로 건너뛰어진다 — 아무 버튼도 반응하지 않는데 오류 안내조차
+  // 없다. 가드로 그 연쇄를 끊는다.
+  const themeToggleBtn = document.getElementById("theme-toggle");
+  if (themeToggleBtn) themeToggleBtn.addEventListener("click", toggleTheme);
   resetToc(); // 페이지를 새로 열 때 목차를 빈 상태로 시작한다
 
   document.getElementById("login").addEventListener("click", doLogin);
@@ -547,7 +562,16 @@ function tableEl(table) {
  *  순서를 따라 DOM 위치를 정한다 — 그룹은 섹션이 도착하는 순서(=완료
  *  순서)와 무관하게 항상 같은 자리에 나와야 한다. 목록에 없는 제목
  *  ("기타" 등, groupOrderIndex가 맨 뒤로 보낸다)은 이미 자리 잡은
- *  그룹들 뒤에 붙는다. */
+ *  그룹들 뒤에 붙는다.
+ *
+ *  반환하는 holder는 sectionHolder()가 이 그룹의 .sec들을 appendChild
+ *  하는 중간 컨테이너다 — id를 고정해 두 번째 호출부터는 기존 노드를
+ *  재사용한다(제목 → 노드 조회용 앵커). class="grp-holder"를 붙이는
+ *  이유: index.html의 `.grp,.grp-holder{display:contents}`가 이 박스를
+ *  없애야 .sec이 #body 그리드의 직속 아이템이 된다 — 안 그러면 .sec은
+ *  이 holder 안의 평범한 블록 자식일 뿐이라 그리드 아이템이 아니게
+ *  되고, .sec.wide{grid-column:1/-1}이 완전히 무효화된다(실측 확인된
+ *  회귀 — wide 표가 그리드 1칸 폭으로 도로 좁아졌다). */
 function groupHolder(title) {
   const id = "grp-" + title;
   let holder = document.getElementById(id);
@@ -562,6 +586,7 @@ function groupHolder(title) {
 
   holder = document.createElement("div");
   holder.id = id;
+  holder.className = "grp-holder";
   wrap.appendChild(holder);
 
   const body = document.getElementById("body");

@@ -18,7 +18,9 @@
    test_light_theme_overrides_every_dark_variable이 이걸 기계적으로
    막는다). --mono(글꼴 스택)는 색상이 아니라 테마와 무관해 다시
    정의하지 않는다. ui.js의 applyTheme()이 <html data-theme="light">을
-   붙였다 뗐다 하며 이 블록을 켠다 — 기본은 다크(속성 없음)다. */
+   붙였다 뗐다 하며 이 블록을 켠다 — data-theme는 "dark"/"light" 둘 다
+   항상 명시적으로 붙는다(생략되지 않는다). 기본값이 다크로 보이는 건
+   속성이 없어서가 아니라 :root 자체가 다크 값이기 때문이다. */
 :root[data-theme="light"]{
   --bg:#f4f5f7; --rail:#ffffff; --panel:#ffffff; --cell:#eef0f3;
   --line:#d8dce2; --line2:#c2c8d1; --tx:#1c222b; --dim:#5b6472;
@@ -84,9 +86,19 @@ th{color:var(--dim2);background:var(--rail);font-weight:normal}
    자기 박스를 없애 h1·각 섹션(.sec)이 #body 그리드의 직속 아이템이
    되게 한다 — 그래야 개별 섹션 단위로 1칸/2칸(전체 폭)을 고를 수
    있다(.grp가 그대로 그리드 아이템이면 그 안의 넓은 표가 그룹 폭
-   절반에 갇힌다). */
+   절반에 갇힌다).
+
+   .grp 하나만으로는 부족하다 — ui.js의 groupHolder()는 .grp(section)
+   안에 중간 홀더 div(id="grp-<제목>", class="grp-holder")를 하나 더 두고
+   sectionHolder()가 .sec을 그 홀더에 붙인다(같은 제목의 섹션이 여러
+   번 렌더돼도 매번 같은 노드를 찾아 재사용하기 위한 id 앵커). 이
+   홀더에도 display:contents를 주지 않으면 #body 그리드의 직속
+   아이템은 h1과 이 홀더 박스가 되고 .sec은 홀더의 평범한 블록 자식일
+   뿐이라 그리드 아이템이 아니게 된다 — 그러면 .sec.wide{grid-column:
+   1/-1}이 완전히 무효화되고, 넓힌 12열 표가 그리드 1칸 폭(2단 중 절반)
+   으로 도로 좁아진다(실측 확인된 회귀). */
 #body{display:grid;grid-template-columns:1fr 1fr;column-gap:32px}
-.grp{display:contents}
+.grp,.grp-holder{display:contents}
 .grp>h1{grid-column:1/-1;font-size:16px;font-weight:normal;color:var(--dim2);
         border-bottom:1px solid var(--line);margin:24px 0 4px;padding-bottom:6px}
 .sec{grid-column:auto}

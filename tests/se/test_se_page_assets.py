@@ -1490,12 +1490,34 @@ class TestLayoutAndTheme(unittest.TestCase):
         본다 — document.getElementById("theme-toggle")처럼 아무 동작도
         없는 참조 한 줄만 남아도 그 글자가 있어 통과해버린다
         (TestAnalyzeFormIsWiredAndReachable이 analyze-btn에 쓰는 것과
-        같은 더 엄격한 검사를 여기도 둔다)."""
+        같은 더 엄격한 검사를 여기도 둔다).
+
+        #theme-toggle이 없으면 null.addEventListener()가 async init()을
+        통째로 중단시킨다(그 뒤 login·logout 등 배선이 전부 건너뛰어짐)
+        — 그래서 init()은 `document.getElementById(...).addEventListener`
+        직결 체이닝이 아니라 변수에 담아 null 가드를 거친 뒤 호출하는
+        스타일을 쓴다. 두 스타일(직결 체이닝 / 변수+가드) 모두 인정하되,
+        어느 쪽이든 실제로 그 참조에서 addEventListener("click", ...)가
+        불리는지까지 확인한다 — TestLogoutClearsDartKey의 dartkey 필드
+        검사와 같은 방식이다.
+        """
         src = _sources()["ui.js"]
-        self.assertRegex(
-            src,
+        direct = re.search(
             r'getElementById\(\s*["\']theme-toggle["\']\s*\)'
             r'[^;]*addEventListener\(\s*["\']click["\']',
+            src,
+        )
+        via_var = None
+        m_var = re.search(
+            r'(\w+)\s*=\s*document\.getElementById\(\s*["\']theme-toggle["\']\s*\)', src
+        )
+        if m_var:
+            via_var = re.search(
+                re.escape(m_var.group(1)) + r'[^;]*\.addEventListener\(\s*["\']click["\']',
+                src,
+            )
+        self.assertTrue(
+            direct or via_var,
             "theme-toggle 버튼에 클릭 리스너가 연결돼 있지 않습니다",
         )
 
