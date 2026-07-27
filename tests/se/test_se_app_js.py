@@ -241,6 +241,58 @@ class TestToTable(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestTableLayout(unittest.TestCase):
+    """세로/가로 자동 판단 + 상수열 캡션 승격.
+
+    tableLayout이 toTable을 대체해 sectionBlocks가 실제로 그리는 표를
+    만든다 — 1건짜리 레코드(indicators 49열)는 세로로, N건(disclosures
+    145건)은 가로로 그리고, 가로에서 모든 행이 같은 값인 열(corp_name 등)은
+    표 위 캡션으로 올려 145줄 반복을 없앤다.
+    """
+
+    def test_single_record_is_vertical(self):
+        got = run_js('tableLayout([{a:1,b:2,c:3}])')
+        self.assertEqual(got["orientation"], "vertical")
+
+    def test_many_records_is_horizontal(self):
+        got = run_js('tableLayout([{a:1},{a:2},{a:3}])')
+        self.assertEqual(got["orientation"], "horizontal")
+
+    def test_constant_columns_move_to_caption(self):
+        got = run_js('tableLayout([{co:"엔켐",n:1},{co:"엔켐",n:2}])')
+        self.assertNotIn("co", got["keys"])
+        self.assertTrue(any(c["value"] == "엔켐" for c in got["caption"]))
+
+    def test_varying_column_stays_in_table(self):
+        got = run_js('tableLayout([{co:"엔켐",n:1},{co:"엔켐",n:2}])')
+        self.assertIn("n", got["keys"])
+
+    def test_single_record_has_no_caption_promotion(self):
+        """1건일 때 모든 열이 '상수'이므로 승격하면 표가 통째로 사라진다."""
+        got = run_js('tableLayout([{a:1,b:2}])')
+        self.assertEqual(got["caption"], [])
+        self.assertEqual(sorted(got["keys"]), ["a", "b"])
+
+    def test_no_data_is_lost_between_caption_and_table(self):
+        """어떤 열도 캡션에도 표에도 없으면 데이터가 사라진 것이다."""
+        got = run_js('tableLayout([{a:"x",b:1},{a:"x",b:2}])')
+        shown = set(got["keys"]) | {c["key"] for c in got["caption"]}
+        self.assertEqual(shown, {"a", "b"}, "열이 사라졌습니다")
+
+    def test_vertical_rows_are_label_value_pairs(self):
+        got = run_js('tableLayout([{rcept_no:"20260724000552"}])')
+        self.assertEqual(got["rows"][0][0], "접수번호")
+
+    def test_values_are_formatted(self):
+        got = run_js('tableLayout([{plan_amount:13082000000},{plan_amount:1}])')
+        self.assertIn("130.8억", [c for r in got["rows"] for c in r])
+
+    def test_empty_input_is_null(self):
+        for expr in ("tableLayout([])", "tableLayout(null)"):
+            self.assertIsNone(run_js(expr))
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestSectionBlocks(unittest.TestCase):
     """dict-of-lists 섹션(shareholders/audit_history/debt_balance 등)을
     소제목 + 개별 표 블록 목록으로 펼치는 sectionBlocks() 검증.
@@ -257,11 +309,20 @@ class TestSectionBlocks(unittest.TestCase):
         self.assertEqual(len(got[0]["table"]["rows"]), 2)
 
     def test_flat_dict_becomes_single_block(self):
-        """indicators처럼 하위 구조 없는 순수 스칼라 dict는 굳이 안 쪼갠다."""
+        """indicators처럼 하위 구조 없는 순수 스칼라 dict는 굳이 안 쪼갠다.
+
+        레코드 1건이므로 세로(키-값)로 그려진다 — indicators 실측(1건
+        49열)을 가로로 펴면 열 하나가 몇 픽셀이 되어 글자가 쪼개지는
+        문제가 Task 2의 핵심 수정 대상이다(tableLayout).
+        """
         got = run_js('sectionBlocks({순이익률: 12.3, 부채비율: 45.6})')
         self.assertEqual(len(got), 1)
         self.assertIsNone(got[0]["title"])
-        self.assertEqual(got[0]["table"]["rows"], [["12.3", "45.6"]])
+        self.assertEqual(got[0]["table"]["orientation"], "vertical")
+        self.assertEqual(
+            got[0]["table"]["rows"],
+            [["순이익률", "12.3"], ["부채비율", "45.6"]],
+        )
 
     def test_dict_of_lists_splits_into_titled_blocks(self):
         """shareholders 형태: {major_holders:[...], bulk_holders:[...]}.

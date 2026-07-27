@@ -226,16 +226,18 @@ function cell(v) {
   return String(v);
 }
 
-/** 섹션 값을 표로 바꾼다. 무엇이든 표로 만든다 — 객체 리스트뿐 아니라
- *  객체가 아닌 항목(문자열 등)도, 스칼라 값 자체도 "값" 한 칸에 담아
- *  자기 행/자기 표를 갖는다. 표로 만들 것 자체가 없을 때만(빈 배열·
- *  빈 객체·null·undefined) null을 돌려준다.
+/** 값을 레코드 배열로 정규화한다. 배열이면 그대로(비객체 항목은 "값" 한
+ *  칸에 감싸서 보존), 객체면 1건짜리 배열로, 스칼라면 1건짜리 배열로
+ *  감싼다. 표로 만들 것 자체가 없으면(빈 배열·빈 객체·null·undefined)
+ *  null을 돌려준다.
  *
- *  이전에는 리스트 안 비객체 항목을 조용히 걸러냈고(흔적 없이 사라짐),
- *  스칼라 값 자체는 무조건 null이라 화면이 "표시할 데이터가 없습니다"로
+ *  toTable과 tableLayout(sectionBlocks 경유) 두 경로가 함께 쓰는 정규화
+ *  로직이다 — 나눠 두면 한쪽만 고치고 잊어버리는 사고가 난다. 이전에는
+ *  리스트 안 비객체 항목을 조용히 걸러냈고(흔적 없이 사라짐), 스칼라
+ *  값 자체는 무조건 null이라 화면이 "표시할 데이터가 없습니다"로
  *  잘못 말했다 — 데이터가 있는데 없다고 하는 것과, 표로 만들 수 없어서
  *  없다고 하는 것은 다르다. */
-function toTable(value) {
+function toRecords(value) {
   if (value === null || value === undefined) return null;
 
   let records;
@@ -246,7 +248,22 @@ function toTable(value) {
   records = records.map(function (r) {
     return (r && typeof r === "object" && !Array.isArray(r)) ? r : { "값": r };
   });
-  if (records.length === 0) return null;
+  return records.length === 0 ? null : records;
+}
+
+/** 섹션 값을 표로 바꾼다. 무엇이든 표로 만든다 — 객체 리스트뿐 아니라
+ *  객체가 아닌 항목(문자열 등)도, 스칼라 값 자체도 "값" 한 칸에 담아
+ *  자기 행/자기 표를 갖는다. 표로 만들 것 자체가 없을 때만(빈 배열·
+ *  빈 객체·null·undefined) null을 돌려준다.
+ *
+ *  `tableLayout`이 이 함수를 대체해 sectionBlocks가 실제로 그리는 표를
+ *  만들지만, 이 함수와 아래 테스트(TestToTable)는 지우지 않고 그대로
+ *  둔다 — "모르는 필드를 숨기지 않는다"·"0과 false를 잃지 않는다" 같은
+ *  성질을 지키는 유일한 방어선이고, tableLayout도 같은 성질을 지켜야
+ *  하므로 이 구현이 기준선 역할을 한다. */
+function toTable(value) {
+  const records = toRecords(value);
+  if (!records) return null;
 
   // 열은 모든 레코드 키의 합집합이다. 레코드마다 필드가 다를 수 있고,
   // 첫 레코드만 보면 뒤쪽 필드가 통째로 사라진다.
@@ -268,6 +285,61 @@ function toTable(value) {
     keys: cols,
     rows: records.map(function (r) {
       return cols.map(function (k) { return cell(r[k]); });
+    }),
+  };
+}
+
+/** 레코드 목록을 화면에 낼 형태로 바꾼다.
+ *
+ * 1건이면 세로(키-값), 여러 건이면 가로(표)다. 1건짜리 49열(indicators)을
+ * 가로로 펴면 열 하나가 몇 픽셀이 되어 글자가 세로로 쪼개진다.
+ */
+function tableLayout(records) {
+  if (!Array.isArray(records)) return null;
+  const rows = records.filter(function (r) { return r && typeof r === "object" && !Array.isArray(r); });
+  if (rows.length === 0) return null;
+
+  const keys = [];
+  const seen = new Set();
+  for (const r of rows) {
+    for (const k of Object.keys(r)) if (!seen.has(k)) { seen.add(k); keys.push(k); }
+  }
+  if (keys.length === 0) return null;
+
+  if (rows.length === 1) {
+    // 세로 — 승격할 게 없다. 1건에서는 모든 열이 '상수'라 승격하면 표가 빈다.
+    return {
+      orientation: "vertical",
+      caption: [],
+      columns: ["항목", "값"],
+      keys: keys,
+      rows: keys.map(function (k) { return [label(k), formatValue(k, rows[0][k])]; }),
+    };
+    // 세로에서는 rows[i][0]이 라벨, rows[i][1]이 값이다. 가로와 구조가
+    // 다르므로 ui.js의 rcept_no 클릭 배선이 두 경우를 모두 처리해야 한다.
+  }
+
+  // 모든 행이 같은 값인 열은 표 위 캡션으로 올린다. 숨기는 게 아니라
+  // 145줄 반복 대신 한 번만 보여주는 것이다.
+  const constant = keys.filter(function (k) {
+    const first = JSON.stringify(rows[0][k]);
+    return rows.every(function (r) { return JSON.stringify(r[k]) === first; });
+  });
+  const constSet = new Set(constant);
+  const bodyKeys = keys.filter(function (k) { return !constSet.has(k); });
+  // 전부 상수면 표가 비어버리므로 승격하지 않는다.
+  const promote = bodyKeys.length > 0 ? constant : [];
+  const finalKeys = bodyKeys.length > 0 ? bodyKeys : keys;
+
+  return {
+    orientation: "horizontal",
+    caption: promote.map(function (k) {
+      return { key: k, label: label(k), value: formatValue(k, rows[0][k]) };
+    }),
+    columns: finalKeys.map(label),
+    keys: finalKeys,
+    rows: rows.map(function (r) {
+      return finalKeys.map(function (k) { return formatValue(k, r[k]); });
     }),
   };
 }
@@ -318,13 +390,17 @@ function sectionBlocks(value, depth) {
   }
 
   if (Array.isArray(value)) {
-    const t = toTable(value);
+    // tableLayout은 레코드(객체) 배열만 받는다 — toRecords로 비객체
+    // 항목(문자열 등)을 "값" 한 칸에 감싸서 보존한 뒤 넘긴다. 그러지
+    // 않으면 tableLayout이 비객체 항목을 조용히 걸러내(rows 필터), 예를
+    // 들어 independence_warnings(문자열 리스트)가 흔적 없이 사라진다.
+    const t = tableLayout(toRecords(value) || []);
     return t ? [{ title: null, table: t }] : [];
   }
 
   if (!isPlainObject(value)) {
     if (isLongText(value)) return [{ title: null, text: value }];
-    const t = toTable(value);
+    const t = tableLayout(toRecords(value) || []);
     return t ? [{ title: null, table: t }] : [];
   }
 
@@ -347,7 +423,9 @@ function sectionBlocks(value, depth) {
     // 부류의 버그, 위 LABELS 주석 참고).
     const flat = Object.create(null);
     for (const k of flatKeys) flat[k] = value[k];
-    const t = toTable(flat);
+    // flat은 항상 단일 평면 객체다 — 레코드 1건짜리 배열로 감싸 넘긴다.
+    // 이 경로가 indicators(1건 49열)를 세로로 바꾸는 핵심 지점이다.
+    const t = tableLayout([flat]);
     if (t) blocks.push({ title: null, table: t });
   }
   for (const k of longTextKeys) {
@@ -460,7 +538,7 @@ function actorLine(actor) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     LS_DART_KEY, LS_SESSION, LS_JOB, SECTION_GROUPS, formatCount,
-    nextKeysToFetch, pollDecision, toTable, LABELS, label,
+    nextKeysToFetch, pollDecision, toTable, toRecords, tableLayout, LABELS, label,
     formatValue, formatAmount, AMOUNT_FIELDS, DATE_FIELDS,
     sectionBlocks, groupTitleFor, groupOrderIndex,
     ACTOR_STATUS, actorLine, resumeTarget,

@@ -313,33 +313,69 @@ function renderHeadPlaceholder(name, message) {
 /** 표를 DOM으로 만든다. 값은 전부 textContent로 넣는다 —
  *  공시 원문과 실명이 그대로 들어오는 자리다.
  *
- *  `rcept_no` 열의 셀만 클릭 가능하게 만든다 — table.keys(toTable()이
+ *  table은 app.js의 tableLayout() 결과다 — {orientation, caption, columns,
+ *  keys, rows}. caption(모든 행의 값이 같아 표 위로 올린 열)이 있으면
+ *  표 앞에 <div class="cap">로 한 번 보여준다 — 숨기는 게 아니라 145줄
+ *  반복 대신 한 번만 보여주는 것이다.
+ *
+ *  `rcept_no` 열의 셀만 클릭 가능하게 만든다 — table.keys(tableLayout()이
  *  라벨과 나란히 남긴 원본 키)로 정확히 그 열을 찾는다. 어느 열이 공시
  *  제목인지, 어느 열이 사람 이름인지는 추측하지 않는다 — 확인되지 않은
  *  필드명을 코드에 박는 것이 이 프로젝트에서 반복해서 사고를 낸 방식이고,
- *  rcept_no만 LABELS·2단 섹션 키(`doc:<접수번호>`)로 이미 확인된 필드다. */
+ *  rcept_no만 LABELS·2단 섹션 키(`doc:<접수번호>`)로 이미 확인된 필드다.
+ *
+ *  orientation이 "vertical"이면 rows[i]는 [라벨, 값] 한 쌍이고 값은
+ *  rows[i][1]에 있다 — 가로(rows[i][col])와 셀 위치가 달라 rcept_no 클릭
+ *  배선도 두 경우를 모두 처리해야 한다(keys[i]가 그 행이 어느 원본
+ *  키인지를 알려준다). */
 function tableEl(table) {
+  const frag = document.createDocumentFragment();
+
+  if (Array.isArray(table.caption) && table.caption.length > 0) {
+    const cap = document.createElement("div");
+    cap.className = "cap";
+    table.caption.forEach(function (c, i) {
+      if (i > 0) cap.appendChild(document.createTextNode(" · "));
+      const b = document.createElement("b");
+      b.textContent = c.label;
+      cap.appendChild(b);
+      cap.appendChild(document.createTextNode(": " + c.value));
+    });
+    frag.appendChild(cap);
+  }
+
   const t = document.createElement("table");
-  const thead = t.createTHead().insertRow();
-  for (const c of table.columns) {
-    const th = document.createElement("th");
-    th.textContent = c;
-    thead.appendChild(th);
+  const isVertical = table.orientation === "vertical";
+  if (!isVertical) {
+    // 세로는 각 행이 이미 [라벨, 값]이라 별도 헤더가 필요 없다 — 헤더를
+    // 넣으면 "항목/값"이 열 제목과 데이터 사이에 낀 군더더기가 된다.
+    const thead = t.createTHead().insertRow();
+    for (const c of table.columns) {
+      const th = document.createElement("th");
+      th.textContent = c;
+      thead.appendChild(th);
+    }
   }
   const rceptCol = Array.isArray(table.keys) ? table.keys.indexOf("rcept_no") : -1;
   const tb = t.createTBody();
-  for (const row of table.rows) {
+  table.rows.forEach(function (row, rowIdx) {
     const tr = tb.insertRow();
     row.forEach(function (v, i) {
       const td = tr.insertCell();
       td.textContent = v;
-      if (i === rceptCol && v) {
+      // 세로: keys[rowIdx]가 이 행의 원본 키다 → 값은 두 번째 칸(i===1).
+      // 가로: keys[i]가 이 칸의 원본 키다 → 값은 그 칸 자신(i===열 위치).
+      const isDocCell = isVertical
+        ? (rowIdx === rceptCol && i === 1)
+        : (i === rceptCol);
+      if (isDocCell && v) {
         td.className = "doc";
         td.addEventListener("click", function () { openDocPanel(v); });
       }
     });
-  }
-  return t;
+  });
+  frag.appendChild(t);
+  return frag;
 }
 
 /** 그룹 제목에 해당하는 컨테이너를 찾거나 만든다. SECTION_GROUPS 정의
