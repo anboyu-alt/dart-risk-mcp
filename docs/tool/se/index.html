@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>리스크 뷰어 SE</title>
+<style>
+:root{
+  --bg:#070a0f; --rail:#0b0e14; --panel:#11151d; --cell:#0d1118;
+  --line:#1e2530; --line2:#2a333f; --tx:#d7dde6; --dim:#7c8797;
+  --dim2:#9fb0c0; --faint:#4a5566; --amber:#e8a33d; --amber2:#f2bc63;
+  --red:#e0564a; --green:#4ad295;
+  --mono:Consolas,"Cascadia Code","SF Mono",monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);
+     font:14px/1.6 -apple-system,"Segoe UI","Malgun Gothic",sans-serif}
+#gate,#main{max-width:960px;margin:0 auto;padding:24px}
+#main[hidden],#gate[hidden]{display:none}
+input,button{font:inherit;background:var(--cell);color:var(--tx);
+             border:1px solid var(--line2);border-radius:4px;padding:8px 10px}
+button{cursor:pointer}
+.sec{border-top:1px solid var(--line);padding:20px 0}
+.sec h2{font-size:15px;color:var(--amber2);margin:0 0 12px}
+table{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:12px}
+th,td{border:1px solid var(--line);padding:4px 8px;text-align:left;
+      vertical-align:top;max-width:280px;overflow-wrap:anywhere}
+th{color:var(--dim2);background:var(--rail);font-weight:normal}
+.person,.doc{color:var(--amber);cursor:pointer;text-decoration:underline dotted}
+#bar{position:sticky;top:0;background:var(--rail);border-bottom:1px solid var(--line);
+     padding:8px 12px;font-family:var(--mono);font-size:12px;color:var(--dim2);z-index:5}
+#panel{position:fixed;top:0;right:0;height:100%;width:min(560px,92vw);
+       background:var(--panel);border-left:1px solid var(--line2);
+       transform:translateX(100%);transition:transform .18s ease;
+       overflow:auto;padding:20px;z-index:10}
+#panel.open{transform:none}
+.note{color:var(--dim);font-size:12px}
+.warn{color:var(--amber);font-size:12px}
+#head{display:flex;align-items:center;gap:12px;justify-content:space-between}
+#panel-close{float:right}
+</style>
+</head>
+<body>
+<section id="gate">
+  <h1>리스크 뷰어 SE</h1>
+  <p class="note">인가된 사용자 전용입니다. 계정은 제작자가 발급합니다.</p>
+  <div><input id="email" type="email" placeholder="이메일" autocomplete="username"></div>
+  <div><input id="password" type="password" placeholder="비밀번호"
+              autocomplete="current-password"></div>
+  <div><input id="dartkey" type="password" placeholder="DART API 키"
+              autocomplete="off"></div>
+  <p class="note">DART 키는 이 브라우저에만 저장되며 서버로 보관되지 않습니다.</p>
+  <button id="login">로그인</button>
+  <p id="gate-msg" class="warn"></p>
+</section>
+
+<main id="main" hidden>
+  <div id="bar"></div>
+  <div id="analyze-form" class="sec">
+    <input id="company-input" type="text" placeholder="회사명 또는 종목코드">
+    <select id="lookback-years">
+      <option value="1">최근 1년</option>
+      <option value="2">최근 2년</option>
+      <option value="3">최근 3년</option>
+      <option value="4">최근 4년</option>
+      <option value="5">최근 5년</option>
+    </select>
+    <button id="analyze-btn">분석 시작</button>
+    <p id="analyze-msg" class="warn"></p>
+  </div>
+  <div id="head" class="sec">
+    <span id="head-name"></span>
+    <button id="actor-btn" hidden>공개기록 보기</button>
+  </div>
+  <div id="body"></div>
+  <div class="sec">
+    <h2>출처·면책</h2>
+    <p class="note">
+      모든 수치와 이름은 금융감독원 전자공시(DART) 공개 자료입니다.
+      이 화면은 사실을 표기할 뿐 위험을 판정하거나 등급을 매기지 않으며,
+      투자 판단의 근거가 아닙니다. 동명이인이 있을 수 있습니다.
+    </p>
+    <button id="logout">로그아웃</button>
+  </div>
+</main>
+
+<aside id="panel">
+  <button id="panel-close" aria-label="닫기">닫기</button>
+  <div id="panel-body"></div>
+</aside>
+
+<script src="app.js"></script>
+<script src="ui.js"></script>
+</body>
+</html>
