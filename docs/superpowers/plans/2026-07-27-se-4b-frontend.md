@@ -150,7 +150,17 @@ _SE = _ROOT / "docs" / "tool" / "se"
 
 
 def _sources() -> dict[str, str]:
-    return {p.name: p.read_text(encoding="utf-8") for p in _SE.glob("*.*")}
+    """검사 대상은 **브라우저가 실행하는 파일**뿐이다.
+
+    `*.*`로 훑으면 Task 5의 README.md까지 걸려서, 안내 문서가 설명을 위해
+    쓴 단어 때문에 테스트가 깨진다. 검사의 목적은 실행되는 코드를 막는
+    것이지 문서를 검열하는 것이 아니다.
+    """
+    out = {}
+    for pattern in ("*.html", "*.js"):
+        for f in _SE.glob(pattern):
+            out[f.name] = f.read_text(encoding="utf-8")
+    return out
 
 
 class TestPageExists(unittest.TestCase):
@@ -612,6 +622,25 @@ function pollDecision(body) {
 export 목록에 `nextKeysToFetch`, `pollDecision`을 추가한다.
 
 - [ ] **Step 4: `ui.js`에 실행 루프 추가**
+
+**먼저 최소 스텁을 둔다.** 아래 루프는 `showBar`·`showProgress`·
+`renderHeadPlaceholder`·`renderSection`·`renderFailures`를 부르는데, 실제
+구현은 Task 3·5에서 온다. 스텁 없이 두면 이 태스크가 끝난 시점의 페이지가
+`ReferenceError`로 죽어서, 중간에 열어 확인할 수가 없다. 각각 한 줄짜리
+placeholder로 만들어 두고 뒤 태스크가 채운다.
+
+```js
+// Task 3·5에서 실제 구현으로 대체된다. 지금은 루프가 돌아가게만 한다.
+function showBar(msg) { document.getElementById("bar").textContent = msg; }
+function showProgress(p) {
+  showBar(p.company + " — " + formatCount(p.finished) + "/" + formatCount(p.total));
+}
+function renderHeadPlaceholder(name) {
+  document.getElementById("head").textContent = name + " 분석을 시작합니다…";
+}
+function renderSection(key, value) { /* Task 3 */ }
+function renderFailures(failed) { /* Task 5 */ }
+```
 
 ```js
 const FETCHED = new Set();   // 이미 받은 섹션 키
