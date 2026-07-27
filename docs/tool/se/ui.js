@@ -3,6 +3,9 @@
 let CONFIG = null;      // {supabase_url, supabase_anon_key}
 let SESSION = null;     // {access_token, refresh_token, expires_at}
 let LOGGING_IN = false; // 로그인 버튼 연타로 중복 인증 요청이 나가는 것을 막는다
+let CURRENT_COMPANY = null; // 지금 화면에 떠 있는 분석의 회사명 — 행위자
+                             // 패널을 "이 회사"로 열 때 쓴다(누가 사람인지
+                             // 추측하지 않고, 헤더 버튼 하나로만 연다).
 
 /** 사용자에게 그대로 보여줘도 되는 문구로만 만든 오류. 원시 오류(네트워크
  *  실패의 "Failed to fetch" 같은 브라우저 내부 문구, 서버 응답 원문 등)는
@@ -182,6 +185,15 @@ function doLogout() {
   if (dartEl) dartEl.value = "";
   const pwEl = document.getElementById("password");
   if (pwEl) pwEl.value = "";
+  // 패널이 열린 채 남으면 로그인 화면 위로 이전 사용자의 실명이 계속
+  // 보인다 — #panel은 #main 밖(형제 노드)이라 showGate()가 #main을
+  // 숨겨도 안 가려진다. 내용까지 비워야 DOM에도 실명이 남지 않는다.
+  closePanel();
+  const panelBox = document.getElementById("panel-body");
+  if (panelBox) panelBox.textContent = "";
+  CURRENT_COMPANY = null;
+  const actorBtn = document.getElementById("actor-btn");
+  if (actorBtn) actorBtn.hidden = true;
   showGate();
 }
 
@@ -189,6 +201,16 @@ function doLogout() {
 async function init() {
   document.getElementById("login").addEventListener("click", doLogin);
   document.getElementById("logout").addEventListener("click", doLogout);
+  // 행위자 패널은 회사 단위 API(GET /api/se/actors?company=)라서, 본문
+  // 어느 열이 사람 이름인지 추측할 필요가 없다 — 헤더 버튼 하나로
+  // "지금 분석 중인 회사"를 그대로 연다.
+  document.getElementById("actor-btn").addEventListener("click", function () {
+    if (CURRENT_COMPANY) openActorPanel(CURRENT_COMPANY);
+  });
+  document.getElementById("panel-close").addEventListener("click", closePanel);
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") closePanel();
+  });
 
   const stored = loadStoredSession();
   if (!stored) {
@@ -217,11 +239,20 @@ function showProgress(p) {
   showBar(p.company + " — " + formatCount(p.finished) + "/" + formatCount(p.total));
 }
 function renderHeadPlaceholder(name) {
-  document.getElementById("head").textContent = name + " 분석을 시작합니다…";
+  document.getElementById("head-name").textContent = name + " 분석을 시작합니다…";
+  CURRENT_COMPANY = name;
+  const btn = document.getElementById("actor-btn");
+  if (btn) btn.hidden = false;
 }
 
 /** 표를 DOM으로 만든다. 값은 전부 textContent로 넣는다 —
- *  공시 원문과 실명이 그대로 들어오는 자리다. */
+ *  공시 원문과 실명이 그대로 들어오는 자리다.
+ *
+ *  `rcept_no` 열의 셀만 클릭 가능하게 만든다 — table.keys(toTable()이
+ *  라벨과 나란히 남긴 원본 키)로 정확히 그 열을 찾는다. 어느 열이 공시
+ *  제목인지, 어느 열이 사람 이름인지는 추측하지 않는다 — 확인되지 않은
+ *  필드명을 코드에 박는 것이 이 프로젝트에서 반복해서 사고를 낸 방식이고,
+ *  rcept_no만 LABELS·2단 섹션 키(`doc:<접수번호>`)로 이미 확인된 필드다. */
 function tableEl(table) {
   const t = document.createElement("table");
   const thead = t.createTHead().insertRow();
@@ -230,10 +261,18 @@ function tableEl(table) {
     th.textContent = c;
     thead.appendChild(th);
   }
+  const rceptCol = Array.isArray(table.keys) ? table.keys.indexOf("rcept_no") : -1;
   const tb = t.createTBody();
   for (const row of table.rows) {
     const tr = tb.insertRow();
-    for (const v of row) tr.insertCell().textContent = v;
+    row.forEach(function (v, i) {
+      const td = tr.insertCell();
+      td.textContent = v;
+      if (i === rceptCol && v) {
+        td.className = "doc";
+        td.addEventListener("click", function () { openDocPanel(v); });
+      }
+    });
   }
   return t;
 }
@@ -427,6 +466,11 @@ async function analyze(company, lookbackYears) {
 
 // ── 우측 슬라이드 패널 — 실명과 공시 원문 ──────────────────────────
 
+/** 패널을 닫는다. 닫기 버튼과 Esc 키가 공유한다. */
+function closePanel() {
+  document.getElementById("panel").classList.remove("open");
+}
+
 /** 행위자(실명) 패널을 연다.
  *
  * actorLine()이 이름·status 라벨·동명이인 경고를 한 번에 만들어 준다 —
@@ -434,18 +478,38 @@ async function analyze(company, lookbackYears) {
  * 실명이 경고 없이 나간다. 값은 전부 textContent로 넣는다.
  */
 async function openActorPanel(company) {
-  const r = await api("GET", "/api/se/actors?company=" + encodeURIComponent(company),
-                      { token: await token() });
   const box = document.getElementById("panel-body");
-  box.innerHTML = "";
   const panel = document.getElementById("panel");
-  if (r.status !== 200) {
+  box.innerHTML = "";
+
+  let r;
+  try {
+    r = await api("GET", "/api/se/actors?company=" + encodeURIComponent(company),
+                  { token: await token() });
+  } catch (e) {
+    // await token()이 갱신 실패로 던지면(세션 만료 등) token()이 이미
+    // clearSession()+showGate()로 로그인 화면을 띄운 뒤다. 여기서 예외를
+    // 그냥 흘리면 이 함수는 클릭 핸들러에서 부른 것이라 아무도 catch하지
+    // 않는다(unhandled rejection) — 패널이 열리지도 닫히지도 않은 채
+    // 아무 일도 없었던 것처럼 보인다. 조용히 멈추는 대신 무언가 잘못됐다고
+    // 알린다.
+    box.textContent = safeMessage(e, "행위자 정보를 불러오지 못했습니다.");
+    panel.classList.add("open");
+    return;
+  }
+
+  const body = r.body || {};
+  // actors가 배열이 아니면(null·문자열 등 예상 밖 응답) 그대로 순회하지
+  // 않는다 — 문자열이면 글자 수만큼 빈 이름 카드가 그려지고, null이면
+  // 예외가 나 패널이 열리지도 못한다. 조용히 넘어가지 않고 실패로 알린다.
+  const actors = Array.isArray(body.actors) ? body.actors : null;
+  if (r.status !== 200 || actors === null) {
     box.textContent = "행위자 정보를 불러오지 못했습니다.";
     panel.classList.add("open");
     return;
   }
 
-  for (const raw of (r.body.actors || [])) {
+  for (const raw of actors) {
     const a = actorLine(raw);
     const d = document.createElement("div");
     const h = document.createElement("h3"); h.textContent = a.name; d.appendChild(h);
@@ -457,35 +521,66 @@ async function openActorPanel(company) {
     c.textContent = a.companies.join(", "); d.appendChild(c);
     box.appendChild(d);
   }
-  // 서버가 준 면책 문구를 그대로 붙인다.
-  const dis = document.createElement("p");
-  dis.className = "note";
-  dis.textContent = r.body.disclaimer || "";
-  box.appendChild(dis);
-  document.getElementById("panel").classList.add("open");
+  if (actors.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "note";
+    empty.textContent = "공개기록에 등재된 행위자가 없습니다.";
+    box.appendChild(empty);
+  }
+  // 서버가 준 면책 문구를 그대로 붙인다. 서버가 빠뜨렸으면(예상 밖 응답)
+  // 빈 문단만 남기지 않는다 — 아예 붙이지 않는다.
+  if (body.disclaimer) {
+    const dis = document.createElement("p");
+    dis.className = "note";
+    dis.textContent = body.disclaimer;
+    box.appendChild(dis);
+  }
+  panel.classList.add("open");
 }
 
 /** 공시 원문 패널을 연다. DART 키는 X-DART-Key 헤더로만 보낸다. */
 async function openDocPanel(rceptNo) {
-  const r = await api("GET", "/api/se/disclosure/" + encodeURIComponent(rceptNo),
-                      { token: await token(),
-                        dartKey: localStorage.getItem(LS_DART_KEY) || "" });
   const box = document.getElementById("panel-body");
+  const panel = document.getElementById("panel");
   box.innerHTML = "";
+
+  let r;
+  try {
+    r = await api("GET", "/api/se/disclosure/" + encodeURIComponent(rceptNo),
+                  { token: await token(),
+                    dartKey: localStorage.getItem(LS_DART_KEY) || "" });
+  } catch (e) {
+    // openActorPanel과 같은 이유 — await token() 실패가 클릭 핸들러
+    // 밖으로 조용히 새 나가는 것을 막는다.
+    box.textContent = safeMessage(e, "공시 원문을 불러오지 못했습니다.");
+    panel.classList.add("open");
+    return;
+  }
+
+  const body = r.body || {};
   const p = document.createElement("pre");
   p.style.whiteSpace = "pre-wrap";
-  // 공시 원문 — 반드시 textContent다.
-  p.textContent = r.status === 200
-    ? r.body.text
-    : (r.body.error || "원문을 불러오지 못했습니다.");
-  box.appendChild(p);
-  if (r.status === 200 && r.body.truncated) {
-    const n = document.createElement("p");
-    n.className = "note";
-    n.textContent = "원문 " + formatCount(r.body.char_count) + "자 중 일부입니다.";
-    box.appendChild(n);
+  // 공시 원문 — 반드시 textContent다. 200인데 text가 문자열이 아니면
+  // (예상 밖 응답) 리터럴 "undefined"를 그대로 보여주는 대신 실패로
+  // 취급한다 — "원문 0자 중 일부입니다" 같은 앞뒤 안 맞는 안내도 막는다.
+  const text = typeof body.text === "string" ? body.text : "";
+  if (r.status === 200 && text) {
+    p.textContent = text;
+    box.appendChild(p);
+    if (body.truncated) {
+      const n = document.createElement("p");
+      n.className = "note";
+      n.textContent = "원문 " + formatCount(body.char_count) + "자 중 일부입니다.";
+      box.appendChild(n);
+    }
+  } else {
+    // 오류 경로다 — 공시 원문(실명 아님)만 다루는 패널이라 여기엔 행위자
+    // 면책 문구가 필요 없다.
+    p.textContent = (typeof body.error === "string" && body.error)
+      || "원문을 불러오지 못했습니다.";
+    box.appendChild(p);
   }
-  document.getElementById("panel").classList.add("open");
+  panel.classList.add("open");
 }
 
 document.addEventListener("DOMContentLoaded", init);

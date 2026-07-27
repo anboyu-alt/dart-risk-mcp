@@ -96,7 +96,12 @@ function toTable(value) {
   if (cols.length === 0) return null;
 
   return {
+    // 원본 키를 라벨과 나란히 남긴다 — ui.js가 "이 열이 rcept_no인가"를
+    // 라벨(한국어 "접수번호")로 추측하지 않고 원본 키로 정확히 찾게 하기
+    // 위해서다. 필드명을 추측해 코드에 박는 것이 이 프로젝트에서 반복해서
+    // 사고를 낸 방식이라, 확인된 키(rcept_no)만 원본 그대로 넘긴다.
     columns: cols.map(label),
+    keys: cols,
     rows: records.map(function (r) {
       return cols.map(function (k) { return cell(r[k]); });
     }),

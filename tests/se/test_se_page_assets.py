@@ -508,14 +508,190 @@ class TestAnalyzeLoopSurvivesTokenRefreshFailure(unittest.TestCase):
 
 
 class TestDisclaimerAlwaysRendered(unittest.TestCase):
-    def test_panel_renders_server_disclaimer(self):
-        """서버가 주는 면책 문구를 화면이 실제로 그려야 한다.
+    """서버가 주는 면책 문구를 화면이 실제로 그려야 한다.
 
-        서버만 보내고 화면이 버리면 사용자는 못 본다.
+    이전 검사(`assertIn("disclaimer", src)`)는 주석 한 줄만 있어도 통과하는
+    공허한 검사였다 — openActorPanel 본문을 파싱해 disclaimer 값이 실제로
+    textContent에 담기고, 그 요소가 appendChild로 DOM에 붙는지까지 확인한다.
+    """
+
+    def test_panel_renders_server_disclaimer(self):
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "openActorPanel")
+
+        m = re.search(
+            r"(\w+)\.textContent\s*=\s*[^;\n]*\.disclaimer\b[^;\n]*;",
+            body,
+        )
+        self.assertIsNotNone(
+            m, "disclaimer 값을 textContent로 담는 코드를 찾지 못했습니다"
+        )
+        var_name = m.group(1)
+
+        self.assertRegex(
+            body,
+            r"appendChild\(\s*" + re.escape(var_name) + r"\s*\)",
+            f"{var_name}를 만들었지만 appendChild로 화면에 붙이지 않습니다 — "
+            "면책 문구를 만들기만 하고 화면에 붙이지 않으면 사용자는 못 봅니다",
+        )
+
+
+class TestPanelsAreWiredAndReachable(unittest.TestCase):
+    """openActorPanel/openDocPanel의 호출부가 실제로 존재하고, 그 호출부가
+    걸리는 DOM 엘리먼트가 index.html에도 실재하는지 확인한다.
+
+    리뷰의 핵심 지적: 패널을 만드는 함수 정의는 있었지만 부르는 곳이
+    저장소 전체에 0개였다 — 패널에 도달할 방법이 없었다. 이 클래스는 그
+    사고가 되풀이되지 않도록 "정의만 있고 호출은 없는" 상태를 기계적으로
+    잡는다.
+    """
+
+    def test_actor_button_exists_and_opens_the_panel_for_current_company(self):
+        html = _sources()["index.html"]
+        self.assertIn('id="actor-btn"', html,
+                      "행위자 패널을 여는 헤더 버튼이 마크업에 없습니다")
+
+        src = _sources()["ui.js"]
+        self.assertRegex(
+            src,
+            r'getElementById\(\s*["\']actor-btn["\']\s*\)'
+            r'[^;]*addEventListener\(\s*["\']click["\']',
+            "actor-btn에 클릭 리스너가 연결돼 있지 않습니다",
+        )
+        # 버튼 핸들러가 실제로 openActorPanel을 부르는지까지 확인한다 —
+        # 리스너만 걸려 있고 정작 패널을 안 열면 여전히 도달 불가능하다.
+        m = re.search(
+            r'getElementById\(\s*["\']actor-btn["\']\s*\)\s*'
+            r'\.addEventListener\(\s*["\']click["\']\s*,\s*function[^{]*\{'
+            r'([\s\S]*?)\}\s*\)\s*;',
+            src,
+        )
+        self.assertIsNotNone(m, "actor-btn 클릭 핸들러 본문을 찾지 못했습니다")
+        self.assertIn("openActorPanel(", m.group(1),
+                      "actor-btn 클릭 핸들러가 openActorPanel을 부르지 않습니다")
+
+    def test_open_actor_panel_is_not_dead_code(self):
+        src = _sources()["ui.js"]
+        occurrences = len(re.findall(r"\bopenActorPanel\b", src))
+        # 정의(함수 선언 1회) + 최소 1회 이상의 호출부가 있어야 한다.
+        self.assertGreaterEqual(
+            occurrences, 2,
+            "openActorPanel 정의만 있고 부르는 곳이 없습니다 — "
+            "패널에 도달할 방법이 없습니다",
+        )
+
+    def test_open_doc_panel_is_wired_from_the_rcept_no_cell(self):
+        """공시 원문 패널은 rcept_no 열의 셀에서만 열려야 한다 — 확인되지
+        않은 필드(공시 제목 등)로 어느 칸이 클릭 가능한지 추측하지 않는다.
         """
         src = _sources()["ui.js"]
-        self.assertIn("disclaimer", src,
-                      "actors 응답의 disclaimer를 화면이 쓰지 않습니다")
+        body = _extract_function_body(src, "tableEl")
+        self.assertIn("rcept_no", body,
+                      "tableEl이 rcept_no 열을 특정하지 않습니다")
+        self.assertIn("openDocPanel(", body,
+                      "tableEl이 openDocPanel을 부르지 않습니다 — "
+                      "공시 원문 패널에 도달할 방법이 없습니다")
+
+        occurrences = len(re.findall(r"\bopenDocPanel\b", src))
+        self.assertGreaterEqual(
+            occurrences, 2,
+            "openDocPanel 정의만 있고 부르는 곳이 없습니다 — "
+            "패널에 도달할 방법이 없습니다",
+        )
+
+    def test_clickable_doc_cell_reuses_existing_css_class(self):
+        """index.html에 이미 정의된 `.doc` 클래스를 재사용해야 한다 —
+        새 클래스를 만들면 스타일이 없는 채로 방치되기 쉽다.
+        """
+        html = _sources()["index.html"]
+        self.assertIn(".doc{", html.replace(" ", ""),
+                      "index.html에 .doc 클래스 스타일이 없습니다")
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "tableEl")
+        self.assertIn('"doc"', body,
+                      "클릭 가능한 rcept_no 셀이 .doc 클래스를 쓰지 않습니다")
+
+    def test_panel_has_a_close_button_and_escape_key_support(self):
+        html = _sources()["index.html"]
+        self.assertIn('id="panel-close"', html,
+                      "패널을 닫는 버튼이 마크업에 없습니다")
+
+        src = _sources()["ui.js"]
+        self.assertRegex(
+            src, r'classList\.remove\(\s*["\']open["\']\s*\)',
+            "패널을 닫는 코드(classList.remove(\"open\"))가 없습니다 — "
+            "열려도 닫을 방법이 없습니다",
+        )
+        self.assertRegex(
+            src, r'["\']Escape["\']',
+            "Esc 키로 패널을 닫는 처리가 없습니다",
+        )
+        self.assertRegex(
+            src,
+            r'getElementById\(\s*["\']panel-close["\']\s*\)'
+            r'[^;]*addEventListener\(\s*["\']click["\']',
+            "panel-close 버튼에 클릭 리스너가 연결돼 있지 않습니다",
+        )
+
+    def test_logout_closes_the_panel_so_names_do_not_linger_on_the_gate(self):
+        """#panel은 #main 밖(형제 노드)이라 showGate()가 #main을 숨겨도
+        열려 있던 패널은 그대로 보인다 — 로그아웃 후에도 이전 사용자의
+        실명이 로그인 화면 위에 남을 수 있다.
+        """
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "doLogout")
+        self.assertRegex(
+            body, r'closePanel\(\)|classList\.remove\(\s*["\']open["\']\s*\)',
+            "doLogout이 열려 있을 수 있는 패널을 닫지 않습니다 — "
+            "로그아웃 후에도 실명이 화면에 남을 수 있습니다",
+        )
+
+
+class TestPanelResponsesAreValidatedDefensively(unittest.TestCase):
+    """서버 응답이 예상과 다를 때(본문이 없거나 필드 타입이 다를 때) 예외가
+    그대로 전파되면 패널이 열리지도, 안내가 뜨지도 않는다(unhandled
+    rejection). 조용히 넘어가지 않고 실패를 화면에 알려야 한다.
+    """
+
+    def test_open_actor_panel_guards_against_non_array_actors(self):
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "openActorPanel")
+        self.assertRegex(
+            body, r"Array\.isArray\(",
+            "openActorPanel이 actors가 배열인지 확인하지 않습니다 — "
+            "문자열이면 글자 수만큼 빈 카드가 그려질 수 있습니다",
+        )
+
+    def test_open_actor_panel_and_open_doc_panel_catch_token_failure(self):
+        """analyze()의 루프는 await token() 실패를 catch하는데 이 두
+        함수는 무처리라면, 세션이 만료된 상태에서 패널을 열 때 아무 일도
+        일어나지 않은 것처럼 보인다(unhandled promise rejection).
+        """
+        src = _sources()["ui.js"]
+        for name in ("openActorPanel", "openDocPanel"):
+            body = _extract_function_body(src, name)
+            self.assertRegex(
+                body, r"await\s+token\(\)",
+                f"{name}이 token()을 부르지 않습니다",
+            )
+            self.assertRegex(
+                body, r"try\s*\{[\s\S]*await\s+token\(\)[\s\S]*\}\s*catch\s*\(",
+                f"{name}이 await token() 실패를 catch하지 않습니다 — "
+                "세션 만료 시 패널을 열면 아무 반응도 없는 것처럼 보입니다",
+            )
+
+    def test_open_doc_panel_does_not_render_literal_undefined(self):
+        """200인데 text가 없으면(예상 밖 응답) <pre>에 리터럴 "undefined"가
+        뜨고, truncated만 참이면 "원문 0자 중 일부입니다"라는 앞뒤 안 맞는
+        안내까지 나온다 — 둘 다 typeof 가드로 막아야 한다.
+        """
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "openDocPanel")
+        self.assertRegex(
+            body, r'typeof\s+\w+\.text\s*===\s*["\']string["\']',
+            "openDocPanel이 text가 문자열인지 확인하지 않습니다 — "
+            "예상 밖 응답에서 리터럴 undefined가 표시될 수 있습니다",
+        )
 
 
 if __name__ == "__main__":

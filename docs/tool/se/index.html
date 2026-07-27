@@ -36,6 +36,8 @@ th{color:var(--dim2);background:var(--rail);font-weight:normal}
 #panel.open{transform:none}
 .note{color:var(--dim);font-size:12px}
 .warn{color:var(--amber);font-size:12px}
+#head{display:flex;align-items:center;gap:12px;justify-content:space-between}
+#panel-close{float:right}
 </style>
 </head>
 <body>
@@ -54,7 +56,10 @@ th{color:var(--dim2);background:var(--rail);font-weight:normal}
 
 <main id="main" hidden>
   <div id="bar"></div>
-  <div id="head" class="sec"></div>
+  <div id="head" class="sec">
+    <span id="head-name"></span>
+    <button id="actor-btn" hidden>공개기록 보기</button>
+  </div>
   <div id="body"></div>
   <div class="sec">
     <h2>출처·면책</h2>
@@ -67,7 +72,10 @@ th{color:var(--dim2);background:var(--rail);font-weight:normal}
   </div>
 </main>
 
-<aside id="panel"><div id="panel-body"></div></aside>
+<aside id="panel">
+  <button id="panel-close" aria-label="닫기">닫기</button>
+  <div id="panel-body"></div>
+</aside>
 
 <script src="app.js"></script>
 <script src="ui.js"></script>
