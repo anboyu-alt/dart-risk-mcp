@@ -183,7 +183,11 @@ th{color:var(--dim2);background:var(--rail);font-weight:normal}
 <!-- 루트 기준 절대경로여야 한다. vercel.json의 trailingSlash:false가 /se/를
      /se로 되돌리는데, 슬래시 없는 /se에서 상대경로 "app.js"는 /app.js로
      해석돼 404가 난다. 그러면 스크립트가 통째로 로드되지 않아 버튼이
-     아무 반응도 하지 않고, 오류를 띄우는 코드조차 없어 화면은 조용하다. -->
+     아무 반응도 하지 않고, 오류를 띄우는 코드조차 없어 화면은 조용하다.
+     chart.umd.js는 CDN이 아니라 vendor/에 반입한 파일이며(외부 접속 기록을
+     남기지 않기 위해 — docs/tool/se/vendor/README.md 참고), app.js·ui.js가
+     전역 Chart를 참조하므로 반드시 그 둘보다 먼저 로드돼야 한다. -->
+<script src="/se/vendor/chart.umd.js"></script>
 <script src="/se/app.js"></script>
 <script src="/se/ui.js"></script>
 </body>
