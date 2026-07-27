@@ -33,7 +33,6 @@ def _req(method, path, token="T", dart_key="DARTKEY123456", body=None):
 
 def _seeded_store(user_id="user-1"):
     """섹션 2개가 완료된 작업을 만들어 둔다."""
-    from se_server.jobs import runner
     store = MemoryJobStore()
     with mock.patch("se_server.api.handlers.resolve_corp",
                     return_value=("회사", {"corp_code": "0"})):
@@ -51,7 +50,7 @@ def _seeded_store(user_id="user-1"):
 
 class TestProgressIsLightweight(unittest.TestCase):
     def test_get_omits_section_bodies(self):
-        store, job_id, key0, _ = _seeded_store()
+        store, job_id, _, _ = _seeded_store()
         resp = handle(_req("GET", f"/api/se/analyze/{job_id}"),
                       Deps(store=store, auth=_Auth()))
         self.assertEqual(resp.status, 200)
@@ -65,11 +64,14 @@ class TestProgressIsLightweight(unittest.TestCase):
         self.assertIn(key1, resp.body["section_keys"])
 
     def test_incomplete_sections_are_not_listed(self):
-        store, job_id, key0, key1 = _seeded_store()
+        store, job_id, _, _ = _seeded_store()
         resp = handle(_req("GET", f"/api/se/analyze/{job_id}"),
                       Deps(store=store, auth=_Auth()))
         job = store.load(job_id)
         pending = [i.key for i in job.items if i.status == "pending"]
+        # pending이 비면 아래 루프가 안 돌아 공허하게 통과한다 —
+        # 실제로 미완료 섹션이 있다는 전제를 명시적으로 검증한다.
+        self.assertTrue(pending, "미완료 섹션이 없어 이 테스트가 아무것도 검증하지 못합니다")
         for key in pending:
             self.assertNotIn(key, resp.body["section_keys"])
 
@@ -100,8 +102,15 @@ class TestSectionEndpoint(unittest.TestCase):
         self.assertEqual(resp.body["value"], {"큰": "x" * 5000})
 
     def test_unknown_section_is_404(self):
+        """라우팅은 통과하는 ASCII 키인데 job.items에 없는 경우를 검증한다.
+
+        한글 등 `_SECTION_KEY`(`[A-Za-z0-9_:-]+`) 밖의 문자를 쓰면 라우터
+        단계에서부터 매칭 실패해 `_section` 핸들러에 도달하지 못한다 —
+        그러면 이 테스트는 라우터 404만 우연히 재확인할 뿐, `_section`의
+        "키를 못 찾으면 404" 분기는 전혀 검증하지 못하는 false-safe가 된다.
+        """
         store, job_id, _, _ = _seeded_store()
-        resp = handle(_req("GET", f"/api/se/analyze/{job_id}/section/없는섹션"),
+        resp = handle(_req("GET", f"/api/se/analyze/{job_id}/section/nonexistent_key"),
                       Deps(store=store, auth=_Auth()))
         self.assertEqual(resp.status, 404)
 
