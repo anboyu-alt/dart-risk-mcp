@@ -38,39 +38,111 @@ function formatCount(n) {
   return Number(n || 0).toLocaleString("ko-KR");
 }
 
-// DART 필드명 → 한국어 라벨. **확신하는 것만 넣는다.**
-// 여기 없는 필드는 원본 키를 그대로 열 이름으로 쓴다 — 숨기면 데이터가
-// 조용히 사라지고 사용자는 없는 줄 안다.
+// DART 필드명 → 한국어 라벨.
+//
+// **확신하는 것만 넣는다.** 여기 없는 필드는 원본 키를 그대로 열 이름으로
+// 쓴다 — 숨기면 데이터가 조용히 사라지고, 틀린 라벨을 붙이면 사용자가
+// 잘못 읽는다. 둘 다 데이터가 없는 것보다 나쁘다.
+//
+// 아래 항목은 2026-07-27 엔켐 실측 응답에서 수집한 필드이며, 뜻이
+// 모호한 것은 core 코드에서 근거를 확인했다(tm·inv_prm·lwfr·se 등).
+//
 // Object.create(null)로 프로토타입 없는 객체를 만든다 — 일반 객체 리터럴이면
 // 키가 "toString"·"constructor"일 때 LABELS[k]가 Object.prototype의 메서드로
 // 새어나가 헤더가 함수가 된다(실제로 확인됨). 프로토타입이 없으면 그런 키는
 // 그냥 undefined라 아래 label()의 `|| k` 폴백이 정상 동작한다.
 const LABELS = Object.assign(Object.create(null), {
-  rcept_no: "접수번호",
-  rcept_dt: "접수일자",
-  report_nm: "공시명",
-  corp_name: "회사명",
-  corp_code: "고유번호",
-  stock_code: "종목코드",
-  flr_nm: "공시제출인",
-  ceo_nm: "대표자",
-  est_dt: "설립일",
-  adres: "주소",
-  bsns_year: "사업연도",
-  // dict-of-lists 섹션(shareholders/audit_history/debt_balance 등)을
-  // 하위 키별로 펼칠 때 소제목으로 쓰인다.
-  major_holders: "최대주주",
-  bulk_holders: "5% 대량보유",
-  opinions: "감사의견",
-  auditor_changes: "감사인 교체",
+  // ── 공통 식별자
+  rcept_no: "접수번호", rcept_dt: "접수일자", corp_code: "고유번호",
+  corp_name: "회사명", corp_cls: "법인구분", stock_code: "종목코드",
+  stock_name: "종목명", bsns_year: "사업연도", reprt_code: "보고서코드",
+  stlm_dt: "결산일", rm: "비고", nm: "성명",
+
+  // ── 기업 개요
+  ceo_nm: "대표자", est_dt: "설립일", adres: "주소", hm_url: "홈페이지",
+  ir_url: "IR 주소", phn_no: "전화", fax_no: "팩스", acc_mt: "결산월",
+  induty_code: "업종코드", corp_name_eng: "영문 회사명",
+  jurir_no: "법인등록번호", bizr_no: "사업자등록번호",
+  // DART 응답 봉투 필드. 기업 정보는 아니지만 숨기지 않는다 — 응답이
+  // 정상이었는지를 사용자가 확인할 수 있어야 한다.
+  status: "API 응답 코드", message: "API 응답 메시지",
+
+  // ── 공시 목록
+  flr_nm: "공시제출인", report_nm: "공시명",
+
+  // ── 자금사용 (dart_client._normalize_fund_usage)
+  tm: "회차", kind: "구분", year: "연도", flags: "이상 표시",
+  pay_de: "납입일", pay_amount: "납입 금액",
+  plan_useprps: "계획 용도", plan_amount: "계획 금액",
+  real_dtls_cn: "실제 집행 내역", real_dtls_amount: "실제 집행 금액",
+  dffrnc_resn: "차이 발생 사유",
+
+  // ── 타법인 출자
+  inv_prm: "피출자 법인명", invstmnt_purps: "출자 목적",
+  frst_acqs_de: "최초 취득일", frst_acqs_amount: "최초 취득 금액",
+  bsis_blce_qy: "기초 수량", bsis_blce_qota_rt: "기초 지분율",
+  bsis_blce_acntbk_amount: "기초 장부가액",
+  trmend_blce_qy: "기말 수량", trmend_blce_qota_rt: "기말 지분율",
+  trmend_blce_acntbk_amount: "기말 장부가액",
+  incrs_dcrs_acqs_dsps_qy: "증감 수량",
+  incrs_dcrs_acqs_dsps_amount: "증감 금액",
+  incrs_dcrs_evl_lstmn: "증감 평가손익",
+  recent_bsns_year_fnnr_sttus_tot_assets: "피투자사 총자산",
+  recent_bsns_year_fnnr_sttus_thstrm_ntpf: "피투자사 당기순이익",
+
+  // ── 재무제표
+  // fs_nm은 섹션 제목 "재무제표"(financials)와 겹치지 않게 구분한다 —
+  // 실제 값도 "재무제표"/"연결재무제표" 문자열이라 fs_div(연결/별도)와
+  // 의미가 겹치는 필드다.
+  account_nm: "계정과목", fs_nm: "재무제표명(개별/연결)", sj_nm: "재무제표 구분",
+  fs_div: "연결/별도", sj_div: "구분코드", currency: "통화", ord: "순번",
+  thstrm_nm: "당기명", thstrm_dt: "당기 기간", thstrm_amount: "당기 금액",
+  frmtrm_nm: "전기명", frmtrm_dt: "전기 기간", frmtrm_amount: "전기 금액",
+  // "전전기"는 배당(lwfr)이 이미 쓴다 — 여기는 기수명(예: "제 26 기")이라
+  // 뜻이 다르므로 접미어로 구분한다(라벨 충돌 방지).
+  bfefrmtrm_nm: "전전기명", bfefrmtrm_dt: "전전기 기간",
+  bfefrmtrm_amount: "전전기 금액",
+
+  // ── 내부자 지분
+  repror: "보고자", source: "출처", relate: "관계", stock_knd: "주식 종류",
+  isu_exctv_ofcps: "직위", isu_exctv_rgist_at: "등기 여부",
+  isu_main_shrholdr: "주요주주 구분", mxmm_shrholdr_nm: "최대주주명",
+  // 출자(affiliates)의 "기초/기말 지분율"과 이름이 겹치지 않게 접두어를
+  // 붙인다. 같은 라벨이 두 필드에 걸리면 열을 구분할 수 없다.
+  sp_stock_lmp_cnt: "특정증권 소유 주식수", sp_stock_lmp_rate: "특정증권 소유 비율",
+  sp_stock_lmp_irds_cnt: "특정증권 증감 주식수",
+  sp_stock_lmp_irds_rate: "특정증권 증감 비율",
+  bsis_posesn_stock_co: "기초 소유 주식수",
+  bsis_posesn_stock_qota_rt: "기초 소유 지분율",
+  trmend_posesn_stock_co: "기말 소유 주식수",
+  trmend_posesn_stock_qota_rt: "기말 소유 지분율",
+  posesn_stock_co: "소유 주식수", qota_rt: "지분율",
+  change_on: "변동일", change_cause: "변동 원인",
+  change_qy_acqs: "취득 수량", change_qy_dsps: "처분 수량",
+  change_qy_incnr: "기타 증감 수량",
+  bsis_qy: "기초 수량(자기주식)", trmend_qy: "기말 수량(자기주식)",
+  acqs_mth1: "취득방법1", acqs_mth2: "취득방법2", acqs_mth3: "취득방법3",
+
+  // ── 배당 (thstrm/frmtrm/lwfr = 당기/전기/전전기)
+  se: "항목", thstrm: "당기 값", frmtrm: "전기 값", lwfr: "전전기",
+
+  // ── 채무·감사
+  total: "합계", by_kind: "종류별 잔액", equity_ratio: "자기자본 대비",
+  maturity_1y_share: "1년 내 만기 비중",
+  opinions: "감사의견", auditor_changes: "감사인 교체",
   independence_warnings: "감사인 독립성 경고",
-  by_kind: "종류별 잔액",
-  corporate_bond: "회사채",
-  short_term_bond: "단기사채",
-  commercial_paper: "기업어음",
-  new_capital: "신종자본증권",
+  major_holders: "최대주주", bulk_holders: "5% 대량보유",
+
+  // ── 공시 원문
+  text: "본문", files: "파일 목록", main_file: "주 파일",
+  char_count: "글자 수", truncated: "잘림",
+
+  // ── 종류별 잔액(채무증권) dict-of-lists 하위 키
+  corporate_bond: "회사채", short_term_bond: "단기사채",
+  commercial_paper: "기업어음", new_capital: "신종자본증권",
   cnd_capital: "조건부자본증권",
-  // SECTION_GROUPS/registry.STAGE1_SPECS의 1단 섹션 키. ui.js의
+
+  // ── SECTION_GROUPS/registry.STAGE1_SPECS의 1단 섹션 키. ui.js의
   // sectionHolder()가 h2 제목에 label()을 쓴다 — 여기 없으면 원본 키
   // (예: "fund_usage")가 그대로 제목이 된다(숨기지 않는다, 위 label()
   // 계약과 동일).
@@ -91,6 +163,47 @@ const LABELS = Object.assign(Object.create(null), {
 /** 키 → 한국어 라벨. 없으면 원본 키 그대로(숨기지 않는다). */
 function label(k) {
   return LABELS[k] || k;
+}
+
+// 금액으로 읽어야 하는 필드. 여기 없는 필드의 큰 수는 건드리지 않는다 —
+// `corp_code`("01011526")를 억으로 바꾸면 거짓말이 된다.
+const AMOUNT_FIELDS = new Set([
+  "pay_amount", "plan_amount", "real_dtls_amount",
+  "frst_acqs_amount", "bsis_blce_acntbk_amount", "trmend_blce_acntbk_amount",
+  "incrs_dcrs_acqs_dsps_amount", "incrs_dcrs_evl_lstmn",
+  "recent_bsns_year_fnnr_sttus_tot_assets",
+  "recent_bsns_year_fnnr_sttus_thstrm_ntpf",
+  "thstrm_amount", "frmtrm_amount", "bfefrmtrm_amount", "total",
+]);
+
+// 날짜로 읽어야 하는 필드. **접수번호는 14자리라 여기 들어가면 안 된다.**
+const DATE_FIELDS = new Set([
+  "rcept_dt", "est_dt", "pay_de", "stlm_dt", "frst_acqs_de", "change_on",
+]);
+
+/** 금액을 한국식 단위로 줄인다. 0과 음수를 잃지 않는다. */
+function formatAmount(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return String(n);
+  const sign = v < 0 ? "-" : "";
+  const abs = Math.abs(v);
+  if (abs >= 1e12) return sign + (abs / 1e12).toFixed(1).replace(/\.0$/, "") + "조";
+  if (abs >= 1e8) return sign + (abs / 1e8).toFixed(1).replace(/\.0$/, "") + "억";
+  return v.toLocaleString("ko-KR");
+}
+
+/** 표시용 문자열. 필드 이름을 봐야 단위를 알 수 있으므로 key를 받는다. */
+function formatValue(key, value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") return JSON.stringify(value);
+  const s = String(value);
+  if (AMOUNT_FIELDS.has(key) && /^-?[\d,]*\d$/.test(s)) {
+    return formatAmount(s.replace(/,/g, ""));
+  }
+  if (DATE_FIELDS.has(key) && /^\d{8}$/.test(s)) {
+    return s.slice(0, 4) + "." + s.slice(4, 6) + "." + s.slice(6, 8);
+  }
+  return s;
 }
 
 function cell(v) {
@@ -334,6 +447,7 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     LS_DART_KEY, LS_SESSION, LS_JOB, SECTION_GROUPS, formatCount,
     nextKeysToFetch, pollDecision, toTable, LABELS, label,
+    formatValue, formatAmount, AMOUNT_FIELDS, DATE_FIELDS,
     sectionBlocks, groupTitleFor, groupOrderIndex,
     ACTOR_STATUS, actorLine, resumeTarget,
   };

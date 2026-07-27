@@ -490,5 +490,76 @@ class TestSectionBlocksDepthGuard(unittest.TestCase):
     # 도입이 정상 케이스를 깨지 않는다는 확인은 그 테스트로 이미 충분하다.
 
 
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestLabels(unittest.TestCase):
+    def test_known_dart_fields_get_korean_labels(self):
+        cases = {
+            "rm": "비고", "flr_nm": "공시제출인", "report_nm": "공시명",
+            "tm": "회차", "inv_prm": "피출자 법인명", "lwfr": "전전기",
+            "plan_amount": "계획 금액", "real_dtls_amount": "실제 집행 금액",
+        }
+        for key, want in cases.items():
+            self.assertEqual(run_js(f'label({json.dumps(key)})'), want)
+
+    def test_unknown_field_keeps_raw_key(self):
+        """라벨이 없다고 숨기거나 바꾸면 안 된다."""
+        self.assertEqual(run_js('label("totally_unknown_xyz")'), "totally_unknown_xyz")
+
+    def test_label_is_not_fooled_by_prototype_keys(self):
+        for key in ("toString", "constructor", "__proto__", "hasOwnProperty"):
+            self.assertEqual(run_js(f'label({json.dumps(key)})'), key)
+
+    def test_every_label_is_a_nonempty_string(self):
+        """빈 라벨이 들어가면 열 제목이 사라진다."""
+        labels = run_js("LABELS")
+        bad = [k for k, v in labels.items() if not isinstance(v, str) or not v.strip()]
+        self.assertEqual(bad, [], f"빈 라벨: {bad}")
+
+    def test_no_label_collides_with_a_different_raw_key(self):
+        """서로 다른 필드가 같은 한국어 라벨을 가지면 열을 구분할 수 없다."""
+        labels = run_js("LABELS")
+        seen = {}
+        dup = []
+        for k, v in labels.items():
+            if v in seen:
+                dup.append(f"{seen[v]}·{k} → {v}")
+            seen[v] = k
+        self.assertEqual(dup, [], "라벨이 겹칩니다:\n  " + "\n  ".join(dup))
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFormatValue(unittest.TestCase):
+    def test_large_amount_becomes_readable_korean_unit(self):
+        self.assertEqual(run_js('formatValue("plan_amount", 13082000000)'), "130.8억")
+
+    def test_trillion_scale(self):
+        self.assertEqual(run_js('formatValue("plan_amount", 1300000000000)'), "1.3조")
+
+    def test_small_amount_keeps_thousands_separator(self):
+        self.assertEqual(run_js('formatValue("plan_amount", 4500)'), "4,500")
+
+    def test_zero_is_zero_not_blank(self):
+        """0을 빈칸으로 만들면 잘못된 정보다."""
+        self.assertEqual(run_js('formatValue("plan_amount", 0)'), "0")
+
+    def test_yyyymmdd_becomes_dotted_date(self):
+        self.assertEqual(run_js('formatValue("rcept_dt", "20260724")'), "2026.07.24")
+
+    def test_rcept_no_is_never_reformatted_as_a_date(self):
+        """접수번호는 14자리 숫자다. 날짜로 오인하면 안 된다."""
+        self.assertEqual(run_js('formatValue("rcept_no", "20260724000552")'),
+                         "20260724000552")
+
+    def test_non_amount_field_with_big_number_is_untouched(self):
+        """금액 필드가 아닌데 큰 수라고 억으로 바꾸면 거짓말이 된다."""
+        self.assertEqual(run_js('formatValue("corp_code", "01011526")'), "01011526")
+
+    def test_null_becomes_empty_string(self):
+        self.assertEqual(run_js('formatValue("plan_amount", null)'), "")
+
+    def test_negative_amount_keeps_sign(self):
+        self.assertEqual(run_js('formatValue("plan_amount", -13082000000)'), "-130.8억")
+
+
 if __name__ == "__main__":
     unittest.main()
