@@ -425,4 +425,67 @@ async function analyze(company, lookbackYears) {
   }
 }
 
+// ── 우측 슬라이드 패널 — 실명과 공시 원문 ──────────────────────────
+
+/** 행위자(실명) 패널을 연다.
+ *
+ * actorLine()이 이름·status 라벨·동명이인 경고를 한 번에 만들어 준다 —
+ * 여기서 셋을 따로 조립하면 한쪽만 그리는 경로가 생기고, 그 경로로
+ * 실명이 경고 없이 나간다. 값은 전부 textContent로 넣는다.
+ */
+async function openActorPanel(company) {
+  const r = await api("GET", "/api/se/actors?company=" + encodeURIComponent(company),
+                      { token: await token() });
+  const box = document.getElementById("panel-body");
+  box.innerHTML = "";
+  const panel = document.getElementById("panel");
+  if (r.status !== 200) {
+    box.textContent = "행위자 정보를 불러오지 못했습니다.";
+    panel.classList.add("open");
+    return;
+  }
+
+  for (const raw of (r.body.actors || [])) {
+    const a = actorLine(raw);
+    const d = document.createElement("div");
+    const h = document.createElement("h3"); h.textContent = a.name; d.appendChild(h);
+    const s = document.createElement("p"); s.className = "note";
+    s.textContent = a.statusLabel; d.appendChild(s);
+    const w = document.createElement("p"); w.className = "warn";
+    w.textContent = a.warn; d.appendChild(w);
+    const c = document.createElement("p");
+    c.textContent = a.companies.join(", "); d.appendChild(c);
+    box.appendChild(d);
+  }
+  // 서버가 준 면책 문구를 그대로 붙인다.
+  const dis = document.createElement("p");
+  dis.className = "note";
+  dis.textContent = r.body.disclaimer || "";
+  box.appendChild(dis);
+  document.getElementById("panel").classList.add("open");
+}
+
+/** 공시 원문 패널을 연다. DART 키는 X-DART-Key 헤더로만 보낸다. */
+async function openDocPanel(rceptNo) {
+  const r = await api("GET", "/api/se/disclosure/" + encodeURIComponent(rceptNo),
+                      { token: await token(),
+                        dartKey: localStorage.getItem(LS_DART_KEY) || "" });
+  const box = document.getElementById("panel-body");
+  box.innerHTML = "";
+  const p = document.createElement("pre");
+  p.style.whiteSpace = "pre-wrap";
+  // 공시 원문 — 반드시 textContent다.
+  p.textContent = r.status === 200
+    ? r.body.text
+    : (r.body.error || "원문을 불러오지 못했습니다.");
+  box.appendChild(p);
+  if (r.status === 200 && r.body.truncated) {
+    const n = document.createElement("p");
+    n.className = "note";
+    n.textContent = "원문 " + formatCount(r.body.char_count) + "자 중 일부입니다.";
+    box.appendChild(n);
+  }
+  document.getElementById("panel").classList.add("open");
+}
+
 document.addEventListener("DOMContentLoaded", init);

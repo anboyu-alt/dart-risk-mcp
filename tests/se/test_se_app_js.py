@@ -344,5 +344,60 @@ class TestGroupRouting(unittest.TestCase):
         self.assertGreater(run_js('groupOrderIndex("기타")'), known_max)
 
 
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestActorLine(unittest.TestCase):
+    def test_verified_has_label(self):
+        got = run_js('actorLine({name:"홍길동", status:"verified", companies:["A"]})')
+        self.assertEqual(got["name"], "홍길동")
+        self.assertTrue(got["statusLabel"])
+
+    def test_auto_matched_carries_namesake_warning(self):
+        """자동 매칭은 동명이인이 확인되지 않았다. 경고 없이 실명을
+        보여주면 안 된다."""
+        got = run_js('actorLine({name:"홍길동", status:"auto_matched", companies:[]})')
+        self.assertIn("동명이인", got["warn"])
+
+    def test_unknown_status_is_treated_as_weakest(self):
+        """모르는 값을 강한 쪽으로 보여주는 실수는 허용되지 않는다."""
+        for bad in ('""', '"확인됨"', "null", "123", '["verified"]'):
+            got = run_js(f'actorLine({{name:"홍길동", status:{bad}, companies:[]}})')
+            self.assertIn("동명이인", got["warn"],
+                          f"status={bad} 인데 경고가 없습니다")
+
+    def test_unknown_status_label_matches_auto_matched_exactly(self):
+        """세 단계 모두 '동명이인' 문구를 포함하므로(위 테스트) warn 문구
+        하나만으로는 unknown이 실제로 auto_matched로 떨어졌는지, 아니면
+        더 강한 verified로 잘못 승격됐는지 구분할 수 없다 — 둘 다 warn에
+        '동명이인'이 들어 있기 때문이다(뮤테이션으로 실제 확인됨: 폴백을
+        ACTOR_STATUS.verified로 바꿔도 위 테스트는 통과했다). label을
+        직접 대조해 승격 여부를 명확히 잡는다.
+        """
+        known = run_js('actorLine({name:"홍길동", status:"auto_matched", companies:[]})')
+        for bad in ('""', '"확인됨"', "null", "123", '["verified"]'):
+            got = run_js(f'actorLine({{name:"홍길동", status:{bad}, companies:[]}})')
+            self.assertEqual(got["statusLabel"], known["statusLabel"],
+                             f"status={bad}가 auto_matched 라벨로 떨어지지 않았습니다")
+
+    def test_every_known_status_also_carries_the_namesake_warning(self):
+        """레지스트리 대조는 표기 일치이지 신원 확인이 아니므로, verified·
+        maintainer_seed도 auto_matched와 마찬가지로 동명이인 경고를 가져야
+        한다(브리프: "세 단계 모두 동명이인 경고를 갖는다"). 근거 강도
+        차이는 label이 나타내지 warn의 유무가 나타내지 않는다.
+        """
+        for st in ('"verified"', '"maintainer_seed"', '"auto_matched"'):
+            got = run_js(f'actorLine({{name:"홍길동", status:{st}, companies:[]}})')
+            self.assertIn("동명이인", got["warn"], f"status={st}에 경고가 없습니다")
+
+    def test_every_status_produces_a_label(self):
+        """라벨이 빈 채로 실명만 나가는 경로가 있으면 안 된다."""
+        for st in ('"verified"', '"maintainer_seed"', '"auto_matched"', '""'):
+            got = run_js(f'actorLine({{name:"홍길동", status:{st}, companies:[]}})')
+            self.assertTrue(got["statusLabel"], f"status={st}에 라벨이 없습니다")
+
+    def test_missing_name_does_not_crash(self):
+        got = run_js("actorLine({})")
+        self.assertEqual(got["name"], "")
+
+
 if __name__ == "__main__":
     unittest.main()

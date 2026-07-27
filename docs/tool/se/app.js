@@ -152,7 +152,11 @@ function sectionBlocks(value) {
 
   const blocks = [];
   if (flatKeys.length > 0) {
-    const flat = {};
+    // Object.create(null)로 프로토타입 없는 객체를 만든다 — 일반 객체
+    // 리터럴이면 키가 "__proto__"일 때 대입이 실제 프로퍼티가 아니라
+    // 프로토타입 setter를 타서 그 키가 조용히 사라진다(LABELS와 같은
+    // 부류의 버그, 위 LABELS 주석 참고).
+    const flat = Object.create(null);
     for (const k of flatKeys) flat[k] = value[k];
     const t = toTable(flat);
     if (t) blocks.push({ title: null, table: t });
@@ -226,10 +230,49 @@ function pollDecision(body) {
   return { shouldStop: false, reason: "" };
 }
 
+// 근거 강도 3단계. 서버(`se_server/api/handlers.py`)와 같은 값이며,
+// 모르는 값은 가장 약한 쪽으로 떨어뜨린다 — 확인 안 된 정보를 확인된
+// 것처럼 보여주는 방향의 오차는 허용되지 않는다.
+const ACTOR_STATUS = {
+  // 어느 단계든 동명이인 경고를 갖는다. 레지스트리 대조는 **표기 일치**이지
+  // 신원 확인이 아니기 때문이다. 단계 차이는 label이 나타낸다.
+  verified: {
+    label: "확인된 공개기록",
+    warn: "공개기록의 표기가 일치함을 확인한 것이며 신원 확인은 아닙니다. 동명이인일 수 있습니다.",
+  },
+  maintainer_seed: {
+    label: "제작자 등록 (근거 미확보)",
+    warn: "근거가 확보되지 않았습니다. 동명이인일 수 있습니다.",
+  },
+  auto_matched: {
+    label: "자동 매칭 (동명이인 미확인)",
+    warn: "자동으로 매칭된 이름입니다. 동명이인일 수 있으며 확인되지 않았습니다.",
+  },
+};
+
+/** 행위자 한 명을 화면에 낼 형태로 바꾼다.
+ *
+ * 이름·라벨·경고를 한 함수가 함께 만든다. 나눠 두면 한쪽만 그리는
+ * 경로가 생기고, 그 경로로 실명이 경고 없이 나간다.
+ */
+function actorLine(actor) {
+  const a = actor || {};
+  const raw = a.status;
+  const known = typeof raw === "string" && Object.prototype.hasOwnProperty.call(ACTOR_STATUS, raw);
+  const meta = known ? ACTOR_STATUS[raw] : ACTOR_STATUS.auto_matched;
+  return {
+    name: typeof a.name === "string" ? a.name : "",
+    statusLabel: meta.label,
+    warn: meta.warn,
+    companies: Array.isArray(a.companies) ? a.companies : [],
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     LS_DART_KEY, LS_SESSION, SECTION_GROUPS, formatCount,
     nextKeysToFetch, pollDecision, toTable, LABELS, label,
     sectionBlocks, groupTitleFor, groupOrderIndex,
+    ACTOR_STATUS, actorLine,
   };
 }

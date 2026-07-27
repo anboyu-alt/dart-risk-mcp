@@ -507,5 +507,16 @@ class TestAnalyzeLoopSurvivesTokenRefreshFailure(unittest.TestCase):
         )
 
 
+class TestDisclaimerAlwaysRendered(unittest.TestCase):
+    def test_panel_renders_server_disclaimer(self):
+        """서버가 주는 면책 문구를 화면이 실제로 그려야 한다.
+
+        서버만 보내고 화면이 버리면 사용자는 못 본다.
+        """
+        src = _sources()["ui.js"]
+        self.assertIn("disclaimer", src,
+                      "actors 응답의 disclaimer를 화면이 쓰지 않습니다")
+
+
 if __name__ == "__main__":
     unittest.main()
