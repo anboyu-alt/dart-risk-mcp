@@ -124,6 +124,21 @@ class TestSectionGroups(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestStage1KeysHaveLabels(unittest.TestCase):
+    def test_every_stage1_key_has_a_label(self):
+        """company_info처럼 라벨이 빠지면 화면에 영문 키가 그대로 뜨고
+        groupTitleFor가 "기타" 그룹으로 밀어낸다 — 13개 1단 섹션 키 전부가
+        LABELS에 있어야 한다(company_info는 헤더라 SECTION_GROUPS에는
+        없지만 label()은 여전히 거쳐야 한다).
+        """
+        from se_server.jobs.registry import STAGE1_SPECS
+
+        labels = run_js("LABELS")
+        missing = [s.key for s in STAGE1_SPECS if s.key not in labels]
+        self.assertEqual(missing, [], f"라벨이 없는 1단 섹션 키: {missing}")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestToTable(unittest.TestCase):
     def test_list_of_records_becomes_rows(self):
         got = run_js('toTable([{a:1,b:2},{a:3,b:4}])')
@@ -497,6 +512,7 @@ class TestLabels(unittest.TestCase):
             "rm": "비고", "flr_nm": "공시제출인", "report_nm": "공시명",
             "tm": "회차", "inv_prm": "피출자 법인명", "lwfr": "전전기",
             "plan_amount": "계획 금액", "real_dtls_amount": "실제 집행 금액",
+            "maturity_under_1y": "1년 이내 만기 금액", "company_info": "기업 개요",
         }
         for key, want in cases.items():
             self.assertEqual(run_js(f'label({json.dumps(key)})'), want)
@@ -559,6 +575,24 @@ class TestFormatValue(unittest.TestCase):
 
     def test_negative_amount_keeps_sign(self):
         self.assertEqual(run_js('formatValue("plan_amount", -13082000000)'), "-130.8억")
+
+    def test_maturity_under_1y_is_treated_as_amount(self):
+        """by_kind[종류].maturity_under_1y는 원 단위 금액이다
+        (dart_client.fetch_debt_balance). AMOUNT_FIELDS에 없으면 천단위
+        구분조차 없는 생숫자로 나간다 — 엔켐 실측에서 잡힌 사각지대."""
+        self.assertEqual(run_js('formatValue("maturity_under_1y", 13082000000)'), "130.8억")
+
+    def test_trillion_boundary_rounds_up_past_10000_eok(self):
+        """999999999999(1e12 바로 아래)는 억 단위로 반올림하면 "10000억"이
+        되는데, 거짓은 아니지만 "1조"가 자연스럽다."""
+        self.assertEqual(run_js('formatValue("plan_amount", 999999999999)'), "1조")
+
+    def test_trillion_boundary_exact_switchover_point(self):
+        """9999.95억(반올림 전 마지막 값)부터 "1조"로 넘어가고, 그 바로
+        아래는 여전히 "9999.9억"이어야 한다 — 어디서 단위가 바뀌는지
+        명확해야 한다."""
+        self.assertEqual(run_js('formatValue("plan_amount", 999995000000)'), "1조")
+        self.assertEqual(run_js('formatValue("plan_amount", 999994999999)'), "9999.9억")
 
 
 if __name__ == "__main__":

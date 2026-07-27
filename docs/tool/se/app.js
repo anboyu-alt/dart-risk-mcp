@@ -129,6 +129,9 @@ const LABELS = Object.assign(Object.create(null), {
   // ── 채무·감사
   total: "합계", by_kind: "종류별 잔액", equity_ratio: "자기자본 대비",
   maturity_1y_share: "1년 내 만기 비중",
+  // by_kind[종류] = {total, maturity_under_1y} (dart_client.fetch_debt_balance).
+  // maturity_1y_share(비중, %)와는 다른 필드다 — 이쪽은 금액.
+  maturity_under_1y: "1년 이내 만기 금액",
   opinions: "감사의견", auditor_changes: "감사인 교체",
   independence_warnings: "감사인 독립성 경고",
   major_holders: "최대주주", bulk_holders: "5% 대량보유",
@@ -146,6 +149,7 @@ const LABELS = Object.assign(Object.create(null), {
   // sectionHolder()가 h2 제목에 label()을 쓴다 — 여기 없으면 원본 키
   // (예: "fund_usage")가 그대로 제목이 된다(숨기지 않는다, 위 label()
   // 계약과 동일).
+  company_info: "기업 개요",
   disclosures: "공시 목록",
   fund_usage: "자금 사용 내역",
   affiliates: "타법인 출자현황",
@@ -174,6 +178,7 @@ const AMOUNT_FIELDS = new Set([
   "recent_bsns_year_fnnr_sttus_tot_assets",
   "recent_bsns_year_fnnr_sttus_thstrm_ntpf",
   "thstrm_amount", "frmtrm_amount", "bfefrmtrm_amount", "total",
+  "maturity_under_1y",
 ]);
 
 // 날짜로 읽어야 하는 필드. **접수번호는 14자리라 여기 들어가면 안 된다.**
@@ -188,7 +193,16 @@ function formatAmount(n) {
   const sign = v < 0 ? "-" : "";
   const abs = Math.abs(v);
   if (abs >= 1e12) return sign + (abs / 1e12).toFixed(1).replace(/\.0$/, "") + "조";
-  if (abs >= 1e8) return sign + (abs / 1e8).toFixed(1).replace(/\.0$/, "") + "억";
+  if (abs >= 1e8) {
+    const eok = (abs / 1e8).toFixed(1).replace(/\.0$/, "");
+    // 반올림 결과가 "10000"(억)이면 1조 문턱을 넘은 것이다. 999999999999처럼
+    // 1e12 바로 아래 값은 억 단위로는 반올림 후 "10000억"이 되는데, 거짓은
+    // 아니지만 "1조"가 자연스럽다 — 단위를 다시 계산해 갈아탄다.
+    if (eok === "10000") {
+      return sign + (abs / 1e12).toFixed(1).replace(/\.0$/, "") + "조";
+    }
+    return sign + eok + "억";
+  }
   return v.toLocaleString("ko-KR");
 }
 
