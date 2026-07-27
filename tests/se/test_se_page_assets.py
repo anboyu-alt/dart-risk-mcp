@@ -370,32 +370,37 @@ class TestNoDeadCode(unittest.TestCase):
 
 
 class TestAnalyzeIsolatesFetchedStatePerCall(unittest.TestCase):
-    """FETCHED가 모듈 전역이면, 같은 페이지에서 analyze()를 두 번째 부를 때
+    """FETCHED가 모듈 전역이면, 같은 페이지에서 폴링을 두 번째 돌릴 때
     이전 작업에서 받은 섹션 키가 그대로 남아 nextKeysToFetch가 매번 []를
     돌려준다 — 두 번째 분석은 섹션이 하나도 안 그려진다.
 
+    폴링 루프는 analyze()(새 작업)와 resumeIfAny()(탭을 다시 열어 이어받는
+    작업)가 공유하는 pollUntilDone()에 있다(Task 5에서 분리) — 두 곳에
+    루프를 따로 두면 한쪽만 고치고 잊어버리는 사고가 되풀이되기 때문이다.
+    그래서 이 검사는 이제 pollUntilDone() 본문을 본다.
+
     단순히 소스에 "FETCHED"라는 이름이 없다고 통과시키면 약하다(이름만
-    바꾸고 여전히 모듈 최상위에 두는 회귀를 못 잡는다) — analyze() 본문
-    안에서 실제로 새 Set을 선언해 쓰는지, 그리고 같은 이름이 모듈
+    바꾸고 여전히 모듈 최상위에 두는 회귀를 못 잡는다) — pollUntilDone()
+    본문 안에서 실제로 새 Set을 선언해 쓰는지, 그리고 같은 이름이 모듈
     최상위에도 선언돼 있지 않은지까지 확인한다.
     """
 
-    def test_analyze_declares_and_uses_a_locally_scoped_fetched_set(self):
+    def test_poll_until_done_declares_and_uses_a_locally_scoped_fetched_set(self):
         src = _sources()["ui.js"]
-        body = _extract_function_body(src, "analyze")
+        body = _extract_function_body(src, "pollUntilDone")
 
         m = re.search(r"(?:let|const)\s+(\w+)\s*=\s*new Set\(\s*\)", body)
         self.assertIsNotNone(
             m,
-            "analyze()가 호출마다 새 Set을 선언하지 않습니다 — 이전 작업의 "
-            "키가 새 작업으로 새어 들어갈 수 있습니다",
+            "pollUntilDone()이 호출마다 새 Set을 선언하지 않습니다 — 이전 "
+            "작업의 키가 새 작업으로 새어 들어갈 수 있습니다",
         )
         var_name = m.group(1)
 
         self.assertRegex(
             body,
             r"nextKeysToFetch\([^,]+,\s*\[\.\.\." + re.escape(var_name) + r"\]\)",
-            "analyze()의 루프가 방금 선언한 지역 Set을 쓰지 않습니다",
+            "pollUntilDone()의 루프가 방금 선언한 지역 Set을 쓰지 않습니다",
         )
 
         # 같은 이름이 모듈 최상위(들여쓰기 없는 줄)에서도 선언돼 있으면,
@@ -414,22 +419,25 @@ class TestSectionFetchFailureIsNotSilentlyLost(unittest.TestCase):
     것처럼 보인다. "받음" 표시는 성공을 확인한 뒤에만 해야 하고, 실패는
     화면에 보이는 경로로 넘어가야 한다.
 
+    폴링 루프는 Task 5에서 pollUntilDone()으로 분리됐다(analyze()와
+    resumeIfAny()가 공유) — 이 검사도 그 본문을 본다.
+
     이 검사도 함수 본문을 실제로 파싱해서 확인한다 — "sec.status"라는
     문자열이 소스 어딘가에 있다는 것만으로는 그 검사가 받음-표시보다
     먼저 일어나는지 알 수 없다.
     """
 
-    def _section_loop_body(self, analyze_body: str) -> str:
+    def _section_loop_body(self, poll_body: str) -> str:
         loop_m = re.search(
             r"for\s*\(\s*const\s+key\s+of\s+nextKeysToFetch\([^)]*\)\s*\)\s*\{",
-            analyze_body,
+            poll_body,
         )
-        self.assertIsNotNone(loop_m, "analyze()에서 섹션 수신 루프를 찾지 못했습니다")
-        return _extract_braced_block(analyze_body, loop_m.end() - 1)
+        self.assertIsNotNone(loop_m, "pollUntilDone()에서 섹션 수신 루프를 찾지 못했습니다")
+        return _extract_braced_block(poll_body, loop_m.end() - 1)
 
     def test_fetched_is_marked_only_after_checking_success(self):
         src = _sources()["ui.js"]
-        body = _extract_function_body(src, "analyze")
+        body = _extract_function_body(src, "pollUntilDone")
         loop_body = self._section_loop_body(body)
 
         if_m = re.search(r"if\s*\(\s*sec\.status\s*===\s*200\s*\)\s*\{", loop_body)
@@ -455,7 +463,7 @@ class TestSectionFetchFailureIsNotSilentlyLost(unittest.TestCase):
 
     def test_failure_is_pushed_to_a_list_that_reaches_render_failures(self):
         src = _sources()["ui.js"]
-        body = _extract_function_body(src, "analyze")
+        body = _extract_function_body(src, "pollUntilDone")
         loop_body = self._section_loop_body(body)
 
         if_m = re.search(r"if\s*\(\s*sec\.status\s*===\s*200\s*\)\s*\{", loop_body)
@@ -508,29 +516,31 @@ class TestSectionFetchFailureIsNotSilentlyLost(unittest.TestCase):
 
 
 class TestAnalyzeLoopSurvivesTokenRefreshFailure(unittest.TestCase):
-    """루프 안 await token()이 실패하면 analyze()가 reject된다 — 그러면 이
-    함수를 부르는 쪽마다 매번 try/catch를 해야 한다. token()이 실패 시
-    이미 clearSession()+showGate()로 로그인 화면을 띄우므로, analyze()는
-    조용히 루프만 멈추면 된다.
+    """루프 안 await token()이 실패하면 pollUntilDone()이 reject된다 —
+    그러면 이 함수를 부르는 analyze()·resumeIfAny() 양쪽 모두 매번
+    try/catch를 해야 한다. token()이 실패 시 이미 clearSession()+
+    showGate()로 로그인 화면을 띄우므로, pollUntilDone()은 조용히 루프만
+    멈추면 된다(Task 5에서 폴링 루프가 analyze()에서 pollUntilDone()으로
+    분리됐다 — analyze()와 resumeIfAny()가 공유하기 위해서다).
     """
 
     def test_loop_body_is_wrapped_in_try_catch(self):
         src = _sources()["ui.js"]
-        body = _extract_function_body(src, "analyze")
+        body = _extract_function_body(src, "pollUntilDone")
         for_m = re.search(r"for\s*\(\s*;;\s*\)\s*\{", body)
-        self.assertIsNotNone(for_m, "analyze()에서 폴링 루프(for (;;))를 찾지 못했습니다")
+        self.assertIsNotNone(for_m, "pollUntilDone()에서 폴링 루프(for (;;))를 찾지 못했습니다")
         for_body = _extract_braced_block(body, for_m.end() - 1)
         # _extract_braced_block은 for(;;)의 여는/닫는 중괄호까지 포함해
         # 돌려주므로 그 바깥 중괄호를 벗겨내고 안쪽 내용만 본다.
         for_inner = for_body[1:-1].strip()
         # for(;;) 본문이 사실상 try { ... } catch (...) { ... } 하나로만
         # 이뤄져 있는지 확인한다 — 그래야 루프 안 어디서 던지든(await
-        # token() 포함) analyze() 밖으로 새지 않는다.
+        # token() 포함) pollUntilDone() 밖으로 새지 않는다.
         self.assertRegex(
             for_inner,
             r"^try\s*\{",
             "폴링 루프 본문이 try로 시작하지 않습니다 — 루프 안 예외가 "
-            "analyze()를 reject시킬 수 있습니다",
+            "pollUntilDone()을 reject시킬 수 있습니다",
         )
         self.assertRegex(
             for_body, r"\}\s*catch\s*\([^)]*\)\s*\{",
@@ -805,6 +815,132 @@ class TestPanelResponsesAreValidatedDefensively(unittest.TestCase):
             body, r'typeof\s+\w+\.text\s*===\s*["\']string["\']',
             "openDocPanel이 text가 문자열인지 확인하지 않습니다 — "
             "예상 밖 응답에서 리터럴 undefined가 표시될 수 있습니다",
+        )
+
+
+class TestRenderFailuresReplacesNotAccumulates(unittest.TestCase):
+    """앞 리뷰가 이 태스크로 넘긴 지적(a): renderFailures는 폴링마다(루프
+    한 바퀴마다) 불린다. "누적"이 아니라 "교체"로 그려야 한다 — 안 그러면
+    같은 실패가 화면에 계속 쌓인다. renderSection이 sec-<key> 고정 노드를
+    재사용하는 방식과 같은 패턴을 검사한다.
+    """
+
+    def test_render_failures_reuses_a_fixed_node_instead_of_always_appending(self):
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "renderFailures")
+        self.assertRegex(
+            body, r'getElementById\(',
+            "renderFailures가 고정 노드를 재사용하지 않고 매번 새로 붙일 수 있습니다",
+        )
+        # 내용을 비우는 처리(removeChild 루프)가 있어야 다시 그릴 때 이전
+        # 실패 목록 위에 새 목록이 쌓이지 않는다.
+        self.assertRegex(
+            body, r"removeChild\(",
+            "renderFailures가 기존 내용을 비우지 않습니다 — 폴링마다 실패 "
+            "목록이 누적될 수 있습니다",
+        )
+
+    def test_render_failures_clears_the_node_when_no_failures_remain(self):
+        """실패가 없어졌는데(재시도 성공) 이전 실패 노드가 화면에 그대로
+        남으면 사용자는 이미 해결된 문제를 계속 보게 된다.
+        """
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "renderFailures")
+        self.assertRegex(
+            body, r"if\s*\(\s*!failed\s*\|\|\s*failed\.length\s*===\s*0\s*\)",
+            "renderFailures가 빈 실패 목록을 별도로 처리하지 않습니다 — 이전 "
+            "실패 노드가 화면에 남을 수 있습니다",
+        )
+
+
+class TestPollLoopSurfacesNonUserSafeErrors(unittest.TestCase):
+    """앞 리뷰가 이 태스크로 넘긴 지적(b): 폴링 루프의 `catch (e) { break; }`가
+    예외를 무메시지로 삼킨다. token() 실패(e.userSafe)는 이미 showGate로
+    처리되지만, fetch 자체가 던지는 네트워크 예외 등은 폴링이 조용히
+    멈추고 진행률 바가 멈춘 채 남는다 — 최소한의 안내가 있어야 한다.
+    """
+
+    def test_catch_distinguishes_user_safe_errors_and_shows_a_message_otherwise(self):
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "pollUntilDone")
+        catch_m = re.search(r"catch\s*\([^)]*\)\s*\{", body)
+        self.assertIsNotNone(catch_m, "pollUntilDone()이 루프 예외를 catch하지 않습니다")
+        catch_body = _extract_braced_block(body, catch_m.end() - 1)
+        self.assertIn(
+            "userSafe", catch_body,
+            "catch가 token() 실패(e.userSafe, 이미 showGate로 안내됨)와 그 외 "
+            "예외를 구분하지 않습니다",
+        )
+        self.assertIn(
+            "showBar(", catch_body,
+            "catch가 사용자에게 아무 안내도 남기지 않습니다 — 진행률 바가 "
+            "멈춘 채 남고 사용자는 원인을 알 수 없습니다",
+        )
+
+
+class TestSectionTitleUsesKoreanLabel(unittest.TestCase):
+    """앞 리뷰가 이 태스크로 넘긴 지적(d): 섹션 h2 제목이 원본 키 그대로였다
+    (예: "fund_usage"). label()이 아는 키는 한국어로, 모르는 키는 원본
+    그대로(숨기지 않는다) 나와야 한다.
+    """
+
+    def test_section_holder_labels_the_h2_title(self):
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "sectionHolder")
+        self.assertRegex(
+            body, r"h2\.textContent\s*=\s*label\(\s*key\s*\)",
+            "sectionHolder가 h2 제목에 label()을 쓰지 않습니다 — 섹션 제목이 "
+            "원본 키 그대로 나올 수 있습니다",
+        )
+
+
+class TestAnalyzeAndResumeShareThePollingLoop(unittest.TestCase):
+    """analyze()와 resumeIfAny() 둘 다 pollUntilDone()을 불러야 한다 —
+    폴링 로직이 두 곳에 따로 있으면 한쪽만 고치고 잊어버리는 사고가
+    되풀이된다(브리프: "Task 2의 폴링 루프를 pollUntilDone(jobId)로 떼어내
+    analyze()와 resumeIfAny()가 함께 쓴다").
+    """
+
+    def test_analyze_remembers_polls_and_forgets_the_job(self):
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "analyze")
+        self.assertIn(
+            "rememberJob(", body,
+            "analyze()가 job_id를 기억하지 않습니다 — 탭을 닫았다 열면 "
+            "이어받을 수 없습니다",
+        )
+        self.assertIn(
+            "pollUntilDone(", body,
+            "analyze()가 공유 폴링 루프(pollUntilDone)를 부르지 않습니다",
+        )
+        self.assertIn(
+            "forgetJob(", body,
+            "analyze()가 완료 후 저장된 job_id를 지우지 않습니다",
+        )
+
+    def test_resume_if_any_validates_with_resume_target_and_shares_poll_until_done(self):
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "resumeIfAny")
+        self.assertIn(
+            "resumeTarget(", body,
+            "resumeIfAny()가 resumeTarget()으로 유효성을 판정하지 않습니다 "
+            "— 오래된 작업을 무한정 이어받을 수 있습니다",
+        )
+        self.assertIn(
+            "pollUntilDone(", body,
+            "resumeIfAny()가 공유 폴링 루프(pollUntilDone)를 부르지 않습니다",
+        )
+
+    def test_resume_if_any_is_wired_and_reachable(self):
+        """정의만 있고 아무도 안 부르면 탭을 다시 열어도 이어받지 못한다
+        (이 파일의 다른 검사들과 같은 원칙 — openActorPanel이 한때 그랬듯,
+        정의는 있지만 호출부가 없는 죽은 코드를 잡는다)."""
+        src = _sources()["ui.js"]
+        _extract_function_body(src, "resumeIfAny")  # 정의 자체가 있는지 먼저 확인
+        self.assertTrue(
+            _has_real_call_site(src, "resumeIfAny"),
+            "resumeIfAny 정의만 있고 부르는 곳이 없습니다 — 탭을 다시 열어도 "
+            "이어받을 방법이 없습니다",
         )
 
 

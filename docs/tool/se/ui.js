@@ -177,6 +177,10 @@ async function doLogin() {
     document.getElementById("password").value = "";
     document.getElementById("dartkey").value = "";
     showMain();
+    // 탭을 닫았다 다시 로그인한 경우에도 12시간 이내 작업이 있으면
+    // 이어받는다 — resumeIfAny 자체가 없거나 오래된 작업이면 조용히
+    // false를 돌려주므로 여기서 결과를 기다릴 필요는 없다.
+    resumeIfAny();
   } catch (e) {
     msgEl.textContent = safeMessage(e, "로그인에 실패했습니다. 잠시 후 다시 시도하세요.");
   } finally {
@@ -226,6 +230,9 @@ async function init() {
     await loadConfig();
     await token();
     showMain();
+    // 저장된 세션으로 자동 로그인한 경우(탭을 닫았다 다시 연 경우가
+    // 여기 해당한다)에도 12시간 이내 이어받을 작업이 있으면 재개한다.
+    resumeIfAny();
   } catch (e) {
     // token()이 자체 실패 경로에서 이미 정리·안내를 했을 수 있지만(같은 e가
     // 다시 올라옴), loadConfig() 자체가 실패하는 경우엔 여기가 유일한 안내
@@ -237,13 +244,16 @@ async function init() {
 
 // ── 분석 실행 + 진행률 폴링 ────────────────────────────────────────
 
-// Task 5에서 실제 구현으로 대체된다. 지금은 루프가 돌아가게만 한다.
 function showBar(msg) { document.getElementById("bar").textContent = msg; }
 function showProgress(p) {
   showBar(p.company + " — " + formatCount(p.finished) + "/" + formatCount(p.total));
 }
-function renderHeadPlaceholder(name) {
-  document.getElementById("head-name").textContent = name + " 분석을 시작합니다…";
+/** message를 생략하면 "N 분석을 시작합니다…"(새 작업 기본 문구)를 쓴다.
+ *  resumeIfAny()는 이어받는 작업이라 다른 문구(message)를 넘긴다 —
+ *  이미 진행 중인 작업을 "시작합니다"로 안내하면 사용자가 새 분석이
+ *  시작된 줄 오해한다. */
+function renderHeadPlaceholder(name, message) {
+  document.getElementById("head-name").textContent = message || (name + " 분석을 시작합니다…");
   // 패널이 이전 회사(실명·공시 원문)를 띄운 채 열려 있으면, 화면은 새
   // 회사를 보여주는데 패널만 이전 회사 정보로 남는다 — 회사를 바꿔
   // 다시 분석할 때 특히 실명이 그렇게 남을 수 있다.
@@ -337,7 +347,9 @@ function sectionHolder(key) {
   const wrap = document.createElement("div");
   wrap.className = "sec";
   const h2 = document.createElement("h2");
-  h2.textContent = key;
+  // label()이 아는 키만 한국어로 바뀐다 — 없으면 원본 키 그대로다
+  // (app.js의 label() 계약: 라벨이 없다고 숨기지 않는다).
+  h2.textContent = label(key);
   wrap.appendChild(h2);
 
   holder = document.createElement("div");
@@ -395,32 +407,74 @@ function renderSection(key, value) {
   for (const block of blocks) holder.appendChild(blockEl(block));
 }
 
-function renderFailures(failed) { /* Task 5 */ }
+/** 가져오지 못한 항목을 보여준다.
+ *
+ * 이 함수는 폴링마다(analyze()의 루프 한 바퀴마다) 불린다. **누적이 아니라
+ * 교체**로 그린다 — 매번 새 노드를 append하면 같은 실패가 화면에 계속
+ * 쌓인다(같은 섹션이 다음 폴링에서도 여전히 실패하면 특히 그렇다).
+ * renderSection이 `sec-<key>` 고정 노드를 재사용해 교체하는 방식을
+ * 그대로 따른다 — 고정 id(`sec-failures`)를 매번 비우고 다시 채운다.
+ * 실패가 없어지면(다음 폴링에서 재시도 성공) 노드 자체를 지운다 — 빈
+ * "0건" 문구가 남지 않게 한다.
+ */
+function renderFailures(failed) {
+  const id = "sec-failures";
+  let wrap = document.getElementById(id);
+  if (!failed || failed.length === 0) {
+    if (wrap) wrap.parentNode.removeChild(wrap);
+    return;
+  }
+  if (!wrap) {
+    wrap = document.createElement("div");
+    wrap.id = id;
+    wrap.className = "sec";
+    document.getElementById("body").appendChild(wrap);
+  }
+  while (wrap.firstChild) wrap.removeChild(wrap.firstChild);
+  const h = document.createElement("h2");
+  h.textContent = "가져오지 못한 항목 " + formatCount(failed.length) + "건";
+  wrap.appendChild(h);
+  for (const f of failed) {
+    const p = document.createElement("p");
+    p.className = "note";
+    // 서버가 이미 키를 스크럽해서 보낸다(runner._scrub).
+    p.textContent = f.key + " — " + (f.error || "원인 미상");
+    wrap.appendChild(p);
+  }
+}
 
-/** 분석 작업을 시작하고 완료될 때까지 진행률을 폴링한다.
+// ── 작업 이어받기 — 상태는 서버(Postgres)에 있고, 브라우저는 job_id만 든다 ──
+
+const LS_JOB = "se_job";
+
+/** 진행 중인 작업을 기억한다. 상태는 서버(Postgres)에 있으므로
+ *  브라우저는 job_id만 들고 있으면 이어받을 수 있다. */
+function rememberJob(jobId) {
+  localStorage.setItem(LS_JOB, JSON.stringify({
+    job_id: jobId, saved_at: Date.now(),
+  }));
+}
+
+function forgetJob() {
+  localStorage.removeItem(LS_JOB);
+}
+
+/** 작업 하나를 완료될 때까지 폴링한다. analyze()(막 시작한 작업)와
+ *  resumeIfAny()(탭을 다시 연 뒤 이어받는 작업)가 이 하나의 루프를
+ *  공유한다 — 폴링 로직이 두 곳에 따로 있으면 한쪽만 고치고 잊어버리는
+ *  사고가 되풀이된다.
  *
  * 섹션은 한 번만 받는다 — 폴링 응답은 매번 완료된 키 전체를 주므로,
  * nextKeysToFetch로 아직 안 받은 키만 걸러 요청한다(SE-4a가 없앤
  * 737KB 재수신 문제가 여기서 되돌아올 수 있다). stalled가 true면
  * 즉시 멈춘다 — 계속 부르면 사용자의 DART 호출 한도만 태운다.
+ *
+ * fetched는 이 호출 하나에만 속하는 지역 상태다 — 모듈 전역에 두면
+ * 같은 페이지에서 두 번째 작업을 폴링할 때 이전 작업에서 받은 키가
+ * 그대로 남아 nextKeysToFetch가 []를 돌려주고 새 작업은 섹션이 하나도
+ * 안 그려진다.
  */
-async function analyze(company, lookbackYears) {
-  const tk = await token();
-  const dartKey = localStorage.getItem(LS_DART_KEY) || "";
-  const created = await api("POST", "/api/se/analyze", {
-    token: tk, dartKey: dartKey,
-    body: { company: company, lookback_years: lookbackYears },
-  });
-  if (created.status !== 201) {
-    showBar(created.body.error || "분석을 시작하지 못했습니다");
-    return;
-  }
-  const jobId = created.body.job_id;
-  renderHeadPlaceholder(created.body.company);
-
-  // 이 작업 하나에만 속하는 상태다 — 모듈 전역에 두면 같은 페이지에서
-  // analyze()를 두 번째 부를 때 이전 작업에서 받은 키가 그대로 남아
-  // nextKeysToFetch가 []를 돌려주고 새 작업은 섹션이 하나도 안 그려진다.
+async function pollUntilDone(jobId, dartKey) {
   const fetched = new Set();
 
   for (;;) {
@@ -466,12 +520,67 @@ async function analyze(company, lookbackYears) {
       }
     } catch (e) {
       // await token()이 갱신 실패로 던지면(세션 만료 등) token()이 이미
-      // clearSession()+showGate()로 로그인 화면을 띄운 뒤다. 여기서
-      // analyze()를 reject시키면 호출부마다 try/catch를 강제하게 되므로,
-      // 루프만 조용히 멈춘다.
+      // clearSession()+showGate()로 로그인 화면을 띄운 뒤다(e.userSafe가
+      // true) — 여기서 또 안내할 필요가 없다. 그 외(fetch 자체가 던지는
+      // 네트워크 예외 등)는 안내 없이 멈추면 진행률 바가 멈춘 채 남고
+      // 사용자는 왜 멈췄는지 알 방법이 없다 — 최소한의 안내를 남긴다.
+      // analyze()/resumeIfAny() 쪽으로 예외를 다시 던지지 않는다 — 그러면
+      // 호출부마다 try/catch를 강제하게 되므로, 루프만 조용히 멈춘다.
+      if (!(e && e.userSafe)) {
+        showBar("연결이 끊겨 진행을 멈췄습니다. 새로고침하면 이어받습니다.");
+      }
       break;
     }
   }
+}
+
+/** 분석 작업을 시작하고 완료될 때까지 진행률을 폴링한다. */
+async function analyze(company, lookbackYears) {
+  const tk = await token();
+  const dartKey = localStorage.getItem(LS_DART_KEY) || "";
+  const created = await api("POST", "/api/se/analyze", {
+    token: tk, dartKey: dartKey,
+    body: { company: company, lookback_years: lookbackYears },
+  });
+  if (created.status !== 201) {
+    showBar(created.body.error || "분석을 시작하지 못했습니다");
+    return;
+  }
+  const jobId = created.body.job_id;
+  renderHeadPlaceholder(created.body.company);
+  rememberJob(jobId);
+  await pollUntilDone(jobId, dartKey);
+  forgetJob();
+}
+
+/** 페이지를 열 때 이어받을 작업이 있으면 폴링을 재개한다.
+ *
+ * 저장된 job_id가 있어도 무조건 이어받지 않는다 — resumeTarget()이
+ * RESUME_WINDOW_MS(12시간)보다 오래된 작업은 걸러낸다. 며칠 전 작업을
+ * 조용히 이어받으면 사용자는 방금 새로 분석한 줄 오해한다.
+ */
+async function resumeIfAny() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(LS_JOB) || "null"); }
+  catch (e) { saved = null; }
+  const jobId = resumeTarget(saved, Date.now());
+  if (!jobId) { forgetJob(); return false; }
+
+  let prog;
+  try {
+    prog = await api("GET", "/api/se/analyze/" + jobId, { token: await token() });
+  } catch (e) {
+    // token() 갱신 실패는 이미 showGate()로 안내된 뒤다 — 조용히 포기한다.
+    forgetJob();
+    return false;
+  }
+  if (prog.status !== 200) { forgetJob(); return false; }   // 남의 것이거나 사라졌다
+
+  renderHeadPlaceholder(prog.body.company, prog.body.company + " 분석을 이어받는 중입니다…");
+  showBar("진행 중이던 분석을 이어받습니다 — " + prog.body.company);
+  await pollUntilDone(jobId, localStorage.getItem(LS_DART_KEY) || "");
+  forgetJob();
+  return true;
 }
 
 // ── 우측 슬라이드 패널 — 실명과 공시 원문 ──────────────────────────

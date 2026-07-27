@@ -418,5 +418,78 @@ class TestActorLine(unittest.TestCase):
         self.assertEqual(got["name"], "")
 
 
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestResumeTarget(unittest.TestCase):
+    _HOUR = 3600 * 1000
+
+    def test_recent_job_is_resumed(self):
+        got = run_js(f'resumeTarget({{job_id:"j1", saved_at: {10 * self._HOUR}}},'
+                     f' {10 * self._HOUR + 60000})')
+        self.assertEqual(got, "j1")
+
+    def test_stale_job_is_not_resumed(self):
+        """며칠 전 작업을 조용히 이어받으면 새 분석으로 오해한다."""
+        got = run_js(f'resumeTarget({{job_id:"j1", saved_at: 0}}, {72 * self._HOUR})')
+        self.assertIsNone(got)
+
+    def test_missing_or_malformed_is_null(self):
+        for expr in ("resumeTarget(null, 1)", "resumeTarget({}, 1)",
+                     'resumeTarget({job_id:"j"}, 1)'):
+            self.assertIsNone(run_js(expr), f"{expr}가 이어받으려 합니다")
+
+    def test_boundary_at_exactly_the_resume_window_is_still_resumed(self):
+        """정확히 경계(12시간)는 포함이다 — <=이지 <가 아니다."""
+        got = run_js('resumeTarget({job_id:"j1", saved_at: 0}, 12 * 3600 * 1000)')
+        self.assertEqual(got, "j1")
+
+    def test_one_ms_past_the_boundary_is_not_resumed(self):
+        got = run_js('resumeTarget({job_id:"j1", saved_at: 0}, 12 * 3600 * 1000 + 1)')
+        self.assertIsNone(got)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestSectionBlocksDepthGuard(unittest.TestCase):
+    """sectionBlocks의 재귀 깊이 상한 — (c) 앞 리뷰 지적: 값이 서버 응답의
+    JSON.parse 산물이라 현재는 도달 불가하지만, 터지면 analyze()의 폴링
+    루프가 예외를 삼키며 조용히 멈춘다. 상한에 걸린 값은 숨기지 않고
+    표현해야 한다(이 화면의 원칙).
+    """
+
+    def _deeply_nested(self, depth: int) -> str:
+        # {"k": {"k": {"k": ... "leaf": 1}}}
+        js = "1"
+        for _ in range(depth):
+            js = '{"k":' + js + "}"
+        return js
+
+    def test_pathologically_deep_value_does_not_crash_and_is_not_silently_dropped(self):
+        """깊이 상한이 없으면 200단 중첩도 끝까지 재귀해 캡 문구 없이
+        완주한다(스택이 아직 안 터지는 얕은 깊이라 크래시로는 못 잡는다) —
+        그래서 "터지지 않는다"가 아니라 "상한 문구가 실제로 나온다"를
+        검사해야 상한 도입 자체를 검증한다.
+        """
+        deep = self._deeply_nested(200)
+        got = run_js(f"sectionBlocks({deep})")
+        self.assertNotEqual(got, [], "깊이 상한에 걸린 값이 흔적 없이 사라졌습니다")
+        texts = [b.get("text") for b in got if b.get("text")]
+        self.assertTrue(
+            any("깊이" in t for t in texts),
+            "상한에 걸렸다는 사실이 어떤 블록에도 나타나지 않습니다 — "
+            "데이터가 조용히 잘렸을 수 있습니다",
+        )
+
+    def test_normal_shallow_nesting_is_unaffected(self):
+        """실제 DART 응답 수준(2~3단)의 중첩은 상한에 걸리지 않고 그대로
+        펼쳐져야 한다 — 상한 도입이 정상 케이스를 망가뜨리면 안 된다.
+        """
+        got = run_js(
+            'sectionBlocks({major_holders:[{nm:"a"}], bulk_holders:[{nm:"b"}]})'
+        )
+        self.assertEqual(len(got), 2)
+        titles = [b["title"] for b in got]
+        self.assertIn("최대주주", titles)
+        self.assertIn("5% 대량보유", titles)
+
+
 if __name__ == "__main__":
     unittest.main()

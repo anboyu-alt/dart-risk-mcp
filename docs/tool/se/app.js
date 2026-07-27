@@ -4,6 +4,25 @@
 const LS_DART_KEY = "se_dart_key";
 const LS_SESSION = "se_session";
 
+// 이어받기 유효 시간. 이보다 오래된 작업은 새로 시작한다 —
+// 며칠 전 작업을 조용히 재개하면 사용자는 새 분석을 받았다고 오해한다.
+const RESUME_WINDOW_MS = 12 * 3600 * 1000;
+
+/** 저장된 job_id를 지금 이어받아도 되는지 판정한다.
+ *
+ * 작업 상태는 Postgres에 있으므로 job_id만 있으면 이어받을 수 있지만,
+ * 오래된 job_id를 무한정 이어받으면 사용자는 새 분석을 받았다고 오해한다
+ * (며칠 전 결과를 방금 실행한 것처럼 보게 된다). saved가 없거나
+ * job_id·saved_at 형태가 예상과 다르면(예: localStorage가 손상되었거나
+ * 옛 스키마) 이어받지 않는다 — 모르면 새로 시작하는 쪽이 안전하다.
+ */
+function resumeTarget(saved, now) {
+  const s = saved || {};
+  if (typeof s.job_id !== "string" || !s.job_id) return null;
+  if (typeof s.saved_at !== "number") return null;
+  return (now - s.saved_at) <= RESUME_WINDOW_MS ? s.job_id : null;
+}
+
 // registry.STAGE1_SPECS[*].section 과 같은 그룹이다. 서버가 이미 화면
 // 그룹을 알고 있으므로 여기서 새로 정하지 않고 그대로 따른다.
 const SECTION_GROUPS = [
@@ -49,6 +68,22 @@ const LABELS = Object.assign(Object.create(null), {
   commercial_paper: "기업어음",
   new_capital: "신종자본증권",
   cnd_capital: "조건부자본증권",
+  // SECTION_GROUPS/registry.STAGE1_SPECS의 1단 섹션 키. ui.js의
+  // sectionHolder()가 h2 제목에 label()을 쓴다 — 여기 없으면 원본 키
+  // (예: "fund_usage")가 그대로 제목이 된다(숨기지 않는다, 위 label()
+  // 계약과 동일).
+  disclosures: "공시 목록",
+  fund_usage: "자금 사용 내역",
+  affiliates: "타법인 출자현황",
+  financials: "재무제표",
+  indicators: "주요 재무지표",
+  shareholders: "주주 현황",
+  insider_timeline: "내부자 지분 변동",
+  executive_roster: "임원 현황",
+  audit_history: "감사의견 이력",
+  debt_balance: "채무증권 잔액",
+  distress: "부실 징후",
+  dividends: "배당",
 });
 
 /** 키 → 한국어 라벨. 없으면 원본 키 그대로(숨기지 않는다). */
@@ -121,6 +156,13 @@ function isLongText(v) {
   return typeof v === "string" && v.length > LONG_TEXT_THRESHOLD;
 }
 
+// sectionBlocks의 재귀 깊이 상한. 값은 서버 응답의 JSON.parse 산물이라
+// JSON 자체엔 순환 참조가 없지만, 병적으로 깊은 중첩(또는 예상 밖 응답
+// 형태)이 오면 재귀가 스택을 태우고, 그러면 analyze()의 폴링 루프가
+// (b)와 같은 경로로 예외를 삼키며 조용히 멈춘다. 실제 DART 응답 중첩
+// 깊이(2~3단)보다 넉넉히 크게 잡는다.
+const MAX_SECTION_DEPTH = 20;
+
 /** 섹션 값을 화면에 그릴 블록 목록 [{title, table}] 또는 [{title, text}]로
  *  바꾼다. title은 없을 수 있다(null). table/text 둘 다 없으면(표로 만들
  *  근거 자체가 없는 하위 키) 그 사실도 블록으로 남긴다 — 하위 항목이
@@ -129,9 +171,22 @@ function isLongText(v) {
  *  shareholders({major_holders:[...], bulk_holders:[...]})처럼 dict 값
  *  안에 리스트/객체가 섞여 있으면("dict-of-lists") 한 표에 JSON 뭉치로
  *  욱여넣지 않고 하위 키마다 재귀적으로 소제목 + 개별 표로 펼친다.
- *  하위 키에 라벨이 없으면 원본 키를 그대로 쓴다. */
-function sectionBlocks(value) {
+ *  하위 키에 라벨이 없으면 원본 키를 그대로 쓴다.
+ *
+ *  depth는 내부 재귀 카운터다(호출자는 생략한다 — 기본 0). 상한을
+ *  넘으면 재귀를 멈추되, 그 하위 데이터를 조용히 빠뜨리지 않고 상한에
+ *  걸렸다는 사실 자체를 텍스트 블록으로 남긴다 — 이 화면의 원칙은
+ *  "데이터를 조용히 숨기지 않는다"이다. */
+function sectionBlocks(value, depth) {
+  const d = depth || 0;
   if (value === null || value === undefined) return [];
+
+  if (d > MAX_SECTION_DEPTH) {
+    return [{
+      title: null,
+      text: "중첩이 너무 깊어(깊이 " + d + ") 더 펼치지 않습니다. 원본 데이터는 있습니다.",
+    }];
+  }
 
   if (Array.isArray(value)) {
     const t = toTable(value);
@@ -170,7 +225,7 @@ function sectionBlocks(value) {
     blocks.push({ title: label(k), text: value[k] });
   }
   for (const k of nestedKeys) {
-    const sub = sectionBlocks(value[k]);
+    const sub = sectionBlocks(value[k], d + 1);
     if (sub.length === 0) {
       blocks.push({ title: label(k), table: null });
       continue;
@@ -278,6 +333,6 @@ if (typeof module !== "undefined" && module.exports) {
     LS_DART_KEY, LS_SESSION, SECTION_GROUPS, formatCount,
     nextKeysToFetch, pollDecision, toTable, LABELS, label,
     sectionBlocks, groupTitleFor, groupOrderIndex,
-    ACTOR_STATUS, actorLine,
+    ACTOR_STATUS, actorLine, resumeTarget,
   };
 }
