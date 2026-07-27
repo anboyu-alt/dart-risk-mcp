@@ -674,6 +674,17 @@ class TestPanelsAreWiredAndReachable(unittest.TestCase):
     def test_open_doc_panel_is_wired_from_the_rcept_no_cell(self):
         """공시 원문 패널은 rcept_no 열의 셀에서만 열려야 한다 — 확인되지
         않은 필드(공시 제목 등)로 어느 칸이 클릭 가능한지 추측하지 않는다.
+
+        이 검사는 문자열 존재만 본다 — tableEl 본문에 "rcept_no"·
+        "openDocPanel(" 이 있는지만 확인하고 실제로 클릭했을 때 무슨 값이
+        전달되는지는 보지 않는다. 그래서 rcept_no가 상수라 캡션으로
+        승격되는 경우(affiliates·financials 실측)에 배선이 끊겨도 이
+        검사는 계속 초록이었다 — 캡션 블록에도 "rcept_no"·"openDocPanel("
+        문자열은 여전히 등장하기 때문이다(문자열 존재 ≠ 그 경로가 실제로
+        연결됨). 세 가지 실제 형태(가로 열·세로 행·캡션 승격)를 node vm
+        가짜 DOM으로 렌더링해 실제 클릭까지 재현하는 검사는
+        tests/se/test_se_app_js.py의 TestDocPanelClickWiring이 맡는다 —
+        이 정적 검사는 최소한의 문자열 가드로만 남긴다.
         """
         src = _sources()["ui.js"]
         body = _extract_function_body(src, "tableEl")
@@ -682,6 +693,17 @@ class TestPanelsAreWiredAndReachable(unittest.TestCase):
         self.assertIn("openDocPanel(", body,
                       "tableEl이 openDocPanel을 부르지 않습니다 — "
                       "공시 원문 패널에 도달할 방법이 없습니다")
+        # 캡션(상수로 승격된 rcept_no) 경로도 openDocPanel을 불러야 한다 —
+        # 그러지 않으면 캡션 조립 블록(c.key === "rcept_no")이 있어도
+        # 클릭 리스너가 없는 채로 남을 수 있다. 실제 클릭 재현은
+        # TestDocPanelClickWiring이 한다 — 여기선 소스에 그 분기 자체가
+        # 있는지만 본다.
+        self.assertRegex(
+            body, r'c\.key\s*===\s*["\']rcept_no["\']',
+            "tableEl이 캡션으로 승격된 rcept_no를 따로 처리하지 않습니다 — "
+            "affiliates·financials처럼 rcept_no가 상수라 캡션으로 올라가면 "
+            "공시 원문 패널에 도달할 방법이 없어집니다",
+        )
 
         # 단순 등장 횟수 대신 주석을 지운 뒤 실제 호출부를 확인한다
         # (openActorPanel과 같은 이유 — 위 test_open_actor_panel_is_not_dead_code

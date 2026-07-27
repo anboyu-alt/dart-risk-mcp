@@ -209,6 +209,17 @@ function formatAmount(n) {
 /** 표시용 문자열. 필드 이름을 봐야 단위를 알 수 있으므로 key를 받는다. */
 function formatValue(key, value) {
   if (value === null || value === undefined) return "";
+  if (Array.isArray(value)) {
+    // 빈 배열을 JSON.stringify로 "[]"라고 그대로 보여주면 무슨 뜻인지
+    // 알 수 없다(예: fund_usage의 flags: []가 캡션에 "이상 표시: []"로
+    // 뜨던 문제) — 숨기지 않고 "없음"으로 명확히 말한다. 원소가 있으면
+    // JSON 배열 표기 대신 쉼표로 이어 사람이 읽기 쉽게 한다(원소가
+    // 객체면 그 원소만 JSON으로 남긴다 — 배열 자체를 통째로 뭉개지 않는다).
+    if (value.length === 0) return "없음";
+    return value.map(function (v) {
+      return (v && typeof v === "object") ? JSON.stringify(v) : String(v);
+    }).join(", ");
+  }
   if (typeof value === "object") return JSON.stringify(value);
   const s = String(value);
   if (AMOUNT_FIELDS.has(key) && /^-?[\d,]*\d$/.test(s)) {
@@ -231,8 +242,9 @@ function cell(v) {
  *  감싼다. 표로 만들 것 자체가 없으면(빈 배열·빈 객체·null·undefined)
  *  null을 돌려준다.
  *
- *  toTable과 tableLayout(sectionBlocks 경유) 두 경로가 함께 쓰는 정규화
- *  로직이다 — 나눠 두면 한쪽만 고치고 잊어버리는 사고가 난다. 이전에는
+ *  sectionBlocks가 tableLayout에 넘기기 전에 쓰는 정규화 로직이다(비객체
+ *  항목 보존은 tableLayout 자체도 계약으로 갖고 있다 — 아래 tableLayout
+ *  주석 참고, 방어가 호출부에만 있으면 새 호출부가 다시 놓친다). 이전에는
  *  리스트 안 비객체 항목을 조용히 걸러냈고(흔적 없이 사라짐), 스칼라
  *  값 자체는 무조건 null이라 화면이 "표시할 데이터가 없습니다"로
  *  잘못 말했다 — 데이터가 있는데 없다고 하는 것과, 표로 만들 수 없어서
@@ -251,52 +263,23 @@ function toRecords(value) {
   return records.length === 0 ? null : records;
 }
 
-/** 섹션 값을 표로 바꾼다. 무엇이든 표로 만든다 — 객체 리스트뿐 아니라
- *  객체가 아닌 항목(문자열 등)도, 스칼라 값 자체도 "값" 한 칸에 담아
- *  자기 행/자기 표를 갖는다. 표로 만들 것 자체가 없을 때만(빈 배열·
- *  빈 객체·null·undefined) null을 돌려준다.
- *
- *  `tableLayout`이 이 함수를 대체해 sectionBlocks가 실제로 그리는 표를
- *  만들지만, 이 함수와 아래 테스트(TestToTable)는 지우지 않고 그대로
- *  둔다 — "모르는 필드를 숨기지 않는다"·"0과 false를 잃지 않는다" 같은
- *  성질을 지키는 유일한 방어선이고, tableLayout도 같은 성질을 지켜야
- *  하므로 이 구현이 기준선 역할을 한다. */
-function toTable(value) {
-  const records = toRecords(value);
-  if (!records) return null;
-
-  // 열은 모든 레코드 키의 합집합이다. 레코드마다 필드가 다를 수 있고,
-  // 첫 레코드만 보면 뒤쪽 필드가 통째로 사라진다.
-  const cols = [];
-  const seen = new Set();
-  for (const r of records) {
-    for (const k of Object.keys(r)) {
-      if (!seen.has(k)) { seen.add(k); cols.push(k); }
-    }
-  }
-  if (cols.length === 0) return null;
-
-  return {
-    // 원본 키를 라벨과 나란히 남긴다 — ui.js가 "이 열이 rcept_no인가"를
-    // 라벨(한국어 "접수번호")로 추측하지 않고 원본 키로 정확히 찾게 하기
-    // 위해서다. 필드명을 추측해 코드에 박는 것이 이 프로젝트에서 반복해서
-    // 사고를 낸 방식이라, 확인된 키(rcept_no)만 원본 그대로 넘긴다.
-    columns: cols.map(label),
-    keys: cols,
-    rows: records.map(function (r) {
-      return cols.map(function (k) { return cell(r[k]); });
-    }),
-  };
-}
-
 /** 레코드 목록을 화면에 낼 형태로 바꾼다.
  *
  * 1건이면 세로(키-값), 여러 건이면 가로(표)다. 1건짜리 49열(indicators)을
  * 가로로 펴면 열 하나가 몇 픽셀이 되어 글자가 세로로 쪼개진다.
+ *
+ * 비객체 항목(문자열 등)을 조용히 버리지 않는 것은 호출부의 책임이 아니라
+ * 이 함수의 계약이다 — sectionBlocks는 이미 toRecords로 감싸서 넘기지만,
+ * 그 방어가 호출부에만 있으면 새 호출부가 다시 놓친다(전에 실제로 그랬다:
+ * 리스트 안 문자열 항목이 필터로 걸러져 흔적 없이 사라졌다). toRecords와
+ * 같은 감싸기 규칙을 여기서도 한 번 더 적용해, tableLayout 하나만 불러도
+ * 안전하다.
  */
 function tableLayout(records) {
   if (!Array.isArray(records)) return null;
-  const rows = records.filter(function (r) { return r && typeof r === "object" && !Array.isArray(r); });
+  const rows = records.map(function (r) {
+    return (r && typeof r === "object" && !Array.isArray(r)) ? r : { "값": r };
+  });
   if (rows.length === 0) return null;
 
   const keys = [];
@@ -308,12 +291,19 @@ function tableLayout(records) {
 
   if (rows.length === 1) {
     // 세로 — 승격할 게 없다. 1건에서는 모든 열이 '상수'라 승격하면 표가 빈다.
+    // columns(["항목","값"])는 일부러 안 넣는다 — ui.js가 세로 표에는
+    // 헤더 행을 그리지 않는다(각 행이 이미 [라벨, 값]이라 "항목/값" 헤더는
+    // 열 제목과 데이터 사이에 낀 군더더기일 뿐이다). 안 쓰는 필드를
+    // 반환값에 남기면 "계산은 했는데 어디서도 그리지 않는" 죽은 출력이 된다.
     return {
       orientation: "vertical",
       caption: [],
-      columns: ["항목", "값"],
       keys: keys,
       rows: keys.map(function (k) { return [label(k), formatValue(k, rows[0][k])]; }),
+      // 재무 금액처럼 억·조 단위로 줄인 값은 원 단위 정확한 값을 잃는다 —
+      // ui.js가 AMOUNT_FIELDS 열에서 이 원본 값을 title(마우스 오버)로
+      // 보여줄 수 있도록 표시용 값과 나란히 남긴다.
+      raw: keys.map(function (k) { return cell(rows[0][k]); }),
     };
     // 세로에서는 rows[i][0]이 라벨, rows[i][1]이 값이다. 가로와 구조가
     // 다르므로 ui.js의 rcept_no 클릭 배선이 두 경우를 모두 처리해야 한다.
@@ -333,6 +323,13 @@ function tableLayout(records) {
 
   return {
     orientation: "horizontal",
+    // rcept_no가 모든 행에서 같으면(affiliates·financials 실측 — 27줄·
+    // 30줄 전부 같은 접수번호) 이 열도 여기(캡션)로 승격돼 finalKeys(표
+    // 본문 열)에서 빠진다 — ui.js가 캡션의 key로도 rcept_no를 찾아 공시
+    // 원문 패널을 열 수 있어야 한다(그러지 않으면 이 섹션들에서는 패널이
+    // 도달 불가능해진다). key를 라벨·값과 나란히 남기는 이유는 toTable이
+    // 남기던 것과 같다 — ui.js가 "이 항목이 rcept_no인가"를 한국어
+    // 라벨로 추측하지 않고 원본 키로 정확히 찾게 하기 위해서다.
     caption: promote.map(function (k) {
       return { key: k, label: label(k), value: formatValue(k, rows[0][k]) };
     }),
@@ -340,6 +337,11 @@ function tableLayout(records) {
     keys: finalKeys,
     rows: rows.map(function (r) {
       return finalKeys.map(function (k) { return formatValue(k, r[k]); });
+    }),
+    // 세로와 같은 이유(위 raw 주석 참고) — 가로는 셀마다 있으므로 rows와
+    // 같은 모양([행][열])의 원본 값 행렬이다.
+    raw: rows.map(function (r) {
+      return finalKeys.map(function (k) { return cell(r[k]); });
     }),
   };
 }
@@ -538,7 +540,7 @@ function actorLine(actor) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     LS_DART_KEY, LS_SESSION, LS_JOB, SECTION_GROUPS, formatCount,
-    nextKeysToFetch, pollDecision, toTable, toRecords, tableLayout, LABELS, label,
+    nextKeysToFetch, pollDecision, toRecords, tableLayout, LABELS, label,
     formatValue, formatAmount, AMOUNT_FIELDS, DATE_FIELDS,
     sectionBlocks, groupTitleFor, groupOrderIndex,
     ACTOR_STATUS, actorLine, resumeTarget,

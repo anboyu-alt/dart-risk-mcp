@@ -314,7 +314,7 @@ function renderHeadPlaceholder(name, message) {
  *  공시 원문과 실명이 그대로 들어오는 자리다.
  *
  *  table은 app.js의 tableLayout() 결과다 — {orientation, caption, columns,
- *  keys, rows}. caption(모든 행의 값이 같아 표 위로 올린 열)이 있으면
+ *  keys, rows, raw}. caption(모든 행의 값이 같아 표 위로 올린 열)이 있으면
  *  표 앞에 <div class="cap">로 한 번 보여준다 — 숨기는 게 아니라 145줄
  *  반복 대신 한 번만 보여주는 것이다.
  *
@@ -327,7 +327,15 @@ function renderHeadPlaceholder(name, message) {
  *  orientation이 "vertical"이면 rows[i]는 [라벨, 값] 한 쌍이고 값은
  *  rows[i][1]에 있다 — 가로(rows[i][col])와 셀 위치가 달라 rcept_no 클릭
  *  배선도 두 경우를 모두 처리해야 한다(keys[i]가 그 행이 어느 원본
- *  키인지를 알려준다). */
+ *  키인지를 알려준다).
+ *
+ *  rcept_no가 모든 행에서 같으면(affiliates·financials 실측 — 27줄·30줄
+ *  전부 같은 접수번호) tableLayout이 그 열을 caption으로 승격시켜
+ *  table.keys에서 빼버린다 — 위 rceptCol 배선만으로는 그 섹션에서 공시
+ *  원문 패널을 열 방법이 사라진다(캡션 div는 textContent만이라 클릭도
+ *  안 됐다). caption 항목의 key가 "rcept_no"면 그 값도 똑같이 클릭
+ *  가능하게 만들어, "반복 열은 캡션으로 줄인다"와 "공시 원문은 항상 열 수
+ *  있다" 두 성질을 함께 지킨다. */
 function tableEl(table) {
   const frag = document.createDocumentFragment();
 
@@ -339,7 +347,16 @@ function tableEl(table) {
       const b = document.createElement("b");
       b.textContent = c.label;
       cap.appendChild(b);
-      cap.appendChild(document.createTextNode(": " + c.value));
+      cap.appendChild(document.createTextNode(": "));
+      if (c.key === "rcept_no" && c.value) {
+        const span = document.createElement("span");
+        span.className = "doc";
+        span.textContent = c.value;
+        span.addEventListener("click", function () { openDocPanel(c.value); });
+        cap.appendChild(span);
+      } else {
+        cap.appendChild(document.createTextNode(c.value));
+      }
     });
     frag.appendChild(cap);
   }
@@ -365,6 +382,17 @@ function tableEl(table) {
       td.textContent = v;
       // 세로: keys[rowIdx]가 이 행의 원본 키다 → 값은 두 번째 칸(i===1).
       // 가로: keys[i]가 이 칸의 원본 키다 → 값은 그 칸 자신(i===열 위치).
+      const isValueCell = isVertical ? (i === 1) : true;
+      const cellKey = isVertical ? table.keys[rowIdx] : table.keys[i];
+      // 억·조 단위로 줄인 값(td.textContent)만으로는 정확한 원 단위 금액을
+      // 알 수 없다(예: 1,308,239,417 → "13.1억") — AMOUNT_FIELDS(app.js)
+      // 열이면 tableLayout()이 나란히 남긴 raw(원본 값)를 title로 붙여
+      // 마우스를 올리면 정확한 값을 볼 수 있게 한다. raw가 표시값과 같으면
+      // (반올림 없는 작은 수 등) 군더더기 툴팁을 남기지 않는다.
+      if (isValueCell && AMOUNT_FIELDS.has(cellKey) && Array.isArray(table.raw)) {
+        const raw = isVertical ? table.raw[rowIdx] : table.raw[rowIdx][i];
+        if (raw !== undefined && raw !== v) td.title = raw;
+      }
       const isDocCell = isVertical
         ? (rowIdx === rceptCol && i === 1)
         : (i === rceptCol);

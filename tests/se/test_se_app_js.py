@@ -12,6 +12,7 @@ import unittest
 
 _ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 _APP = _ROOT / "docs" / "tool" / "se" / "app.js"
+_UI = _ROOT / "docs" / "tool" / "se" / "ui.js"
 _NODE = shutil.which("node")
 
 
@@ -30,6 +31,127 @@ def run_js(expression: str):
     # 잘못 디코딩될 수 있다.
     out = subprocess.run(
         [_NODE, "-e", script], capture_output=True, text=True, encoding="utf-8"
+    )
+    if out.returncode != 0:
+        raise AssertionError(f"node 실행 실패:\n{out.stderr}")
+    return json.loads(out.stdout)
+
+
+# ── 공시 원문 패널 클릭 배선 재현용 가짜 DOM ────────────────────────────
+#
+# ui.js는 순수 함수가 아니다(document를 직접 만진다) — 그래서 위 run_js
+# (app.js만 require)로는 tableEl()의 실제 클릭 경로를 검증할 수 없다.
+# index.html이 app.js·ui.js를 각각 <script> 태그로 실어(모듈이 아니라
+# 전역 스코프를 공유) 실행하는 것과 같은 조건을 node vm으로 재현한다 —
+# 두 파일을 같은 vm 컨텍스트에서 순서대로 실행하면, ui.js가 참조하는
+# app.js의 top-level const/function(예: tableLayout, AMOUNT_FIELDS)이
+# 브라우저와 동일하게 전역에서 보인다.
+#
+# HTMLTableElement API(createTHead/createTBody/insertRow/insertCell)만
+# 최소한으로 흉내 낸 가짜 엘리먼트를 쓴다 — tableEl()이 실제로 쓰는
+# DOM 표면만 구현하면 충분하다.
+_DOC_CLICK_HARNESS = r"""
+const vm = require("vm");
+const fs = require("fs");
+
+class FakeEl {
+  constructor(tag) {
+    this.tag = tag;
+    this.children = [];
+    this._text = "";
+    this._className = "";
+    this._listeners = {};
+  }
+  appendChild(c) { this.children.push(c); return c; }
+  insertRow() { const tr = new FakeEl("tr"); this.appendChild(tr); return tr; }
+  insertCell() { const td = new FakeEl("td"); this.appendChild(td); return td; }
+  createTHead() { const el = new FakeEl("thead"); this.appendChild(el); return el; }
+  createTBody() { const el = new FakeEl("tbody"); this.appendChild(el); return el; }
+  addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); }
+  dispatch(type) { (this._listeners[type] || []).forEach(function (fn) { fn({}); }); }
+  set textContent(v) { this._text = String(v); this.children = []; }
+  get textContent() { return this._text; }
+  set className(v) { this._className = v; }
+  get className() { return this._className; }
+}
+
+function collectDocEls(node, out) {
+  out = out || [];
+  if (!node) return out;
+  if (node.className === "doc") out.push(node);
+  (node.children || []).forEach(function (c) { collectDocEls(c, out); });
+  return out;
+}
+
+function collectCells(node, out) {
+  out = out || [];
+  if (!node) return out;
+  if (node.tag === "td") out.push({ text: node.textContent, title: node.title || null });
+  (node.children || []).forEach(function (c) { collectCells(c, out); });
+  return out;
+}
+
+const sandbox = {
+  console: console,
+  document: {
+    createElement: function (tag) { return new FakeEl(tag); },
+    createDocumentFragment: function () { return new FakeEl("#fragment"); },
+    createTextNode: function (t) { const n = new FakeEl("#text"); n.textContent = t; return n; },
+    addEventListener: function () {},
+    getElementById: function () { return null; },
+  },
+  localStorage: {
+    getItem: function () { return null; },
+    setItem: function () {},
+    removeItem: function () {},
+  },
+  fetch: function () { return Promise.reject(new Error("no network in test")); },
+};
+vm.createContext(sandbox);
+// node -e "script" arg1 arg2 는 argv를 [node실행파일, arg1, arg2]로 채운다
+// ("eval" 자리표시자가 없다 — node -e "console.log(process.argv)" a b로
+// 직접 확인함). 그래서 인덱스가 1·2다(스크립트 파일을 직접 실행할 때의
+// 2·3과 다르다).
+new vm.Script(fs.readFileSync(process.argv[1], "utf-8"), { filename: "app.js" }).runInContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).runInContext(sandbox);
+
+// ui.js가 정의한 실제 openDocPanel을 캡처용으로 바꿔치기한다 — tableEl()
+// 안의 호출은 이름으로 전역을 다시 찾아가므로(클로저로 미리 굳지 않는다),
+// 스크립트 실행 뒤에 덮어써도 클릭 시점에는 이 스파이가 불린다.
+const CAPTURED = [];
+sandbox.openDocPanel = function (rceptNo) { CAPTURED.push(rceptNo); };
+
+const records = %(records)s;
+const table = sandbox.tableLayout(records);
+const frag = table ? sandbox.tableEl(table) : null;
+const docEls = frag ? collectDocEls(frag, []) : [];
+docEls.forEach(function (e) { e.dispatch("click"); });
+
+process.stdout.write(JSON.stringify({
+  orientation: table ? table.orientation : null,
+  caption: table ? table.caption : null,
+  docTexts: docEls.map(function (e) { return e.textContent; }),
+  captured: CAPTURED,
+  cells: frag ? collectCells(frag, []) : [],
+}));
+"""
+
+
+def run_doc_click(records_js: str):
+    """records_js(레코드 배열 JS 리터럴)를 tableLayout → tableEl로 그린 뒤,
+    class="doc"인 모든 엘리먼트를 실제로 클릭해(이벤트 리스너를 호출해)
+    openDocPanel이 어떤 인자로 몇 번 불렸는지를 돌려준다.
+
+    문자열 존재 검사(예: 소스에 "openDocPanel(" 이 있는지)가 아니라, 표를
+    실제로 렌더링하고 실제 클릭 이벤트를 발생시켜 그 결과를 확인한다 —
+    "가로에서는 rcept_no 열이 있지만 캡션으로 승격되면 클릭 경로 자체가
+    사라진다" 같은 배선 유실은 문자열 검사로는 못 잡는다(이번에 실제로
+    그렇게 통과해버린 사고였다).
+    """
+    script = _DOC_CLICK_HARNESS % {"records": records_js}
+    out = subprocess.run(
+        [_NODE, "-e", script, str(_APP), str(_UI)],
+        capture_output=True, text=True, encoding="utf-8",
     )
     if out.returncode != 0:
         raise AssertionError(f"node 실행 실패:\n{out.stderr}")
@@ -139,94 +261,108 @@ class TestStage1KeysHaveLabels(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
-class TestToTable(unittest.TestCase):
-    def test_list_of_records_becomes_rows(self):
-        got = run_js('toTable([{a:1,b:2},{a:3,b:4}])')
-        self.assertEqual(got["rows"], [["1", "2"], ["3", "4"]])
+class TestToRecords(unittest.TestCase):
+    """toTable을 지우면서(사용처가 없는 죽은 함수였다 — 대체한 tableLayout이
+    실제로 화면을 그린다) toRecords 자체의 정규화 계약은 이 클래스가 직접
+    검증한다. "표로 만들 근거가 없을 때만 null, 스칼라·리스트는 감싸서
+    보존" 원칙은 toRecords가 여전히 지켜야 한다 — sectionBlocks가 그대로
+    의존한다.
+    """
+
+    def test_empty_value_is_null(self):
+        for expr in ("toRecords([])", "toRecords(null)", "toRecords(undefined)"):
+            self.assertIsNone(run_js(expr), f"{expr}가 레코드를 만들었습니다")
+
+    def test_empty_dict_becomes_one_field_less_record_not_null(self):
+        """toRecords({})는 null이 아니라 [{}]다 — "표로 만들 근거가
+        없다"(빈 키)는 판정은 이 함수의 몫이 아니라 그 위(tableLayout의
+        `keys.length === 0` 가드)의 몫이다. toRecords는 그저 감싸기만
+        한다."""
+        self.assertEqual(run_js('toRecords({})'), [{}])
+        self.assertIsNone(run_js('tableLayout(toRecords({}))'),
+                          "빈 객체는 tableLayout 단계에서 표로 만들 근거가 "
+                          "없어야 합니다")
+
+    def test_single_dict_becomes_one_record(self):
+        self.assertEqual(run_js('toRecords({a:1})'), [{"a": 1}])
+
+    def test_scalar_string_value_is_wrapped_not_dropped(self):
+        """toRecords("문자열")이 null이면 화면은 "표시할 데이터가
+        없습니다"라고 말한다 — 데이터가 있는데 없다고 하는 것이다."""
+        self.assertEqual(run_js('toRecords("어떤 문자열")'), [{"값": "어떤 문자열"}])
+
+    def test_list_of_scalars_is_wrapped_item_by_item(self):
+        self.assertEqual(run_js('toRecords(["a","b"])'), [{"값": "a"}, {"값": "b"}])
+
+    def test_non_object_list_items_are_wrapped_not_dropped(self):
+        got = run_js('toRecords([{a:1},"note",{b:2}])')
+        self.assertEqual(got, [{"a": 1}, {"값": "note"}, {"b": 2}])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestTableLayoutPreservesData(unittest.TestCase):
+    """toTable을 지우면서 그 계약(모르는 필드를 숨기지 않는다·0과 false를
+    잃지 않는다·중첩 객체가 사라지지 않는다·프로토타입 키가 열을 오염시키지
+    않는다)을 tableLayout 기준으로 이식한다 — toTable은 프로덕션 소비처가
+    0개인 죽은 함수였고, 그 성질을 실제로 화면을 그리는 tableLayout이
+    지켜야 의미가 있다(리뷰 지적 ③).
+
+    아래 테스트는 모두 레코드 2건 이상을 써서 가로(horizontal) 경로를
+    탄다 — 1건은 세로로 빠져 columns/caption 승격 로직 자체를 타지 않는다.
+    """
 
     def test_columns_union_covers_ragged_records(self):
         """레코드마다 필드가 다를 수 있다. 어느 것도 사라지면 안 된다."""
-        got = run_js('toTable([{a:1},{b:2}])')
-        self.assertEqual(sorted(got["columns"]), ["a", "b"])
+        got = run_js('tableLayout([{a:1},{b:2}])')
+        self.assertEqual(sorted(got["keys"]), ["a", "b"])
 
-    def test_unknown_field_keeps_raw_key_as_header(self):
+    def test_unknown_field_keeps_raw_key_in_keys_and_columns(self):
         """라벨이 없다고 열을 숨기면 데이터가 조용히 사라진다."""
-        got = run_js('toTable([{wholly_unknown_field: "x"}])')
+        got = run_js('tableLayout([{wholly_unknown_field:"x"},{wholly_unknown_field:"y"}])')
+        self.assertIn("wholly_unknown_field", got["keys"])
         self.assertIn("wholly_unknown_field", got["columns"])
 
-    def test_known_field_uses_korean_label(self):
-        got = run_js('toTable([{rcept_no: "20240301000001"}])')
-        self.assertIn("접수번호", got["columns"])
-
-    def test_single_dict_becomes_one_row(self):
-        got = run_js('toTable({a:1})')
-        self.assertEqual(got["rows"], [["1"]])
-
-    def test_empty_value_is_null(self):
-        for expr in ("toTable([])", "toTable(null)", "toTable({})"):
-            self.assertIsNone(run_js(expr), f"{expr}가 표를 만들었습니다")
-
-    def test_nested_value_is_stringified_not_dropped(self):
-        got = run_js('toTable([{x: {deep: 1}}])')
-        self.assertNotEqual(got["rows"][0][0], "")
-
-    def test_null_cell_becomes_empty_string_not_the_word_null(self):
-        got = run_js('toTable([{a: null}])')
-        self.assertEqual(got["rows"][0][0], "")
-
-    def test_zero_and_false_are_not_blanked(self):
-        """0과 false는 '없음'이 아니라 유효한 값이다.
-
-        cell()을 `v ? String(v) : ""` 같은 truthy 체크로 바꾸면 0과 false가
-        빈 칸이 된다 — 이 테스트가 그 회귀를 잡아야 한다.
-        """
-        got = run_js('toTable([{a: 0, b: false}])')
-        self.assertEqual(got["rows"], [["0", "false"]])
-
-    def test_non_object_list_items_are_not_dropped(self):
-        """리스트 안 비객체 항목(문자열 등)이 흔적 없이 사라지면 안 된다.
-
-        toTable([{a:1},"note",{b:2}])는 레코드 3개인데 예전엔 2행이 됐다
-        (문자열 항목이 필터링으로 사라짐).
-        """
-        got = run_js('toTable([{a:1},"note",{b:2}])')
-        self.assertEqual(len(got["rows"]), 3, "비객체 항목이 사라졌습니다")
-        flat = [cell for row in got["rows"] for cell in row]
-        self.assertIn("note", flat, "문자열 항목의 내용이 화면 어디에도 없습니다")
-
-    def test_scalar_string_value_is_not_null(self):
-        """toTable("문자열")이 null이면 화면은 '표시할 데이터가 없습니다'라고
-        말한다 — 데이터가 있는데 없다고 하는 것이다.
-        """
-        got = run_js('toTable("어떤 문자열")')
-        self.assertIsNotNone(got)
-        flat = [cell for row in got["rows"] for cell in row]
-        self.assertIn("어떤 문자열", flat)
-
-    def test_list_of_scalars_is_not_null(self):
-        got = run_js('toTable(["a","b"])')
-        self.assertIsNotNone(got)
-        flat = [cell for row in got["rows"] for cell in row]
-        self.assertEqual(sorted(flat), ["a", "b"])
-
-    def test_keys_carries_the_raw_field_names_in_column_order(self):
+    def test_keys_carry_raw_field_names_in_column_order(self):
         """columns는 한국어 라벨(사람이 읽는 값)이고, keys는 라벨링 이전의
         원본 필드명이어야 한다 — ui.js의 tableEl()이 "이 열이 rcept_no인가"를
-        라벨("접수번호")로 추측하지 않고 keys로 정확히 찾기 때문이다.
-
-        toTable()이 keys를 빠뜨리면(예: columns만 돌려주도록 리팩터링)
-        tableEl()의 `Array.isArray(table.keys) ? table.keys.indexOf(...) : -1`
-        가드가 -1로 떨어져 rcept_no 열을 못 찾고, 공시 원문 패널이 다시
-        도달 불가능해진다 — 정적 검사도 다른 node 테스트도 이 배선 유실을
-        못 잡는다.
+        라벨("접수번호")로 추측하지 않고 keys로 정확히 찾기 때문이다(TestDocPanelClickWiring
+        참고 — 실제 클릭 경로로 다시 확인한다).
         """
-        got = run_js('toTable([{rcept_dt: "20240301", rcept_no: "20240301000001"}])')
+        got = run_js(
+            'tableLayout([{rcept_dt:"20240301",rcept_no:"20240301000001"},'
+            ' {rcept_dt:"20240302",rcept_no:"20240301000002"}])'
+        )
         self.assertEqual(got["keys"], ["rcept_dt", "rcept_no"])
-        self.assertEqual(got["keys"][1], "rcept_no",
-                         "keys[1]이 라벨이 아니라 원본 키 'rcept_no'여야 합니다")
-        # columns는 라벨(한국어)이어야 하고, keys와 순서가 같아야(라벨↔원본
-        # 키 대응이 어긋나지 않아야) tableEl()의 인덱스 매칭이 맞는다.
         self.assertEqual(got["columns"], ["접수일자", "접수번호"])
+
+    def test_nested_value_is_stringified_not_dropped(self):
+        got = run_js('tableLayout([{x:{deep:1}},{x:{deep:2}}])')
+        flat = [c for r in got["rows"] for c in r]
+        self.assertTrue(any("deep" in c for c in flat), "중첩 객체가 사라졌습니다")
+
+    def test_null_cell_becomes_empty_string_not_the_word_null(self):
+        got = run_js('tableLayout([{a:null},{a:1}])')
+        flat = [c for r in got["rows"] for c in r]
+        self.assertIn("", flat)
+        self.assertNotIn("null", flat)
+
+    def test_zero_and_false_are_not_blanked(self):
+        """0과 false는 '없음'이 아니라 유효한 값이다."""
+        got = run_js('tableLayout([{a:0,b:false},{a:1,b:true}])')
+        flat = [c for r in got["rows"] for c in r]
+        self.assertIn("0", flat)
+        self.assertIn("false", flat)
+
+    def test_non_object_list_items_are_not_dropped(self):
+        """리스트 안 비객체 항목(문자열 등)이 흔적 없이 사라지면 안 된다 —
+        toRecords로 미리 감싸지 않고 tableLayout에 배열을 바로 넘겨도
+        (④ 수정: 방어가 호출부가 아니라 tableLayout 자신의 계약이다)
+        살아남아야 한다.
+        """
+        got = run_js('tableLayout([{a:1},"note",{a:2}])')
+        self.assertEqual(len(got["rows"]), 3, "비객체 항목이 사라졌습니다")
+        flat = [c for r in got["rows"] for c in r]
+        self.assertIn("note", flat, "문자열 항목의 내용이 화면 어디에도 없습니다")
 
     def test_label_lookup_ignores_prototype_keys(self):
         """LABELS가 프로토타입이 있는 일반 객체면 "toString"·"constructor"
@@ -234,10 +370,30 @@ class TestToTable(unittest.TestCase):
         객체가 되고(JSON 직렬화 시 배열 안 함수는 null이 된다), 실제로
         확인된 버그다.
         """
-        got = run_js('toTable([{toString: "x", constructor: "y"}])')
+        got = run_js(
+            'tableLayout([{toString:"x",constructor:"y"},{toString:"a",constructor:"b"}])'
+        )
         self.assertIn("toString", got["columns"])
         self.assertIn("constructor", got["columns"])
         self.assertNotIn(None, got["columns"], "헤더가 함수로 새어나갔습니다")
+
+    def test_raw_amount_value_is_carried_alongside_the_formatted_value(self):
+        """AMOUNT_FIELDS(app.js)는 억·조 단위로 줄여 보여준다(예:
+        1,308,239,417 → "13.1억") — ui.js가 title(마우스 오버)로 정확한
+        원 단위 값을 보여주려면(리뷰 지적 ⑤) raw가 표시값과 나란히 있어야
+        한다.
+        """
+        got = run_js('tableLayout([{plan_amount:1308239417},{plan_amount:1}])')
+        flat_raw = [c for r in got["raw"] for c in r]
+        self.assertIn("1308239417", flat_raw)
+
+    def test_vertical_raw_is_a_flat_array_indexed_like_keys(self):
+        """세로는 레코드 1건이라 raw도 rows처럼 2차원이 아니라 keys와 같은
+        길이의 1차원 배열이다 — ui.js가 orientation으로 분기해 인덱싱한다.
+        """
+        got = run_js('tableLayout([{plan_amount:1308239417}])')
+        idx = got["keys"].index("plan_amount")
+        self.assertEqual(got["raw"][idx], "1308239417")
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
@@ -654,6 +810,119 @@ class TestFormatValue(unittest.TestCase):
         명확해야 한다."""
         self.assertEqual(run_js('formatValue("plan_amount", 999995000000)'), "1조")
         self.assertEqual(run_js('formatValue("plan_amount", 999994999999)'), "9999.9억")
+
+    def test_empty_array_reads_as_none_not_bracket_literal(self):
+        """fund_usage의 flags: []가 캡션에 "이상 표시: []"로 뜨던 문제
+        (리뷰 지적 ⑥) — 빈 배열은 "없음"으로 명확히 말해야 한다."""
+        self.assertEqual(run_js('formatValue("flags", [])'), "없음")
+
+    def test_non_empty_array_of_strings_reads_as_comma_joined(self):
+        """JSON.stringify(["a","b"]) === '["a","b"]'는 대괄호·따옴표가
+        섞여 사람이 읽기 불편하다 — 쉼표로 이어 붙인다."""
+        self.assertEqual(
+            run_js('formatValue("flags", ["FUND_DIVERSION","FUND_UNREPORTED"])'),
+            "FUND_DIVERSION, FUND_UNREPORTED",
+        )
+
+    def test_array_of_objects_keeps_each_item_as_json(self):
+        """배열 원소가 객체면 그 원소만 JSON으로 남긴다 — 배열 자체를
+        문자열 하나로 뭉개 원소 경계를 잃지 않는다."""
+        got = run_js('formatValue("x", [{"a":1},{"b":2}])')
+        self.assertIn('"a":1', got.replace(" ", ""))
+        self.assertIn('"b":2', got.replace(" ", ""))
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 클릭 배선을 검증할 수 없습니다")
+class TestDocPanelClickWiring(unittest.TestCase):
+    """공시 원문 패널은 rcept_no 셀 클릭에서만 열려야 한다(브리프 ①·②).
+
+    이전 정적 검사(test_se_page_assets.py의
+    test_open_doc_panel_is_wired_from_the_rcept_no_cell)는 tableEl 본문에
+    "rcept_no"·"openDocPanel(" 문자열이 있는지만 봤다 — 그래서 캡션 승격이
+    실제로 배선을 끊었는데도(affiliates·financials는 rcept_no가 상수열이라
+    캡션으로 승격되고, 캡션 div는 예전엔 textContent만이라 클릭이 안 됐다)
+    계속 초록이었다. 여기서는 app.js·ui.js를 node vm 가짜 DOM에 실제로
+    실행해 tableLayout → tableEl → 클릭 이벤트까지 전체 경로를 재현한다.
+    """
+
+    def test_horizontal_table_rcept_no_column_is_clickable(self):
+        """rcept_no가 행마다 달라 표 본문 열로 남는 일반적인 경우다."""
+        got = run_doc_click(
+            '[{rcept_no:"20260101000001",n:1},{rcept_no:"20260102000002",n:2}]'
+        )
+        self.assertEqual(got["orientation"], "horizontal")
+        self.assertEqual(sorted(got["captured"]),
+                         ["20260101000001", "20260102000002"])
+
+    def test_vertical_table_rcept_no_row_is_clickable(self):
+        """레코드 1건(예: indicators)이면 세로 — rows[i]가 [라벨, 값]이라
+        가로와 셀 위치가 달라 배선을 따로 확인해야 한다(브리프 ②: "세로
+        표의 rcept_no 배선에는 커밋된 테스트가 0건이었다")."""
+        got = run_doc_click('[{rcept_no:"20260724000552",n:1}]')
+        self.assertEqual(got["orientation"], "vertical")
+        self.assertEqual(got["captured"], ["20260724000552"])
+
+    def test_constant_rcept_no_promoted_to_caption_is_still_clickable(self):
+        """affiliates(27줄)·financials(30줄) 실측 — rcept_no가 모든 행에서
+        같아 tableLayout이 이 열을 표 본문(keys)에서 빼 캡션으로 올린다.
+        이 경우에도 공시 원문 패널을 열 수 있어야 한다(브리프 ①, Critical)
+        — 안 그러면 이 두 섹션에서는 패널에 도달할 방법 자체가 없어진다.
+        """
+        got = run_doc_click(
+            '[{rcept_no:"20260715900769",corp_name:"엔켐",inv_prm:"A"},'
+            ' {rcept_no:"20260715900769",corp_name:"엔켐",inv_prm:"B"}]'
+        )
+        self.assertEqual(got["orientation"], "horizontal")
+        caption_keys = [c["key"] for c in got["caption"]]
+        self.assertIn("rcept_no", caption_keys,
+                     "이 테스트 자체가 재현하려는 전제(rcept_no가 상수라 "
+                     "캡션으로 승격됨)가 깨졌습니다")
+        self.assertEqual(
+            got["captured"], ["20260715900769"],
+            "rcept_no가 캡션으로 승격된 표에서는 공시 원문 패널을 열 "
+            "방법이 없습니다 — 캡션 값 자체가 클릭 가능해야 합니다",
+        )
+
+    def test_no_rcept_no_field_means_nothing_is_clickable(self):
+        """rcept_no가 아예 없는 표에서는 아무 셀도 클릭 가능해선 안 된다 —
+        확인되지 않은 다른 필드(공시 제목 등)를 추측해 클릭 가능하게
+        만들면 안 된다는 계약의 반대쪽 확인이다."""
+        got = run_doc_click('[{corp_name:"엔켐",n:1},{corp_name:"엔켐",n:2}]')
+        self.assertEqual(got["captured"], [])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestAmountCellTitleTooltip(unittest.TestCase):
+    """리뷰 지적 ⑤: 억·조 단위로 줄인 금액(예: 1,308,239,417 → "13.1억")은
+    정확한 원 단위 값을 화면 어디서도 볼 수 없었다. AMOUNT_FIELDS(app.js)
+    열의 셀에 title(마우스 오버) 속성으로 원본 값을 남기는지를 실제 렌더
+    결과로 확인한다.
+    """
+
+    def test_horizontal_amount_cell_carries_raw_value_as_title(self):
+        got = run_doc_click('[{plan_amount:1308239417,n:1},{plan_amount:4500,n:2}]')
+        titled = {c["text"]: c["title"] for c in got["cells"] if c["title"]}
+        self.assertEqual(titled.get("13.1억"), "1308239417")
+        self.assertEqual(titled.get("4,500"), "4500")
+
+    def test_vertical_amount_cell_carries_raw_value_as_title(self):
+        got = run_doc_click('[{plan_amount:1308239417}]')
+        titled = {c["text"]: c["title"] for c in got["cells"] if c["title"]}
+        self.assertEqual(titled.get("13.1억"), "1308239417")
+
+    def test_non_amount_field_gets_no_title(self):
+        """AMOUNT_FIELDS가 아닌 열에 title을 붙이면 툴팁이 무의미하게
+        남발된다 — 값이 큰 수라도(예: n) 붙지 않아야 한다."""
+        got = run_doc_click('[{n:1308239417,n2:1},{n:1,n2:2}]')
+        self.assertTrue(all(c["title"] is None for c in got["cells"]))
+
+    def test_label_column_in_vertical_table_gets_no_title(self):
+        """세로 표의 라벨 칸("계획 금액")은 값 칸이 아니다 — title이 붙으면
+        안 된다."""
+        got = run_doc_click('[{plan_amount:1308239417}]')
+        label_cells = [c for c in got["cells"] if c["text"] == "계획 금액"]
+        self.assertTrue(label_cells)
+        self.assertTrue(all(c["title"] is None for c in label_cells))
 
 
 if __name__ == "__main__":
