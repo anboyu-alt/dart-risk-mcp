@@ -255,8 +255,20 @@ function formatValue(key, value) {
   if (AMOUNT_FIELDS.has(key) && /^-?[\d,]*\d$/.test(s)) {
     return formatAmount(s.replace(/,/g, ""));
   }
-  if (DATE_FIELDS.has(key) && /^\d{8}$/.test(s)) {
-    return s.slice(0, 4) + "." + s.slice(4, 6) + "." + s.slice(6, 8);
+  if (DATE_FIELDS.has(key)) {
+    if (/^\d{8}$/.test(s)) {
+      return s.slice(0, 4) + "." + s.slice(4, 6) + "." + s.slice(6, 8);
+    }
+    // insider_timeline의 rcept_dt 실측(field-inventory)은 "2026-04-15"처럼
+    // 하이픈이 있는 10자 문자열이다. 이전에는 8자리 숫자 분기만 있어 이
+    // 형태가 그대로(하이픈인 채) 표에 남았는데, 같은 값을 축 라벨로 쓰는
+    // 차트(axisLabel)는 하이픈도 "."으로 바꾸므로 표와 차트가 같은 값을
+    // 두 가지 표기로 보여줬다(리뷰 지적 ③). axisLabel과 같은 정규식·같은
+    // 변환으로 맞춘다 — 표기를 하나로 통일하는 것이지 새 규칙을 만드는
+    // 것이 아니다.
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      return s.replace(/-/g, ".");
+    }
   }
   return s;
 }
@@ -940,9 +952,20 @@ const CHART_SPECS = Object.assign(Object.create(null), {
     // scales.x.type으로 그대로 쓴다.
     xScale: "category",
   },
+  // fetch_fund_usage(dart_client.py)는 연도(bsns_year) × 보고서코드 4종
+  // (11011 사업·11012 반기·11013 1분기·11014 3분기)을 루프 돌며 모으므로
+  // **같은 회차(tm)가 보고 시점마다 반복 수집된다** — 정규화된 레코드에는
+  // reprt_code가 남지 않지만 year(그 루프의 bsns_year)는 남는다. x를
+  // tm 하나로만 잡으면 같은 회차의 서로 다른 연도 보고(예: 2024년 보고
+  // 50억 vs 2025년 보고 130.8억, 실제 회귀 사례)가 한 x축 점에서 뒤
+  // 레코드가 앞을 조용히 덮어 표(같은 회차 두 행을 그대로 보여준다)와
+  // 다른 값을 말하게 된다(리뷰 지적 ①). compositeXFields로 x를
+  // "회차 (연도)" 형태로 쪼개면 두 보고가 서로 다른 x축 점이 되어 값이
+  // 사라지지 않는다 — year가 없는 레코드(예: 테스트 픽스처)는
+  // compositeXValue가 tm 하나로 자연히 폴백한다.
   fund_usage: {
-    kind: "bar", title: "자금 사용 — 계획 대비 실제",
-    x: "tm", yLabel: "금액", xScale: "category",
+    kind: "bar", title: "자금 사용 — 계획 대비 실제 (회차·보고연도별)",
+    x: "tm", compositeXFields: ["tm", "year"], yLabel: "금액", xScale: "category",
     series: [
       { key: "plan_amount", label: "계획 금액" },
       { key: "real_dtls_amount", label: "실제 집행 금액" },
@@ -1068,6 +1091,31 @@ function monthlyCounts(rows, field) {
   return order.map(function (m) { return { month: m, count: counts.get(m) }; });
 }
 
+/** row에서 fields의 값들을 이어 x축 표시용 문자열 하나로 합친다.
+ *
+ *  fund_usage처럼 한 필드(tm=회차)만으로는 서로 다른 레코드를 구분하지
+ *  못할 때 쓴다(위 CHART_SPECS.fund_usage 주석 참고, 리뷰 지적 ①). 비어
+ *  있는 필드는 건너뛴다 — year가 없는 레코드(테스트 픽스처 등)에서는
+ *  자연히 tm 하나만 남아 이전 동작과 같아진다. 값이 하나도 없으면(모든
+ *  필드가 비어 있으면) null — chartData의 기존 "축 값 없으면 건너뛴다"
+ *  처리에 그대로 흡수된다.
+ *
+ *  "제14회 (2025)" 형태로 만든다 — axisSortKey는 문자가 아니라 문자열에
+ *  포함된 숫자만 이어붙여 정렬 기준을 삼으므로("제14회 (2025)" →
+ *  "142025"), year가 언제나 4자리인 한(달력 연도라 사실상 항상 그렇다)
+ *  이 값은 정확히 "회차*10000+연도"와 같아 회차가 먼저, 같은 회차 안에서는
+ *  연도가 나중 기준으로 정렬된다 — 별도 비교 함수를 새로 만들 필요가 없다.
+ */
+function compositeXValue(row, fields) {
+  const parts = fields
+    .map(function (f) { return row[f]; })
+    .filter(function (v) { return v !== null && v !== undefined && v !== ""; })
+    .map(String);
+  if (parts.length === 0) return null;
+  if (parts.length === 1) return parts[0];
+  return parts[0] + " (" + parts.slice(1).join(", ") + ")";
+}
+
 /** 레코드 목록을 Chart.js가 받는 형태로 바꾼다. 그릴 게 없으면 null. */
 function chartData(records, spec) {
   if (!Array.isArray(records) || records.length === 0 || !spec) return null;
@@ -1086,6 +1134,21 @@ function chartData(records, spec) {
       x: "month",
       series: [{ key: "count", label: spec.yLabel || "건수" }],
     });
+  }
+
+  if (spec.compositeXFields) {
+    // fund_usage(리뷰 지적 ①) — x 하나(tm)만으로는 같은 회차의 서로 다른
+    // 보고 시점을 구분하지 못해 뒤 레코드가 앞을 덮는다. __composite_x를
+    // 만들어 spec.x를 그쪽으로 돌린다 — 아래 xs 구성·series/groupBy 분기는
+    // 손대지 않고 그대로 재사용한다(새 렌더 분기를 만들지 않는다, 다른
+    // monthlyCountOf 처리와 같은 방식).
+    const fields = spec.compositeXFields;
+    rows = rows.map(function (r) {
+      const copy = Object.assign({}, r);
+      copy.__composite_x = compositeXValue(r, fields);
+      return copy;
+    });
+    spec = Object.assign({}, spec, { x: "__composite_x" });
   }
 
   const xs = [];
@@ -1184,6 +1247,6 @@ if (typeof module !== "undefined" && module.exports) {
     dropAllEmptyColumns, recordsHaveSourceField, sourceGroupedBlocks,
     DOC_LIST_KEY, docKeyRceptNo, docListRow,
     CHART_SPECS, chartData, axisLabel, numeric, axisSortKey,
-    normalizeDebtByKind, monthlyCounts,
+    normalizeDebtByKind, monthlyCounts, compositeXValue,
   };
 }

@@ -255,6 +255,12 @@ function renderChart(wrap, key, records) {
 
   const canvas = document.createElement("canvas");
   canvas.className = "chart-canvas";
+  // canvas 안의 그림은 스크린 리더가 읽지 못한다 — role="img" + aria-label로
+  // 최소한 "무슨 차트인지"는 전달한다(리뷰 지적 ⑤). 정확한 값은 어차피
+  // 표(같은 wrap 안, 이 canvas 바로 아래)가 텍스트로 책임진다 — 여기서는
+  // 차트의 존재와 제목만 알리면 된다.
+  canvas.setAttribute("role", "img");
+  canvas.setAttribute("aria-label", spec.title || label(key));
   const table = typeof wrap.querySelector === "function" ? wrap.querySelector("table") : null;
   if (table && typeof wrap.insertBefore === "function") {
     wrap.insertBefore(canvas, table);
@@ -323,6 +329,43 @@ function repaintCharts() {
     }
     if (typeof chart.update === "function") chart.update();
   }
+}
+
+/** node 서브트리 안의 canvas 엘리먼트를 전부 모은다(재귀). 실제 브라우저
+ *  DOM(tagName)과 이 파일이 함께 실행되는 가짜 DOM 테스트(tag) 양쪽을
+ *  모두 지원한다 — querySelectorAll("canvas")에 기대지 않는 이유는
+ *  FakeEl(테스트 하네스)이 "table" 선택자만 흉내 내기 때문이다. */
+function collectCanvasesIn(node, out) {
+  out = out || [];
+  if (!node) return out;
+  const tag = node.tag || (node.tagName ? node.tagName.toLowerCase() : "");
+  if (tag === "canvas") out.push(node);
+  const kids = node.children;
+  if (kids) for (let i = 0; i < kids.length; i++) collectCanvasesIn(kids[i], out);
+  return out;
+}
+
+/** node 서브트리 안의 canvas에 연결된 Chart 인스턴스를 destroy()하고
+ *  CHART_INSTANCES에서 뺀다.
+ *
+ *  renderSection이 섹션을 다시 그릴 때(같은 key로 두 번째 이후 호출)
+ *  holder를 비우기 직전에 부른다 — holder.removeChild는 DOM에서만
+ *  canvas를 떼어낼 뿐, 그 canvas로 만든 Chart.js 인스턴스(내부 이벤트
+ *  리스너·캔버스 컨텍스트를 쥐고 있다)는 CHART_INSTANCES에 그대로
+ *  남는다(리뷰 지적 ④) — showGate()의 resetCharts()는 회사를 바꾸거나
+ *  로그아웃할 때만 불리므로, 같은 회사 안에서 같은 섹션이 다시 그려지는
+ *  경로는 이 함수가 없으면 정리되지 않는다. */
+function pruneChartsIn(node) {
+  const canvases = collectCanvasesIn(node, []);
+  if (canvases.length === 0 || CHART_INSTANCES.length === 0) return;
+  const stale = new Set(canvases);
+  CHART_INSTANCES = CHART_INSTANCES.filter(function (c) {
+    if (!c || !stale.has(c.canvas)) return true;
+    if (typeof c.destroy === "function") {
+      try { c.destroy(); } catch (e) { /* 정리 실패로 나머지 정리까지 막지 않는다 */ }
+    }
+    return false;
+  });
 }
 
 // ── 좌측 목차 ─────────────────────────────────────────────────────
@@ -891,6 +934,10 @@ function blockEl(block) {
  *  표로 나눠 그린다. */
 function renderSection(key, value) {
   const holder = sectionHolder(key);
+  // holder를 비우기 전에, 그 안에 남아 있는 canvas의 Chart 인스턴스를
+  // 먼저 정리한다(리뷰 지적 ④) — removeChild만으로는 DOM에서 canvas가
+  // 사라질 뿐 CHART_INSTANCES의 참조는 그대로 남는다.
+  pruneChartsIn(holder);
   while (holder.firstChild) holder.removeChild(holder.firstChild);
 
   const blocks = sectionBlocks(value, 0, key);

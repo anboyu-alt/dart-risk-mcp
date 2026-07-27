@@ -1332,6 +1332,13 @@ class TestFormatValue(unittest.TestCase):
     def test_yyyymmdd_becomes_dotted_date(self):
         self.assertEqual(run_js('formatValue("rcept_dt", "20260724")'), "2026.07.24")
 
+    def test_hyphenated_iso_date_becomes_dotted_too(self):
+        """리뷰 지적 ③: insider_timeline의 rcept_dt 실측(field-inventory)은
+        "2026-04-15"처럼 하이픈이 있는 형태다. 차트 축(axisLabel)은 이미
+        이 형태를 "."으로 바꾸는데 표(formatValue)가 8자리 숫자만 처리하면
+        표는 하이픈 그대로, 차트는 점 표기로 같은 값을 두 가지로 보여준다."""
+        self.assertEqual(run_js('formatValue("rcept_dt", "2026-04-15")'), "2026.04.15")
+
     def test_rcept_no_is_never_reformatted_as_a_date(self):
         """접수번호는 14자리 숫자다. 날짜로 오인하면 안 된다."""
         self.assertEqual(run_js('formatValue("rcept_no", "20260724000552")'),
@@ -3324,6 +3331,36 @@ class TestChartData(unittest.TestCase):
         self.assertIsNotNone(got, "실값이 null에 덮여 차트 전체가 사라졌습니다")
         self.assertEqual(got["datasets"][0]["data"], [5])
 
+    def test_same_round_different_report_year_does_not_blank_the_other(self):
+        """리뷰 지적 ①의 정확한 재현: fetch_fund_usage(dart_client.py)는
+        연도(bsns_year) × 보고서코드 4종을 루프 돌아 **같은 회차가 보고
+        시점마다 반복 수집된다**. 실측 사례: 제14회 실제집행이 2024년
+        보고에는 50억, 2025년 보고에는 130.8억으로 서로 다르다. 이전에는
+        x가 tm 하나뿐이라 뒤 레코드(2025년 보고)가 앞(2024년 보고)을
+        조용히 덮어 차트에는 130.8억만 남았다 — 표는 두 행을 그대로
+        보여주므로 차트와 표가 다른 값을 말하게 됐다. compositeXFields가
+        tm과 year를 함께 x로 묶어 두 보고를 별도 x축 점으로 남긴다."""
+        got = run_js('''chartData([
+          {tm:"제14회", year:2024, plan_amount:"5000000000", real_dtls_amount:"5000000000"},
+          {tm:"제14회", year:2025, plan_amount:"5000000000", real_dtls_amount:"13080000000"}
+        ], CHART_SPECS.fund_usage)''')
+        self.assertEqual(len(got["labels"]), 2,
+                         "같은 회차의 서로 다른 보고연도 값이 하나로 뭉개졌습니다")
+        real = next(d for d in got["datasets"] if d["label"] == "실제 집행 금액")
+        self.assertEqual(sorted(real["data"]), [5000000000, 13080000000],
+                         "값이 있는 레코드가 다른 값이 있는 레코드에 덮였습니다")
+
+    def test_composite_x_falls_back_to_the_single_field_when_the_others_are_absent(self):
+        """year 필드가 없는(테스트 픽스처·구 데이터 등) 레코드에서는
+        compositeXFields가 tm 하나로 자연히 폴백해야 한다 — 기존
+        회차 정렬 동작(test_round_numbers_with_korean_suffix_sort_
+        correctly_even_out_of_order 등)을 이 변경이 깨면 안 된다."""
+        got = run_js('''chartData([
+          {tm:"제10회", plan_amount:"1", real_dtls_amount:"1"},
+          {tm:"제9회",  plan_amount:"2", real_dtls_amount:"2"}
+        ], CHART_SPECS.fund_usage)''')
+        self.assertEqual(got["labels"], ["제9회", "제10회"])
+
     def test_financials_has_no_chart_spec_to_avoid_mixing_cfs_and_ofs(self):
         """리뷰 지적 ②: financials는 실측에서 fs_div(연결/별도)·sj_div
         (재무상태표/손익계산서)가 상수열이 아니다 — 같은 account_nm이
@@ -3698,6 +3735,30 @@ function collectTags(node, out) {
   return out;
 }
 
+// 리뷰 검증 요구(①): 차트가 만든 값과 표가 만든 값을 실제 렌더 결과에서
+// 직접 대조하려면 표 <table>의 셀 텍스트를 읽어야 한다 — collectTags는
+// tag·className만 모으므로 이 목적에는 쓸 수 없다.
+function findTable(node) {
+  if (!node) return null;
+  if (node.tag === "table") return node;
+  for (const c of (node.children || [])) {
+    const found = findTable(c);
+    if (found) return found;
+  }
+  return null;
+}
+function tableRowTexts(tableNode) {
+  const tbody = (tableNode.children || []).find(function (c) { return c.tag === "tbody"; });
+  if (!tbody) return [];
+  return tbody.children
+    .filter(function (tr) { return tr.className !== "fold-detail"; })
+    .map(function (tr) {
+      return tr.children
+        .filter(function (td) { return td.tag === "td"; })
+        .map(function (td) { return td.textContent; });
+    });
+}
+
 const sandbox = {
   console: console,
   Chart: FakeChart,
@@ -3723,10 +3784,14 @@ new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).
 
 sandbox.openDocPanel = function () {};
 
-// A) fund_usage — CHART_SPECS에 series(계획 vs 실제) 정의가 있다.
+// A) fund_usage — CHART_SPECS에 series(계획 vs 실제) 정의가 있다. tm은
+//    실측(field-inventory) 형태인 "제N회"를 쓰고(브리프의 가짜 형태
+//    "1"·"2"였던 것을 되돌린다 — 리뷰 지적 ②), 사전식으로 이미 뒤섞인
+//    순서("제10회"가 "제9회"보다 먼저)로 넣어 axisSortKey(회차 정렬)가
+//    되돌아가도 이 렌더 테스트가 실제로 잡아내는지 확인한다.
 sandbox.renderSection("fund_usage", [
-  { tm: "1", plan_amount: "1300000000", real_dtls_amount: "800000000" },
-  { tm: "2", plan_amount: "500000000", real_dtls_amount: "500000000" },
+  { tm: "제10회", plan_amount: "500000000", real_dtls_amount: "500000000" },
+  { tm: "제9회", plan_amount: "1300000000", real_dtls_amount: "800000000" },
 ]);
 const fundTags = collectTags(bodyEl, []);
 const fundChart = CHART_CALLS[0];
@@ -3734,10 +3799,13 @@ const fundChart = CHART_CALLS[0];
 // B) insider_timeline — source별로 쪼개진 블록마다 자기 레코드만 받는지
 //    확인한다. elestock 그룹만 CHART_SPECS가 요구하는 필드(rcept_dt·
 //    sp_stock_lmp_rate)를 갖고 있고, hyslr 그룹은 없다 — elestock 블록만
-//    차트가 생겨야 한다.
+//    차트가 생겨야 한다. rcept_dt는 실측(field-inventory) 형태인 하이픈
+//    ISO("2026-03-04")를 쓴다(브리프의 가짜 형태 "20260304"였던 것을
+//    되돌린다 — 리뷰 지적 ②) — axisLabel의 하이픈 분기가 되돌아가도 이
+//    렌더 테스트가 실제로 잡아내는지 확인한다.
 sandbox.renderSection("insider_timeline", [
-  { source: "elestock", repror: "오정강", rcept_dt: "20260304", sp_stock_lmp_rate: "14.13" },
-  { source: "elestock", repror: "오정강", rcept_dt: "20260327", sp_stock_lmp_rate: "3.60" },
+  { source: "elestock", repror: "오정강", rcept_dt: "2026-03-04", sp_stock_lmp_rate: "14.13" },
+  { source: "elestock", repror: "오정강", rcept_dt: "2026-03-27", sp_stock_lmp_rate: "3.60" },
   { source: "hyslr", mxmm_shrholdr_nm: "홍길동", posesn_stock_co: "1000" },
 ]);
 const chartCountAfterB = CHART_CALLS.length;
@@ -3804,6 +3872,39 @@ sandbox.renderSection("disclosures", [
 const chartCountAfterH = CHART_CALLS.length;
 const disclosuresChart = chartCountAfterH > chartCountBeforeH ? CHART_CALLS[CHART_CALLS.length - 1] : null;
 
+// I) 같은 섹션을 다시 그리면 이전 Chart 인스턴스가 정리돼야 한다(리뷰
+//    지적 ④) — holder.removeChild만으로는 DOM에서 canvas가 빠질 뿐,
+//    Chart.js 인스턴스는 CHART_INSTANCES에 남아 다음 사용자 화면까지
+//    쌓인다. showGate()의 resetCharts()가 아니라 renderSection 자체가
+//    정리해야 하는 경로다(같은 회사 안에서 같은 섹션이 다시 오는 경우).
+const destroyedBeforeSectionRerender = DESTROYED.length;
+sandbox.renderSection("fund_usage", [
+  { tm: "제20회", plan_amount: "1000000000", real_dtls_amount: "500000000" },
+]);
+const chartsAfterFirstRerender = CHART_CALLS.length;
+sandbox.renderSection("fund_usage", [
+  { tm: "제21회", plan_amount: "2000000000", real_dtls_amount: "1000000000" },
+]);
+const chartsAfterSecondRerender = CHART_CALLS.length;
+const destroyedAfterSectionRerender = DESTROYED.length;
+
+// K) 리뷰 지적 ①의 종단 검증: 같은 회차(tm="제14회")가 서로 다른 연도
+//    (year) 보고에서 다른 실제 집행 금액으로 나타난 리뷰의 재현 사례를
+//    그대로 쓴다(2024년 보고 50억, 2025년 보고 130.8억). compositeXFields가
+//    없으면 뒤 레코드가 앞을 조용히 덮어 차트에는 130.8억만 남고 표는
+//    그대로 두 행을 보여줘 차트와 표가 다른 값을 말하게 된다 — 여기서는
+//    순수 함수(chartData)가 아니라 renderSection 전체 경로로 차트가 실제로
+//    만든 값과 표(<table>)가 실제로 그린 값을 직접 대조한다. plan_amount는
+//    두 보고에서 값이 같다(계획은 안 바뀐다) — tm과 함께 캡션으로 승격돼
+//    본문 열에서 빠지므로, 남는 본문 열은 [year, real_dtls_amount] 둘뿐이다.
+sandbox.renderSection("fund_usage", [
+  { tm: "제14회", year: 2024, plan_amount: "5000000000", real_dtls_amount: "5000000000" },
+  { tm: "제14회", year: 2025, plan_amount: "5000000000", real_dtls_amount: "13080000000" },
+]);
+const sameRoundChart = CHART_CALLS[CHART_CALLS.length - 1];
+const sameRoundTable = findTable(ELEMENTS["sec-fund_usage"]);
+const sameRoundTableRows = sameRoundTable ? tableRowTexts(sameRoundTable) : [];
+
 function findIndex(tags, tag) {
   for (let i = 0; i < tags.length; i++) if (tags[i].tag === tag) return i;
   return -1;
@@ -3825,6 +3926,8 @@ process.stdout.write(JSON.stringify({
   fundXScaleType: fundChart.options.scales.x.type,
   fundHasTableCells: fundTags.some(function (t) { return t.tag === "td"; }),
   canvasClassName: canvasIdx === -1 ? null : fundTags[canvasIdx].className,
+  canvasRole: fundChart.canvas.getAttribute("role"),
+  canvasAriaLabel: fundChart.canvas.getAttribute("aria-label"),
   chartCountAfterA: 1,
   chartCountAfterB: chartCountAfterB,
   chartCountAfterC: chartCountAfterC,
@@ -3849,6 +3952,15 @@ process.stdout.write(JSON.stringify({
   chartCountAfterH: chartCountAfterH,
   disclosuresLabels: disclosuresChart ? disclosuresChart.data.labels : null,
   disclosuresData: disclosuresChart ? disclosuresChart.data.datasets[0].data : null,
+  destroyedBeforeSectionRerender: destroyedBeforeSectionRerender,
+  chartsAfterFirstRerender: chartsAfterFirstRerender,
+  chartsAfterSecondRerender: chartsAfterSecondRerender,
+  destroyedAfterSectionRerender: destroyedAfterSectionRerender,
+  sameRoundChartLabels: sameRoundChart.data.labels,
+  sameRoundChartRealData: sameRoundChart.data.datasets.find(function (d) {
+    return d.label === "실제 집행 금액";
+  }).data,
+  sameRoundTableRows: sameRoundTableRows,
 }));
 """
 
@@ -3870,8 +3982,11 @@ class TestChartRenderExecution(unittest.TestCase):
     아니라 실제 렌더 결과로 확인한다."""
 
     def test_chart_is_created_with_labels_and_series_datasets(self):
+        """입력 순서는 "제10회"가 "제9회"보다 먼저다(리뷰 지적 ②의 실측
+        형태 픽스처) — axisSortKey(회차 정렬)가 실제로 동작해야 출력이
+        회차 순(9→10)으로 나온다."""
         got = run_chart_render()
-        self.assertEqual(got["fundLabels"], ["1", "2"])
+        self.assertEqual(got["fundLabels"], ["제9회", "제10회"])
         self.assertEqual(
             [d["label"] for d in got["fundDatasets"]],
             ["계획 금액", "실제 집행 금액"],
@@ -3968,6 +4083,47 @@ class TestChartRenderExecution(unittest.TestCase):
                          "disclosures 차트가 실제 렌더 경로에서 생기지 않았습니다")
         self.assertEqual(got["disclosuresLabels"], ["2026.04", "2026.05"])
         self.assertEqual(got["disclosuresData"], [2, 1])
+
+    def test_canvas_has_an_accessible_role_and_label(self):
+        """리뷰 지적 ⑤: canvas 안의 그림은 스크린 리더가 읽지 못한다 —
+        role="img" + aria-label로 최소한 무슨 차트인지는 전달해야 한다."""
+        got = run_chart_render()
+        self.assertEqual(got["canvasRole"], "img")
+        self.assertTrue(got["canvasAriaLabel"], "canvas에 aria-label이 없습니다")
+
+    def test_rerendering_a_section_destroys_the_previous_chart_instance(self):
+        """리뷰 지적 ④: renderSection이 holder만 비우고 그 안의 Chart
+        인스턴스는 CHART_INSTANCES에 남으면, 회사를 바꾸지 않고 같은
+        섹션이 다시 그려질 때마다(showGate()가 부르는 resetCharts()를
+        거치지 않는 경로) 캔버스와 리스너가 계속 쌓인다."""
+        got = run_chart_render()
+        self.assertEqual(got["chartsAfterSecondRerender"] - got["chartsAfterFirstRerender"], 1,
+                         "같은 섹션을 다시 그렸는데 새 Chart 인스턴스가 생기지 않았습니다")
+        self.assertGreater(got["destroyedAfterSectionRerender"], got["destroyedBeforeSectionRerender"],
+                           "섹션을 다시 그려도 이전 Chart 인스턴스가 destroy()되지 않습니다")
+
+    def test_same_fund_round_different_report_year_agrees_between_chart_and_table(self):
+        """검증 요구(①): 리뷰가 재현한 실제 사례 — 제14회가 2024년 보고에는
+        50억, 2025년 보고에는 130.8억으로 다르게 잡힌다. 순수 함수
+        (chartData) 단위 테스트가 아니라 renderSection 전체 경로로, 차트가
+        실제로 그린 값과 표(<table>)가 실제로 그린 값을 직접 대조한다 —
+        compositeXFields 없이 x가 tm 하나뿐이면 뒤 레코드(130.8억)가
+        앞(50억)을 조용히 덮어 차트에는 하나만 남고, 표는 그대로 두 행을
+        보여줘 차트와 표가 다른 값을 말하게 된다."""
+        got = run_chart_render()
+        self.assertEqual(len(got["sameRoundChartLabels"]), 2,
+                         "같은 회차의 서로 다른 보고연도가 차트에서 하나로 뭉개졌습니다")
+        chart_values = set(got["sameRoundChartRealData"])
+        self.assertEqual(chart_values, {5000000000, 13080000000},
+                         "차트의 실제 집행 금액 두 값이 리뷰가 재현한 사례와 다릅니다")
+
+        self.assertEqual(len(got["sameRoundTableRows"]), 2, "표가 두 행을 보여주지 않습니다")
+        # 본문 열은 [year, real_dtls_amount] 순서다 — tm·plan_amount는 두
+        # 보고에서 값이 같아 caption으로 승격돼 본문에서 빠진다(위 하네스
+        # 블록 K 주석 참고). 마지막 열이 실제 집행 금액이다.
+        table_amounts = set(row[-1] for row in got["sameRoundTableRows"])
+        self.assertEqual(table_amounts, {"50억", "130.8억"},
+                         "표의 실제 집행 금액 두 값이 리뷰가 재현한 사례와 다릅니다")
 
 
 if __name__ == "__main__":
