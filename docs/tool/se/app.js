@@ -864,6 +864,111 @@ function documentBlocks(text) {
   return blocks;
 }
 
+// 섹션별 차트 정의. 여기 없는 섹션은 차트 없이 표만 나온다.
+//
+// **`time` 축을 쓰지 않는다.** Chart.js의 time scale은 별도 날짜 어댑터를
+// 요구해 의존성이 하나 더 늘어난다. 날짜를 "2026.04.15" 문자열로 만들어
+// category 축에 넣으면 어댑터 없이 같은 그림이 나온다 — 우리 데이터는
+// 보고 시점이 띄엄띄엄한 이산 값이라 오히려 이쪽이 맞다.
+const CHART_SPECS = Object.assign(Object.create(null), {
+  insider_timeline: {
+    kind: "line", title: "보고자별 지분율 추이",
+    x: "rcept_dt", y: "sp_stock_lmp_rate", groupBy: "repror", yLabel: "지분율 (%)",
+  },
+  fund_usage: {
+    kind: "bar", title: "자금 사용 — 계획 대비 실제",
+    x: "tm", yLabel: "금액",
+    series: [
+      { key: "plan_amount", label: "계획 금액" },
+      { key: "real_dtls_amount", label: "실제 집행 금액" },
+    ],
+  },
+  financials: {
+    kind: "bar", title: "계정과목별 3개 기간",
+    x: "account_nm", yLabel: "금액",
+    series: [
+      { key: "bfefrmtrm_amount", label: "전전기" },
+      { key: "frmtrm_amount", label: "전기" },
+      { key: "thstrm_amount", label: "당기" },
+    ],
+  },
+});
+
+/** "20260415" → "2026.04.15". 날짜가 아니면 원본을 그대로 쓴다. */
+function axisLabel(v) {
+  const s = v === null || v === undefined ? "" : String(v);
+  return /^\d{8}$/.test(s) ? s.slice(0, 4) + "." + s.slice(4, 6) + "." + s.slice(6, 8) : s;
+}
+
+/** 숫자로 읽는다. 읽을 수 없으면 null — **0으로 채우지 않는다.**
+ *  0으로 채우면 "그 시점에 0이었다"는 거짓말이 된다. */
+function numeric(v) {
+  if (v === null || v === undefined) return null;
+  const s = String(v).replace(/,/g, "").trim();
+  if (s === "" || !/^-?\d*\.?\d+$/.test(s)) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** 레코드 목록을 Chart.js가 받는 형태로 바꾼다. 그릴 게 없으면 null. */
+function chartData(records, spec) {
+  if (!Array.isArray(records) || records.length === 0 || !spec) return null;
+  const rows = records.filter(function (r) { return r && typeof r === "object"; });
+  if (rows.length === 0) return null;
+
+  const xs = [];
+  const seen = new Set();
+  for (const r of rows) {
+    const raw = r[spec.x];
+    if (raw === null || raw === undefined || raw === "") continue;
+    const key = String(raw);
+    if (!seen.has(key)) { seen.add(key); xs.push(key); }
+  }
+  if (xs.length === 0) return null;
+  // 전부 숫자로 읽히면 숫자로 정렬한다. 문자열 정렬이면 회차 10이 9보다
+  // 앞에 와서 그래프가 거짓말을 한다. 날짜(YYYYMMDD)는 문자열 정렬이
+  // 곧 시간순이라 그대로 둬도 된다.
+  const allNumeric = xs.every(function (v) { return numeric(v) !== null; });
+  xs.sort(allNumeric
+    ? function (a, b) { return numeric(a) - numeric(b); }
+    : undefined);
+  const labels = xs.map(axisLabel);
+  const at = new Map(xs.map(function (v, i) { return [v, i]; }));
+
+  const datasets = [];
+  if (spec.series) {
+    // 같은 x에 여러 계열(계획 vs 실제 등)
+    for (const s of spec.series) {
+      const data = xs.map(function () { return null; });
+      for (const r of rows) {
+        const i = at.get(String(r[spec.x]));
+        if (i !== undefined) data[i] = numeric(r[s.key]);
+      }
+      datasets.push({ label: s.label, data: data });
+    }
+  } else {
+    // groupBy로 계열을 나눈다(보고자별 등)
+    const groups = new Map();
+    for (const r of rows) {
+      const g = r[spec.groupBy];
+      if (g === null || g === undefined || g === "") continue;
+      const name = String(g);
+      if (!groups.has(name)) groups.set(name, xs.map(function () { return null; }));
+      const i = at.get(String(r[spec.x]));
+      if (i !== undefined) groups.get(name)[i] = numeric(r[spec.y]);
+    }
+    for (const [name, data] of groups) datasets.push({ label: name, data: data });
+  }
+
+  // 값이 하나도 없으면 빈 그림이 된다 — 차트를 만들지 않는다.
+  const any = datasets.some(function (d) {
+    return d.data.some(function (v) { return v !== null; });
+  });
+  if (!any) return null;
+
+  return { labels: labels, datasets: datasets };
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     LS_DART_KEY, LS_SESSION, LS_JOB, LS_THEME, SECTION_GROUPS, formatCount,
@@ -873,5 +978,6 @@ if (typeof module !== "undefined" && module.exports) {
     ACTOR_STATUS, actorLine, resumeTarget, documentBlocks,
     dropAllEmptyColumns, recordsHaveSourceField, sourceGroupedBlocks,
     DOC_LIST_KEY, docKeyRceptNo, docListRow,
+    CHART_SPECS, chartData, axisLabel, numeric,
   };
 }

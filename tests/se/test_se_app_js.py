@@ -3097,6 +3097,109 @@ class TestTocMatchesScreenOrderAndBehavesOnInteraction(unittest.TestCase):
                          "남아 있습니다")
 
 
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestChartData(unittest.TestCase):
+    _INSIDER = """[
+      {source:"elestock", repror:"오정강", rcept_dt:"20260304", sp_stock_lmp_rate:"14.13"},
+      {source:"elestock", repror:"오정강", rcept_dt:"20260327", sp_stock_lmp_rate:"3.60"},
+      {source:"elestock", repror:"와이어트그룹", rcept_dt:"20260415", sp_stock_lmp_rate:"6.53"}
+    ]"""
+
+    def test_groups_into_one_dataset_per_reporter(self):
+        got = run_js(f'chartData({self._INSIDER}, CHART_SPECS.insider_timeline)')
+        labels = sorted(d["label"] for d in got["datasets"])
+        self.assertEqual(labels, ["오정강", "와이어트그룹"])
+
+    def test_x_labels_are_sorted_by_date(self):
+        got = run_js(f'chartData({self._INSIDER}, CHART_SPECS.insider_timeline)')
+        self.assertEqual(got["labels"], ["2026.03.04", "2026.03.27", "2026.04.15"])
+
+    def test_series_aligns_values_to_the_shared_x_axis(self):
+        """계열마다 관측 시점이 다르다. 없는 지점은 null이어야 선이 끊긴다 —
+        0으로 채우면 지분이 0이 됐다는 거짓말이 된다."""
+        got = run_js(f'chartData({self._INSIDER}, CHART_SPECS.insider_timeline)')
+        ohj = next(d for d in got["datasets"] if d["label"] == "오정강")
+        self.assertEqual(ohj["data"], [14.13, 3.6, None])
+
+    def test_zero_is_a_real_value_not_a_gap(self):
+        got = run_js('''chartData([
+          {repror:"김", rcept_dt:"20260101", sp_stock_lmp_rate:"0"},
+          {repror:"김", rcept_dt:"20260102", sp_stock_lmp_rate:"1.5"}
+        ], CHART_SPECS.insider_timeline)''')
+        self.assertEqual(got["datasets"][0]["data"], [0, 1.5])
+
+    def test_non_numeric_value_becomes_a_gap_not_zero(self):
+        got = run_js('''chartData([
+          {repror:"김", rcept_dt:"20260101", sp_stock_lmp_rate:"-"},
+          {repror:"김", rcept_dt:"20260102", sp_stock_lmp_rate:"1.5"}
+        ], CHART_SPECS.insider_timeline)''')
+        self.assertEqual(got["datasets"][0]["data"], [None, 1.5])
+
+    def test_comma_separated_number_is_parsed(self):
+        got = run_js('''chartData([{tm:"1", plan_amount:"13,082,000,000",
+                        real_dtls_amount:"13,082,000,000"}], CHART_SPECS.fund_usage)''')
+        self.assertEqual(got["datasets"][0]["data"], [13082000000])
+
+    def test_plan_vs_actual_makes_two_datasets(self):
+        got = run_js('''chartData([{tm:"1", plan_amount:"100", real_dtls_amount:"80"}],
+                        CHART_SPECS.fund_usage)''')
+        self.assertEqual([d["label"] for d in got["datasets"]], ["계획 금액", "실제 집행 금액"])
+
+    def test_numeric_x_axis_sorts_numerically_not_lexically(self):
+        """회차 10이 9보다 앞에 오면 그래프가 거짓말을 한다."""
+        got = run_js('''chartData([
+          {tm:"9",  plan_amount:"1", real_dtls_amount:"1"},
+          {tm:"10", plan_amount:"2", real_dtls_amount:"2"}
+        ], CHART_SPECS.fund_usage)''')
+        self.assertEqual(got["labels"], ["9", "10"])
+
+    def test_date_x_axis_stays_in_time_order(self):
+        """YYYYMMDD는 문자열 정렬이 곧 시간순이다. 숫자 정렬 도입이
+        날짜 축을 깨뜨리지 않는지 확인한다."""
+        got = run_js('''chartData([
+          {repror:"김", rcept_dt:"20261231", sp_stock_lmp_rate:"2"},
+          {repror:"김", rcept_dt:"20260101", sp_stock_lmp_rate:"1"}
+        ], CHART_SPECS.insider_timeline)''')
+        self.assertEqual(got["labels"], ["2026.01.01", "2026.12.31"])
+
+    def test_returns_null_when_no_records(self):
+        for expr in ("chartData([], CHART_SPECS.insider_timeline)",
+                     "chartData(null, CHART_SPECS.insider_timeline)"):
+            self.assertIsNone(run_js(expr))
+
+    def test_returns_null_when_the_axis_fields_are_absent(self):
+        """축 필드가 없으면 차트를 만들지 않는다 — 표는 그대로 남는다."""
+        got = run_js('chartData([{무관:1}], CHART_SPECS.insider_timeline)')
+        self.assertIsNone(got)
+
+    def test_returns_null_when_every_value_is_missing(self):
+        got = run_js('''chartData([{repror:"김", rcept_dt:"20260101",
+                        sp_stock_lmp_rate:null}], CHART_SPECS.insider_timeline)''')
+        self.assertIsNone(got)
+
+    def test_single_point_series_still_charts(self):
+        got = run_js('''chartData([{repror:"김", rcept_dt:"20260101",
+                        sp_stock_lmp_rate:"5"}], CHART_SPECS.insider_timeline)''')
+        self.assertEqual(got["datasets"][0]["data"], [5])
+
+    def test_spec_keys_all_exist_in_the_server_registry(self):
+        """CHART_SPECS의 섹션 키가 서버가 실제로 주는 키여야 한다.
+        오타가 있으면 차트가 조용히 안 그려진다."""
+        from se_server.jobs.registry import STAGE1_SPECS
+
+        known = {s.key for s in STAGE1_SPECS}
+        specs = run_js("Object.keys(CHART_SPECS)")
+        unknown = sorted(set(specs) - known)
+        self.assertEqual(unknown, [], f"registry에 없는 섹션 키: {unknown}")
+
+    def test_no_spec_uses_a_time_scale(self):
+        """time 축은 별도 어댑터를 요구한다. category 축만 쓴다."""
+        specs = run_js("CHART_SPECS")
+        for key, spec in specs.items():
+            self.assertNotEqual(spec.get("xScale"), "time",
+                                f"{key}가 time 축을 씁니다 — 어댑터가 필요해집니다")
+
+
 if __name__ == "__main__":
     unittest.main()
 
