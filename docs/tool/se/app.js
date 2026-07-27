@@ -17,6 +17,58 @@ function formatCount(n) {
   return Number(n || 0).toLocaleString("ko-KR");
 }
 
+// DART 필드명 → 한국어 라벨. **확신하는 것만 넣는다.**
+// 여기 없는 필드는 원본 키를 그대로 열 이름으로 쓴다 — 숨기면 데이터가
+// 조용히 사라지고 사용자는 없는 줄 안다.
+const LABELS = {
+  rcept_no: "접수번호",
+  rcept_dt: "접수일자",
+  report_nm: "공시명",
+  corp_name: "회사명",
+  corp_code: "고유번호",
+  stock_code: "종목코드",
+  flr_nm: "공시제출인",
+  ceo_nm: "대표자",
+  est_dt: "설립일",
+  adres: "주소",
+  bsns_year: "사업연도",
+};
+
+/** 섹션 값을 표로 바꾼다. 표로 만들 수 없으면 null. */
+function toTable(value) {
+  let records;
+  if (Array.isArray(value)) records = value;
+  else if (value && typeof value === "object") records = [value];
+  else return null;
+
+  records = records.filter(function (r) { return r && typeof r === "object"; });
+  if (records.length === 0) return null;
+
+  // 열은 모든 레코드 키의 합집합이다. 레코드마다 필드가 다를 수 있고,
+  // 첫 레코드만 보면 뒤쪽 필드가 통째로 사라진다.
+  const cols = [];
+  const seen = new Set();
+  for (const r of records) {
+    for (const k of Object.keys(r)) {
+      if (!seen.has(k)) { seen.add(k); cols.push(k); }
+    }
+  }
+  if (cols.length === 0) return null;
+
+  return {
+    columns: cols.map(function (k) { return LABELS[k] || k; }),
+    rows: records.map(function (r) {
+      return cols.map(function (k) { return cell(r[k]); });
+    }),
+  };
+}
+
+function cell(v) {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
+
 /** 아직 받지 않은 섹션 키만 돌려준다.
  *
  * 진행률 폴링은 매번 완료된 키 **전체**를 준다. 그대로 다시 받으면
@@ -56,6 +108,6 @@ function pollDecision(body) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     LS_DART_KEY, LS_SESSION, SECTION_GROUPS, formatCount,
-    nextKeysToFetch, pollDecision,
+    nextKeysToFetch, pollDecision, toTable, LABELS,
   };
 }

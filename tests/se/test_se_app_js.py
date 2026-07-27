@@ -123,5 +123,42 @@ class TestSectionGroups(unittest.TestCase):
                          "registry에 없는 섹션 키를 그리려 합니다")
 
 
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestToTable(unittest.TestCase):
+    def test_list_of_records_becomes_rows(self):
+        got = run_js('toTable([{a:1,b:2},{a:3,b:4}])')
+        self.assertEqual(got["rows"], [["1", "2"], ["3", "4"]])
+
+    def test_columns_union_covers_ragged_records(self):
+        """레코드마다 필드가 다를 수 있다. 어느 것도 사라지면 안 된다."""
+        got = run_js('toTable([{a:1},{b:2}])')
+        self.assertEqual(sorted(got["columns"]), ["a", "b"])
+
+    def test_unknown_field_keeps_raw_key_as_header(self):
+        """라벨이 없다고 열을 숨기면 데이터가 조용히 사라진다."""
+        got = run_js('toTable([{wholly_unknown_field: "x"}])')
+        self.assertIn("wholly_unknown_field", got["columns"])
+
+    def test_known_field_uses_korean_label(self):
+        got = run_js('toTable([{rcept_no: "20240301000001"}])')
+        self.assertIn("접수번호", got["columns"])
+
+    def test_single_dict_becomes_one_row(self):
+        got = run_js('toTable({a:1})')
+        self.assertEqual(got["rows"], [["1"]])
+
+    def test_empty_value_is_null(self):
+        for expr in ("toTable([])", "toTable(null)", "toTable({})"):
+            self.assertIsNone(run_js(expr), f"{expr}가 표를 만들었습니다")
+
+    def test_nested_value_is_stringified_not_dropped(self):
+        got = run_js('toTable([{x: {deep: 1}}])')
+        self.assertNotEqual(got["rows"][0][0], "")
+
+    def test_null_cell_becomes_empty_string_not_the_word_null(self):
+        got = run_js('toTable([{a: null}])')
+        self.assertEqual(got["rows"][0][0], "")
+
+
 if __name__ == "__main__":
     unittest.main()

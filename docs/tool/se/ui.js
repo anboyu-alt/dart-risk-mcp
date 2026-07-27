@@ -211,7 +211,7 @@ async function init() {
 
 // ── 분석 실행 + 진행률 폴링 ────────────────────────────────────────
 
-// Task 3·5에서 실제 구현으로 대체된다. 지금은 루프가 돌아가게만 한다.
+// Task 5에서 실제 구현으로 대체된다. 지금은 루프가 돌아가게만 한다.
 function showBar(msg) { document.getElementById("bar").textContent = msg; }
 function showProgress(p) {
   showBar(p.company + " — " + formatCount(p.finished) + "/" + formatCount(p.total));
@@ -219,7 +219,68 @@ function showProgress(p) {
 function renderHeadPlaceholder(name) {
   document.getElementById("head").textContent = name + " 분석을 시작합니다…";
 }
-function renderSection(key, value) { /* Task 3 */ }
+
+/** 표를 DOM으로 만든다. 값은 전부 textContent로 넣는다 —
+ *  공시 원문과 실명이 그대로 들어오는 자리다. */
+function tableEl(table) {
+  const t = document.createElement("table");
+  const thead = t.createTHead().insertRow();
+  for (const c of table.columns) {
+    const th = document.createElement("th");
+    th.textContent = c;
+    thead.appendChild(th);
+  }
+  const tb = t.createTBody();
+  for (const row of table.rows) {
+    const tr = tb.insertRow();
+    for (const v of row) tr.insertCell().textContent = v;
+  }
+  return t;
+}
+
+/** 섹션 키에 해당하는 표시 영역을 찾거나 만든다.
+ *
+ * id를 키로 고정해두면 renderSection이 같은 키로 여러 번 불려도(폴링마다
+ * 그럴 수 있다) 매번 같은 노드를 돌려준다 — 새 노드를 계속 추가하면
+ * 화면에 같은 섹션이 쌓인다. h2 제목은 한 번만 만들고, 내용만 담는
+ * 자식(holder)을 별도로 둬서 제목까지 지웠다 다시 만들지 않는다. */
+function sectionHolder(key) {
+  const id = "sec-" + key;
+  let holder = document.getElementById(id);
+  if (holder) return holder;
+
+  const wrap = document.createElement("div");
+  wrap.className = "sec";
+  const h2 = document.createElement("h2");
+  h2.textContent = key;
+  wrap.appendChild(h2);
+
+  holder = document.createElement("div");
+  holder.id = id;
+  wrap.appendChild(holder);
+
+  document.getElementById("body").appendChild(wrap);
+  return holder;
+}
+
+/** 섹션 하나를 그린다. 같은 키로 다시 불리면 **교체**한다 — 누적하면
+ *  화면에 같은 섹션이 계속 쌓인다(섹션은 한 번만 오도록 돼 있지만,
+ *  렌더 함수가 누적식이면 다른 경로에서 쉽게 깨진다). */
+function renderSection(key, value) {
+  const holder = sectionHolder(key);
+  while (holder.firstChild) holder.removeChild(holder.firstChild);
+
+  const table = toTable(value);
+  if (!table) {
+    const p = document.createElement("p");
+    p.className = "note";
+    p.textContent = "표시할 데이터가 없습니다.";
+    holder.appendChild(p);
+    return;
+  }
+  holder.appendChild(tableEl(table));
+}
+
 function renderFailures(failed) { /* Task 5 */ }
 
 /** 분석 작업을 시작하고 완료될 때까지 진행률을 폴링한다.
