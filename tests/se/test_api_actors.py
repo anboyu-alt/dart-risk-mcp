@@ -125,6 +125,33 @@ class TestActors(unittest.TestCase):
             resp = handle(_req("/api/se/actors?company=회사"), _deps())
         self.assertEqual(resp.body["actors"][0]["status"], "auto_matched")
 
+    def test_unhashable_status_list_does_not_500(self):
+        """`value in frozenset(...)`는 value가 리스트면 TypeError를 던진다.
+        레코드 하나가 이런 값을 가지면 엔드포인트 전체가 500이 됐다 —
+        isinstance(str) 선검사로 막는다."""
+        sample = [("최OO", {"status": ["verified"], "companies": ["F사"], "evidence": "근거"})]
+        with mock.patch("se_server.api.handlers.lookup_actors_by_company",
+                        return_value=sample):
+            resp = handle(_req("/api/se/actors?company=회사"), _deps())
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(resp.body["actors"][0]["status"], "auto_matched")
+
+    def test_unhashable_status_dict_does_not_500(self):
+        sample = [("최OO", {"status": {"a": 1}, "companies": ["F사"], "evidence": "근거"})]
+        with mock.patch("se_server.api.handlers.lookup_actors_by_company",
+                        return_value=sample):
+            resp = handle(_req("/api/se/actors?company=회사"), _deps())
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(resp.body["actors"][0]["status"], "auto_matched")
+
+    def test_non_string_status_int_downgrades_to_auto_matched(self):
+        sample = [("최OO", {"status": 123, "companies": ["F사"], "evidence": "근거"})]
+        with mock.patch("se_server.api.handlers.lookup_actors_by_company",
+                        return_value=sample):
+            resp = handle(_req("/api/se/actors?company=회사"), _deps())
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(resp.body["actors"][0]["status"], "auto_matched")
+
 
 class TestQueryParsing(unittest.TestCase):
     def test_company_is_url_decoded(self):

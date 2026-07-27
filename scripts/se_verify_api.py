@@ -42,6 +42,37 @@ FAIL = "  [FAIL]  "
 INFO = "  [ .. ]  "
 
 _failures: list[str] = []
+# --steps 기본값(2)처럼 실동작 데이터가 아직 없어 건너뛴 검사들. 이게
+# 하나라도 있으면 "전부 통과했습니다"라고 말하면 안 된다 — 검증이 아니라
+# 미실행이기 때문이다.
+_skipped: list[str] = []
+
+
+def skip(label: str, reason: str = "") -> None:
+    print(f"{INFO}건너뜀: {label}" + (f" — {reason}" if reason else ""))
+    _skipped.append(label)
+
+
+def summary_lines(failures: list[str], skipped: list[str]) -> list[str]:
+    """최종 요약 줄을 만든다. 네트워크와 분리해 단위 테스트로 검증한다.
+
+    건너뛴 검사가 하나라도 있으면 "전부 통과했습니다"를 절대 말하지 않는다
+    — 검증이 아니라 미실행이므로 통과로 보고하면 거짓이 된다.
+    """
+    lines: list[str] = []
+    if failures:
+        lines.append(f"\n실패 {len(failures)}건:")
+        lines.extend(f"  - {name}" for name in failures)
+    if skipped:
+        lines.append(f"\n건너뜀 {len(skipped)}건 (--steps 기본값이 낮아 실동작 데이터가"
+                      " 없었을 수 있습니다. --steps를 늘려 재실행하세요):")
+        lines.extend(f"  - {name}" for name in skipped)
+    if not failures and not skipped:
+        lines.append("\n전부 통과했습니다.")
+    elif not failures:
+        lines.append(f"\n실패는 없지만 {len(skipped)}건을 건너뛰었습니다 —"
+                      " 전부 통과라고 볼 수 없습니다.")
+    return lines
 
 
 def load_env() -> None:
@@ -267,8 +298,7 @@ def main() -> int:
                        bob.access_token)
             check("section: 타인 404", c3 == 404, f"HTTP {c3}")
         else:
-            print(f"{INFO}완료된 섹션이 없어 section 격리 검증을 건너뜁니다"
-                  " (--steps를 늘려주세요)")
+            skip("section 실동작·격리 검증", "완료된 섹션이 없습니다 (--steps를 늘려주세요)")
 
         doc_rcept_no = ""
         for k in final_keys:
@@ -287,8 +317,7 @@ def main() -> int:
             check("disclosure: 실제 공시 200", c4 == 200 and bool(b4.get("text")),
                   f"HTTP {c4} · 본문 {len(str(b4.get('text', ''))):,}자")
         else:
-            print(f"{INFO}완료된 공시 원문 섹션이 없어 disclosure 실조회를"
-                  " 건너뜁니다 (--steps를 늘려주세요)")
+            skip("disclosure 실조회 검증", "완료된 공시 원문 섹션이 없습니다 (--steps를 늘려주세요)")
 
         print(f"{INFO}actors — 인증·면책 동반")
         c5, _ = api(session, args.base, "GET",
@@ -320,12 +349,8 @@ def main() -> int:
             print(f"\n{INFO}테스트 계정 정리 중…")
             ok_a, ok_b = alice.delete(), bob.delete()
             print(f"{PASS if ok_a and ok_b else FAIL}테스트 계정 삭제")
-        if _failures:
-            print(f"\n실패 {len(_failures)}건:")
-            for name in _failures:
-                print(f"  - {name}")
-        else:
-            print("\n전부 통과했습니다.")
+        for line in summary_lines(_failures, _skipped):
+            print(line)
 
 
 if __name__ == "__main__":

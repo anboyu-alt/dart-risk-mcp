@@ -161,6 +161,88 @@ class TestSectionKeyRouting(unittest.TestCase):
         from se_server.api.router import match
         self.assertIsNone(match("GET", "/api/se/analyze/abc/section/../../etc"))
 
+    def test_percent_encoded_document_section_key_matches(self):
+        """프론트엔드가 encodeURIComponent(key)를 쓰면 `doc:...`이
+        `doc%3A...`가 된다. 라우터가 이 형태도 받아들여야 한다."""
+        from se_server.api.router import match
+        name, vars_ = match(
+            "GET", "/api/se/analyze/abc/section/doc%3A20240301000001")
+        self.assertEqual(name, "section")
+        self.assertEqual(vars_["key"], "doc%3A20240301000001")
+
+    def test_malformed_percent_encoding_is_rejected(self):
+        """`%` 뒤에 유효한 16진수 2자리가 없으면 라우터 단계에서부터 거부한다."""
+        from se_server.api.router import match
+        self.assertIsNone(match("GET", "/api/se/analyze/abc/section/doc%3"))
+        self.assertIsNone(match("GET", "/api/se/analyze/abc/section/doc%zz"))
+
+    def test_encoded_path_traversal_chars_still_match_router(self):
+        """`%2F`·`%2E%2E`는 문자 집합상 라우터를 통과한다(유효한 percent
+        인코딩이므로) — 하지만 실제 위험 여부는 핸들러가 결정한다
+        (test_api_sections.TestSectionEndpoint 쪽에서 확인)."""
+        from se_server.api.router import match
+        name, vars_ = match("GET", "/api/se/analyze/abc/section/x%2Fy")
+        self.assertEqual(name, "section")
+        self.assertEqual(vars_["key"], "x%2Fy")
+
+
+def _seeded_store_with_doc_key(user_id="user-1"):
+    """`doc:<rcept_no>` 형태 키(콜론 포함)로 완료된 섹션을 만들어 둔다.
+
+    `_seeded_store`의 registry 키(`company_info` 등)는 인코딩해도 문자가
+    안 바뀌므로 percent-encoding 왕복 검증에 쓸모가 없다 — 실제로
+    `runner.py`가 만드는 `doc:` 키(콜론)로 재현해야 인코딩·디코딩 경로가
+    실제로 발화한다.
+    """
+    from se_server.jobs.model import WorkItem
+    store, job_id, _, _ = _seeded_store(user_id)
+    job = store.load(job_id)
+    doc_key = "doc:20240301000001"
+    job.items.append(WorkItem(
+        key=doc_key, stage=2, kind="fetch_disclosure_full",
+        params={"rcept_no": "20240301000001"},
+        status="done", result={"value": {"text": "공시 원문"}},
+    ))
+    store.save(job)
+    return store, job_id, doc_key
+
+
+class TestSectionKeyDecoding(unittest.TestCase):
+    """`_section`은 인코딩된 키와 원문 키 둘 다 같은 섹션을 돌려줘야 한다."""
+
+    def test_percent_encoded_key_returns_same_section_as_plain_key(self):
+        store, job_id, doc_key = _seeded_store_with_doc_key()
+        plain = handle(_req("GET", f"/api/se/analyze/{job_id}/section/{doc_key}"),
+                       Deps(store=store, auth=_Auth()))
+        from urllib.parse import quote
+        encoded = handle(
+            _req("GET", f"/api/se/analyze/{job_id}/section/{quote(doc_key, safe='')}"),
+            Deps(store=store, auth=_Auth()))
+        self.assertEqual(plain.status, 200)
+        self.assertEqual(encoded.status, 200)
+        self.assertEqual(plain.body, encoded.body)
+
+    def test_double_encoded_key_does_not_match(self):
+        """이중 디코딩 금지 — 두 번 인코딩한 키를 넣으면 원문과 일치하지
+        않아야 한다(한 번만 디코딩했다는 증거)."""
+        store, job_id, doc_key = _seeded_store_with_doc_key()
+        from urllib.parse import quote
+        double_encoded = quote(quote(doc_key, safe=""), safe="")
+        resp = handle(
+            _req("GET", f"/api/se/analyze/{job_id}/section/{double_encoded}"),
+            Deps(store=store, auth=_Auth()))
+        self.assertEqual(resp.status, 404)
+
+    def test_percent_encoded_traversal_chars_do_not_reach_filesystem(self):
+        """`%2F`·`%2E%2E`가 디코딩으로 `/`·`..`가 되어도 job.items 비교에만
+        쓰이므로 그런 item.key는 존재하지 않아 안전하게 404가 된다."""
+        store, job_id, _, _ = _seeded_store()
+        for encoded_key in ("x%2Fy", "%2E%2E", "..%2F..%2Fetc"):
+            resp = handle(
+                _req("GET", f"/api/se/analyze/{job_id}/section/{encoded_key}"),
+                Deps(store=store, auth=_Auth()))
+            self.assertEqual(resp.status, 404, f"key={encoded_key}")
+
 
 if __name__ == "__main__":
     unittest.main()

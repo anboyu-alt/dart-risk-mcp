@@ -9,7 +9,7 @@ Vercel 어댑터가 변환을 담당한다.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from dart_risk_mcp.core.dart_client import fetch_disclosure_full, resolve_corp
 from dart_risk_mcp.core.known_actors import lookup_actors_by_company
@@ -198,14 +198,25 @@ def _section(deps: Deps, user_id: str, job_id: str, key: str) -> Response:
     """완료된 섹션 하나를 돌려준다.
 
     미완료 섹션은 404다 — 부분 결과를 완성된 것처럼 보이게 하면 안 된다.
+
+    `key`는 라우터를 그대로 통과한 원문이라 원문 키(`doc:...`)와
+    encodeURIComponent로 인코딩된 키(`doc%3A...`) 둘 다 들어올 수 있다.
+    여기서 정확히 한 번만 디코딩한다 — path 세그먼트는 여기 도달하기까지
+    어떤 계층도 디코딩하지 않으므로(`api/index.py`가 `rh.path`를 그대로
+    넘기고, `router.match`도 디코딩하지 않는다) 이중 디코딩 위험이 없다.
+    디코딩 결과는 파일 경로가 아니라 `job.items` 순회 비교에만 쓰므로
+    `%2F`가 `/`로 풀려도 실제 경로 순회로 이어지지 않는다 — 진짜
+    `item.key`는 `/`를 담지 않으니 그런 값은 그냥 일치하는 항목이 없어
+    404로 떨어질 뿐이다.
     """
     job = deps.store.load(job_id, user_id=user_id)
     if job is None:
         return Response.error(404, "작업을 찾을 수 없습니다")
 
+    decoded_key = unquote(key)
     for item in job.items:
-        if item.key == key and item.status == "done" and item.result is not None:
-            return Response(200, {"key": key, "value": item.result.get("value")})
+        if item.key == decoded_key and item.status == "done" and item.result is not None:
+            return Response(200, {"key": decoded_key, "value": item.result.get("value")})
     return Response.error(404, "섹션을 찾을 수 없습니다")
 
 
@@ -270,9 +281,15 @@ def _actor_status(rec: dict) -> str:
     키가 있으면 기본값을 쓰지 않으므로, 단순 `.get("status", "auto_matched")`은
     이 빈 문자열 케이스에서 발화하지 않고 `""`가 그대로 응답에 실린다.
     그래서 존재 여부가 아니라 **값 자체**를 화이트리스트로 검증한다.
+
+    `value in frozenset(...)` 멤버십 검사는 value가 리스트·dict 같은 해시
+    불가 타입이면 `TypeError`를 던진다. 레코드 하나가 그런 값을 갖고
+    들어오면 `/api/se/actors` 전체가 500이 되므로, 문자열인지 먼저
+    확인한 뒤에만 화이트리스트를 대조한다. 문자열이 아니면 근거를 모르는
+    것과 같으니 가장 약한 `auto_matched`로 강등한다(등급 상향 없음).
     """
     value = rec.get("status")
-    if value in _VALID_ACTOR_STATUSES:
+    if isinstance(value, str) and value in _VALID_ACTOR_STATUSES:
         return value
     return "auto_matched"
 
