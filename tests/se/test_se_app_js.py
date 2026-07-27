@@ -353,10 +353,15 @@ class TestSectionGroups(unittest.TestCase):
 
         groups = run_js("SECTION_GROUPS")
         shown = {k for g in groups for k in g["keys"]}
+        # doc_list는 STAGE1_SPECS에 없는 2단 합성 키(개별 doc:<접수번호>
+        # 섹션들을 addDocListEntry가 목록 하나로 모은 것, DOC_LIST_KEY
+        # 참고)다 — 화면에는 나와야 하므로 SECTION_GROUPS에 있지만, 이
+        # 검사는 "1단 API 키가 전부 어딘가에 나오는가"만 보므로 따로 뺀다.
+        shown_stage1 = shown - {"doc_list"}
         expected = {s.key for s in STAGE1_SPECS} - {"company_info"}  # 헤더는 별도
-        self.assertEqual(expected - shown, set(),
+        self.assertEqual(expected - shown_stage1, set(),
                          "화면에 안 나오는 섹션이 있습니다")
-        self.assertEqual(shown - expected, set(),
+        self.assertEqual(shown_stage1 - expected, set(),
                          "registry에 없는 섹션 키를 그리려 합니다")
 
 
@@ -739,6 +744,141 @@ class TestSectionBlocks(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestInsiderTimelineSourceSplit(unittest.TestCase):
+    """insider_timeline은 elestock·hyslr·hyslr_chg·exec_treasury 4개
+    엔드포인트를 합친 결과다(dart_client.fetch_insider_timeline). 레코드마다
+    자기 엔드포인트 필드만 채우고 나머지는 전부 null이라, 한 표로 그리면
+    실측(field-inventory)에서 접힌 26개 항목 중 값이 있는 열이 0개인 행이
+    나왔다 — 펼쳐도 내용이 없어 보이는 원인. source별로 표를 나누고, 그
+    안에서도 전부 빈 열은 뺀다(값이 하나라도 있으면 반드시 남긴다).
+    """
+
+    def test_records_with_source_split_into_one_table_per_source(self):
+        records = [
+            {"source": "elestock", "corp_name": "엔켐", "rcept_no": "1", "nm": "오정강"},
+            {"source": "elestock", "corp_name": "엔켐", "rcept_no": "2", "nm": "이승호"},
+            {"source": "hyslr", "corp_name": "엔켐", "mxmm_shrholdr_nm": "오정강 외 2인"},
+        ]
+        got = run_js(f"sectionBlocks({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(len(got), 2, "source별로 표가 나뉘지 않았습니다")
+        titles = [b["title"] for b in got]
+        self.assertEqual(len(set(titles)), 2, "표 제목이 source별로 구분되지 않습니다")
+
+    def test_each_table_only_has_its_own_endpoint_fields(self):
+        """elestock 표에는 hyslr 전용 필드가, hyslr 표에는 elestock 전용
+        필드가 나오면 안 된다 — 서로 다른 엔드포인트 필드가 한 표에 섞이면
+        빈 칸 문제가 되돌아온다."""
+        records = [
+            {"source": "elestock", "nm": "오정강"},
+            {"source": "hyslr", "mxmm_shrholdr_nm": "오정강 외 2인"},
+        ]
+        got = run_js(f"sectionBlocks({json.dumps(records, ensure_ascii=False)})")
+        by_title = {b["title"]: b["table"] for b in got}
+        elestock_table = by_title["5% 대량보유 이력"]
+        hyslr_table = by_title["최대주주 현황"]
+        self.assertNotIn("mxmm_shrholdr_nm", elestock_table["keys"])
+        self.assertNotIn("nm", hyslr_table["keys"])
+
+    def test_column_empty_in_every_row_of_its_group_is_dropped(self):
+        """같은 source 그룹 안에서도 값이 전부 비어 있는 열은 빼되, 값이
+        하나라도 있는 열은 반드시 남아야 한다."""
+        records = [
+            {"source": "hyslr_chg", "corp_name": "엔켐", "change_cause": "장내매도", "rm": None},
+            {"source": "hyslr_chg", "corp_name": "엔켐", "change_cause": None, "rm": None},
+        ]
+        got = run_js(f"sectionBlocks({json.dumps(records, ensure_ascii=False)})")
+        table = got[0]["table"]
+        present = set(table["keys"]) | {c["key"] for c in table["caption"]}
+        self.assertNotIn("rm", present, "모든 행이 비어 있는 열이 남아 있습니다")
+        self.assertIn("change_cause", present, "값이 하나라도 있는 열이 사라졌습니다")
+
+    def test_no_block_has_a_column_where_every_visible_row_is_blank(self):
+        """엔켐 실측과 같은 규모(4개 source 혼합)로도 어떤 표에도 완전히
+        빈 열이 남지 않아야 한다(세로·가로 표 모두)."""
+        records = [
+            {"source": "elestock", "rcept_no": "1", "nm": "오정강", "relate": None},
+            {"source": "elestock", "rcept_no": "2", "nm": "이승호", "relate": None},
+            {"source": "hyslr", "bsns_year": "2026", "mxmm_shrholdr_nm": "오정강", "rm": None},
+            {"source": "hyslr_chg", "bsns_year": "2026", "change_cause": "장내매도", "rm": None},
+            {"source": "exec_treasury", "bsns_year": "2026", "repror": "오정강", "bsis_qy": None},
+        ]
+        got = run_js(f"sectionBlocks({json.dumps(records, ensure_ascii=False)})")
+        for block in got:
+            t = block["table"]
+            if t["orientation"] == "vertical":
+                for pair in t["rows"]:
+                    self.assertNotEqual(
+                        pair[1], "",
+                        f"{block['title']} 표의 '{pair[0]}' 값이 비어 있는데 열로 남아 있습니다",
+                    )
+                continue
+            for i, k in enumerate(t["keys"]):
+                col_values = [row[i] for row in t["rows"]]
+                self.assertTrue(
+                    any(v != "" for v in col_values),
+                    f"{block['title']} 표의 '{k}' 열이 전부 빈칸입니다",
+                )
+
+    def test_records_without_source_field_are_not_split(self):
+        """source가 없는 다른 섹션에는 이 분리가 적용되면 안 된다."""
+        got = run_js('sectionBlocks([{a:1},{a:2}])')
+        self.assertEqual(len(got), 1)
+
+    def test_partial_source_presence_falls_back_to_a_single_table(self):
+        """일부 레코드만 source를 가지면(예상 밖 응답) 안전하게 단일
+        표로 그린다 — 어중간하게 갈라 데이터를 잃는 쪽보다 낫다."""
+        got = run_js('sectionBlocks([{source:"elestock",a:1},{a:2}])')
+        self.assertEqual(len(got), 1)
+
+    def test_source_group_title_does_not_collide_with_bulk_holders_label(self):
+        """bulk_holders 섹션(fetch_shareholder_status, 최신 현황)과
+        elestock(fetch_insider_timeline, 전체 이력)은 서로 다른 데이터라
+        같은 "5% 대량보유" 라벨을 쓰면 라벨 충돌 검사에 걸리고 사용자도
+        두 표를 구분할 수 없다."""
+        got = run_js('sectionBlocks([{source:"elestock",a:1}])')
+        self.assertNotEqual(got[0]["title"], "5% 대량보유")
+
+    def test_source_value_is_not_repeated_as_a_mismatched_caption(self):
+        """리뷰 지적 ③: 표 제목이 이미 "5% 대량보유 이력"(label(source))인데
+        바로 아래 캡션에 "출처: elestock"(원본 값)이 다시 떴다 — 같은
+        것을 두 가지로 부르는 표기 불일치. 표 안에서는 source 필드
+        자체를 빼서 이 중복을 없앤다(값은 title에 여전히 남는다 — 숨기는
+        게 아니다).
+        """
+        records = [
+            {"source": "elestock", "rcept_no": "1", "nm": "오정강"},
+            {"source": "elestock", "rcept_no": "2", "nm": "이승호"},
+        ]
+        got = run_js(f"sectionBlocks({json.dumps(records, ensure_ascii=False)})")
+        table = got[0]["table"]
+        self.assertEqual(got[0]["title"], "5% 대량보유 이력")
+        caption_keys = [c["key"] for c in table["caption"]]
+        self.assertNotIn("source", table["keys"])
+        self.assertNotIn("source", caption_keys,
+                         "표 제목이 이미 출처를 말하는데 캡션에도 원본 값이 남아 있습니다")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestInsiderTimelineRenderWiring(unittest.TestCase):
+    """sectionBlocks 단독 검증만으로는 renderSection(ui.js) 호출부가 실제로
+    이 분기를 타는지 못 잡는다(이 저장소에서 이미 여러 번 난 "정의만 있고
+    호출부가 안 바뀐" 사고 유형) — app.js·ui.js를 실제로 함께 실행해
+    소제목(h3)이 실제 DOM에 여러 개 나오는지 확인한다.
+    """
+
+    def test_multiple_source_tables_render_as_separate_titled_blocks(self):
+        records = [
+            {"source": "elestock", "rcept_no": "1", "nm": "오정강"},
+            {"source": "hyslr", "mxmm_shrholdr_nm": "오정강 외 2인"},
+        ]
+        got = run_render_section(
+            '"insider_timeline"', json.dumps(records, ensure_ascii=False)
+        )
+        self.assertIn("5% 대량보유 이력", got["titles"])
+        self.assertIn("최대주주 현황", got["titles"])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestGroupRouting(unittest.TestCase):
     """SECTION_GROUPS를 실제로 소비하는 groupTitleFor/groupOrderIndex 검증.
 
@@ -752,21 +892,45 @@ class TestGroupRouting(unittest.TestCase):
         self.assertEqual(run_js('groupTitleFor("audit_history")'), "감사·부실")
 
     def test_unknown_key_falls_back_to_catchall_group(self):
-        """2단 `doc:<rcept_no>` 키처럼 SECTION_GROUPS에 없는 키도 어딘가에는
-        나와야 한다 — 그룹이 없다고 사라지면 안 된다.
+        """2단 `doc:<rcept_no>` 키(개별 원문 섹션, addDocListEntry가 목록
+        하나로 모으기 전의 원본 키)처럼 SECTION_GROUPS에 없는 키도 어딘가에는
+        나와야 한다 — 그룹이 없다고 사라지면 안 된다. 이 개별 키 자체는
+        renderSection에 직접 넘어가지 않으므로(DOC_LIST_KEY로 모아서만
+        그린다) "기타"로 떨어지는 것이 실제로는 문제가 안 된다 — 아래
+        doc_list(목록 키) 테스트와는 별개다.
         """
         got = run_js('groupTitleFor("doc:20240301000001")')
         self.assertEqual(got, "기타")
 
+    def test_doc_list_gets_its_own_section_not_the_catchall(self):
+        """doc_list(공시 원문 목록, DOC_LIST_KEY)는 STAGE1_SPECS에 없는
+        합성 키지만 실제로 renderSection(ui.js)에 그대로 넘어가 화면에
+        그려진다 — "기타"로 떨어지면 design 문서(§7.1)가 정의한 "⑦ 공시
+        원문 열람" 자리 대신 페이지 맨 끝(다른 어떤 그룹보다도 뒤)으로
+        밀려난다. 리뷰 지적 ②의 재발 방지.
+        """
+        got = run_js('groupTitleFor("doc_list")')
+        self.assertNotEqual(got, "기타")
+        self.assertEqual(got, "공시 원문 열람")
+
     def test_group_order_follows_definition_order(self):
         got = [run_js(f'groupOrderIndex("{t}")') for t in
-               ("자금", "재무", "지배구조", "감사·부실")]
+               ("자금", "재무", "지배구조", "감사·부실", "공시 원문 열람")]
         self.assertEqual(got, sorted(got), "그룹 순서가 정의 순서를 따르지 않습니다")
+
+    def test_doc_list_group_sorts_after_the_last_stage1_group(self):
+        """design 문서 §7.1은 "⑦ 공시 원문 열람"을 감사·부실 뒤 마지막
+        정식 섹션으로 정의한다 — "기타"보다는 앞이어야 한다."""
+        audit = run_js('groupOrderIndex("감사·부실")')
+        doc_list_group = run_js('groupOrderIndex("공시 원문 열람")')
+        catchall = run_js('groupOrderIndex("기타")')
+        self.assertLess(audit, doc_list_group)
+        self.assertLess(doc_list_group, catchall)
 
     def test_unknown_group_sorts_after_all_known_groups(self):
         known_max = max(
             run_js(f'groupOrderIndex("{t}")')
-            for t in ("자금", "재무", "지배구조", "감사·부실")
+            for t in ("자금", "재무", "지배구조", "감사·부실", "공시 원문 열람")
         )
         self.assertGreater(run_js('groupOrderIndex("기타")'), known_max)
 
@@ -1116,6 +1280,124 @@ class TestFormatValue(unittest.TestCase):
         self.assertIn('"b":2', got.replace(" ", ""))
 
 
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestDocKeyRceptNo(unittest.TestCase):
+    """registry.py의 expand_stage2가 만드는 `f"doc:{rcept_no}"` 키에서
+    접수번호를 뽑는다 — ui.js가 이 값으로 본문 목록 통합(addDocListEntry)
+    분기를 태운다."""
+
+    def test_extracts_rcept_no_from_doc_prefixed_key(self):
+        self.assertEqual(
+            run_js('docKeyRceptNo("doc:20260715900769")'), "20260715900769"
+        )
+
+    def test_non_doc_key_is_null(self):
+        for expr in (
+            'docKeyRceptNo("insider_timeline")',
+            'docKeyRceptNo("doc")',
+            "docKeyRceptNo(null)",
+            "docKeyRceptNo(123)",
+        ):
+            self.assertIsNone(run_js(expr), f"{expr}가 doc: 키로 잘못 인식됐습니다")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestDocListRow(unittest.TestCase):
+    """doc:<접수번호> 섹션 값(원문 최대 20,000자 포함)을 본문 목록 한 줄로
+    줄인다 — 원문 자체는 목록에 넣지 않는다(사용자 승인 방향: 원문은
+    우측 패널에서 본다), 몇 자짜리 문서인지·잘렸는지는 남긴다.
+    """
+
+    def test_row_carries_rcept_no_char_count_and_truncated(self):
+        got = run_js(
+            'docListRow("20260715900769",'
+            ' {text:"본문 내용", char_count:3988, truncated:false,'
+            '  main_file:"20260715900769.xml", files:["20260715900769.xml"]})'
+        )
+        self.assertEqual(got["rcept_no"], "20260715900769")
+        self.assertEqual(got["char_count"], 3988)
+        self.assertEqual(got["truncated"], False)
+
+    def test_full_text_is_not_carried_into_the_row(self):
+        """행에 원문 전체가 실리면 목록으로 나눈 의미가 없다."""
+        got = run_js(
+            'docListRow("1", {text:"가".repeat(4000), char_count:4000, truncated:false})'
+        )
+        self.assertNotIn("text", got, "원문 전체가 목록 행에 그대로 남아 있습니다")
+
+    def test_missing_value_does_not_crash(self):
+        got = run_js('docListRow("1", null)')
+        self.assertEqual(got["rcept_no"], "1")
+        self.assertEqual(got["files"], [], "value가 없어도 files는 빈 배열이어야 합니다")
+
+    def test_row_carries_main_file_and_files(self):
+        """리뷰 지적 ①: main_file·files가 본문 어디에서도 도달 불가였다 —
+        se_server/api/handlers.py의 우측 패널 응답(`_disclosure`)은
+        rcept_no·text·char_count·truncated만 주므로, 목록에서마저 빠지면
+        이 두 필드는 화면 전체에서 사라진다. 실측(field-inventory) 기준
+        34건 중 33건이 main_file에 실제 파일명을 갖고 있다.
+        """
+        got = run_js(
+            'docListRow("20260715900769",'
+            ' {text:"x", char_count:1, truncated:false,'
+            '  main_file:"20260715900769.xml", files:["20260715900769.xml"]})'
+        )
+        self.assertEqual(got["main_file"], "20260715900769.xml")
+        self.assertEqual(got["files"], ["20260715900769.xml"])
+
+    def test_row_normalizes_non_array_files_to_empty_list(self):
+        """files가 배열이 아닌 예상 밖 값이면(예상 밖 응답) 조용히 무너지지
+        않고 빈 배열로 안전하게 떨어진다."""
+        got = run_js(
+            'docListRow("1", {char_count:0, truncated:false, files:null})'
+        )
+        self.assertEqual(got["files"], [])
+
+    def test_doc_prefixed_key_is_stripped_from_rcept_no(self):
+        """실측 결함 재현: 호출부가 docKeyRceptNo로 미리 벗기지 않고
+        섹션 키(`doc:<접수번호>`)를 그대로 넘겨도 rcept_no 열에 접두어가
+        남으면 안 된다. 접두어가 남으면 openDocPanel(ui.js)이
+        `/api/se/disclosure/doc%3A...`를 요청하는데, se_server/api/router.py의
+        rcept_no 패턴(`[0-9]{8,20}`, 숫자만)과 매칭되지 않아 404가 난다 —
+        프로덕션 실측: `/api/se/disclosure/doc%3A20260715900769` → 404.
+        지금 유일한 호출부(ui.js addDocListEntry)는 이미 docKeyRceptNo로
+        벗겨 넘기지만, docListRow 자신도 이 계약을 지켜야 다른 호출부가
+        실수해도 같은 사고가 재발하지 않는다.
+        """
+        got = run_js(
+            'docListRow("doc:20260715900769",'
+            ' {char_count:1, truncated:false})'
+        )
+        self.assertEqual(got["rcept_no"], "20260715900769")
+        self.assertNotIn("doc:", got["rcept_no"])
+
+    def test_already_stripped_rcept_no_passes_through_unchanged(self):
+        """정상 호출부(ui.js)가 이미 벗긴 값을 넘기는 경우 — 이중 처리로
+        값이 훼손되면 안 된다."""
+        got = run_js(
+            'docListRow("20260715900769",'
+            ' {char_count:1, truncated:false})'
+        )
+        self.assertEqual(got["rcept_no"], "20260715900769")
+
+    def test_empty_files_is_shown_as_a_fact_not_a_verdict(self):
+        """리뷰 지적 ④: ZIP을 아예 못 받은 공시는 files가 빈 배열로 온다
+        (se_server/api/handlers.py `_disclosure`의 files=[] 판별 기준과
+        동일). 목록에서 클릭하기 전에 미리 알 수 있어야 하지만, "실패"·
+        "오류" 같은 판정 어휘 없이 사실만 표기해야 한다(v0.8.5 원칙) —
+        formatValue(app.js)의 빈 배열 규칙("없음")이 그 역할을 한다.
+        """
+        row = run_js(
+            'docListRow("20260123000072",'
+            ' {text:"", char_count:0, truncated:false, main_file:"", files:[]})'
+        )
+        self.assertEqual(row["files"], [])
+        rendered = run_js(f'formatValue("files", {json.dumps(row["files"])})')
+        self.assertEqual(rendered, "없음")
+        for verdict_word in ("실패", "오류", "에러"):
+            self.assertNotIn(verdict_word, rendered)
+
+
 @unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 클릭 배선을 검증할 수 없습니다")
 class TestDocPanelClickWiring(unittest.TestCase):
     """공시 원문 패널은 rcept_no 셀 클릭에서만 열려야 한다(브리프 ①·②).
@@ -1173,6 +1455,110 @@ class TestDocPanelClickWiring(unittest.TestCase):
         만들면 안 된다는 계약의 반대쪽 확인이다."""
         got = run_doc_click('[{corp_name:"엔켐",n:1},{corp_name:"엔켐",n:2}]')
         self.assertEqual(got["captured"], [])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 클릭 배선을 검증할 수 없습니다")
+class TestDocPanelClickReachesServerRoute(unittest.TestCase):
+    """openDocPanel에 넘어가는 클릭 값이 실제로 se_server가 라우팅하는
+    값인지를 검증한다.
+
+    위 TestDocPanelClickWiring은 "docListRow/레코드에 넣은 값이
+    openDocPanel에 그대로 나오는가"만 봤다 — 자기 자신과의 일치라서 그
+    값 자체가 서버가 거부하는 형태(`doc:` 접두어가 남은 접수번호 등)여도
+    통과했다. 실제 사고: 본문의 doc: 섹션을 목록 하나로 모으면서
+    (addDocListEntry) `doc:<접수번호>` 섹션 키가 docListRow의 rcept_no로
+    그대로 새어 들어갈 뻔했고, 그 값이 그대로 openDocPanel →
+    `/api/se/disclosure/doc%3A...` 요청으로 이어져 라우터(router.py)의
+    `[0-9]{8,20}` 패턴과 매칭되지 않아 404가 났다(프로덕션 실측).
+
+    여기서는 se_server.api.router.match를 실제로 import해, 클릭이 만든
+    값으로 GET /api/se/disclosure/<값>이 실제로 라우팅되는지 그 자체를
+    확인한다 — 문자열을 하드코딩해 비교하면 서버 패턴이 바뀔 때 이
+    테스트도 같이 놓친다.
+    """
+
+    @staticmethod
+    def _routes_to_disclosure(value):
+        """value로 만든 공시 원문 요청 경로가 실제 라우터를 통과하면
+        True. ui.js의 openDocPanel이 그대로 쓰는
+        `"/api/se/disclosure/" + encodeURIComponent(rceptNo)` 조합과
+        같은 인코딩(quote)을 쓴다."""
+        from urllib.parse import quote
+
+        from se_server.api.router import match
+
+        result = match("GET", "/api/se/disclosure/" + quote(str(value), safe=""))
+        return (
+            result is not None
+            and result[0] == "disclosure"
+            and result[1].get("rcept_no") == str(value)
+        )
+
+    def test_doc_prefixed_value_does_not_route(self):
+        """이 테스트 스위트의 전제 확인: "doc:" 접두어가 남은 값은 실제로
+        라우터가 거부한다(수정 전 실측 404의 직접 원인). 이 검증이 없으면
+        아래 통과 테스트들이 애초에 무엇을 막는지 근거가 없다.
+        """
+        self.assertFalse(self._routes_to_disclosure("doc:20260715900769"))
+
+    def test_route_1_doc_list_row_click_reaches_disclosure_route(self):
+        """경로 ①: 공시 원문 목록(doc_list) 행 클릭.
+
+        서버가 실제로 만드는 섹션 키 형식(`doc:<rcept_no>`,
+        se_server/jobs/runner.py의 expand_stage2 `f"doc:{rcept_no}"`)에서
+        시작해 docKeyRceptNo → docListRow → tableLayout → tableEl → 클릭
+        까지 실제 ui.js 배선 그대로 재현한다.
+        """
+        rcept_no = "20260715900769"
+        row = run_js(
+            'docListRow(docKeyRceptNo(' + json.dumps(f"doc:{rcept_no}") + '),'
+            ' {char_count: 1, truncated: false,'
+            '  main_file: "20260715900769.xml", files: ["20260715900769.xml"]})'
+        )
+        self.assertEqual(row["rcept_no"], rcept_no)
+        got = run_doc_click(json.dumps([row]))
+        self.assertEqual(got["captured"], [rcept_no])
+        self.assertTrue(
+            self._routes_to_disclosure(got["captured"][0]),
+            f"공시 원문 목록 클릭 값 {got['captured'][0]!r}이 서버 라우터를 통과하지 못합니다",
+        )
+
+    def test_route_2_disclosures_table_rcept_no_column_reaches_disclosure_route(self):
+        """경로 ②: `disclosures` 표(Stage1, 행마다 접수번호가 달라 표 본문
+        열로 남는 일반적인 경우)의 rcept_no 열 클릭. 이 경로는 원래
+        접두어가 없어 정상 동작했지만, 값 자체가 서버 계약을 지키는지는
+        지금까지 검증한 적이 없었다.
+        """
+        rows = [
+            {"rcept_dt": "20260710", "rcept_no": "20260710000123", "report_nm": "A"},
+            {"rcept_dt": "20260715", "rcept_no": "20260715900769", "report_nm": "B"},
+        ]
+        got = run_doc_click(json.dumps(rows))
+        self.assertEqual(got["orientation"], "horizontal")
+        self.assertEqual(len(got["captured"]), 2)
+        for value in got["captured"]:
+            self.assertTrue(
+                self._routes_to_disclosure(value),
+                f"disclosures 표 클릭 값 {value!r}이 서버 라우터를 통과하지 못합니다",
+            )
+
+    def test_route_3_caption_promoted_rcept_no_reaches_disclosure_route(self):
+        """경로 ③: rcept_no가 모든 행에서 같아(affiliates·financials 실측)
+        캡션으로 승격된 경우의 클릭.
+        """
+        rows = [
+            {"rcept_no": "20260715900769", "corp_name": "엔켐", "inv_prm": "A"},
+            {"rcept_no": "20260715900769", "corp_name": "엔켐", "inv_prm": "B"},
+        ]
+        got = run_doc_click(json.dumps(rows))
+        caption_keys = [c["key"] for c in got["caption"]]
+        self.assertIn("rcept_no", caption_keys,
+                     "이 테스트 자체가 재현하려는 전제(rcept_no가 캡션으로 승격됨)가 깨졌습니다")
+        self.assertEqual(got["captured"], ["20260715900769"])
+        self.assertTrue(
+            self._routes_to_disclosure(got["captured"][0]),
+            f"캡션 승격 클릭 값 {got['captured'][0]!r}이 서버 라우터를 통과하지 못합니다",
+        )
 
 
 @unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
@@ -1911,6 +2297,367 @@ class TestDocPanelRendersDocumentBlocks(unittest.TestCase):
         }, ensure_ascii=False)
         got = run_doc_panel(body)
         self.assertIn("12,345자 중 일부입니다", got["flat"])
+
+
+# ── doc: 섹션 본문 목록 통합(ui.js의 addDocListEntry) ──────────────────
+#
+# 원인: documentBlocks(파이프를 표로 복원)는 openDocPanel(우측 패널)에만
+# 쓰이고, 본문의 doc: 섹션은 여전히 {title:"본문", text: 수천 자}로 그대로
+# 나갔다(엔켐 실측 34건 × 약 13만 자). 승인된 수정 방향: 본문에서는 doc:
+# 원문 전체를 걷어내고 "어떤 공시를 가져왔는지" 목록 하나만 남긴다 —
+# 원문은 접수번호를 클릭해 우측 패널에서 본다.
+#
+# 여기서는 app.js·ui.js를 실제로 같은 vm 컨텍스트에서 실행해(문자열 검사가
+# 아니라) addDocListEntry를 여러 번 불렀을 때 h2가 하나만 생기는지, 그리고
+# 목록의 각 행을 실제로 클릭하면 openDocPanel이 정확한 접수번호로 불리는지
+# 확인한다 — "정의만 있고 호출부가 안 바뀐" 사고가 이 프로젝트에서 이미
+# 여러 번 났다(브리프 지적).
+_DOC_LIST_HARNESS = r"""
+const vm = require("vm");
+const fs = require("fs");
+
+const ELEMENTS = Object.create(null);
+
+class FakeEl {
+  constructor(tag) {
+    this.tag = tag;
+    this.children = [];
+    this._text = "";
+    this._className = "";
+    this._id = "";
+    this.dataset = {};
+    this._listeners = {};
+  }
+  appendChild(c) { this.children.push(c); return c; }
+  insertBefore(node, ref) {
+    const idx = ref ? this.children.indexOf(ref) : -1;
+    if (idx === -1) this.children.push(node);
+    else this.children.splice(idx, 0, node);
+    return node;
+  }
+  removeChild(c) {
+    const idx = this.children.indexOf(c);
+    if (idx !== -1) this.children.splice(idx, 1);
+    return c;
+  }
+  get firstChild() { return this.children.length ? this.children[0] : null; }
+  insertRow() { const tr = new FakeEl("tr"); this.appendChild(tr); return tr; }
+  insertCell() { const td = new FakeEl("td"); this.appendChild(td); return td; }
+  createTHead() { const el = new FakeEl("thead"); this.appendChild(el); return el; }
+  createTBody() { const el = new FakeEl("tbody"); this.appendChild(el); return el; }
+  addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); }
+  dispatch(type) { (this._listeners[type] || []).forEach(function (fn) { fn({}); }); }
+  set textContent(v) { this._text = String(v); this.children = []; }
+  get textContent() { return this._text; }
+  set className(v) { this._className = v; }
+  get className() { return this._className; }
+  set id(v) { this._id = v; ELEMENTS[v] = this; }
+  get id() { return this._id; }
+}
+
+const bodyEl = new FakeEl("div");
+bodyEl.id = "body";
+
+function collectByTag(node, tag, out) {
+  out = out || [];
+  if (!node) return out;
+  if (node.tag === tag) out.push(node);
+  (node.children || []).forEach(function (c) { collectByTag(c, tag, out); });
+  return out;
+}
+
+function collectDocEls(node, out) {
+  out = out || [];
+  if (!node) return out;
+  if (node.className === "doc") out.push(node);
+  (node.children || []).forEach(function (c) { collectDocEls(c, out); });
+  return out;
+}
+
+const sandbox = {
+  console: console,
+  document: {
+    createElement: function (tag) { return new FakeEl(tag); },
+    createDocumentFragment: function () { return new FakeEl("#fragment"); },
+    createTextNode: function (t) { const n = new FakeEl("#text"); n.textContent = t; return n; },
+    addEventListener: function () {},
+    getElementById: function (id) { return ELEMENTS[id] || null; },
+  },
+  localStorage: {
+    getItem: function () { return null; },
+    setItem: function () {},
+    removeItem: function () {},
+  },
+  fetch: function () { return Promise.reject(new Error("no network in test")); },
+};
+vm.createContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[1], "utf-8"), { filename: "app.js" }).runInContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).runInContext(sandbox);
+
+const CAPTURED = [];
+sandbox.openDocPanel = function (rceptNo) { CAPTURED.push(rceptNo); };
+
+const entries = %(entries)s;
+entries.forEach(function (e) { sandbox.addDocListEntry(e.rcept_no, e.value); });
+
+const h2s = collectByTag(bodyEl, "h2", []);
+const docEls = collectDocEls(bodyEl, []);
+docEls.forEach(function (e) { e.dispatch("click"); });
+
+process.stdout.write(JSON.stringify({
+  h2Texts: h2s.map(function (h) { return h.textContent; }),
+  docCellCount: docEls.length,
+  captured: CAPTURED,
+}));
+"""
+
+
+def run_doc_list(entries_js: str):
+    script = _DOC_LIST_HARNESS % {"entries": entries_js}
+    out = subprocess.run(
+        [_NODE, "-e", script, str(_APP), str(_UI)],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    if out.returncode != 0:
+        raise AssertionError(f"node 실행 실패:\n{out.stderr}")
+    return json.loads(out.stdout)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 목록 렌더링을 검증할 수 없습니다")
+class TestDocListConsolidation(unittest.TestCase):
+    """doc:<접수번호> 섹션이 도착할 때마다 새 h2로 원문 전체를 쏟아내던
+    문제(엔켐 실측 34건 × 약 13만 자)의 수정 — 본문에는 "어떤 공시를
+    가져왔는지" 목록 하나만 남고, 각 행에서 우측 패널을 열 수 있어야 한다
+    (그러지 않으면 원문을 볼 방법이 사라져 진짜로 숨기는 게 된다).
+    """
+
+    _ENTRIES = json.dumps([
+        {"rcept_no": "20260715900769",
+         "value": {"text": "엔켐/회사합병 결정" + ("가" * 3900),
+                    "char_count": 3988, "truncated": False}},
+        {"rcept_no": "20260708900785",
+         "value": {"text": "엔켐/전환사채" + ("나" * 1600),
+                    "char_count": 1676, "truncated": False}},
+        {"rcept_no": "20260123000072",
+         "value": {"text": "", "char_count": 0, "truncated": False}},
+    ], ensure_ascii=False)
+
+    def test_all_entries_collapse_into_a_single_titled_section(self):
+        got = run_doc_list(self._ENTRIES)
+        matches = [t for t in got["h2Texts"] if t == "공시 원문 목록"]
+        self.assertEqual(
+            len(matches), 1,
+            f"doc: 섹션이 여러 개의 h2로 흩어졌거나 목록 자체가 없습니다 "
+            f"(h2: {got['h2Texts']})",
+        )
+
+    def test_every_entry_is_clickable_and_opens_its_own_doc_panel(self):
+        got = run_doc_list(self._ENTRIES)
+        self.assertEqual(got["docCellCount"], 3, "목록 행 수만큼 클릭 가능한 셀이 없습니다")
+        self.assertEqual(
+            sorted(got["captured"]),
+            sorted(["20260715900769", "20260708900785", "20260123000072"]),
+            "목록 항목을 클릭해도 우측 패널(openDocPanel)이 열리지 않습니다",
+        )
+
+    _ENTRIES_WITH_MAIN_FILE = json.dumps([
+        {"rcept_no": "20260715900769",
+         "value": {"text": "엔켐/회사합병 결정" + ("가" * 3900),
+                    "char_count": 3988, "truncated": False,
+                    "main_file": "20260715900769.xml",
+                    "files": ["20260715900769.xml"]}},
+        {"rcept_no": "20260708900785",
+         "value": {"text": "엔켐/전환사채" + ("나" * 1600),
+                    "char_count": 1676, "truncated": False,
+                    "main_file": "20260708900785.xml",
+                    "files": ["20260708900785.xml"]}},
+        # ZIP 수신 실패 사례(files=[]) — 리뷰 지적 ④.
+        {"rcept_no": "20260123000072",
+         "value": {"text": "", "char_count": 0, "truncated": False,
+                    "main_file": "", "files": []}},
+    ], ensure_ascii=False)
+
+    def test_rcept_no_click_path_survives_adding_main_file_and_files_columns(self):
+        """리뷰 지적 ①로 main_file·files 열을 표에 추가하면 열 순서가
+        바뀐다 — rcept_no 클릭 배선(tableEl의 table.keys.indexOf("rcept_no"))이
+        키로 열을 찾는지, 고정된 열 위치를 가정하는지를 여기서 실제로
+        검증한다. 셀 인덱스가 밀려 배선이 끊기면 이 테스트가 잡는다."""
+        got = run_doc_list(self._ENTRIES_WITH_MAIN_FILE)
+        self.assertEqual(got["docCellCount"], 3,
+                         "main_file·files 열이 추가되며 클릭 가능한 셀 수가 달라졌습니다")
+        self.assertEqual(
+            sorted(got["captured"]),
+            sorted(["20260715900769", "20260708900785", "20260123000072"]),
+            "main_file·files 열 추가 후 우측 패널 클릭 경로가 끊겼습니다",
+        )
+
+
+# 위 _DOC_LIST_HARNESS는 addDocListEntry만 재현한다 — showGate()·
+# renderHeadPlaceholder()가 실제로 DOC_LIST_ROWS를 비우는지는 그 두 함수가
+# 참조하는 #gate·#main·#panel 등 추가 DOM이 필요해 별도 하네스로 확인한다
+# (브리프 제약: "showGate()가 패널·#body 등을 비우는 성질을 깨뜨리지
+# 말 것 — 새로 만드는 목록도 이 정리에 포함돼야 한다").
+_DOC_LIST_RESET_HARNESS = r"""
+const vm = require("vm");
+const fs = require("fs");
+
+const ELEMENTS = Object.create(null);
+
+class FakeClassList {
+  constructor() { this._set = new Set(); }
+  add(c) { this._set.add(c); }
+  remove(c) { this._set.delete(c); }
+  contains(c) { return this._set.has(c); }
+}
+
+// 실제 브라우저의 document.getElementById()는 문서(연결된 트리)에서만
+// 찾는다 — 노드를 removeChild로 떼어내면 그 id는 더 이상 찾히지 않는다.
+// 이 하네스의 ELEMENTS는 한 번 등록되면 지워지지 않는 평평한 사전이라
+// 그 성질을 흉내 내지 못하면(떼어낸 뒤에도 여전히 찾힌다), showGate()
+// 이후 sectionHolder()/groupHolder()가 실제로는 새 노드를 만들어야 할
+// 자리에서 여전히 붙어 있는 것처럼 착각한 옛(분리된) 노드를 재사용해
+// buggy하지 않은 실제 동작을 buggy한 것처럼 오검출한다 — removeChild에서
+// 떼어낸 서브트리 전체의 id를 여기서 지워 실제 DOM과 같은 성질을 맞춘다.
+function deregister(node) {
+  if (!node) return;
+  if (node._id) delete ELEMENTS[node._id];
+  (node.children || []).forEach(deregister);
+}
+
+class FakeEl {
+  constructor(tag) {
+    this.tag = tag;
+    this.children = [];
+    this._text = "";
+    this._className = "";
+    this._id = "";
+    this.dataset = {};
+    this._listeners = {};
+    this.hidden = false;
+    this.classList = new FakeClassList();
+  }
+  appendChild(c) { this.children.push(c); return c; }
+  insertBefore(node, ref) {
+    const idx = ref ? this.children.indexOf(ref) : -1;
+    if (idx === -1) this.children.push(node);
+    else this.children.splice(idx, 0, node);
+    return node;
+  }
+  removeChild(c) {
+    const idx = this.children.indexOf(c);
+    if (idx !== -1) this.children.splice(idx, 1);
+    deregister(c);
+    return c;
+  }
+  get firstChild() { return this.children.length ? this.children[0] : null; }
+  insertRow() { const tr = new FakeEl("tr"); this.appendChild(tr); return tr; }
+  insertCell() { const td = new FakeEl("td"); this.appendChild(td); return td; }
+  createTHead() { const el = new FakeEl("thead"); this.appendChild(el); return el; }
+  createTBody() { const el = new FakeEl("tbody"); this.appendChild(el); return el; }
+  addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); }
+  dispatch(type) { (this._listeners[type] || []).forEach(function (fn) { fn({}); }); }
+  set textContent(v) { this._text = String(v); this.children = []; }
+  get textContent() { return this._text; }
+  set className(v) { this._className = v; }
+  get className() { return this._className; }
+  set id(v) { this._id = v; ELEMENTS[v] = this; }
+  get id() { return this._id; }
+}
+
+function makeEl(tag, id) {
+  const el = new FakeEl(tag);
+  if (id) el.id = id;
+  return el;
+}
+
+const bodyEl = makeEl("div", "body");
+makeEl("nav", "toc");
+makeEl("div", "company-info");
+makeEl("section", "gate");
+makeEl("main", "main");
+makeEl("p", "gate-msg");
+makeEl("aside", "panel");
+makeEl("div", "panel-body");
+makeEl("span", "head-name");
+makeEl("div", "bar");
+makeEl("button", "actor-btn");
+
+function collectDocEls(node, out) {
+  out = out || [];
+  if (!node) return out;
+  if (node.className === "doc") out.push(node);
+  (node.children || []).forEach(function (c) { collectDocEls(c, out); });
+  return out;
+}
+
+const sandbox = {
+  console: console,
+  document: {
+    createElement: function (tag) { return new FakeEl(tag); },
+    createDocumentFragment: function () { return new FakeEl("#fragment"); },
+    createTextNode: function (t) { const n = new FakeEl("#text"); n.textContent = t; return n; },
+    addEventListener: function () {},
+    getElementById: function (id) { return ELEMENTS[id] || null; },
+  },
+  localStorage: {
+    getItem: function () { return null; },
+    setItem: function () {},
+    removeItem: function () {},
+  },
+  fetch: function () { return Promise.reject(new Error("no network in test")); },
+};
+vm.createContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[1], "utf-8"), { filename: "app.js" }).runInContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).runInContext(sandbox);
+
+sandbox.openDocPanel = function () {};
+
+sandbox.addDocListEntry("1", { text: "a", char_count: 1, truncated: false });
+sandbox.addDocListEntry("2", { text: "b", char_count: 1, truncated: false });
+const beforeReset = collectDocEls(bodyEl, []).length;
+
+%(reset_call)s;
+
+sandbox.addDocListEntry("3", { text: "c", char_count: 1, truncated: false });
+const afterReset = collectDocEls(bodyEl, []).length;
+
+process.stdout.write(JSON.stringify({ beforeReset: beforeReset, afterReset: afterReset }));
+"""
+
+
+def run_doc_list_reset(reset_call: str):
+    script = _DOC_LIST_RESET_HARNESS % {"reset_call": reset_call}
+    out = subprocess.run(
+        [_NODE, "-e", script, str(_APP), str(_UI)],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    if out.returncode != 0:
+        raise AssertionError(f"node 실행 실패:\n{out.stderr}")
+    return json.loads(out.stdout)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestDocListResetsWithShowGateAndPlaceholder(unittest.TestCase):
+    """showGate()·renderHeadPlaceholder()가 패널·#body·헤더 등을 비우는
+    성질(브리프 제약)에 이 새 목록(DOC_LIST_ROWS)도 포함돼야 한다 — 안
+    그러면 로그아웃 후 다음 사용자가, 또는 새 회사를 분석한 사용자가
+    이전 회사의 공시 목록 행이 이어붙은 화면을 보게 된다.
+    """
+
+    def test_show_gate_starts_a_fresh_doc_list(self):
+        got = run_doc_list_reset("sandbox.showGate()")
+        self.assertEqual(got["beforeReset"], 2)
+        self.assertEqual(
+            got["afterReset"], 1,
+            "showGate() 이후에도 이전 목록 행이 새 목록에 남아 있습니다",
+        )
+
+    def test_render_head_placeholder_starts_a_fresh_doc_list(self):
+        got = run_doc_list_reset('sandbox.renderHeadPlaceholder("새 회사")')
+        self.assertEqual(
+            got["afterReset"], 1,
+            "renderHeadPlaceholder() 이후에도 이전 목록 행이 남아 있습니다",
+        )
 
 
 # ── #body(그리드)와 .sec 사이 DOM 중간 요소가 전부 display:contents인지 ──

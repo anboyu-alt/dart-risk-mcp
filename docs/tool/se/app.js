@@ -30,11 +30,20 @@ function resumeTarget(saved, now) {
 
 // registry.STAGE1_SPECS[*].section 과 같은 그룹이다. 서버가 이미 화면
 // 그룹을 알고 있으므로 여기서 새로 정하지 않고 그대로 따른다.
+//
+// "공시 원문 열람"(doc_list)만 예외다 — 이 키는 STAGE1_SPECS에 없다(2단
+// `doc:<접수번호>` 섹션들을 addDocListEntry가 한 목록으로 모은 합성 키,
+// DOC_LIST_KEY 참고). 여기 없으면 groupTitleFor가 catch-all "기타"로
+// 떨어뜨려 본문 맨 끝(다른 어떤 정식 그룹보다도 뒤)으로 밀려난다 —
+// design 문서(2026-07-26-risk-viewer-se-design.md §7.1)는 본문 섹션
+// 순서에서 "⑦ 공시 원문 열람"을 마지막 정식 섹션으로 정의하므로, 그
+// 자리를 그대로 준다(감사·부실 뒤, 아직 "기타"는 아님).
 const SECTION_GROUPS = [
   { title: "자금", keys: ["fund_usage", "affiliates", "disclosures"] },
   { title: "재무", keys: ["financials", "indicators"] },
   { title: "지배구조", keys: ["shareholders", "insider_timeline", "executive_roster"] },
   { title: "감사·부실", keys: ["audit_history", "debt_balance", "distress", "dividends"] },
+  { title: "공시 원문 열람", keys: ["doc_list"] },
 ];
 
 function formatCount(n) {
@@ -106,6 +115,17 @@ const LABELS = Object.assign(Object.create(null), {
   bfefrmtrm_nm: "전전기명", bfefrmtrm_dt: "전전기 기간",
   bfefrmtrm_amount: "전전기 금액",
 
+  // ── 내부자 지분 (source 필드의 값 자체 — sourceGroupedBlocks의 표
+  // 제목으로 쓴다. dart_client.fetch_insider_timeline이 4개 엔드포인트를
+  // 합치며 붙이는 값이라 필드명이 아니라 필드 "값"을 키로 쓴다 — label()이
+  // 필드명과 값을 구분하지 않고 같은 사전에서 찾으므로 여기 등록해도 된다.
+  // bulk_holders의 "5% 대량보유"와 겹치면 라벨 충돌 검사(test_no_label_
+  // collides_with_a_different_raw_key)에 걸린다 — elestock은 전체 이력을
+  // 반환하고(fetch_insider_timeline 주석) bulk_holders는 최신 현황만이라
+  // 뜻도 실제로 다르므로 "이력"을 붙여 구분한다.
+  elestock: "5% 대량보유 이력", hyslr: "최대주주 현황",
+  hyslr_chg: "최대주주 변동현황", exec_treasury: "임원·주요주주 자기주식",
+
   // ── 내부자 지분
   repror: "보고자", source: "출처", relate: "관계", stock_knd: "주식 종류",
   isu_exctv_ofcps: "직위", isu_exctv_rgist_at: "등기 여부",
@@ -165,6 +185,9 @@ const LABELS = Object.assign(Object.create(null), {
   debt_balance: "채무증권 잔액",
   distress: "부실 징후",
   dividends: "배당",
+
+  // ── doc: 섹션을 본문에서 모으는 목록(Task 2). DOC_LIST_KEY와 같은 값.
+  doc_list: "공시 원문 목록",
 });
 
 /** 키 → 한국어 라벨. 없으면 원본 키 그대로(숨기지 않는다). */
@@ -415,6 +438,91 @@ function isPlainObject(v) {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
+/** records(같은 source 그룹) 안에서, 표시했을 때(formatValue 기준) 모든
+ *  행이 빈 문자열인 열을 제거한다. "표시했을 때"를 기준으로 삼는 이유는
+ *  0과 false를 잃지 않기 위해서다 — formatValue(0)은 "0"이고 이는 빈
+ *  문자열이 아니므로 지워지지 않는다(값이 있는 데이터를 조용히 숨기지
+ *  않는다는 이 화면의 원칙과 같다). 값이 하나라도 있는 열은 반드시 남는다.
+ *
+ *  insider_timeline이 대표 사례다(dart_client.fetch_insider_timeline —
+ *  elestock·hyslr·hyslr_chg·exec_treasury 4개 엔드포인트를 합친 결과라
+ *  레코드마다 자기 엔드포인트 필드만 채우고 나머지는 전부 null이다).
+ *  source별로 나눈(sourceGroupedBlocks) 뒤에도 그 그룹 안에서마저 전부
+ *  비는 열(분기·연도별 응답 형태 차이 등)이 남을 수 있어 한 번 더 걷어낸다.
+ */
+function dropAllEmptyColumns(records) {
+  if (!Array.isArray(records) || records.length === 0) return records;
+  const keys = [];
+  const seen = new Set();
+  for (const r of records) {
+    for (const k of Object.keys(r)) if (!seen.has(k)) { seen.add(k); keys.push(k); }
+  }
+  const emptyKeys = keys.filter(function (k) {
+    return records.every(function (r) { return formatValue(k, r[k]) === ""; });
+  });
+  if (emptyKeys.length === 0) return records;
+  const emptySet = new Set(emptyKeys);
+  return records.map(function (r) {
+    const out = {};
+    for (const k of Object.keys(r)) if (!emptySet.has(k)) out[k] = r[k];
+    return out;
+  });
+}
+
+/** 레코드 전부가 비어 있지 않은 문자열 source 필드를 가지면 true다.
+ *
+ *  이 조건으로만 sourceGroupedBlocks를 태운다 — "source가 없는 데이터
+ *  (다른 섹션)에는 이 분리가 적용되면 안 된다"는 요구사항을 지키는
+ *  유일한 문(gate)이다. 일부 레코드만 source를 가지면(예상 밖 응답)
+ *  false를 돌려줘 안전하게 단일 표로 폴백한다 — 어중간하게 갈라 데이터를
+ *  잃는 쪽보다 낫다.
+ */
+function recordsHaveSourceField(records) {
+  return records.length > 0 && records.every(function (r) {
+    return isPlainObject(r) && typeof r.source === "string" && r.source !== "";
+  });
+}
+
+/** source별로 레코드를 나눠 작은 표 여러 개(제목 + 표)로 만든다.
+ *
+ *  insider_timeline 실측(field-inventory): 접힌 26개 항목 중 값이 있는
+ *  열이 0개인 행이 나왔다 — 4개 엔드포인트를 합친 레코드를 한 표로
+ *  그리면 레코드마다 자기 엔드포인트 필드만 채우고 나머지 30여 열은
+ *  전부 비어 있기 때문이다. source별로 나누면 각 표가 자기 엔드포인트
+ *  필드만 갖게 되어 열 수가 줄고 빈칸이 사라진다(dropAllEmptyColumns가
+ *  그 안에서마저 전부 비는 열을 한 번 더 걷어낸다).
+ *
+ *  그룹 순서는 레코드가 등장하는 순서(첫 등장 기준) 그대로 둔다 — 임의로
+ *  재정렬하면 실측 정렬(rcept_dt·bsns_year 내림차순, fetch_insider_timeline
+ *  주석 참고)이 흐트러진다.
+ */
+function sourceGroupedBlocks(records) {
+  const order = [];
+  const groups = new Map();
+  for (const r of records) {
+    const s = r.source;
+    if (!groups.has(s)) { groups.set(s, []); order.push(s); }
+    groups.get(s).push(r);
+  }
+  const blocks = [];
+  for (const s of order) {
+    // 그룹 안에서는 source 필드 자체를 뺀다. 값이 그룹 전체에서 같은
+    // 한 값(s)뿐이라 tableLayout이 그대로 두면 상수 열로 캡션에 올라가
+    // "출처: elestock" 식으로 뜨는데, 표 제목(title = label(s), 예: "5%
+    // 대량보유 이력")이 이미 같은 정보를 한국어로 말하고 있다 — 같은
+    // 것을 원본 키 값과 한국어 라벨 두 가지로 부르는 표기 불일치였다.
+    // 숨기는 게 아니다: 값 자체는 title에 여전히 그대로 남는다.
+    const withoutSource = groups.get(s).map(function (r) {
+      const copy = Object.assign({}, r);
+      delete copy.source;
+      return copy;
+    });
+    const t = tableLayout(dropAllEmptyColumns(withoutSource));
+    if (t) blocks.push({ title: label(s), table: t });
+  }
+  return blocks;
+}
+
 // 표 셀 하나(max-width:280px)에 욱여넣기엔 너무 긴 문자열의 기준. 공시
 // 원문(`doc:` 섹션의 text, 최대 8000자)이 대표 사례 — 다음 태스크가 이런
 // 값을 우측 패널로 옮길 예정이니, 여기서는 표에 밀어넣지만 않으면 된다.
@@ -496,7 +604,13 @@ function sectionBlocks(value, depth, key) {
     // 항목(문자열 등)을 "값" 한 칸에 감싸서 보존한 뒤 넘긴다. 그러지
     // 않으면 tableLayout이 비객체 항목을 조용히 걸러내(rows 필터), 예를
     // 들어 independence_warnings(문자열 리스트)가 흔적 없이 사라진다.
-    const t = tableLayout(toRecords(value) || []);
+    const records = toRecords(value) || [];
+    // insider_timeline처럼 레코드 전부가 source 필드를 가지면(4개
+    // 엔드포인트를 합친 결과) source별로 작은 표 여러 개로 나눈다 —
+    // source가 없는 다른 섹션은 이 분기를 타지 않는다(recordsHaveSourceField
+    // 계약).
+    if (recordsHaveSourceField(records)) return sourceGroupedBlocks(records);
+    const t = tableLayout(records);
     return t ? [{ title: null, table: t }] : [];
   }
 
@@ -660,6 +774,64 @@ function stripMarkdownHeadingHash(line) {
   return line.replace(/^(\s*)#{1,6}(?=\s|$)\s*/, "$1");
 }
 
+// 본문에서 doc:<접수번호> 섹션을 모으는 목록 섹션의 키. LABELS의
+// doc_list 항목과 짝을 이룬다. ui.js가 이 값으로 renderSection을 호출해
+// 표를 (누적이 아니라) 매번 통째로 다시 그린다(renderSection 계약).
+const DOC_LIST_KEY = "doc_list";
+
+/** "doc:<접수번호>" 형태의 섹션 키에서 접수번호만 뽑는다. 아니면 null.
+ *  registry.py의 expand_stage2가 `f"doc:{rcept_no}"`로 만드는 키와 짝이다. */
+function docKeyRceptNo(key) {
+  return (typeof key === "string" && key.indexOf("doc:") === 0) ? key.slice(4) : null;
+}
+
+/** doc:<접수번호> 섹션 값을 본문 목록의 행 하나로 줄인다.
+ *
+ * **원문(text, 최대 20,000자)은 목록에 넣지 않는다.** 본문에 그대로
+ * 내보내면 엔켐 실측 기준 34건 × 약 13만 자가 쏟아진다(field-inventory) —
+ * 원문은 rcept_no를 클릭해 우측 패널(openDocPanel)에서 본다. 여기서는
+ * "어떤 공시를 가져왔는지"만 사실대로 남긴다: 접수번호(rcept_no 키를
+ * 그대로 써야 ui.js의 기존 클릭 배선 — table.keys.indexOf("rcept_no") —
+ * 이 그대로 작동한다), 주 파일·파일 목록, 글자 수, 잘렸는지 여부.
+ *
+ * main_file·files는 이전에는 본문 표의 열이었다(공시 원문을 doc: 원문
+ * 그대로 내보내던 시절). text를 목록으로 바꾸며 이 둘도 함께 빠졌는데,
+ * se_server/api/handlers.py의 우측 패널 응답(`_disclosure`)은
+ * rcept_no·text·char_count·truncated만 주고 files·main_file은 주지
+ * 않는다 — 그 결과 이 두 필드는 화면 어디에서도 도달 불가능해졌다.
+ * 값이 있는 데이터를 조용히 숨기지 않는다는 이 화면의 원칙(위 LABELS
+ * 주석과 동일)에 따라 목록에 되살린다. 실측(field-inventory) 기준
+ * main_file은 34건 중 33건에 실제 파일명(예: "20260715900769.xml")이
+ * 있고, files도 함께 채워져 있다(파일이 여러 개인 공시도 있어 배열
+ * 그대로 둔다 — formatValue가 원소를 쉼표로 이어 보여준다).
+ *
+ * files가 빈 배열([])이면(ZIP을 아예 못 받은 경우 — handlers.py의
+ * `_disclosure` 주석: "files=[]인 완전한 빈 dict") formatValue(app.js)가
+ * 그 사실 그대로 "없음"으로 보여준다 — 목록 단계에서부터 이 공시는 클릭해도
+ * 원문이 없다는 것을 미리 알 수 있다(판정 어휘 없이 사실만, v0.8.5 원칙).
+ *
+ * **rcept_no는 여기서도 한 번 더 정규화한다.** 지금 유일한 호출부인
+ * ui.js의 addDocListEntry는 docKeyRceptNo로 "doc:" 접두어를 미리 벗기고
+ * 넘기지만, 그 계약을 이 함수 자신도 지켜야 한다 — 그래야 나중에 다른
+ * 호출부가 섹션 키(`doc:<접수번호>`)를 그대로 넘기는 실수를 해도(실제로
+ * 있었던 사고: rcept_no 열이 접두어를 단 채 우측 패널 openDocPanel로
+ * 넘어가 `/api/se/disclosure/doc%3A...`를 요청 — router.py의 rcept_no
+ * 패턴 `[0-9]{8,20}`과 매칭되지 않아 404) 목록 행의 rcept_no는 항상
+ * 서버가 받는 형태(숫자만)로 남는다. docKeyRceptNo가 null이면(이미
+ * 접두어가 없는 값) 원래 값을 그대로 쓴다.
+ */
+function docListRow(rceptNo, value) {
+  const v = value || {};
+  const stripped = docKeyRceptNo(rceptNo);
+  return {
+    rcept_no: stripped !== null ? stripped : rceptNo,
+    main_file: v.main_file,
+    files: Array.isArray(v.files) ? v.files : [],
+    char_count: v.char_count,
+    truncated: v.truncated,
+  };
+}
+
 function documentBlocks(text) {
   if (!text || typeof text !== "string") return [];
   const blocks = [];
@@ -699,5 +871,7 @@ if (typeof module !== "undefined" && module.exports) {
     formatValue, formatAmount, AMOUNT_FIELDS, DATE_FIELDS,
     sectionBlocks, groupTitleFor, groupOrderIndex, normalizeRoster,
     ACTOR_STATUS, actorLine, resumeTarget, documentBlocks,
+    dropAllEmptyColumns, recordsHaveSourceField, sourceGroupedBlocks,
+    DOC_LIST_KEY, docKeyRceptNo, docListRow,
   };
 }

@@ -233,6 +233,7 @@ function resetToc() {
   if (TOC_OBSERVER) { TOC_OBSERVER.disconnect(); TOC_OBSERVER = null; }
   TOC_ITEMS = [];
   for (const k in SEC_WRAP) delete SEC_WRAP[k];
+  DOC_LIST_ROWS = [];
 }
 
 // ── 화면 전환 + 로컬 저장 ──────────────────────────────────────────
@@ -647,6 +648,13 @@ function groupHolder(title) {
 // 않는 가짜 DOM으로도 실행된다 — 위 TOC_ITEMS 주석 참고).
 const SEC_WRAP = Object.create(null);
 
+// doc:<접수번호> 섹션이 도착할 때마다(폴링마다 하나씩) 쌓이는 목록 행.
+// 한 회사 분석 안에서만 유효한 지역 상태라 resetToc()가 SEC_WRAP과
+// 함께 비운다 — 안 그러면 새 회사를 분석하거나 로그아웃 후 다른
+// 사용자가 로그인해도 이전 회사의 공시 목록 행이 새 목록에 이어 붙는다
+// (showGate()가 실명·본문을 정리하는 것과 같은 이유, addDocListEntry 참고).
+let DOC_LIST_ROWS = [];
+
 function sectionHolder(key) {
   const id = "sec-" + key;
   let holder = document.getElementById(id);
@@ -732,6 +740,26 @@ function renderSection(key, value) {
     return;
   }
   for (const block of blocks) holder.appendChild(blockEl(block));
+}
+
+/** doc:<접수번호> 섹션이 도착할 때마다 부른다(pollUntilDone).
+ *
+ * 승인된 방향: 원문 전체(text, 최대 20,000자)를 그때그때 새 h2 섹션으로
+ * 쏟아내면 엔켐 실측 기준 34건 × 약 13만 자가 본문에 쌓인다
+ * (docs/superpowers/plans/2026-07-27-se-4c-field-inventory.json) — 본문에는
+ * "어떤 공시를 가져왔는지" 목록 하나만 남기고, 원문은 각 행의 접수번호를
+ * 클릭해 우측 패널(openDocPanel, 기존 rcept_no 클릭 배선을 그대로 재사용
+ * — table.keys.indexOf("rcept_no"))에서 본다.
+ *
+ * 섹션은 폴링마다 하나씩 도착한다(SE-2 청크 오케스트레이터) — 도착할
+ * 때마다 누적 목록(DOC_LIST_ROWS)에 행을 하나 더하고 renderSection을
+ * 다시 부른다. renderSection(key, value)은 같은 key로 다시 불리면
+ * **교체**하므로(app.js/ui.js 공통 계약) 34번을 다시 불러도 34개의 목록이
+ * 쌓이지 않고 매번 전체 목록 하나로 갱신된다.
+ */
+function addDocListEntry(rceptNo, value) {
+  DOC_LIST_ROWS.push(docListRow(rceptNo, value));
+  renderSection(DOC_LIST_KEY, DOC_LIST_ROWS.slice());
 }
 
 /** company_info(STAGE1_SPECS의 "헤더" 섹션)를 본문 맨 위 고정 박스
@@ -903,7 +931,12 @@ async function pollUntilDone(jobId, dartKey, gen) {
             // company_info(헤더)는 그룹 정렬과 무관하게 항상 화면 맨
             // 위 고정이어야 한다(renderCompanyInfo 주석 참고) — 일반
             // renderSection(그룹별 정렬) 경로를 타지 않는다.
+            const docRceptNo = docKeyRceptNo(secKey);
             if (secKey === "company_info") renderCompanyInfo(sec.body.value);
+            // doc:<접수번호> 섹션은 각자 새 h2로 그리지 않고 하나의 목록
+            // (addDocListEntry)에 모은다 — 34건이 34개 h2로 흩어지며 본문에
+            // 원문 전체가 쏟아지던 문제의 수정(위 addDocListEntry 주석 참고).
+            else if (docRceptNo) addDocListEntry(docRceptNo, sec.body.value);
             else renderSection(secKey, sec.body.value);
           } else {
             // 성공했을 때만 "받음"으로 친다 — 다음 폴링에서 자동 재시도된다.
