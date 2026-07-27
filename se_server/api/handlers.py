@@ -9,8 +9,10 @@ Vercel 어댑터가 변환을 담당한다.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import parse_qs, urlsplit
 
 from dart_risk_mcp.core.dart_client import fetch_disclosure_full, resolve_corp
+from dart_risk_mcp.core.known_actors import lookup_actors_by_company
 from se_server.api.auth import AuthError, extract_bearer
 from se_server.api.router import match
 from se_server.api.types import Request, Response
@@ -72,6 +74,8 @@ def handle(request: Request, deps: Deps) -> Response:
         return _section(deps, user_id, path_vars["job_id"], path_vars["key"])
     if name == "disclosure":
         return _disclosure(request, deps, path_vars["rcept_no"])
+    if name == "actors":
+        return _actors(request, deps)
     # 라우트가 늘었는데 분기를 빠뜨리면 조용히 엉뚱한 핸들러로 새지 않고
     # 여기서 드러난다.
     return Response.error(404, "존재하지 않는 경로입니다")
@@ -244,6 +248,56 @@ def _disclosure(request: Request, deps: Deps, rcept_no: str) -> Response:
         "text": text,
         "char_count": result.get("char_count", len(text)),
         "truncated": bool(result.get("truncated")),
+    })
+
+
+_ACTOR_DISCLAIMER = (
+    "공개기록에 근거한 사실 표기입니다. 위험 판정이 아니며, 동명이인일 수 "
+    "있습니다. status가 auto_matched인 항목은 동명이인 확인이 되지 않았습니다."
+)
+
+
+def _query(request: Request, name: str) -> str:
+    """쿼리 파라미터 하나를 읽는다.
+
+    parse_qs가 이미 퍼센트 디코딩을 하므로 unquote를 또 부르면 안 된다 —
+    값에 리터럴 `%`가 있으면(`100%증자`) 이중 디코딩으로 손상된다.
+    """
+    values = parse_qs(urlsplit(request.path).query).get(name) or []
+    return values[0].strip() if values else ""
+
+
+def _actors(request: Request, deps: Deps) -> Response:
+    """회사에 등장한 공개기록 행위자.
+
+    실명을 내보내므로 status와 면책을 **항상** 동반한다. 판정·점수는 없다.
+    레지스트리는 opt-in이라 미설정 시 빈 목록이 정상이다(500이 아니다).
+    """
+    company = _query(request, "company")
+    if not company:
+        return Response.error(400, "company 파라미터가 필요합니다")
+
+    try:
+        found = lookup_actors_by_company(company) or []
+    except Exception:
+        return Response.error(502, "레지스트리를 조회하지 못했습니다")
+
+    return Response(200, {
+        "company": company,
+        "actors": [
+            {
+                "name": name,
+                # status 기본값은 가장 약한 auto_matched다. 레코드에 status가
+                # 없을 때 verified로 보이면 확인 안 된 정보를 확인된 것처럼
+                # 표시하게 된다 — 실명을 다루는 이상 이 방향의 오차는
+                # 허용할 수 없다.
+                "status": (rec or {}).get("status", "auto_matched"),
+                "companies": (rec or {}).get("companies", []),
+                "evidence": (rec or {}).get("evidence", ""),
+            }
+            for name, rec in found
+        ],
+        "disclaimer": _ACTOR_DISCLAIMER,
     })
 
 

@@ -39,6 +39,7 @@ _ROUTES: tuple[tuple[str, re.Pattern, str], ...] = (
     ("GET", re.compile(rf"/api/se/analyze/{_JOB_ID}/section/{_SECTION_KEY}"), "section"),
     ("GET", re.compile(rf"/api/se/analyze/{_JOB_ID}"), "get"),
     ("GET", re.compile(rf"/api/se/disclosure/{_RCEPT_NO}"), "disclosure"),
+    ("GET", re.compile(r"/api/se/actors"), "actors"),
     ("GET", re.compile(r"/api/se/config"), "config"),
 )
 
