@@ -29,6 +29,7 @@ class Deps:
     store: JobStore
     auth: object  # SupabaseAuth 또는 verify(bearer) -> user_id 를 만족하는 것
     budget_seconds: float = _DEFAULT_BUDGET
+    config: object = None  # SEConfig. /api/se/config 응답에만 쓴다
 
 
 def handle(request: Request, deps: Deps) -> Response:
@@ -38,7 +39,11 @@ def handle(request: Request, deps: Deps) -> Response:
         return Response.error(404, "존재하지 않는 경로입니다")
     name, path_vars = route
 
-    # 인증이 먼저다. 실패하면 저장소·DART 어디에도 닿지 않는다.
+    # config는 로그인 전에 필요하므로 인증 앞에 둔다. 공개 정보만 담는다.
+    if name == "config":
+        return _config(deps)
+
+    # 그 외에는 인증이 먼저다. 실패하면 저장소·DART 어디에도 닿지 않는다.
     try:
         user_id = deps.auth.verify(extract_bearer(request.header("Authorization")))
     except AuthError as exc:
@@ -192,6 +197,19 @@ def _section(deps: Deps, user_id: str, job_id: str, key: str) -> Response:
     return Response.error(404, "섹션을 찾을 수 없습니다")
 
 
+def _config(deps: Deps) -> Response:
+    """브라우저 로그인에 필요한 공개 설정.
+
+    **service_role 키를 절대 담지 않는다.** anon 키는 브라우저 노출을 전제로
+    설계된 값이며 RLS가 실제 방어선이다.
+    """
+    config = deps.config
+    return Response(200, {
+        "supabase_url": getattr(config, "supabase_url", ""),
+        "supabase_anon_key": getattr(config, "supabase_anon_key", ""),
+    })
+
+
 def build_deps() -> Deps:
     """환경변수에서 의존성을 조립한다. Vercel 어댑터가 요청마다 호출한다."""
     from se_server.api.auth import SupabaseAuth
@@ -203,4 +221,4 @@ def build_deps() -> Deps:
     config = SEConfig.from_env()
     # DART 응답 캐시를 core 시임에 주입한다(SE-1).
     install(SupabaseCache(config))
-    return Deps(store=SupabaseJobStore(config), auth=SupabaseAuth(config))
+    return Deps(store=SupabaseJobStore(config), auth=SupabaseAuth(config), config=config)
