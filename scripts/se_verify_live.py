@@ -127,25 +127,33 @@ sys.path.insert(0, r"{root}")
 from se_server.cache import SupabaseCache
 from se_server.config import SEConfig
 from se_server.http_cache import install
-from dart_risk_mcp.core.dart_client import resolve_corp, fetch_company_disclosures
+from dart_risk_mcp.core.dart_client import (
+    resolve_corp, fetch_company_disclosures, fetch_disclosure_full)
 from dart_risk_mcp.core.signals import match_signals
 
 install(SupabaseCache(SEConfig.from_env()))
+key = os.environ["DART_API_KEY"]
 started = time.monotonic()
-resolved = resolve_corp({company!r}, os.environ["DART_API_KEY"])
+resolved = resolve_corp({company!r}, key)
 if not resolved:
     print("RESULT unresolved 0 0"); raise SystemExit(1)
 _, info = resolved
-items = fetch_company_disclosures(info["corp_code"], os.environ["DART_API_KEY"],
+items = fetch_company_disclosures(info["corp_code"], key,
                                   lookback_days={days}, max_pages={pages})
-matched = sum(1 for i in items if match_signals(i.get("report_nm", "")))
-print(f"RESULT ok {{time.monotonic() - started:.1f}} {{len(items)}} {{matched}}")
+# 원문까지 연다. 캐시 이득의 대부분이 여기 있고, 목록만 재면 "8~15분 →
+# 30초~1분" 주장을 검증하지 못한다. 상한을 두어 검증이 무한정 길어지지
+# 않게 한다.
+targets = [i["rcept_no"] for i in items if match_signals(i.get("report_nm", ""))]
+targets = targets[:{docs}]
+for rcept_no in targets:
+    fetch_disclosure_full(rcept_no, key)
+print(f"RESULT ok {{time.monotonic() - started:.1f}} {{len(items)}} {{len(targets)}}")
 '''
 
 
-def _run_child(company: str, years: int) -> tuple[float, int, int] | None:
+def _run_child(company: str, years: int, max_docs: int) -> tuple[float, int, int] | None:
     code = _CHILD.format(root=str(_ROOT), company=company,
-                         days=years * 365, pages=years * 10)
+                         days=years * 365, pages=years * 10, docs=max_docs)
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True,
                           text=True, encoding="utf-8", errors="replace",
                           env=os.environ.copy(), cwd=str(_ROOT))
@@ -157,20 +165,20 @@ def _run_child(company: str, years: int) -> tuple[float, int, int] | None:
     return None
 
 
-def verify_cross_process(company: str, years: int) -> None:
+def verify_cross_process(company: str, years: int, max_docs: int) -> None:
     print("\n[3] 프로세스 간 영속 캐시 (Vercel 실제 시나리오)")
     if not os.environ.get("DART_API_KEY"):
         print(f"{SKIP}DART_API_KEY가 없어 건너뜁니다")
         return
 
     print("    콜드 실행 (새 프로세스)…")
-    cold = _run_child(company, years)
+    cold = _run_child(company, years, max_docs)
     if cold is None:
         check("콜드 실행", False)
         return
 
     print("    웜 실행 (별도의 새 프로세스)…")
-    warm = _run_child(company, years)
+    warm = _run_child(company, years, max_docs)
     if warm is None:
         check("웜 실행", False)
         return
@@ -178,7 +186,7 @@ def verify_cross_process(company: str, years: int) -> None:
     cold_s, total, matched = cold
     warm_s, _, _ = warm
     print(f"    콜드 {cold_s:.1f}초 → 웜 {warm_s:.1f}초 "
-          f"(공시 {total}건, 신호 매칭 {matched}건)")
+          f"(공시 {total}건, 원문 {matched}건 열람)")
 
     ok = warm_s < cold_s
     check("캐시가 프로세스 경계를 넘음", ok,
@@ -191,6 +199,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="SE Supabase 라이브 검증")
     parser.add_argument("--company", default="셀트리온")
     parser.add_argument("--years", type=int, default=1)
+    parser.add_argument("--max-docs", type=int, default=15,
+                        help="원문을 여는 최대 건수 (기본 15)")
     parser.add_argument("--skip-dart", action="store_true",
                         help="DART 호출이 필요한 검증을 건너뛴다")
     args = parser.parse_args()
@@ -213,7 +223,7 @@ def main() -> int:
     if args.skip_dart:
         print(f"\n[3] 프로세스 간 영속 캐시\n{SKIP}--skip-dart 지정됨")
     else:
-        verify_cross_process(args.company, args.years)
+        verify_cross_process(args.company, args.years, args.max_docs)
 
     print()
     if _failures:
