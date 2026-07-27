@@ -155,6 +155,10 @@ const LABELS = Object.assign(Object.create(null), {
   // by_kind[종류] = {total, maturity_under_1y} (dart_client.fetch_debt_balance).
   // maturity_1y_share(비중, %)와는 다른 필드다 — 이쪽은 금액.
   maturity_under_1y: "1년 이내 만기 금액",
+  // normalizeDebtByKind가 by_kind(dict)를 레코드로 뒤집을 때 쓰는 열
+  // 이름이다. "종류"만 쓰면 흔해서 다른 필드가 나중에 같은 라벨을 쓸 때
+  // 충돌하기 쉽다("주식 종류"·"종류별 잔액"과 겹치지 않게 접두어를 둔다).
+  debt_kind: "채무 종류",
   opinions: "감사의견", auditor_changes: "감사인 교체",
   independence_warnings: "감사인 독립성 경고",
   major_holders: "최대주주", bulk_holders: "5% 대량보유",
@@ -566,6 +570,29 @@ function normalizeRoster(value) {
   });
 }
 
+/** debt_balance.by_kind({회사채: {total, maturity_under_1y}, ...})를
+ *  레코드 목록으로 바꾼다.
+ *
+ * dart_client.fetch_debt_balance가 종류를 키로 쓰는 dict를 주므로(레코드
+ * 리스트가 아니다) — 일반 재귀 경로(sectionBlocks)에 그대로 맡기면 종류마다
+ * 별도 1행 표로 쪼개져 종류를 나란히 비교할 수 없고, chartData가 읽을 x축
+ * 필드(종류 이름)도 레코드 안에 없다(정규화 전에는 "종류"가 레코드의 값이
+ * 아니라 title로만 존재한다). normalizeRoster와 같은 이유로 종류를 열
+ * (debt_kind)로 뒤집어 표 하나 + 차트용 레코드로 만든다.
+ *
+ * 종류 이름(예: "corporate_bond")은 label()로 미리 한국어로 바꿔 저장한다 —
+ * formatValue/tableLayout은 열 **이름**(key)만 label()로 바꾸고 셀 **값**은
+ * 그대로 두므로, 표·차트 x축에 실제로 찍히는 문자열(값 자체)을 여기서
+ * 바꿔둬야 "corporate_bond"가 그대로 노출되지 않는다.
+ */
+function normalizeDebtByKind(value) {
+  if (!isPlainObject(value)) return [];
+  return Object.keys(value).map(function (k) {
+    const v = isPlainObject(value[k]) ? value[k] : {};
+    return { debt_kind: label(k), total: v.total, maturity_under_1y: v.maturity_under_1y };
+  });
+}
+
 /** 섹션 값을 화면에 그릴 블록 목록 [{title, table}] 또는 [{title, text}]로
  *  바꾼다. title은 없을 수 있다(null). table/text 둘 다 없으면(표로 만들
  *  근거 자체가 없는 하위 키) 그 사실도 블록으로 남긴다 — 하위 항목이
@@ -660,6 +687,18 @@ function sectionBlocks(value, depth, key) {
     blocks.push({ title: label(k), text: value[k] });
   }
   for (const k of nestedKeys) {
+    // debt_balance.by_kind만 특수 처리한다(depth 0 + 부모 key로 게이트 —
+    // executive_roster와 같은 방식). 다른 섹션에 우연히 "by_kind"라는
+    // 이름의 하위 키가 있어도 이 경로를 타지 않는다(key가 재귀 호출에는
+    // 전달되지 않으므로 하위 호출에서는 이 조건이 항상 거짓이다).
+    if (d === 0 && key === "debt_balance" && k === "by_kind") {
+      const records = normalizeDebtByKind(value[k]);
+      const t = tableLayout(records);
+      blocks.push(t
+        ? { title: label(k), table: t, records: records }
+        : { title: label(k), table: null, records: null });
+      continue;
+    }
     const sub = sectionBlocks(value[k], d + 1);
     if (sub.length === 0) {
       blocks.push({ title: label(k), table: null, records: null });
@@ -909,6 +948,39 @@ const CHART_SPECS = Object.assign(Object.create(null), {
       { key: "real_dtls_amount", label: "실제 집행 금액" },
     ],
   },
+  // dividends의 se(항목)에는 "주당 현금배당금(원)"처럼 원(₩) 단위와
+  // "현금배당수익률(%)"처럼 비율(%) 단위가 한 목록에 섞여 있다(alotMatter
+  // 실측). 같은 y축에 그리면 financials의 CFS/OFS를 섞었던 사고와 같은
+  // 부류의 거짓말이 된다 — 값 자체는 정확해도 단위가 다른 두 계열을 같은
+  // 눈금으로 비교하게 만들기 때문이다. groupFilterSuffix("(원)")로 순수
+  // 원화 단위 항목만 계열로 만든다(끝이 정확히 "(원)"인 항목만 — "(백만원)"
+  // 은 마지막 3글자가 "만원)"이라 걸리지 않는다, chartData 주석 참고).
+  // 제외된 항목(%·백만원·주)은 차트에서만 빠질 뿐 표에는 그대로 남는다.
+  dividends: {
+    kind: "line", title: "배당 지표 추이 (원 단위 항목만)",
+    x: "bsns_year", y: "thstrm", groupBy: "se", yLabel: "금액 (원)",
+    xScale: "category", groupFilterSuffix: "(원)",
+  },
+  // debt_balance.by_kind는 dict라 레코드 리스트가 아니다 — sectionBlocks의
+  // 특수 경로(normalizeDebtByKind)가 종류를 debt_kind 열로 뒤집은 레코드를
+  // 만들어야 이 스펙이 그릴 수 있다(위 sectionBlocks 주석 참고).
+  debt_balance: {
+    kind: "bar", title: "채무증권 종류별 잔액", xScale: "category",
+    x: "debt_kind", yLabel: "금액",
+    series: [
+      { key: "total", label: "합계" },
+      { key: "maturity_under_1y", label: "1년 이내 만기 금액" },
+    ],
+  },
+  // disclosures는 145건(엔켐 실측)의 개별 공시다 — 월별로 몇 건이었는지는
+  // 사실이지만("건수를 세는 것은 사실이다"), "이 달에 몰렸다"고 강조하면
+  // 판정이 된다(v0.8.5). monthlyCountOf는 chartData 안에서 건수만 세고
+  // 멈춘다 — 순위·강조 없이 막대 높이로만 보여준다. 표는 원본 145행을
+  // 그대로 유지한다(집계는 차트 전용 파생값, block.records는 손대지 않는다).
+  disclosures: {
+    kind: "bar", title: "월별 공시 건수", xScale: "category",
+    monthlyCountOf: "rcept_dt", yLabel: "건수",
+  },
 });
 
 /** "20260415" → "2026.04.15", "2026-04-15" → "2026.04.15". 날짜가 아니면
@@ -923,6 +995,10 @@ function axisLabel(v) {
   const s = v === null || v === undefined ? "" : String(v);
   if (/^\d{8}$/.test(s)) return s.slice(0, 4) + "." + s.slice(4, 6) + "." + s.slice(6, 8);
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s.replace(/-/g, ".");
+  // disclosures 월별 집계(monthlyCounts)가 만드는 "YYYYMM"(6자리) 라벨.
+  // 8자리 분기보다 뒤에 둬야 한다 — 정규식 자체는 서로 겹치지 않지만
+  // (자릿수가 다르다) 읽는 순서를 날짜 특이 형태 → 일반형 순으로 유지한다.
+  if (/^\d{6}$/.test(s)) return s.slice(0, 4) + "." + s.slice(4, 6);
   return s;
 }
 
@@ -969,11 +1045,48 @@ function axisSortKey(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+/** field(예: rcept_dt) 값을 월(YYYYMM, 6자리)로 묶어 건수만 센다.
+ *
+ * **집계는 여기서 끝난다.** 어떤 달이 많았는지 강조하거나 순위를 매기지
+ * 않는다 — 그건 판정이다(v0.8.5, disclosures 브리프의 "막대만 그리고
+ * 강조하지 않는다"). axisSortKey와 같은 방식으로 문자열에서 숫자만 뽑아
+ * 앞 6자리를 쓰므로 "20260415"·"2026-04-15" 두 형태 모두 같은 월
+ * (202604)로 묶인다. 등장 순서를 그대로 보존해 반환한다 — chartData가
+ * 이어서 xs를 숫자로(모두 6자리 숫자이므로) 시간순 정렬한다. */
+function monthlyCounts(rows, field) {
+  const counts = new Map();
+  const order = [];
+  for (const r of rows) {
+    const raw = r[field];
+    if (raw === null || raw === undefined || raw === "") continue;
+    const digits = String(raw).replace(/[^0-9]/g, "");
+    if (digits.length < 6) continue; // 월을 특정할 수 없다 — 건너뛴다(0으로 세지 않는다)
+    const month = digits.slice(0, 6);
+    if (!counts.has(month)) { counts.set(month, 0); order.push(month); }
+    counts.set(month, counts.get(month) + 1);
+  }
+  return order.map(function (m) { return { month: m, count: counts.get(m) }; });
+}
+
 /** 레코드 목록을 Chart.js가 받는 형태로 바꾼다. 그릴 게 없으면 null. */
 function chartData(records, spec) {
   if (!Array.isArray(records) || records.length === 0 || !spec) return null;
-  const rows = records.filter(function (r) { return r && typeof r === "object"; });
+  let rows = records.filter(function (r) { return r && typeof r === "object"; });
   if (rows.length === 0) return null;
+
+  if (spec.monthlyCountOf) {
+    // disclosures처럼 개별 레코드가 아니라 "월별 건수"를 그려야 하는
+    // 경우다. 표(block.records)는 원본 개별 레코드를 그대로 유지하고,
+    // 이 집계는 차트 전용 파생값이다 — 아래로는 x="month",
+    // series=[{key:"count"}] 하나짜리 스펙으로 취급해 기존 series 경로를
+    // 그대로 재사용한다(새 렌더 분기를 만들지 않는다).
+    rows = monthlyCounts(rows, spec.monthlyCountOf);
+    if (rows.length === 0) return null;
+    spec = Object.assign({}, spec, {
+      x: "month",
+      series: [{ key: "count", label: spec.yLabel || "건수" }],
+    });
+  }
 
   const xs = [];
   const seen = new Set();
@@ -1032,6 +1145,15 @@ function chartData(records, spec) {
       const g = r[spec.groupBy];
       if (g === null || g === undefined || g === "") continue;
       const name = String(g);
+      // dividends의 se(항목)처럼 그룹 이름에 단위가 다른 값(원/%/백만원/주)이
+      // 섞여 있으면 한 축에 그리는 순간 스케일을 왜곡해 보여준다(위
+      // CHART_SPECS.dividends 주석 참고) — groupFilterSuffix가 있으면 그
+      // 접미어로 끝나는 이름만 계열로 만든다. 제외된 항목은 차트에서만
+      // 빠질 뿐 표(block.records)에는 그대로 남는다.
+      if (spec.groupFilterSuffix &&
+          name.slice(-spec.groupFilterSuffix.length) !== spec.groupFilterSuffix) {
+        continue;
+      }
       if (!groups.has(name)) groups.set(name, xs.map(function () { return null; }));
       const i = at.get(String(r[spec.x]));
       if (i === undefined) continue;
@@ -1062,5 +1184,6 @@ if (typeof module !== "undefined" && module.exports) {
     dropAllEmptyColumns, recordsHaveSourceField, sourceGroupedBlocks,
     DOC_LIST_KEY, docKeyRceptNo, docListRow,
     CHART_SPECS, chartData, axisLabel, numeric, axisSortKey,
+    normalizeDebtByKind, monthlyCounts,
   };
 }

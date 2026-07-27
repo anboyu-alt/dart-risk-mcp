@@ -744,6 +744,112 @@ class TestSectionBlocks(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestNormalizeDebtByKind(unittest.TestCase):
+    """debt_balance.by_kind({회사채: {total, maturity_under_1y}, ...})는
+    dart_client.fetch_debt_balance가 종류를 키로 쓰는 dict다(레코드
+    리스트가 아니다, task-6-brief.md) — normalizeDebtByKind가 종류를 열
+    (debt_kind)로 뒤집어야 표 하나로 나란히 비교되고 chartData가 그릴
+    x축 필드가 생긴다(normalizeRoster와 같은 이유).
+    """
+
+    def test_kind_keys_become_a_column_with_korean_labels(self):
+        got = run_js(
+            'normalizeDebtByKind({corporate_bond:{total:1000,maturity_under_1y:200},'
+            ' short_term_bond:{total:500,maturity_under_1y:500}})'
+        )
+        self.assertEqual([r["debt_kind"] for r in got], ["회사채", "단기사채"])
+        self.assertEqual(got[0]["total"], 1000)
+        self.assertEqual(got[0]["maturity_under_1y"], 200)
+
+    def test_unlabeled_kind_key_keeps_raw_name(self):
+        """label()에 없는 종류가 와도 숨기지 않는다 — 원본 키 그대로 쓴다."""
+        got = run_js('normalizeDebtByKind({wholly_unknown_kind:{total:1}})')
+        self.assertEqual(got[0]["debt_kind"], "wholly_unknown_kind")
+
+    def test_non_object_input_is_empty_list(self):
+        for expr in ("normalizeDebtByKind(null)", "normalizeDebtByKind(undefined)",
+                     'normalizeDebtByKind("x")', "normalizeDebtByKind([])"):
+            self.assertEqual(run_js(expr), [])
+
+    def test_malformed_kind_value_does_not_crash(self):
+        """kind 값이 dict가 아니어도(예상 밖 응답 형태) 죽지 않고
+        total/maturity_under_1y가 없는 레코드로 방어적으로 처리한다."""
+        got = run_js('normalizeDebtByKind({corporate_bond:"이상한 값"})')
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["debt_kind"], "회사채")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestDebtBalanceWiredIntoSectionBlocks(unittest.TestCase):
+    """normalizeDebtByKind를 정의만 하고 sectionBlocks 경로에 안 꽂으면
+    (executive_roster와 같은 부류의 사고, 이 저장소에서 이미 다섯 번 났다)
+    by_kind는 여전히 종류마다 조각난 1행 표로 나뉘어 나온다 — 종류를
+    나란히 비교할 수도, chartData가 읽을 x축(debt_kind)도 없다.
+
+    sectionBlocks가 실제로 소비하는 것과 같은 3번째 인자(key)를 그대로
+    넘겨 실제 진입점을 검증한다.
+    """
+
+    def test_debt_balance_key_combines_by_kind_into_one_table(self):
+        got = run_js(
+            'sectionBlocks({year:"2025", total:1500, by_kind:'
+            '{corporate_bond:{total:1000,maturity_under_1y:200},'
+            ' short_term_bond:{total:500,maturity_under_1y:500}},'
+            ' equity_ratio:null, maturity_1y_share:46.7}, 0, "debt_balance")'
+        )
+        titled = [b for b in got if b["title"] == "종류별 잔액"]
+        self.assertEqual(len(titled), 1, "by_kind가 여러 블록으로 쪼개졌거나 안 보입니다")
+        table = titled[0]["table"]
+        self.assertEqual(table["orientation"], "horizontal")
+        self.assertEqual(len(table["rows"]), 2, "종류가 나란히 비교되는 표가 아닙니다")
+        flat = [c for r in table["rows"] for c in r]
+        self.assertIn("회사채", flat)
+        self.assertIn("단기사채", flat)
+        # chartData(x="debt_kind")가 읽을 수 있어야 하므로 records에도
+        # 원본 숫자(포맷 전)가 그대로 있어야 한다.
+        self.assertEqual(
+            sorted(r["debt_kind"] for r in titled[0]["records"]),
+            ["단기사채", "회사채"],
+        )
+
+    def test_flat_scalar_fields_are_not_lost(self):
+        """year·total 등 스칼라 필드는 by_kind 특수 처리와 무관하게 그대로
+        남아야 한다 — 값이 사라지는 변경이 아니라 더해지는 변경이어야
+        한다(SE-4d Global Constraints)."""
+        got = run_js(
+            'sectionBlocks({year:"2025", total:1500,'
+            ' by_kind:{corporate_bond:{total:1000,maturity_under_1y:200}}},'
+            ' 0, "debt_balance")'
+        )
+        flat_blocks = [b for b in got if b["title"] is None]
+        self.assertEqual(len(flat_blocks), 1, "스칼라 필드(year/total) 블록이 사라졌습니다")
+        labels = [row[0] for row in flat_blocks[0]["table"]["rows"]]
+        self.assertIn("연도", labels)
+        self.assertIn("합계", labels)
+
+    def test_other_keys_still_get_fragmented_per_kind_blocks(self):
+        """key가 "debt_balance"가 아니면 이 특수 경로를 타면 안 된다 —
+        일반 dict-of-dicts 펼치기가 그대로 적용돼야 한다(기존 동작
+        무변경, test_mixed_flat_and_nested_keeps_both와 같은 성질)."""
+        got = run_js(
+            'sectionBlocks({by_kind:{corporate_bond:{total:1000}}}, 0, "other_section")'
+        )
+        titles = [b["title"] for b in got]
+        self.assertTrue(any("회사채" in (t or "") for t in titles),
+                         "key 무관 특수 경로를 탔습니다 — 일반 재귀 경로가 아닙니다")
+
+    def test_nested_field_literally_named_by_kind_at_deeper_depth_is_unaffected(self):
+        """depth 0이 아닐 때는(재귀 호출) key를 넘기지 않으므로, 하위 키가
+        우연히 "by_kind"라는 이름이어도 이 특수 경로를 타면 안 된다."""
+        got = run_js(
+            'sectionBlocks({wrap:{by_kind:{corporate_bond:{total:1000}}}}, 0, "debt_balance")'
+        )
+        titles = [b["title"] for b in got]
+        self.assertTrue(any("회사채" in (t or "") for t in titles),
+                         "깊이 0이 아닌 by_kind 키가 잘못 특수 경로로 빠졌습니다")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestInsiderTimelineSourceSplit(unittest.TestCase):
     """insider_timeline은 elestock·hyslr·hyslr_chg·exec_treasury 4개
     엔드포인트를 합친 결과다(dart_client.fetch_insider_timeline). 레코드마다
@@ -3275,6 +3381,139 @@ class TestChartData(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestMonthlyCounts(unittest.TestCase):
+    """disclosures 월별 집계(monthlyCounts) 순수 함수 검증.
+
+    **집계는 건수를 세는 것에서 끝난다** — 어떤 달이 많았는지 순위를
+    매기거나 강조 표시를 만들지 않는다(v0.8.5 판정 금지, task-6-brief.md의
+    "막대만 그리고 강조하지 않는다")."""
+
+    def test_counts_records_by_month_prefix(self):
+        got = run_js('''monthlyCounts([
+          {rcept_dt:"20260415"}, {rcept_dt:"20260420"}, {rcept_dt:"20260501"}
+        ], "rcept_dt")''')
+        by_month = {r["month"]: r["count"] for r in got}
+        self.assertEqual(by_month, {"202604": 2, "202605": 1})
+
+    def test_hyphenated_dates_are_counted_the_same_as_plain_digits(self):
+        """insider_timeline의 rcept_dt는 하이픈 있는 실측 형태였다(리뷰
+        지적 ④와 같은 부류 함정) — disclosures도 두 형태 모두 같은 달로
+        묶여야 한다."""
+        got = run_js('''monthlyCounts([
+          {rcept_dt:"2026-04-15"}, {rcept_dt:"20260420"}
+        ], "rcept_dt")''')
+        self.assertEqual(got, [{"month": "202604", "count": 2}])
+
+    def test_missing_or_short_values_are_skipped_not_miscounted(self):
+        got = run_js('''monthlyCounts([
+          {rcept_dt:null}, {rcept_dt:""}, {rcept_dt:"2026"}, {rcept_dt:"20260415"}
+        ], "rcept_dt")''')
+        self.assertEqual(got, [{"month": "202604", "count": 1}])
+
+    def test_empty_input_yields_empty_list(self):
+        self.assertEqual(run_js('monthlyCounts([], "rcept_dt")'), [])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestChartDataForDividendsDebtDisclosures(unittest.TestCase):
+    """SE-4d Task 6(task-6-brief.md): dividends·debt_balance·disclosures
+    차트 데이터 가공. 셋 다 insider_timeline/fund_usage와 형태가 달라
+    각각 확인이 필요하다 — dividends는 단위가 섞인 groupBy, debt_balance는
+    레코드가 아니라 dict, disclosures는 집계가 필요하다."""
+
+    # ── dividends: se(항목)에 원/%/백만원이 섞여 있다 ──────────────────
+    def test_dividends_only_charts_won_denominated_items(self):
+        """실측(alotMatter) se 값 예시: "주당액면가액(원)"(원)·
+        "현금배당수익률(%)"(%)·"현금배당금총액(백만원)"(백만원)이 한
+        목록에 섞여 있다 — "(원)"으로 끝나는 항목만 계열이 되어야 한다."""
+        got = run_js('''chartData([
+          {se:"주당액면가액(원)", bsns_year:"2024", thstrm:"500"},
+          {se:"주당액면가액(원)", bsns_year:"2025", thstrm:"500"},
+          {se:"현금배당수익률(%)", bsns_year:"2024", thstrm:"1.2"},
+          {se:"현금배당금총액(백만원)", bsns_year:"2024", thstrm:"300"}
+        ], CHART_SPECS.dividends)''')
+        labels = [d["label"] for d in got["datasets"]]
+        self.assertEqual(labels, ["주당액면가액(원)"])
+
+    def test_dividends_excludes_million_won_items_even_though_they_contain_won(self):
+        """"(백만원)"도 문자로는 "원"을 포함하지만 "(원)"으로 끝나지는
+        않는다 — indexOf 방식이었다면 이 항목까지 새어 들어와 단위가
+        100만 배 다른 계열이 섞였을 것이다."""
+        got = run_js('''chartData([
+          {se:"현금배당금총액(백만원)", bsns_year:"2024", thstrm:"300"}
+        ], CHART_SPECS.dividends)''')
+        self.assertIsNone(got, "백만원 단위 항목이 원 단위 차트에 섞여 들어갔습니다")
+
+    def test_dividends_x_axis_is_the_report_year(self):
+        got = run_js('''chartData([
+          {se:"주당액면가액(원)", bsns_year:"2023", thstrm:"500"},
+          {se:"주당액면가액(원)", bsns_year:"2025", thstrm:"500"},
+          {se:"주당액면가액(원)", bsns_year:"2024", thstrm:"500"}
+        ], CHART_SPECS.dividends)''')
+        self.assertEqual(got["labels"], ["2023", "2024", "2025"])
+
+    def test_dividends_returns_null_when_only_percentage_items_exist(self):
+        """원 단위 항목이 하나도 없으면(전부 필터에 걸리면) 빈 그림을
+        만들지 않고 차트 자체를 만들지 않는다 — 표는 그대로 남는다."""
+        got = run_js('''chartData([
+          {se:"현금배당수익률(%)", bsns_year:"2024", thstrm:"1.2"},
+          {se:"현금배당수익률(%)", bsns_year:"2025", thstrm:"1.5"}
+        ], CHART_SPECS.dividends)''')
+        self.assertIsNone(got)
+
+    # ── debt_balance: 레코드 리스트가 아니라 dict다 ────────────────────
+    def test_debt_balance_charts_normalized_records(self):
+        got = run_js('''chartData(
+          normalizeDebtByKind({corporate_bond:{total:1000,maturity_under_1y:200},
+                               short_term_bond:{total:500,maturity_under_1y:500}}),
+          CHART_SPECS.debt_balance
+        )''')
+        self.assertEqual(got["labels"], ["회사채", "단기사채"])
+        self.assertEqual(
+            [d["label"] for d in got["datasets"]], ["합계", "1년 이내 만기 금액"]
+        )
+        totals = next(d for d in got["datasets"] if d["label"] == "합계")
+        self.assertEqual(totals["data"], [1000, 500])
+
+    def test_debt_balance_returns_null_for_the_raw_by_kind_dict(self):
+        """정규화(normalizeDebtByKind) 없이 by_kind dict를 그대로 넘기면
+        (records가 배열이 아니다) chartData는 그리지 않는다 — 별도 처리가
+        빠지면 조용히 안 그려진다는 것 자체를 확인한다."""
+        got = run_js('''chartData(
+          {corporate_bond:{total:1000,maturity_under_1y:200}},
+          CHART_SPECS.debt_balance
+        )''')
+        self.assertIsNone(got)
+
+    # ── disclosures: 월별 집계는 chartData 안에서만 끝난다 ──────────────
+    def test_disclosures_charts_monthly_counts(self):
+        got = run_js('''chartData([
+          {rcept_no:1, rcept_dt:"20260415", report_nm:"a"},
+          {rcept_no:2, rcept_dt:"20260420", report_nm:"b"},
+          {rcept_no:3, rcept_dt:"20260501", report_nm:"c"}
+        ], CHART_SPECS.disclosures)''')
+        self.assertEqual(got["labels"], ["2026.04", "2026.05"])
+        self.assertEqual(got["datasets"], [{"label": "건수", "data": [2, 1]}])
+
+    def test_disclosures_returns_null_when_no_valid_dates(self):
+        got = run_js('chartData([{rcept_no:1, report_nm:"a"}], CHART_SPECS.disclosures)')
+        self.assertIsNone(got)
+
+    def test_disclosures_table_records_stay_individual_not_aggregated(self):
+        """집계는 가공이다(브리프) — chartData 내부에서만 일어나야 하고,
+        sectionBlocks가 만드는 표(및 그 records)는 원본 건수 그대로
+        남아야 한다. 145건이 2개 월로 뭉개지면 안 된다."""
+        got = run_js('''sectionBlocks([
+          {rcept_no:1, rcept_dt:"20260415", report_nm:"a"},
+          {rcept_no:2, rcept_dt:"20260420", report_nm:"b"},
+          {rcept_no:3, rcept_dt:"20260501", report_nm:"c"}
+        ], 0, "disclosures")''')
+        self.assertEqual(len(got), 1)
+        self.assertEqual(len(got[0]["table"]["rows"]), 3, "표가 월별로 집계되어 버렸습니다")
+        self.assertEqual(len(got[0]["records"]), 3)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestNumeric(unittest.TestCase):
     """numeric()의 쉼표·배열 처리(리뷰 지적 ⑦ minor).
 
@@ -3523,6 +3762,48 @@ sandbox.applyTheme("light");
 const colorAfterTheme = themedChart.options.scales.x.ticks.color;
 const updatedAfterTheme = UPDATED.indexOf(themedChart) !== -1;
 
+// F) dividends — se(항목)에 원/%가 섞여 있다. "(원)"으로 끝나는 항목만
+//    계열이 되어야 한다(판정선: 단위가 다른 값을 한 그림에 섞지 않는다).
+//    차트가 실제로 생겼는지는 개수 스냅샷으로 확인한다 — 안 생기면
+//    CHART_CALLS의 마지막 원소는 이전(E) 차트를 가리키는 낡은 참조가
+//    되어 조용히 통과하는 함정이 있다(카운트 비교로 그 함정을 막는다).
+const chartCountBeforeF = CHART_CALLS.length;
+sandbox.renderSection("dividends", [
+  { se: "주당액면가액(원)", bsns_year: "2024", thstrm: "500" },
+  { se: "주당액면가액(원)", bsns_year: "2025", thstrm: "500" },
+  { se: "현금배당수익률(%)", bsns_year: "2024", thstrm: "1.2" },
+  { se: "현금배당수익률(%)", bsns_year: "2025", thstrm: "1.5" },
+]);
+const chartCountAfterF = CHART_CALLS.length;
+const dividendsChart = chartCountAfterF > chartCountBeforeF ? CHART_CALLS[CHART_CALLS.length - 1] : null;
+
+// G) debt_balance — by_kind는 dict라, sectionBlocks의 특수 정규화
+//    (normalizeDebtByKind) 없이는 chartData가 그릴 x축(debt_kind)이
+//    레코드에 없다.
+const chartCountBeforeG = CHART_CALLS.length;
+sandbox.renderSection("debt_balance", {
+  year: "2025", total: 1500,
+  by_kind: {
+    corporate_bond: { total: 1000, maturity_under_1y: 200 },
+    short_term_bond: { total: 500, maturity_under_1y: 500 },
+  },
+  equity_ratio: null, maturity_1y_share: 46.7,
+});
+const chartCountAfterG = CHART_CALLS.length;
+const debtChart = chartCountAfterG > chartCountBeforeG ? CHART_CALLS[CHART_CALLS.length - 1] : null;
+
+// H) disclosures — 개별 건이 아니라 월별 건수만 그려야 한다(집계는
+//    chartData 내부 파생값, 표는 별도 순수 함수 테스트가 원본 그대로임을
+//    확인한다).
+const chartCountBeforeH = CHART_CALLS.length;
+sandbox.renderSection("disclosures", [
+  { rcept_no: 1, rcept_dt: "20260415", report_nm: "a" },
+  { rcept_no: 2, rcept_dt: "20260420", report_nm: "b" },
+  { rcept_no: 3, rcept_dt: "20260501", report_nm: "c" },
+]);
+const chartCountAfterH = CHART_CALLS.length;
+const disclosuresChart = chartCountAfterH > chartCountBeforeH ? CHART_CALLS[CHART_CALLS.length - 1] : null;
+
 function findIndex(tags, tag) {
   for (let i = 0; i < tags.length; i++) if (tags[i].tag === tag) return i;
   return -1;
@@ -3553,6 +3834,21 @@ process.stdout.write(JSON.stringify({
   colorBeforeTheme: colorBeforeTheme,
   colorAfterTheme: colorAfterTheme,
   updatedAfterTheme: updatedAfterTheme,
+  chartCountBeforeF: chartCountBeforeF,
+  chartCountAfterF: chartCountAfterF,
+  dividendsLabels: dividendsChart ? dividendsChart.data.labels : null,
+  dividendsDatasetLabels: dividendsChart
+    ? dividendsChart.data.datasets.map(function (d) { return d.label; }) : null,
+  chartCountBeforeG: chartCountBeforeG,
+  chartCountAfterG: chartCountAfterG,
+  debtLabels: debtChart ? debtChart.data.labels : null,
+  debtDatasetLabels: debtChart
+    ? debtChart.data.datasets.map(function (d) { return d.label; }) : null,
+  debtTotals: debtChart ? debtChart.data.datasets[0].data : null,
+  chartCountBeforeH: chartCountBeforeH,
+  chartCountAfterH: chartCountAfterH,
+  disclosuresLabels: disclosuresChart ? disclosuresChart.data.labels : null,
+  disclosuresData: disclosuresChart ? disclosuresChart.data.datasets[0].data : null,
 }));
 """
 
@@ -3641,6 +3937,37 @@ class TestChartRenderExecution(unittest.TestCase):
                             "테마를 바꿔도 이미 그려진 차트의 축 색이 그대로입니다")
         self.assertTrue(got["updatedAfterTheme"],
                         "테마를 바꿔도 차트의 update()가 불리지 않습니다")
+
+    def test_dividends_chart_only_includes_won_denominated_series(self):
+        """SE-4d Task 6: renderSection("dividends", ...)이 실제로 차트를
+        만들고, "(원)"으로 끝나지 않는 항목(퍼센트)은 계열에서 빠지는지
+        실제 렌더 경로로 확인한다."""
+        got = run_chart_render()
+        self.assertEqual(got["chartCountAfterF"] - got["chartCountBeforeF"], 1,
+                         "dividends 차트가 실제 렌더 경로에서 생기지 않았습니다")
+        self.assertEqual(got["dividendsLabels"], ["2024", "2025"])
+        self.assertEqual(got["dividendsDatasetLabels"], ["주당액면가액(원)"],
+                         "퍼센트 항목이 원 단위 차트에 섞여 들어갔습니다")
+
+    def test_debt_balance_chart_reads_the_normalized_by_kind_records(self):
+        """debt_balance.by_kind는 dict라 sectionBlocks의 특수 처리
+        (normalizeDebtByKind)가 배선돼야만 차트가 나온다 — 실제 렌더
+        경로로 확인한다."""
+        got = run_chart_render()
+        self.assertEqual(got["chartCountAfterG"] - got["chartCountBeforeG"], 1,
+                         "debt_balance 차트가 실제 렌더 경로에서 생기지 않았습니다")
+        self.assertEqual(got["debtLabels"], ["회사채", "단기사채"])
+        self.assertEqual(got["debtDatasetLabels"], ["합계", "1년 이내 만기 금액"])
+        self.assertEqual(got["debtTotals"], [1000, 500])
+
+    def test_disclosures_chart_shows_monthly_counts_not_raw_rows(self):
+        """실제 렌더 경로로 disclosures 차트가 개별 3건이 아니라 월별
+        집계(2개월)로 그려지는지 확인한다."""
+        got = run_chart_render()
+        self.assertEqual(got["chartCountAfterH"] - got["chartCountBeforeH"], 1,
+                         "disclosures 차트가 실제 렌더 경로에서 생기지 않았습니다")
+        self.assertEqual(got["disclosuresLabels"], ["2026.04", "2026.05"])
+        self.assertEqual(got["disclosuresData"], [2, 1])
 
 
 if __name__ == "__main__":
