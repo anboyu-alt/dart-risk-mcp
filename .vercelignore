@@ -1,9 +1,28 @@
-# Vercel 배포에는 도구 페이지(docs/tool)와 릴레이 함수(api/)만 필요하다.
-# 루트의 pyproject.toml 때문에 Python 앱으로 오인 빌드되는 것을 차단
-# ("No python entrypoint found" — 2026-07 실측).
+# Vercel 배포에 올릴 것만 허용목록으로 남긴다.
+#
+# 루트를 통째로 제외(`/*`)하는 이유: pyproject.toml이 보이면 Vercel이 이
+# 저장소를 Python 앱으로 오인해 빌드가 깨진다("No python entrypoint found"
+# — 2026-07 실측).
+#
+# **주의: 여기서 제외된 디렉토리는 서버리스 함수 번들에도 들어가지 않는다.**
+# api/index.py가 `import se_server`를 하려면 se_server가 허용목록에 있어야
+# 한다. 이걸 빠뜨려 프로덕션에서 ModuleNotFoundError가 났다(2026-07-27).
+# SE 함수가 import하는 패키지를 추가할 때는 여기도 반드시 함께 갱신할 것.
 /*
+
+# 서버리스 함수 진입점 — 릴레이([endpoint].js)와 SE 핸들러(index.py)
 !api
-!docs
+
+# SE 함수가 import하는 패키지. 없으면 ModuleNotFoundError로 함수가 죽는다.
+!se_server
+!dart_risk_mcp
+
+# Python 의존성 설치 목록(requests). 없으면 import가 깨진다.
+!requirements.txt
+
 !vercel.json
+
+# 정적 출력은 공개 뷰어 페이지만
+!docs
 docs/*
 !docs/tool
