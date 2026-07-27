@@ -23,6 +23,12 @@ _DEFAULT_BUDGET = 25.0
 _MIN_YEARS = 1
 _MAX_YEARS = 5
 
+# 키 값이나 예외 원문은 담지 않는다 — "확인해 보라"는 방향만 제시한다.
+_DART_FETCH_FAILED_MSG = (
+    "공시 원문을 가져오지 못했습니다. DART 키가 올바른지, 접속 상태가"
+    " 정상인지 확인해 주세요"
+)
+
 
 @dataclass
 class Deps:
@@ -213,7 +219,22 @@ def _disclosure(request: Request, deps: Deps, rcept_no: str) -> Response:
         result = fetch_disclosure_full(rcept_no, api_key) or {}
     except Exception:
         # DART 쪽 실패를 500으로 보고하면 우리 버그로 오해된다.
-        return Response.error(502, "공시 원문을 가져오지 못했습니다")
+        # (core는 내부에서 예외를 삼키므로 실제로는 아래 files 분기가
+        # 주로 이 역할을 한다 — 이 except는 방어적으로 남겨둔다.)
+        return Response.error(502, _DART_FETCH_FAILED_MSG)
+
+    # fetch_disclosure_full은 실패를 예외로 던지지 않고 빈 결과 dict로
+    # 삼킨다(core 원칙). "ZIP 자체를 못 받음"과 "문서는 받았으나 본문이
+    # 비어 있음"이 똑같이 text=""로 내려오면, DART 키 오류·네트워크
+    # 장애·DART 5xx·ZIP 안전검증 거부가 전부 "공시가 없다"는 404로
+    # 잘못 표시된다 — 화면이 장애를 "없는 공시"로 오인시키게 된다.
+    #
+    # 구분 기준: ZIP을 아예 못 받은 경우 core는 `files=[]`인 완전한 빈
+    # dict(`empty`)를 그대로 반환한다. ZIP을 받았다면(문서가 없거나
+    # 본문이 비어 있는 경우조차) `files`에 ZIP 내 파일 목록이 채워진
+    # 채로 반환된다. 그래서 `files`가 비어 있는지가 "받았는가"의 신호다.
+    if not result.get("files"):
+        return Response.error(502, _DART_FETCH_FAILED_MSG)
 
     text = result.get("text") or ""
     if not text:
