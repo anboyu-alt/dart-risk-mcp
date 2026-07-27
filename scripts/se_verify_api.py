@@ -75,6 +75,19 @@ def summary_lines(failures: list[str], skipped: list[str]) -> list[str]:
     return lines
 
 
+def exit_code(failures: list[str], skipped: list[str]) -> int:
+    """종료 코드를 정한다. 0=전부 통과, 1=실패, 2=미완(건너뜀).
+
+    건너뛴 검사에 0을 돌려주면 출력만 정직하고 종료 코드는 거짓이 된다 —
+    CI는 종료 코드만 보므로 미실행이 초록으로 읽힌다. 실패(1)와 미완(2)을
+    가르는 이유는 둘의 대응이 다르기 때문이다: 실패는 고쳐야 하고, 미완은
+    --steps를 늘려 다시 돌려야 한다.
+    """
+    if failures:
+        return 1
+    return 2 if skipped else 0
+
+
 def load_env() -> None:
     if _ENV_FILE.exists():
         for raw in _ENV_FILE.read_text(encoding="utf-8").splitlines():
@@ -328,7 +341,7 @@ def main() -> int:
         check("actors: 인증되면 200", c5 == 200, f"HTTP {c5}")
         check("actors: 면책 문구 동반", bool(b5.get("disclaimer")))
 
-        return 1 if _failures else 0
+        return exit_code(_failures, _skipped)
 
     finally:
         # 검증이 만든 작업 레코드도 치운다. 남겨두면 소유자가 삭제된
