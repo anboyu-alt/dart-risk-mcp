@@ -1377,5 +1377,71 @@ class TestLsJobConstantLivesWithOtherStorageKeys(unittest.TestCase):
         )
 
 
+
+class TestAssetPathsSurviveTrailingSlashRedirect(unittest.TestCase):
+    """페이지가 부르는 스크립트·스타일이 배포 후에도 실제로 로드되는지 본다.
+
+    실제 배포에서 겪은 실패다: `index.html`이 `<script src="app.js">`처럼
+    상대경로를 썼는데, `vercel.json`의 `trailingSlash: false`가 `/se/`를
+    `/se`로 되돌린다. 슬래시가 없는 `/se`에서 브라우저는 현재 디렉토리를
+    루트로 보므로 `app.js`를 `/app.js`로 해석해 **404**를 받는다.
+
+    증상이 고약했다 — 스크립트가 통째로 로드되지 않아 로그인 버튼이 아무
+    반응도 하지 않는데, 오류를 띄우는 코드마저 그 스크립트 안에 있어
+    화면에는 아무 안내도 뜨지 않는다. 파일 내용만 검사하는 다른 테스트들은
+    전부 초록이었다. 파일은 멀쩡했고, 브라우저가 요청하는 **주소**가
+    틀렸기 때문이다.
+
+    그래서 이 테스트는 내용이 아니라 **경로 해석**을 검사한다.
+    """
+
+    # vercel.json의 outputDirectory. 여기가 배포 루트(/)가 된다.
+    _OUTPUT_DIR = _ROOT / "docs" / "tool"
+
+    def _local_refs(self):
+        """HTML이 참조하는 로컬 자산 (파일명, 원본 URL) 목록."""
+        refs = []
+        for name, src in _sources().items():
+            if not name.endswith(".html"):
+                continue
+            for m in re.finditer(
+                r'<(?:script|link)[^>]*\b(?:src|href)="([^"]+)"', src
+            ):
+                url = m.group(1)
+                if url.startswith(("http://", "https://", "//", "data:", "#")):
+                    continue  # 외부 참조는 다른 테스트가 막는다
+                refs.append((name, url))
+        return refs
+
+    def test_there_is_at_least_one_local_asset(self):
+        """참조가 하나도 없으면 아래 검사들이 공허하게 통과한다."""
+        self.assertTrue(self._local_refs(),
+                        "검사할 로컬 자산 참조를 찾지 못했습니다")
+
+    def test_local_assets_use_root_absolute_paths(self):
+        offenders = [
+            f"{name}: {url}" for name, url in self._local_refs()
+            if not url.startswith("/")
+        ]
+        self.assertEqual(
+            offenders, [],
+            "상대경로로 자산을 부르고 있습니다. trailingSlash:false 때문에 "
+            "/se/ 가 /se 로 되돌아가면 상대경로는 루트 기준으로 해석돼 404가 "
+            "납니다. `/se/app.js`처럼 루트 기준 절대경로를 쓰세요:\n  "
+            + "\n  ".join(offenders),
+        )
+
+    def test_referenced_assets_actually_exist_in_the_deployed_tree(self):
+        """경로가 절대적이어도 가리키는 파일이 없으면 똑같이 404다."""
+        missing = []
+        for name, url in self._local_refs():
+            target = self._OUTPUT_DIR / url.lstrip("/").split("?")[0]
+            if not target.exists():
+                missing.append(f"{name}: {url} → {target} 없음")
+        self.assertEqual(
+            missing, [],
+            "참조하는 자산 파일이 배포 트리에 없습니다:\n  " + "\n  ".join(missing),
+        )
+
 if __name__ == "__main__":
     unittest.main()
