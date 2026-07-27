@@ -1353,6 +1353,33 @@ class TestDocListRow(unittest.TestCase):
         )
         self.assertEqual(got["files"], [])
 
+    def test_doc_prefixed_key_is_stripped_from_rcept_no(self):
+        """실측 결함 재현: 호출부가 docKeyRceptNo로 미리 벗기지 않고
+        섹션 키(`doc:<접수번호>`)를 그대로 넘겨도 rcept_no 열에 접두어가
+        남으면 안 된다. 접두어가 남으면 openDocPanel(ui.js)이
+        `/api/se/disclosure/doc%3A...`를 요청하는데, se_server/api/router.py의
+        rcept_no 패턴(`[0-9]{8,20}`, 숫자만)과 매칭되지 않아 404가 난다 —
+        프로덕션 실측: `/api/se/disclosure/doc%3A20260715900769` → 404.
+        지금 유일한 호출부(ui.js addDocListEntry)는 이미 docKeyRceptNo로
+        벗겨 넘기지만, docListRow 자신도 이 계약을 지켜야 다른 호출부가
+        실수해도 같은 사고가 재발하지 않는다.
+        """
+        got = run_js(
+            'docListRow("doc:20260715900769",'
+            ' {char_count:1, truncated:false})'
+        )
+        self.assertEqual(got["rcept_no"], "20260715900769")
+        self.assertNotIn("doc:", got["rcept_no"])
+
+    def test_already_stripped_rcept_no_passes_through_unchanged(self):
+        """정상 호출부(ui.js)가 이미 벗긴 값을 넘기는 경우 — 이중 처리로
+        값이 훼손되면 안 된다."""
+        got = run_js(
+            'docListRow("20260715900769",'
+            ' {char_count:1, truncated:false})'
+        )
+        self.assertEqual(got["rcept_no"], "20260715900769")
+
     def test_empty_files_is_shown_as_a_fact_not_a_verdict(self):
         """리뷰 지적 ④: ZIP을 아예 못 받은 공시는 files가 빈 배열로 온다
         (se_server/api/handlers.py `_disclosure`의 files=[] 판별 기준과
@@ -1428,6 +1455,110 @@ class TestDocPanelClickWiring(unittest.TestCase):
         만들면 안 된다는 계약의 반대쪽 확인이다."""
         got = run_doc_click('[{corp_name:"엔켐",n:1},{corp_name:"엔켐",n:2}]')
         self.assertEqual(got["captured"], [])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 클릭 배선을 검증할 수 없습니다")
+class TestDocPanelClickReachesServerRoute(unittest.TestCase):
+    """openDocPanel에 넘어가는 클릭 값이 실제로 se_server가 라우팅하는
+    값인지를 검증한다.
+
+    위 TestDocPanelClickWiring은 "docListRow/레코드에 넣은 값이
+    openDocPanel에 그대로 나오는가"만 봤다 — 자기 자신과의 일치라서 그
+    값 자체가 서버가 거부하는 형태(`doc:` 접두어가 남은 접수번호 등)여도
+    통과했다. 실제 사고: 본문의 doc: 섹션을 목록 하나로 모으면서
+    (addDocListEntry) `doc:<접수번호>` 섹션 키가 docListRow의 rcept_no로
+    그대로 새어 들어갈 뻔했고, 그 값이 그대로 openDocPanel →
+    `/api/se/disclosure/doc%3A...` 요청으로 이어져 라우터(router.py)의
+    `[0-9]{8,20}` 패턴과 매칭되지 않아 404가 났다(프로덕션 실측).
+
+    여기서는 se_server.api.router.match를 실제로 import해, 클릭이 만든
+    값으로 GET /api/se/disclosure/<값>이 실제로 라우팅되는지 그 자체를
+    확인한다 — 문자열을 하드코딩해 비교하면 서버 패턴이 바뀔 때 이
+    테스트도 같이 놓친다.
+    """
+
+    @staticmethod
+    def _routes_to_disclosure(value):
+        """value로 만든 공시 원문 요청 경로가 실제 라우터를 통과하면
+        True. ui.js의 openDocPanel이 그대로 쓰는
+        `"/api/se/disclosure/" + encodeURIComponent(rceptNo)` 조합과
+        같은 인코딩(quote)을 쓴다."""
+        from urllib.parse import quote
+
+        from se_server.api.router import match
+
+        result = match("GET", "/api/se/disclosure/" + quote(str(value), safe=""))
+        return (
+            result is not None
+            and result[0] == "disclosure"
+            and result[1].get("rcept_no") == str(value)
+        )
+
+    def test_doc_prefixed_value_does_not_route(self):
+        """이 테스트 스위트의 전제 확인: "doc:" 접두어가 남은 값은 실제로
+        라우터가 거부한다(수정 전 실측 404의 직접 원인). 이 검증이 없으면
+        아래 통과 테스트들이 애초에 무엇을 막는지 근거가 없다.
+        """
+        self.assertFalse(self._routes_to_disclosure("doc:20260715900769"))
+
+    def test_route_1_doc_list_row_click_reaches_disclosure_route(self):
+        """경로 ①: 공시 원문 목록(doc_list) 행 클릭.
+
+        서버가 실제로 만드는 섹션 키 형식(`doc:<rcept_no>`,
+        se_server/jobs/runner.py의 expand_stage2 `f"doc:{rcept_no}"`)에서
+        시작해 docKeyRceptNo → docListRow → tableLayout → tableEl → 클릭
+        까지 실제 ui.js 배선 그대로 재현한다.
+        """
+        rcept_no = "20260715900769"
+        row = run_js(
+            'docListRow(docKeyRceptNo(' + json.dumps(f"doc:{rcept_no}") + '),'
+            ' {char_count: 1, truncated: false,'
+            '  main_file: "20260715900769.xml", files: ["20260715900769.xml"]})'
+        )
+        self.assertEqual(row["rcept_no"], rcept_no)
+        got = run_doc_click(json.dumps([row]))
+        self.assertEqual(got["captured"], [rcept_no])
+        self.assertTrue(
+            self._routes_to_disclosure(got["captured"][0]),
+            f"공시 원문 목록 클릭 값 {got['captured'][0]!r}이 서버 라우터를 통과하지 못합니다",
+        )
+
+    def test_route_2_disclosures_table_rcept_no_column_reaches_disclosure_route(self):
+        """경로 ②: `disclosures` 표(Stage1, 행마다 접수번호가 달라 표 본문
+        열로 남는 일반적인 경우)의 rcept_no 열 클릭. 이 경로는 원래
+        접두어가 없어 정상 동작했지만, 값 자체가 서버 계약을 지키는지는
+        지금까지 검증한 적이 없었다.
+        """
+        rows = [
+            {"rcept_dt": "20260710", "rcept_no": "20260710000123", "report_nm": "A"},
+            {"rcept_dt": "20260715", "rcept_no": "20260715900769", "report_nm": "B"},
+        ]
+        got = run_doc_click(json.dumps(rows))
+        self.assertEqual(got["orientation"], "horizontal")
+        self.assertEqual(len(got["captured"]), 2)
+        for value in got["captured"]:
+            self.assertTrue(
+                self._routes_to_disclosure(value),
+                f"disclosures 표 클릭 값 {value!r}이 서버 라우터를 통과하지 못합니다",
+            )
+
+    def test_route_3_caption_promoted_rcept_no_reaches_disclosure_route(self):
+        """경로 ③: rcept_no가 모든 행에서 같아(affiliates·financials 실측)
+        캡션으로 승격된 경우의 클릭.
+        """
+        rows = [
+            {"rcept_no": "20260715900769", "corp_name": "엔켐", "inv_prm": "A"},
+            {"rcept_no": "20260715900769", "corp_name": "엔켐", "inv_prm": "B"},
+        ]
+        got = run_doc_click(json.dumps(rows))
+        caption_keys = [c["key"] for c in got["caption"]]
+        self.assertIn("rcept_no", caption_keys,
+                     "이 테스트 자체가 재현하려는 전제(rcept_no가 캡션으로 승격됨)가 깨졌습니다")
+        self.assertEqual(got["captured"], ["20260715900769"])
+        self.assertTrue(
+            self._routes_to_disclosure(got["captured"][0]),
+            f"캡션 승격 클릭 값 {got['captured'][0]!r}이 서버 라우터를 통과하지 못합니다",
+        )
 
 
 @unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")

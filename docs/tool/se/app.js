@@ -809,11 +809,22 @@ function docKeyRceptNo(key) {
  * `_disclosure` 주석: "files=[]인 완전한 빈 dict") formatValue(app.js)가
  * 그 사실 그대로 "없음"으로 보여준다 — 목록 단계에서부터 이 공시는 클릭해도
  * 원문이 없다는 것을 미리 알 수 있다(판정 어휘 없이 사실만, v0.8.5 원칙).
+ *
+ * **rcept_no는 여기서도 한 번 더 정규화한다.** 지금 유일한 호출부인
+ * ui.js의 addDocListEntry는 docKeyRceptNo로 "doc:" 접두어를 미리 벗기고
+ * 넘기지만, 그 계약을 이 함수 자신도 지켜야 한다 — 그래야 나중에 다른
+ * 호출부가 섹션 키(`doc:<접수번호>`)를 그대로 넘기는 실수를 해도(실제로
+ * 있었던 사고: rcept_no 열이 접두어를 단 채 우측 패널 openDocPanel로
+ * 넘어가 `/api/se/disclosure/doc%3A...`를 요청 — router.py의 rcept_no
+ * 패턴 `[0-9]{8,20}`과 매칭되지 않아 404) 목록 행의 rcept_no는 항상
+ * 서버가 받는 형태(숫자만)로 남는다. docKeyRceptNo가 null이면(이미
+ * 접두어가 없는 값) 원래 값을 그대로 쓴다.
  */
 function docListRow(rceptNo, value) {
   const v = value || {};
+  const stripped = docKeyRceptNo(rceptNo);
   return {
-    rcept_no: rceptNo,
+    rcept_no: stripped !== null ? stripped : rceptNo,
     main_file: v.main_file,
     files: Array.isArray(v.files) ? v.files : [],
     char_count: v.char_count,
