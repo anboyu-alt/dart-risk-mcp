@@ -1,0 +1,6 @@
+# 반입(vendor) 라이브러리는 바이트 단위로 고정한다. core.autocrlf(Windows
+# 기본값 true)가 개행을 LF<->CRLF로 바꾸면 파일 바이트가 달라져
+# docs/tool/se/vendor/README.md에 기록한 SHA-384 체크섬과 어긋난다 —
+# TestVendoredChartLibrary.test_library_file_matches_the_recorded_checksum이
+# 매 checkout마다 깨질 수 있다. binary로 지정해 변환을 완전히 끈다.
+docs/tool/se/vendor/*.js binary

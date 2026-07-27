@@ -1775,5 +1775,102 @@ class TestNoDeadPersonCssClass(unittest.TestCase):
         self.assertIn(".doc{", html, ".doc 클래스 스타일이 사라졌습니다")
 
 
+class TestVendoredChartLibrary(unittest.TestCase):
+    """라이브러리는 저장소에 넣는다 — CDN에서 불러오지 않는다.
+
+    인가된 사람만 쓰는 서비스라, 외부 CDN이 페이지 접속 기록(IP·리퍼러)을
+    갖는 것을 피한다. 파일을 고정해 두면 공급망 위험도 사라지고 CDN 장애와
+    무관해진다. 빌드 스텝은 여전히 없다 — 한 번 받아 커밋할 뿐이다.
+    """
+
+    _VENDOR = _SE / "vendor"
+
+    def test_chart_library_file_is_present(self):
+        """파일이 없으면 아래 검사들이 공허하게 통과한다."""
+        self.assertTrue((self._VENDOR / "chart.umd.js").exists(),
+                        "vendor/chart.umd.js가 없습니다")
+
+    def test_vendor_readme_records_source_and_license(self):
+        """어디서 받았고 무슨 라이선스인지 남기지 않으면 갱신도 감사도 못 한다."""
+        readme = (self._VENDOR / "README.md").read_text(encoding="utf-8")
+        for token in ("4.5.1", "MIT", "chart.js"):
+            self.assertIn(token, readme, f"vendor/README.md에 {token}이 없습니다")
+
+    def test_library_is_loaded_from_a_root_absolute_local_path(self):
+        html = _sources()["index.html"]
+        m = re.search(r'<script src="([^"]*chart[^"]*)"', html)
+        self.assertIsNotNone(m, "index.html이 차트 라이브러리를 불러오지 않습니다")
+        src = m.group(1)
+        self.assertFalse(src.startswith(("http://", "https://", "//")),
+                         f"CDN에서 불러오고 있습니다: {src}")
+        self.assertTrue(src.startswith("/se/"),
+                        f"루트 절대경로여야 합니다(trailingSlash:false): {src}")
+
+    def test_library_loads_before_our_scripts(self):
+        """app.js·ui.js가 Chart를 참조하므로 먼저 로드돼야 한다."""
+        html = _sources()["index.html"]
+        lib = html.index("chart.umd.js")
+        for name in ("/se/app.js", "/se/ui.js"):
+            self.assertLess(lib, html.index(name), f"{name}보다 뒤에 로드됩니다")
+
+    def test_library_file_matches_the_recorded_checksum(self):
+        """반입한 파일이 조용히 바뀌지 않았는지 확인한다.
+
+        CDN에서 불러오면 `integrity="sha384-..."`가 무결성을 지켜준다.
+        파일로 반입하면 그 장치가 없어지므로 체크섬을 기록에 남기고
+        여기서 강제한다. 리뷰어는 이 값을 npm/jsdelivr가 공표한 integrity
+        값과 대조해 진짜 배포본인지 확인할 수 있다.
+        """
+        import base64
+        import hashlib
+
+        blob = (self._VENDOR / "chart.umd.js").read_bytes()
+        actual = "sha384-" + base64.b64encode(hashlib.sha384(blob).digest()).decode()
+        readme = (self._VENDOR / "README.md").read_text(encoding="utf-8")
+        self.assertIn(actual, readme,
+                      "반입한 파일이 README에 적힌 체크섬과 다릅니다.\n"
+                      f"  실제: {actual}\n"
+                      "  의도한 교체라면 README의 값을 갱신하세요.")
+
+    def test_no_second_runtime_dependency_sneaks_in(self):
+        """시간축 어댑터 같은 것이 추가되면 알아차려야 한다.
+
+        Chart.js의 `time` scale은 별도 어댑터를 요구한다. 우리는 날짜를
+        문자열 라벨로 만들어 `category` 축을 쓰므로 어댑터가 필요 없다.
+        """
+        names = sorted(p.name for p in self._VENDOR.glob("*.js"))
+        self.assertEqual(names, ["chart.umd.js"],
+                         f"vendor에 예상 밖 파일이 있습니다: {names}")
+
+
+class TestChartRendering(unittest.TestCase):
+    def test_chart_is_added_above_the_table_not_instead_of_it(self):
+        """canvas 안의 숫자는 복사도 검색도 안 된다. 표가 근거로 남아야 한다."""
+        ui = _sources()["ui.js"]
+        body = _extract_function_body(ui, "renderSection")
+        self.assertIn("renderChart", body, "renderSection이 차트를 그리지 않습니다")
+        self.assertIn("blockEl", body, "renderSection이 표를 더 이상 그리지 않습니다")
+
+    def test_chart_instances_are_destroyed_on_reset(self):
+        """인스턴스가 남으면 회사를 바꿀 때마다 누적된다."""
+        ui = _sources()["ui.js"]
+        gate = _extract_function_body(ui, "showGate")
+        self.assertRegex(gate, r"destroy|resetCharts",
+                         "showGate가 차트 인스턴스를 정리하지 않습니다")
+
+    def test_theme_toggle_repaints_charts(self):
+        ui = _sources()["ui.js"]
+        body = _extract_function_body(ui, "applyTheme")
+        self.assertRegex(body, r"chart|Chart",
+                         "테마를 바꿔도 차트 색이 그대로입니다")
+
+    def test_no_verdict_coloring_tied_to_values(self):
+        """빨강을 값에 따라 붙이면 판정이 된다(v0.8.5)."""
+        ui = _sources()["ui.js"]
+        body = _extract_function_body(ui, "renderChart")
+        self.assertNotRegex(body, r"--red|#e0564a",
+                            "차트가 판정 색을 씁니다")
+
+
 if __name__ == "__main__":
     unittest.main()

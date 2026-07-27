@@ -155,6 +155,10 @@ const LABELS = Object.assign(Object.create(null), {
   // by_kind[종류] = {total, maturity_under_1y} (dart_client.fetch_debt_balance).
   // maturity_1y_share(비중, %)와는 다른 필드다 — 이쪽은 금액.
   maturity_under_1y: "1년 이내 만기 금액",
+  // normalizeDebtByKind가 by_kind(dict)를 레코드로 뒤집을 때 쓰는 열
+  // 이름이다. "종류"만 쓰면 흔해서 다른 필드가 나중에 같은 라벨을 쓸 때
+  // 충돌하기 쉽다("주식 종류"·"종류별 잔액"과 겹치지 않게 접두어를 둔다).
+  debt_kind: "채무 종류",
   opinions: "감사의견", auditor_changes: "감사인 교체",
   independence_warnings: "감사인 독립성 경고",
   major_holders: "최대주주", bulk_holders: "5% 대량보유",
@@ -251,8 +255,20 @@ function formatValue(key, value) {
   if (AMOUNT_FIELDS.has(key) && /^-?[\d,]*\d$/.test(s)) {
     return formatAmount(s.replace(/,/g, ""));
   }
-  if (DATE_FIELDS.has(key) && /^\d{8}$/.test(s)) {
-    return s.slice(0, 4) + "." + s.slice(4, 6) + "." + s.slice(6, 8);
+  if (DATE_FIELDS.has(key)) {
+    if (/^\d{8}$/.test(s)) {
+      return s.slice(0, 4) + "." + s.slice(4, 6) + "." + s.slice(6, 8);
+    }
+    // insider_timeline의 rcept_dt 실측(field-inventory)은 "2026-04-15"처럼
+    // 하이픈이 있는 10자 문자열이다. 이전에는 8자리 숫자 분기만 있어 이
+    // 형태가 그대로(하이픈인 채) 표에 남았는데, 같은 값을 축 라벨로 쓰는
+    // 차트(axisLabel)는 하이픈도 "."으로 바꾸므로 표와 차트가 같은 값을
+    // 두 가지 표기로 보여줬다(리뷰 지적 ③). axisLabel과 같은 정규식·같은
+    // 변환으로 맞춘다 — 표기를 하나로 통일하는 것이지 새 규칙을 만드는
+    // 것이 아니다.
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      return s.replace(/-/g, ".");
+    }
   }
   return s;
 }
@@ -517,8 +533,12 @@ function sourceGroupedBlocks(records) {
       delete copy.source;
       return copy;
     });
-    const t = tableLayout(dropAllEmptyColumns(withoutSource));
-    if (t) blocks.push({ title: label(s), table: t });
+    const cleaned = dropAllEmptyColumns(withoutSource);
+    const t = tableLayout(cleaned);
+    // records는 표가 실제로 그린 것과 같은 레코드(source 제거·빈 열 제거
+    // 반영 후)를 그대로 싣는다 — 다음 태스크(차트)가 이 레코드로 그리므로
+    // 표와 다른 값을 보여주면 안 된다.
+    if (t) blocks.push({ title: label(s), table: t, records: cleaned });
   }
   return blocks;
 }
@@ -562,6 +582,29 @@ function normalizeRoster(value) {
   });
 }
 
+/** debt_balance.by_kind({회사채: {total, maturity_under_1y}, ...})를
+ *  레코드 목록으로 바꾼다.
+ *
+ * dart_client.fetch_debt_balance가 종류를 키로 쓰는 dict를 주므로(레코드
+ * 리스트가 아니다) — 일반 재귀 경로(sectionBlocks)에 그대로 맡기면 종류마다
+ * 별도 1행 표로 쪼개져 종류를 나란히 비교할 수 없고, chartData가 읽을 x축
+ * 필드(종류 이름)도 레코드 안에 없다(정규화 전에는 "종류"가 레코드의 값이
+ * 아니라 title로만 존재한다). normalizeRoster와 같은 이유로 종류를 열
+ * (debt_kind)로 뒤집어 표 하나 + 차트용 레코드로 만든다.
+ *
+ * 종류 이름(예: "corporate_bond")은 label()로 미리 한국어로 바꿔 저장한다 —
+ * formatValue/tableLayout은 열 **이름**(key)만 label()로 바꾸고 셀 **값**은
+ * 그대로 두므로, 표·차트 x축에 실제로 찍히는 문자열(값 자체)을 여기서
+ * 바꿔둬야 "corporate_bond"가 그대로 노출되지 않는다.
+ */
+function normalizeDebtByKind(value) {
+  if (!isPlainObject(value)) return [];
+  return Object.keys(value).map(function (k) {
+    const v = isPlainObject(value[k]) ? value[k] : {};
+    return { debt_kind: label(k), total: v.total, maturity_under_1y: v.maturity_under_1y };
+  });
+}
+
 /** 섹션 값을 화면에 그릴 블록 목록 [{title, table}] 또는 [{title, text}]로
  *  바꾼다. title은 없을 수 있다(null). table/text 둘 다 없으면(표로 만들
  *  근거 자체가 없는 하위 키) 그 사실도 블록으로 남긴다 — 하위 항목이
@@ -595,8 +638,12 @@ function sectionBlocks(value, depth, key) {
   }
 
   if (d === 0 && key === "executive_roster") {
-    const t = tableLayout(normalizeRoster(value));
-    return t ? [{ title: null, table: t }] : [];
+    const records = normalizeRoster(value);
+    const t = tableLayout(records);
+    // records: 차트(다음 태스크)가 표와 같은 데이터를 그리도록, 표가
+    // 실제로 쓴 레코드를 그대로 함께 싣는다 — table.rows는 이미
+    // formatValue를 거친 문자열이라 차트에는 쓸 수 없다.
+    return t ? [{ title: null, table: t, records: records }] : [];
   }
 
   if (Array.isArray(value)) {
@@ -608,16 +655,19 @@ function sectionBlocks(value, depth, key) {
     // insider_timeline처럼 레코드 전부가 source 필드를 가지면(4개
     // 엔드포인트를 합친 결과) source별로 작은 표 여러 개로 나눈다 —
     // source가 없는 다른 섹션은 이 분기를 타지 않는다(recordsHaveSourceField
-    // 계약).
+    // 계약). 이 경로는 sourceGroupedBlocks가 블록별로 자기 레코드를
+    // 따로 싣는다(source가 레코드에서 빠지므로 섹션 전체 레코드를
+    // 넘기는 방식은 여기서 성립하지 않는다).
     if (recordsHaveSourceField(records)) return sourceGroupedBlocks(records);
     const t = tableLayout(records);
-    return t ? [{ title: null, table: t }] : [];
+    return t ? [{ title: null, table: t, records: records }] : [];
   }
 
   if (!isPlainObject(value)) {
     if (isLongText(value)) return [{ title: null, text: value }];
-    const t = tableLayout(toRecords(value) || []);
-    return t ? [{ title: null, table: t }] : [];
+    const records = toRecords(value) || [];
+    const t = tableLayout(records);
+    return t ? [{ title: null, table: t, records: records }] : [];
   }
 
   const keys = Object.keys(value);
@@ -641,16 +691,29 @@ function sectionBlocks(value, depth, key) {
     for (const k of flatKeys) flat[k] = value[k];
     // flat은 항상 단일 평면 객체다 — 레코드 1건짜리 배열로 감싸 넘긴다.
     // 이 경로가 indicators(1건 49열)를 세로로 바꾸는 핵심 지점이다.
-    const t = tableLayout([flat]);
-    if (t) blocks.push({ title: null, table: t });
+    const records = [flat];
+    const t = tableLayout(records);
+    if (t) blocks.push({ title: null, table: t, records: records });
   }
   for (const k of longTextKeys) {
     blocks.push({ title: label(k), text: value[k] });
   }
   for (const k of nestedKeys) {
+    // debt_balance.by_kind만 특수 처리한다(depth 0 + 부모 key로 게이트 —
+    // executive_roster와 같은 방식). 다른 섹션에 우연히 "by_kind"라는
+    // 이름의 하위 키가 있어도 이 경로를 타지 않는다(key가 재귀 호출에는
+    // 전달되지 않으므로 하위 호출에서는 이 조건이 항상 거짓이다).
+    if (d === 0 && key === "debt_balance" && k === "by_kind") {
+      const records = normalizeDebtByKind(value[k]);
+      const t = tableLayout(records);
+      blocks.push(t
+        ? { title: label(k), table: t, records: records }
+        : { title: label(k), table: null, records: null });
+      continue;
+    }
     const sub = sectionBlocks(value[k], d + 1);
     if (sub.length === 0) {
-      blocks.push({ title: label(k), table: null });
+      blocks.push({ title: label(k), table: null, records: null });
       continue;
     }
     for (const sb of sub) {
@@ -864,6 +927,423 @@ function documentBlocks(text) {
   return blocks;
 }
 
+// 섹션별 차트 정의. 여기 없는 섹션은 차트 없이 표만 나온다.
+//
+// **`time` 축을 쓰지 않는다.** Chart.js의 time scale은 별도 날짜 어댑터를
+// 요구해 의존성이 하나 더 늘어난다. 날짜를 "2026.04.15" 문자열로 만들어
+// category 축에 넣으면 어댑터 없이 같은 그림이 나온다 — 우리 데이터는
+// 보고 시점이 띄엄띄엄한 이산 값이라 오히려 이쪽이 맞다.
+// financials는 여기 없다 — 실측(field-inventory)에서 fs_div(CFS/OFS)·
+// sj_div(BS/IS)가 상수열이 아니라 30건 안에 연결·별도, 재무상태표·손익계산서가
+// 공존한다. 같은 account_nm("유동자산")이 연결 행과 별도 행 양쪽에 나타나는데,
+// x축(account_nm) 하나에 값 하나만 담는 chartData 구조로는 뒤 레코드가 앞을
+// 조용히 덮어(연결 100이 사라지고 별도 11만 남는 식) 어느 쪽 값인지 표시할
+// 방법이 없다(리뷰 지적 ②). 연결과 별도를 한 그림에 섞느니 차트를 빼고
+// 표(financials 섹션은 fs_div·sj_div·fs_nm·sj_nm 열을 그대로 보여준다)만
+// 남긴다 — 표는 행마다 그 값이 어느 재무제표인지 정확히 말하지만, 차트는
+// 그 구분을 표현할 자리가 없다.
+const CHART_SPECS = Object.assign(Object.create(null), {
+  insider_timeline: {
+    kind: "line", title: "보고자별 지분율 추이",
+    x: "rcept_dt", y: "sp_stock_lmp_rate", groupBy: "repror", yLabel: "지분율 (%)",
+    // Chart.js의 time 축은 별도 날짜 어댑터를 요구한다 — 위 CHART_SPECS
+    // 주석의 결정을 실제로 지키는지 테스트가 확인할 수 있도록 명시한다
+    // (test_no_spec_uses_a_time_scale). renderChart(ui.js)가 이 값을
+    // scales.x.type으로 그대로 쓴다.
+    xScale: "category",
+  },
+  // fetch_fund_usage(dart_client.py)는 연도(bsns_year) × 보고서코드 4종
+  // (11011 사업·11012 반기·11013 1분기·11014 3분기)을 루프 돌며 모으므로
+  // **같은 회차(tm)가 보고 시점마다 반복 수집된다** — 정규화된 레코드에는
+  // reprt_code가 남지 않지만 year(그 루프의 bsns_year)·kind(공모/사모)는
+  // 남는다. x를 tm 하나로만 잡으면 같은 회차의 서로 다른 연도 보고(예:
+  // 2024년 보고 50억 vs 2025년 보고 130.8억, 실제 회귀 사례)가 한 x축
+  // 점에서 뒤 레코드가 앞을 조용히 덮어 표(같은 회차 두 행을 그대로
+  // 보여준다)와 다른 값을 말하게 된다(리뷰 지적 ①). compositeXFields로
+  // x를 "회차 (연도, 구분)" 형태로 쪼개면 서로 다른 보고가 서로 다른
+  // x축 점이 되어 값이 사라지지 않는다 — year·kind가 없는 레코드(예:
+  // 테스트 픽스처)는 compositeXValue가 있는 필드만으로 자연히 폴백한다.
+  //
+  // **kind를 더해도 여전히 다 갈라지지 않는다(라이브 재리뷰 Critical).**
+  // 공모(kind="public") 건은 tm 실측값이 "-"(회차 없음)인 경우가 있고,
+  // 같은 연도·같은 kind 안에서도 보고서(reprt_code — 정규화 과정
+  // (_normalize_fund_usage)에서 탈락해 여기서는 되살릴 수 없다)마다
+  // 계획금액이 다른 레코드가 3건까지 나온다(실측: 130.82억/352.91억/
+  // 476.57억). reprt_code 없이는 이 세 값을 서로 다른 x축 점으로 가를
+  // 방법이 없다 — 이런 진짜 충돌은 chartData 하단의 범용 충돌 감지
+  // (writeChartCell)가 그 x축 점을 null로 만든다(표는 여전히 3행 모두
+  // 보여준다 — 값을 지어내지 않을 뿐 숨기지도 않는다). reprt_code를
+  // 되살리려면 dart_client.py를 고쳐야 하는데 이 브랜치는 core를
+  // 읽기만 한다 — 여기서 할 수 있는 최선은 "쪼갤 수 있는 만큼 쪼개고,
+  // 남는 충돌은 숨기지 않는다"이다.
+  fund_usage: {
+    kind: "bar", title: "자금 사용 — 계획 대비 실제 (회차·보고연도·구분별)",
+    x: "tm", compositeXFields: ["tm", "year", "kind"], yLabel: "금액", xScale: "category",
+    series: [
+      { key: "plan_amount", label: "계획 금액" },
+      { key: "real_dtls_amount", label: "실제 집행 금액" },
+    ],
+  },
+  // dividends의 se(항목)에는 "주당 현금배당금(원)"처럼 원(₩) 단위와
+  // "현금배당수익률(%)"처럼 비율(%) 단위가 한 목록에 섞여 있다(alotMatter
+  // 실측). 같은 y축에 그리면 financials의 CFS/OFS를 섞었던 사고와 같은
+  // 부류의 거짓말이 된다 — 값 자체는 정확해도 단위가 다른 두 계열을 같은
+  // 눈금으로 비교하게 만들기 때문이다. groupFilterSuffix("(원)")로 순수
+  // 원화 단위 항목만 계열로 만든다(끝이 정확히 "(원)"인 항목만 — "(백만원)"
+  // 은 마지막 3글자가 "만원)"이라 걸리지 않는다, chartData 주석 참고).
+  // 제외된 항목(%·백만원·주)은 차트에서만 빠질 뿐 표에는 그대로 남는다.
+  //
+  // **fetch_dividend_history(dart_client.py)도 4개 reprt_code(11011·
+  // 11012·11013·11014) × N년 루프다(fund_usage와 같은 부류의 반복
+  // 수집) — 그런데 x는 bsns_year 하나뿐이었다(라이브 재리뷰 Critical,
+  // fund_usage와 달리 이 섹션은 손도 안 댄 채였다). 같은 연도·같은
+  // 항목(se)에 보고서마다 다른 값이 조용히 하나로 덮이고, 부호까지
+  // 뒤집힌다(실측 2025년 (연결)주당순이익(원): -3,154/1,817/2,750/121 —
+  // 첫 보고는 적자인데 마지막 값(121)만 남아 흑자로 보였다). dividend
+  // 레코드는 fund_usage와 달리 reprt_code가 정규화 과정에서 탈락하지
+  // 않고 그대로 남는다(fetch_dividend_history 주석) — compositeXFields로
+  // x를 "연도 (보고서코드)"로 쪼개 네 보고를 각자 다른 x축 점으로 남긴다.
+  //
+  // stock_knd(보통주/우선주)도 groupBy(se) 하나에 안 담기면 같은 항목의
+  // 우선주 배당이 보통주 값과 한 계열에서 충돌한다 — compositeGroupFields로
+  // 계열 이름도 "항목 (주식종류)"로 쪼갠다. groupFilterSuffix 판정은
+  // 계열 이름이 아니라 원래 필드(se)를 그대로 보므로("(원)"으로 끝나는지)
+  // 계열을 쪼개도 원 단위 필터링은 그대로 동작한다(chartData의
+  // groupFilterField 처리 참고). reprt_code·stock_knd가 없는 레코드
+  // (기존 픽스처 등)는 compositeXValue가 있는 필드만으로 자연히 폴백해
+  // 이전 동작과 같다.
+  dividends: {
+    kind: "line", title: "배당 지표 추이 (원 단위 항목만, 연도·보고서코드별)",
+    x: "bsns_year", compositeXFields: ["bsns_year", "reprt_code"],
+    y: "thstrm", groupBy: "se", compositeGroupFields: ["se", "stock_knd"],
+    yLabel: "금액 (원)", xScale: "category", groupFilterSuffix: "(원)",
+  },
+  // debt_balance.by_kind는 dict라 레코드 리스트가 아니다 — sectionBlocks의
+  // 특수 경로(normalizeDebtByKind)가 종류를 debt_kind 열로 뒤집은 레코드를
+  // 만들어야 이 스펙이 그릴 수 있다(위 sectionBlocks 주석 참고).
+  debt_balance: {
+    kind: "bar", title: "채무증권 종류별 잔액", xScale: "category",
+    x: "debt_kind", yLabel: "금액",
+    series: [
+      { key: "total", label: "합계" },
+      { key: "maturity_under_1y", label: "1년 이내 만기 금액" },
+    ],
+  },
+  // disclosures는 145건(엔켐 실측)의 개별 공시다 — 월별로 몇 건이었는지는
+  // 사실이지만("건수를 세는 것은 사실이다"), "이 달에 몰렸다"고 강조하면
+  // 판정이 된다(v0.8.5). monthlyCountOf는 chartData 안에서 건수만 세고
+  // 멈춘다 — 순위·강조 없이 막대 높이로만 보여준다. 표는 원본 145행을
+  // 그대로 유지한다(집계는 차트 전용 파생값, block.records는 손대지 않는다).
+  disclosures: {
+    kind: "bar", title: "월별 공시 건수", xScale: "category",
+    monthlyCountOf: "rcept_dt", yLabel: "건수",
+  },
+});
+
+/** "20260415" → "2026.04.15", "2026-04-15" → "2026.04.15". 날짜가 아니면
+ *  원본을 그대로 쓴다.
+ *
+ *  실측(field-inventory)에서 insider_timeline.rcept_dt는 "2026-04-15"처럼
+ *  하이픈이 있는 10자 문자열이다 — 브리프가 예시로 준 8자리 숫자
+ *  ("20260415")와 다르다. 8자리 숫자 분기만 있으면 이 실측 형태가 어느
+ *  분기에도 걸리지 않아 하이픈이 그대로 노출된다(리뷰 지적 ④). 두 형태
+ *  모두 "."로 통일해 화면 표기가 일관되게 한다. */
+function axisLabel(v) {
+  const s = v === null || v === undefined ? "" : String(v);
+  if (/^\d{8}$/.test(s)) return s.slice(0, 4) + "." + s.slice(4, 6) + "." + s.slice(6, 8);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s.replace(/-/g, ".");
+  // disclosures 월별 집계(monthlyCounts)가 만드는 "YYYYMM"(6자리) 라벨.
+  // 8자리 분기보다 뒤에 둬야 한다 — 정규식 자체는 서로 겹치지 않지만
+  // (자릿수가 다르다) 읽는 순서를 날짜 특이 형태 → 일반형 순으로 유지한다.
+  if (/^\d{6}$/.test(s)) return s.slice(0, 4) + "." + s.slice(4, 6);
+  return s;
+}
+
+/** 숫자로 읽는다. 읽을 수 없으면 null — **0으로 채우지 않는다.**
+ *  0으로 채우면 "그 시점에 0이었다"는 거짓말이 된다.
+ *
+ *  배열·객체는 애초에 숫자가 아니다 — 걸러내지 않으면 String([5])가 "5"로
+ *  우연히 읽혀 배열이 숫자인 척한다(리뷰 지적 ⑦).
+ *
+ *  쉼표는 "13,082,000,000"처럼 천 단위를 3자리씩 묶을 때만 벗긴다.
+ *  "1,2,3"처럼 자릿수가 안 맞는 문자열까지 쉼표를 무조건 지우면
+ *  "123"이라는 없는 숫자를 만들어낸다(리뷰 지적 ⑦) — 쉼표가 있는데
+ *  이 형태에 안 맞으면 애초에 숫자로 보지 않는다. */
+function numeric(v) {
+  if (v === null || v === undefined) return null;
+  if (typeof v === "object") return null;
+  const raw = String(v).trim();
+  if (raw === "") return null;
+  if (raw.indexOf(",") !== -1 && !/^-?\d{1,3}(,\d{3})*(\.\d+)?$/.test(raw)) return null;
+  const s = raw.replace(/,/g, "");
+  if (!/^-?\d*\.?\d+$/.test(s)) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** x축 정렬용 보조키: 문자열에 있는 숫자만 이어붙여 정수로 읽는다. 숫자가
+ *  전혀 없으면(예: "유동자산") null이다.
+ *
+ *  numeric()과 다른 함수다 — numeric()은 "이 값 자체가 숫자다"를 요구하고
+ *  (예: "제14회"는 실패), 이 함수는 "이 값 안에 정렬 기준이 될 숫자가
+ *  있다"만 본다("제14회" → 14). fund_usage.tm의 실측 형태가 "제14회"처럼
+ *  숫자가 아닌 문자로 감싸여 있어(리뷰 지적 ①) numeric()만으로는
+ *  회차 정렬이 항상 실패한다 — 문자열 정렬(사전식)로 빠지면 "제10회"가
+ *  "제9회"보다 앞에 와 그래프가 거짓말을 한다.
+ *
+ *  "20260415"·"2026-04-15"처럼 형식이 섞인 날짜도 숫자만 이으면 같은
+ *  값(20260415)이 되어 시간순이 그대로 유지된다 — 날짜 축은 이 함수
+ *  하나로 8자리·하이픈 두 형태를 모두 옳게 정렬한다. */
+function axisSortKey(v) {
+  const s = v === null || v === undefined ? "" : String(v);
+  const digits = s.replace(/[^0-9]/g, "");
+  if (digits === "") return null;
+  const n = Number(digits);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** field(예: rcept_dt) 값을 월(YYYYMM, 6자리)로 묶어 건수만 센다.
+ *
+ * **집계는 여기서 끝난다.** 어떤 달이 많았는지 강조하거나 순위를 매기지
+ * 않는다 — 그건 판정이다(v0.8.5, disclosures 브리프의 "막대만 그리고
+ * 강조하지 않는다"). axisSortKey와 같은 방식으로 문자열에서 숫자만 뽑아
+ * 앞 6자리를 쓰므로 "20260415"·"2026-04-15" 두 형태 모두 같은 월
+ * (202604)로 묶인다. 등장 순서를 그대로 보존해 반환한다 — chartData가
+ * 이어서 xs를 숫자로(모두 6자리 숫자이므로) 시간순 정렬한다. */
+function monthlyCounts(rows, field) {
+  const counts = new Map();
+  const order = [];
+  for (const r of rows) {
+    const raw = r[field];
+    if (raw === null || raw === undefined || raw === "") continue;
+    const digits = String(raw).replace(/[^0-9]/g, "");
+    if (digits.length < 6) continue; // 월을 특정할 수 없다 — 건너뛴다(0으로 세지 않는다)
+    const month = digits.slice(0, 6);
+    if (!counts.has(month)) { counts.set(month, 0); order.push(month); }
+    counts.set(month, counts.get(month) + 1);
+  }
+  return order.map(function (m) { return { month: m, count: counts.get(m) }; });
+}
+
+/** row에서 fields의 값들을 이어 x축 표시용 문자열 하나로 합친다.
+ *
+ *  fund_usage처럼 한 필드(tm=회차)만으로는 서로 다른 레코드를 구분하지
+ *  못할 때 쓴다(위 CHART_SPECS.fund_usage 주석 참고, 리뷰 지적 ①). 비어
+ *  있는 필드는 건너뛴다 — year가 없는 레코드(테스트 픽스처 등)에서는
+ *  자연히 tm 하나만 남아 이전 동작과 같아진다. 값이 하나도 없으면(모든
+ *  필드가 비어 있으면) null — chartData의 기존 "축 값 없으면 건너뛴다"
+ *  처리에 그대로 흡수된다.
+ *
+ *  "제14회 (2025)" 형태로 만든다 — axisSortKey는 문자가 아니라 문자열에
+ *  포함된 숫자만 이어붙여 정렬 기준을 삼으므로("제14회 (2025)" →
+ *  "142025"), year가 언제나 4자리인 한(달력 연도라 사실상 항상 그렇다)
+ *  이 값은 정확히 "회차*10000+연도"와 같아 회차가 먼저, 같은 회차 안에서는
+ *  연도가 나중 기준으로 정렬된다 — 별도 비교 함수를 새로 만들 필요가 없다.
+ */
+function compositeXValue(row, fields) {
+  const parts = fields
+    .map(function (f) { return row[f]; })
+    .filter(function (v) { return v !== null && v !== undefined && v !== ""; })
+    .map(String);
+  if (parts.length === 0) return null;
+  if (parts.length === 1) return parts[0];
+  return parts[0] + " (" + parts.slice(1).join(", ") + ")";
+}
+
+/** data[i]에 값을 채운다. 아직 비어 있으면 그대로 채우고, 이미 다른
+ *  non-null 값이 있는데 새 값이 다르면(진짜 충돌) 그 자리를 null로
+ *  되돌리고 다시는 채우지 않는다.
+ *
+ *  **왜 필요한가.** fund_usage(같은 회차가 보고 시점마다 반복 수집)와
+ *  dividends(같은 항목이 분기 보고서마다 반복 수집)에서 실제로 났던
+ *  사고가 같은 뿌리다 — 같은 x축 점(같은 회차, 같은 연도)에 서로 다른
+ *  값(계획금액 130.82억 vs 352.91억 vs 476.57억, 또는 주당순이익
+ *  -3,154원 vs 121원처럼 부호까지 다른 값)이 들어오면, 이전에는 뒤
+ *  레코드가 앞을 조용히 덮어 마지막 값 하나만 살아남았다 — 표는 그
+ *  값들을 전부 보여주는데 차트는 그중 하나가 "the" 값인 것처럼 그렸다.
+ *  compositeXFields·compositeGroupFields로 x/계열 키를 넓혀 우선 최대한
+ *  갈라내지만(위 CHART_SPECS.fund_usage·dividends 주석), 정규화 과정에서
+ *  탈락한 필드(예: fund_usage의 reprt_code)가 있으면 키를 아무리 넓혀도
+ *  가끔 여전히 충돌한다 — 이 함수는 그 **남는** 충돌을 잡는 마지막 방어선
+ *  이다. 어느 쪽이 맞는지 차트가 판정해 하나를 고르면 안 된다(v0.8.5,
+ *  이 화면의 "조용히 하나만 남기지 않는다" 원칙) — 그래서 고르지 않고
+ *  null로 만든다. 표(block.records)는 이 함수를 거치지 않으므로 값이
+ *  사라지지 않는다.
+ *
+ *  같은 값이 반복되는 것은 충돌이 아니다(data[i] !== v로 실제 값 차이만
+ *  본다) — 같은 레코드가 우연히 두 번 들어와도 차트가 사라지면 안 된다.
+ *
+ *  conflicted는 xs와 같은 길이의 boolean 배열이다. 한 번 충돌한 자리는
+ *  잠가서, 세 번째 레코드가 먼저 두 값 중 하나와 우연히 같아도(예: v1,
+ *  v2, v1 순서) 충돌 사실이 사라지고 값이 되살아나는 일이 없게 한다. */
+function writeChartCell(data, conflicted, i, v) {
+  if (conflicted[i]) return;
+  if (data[i] === null) {
+    data[i] = v;
+  } else if (data[i] !== v) {
+    data[i] = null;
+    conflicted[i] = true;
+  }
+}
+
+/** 레코드 목록을 Chart.js가 받는 형태로 바꾼다. 그릴 게 없으면 null. */
+function chartData(records, spec) {
+  if (!Array.isArray(records) || records.length === 0 || !spec) return null;
+  let rows = records.filter(function (r) { return r && typeof r === "object"; });
+  if (rows.length === 0) return null;
+
+  if (spec.monthlyCountOf) {
+    // disclosures처럼 개별 레코드가 아니라 "월별 건수"를 그려야 하는
+    // 경우다. 표(block.records)는 원본 개별 레코드를 그대로 유지하고,
+    // 이 집계는 차트 전용 파생값이다 — 아래로는 x="month",
+    // series=[{key:"count"}] 하나짜리 스펙으로 취급해 기존 series 경로를
+    // 그대로 재사용한다(새 렌더 분기를 만들지 않는다).
+    rows = monthlyCounts(rows, spec.monthlyCountOf);
+    if (rows.length === 0) return null;
+    spec = Object.assign({}, spec, {
+      x: "month",
+      series: [{ key: "count", label: spec.yLabel || "건수" }],
+    });
+  }
+
+  if (spec.compositeXFields) {
+    // fund_usage(리뷰 지적 ①) — x 하나(tm)만으로는 같은 회차의 서로 다른
+    // 보고 시점을 구분하지 못해 뒤 레코드가 앞을 덮는다. __composite_x를
+    // 만들어 spec.x를 그쪽으로 돌린다 — 아래 xs 구성·series/groupBy 분기는
+    // 손대지 않고 그대로 재사용한다(새 렌더 분기를 만들지 않는다, 다른
+    // monthlyCountOf 처리와 같은 방식).
+    const fields = spec.compositeXFields;
+    rows = rows.map(function (r) {
+      const copy = Object.assign({}, r);
+      copy.__composite_x = compositeXValue(r, fields);
+      return copy;
+    });
+    spec = Object.assign({}, spec, { x: "__composite_x" });
+  }
+
+  if (spec.compositeGroupFields) {
+    // dividends(라이브 재리뷰 Critical ②) — stock_knd(보통주/우선주)가
+    // groupBy(se) 하나에 안 담기면 같은 항목의 우선주 배당이 보통주 값과
+    // 한 계열에서 충돌한다. __composite_group을 만들어 spec.groupBy를
+    // 그쪽으로 돌린다 — compositeXFields와 같은 방식(새 렌더 분기를
+    // 만들지 않는다)이지만, groupFilterSuffix 판정(예: "(원)"으로
+    // 끝나는지)은 계열 이름이 아니라 **원래** 필드(예: se)를 봐야 하므로
+    // groupFilterField에 원래 groupBy를 남겨 둔다 — 아래 groupBy 분기가
+    // 이 필드로 필터링하고, 계열 이름 자체는 합성 필드를 쓴다.
+    const gfields = spec.compositeGroupFields;
+    const filterField = spec.groupFilterField || spec.groupBy;
+    rows = rows.map(function (r) {
+      const copy = Object.assign({}, r);
+      copy.__composite_group = compositeXValue(r, gfields);
+      return copy;
+    });
+    spec = Object.assign({}, spec, { groupBy: "__composite_group", groupFilterField: filterField });
+  }
+
+  const xs = [];
+  const seen = new Set();
+  for (const r of rows) {
+    const raw = r[spec.x];
+    if (raw === null || raw === undefined || raw === "") continue;
+    const key = String(raw);
+    if (!seen.has(key)) { seen.add(key); xs.push(key); }
+  }
+  if (xs.length === 0) return null;
+  // 정렬 기준 3단계(리뷰 지적 ①⑤):
+  // 1) 값 전부가 순수 숫자면(예: "9","10") 숫자로 정렬한다.
+  // 2) 아니지만 전부 숫자를 품고 있으면(예: "제14회", "2026-04-15")
+  //    그 숫자로 정렬한다 — axisSortKey가 문자를 벗기고 숫자만 비교하므로
+  //    "제9회"가 "제14회"보다 앞에 온다(회차 정렬이 실제로 통한다).
+  // 3) 숫자가 전혀 없는 순수 범주형(예: "유동자산")은 정렬하지 않고
+  //    원본 등장 순서를 그대로 둔다. **`xs.sort(undefined)`를 여기 쓰면
+  //    안 된다** — comparator 없는 Array.prototype.sort는 기본값이 아니라
+  //    문자열 사전식 비교라 계정과목이 가나다순으로 뒤바뀐다(실제로 났던
+  //    사고, 리뷰 지적 ⑤). 정렬하지 않으려면 sort 자체를 호출하지 않아야
+  //    한다.
+  const allNumeric = xs.every(function (v) { return numeric(v) !== null; });
+  if (allNumeric) {
+    xs.sort(function (a, b) { return numeric(a) - numeric(b); });
+  } else {
+    const allHaveDigits = xs.every(function (v) { return axisSortKey(v) !== null; });
+    if (allHaveDigits) {
+      xs.sort(function (a, b) { return axisSortKey(a) - axisSortKey(b); });
+    }
+  }
+  const labels = xs.map(axisLabel);
+  const at = new Map(xs.map(function (v, i) { return [v, i]; }));
+
+  const datasets = [];
+  if (spec.series) {
+    // 같은 x에 여러 계열(계획 vs 실제 등)
+    for (const s of spec.series) {
+      const data = xs.map(function () { return null; });
+      // 충돌 감지(writeChartCell)는 x축 점 단위(conflicted[i])로 잠긴다 —
+      // 계열(series)마다 별도 배열이어야 한다. 같은 x에서 "계획 금액"이
+      // 충돌해도 "실제 집행 금액"까지 덩달아 null이 되면 안 된다.
+      const conflicted = xs.map(function () { return false; });
+      for (const r of rows) {
+        const i = at.get(String(r[spec.x]));
+        if (i === undefined) continue;
+        const v = numeric(r[s.key]);
+        // 같은 x(예: 같은 tm)에 레코드가 둘 이상 있을 수 있다(실측: kind가
+        // 상수열이 아니라 회차가 겹친다) — 값이 없는 레코드(v === null)는
+        // 건너뛴다(0으로 채우는 것과 같은 부류의 거짓말이 되므로). 값이
+        // 있는데 이미 채운 값과 다르면(진짜 충돌) writeChartCell이 그
+        // 자리를 null로 되돌린다 — 조용히 마지막 값만 남기지 않는다(위
+        // writeChartCell 주석 참고, 실제 사례: fund_usage 리뷰 지적 ①).
+        if (v !== null) writeChartCell(data, conflicted, i, v);
+      }
+      datasets.push({ label: s.label, data: data });
+    }
+  } else {
+    // groupBy로 계열을 나눈다(보고자별 등)
+    const groups = new Map();
+    const groupConflicts = new Map();
+    for (const r of rows) {
+      const g = r[spec.groupBy];
+      if (g === null || g === undefined || g === "") continue;
+      const name = String(g);
+      // dividends의 se(항목)처럼 그룹 이름에 단위가 다른 값(원/%/백만원/주)이
+      // 섞여 있으면 한 축에 그리는 순간 스케일을 왜곡해 보여준다(위
+      // CHART_SPECS.dividends 주석 참고) — groupFilterSuffix가 있으면 그
+      // 접미어로 끝나는 이름만 계열로 만든다. 판정은 groupFilterField(없으면
+      // groupBy 자신)로 한다 — compositeGroupFields로 groupBy가 합성
+      // 필드(__composite_group)로 바뀐 경우에도, 필터는 항상 원래 필드
+      // (예: se)의 값을 봐야 "(원)"으로 끝나는지를 정확히 판단한다(합성된
+      // "항목 (주식종류)"는 "(원)"으로 끝나지 않으니 계열 이름으로 판정하면
+      // 전부 걸러진다). 제외된 항목은 차트에서만 빠질 뿐 표(block.records)
+      // 에는 그대로 남는다.
+      if (spec.groupFilterSuffix) {
+        const filterField = spec.groupFilterField || spec.groupBy;
+        const fv = r[filterField];
+        const filterName = (fv === null || fv === undefined) ? "" : String(fv);
+        if (filterName.slice(-spec.groupFilterSuffix.length) !== spec.groupFilterSuffix) {
+          continue;
+        }
+      }
+      if (!groups.has(name)) {
+        groups.set(name, xs.map(function () { return null; }));
+        groupConflicts.set(name, xs.map(function () { return false; }));
+      }
+      const i = at.get(String(r[spec.x]));
+      if (i === undefined) continue;
+      const v = numeric(r[spec.y]);
+      // 위 series 분기와 같은 이유·같은 함수(writeChartCell) — 값 없는
+      // 레코드는 건너뛰고, 값이 있는데 다른 값과 충돌하면 null로 되돌린다.
+      if (v !== null) writeChartCell(groups.get(name), groupConflicts.get(name), i, v);
+    }
+    for (const [name, data] of groups) datasets.push({ label: name, data: data });
+  }
+
+  // 값이 하나도 없으면 빈 그림이 된다 — 차트를 만들지 않는다.
+  const any = datasets.some(function (d) {
+    return d.data.some(function (v) { return v !== null; });
+  });
+  if (!any) return null;
+
+  return { labels: labels, datasets: datasets };
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     LS_DART_KEY, LS_SESSION, LS_JOB, LS_THEME, SECTION_GROUPS, formatCount,
@@ -873,5 +1353,7 @@ if (typeof module !== "undefined" && module.exports) {
     ACTOR_STATUS, actorLine, resumeTarget, documentBlocks,
     dropAllEmptyColumns, recordsHaveSourceField, sourceGroupedBlocks,
     DOC_LIST_KEY, docKeyRceptNo, docListRow,
+    CHART_SPECS, chartData, axisLabel, numeric, axisSortKey,
+    normalizeDebtByKind, monthlyCounts, compositeXValue,
   };
 }

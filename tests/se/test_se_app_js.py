@@ -744,6 +744,112 @@ class TestSectionBlocks(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestNormalizeDebtByKind(unittest.TestCase):
+    """debt_balance.by_kind({회사채: {total, maturity_under_1y}, ...})는
+    dart_client.fetch_debt_balance가 종류를 키로 쓰는 dict다(레코드
+    리스트가 아니다, task-6-brief.md) — normalizeDebtByKind가 종류를 열
+    (debt_kind)로 뒤집어야 표 하나로 나란히 비교되고 chartData가 그릴
+    x축 필드가 생긴다(normalizeRoster와 같은 이유).
+    """
+
+    def test_kind_keys_become_a_column_with_korean_labels(self):
+        got = run_js(
+            'normalizeDebtByKind({corporate_bond:{total:1000,maturity_under_1y:200},'
+            ' short_term_bond:{total:500,maturity_under_1y:500}})'
+        )
+        self.assertEqual([r["debt_kind"] for r in got], ["회사채", "단기사채"])
+        self.assertEqual(got[0]["total"], 1000)
+        self.assertEqual(got[0]["maturity_under_1y"], 200)
+
+    def test_unlabeled_kind_key_keeps_raw_name(self):
+        """label()에 없는 종류가 와도 숨기지 않는다 — 원본 키 그대로 쓴다."""
+        got = run_js('normalizeDebtByKind({wholly_unknown_kind:{total:1}})')
+        self.assertEqual(got[0]["debt_kind"], "wholly_unknown_kind")
+
+    def test_non_object_input_is_empty_list(self):
+        for expr in ("normalizeDebtByKind(null)", "normalizeDebtByKind(undefined)",
+                     'normalizeDebtByKind("x")', "normalizeDebtByKind([])"):
+            self.assertEqual(run_js(expr), [])
+
+    def test_malformed_kind_value_does_not_crash(self):
+        """kind 값이 dict가 아니어도(예상 밖 응답 형태) 죽지 않고
+        total/maturity_under_1y가 없는 레코드로 방어적으로 처리한다."""
+        got = run_js('normalizeDebtByKind({corporate_bond:"이상한 값"})')
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["debt_kind"], "회사채")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestDebtBalanceWiredIntoSectionBlocks(unittest.TestCase):
+    """normalizeDebtByKind를 정의만 하고 sectionBlocks 경로에 안 꽂으면
+    (executive_roster와 같은 부류의 사고, 이 저장소에서 이미 다섯 번 났다)
+    by_kind는 여전히 종류마다 조각난 1행 표로 나뉘어 나온다 — 종류를
+    나란히 비교할 수도, chartData가 읽을 x축(debt_kind)도 없다.
+
+    sectionBlocks가 실제로 소비하는 것과 같은 3번째 인자(key)를 그대로
+    넘겨 실제 진입점을 검증한다.
+    """
+
+    def test_debt_balance_key_combines_by_kind_into_one_table(self):
+        got = run_js(
+            'sectionBlocks({year:"2025", total:1500, by_kind:'
+            '{corporate_bond:{total:1000,maturity_under_1y:200},'
+            ' short_term_bond:{total:500,maturity_under_1y:500}},'
+            ' equity_ratio:null, maturity_1y_share:46.7}, 0, "debt_balance")'
+        )
+        titled = [b for b in got if b["title"] == "종류별 잔액"]
+        self.assertEqual(len(titled), 1, "by_kind가 여러 블록으로 쪼개졌거나 안 보입니다")
+        table = titled[0]["table"]
+        self.assertEqual(table["orientation"], "horizontal")
+        self.assertEqual(len(table["rows"]), 2, "종류가 나란히 비교되는 표가 아닙니다")
+        flat = [c for r in table["rows"] for c in r]
+        self.assertIn("회사채", flat)
+        self.assertIn("단기사채", flat)
+        # chartData(x="debt_kind")가 읽을 수 있어야 하므로 records에도
+        # 원본 숫자(포맷 전)가 그대로 있어야 한다.
+        self.assertEqual(
+            sorted(r["debt_kind"] for r in titled[0]["records"]),
+            ["단기사채", "회사채"],
+        )
+
+    def test_flat_scalar_fields_are_not_lost(self):
+        """year·total 등 스칼라 필드는 by_kind 특수 처리와 무관하게 그대로
+        남아야 한다 — 값이 사라지는 변경이 아니라 더해지는 변경이어야
+        한다(SE-4d Global Constraints)."""
+        got = run_js(
+            'sectionBlocks({year:"2025", total:1500,'
+            ' by_kind:{corporate_bond:{total:1000,maturity_under_1y:200}}},'
+            ' 0, "debt_balance")'
+        )
+        flat_blocks = [b for b in got if b["title"] is None]
+        self.assertEqual(len(flat_blocks), 1, "스칼라 필드(year/total) 블록이 사라졌습니다")
+        labels = [row[0] for row in flat_blocks[0]["table"]["rows"]]
+        self.assertIn("연도", labels)
+        self.assertIn("합계", labels)
+
+    def test_other_keys_still_get_fragmented_per_kind_blocks(self):
+        """key가 "debt_balance"가 아니면 이 특수 경로를 타면 안 된다 —
+        일반 dict-of-dicts 펼치기가 그대로 적용돼야 한다(기존 동작
+        무변경, test_mixed_flat_and_nested_keeps_both와 같은 성질)."""
+        got = run_js(
+            'sectionBlocks({by_kind:{corporate_bond:{total:1000}}}, 0, "other_section")'
+        )
+        titles = [b["title"] for b in got]
+        self.assertTrue(any("회사채" in (t or "") for t in titles),
+                         "key 무관 특수 경로를 탔습니다 — 일반 재귀 경로가 아닙니다")
+
+    def test_nested_field_literally_named_by_kind_at_deeper_depth_is_unaffected(self):
+        """depth 0이 아닐 때는(재귀 호출) key를 넘기지 않으므로, 하위 키가
+        우연히 "by_kind"라는 이름이어도 이 특수 경로를 타면 안 된다."""
+        got = run_js(
+            'sectionBlocks({wrap:{by_kind:{corporate_bond:{total:1000}}}}, 0, "debt_balance")'
+        )
+        titles = [b["title"] for b in got]
+        self.assertTrue(any("회사채" in (t or "") for t in titles),
+                         "깊이 0이 아닌 by_kind 키가 잘못 특수 경로로 빠졌습니다")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestInsiderTimelineSourceSplit(unittest.TestCase):
     """insider_timeline은 elestock·hyslr·hyslr_chg·exec_treasury 4개
     엔드포인트를 합친 결과다(dart_client.fetch_insider_timeline). 레코드마다
@@ -1225,6 +1331,13 @@ class TestFormatValue(unittest.TestCase):
 
     def test_yyyymmdd_becomes_dotted_date(self):
         self.assertEqual(run_js('formatValue("rcept_dt", "20260724")'), "2026.07.24")
+
+    def test_hyphenated_iso_date_becomes_dotted_too(self):
+        """리뷰 지적 ③: insider_timeline의 rcept_dt 실측(field-inventory)은
+        "2026-04-15"처럼 하이픈이 있는 형태다. 차트 축(axisLabel)은 이미
+        이 형태를 "."으로 바꾸는데 표(formatValue)가 8자리 숫자만 처리하면
+        표는 하이픈 그대로, 차트는 점 표기로 같은 값을 두 가지로 보여준다."""
+        self.assertEqual(run_js('formatValue("rcept_dt", "2026-04-15")'), "2026.04.15")
 
     def test_rcept_no_is_never_reformatted_as_a_date(self):
         """접수번호는 14자리 숫자다. 날짜로 오인하면 안 된다."""
@@ -3095,6 +3208,1358 @@ class TestTocMatchesScreenOrderAndBehavesOnInteraction(unittest.TestCase):
         self.assertEqual(after["bodyCount"], 0,
                          "renderHeadPlaceholder() 이후에도 이전 회사의 본문 섹션이 "
                          "남아 있습니다")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestChartData(unittest.TestCase):
+    # rcept_dt는 하이픈 있는 "2026-04-15"(10자) 형태다 — 엔켐 실측
+    # (field-inventory)이 그렇다. 브리프가 예시로 준 "20260415"(8자,
+    # 하이픈 없음)는 프로덕션에 존재하지 않는 형태였다(리뷰 지적 ④).
+    _INSIDER = """[
+      {source:"elestock", repror:"오정강", rcept_dt:"2026-03-04", sp_stock_lmp_rate:"14.13"},
+      {source:"elestock", repror:"오정강", rcept_dt:"2026-03-27", sp_stock_lmp_rate:"3.60"},
+      {source:"elestock", repror:"와이어트그룹", rcept_dt:"2026-04-15", sp_stock_lmp_rate:"6.53"}
+    ]"""
+
+    def test_groups_into_one_dataset_per_reporter(self):
+        got = run_js(f'chartData({self._INSIDER}, CHART_SPECS.insider_timeline)')
+        labels = sorted(d["label"] for d in got["datasets"])
+        self.assertEqual(labels, ["오정강", "와이어트그룹"])
+
+    def test_x_labels_are_sorted_by_date(self):
+        got = run_js(f'chartData({self._INSIDER}, CHART_SPECS.insider_timeline)')
+        self.assertEqual(got["labels"], ["2026.03.04", "2026.03.27", "2026.04.15"])
+
+    def test_series_aligns_values_to_the_shared_x_axis(self):
+        """계열마다 관측 시점이 다르다. 없는 지점은 null이어야 선이 끊긴다 —
+        0으로 채우면 지분이 0이 됐다는 거짓말이 된다."""
+        got = run_js(f'chartData({self._INSIDER}, CHART_SPECS.insider_timeline)')
+        ohj = next(d for d in got["datasets"] if d["label"] == "오정강")
+        self.assertEqual(ohj["data"], [14.13, 3.6, None])
+
+    def test_zero_is_a_real_value_not_a_gap(self):
+        got = run_js('''chartData([
+          {repror:"김", rcept_dt:"2026-01-01", sp_stock_lmp_rate:"0"},
+          {repror:"김", rcept_dt:"2026-01-02", sp_stock_lmp_rate:"1.5"}
+        ], CHART_SPECS.insider_timeline)''')
+        self.assertEqual(got["datasets"][0]["data"], [0, 1.5])
+
+    def test_non_numeric_value_becomes_a_gap_not_zero(self):
+        got = run_js('''chartData([
+          {repror:"김", rcept_dt:"2026-01-01", sp_stock_lmp_rate:"-"},
+          {repror:"김", rcept_dt:"2026-01-02", sp_stock_lmp_rate:"1.5"}
+        ], CHART_SPECS.insider_timeline)''')
+        self.assertEqual(got["datasets"][0]["data"], [None, 1.5])
+
+    def test_comma_separated_number_is_parsed(self):
+        got = run_js('''chartData([{tm:"제1회", plan_amount:"13,082,000,000",
+                        real_dtls_amount:"13,082,000,000"}], CHART_SPECS.fund_usage)''')
+        self.assertEqual(got["datasets"][0]["data"], [13082000000])
+
+    def test_plan_vs_actual_makes_two_datasets(self):
+        got = run_js('''chartData([{tm:"제1회", plan_amount:"100", real_dtls_amount:"80"}],
+                        CHART_SPECS.fund_usage)''')
+        self.assertEqual([d["label"] for d in got["datasets"]], ["계획 금액", "실제 집행 금액"])
+
+    def test_numeric_x_axis_sorts_numerically_not_lexically(self):
+        """회차 10이 9보다 앞에 오면 그래프가 거짓말을 한다.
+
+        tm은 순수 숫자 문자열이 아니라 "제9회"·"제10회"처럼 한글이 섞인
+        실측(field-inventory) 형태다 — numeric()은 이 값에서 실패하므로
+        (전체가 숫자가 아니다) 내장된 숫자만 뽑아 비교해야 한다.
+        """
+        got = run_js('''chartData([
+          {tm:"제9회",  plan_amount:"1", real_dtls_amount:"1"},
+          {tm:"제10회", plan_amount:"2", real_dtls_amount:"2"}
+        ], CHART_SPECS.fund_usage)''')
+        self.assertEqual(got["labels"], ["제9회", "제10회"])
+
+    def test_round_numbers_with_korean_suffix_sort_correctly_even_out_of_order(self):
+        """리뷰 지적 ①의 정확한 재현: 응답 순서가 "제10회", "제14회",
+        "제9회"(사전식으로 이미 뒤섞인 순서)로 와도 회차 순서(9→10→14)로
+        정렬돼야 한다."""
+        got = run_js('''chartData([
+          {tm:"제10회", plan_amount:"1", real_dtls_amount:"1"},
+          {tm:"제14회", plan_amount:"2", real_dtls_amount:"2"},
+          {tm:"제9회",  plan_amount:"3", real_dtls_amount:"3"}
+        ], CHART_SPECS.fund_usage)''')
+        self.assertEqual(got["labels"], ["제9회", "제10회", "제14회"])
+
+    def test_date_x_axis_stays_in_time_order(self):
+        """YYYYMMDD·하이픈 ISO 두 형태 모두 시간순이 유지되는지 확인한다
+        (숫자 정렬 도입이 날짜 축을 깨뜨리지 않는지)."""
+        got = run_js('''chartData([
+          {repror:"김", rcept_dt:"2026-12-31", sp_stock_lmp_rate:"2"},
+          {repror:"김", rcept_dt:"2026-01-01", sp_stock_lmp_rate:"1"}
+        ], CHART_SPECS.insider_timeline)''')
+        self.assertEqual(got["labels"], ["2026.01.01", "2026.12.31"])
+
+    def test_categorical_axis_without_any_digits_preserves_original_order(self):
+        """리뷰 지적 ⑤: financials의 account_nm처럼 숫자가 전혀 없는
+        범주형 값은 가나다순으로 재배열되면 안 된다 — DART 표시 순서
+        (원본 등장 순서)를 그대로 지켜야 한다. 여기서는 CHART_SPECS에
+        없는 임의의 스펙으로 chartData 자체의 정렬 규칙만 검증한다."""
+        got = run_js('''chartData([
+          {cat:"유동자산", v:"1"},
+          {cat:"자산총계", v:"2"},
+          {cat:"부채총계", v:"3"}
+        ], {x:"cat", series:[{key:"v", label:"값"}]})''')
+        self.assertEqual(got["labels"], ["유동자산", "자산총계", "부채총계"],
+                         "숫자가 없는 범주형 축이 원본 순서를 잃었습니다")
+
+    def test_second_record_without_a_value_does_not_blank_the_first(self):
+        """리뷰 지적 ③의 정확한 재현: 같은 x(tm)에 레코드가 둘 있고
+        뒤엣것에 이 필드 값이 없으면, 앞 레코드의 실값이 null로 덮이면
+        안 된다."""
+        got = run_js('''chartData([
+          {tm:"제1회", plan_amount:"100"},
+          {tm:"제1회", real_dtls_amount:"80"}
+        ], CHART_SPECS.fund_usage)''')
+        by_label = {d["label"]: d["data"] for d in got["datasets"]}
+        self.assertEqual(by_label["계획 금액"], [100], "값이 있는 레코드가 값 없는 레코드에 덮였습니다")
+        self.assertEqual(by_label["실제 집행 금액"], [80])
+
+    def test_second_record_without_a_value_does_not_blank_the_first_in_group_by_mode(self):
+        """같은 재현을 groupBy 계열(insider_timeline, 보고자별)에서도 확인한다
+        — series 분기만 고치고 groupBy 분기를 놓치면 이쪽에서 다시 난다.
+        고치지 않은 채로는 null이 유일한 값을 지워 차트 자체가 사라진다
+        (그릴 값이 하나도 안 남아 chartData가 null을 반환)."""
+        got = run_js('''chartData([
+          {repror:"김", rcept_dt:"2026-01-01", sp_stock_lmp_rate:"5"},
+          {repror:"김", rcept_dt:"2026-01-01", sp_stock_lmp_rate:null}
+        ], CHART_SPECS.insider_timeline)''')
+        self.assertIsNotNone(got, "실값이 null에 덮여 차트 전체가 사라졌습니다")
+        self.assertEqual(got["datasets"][0]["data"], [5])
+
+    def test_same_round_different_report_year_does_not_blank_the_other(self):
+        """리뷰 지적 ①의 정확한 재현: fetch_fund_usage(dart_client.py)는
+        연도(bsns_year) × 보고서코드 4종을 루프 돌아 **같은 회차가 보고
+        시점마다 반복 수집된다**. 실측 사례: 제14회 실제집행이 2024년
+        보고에는 50억, 2025년 보고에는 130.8억으로 서로 다르다. 이전에는
+        x가 tm 하나뿐이라 뒤 레코드(2025년 보고)가 앞(2024년 보고)을
+        조용히 덮어 차트에는 130.8억만 남았다 — 표는 두 행을 그대로
+        보여주므로 차트와 표가 다른 값을 말하게 됐다. compositeXFields가
+        tm과 year를 함께 x로 묶어 두 보고를 별도 x축 점으로 남긴다."""
+        got = run_js('''chartData([
+          {tm:"제14회", year:2024, plan_amount:"5000000000", real_dtls_amount:"5000000000"},
+          {tm:"제14회", year:2025, plan_amount:"5000000000", real_dtls_amount:"13080000000"}
+        ], CHART_SPECS.fund_usage)''')
+        self.assertEqual(len(got["labels"]), 2,
+                         "같은 회차의 서로 다른 보고연도 값이 하나로 뭉개졌습니다")
+        real = next(d for d in got["datasets"] if d["label"] == "실제 집행 금액")
+        self.assertEqual(sorted(real["data"]), [5000000000, 13080000000],
+                         "값이 있는 레코드가 다른 값이 있는 레코드에 덮였습니다")
+
+    def test_composite_x_falls_back_to_the_single_field_when_the_others_are_absent(self):
+        """year 필드가 없는(테스트 픽스처·구 데이터 등) 레코드에서는
+        compositeXFields가 tm 하나로 자연히 폴백해야 한다 — 기존
+        회차 정렬 동작(test_round_numbers_with_korean_suffix_sort_
+        correctly_even_out_of_order 등)을 이 변경이 깨면 안 된다."""
+        got = run_js('''chartData([
+          {tm:"제10회", plan_amount:"1", real_dtls_amount:"1"},
+          {tm:"제9회",  plan_amount:"2", real_dtls_amount:"2"}
+        ], CHART_SPECS.fund_usage)''')
+        self.assertEqual(got["labels"], ["제9회", "제10회"])
+
+    def test_fund_usage_kind_disambiguates_same_round_and_year(self):
+        """라이브 재리뷰 Critical ①의 수정 확인: compositeXFields에 kind가
+        빠져 있으면 같은 tm("-")·같은 year라도 공모(public)와 사모(private)
+        값이 한 x축 점에서 충돌한다. kind를 더하면 두 값 모두 살아남는다."""
+        got = run_js('''chartData([
+          {tm:"-", year:2023, kind:"public",  plan_amount:"13082000000", real_dtls_amount:"13082000000"},
+          {tm:"-", year:2023, kind:"private", plan_amount:"5000000000",  real_dtls_amount:"5000000000"}
+        ], CHART_SPECS.fund_usage)''')
+        self.assertEqual(len(got["labels"]), 2,
+                         "kind가 다른 두 레코드가 같은 x축 점으로 합쳐졌습니다")
+        plan = next(d for d in got["datasets"] if d["label"] == "계획 금액")
+        self.assertEqual(sorted(plan["data"]), [5000000000, 13082000000],
+                         "kind로 갈라진 두 값이 온전히 보존되지 않았습니다")
+
+    def test_fund_usage_still_conflicting_records_become_null_not_a_guess(self):
+        """라이브 재리뷰 Critical ①의 정확한 재현: 공모건의 tm 실측값은
+        "-"(회차 없음)이고, 같은 연도·같은 kind(공모) 안에서도 (정규화
+        과정에서 탈락하는 reprt_code 탓에) 계획금액이 다른 레코드가 3건
+        나온다(실측: 130.82억/352.91억/476.57억). compositeXFields를
+        tm+year+kind로 넓혀도 이 세 레코드는 여전히 같은 x축 점에서
+        충돌한다 — kind까지 같기 때문이다. 이전에는 뒤 레코드(476.57억)가
+        조용히 마지막 값으로 남았지만, 이제는 어느 값이 맞는지 차트가
+        판정하지 않고 null이 된다(표는 sectionBlocks가 3행 모두 보여준다,
+        아래에서 함께 확인한다)."""
+        records_js = '''[
+          {tm:"-", year:2023, kind:"public", plan_amount:"13082000000", real_dtls_amount:"13082000000"},
+          {tm:"-", year:2023, kind:"public", plan_amount:"35291000000", real_dtls_amount:"35291000000"},
+          {tm:"-", year:2023, kind:"public", plan_amount:"47657000000", real_dtls_amount:"47657000000"}
+        ]'''
+        chart = run_js(f'chartData({records_js}, CHART_SPECS.fund_usage)')
+        self.assertIsNone(chart, "값이 서로 다른 3건 중 하나를 차트가 조용히 골라 그렸습니다")
+
+        blocks = run_js(f'sectionBlocks({records_js}, 0, "fund_usage")')
+        self.assertEqual(len(blocks[0]["table"]["rows"]), 3,
+                         "차트가 사라지면서 표에서도 행이 사라졌습니다 — 표는 그대로 남아야 합니다")
+
+    def test_financials_has_no_chart_spec_to_avoid_mixing_cfs_and_ofs(self):
+        """리뷰 지적 ②: financials는 실측에서 fs_div(연결/별도)·sj_div
+        (재무상태표/손익계산서)가 상수열이 아니다 — 같은 account_nm이
+        연결·별도 양쪽에 나타나 한 그림에 그리면 어느 쪽 값인지 알 수
+        없이 뒤섞인다. 나누지 않고 차트 자체를 빼기로 했다(표는 그대로
+        fs_div·sj_div 열을 보여준다) — CHART_SPECS에 이 키가 없어야 한다.
+        """
+        self.assertNotIn("financials", run_js("Object.keys(CHART_SPECS)"))
+
+    def test_returns_null_when_no_records(self):
+        for expr in ("chartData([], CHART_SPECS.insider_timeline)",
+                     "chartData(null, CHART_SPECS.insider_timeline)"):
+            self.assertIsNone(run_js(expr))
+
+    def test_returns_null_when_the_axis_fields_are_absent(self):
+        """축 필드가 없으면 차트를 만들지 않는다 — 표는 그대로 남는다."""
+        got = run_js('chartData([{무관:1}], CHART_SPECS.insider_timeline)')
+        self.assertIsNone(got)
+
+    def test_returns_null_when_every_value_is_missing(self):
+        got = run_js('''chartData([{repror:"김", rcept_dt:"2026-01-01",
+                        sp_stock_lmp_rate:null}], CHART_SPECS.insider_timeline)''')
+        self.assertIsNone(got)
+
+    def test_single_point_series_still_charts(self):
+        got = run_js('''chartData([{repror:"김", rcept_dt:"2026-01-01",
+                        sp_stock_lmp_rate:"5"}], CHART_SPECS.insider_timeline)''')
+        self.assertEqual(got["datasets"][0]["data"], [5])
+
+    def test_spec_keys_all_exist_in_the_server_registry(self):
+        """CHART_SPECS의 섹션 키가 서버가 실제로 주는 키여야 한다.
+        오타가 있으면 차트가 조용히 안 그려진다."""
+        from se_server.jobs.registry import STAGE1_SPECS
+
+        known = {s.key for s in STAGE1_SPECS}
+        specs = run_js("Object.keys(CHART_SPECS)")
+        unknown = sorted(set(specs) - known)
+        self.assertEqual(unknown, [], f"registry에 없는 섹션 키: {unknown}")
+
+    def test_no_spec_uses_a_time_scale(self):
+        """time 축은 별도 어댑터를 요구한다. category 축만 쓴다.
+
+        리뷰 지적 ⑥: 이전에는 어느 spec에도 xScale 키 자체가 없어
+        spec.get("xScale")가 항상 None이었다(무엇을 해도 통과하는 공허한
+        검사). 이제 CHART_SPECS 각 항목이 xScale을 실제로 갖고
+        renderChart(ui.js)가 이 값을 Chart.js의 scales.x.type으로 쓴다
+        (TestChartRenderExecution이 그 배선을 확인한다) — 이 테스트는
+        그 값이 "category"이고 "time"이 아님을 직접 확인한다.
+        """
+        specs = run_js("CHART_SPECS")
+        self.assertTrue(specs, "CHART_SPECS가 비어 있어 이 검사가 아무것도 보지 않습니다")
+        for key, spec in specs.items():
+            self.assertEqual(spec.get("xScale"), "category",
+                             f"{key}의 xScale이 'category'가 아닙니다: {spec.get('xScale')!r}")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestChartDataConflictDetection(unittest.TestCase):
+    """chartData의 범용 충돌 감지(writeChartCell) — 같은 (x, 계열)에 서로
+    다른 non-null 값이 둘 이상 들어오면 조용히 하나만 남기지 않는다.
+
+    이 부류의 사고가 이 계획에서 세 번(financials·fund_usage·dividends)
+    났고, 그때마다 개별 스펙만 고쳤다 — kind·reprt_code처럼 정규화
+    과정에서 아예 탈락한 필드가 있으면 키를 아무리 넓혀도 여전히
+    충돌할 수 있다. 이 클래스는 특정 섹션이 아니라 chartData 자체의
+    방어를 확인한다 — 다음에 같은 부류가 나도 조용히 통과하지 않게
+    하는 것이 목적이다(fund_usage·dividends 전용 재현은 각각
+    TestChartData·TestChartDataForDividendsDebtDisclosures에 있다)."""
+
+    def test_two_different_values_at_the_same_cell_become_null(self):
+        got = run_js('''chartData([
+          {cat:"a", v:"1"},
+          {cat:"a", v:"2"}
+        ], {x:"cat", series:[{key:"v", label:"값"}]})''')
+        self.assertIsNone(got, "충돌하는 두 값 중 하나를 차트가 조용히 골라 그렸습니다")
+
+    def test_conflict_at_one_point_does_not_blank_other_points(self):
+        """충돌은 그 x축 점 하나만 지운다 — 같은 계열의 다른 점은 살아있다."""
+        got = run_js('''chartData([
+          {cat:"a", v:"1"},
+          {cat:"a", v:"2"},
+          {cat:"b", v:"5"}
+        ], {x:"cat", series:[{key:"v", label:"값"}]})''')
+        self.assertIsNotNone(got, "충돌 없는 다른 점까지 차트 전체가 사라졌습니다")
+        self.assertEqual(got["labels"], ["a", "b"])
+        self.assertEqual(got["datasets"][0]["data"], [None, 5])
+
+    def test_repeating_the_identical_value_is_not_a_conflict(self):
+        """같은 레코드가 우연히 두 번 들어와도(값이 같다) 충돌이 아니다."""
+        got = run_js('''chartData([
+          {cat:"a", v:"1"},
+          {cat:"a", v:"1"}
+        ], {x:"cat", series:[{key:"v", label:"값"}]})''')
+        self.assertEqual(got["datasets"][0]["data"], [1])
+
+    def test_conflict_persists_even_if_a_later_value_matches_an_earlier_one(self):
+        """v1, v2, v1 순서로 와도(세 번째가 첫 값과 우연히 같아도) 충돌
+        사실이 사라지고 값이 되살아나면 안 된다 — writeChartCell의
+        conflicted 잠금을 확인한다."""
+        got = run_js('''chartData([
+          {cat:"a", v:"1"},
+          {cat:"a", v:"2"},
+          {cat:"a", v:"1"}
+        ], {x:"cat", series:[{key:"v", label:"값"}]})''')
+        self.assertIsNone(got, "충돌 이후 값이 되살아났습니다")
+
+    def test_conflict_detection_also_applies_to_groupby_mode(self):
+        """series 분기만 고치고 groupBy 분기(insider_timeline 등, 보고자별
+        계열)를 놓치면 이 부류의 사고가 groupBy 쪽에서 다시 난다 — 같은
+        보고자·같은 날짜에 서로 다른 지분율이 오는 경우로 재현한다(이전
+        (같은 값 없음) 테스트와 달리 이번엔 값 자체가 진짜로 다르다)."""
+        got = run_js('''chartData([
+          {repror:"김", rcept_dt:"2026-01-01", sp_stock_lmp_rate:"5"},
+          {repror:"김", rcept_dt:"2026-01-01", sp_stock_lmp_rate:"7"}
+        ], CHART_SPECS.insider_timeline)''')
+        self.assertIsNone(got, "같은 보고자·같은 날짜의 서로 다른 지분율이 조용히 하나로 뭉개졌습니다")
+
+    def test_groupby_conflict_does_not_affect_a_different_group(self):
+        """충돌이 한 그룹(보고자)에서만 나면 다른 그룹의 데이터는 그대로
+        살아있어야 한다 — 그룹 간에 충돌 상태가 새면 안 된다."""
+        got = run_js('''chartData([
+          {repror:"김", rcept_dt:"2026-01-01", sp_stock_lmp_rate:"5"},
+          {repror:"김", rcept_dt:"2026-01-01", sp_stock_lmp_rate:"7"},
+          {repror:"이", rcept_dt:"2026-01-01", sp_stock_lmp_rate:"9"}
+        ], CHART_SPECS.insider_timeline)''')
+        self.assertIsNotNone(got, "다른 보고자의 데이터까지 사라졌습니다")
+        by_label = {d["label"]: d["data"] for d in got["datasets"]}
+        self.assertEqual(by_label["김"], [None])
+        self.assertEqual(by_label["이"], [9])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestMonthlyCounts(unittest.TestCase):
+    """disclosures 월별 집계(monthlyCounts) 순수 함수 검증.
+
+    **집계는 건수를 세는 것에서 끝난다** — 어떤 달이 많았는지 순위를
+    매기거나 강조 표시를 만들지 않는다(v0.8.5 판정 금지, task-6-brief.md의
+    "막대만 그리고 강조하지 않는다")."""
+
+    def test_counts_records_by_month_prefix(self):
+        got = run_js('''monthlyCounts([
+          {rcept_dt:"20260415"}, {rcept_dt:"20260420"}, {rcept_dt:"20260501"}
+        ], "rcept_dt")''')
+        by_month = {r["month"]: r["count"] for r in got}
+        self.assertEqual(by_month, {"202604": 2, "202605": 1})
+
+    def test_hyphenated_dates_are_counted_the_same_as_plain_digits(self):
+        """insider_timeline의 rcept_dt는 하이픈 있는 실측 형태였다(리뷰
+        지적 ④와 같은 부류 함정) — disclosures도 두 형태 모두 같은 달로
+        묶여야 한다."""
+        got = run_js('''monthlyCounts([
+          {rcept_dt:"2026-04-15"}, {rcept_dt:"20260420"}
+        ], "rcept_dt")''')
+        self.assertEqual(got, [{"month": "202604", "count": 2}])
+
+    def test_missing_or_short_values_are_skipped_not_miscounted(self):
+        got = run_js('''monthlyCounts([
+          {rcept_dt:null}, {rcept_dt:""}, {rcept_dt:"2026"}, {rcept_dt:"20260415"}
+        ], "rcept_dt")''')
+        self.assertEqual(got, [{"month": "202604", "count": 1}])
+
+    def test_empty_input_yields_empty_list(self):
+        self.assertEqual(run_js('monthlyCounts([], "rcept_dt")'), [])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestChartDataForDividendsDebtDisclosures(unittest.TestCase):
+    """SE-4d Task 6(task-6-brief.md): dividends·debt_balance·disclosures
+    차트 데이터 가공. 셋 다 insider_timeline/fund_usage와 형태가 달라
+    각각 확인이 필요하다 — dividends는 단위가 섞인 groupBy, debt_balance는
+    레코드가 아니라 dict, disclosures는 집계가 필요하다."""
+
+    # ── dividends: se(항목)에 원/%/백만원이 섞여 있다 ──────────────────
+    def test_dividends_only_charts_won_denominated_items(self):
+        """실측(alotMatter) se 값 예시: "주당액면가액(원)"(원)·
+        "현금배당수익률(%)"(%)·"현금배당금총액(백만원)"(백만원)이 한
+        목록에 섞여 있다 — "(원)"으로 끝나는 항목만 계열이 되어야 한다."""
+        got = run_js('''chartData([
+          {se:"주당액면가액(원)", bsns_year:"2024", thstrm:"500"},
+          {se:"주당액면가액(원)", bsns_year:"2025", thstrm:"500"},
+          {se:"현금배당수익률(%)", bsns_year:"2024", thstrm:"1.2"},
+          {se:"현금배당금총액(백만원)", bsns_year:"2024", thstrm:"300"}
+        ], CHART_SPECS.dividends)''')
+        labels = [d["label"] for d in got["datasets"]]
+        self.assertEqual(labels, ["주당액면가액(원)"])
+
+    def test_dividends_excludes_million_won_items_even_though_they_contain_won(self):
+        """"(백만원)"에도 문자로는 "원"이 들어 있지만, "(원)"이라는 연속된
+        부분 문자열 자체가 없다("(백만원)"의 마지막 네 글자는 "만원)"이지
+        "(원)"이 아니다) — 그래서 String.indexOf("(원)")로 판정해도 이
+        항목은 이미 걸러진다(-1). 이 테스트는 "(원)"으로 끝나는지
+        (endsWith 방식)와 문자열에 "(원)"이 포함되는지(indexOf 방식)를
+        가르지 못한다 — 실제로 이 값 하나만으로는 두 방식의 차이가
+        드러나지 않는다. 그래도 "숫자만 세는 문자열 포함 검사"(예:
+        "원" 한 글자만 찾는 것) 같은 더 느슨한 오탐지를 회귀로부터
+        지키는 최소 방어선으로 남겨 둔다."""
+        got = run_js('''chartData([
+          {se:"현금배당금총액(백만원)", bsns_year:"2024", thstrm:"300"}
+        ], CHART_SPECS.dividends)''')
+        self.assertIsNone(got, "백만원 단위 항목이 원 단위 차트에 섞여 들어갔습니다")
+
+    def test_dividends_x_axis_is_the_report_year(self):
+        got = run_js('''chartData([
+          {se:"주당액면가액(원)", bsns_year:"2023", thstrm:"500"},
+          {se:"주당액면가액(원)", bsns_year:"2025", thstrm:"500"},
+          {se:"주당액면가액(원)", bsns_year:"2024", thstrm:"500"}
+        ], CHART_SPECS.dividends)''')
+        self.assertEqual(got["labels"], ["2023", "2024", "2025"])
+
+    def test_dividends_returns_null_when_only_percentage_items_exist(self):
+        """원 단위 항목이 하나도 없으면(전부 필터에 걸리면) 빈 그림을
+        만들지 않고 차트 자체를 만들지 않는다 — 표는 그대로 남는다."""
+        got = run_js('''chartData([
+          {se:"현금배당수익률(%)", bsns_year:"2024", thstrm:"1.2"},
+          {se:"현금배당수익률(%)", bsns_year:"2025", thstrm:"1.5"}
+        ], CHART_SPECS.dividends)''')
+        self.assertIsNone(got)
+
+    # ── dividends: 라이브 재리뷰 Critical ② — reprt_code·stock_knd가
+    #    복합키에 없어 손도 안 댄 채 같은 사고가 났다 ────────────────────
+    def test_dividends_reprt_code_key_prevents_quarterly_reports_from_colliding(self):
+        """fetch_dividend_history(dart_client.py)는 4개 reprt_code(11011·
+        11012·11013·11014) × N년 루프인데, 이전에는 x가 bsns_year 하나뿐
+        이었다 — 같은 연도·같은 항목(se)에 보고서마다 다른 값이 조용히
+        하나로 덮이고 부호까지 뒤집혔다. 실측(2025년 (연결)주당순이익(원)):
+        -3,154 / 1,817 / 2,750 / 121 — 이전에는 마지막 값(121, 흑자)만
+        남아 첫 보고(적자)가 사라졌다. reprt_code를 x에 더하면 네 값
+        모두 서로 다른 x축 점에 남는다(fund_usage와 달리 reprt_code는
+        정규화 과정에서 탈락하지 않는다 — fetch_dividend_history 주석)."""
+        got = run_js('''chartData([
+          {se:"(연결)주당순이익(원)", bsns_year:"2025", reprt_code:"11011", thstrm:"-3154"},
+          {se:"(연결)주당순이익(원)", bsns_year:"2025", reprt_code:"11012", thstrm:"1817"},
+          {se:"(연결)주당순이익(원)", bsns_year:"2025", reprt_code:"11013", thstrm:"2750"},
+          {se:"(연결)주당순이익(원)", bsns_year:"2025", reprt_code:"11014", thstrm:"121"}
+        ], CHART_SPECS.dividends)''')
+        self.assertEqual(len(got["labels"]), 4,
+                         "같은 연도의 네 분기 보고가 한 x축 점으로 뭉개졌습니다")
+        eps = got["datasets"][0]["data"]
+        self.assertEqual(sorted(eps), [-3154, 121, 1817, 2750],
+                         "부호를 포함한 네 값이 그대로 보존되지 않았습니다 — 적자 보고가 사라졌습니다")
+
+    def test_dividends_reprt_code_key_also_preserves_multi_year_negative_values(self):
+        """실측 2024년 (연결)주당순이익(원): -28,306 / -16,885 / -17,387 /
+        -19,059 — 전부 적자다. 연도가 다른 레코드와 섞이지 않고, 한 연도
+        안의 네 보고 값도 서로 지우지 않고 모두 남아야 한다."""
+        got = run_js('''chartData([
+          {se:"(연결)주당순이익(원)", bsns_year:"2024", reprt_code:"11011", thstrm:"-28306"},
+          {se:"(연결)주당순이익(원)", bsns_year:"2024", reprt_code:"11012", thstrm:"-16885"},
+          {se:"(연결)주당순이익(원)", bsns_year:"2024", reprt_code:"11013", thstrm:"-17387"},
+          {se:"(연결)주당순이익(원)", bsns_year:"2024", reprt_code:"11014", thstrm:"-19059"}
+        ], CHART_SPECS.dividends)''')
+        self.assertEqual(len(got["labels"]), 4)
+        self.assertEqual(sorted(got["datasets"][0]["data"]), [-28306, -19059, -17387, -16885])
+
+    def test_dividends_stock_knd_key_prevents_common_and_preferred_stock_from_colliding(self):
+        """stock_knd(보통주/우선주)가 복합키에 없으면 같은 항목(se)의
+        우선주 배당이 보통주 값과 한 계열에서 충돌한다 — compositeGroupFields
+        (se+stock_knd)로 계열을 갈라 별도 선으로 만든다."""
+        got = run_js('''chartData([
+          {se:"주당 현금배당금(원)", stock_knd:"보통주", bsns_year:"2025", reprt_code:"11011", thstrm:"500"},
+          {se:"주당 현금배당금(원)", stock_knd:"우선주", bsns_year:"2025", reprt_code:"11011", thstrm:"550"}
+        ], CHART_SPECS.dividends)''')
+        labels = sorted(d["label"] for d in got["datasets"])
+        self.assertEqual(len(labels), 2, "보통주·우선주 배당이 한 계열로 합쳐졌습니다")
+        by_label = {d["label"]: d["data"] for d in got["datasets"]}
+        self.assertEqual(by_label["주당 현금배당금(원) (보통주)"], [500])
+        self.assertEqual(by_label["주당 현금배당금(원) (우선주)"], [550])
+
+    def test_dividends_group_filter_suffix_still_applies_when_group_is_composite(self):
+        """계열 이름이 compositeGroupFields로 "항목 (주식종류)" 형태가 돼도,
+        "(원)" 필터는 원래 필드(se)를 보고 판정해야 한다 — 계열 이름 자체
+        ("...(원) (보통주)")는 "(원)"으로 끝나지 않으므로, 필터가 합성된
+        이름을 잘못 보면 원 단위 항목까지 전부 걸러진다."""
+        got = run_js('''chartData([
+          {se:"주당 현금배당금(원)", stock_knd:"보통주", bsns_year:"2025", reprt_code:"11011", thstrm:"500"},
+          {se:"현금배당수익률(%)", stock_knd:"보통주", bsns_year:"2025", reprt_code:"11011", thstrm:"1.2"}
+        ], CHART_SPECS.dividends)''')
+        self.assertIsNotNone(got, "필터가 합성 이름을 보고 원 단위 항목까지 전부 걸러냈습니다")
+        labels = [d["label"] for d in got["datasets"]]
+        self.assertEqual(labels, ["주당 현금배당금(원) (보통주)"])
+
+    def test_dividends_table_still_shows_all_four_quarterly_rows(self):
+        """검증 요구: 차트가 네 점으로 갈라지는 동안 표(sectionBlocks)도
+        네 행 그대로 남아야 한다 — 차트만 고치고 표를 죽이면 안 된다."""
+        records_js = '''[
+          {se:"(연결)주당순이익(원)", bsns_year:"2025", reprt_code:"11011", thstrm:"-3154"},
+          {se:"(연결)주당순이익(원)", bsns_year:"2025", reprt_code:"11012", thstrm:"1817"},
+          {se:"(연결)주당순이익(원)", bsns_year:"2025", reprt_code:"11013", thstrm:"2750"},
+          {se:"(연결)주당순이익(원)", bsns_year:"2025", reprt_code:"11014", thstrm:"121"}
+        ]'''
+        blocks = run_js(f'sectionBlocks({records_js}, 0, "dividends")')
+        self.assertEqual(len(blocks[0]["table"]["rows"]), 4)
+
+    # ── debt_balance: 레코드 리스트가 아니라 dict다 ────────────────────
+    def test_debt_balance_charts_normalized_records(self):
+        got = run_js('''chartData(
+          normalizeDebtByKind({corporate_bond:{total:1000,maturity_under_1y:200},
+                               short_term_bond:{total:500,maturity_under_1y:500}}),
+          CHART_SPECS.debt_balance
+        )''')
+        self.assertEqual(got["labels"], ["회사채", "단기사채"])
+        self.assertEqual(
+            [d["label"] for d in got["datasets"]], ["합계", "1년 이내 만기 금액"]
+        )
+        totals = next(d for d in got["datasets"] if d["label"] == "합계")
+        self.assertEqual(totals["data"], [1000, 500])
+
+    def test_debt_balance_returns_null_for_the_raw_by_kind_dict(self):
+        """정규화(normalizeDebtByKind) 없이 by_kind dict를 그대로 넘기면
+        (records가 배열이 아니다) chartData는 그리지 않는다 — 별도 처리가
+        빠지면 조용히 안 그려진다는 것 자체를 확인한다."""
+        got = run_js('''chartData(
+          {corporate_bond:{total:1000,maturity_under_1y:200}},
+          CHART_SPECS.debt_balance
+        )''')
+        self.assertIsNone(got)
+
+    # ── disclosures: 월별 집계는 chartData 안에서만 끝난다 ──────────────
+    def test_disclosures_charts_monthly_counts(self):
+        got = run_js('''chartData([
+          {rcept_no:1, rcept_dt:"20260415", report_nm:"a"},
+          {rcept_no:2, rcept_dt:"20260420", report_nm:"b"},
+          {rcept_no:3, rcept_dt:"20260501", report_nm:"c"}
+        ], CHART_SPECS.disclosures)''')
+        self.assertEqual(got["labels"], ["2026.04", "2026.05"])
+        self.assertEqual(got["datasets"], [{"label": "건수", "data": [2, 1]}])
+
+    def test_disclosures_returns_null_when_no_valid_dates(self):
+        got = run_js('chartData([{rcept_no:1, report_nm:"a"}], CHART_SPECS.disclosures)')
+        self.assertIsNone(got)
+
+    def test_disclosures_table_records_stay_individual_not_aggregated(self):
+        """집계는 가공이다(브리프) — chartData 내부에서만 일어나야 하고,
+        sectionBlocks가 만드는 표(및 그 records)는 원본 건수 그대로
+        남아야 한다. 145건이 2개 월로 뭉개지면 안 된다."""
+        got = run_js('''sectionBlocks([
+          {rcept_no:1, rcept_dt:"20260415", report_nm:"a"},
+          {rcept_no:2, rcept_dt:"20260420", report_nm:"b"},
+          {rcept_no:3, rcept_dt:"20260501", report_nm:"c"}
+        ], 0, "disclosures")''')
+        self.assertEqual(len(got), 1)
+        self.assertEqual(len(got[0]["table"]["rows"]), 3, "표가 월별로 집계되어 버렸습니다")
+        self.assertEqual(len(got[0]["records"]), 3)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestNumeric(unittest.TestCase):
+    """numeric()의 쉼표·배열 처리(리뷰 지적 ⑦ minor).
+
+    이전에는 쉼표를 무조건 지우고("1,2,3" → "123") 배열을 String()으로
+    문자열화해(String([5]) === "5") 우연히 숫자로 읽었다 — 둘 다 없는
+    숫자를 만들어내는 쪽의 실수다(0으로 채우는 것과 같은 부류의 거짓말).
+    """
+
+    def test_thousands_grouped_comma_is_parsed(self):
+        """정상적인 3자리 그룹 쉼표는 그대로 지원해야 한다(회귀 방지)."""
+        self.assertEqual(run_js('numeric("13,082,000,000")'), 13082000000)
+
+    def test_malformed_comma_grouping_is_not_silently_concatenated(self):
+        """"1,2,3"은 자릿수가 3자리씩 묶이지 않은 잘못된 형태다 — 쉼표를
+        그냥 지우면 없는 숫자 123이 만들어진다."""
+        self.assertIsNone(run_js('numeric("1,2,3")'))
+
+    def test_array_is_not_coerced_into_a_number(self):
+        """String([5]) === "5"라 배열이 우연히 숫자처럼 읽히던 사고."""
+        self.assertIsNone(run_js("numeric([5])"))
+
+    def test_array_of_multiple_items_is_not_coerced_either(self):
+        self.assertIsNone(run_js("numeric([1,2])"))
+
+    def test_plain_number_and_numeric_string_still_work(self):
+        self.assertEqual(run_js("numeric(5)"), 5)
+        self.assertEqual(run_js('numeric("5.5")'), 5.5)
+
+    def test_non_numeric_string_is_null(self):
+        self.assertIsNone(run_js('numeric("-")'))
+
+    def test_empty_string_is_null_not_zero(self):
+        """M2: numeric("")이 0을 돌려주면 "그 시점 값이 0이었다"는 거짓말이
+        된다(이 화면의 헤드라인 원칙, numeric() 자체의 주석과 동일) — 지금
+        까지는 이 경계를 직접 확인하는 테스트가 없어 `return 0`으로 바꿔도
+        초록이었다."""
+        self.assertIsNone(run_js('numeric("")'))
+        self.assertIsNone(run_js('numeric("   ")'))
+
+
+# ── renderChart 실제 렌더 경로 재현용 가짜 DOM ──────────────────────────
+#
+# 위 TestChartData는 chartData()(app.js 순수 함수)만 검증한다 — renderChart
+# (ui.js, DOM을 직접 만진다)는 실제로 canvas를 만들고 Chart를 생성자로
+# 부르고 destroy()하는지까지는 못 잡는다. "정의만 있고 호출부가 없다"가
+# 이 저장소에서 다섯 번 났다는 브리프 경고에 따라, Chart 생성자를 스텁으로
+# 주입해 실제로 어떤 데이터로 불렸는지 기록한다.
+#
+# document.createDocumentFragment로 만든 조각을 appendChild하면(tableEl이
+# 그렇게 만든다) 진짜 브라우저는 조각의 자식을 부모로 옮기고 조각 자체는
+# 사라진다(네이티브 DocumentFragment 동작) — 이 가짜 FakeEl도 그 동작을
+# 흉내 내야 renderChart의 `wrap.querySelector("table")`가 실제 브라우저와
+# 같은 자리에서 <table>을 찾는다(안 그러면 표가 fragment 껍데기 안에
+# 갇혀 canvas를 표 바로 위로 끼워 넣지 못한다).
+_CHART_RENDER_HARNESS = r"""
+const vm = require("vm");
+const fs = require("fs");
+
+const ELEMENTS = Object.create(null);
+const DESTROYED = [];
+const UPDATED = [];
+const CHART_CALLS = [];
+
+class FakeClassList {
+  constructor() { this._set = new Set(); }
+  add(c) { this._set.add(c); }
+  remove(c) { this._set.delete(c); }
+  contains(c) { return this._set.has(c); }
+}
+
+class FakeEl {
+  constructor(tag) {
+    this.tag = tag;
+    this.children = [];
+    this._text = "";
+    this._className = "";
+    this._id = "";
+    this.dataset = {};
+    this._listeners = {};
+    this._attrs = {};
+    this.hidden = false;
+    this.classList = new FakeClassList();
+  }
+  appendChild(c) {
+    // 네이티브 DocumentFragment 동작 재현 — 조각을 그대로 자식으로 넣지
+    // 않고, 조각의 자식을 이 노드로 옮긴다(위 하네스 설명 참고).
+    if (c && c.tag === "#fragment") {
+      while (c.children.length) this.children.push(c.children.shift());
+      return c;
+    }
+    this.children.push(c);
+    return c;
+  }
+  insertBefore(node, ref) {
+    const idx = ref ? this.children.indexOf(ref) : -1;
+    if (idx === -1) this.children.push(node);
+    else this.children.splice(idx, 0, node);
+    return node;
+  }
+  removeChild(c) {
+    const idx = this.children.indexOf(c);
+    if (idx !== -1) this.children.splice(idx, 1);
+    return c;
+  }
+  get firstChild() { return this.children.length ? this.children[0] : null; }
+  insertRow() { const tr = new FakeEl("tr"); this.appendChild(tr); return tr; }
+  insertCell() { const td = new FakeEl("td"); this.appendChild(td); return td; }
+  createTHead() { const el = new FakeEl("thead"); this.appendChild(el); return el; }
+  createTBody() { const el = new FakeEl("tbody"); this.appendChild(el); return el; }
+  addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); }
+  dispatch(type) { (this._listeners[type] || []).forEach(function (fn) { fn({}); }); }
+  setAttribute(k, v) { this._attrs[k] = String(v); }
+  getAttribute(k) {
+    return Object.prototype.hasOwnProperty.call(this._attrs, k) ? this._attrs[k] : null;
+  }
+  set textContent(v) { this._text = String(v); this.children = []; }
+  get textContent() { return this._text; }
+  set className(v) { this._className = v; }
+  get className() { return this._className; }
+  set id(v) { this._id = v; ELEMENTS[v] = this; }
+  get id() { return this._id; }
+  // renderChart가 쓰는 선택자("table")만 최소 지원한다 — 모든 자손을
+  // 재귀로 훑는다(네이티브 querySelector와 같은 범위).
+  querySelector(sel) {
+    if (sel !== "table") return null;
+    const stack = this.children.slice();
+    while (stack.length) {
+      const n = stack.shift();
+      if (!n) continue;
+      if (n.tag === "table") return n;
+      if (n.children && n.children.length) stack.push.apply(stack, n.children);
+    }
+    return null;
+  }
+}
+
+function makeEl(tag, id) {
+  const el = new FakeEl(tag);
+  if (id) el.id = id;
+  return el;
+}
+
+const bodyEl = makeEl("div", "body");
+makeEl("nav", "toc");
+makeEl("div", "company-info");
+makeEl("section", "gate");
+makeEl("main", "main");
+makeEl("p", "gate-msg");
+makeEl("aside", "panel");
+makeEl("div", "panel-body");
+makeEl("span", "head-name");
+makeEl("div", "bar");
+makeEl("button", "actor-btn");
+
+const documentElement = new FakeEl("html");
+
+// 테마별로 다른 값을 주는 CSS 변수 스텁 — index.html의 실제 값 자체를
+// 검증하지 않는다(그건 정적 검사 쪽 몫이다). 여기서는 "테마가 바뀌면
+// 차트에 적용된 색도 실제로 바뀐다"만 확인하면 된다.
+const CSS_VARS = {
+  dark: { "--dim2": "#9fb0c0", "--tx": "#d7dde6",
+          "--c0": "#5b8ff9", "--c1": "#61ddaa", "--c2": "#f6bd16" },
+  light: { "--dim2": "#333c48", "--tx": "#1c222b",
+           "--c0": "#2f5fd0", "--c1": "#1f9d6e", "--c2": "#ad8c00" },
+};
+
+function fakeGetComputedStyle(el) {
+  const theme = el.getAttribute("data-theme") === "light" ? "light" : "dark";
+  const vars = CSS_VARS[theme];
+  return { getPropertyValue: function (name) { return vars[name] || ""; } };
+}
+
+class FakeChart {
+  constructor(canvas, config) {
+    this.canvas = canvas;
+    this.config = config;
+    this.options = config.options;
+    this.data = config.data;
+    CHART_CALLS.push(this);
+  }
+  update() { UPDATED.push(this); }
+  destroy() { DESTROYED.push(this); }
+}
+
+function collectTags(node, out) {
+  out = out || [];
+  if (!node) return out;
+  out.push({ tag: node.tag, className: node.className || "" });
+  (node.children || []).forEach(function (c) { collectTags(c, out); });
+  return out;
+}
+
+// 리뷰 검증 요구(①): 차트가 만든 값과 표가 만든 값을 실제 렌더 결과에서
+// 직접 대조하려면 표 <table>의 셀 텍스트를 읽어야 한다 — collectTags는
+// tag·className만 모으므로 이 목적에는 쓸 수 없다.
+function findTable(node) {
+  if (!node) return null;
+  if (node.tag === "table") return node;
+  for (const c of (node.children || [])) {
+    const found = findTable(c);
+    if (found) return found;
+  }
+  return null;
+}
+function tableRowTexts(tableNode) {
+  const tbody = (tableNode.children || []).find(function (c) { return c.tag === "tbody"; });
+  if (!tbody) return [];
+  return tbody.children
+    .filter(function (tr) { return tr.className !== "fold-detail"; })
+    .map(function (tr) {
+      return tr.children
+        .filter(function (td) { return td.tag === "td"; })
+        .map(function (td) { return td.textContent; });
+    });
+}
+
+const sandbox = {
+  console: console,
+  Chart: FakeChart,
+  getComputedStyle: fakeGetComputedStyle,
+  document: {
+    documentElement: documentElement,
+    createElement: function (tag) { return new FakeEl(tag); },
+    createDocumentFragment: function () { return new FakeEl("#fragment"); },
+    createTextNode: function (t) { const n = new FakeEl("#text"); n.textContent = t; return n; },
+    addEventListener: function () {},
+    getElementById: function (id) { return ELEMENTS[id] || null; },
+  },
+  localStorage: {
+    getItem: function () { return null; },
+    setItem: function () {},
+    removeItem: function () {},
+  },
+  fetch: function () { return Promise.reject(new Error("no network in test")); },
+};
+vm.createContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[1], "utf-8"), { filename: "app.js" }).runInContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).runInContext(sandbox);
+
+sandbox.openDocPanel = function () {};
+
+// A) fund_usage — CHART_SPECS에 series(계획 vs 실제) 정의가 있다. tm은
+//    실측(field-inventory) 형태인 "제N회"를 쓰고(브리프의 가짜 형태
+//    "1"·"2"였던 것을 되돌린다 — 리뷰 지적 ②), 사전식으로 이미 뒤섞인
+//    순서("제10회"가 "제9회"보다 먼저)로 넣어 axisSortKey(회차 정렬)가
+//    되돌아가도 이 렌더 테스트가 실제로 잡아내는지 확인한다.
+sandbox.renderSection("fund_usage", [
+  { tm: "제10회", plan_amount: "500000000", real_dtls_amount: "500000000" },
+  { tm: "제9회", plan_amount: "1300000000", real_dtls_amount: "800000000" },
+]);
+const fundTags = collectTags(bodyEl, []);
+const fundChart = CHART_CALLS[0];
+
+// B) insider_timeline — source별로 쪼개진 블록마다 자기 레코드만 받는지
+//    확인한다. elestock 그룹만 CHART_SPECS가 요구하는 필드(rcept_dt·
+//    sp_stock_lmp_rate)를 갖고 있고, hyslr 그룹은 없다 — elestock 블록만
+//    차트가 생겨야 한다. rcept_dt는 실측(field-inventory) 형태인 하이픈
+//    ISO("2026-03-04")를 쓴다(브리프의 가짜 형태 "20260304"였던 것을
+//    되돌린다 — 리뷰 지적 ②) — axisLabel의 하이픈 분기가 되돌아가도 이
+//    렌더 테스트가 실제로 잡아내는지 확인한다.
+sandbox.renderSection("insider_timeline", [
+  { source: "elestock", repror: "오정강", rcept_dt: "2026-03-04", sp_stock_lmp_rate: "14.13" },
+  { source: "elestock", repror: "오정강", rcept_dt: "2026-03-27", sp_stock_lmp_rate: "3.60" },
+  { source: "hyslr", mxmm_shrholdr_nm: "홍길동", posesn_stock_co: "1000" },
+]);
+const chartCountAfterB = CHART_CALLS.length;
+const insiderChart = CHART_CALLS[1];
+
+// C) shareholders — CHART_SPECS에 정의가 아예 없다. 차트가 늘면 안 된다.
+sandbox.renderSection("shareholders", { major_holders: [{ nm: "a" }] });
+const chartCountAfterC = CHART_CALLS.length;
+
+// D) showGate — 지금까지 만든 인스턴스가 전부 destroy()되는지 확인한다.
+sandbox.showGate("메시지");
+const destroyedAfterGate = DESTROYED.length;
+
+// E) 재렌더 후 테마 전환 — repaintCharts가 살아있는 인스턴스의 색을
+//    실제로 바꾸고 update()를 부르는지 확인한다.
+sandbox.renderSection("fund_usage", [
+  { tm: "1", plan_amount: "100", real_dtls_amount: "80" },
+]);
+const themedChart = CHART_CALLS[CHART_CALLS.length - 1];
+const colorBeforeTheme = themedChart.options.scales.x.ticks.color;
+sandbox.applyTheme("light");
+const colorAfterTheme = themedChart.options.scales.x.ticks.color;
+const updatedAfterTheme = UPDATED.indexOf(themedChart) !== -1;
+
+// F) dividends — se(항목)에 원/%가 섞여 있다. "(원)"으로 끝나는 항목만
+//    계열이 되어야 한다(판정선: 단위가 다른 값을 한 그림에 섞지 않는다).
+//    차트가 실제로 생겼는지는 개수 스냅샷으로 확인한다 — 안 생기면
+//    CHART_CALLS의 마지막 원소는 이전(E) 차트를 가리키는 낡은 참조가
+//    되어 조용히 통과하는 함정이 있다(카운트 비교로 그 함정을 막는다).
+const chartCountBeforeF = CHART_CALLS.length;
+sandbox.renderSection("dividends", [
+  { se: "주당액면가액(원)", bsns_year: "2024", thstrm: "500" },
+  { se: "주당액면가액(원)", bsns_year: "2025", thstrm: "500" },
+  { se: "현금배당수익률(%)", bsns_year: "2024", thstrm: "1.2" },
+  { se: "현금배당수익률(%)", bsns_year: "2025", thstrm: "1.5" },
+]);
+const chartCountAfterF = CHART_CALLS.length;
+const dividendsChart = chartCountAfterF > chartCountBeforeF ? CHART_CALLS[CHART_CALLS.length - 1] : null;
+
+// G) debt_balance — by_kind는 dict라, sectionBlocks의 특수 정규화
+//    (normalizeDebtByKind) 없이는 chartData가 그릴 x축(debt_kind)이
+//    레코드에 없다.
+const chartCountBeforeG = CHART_CALLS.length;
+sandbox.renderSection("debt_balance", {
+  year: "2025", total: 1500,
+  by_kind: {
+    corporate_bond: { total: 1000, maturity_under_1y: 200 },
+    short_term_bond: { total: 500, maturity_under_1y: 500 },
+  },
+  equity_ratio: null, maturity_1y_share: 46.7,
+});
+const chartCountAfterG = CHART_CALLS.length;
+const debtChart = chartCountAfterG > chartCountBeforeG ? CHART_CALLS[CHART_CALLS.length - 1] : null;
+
+// H) disclosures — 개별 건이 아니라 월별 건수만 그려야 한다(집계는
+//    chartData 내부 파생값, 표는 별도 순수 함수 테스트가 원본 그대로임을
+//    확인한다).
+const chartCountBeforeH = CHART_CALLS.length;
+sandbox.renderSection("disclosures", [
+  { rcept_no: 1, rcept_dt: "20260415", report_nm: "a" },
+  { rcept_no: 2, rcept_dt: "20260420", report_nm: "b" },
+  { rcept_no: 3, rcept_dt: "20260501", report_nm: "c" },
+]);
+const chartCountAfterH = CHART_CALLS.length;
+const disclosuresChart = chartCountAfterH > chartCountBeforeH ? CHART_CALLS[CHART_CALLS.length - 1] : null;
+
+// I) 같은 섹션을 다시 그리면 이전 Chart 인스턴스가 정리돼야 한다(리뷰
+//    지적 ④) — holder.removeChild만으로는 DOM에서 canvas가 빠질 뿐,
+//    Chart.js 인스턴스는 CHART_INSTANCES에 남아 다음 사용자 화면까지
+//    쌓인다. showGate()의 resetCharts()가 아니라 renderSection 자체가
+//    정리해야 하는 경로다(같은 회사 안에서 같은 섹션이 다시 오는 경우).
+const destroyedBeforeSectionRerender = DESTROYED.length;
+sandbox.renderSection("fund_usage", [
+  { tm: "제20회", plan_amount: "1000000000", real_dtls_amount: "500000000" },
+]);
+const chartsAfterFirstRerender = CHART_CALLS.length;
+sandbox.renderSection("fund_usage", [
+  { tm: "제21회", plan_amount: "2000000000", real_dtls_amount: "1000000000" },
+]);
+const chartsAfterSecondRerender = CHART_CALLS.length;
+const destroyedAfterSectionRerender = DESTROYED.length;
+
+// K) 리뷰 지적 ①의 종단 검증: 같은 회차(tm="제14회")가 서로 다른 연도
+//    (year) 보고에서 다른 실제 집행 금액으로 나타난 리뷰의 재현 사례를
+//    그대로 쓴다(2024년 보고 50억, 2025년 보고 130.8억). compositeXFields가
+//    없으면 뒤 레코드가 앞을 조용히 덮어 차트에는 130.8억만 남고 표는
+//    그대로 두 행을 보여줘 차트와 표가 다른 값을 말하게 된다 — 여기서는
+//    순수 함수(chartData)가 아니라 renderSection 전체 경로로 차트가 실제로
+//    만든 값과 표(<table>)가 실제로 그린 값을 직접 대조한다. plan_amount는
+//    두 보고에서 값이 같다(계획은 안 바뀐다) — tm과 함께 캡션으로 승격돼
+//    본문 열에서 빠지므로, 남는 본문 열은 [year, real_dtls_amount] 둘뿐이다.
+sandbox.renderSection("fund_usage", [
+  { tm: "제14회", year: 2024, plan_amount: "5000000000", real_dtls_amount: "5000000000" },
+  { tm: "제14회", year: 2025, plan_amount: "5000000000", real_dtls_amount: "13080000000" },
+]);
+const sameRoundChart = CHART_CALLS[CHART_CALLS.length - 1];
+const sameRoundTable = findTable(ELEMENTS["sec-fund_usage"]);
+const sameRoundTableRows = sameRoundTable ? tableRowTexts(sameRoundTable) : [];
+
+function findIndex(tags, tag) {
+  for (let i = 0; i < tags.length; i++) if (tags[i].tag === tag) return i;
+  return -1;
+}
+const canvasIdx = findIndex(fundTags, "canvas");
+const tableIdx = findIndex(fundTags, "table");
+
+process.stdout.write(JSON.stringify({
+  fundLabels: fundChart.data.labels,
+  fundDatasets: fundChart.data.datasets.map(function (d) {
+    return { label: d.label, data: d.data, color: d.borderColor };
+  }),
+  fundTooltip0: fundChart.config.options.plugins.tooltip.callbacks.label(
+    { datasetIndex: 0, dataset: { label: "계획 금액" }, parsed: { y: 1300000000 } }),
+  fundTooltip1: fundChart.config.options.plugins.tooltip.callbacks.label(
+    { datasetIndex: 1, dataset: { label: "실제 집행 금액" }, parsed: { y: 800000000 } }),
+  // L1: spanGaps가 실제로 Chart.js 데이터셋 옵션까지 전달되는지(true로
+  // 바뀌어도 지금까지는 어느 테스트도 못 잡았다) 확인하기 위한 원본 값.
+  fundDatasetSpanGaps: fundChart.data.datasets.map(function (d) { return d.spanGaps; }),
+  canvasIdx: canvasIdx,
+  tableIdx: tableIdx,
+  fundXScaleType: fundChart.options.scales.x.type,
+  fundHasTableCells: fundTags.some(function (t) { return t.tag === "td"; }),
+  canvasClassName: canvasIdx === -1 ? null : fundTags[canvasIdx].className,
+  canvasRole: fundChart.canvas.getAttribute("role"),
+  canvasAriaLabel: fundChart.canvas.getAttribute("aria-label"),
+  chartCountAfterA: 1,
+  chartCountAfterB: chartCountAfterB,
+  chartCountAfterC: chartCountAfterC,
+  insiderLabels: insiderChart.data.labels,
+  insiderDatasetLabels: insiderChart.data.datasets.map(function (d) { return d.label; }),
+  destroyedAfterGate: destroyedAfterGate,
+  colorBeforeTheme: colorBeforeTheme,
+  colorAfterTheme: colorAfterTheme,
+  updatedAfterTheme: updatedAfterTheme,
+  chartCountBeforeF: chartCountBeforeF,
+  chartCountAfterF: chartCountAfterF,
+  dividendsLabels: dividendsChart ? dividendsChart.data.labels : null,
+  dividendsDatasetLabels: dividendsChart
+    ? dividendsChart.data.datasets.map(function (d) { return d.label; }) : null,
+  chartCountBeforeG: chartCountBeforeG,
+  chartCountAfterG: chartCountAfterG,
+  debtLabels: debtChart ? debtChart.data.labels : null,
+  debtDatasetLabels: debtChart
+    ? debtChart.data.datasets.map(function (d) { return d.label; }) : null,
+  debtTotals: debtChart ? debtChart.data.datasets[0].data : null,
+  chartCountBeforeH: chartCountBeforeH,
+  chartCountAfterH: chartCountAfterH,
+  disclosuresLabels: disclosuresChart ? disclosuresChart.data.labels : null,
+  disclosuresData: disclosuresChart ? disclosuresChart.data.datasets[0].data : null,
+  destroyedBeforeSectionRerender: destroyedBeforeSectionRerender,
+  chartsAfterFirstRerender: chartsAfterFirstRerender,
+  chartsAfterSecondRerender: chartsAfterSecondRerender,
+  destroyedAfterSectionRerender: destroyedAfterSectionRerender,
+  sameRoundChartLabels: sameRoundChart.data.labels,
+  sameRoundChartRealData: sameRoundChart.data.datasets.find(function (d) {
+    return d.label === "실제 집행 금액";
+  }).data,
+  sameRoundTableRows: sameRoundTableRows,
+}));
+"""
+
+
+def run_chart_render():
+    out = subprocess.run(
+        [_NODE, "-e", _CHART_RENDER_HARNESS, str(_APP), str(_UI)],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    if out.returncode != 0:
+        raise AssertionError(f"node 실행 실패:\n{out.stderr}")
+    return json.loads(out.stdout)
+
+
+# ── 회사 전환(renderHeadPlaceholder) 차트 정리 경로 재현용 가짜 DOM ──────
+#
+# M1: showGate()의 resetCharts() 호출(로그아웃·세션 만료)은 위
+# TestChartRenderExecution.test_show_gate_destroys_every_tracked_chart_
+# instance가 이미 확인한다. 하지만 같은 세션에서 회사만 바꿔 다시
+# 분석하는 경로(renderHeadPlaceholder, doAnalyze가 새 조회를 시작할 때
+# 호출)에는 지금까지 테스트가 없었다 — 그 resetCharts() 호출을 지워도
+# 전부 초록이었다. _CHART_RENDER_HARNESS(위)는 이미 매우 길고 여러
+# 블록이 CHART_CALLS 개수에 서로 의존하므로, 그 안에 끼워 넣으면
+# renderHeadPlaceholder가 SEC_WRAP·ELEMENTS를 건드리는 부작용이 뒤 블록의
+# 가정(예: 같은 섹션의 "재렌더")을 깨뜨릴 위험이 있다 — 별도의 작고
+# 독립된 시나리오로 분리한다(FakeEl·FakeChart는 위 하네스와 같은 최소
+# 구현을 그대로 쓴다).
+_COMPANY_SWITCH_HARNESS = r"""
+const vm = require("vm");
+const fs = require("fs");
+
+const ELEMENTS = Object.create(null);
+const DESTROYED = [];
+const CHART_CALLS = [];
+
+class FakeClassList {
+  constructor() { this._set = new Set(); }
+  add(c) { this._set.add(c); }
+  remove(c) { this._set.delete(c); }
+  contains(c) { return this._set.has(c); }
+}
+
+class FakeEl {
+  constructor(tag) {
+    this.tag = tag;
+    this.children = [];
+    this._text = "";
+    this._className = "";
+    this._id = "";
+    this.dataset = {};
+    this._listeners = {};
+    this._attrs = {};
+    this.hidden = false;
+    this.classList = new FakeClassList();
+  }
+  appendChild(c) {
+    if (c && c.tag === "#fragment") {
+      while (c.children.length) this.children.push(c.children.shift());
+      return c;
+    }
+    this.children.push(c);
+    return c;
+  }
+  insertBefore(node, ref) {
+    const idx = ref ? this.children.indexOf(ref) : -1;
+    if (idx === -1) this.children.push(node);
+    else this.children.splice(idx, 0, node);
+    return node;
+  }
+  removeChild(c) {
+    const idx = this.children.indexOf(c);
+    if (idx !== -1) this.children.splice(idx, 1);
+    return c;
+  }
+  insertRow() { const tr = new FakeEl("tr"); this.appendChild(tr); return tr; }
+  insertCell() { const td = new FakeEl("td"); this.appendChild(td); return td; }
+  createTHead() { const el = new FakeEl("thead"); this.appendChild(el); return el; }
+  createTBody() { const el = new FakeEl("tbody"); this.appendChild(el); return el; }
+  addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); }
+  dispatch(type) { (this._listeners[type] || []).forEach(function (fn) { fn({}); }); }
+  setAttribute(k, v) { this._attrs[k] = String(v); }
+  getAttribute(k) {
+    return Object.prototype.hasOwnProperty.call(this._attrs, k) ? this._attrs[k] : null;
+  }
+  set textContent(v) { this._text = String(v); this.children = []; }
+  get textContent() { return this._text; }
+  set className(v) { this._className = v; }
+  get className() { return this._className; }
+  set id(v) { this._id = v; ELEMENTS[v] = this; }
+  get id() { return this._id; }
+  querySelector(sel) {
+    if (sel !== "table") return null;
+    const stack = this.children.slice();
+    while (stack.length) {
+      const n = stack.shift();
+      if (!n) continue;
+      if (n.tag === "table") return n;
+      if (n.children && n.children.length) stack.push.apply(stack, n.children);
+    }
+    return null;
+  }
+}
+
+function makeEl(tag, id) {
+  const el = new FakeEl(tag);
+  if (id) el.id = id;
+  return el;
+}
+
+const bodyEl = makeEl("div", "body");
+makeEl("nav", "toc");
+makeEl("div", "company-info");
+makeEl("section", "gate");
+makeEl("main", "main");
+makeEl("p", "gate-msg");
+makeEl("aside", "panel");
+makeEl("div", "panel-body");
+makeEl("span", "head-name");
+makeEl("div", "bar");
+makeEl("button", "actor-btn");
+
+const documentElement = new FakeEl("html");
+
+function fakeGetComputedStyle() {
+  return { getPropertyValue: function () { return "#000"; } };
+}
+
+class FakeChart {
+  constructor(canvas, config) {
+    this.canvas = canvas;
+    this.config = config;
+    this.options = config.options;
+    this.data = config.data;
+    CHART_CALLS.push(this);
+  }
+  update() {}
+  destroy() { DESTROYED.push(this); }
+}
+
+const sandbox = {
+  console: console,
+  Chart: FakeChart,
+  getComputedStyle: fakeGetComputedStyle,
+  document: {
+    documentElement: documentElement,
+    createElement: function (tag) { return new FakeEl(tag); },
+    createDocumentFragment: function () { return new FakeEl("#fragment"); },
+    createTextNode: function (t) { const n = new FakeEl("#text"); n.textContent = t; return n; },
+    addEventListener: function () {},
+    getElementById: function (id) { return ELEMENTS[id] || null; },
+  },
+  localStorage: {
+    getItem: function () { return null; },
+    setItem: function () {},
+    removeItem: function () {},
+  },
+  fetch: function () { return Promise.reject(new Error("no network in test")); },
+};
+vm.createContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[1], "utf-8"), { filename: "app.js" }).runInContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).runInContext(sandbox);
+
+sandbox.openDocPanel = function () {};
+
+// 1) A사 조회 — 차트가 하나 생긴다.
+sandbox.renderSection("fund_usage", [
+  { tm: "1", plan_amount: "100", real_dtls_amount: "80" },
+]);
+const chartsBeforeSwitch = CHART_CALLS.length;
+const destroyedBeforeSwitch = DESTROYED.length;
+
+// 2) 회사 전환 — doAnalyze()가 새 조회를 시작할 때 부르는 경로
+//    (renderHeadPlaceholder)를 그대로 재현한다. 이 호출이 resetCharts()를
+//    부르지 않으면 A사 차트 인스턴스가 그대로 남는다.
+sandbox.renderHeadPlaceholder("B사");
+const chartsAfterSwitch = CHART_CALLS.length;
+const destroyedAfterSwitch = DESTROYED.length;
+
+// 3) 전환 후 B사 조회 — resetToc()가 SEC_WRAP을 비웠다면 같은 키
+//    ("fund_usage")라도 처음 그리는 것처럼 새 차트가 생겨야 한다.
+sandbox.renderSection("fund_usage", [
+  { tm: "1", plan_amount: "200", real_dtls_amount: "150" },
+]);
+const chartsAfterPostSwitchRender = CHART_CALLS.length;
+
+process.stdout.write(JSON.stringify({
+  chartsBeforeSwitch: chartsBeforeSwitch,
+  destroyedBeforeSwitch: destroyedBeforeSwitch,
+  chartsAfterSwitch: chartsAfterSwitch,
+  destroyedAfterSwitch: destroyedAfterSwitch,
+  chartsAfterPostSwitchRender: chartsAfterPostSwitchRender,
+}));
+"""
+
+
+def run_company_switch():
+    out = subprocess.run(
+        [_NODE, "-e", _COMPANY_SWITCH_HARNESS, str(_APP), str(_UI)],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    if out.returncode != 0:
+        raise AssertionError(f"node 실행 실패:\n{out.stderr}")
+    return json.loads(out.stdout)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 차트 렌더 경로를 검증할 수 없습니다")
+class TestChartRenderExecution(unittest.TestCase):
+    """renderChart(ui.js)를 Chart 생성자 스텁으로 실제 실행해, 정의만 있고
+    호출부가 죽어 있는 사고(이 저장소에서 다섯 번 났다)를 문자열 검사가
+    아니라 실제 렌더 결과로 확인한다."""
+
+    def test_chart_is_created_with_labels_and_series_datasets(self):
+        """입력 순서는 "제10회"가 "제9회"보다 먼저다(리뷰 지적 ②의 실측
+        형태 픽스처) — axisSortKey(회차 정렬)가 실제로 동작해야 출력이
+        회차 순(9→10)으로 나온다."""
+        got = run_chart_render()
+        self.assertEqual(got["fundLabels"], ["제9회", "제10회"])
+        self.assertEqual(
+            [d["label"] for d in got["fundDatasets"]],
+            ["계획 금액", "실제 집행 금액"],
+        )
+        self.assertEqual(got["fundDatasets"][0]["data"], [1300000000, 500000000])
+        self.assertEqual(got["fundDatasets"][1]["data"], [800000000, 500000000])
+
+    def test_x_scale_type_comes_from_the_spec_not_hardcoded(self):
+        """리뷰 지적 ⑥: CHART_SPECS.fund_usage.xScale("category")이 실제로
+        Chart.js 옵션(scales.x.type)까지 전달되는지 확인한다 — spec에
+        키만 있고 렌더 경로가 안 읽으면 죽은 설정이 된다."""
+        got = run_chart_render()
+        self.assertEqual(got["fundXScaleType"], "category")
+
+    def test_tooltip_uses_format_value_so_it_matches_the_table(self):
+        """억/조 표기가 표와 어긋나면 같은 값을 두 가지로 말하는 셈이 된다."""
+        got = run_chart_render()
+        self.assertEqual(got["fundTooltip0"], "계획 금액: 13억")
+        self.assertEqual(got["fundTooltip1"], "실제 집행 금액: 8억")
+
+    def test_span_gaps_is_false_so_missing_points_are_not_bridged(self):
+        """L1: renderChart(ui.js)가 데이터셋마다 spanGaps: false를 명시한다
+        (Chart.js 기본값을 명시적으로 고정 — 값이 없는 구간을 이어붙이면
+        추세선처럼 보여 판정이 된다, v0.8.5). 지금까지는 이 값을 확인하는
+        테스트가 없어 true로 바꿔도 초록이었다."""
+        got = run_chart_render()
+        self.assertTrue(got["fundDatasetSpanGaps"], "spanGaps 값 자체가 비었습니다")
+        for v in got["fundDatasetSpanGaps"]:
+            self.assertIs(v, False, "spanGaps가 false가 아닙니다 — 값 없는 구간이 이어질 수 있습니다")
+
+    def test_series_colors_differ_and_avoid_the_verdict_red(self):
+        got = run_chart_render()
+        c0 = got["fundDatasets"][0]["color"]
+        c1 = got["fundDatasets"][1]["color"]
+        self.assertNotEqual(c0, c1, "계열 색이 구분되지 않습니다")
+        for c in (c0, c1):
+            self.assertNotIn(c, ("#e0564a", "#b3261e"),
+                             "차트 계열 색이 판정 색(--red)과 같습니다")
+
+    def test_canvas_is_inserted_above_the_table_which_still_renders(self):
+        got = run_chart_render()
+        self.assertNotEqual(got["canvasIdx"], -1, "canvas가 만들어지지 않았습니다")
+        self.assertNotEqual(got["tableIdx"], -1, "표가 사라졌습니다")
+        self.assertLess(got["canvasIdx"], got["tableIdx"],
+                        "차트가 표 위가 아니라 아래(또는 표 대신)에 있습니다")
+        self.assertTrue(got["fundHasTableCells"], "표 셀 데이터가 사라졌습니다")
+        self.assertEqual(got["canvasClassName"], "chart-canvas")
+
+    def test_source_split_block_only_charts_the_group_with_axis_fields(self):
+        """insider_timeline은 source별로 쪼개진다 — CHART_SPECS가 요구하는
+        필드(rcept_dt·sp_stock_lmp_rate)를 가진 elestock 블록만 차트가
+        생기고, 필드가 없는 hyslr 블록은 표만 남아야 한다."""
+        got = run_chart_render()
+        self.assertEqual(got["chartCountAfterB"] - got["chartCountAfterA"], 1,
+                         "source로 쪼개진 블록마다 각각 그려지지 않았거나, "
+                         "필드가 없는 블록에서도 차트가 생겼습니다")
+        self.assertEqual(got["insiderLabels"], ["2026.03.04", "2026.03.27"])
+        self.assertEqual(got["insiderDatasetLabels"], ["오정강"])
+
+    def test_no_chart_spec_means_no_new_chart(self):
+        got = run_chart_render()
+        self.assertEqual(got["chartCountAfterC"], got["chartCountAfterB"],
+                         "CHART_SPECS에 없는 섹션인데 차트가 생겼습니다")
+
+    def test_show_gate_destroys_every_tracked_chart_instance(self):
+        got = run_chart_render()
+        self.assertEqual(got["destroyedAfterGate"], got["chartCountAfterC"],
+                         "showGate()가 그 시점까지 만든 차트를 전부 destroy()하지 않습니다")
+
+    def test_theme_toggle_actually_repaints_an_existing_chart(self):
+        got = run_chart_render()
+        self.assertNotEqual(got["colorBeforeTheme"], got["colorAfterTheme"],
+                            "테마를 바꿔도 이미 그려진 차트의 축 색이 그대로입니다")
+        self.assertTrue(got["updatedAfterTheme"],
+                        "테마를 바꿔도 차트의 update()가 불리지 않습니다")
+
+    def test_dividends_chart_only_includes_won_denominated_series(self):
+        """SE-4d Task 6: renderSection("dividends", ...)이 실제로 차트를
+        만들고, "(원)"으로 끝나지 않는 항목(퍼센트)은 계열에서 빠지는지
+        실제 렌더 경로로 확인한다."""
+        got = run_chart_render()
+        self.assertEqual(got["chartCountAfterF"] - got["chartCountBeforeF"], 1,
+                         "dividends 차트가 실제 렌더 경로에서 생기지 않았습니다")
+        self.assertEqual(got["dividendsLabels"], ["2024", "2025"])
+        self.assertEqual(got["dividendsDatasetLabels"], ["주당액면가액(원)"],
+                         "퍼센트 항목이 원 단위 차트에 섞여 들어갔습니다")
+
+    def test_debt_balance_chart_reads_the_normalized_by_kind_records(self):
+        """debt_balance.by_kind는 dict라 sectionBlocks의 특수 처리
+        (normalizeDebtByKind)가 배선돼야만 차트가 나온다 — 실제 렌더
+        경로로 확인한다."""
+        got = run_chart_render()
+        self.assertEqual(got["chartCountAfterG"] - got["chartCountBeforeG"], 1,
+                         "debt_balance 차트가 실제 렌더 경로에서 생기지 않았습니다")
+        self.assertEqual(got["debtLabels"], ["회사채", "단기사채"])
+        self.assertEqual(got["debtDatasetLabels"], ["합계", "1년 이내 만기 금액"])
+        self.assertEqual(got["debtTotals"], [1000, 500])
+
+    def test_disclosures_chart_shows_monthly_counts_not_raw_rows(self):
+        """실제 렌더 경로로 disclosures 차트가 개별 3건이 아니라 월별
+        집계(2개월)로 그려지는지 확인한다."""
+        got = run_chart_render()
+        self.assertEqual(got["chartCountAfterH"] - got["chartCountBeforeH"], 1,
+                         "disclosures 차트가 실제 렌더 경로에서 생기지 않았습니다")
+        self.assertEqual(got["disclosuresLabels"], ["2026.04", "2026.05"])
+        self.assertEqual(got["disclosuresData"], [2, 1])
+
+    def test_canvas_has_an_accessible_role_and_label(self):
+        """리뷰 지적 ⑤: canvas 안의 그림은 스크린 리더가 읽지 못한다 —
+        role="img" + aria-label로 최소한 무슨 차트인지는 전달해야 한다."""
+        got = run_chart_render()
+        self.assertEqual(got["canvasRole"], "img")
+        self.assertTrue(got["canvasAriaLabel"], "canvas에 aria-label이 없습니다")
+
+    def test_rerendering_a_section_destroys_the_previous_chart_instance(self):
+        """리뷰 지적 ④: renderSection이 holder만 비우고 그 안의 Chart
+        인스턴스는 CHART_INSTANCES에 남으면, 회사를 바꾸지 않고 같은
+        섹션이 다시 그려질 때마다(showGate()가 부르는 resetCharts()를
+        거치지 않는 경로) 캔버스와 리스너가 계속 쌓인다."""
+        got = run_chart_render()
+        self.assertEqual(got["chartsAfterSecondRerender"] - got["chartsAfterFirstRerender"], 1,
+                         "같은 섹션을 다시 그렸는데 새 Chart 인스턴스가 생기지 않았습니다")
+        self.assertGreater(got["destroyedAfterSectionRerender"], got["destroyedBeforeSectionRerender"],
+                           "섹션을 다시 그려도 이전 Chart 인스턴스가 destroy()되지 않습니다")
+
+    def test_same_fund_round_different_report_year_agrees_between_chart_and_table(self):
+        """검증 요구(①): 리뷰가 재현한 실제 사례 — 제14회가 2024년 보고에는
+        50억, 2025년 보고에는 130.8억으로 다르게 잡힌다. 순수 함수
+        (chartData) 단위 테스트가 아니라 renderSection 전체 경로로, 차트가
+        실제로 그린 값과 표(<table>)가 실제로 그린 값을 직접 대조한다 —
+        compositeXFields 없이 x가 tm 하나뿐이면 뒤 레코드(130.8억)가
+        앞(50억)을 조용히 덮어 차트에는 하나만 남고, 표는 그대로 두 행을
+        보여줘 차트와 표가 다른 값을 말하게 된다."""
+        got = run_chart_render()
+        self.assertEqual(len(got["sameRoundChartLabels"]), 2,
+                         "같은 회차의 서로 다른 보고연도가 차트에서 하나로 뭉개졌습니다")
+        chart_values = set(got["sameRoundChartRealData"])
+        self.assertEqual(chart_values, {5000000000, 13080000000},
+                         "차트의 실제 집행 금액 두 값이 리뷰가 재현한 사례와 다릅니다")
+
+        self.assertEqual(len(got["sameRoundTableRows"]), 2, "표가 두 행을 보여주지 않습니다")
+        # 본문 열은 [year, real_dtls_amount] 순서다 — tm·plan_amount는 두
+        # 보고에서 값이 같아 caption으로 승격돼 본문에서 빠진다(위 하네스
+        # 블록 K 주석 참고). 마지막 열이 실제 집행 금액이다.
+        table_amounts = set(row[-1] for row in got["sameRoundTableRows"])
+        self.assertEqual(table_amounts, {"50억", "130.8억"},
+                         "표의 실제 집행 금액 두 값이 리뷰가 재현한 사례와 다릅니다")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 회사 전환 경로를 검증할 수 없습니다")
+class TestCompanySwitchDestroysCharts(unittest.TestCase):
+    """M1: 회사 전환(renderHeadPlaceholder) 경로에서도 이전 회사의 Chart
+    인스턴스가 destroy()되는지 확인한다. showGate()의 resetCharts()
+    호출은 이미 다른 테스트(test_show_gate_destroys_every_tracked_chart_
+    instance)가 지키지만, 로그아웃을 거치지 않고 같은 세션에서 회사만
+    바꾸는 이 경로는 지금까지 아무 테스트도 지키지 않았다 — resetCharts()
+    호출을 지워도 전부 초록이었다."""
+
+    def test_switching_company_destroys_the_previous_charts(self):
+        got = run_company_switch()
+        self.assertEqual(got["chartsBeforeSwitch"], 1)
+        self.assertGreater(got["destroyedAfterSwitch"], got["destroyedBeforeSwitch"],
+                           "회사를 전환해도 이전 회사의 Chart 인스턴스가 destroy()되지 않습니다")
+        self.assertEqual(got["destroyedAfterSwitch"], got["chartsBeforeSwitch"],
+                         "회사 전환 시점까지 만든 차트 전부가 destroy()되지 않았습니다")
+
+    def test_switching_company_alone_does_not_create_a_new_chart(self):
+        """전환 자체는 정리만 한다 — 아직 아무 섹션도 다시 그리지 않았으니
+        새 차트가 생기면 안 된다."""
+        got = run_company_switch()
+        self.assertEqual(got["chartsAfterSwitch"], got["chartsBeforeSwitch"])
+
+    def test_rendering_the_same_section_key_after_switch_creates_a_fresh_chart(self):
+        """전환 후 같은 섹션 키("fund_usage")로 B사를 그려도, SEC_WRAP이
+        비워져 있어야(resetToc()) "처음 그리는 것"으로 취급돼 새 차트가
+        생긴다 — 그러지 않으면 A사의 표·차트 잔재 위에 B사 값이 잘못
+        이어붙을 수 있다."""
+        got = run_company_switch()
+        self.assertEqual(got["chartsAfterPostSwitchRender"], got["chartsAfterSwitch"] + 1)
 
 
 if __name__ == "__main__":

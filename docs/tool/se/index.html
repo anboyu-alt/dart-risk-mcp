@@ -11,6 +11,11 @@
   --dim2:#9fb0c0; --faint:#4a5566; --amber:#e8a33d; --amber2:#f2bc63;
   --red:#e0564a; --green:#4ad295;
   --mono:Consolas,"Cascadia Code","SF Mono",monospace;
+  /* 차트 계열 구분 전용 색 9종(--c0~--c8) — ui.js의 renderChart()가 값과
+     무관하게 순서로만 배정한다(v0.8.5: 판정 색이 아니다). --red를 여기
+     섞지 않는다 — 판정 색과 계열 색은 항상 분리해 둔다. */
+  --c0:#5b8ff9; --c1:#61ddaa; --c2:#f6bd16; --c3:#7262fd; --c4:#78d3f8;
+  --c5:#9661bc; --c6:#f6903d; --c7:#008685; --c8:#f08bb4;
 }
 /* 라이트 모드 — 다크 :root의 색상 변수를 하나도 빠짐없이 다시 정의한다.
    일부만 덮으면 배경만 밝아지고 글자는 다크 모드 색(밝은 회색 계열)
@@ -26,6 +31,8 @@
   --line:#d8dce2; --line2:#c2c8d1; --tx:#1c222b; --dim:#5b6472;
   --dim2:#333c48; --faint:#88909c; --amber:#a8660a; --amber2:#8a5410;
   --red:#b3261e; --green:#1f7a51;
+  --c0:#2f5fd0; --c1:#1f9d6e; --c2:#ad8c00; --c3:#5433d6; --c4:#0f8fc4;
+  --c5:#7a3fa0; --c6:#cc6a10; --c7:#00615f; --c8:#c2477a;
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--tx);
@@ -50,6 +57,9 @@ th{color:var(--dim2);background:var(--rail);font-weight:normal}
 .fold-btn{font-size:11px;padding:2px 6px;color:var(--dim2)}
 .fold-detail td{background:var(--cell);color:var(--dim2);white-space:normal}
 .fold-detail b{color:var(--tx);font-weight:normal}
+/* 차트는 표 위에 얹는다(표를 대체하지 않는다) — max-width:100%로 그리드
+   칸을 넘지 않게 하고, margin-bottom으로 바로 아래 표와 붙지 않게 한다. */
+.chart-canvas{max-width:100%;max-height:280px;margin-bottom:10px}
 #bar{position:sticky;top:0;background:var(--rail);border-bottom:1px solid var(--line);
      padding:8px 12px;font-family:var(--mono);font-size:12px;color:var(--dim2);z-index:5}
 #panel{position:fixed;top:0;right:0;height:100%;width:min(560px,92vw);
@@ -183,7 +193,11 @@ th{color:var(--dim2);background:var(--rail);font-weight:normal}
 <!-- 루트 기준 절대경로여야 한다. vercel.json의 trailingSlash:false가 /se/를
      /se로 되돌리는데, 슬래시 없는 /se에서 상대경로 "app.js"는 /app.js로
      해석돼 404가 난다. 그러면 스크립트가 통째로 로드되지 않아 버튼이
-     아무 반응도 하지 않고, 오류를 띄우는 코드조차 없어 화면은 조용하다. -->
+     아무 반응도 하지 않고, 오류를 띄우는 코드조차 없어 화면은 조용하다.
+     chart.umd.js는 CDN이 아니라 vendor/에 반입한 파일이며(외부 접속 기록을
+     남기지 않기 위해 — docs/tool/se/vendor/README.md 참고), app.js·ui.js가
+     전역 Chart를 참조하므로 반드시 그 둘보다 먼저 로드돼야 한다. -->
+<script src="/se/vendor/chart.umd.js"></script>
 <script src="/se/app.js"></script>
 <script src="/se/ui.js"></script>
 </body>
