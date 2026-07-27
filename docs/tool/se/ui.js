@@ -209,4 +209,69 @@ async function init() {
   }
 }
 
+// ── 분석 실행 + 진행률 폴링 ────────────────────────────────────────
+
+// Task 3·5에서 실제 구현으로 대체된다. 지금은 루프가 돌아가게만 한다.
+function showBar(msg) { document.getElementById("bar").textContent = msg; }
+function showProgress(p) {
+  showBar(p.company + " — " + formatCount(p.finished) + "/" + formatCount(p.total));
+}
+function renderHeadPlaceholder(name) {
+  document.getElementById("head").textContent = name + " 분석을 시작합니다…";
+}
+function renderSection(key, value) { /* Task 3 */ }
+function renderFailures(failed) { /* Task 5 */ }
+
+const FETCHED = new Set();   // 이미 받은 섹션 키
+
+/** 분석 작업을 시작하고 완료될 때까지 진행률을 폴링한다.
+ *
+ * 섹션은 한 번만 받는다 — 폴링 응답은 매번 완료된 키 전체를 주므로,
+ * nextKeysToFetch로 아직 안 받은 키만 걸러 요청한다(SE-4a가 없앤
+ * 737KB 재수신 문제가 여기서 되돌아올 수 있다). stalled가 true면
+ * 즉시 멈춘다 — 계속 부르면 사용자의 DART 호출 한도만 태운다.
+ */
+async function analyze(company, lookbackYears) {
+  const tk = await token();
+  const dartKey = localStorage.getItem(LS_DART_KEY) || "";
+  const created = await api("POST", "/api/se/analyze", {
+    token: tk, dartKey: dartKey,
+    body: { company: company, lookback_years: lookbackYears },
+  });
+  if (created.status !== 201) {
+    showBar(created.body.error || "분석을 시작하지 못했습니다");
+    return;
+  }
+  const jobId = created.body.job_id;
+  renderHeadPlaceholder(created.body.company);
+
+  for (;;) {
+    const step = await api("POST", "/api/se/analyze/" + jobId + "/step",
+                           { token: await token(), dartKey: dartKey });
+    const decision = pollDecision(step.body);
+
+    const prog = await api("GET", "/api/se/analyze/" + jobId,
+                           { token: await token() });
+    if (prog.status === 200) {
+      showProgress(prog.body);
+      // 새로 완성된 섹션만 받는다.
+      for (const key of nextKeysToFetch(prog.body.section_keys, [...FETCHED])) {
+        FETCHED.add(key);
+        const sec = await api(
+          "GET",
+          "/api/se/analyze/" + jobId + "/section/" + encodeURIComponent(key),
+          { token: await token() }
+        );
+        // api()는 {status, body}를 준다. 섹션 키는 sec.body.key에 있다.
+        if (sec.status === 200) renderSection(sec.body.key || key, sec.body.value);
+      }
+      renderFailures(prog.body.failed);
+    }
+    if (decision.shouldStop) {
+      if (decision.reason) showBar(decision.reason);
+      break;
+    }
+  }
+}
+
 document.addEventListener("DOMContentLoaded", init);
