@@ -637,12 +637,56 @@ function actorLine(actor) {
   };
 }
 
+/** 공시 원문을 문단과 표 블록으로 나눈다.
+ *
+ * **가공은 구조 복원까지만 한다.** 요약하거나 중요한 부분을 골라내거나
+ * 순서를 바꾸지 않는다 — 그건 판정이고, 이 도구는 사실만 표기한다
+ * (v0.8.5 원칙). dart_client.py의 `_html_to_structured_text`가 실제로
+ * 표를 파이프(|) 구분 마크다운으로, 행마다 줄바꿈을 넣어 만든다
+ * (`_table_to_markdown`이 각 행을 "\n"으로 join) — 그래서 여기서는
+ * "|"가 있는 줄만 표 행으로 보고, 그 외는 원문 그대로 문단으로 보존한다.
+ * `|---|---|` 같은 마크다운 표 구분선은 데이터가 아니므로 행으로 만들지
+ * 않는다(셀 전부가 `-`만으로 이뤄진 줄만 걸러낸다 — 실제 데이터 줄에
+ * "-"가 섞여 있어도 다른 셀이 남아 있으면 걸러지지 않는다).
+ */
+function documentBlocks(text) {
+  if (!text || typeof text !== "string") return [];
+  const blocks = [];
+  let prose = [];
+  let table = [];
+
+  function flushProse() {
+    const t = prose.join("\n").trim();
+    if (t) blocks.push({ kind: "text", text: t });
+    prose = [];
+  }
+  function flushTable() {
+    if (table.length) blocks.push({ kind: "table", rows: table });
+    table = [];
+  }
+
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.indexOf("|") >= 0) {
+      const cells = line.split("|").map(function (c) { return c.trim(); })
+        .filter(function (c, i, a) { return !(c === "" && (i === 0 || i === a.length - 1)); });
+      if (cells.length && cells.every(function (c) { return /^:?-{2,}:?$/.test(c); })) continue;
+      if (cells.length) { flushProse(); table.push(cells); continue; }
+    }
+    flushTable();
+    prose.push(raw);
+  }
+  flushTable();
+  flushProse();
+  return blocks;
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     LS_DART_KEY, LS_SESSION, LS_JOB, LS_THEME, SECTION_GROUPS, formatCount,
     nextKeysToFetch, pollDecision, toRecords, tableLayout, LABELS, label,
     formatValue, formatAmount, AMOUNT_FIELDS, DATE_FIELDS,
     sectionBlocks, groupTitleFor, groupOrderIndex, normalizeRoster,
-    ACTOR_STATUS, actorLine, resumeTarget,
+    ACTOR_STATUS, actorLine, resumeTarget, documentBlocks,
   };
 }

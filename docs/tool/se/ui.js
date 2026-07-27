@@ -1026,6 +1026,31 @@ async function openActorPanel(company) {
   panel.classList.add("open");
 }
 
+/** documentBlocks()(app.js)가 만든 블록 하나를 DOM으로 그린다.
+ *
+ * 표 블록은 어떤 셀이 헤더인지 판정하지 않는다 — documentBlocks는 구조만
+ * 복원할 뿐 요약·판정을 하지 않으므로(v0.8.5 원칙), <thead> 없이 모든
+ * 행을 그대로 <tr><td>로 나열한다. 값은 전부 textContent로만 넣는다 —
+ * 공시 원문은 사용자 데이터라 한 줄로 스크립트가 실행되면 안 된다.
+ */
+function docBlockEl(block) {
+  if (block.kind === "table") {
+    const table = document.createElement("table");
+    const tbody = table.createTBody();
+    block.rows.forEach(function (row) {
+      const tr = tbody.insertRow();
+      row.forEach(function (c) {
+        const td = tr.insertCell();
+        td.textContent = c;
+      });
+    });
+    return table;
+  }
+  const p = document.createElement("p");
+  p.textContent = block.text;
+  return p;
+}
+
 /** 공시 원문 패널을 연다. DART 키는 X-DART-Key 헤더로만 보낸다. */
 async function openDocPanel(rceptNo) {
   const box = document.getElementById("panel-body");
@@ -1046,15 +1071,18 @@ async function openDocPanel(rceptNo) {
   }
 
   const body = r.body || {};
-  const p = document.createElement("pre");
-  p.style.whiteSpace = "pre-wrap";
-  // 공시 원문 — 반드시 textContent다. 200인데 text가 문자열이 아니면
-  // (예상 밖 응답) 리터럴 "undefined"를 그대로 보여주는 대신 실패로
-  // 취급한다 — "원문 0자 중 일부입니다" 같은 앞뒤 안 맞는 안내도 막는다.
+  // 공시 원문 — 반드시 textContent다(docBlockEl 참고). 200인데 text가
+  // 문자열이 아니면(예상 밖 응답) 리터럴 "undefined"를 그대로 보여주는
+  // 대신 실패로 취급한다 — "원문 0자 중 일부입니다" 같은 앞뒤 안 맞는
+  // 안내도 막는다.
   const text = typeof body.text === "string" ? body.text : "";
   if (r.status === 200 && text) {
-    p.textContent = text;
-    box.appendChild(p);
+    // 한 덩어리 <pre>는 원문에 담긴 파이프 구분 표를 사람이 읽을 수 없게
+    // 만든다 — documentBlocks(app.js)가 복원한 문단·표 구조 그대로
+    // 그린다(요약이 아니라 구조 복원만, v0.8.5 원칙).
+    for (const block of documentBlocks(text)) {
+      box.appendChild(docBlockEl(block));
+    }
     if (body.truncated) {
       const n = document.createElement("p");
       n.className = "note";
@@ -1064,6 +1092,7 @@ async function openDocPanel(rceptNo) {
   } else {
     // 오류 경로다 — 공시 원문(실명 아님)만 다루는 패널이라 여기엔 행위자
     // 면책 문구가 필요 없다.
+    const p = document.createElement("p");
     p.textContent = (typeof body.error === "string" && body.error)
       || "원문을 불러오지 못했습니다.";
     box.appendChild(p);

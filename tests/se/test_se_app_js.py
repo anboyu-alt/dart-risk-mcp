@@ -1632,5 +1632,255 @@ class TestTocAndWideTableWiring(unittest.TestCase):
         self.assertEqual(wrap["className"], "sec")
 
 
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestDocumentBlocks(unittest.TestCase):
+    """공시 원문(우측 패널)을 문단·표 블록으로 나누는 documentBlocks() 검증.
+
+    지금은 원문이 <pre> 한 덩어리라, 원본이 담고 있는 `항목 | 값 | 값`
+    파이프 구분 표가 그대로 한 줄로 이어져 읽을 수 없다. dart_client.py의
+    _html_to_structured_text를 실제로 확인한 결과(_table_to_markdown이
+    행마다 "\\n"으로 join) — 표 행은 줄바꿈으로 구분된다(두산 골든
+    tests/fixtures/sample_outputs/두산_doc_20260422800615.txt 실측: 매 행이
+    "| ... |" 형태로 한 줄씩 나온다). documentBlocks는 그 구조를 복원할
+    뿐 요약하거나 판정하지 않는다(v0.8.5 원칙).
+    """
+
+    def test_pipe_rows_become_a_table_block(self):
+        got = run_js(r'documentBlocks("머리말\n| 항목 | 값 |\n| 자본금 | 100 |\n꼬리말")')
+        kinds = [b["kind"] for b in got]
+        self.assertIn("table", kinds)
+
+    def test_prose_around_tables_is_kept(self):
+        got = run_js(r'documentBlocks("머리말\n| a | b |\n꼬리말")')
+        texts = " ".join(b.get("text", "") for b in got if b["kind"] == "text")
+        self.assertIn("머리말", texts)
+        self.assertIn("꼬리말", texts)
+
+    def test_nothing_is_lost(self):
+        src = "가나다\n| ㄱ | ㄴ |\n라마바"
+        got = run_js(f'documentBlocks({json.dumps(src)})')
+        joined = "".join(
+            b.get("text", "") + " ".join(" ".join(r) for r in b.get("rows", []))
+            for b in got
+        )
+        for token in ("가나다", "ㄱ", "ㄴ", "라마바"):
+            self.assertIn(token, joined, f"{token}이 사라졌습니다")
+
+    def test_plain_text_without_pipes_is_one_text_block(self):
+        got = run_js('documentBlocks("파이프 없는 본문")')
+        self.assertEqual([b["kind"] for b in got], ["text"])
+
+    def test_empty_input_is_empty_list(self):
+        for expr in ('documentBlocks("")', "documentBlocks(null)"):
+            self.assertEqual(run_js(expr), [])
+
+    def test_separator_only_rows_are_not_data(self):
+        """`|---|---|` 는 구분선이지 데이터가 아니다."""
+        got = run_js(r'documentBlocks("| a | b |\n|---|---|\n| 1 | 2 |")')
+        table = [b for b in got if b["kind"] == "table"][0]
+        self.assertNotIn(["---", "---"], table["rows"])
+
+    def test_real_world_flattened_pipes_lose_nothing(self):
+        """사장님이 실제로 붙여넣은 엔켐 회사합병 결정 공시 조각 — 행 구분이
+        (붙여넣는 과정에서였는지) 줄바꿈 없이 공백만으로 이어져 있었다.
+        정상 경로(골든 파일 실측 — 두산_doc_20260422800615.txt)는 표 행마다
+        줄바꿈이 있지만, 이렇게 무너진 입력이 와도 토큰 하나 잃으면 안
+        된다(문단·표 어느 쪽으로 분류되는지는 이 테스트의 관심사가 아니다
+        — "사라지지 않는다"만 확인한다).
+        """
+        src = (
+            "엔켐/회사합병 결정(종속회사의 주요경영사항) /(2026.07.15)회사합병 결정 "
+            "종속회사인 | Enchem America Inc. | 의 주요경영사항 신고 | "
+            "|---|---| "
+            "| 1. 합병방법 | Enchem America Inc.가 THE GROWHUB LIMITED의 자회사인 | "
+            "| 5. 합병신주의 종류와 수(주) | 보통주식 | - | "
+            "| 종류주식 | - |"
+        )
+        got = run_js(f'documentBlocks({json.dumps(src)})')
+        joined = "".join(
+            b.get("text", "") + " " + " ".join(" ".join(r) for r in b.get("rows", []))
+            for b in got
+        )
+        for token in (
+            "엔켐/회사합병 결정(종속회사의 주요경영사항)",
+            "Enchem America Inc.",
+            "의 주요경영사항 신고",
+            "1. 합병방법",
+            "THE GROWHUB LIMITED",
+            "5. 합병신주의 종류와 수(주)",
+            "보통주식",
+            "종류주식",
+        ):
+            self.assertIn(token, joined, f"{token}이 사라졌습니다")
+
+
+# ── 공시 원문 패널 실제 렌더 재현용 가짜 DOM ────────────────────────────
+#
+# documentBlocks() 단독 테스트(TestDocumentBlocks)로는 openDocPanel이 그
+# 결과를 실제로 그리는지 확인할 수 없다 — "정의만 있고 부르는 곳이 없는"
+# 사고가 이 화면에서 이미 네 번 났다(브리프). 인증(token())·네트워크
+# (fetch)는 이 태스크의 관심사가 아니므로 둘 다 스텁으로 바꾸고,
+# openDocPanel을 실제로 실행해 #panel-body 안에 <table>·<p>가 실제로
+# 생기는지(문자열 검사가 아니라 렌더 결과로) 확인한다.
+_DOC_PANEL_HARNESS = r"""
+const vm = require("vm");
+const fs = require("fs");
+
+const ELEMENTS = Object.create(null);
+
+class FakeEl {
+  constructor(tag) {
+    this.tag = tag;
+    this.children = [];
+    this._text = "";
+    this._className = "";
+    this._id = "";
+    this.classList = { add: function () {}, remove: function () {} };
+  }
+  appendChild(c) { this.children.push(c); return c; }
+  insertRow() { const tr = new FakeEl("tr"); this.appendChild(tr); return tr; }
+  insertCell() { const td = new FakeEl("td"); this.appendChild(td); return td; }
+  createTHead() { const el = new FakeEl("thead"); this.appendChild(el); return el; }
+  createTBody() { const el = new FakeEl("tbody"); this.appendChild(el); return el; }
+  set textContent(v) { this._text = String(v); this.children = []; }
+  get textContent() { return this._text; }
+  set className(v) { this._className = v; }
+  get className() { return this._className; }
+  set id(v) { this._id = v; ELEMENTS[v] = this; }
+  get id() { return this._id; }
+}
+
+const panelBody = new FakeEl("div");
+panelBody.id = "panel-body";
+const panel = new FakeEl("aside");
+panel.id = "panel";
+
+function collectTags(node, out) {
+  out = out || [];
+  if (!node) return out;
+  out.push(node.tag);
+  (node.children || []).forEach(function (c) { collectTags(c, out); });
+  return out;
+}
+
+function collectCells(node, out) {
+  out = out || [];
+  if (!node) return out;
+  if (node.tag === "td") out.push(node.textContent);
+  (node.children || []).forEach(function (c) { collectCells(c, out); });
+  return out;
+}
+
+function flattenText(node) {
+  if (!node) return "";
+  if (!node.children || node.children.length === 0) return node.textContent || "";
+  return node.children.map(flattenText).join(" ");
+}
+
+const sandbox = {
+  console: console,
+  document: {
+    createElement: function (tag) { return new FakeEl(tag); },
+    createDocumentFragment: function () { return new FakeEl("#fragment"); },
+    createTextNode: function (t) { const n = new FakeEl("#text"); n.textContent = t; return n; },
+    addEventListener: function () {},
+    getElementById: function (id) { return ELEMENTS[id] || null; },
+  },
+  localStorage: {
+    getItem: function () { return null; },
+    setItem: function () {},
+    removeItem: function () {},
+  },
+  fetch: function () { return Promise.reject(new Error("no network in test")); },
+};
+vm.createContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[1], "utf-8"), { filename: "app.js" }).runInContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).runInContext(sandbox);
+
+// 인증·네트워크는 이 태스크의 관심사가 아니다 — openDocPanel이 실제로
+// 그리는 DOM만 본다. openDocPanel 스파이 교체(위 _DOC_CLICK_HARNESS)와
+// 같은 이유로, top-level function 선언은(let/const와 달리) vm 컨텍스트
+// 전역에 노출되므로 이렇게 덮어쓸 수 있다.
+sandbox.token = async function () { return "fake-token"; };
+sandbox.fetch = function () {
+  return Promise.resolve({
+    status: 200,
+    json: async function () { return %(body)s; },
+  });
+};
+
+(async function () {
+  await sandbox.openDocPanel("20260715900769");
+  process.stdout.write(JSON.stringify({
+    tags: collectTags(panelBody, []),
+    cellTexts: collectCells(panelBody, []),
+    flat: flattenText(panelBody),
+  }));
+})();
+"""
+
+
+def run_doc_panel(body_js: str):
+    """body_js(서버가 돌려주는 JSON 응답 리터럴)로 openDocPanel을 실제로
+    실행해, #panel-body에 실제로 그려진 태그 목록·표 셀 텍스트·전체 텍스트를
+    돌려준다.
+    """
+    script = _DOC_PANEL_HARNESS % {"body": body_js}
+    out = subprocess.run(
+        [_NODE, "-e", script, str(_APP), str(_UI)],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    if out.returncode != 0:
+        raise AssertionError(f"node 실행 실패:\n{out.stderr}")
+    return json.loads(out.stdout)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestDocPanelRendersDocumentBlocks(unittest.TestCase):
+    """openDocPanel이 documentBlocks()를 실제로 불러 그리는지 확인한다.
+
+    documentBlocks 정의만 있고 openDocPanel 호출부가 안 바뀌면 화면은
+    여전히 <pre> 한 덩어리다 — "정의만 있고 부르는 곳이 없는" 사고가 이
+    화면에서 이미 네 번 났다(브리프 지적). 여기서는 실제로 함수를 실행해
+    #panel-body 안에 <table>·<p>가 생기는지, 표 셀이 실제로 나뉘는지 본다.
+    """
+
+    _BODY = json.dumps({
+        "text": "머리말\n| 항목 | 값 |\n|---|---|\n| 자본금 | 100 |\n꼬리말",
+        "truncated": False,
+        "char_count": 20,
+    }, ensure_ascii=False)
+
+    def test_table_and_paragraph_tags_are_actually_rendered(self):
+        got = run_doc_panel(self._BODY)
+        self.assertIn("table", got["tags"],
+                       "표가 <table>로 그려지지 않습니다 — documentBlocks가 "
+                       "배선되지 않았을 수 있습니다")
+        self.assertIn("p", got["tags"],
+                       "문단이 <p>로 그려지지 않습니다")
+
+    def test_table_cells_are_split_not_one_blob(self):
+        got = run_doc_panel(self._BODY)
+        self.assertIn("자본금", got["cellTexts"])
+        self.assertIn("100", got["cellTexts"])
+        # 구분선("---")은 데이터가 아니다 — 셀로 남으면 안 된다.
+        self.assertNotIn("---", got["cellTexts"])
+
+    def test_nothing_is_lost_in_the_rendered_panel(self):
+        got = run_doc_panel(self._BODY)
+        for token in ("머리말", "자본금", "100", "꼬리말"):
+            self.assertIn(token, got["flat"], f"{token}이 화면에서 사라졌습니다")
+
+    def test_truncated_note_still_appears(self):
+        body = json.dumps({
+            "text": "본문",
+            "truncated": True,
+            "char_count": 12345,
+        }, ensure_ascii=False)
+        got = run_doc_panel(body)
+        self.assertIn("12,345자 중 일부입니다", got["flat"])
+
+
 if __name__ == "__main__":
     unittest.main()
+
