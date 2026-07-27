@@ -39,6 +39,13 @@ function pollDecision(body) {
     return { shouldStop: true,
              reason: "진행이 멈췄습니다. 잠시 후 다시 시도해 주세요." };
   }
+  if (typeof b.error === "string" && b.error) {
+    // 서버가 이미 사용자에게 보여줘도 되는 문구로 다듬어 보낸다
+    // (se_server/api/types.py Response.error — "X-DART-Key 헤더가
+    // 필요합니다" 같은, 사용자가 스스로 고칠 수 있는 오류). 여기서
+    // "서버 응답을 이해하지 못했습니다"로 뭉개면 그 안내가 사라진다.
+    return { shouldStop: true, reason: b.error };
+  }
   if (typeof b.done !== "boolean") {
     return { shouldStop: true,
              reason: "서버 응답을 이해하지 못했습니다." };

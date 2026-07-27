@@ -84,6 +84,26 @@ class TestPollDecision(unittest.TestCase):
         got = run_js("pollDecision({})")
         self.assertTrue(got["shouldStop"])
 
+    def test_surfaces_server_error_message_instead_of_generic_fallback(self):
+        """step 응답이 {error: "X-DART-Key 헤더가 필요합니다"} 같은 curated
+        문구를 주면(se_server/api/types.py Response.error), 사용자가 스스로
+        고칠 수 있는 오류인데 "서버 응답을 이해하지 못했습니다"로 뭉개면
+        안 된다.
+        """
+        got = run_js(
+            'pollDecision({error: "X-DART-Key 헤더가 필요합니다"})'
+        )
+        self.assertTrue(got["shouldStop"])
+        self.assertEqual(got["reason"], "X-DART-Key 헤더가 필요합니다")
+
+    def test_generic_fallback_still_used_when_no_error_field(self):
+        """error 필드 자체가 없는, 정말 예상 밖인 응답에서는 여전히 폴백
+        문구를 써야 한다 — 이 테스트가 깨지면 폴백 경로가 사라진 것이다.
+        """
+        got = run_js('pollDecision({foo: "bar"})')
+        self.assertTrue(got["shouldStop"])
+        self.assertEqual(got["reason"], "서버 응답을 이해하지 못했습니다.")
+
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestSectionGroups(unittest.TestCase):

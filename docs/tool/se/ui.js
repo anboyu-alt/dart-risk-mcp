@@ -222,8 +222,6 @@ function renderHeadPlaceholder(name) {
 function renderSection(key, value) { /* Task 3 */ }
 function renderFailures(failed) { /* Task 5 */ }
 
-const FETCHED = new Set();   // 이미 받은 섹션 키
-
 /** 분석 작업을 시작하고 완료될 때까지 진행률을 폴링한다.
  *
  * 섹션은 한 번만 받는다 — 폴링 응답은 매번 완료된 키 전체를 주므로,
@@ -245,30 +243,57 @@ async function analyze(company, lookbackYears) {
   const jobId = created.body.job_id;
   renderHeadPlaceholder(created.body.company);
 
-  for (;;) {
-    const step = await api("POST", "/api/se/analyze/" + jobId + "/step",
-                           { token: await token(), dartKey: dartKey });
-    const decision = pollDecision(step.body);
+  // 이 작업 하나에만 속하는 상태다 — 모듈 전역에 두면 같은 페이지에서
+  // analyze()를 두 번째 부를 때 이전 작업에서 받은 키가 그대로 남아
+  // nextKeysToFetch가 []를 돌려주고 새 작업은 섹션이 하나도 안 그려진다.
+  const fetched = new Set();
 
-    const prog = await api("GET", "/api/se/analyze/" + jobId,
-                           { token: await token() });
-    if (prog.status === 200) {
-      showProgress(prog.body);
-      // 새로 완성된 섹션만 받는다.
-      for (const key of nextKeysToFetch(prog.body.section_keys, [...FETCHED])) {
-        FETCHED.add(key);
-        const sec = await api(
-          "GET",
-          "/api/se/analyze/" + jobId + "/section/" + encodeURIComponent(key),
-          { token: await token() }
-        );
-        // api()는 {status, body}를 준다. 섹션 키는 sec.body.key에 있다.
-        if (sec.status === 200) renderSection(sec.body.key || key, sec.body.value);
+  for (;;) {
+    try {
+      const step = await api("POST", "/api/se/analyze/" + jobId + "/step",
+                             { token: await token(), dartKey: dartKey });
+      const decision = pollDecision(step.body);
+
+      const prog = await api("GET", "/api/se/analyze/" + jobId,
+                             { token: await token() });
+      if (prog.status === 200) {
+        showProgress(prog.body);
+        // 새로 완성된 섹션만 받는다. 요청이 실패한 키는 fetched에 넣지
+        // 않는다 — FETCHED.add()를 요청 전에 해버리면 실패한 섹션이
+        // 재시도되지도, 사용자에게 알려지지도 않고 조용히 사라진다.
+        const sectionErrors = [];
+        for (const key of nextKeysToFetch(prog.body.section_keys, [...fetched])) {
+          const sec = await api(
+            "GET",
+            "/api/se/analyze/" + jobId + "/section/" + encodeURIComponent(key),
+            { token: await token() }
+          );
+          // api()는 {status, body}를 준다. 섹션 키는 sec.body.key에 있다.
+          if (sec.status === 200) {
+            fetched.add(key);
+            renderSection(sec.body.key || key, sec.body.value);
+          } else {
+            // 성공했을 때만 "받음"으로 친다 — 다음 폴링에서 자동 재시도된다.
+            // 동시에 renderFailures로 넘겨 화면에도 보이게 한다(무한 재시도로
+            // 사용자의 DART 호출 한도를 태우지 않도록, 재시도는 이미 도는
+            // 폴링 루프에 얹을 뿐 별도로 더 부르지 않는다).
+            sectionErrors.push({
+              key: key,
+              error: (sec.body && sec.body.error) || ("섹션 응답 오류(" + sec.status + ")"),
+            });
+          }
+        }
+        renderFailures((prog.body.failed || []).concat(sectionErrors));
       }
-      renderFailures(prog.body.failed);
-    }
-    if (decision.shouldStop) {
-      if (decision.reason) showBar(decision.reason);
+      if (decision.shouldStop) {
+        if (decision.reason) showBar(decision.reason);
+        break;
+      }
+    } catch (e) {
+      // await token()이 갱신 실패로 던지면(세션 만료 등) token()이 이미
+      // clearSession()+showGate()로 로그인 화면을 띄운 뒤다. 여기서
+      // analyze()를 reject시키면 호출부마다 try/catch를 강제하게 되므로,
+      // 루프만 조용히 멈춘다.
       break;
     }
   }

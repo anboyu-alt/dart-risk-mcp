@@ -49,6 +49,25 @@ def _extract_function_body(src: str, name: str) -> str:
     raise AssertionError(f"함수 {name}의 닫는 중괄호를 찾지 못했습니다")
 
 
+def _extract_braced_block(src: str, open_idx: int) -> str:
+    """`open_idx`가 가리키는 여는 `{`부터 중괄호 균형이 맞는 지점까지
+    추출한다(`_extract_function_body`와 같은 방식 — 중첩된 `{}`가 있어
+    정규식만으로는 블록 경계를 정확히 못 잡는다). 반환값은 여는/닫는
+    중괄호를 포함한다.
+    """
+    if src[open_idx] != "{":
+        raise AssertionError(f"{open_idx} 위치가 '{{'가 아닙니다")
+    depth = 0
+    for i in range(open_idx, len(src)):
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[open_idx:i + 1]
+    raise AssertionError("닫는 중괄호를 찾지 못했습니다")
+
+
 def _is_safe_html_literal(expr: str) -> bool:
     """HTML 싱크에 들어가는 값이 순수 문자열 리터럴인지 판정한다.
 
@@ -317,6 +336,175 @@ class TestNoDeadCode(unittest.TestCase):
                          "ui.js는 node 테스트 대상이 아니므로 module.exports가 필요 없습니다")
         self.assertNotRegex(src, r"function\s+getDartKey\s*\(",
                             "getDartKey()는 소비처가 없는 죽은 코드입니다")
+
+
+class TestAnalyzeIsolatesFetchedStatePerCall(unittest.TestCase):
+    """FETCHED가 모듈 전역이면, 같은 페이지에서 analyze()를 두 번째 부를 때
+    이전 작업에서 받은 섹션 키가 그대로 남아 nextKeysToFetch가 매번 []를
+    돌려준다 — 두 번째 분석은 섹션이 하나도 안 그려진다.
+
+    단순히 소스에 "FETCHED"라는 이름이 없다고 통과시키면 약하다(이름만
+    바꾸고 여전히 모듈 최상위에 두는 회귀를 못 잡는다) — analyze() 본문
+    안에서 실제로 새 Set을 선언해 쓰는지, 그리고 같은 이름이 모듈
+    최상위에도 선언돼 있지 않은지까지 확인한다.
+    """
+
+    def test_analyze_declares_and_uses_a_locally_scoped_fetched_set(self):
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "analyze")
+
+        m = re.search(r"(?:let|const)\s+(\w+)\s*=\s*new Set\(\s*\)", body)
+        self.assertIsNotNone(
+            m,
+            "analyze()가 호출마다 새 Set을 선언하지 않습니다 — 이전 작업의 "
+            "키가 새 작업으로 새어 들어갈 수 있습니다",
+        )
+        var_name = m.group(1)
+
+        self.assertRegex(
+            body,
+            r"nextKeysToFetch\([^,]+,\s*\[\.\.\." + re.escape(var_name) + r"\]\)",
+            "analyze()의 루프가 방금 선언한 지역 Set을 쓰지 않습니다",
+        )
+
+        # 같은 이름이 모듈 최상위(들여쓰기 없는 줄)에서도 선언돼 있으면,
+        # 지역 선언이 있어도 바깥 전역이 여전히 상태를 공유하게 된다.
+        self.assertNotRegex(
+            src,
+            r"(?m)^(?:let|const)\s+" + re.escape(var_name) + r"\b",
+            f"{var_name}이 모듈 최상위(전역)에서도 선언돼 있습니다 — "
+            "analyze() 호출 간에 상태가 샙니다",
+        )
+
+
+class TestSectionFetchFailureIsNotSilentlyLost(unittest.TestCase):
+    """FETCHED.add(key)가 요청 **전**에 일어나면, 실패한 섹션은 재시도되지도
+    사용자에게 알려지지도 않고 영원히 사라진다 — 화면은 아무 일 없었던
+    것처럼 보인다. "받음" 표시는 성공을 확인한 뒤에만 해야 하고, 실패는
+    화면에 보이는 경로로 넘어가야 한다.
+
+    이 검사도 함수 본문을 실제로 파싱해서 확인한다 — "sec.status"라는
+    문자열이 소스 어딘가에 있다는 것만으로는 그 검사가 받음-표시보다
+    먼저 일어나는지 알 수 없다.
+    """
+
+    def _section_loop_body(self, analyze_body: str) -> str:
+        loop_m = re.search(
+            r"for\s*\(\s*const\s+key\s+of\s+nextKeysToFetch\([^)]*\)\s*\)\s*\{",
+            analyze_body,
+        )
+        self.assertIsNotNone(loop_m, "analyze()에서 섹션 수신 루프를 찾지 못했습니다")
+        return _extract_braced_block(analyze_body, loop_m.end() - 1)
+
+    def test_fetched_is_marked_only_after_checking_success(self):
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "analyze")
+        loop_body = self._section_loop_body(body)
+
+        if_m = re.search(r"if\s*\(\s*sec\.status\s*===\s*200\s*\)\s*\{", loop_body)
+        self.assertIsNotNone(
+            if_m, "루프가 섹션 요청의 성공 여부(sec.status)를 확인하지 않습니다"
+        )
+        if_body = _extract_braced_block(loop_body, if_m.end() - 1)
+
+        self.assertRegex(
+            if_body, r"\.add\(\s*key\s*\)",
+            "성공했을 때 받은 키를 기록하지 않습니다",
+        )
+
+        # 성공 분기 블록(if_body)을 들어내고도 여전히 .add(key)가 남아
+        # 있다면, 요청 결과를 확인하기 전(또는 실패 분기)에도 "받음"으로
+        # 표시하는 것이다.
+        rest = loop_body.replace(if_body, "", 1)
+        self.assertNotRegex(
+            rest, r"\.add\(\s*key\s*\)",
+            "요청 성공 여부를 확인하기 전(또는 실패 시)에도 키를 '받음'으로 "
+            "표시합니다 — 실패한 섹션이 재시도되지 않고 영원히 사라집니다",
+        )
+
+    def test_failure_is_pushed_to_a_list_that_reaches_render_failures(self):
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "analyze")
+        loop_body = self._section_loop_body(body)
+
+        if_m = re.search(r"if\s*\(\s*sec\.status\s*===\s*200\s*\)\s*\{", loop_body)
+        self.assertIsNotNone(if_m)
+        if_body = _extract_braced_block(loop_body, if_m.end() - 1)
+
+        after_if = loop_body[loop_body.index(if_body) + len(if_body):]
+        else_m = re.match(r"\s*else\s*\{", after_if)
+        self.assertIsNotNone(
+            else_m,
+            "요청 실패 시 처리 분기(else)가 없습니다 — 실패가 조용히 "
+            "사라집니다",
+        )
+        else_body = _extract_braced_block(after_if, else_m.end() - 1)
+
+        push_m = re.search(r"(\w+)\.push\(", else_body)
+        self.assertIsNotNone(
+            push_m, "실패를 어디에도 기록하지 않습니다 — 조용히 사라집니다"
+        )
+        array_name = push_m.group(1)
+
+        # 그 배열이 renderFailures로 전달돼야 실제로 화면에 보이는 경로를
+        # 탄다. 배열에 담기만 하고 아무 데도 넘기지 않으면 여전히 죽은
+        # 데이터다. renderFailures(...) 인자에는 `(prog.body.failed || [])`
+        # 처럼 중첩 괄호가 섞일 수 있어 `[^)]*`로는 못 잡는다 — 괄호
+        # 균형을 실제로 세어 호출 전체를 추출한다.
+        call_m = re.search(r"renderFailures\(", body)
+        self.assertIsNotNone(
+            call_m,
+            "실패 목록을 만들기만 하고 renderFailures를 부르지 않습니다 — "
+            "여전히 사용자에게 보이지 않습니다",
+        )
+        depth = 0
+        call_end = None
+        for i in range(call_m.end() - 1, len(body)):
+            if body[i] == "(":
+                depth += 1
+            elif body[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    call_end = i + 1
+                    break
+        self.assertIsNotNone(call_end, "renderFailures(...) 호출의 닫는 괄호를 찾지 못했습니다")
+        call_expr = body[call_m.start():call_end]
+        self.assertIn(
+            array_name, call_expr,
+            "실패 목록을 만들기만 하고 renderFailures로 넘기지 않습니다 — "
+            "여전히 사용자에게 보이지 않습니다",
+        )
+
+
+class TestAnalyzeLoopSurvivesTokenRefreshFailure(unittest.TestCase):
+    """루프 안 await token()이 실패하면 analyze()가 reject된다 — 그러면 이
+    함수를 부르는 쪽마다 매번 try/catch를 해야 한다. token()이 실패 시
+    이미 clearSession()+showGate()로 로그인 화면을 띄우므로, analyze()는
+    조용히 루프만 멈추면 된다.
+    """
+
+    def test_loop_body_is_wrapped_in_try_catch(self):
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "analyze")
+        for_m = re.search(r"for\s*\(\s*;;\s*\)\s*\{", body)
+        self.assertIsNotNone(for_m, "analyze()에서 폴링 루프(for (;;))를 찾지 못했습니다")
+        for_body = _extract_braced_block(body, for_m.end() - 1)
+        # _extract_braced_block은 for(;;)의 여는/닫는 중괄호까지 포함해
+        # 돌려주므로 그 바깥 중괄호를 벗겨내고 안쪽 내용만 본다.
+        for_inner = for_body[1:-1].strip()
+        # for(;;) 본문이 사실상 try { ... } catch (...) { ... } 하나로만
+        # 이뤄져 있는지 확인한다 — 그래야 루프 안 어디서 던지든(await
+        # token() 포함) analyze() 밖으로 새지 않는다.
+        self.assertRegex(
+            for_inner,
+            r"^try\s*\{",
+            "폴링 루프 본문이 try로 시작하지 않습니다 — 루프 안 예외가 "
+            "analyze()를 reject시킬 수 있습니다",
+        )
+        self.assertRegex(
+            for_body, r"\}\s*catch\s*\([^)]*\)\s*\{",
+            "폴링 루프에 catch가 없습니다",
+        )
 
 
 if __name__ == "__main__":
