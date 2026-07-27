@@ -9,8 +9,10 @@ Vercel 어댑터가 변환을 담당한다.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import parse_qs, unquote, urlsplit
 
-from dart_risk_mcp.core.dart_client import resolve_corp
+from dart_risk_mcp.core.dart_client import fetch_disclosure_full, resolve_corp
+from dart_risk_mcp.core.known_actors import lookup_actors_by_company
 from se_server.api.auth import AuthError, extract_bearer
 from se_server.api.router import match
 from se_server.api.types import Request, Response
@@ -23,12 +25,19 @@ _DEFAULT_BUDGET = 25.0
 _MIN_YEARS = 1
 _MAX_YEARS = 5
 
+# 키 값이나 예외 원문은 담지 않는다 — "확인해 보라"는 방향만 제시한다.
+_DART_FETCH_FAILED_MSG = (
+    "공시 원문을 가져오지 못했습니다. DART 키가 올바른지, 접속 상태가"
+    " 정상인지 확인해 주세요"
+)
+
 
 @dataclass
 class Deps:
     store: JobStore
     auth: object  # SupabaseAuth 또는 verify(bearer) -> user_id 를 만족하는 것
     budget_seconds: float = _DEFAULT_BUDGET
+    config: object = None  # SEConfig. /api/se/config 응답에만 쓴다
 
 
 def handle(request: Request, deps: Deps) -> Response:
@@ -38,7 +47,11 @@ def handle(request: Request, deps: Deps) -> Response:
         return Response.error(404, "존재하지 않는 경로입니다")
     name, path_vars = route
 
-    # 인증이 먼저다. 실패하면 저장소·DART 어디에도 닿지 않는다.
+    # config는 로그인 전에 필요하므로 인증 앞에 둔다. 공개 정보만 담는다.
+    if name == "config":
+        return _config(deps)
+
+    # 그 외에는 인증이 먼저다. 실패하면 저장소·DART 어디에도 닿지 않는다.
     try:
         user_id = deps.auth.verify(extract_bearer(request.header("Authorization")))
     except AuthError as exc:
@@ -57,6 +70,12 @@ def handle(request: Request, deps: Deps) -> Response:
         return _step(request, deps, user_id, path_vars["job_id"])
     if name == "get":
         return _get(deps, user_id, path_vars["job_id"])
+    if name == "section":
+        return _section(deps, user_id, path_vars["job_id"], path_vars["key"])
+    if name == "disclosure":
+        return _disclosure(request, deps, path_vars["rcept_no"])
+    if name == "actors":
+        return _actors(request, deps)
     # 라우트가 늘었는데 분기를 빠뜨리면 조용히 엉뚱한 핸들러로 새지 않고
     # 여기서 드러난다.
     return Response.error(404, "존재하지 않는 경로입니다")
@@ -157,14 +176,9 @@ def _get(deps: Deps, user_id: str, job_id: str) -> Response:
         return Response.error(404, "작업을 찾을 수 없습니다")
 
     finished, total = job.progress()
-    # 섹션별로 완료된 항목만 노출한다. 아직 안 끝난 항목은 넣지 않는다 —
-    # 부분 결과를 완성된 것처럼 보이게 하면 안 된다.
-    sections: dict[str, dict] = {}
-    for item in job.items:
-        if item.status != "done" or item.result is None:
-            continue
-        sections[item.key] = item.result.get("value")
-
+    # 섹션 **본문은 담지 않는다.** 화면은 이 응답을 수 초 간격으로 폴링하는데,
+    # 본문까지 담으면 같은 데이터를 반복 전송한다(실측 737KB × 폴링 횟수).
+    # 완료된 키만 알려주고, 화면이 새로 생긴 키만 개별 조회한다.
     return Response(200, {
         "job_id": job.job_id,
         "company": job.company,
@@ -174,7 +188,165 @@ def _get(deps: Deps, user_id: str, job_id: str) -> Response:
         "failed": [
             {"key": i.key, "error": i.error} for i in job.items if i.status == "failed"
         ],
-        "sections": sections,
+        "section_keys": [
+            i.key for i in job.items if i.status == "done" and i.result is not None
+        ],
+    })
+
+
+def _section(deps: Deps, user_id: str, job_id: str, key: str) -> Response:
+    """완료된 섹션 하나를 돌려준다.
+
+    미완료 섹션은 404다 — 부분 결과를 완성된 것처럼 보이게 하면 안 된다.
+
+    `key`는 라우터를 그대로 통과한 원문이라 원문 키(`doc:...`)와
+    encodeURIComponent로 인코딩된 키(`doc%3A...`) 둘 다 들어올 수 있다.
+    여기서 정확히 한 번만 디코딩한다 — path 세그먼트는 여기 도달하기까지
+    어떤 계층도 디코딩하지 않으므로(`api/index.py`가 `rh.path`를 그대로
+    넘기고, `router.match`도 디코딩하지 않는다) 이중 디코딩 위험이 없다.
+    디코딩 결과는 파일 경로가 아니라 `job.items` 순회 비교에만 쓰므로
+    `%2F`가 `/`로 풀려도 실제 경로 순회로 이어지지 않는다 — 진짜
+    `item.key`는 `/`를 담지 않으니 그런 값은 그냥 일치하는 항목이 없어
+    404로 떨어질 뿐이다.
+    """
+    job = deps.store.load(job_id, user_id=user_id)
+    if job is None:
+        return Response.error(404, "작업을 찾을 수 없습니다")
+
+    decoded_key = unquote(key)
+    for item in job.items:
+        if item.key == decoded_key and item.status == "done" and item.result is not None:
+            return Response(200, {"key": decoded_key, "value": item.result.get("value")})
+    return Response.error(404, "섹션을 찾을 수 없습니다")
+
+
+def _disclosure(request: Request, deps: Deps, rcept_no: str) -> Response:
+    """공시 원문. 우측 패널이 클릭 시 호출한다(3단 로딩).
+
+    작업에 묶지 않는다 — 공시는 공개 데이터라 소유권 개념이 없고, 작업에
+    묶으면 화면이 "이 공시가 어느 작업에서 왔는지"를 추적해야 한다.
+    """
+    api_key = _dart_key(request)
+    if not api_key:
+        return Response.error(400, "X-DART-Key 헤더가 필요합니다")
+
+    try:
+        result = fetch_disclosure_full(rcept_no, api_key) or {}
+    except Exception:
+        # DART 쪽 실패를 500으로 보고하면 우리 버그로 오해된다.
+        # (core는 내부에서 예외를 삼키므로 실제로는 아래 files 분기가
+        # 주로 이 역할을 한다 — 이 except는 방어적으로 남겨둔다.)
+        return Response.error(502, _DART_FETCH_FAILED_MSG)
+
+    # fetch_disclosure_full은 실패를 예외로 던지지 않고 빈 결과 dict로
+    # 삼킨다(core 원칙). "ZIP 자체를 못 받음"과 "문서는 받았으나 본문이
+    # 비어 있음"이 똑같이 text=""로 내려오면, DART 키 오류·네트워크
+    # 장애·DART 5xx·ZIP 안전검증 거부가 전부 "공시가 없다"는 404로
+    # 잘못 표시된다 — 화면이 장애를 "없는 공시"로 오인시키게 된다.
+    #
+    # 구분 기준: ZIP을 아예 못 받은 경우 core는 `files=[]`인 완전한 빈
+    # dict(`empty`)를 그대로 반환한다. ZIP을 받았다면(문서가 없거나
+    # 본문이 비어 있는 경우조차) `files`에 ZIP 내 파일 목록이 채워진
+    # 채로 반환된다. 그래서 `files`가 비어 있는지가 "받았는가"의 신호다.
+    if not result.get("files"):
+        return Response.error(502, _DART_FETCH_FAILED_MSG)
+
+    text = result.get("text") or ""
+    if not text:
+        return Response.error(404, "공시 원문을 찾을 수 없습니다")
+    return Response(200, {
+        "rcept_no": rcept_no,
+        "text": text,
+        "char_count": result.get("char_count", len(text)),
+        "truncated": bool(result.get("truncated")),
+    })
+
+
+_ACTOR_DISCLAIMER = (
+    "공개기록에 근거한 사실 표기입니다. 위험 판정이 아니며, 동명이인일 수 "
+    "있습니다. status가 auto_matched인 항목은 동명이인 확인이 되지 않았습니다."
+)
+
+# 근거 강도 3단계. 이 밖의 값(빈 문자열·None·오타·사람이 손으로 넣은 값 등)은
+# 전부 가장 약한 auto_matched로 강등한다 — 실명이 걸린 항목이므로 근거를
+# 모를 때 강해 보이는 쪽으로 새는 오차는 허용하지 않는다.
+_VALID_ACTOR_STATUSES = frozenset({"verified", "maintainer_seed", "auto_matched"})
+
+
+def _actor_status(rec: dict) -> str:
+    """레코드에서 status를 뽑아 화이트리스트로 검증한다.
+
+    운영 로더(Notion 파서, known_actors.py:439 부근)는 status select가
+    비어 있으면 키는 존재하되 값이 `""`인 레코드를 만든다. `.get(키, 기본값)`은
+    키가 있으면 기본값을 쓰지 않으므로, 단순 `.get("status", "auto_matched")`은
+    이 빈 문자열 케이스에서 발화하지 않고 `""`가 그대로 응답에 실린다.
+    그래서 존재 여부가 아니라 **값 자체**를 화이트리스트로 검증한다.
+
+    `value in frozenset(...)` 멤버십 검사는 value가 리스트·dict 같은 해시
+    불가 타입이면 `TypeError`를 던진다. 레코드 하나가 그런 값을 갖고
+    들어오면 `/api/se/actors` 전체가 500이 되므로, 문자열인지 먼저
+    확인한 뒤에만 화이트리스트를 대조한다. 문자열이 아니면 근거를 모르는
+    것과 같으니 가장 약한 `auto_matched`로 강등한다(등급 상향 없음).
+    """
+    value = rec.get("status")
+    if isinstance(value, str) and value in _VALID_ACTOR_STATUSES:
+        return value
+    return "auto_matched"
+
+
+def _query(request: Request, name: str) -> str:
+    """쿼리 파라미터 하나를 읽는다.
+
+    parse_qs가 이미 퍼센트 디코딩을 하므로 unquote를 또 부르면 안 된다 —
+    값에 리터럴 `%`가 있으면(`100%증자`) 이중 디코딩으로 손상된다.
+    """
+    values = parse_qs(urlsplit(request.path).query).get(name) or []
+    return values[0].strip() if values else ""
+
+
+def _actors(request: Request, deps: Deps) -> Response:
+    """회사에 등장한 공개기록 행위자.
+
+    실명을 내보내므로 status와 면책을 **항상** 동반한다. 판정·점수는 없다.
+    레지스트리는 opt-in이라 미설정 시 빈 목록이 정상이다(500이 아니다).
+    """
+    company = _query(request, "company")
+    if not company:
+        return Response.error(400, "company 파라미터가 필요합니다")
+
+    try:
+        found = lookup_actors_by_company(company) or []
+    except Exception:
+        return Response.error(502, "레지스트리를 조회하지 못했습니다")
+
+    return Response(200, {
+        "company": company,
+        "actors": [
+            {
+                "name": name,
+                # status는 화이트리스트 검증 후 강등한다 — 키가 없을 때뿐 아니라
+                # 빈 문자열·예상 밖 값일 때도 auto_matched로 떨어진다.
+                # (_actor_status 참고)
+                "status": _actor_status(rec or {}),
+                "companies": (rec or {}).get("companies", []),
+                "evidence": (rec or {}).get("evidence", ""),
+            }
+            for name, rec in found
+        ],
+        "disclaimer": _ACTOR_DISCLAIMER,
+    })
+
+
+def _config(deps: Deps) -> Response:
+    """브라우저 로그인에 필요한 공개 설정.
+
+    **service_role 키를 절대 담지 않는다.** anon 키는 브라우저 노출을 전제로
+    설계된 값이며 RLS가 실제 방어선이다.
+    """
+    config = deps.config
+    return Response(200, {
+        "supabase_url": getattr(config, "supabase_url", ""),
+        "supabase_anon_key": getattr(config, "supabase_anon_key", ""),
     })
 
 
@@ -189,4 +361,4 @@ def build_deps() -> Deps:
     config = SEConfig.from_env()
     # DART 응답 캐시를 core 시임에 주입한다(SE-1).
     install(SupabaseCache(config))
-    return Deps(store=SupabaseJobStore(config), auth=SupabaseAuth(config))
+    return Deps(store=SupabaseJobStore(config), auth=SupabaseAuth(config), config=config)

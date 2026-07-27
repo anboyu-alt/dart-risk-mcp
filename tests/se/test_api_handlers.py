@@ -204,7 +204,7 @@ class TestGet(unittest.TestCase):
                       _deps(store=store))
         self.assertEqual(resp.status, 200)
         self.assertEqual(resp.body["company"], "회사")
-        self.assertIn("sections", resp.body)
+        self.assertIn("section_keys", resp.body)
 
     def test_other_user_gets_404(self):
         store = MemoryJobStore()

@@ -16,6 +16,9 @@ class SEConfig:
     # dataclass 기본 __repr__에 노출되면 로그·예외 문자열 한 번으로 유출된다.
     supabase_service_key: str = field(repr=False)
     cache_bucket: str = "se-cache"
+    # 브라우저에 내보내는 공개 키(구 anon). RLS가 실제 방어선이므로 노출돼도
+    # 되는 값이지만, repr에 담을 이유는 없어 service key와 같이 가린다.
+    supabase_anon_key: str = field(default="", repr=False)
 
     @classmethod
     def from_env(cls) -> "SEConfig":
@@ -29,4 +32,5 @@ class SEConfig:
             supabase_url=url,
             supabase_service_key=service_key,
             cache_bucket=os.environ.get("SE_CACHE_BUCKET") or "se-cache",
+            supabase_anon_key=os.environ.get("SUPABASE_ANON_KEY") or "",
         )

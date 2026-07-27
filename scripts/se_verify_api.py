@@ -42,6 +42,50 @@ FAIL = "  [FAIL]  "
 INFO = "  [ .. ]  "
 
 _failures: list[str] = []
+# --steps 기본값(2)처럼 실동작 데이터가 아직 없어 건너뛴 검사들. 이게
+# 하나라도 있으면 "전부 통과했습니다"라고 말하면 안 된다 — 검증이 아니라
+# 미실행이기 때문이다.
+_skipped: list[str] = []
+
+
+def skip(label: str, reason: str = "") -> None:
+    print(f"{INFO}건너뜀: {label}" + (f" — {reason}" if reason else ""))
+    _skipped.append(label)
+
+
+def summary_lines(failures: list[str], skipped: list[str]) -> list[str]:
+    """최종 요약 줄을 만든다. 네트워크와 분리해 단위 테스트로 검증한다.
+
+    건너뛴 검사가 하나라도 있으면 "전부 통과했습니다"를 절대 말하지 않는다
+    — 검증이 아니라 미실행이므로 통과로 보고하면 거짓이 된다.
+    """
+    lines: list[str] = []
+    if failures:
+        lines.append(f"\n실패 {len(failures)}건:")
+        lines.extend(f"  - {name}" for name in failures)
+    if skipped:
+        lines.append(f"\n건너뜀 {len(skipped)}건 (--steps 기본값이 낮아 실동작 데이터가"
+                      " 없었을 수 있습니다. --steps를 늘려 재실행하세요):")
+        lines.extend(f"  - {name}" for name in skipped)
+    if not failures and not skipped:
+        lines.append("\n전부 통과했습니다.")
+    elif not failures:
+        lines.append(f"\n실패는 없지만 {len(skipped)}건을 건너뛰었습니다 —"
+                      " 전부 통과라고 볼 수 없습니다.")
+    return lines
+
+
+def exit_code(failures: list[str], skipped: list[str]) -> int:
+    """종료 코드를 정한다. 0=전부 통과, 1=실패, 2=미완(건너뜀).
+
+    건너뛴 검사에 0을 돌려주면 출력만 정직하고 종료 코드는 거짓이 된다 —
+    CI는 종료 코드만 보므로 미실행이 초록으로 읽힌다. 실패(1)와 미완(2)을
+    가르는 이유는 둘의 대응이 다르기 때문이다: 실패는 고쳐야 하고, 미완은
+    --steps를 늘려 다시 돌려야 한다.
+    """
+    if failures:
+        return 1
+    return 2 if skipped else 0
 
 
 def load_env() -> None:
@@ -155,6 +199,9 @@ def main() -> int:
     alice = TestUser(session, supabase_url, service_key, "alice")
     bob = TestUser(session, supabase_url, service_key, "bob")
     created_job = ""
+    # [5]에서 채워진다. [6]의 section·disclosure 검증이 재사용한다
+    # (새 작업을 또 만들지 않고 이미 만든 작업의 완료 섹션을 그대로 쓴다).
+    final_keys: list[str] = []
 
     try:
         print(f"대상: {args.base}")
@@ -213,16 +260,88 @@ def main() -> int:
         code, body = api(session, args.base, "GET", f"/api/se/analyze/{job_id}",
                          alice.access_token)
         if code == 200:
+            keys = body.get("section_keys") or []
+            final_keys = keys
             failed = body.get("failed") or []
             print(f"{INFO}{body.get('finished')}/{body.get('total')} 완료 "
-                  f"· 섹션 {len(body.get('sections') or {})}개 · 실패 {len(failed)}건")
+                  f"· 섹션 {len(keys)}개 · 실패 {len(failed)}건")
             for item in failed[:5]:
                 print(f"         실패: {item.get('key')} — {str(item.get('error'))[:70]}")
             check("최종 조회 정상", True)
+            # 이번 계획(SE-4a)의 목적 그 자체 — 진행률 응답이 섹션 본문을
+            # 더는 담지 않으므로, 실측 크기가 이전 737KB에서 수 KB로
+            # 줄었는지 여기서 눈으로 확인한다.
+            resp_size = len(str(body))
+            check("진행률 응답이 경량", resp_size < 20000, f"{resp_size:,}자")
+            if keys:
+                c2, b2 = api(session, args.base, "GET",
+                             f"/api/se/analyze/{job_id}/section/{keys[0]}",
+                             alice.access_token)
+                check("섹션 개별 조회", c2 == 200 and b2.get("key") == keys[0],
+                      f"HTTP {c2}")
         else:
             check("최종 조회 정상", False, f"HTTP {code}")
 
-        return 1 if _failures else 0
+        print("\n[6] 신규 엔드포인트")
+
+        print(f"{INFO}config — 인증 없이 열리는 유일한 경로")
+        cfg_resp = session.get(f"{args.base}/api/se/config", timeout=20)
+        cfg_ok = check("config: 인증 없이 200", cfg_resp.status_code == 200,
+                       f"HTTP {cfg_resp.status_code}")
+        try:
+            cfg_body = cfg_resp.json() if cfg_ok else {}
+        except ValueError:
+            cfg_body = {}
+        if cfg_ok:
+            check("config: supabase_url 포함", bool(cfg_body.get("supabase_url")))
+        # 값 자체를 응답 원문에서 찾는다 — 필드명이 아니라 실제 service key가
+        # 새어나갔는지를 직접 검증한다(응답 스키마가 바뀌어도 이 검증은 유효하다).
+        check("config: service key 비노출", service_key not in cfg_resp.text)
+
+        if final_keys:
+            key0 = final_keys[0]
+            print(f"{INFO}section — 소유자·타인 격리")
+            c3, b3 = api(session, args.base, "GET",
+                        f"/api/se/analyze/{job_id}/section/{key0}",
+                        alice.access_token)
+            check("section: 소유자 200", c3 == 200 and b3.get("key") == key0,
+                  f"HTTP {c3}")
+            c3, _ = api(session, args.base, "GET",
+                       f"/api/se/analyze/{job_id}/section/{key0}",
+                       bob.access_token)
+            check("section: 타인 404", c3 == 404, f"HTTP {c3}")
+        else:
+            skip("section 실동작·격리 검증", "완료된 섹션이 없습니다 (--steps를 늘려주세요)")
+
+        doc_rcept_no = ""
+        for k in final_keys:
+            if k.startswith("doc:"):
+                doc_rcept_no = k.split(":", 1)[1]
+                break
+        print(f"{INFO}disclosure — 인증·실제 공시 원문")
+        c4, _ = api(session, args.base, "GET",
+                   f"/api/se/disclosure/{doc_rcept_no or '00000000000000'}",
+                   "", dart_key)
+        check("disclosure: 인증 없이는 401", c4 == 401, f"HTTP {c4}")
+        if doc_rcept_no:
+            c4, b4 = api(session, args.base, "GET",
+                        f"/api/se/disclosure/{doc_rcept_no}",
+                        alice.access_token, dart_key)
+            check("disclosure: 실제 공시 200", c4 == 200 and bool(b4.get("text")),
+                  f"HTTP {c4} · 본문 {len(str(b4.get('text', ''))):,}자")
+        else:
+            skip("disclosure 실조회 검증", "완료된 공시 원문 섹션이 없습니다 (--steps를 늘려주세요)")
+
+        print(f"{INFO}actors — 인증·면책 동반")
+        c5, _ = api(session, args.base, "GET",
+                   f"/api/se/actors?company={args.company}", "")
+        check("actors: 인증 없이는 401", c5 == 401, f"HTTP {c5}")
+        c5, b5 = api(session, args.base, "GET",
+                    f"/api/se/actors?company={args.company}", alice.access_token)
+        check("actors: 인증되면 200", c5 == 200, f"HTTP {c5}")
+        check("actors: 면책 문구 동반", bool(b5.get("disclaimer")))
+
+        return exit_code(_failures, _skipped)
 
     finally:
         # 검증이 만든 작업 레코드도 치운다. 남겨두면 소유자가 삭제된
@@ -243,12 +362,8 @@ def main() -> int:
             print(f"\n{INFO}테스트 계정 정리 중…")
             ok_a, ok_b = alice.delete(), bob.delete()
             print(f"{PASS if ok_a and ok_b else FAIL}테스트 계정 삭제")
-        if _failures:
-            print(f"\n실패 {len(_failures)}건:")
-            for name in _failures:
-                print(f"  - {name}")
-        else:
-            print("\n전부 통과했습니다.")
+        for line in summary_lines(_failures, _skipped):
+            print(line)
 
 
 if __name__ == "__main__":

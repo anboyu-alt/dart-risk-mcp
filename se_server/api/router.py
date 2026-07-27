@@ -23,11 +23,33 @@ import re
 # 이 문자 집합을 벗어나는 값(경로 순회 등)은 애초에 매칭되지 않는다.
 _JOB_ID = r"(?P<job_id>[A-Za-z0-9_-]+)"
 
+# 섹션 키. registry 키(insider_timeline)와 원문 키(doc:<rcept_no>) 두 형태다.
+# 콜론은 허용하되 `/`·`.`는 리터럴로는 배제해 경로 순회를 구조적으로 막는다.
+#
+# 프론트엔드가 표준 관행대로 encodeURIComponent(key)를 쓰면 `doc:...`이
+# `doc%3A...`가 된다. 원문 키(콜론 리터럴)와 인코딩된 키(%3A) 둘 다
+# 받아들이도록 유효한 percent-encoding 삼중항(`%` + 16진수 2자리)도
+# 허용한다. `%` 하나만 있고 뒤에 유효한 16진수가 없으면 애초에 매칭되지
+# 않는다 — 라우터가 보안 경계이므로 잘못된 인코딩은 여기서 걸러낸다.
+# `%2F`(디코딩하면 `/`)·`%2E`(디코딩하면 `.`)도 문자 집합상 매칭은 되지만,
+# 디코딩은 핸들러(_section)에서 딱 한 번만 일어나고 그 결과는 파일 경로가
+# 아니라 job.items 순회 비교에만 쓰이므로 실제 경로 순회로 이어지지 않는다.
+_SECTION_KEY = r"(?P<key>(?:[A-Za-z0-9_:-]|%[0-9A-Fa-f]{2})+)"
+
+# 접수번호는 숫자로만 구성된다(현재 DART 발급분은 14자리). 자릿수를
+# 8~20으로 넉넉히 잡아 향후 접수번호 형식이 바뀌어도 흡수하도록 하고,
+# 숫자만 허용해 경로 순회는 구조적으로 막는다.
+_RCEPT_NO = r"(?P<rcept_no>[0-9]{8,20})"
+
 # fullmatch로 대조하므로 ^...$ 앵커를 쓰지 않는다.
 _ROUTES: tuple[tuple[str, re.Pattern, str], ...] = (
     ("POST", re.compile(r"/api/se/analyze"), "create"),
     ("POST", re.compile(rf"/api/se/analyze/{_JOB_ID}/step"), "step"),
+    ("GET", re.compile(rf"/api/se/analyze/{_JOB_ID}/section/{_SECTION_KEY}"), "section"),
     ("GET", re.compile(rf"/api/se/analyze/{_JOB_ID}"), "get"),
+    ("GET", re.compile(rf"/api/se/disclosure/{_RCEPT_NO}"), "disclosure"),
+    ("GET", re.compile(r"/api/se/actors"), "actors"),
+    ("GET", re.compile(r"/api/se/config"), "config"),
 )
 
 
