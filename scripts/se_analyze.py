@@ -16,6 +16,8 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from scripts._console import use_utf8_stdout  # noqa: E402
+
 from dart_risk_mcp.core.dart_client import resolve_corp  # noqa: E402
 from se_server.cache import MemoryCache  # noqa: E402
 from se_server.http_cache import install  # noqa: E402
@@ -47,9 +49,12 @@ def run_to_completion(company, api_key, lookback_years, store, budget_seconds, n
 
     반환: (job_id, 단계별 StepResult 목록)
     """
-    corp_name, info = resolve_corp(company, api_key)
-    if not info:
+    # resolve_corp는 실패 시 None을 반환한다. 곧바로 언패킹하면 TypeError가 나서
+    # 아래의 친절한 오류 메시지에 도달하지 못한다.
+    resolved = resolve_corp(company, api_key)
+    if not resolved:
         raise ValueError(f"기업을 찾지 못했습니다: {company}")
+    corp_name, info = resolved
 
     job = runner.create_job(corp_name or company, info["corp_code"], lookback_years, store)
     steps = []
@@ -85,10 +90,7 @@ def run_to_completion(company, api_key, lookback_years, store, budget_seconds, n
 
 def main() -> int:
     # Windows 콘솔 기본 코드페이지(cp949)는 "—" 같은 문자를 인코딩하지 못해
-    # UnicodeEncodeError로 죽는다(라이브 실측 중 실제로 재현). PYTHONIOENCODING을
-    # 강제하는 대신 여기서 stdout을 utf-8로 재설정해 별도 환경변수 없이도 동작하게 한다.
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
+    use_utf8_stdout()
 
     parser = argparse.ArgumentParser(description="SE 분석 작업 실행")
     parser.add_argument("company", help="기업명 또는 종목코드")

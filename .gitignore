@@ -7,6 +7,10 @@ build/
 venv/
 .env
 *.env
+# .env.local 등 접미사가 붙는 변형까지 포함한다. `*.env`는 .env로 **끝나는**
+# 파일만 잡으므로 .env.local은 걸리지 않는다 — 자격증명이 담기는 파일이라
+# 누락되면 그대로 커밋된다.
+.env.*
 ~/.cache/
 .mcp.json
 .claude/

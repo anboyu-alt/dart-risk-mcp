@@ -72,7 +72,13 @@ class StepResult:
     stalled: bool = False
 
 
-def create_job(company: str, corp_code: str, lookback_years: int, store: JobStore) -> Job:
+def create_job(
+    company: str,
+    corp_code: str,
+    lookback_years: int,
+    store: JobStore,
+    user_id: str = "",
+) -> Job:
     """1단 항목으로 채운 새 작업을 만들어 저장한다."""
     job = Job(
         job_id=new_job_id(),
@@ -80,6 +86,7 @@ def create_job(company: str, corp_code: str, lookback_years: int, store: JobStor
         corp_code=corp_code,
         lookback_years=lookback_years,
         items=build_stage1_items(corp_code, lookback_years),
+        user_id=user_id,
     )
     store.save(job)
     return job
@@ -225,6 +232,7 @@ def run_step(
     budget_seconds: float = 45.0,
     now: Callable[[], float] = time.monotonic,
     save_interval_seconds: float = SAVE_INTERVAL,
+    user_id: str = "",
 ) -> StepResult:
     """예산 안에서 처리 가능한 만큼 항목을 실행하고 상태를 저장한다.
 
@@ -239,7 +247,7 @@ def run_step(
     돌리자 13개 항목 중 작은 7개만 처리되고 oversized 6개는 영원히
     시작되지 못한 채 영구 고착됐다.
     """
-    job = store.load(job_id)
+    job = store.load(job_id, user_id)
     if job is None:
         raise ValueError(f"작업을 찾을 수 없습니다: {job_id}")
 

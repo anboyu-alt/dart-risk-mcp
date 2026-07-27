@@ -5,5 +5,8 @@
   "installCommand": null,
   "regions": ["icn1"],
   "outputDirectory": "docs/tool",
-  "trailingSlash": false
+  "trailingSlash": false,
+  "rewrites": [
+    { "source": "/api/se/(.*)", "destination": "/api/index" }
+  ]
 }

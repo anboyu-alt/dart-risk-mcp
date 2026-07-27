@@ -15,6 +15,7 @@ import requests
 
 from se_server.config import SEConfig
 from se_server.jobs.model import Job
+from se_server.supabase_rest import auth_headers
 
 _TABLE = "se_jobs"
 
@@ -25,8 +26,7 @@ class SupabaseJobStore:
         self.session = session or requests.Session()
 
     def _headers(self) -> dict:
-        key = self.config.supabase_service_key
-        return {"Authorization": f"Bearer {key}", "apikey": key}
+        return auth_headers(self.config.supabase_service_key)
 
     def _table_url(self) -> str:
         return f"{self.config.supabase_url}/rest/v1/{_TABLE}"
@@ -42,6 +42,7 @@ class SupabaseJobStore:
                 "job_id": job.job_id,
                 "state": job.to_dict(),
                 "status": job.status,
+                "user_id": job.user_id,
                 # updated_at을 페이로드에 반드시 넣는다. 스키마의 default now()는
                 # INSERT에만 적용되고, PostgREST의 merge-duplicates upsert는
                 # 페이로드에 있는 컬럼만 SET하므로, 빼면 최초 삽입 시각에
@@ -54,11 +55,16 @@ class SupabaseJobStore:
         if resp.status_code >= 300:
             raise RuntimeError(f"작업 상태 저장 실패 (HTTP {resp.status_code})")
 
-    def load(self, job_id: str) -> Job | None:
+    def load(self, job_id: str, user_id: str = "") -> Job | None:
+        params = {"job_id": f"eq.{job_id}", "select": "state"}
+        if user_id:
+            # 소유자 필터를 쿼리에 넣는다. 받아온 뒤 비교하면 남의 레코드가
+            # 잠시라도 프로세스 메모리에 들어온다.
+            params["user_id"] = f"eq.{user_id}"
         resp = self.session.get(
             self._table_url(),
             headers=self._headers(),
-            params={"job_id": f"eq.{job_id}", "select": "state"},
+            params=params,
             timeout=15,
         )
         if resp.status_code >= 300:

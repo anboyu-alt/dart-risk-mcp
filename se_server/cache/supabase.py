@@ -17,6 +17,7 @@ import datetime as _dt
 import requests
 
 from se_server.config import SEConfig
+from se_server.supabase_rest import auth_headers
 
 _TABLE = "se_cache"
 
@@ -28,8 +29,7 @@ class SupabaseCache:
 
     # ── 공통 ──────────────────────────────────────
     def _headers(self) -> dict:
-        key = self.config.supabase_service_key
-        return {"Authorization": f"Bearer {key}", "apikey": key}
+        return auth_headers(self.config.supabase_service_key)
 
     def _object_url(self, key: str) -> str:
         return (

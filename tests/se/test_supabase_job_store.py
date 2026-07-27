@@ -33,7 +33,23 @@ class TestSave(unittest.TestCase):
         SupabaseJobStore(CFG, session=session).save(_job())
         headers = session.post.call_args[1]["headers"]
         self.assertIn("resolution=merge-duplicates", headers["Prefer"])
-        self.assertEqual(headers["Authorization"], "Bearer SERVICE_KEY")
+        # CFG의 서비스 키("SERVICE_KEY")는 JWT 형태가 아니므로 Authorization
+        # 헤더는 붙지 않는다 — apikey로 서비스 키 전달을 검증한다.
+        self.assertEqual(headers["apikey"], "SERVICE_KEY")
+
+    def test_save_new_format_key_omits_authorization(self):
+        """신형 secret 키(sb_secret_...)도 apikey 헤더만으로 정상 동작한다."""
+        new_key_cfg = SEConfig(
+            supabase_url="https://proj.supabase.co",
+            supabase_service_key="sb_secret_EXAMPLE-NOT-REAL",
+            cache_bucket="se-cache",
+        )
+        session = mock.Mock()
+        session.post.return_value = _resp(201)
+        SupabaseJobStore(new_key_cfg, session=session).save(_job())
+        headers = session.post.call_args[1]["headers"]
+        self.assertEqual(headers["apikey"], "sb_secret_EXAMPLE-NOT-REAL")
+        self.assertNotIn("Authorization", headers)
 
     def test_payload_carries_job_id_and_state(self):
         session = mock.Mock()

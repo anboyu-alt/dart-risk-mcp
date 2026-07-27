@@ -15,8 +15,11 @@ class JobStore(Protocol):
         """작업을 저장한다."""
         ...
 
-    def load(self, job_id: str) -> Job | None:
-        """작업 ID로 작업을 조회한다. 없으면 None."""
+    def load(self, job_id: str, user_id: str = "") -> Job | None:
+        """작업 ID로 작업을 조회한다. 없으면 None.
+
+        user_id가 주어지면 소유자가 다를 때도 None을 돌려준다.
+        """
         ...
 
 
@@ -57,7 +60,7 @@ class MemoryJobStore:
         """작업을 메모리에 저장한다."""
         self._jobs[job.job_id] = job.to_dict()
 
-    def load(self, job_id: str) -> Job | None:
+    def load(self, job_id: str, user_id: str = "") -> Job | None:
         """작업 ID로 작업을 조회한다. 없으면 None.
 
         내부 dict를 깊은 복사해 넘긴다 — 그렇지 않으면 돌려준 Job의 중첩
@@ -66,4 +69,9 @@ class MemoryJobStore:
         data = self._jobs.get(job_id)
         if data is None:
             return None
-        return Job.from_dict(copy.deepcopy(data))
+        job = Job.from_dict(copy.deepcopy(data))
+        # 소유자 불일치는 "없음"과 동일하게 취급한다. 404와 403을 구분하면
+        # 남의 job_id가 존재하는지를 알려주게 된다.
+        if user_id and job.user_id != user_id:
+            return None
+        return job
