@@ -256,6 +256,26 @@ _ACTOR_DISCLAIMER = (
     "있습니다. status가 auto_matched인 항목은 동명이인 확인이 되지 않았습니다."
 )
 
+# 근거 강도 3단계. 이 밖의 값(빈 문자열·None·오타·사람이 손으로 넣은 값 등)은
+# 전부 가장 약한 auto_matched로 강등한다 — 실명이 걸린 항목이므로 근거를
+# 모를 때 강해 보이는 쪽으로 새는 오차는 허용하지 않는다.
+_VALID_ACTOR_STATUSES = frozenset({"verified", "maintainer_seed", "auto_matched"})
+
+
+def _actor_status(rec: dict) -> str:
+    """레코드에서 status를 뽑아 화이트리스트로 검증한다.
+
+    운영 로더(Notion 파서, known_actors.py:439 부근)는 status select가
+    비어 있으면 키는 존재하되 값이 `""`인 레코드를 만든다. `.get(키, 기본값)`은
+    키가 있으면 기본값을 쓰지 않으므로, 단순 `.get("status", "auto_matched")`은
+    이 빈 문자열 케이스에서 발화하지 않고 `""`가 그대로 응답에 실린다.
+    그래서 존재 여부가 아니라 **값 자체**를 화이트리스트로 검증한다.
+    """
+    value = rec.get("status")
+    if value in _VALID_ACTOR_STATUSES:
+        return value
+    return "auto_matched"
+
 
 def _query(request: Request, name: str) -> str:
     """쿼리 파라미터 하나를 읽는다.
@@ -287,11 +307,10 @@ def _actors(request: Request, deps: Deps) -> Response:
         "actors": [
             {
                 "name": name,
-                # status 기본값은 가장 약한 auto_matched다. 레코드에 status가
-                # 없을 때 verified로 보이면 확인 안 된 정보를 확인된 것처럼
-                # 표시하게 된다 — 실명을 다루는 이상 이 방향의 오차는
-                # 허용할 수 없다.
-                "status": (rec or {}).get("status", "auto_matched"),
+                # status는 화이트리스트 검증 후 강등한다 — 키가 없을 때뿐 아니라
+                # 빈 문자열·예상 밖 값일 때도 auto_matched로 떨어진다.
+                # (_actor_status 참고)
+                "status": _actor_status(rec or {}),
                 "companies": (rec or {}).get("companies", []),
                 "evidence": (rec or {}).get("evidence", ""),
             }

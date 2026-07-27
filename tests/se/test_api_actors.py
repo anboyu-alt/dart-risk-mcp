@@ -92,6 +92,39 @@ class TestActors(unittest.TestCase):
         for banned in ("점수", "등급", "score", "grade", "위험도"):
             self.assertNotIn(banned, dumped)
 
+    def test_missing_status_key_downgrades_to_auto_matched(self):
+        """레코드에 status 키 자체가 없는 경우.
+
+        `.get("status", "auto_matched")`는 이 케이스에서만 발화한다 — 즉
+        가장 흔하지 않은 입력이다. 운영에서 실제로 문제가 되는 빈 문자열
+        케이스는 아래 test_empty_status_downgrades_to_auto_matched.
+        """
+        sample = [("박OO", {"companies": ["C사"], "evidence": "근거"})]
+        with mock.patch("se_server.api.handlers.lookup_actors_by_company",
+                        return_value=sample):
+            resp = handle(_req("/api/se/actors?company=회사"), _deps())
+        self.assertEqual(resp.body["actors"][0]["status"], "auto_matched")
+
+    def test_empty_status_downgrades_to_auto_matched(self):
+        """Notion status select가 비어 있으면 키는 있고 값이 ''인 레코드가 된다
+        (known_actors.py:439 부근). `.get(키, 기본값)`은 키가 있으면 기본값을
+        쓰지 않으므로, 단순 기본값 방식은 이 케이스를 놓친다 — 바로 이 결함을
+        고치는 테스트다.
+        """
+        sample = [("최OO", {"status": "", "companies": ["D사"], "evidence": "근거"})]
+        with mock.patch("se_server.api.handlers.lookup_actors_by_company",
+                        return_value=sample):
+            resp = handle(_req("/api/se/actors?company=회사"), _deps())
+        self.assertEqual(resp.body["actors"][0]["status"], "auto_matched")
+
+    def test_unexpected_status_value_downgrades_to_auto_matched(self):
+        """오타·사람이 손으로 넣은 값(예: "확인됨")도 강한 쪽으로 새면 안 된다."""
+        sample = [("정OO", {"status": "확인됨", "companies": ["E사"], "evidence": "근거"})]
+        with mock.patch("se_server.api.handlers.lookup_actors_by_company",
+                        return_value=sample):
+            resp = handle(_req("/api/se/actors?company=회사"), _deps())
+        self.assertEqual(resp.body["actors"][0]["status"], "auto_matched")
+
 
 class TestQueryParsing(unittest.TestCase):
     def test_company_is_url_decoded(self):
@@ -100,6 +133,20 @@ class TestQueryParsing(unittest.TestCase):
             handle(_req("/api/se/actors?company=%EC%85%80%ED%8A%B8%EB%A6%AC%EC%98%A8"),
                    _deps())
         self.assertEqual(f.call_args[0][0], "셀트리온")
+
+    def test_company_is_decoded_exactly_once(self):
+        """값에 리터럴 %가 있는 경우로 이중 디코딩 여부를 실제로 검증한다.
+
+        원문 "100%25증자"를 한 번 디코딩하면 "100%증자"가 된다. 만약
+        unquote를 또 부르는 이중 디코딩이 있다면 "%25"의 "%"가 다시
+        "%3" ... 처럼 잘못 해석되어 손상된 값이 나온다 — 리터럴 %가 없는
+        값만으로는 이 결함을 잡아낼 수 없다.
+        """
+        with mock.patch("se_server.api.handlers.lookup_actors_by_company",
+                        return_value=[]) as f:
+            handle(_req("/api/se/actors?company=100%2525%EC%A6%9D%EC%9E%90"),
+                   _deps())
+        self.assertEqual(f.call_args[0][0], "100%25증자")
 
 
 if __name__ == "__main__":
