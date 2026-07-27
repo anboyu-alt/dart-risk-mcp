@@ -309,14 +309,30 @@ class TestLoadConfigValidatesServerSettings(unittest.TestCase):
     """
 
     def test_load_config_rejects_empty_server_settings_distinctly(self):
+        """이전 버전은 "supabase_url"·"supabase_anon_key"·"throw"가 함수
+        본문 어딘가에 각각 있는지만 따로따로 확인했다 — 서로 무관한 throw
+        (예: 응답이 200이 아닐 때의 throw)로도 세 조건이 전부 만족돼 공허하게
+        통과했다(뮤테이션으로 확인됨: 검증 if문 자체를 지워도 이 검사는
+        여전히 통과했다). supabase_url·supabase_anon_key를 함께 검사하는
+        조건문을 실제로 찾아, 그 조건문 **안에서** throw가 일어나는지까지
+        확인한다.
+        """
         src = _sources()["ui.js"]
         body = _extract_function_body(src, "loadConfig")
-        self.assertIn("supabase_url", body,
-                      "loadConfig이 supabase_url을 검증하지 않습니다")
-        self.assertIn("supabase_anon_key", body,
-                      "loadConfig이 supabase_anon_key를 검증하지 않습니다")
-        self.assertIn("throw", body, "loadConfig이 빈 설정에서 실패하지 않습니다")
-        self.assertNotIn("이메일과 비밀번호", body,
+        if_m = re.search(
+            r"if\s*\([^)]*supabase_url[^)]*supabase_anon_key[^)]*\)\s*\{",
+            body,
+        )
+        self.assertIsNotNone(
+            if_m,
+            "loadConfig이 supabase_url·supabase_anon_key를 함께 검사하는 "
+            "조건문을 갖고 있지 않습니다",
+        )
+        guard_block = _extract_braced_block(body, if_m.end() - 1)
+        self.assertIn("throw", guard_block,
+                      "loadConfig이 빈 설정에서 실패하지 않습니다 — 검증 "
+                      "조건문 안에 throw가 없습니다")
+        self.assertNotIn("이메일과 비밀번호", guard_block,
                          "설정 오류를 로그인 실패 문구로 안내하면 안 됩니다 — "
                          "원인이 다릅니다")
 
@@ -648,21 +664,12 @@ class TestPanelsAreWiredAndReachable(unittest.TestCase):
         self.assertIn("openActorPanel(", m.group(1),
                       "actor-btn 클릭 핸들러가 openActorPanel을 부르지 않습니다")
 
-    def test_open_actor_panel_is_not_dead_code(self):
-        """단순 등장 횟수(≥2)는 설명 주석 속 함수 이름 언급까지 "호출부"로
-        착각한다(실제로 이 파일의 openDocPanel 옆 주석 "openActorPanel과
-        같은 이유"가 그 경우다) — 주석을 지운 뒤 선언을 제외한 자리에
-        실제 호출이 있는지 확인한다.
-        """
-        src = _sources()["ui.js"]
-        # 정의 자체가 있는지 먼저 확인한다(없으면 아래 호출부 검사가
-        # 공허하게 통과한다).
-        _extract_function_body(src, "openActorPanel")
-        self.assertTrue(
-            _has_real_call_site(src, "openActorPanel"),
-            "openActorPanel 정의만 있고 부르는 곳이 없습니다 — "
-            "패널에 도달할 방법이 없습니다",
-        )
+    # test_open_actor_panel_is_not_dead_code는 삭제했다 — 바로 위
+    # test_actor_button_exists_and_opens_the_panel_for_current_company가
+    # actor-btn 클릭 핸들러 본문을 파싱해 "openActorPanel(" 호출을 이미
+    # 확인한다(주석이 아니라 실제 핸들러 본문에서). 그 핸들러 안의 호출을
+    # 지우면 그 테스트가 바로 실패하므로 뮤테이션 kill 커버리지 손실이
+    # 없다 — 완전한 중복이었다.
 
     def test_open_doc_panel_is_wired_from_the_rcept_no_cell(self):
         """공시 원문 패널은 rcept_no 열의 셀에서만 열려야 한다 — 확인되지
@@ -826,6 +833,12 @@ class TestRenderFailuresReplacesNotAccumulates(unittest.TestCase):
     """
 
     def test_render_failures_reuses_a_fixed_node_instead_of_always_appending(self):
+        """이전 버전은 `removeChild(`가 본문에 두 군데(빈 목록일 때의
+        `wrap.parentNode.removeChild(wrap)`, 내용을 비우는 `while` 루프) 있어
+        후자를 통째로 지워도 여전히 통과했다(공허 통과, 뮤테이션으로 확인됨).
+        내용을 비우는 `while (...firstChild) ...removeChild(...)` 루프
+        패턴을 직접 찾는다 — 단순 `removeChild(` 등장 여부가 아니라.
+        """
         src = _sources()["ui.js"]
         body = _extract_function_body(src, "renderFailures")
         self.assertRegex(
@@ -833,22 +846,39 @@ class TestRenderFailuresReplacesNotAccumulates(unittest.TestCase):
             "renderFailures가 고정 노드를 재사용하지 않고 매번 새로 붙일 수 있습니다",
         )
         # 내용을 비우는 처리(removeChild 루프)가 있어야 다시 그릴 때 이전
-        # 실패 목록 위에 새 목록이 쌓이지 않는다.
+        # 실패 목록 위에 새 목록이 쌓이지 않는다. `wrap.parentNode.removeChild`
+        # (빈 목록 분기)와는 다른, 반복해서 자식을 비우는 while 루프여야 한다.
         self.assertRegex(
-            body, r"removeChild\(",
-            "renderFailures가 기존 내용을 비우지 않습니다 — 폴링마다 실패 "
-            "목록이 누적될 수 있습니다",
+            body, r"while\s*\(\s*\w+\.firstChild\s*\)\s*\w+\.removeChild\(",
+            "renderFailures가 기존 내용을 비우는 while 루프를 갖고 있지 "
+            "않습니다 — 폴링마다 실패 목록이 누적될 수 있습니다",
         )
 
     def test_render_failures_clears_the_node_when_no_failures_remain(self):
         """실패가 없어졌는데(재시도 성공) 이전 실패 노드가 화면에 그대로
         남으면 사용자는 이미 해결된 문제를 계속 보게 된다.
+
+        이전 버전은 if 조건문의 정규식 존재만 확인했다 — 그 분기 **본문**이
+        실제로 노드를 지우는지는 보지 않아서, 분기 안을 빈 채로 두거나
+        무관한 코드로 바꿔도 통과했다(공허 통과, 뮤테이션으로 확인됨). 분기
+        본문을 직접 추출해 `removeChild`로 기존 노드를 실제로 제거하는지까지
+        확인한다.
         """
         src = _sources()["ui.js"]
         body = _extract_function_body(src, "renderFailures")
-        self.assertRegex(
-            body, r"if\s*\(\s*!failed\s*\|\|\s*failed\.length\s*===\s*0\s*\)",
+        if_m = re.search(
+            r"if\s*\(\s*!failed\s*\|\|\s*failed\.length\s*===\s*0\s*\)\s*\{",
+            body,
+        )
+        self.assertIsNotNone(
+            if_m,
             "renderFailures가 빈 실패 목록을 별도로 처리하지 않습니다 — 이전 "
+            "실패 노드가 화면에 남을 수 있습니다",
+        )
+        guard_block = _extract_braced_block(body, if_m.end() - 1)
+        self.assertRegex(
+            guard_block, r"removeChild\(",
+            "빈 실패 목록 분기가 기존 노드를 실제로 지우지 않습니다 — 이전 "
             "실패 노드가 화면에 남을 수 있습니다",
         )
 
@@ -1014,16 +1044,12 @@ class TestAnalyzeFormIsWiredAndReachable(unittest.TestCase):
             "분석을 시작할 방법이 없습니다",
         )
 
-    def test_analyze_itself_is_reachable_not_only_resume_if_any(self):
-        """이 태스크 이전에는 resumeIfAny()만 호출부가 있고 analyze()는
-        정의만 있는 죽은 코드였다(회사 입력 폼이 없었으므로) — analyze()도
-        독립적으로 도달 가능해야 한다."""
-        src = _sources()["ui.js"]
-        self.assertTrue(
-            _has_real_call_site(src, "analyze"),
-            "analyze 정의만 있고 부르는 곳이 없습니다 — 새 분석을 시작할 "
-            "방법이 없습니다",
-        )
+    # test_analyze_itself_is_reachable_not_only_resume_if_any은 삭제했다 —
+    # 바로 아래 test_do_analyze_is_not_dead_code(doAnalyze가 실제로 불린다)와
+    # 위 test_analyze_button_is_wired_to_a_handler_that_calls_analyze(doAnalyze
+    # 본문이 실제로 `analyze(`를 부른다)가 이어지면 analyze()에도 이미 실제
+    # 호출부가 있음이 전이적으로 보장된다 — analyze( 호출을 doAnalyze에서
+    # 지우면 후자가 바로 실패하므로 뮤테이션 kill 커버리지 손실이 없다.
 
     def test_do_analyze_rejects_empty_company_without_calling_analyze(self):
         src = _sources()["ui.js"]
@@ -1085,6 +1111,269 @@ class TestAnalyzeFormIsWiredAndReachable(unittest.TestCase):
             "renderHeadPlaceholder가 #body의 기존 내용을 비우지 않습니다 — "
             "새 회사 분석 시작 시 이전 회사의 섹션이 그대로 남을 수 "
             "있습니다",
+        )
+
+
+class TestShowGateClearsScreenState(unittest.TestCase):
+    """리뷰 지적 ①(심각): showGate()는 패널만 정리하고 #body·#head-name·
+    #bar는 그대로 남겨, 사용자 A 조회 → 로그아웃 → 사용자 B 로그인 경로에서
+    B의 화면 위에 A가 조회한 회사의 실명이 그대로 보였다. showGate()는
+    로그아웃뿐 아니라 세션 만료 경로도 공유하므로, 여기 한 곳에서 비워야
+    화면을 떠나는 모든 경로가 한 번에 덮인다.
+
+    (①의 실제 재현·수정 확인은 node vm 가짜 DOM으로 별도 검증했다 — 사용자
+    A가 조회한 표를 렌더한 뒤 doLogout()을 호출해 #body·#head-name·#bar가
+    실제로 비는지까지 실행해서 확인했다. 이 클래스는 그 수정이 되돌아오지
+    않도록 잠그는 정적 회귀 테스트다.)
+    """
+
+    def test_show_gate_clears_head_name(self):
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "showGate")
+        m = re.search(
+            r'(\w+)\s*=\s*document\.getElementById\(\s*["\']head-name["\']\s*\)', body
+        )
+        self.assertIsNotNone(
+            m, "showGate가 head-name 엘리먼트를 참조하지 않습니다 — 이전 "
+               "사용자의 헤더 문구가 남을 수 있습니다",
+        )
+        self.assertRegex(
+            body, re.escape(m.group(1)) + r'\.textContent\s*=\s*["\']["\']',
+            "showGate가 head-name 내용을 비우지 않습니다",
+        )
+
+    def test_show_gate_clears_bar(self):
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "showGate")
+        m = re.search(
+            r'(\w+)\s*=\s*document\.getElementById\(\s*["\']bar["\']\s*\)', body
+        )
+        self.assertIsNotNone(
+            m, "showGate가 bar 엘리먼트를 참조하지 않습니다 — 이전 진행률 "
+               "문구가 남을 수 있습니다",
+        )
+        self.assertRegex(
+            body, re.escape(m.group(1)) + r'\.textContent\s*=\s*["\']["\']',
+            "showGate가 bar 내용을 비우지 않습니다",
+        )
+
+    def test_show_gate_clears_body_section_list(self):
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "showGate")
+        m = re.search(
+            r'(\w+)\s*=\s*document\.getElementById\(\s*["\']body["\']\s*\)', body
+        )
+        self.assertIsNotNone(
+            m, "showGate가 body 엘리먼트를 참조하지 않습니다 — 이전 회사의 "
+               "섹션이 남을 수 있습니다",
+        )
+        var_name = m.group(1)
+        self.assertRegex(
+            body,
+            r"while\s*\(\s*" + re.escape(var_name) + r"\.firstChild\s*\)\s*"
+            + re.escape(var_name) + r"\.removeChild\(",
+            "showGate가 body의 기존 섹션을 비우는 while 루프를 갖고 있지 "
+            "않습니다 — 이전 사용자가 조회한 회사의 실명 표가 다음 사용자 "
+            "화면에 남을 수 있습니다",
+        )
+
+    def test_do_logout_no_longer_duplicates_screen_clearing(self):
+        """CURRENT_COMPANY·actor-btn 초기화가 showGate()로 옮겨졌으므로
+        doLogout()이 다시 갖고 있으면 두 곳에서 같은 처리를 하게 된다 —
+        한쪽만 고치고 잊어버리는 사고가 되풀이된다. 설명 주석 속 언급까지
+        "중복 코드"로 착각하지 않도록 주석을 지운 뒤 확인한다."""
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "doLogout")
+        code_only = _strip_js_comments(body)
+        self.assertNotIn("CURRENT_COMPANY", code_only,
+                         "doLogout이 CURRENT_COMPANY 정리를 중복으로 갖고 "
+                         "있습니다 — showGate()로 옮겼으면 여기 있으면 안 "
+                         "됩니다")
+
+
+class TestPollingGenerationPreventsConcurrentLoops(unittest.TestCase):
+    """리뷰 지적 ②(심각): 이어받기 루프(resumeIfAny)가 도는 중 새 분석
+    (analyze)이 시작되면, 늦게 도착한 옛 루프의 응답이 새 화면 위에 섞이고
+    옛 루프의 forgetJob()이 새 작업의 se_job을 지운다. POLL_GEN 세대
+    토큰으로 언제나 최신 루프만 그리고, 자기 작업이 아니면 정리도 하지
+    않아야 한다.
+
+    (②의 실제 재현·수정 확인은 node vm 가짜 DOM + 지연 가능한 fetch
+    목업으로 별도 검증했다 — 이어받기 루프의 응답을 일부러 붙잡아 둔 채
+    새 분석을 시작·완료시키고, 붙잡아 둔 응답을 뒤늦게 흘려보내 화면·
+    localStorage가 섞이지 않는지까지 실행해서 확인했다. 이 클래스는 그
+    수정이 되돌아오지 않도록 잠그는 정적 회귀 테스트다.)
+    """
+
+    def test_poll_until_done_takes_a_generation_token_and_checks_it(self):
+        src = _sources()["ui.js"]
+        m = re.search(
+            r"async\s+function\s+pollUntilDone\s*\(\s*\w+\s*,\s*\w+\s*,\s*(\w+)\s*\)",
+            src,
+        )
+        self.assertIsNotNone(
+            m, "pollUntilDone이 세대 토큰(gen) 인자를 받지 않습니다 — 늦게 "
+               "도착한 옛 루프의 응답을 걸러낼 방법이 없습니다",
+        )
+        gen_param = m.group(1)
+        body = _extract_function_body(src, "pollUntilDone")
+        checks = re.findall(
+            r"\b" + re.escape(gen_param) + r"\s*!==\s*POLL_GEN\b", body,
+        )
+        self.assertGreaterEqual(
+            len(checks), 2,
+            "pollUntilDone이 루프 도중 여러 지점에서 세대가 여전히 최신인지 "
+            "확인하지 않습니다 — 응답을 기다리는 동안 더 새 루프가 시작돼도 "
+            "계속 화면을 그릴 수 있습니다",
+        )
+
+    def test_analyze_and_resume_if_any_bump_the_generation_before_polling(self):
+        src = _sources()["ui.js"]
+        for name in ("analyze", "resumeIfAny"):
+            body = _extract_function_body(src, name)
+            self.assertRegex(
+                body, r"\+\+POLL_GEN\b",
+                f"{name}이 폴링을 시작하기 전에 세대 토큰(POLL_GEN)을 올리지 "
+                "않습니다",
+            )
+            # pollUntilDone(...) 호출 인자에 중첩 괄호(예:
+            # localStorage.getItem(LS_DART_KEY))가 섞일 수 있어 `[^)]*`로는
+            # 못 잡는다 — 괄호 균형을 실제로 세어 호출 전체를 추출한다.
+            call_m = re.search(r"pollUntilDone\(", body)
+            self.assertIsNotNone(
+                call_m, f"{name}이 pollUntilDone을 부르지 않습니다",
+            )
+            depth = 0
+            call_end = None
+            for i in range(call_m.end() - 1, len(body)):
+                if body[i] == "(":
+                    depth += 1
+                elif body[i] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        call_end = i + 1
+                        break
+            self.assertIsNotNone(call_end, "pollUntilDone(...) 호출의 닫는 괄호를 찾지 못했습니다")
+            call_expr = body[call_m.start():call_end]
+            self.assertRegex(
+                call_expr, r"\bgen\b",
+                f"{name}이 자기가 올린 세대 번호를 pollUntilDone에 넘기지 "
+                "않습니다",
+            )
+
+    def test_forget_job_is_guarded_by_generation_ownership(self):
+        """세대가 이미 지나간 루프가 forgetJob()을 부르면 방금 시작된 새
+        작업의 se_job을 지워버릴 수 있다 — gen === POLL_GEN일 때만 정리해야
+        한다.
+        """
+        src = _sources()["ui.js"]
+        for name in ("analyze", "resumeIfAny"):
+            body = _extract_function_body(src, name)
+            m = re.search(r"if\s*\(\s*gen\s*===\s*POLL_GEN\s*\)\s*\{", body)
+            self.assertIsNotNone(
+                m, f"{name}이 gen === POLL_GEN 확인 없이 뒷정리를 할 수 "
+                   "있습니다 — 더 새 작업의 se_job·헤더를 건드릴 수 있습니다",
+            )
+            guard_block = _extract_braced_block(body, m.end() - 1)
+            self.assertIn(
+                "forgetJob(", guard_block,
+                f"{name}의 forgetJob() 호출이 세대 확인 밖에 있습니다",
+            )
+
+
+class TestResumeMessagePromiseIsKept(unittest.TestCase):
+    """리뷰 지적 ③(중간): 네트워크가 끊겨 "새로고침하면 이어받습니다"를
+    띄운 직후 forgetJob()을 무조건 부르면 새로고침해도 이어받지 못해
+    문구가 거짓말이 된다. pollUntilDone이 그 경로에서 resumable:true를
+    돌려주고, 호출부가 그 값을 실제로 확인해 forgetJob()을 건너뛰어야 한다.
+    """
+
+    def test_network_disconnect_branch_reports_resumable(self):
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "pollUntilDone")
+        m = re.search(r'showBar\(\s*"연결이 끊겨[^"]*"\s*\)\s*;', body)
+        self.assertIsNotNone(
+            m, "pollUntilDone에 연결 끊김 안내 문구가 없습니다",
+        )
+        tail = body[m.end():m.end() + 200]
+        self.assertRegex(
+            tail, r"resumable\s*:\s*true",
+            "연결 끊김 안내 직후 resumable:true를 돌려주지 않습니다 — "
+            "호출부가 이 값 없이는 새로고침 시 이어받기를 보장할 수 없습니다",
+        )
+
+    def test_analyze_and_resume_if_any_skip_forget_job_when_resumable(self):
+        src = _sources()["ui.js"]
+        for name in ("analyze", "resumeIfAny"):
+            body = _extract_function_body(src, name)
+            self.assertRegex(
+                body, r"!\s*result\.resumable",
+                f"{name}이 result.resumable을 확인하지 않고 forgetJob()을 "
+                "부를 수 있습니다 — \"새로고침하면 이어받습니다\" 안내가 "
+                "거짓말이 됩니다",
+            )
+
+
+class TestHeadNameReflectsCompletion(unittest.TestCase):
+    """리뷰 지적 ④(중간): 분석이 끝나도 #head-name이 "N 분석을 시작합니다…"
+    에서 그대로다 — 완료 상태가 화면에 드러나지 않는다.
+    """
+
+    def test_render_head_done_updates_head_name(self):
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "renderHeadDone")
+        self.assertRegex(
+            body, r'getElementById\(\s*["\']head-name["\']\s*\)',
+            "renderHeadDone이 head-name 엘리먼트를 건드리지 않습니다",
+        )
+        self.assertIn("textContent", body,
+                      "renderHeadDone이 textContent를 갱신하지 않습니다")
+
+    def test_analyze_and_resume_if_any_call_render_head_done_on_success(self):
+        src = _sources()["ui.js"]
+        for name in ("analyze", "resumeIfAny"):
+            body = _extract_function_body(src, name)
+            self.assertIn(
+                "renderHeadDone(", body,
+                f"{name}이 완료 시 renderHeadDone()을 부르지 않습니다 — "
+                "분석이 끝나도 헤더가 시작 문구 그대로 남습니다",
+            )
+
+
+class TestAnalyzeFailureClearsPreviousScreen(unittest.TestCase):
+    """리뷰 지적 5(낮음): analyze()가 201이 아닐 때 renderHeadPlaceholder를
+    안 불러서, 이전 회사 본문 위에 오류만 표시됐다.
+    """
+
+    def test_non_201_branch_calls_render_head_placeholder(self):
+        src = _sources()["ui.js"]
+        body = _extract_function_body(src, "analyze")
+        m = re.search(r"if\s*\(\s*created\.status\s*!==\s*201\s*\)\s*\{", body)
+        self.assertIsNotNone(m, "analyze가 201이 아닌 응답을 확인하지 않습니다")
+        guard_block = _extract_braced_block(body, m.end() - 1)
+        self.assertIn(
+            "renderHeadPlaceholder(", guard_block,
+            "analyze가 실패 시 renderHeadPlaceholder를 부르지 않습니다 — "
+            "이전 회사의 본문·헤더가 오류 문구 아래 그대로 남습니다",
+        )
+
+
+class TestLsJobConstantLivesWithOtherStorageKeys(unittest.TestCase):
+    """리뷰 지적 6(낮음): LS_JOB 상수만 ui.js에 있어 다른 LS_*
+    상수(LS_DART_KEY·LS_SESSION, app.js)와 위치가 어긋났다.
+    """
+
+    def test_ls_job_is_declared_in_app_js_not_ui_js(self):
+        app_src = _sources()["app.js"]
+        ui_src = _sources()["ui.js"]
+        self.assertRegex(
+            app_src, r'const\s+LS_JOB\s*=\s*"se_job"',
+            "LS_JOB이 app.js로 옮겨지지 않았습니다",
+        )
+        self.assertNotRegex(
+            ui_src, r'const\s+LS_JOB\s*=',
+            "ui.js가 여전히 자체 LS_JOB을 선언합니다 — 저장소 키가 두 "
+            "파일에 흩어져 있습니다",
         )
 
 

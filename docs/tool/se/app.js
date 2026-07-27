@@ -3,6 +3,8 @@
 // 브라우저에만 남는 값들. 서버에 저장하지 않는다.
 const LS_DART_KEY = "se_dart_key";
 const LS_SESSION = "se_session";
+const LS_JOB = "se_job"; // 진행 중인 분석 작업의 job_id — 상태 자체는
+                          // 서버(Postgres)에 있고 브라우저는 이 id만 든다.
 
 // 이어받기 유효 시간. 이보다 오래된 작업은 새로 시작한다 —
 // 며칠 전 작업을 조용히 재개하면 사용자는 새 분석을 받았다고 오해한다.
@@ -330,7 +332,7 @@ function actorLine(actor) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    LS_DART_KEY, LS_SESSION, SECTION_GROUPS, formatCount,
+    LS_DART_KEY, LS_SESSION, LS_JOB, SECTION_GROUPS, formatCount,
     nextKeysToFetch, pollDecision, toTable, LABELS, label,
     sectionBlocks, groupTitleFor, groupOrderIndex,
     ACTOR_STATUS, actorLine, resumeTarget,

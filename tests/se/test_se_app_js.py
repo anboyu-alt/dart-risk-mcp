@@ -376,12 +376,16 @@ class TestActorLine(unittest.TestCase):
         got = run_js('actorLine({name:"홍길동", status:"auto_matched", companies:[]})')
         self.assertIn("동명이인", got["warn"])
 
-    def test_unknown_status_is_treated_as_weakest(self):
-        """모르는 값을 강한 쪽으로 보여주는 실수는 허용되지 않는다."""
-        for bad in ('""', '"확인됨"', "null", "123", '["verified"]'):
-            got = run_js(f'actorLine({{name:"홍길동", status:{bad}, companies:[]}})')
-            self.assertIn("동명이인", got["warn"],
-                          f"status={bad} 인데 경고가 없습니다")
+    # test_unknown_status_is_treated_as_weakest는 삭제했다 — "모르는 값이
+    # 강한 쪽으로 승격되지 않는다"를 검증하려 했지만, 세 status가 전부
+    # 동명이인 경고를 갖는다(위 test_every_known_status_also_carries_the_
+    # namesake_warning)는 사실 때문에 warn에 "동명이인"이 있는지만 봐서는
+    # 실제로 auto_matched로 떨어졌는지 verified로 잘못 승격됐는지 구분하지
+    # 못했다(공허 통과 — 뮤테이션으로 확인됨). 바로 아래
+    # test_unknown_status_label_matches_auto_matched_exactly가 같은 입력
+    # 목록으로 statusLabel을 직접 대조해 승격 여부를 정확히 잡으므로
+    # (그리고 auto_matched로 떨어지면 warn도 자동으로 동명이인을 포함한다는
+    # 것은 다른 테스트가 보장한다), 완전히 상위호환으로 대체된다.
 
     def test_unknown_status_label_matches_auto_matched_exactly(self):
         """세 단계 모두 '동명이인' 문구를 포함하므로(위 테스트) warn 문구
@@ -478,17 +482,12 @@ class TestSectionBlocksDepthGuard(unittest.TestCase):
             "데이터가 조용히 잘렸을 수 있습니다",
         )
 
-    def test_normal_shallow_nesting_is_unaffected(self):
-        """실제 DART 응답 수준(2~3단)의 중첩은 상한에 걸리지 않고 그대로
-        펼쳐져야 한다 — 상한 도입이 정상 케이스를 망가뜨리면 안 된다.
-        """
-        got = run_js(
-            'sectionBlocks({major_holders:[{nm:"a"}], bulk_holders:[{nm:"b"}]})'
-        )
-        self.assertEqual(len(got), 2)
-        titles = [b["title"] for b in got]
-        self.assertIn("최대주주", titles)
-        self.assertIn("5% 대량보유", titles)
+    # test_normal_shallow_nesting_is_unaffected는 삭제했다 — 같은 입력
+    # (major_holders/bulk_holders 2단 중첩)과 같은 세 검사(블록 2개,
+    # "최대주주"·"5% 대량보유" 타이틀 존재)를 TestSectionBlocks의
+    # test_dict_of_lists_splits_into_titled_blocks가 이미 그대로 수행한다
+    # (그쪽이 표 not-None 검사까지 하나 더 있어 오히려 상위호환) — 상한
+    # 도입이 정상 케이스를 깨지 않는다는 확인은 그 테스트로 이미 충분하다.
 
 
 if __name__ == "__main__":

@@ -9,6 +9,14 @@ let ANALYZING = false;  // 분석 버튼 연타로 중복 작업이 생성되는
 let CURRENT_COMPANY = null; // 지금 화면에 떠 있는 분석의 회사명 — 행위자
                              // 패널을 "이 회사"로 열 때 쓴다(누가 사람인지
                              // 추측하지 않고, 헤더 버튼 하나로만 연다).
+let POLL_GEN = 0; // 폴링 세대 토큰. analyze()·resumeIfAny()가 폴링을 새로
+                   // 시작할 때마다 올린다. pollUntilDone()은 매 확인 지점에서
+                   // 자기 세대를 이 값과 비교해, 더 새 루프가 시작된 뒤에는
+                   // 스스로 멈춘다 — 렌더도 하지 않고 forgetJob()도 부르지
+                   // 않는다. 이어받기 루프가 도는 중 새 분석이 시작되면
+                   // (또는 그 반대) 늦게 도착한 옛 루프의 응답이 새 화면
+                   // 위에 섞이거나, 옛 루프가 새 작업의 se_job을 지워버리는
+                   // 사고를 막기 위해서다.
 
 /** 사용자에게 그대로 보여줘도 되는 문구로만 만든 오류. 원시 오류(네트워크
  *  실패의 "Failed to fetch" 같은 브라우저 내부 문구, 서버 응답 원문 등)는
@@ -140,6 +148,23 @@ function showGate(msg) {
   closePanel();
   const panelBox = document.getElementById("panel-body");
   if (panelBox) panelBox.textContent = "";
+  // #main을 hidden으로 숨기는 것만으로는 그 안의 내용이 지워지지 않는다.
+  // 사용자 A가 조회 → 로그아웃 → 사용자 B가 로그인하면, showMain()이
+  // #main을 다시 보여줄 뿐이라 A가 조회한 회사의 실명 표(#body)·헤더
+  // (#head-name)·진행률(#bar)이 그대로 남아 B에게 보인다. 위 패널 정리와
+  // 같은 이유로 여기 한 곳에서 비워야 로그아웃·세션 만료 등 화면을 떠나는
+  // 모든 경로가 한 번에 덮인다.
+  const headEl = document.getElementById("head-name");
+  if (headEl) headEl.textContent = "";
+  const barEl = document.getElementById("bar");
+  if (barEl) barEl.textContent = "";
+  const bodyBox = document.getElementById("body");
+  if (bodyBox) {
+    while (bodyBox.firstChild) bodyBox.removeChild(bodyBox.firstChild);
+  }
+  CURRENT_COMPANY = null;
+  const actorBtn = document.getElementById("actor-btn");
+  if (actorBtn) actorBtn.hidden = true;
 }
 
 function loadStoredSession() {
@@ -200,11 +225,9 @@ function doLogout() {
   if (dartEl) dartEl.value = "";
   const pwEl = document.getElementById("password");
   if (pwEl) pwEl.value = "";
-  CURRENT_COMPANY = null;
-  const actorBtn = document.getElementById("actor-btn");
-  if (actorBtn) actorBtn.hidden = true;
-  // 패널을 닫고 내용을 비우는 처리는 showGate() 안으로 옮겼다 — 세션
-  // 만료 경로(token())와 공유하기 위해서다. 여기서 다시 하면 중복이다.
+  // 패널·본문(#body)·헤더(#head-name)·진행률(#bar)을 비우고 CURRENT_COMPANY·
+  // actor-btn을 초기화하는 처리는 showGate() 안으로 옮겼다 — 세션 만료
+  // 경로(token())와 공유하기 위해서다. 여기서 다시 하면 중복이다.
   showGate();
 }
 
@@ -466,8 +489,8 @@ function renderFailures(failed) {
 }
 
 // ── 작업 이어받기 — 상태는 서버(Postgres)에 있고, 브라우저는 job_id만 든다 ──
-
-const LS_JOB = "se_job";
+// LS_JOB 상수는 app.js에 있다(LS_DART_KEY·LS_SESSION과 같은 자리 —
+// 브라우저 저장소 키는 한곳에 모아둔다).
 
 /** 진행 중인 작업을 기억한다. 상태는 서버(Postgres)에 있으므로
  *  브라우저는 job_id만 들고 있으면 이어받을 수 있다. */
@@ -479,6 +502,16 @@ function rememberJob(jobId) {
 
 function forgetJob() {
   localStorage.removeItem(LS_JOB);
+}
+
+/** 분석이 성공적으로 끝났을 때 헤더 문구를 "N 분석을 시작합니다…"/
+ *  "N 분석을 이어받는 중입니다…"에서 완료 문구로 바꾼다. 완료 상태가
+ *  화면에 전혀 드러나지 않던 결함의 수정이다 — 호출부(analyze()·
+ *  resumeIfAny())에서 자기 세대가 여전히 최신일 때만 부른다(아니면 더
+ *  새 분석의 헤더를 덮어쓸 수 있다). */
+function renderHeadDone(name) {
+  const headEl = document.getElementById("head-name");
+  if (headEl) headEl.textContent = name + " 분석 완료";
 }
 
 /** 작업 하나를 완료될 때까지 폴링한다. analyze()(막 시작한 작업)와
@@ -495,18 +528,36 @@ function forgetJob() {
  * 같은 페이지에서 두 번째 작업을 폴링할 때 이전 작업에서 받은 키가
  * 그대로 남아 nextKeysToFetch가 []를 돌려주고 새 작업은 섹션이 하나도
  * 안 그려진다.
+ *
+ * gen은 호출자(analyze()/resumeIfAny())가 자기 시작 시점에 POLL_GEN에서
+ * 찍어온 세대 번호다. 이어받기 루프가 도는 중에 사용자가 새 분석을
+ * 시작하면(또는 그 반대) 두 루프가 동시에 돌면서 늦게 도착한 옛 루프의
+ * 응답이 새 화면 위에 섞일 수 있다 — 매 확인 지점에서 gen이 여전히
+ * POLL_GEN과 같은지 보고, 아니면(더 새 루프가 이미 시작됐으면) 그 자리에서
+ * 조용히 멈춘다. 화면을 그리지도, 이어서 서버를 부르지도 않는다.
+ *
+ * 반환값 {resumable, done}은 호출자가 forgetJob()·renderHeadDone() 여부를
+ * 정하는 데 쓴다 — resumable=true(네트워크 예외로 멈춘 경우)면 "새로고침
+ * 하면 이어받습니다" 안내를 실제로 지킬 수 있도록 se_job을 지우지 않아야
+ * 한다.
  */
-async function pollUntilDone(jobId, dartKey) {
+async function pollUntilDone(jobId, dartKey, gen) {
   const fetched = new Set();
 
   for (;;) {
     try {
+      // 이 루프를 시작한 이후 더 새 루프(analyze()·resumeIfAny()의 다른
+      // 호출)가 시작됐으면 여기서 멈춘다 — 서버를 더 부르지도, 화면을
+      // 더 그리지도 않는다.
+      if (gen !== POLL_GEN) return { resumable: false, done: false };
       const step = await api("POST", "/api/se/analyze/" + jobId + "/step",
                              { token: await token(), dartKey: dartKey });
+      if (gen !== POLL_GEN) return { resumable: false, done: false };
       const decision = pollDecision(step.body);
 
       const prog = await api("GET", "/api/se/analyze/" + jobId,
                              { token: await token() });
+      if (gen !== POLL_GEN) return { resumable: false, done: false };
       if (prog.status === 200) {
         showProgress(prog.body);
         // 새로 완성된 섹션만 받는다. 요청이 실패한 키는 fetched에 넣지
@@ -519,6 +570,7 @@ async function pollUntilDone(jobId, dartKey) {
             "/api/se/analyze/" + jobId + "/section/" + encodeURIComponent(key),
             { token: await token() }
           );
+          if (gen !== POLL_GEN) return { resumable: false, done: false };
           // api()는 {status, body}를 준다. 섹션 키는 sec.body.key에 있다.
           if (sec.status === 200) {
             fetched.add(key);
@@ -534,11 +586,14 @@ async function pollUntilDone(jobId, dartKey) {
             });
           }
         }
+        if (gen !== POLL_GEN) return { resumable: false, done: false };
         renderFailures((prog.body.failed || []).concat(sectionErrors));
       }
       if (decision.shouldStop) {
         if (decision.reason) showBar(decision.reason);
-        break;
+        // reason이 없으면 정상 완료(b.done===true)다 — stalled·서버 오류는
+        // 항상 reason을 동반한다(pollDecision 계약).
+        return { resumable: false, done: !decision.reason };
       }
     } catch (e) {
       // await token()이 갱신 실패로 던지면(세션 만료 등) token()이 이미
@@ -548,10 +603,15 @@ async function pollUntilDone(jobId, dartKey) {
       // 사용자는 왜 멈췄는지 알 방법이 없다 — 최소한의 안내를 남긴다.
       // analyze()/resumeIfAny() 쪽으로 예외를 다시 던지지 않는다 — 그러면
       // 호출부마다 try/catch를 강제하게 되므로, 루프만 조용히 멈춘다.
+      if (gen !== POLL_GEN) return { resumable: false, done: false };
       if (!(e && e.userSafe)) {
         showBar("연결이 끊겨 진행을 멈췄습니다. 새로고침하면 이어받습니다.");
+        // 안내 문구가 실제로 이어받기를 약속하므로, 호출자가 se_job을
+        // 지우지 않도록 resumable=true를 돌려준다 — 안 그러면 새로고침해도
+        // 이어받지 못해 문구가 거짓말이 된다.
+        return { resumable: true, done: false };
       }
-      break;
+      return { resumable: false, done: false };
     }
   }
 }
@@ -600,14 +660,31 @@ async function analyze(company, lookbackYears) {
     body: { company: company, lookback_years: lookbackYears },
   });
   if (created.status !== 201) {
-    showBar(created.body.error || "분석을 시작하지 못했습니다");
+    // renderHeadPlaceholder를 부르지 않으면 이전 회사의 본문(#body)·헤더
+    // (#head-name)가 그대로 남은 채 오류 문구만 진행률 바에 얹힌다 —
+    // renderHeadPlaceholder가 그 정리를 겸한다(#panel·#body를 비우는
+    // 한 곳 정리 패턴, showGate()와 같은 이유).
+    const msg = created.body.error || "분석을 시작하지 못했습니다";
+    renderHeadPlaceholder(company, msg);
+    showBar(msg);
     return;
   }
   const jobId = created.body.job_id;
+  // 세대 토큰은 renderHeadPlaceholder·rememberJob 직전에 올린다 — 그
+  // 사이에 await이 없으므로, 이어받기 루프 등 아직 돌고 있을 수 있는
+  // 이전 루프가 그 틈에 한 번 더 그리거나 이 작업의 se_job을 지울 수
+  // 없다(POLL_GEN 주석 참고).
+  const gen = ++POLL_GEN;
   renderHeadPlaceholder(created.body.company);
   rememberJob(jobId);
-  await pollUntilDone(jobId, dartKey);
-  forgetJob();
+  const result = await pollUntilDone(jobId, dartKey, gen);
+  // gen이 여전히 최신일 때만 이 작업의 뒷정리를 한다 — 그 사이 더 새
+  // 분석이 시작됐다면(gen !== POLL_GEN) 그 작업의 헤더·se_job을 건드리면
+  // 안 된다.
+  if (gen === POLL_GEN) {
+    if (result.done) renderHeadDone(created.body.company);
+    if (!result.resumable) forgetJob();
+  }
 }
 
 /** 페이지를 열 때 이어받을 작업이 있으면 폴링을 재개한다.
@@ -633,10 +710,16 @@ async function resumeIfAny() {
   }
   if (prog.status !== 200) { forgetJob(); return false; }   // 남의 것이거나 사라졌다
 
+  // analyze()와 같은 이유로, 렌더와 rememberJob 격인 상태 표시 사이에
+  // await 없이 세대를 올린다(POLL_GEN 주석 참고).
+  const gen = ++POLL_GEN;
   renderHeadPlaceholder(prog.body.company, prog.body.company + " 분석을 이어받는 중입니다…");
   showBar("진행 중이던 분석을 이어받습니다 — " + prog.body.company);
-  await pollUntilDone(jobId, localStorage.getItem(LS_DART_KEY) || "");
-  forgetJob();
+  const result = await pollUntilDone(jobId, localStorage.getItem(LS_DART_KEY) || "", gen);
+  if (gen === POLL_GEN) {
+    if (result.done) renderHeadDone(prog.body.company);
+    if (!result.resumable) forgetJob();
+  }
   return true;
 }
 
