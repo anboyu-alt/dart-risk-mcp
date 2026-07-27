@@ -159,6 +159,190 @@ class TestToTable(unittest.TestCase):
         got = run_js('toTable([{a: null}])')
         self.assertEqual(got["rows"][0][0], "")
 
+    def test_zero_and_false_are_not_blanked(self):
+        """0과 false는 '없음'이 아니라 유효한 값이다.
+
+        cell()을 `v ? String(v) : ""` 같은 truthy 체크로 바꾸면 0과 false가
+        빈 칸이 된다 — 이 테스트가 그 회귀를 잡아야 한다.
+        """
+        got = run_js('toTable([{a: 0, b: false}])')
+        self.assertEqual(got["rows"], [["0", "false"]])
+
+    def test_non_object_list_items_are_not_dropped(self):
+        """리스트 안 비객체 항목(문자열 등)이 흔적 없이 사라지면 안 된다.
+
+        toTable([{a:1},"note",{b:2}])는 레코드 3개인데 예전엔 2행이 됐다
+        (문자열 항목이 필터링으로 사라짐).
+        """
+        got = run_js('toTable([{a:1},"note",{b:2}])')
+        self.assertEqual(len(got["rows"]), 3, "비객체 항목이 사라졌습니다")
+        flat = [cell for row in got["rows"] for cell in row]
+        self.assertIn("note", flat, "문자열 항목의 내용이 화면 어디에도 없습니다")
+
+    def test_scalar_string_value_is_not_null(self):
+        """toTable("문자열")이 null이면 화면은 '표시할 데이터가 없습니다'라고
+        말한다 — 데이터가 있는데 없다고 하는 것이다.
+        """
+        got = run_js('toTable("어떤 문자열")')
+        self.assertIsNotNone(got)
+        flat = [cell for row in got["rows"] for cell in row]
+        self.assertIn("어떤 문자열", flat)
+
+    def test_list_of_scalars_is_not_null(self):
+        got = run_js('toTable(["a","b"])')
+        self.assertIsNotNone(got)
+        flat = [cell for row in got["rows"] for cell in row]
+        self.assertEqual(sorted(flat), ["a", "b"])
+
+    def test_label_lookup_ignores_prototype_keys(self):
+        """LABELS가 프로토타입이 있는 일반 객체면 "toString"·"constructor"
+        같은 키가 Object.prototype 메서드로 새어나간다 — 컬럼 헤더가 함수
+        객체가 되고(JSON 직렬화 시 배열 안 함수는 null이 된다), 실제로
+        확인된 버그다.
+        """
+        got = run_js('toTable([{toString: "x", constructor: "y"}])')
+        self.assertIn("toString", got["columns"])
+        self.assertIn("constructor", got["columns"])
+        self.assertNotIn(None, got["columns"], "헤더가 함수로 새어나갔습니다")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestSectionBlocks(unittest.TestCase):
+    """dict-of-lists 섹션(shareholders/audit_history/debt_balance 등)을
+    소제목 + 개별 표 블록 목록으로 펼치는 sectionBlocks() 검증.
+    """
+
+    def test_empty_value_yields_no_blocks(self):
+        for expr in ('sectionBlocks(null)', 'sectionBlocks(undefined)', 'sectionBlocks({})'):
+            self.assertEqual(run_js(expr), [], f"{expr}가 빈 블록이 아닙니다")
+
+    def test_plain_array_becomes_single_block(self):
+        got = run_js('sectionBlocks([{a:1},{a:2}])')
+        self.assertEqual(len(got), 1)
+        self.assertIsNone(got[0]["title"])
+        self.assertEqual(len(got[0]["table"]["rows"]), 2)
+
+    def test_flat_dict_becomes_single_block(self):
+        """indicators처럼 하위 구조 없는 순수 스칼라 dict는 굳이 안 쪼갠다."""
+        got = run_js('sectionBlocks({순이익률: 12.3, 부채비율: 45.6})')
+        self.assertEqual(len(got), 1)
+        self.assertIsNone(got[0]["title"])
+        self.assertEqual(got[0]["table"]["rows"], [["12.3", "45.6"]])
+
+    def test_dict_of_lists_splits_into_titled_blocks(self):
+        """shareholders 형태: {major_holders:[...], bulk_holders:[...]}.
+
+        지금은 이게 한 셀에 JSON 문자열로 뭉쳐 들어간다 — 최대주주 현황을
+        사람이 읽을 수 없으면 화면을 만든 의미가 없다.
+        """
+        got = run_js(
+            'sectionBlocks({major_holders:[{nm:"a"}], bulk_holders:[{nm:"b"}]})'
+        )
+        self.assertEqual(len(got), 2)
+        titles = [b["title"] for b in got]
+        self.assertIn("최대주주", titles)
+        self.assertIn("5% 대량보유", titles)
+        for b in got:
+            self.assertIsNotNone(b["table"], f"{b['title']} 블록에 표가 없습니다")
+
+    def test_unlabeled_sub_key_keeps_raw_name(self):
+        """라벨이 없는 하위 키는 원본 그대로 써야 한다 — 숨기지 않는다."""
+        got = run_js('sectionBlocks({wholly_unknown_group:[{a:1}]})')
+        self.assertEqual(got[0]["title"], "wholly_unknown_group")
+
+    def test_mixed_flat_and_nested_keeps_both(self):
+        """debt_balance 형태: 스칼라 필드(year·total 등) + 중첩 dict(by_kind).
+
+        스칼라는 표 하나로, 중첩은 하위 키별 블록으로 — 어느 쪽도 사라지면
+        안 된다.
+        """
+        got = run_js(
+            'sectionBlocks({year:2024, total:100,'
+            ' by_kind:{corporate_bond:{total:100}}})'
+        )
+        flat_blocks = [b for b in got if b["title"] is None]
+        nested_blocks = [b for b in got if b["title"] is not None]
+        self.assertEqual(len(flat_blocks), 1, "스칼라 필드(year/total)가 안 보입니다")
+        self.assertTrue(
+            any("종류별 잔액" in b["title"] for b in nested_blocks),
+            "by_kind 블록이 안 보입니다",
+        )
+        self.assertTrue(
+            any("회사채" in b["title"] for b in nested_blocks),
+            "by_kind 하위(corporate_bond) 라벨이 안 보입니다",
+        )
+
+    def test_empty_nested_list_still_gets_its_own_block(self):
+        """하위 리스트가 비어 있어도(예: independence_warnings: []) 그 사실을
+        블록으로 남긴다 — 통째로 빠지면 "이 항목을 확인했는데 비어 있다"와
+        "이 항목 자체가 없다"를 구분할 수 없다.
+        """
+        got = run_js('sectionBlocks({opinions:[], independence_warnings:[]})')
+        titles = [b["title"] for b in got]
+        self.assertIn("감사의견", titles)
+        self.assertIn("감사인 독립성 경고", titles)
+
+    def test_list_of_strings_inside_dict_is_not_dropped(self):
+        """independence_warnings는 dict의 리스트가 아니라 **문자열**의
+        리스트다. toTable의 ② 수정과 맞물려 문자열도 살아남아야 한다.
+        """
+        got = run_js(
+            'sectionBlocks({independence_warnings:["3년 연속 재직"]})'
+        )
+        self.assertEqual(len(got), 1)
+        flat = [cell for row in got[0]["table"]["rows"] for cell in row]
+        self.assertIn("3년 연속 재직", flat)
+
+    def test_long_text_is_not_embedded_in_a_table(self):
+        """doc: 섹션의 text(최대 8000자)처럼 표 셀(max-width:280px)에 욱여넣기엔
+        너무 긴 문자열은 표가 아니라 별도 text 블록으로 빠져야 한다.
+        """
+        long_text = "가" * 500
+        got = run_js(
+            'sectionBlocks({main_file:"a.html", text:' + json.dumps(long_text) + "})"
+        )
+        text_blocks = [b for b in got if b.get("text")]
+        self.assertEqual(len(text_blocks), 1, "긴 문자열 블록이 없습니다")
+        self.assertEqual(text_blocks[0]["text"], long_text, "원문이 손상됐습니다")
+        for b in got:
+            if b.get("table"):
+                for row in b["table"]["rows"]:
+                    for c in row:
+                        self.assertNotIn(long_text, c, "긴 문자열이 표 셀에 욱여넣어졌습니다")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestGroupRouting(unittest.TestCase):
+    """SECTION_GROUPS를 실제로 소비하는 groupTitleFor/groupOrderIndex 검증.
+
+    브리프에 Consumes: SECTION_GROUPS라고 적혀 있었는데 실제 구현이
+    아무도 이 상수를 읽지 않아 그룹 제목·순서가 화면에 전혀 안 나오던
+    문제의 수정 대상.
+    """
+
+    def test_known_key_maps_to_its_group_title(self):
+        self.assertEqual(run_js('groupTitleFor("shareholders")'), "지배구조")
+        self.assertEqual(run_js('groupTitleFor("audit_history")'), "감사·부실")
+
+    def test_unknown_key_falls_back_to_catchall_group(self):
+        """2단 `doc:<rcept_no>` 키처럼 SECTION_GROUPS에 없는 키도 어딘가에는
+        나와야 한다 — 그룹이 없다고 사라지면 안 된다.
+        """
+        got = run_js('groupTitleFor("doc:20240301000001")')
+        self.assertEqual(got, "기타")
+
+    def test_group_order_follows_definition_order(self):
+        got = [run_js(f'groupOrderIndex("{t}")') for t in
+               ("자금", "재무", "지배구조", "감사·부실")]
+        self.assertEqual(got, sorted(got), "그룹 순서가 정의 순서를 따르지 않습니다")
+
+    def test_unknown_group_sorts_after_all_known_groups(self):
+        known_max = max(
+            run_js(f'groupOrderIndex("{t}")')
+            for t in ("자금", "재무", "지배구조", "감사·부실")
+        )
+        self.assertGreater(run_js('groupOrderIndex("기타")'), known_max)
+
 
 if __name__ == "__main__":
     unittest.main()

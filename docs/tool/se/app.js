@@ -20,7 +20,11 @@ function formatCount(n) {
 // DART 필드명 → 한국어 라벨. **확신하는 것만 넣는다.**
 // 여기 없는 필드는 원본 키를 그대로 열 이름으로 쓴다 — 숨기면 데이터가
 // 조용히 사라지고 사용자는 없는 줄 안다.
-const LABELS = {
+// Object.create(null)로 프로토타입 없는 객체를 만든다 — 일반 객체 리터럴이면
+// 키가 "toString"·"constructor"일 때 LABELS[k]가 Object.prototype의 메서드로
+// 새어나가 헤더가 함수가 된다(실제로 확인됨). 프로토타입이 없으면 그런 키는
+// 그냥 undefined라 아래 label()의 `|| k` 폴백이 정상 동작한다.
+const LABELS = Object.assign(Object.create(null), {
   rcept_no: "접수번호",
   rcept_dt: "접수일자",
   report_nm: "공시명",
@@ -32,16 +36,52 @@ const LABELS = {
   est_dt: "설립일",
   adres: "주소",
   bsns_year: "사업연도",
-};
+  // dict-of-lists 섹션(shareholders/audit_history/debt_balance 등)을
+  // 하위 키별로 펼칠 때 소제목으로 쓰인다.
+  major_holders: "최대주주",
+  bulk_holders: "5% 대량보유",
+  opinions: "감사의견",
+  auditor_changes: "감사인 교체",
+  independence_warnings: "감사인 독립성 경고",
+  by_kind: "종류별 잔액",
+  corporate_bond: "회사채",
+  short_term_bond: "단기사채",
+  commercial_paper: "기업어음",
+  new_capital: "신종자본증권",
+  cnd_capital: "조건부자본증권",
+});
 
-/** 섹션 값을 표로 바꾼다. 표로 만들 수 없으면 null. */
+/** 키 → 한국어 라벨. 없으면 원본 키 그대로(숨기지 않는다). */
+function label(k) {
+  return LABELS[k] || k;
+}
+
+function cell(v) {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
+
+/** 섹션 값을 표로 바꾼다. 무엇이든 표로 만든다 — 객체 리스트뿐 아니라
+ *  객체가 아닌 항목(문자열 등)도, 스칼라 값 자체도 "값" 한 칸에 담아
+ *  자기 행/자기 표를 갖는다. 표로 만들 것 자체가 없을 때만(빈 배열·
+ *  빈 객체·null·undefined) null을 돌려준다.
+ *
+ *  이전에는 리스트 안 비객체 항목을 조용히 걸러냈고(흔적 없이 사라짐),
+ *  스칼라 값 자체는 무조건 null이라 화면이 "표시할 데이터가 없습니다"로
+ *  잘못 말했다 — 데이터가 있는데 없다고 하는 것과, 표로 만들 수 없어서
+ *  없다고 하는 것은 다르다. */
 function toTable(value) {
+  if (value === null || value === undefined) return null;
+
   let records;
   if (Array.isArray(value)) records = value;
-  else if (value && typeof value === "object") records = [value];
-  else return null;
+  else if (typeof value === "object") records = [value];
+  else records = [value]; // 문자열·숫자 등 스칼라 자체 — 아래서 레코드로 감싼다
 
-  records = records.filter(function (r) { return r && typeof r === "object"; });
+  records = records.map(function (r) {
+    return (r && typeof r === "object" && !Array.isArray(r)) ? r : { "값": r };
+  });
   if (records.length === 0) return null;
 
   // 열은 모든 레코드 키의 합집합이다. 레코드마다 필드가 다를 수 있고,
@@ -56,17 +96,98 @@ function toTable(value) {
   if (cols.length === 0) return null;
 
   return {
-    columns: cols.map(function (k) { return LABELS[k] || k; }),
+    columns: cols.map(label),
     rows: records.map(function (r) {
       return cols.map(function (k) { return cell(r[k]); });
     }),
   };
 }
 
-function cell(v) {
-  if (v === null || v === undefined) return "";
-  if (typeof v === "object") return JSON.stringify(v);
-  return String(v);
+function isPlainObject(v) {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+// 표 셀 하나(max-width:280px)에 욱여넣기엔 너무 긴 문자열의 기준. 공시
+// 원문(`doc:` 섹션의 text, 최대 8000자)이 대표 사례 — 다음 태스크가 이런
+// 값을 우측 패널로 옮길 예정이니, 여기서는 표에 밀어넣지만 않으면 된다.
+const LONG_TEXT_THRESHOLD = 200;
+
+function isLongText(v) {
+  return typeof v === "string" && v.length > LONG_TEXT_THRESHOLD;
+}
+
+/** 섹션 값을 화면에 그릴 블록 목록 [{title, table}] 또는 [{title, text}]로
+ *  바꾼다. title은 없을 수 있다(null). table/text 둘 다 없으면(표로 만들
+ *  근거 자체가 없는 하위 키) 그 사실도 블록으로 남긴다 — 하위 항목이
+ *  조용히 빠지는 것을 막기 위해서다.
+ *
+ *  shareholders({major_holders:[...], bulk_holders:[...]})처럼 dict 값
+ *  안에 리스트/객체가 섞여 있으면("dict-of-lists") 한 표에 JSON 뭉치로
+ *  욱여넣지 않고 하위 키마다 재귀적으로 소제목 + 개별 표로 펼친다.
+ *  하위 키에 라벨이 없으면 원본 키를 그대로 쓴다. */
+function sectionBlocks(value) {
+  if (value === null || value === undefined) return [];
+
+  if (Array.isArray(value)) {
+    const t = toTable(value);
+    return t ? [{ title: null, table: t }] : [];
+  }
+
+  if (!isPlainObject(value)) {
+    if (isLongText(value)) return [{ title: null, text: value }];
+    const t = toTable(value);
+    return t ? [{ title: null, table: t }] : [];
+  }
+
+  const keys = Object.keys(value);
+  const nestedKeys = keys.filter(function (k) {
+    return isPlainObject(value[k]) || Array.isArray(value[k]);
+  });
+  const longTextKeys = keys.filter(function (k) {
+    return nestedKeys.indexOf(k) === -1 && isLongText(value[k]);
+  });
+  const flatKeys = keys.filter(function (k) {
+    return nestedKeys.indexOf(k) === -1 && longTextKeys.indexOf(k) === -1;
+  });
+
+  const blocks = [];
+  if (flatKeys.length > 0) {
+    const flat = {};
+    for (const k of flatKeys) flat[k] = value[k];
+    const t = toTable(flat);
+    if (t) blocks.push({ title: null, table: t });
+  }
+  for (const k of longTextKeys) {
+    blocks.push({ title: label(k), text: value[k] });
+  }
+  for (const k of nestedKeys) {
+    const sub = sectionBlocks(value[k]);
+    if (sub.length === 0) {
+      blocks.push({ title: label(k), table: null });
+      continue;
+    }
+    for (const sb of sub) {
+      const title = sb.title ? (label(k) + " · " + sb.title) : label(k);
+      blocks.push(Object.assign({}, sb, { title: title }));
+    }
+  }
+  return blocks;
+}
+
+/** 섹션 키가 속한 그룹 제목. SECTION_GROUPS에 없는 키(2단 `doc:` 키 등)는
+ *  "기타"로 묶는다 — 그룹이 안 잡힌다고 화면에서 사라지면 안 된다. */
+function groupTitleFor(key) {
+  for (const g of SECTION_GROUPS) {
+    if (g.keys.indexOf(key) !== -1) return g.title;
+  }
+  return "기타";
+}
+
+/** 그룹 제목의 정렬 순서. SECTION_GROUPS 정의 순서를 따르고, 목록에 없는
+ *  제목("기타" 포함)은 맨 뒤로 보낸다. */
+function groupOrderIndex(title) {
+  const idx = SECTION_GROUPS.findIndex(function (g) { return g.title === title; });
+  return idx === -1 ? SECTION_GROUPS.length : idx;
 }
 
 /** 아직 받지 않은 섹션 키만 돌려준다.
@@ -108,6 +229,7 @@ function pollDecision(body) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     LS_DART_KEY, LS_SESSION, SECTION_GROUPS, formatCount,
-    nextKeysToFetch, pollDecision, toTable, LABELS,
+    nextKeysToFetch, pollDecision, toTable, LABELS, label,
+    sectionBlocks, groupTitleFor, groupOrderIndex,
   };
 }

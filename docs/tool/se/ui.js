@@ -238,16 +238,52 @@ function tableEl(table) {
   return t;
 }
 
+/** 그룹 제목에 해당하는 컨테이너를 찾거나 만든다. SECTION_GROUPS 정의
+ *  순서를 따라 DOM 위치를 정한다 — 그룹은 섹션이 도착하는 순서(=완료
+ *  순서)와 무관하게 항상 같은 자리에 나와야 한다. 목록에 없는 제목
+ *  ("기타" 등, groupOrderIndex가 맨 뒤로 보낸다)은 이미 자리 잡은
+ *  그룹들 뒤에 붙는다. */
+function groupHolder(title) {
+  const id = "grp-" + title;
+  let holder = document.getElementById(id);
+  if (holder) return holder;
+
+  const wrap = document.createElement("section");
+  wrap.className = "grp";
+  wrap.dataset.title = title;
+  const h1 = document.createElement("h1");
+  h1.textContent = title;
+  wrap.appendChild(h1);
+
+  holder = document.createElement("div");
+  holder.id = id;
+  wrap.appendChild(holder);
+
+  const body = document.getElementById("body");
+  const idx = groupOrderIndex(title);
+  let before = null;
+  for (const child of body.children) {
+    if (groupOrderIndex(child.dataset.title) > idx) { before = child; break; }
+  }
+  body.insertBefore(wrap, before);
+  return holder;
+}
+
 /** 섹션 키에 해당하는 표시 영역을 찾거나 만든다.
  *
  * id를 키로 고정해두면 renderSection이 같은 키로 여러 번 불려도(폴링마다
  * 그럴 수 있다) 매번 같은 노드를 돌려준다 — 새 노드를 계속 추가하면
  * 화면에 같은 섹션이 쌓인다. h2 제목은 한 번만 만들고, 내용만 담는
- * 자식(holder)을 별도로 둬서 제목까지 지웠다 다시 만들지 않는다. */
+ * 자식(holder)을 별도로 둬서 제목까지 지웠다 다시 만들지 않는다.
+ *
+ * 자기 그룹(groupTitleFor) 아래에 붙인다 — SECTION_GROUPS를 실제로
+ * 쓰지 않으면 그룹 제목도 순서도 화면에 나오지 않는다. */
 function sectionHolder(key) {
   const id = "sec-" + key;
   let holder = document.getElementById(id);
   if (holder) return holder;
+
+  const group = groupHolder(groupTitleFor(key));
 
   const wrap = document.createElement("div");
   wrap.className = "sec";
@@ -259,26 +295,55 @@ function sectionHolder(key) {
   holder.id = id;
   wrap.appendChild(holder);
 
-  document.getElementById("body").appendChild(wrap);
+  group.appendChild(wrap);
   return holder;
+}
+
+/** 블록 하나(소제목 + 표, 또는 소제목 + 원문 텍스트)를 DOM으로 만든다. */
+function blockEl(block) {
+  const wrap = document.createElement("div");
+  if (block.title) {
+    const h3 = document.createElement("h3");
+    h3.textContent = block.title;
+    wrap.appendChild(h3);
+  }
+  if (block.table) {
+    wrap.appendChild(tableEl(block.table));
+  } else if (typeof block.text === "string") {
+    // 표 셀(max-width:280px)에 욱여넣기엔 너무 긴 문자열 — 별도 문단으로
+    // 그대로 보여준다. textContent만 쓴다.
+    const p = document.createElement("p");
+    p.textContent = block.text;
+    wrap.appendChild(p);
+  } else {
+    const p = document.createElement("p");
+    p.className = "note";
+    p.textContent = "표시할 데이터가 없습니다.";
+    wrap.appendChild(p);
+  }
+  return wrap;
 }
 
 /** 섹션 하나를 그린다. 같은 키로 다시 불리면 **교체**한다 — 누적하면
  *  화면에 같은 섹션이 계속 쌓인다(섹션은 한 번만 오도록 돼 있지만,
- *  렌더 함수가 누적식이면 다른 경로에서 쉽게 깨진다). */
+ *  렌더 함수가 누적식이면 다른 경로에서 쉽게 깨진다).
+ *
+ *  값이 dict-of-lists(shareholders 등)면 sectionBlocks가 하위 키별로
+ *  여러 블록을 돌려준다 — 표 하나에 JSON으로 뭉치지 않고 소제목 + 개별
+ *  표로 나눠 그린다. */
 function renderSection(key, value) {
   const holder = sectionHolder(key);
   while (holder.firstChild) holder.removeChild(holder.firstChild);
 
-  const table = toTable(value);
-  if (!table) {
+  const blocks = sectionBlocks(value);
+  if (blocks.length === 0) {
     const p = document.createElement("p");
     p.className = "note";
     p.textContent = "표시할 데이터가 없습니다.";
     holder.appendChild(p);
     return;
   }
-  holder.appendChild(tableEl(table));
+  for (const block of blocks) holder.appendChild(blockEl(block));
 }
 
 function renderFailures(failed) { /* Task 5 */ }
