@@ -1647,6 +1647,41 @@ def _css_rule(css_text: str, selector: str) -> str | None:
     return m.group(1) if m else None
 
 
+# ── Task 3(SE-4g) 마크 렌더 검사용 얇은 래퍼 ─────────────────────────────
+# 위 _sources()/_css_rule()/_extract_function_body()를 이름만 짧게 다시
+# 노출한다 — 새 파싱 로직을 만들지 않는다(이 파일의 기존 관례를 그대로
+# 따른다는 브리프 지시).
+def read_index_css() -> str:
+    """index.html의 CSS를 미디어쿼리 밖·주석 제거 상태로 돌려준다.
+
+    _split_media_and_base가 이미 이 두 가지(주석 인용문에 속지 않기,
+    반응형 규칙과 기본 규칙을 섞지 않기)를 하므로 그대로 재사용한다 —
+    :root/.mk처럼 미디어쿼리 밖에서만 정의되는 규칙을 찾는 검사이므로
+    "밖" 쪽만 있으면 된다.
+    """
+    base, _ = _split_media_and_base(_sources()["index.html"])
+    return base
+
+
+def extract_rule(css_text: str, selector: str) -> str:
+    rule = _css_rule(css_text, selector)
+    if rule is None:
+        raise AssertionError(f"선택자 {selector} 규칙을 index.html에서 찾지 못했습니다")
+    return rule
+
+
+def read_ui_js() -> str:
+    return _sources()["ui.js"]
+
+
+def read_app_js() -> str:
+    return _sources()["app.js"]
+
+
+def extract_function(src: str, name: str) -> str:
+    return _extract_function_body(src, name)
+
+
 class TestLayoutCssRuleStructure(unittest.TestCase):
     """리뷰 지적 ②(High): 2단 레이아웃을 이루는 CSS 규칙 7가지를 문자열
     존재가 아니라 **선택자별 선언**으로 검사한다.
@@ -2170,6 +2205,65 @@ class TestFinancialRatiosDerivedBlockIsWired(unittest.TestCase):
             body = _extract_function_body(ui, name)
             for word in ("악화", "개선", "위험", "주의", "양호", "부실"):
                 self.assertNotIn(word, body, f"{name}에 판정 어휘 '{word}'")
+
+
+class TestMarkStyling(unittest.TestCase):
+    """SE-4g Task 3: 사실 강조(.mk) CSS — 두 테마 모두 정의되고, 글자색은
+    건드리지 않고, 배경은 옅어야 한다(엔켐 실측 근거는 task-3-brief.md)."""
+
+    def test_mark_vars_defined_in_both_themes(self):
+        css = read_index_css()  # 기존 헬퍼 재사용
+        dark = extract_rule(css, ":root")
+        light = extract_rule(css, ':root[data-theme="light"]')
+        for var in ("--mark", "--mark-bg"):
+            self.assertIn(var, dark, f"{var}가 다크 테마에 없다")
+            self.assertIn(var, light, f"{var}가 라이트 테마에 없다")
+
+    def test_mark_does_not_set_text_color(self):
+        # 글자색을 바꾸면 대비가 무너진다. 사장님이 지적한 지점이다.
+        rule = extract_rule(read_index_css(), ".mk")
+        self.assertIn("border-left", rule)
+        self.assertIsNone(re.search(r"(^|[;{\s])color\s*:", rule), ".mk 가 글자색을 바꾼다")
+
+    def test_mark_background_is_subtle(self):
+        # 엔켐 실측 27건 중 19건(70%)이 강조 대상이다. 배경을 진하게 채우면
+        # 표 대부분이 칠해져 강조가 배경이 된다.
+        rule = extract_rule(read_index_css(), ":root")
+        m = re.search(r"--mark-bg:\s*[^;]*?([\d.]+)\s*\)", rule)
+        self.assertIsNotNone(m, "--mark-bg 가 알파 채널을 쓰지 않는다")
+        self.assertLessEqual(float(m.group(1)), 0.10, f"--mark-bg 알파 {m.group(1)} — 너무 진하다")
+
+
+class TestMarkRenderPaths(unittest.TestCase):
+    """caption(승격된 열)·접힌 열에도 marks가 적용되는지 — 본문 셀만
+    처리하면 이 두 경로에서 강조가 조용히 사라진다(브리프가 지적한 함정)."""
+
+    def test_caption_path_applies_marks(self):
+        # 값이 모든 행에서 같으면 tableLayout 이 그 열을 caption 으로 올린다.
+        # 본문 셀만 처리하면 그때 표시가 조용히 사라진다.
+        src = read_ui_js()
+        cap = extract_function(src, "tableEl")
+        head, _, tail = cap.partition("const t = document.createElement(\"table\")")
+        self.assertIn("marks", head, "caption 렌더 경로에 marks 적용이 없다")
+
+    def test_folded_path_applies_marks(self):
+        src = read_ui_js()
+        self.assertRegex(
+            extract_function(src, "tableEl"),
+            r"folded[\s\S]{0,600}?marks",
+            "접힌 열 렌더 경로에 marks 적용이 없다",
+        )
+
+
+class TestMarkVocabulary(unittest.TestCase):
+    """강조는 사실의 가시화다(v0.8.5). 규칙 문구에 판정 어휘가 섞이면
+    강조가 판정이 된다."""
+
+    def test_rule_texts_carry_no_verdict_words(self):
+        src = read_app_js()
+        block = src[src.index("MARK_RULES"):]
+        for w in ("부실", "위험", "주의", "손상", "악화", "양호", "이상 징후", "경고", "심각"):
+            self.assertNotIn(w, block, f"규칙 문구에 판정 어휘 '{w}' 가 있다")
 
 
 if __name__ == "__main__":

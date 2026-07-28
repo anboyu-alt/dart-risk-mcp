@@ -739,9 +739,31 @@ function renderHeadPlaceholder(name, message) {
  *  원문 패널을 열 방법이 사라진다(캡션 div는 textContent만이라 클릭도
  *  안 됐다). caption 항목의 key가 "rcept_no"면 그 값도 똑같이 클릭
  *  가능하게 만들어, "반복 열은 캡션으로 줄인다"와 "공시 원문은 항상 열 수
- *  있다" 두 성질을 함께 지킨다. */
-function tableEl(table) {
+ *  있다" 두 성질을 함께 지킨다.
+ *
+ *  `marks`(선택 인자, app.js cellMarks(records, sectionKey)의 반환값 —
+ *  "행번호|열키" → 규칙 문구)가 있으면 그 좌표의 셀에 강조(.mk)를 입힌다.
+ *  호출부가 넘기지 않으면(undefined) 아무 표시도 하지 않아 기존 동작이
+ *  그대로다. 강조는 **세 경로 모두**에서 확인해야 한다 — 본문 셀만
+ *  처리하면 (a) 모든 행에서 값이 같아 caption으로 승격된 열, (b) 12열
+ *  넘어 접힌 열에서는 강조가 조용히 사라진다(승격·접기는 "표시를 줄이는"
+ *  경로라 강조 배선이 거기서 끊기기 쉽다). 좌표는 이미 위에서 계산한
+ *  isValueCell/cellKey를 그대로 쓴다(브리프: "새로 계산하지 않는다") —
+ *  세로 표는 레코드가 하나라 행번호는 항상 0이다. */
+function tableEl(table, marks) {
   const frag = document.createDocumentFragment();
+  // 범례는 이 표에 실제로 찍힌 강조만 말해야 한다 — marks(cellMarks 반환값)
+  // 전체가 아니라, 아래 세 경로(caption·본문·접힌 열)가 셀에 실제로 붙인
+  // 사유만 여기 모은다. 이유: buildAffiliateOverviewBlock처럼 원본
+  // 레코드로 marks를 계산하되 열은 7개만 추려 보여주는 파생 표에서는,
+  // marks에는 있지만 그 표에는 열 자체가 없는 규칙(예: 증감 평가손익)이
+  // 있을 수 있다 — marks를 그대로 다 나열하면 "이 규칙도 강조됐다"고
+  // 말하면서 정작 표에는 강조된 칸이 하나도 없는 모순이 생긴다.
+  const appliedWhys = [];
+  const seenWhys = new Set();
+  function noteApplied(why) {
+    if (!seenWhys.has(why)) { seenWhys.add(why); appliedWhys.push(why); }
+  }
 
   if (Array.isArray(table.caption) && table.caption.length > 0) {
     const cap = document.createElement("div");
@@ -752,11 +774,27 @@ function tableEl(table) {
       b.textContent = c.label;
       cap.appendChild(b);
       cap.appendChild(document.createTextNode(": "));
+      // caption은 모든 행에서 값이 같아 표 밖으로 승격된 열이다 — 값은
+      // 레코드 0번 것이므로 marks 조회도 행번호 0으로 고정한다("N|열키"
+      // 좌표, cellMarks 주석 참고). 본문 셀만 처리하면 여기서 강조가
+      // 조용히 사라진다(브리프가 지적한 함정).
+      const capWhy = marks ? marks["0|" + c.key] : null;
       if (c.key === "rcept_no" && c.value) {
         const span = document.createElement("span");
         span.className = "doc";
         span.textContent = c.value;
         span.addEventListener("click", function () { openDocPanel(c.value); });
+        // className을 이어 붙인다(덮어쓰면 위 "doc" 클릭 표시가 사라진다) —
+        // 이 코드베이스는 classList를 쓰지 않는다(.doc·.cap·.derived 모두
+        // className 대입, 아래 td도 같은 방식).
+        if (capWhy) { span.className += " mk"; span.title = capWhy; noteApplied(capWhy); }
+        cap.appendChild(span);
+      } else if (capWhy) {
+        noteApplied(capWhy);
+        const span = document.createElement("span");
+        span.className = "mk";
+        span.title = capWhy;
+        span.textContent = c.value;
         cap.appendChild(span);
       } else {
         cap.appendChild(document.createTextNode(c.value));
@@ -797,6 +835,11 @@ function tableEl(table) {
       // 가로: keys[i]가 이 칸의 원본 키다 → 값은 그 칸 자신(i===열 위치).
       const isValueCell = isVertical ? (i === 1) : true;
       const cellKey = isVertical ? table.keys[rowIdx] : table.keys[i];
+      // 강조 좌표는 cellMarks(app.js)와 같은 형식이다: 세로는 레코드가
+      // 하나라 행번호가 항상 0, 가로는 rowIdx가 곧 레코드 순번이다(rows가
+      // tableLayout에서 records.map(...)으로 만들어져 순서가 그대로다).
+      const markKey = (isVertical ? 0 : rowIdx) + "|" + cellKey;
+      const why = marks && isValueCell ? marks[markKey] : null;
       // 억·조 단위로 줄인 값(td.textContent)만으로는 정확한 원 단위 금액을
       // 알 수 없다(예: 1,308,239,417 → "13.1억") — AMOUNT_FIELDS(app.js)
       // 열이면 tableLayout()이 나란히 남긴 raw(원본 값)를 title로 붙여
@@ -812,6 +855,16 @@ function tableEl(table) {
       if (isDocCell && v) {
         td.className = "doc";
         td.addEventListener("click", function () { openDocPanel(v); });
+      }
+      // 강조 사유는 원본 값 툴팁 다음에 붙인다(순서가 반대면 아래 줄이
+      // 위 raw 툴팁을 덮어써 왜 강조됐는지가 사라진다 — affiliates 3개
+      // 규칙 열이 전부 AMOUNT_FIELDS라 실제로 겹친다). className은 이어
+      // 붙인다(대입하면 위 "doc" 클릭 표시가 지워진다) — 이 코드베이스는
+      // classList를 쓰지 않는다(.doc·.cap·.derived 모두 className 대입).
+      if (why) {
+        td.className = td.className ? (td.className + " mk") : "mk";
+        td.title = td.title ? (td.title + " · " + why) : why;
+        noteApplied(why);
       }
     });
 
@@ -844,7 +897,24 @@ function tableEl(table) {
         const b = document.createElement("b");
         b.textContent = pair[0];
         detailTd.appendChild(b);
-        detailTd.appendChild(document.createTextNode(": " + pair[1]));
+        // 접힌 열도 본문 셀과 같은 좌표계다 — 세로는 애초에 접지 않으므로
+        // (tableLayout 주석 참고) 여기 도달하는 표는 항상 가로이고, 행번호는
+        // rowIdx 그대로다. table.foldedKeys[idx]가 이 쌍이 어느 원본 열인지
+        // 알려준다(foldedRows가 foldedKeys와 같은 순서로 만들어졌다 — app.js
+        // tableLayout 참고).
+        const foldKey = Array.isArray(table.foldedKeys) ? table.foldedKeys[idx] : undefined;
+        const foldWhy = marks && foldKey !== undefined ? marks[rowIdx + "|" + foldKey] : null;
+        if (foldWhy) {
+          noteApplied(foldWhy);
+          detailTd.appendChild(document.createTextNode(": "));
+          const span = document.createElement("span");
+          span.className = "mk";
+          span.title = foldWhy;
+          span.textContent = pair[1];
+          detailTd.appendChild(span);
+        } else {
+          detailTd.appendChild(document.createTextNode(": " + pair[1]));
+        }
       });
 
       btn.addEventListener("click", function () {
@@ -853,6 +923,27 @@ function tableEl(table) {
     }
   });
   frag.appendChild(t);
+
+  // 범례 — 위 세 경로(caption·본문·접힌 열)가 실제로 셀에 붙인 사유만,
+  // 중복 없이 한 줄로(appliedWhys, 등장 순서 그대로 — 사실을 나열하는
+  // 목록이지 우선순위 순위가 아니라 MARK_RULES 선언 순서로 다시 정렬하지
+  // 않는다). marks를 그대로 다 쓰지 않는 이유는 위 appliedWhys 선언부
+  // 주석 참고 — 파생 표처럼 열 자체가 없는 규칙까지 "강조됐다"고 말하면
+  // 안 된다. 발화한 규칙이 없으면 아무것도 만들지 않는다 — 빈 줄을
+  // 남기면 "여기 강조할 게 있었는데 없다"는 착각을 준다.
+  if (appliedWhys.length > 0) {
+    const legend = document.createElement("div");
+    legend.className = "mk-legend";
+    const b = document.createElement("b");
+    b.textContent = "강조: ";
+    legend.appendChild(b);
+    // textContent만 쓴다 — 문구가 MARK_RULES(app.js)의 고정 문자열뿐이라
+    // 실명·공시 원문이 섞일 자리는 아니지만, 이 파일 어디서도 데이터를
+    // innerHTML로 넣지 않는다는 규칙을 여기서도 그대로 지킨다.
+    legend.appendChild(document.createTextNode(appliedWhys.join(" · ")));
+    frag.appendChild(legend);
+  }
+
   return frag;
 }
 
@@ -950,8 +1041,11 @@ function sectionHolder(key) {
   return holder;
 }
 
-/** 블록 하나(소제목 + 표, 또는 소제목 + 원문 텍스트)를 DOM으로 만든다. */
-function blockEl(block) {
+/** 블록 하나(소제목 + 표, 또는 소제목 + 원문 텍스트)를 DOM으로 만든다.
+ *  `marks`(선택 인자)는 그대로 tableEl에 넘긴다 — cellMarks(records,
+ *  sectionKey)의 반환값이다(호출부인 renderSection이 block.records로
+ *  계산한다, block 자신은 자기 sectionKey를 모른다). */
+function blockEl(block, marks) {
   const wrap = document.createElement("div");
   if (block.title) {
     const h3 = document.createElement("h3");
@@ -969,7 +1063,7 @@ function blockEl(block) {
     wrap.appendChild(note);
   }
   if (block.table) {
-    wrap.appendChild(tableEl(block.table));
+    wrap.appendChild(tableEl(block.table, marks));
   } else if (typeof block.text === "string") {
     // 표 셀(max-width:280px)에 욱여넣기엔 너무 긴 문자열 — 별도 문단으로
     // 그대로 보여준다. textContent만 쓴다.
@@ -1045,7 +1139,15 @@ function buildFinancialRatiosBlock(ratios) {
     };
   });
   const table = tableLayout(records);
-  if (table) wrap.appendChild(tableEl(table));
+  // cellMarks는 원본 ratios(값이 숫자|null)로 계산한다 — 위 records는
+  // 표시용으로 "%"를 붙여 문자열화해서, 거기다 markNeg를 돌리면 숫자
+  // 파싱이 깨진다(app.js markNumber는 "%"를 걷어내지 않는다). records가
+  // ratios.map(...)으로 만들어져 순서가 같으므로 행번호(rowIdx)는
+  // 그대로 맞는다 — sectionKey는 renderSection이 받는 "financials"가
+  // 아니라 이 파생 표 전용 키 "financial_ratios"다(MARK_RULES.financial_ratios
+  // 참고, 다른 어떤 호출부도 이 sectionKey로 cellMarks를 부르지 않는다).
+  const ratioMarks = cellMarks(ratios, "financial_ratios");
+  if (table) wrap.appendChild(tableEl(table, ratioMarks));
 
   renderChart(wrap, "financial_ratios", ratios, SIGNALS_DATA);
   return { el: wrap, table: table };
@@ -1185,7 +1287,10 @@ function buildAffiliateOverviewBlock(records) {
     };
   });
   const table = tableLayout(rows);
-  if (table) wrap.appendChild(tableEl(table));
+  // records는 원본 필드를 전부 가진 채 순서만 바뀐 것이라(위 주석 —
+  // affiliateOverview가 재배열만 한다) cellMarks("affiliates")가 그대로
+  // 통한다. rows는 records.map(...)으로 만들어져 행번호가 그대로 맞는다.
+  if (table) wrap.appendChild(tableEl(table, cellMarks(records, "affiliates")));
 
   renderChart(wrap, "affiliate_timeline", records, SIGNALS_DATA);
   return { el: wrap, table: table };
@@ -1302,7 +1407,14 @@ function renderSection(key, value) {
   if (fundChangeBlock) holder.appendChild(fundChangeBlock.el);
   if (affiliateBlock) holder.appendChild(affiliateBlock.el);
   for (const block of blocks) {
-    const el = blockEl(block);
+    // 강조는 이 섹션 키(key)의 규칙(MARK_RULES[key])을 block.records(그
+    // 표가 실제로 그린 레코드 — sourceGroupedBlocks 등이 source 제거·빈
+    // 열 제거를 거친 뒤의 것)에 대해 계산한다. cellMarks는 sectionKey에
+    // 등록된 규칙이 없거나 records가 없으면(예: debt_balance.by_kind처럼
+    // table만 있고 records가 null인 블록) 빈 객체를 돌려줄 뿐이라 다른
+    // 섹션·블록에 부작용이 없다.
+    const marks = block.records ? cellMarks(block.records, key) : undefined;
+    const el = blockEl(block, marks);
     // 차트는 표 위에 얹는다 — 표를 지우지 않는다. canvas 안의 숫자는
     // 복사도 검색도 안 되므로 정확한 값은 항상 표가 책임진다(브리프
     // 원칙). CHART_SPECS에 이 섹션 정의가 없거나 그릴 데이터가 없으면
