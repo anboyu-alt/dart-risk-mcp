@@ -1504,6 +1504,257 @@ function fundPlanChanges(records) {
   return out;
 }
 
+/** fund_usage(자금사용 내역) 원본 행(회사에 따라 94개까지 나온다)을
+ *  납입일(pay_de) 단위 "조달건"으로 묶고, 그 안에서 용도(plan_useprps)별로
+ *  계획 금액을 분해한다(SE-5a Task 1, task-1-brief.md).
+ *
+ *  **DART는 분기 보고서마다 같은 누적치를 다시 보고한다.** 실측(엔켐
+ *  2021.10.26)은 24행이지만 용도는 3종뿐이다 — 같은 (pay_de,
+ *  plan_useprps) 쌍이 최대 8번 반복 보고된다. 그대로 합치면 계획 합계가
+ *  N배로 부풀려지므로, 같은 쌍에서는 **행 하나만** 남긴다.
+ *
+ *  남길 기준은 plan_amount가 가장 큰 행이다. "가장 최근 보고"를 고르는
+ *  편이 더 자연스러워 보이지만, 이 응답에는 그걸 판단할 신뢰할 만한
+ *  필드가 없다 — year는 보고 시점이 아니라 사업연도이고, tm은 실측상
+ *  항상 "-"이며, 분기 구분(reprt_code)은 core(dart_client.fetch_fund_usage)가
+ *  공모·사모 두 엔드포인트를 합치는 과정에서 이미 떨어져 나간다. 그렇다고
+ *  아무 행이나 골라도 되는 것도 아니다 — 계획 금액 자체가 보고 시점마다
+ *  바뀐 사례가 이미 확인됐다(fundPlanChanges 위 주석: 엔켐 운영자금이
+ *  34,291,000,000 → 35,291,000,000으로 바뀜). **"최신값을 안다"고
+ *  주장하지 않고, "고를 근거가 없으니 지금까지 보고된 것 중 가장 큰
+ *  값을 쓴다"는 명시적 선택**이다 — 동률이면 먼저 나온 행을 유지한다
+ *  (strictly-greater일 때만 교체).
+ *
+ *  용도 텍스트의 개행은 공백 하나로 정규화한다(실측: "원재료 매입대금
+ *  및\n해외공장 증설자금") — 정규화 없이 비교하면 개행 유무 차이만으로
+ *  같은 용도가 서로 다른 항목 두 개로 쪼개진다.
+ *
+ *  pay_de가 결측(isNoDataMarker — "-" 등)인 행도 버리지 않는다.
+ *  pay_de: null 묶음 하나로 모은다 — 제이스코홀딩스처럼 26건 전부
+ *  pay_de·plan_useprps·real_dtls_cn이 결측인 회사가 실재하고, "내역이
+ *  없다"와 "내역은 있는데 납입일이 공시되지 않았다"는 다른 사실이다.
+ *
+ *  결과는 sort_key(axisSortKey) 내림차순 — 최신 조달이 위로 온다.
+ *  sort_key가 null인 묶음(pay_de 결측)은 맨 뒤로 보낸다. 새 날짜 파서를
+ *  쓰지 않고 axisSortKey를 그대로 재사용한다 — numeric()은 "2021.10.26"
+ *  처럼 점이 섞인 문자열을 통째로 null로 돌려줘(SE-4f에서 정렬이
+ *  실동작 없이 죽은 원인) 이런 날짜 비교에 쓸 수 없다. */
+function fundChain(records) {
+  if (!Array.isArray(records)) return [];
+
+  const groups = new Map(); // key: pay_de(문자열) 또는 null
+  const groupOrder = [];
+
+  for (const r of records) {
+    if (!r || typeof r !== "object") continue;
+    const payDe = isNoDataMarker(r.pay_de) ? null : String(r.pay_de);
+    if (!groups.has(payDe)) {
+      groups.set(payDe, []);
+      groupOrder.push(payDe);
+    }
+    groups.get(payDe).push(r);
+  }
+
+  const out = [];
+  for (const payDe of groupOrder) {
+    const rows = groups.get(payDe);
+
+    const uses = new Map(); // key: 정규화된 purpose(문자열) 또는 null
+    const useOrder = [];
+    for (const r of rows) {
+      const purpose = isNoDataMarker(r.plan_useprps)
+        ? null
+        : String(r.plan_useprps).replace(/\s*\n\s*/g, " ").trim();
+      if (!uses.has(purpose)) {
+        uses.set(purpose, []);
+        useOrder.push(purpose);
+      }
+      uses.get(purpose).push(r);
+    }
+
+    let totalPlan = 0;
+    const useList = [];
+    for (const purpose of useOrder) {
+      const useRows = uses.get(purpose);
+      // 같은 (pay_de, purpose) 반복 보고 중 plan_amount가 가장 큰 행을
+      // 남긴다 — 위 함수 주석에 그 이유를 적었다.
+      let best = useRows[0];
+      let bestAmount = markNumber(best.plan_amount);
+      for (let i = 1; i < useRows.length; i++) {
+        const amt = markNumber(useRows[i].plan_amount);
+        if (amt !== null && (bestAmount === null || amt > bestAmount)) {
+          best = useRows[i];
+          bestAmount = amt;
+        }
+      }
+      const plan = bestAmount === null ? 0 : bestAmount;
+      totalPlan += plan;
+      useList.push({
+        purpose: purpose,
+        plan: plan,
+        real: markNumber(best.real_dtls_amount),
+        diff_reason: isNoDataMarker(best.dffrnc_resn) ? null : best.dffrnc_resn,
+        rows: useRows.length,
+      });
+    }
+
+    out.push({
+      pay_de: payDe,
+      sort_key: payDe === null ? null : axisSortKey(payDe),
+      total_plan: totalPlan,
+      uses: useList,
+      row_count: rows.length,
+    });
+  }
+
+  out.sort(function (a, b) {
+    if (a.sort_key === null && b.sort_key === null) return 0;
+    if (a.sort_key === null) return 1;
+    if (b.sort_key === null) return -1;
+    return b.sort_key - a.sort_key;
+  });
+
+  return out;
+}
+
+// fundChainDisclosureHints가 매칭 대상으로 삼는 신호 키 5개(task-2-brief.md).
+// classifyDisclosureCategory(아래)의 카테고리(0~8) 단위로는 이 목적에 쓸 수
+// 없다 — 예를 들어 category 1("CB/채권")에는 CB_BW 말고도 CB_REPAY·
+// CB_ROLLOVER·CB_BUYBACK·TREASURY_EB 등 조달과 무관한 키가 섞여 있어,
+// category만 보고 "조달 공시다"라고 단정하면 과다 매칭이 된다.
+const PROCUREMENT_SIGNAL_KEYS = ["CB_BW", "3PCA", "RIGHTS_UNDER", "EB", "RCPS"];
+
+/** reportNm이 PROCUREMENT_SIGNAL_KEYS 중 하나의 키워드에 걸리는지만 본다.
+ *  classifyDisclosureCategory와 같은 원본(signalsData.signals·keywords·
+ *  amendment_pattern)·같은 알고리즘(정정공시 제외 → 키워드 포함 검사)을
+ *  쓴다 — "로직을 새로 만들지 마라"(브리프)는 이 signalsData·이 매칭
+ *  방식을 그대로 쓰라는 뜻이지, 이미 있는 함수의 반환 단위(카테고리)를
+ *  억지로 재활용하라는 뜻은 아니라고 판단했다(위 PROCUREMENT_SIGNAL_KEYS
+ *  주석 참고 — 카테고리로는 이 5개만 골라낼 수 없다).
+ *
+ *  정정공시([기재정정] 등)는 공개 뷰어·classifyDisclosureCategory와
+ *  마찬가지로 제외한다 — 정정은 새 조달 결정이 아니라 기존 보고를
+ *  고친 것이다. */
+function isProcurementDisclosure(reportNm, signalsData) {
+  const nm = typeof reportNm === "string" ? reportNm : "";
+  if (typeof signalsData.amendment_pattern === "string") {
+    try {
+      if (new RegExp(signalsData.amendment_pattern).test(nm)) return false;
+    } catch (e) {
+      // 정규식 자체가 깨졌으면(예상 밖 데이터) 정정 판정만 건너뛰고
+      // 아래 키워드 매칭으로 이어간다 — 분류를 통째로 포기하지 않는다.
+    }
+  }
+  for (const s of signalsData.signals) {
+    if (!s || PROCUREMENT_SIGNAL_KEYS.indexOf(s.key) === -1) continue;
+    const keywords = Array.isArray(s.keywords) ? s.keywords : [];
+    for (const kw of keywords) {
+      if (kw && nm.indexOf(kw) !== -1) return true;
+    }
+  }
+  return false;
+}
+
+/** axisSortKey가 만든 8자리 정수(YYYYMMDD, 예: 20211026)를 실제 달력
+ *  날짜로 되돌린다. 8자리가 아니거나(예상 밖 rcept_dt) 월/일이 달력에
+ *  없으면(예: 13월, 2월 30일) null — 날짜를 알 수 없는 값을 "이전"이라
+ *  우기지 않는다.
+ *
+ *  이건 axisSortKey를 대체하는 새 날짜 파서가 아니다 — 원본 문자열
+ *  ("2021.10.26"·"20260123")을 다시 파싱하지 않고, axisSortKey가 이미
+ *  정규화해 준 숫자 하나만 년/월/일로 다시 쪼갠다. 필요한 이유는
+ *  days_before(실제 날짜 차이)가 axisSortKey 정수끼리의 뺄셈으로는 나오지
+ *  않기 때문이다 — 20260101 - 20251231 = 8730이지만 실제로는 하루
+ *  차이다(월경계를 정수 뺄셈이 모른다). */
+function sortKeyToUTCDate(sortKey) {
+  if (sortKey === null || sortKey === undefined) return null;
+  const s = String(sortKey);
+  if (!/^\d{8}$/.test(s)) return null;
+  const y = Number(s.slice(0, 4));
+  const mo = Number(s.slice(4, 6));
+  const d = Number(s.slice(6, 8));
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  // 존재하지 않는 날짜(예: 2021-02-30)는 Date.UTC가 다음 달로 굴려버린다
+  // (JS의 관용 동작) — 되읽어 원래 년/월/일과 다르면 애초에 없는 날짜였다는
+  // 뜻이므로 null로 되돌린다.
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) {
+    return null;
+  }
+  return dt;
+}
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/** fundChain(records) 결과(조달건)와 disclosures(공시 원본 레코드)를
+ *  날짜 근접으로 병치한다(SE-5a Task 2, task-2-brief.md).
+ *
+ *  **조인이 아니다.** 자금사용 내역 행과 특정 공시를 잇는 열쇠(rcept_no
+ *  등)가 DART 응답에 없다(계획 "배경: 실측으로 확인한 것" §조달 공시는
+ *  있다). 여기서 하는 일은 "이 납입일 이전 windowDays 안에 이런 조달
+ *  신호 공시가 있었다"는 시간 근접 사실만 나열하는 것이고, 그 이상(어느
+ *  공시가 이 조달건의 원인인지)은 단정하지 않는다 — 함수 이름을
+ *  fundChainMatch가 아니라 fundChainDisclosureHints로 둔 것, 하나로
+ *  좁히지 않고 걸리는 공시를 전부 돌려주는 것, days_before를 감춘 판정
+ *  없이 그대로 노출하는 것, 화면(Task 3)이 windowDays 값을 반드시
+ *  표시하는 것 모두 이 불확실성을 지우지 않기 위해서다.
+ *
+ *  **납입일 "이전"만 본다.** 조달 결정은 납입에 앞선다 — days_before가
+ *  0 이하(당일 포함)이거나 음수(공시가 납입 이후)면 인과가 뒤집히므로
+ *  제외한다.
+ *
+ *  **날짜는 axisSortKey로만 다룬다.** pay_de("2021.10.26")·rcept_dt
+ *  ("20260123") 형식이 다르다 — numeric()은 점이 섞이면 통째로 null을
+ *  돌려줘(SE-4f 사고) 이 비교에 쓸 수 없다. axisSortKey는 숫자만
+ *  이어붙여 두 형식 모두 YYYYMMDD 정수로 정규화하고, sortKeyToUTCDate
+ *  (위)가 그 정수를 실제 날짜로 되돌려 days_before를 계산한다.
+ *
+ *  sort_key가 null인 조달건(pay_de 결측)은 앵커로 삼을 날짜가 없어
+ *  결과에서 아예 빠진다 — 화면이 "언제 공시됐는지" 자체를 물을 수
+ *  없는 묶음이기 때문이다.
+ *
+ *  signalsData가 없거나 형태가 예상과 다르면(로드 실패) {}를 돌려주고
+ *  예외를 던지지 않는다 — 호출자(Task 3 렌더)가 이 신호로 힌트 블록만
+ *  건너뛴다(SE-4f classifyDisclosureCategory와 같은 폴백 계약). */
+function fundChainDisclosureHints(chain, disclosures, signalsData, windowDays) {
+  if (!signalsData || !Array.isArray(signalsData.signals)) return {};
+  if (!Array.isArray(chain) || !Array.isArray(disclosures)) return {};
+  const window = typeof windowDays === "number" && windowDays > 0 ? windowDays : 90;
+
+  const out = {};
+  for (const entry of chain) {
+    if (!entry || entry.sort_key === null || entry.sort_key === undefined) continue;
+    const payDate = sortKeyToUTCDate(entry.sort_key);
+    if (payDate === null) continue;
+
+    const hits = [];
+    for (const d of disclosures) {
+      if (!d || typeof d !== "object") continue;
+      if (!isProcurementDisclosure(d.report_nm, signalsData)) continue;
+      const discDate = sortKeyToUTCDate(axisSortKey(d.rcept_dt));
+      if (discDate === null) continue;
+
+      const daysBefore = Math.round((payDate.getTime() - discDate.getTime()) / MS_PER_DAY);
+      if (daysBefore <= 0 || daysBefore > window) continue;
+
+      hits.push({
+        rcept_no: d.rcept_no,
+        rcept_dt: d.rcept_dt,
+        report_nm: d.report_nm,
+        days_before: daysBefore,
+      });
+    }
+
+    if (hits.length > 0) {
+      // 가까운 공시(days_before가 작을수록)를 앞에 둔다 — 순위·중요도
+      // 판정이 아니라 화면이 나열하는 순서일 뿐이다(v0.8.5).
+      hits.sort(function (a, b) { return a.days_before - b.days_before; });
+      out[entry.sort_key] = hits;
+    }
+  }
+  return out;
+}
+
 /** affiliates(타법인 출자현황) 레코드를 최초취득일(frst_acqs_de) 오름차순으로
  *  다시 배열한다(SE-4f Task 5, task-5-brief.md: "피투자사에 대한 정보를
  *  처음부터 보여줄 필요도 있음", "시간의 순서에 따라 투자 규모 변화").
@@ -2740,7 +2991,8 @@ if (typeof module !== "undefined" && module.exports) {
     CHART_SPECS, chartData, axisLabel, numeric, axisSortKey,
     normalizeDebtByKind, monthlyCounts, compositeXValue,
     financialRatios, classifyDisclosureCategory, monthlyCountsByCategory,
-    DIVIDEND_SE_FIELDS, dividendVsIncome, fundPlanChanges, affiliateOverview,
+    DIVIDEND_SE_FIELDS, dividendVsIncome, fundPlanChanges, fundChain, affiliateOverview,
+    fundChainDisclosureHints,
     markNumber, MARK_RULES, cellMarks, markedColumnKeys, indicatorCellWhy,
     isAggregateRow, splitAggregateRows, splitVisibleFolded, MAX_VISIBLE_COLUMNS,
     INDICATOR_CATEGORY_ORDER, INDICATOR_PRIMARY, INDICATOR_NOTES,
