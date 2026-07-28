@@ -6181,6 +6181,129 @@ class TestFundPlanChangesRenderWiring(unittest.TestCase):
         self.assertNotIn("계획 금액 변경 (사실 표기)", got["titles"])
 
 
+class TestFundChain(unittest.TestCase):
+    """SE-5a Task 1 — 자금사용 내역 원본 행(회사에 따라 94개까지 나온다)을
+    조달건(pay_de) 단위로 묶고 용도(plan_useprps)별로 계획 금액을 분해한다.
+    픽스처는 task-1-brief.md·계획서 "배경" 절의 실측값 그대로다(2026-07-29
+    엔켐 corp_code=01011526 fetch_fund_usage 실측: 2021.10.26 납입건은
+    24행이지만 용도는 3종 — 그중 시설자금·운영자금 2종을 픽스처로 쓴다).
+
+    핵심은 중복 재보고 제거다 — DART는 분기 보고서마다 같은 누적치를
+    다시 보고하므로 (pay_de, plan_useprps)가 여러 번 반복된다. 그대로
+    합치면 계획 합계가 N배로 부풀려진다. 어느 행을 남길지 판단할 신뢰할
+    만한 "최신 보고" 필드가 없다(year는 사업연도, tm은 "-", reprt_code는
+    core 정규화에서 탈락) — 그래서 plan_amount가 가장 큰 값을 남긴다.
+    SE-4f에서 같은 (2021.10.26, 운영자금) 건의 계획 금액이 보고 시점마다
+    34,291,000,000 → 35,291,000,000으로 바뀐 사례가 이미 확인됐다(그
+    실측값을 그대로 이 픽스처에도 쓴다)."""
+
+    _ROWS = [
+        {"kind": "public", "year": 2023, "tm": "-", "pay_de": "2021.10.26", "pay_amount": 0,
+         "plan_useprps": "시설자금", "plan_amount": 13082000000,
+         "real_dtls_cn": "시설자금", "real_dtls_amount": 13082000000, "dffrnc_resn": "-", "flags": []},
+        {"kind": "public", "year": 2024, "tm": "-", "pay_de": "2021.10.26", "pay_amount": 0,
+         "plan_useprps": "시설자금", "plan_amount": 13082000000,
+         "real_dtls_cn": "시설자금", "real_dtls_amount": 13082000000, "dffrnc_resn": "-", "flags": []},
+        {"kind": "public", "year": 2023, "tm": "-", "pay_de": "2021.10.26", "pay_amount": 0,
+         "plan_useprps": "운영자금", "plan_amount": 34291000000,
+         "real_dtls_cn": "운영자금", "real_dtls_amount": 34291000000, "dffrnc_resn": "-", "flags": []},
+        {"kind": "public", "year": 2024, "tm": "-", "pay_de": "2021.10.26", "pay_amount": 0,
+         "plan_useprps": "운영자금", "plan_amount": 35291000000,
+         "real_dtls_cn": "운영자금", "real_dtls_amount": 35291000000, "dffrnc_resn": "-", "flags": []},
+        {"kind": "private", "year": 2024, "tm": "-", "pay_de": "2024.11.29", "pay_amount": 0,
+         "plan_useprps": "원재료 매입대금 및\n해외공장 증설자금", "plan_amount": 900000000000,
+         "real_dtls_cn": "원재료 매입대금 및\n해외공장 증설자금", "real_dtls_amount": 900000000000,
+         "dffrnc_resn": "-", "flags": []},
+        {"kind": "private", "year": 2025, "tm": "-", "pay_de": "2024.11.29", "pay_amount": 0,
+         "plan_useprps": "원재료 매입대금 및 해외공장 증설자금", "plan_amount": 900000000000,
+         "real_dtls_cn": "원재료 매입대금 및 해외공장 증설자금", "real_dtls_amount": 900000000000,
+         "dffrnc_resn": "-", "flags": []},
+        {"kind": "private", "year": 2025, "tm": "-", "pay_de": "-", "pay_amount": 0,
+         "plan_useprps": "-", "plan_amount": 0,
+         "real_dtls_cn": "-", "real_dtls_amount": 0, "dffrnc_resn": "-", "flags": []},
+    ]
+
+    def test_groups_by_pay_de_and_dedups_purposes(self):
+        got = run_js(f"fundChain({json.dumps(self._ROWS, ensure_ascii=False)})")
+        by_pay = {g["pay_de"]: g for g in got}
+        enchem = by_pay["2021.10.26"]
+        self.assertEqual(len(enchem["uses"]), 2)
+        self.assertEqual(enchem["row_count"], 4)
+
+    def test_total_plan_takes_largest_amount_not_sum_of_duplicates(self):
+        got = run_js(f"fundChain({json.dumps(self._ROWS, ensure_ascii=False)})")
+        by_pay = {g["pay_de"]: g for g in got}
+        enchem = by_pay["2021.10.26"]
+        self.assertEqual(enchem["total_plan"], 13082000000 + 35291000000)
+        uses_by_purpose = {u["purpose"]: u for u in enchem["uses"]}
+        self.assertEqual(uses_by_purpose["운영자금"]["plan"], 35291000000)
+
+    def test_rows_field_reflects_original_report_count_per_use(self):
+        got = run_js(f"fundChain({json.dumps(self._ROWS, ensure_ascii=False)})")
+        by_pay = {g["pay_de"]: g for g in got}
+        enchem = by_pay["2021.10.26"]
+        uses_by_purpose = {u["purpose"]: u for u in enchem["uses"]}
+        self.assertEqual(uses_by_purpose["시설자금"]["rows"], 2)
+        self.assertEqual(uses_by_purpose["운영자금"]["rows"], 2)
+
+    def test_purpose_newline_is_normalized_to_single_space(self):
+        got = run_js(f"fundChain({json.dumps(self._ROWS, ensure_ascii=False)})")
+        by_pay = {g["pay_de"]: g for g in got}
+        merged = by_pay["2024.11.29"]
+        self.assertEqual(len(merged["uses"]), 1)
+        self.assertEqual(merged["total_plan"], 900000000000)
+        self.assertEqual(merged["uses"][0]["purpose"], "원재료 매입대금 및 해외공장 증설자금")
+
+    def test_missing_pay_de_is_kept_as_null_group_not_dropped(self):
+        got = run_js(f"fundChain({json.dumps(self._ROWS, ensure_ascii=False)})")
+        null_groups = [g for g in got if g["pay_de"] is None]
+        self.assertEqual(len(null_groups), 1)
+
+    def test_sorted_descending_by_sort_key_even_when_input_is_ascending(self):
+        ascending = list(reversed(self._ROWS))
+        got = run_js(f"fundChain({json.dumps(ascending, ensure_ascii=False)})")
+        keys = [g["sort_key"] for g in got if g["sort_key"] is not None]
+        self.assertEqual(keys, sorted(keys, reverse=True))
+        self.assertEqual(got[0]["pay_de"], "2024.11.29")
+
+    def test_dffrnc_resn_dash_becomes_null_diff_reason(self):
+        got = run_js(f"fundChain({json.dumps(self._ROWS, ensure_ascii=False)})")
+        by_pay = {g["pay_de"]: g for g in got}
+        enchem = by_pay["2021.10.26"]
+        for use in enchem["uses"]:
+            self.assertIsNone(use["diff_reason"])
+
+    def test_empty_or_non_array_returns_empty(self):
+        self.assertEqual(run_js("fundChain([])"), [])
+        self.assertEqual(run_js("fundChain(null)"), [])
+
+    def test_all_dash_rows_like_jayseco_produce_single_null_group_with_zero_total(self):
+        """제이스코홀딩스(00164645) 실측처럼 pay_de·plan_useprps·real_dtls_cn
+        전부 '-'인 회사가 실재한다. 조달건이 하나도 안 만들어지는 게 아니라
+        pay_de:null 묶음 하나로 모여야 하고, 예외 없이 total_plan=0이어야
+        한다."""
+        records = [
+            {"kind": "public", "year": 2023, "tm": "-", "pay_de": "-", "pay_amount": 0,
+             "plan_useprps": "-", "plan_amount": 0,
+             "real_dtls_cn": "-", "real_dtls_amount": 0, "dffrnc_resn": "-", "flags": []},
+            {"kind": "public", "year": 2024, "tm": "-", "pay_de": "-", "pay_amount": 0,
+             "plan_useprps": "-", "plan_amount": 0,
+             "real_dtls_cn": "-", "real_dtls_amount": 0, "dffrnc_resn": "-", "flags": []},
+        ]
+        got = run_js(f"fundChain({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(len(got), 1)
+        self.assertIsNone(got[0]["pay_de"])
+        self.assertEqual(got[0]["total_plan"], 0)
+
+    def test_no_verdict_words(self):
+        got = json.dumps(
+            run_js(f"fundChain({json.dumps(self._ROWS, ensure_ascii=False)})"),
+            ensure_ascii=False,
+        )
+        for word in ("의심", "유용", "부정", "위험"):
+            self.assertNotIn(word, got, f"판정 어휘 '{word}'")
+
+
 # ── SE-4f Task 5: 타법인 출자 — 피투자사 정보 + 최초취득일 순 시각화 ─────
 #
 # 픽스처는 실제 API 응답 형태다: ENCHEM_POLAND·DFD_YANGFU·PT_INDONESIA

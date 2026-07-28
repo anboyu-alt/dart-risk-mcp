@@ -1504,6 +1504,119 @@ function fundPlanChanges(records) {
   return out;
 }
 
+/** fund_usage(자금사용 내역) 원본 행(회사에 따라 94개까지 나온다)을
+ *  납입일(pay_de) 단위 "조달건"으로 묶고, 그 안에서 용도(plan_useprps)별로
+ *  계획 금액을 분해한다(SE-5a Task 1, task-1-brief.md).
+ *
+ *  **DART는 분기 보고서마다 같은 누적치를 다시 보고한다.** 실측(엔켐
+ *  2021.10.26)은 24행이지만 용도는 3종뿐이다 — 같은 (pay_de,
+ *  plan_useprps) 쌍이 최대 8번 반복 보고된다. 그대로 합치면 계획 합계가
+ *  N배로 부풀려지므로, 같은 쌍에서는 **행 하나만** 남긴다.
+ *
+ *  남길 기준은 plan_amount가 가장 큰 행이다. "가장 최근 보고"를 고르는
+ *  편이 더 자연스러워 보이지만, 이 응답에는 그걸 판단할 신뢰할 만한
+ *  필드가 없다 — year는 보고 시점이 아니라 사업연도이고, tm은 실측상
+ *  항상 "-"이며, 분기 구분(reprt_code)은 core(dart_client.fetch_fund_usage)가
+ *  공모·사모 두 엔드포인트를 합치는 과정에서 이미 떨어져 나간다. 그렇다고
+ *  아무 행이나 골라도 되는 것도 아니다 — 계획 금액 자체가 보고 시점마다
+ *  바뀐 사례가 이미 확인됐다(fundPlanChanges 위 주석: 엔켐 운영자금이
+ *  34,291,000,000 → 35,291,000,000으로 바뀜). **"최신값을 안다"고
+ *  주장하지 않고, "고를 근거가 없으니 지금까지 보고된 것 중 가장 큰
+ *  값을 쓴다"는 명시적 선택**이다 — 동률이면 먼저 나온 행을 유지한다
+ *  (strictly-greater일 때만 교체).
+ *
+ *  용도 텍스트의 개행은 공백 하나로 정규화한다(실측: "원재료 매입대금
+ *  및\n해외공장 증설자금") — 정규화 없이 비교하면 개행 유무 차이만으로
+ *  같은 용도가 서로 다른 항목 두 개로 쪼개진다.
+ *
+ *  pay_de가 결측(isNoDataMarker — "-" 등)인 행도 버리지 않는다.
+ *  pay_de: null 묶음 하나로 모은다 — 제이스코홀딩스처럼 26건 전부
+ *  pay_de·plan_useprps·real_dtls_cn이 결측인 회사가 실재하고, "내역이
+ *  없다"와 "내역은 있는데 납입일이 공시되지 않았다"는 다른 사실이다.
+ *
+ *  결과는 sort_key(axisSortKey) 내림차순 — 최신 조달이 위로 온다.
+ *  sort_key가 null인 묶음(pay_de 결측)은 맨 뒤로 보낸다. 새 날짜 파서를
+ *  쓰지 않고 axisSortKey를 그대로 재사용한다 — numeric()은 "2021.10.26"
+ *  처럼 점이 섞인 문자열을 통째로 null로 돌려줘(SE-4f에서 정렬이
+ *  실동작 없이 죽은 원인) 이런 날짜 비교에 쓸 수 없다. */
+function fundChain(records) {
+  if (!Array.isArray(records)) return [];
+
+  const groups = new Map(); // key: pay_de(문자열) 또는 null
+  const groupOrder = [];
+
+  for (const r of records) {
+    if (!r || typeof r !== "object") continue;
+    const payDe = isNoDataMarker(r.pay_de) ? null : String(r.pay_de);
+    if (!groups.has(payDe)) {
+      groups.set(payDe, []);
+      groupOrder.push(payDe);
+    }
+    groups.get(payDe).push(r);
+  }
+
+  const out = [];
+  for (const payDe of groupOrder) {
+    const rows = groups.get(payDe);
+
+    const uses = new Map(); // key: 정규화된 purpose(문자열) 또는 null
+    const useOrder = [];
+    for (const r of rows) {
+      const purpose = isNoDataMarker(r.plan_useprps)
+        ? null
+        : String(r.plan_useprps).replace(/\s*\n\s*/g, " ").trim();
+      if (!uses.has(purpose)) {
+        uses.set(purpose, []);
+        useOrder.push(purpose);
+      }
+      uses.get(purpose).push(r);
+    }
+
+    let totalPlan = 0;
+    const useList = [];
+    for (const purpose of useOrder) {
+      const useRows = uses.get(purpose);
+      // 같은 (pay_de, purpose) 반복 보고 중 plan_amount가 가장 큰 행을
+      // 남긴다 — 위 함수 주석에 그 이유를 적었다.
+      let best = useRows[0];
+      let bestAmount = markNumber(best.plan_amount);
+      for (let i = 1; i < useRows.length; i++) {
+        const amt = markNumber(useRows[i].plan_amount);
+        if (amt !== null && (bestAmount === null || amt > bestAmount)) {
+          best = useRows[i];
+          bestAmount = amt;
+        }
+      }
+      const plan = bestAmount === null ? 0 : bestAmount;
+      totalPlan += plan;
+      useList.push({
+        purpose: purpose,
+        plan: plan,
+        real: markNumber(best.real_dtls_amount),
+        diff_reason: isNoDataMarker(best.dffrnc_resn) ? null : best.dffrnc_resn,
+        rows: useRows.length,
+      });
+    }
+
+    out.push({
+      pay_de: payDe,
+      sort_key: payDe === null ? null : axisSortKey(payDe),
+      total_plan: totalPlan,
+      uses: useList,
+      row_count: rows.length,
+    });
+  }
+
+  out.sort(function (a, b) {
+    if (a.sort_key === null && b.sort_key === null) return 0;
+    if (a.sort_key === null) return 1;
+    if (b.sort_key === null) return -1;
+    return b.sort_key - a.sort_key;
+  });
+
+  return out;
+}
+
 /** affiliates(타법인 출자현황) 레코드를 최초취득일(frst_acqs_de) 오름차순으로
  *  다시 배열한다(SE-4f Task 5, task-5-brief.md: "피투자사에 대한 정보를
  *  처음부터 보여줄 필요도 있음", "시간의 순서에 따라 투자 규모 변화").
@@ -2740,7 +2853,7 @@ if (typeof module !== "undefined" && module.exports) {
     CHART_SPECS, chartData, axisLabel, numeric, axisSortKey,
     normalizeDebtByKind, monthlyCounts, compositeXValue,
     financialRatios, classifyDisclosureCategory, monthlyCountsByCategory,
-    DIVIDEND_SE_FIELDS, dividendVsIncome, fundPlanChanges, affiliateOverview,
+    DIVIDEND_SE_FIELDS, dividendVsIncome, fundPlanChanges, fundChain, affiliateOverview,
     markNumber, MARK_RULES, cellMarks, markedColumnKeys, indicatorCellWhy,
     isAggregateRow, splitAggregateRows, splitVisibleFolded, MAX_VISIBLE_COLUMNS,
     INDICATOR_CATEGORY_ORDER, INDICATOR_PRIMARY, INDICATOR_NOTES,
