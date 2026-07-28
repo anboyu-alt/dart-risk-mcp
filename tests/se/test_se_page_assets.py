@@ -1647,6 +1647,41 @@ def _css_rule(css_text: str, selector: str) -> str | None:
     return m.group(1) if m else None
 
 
+# ── Task 3(SE-4g) 마크 렌더 검사용 얇은 래퍼 ─────────────────────────────
+# 위 _sources()/_css_rule()/_extract_function_body()를 이름만 짧게 다시
+# 노출한다 — 새 파싱 로직을 만들지 않는다(이 파일의 기존 관례를 그대로
+# 따른다는 브리프 지시).
+def read_index_css() -> str:
+    """index.html의 CSS를 미디어쿼리 밖·주석 제거 상태로 돌려준다.
+
+    _split_media_and_base가 이미 이 두 가지(주석 인용문에 속지 않기,
+    반응형 규칙과 기본 규칙을 섞지 않기)를 하므로 그대로 재사용한다 —
+    :root/.mk처럼 미디어쿼리 밖에서만 정의되는 규칙을 찾는 검사이므로
+    "밖" 쪽만 있으면 된다.
+    """
+    base, _ = _split_media_and_base(_sources()["index.html"])
+    return base
+
+
+def extract_rule(css_text: str, selector: str) -> str:
+    rule = _css_rule(css_text, selector)
+    if rule is None:
+        raise AssertionError(f"선택자 {selector} 규칙을 index.html에서 찾지 못했습니다")
+    return rule
+
+
+def read_ui_js() -> str:
+    return _sources()["ui.js"]
+
+
+def read_app_js() -> str:
+    return _sources()["app.js"]
+
+
+def extract_function(src: str, name: str) -> str:
+    return _extract_function_body(src, name)
+
+
 class TestLayoutCssRuleStructure(unittest.TestCase):
     """리뷰 지적 ②(High): 2단 레이아웃을 이루는 CSS 규칙 7가지를 문자열
     존재가 아니라 **선택자별 선언**으로 검사한다.
@@ -2170,6 +2205,82 @@ class TestFinancialRatiosDerivedBlockIsWired(unittest.TestCase):
             body = _extract_function_body(ui, name)
             for word in ("악화", "개선", "위험", "주의", "양호", "부실"):
                 self.assertNotIn(word, body, f"{name}에 판정 어휘 '{word}'")
+
+
+class TestMarkStyling(unittest.TestCase):
+    """SE-4g Task 3: 사실 강조(.mk) CSS — 두 테마 모두 정의되고, 글자색은
+    건드리지 않고, 배경은 옅어야 한다(엔켐 실측 근거는 task-3-brief.md)."""
+
+    def test_mark_vars_defined_in_both_themes(self):
+        css = read_index_css()  # 기존 헬퍼 재사용
+        dark = extract_rule(css, ":root")
+        light = extract_rule(css, ':root[data-theme="light"]')
+        for var in ("--mark", "--mark-bg"):
+            self.assertIn(var, dark, f"{var}가 다크 테마에 없다")
+            self.assertIn(var, light, f"{var}가 라이트 테마에 없다")
+
+    def test_mark_does_not_set_text_color(self):
+        # 글자색을 바꾸면 대비가 무너진다. 사장님이 지적한 지점이다.
+        rule = extract_rule(read_index_css(), ".mk")
+        self.assertIn("border-left", rule)
+        self.assertIsNone(re.search(r"(^|[;{\s])color\s*:", rule), ".mk 가 글자색을 바꾼다")
+
+    def test_mark_background_is_subtle(self):
+        # 엔켐 실측 27건 중 19건(70%)이 강조 대상이다. 배경을 진하게 채우면
+        # 표 대부분이 칠해져 강조가 배경이 된다.
+        rule = extract_rule(read_index_css(), ":root")
+        m = re.search(r"--mark-bg:\s*[^;]*?([\d.]+)\s*\)", rule)
+        self.assertIsNotNone(m, "--mark-bg 가 알파 채널을 쓰지 않는다")
+        self.assertLessEqual(float(m.group(1)), 0.10, f"--mark-bg 알파 {m.group(1)} — 너무 진하다")
+
+
+# caption(승격된 열)·접힌 열·본문 셀 세 경로에 marks가 실제로 적용되는지는
+# 더 이상 여기서 소스 문자열로 짐작하지 않는다(과거 TestMarkRenderPaths —
+# 리뷰 지적: `assertIn("marks", head)`가 tableEl(table, marks) 함수
+# 시그니처 자체와 항상 일치해 아무 렌더 결과도 확인하지 않고 통과했다).
+# 실제 DOM을 그려 셀에 강조가 붙는지는
+# tests/se/test_se_app_js.py::TestMarkRenderBehavior가 renderSection을
+# 직접 호출해(run_render_section) 검증한다 — 세 경로 각각을 무력화하는
+# 변형(body-cell why=null·범례 게이트 무력화·capWhy=null)이 실제로 그
+# 테스트를 실패시키는지까지 확인했다(해당 클래스 docstring 참고).
+
+
+class TestMarkVocabulary(unittest.TestCase):
+    """강조는 사실의 가시화다(v0.8.5). 규칙 문구에 판정 어휘가 섞이면
+    강조가 판정이 된다."""
+
+    def test_rule_texts_carry_no_verdict_words(self):
+        src = read_app_js()
+        # 앵커는 선언문이어야 한다. 단순히 "MARK_RULES" 를 찾으면 그 문자열을
+        # 언급한 앞쪽 주석에 걸려 검사 범위가 파일 대부분으로 번지고, 규칙과
+        # 무관한 곳의 낱말 때문에 터진다(실제로 한 번 걸렸다).
+        anchor = src.index("const MARK_RULES")
+        block = src[anchor:]
+        for w in ("부실", "위험", "주의", "손상", "악화", "양호", "이상 징후", "경고", "심각"):
+            self.assertNotIn(w, block, f"규칙 문구에 판정 어휘 '{w}' 가 있다")
+
+
+class TestMarksClearedOnGate:
+    """SE-4g Task 4, Step 1 — 브리프가 준 그대로의 소스-grep 검사.
+
+    이 저장소는 소스-grep만으로는 배선 유실을 못 잡는다는 사고를 이미
+    반복했다(예: `assertIn("marks", head)`가 tableEl(table, marks) 함수
+    시그니처와만 일치해 실제 렌더와 무관하게 통과한 사례, TestMarkRenderBehavior
+    docstring 참고). 그래서 이 검사는 **보조**일 뿐이다 — 강조·범례가
+    실제로 그려졌다가 showGate() 이후 실제로 사라지는지의 1차 증거는
+    tests/se/test_se_app_js.py::TestMarksClearedOnGate가 renderSection과
+    showGate()를 node vm으로 직접 실행해(run_render_section의 afterGate)
+    확인한다. 여기서는 그 결론과 어긋나지 않는 정적 사실만 재확인한다:
+    tableEl()이 범례를 표 조각(frag) 밖(document.body 등)에 직접 붙이지
+    않는다는 것, showGate()가 #body를 언급한다는 것."""
+
+    def test_legend_lives_inside_cleared_container(self):
+        # 범례가 #body 밖에 붙으면 로그아웃 후에도 남는다.
+        src = read_ui_js()
+        gate = extract_function(src, "showGate")
+        assert "#body" in gate or "body" in gate
+        te = extract_function(src, "tableEl")
+        assert "document.body.appendChild" not in te, "범례가 표 조각 밖에 붙는다"
 
 
 if __name__ == "__main__":

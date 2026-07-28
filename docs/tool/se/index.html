@@ -16,6 +16,14 @@
      섞지 않는다 — 판정 색과 계열 색은 항상 분리해 둔다. */
   --c0:#5b8ff9; --c1:#61ddaa; --c2:#f6bd16; --c3:#7262fd; --c4:#78d3f8;
   --c5:#9661bc; --c6:#f6903d; --c7:#008685; --c8:#f08bb4;
+  /* 사실 강조(마크) 전용 색 — ui.js의 tableEl()이 app.js cellMarks()가
+     찍은 셀에 쓴다(v0.8.5: 판정이 아니라 사실의 가시화라 --red를 쓰지
+     않는다 — --red는 없지만 위 --c* 계열 색과도 섞지 않는다, 계열
+     구분과 강조는 다른 목적). 엔켐 실측(otrCprInvstmntSttus 27건 중
+     19건이 여러 규칙에 걸린다)에서 배경을 진하게 채우면 표 대부분이
+     칠해져 강조가 배경이 되므로 --mark-bg는 알파 0.10 이하로만 쓴다
+     (아래 .mk 참고). */
+  --mark:#d98a3a; --mark-bg:rgba(217, 138, 58, 0.08);
 }
 /* 라이트 모드 — 다크 :root의 색상 변수를 하나도 빠짐없이 다시 정의한다.
    일부만 덮으면 배경만 밝아지고 글자는 다크 모드 색(밝은 회색 계열)
@@ -33,6 +41,7 @@
   --red:#b3261e; --green:#1f7a51;
   --c0:#2f5fd0; --c1:#1f9d6e; --c2:#ad8c00; --c3:#5433d6; --c4:#0f8fc4;
   --c5:#7a3fa0; --c6:#cc6a10; --c7:#00615f; --c8:#c2477a;
+  --mark:#b5661c; --mark-bg:rgba(181, 102, 28, 0.08);
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--tx);
@@ -57,6 +66,14 @@ th{color:var(--dim2);background:var(--rail);font-weight:normal}
 .fold-btn{font-size:11px;padding:2px 6px;color:var(--dim2)}
 .fold-detail td{background:var(--cell);color:var(--dim2);white-space:normal}
 .fold-detail b{color:var(--tx);font-weight:normal}
+/* 사실 강조 — 얇은 좌측 막대가 주 표기다. 엔켐 실측에서 타법인 출자
+   27건 중 19건(70%)이 강조 대상이라, 배경을 진하게 채우면 표 대부분이
+   칠해져 강조가 배경이 된다. 글자색은 건드리지 않는다 — 대비가
+   무너진다(v0.8.5: 강조는 판정이 아니라 사실의 가시화라 값 자체를
+   읽기 어렵게 만들면 안 된다). */
+.mk{border-left:3px solid var(--mark);background:var(--mark-bg)}
+.mk-legend{margin-top:6px;font-size:12px;color:var(--dim)}
+.mk-legend b{color:var(--mark);font-weight:600}
 /* 차트는 표 위에 얹는다(표를 대체하지 않는다) — max-width:100%로 그리드
    칸을 넘지 않게 하고, margin-bottom으로 바로 아래 표와 붙지 않게 한다. */
 .chart-canvas{max-width:100%;max-height:280px;margin-bottom:10px}

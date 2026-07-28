@@ -92,6 +92,23 @@ function collectCells(node, out) {
   return out;
 }
 
+// tableEl(table, marks)를 **직접** 부르는 경로에서 강조를 관찰하기 위한
+// 최소 수집기. renderSection 하네스 쪽 collectMarked와 목적은 같지만, 이
+// 하네스는 tableLayout → tableEl 두 층만 재현한다(그 위의 renderSection·
+// relayoutForMarks를 거치지 않는다) — 그래서 "강조된 열이 접힌 채로
+// tableEl에 들어왔을 때"라는, 호출부가 정상이면 도달하지 않는 방어 경로를
+// 여기서만 직접 만들어 볼 수 있다.
+function collectMk(node, out) {
+  out = out || [];
+  if (!node) return out;
+  const tokens = String(node.className || "").split(/\s+/);
+  if (tokens.indexOf("mk") !== -1) {
+    out.push({ tag: node.tag, text: node.textContent, title: node.title || null });
+  }
+  (node.children || []).forEach(function (c) { collectMk(c, out); });
+  return out;
+}
+
 const sandbox = {
   console: console,
   document: {
@@ -123,22 +140,28 @@ const CAPTURED = [];
 sandbox.openDocPanel = function (rceptNo) { CAPTURED.push(rceptNo); };
 
 const records = %(records)s;
+const marks = %(marks)s;
+// markedKeys를 **일부러 넘기지 않는다** — 강조가 붙은 열이 접힌 상태로
+// tableEl에 도달하는 조건을 만들기 위해서다(호출부 3곳은 전부 넘긴다).
 const table = sandbox.tableLayout(records);
-const frag = table ? sandbox.tableEl(table) : null;
+const frag = table ? sandbox.tableEl(table, marks) : null;
 const docEls = frag ? collectDocEls(frag, []) : [];
 docEls.forEach(function (e) { e.dispatch("click"); });
 
 process.stdout.write(JSON.stringify({
   orientation: table ? table.orientation : null,
   caption: table ? table.caption : null,
+  foldedKeys: table ? (table.foldedKeys || []) : [],
+  keys: table ? (table.keys || []) : [],
   docTexts: docEls.map(function (e) { return e.textContent; }),
   captured: CAPTURED,
   cells: frag ? collectCells(frag, []) : [],
+  marked: frag ? collectMk(frag, []) : [],
 }));
 """
 
 
-def run_doc_click(records_js: str):
+def run_doc_click(records_js: str, marks_js: str = "null"):
     """records_js(레코드 배열 JS 리터럴)를 tableLayout → tableEl로 그린 뒤,
     class="doc"인 모든 엘리먼트를 실제로 클릭해(이벤트 리스너를 호출해)
     openDocPanel이 어떤 인자로 몇 번 불렸는지를 돌려준다.
@@ -149,7 +172,7 @@ def run_doc_click(records_js: str):
     사라진다" 같은 배선 유실은 문자열 검사로는 못 잡는다(이번에 실제로
     그렇게 통과해버린 사고였다).
     """
-    script = _DOC_CLICK_HARNESS % {"records": records_js}
+    script = _DOC_CLICK_HARNESS % {"records": records_js, "marks": marks_js}
     out = subprocess.run(
         [_NODE, "-e", script, str(_APP), str(_UI)],
         capture_output=True, text=True, encoding="utf-8",
@@ -172,6 +195,13 @@ const fs = require("fs");
 
 const ELEMENTS = Object.create(null);
 
+class FakeClassList {
+  constructor() { this._set = new Set(); }
+  add(c) { this._set.add(c); }
+  remove(c) { this._set.delete(c); }
+  contains(c) { return this._set.has(c); }
+}
+
 class FakeEl {
   constructor(tag) {
     this.tag = tag;
@@ -181,6 +211,8 @@ class FakeEl {
     this._id = "";
     this.dataset = {};
     this._listeners = {};
+    this.hidden = false;
+    this.classList = new FakeClassList();
   }
   appendChild(c) { this.children.push(c); return c; }
   insertBefore(node, ref) {
@@ -194,6 +226,7 @@ class FakeEl {
     if (idx !== -1) this.children.splice(idx, 1);
     return c;
   }
+  get firstChild() { return this.children.length ? this.children[0] : null; }
   insertRow() { const tr = new FakeEl("tr"); this.appendChild(tr); return tr; }
   insertCell() { const td = new FakeEl("td"); this.appendChild(td); return td; }
   createTHead() { const el = new FakeEl("thead"); this.appendChild(el); return el; }
@@ -210,6 +243,28 @@ class FakeEl {
 
 const bodyEl = new FakeEl("div");
 bodyEl.id = "body";
+
+// showGate()가 실제로 참조하는 나머지 고정 엘리먼트들 — 위 _TOC_BEHAVIOR_
+// HARNESS(목차 행동 검사용)와 같은 최소 집합이다. gate·main·gate-msg·
+// panel(classList.remove를 무조건 부른다, closePanel 참고)이 없으면
+// showGate()가 그 자리에서 TypeError로 죽는다. panel-body·head-name·bar·
+// company-info·actor-btn은 showGate()가 `if (el)`로 방어하므로 없어도
+// 죽지는 않지만, 실측 배선(SE-4d/e/f 잔류 사고들)과 같은 조건으로 확인하기
+// 위해 전부 등록해 둔다.
+function makeEl(tag, id) {
+  const el = new FakeEl(tag);
+  if (id) el.id = id;
+  return el;
+}
+makeEl("section", "gate");
+makeEl("main", "main");
+makeEl("p", "gate-msg");
+makeEl("aside", "panel");
+makeEl("div", "panel-body");
+makeEl("span", "head-name");
+makeEl("div", "bar");
+makeEl("div", "company-info");
+makeEl("button", "actor-btn");
 
 function collectCells(node, out) {
   out = out || [];
@@ -240,6 +295,73 @@ function collectNotes(node, out) {
   return out;
 }
 
+// 강조(.mk) 실제 렌더 검증용 — 소스 문자열이 아니라 renderSection이 실제로
+// 만든 DOM에서 className 토큰에 "mk"가 있는 td/span만 모은다. 본문 셀·
+// caption span·접힌 열 span 세 경로 모두 이 하나의 수집기로 잡힌다(셋 다
+// className에 "mk"를 붙이는 지점이 코드에서 물리적으로 분리돼 있으므로,
+// 한 경로가 무력화돼도 나머지는 여기 그대로 잡힌다 — 각 경로를 무너뜨리는
+// 변형이 서로 다른 테스트를 실패시켜야 "표시 자체가 됐다"가 아니라
+// "그 경로가 작동했다"를 증명한다).
+function collectMarked(node, out) {
+  out = out || [];
+  if (!node) return out;
+  const tokens = String(node.className || "").split(/\s+/);
+  if ((node.tag === "td" || node.tag === "span") && tokens.indexOf("mk") !== -1) {
+    out.push({
+      tag: node.tag, text: node.textContent, title: node.title || null,
+      // className 전체를 함께 싣는다 — 강조가 기존 클래스(.doc 등)를
+      // 덮어쓰지 않는지 확인하려면 "mk가 있다"만으로는 부족하다.
+      className: node.className || "",
+    });
+  }
+  (node.children || []).forEach(function (c) { collectMarked(c, out); });
+  return out;
+}
+
+// 표 행 단위 수집기 — 강조가 **어느 행에** 붙었는지 확인해야 하는 검사
+// (marks 좌표계 ↔ 렌더된 행 순서의 정합)를 위해서다. collectMarked는
+// 강조된 셀만 평평하게 모으므로 "그 셀이 어느 회사 행이었나"를 말할 수
+// 없다 — 정렬 버그는 정확히 그 자리에서 숨는다.
+function collectTableRows(node, out) {
+  out = out || [];
+  if (!node) return out;
+  if (node.tag === "tr") {
+    const cells = [];
+    (node.children || []).forEach(function (c) {
+      if (c.tag !== "td" && c.tag !== "th") return;
+      const tokens = String(c.className || "").split(/\s+/);
+      cells.push({
+        tag: c.tag, text: textOf(c), mk: tokens.indexOf("mk") !== -1,
+        title: c.title || null, className: c.className || "",
+      });
+    });
+    out.push(cells);
+  }
+  (node.children || []).forEach(function (c) { collectTableRows(c, out); });
+  return out;
+}
+
+// FakeEl.textContent는 setter로 값을 넣은 노드에서만 채워진다(appendChild로
+// 자식을 쌓기만 한 컨테이너는 자기 _text가 빈 문자열로 남는다) — 실제
+// DOM의 textContent는 하위 트리 전체를 이어붙인 값이므로, div.mk-legend
+// 처럼 <b>와 텍스트 노드를 자식으로 붙여 만든 노드는 재귀로 직접 이어야
+// 한다.
+function textOf(node) {
+  if (!node) return "";
+  if (node.children && node.children.length) {
+    return node.children.map(textOf).join("");
+  }
+  return node.textContent || "";
+}
+
+function collectLegends(node, out) {
+  out = out || [];
+  if (!node) return out;
+  if (node.className === "mk-legend") out.push(textOf(node));
+  (node.children || []).forEach(function (c) { collectLegends(c, out); });
+  return out;
+}
+
 const sandbox = {
   console: console,
   document: {
@@ -263,11 +385,33 @@ new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).
 sandbox.openDocPanel = function () {};
 sandbox.renderSection(%(key)s, %(value)s);
 
-process.stdout.write(JSON.stringify({
+// 기존 필드(cells·titles·notes·marked·legends)는 항상 showGate() 이전
+// 상태를 그대로 담는다 — 아래에서 showGate()를 부르지만, 그 결과는 별도
+// afterGate 키에만 담아 기존 호출부(run_render_section을 쓰는 다른 모든
+// 테스트) 출력을 그대로 유지한다.
+const beforeGate = {
   cells: collectCells(bodyEl, []),
   titles: collectTitles(bodyEl, []),
   notes: collectNotes(bodyEl, []),
-}));
+  marked: collectMarked(bodyEl, []),
+  legends: collectLegends(bodyEl, []),
+  tableRows: collectTableRows(bodyEl, []),
+};
+
+// 로그아웃(세션 만료 포함) 잔류 확인 — 강조 범례는 실명이 아니지만
+// "이전 사용자가 조회한 회사의 사실"을 드러낸다. #body 자체가 지워지면
+// 그 안의 강조·범례도 함께 지워지는지, 소스 문자열이 아니라 실제 렌더 →
+// 실제 showGate() 호출로 확인한다.
+sandbox.showGate("메시지");
+
+const afterGate = {
+  cells: collectCells(bodyEl, []),
+  marked: collectMarked(bodyEl, []),
+  legends: collectLegends(bodyEl, []),
+  bodyChildCount: bodyEl.children.length,
+};
+
+process.stdout.write(JSON.stringify(Object.assign({}, beforeGate, { afterGate: afterGate })));
 """
 
 
@@ -6079,6 +6223,773 @@ class TestAffiliateOverviewRenderWiring(unittest.TestCase):
         text = " ".join(got["titles"] + got["notes"] + got["cells"])
         for word in ("부실", "위험", "집중", "의심", "우량", "건전"):
             self.assertNotIn(word, text, f"판정 어휘 '{word}'")
+
+
+AFFILIATE_ROWS = """[
+  {"inv_prm":"제이알에너지솔루션","frst_acqs_amount":"10,000,000,000",
+   "incrs_dcrs_evl_lstmn":"-1,259,000,000","trmend_blce_acntbk_amount":"4,991,000,000",
+   "recent_bsns_year_fnnr_sttus_thstrm_ntpf":"-10,378,000,000"},
+  {"inv_prm":"DFD Yangfu New Mater","frst_acqs_amount":"38,687,000,000",
+   "incrs_dcrs_evl_lstmn":"25,806,000,000","trmend_blce_acntbk_amount":"63,481,000,000",
+   "recent_bsns_year_fnnr_sttus_thstrm_ntpf":"5,148,000,000"},
+  {"inv_prm":"Enchem Poland Sp. z","frst_acqs_amount":"2,004,000,000",
+   "incrs_dcrs_evl_lstmn":"-","trmend_blce_acntbk_amount":"2,004,000,000",
+   "recent_bsns_year_fnnr_sttus_thstrm_ntpf":"-10,534,000,000"}
+]"""
+
+
+# 엔켐 실측 형태(otrCprInvstmntSttus 20필드)를 그대로 따른 affiliates 픽스처.
+# 위 AFFILIATE_ROWS는 5필드만 남긴 축약본이라 열이 접히지 않는다 — 강조가
+# 접힌 열 뒤로 숨는 문제(SE-4g 최종 리뷰 Finding B)는 실측 열 수에서만
+# 재현된다(rcept_no·corp_name·stlm_dt는 전 행 동일 → 캡션 승격, 남는 본문
+# 열 15개 > MAX_VISIBLE_COLUMNS 12).
+#
+# **frst_acqs_de를 일부러 뒤섞어 둔다**(2023 → 2019 → 2021). affiliateOverview
+# 가 최초취득일 순으로 재정렬하므로 입력 순서와 렌더 순서가 실제로 달라진다 —
+# 실측 엔켐 응답은 우연히 거의 날짜순이라 정렬 관련 버그가 그 안에서는 숨는다
+# (이 저장소가 이미 한 번 그렇게 놓쳤다: affiliateOverview의 numeric() 버그).
+LIVE_SHAPED_AFFILIATE_ROWS = json.dumps([
+    {
+        "rcept_no": "20250515000123", "corp_cls": "K", "corp_code": "01234567",
+        "corp_name": "엔켐", "inv_prm": "제이알에너지솔루션",
+        "frst_acqs_de": "2023.08.11", "invstmnt_purps": "경영참여",
+        "frst_acqs_amount": "10,000,000,000",
+        "bsis_blce_qy": "2,000,000", "bsis_blce_qota_rt": "40.00",
+        "bsis_blce_acntbk_amount": "6,250,000,000",
+        "incrs_dcrs_acqs_dsps_qy": "-", "incrs_dcrs_acqs_dsps_amount": "-",
+        "incrs_dcrs_evl_lstmn": "-1,259,000,000",
+        "trmend_blce_qy": "2,000,000", "trmend_blce_qota_rt": "40.00",
+        "trmend_blce_acntbk_amount": "4,991,000,000",
+        "recent_bsns_year_fnnr_sttus_tot_assets": "31,000,000,000",
+        "recent_bsns_year_fnnr_sttus_thstrm_ntpf": "-10,378,000,000",
+        "stlm_dt": "2024-12-31",
+    },
+    {
+        "rcept_no": "20250515000123", "corp_cls": "K", "corp_code": "01234567",
+        "corp_name": "엔켐", "inv_prm": "DFD Yangfu New Mater",
+        "frst_acqs_de": "2019.03.02", "invstmnt_purps": "단순투자",
+        "frst_acqs_amount": "38,687,000,000",
+        "bsis_blce_qy": "5,000,000", "bsis_blce_qota_rt": "25.00",
+        "bsis_blce_acntbk_amount": "37,675,000,000",
+        "incrs_dcrs_acqs_dsps_qy": "-", "incrs_dcrs_acqs_dsps_amount": "-",
+        "incrs_dcrs_evl_lstmn": "25,806,000,000",
+        "trmend_blce_qy": "5,000,000", "trmend_blce_qota_rt": "25.00",
+        "trmend_blce_acntbk_amount": "63,481,000,000",
+        "recent_bsns_year_fnnr_sttus_tot_assets": "180,000,000,000",
+        "recent_bsns_year_fnnr_sttus_thstrm_ntpf": "5,148,000,000",
+        "stlm_dt": "2024-12-31",
+    },
+    {
+        "rcept_no": "20250515000123", "corp_cls": "K", "corp_code": "01234567",
+        "corp_name": "엔켐", "inv_prm": "Enchem Poland Sp. z",
+        "frst_acqs_de": "2021.06.15", "invstmnt_purps": "경영참여",
+        "frst_acqs_amount": "2,004,000,000",
+        "bsis_blce_qy": "400,000", "bsis_blce_qota_rt": "100.00",
+        "bsis_blce_acntbk_amount": "2,004,000,000",
+        "incrs_dcrs_acqs_dsps_qy": "-", "incrs_dcrs_acqs_dsps_amount": "-",
+        "incrs_dcrs_evl_lstmn": "-",
+        "trmend_blce_qy": "400,000", "trmend_blce_qota_rt": "100.00",
+        "trmend_blce_acntbk_amount": "2,004,000,000",
+        "recent_bsns_year_fnnr_sttus_tot_assets": "9,000,000,000",
+        "recent_bsns_year_fnnr_sttus_thstrm_ntpf": "-10,534,000,000",
+        "stlm_dt": "2024-12-31",
+    },
+], ensure_ascii=False)
+
+
+def _header_rows(rendered):
+    """run_render_section 결과에서 표별 헤더 행(th)의 텍스트 목록만 뽑는다.
+    한 섹션에 표가 여러 개(원본 + 파생) 그려질 수 있어, 어느 표를 보는지
+    호출부가 명시적으로 고르게 한다."""
+    out = []
+    for row in rendered["tableRows"]:
+        if row and all(c["tag"] == "th" for c in row if c["text"] != ""):
+            if any(c["tag"] == "th" for c in row):
+                out.append([c["text"] for c in row])
+    return out
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestMarkNumber(unittest.TestCase):
+    def test_hyphen_is_missing_not_zero(self):
+        # 실측 27건 중 21건이 "-" 다. 0이나 음수로 읽으면 21건이 잘못 강조된다.
+        self.assertIsNone(run_js('markNumber("-")'))
+
+    def test_blank_and_null_are_missing(self):
+        self.assertEqual(run_js('[markNumber(""), markNumber(null)]'), [None, None])
+
+    def test_parses_commas_and_sign(self):
+        self.assertEqual(run_js('markNumber("-10,534,000,000")'), -10534000000)
+
+    def test_negative_zero_is_not_marked(self):
+        # DART는 증감 비율을 소수 2자리로 반올림해 "-0.00"을 내보낸다
+        # (엔켐 elestock 실측 29건 중 1건). Number("-0.00")은 IEEE-754 -0 이고
+        # JS에서 -0 < 0 은 false 라 이 값은 강조되지 않는다. 우연이지만 옳다 —
+        # 화면에 "-0.00"이 찍힌 칸에 "증감 비율 < 0"이라고 표시하면 사용자에게는
+        # 오작동으로 보인다. 누가 "버그"로 보고 고치지 않도록 못 박는다.
+        rows = ('[{"sp_stock_lmp_irds_rate":"-0.00"},'
+                ' {"sp_stock_lmp_irds_rate":"-0.01"}]')
+        marks = run_js('cellMarks(%s, "insider_timeline")' % rows)
+        self.assertEqual(list(marks.keys()), ["1|sp_stock_lmp_irds_rate"])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestAffiliateMarks(unittest.TestCase):
+    def test_book_value_below_acquisition(self):
+        got = run_js(
+            '(() => { const m = cellMarks(%s, "affiliates");'
+            ' return Object.keys(m).filter(k => k.endsWith("|trmend_blce_acntbk_amount")).sort(); })()'
+            % AFFILIATE_ROWS
+        )
+        # 제이알(100억→49.9억)만 해당. DFD는 증가, Poland는 동일(< 가 아니다).
+        self.assertEqual(got, ["0|trmend_blce_acntbk_amount"])
+
+    def test_equal_book_value_is_not_marked(self):
+        # Poland 는 최초취득 == 기말장부(2,004,000,000). "낮은 경우"이지 "같은 경우"가 아니다.
+        got = run_js(
+            '(() => { const m = cellMarks(%s, "affiliates");'
+            ' return m["2|trmend_blce_acntbk_amount"] || null; })()'
+            % AFFILIATE_ROWS
+        )
+        self.assertIsNone(got)
+
+    def test_investee_net_loss(self):
+        got = run_js(
+            '(() => { const m = cellMarks(%s, "affiliates");'
+            ' return Object.keys(m).filter(k => k.indexOf("thstrm_ntpf") >= 0).sort(); })()'
+            % AFFILIATE_ROWS
+        )
+        self.assertEqual(got, [
+            "0|recent_bsns_year_fnnr_sttus_thstrm_ntpf",
+            "2|recent_bsns_year_fnnr_sttus_thstrm_ntpf",
+        ])
+
+    def test_hyphen_valuation_is_not_marked(self):
+        # Poland 의 평가손익은 "-" 다. 결측을 음수로 읽으면 여기서 터진다.
+        got = run_js(
+            '(() => { const m = cellMarks(%s, "affiliates");'
+            ' return Object.keys(m).filter(k => k.indexOf("evl_lstmn") >= 0).sort(); })()'
+            % AFFILIATE_ROWS
+        )
+        self.assertEqual(got, ["0|incrs_dcrs_evl_lstmn"])
+
+    def test_three_distinct_rules_fire(self):
+        # markLegend는 죽은 코드라 제거했다(SE-4g Task 3 리뷰 지적) —
+        # 범례가 실제로 무엇을 보여주는지는 이제 run_render_section으로
+        # 실제 DOM을 그려 확인한다(아래 TestMarkRenderBehavior 참고).
+        # 여기서는 cellMarks 자체가 세 규칙 모두 발화시키는지만 본다.
+        got = run_js('cellMarks(%s, "affiliates")' % AFFILIATE_ROWS)
+        whys = set(got.values())
+        self.assertEqual(len(whys), 3)
+
+    def test_nothing_fires_when_all_values_are_favorable(self):
+        clean = ('[{"frst_acqs_amount":"1,000","trmend_blce_acntbk_amount":"2,000",'
+                 '"incrs_dcrs_evl_lstmn":"500","recent_bsns_year_fnnr_sttus_thstrm_ntpf":"900"}]')
+        self.assertEqual(run_js('cellMarks(%s, "affiliates")' % clean), {})
+
+    def test_unknown_section_returns_empty(self):
+        self.assertEqual(run_js('cellMarks([{"a":1}], "nope")'), {})
+
+    def test_non_array_input_is_safe(self):
+        got = run_js('[cellMarks(null,"affiliates"), cellMarks({},"affiliates")]')
+        self.assertEqual(got, [{}, {}])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestAuditOpinionMark(unittest.TestCase):
+    """fetch_audit_opinion_history(dart_client.py)가 실제로 내보내는 필드는
+    "opinion"이다 — DART 원본 accnutAdtorNmNdAdtOpinion.json의 필드명
+    adt_opinion을 그대로 옮겨 적었던 이전 버전은 이 필드가 레코드에 전혀
+    없어(cellMarks의 `rule.key in rec` 게이트) 영원히 발화하지 않았다
+    (리뷰 지적 — 실측 페이로드로 렌더해 0건 마크를 직접 확인한 사례).
+    필드명은 dart_client.py fetch_audit_opinion_history docstring 그대로다."""
+
+    def test_jeokjeong_is_not_marked(self):
+        rows = '[{"opinion":"적정의견"}]'
+        self.assertEqual(run_js('cellMarks(%s,"audit_history")' % rows), {})
+
+    def test_bujeokjeong_is_marked(self):
+        # "부적정의견"은 부분 문자열 "적정"을 포함한다. indexOf 로 짜면
+        # 가장 무거운 의견을 정상으로 읽는다 — 접두 일치여야 한다.
+        rows = '[{"opinion":"부적정의견"}]'
+        got = run_js('cellMarks(%s,"audit_history")' % rows)
+        self.assertEqual(got, {"0|opinion": '감사의견이 "적정"이 아님'})
+
+    def test_hanjeong_and_georeol_are_marked(self):
+        rows = '[{"opinion":"한정의견"},{"opinion":"의견거절"}]'
+        got = run_js('cellMarks(%s,"audit_history")' % rows)
+        self.assertEqual(sorted(got.keys()), ["0|opinion", "1|opinion"])
+
+    def test_whitespace_around_jeokjeong_is_tolerated(self):
+        rows = '[{"opinion":" 적정의견 "}]'
+        self.assertEqual(run_js('cellMarks(%s,"audit_history")' % rows), {})
+
+    def test_dart_raw_field_name_does_not_fire(self):
+        # 회귀 고정: adt_opinion(DART 원본 필드명)이 레코드에 있어도 이
+        # 규칙은 "opinion" 키만 본다 — SE 서버가 실제로 내보내는 필드가
+        # 아닌 이름으로 다시 회귀하면 이 테스트가 잡는다.
+        rows = '[{"adt_opinion":"부적정의견"}]'
+        self.assertEqual(run_js('cellMarks(%s,"audit_history")' % rows), {})
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestShareholderMark(unittest.TestCase):
+    def test_decrease_is_marked(self):
+        # 실측: 오정강 14.82 → 14.41
+        rows = ('[{"nm":"오정강","bsis_posesn_stock_qota_rt":"14.82","trmend_posesn_stock_qota_rt":"14.41"},'
+                '{"nm":"박수정","bsis_posesn_stock_qota_rt":"0.07","trmend_posesn_stock_qota_rt":"0.07"},'
+                '{"nm":"정지선","bsis_posesn_stock_qota_rt":"0.00","trmend_posesn_stock_qota_rt":"0.03"}]')
+        got = run_js('cellMarks(%s,"shareholders")' % rows)
+        self.assertEqual(list(got.keys()), ["0|trmend_posesn_stock_qota_rt"])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestDisclosureAmendmentMark(unittest.TestCase):
+    def test_known_amendment_prefixes(self):
+        rows = ('[{"report_nm":"[기재정정]주요사항보고서"},{"report_nm":"[첨부정정]사업보고서"},'
+                '{"report_nm":"[정정]반기보고서"},{"report_nm":"사업보고서 (2025.12)"}]')
+        got = run_js('cellMarks(%s,"disclosures")' % rows)
+        self.assertEqual(sorted(got.keys()), ["0|report_nm", "1|report_nm", "2|report_nm"])
+
+    def test_bracket_without_amendment_is_not_marked(self):
+        rows = '[{"report_nm":"[첨부추가]사업보고서"}]'
+        self.assertEqual(run_js('cellMarks(%s,"disclosures")' % rows), {})
+
+    def test_amendment_word_outside_bracket_is_not_marked(self):
+        # 대괄호 안(첨부추가)에는 "정정"이 없다 — 대괄호 밖 본문에 "정정"이
+        # 있어도 그건 판정 대상이 아니다. isAmendmentName을 전체 문자열
+        # 부분일치(s.indexOf("정정") >= 0)로 짜면 이 케이스가 잘못 표시된다.
+        rows = '[{"report_nm":"[첨부추가]사업보고서 정정 관련 안내"}]'
+        self.assertEqual(run_js('cellMarks(%s,"disclosures")' % rows), {})
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestRatioMark(unittest.TestCase):
+    def test_negative_margin_marked_but_other_negatives_not(self):
+        rows = ('[{"지표":"영업이익률","값":-25.1},{"지표":"순이익률","값":-22.6},'
+                '{"지표":"부채비율","값":130.2},{"지표":"유동비율","값":61.3},'
+                '{"지표":"영업이익률","값":3.4}]')
+        got = run_js('cellMarks(%s,"financial_ratios")' % rows)
+        self.assertEqual(sorted(got.keys()), ["0|값", "1|값"])
+
+    def test_null_value_is_not_marked(self):
+        rows = '[{"지표":"순이익률","값":null,"사유":"매출액 없음"}]'
+        self.assertEqual(run_js('cellMarks(%s,"financial_ratios")' % rows), {})
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestDistressMark(unittest.TestCase):
+    def test_record_presence_is_marked(self):
+        # 부도·영업정지·회생절차·해산사유 레코드는 존재 자체가 사실이다 —
+        # 임계값 없이 레코드 존재만으로 표시한다.
+        rows = '[{"rcept_no":"20260101000001"}]'
+        got = run_js('cellMarks(%s,"distress")' % rows)
+        self.assertEqual(got, {"0|rcept_no": "부도·영업정지·회생절차·해산사유 중 하나가 보고됨"})
+
+    def test_marked_even_when_rcept_no_is_empty(self):
+        # rcept_no 값이 비어 있어도 레코드 자체는 존재한다 — 표시 여부는
+        # rcept_no가 참값인지가 아니라 레코드 존재 자체에 달려 있다. when을
+        # "!!r.rcept_no" 같은 조건으로 바꾸는 변형이 들어오면 여기서 잡힌다.
+        rows = '[{"rcept_no":""}]'
+        got = run_js('cellMarks(%s,"distress")' % rows)
+        self.assertEqual(got, {"0|rcept_no": "부도·영업정지·회생절차·해산사유 중 하나가 보고됨"})
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestInsiderTimelineMark(unittest.TestCase):
+    def test_negative_count_and_rate_are_separate_rules(self):
+        # 실측(엔켐 오정강) 3개 행. 가운데 행이 이 규칙 분리의 이유다:
+        # 증감비율은 -0.26(감소)인데 증감수는 +6,000(증가) — 매도 없이
+        # 희석만으로 비율이 떨어질 수 있다. 두 필드를 한 규칙으로 합치면
+        # 이 행에서 "주식수도 줄었다"는 거짓 사실이 만들어진다.
+        rows = (
+            '[{"rcept_dt":"20240729","sp_stock_lmp_irds_cnt":"-32,123","sp_stock_lmp_irds_rate":"-1.49"},'
+            ' {"rcept_dt":"20250520","sp_stock_lmp_irds_cnt":"+6,000","sp_stock_lmp_irds_rate":"-0.26"},'
+            ' {"rcept_dt":"20250101","sp_stock_lmp_irds_cnt":"+1,000","sp_stock_lmp_irds_rate":"0.10"}]'
+        )
+        got = run_js('cellMarks(%s,"insider_timeline")' % rows)
+        self.assertEqual(got, {
+            "0|sp_stock_lmp_irds_cnt": "증감 주식수 < 0",
+            "0|sp_stock_lmp_irds_rate": "증감 비율 < 0",
+            "1|sp_stock_lmp_irds_rate": "증감 비율 < 0",
+        })
+        # 가운데 행은 비율만 표시되고 주식수 셀은 표시되지 않는다 — divergence pin.
+        self.assertNotIn("1|sp_stock_lmp_irds_cnt", got)
+
+    def test_positive_values_are_not_marked(self):
+        rows = '[{"sp_stock_lmp_irds_cnt":"+1,000","sp_stock_lmp_irds_rate":"0.10"}]'
+        self.assertEqual(run_js('cellMarks(%s,"insider_timeline")' % rows), {})
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestMarkRenderBehavior(unittest.TestCase):
+    """SE-4g Task 3 리뷰 지적(Finding 2) — 이전 검증은 소스 문자열만 봤다
+    (예: `assertIn("marks", head)`는 tableEl(table, marks) 시그니처
+    자체와 항상 일치해 실제 렌더 여부와 무관하게 통과했다). 리뷰어가 세
+    변형을 넣고 전체 스위트가 그대로 초록임을 실측했다:
+
+      - 본문 셀 `const why = ...` → `null`: 강조 렌더 자체가 전부 죽는다
+      - 범례 `if (appliedWhys.length > 0)` → `if (false)`: 범례가 사라진다
+      - caption `capWhy = null`: 승격된 열의 강조가 사라진다
+
+    이 클래스는 renderSection을 실제로 호출해(run_render_section, 위
+    _RENDER_SECTION_HARNESS의 collectMarked/collectLegends) 세 변형이
+    각각 최소 한 테스트를 실패시키는지 직접 확인했다(아래 각 테스트
+    docstring에 어느 변형을 겨냥하는지 적어 둔다). 적용·되돌리기 로그는
+    task-3-report.md 참고."""
+
+    # 4열(nm·relate·기초/기말 지분율), 행마다 지분율이 달라 caption으로
+    # 승격되지 않고(모든 행이 같은 값이어야 승격된다) 12열 미만이라
+    # 접히지도 않는다 — 강조가 나올 수 있는 경로가 본문 셀 하나뿐이다.
+    _SHAREHOLDER_RECORDS = [
+        {"nm": "오정강", "relate": "본인",
+         "bsis_posesn_stock_qota_rt": "14.82", "trmend_posesn_stock_qota_rt": "14.41"},
+        {"nm": "박수정", "relate": "특수관계인",
+         "bsis_posesn_stock_qota_rt": "0.07", "trmend_posesn_stock_qota_rt": "0.07"},
+        {"nm": "정지선", "relate": "특수관계인",
+         "bsis_posesn_stock_qota_rt": "0.00", "trmend_posesn_stock_qota_rt": "0.03"},
+    ]
+
+    def _render_shareholders(self):
+        value = {"major_holders": self._SHAREHOLDER_RECORDS, "bulk_holders": []}
+        return run_render_section('"shareholders"', json.dumps(value, ensure_ascii=False))
+
+    def test_body_cell_gets_marked(self):
+        """변형 표의 ①(body-cell why=null)을 겨냥한다 — 이 표는 caption도
+        접힌 열도 없으므로 강조는 본문 셀 경로로만 나올 수 있다."""
+        got = self._render_shareholders()
+        marked = got["marked"]
+        self.assertTrue(
+            any(m["tag"] == "td" and m["title"] == "기말 지분율 < 기초 지분율" for m in marked),
+            f"본문 셀 강조가 렌더되지 않았습니다: {marked}",
+        )
+
+    def test_legend_appears_when_marks_fire(self):
+        """변형 표의 ②(범례 게이트 `if (false)`)를 겨냥한다."""
+        got = self._render_shareholders()
+        self.assertTrue(
+            any("기말 지분율 < 기초 지분율" in legend for legend in got["legends"]),
+            f"범례가 렌더되지 않았습니다: {got['legends']}",
+        )
+
+    def test_legend_absent_when_nothing_fires(self):
+        """빈 줄을 남기지 않는다는 브리프 원칙(ui.js tableEl 주석)의
+        반대쪽도 확인한다 — 아무 규칙도 안 붙으면 범례 자체가 없어야 한다."""
+        value = {
+            "major_holders": [
+                {"nm": "오정강", "relate": "본인",
+                 "bsis_posesn_stock_qota_rt": "14.00", "trmend_posesn_stock_qota_rt": "14.00"},
+            ],
+            "bulk_holders": [],
+        }
+        got = run_render_section('"shareholders"', json.dumps(value, ensure_ascii=False))
+        self.assertEqual(got["legends"], [])
+        self.assertEqual(got["marked"], [])
+
+    def test_caption_gets_marked(self):
+        """변형 표의 ③(caption `capWhy = null`)을 겨냥한다 — opinion이
+        두 레코드 모두 같은 값이라 caption으로 승격되고, 그 열에만
+        MARK_RULES.audit_history 규칙이 걸려 있어 본문 셀에는 강조가
+        나올 수 없는 표다(year만 본문에 남는데 그 열엔 규칙이 없다)."""
+        value = {
+            "opinions": [
+                {"year": 2024, "opinion": "한정의견", "auditor": "가나회계법인", "tenure_years": 3},
+                {"year": 2023, "opinion": "한정의견", "auditor": "가나회계법인", "tenure_years": 2},
+            ],
+            "auditor_changes": [],
+            "independence_warnings": [],
+        }
+        got = run_render_section('"audit_history"', json.dumps(value, ensure_ascii=False))
+        marked = got["marked"]
+        self.assertTrue(
+            any(m["tag"] == "span" and m["title"] == '감사의견이 "적정"이 아님' for m in marked),
+            f"caption 강조가 렌더되지 않았습니다: {marked}",
+        )
+
+    @staticmethod
+    def _wide_insider_row(cnt, tag):
+        """13번째 자리(=접히는 자리)에 elestock 실측 필드를 둔 넓은 행."""
+        r = {f"a{i}": f"{tag}-{i}" for i in range(1, 13)}
+        r["sp_stock_lmp_irds_cnt"] = cnt
+        r["source"] = "elestock"
+        return r
+
+    def test_marked_column_is_not_folded(self):
+        """SE-4g 최종 리뷰 Finding B — 강조가 붙은 열은 접히면 안 된다.
+
+        실측(엔켐 affiliates 20열)에서 59개 강조 중 56개가 접힌 열에 있어
+        행마다 버튼을 눌러야 보였다. 범례는 세 규칙을 다 말하는데 화면에는
+        3개만 보이는 상태였다 — "눈에 띄게"의 반대다.
+
+        여기서는 13열짜리(=12열 상한 초과) 표를 만들고, 강조 규칙이 걸린
+        열을 맨 뒤(원래대로면 가장 먼저 접히는 자리)에 둔다. 강조는 접힌
+        열 상세(span)가 아니라 **본문 셀(td)**로 나와야 한다."""
+        records = [self._wide_insider_row("-32124", "r0"),
+                   self._wide_insider_row("100", "r1")]
+        got = run_render_section('"insider_timeline"', json.dumps(records, ensure_ascii=False))
+        marked = [m for m in got["marked"] if m["title"] == "증감 주식수 < 0"]
+        self.assertEqual(len(marked), 1, f"강조가 1개가 아닙니다: {got['marked']}")
+        self.assertEqual(
+            marked[0]["tag"], "td",
+            f"강조된 열이 접혀 펼치기 버튼 뒤에 숨었습니다: {marked[0]}",
+        )
+        # 표 헤더에 그 열의 라벨이 실제로 보여야 한다(접힌 열은 헤더가 없다).
+        headers = _header_rows(got)
+        self.assertEqual(len(headers), 1, f"표가 1개가 아닙니다: {headers}")
+        self.assertIn(
+            "특정증권 증감 주식수", headers[0],
+            f"강조된 열이 표 헤더에 없습니다: {headers[0]}",
+        )
+        # 열 예산은 그대로다 — 확보한 만큼 다른 열이 대신 접힐 뿐 표가
+        # 무한정 넓어지지 않는다(13열 중 12열만 보이고 + 펼치기 버튼 칸).
+        self.assertEqual(len(headers[0]), 12 + 1, "펼치기 버튼 칸 포함 13칸이어야 합니다")
+
+    def test_live_shaped_affiliates_keeps_all_three_marked_columns(self):
+        """Finding B의 실제 재현 조건 — 엔켐 실측 형태(20열) affiliates에서
+        세 규칙이 걸린 열이 전부 접히지 않고 보여야 한다. 수정 전에는
+        증감 평가손익만 보이고 기말 장부가액·피투자사 당기순이익 두 열이
+        접혀, 범례는 세 규칙을 말하는데 화면에는 하나만 보였다."""
+        got = run_render_section('"affiliates"', LIVE_SHAPED_AFFILIATE_ROWS)
+        headers = _header_rows(got)
+        # 원본 표(넓은 쪽)를 고른다 — 파생 "피투자사 정보" 표는 7열뿐이다.
+        wide = max(headers, key=len)
+        for lbl in ("기말 장부가액", "증감 평가손익", "피투자사 당기순이익"):
+            self.assertIn(lbl, wide, f"강조 열 '{lbl}'이 접혔습니다: {wide}")
+        # 강조는 전부 본문 셀(td)로 나와야 한다 — 접힌 열이면 span이다.
+        for m in got["marked"]:
+            self.assertEqual(m["tag"], "td", f"강조가 접힌 열 안에 있습니다: {m}")
+
+    def test_folded_column_path_still_marks(self):
+        """접힌 열 강조 경로(tableEl의 foldWhy)는 방어용으로 남겨 둔다 —
+        호출부 3곳이 전부 markedKeys를 넘기므로 화면에서는 도달하지 않지만,
+        marks만 넘기고 markedKeys를 빠뜨린 새 호출부가 생기면 이 경로가
+        강조를 살린다. run_doc_click은 tableLayout을 markedKeys 없이 부르는
+        유일한 경로라 그 조건을 직접 만들 수 있다."""
+        records = [self._wide_insider_row("-32124", "r0"),
+                   self._wide_insider_row("100", "r1")]
+        marks = {"0|sp_stock_lmp_irds_cnt": "증감 주식수 < 0"}
+        got = run_doc_click(
+            json.dumps(records, ensure_ascii=False),
+            json.dumps(marks, ensure_ascii=False),
+        )
+        self.assertIn("sp_stock_lmp_irds_cnt", got["foldedKeys"],
+                      "사전 조건 실패: 그 열이 접히지 않았습니다")
+        self.assertTrue(
+            any(m["tag"] == "span" and m["title"] == "증감 주식수 < 0" for m in got["marked"]),
+            f"접힌 열 강조가 렌더되지 않았습니다: {got['marked']}",
+        )
+
+    def test_affiliates_legend_differs_original_vs_derived(self):
+        """appliedWhys 버그 수정(task-3-report.md "발견하고 고친 버그" ②)의
+        회귀 테스트 — 파생 "피투자사 정보" 표(buildAffiliateOverviewBlock)는
+        7열만 그리고 그중 incrs_dcrs_evl_lstmn(증감 평가손익) 열이 없다.
+        cellMarks는 원본 레코드로 3규칙 전부 계산하지만, 파생 표의 범례가
+        marks 전체를 그대로 나열하면 "그 표에 없는 열의 규칙이 강조됐다"고
+        말하는 모순이 생긴다(수정 전 실제로 벌어졌던 사고). 원본 표
+        범례에는 3규칙 전부, 파생 표 범례에는 2규칙만 있어야 한다."""
+        got = run_render_section('"affiliates"', AFFILIATE_ROWS)
+        legends = got["legends"]
+        self.assertEqual(len(legends), 2, f"범례가 2개(원본+파생)가 아닙니다: {legends}")
+
+        full = [l for l in legends if "증감 평가손익 < 0" in l]
+        partial = [l for l in legends if "증감 평가손익 < 0" not in l]
+        self.assertEqual(len(full), 1, "3규칙 전부인 원본 표 범례를 찾지 못했습니다")
+        self.assertEqual(len(partial), 1, "2규칙만인 파생 표 범례를 찾지 못했습니다")
+        for why in ("기말 장부가액 < 최초 취득금액", "피투자사 당기순이익 < 0"):
+            self.assertIn(why, partial[0], f"파생 표 범례에 '{why}'가 없습니다: {partial[0]}")
+            self.assertIn(why, full[0], f"원본 표 범례에 '{why}'가 없습니다: {full[0]}")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestMarkRowAlignment(unittest.TestCase):
+    """SE-4g 최종 리뷰 Finding A — cellMarks의 좌표는 **자기가 받은 배열의
+    인덱스**다. 강조를 계산한 배열과 실제로 그린 배열이 다르면(정렬·필터·
+    분할이 사이에 끼면) 모든 강조가 다른 회사의 행으로 간다. 표시가 사라지는
+    게 아니라 **다른 회사의 사실이 된다** — 화면만 봐서는 알 수 없다.
+
+    affiliates가 유일하게 위험한 경로다: affiliateOverview(app.js)가
+    최초취득일 순으로 재정렬한다. 실측 엔켐 응답이 거의 날짜순이라 이
+    함정은 실데이터로도 잘 드러나지 않으므로, 입력 순서와 정렬 결과가 확실히
+    다른 픽스처(LIVE_SHAPED_AFFILIATE_ROWS)로 고정한다."""
+
+    def _rows_by_company(self, key, value_js):
+        got = run_render_section(key, value_js)
+        out = []
+        for row in got["tableRows"]:
+            texts = [c["text"] for c in row]
+            # 금액 열의 title은 "원본값 · 사유" 형태다(tableEl) — 여기서는
+            # 어느 규칙이 붙었는지만 보면 되므로 마지막 " · " 뒤를 취한다.
+            marked = [c["title"].split(" · ")[-1] for c in row if c["mk"]]
+            out.append((texts, marked))
+        return out
+
+    def test_sort_actually_reorders_the_fixture(self):
+        """사전 조건 — 정렬이 실제로 순서를 바꾸지 않으면 아래 두 테스트가
+        아무것도 증명하지 못한다(정렬 버그가 숨는 조건 그 자체)."""
+        got = run_js(
+            'affiliateOverview(%s).map(r => r.inv_prm)' % LIVE_SHAPED_AFFILIATE_ROWS
+        )
+        self.assertEqual(
+            got, ["DFD Yangfu New Mater", "Enchem Poland Sp. z", "제이알에너지솔루션"],
+        )
+        original = [r["inv_prm"] for r in json.loads(LIVE_SHAPED_AFFILIATE_ROWS)]
+        self.assertNotEqual(got, original, "정렬이 순서를 바꾸지 않는 픽스처입니다")
+
+    def test_marks_land_on_the_right_company_after_sorting(self):
+        """회사별로 붙어야 할 강조가 정확히 그 회사 행에만 있어야 한다.
+
+        정렬 전 인덱스를 쓰면 0번(제이알, 3규칙 전부)의 강조가 정렬 후
+        0번인 DFD 행으로 옮겨간다 — DFD는 세 규칙 모두 해당 없는 회사라
+        화면이 없는 사실을 만들어낸다. 그래서 "DFD 행에는 강조가 하나도
+        없다"가 이 테스트의 핵심 단언이다."""
+        rows = self._rows_by_company('"affiliates"', LIVE_SHAPED_AFFILIATE_ROWS)
+        seen = {}
+        for texts, whys in rows:
+            joined = " | ".join(texts)
+            for company in ("제이알에너지솔루션", "DFD Yangfu New Mater",
+                            "Enchem Poland Sp. z"):
+                if company in joined:
+                    seen.setdefault(company, []).append(set(whys))
+        self.assertEqual(len(seen), 3, f"세 회사 행이 다 렌더되지 않았습니다: {seen}")
+
+        for whys in seen["DFD Yangfu New Mater"]:
+            self.assertEqual(
+                whys, set(),
+                f"해당 규칙이 없는 DFD 행에 강조가 붙었습니다(좌표 밀림): {whys}",
+            )
+        for whys in seen["Enchem Poland Sp. z"]:
+            self.assertEqual(whys, {"피투자사 당기순이익 < 0"},
+                             f"Poland 행의 강조가 기대와 다릅니다: {whys}")
+        for whys in seen["제이알에너지솔루션"]:
+            # 파생 표에는 증감 평가손익 열이 없으므로 2규칙, 원본 표는 3규칙.
+            self.assertIn("기말 장부가액 < 최초 취득금액", whys)
+            self.assertIn("피투자사 당기순이익 < 0", whys)
+
+    def test_poland_negative_income_is_marked_on_polands_own_row(self):
+        """Poland는 '피투자사 당기순이익 < 0' 하나만 해당한다(장부가액은
+        최초취득과 동일, 평가손익은 결측 "-"). 좌표가 밀리면 이 하나가
+        제이알이나 DFD 행으로 옮겨간다."""
+        rows = self._rows_by_company('"affiliates"', LIVE_SHAPED_AFFILIATE_ROWS)
+        poland = [(t, w) for t, w in rows if "Enchem Poland Sp. z" in " | ".join(t)]
+        self.assertTrue(poland, "Poland 행이 렌더되지 않았습니다")
+        for texts, whys in poland:
+            self.assertEqual(
+                sorted(set(whys)), ["피투자사 당기순이익 < 0"],
+                f"Poland 행의 강조가 기대와 다릅니다: {whys}",
+            )
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestRatioMarksAreWired(unittest.TestCase):
+    """SE-4g 최종 리뷰 Finding C① — ui.js buildFinancialRatiosBlock의
+    `tableEl(table, ratioMarks)`에서 두 번째 인자를 지우면 재무 파생 지표
+    표의 강조 11개와 범례가 통째로 사라지는데, 그 변형으로도 전체 스위트가
+    초록이었다. financial_ratios는 renderSection의 섹션 키("financials")와
+    다른 전용 sectionKey라 다른 어떤 호출부도 이 규칙을 발화시키지 못한다 —
+    이 배선이 유일한 경로다."""
+
+    # 영업이익률 -25.1%, 순이익률 -22.6% (당기). 전기·전전기는 값이 없어
+    # 사유만 표기되므로 강조 대상이 아니다.
+    _FS_ROWS = json.dumps([
+        {"fs_div": "CFS", "sj_div": "IS", "account_nm": "매출액", "thstrm_amount": "1000"},
+        {"fs_div": "CFS", "sj_div": "IS", "account_nm": "영업이익", "thstrm_amount": "-251"},
+        {"fs_div": "CFS", "sj_div": "IS", "account_nm": "당기순이익", "thstrm_amount": "-226"},
+    ], ensure_ascii=False)
+
+    def test_negative_margin_cells_are_marked_in_the_derived_table(self):
+        got = run_render_section('"financials"', self._FS_ROWS)
+        marked = [m for m in got["marked"] if m["title"] == "이익률 < 0"]
+        self.assertEqual(
+            len(marked), 2,
+            f"파생 지표 표의 강조가 2개(영업이익률·순이익률)가 아닙니다: {got['marked']}",
+        )
+
+    def test_derived_table_has_a_legend(self):
+        got = run_render_section('"financials"', self._FS_ROWS)
+        self.assertTrue(
+            any("이익률 < 0" in legend for legend in got["legends"]),
+            f"파생 지표 표의 범례가 없습니다: {got['legends']}",
+        )
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestMarkDoesNotOverwriteExistingCellState(unittest.TestCase):
+    """SE-4g 최종 리뷰 Finding C② — 강조는 className·title에 **이어 붙인다**.
+    대입으로 바꾸면 (a) rcept_no 셀의 .doc 클래스(=공시 원문 클릭)가 지워지고
+    (b) 금액 열의 원본값 툴팁이 강조 사유로 덮인다. 두 변형 모두 지금까지
+    아무 테스트도 실패시키지 않았다. caption 경로(승격된 rcept_no)도 같은
+    구조라 함께 고정한다."""
+
+    # distress 규칙은 "레코드 존재 자체"라 rcept_no 셀에 항상 강조가 붙는다 —
+    # .doc(클릭)과 .mk(강조)가 같은 셀에서 만나는 유일한 조합이다.
+    _DISTRESS_ROWS = json.dumps([
+        {"rcept_no": "20260101000001", "rcept_dt": "20260101"},
+        {"rcept_no": "20260202000002", "rcept_dt": "20260202"},
+    ], ensure_ascii=False)
+
+    def test_marked_rcept_no_cell_keeps_doc_class(self):
+        got = run_render_section('"distress"', self._DISTRESS_ROWS)
+        docs = [m for m in got["marked"] if "20260101000001" == m["text"]]
+        self.assertTrue(docs, f"강조된 rcept_no 셀을 찾지 못했습니다: {got['marked']}")
+        tokens = docs[0]["className"].split()
+        self.assertIn("mk", tokens)
+        self.assertIn("doc", tokens,
+                      f"강조가 .doc 클래스를 덮어썼습니다: {docs[0]['className']!r}")
+
+    def test_marked_rcept_no_caption_keeps_doc_class(self):
+        # 모든 행의 rcept_no가 같으면 그 열은 caption으로 승격된다 — 그쪽도
+        # 같은 이어붙이기 규칙을 지켜야 클릭이 살아남는다.
+        rows = json.dumps([
+            {"rcept_no": "20260101000001", "rcept_dt": "20260101"},
+            {"rcept_no": "20260101000001", "rcept_dt": "20260202"},
+        ], ensure_ascii=False)
+        got = run_render_section('"distress"', rows)
+        caps = [m for m in got["marked"]
+                if m["tag"] == "span" and m["text"] == "20260101000001"]
+        self.assertTrue(caps, f"강조된 caption span을 찾지 못했습니다: {got['marked']}")
+        tokens = caps[0]["className"].split()
+        self.assertIn("mk", tokens)
+        self.assertIn("doc", tokens,
+                      f"caption 강조가 .doc 클래스를 덮어썼습니다: {caps[0]['className']!r}")
+
+    def test_marked_amount_cell_keeps_raw_value_tooltip(self):
+        # 기말 장부가액은 AMOUNT_FIELDS라 "49.9억"으로 줄여 표시되고, 원 단위
+        # 원본값이 title에 남는다. 강조 사유를 대입하면 그 원본값이 사라진다.
+        got = run_render_section('"affiliates"', LIVE_SHAPED_AFFILIATE_ROWS)
+        hits = [m for m in got["marked"]
+                if m["title"] and "기말 장부가액 < 최초 취득금액" in m["title"]]
+        self.assertTrue(hits, f"기말 장부가액 강조를 찾지 못했습니다: {got['marked']}")
+        for m in hits:
+            self.assertIn(
+                "4,991,000,000", m["title"],
+                f"강조 사유가 원본값 툴팁을 덮어썼습니다: {m['title']!r}",
+            )
+            self.assertIn(" · ", m["title"])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestMarkLtRequiresBothSides(unittest.TestCase):
+    """SE-4g 최종 리뷰 Finding C③ — markLt는 두 값이 **모두** 있을 때만
+    비교한다. 결측을 0으로 읽는 변형은 실데이터에서 바로 터진다:
+    frst_acqs_amount가 "-"인 행이 실제로 존재한다(DART의 무값 표기).
+    "모르는 것"을 0으로 읽으면 없는 사실을 만들어낸다."""
+
+    def test_missing_left_side_is_not_marked(self):
+        # 결측을 0으로 읽으면 0 < 10,000,000,000 이 참이 되어 강조된다.
+        rows = ('[{"trmend_blce_acntbk_amount":"-",'
+                ' "frst_acqs_amount":"10,000,000,000"}]')
+        got = run_js('cellMarks(%s,"affiliates")' % rows)
+        self.assertEqual(got, {})
+
+    def test_missing_right_side_is_not_marked(self):
+        # 결측을 0으로 읽으면 -1,000 < 0 이 참이 되어 강조된다.
+        rows = '[{"trmend_blce_acntbk_amount":"-1,000","frst_acqs_amount":"-"}]'
+        got = run_js('cellMarks(%s,"affiliates")' % rows)
+        self.assertNotIn("0|trmend_blce_acntbk_amount", got)
+
+    def test_both_sides_missing_is_not_marked(self):
+        rows = '[{"trmend_blce_acntbk_amount":"-","frst_acqs_amount":"-"}]'
+        self.assertEqual(run_js('cellMarks(%s,"affiliates")' % rows), {})
+
+    def test_shareholder_rule_also_requires_both_sides(self):
+        # 같은 markLt를 쓰는 두 번째 사용처 — 한 곳만 고쳐도 다른 곳이 남는다.
+        rows = ('[{"nm":"오정강","trmend_posesn_stock_qota_rt":"-",'
+                ' "bsis_posesn_stock_qota_rt":"14.82"}]')
+        self.assertEqual(run_js('cellMarks(%s,"shareholders")' % rows), {})
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestShareholderAggregateAndBulkRules(unittest.TestCase):
+    """SE-4g 최종 리뷰 Finding E — 합계 행 제외 + 대량보유 지분율 증감 규칙."""
+
+    def test_aggregate_row_is_not_marked(self):
+        # 실측(엔켐): 구성원 행들과 "계" 행(21.63 → 21.04)이 함께 온다.
+        # 합계의 감소는 구성원 감소의 합일 뿐 — 같은 사실을 두 번 말한다.
+        rows = ('[{"nm":"오정강","bsis_posesn_stock_qota_rt":"14.82","trmend_posesn_stock_qota_rt":"14.41"},'
+                '{"nm":"계","bsis_posesn_stock_qota_rt":"21.63","trmend_posesn_stock_qota_rt":"21.04"}]')
+        got = run_js('cellMarks(%s,"shareholders")' % rows)
+        self.assertEqual(list(got.keys()), ["0|trmend_posesn_stock_qota_rt"])
+
+    def test_aggregate_row_with_inner_space_is_not_marked(self):
+        rows = ('[{"nm":"합 계","bsis_posesn_stock_qota_rt":"21.63",'
+                '"trmend_posesn_stock_qota_rt":"21.04"}]')
+        self.assertEqual(run_js('cellMarks(%s,"shareholders")' % rows), {})
+
+    def test_person_named_gyesanghyeok_is_still_marked(self):
+        """"계상혁"은 사람이다 — 접두/부분 일치로 합계를 걸러내면 이 사람의
+        지분 감소가 조용히 사라진다(isAggregateRow가 이미 막고 있는 함정을
+        강조 규칙 쪽에서 다시 뚫지 않는지 확인한다)."""
+        rows = ('[{"nm":"계상혁","bsis_posesn_stock_qota_rt":"14.82",'
+                '"trmend_posesn_stock_qota_rt":"14.41"}]')
+        got = run_js('cellMarks(%s,"shareholders")' % rows)
+        self.assertEqual(list(got.keys()), ["0|trmend_posesn_stock_qota_rt"])
+
+    def test_aggregate_detection_is_shared_with_split(self):
+        """판정을 두 군데서 각자 짜지 않았는지 — 같은 입력에 같은 답."""
+        got = run_js('[isAggregateRow({nm:"계"}), isAggregateRow({nm:"합 계"}),'
+                     ' isAggregateRow({nm:"계상혁"}), isAggregateRow({}),'
+                     ' splitAggregateRows([{nm:"계"},{nm:"계상혁"}]).totals.length]')
+        self.assertEqual(got, [True, True, False, False, 1])
+
+    def test_bulk_holder_negative_rate_change_is_marked(self):
+        # /majorstock.json 원본 필드 그대로(dart_client가 개명하지 않는다).
+        # 엔켐 실측 23건 중 9건이 음수다.
+        rows = ('[{"repror":"오정강","stkrt":"14.41","stkrt_irds":"-1.49"},'
+                '{"repror":"오정강","stkrt":"15.90","stkrt_irds":"0.62"},'
+                '{"repror":"박수정","stkrt":"5.10","stkrt_irds":"-"}]')
+        got = run_js('cellMarks(%s,"shareholders")' % rows)
+        self.assertEqual(got, {"0|stkrt_irds": "지분율 증감 < 0"})
+
+    def test_bulk_holder_rule_survives_the_render(self):
+        """규칙이 화면까지 실제로 도달하는지 — 필드명이 SE가 내보내는 것과
+        다르면 `rule.key in rec` 게이트에 걸려 영원히 발화하지 않는다
+        (audit_history의 adt_opinion 사고와 같은 부류)."""
+        value = {
+            "major_holders": [],
+            "bulk_holders": [
+                {"repror": "오정강", "stkrt": "14.41", "stkrt_irds": "-1.49"},
+                {"repror": "오정강", "stkrt": "15.90", "stkrt_irds": "0.62"},
+            ],
+        }
+        got = run_render_section('"shareholders"', json.dumps(value, ensure_ascii=False))
+        self.assertTrue(
+            any(m["title"] == "지분율 증감 < 0" for m in got["marked"]),
+            f"대량보유 지분율 증감 강조가 렌더되지 않았습니다: {got['marked']}",
+        )
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 로그아웃 정리 동작을 검증할 수 없습니다")
+class TestMarksClearedOnGate(unittest.TestCase):
+    """SE-4g Task 4 — 강조 범례는 실명은 아니지만 "이전 사용자가 조회한
+    회사의 사실"을 드러낸다(예: "기말 장부가액 < 최초 취득금액"이 어떤
+    출자에 붙었는지). 공유 PC 제품에서 이 저장소는 이미 두 번(우측 패널
+    실명 잔류, #body 미정리) 로그아웃 잔류 사고를 냈다 — 그래서 여기서는
+    소스 문자열 검사가 아니라 renderSection을 실제로 호출해 강조·범례가
+    실제로 그려지는지 먼저 확인하고, showGate()를 실제로 호출해 그 강조·
+    범례가 함께 사라지는지를 같은 가짜 DOM에서 직접 관찰한다(위
+    _RENDER_SECTION_HARNESS의 afterGate, run_render_section 참고 —
+    Task 3이 만든 렌더 하네스를 그대로 확장했다. 새 하네스를 병렬로 만들지
+    않는다는 이 태스크의 제약)."""
+
+    def test_marks_actually_fire_before_gate(self):
+        """뒤 테스트(사라짐 확인)가 의미를 가지려면 먼저 강조·범례가 실제로
+        그려졌다는 사실이 필요하다 — 애초에 아무것도 안 그려졌다면
+        showGate() 이후 텅 비어 있는 것이 당연해서 테스트가 무력하다."""
+        got = run_render_section('"affiliates"', AFFILIATE_ROWS)
+        self.assertGreater(len(got["marked"]), 0, "사전 조건 실패: 강조 셀이 렌더되지 않았습니다")
+        self.assertGreater(len(got["legends"]), 0, "사전 조건 실패: 범례가 렌더되지 않았습니다")
+
+    def test_marked_cells_and_legend_do_not_survive_show_gate(self):
+        got = run_render_section('"affiliates"', AFFILIATE_ROWS)
+        after = got["afterGate"]
+        self.assertEqual(after["marked"], [],
+                          f"showGate() 이후에도 강조 셀이 남아 있습니다: {after['marked']}")
+        self.assertEqual(after["legends"], [],
+                          f"showGate() 이후에도 범례가 남아 있습니다: {after['legends']}")
+        self.assertEqual(after["cells"], [],
+                          "showGate() 이후에도 표 셀이 남아 있습니다")
+        self.assertEqual(after["bodyChildCount"], 0,
+                          "showGate() 이후에도 #body에 자식 노드가 남아 있습니다")
 
 
 if __name__ == "__main__":
