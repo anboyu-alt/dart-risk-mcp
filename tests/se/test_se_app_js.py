@@ -7331,6 +7331,30 @@ class TestIndicatorBlocks(unittest.TestCase):
             )
 
 
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestIndicatorCellWhy(unittest.TestCase):
+    """SE-4i — indicatorTableEl(ui.js)이 cellMarks(app.js)를 부르지 않아
+    주요 재무지표 표만 사실 강조(.mk)가 빠져 있었다(사용자 실측 지적:
+    순이익률 -22.6%·ROE -14.6%·매출총이익률 -0.5%가 전부 맨눈으로
+    렌더됐다). indicatorCellWhy(idx_val)는 그 표 전용의 얇은 판정 함수 —
+    규칙은 하나뿐이다: idx_val < 0. 문턱값(매출원가율 > 100 등)은 v0.8.5
+    원칙(판정 금지) 위반이라 두지 않는다."""
+
+    def test_negative_value_is_marked(self):
+        self.assertEqual(run_js('indicatorCellWhy(-22.56)'), "지표 값 < 0")
+
+    def test_positive_value_is_not_marked(self):
+        self.assertIsNone(run_js('indicatorCellWhy(130.248)'))
+
+    def test_zero_is_not_marked(self):
+        """0은 음수가 아니다 — markNeg가 `< 0`으로만 판정한다."""
+        self.assertIsNone(run_js('indicatorCellWhy(0)'))
+
+    def test_null_is_not_marked(self):
+        """결측은 음수가 아니다 — 엔켐 실측에 51개 null 셀이 있다."""
+        self.assertIsNone(run_js('indicatorCellWhy(null)'))
+
+
 @unittest.skipUnless(_NODE, "node가 없어 ui.js 렌더링을 검증할 수 없습니다")
 class TestIndicatorSectionRender(unittest.TestCase):
     """SE-4h Task 2 Step 5 — renderSection("indicators", rows)이 실제로
@@ -7407,6 +7431,65 @@ class TestIndicatorSectionRender(unittest.TestCase):
         got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
         self.assertEqual(got["afterGate"]["cells"], [])
         self.assertEqual(got["afterGate"]["bodyChildCount"], 0)
+
+    # ── SE-4i: 사실 강조가 이 표에도 실제로 도달하는지 ─────────────────────
+    # indicatorTableEl은 cellMarks를 부르지 않는 별도 렌더 경로라, 강조가
+    # 배선되지 않은 채로 있어도 소스 문자열 검사나 indicatorCellWhy 단독
+    # 호출로는 못 잡는다 — 실제로 renderSection을 실행해 DOM에 .mk가
+    # 찍히는지 확인한다(다른 섹션에서 이미 겪은 "파일은 맞는데 화면이
+    # 죽어 있었다" 사고와 같은 부류).
+
+    def test_negative_primary_indicator_is_marked(self):
+        """primary 표(순이익률 -22.6%, 수익성 분류)의 음수 셀이 강조된다."""
+        got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
+        self.assertTrue(
+            any(m["text"] == "-22.6%" and m["title"] == "지표 값 < 0" for m in got["marked"]),
+            f"순이익률 -22.6% 강조가 렌더되지 않았습니다: {got['marked']}",
+        )
+
+    def test_negative_folded_indicator_is_marked(self):
+        """접힌("나머지 N개 지표") 표의 음수 셀도 강조된다 — 실측
+        (납입자본이익률 -5937.1%·자본금영업이익률 -729.9%)은 오히려 folded
+        쪽에 음수가 더 많다. 이 픽스처의 납입자본이익률(-657.043, rest)로
+        같은 경로를 확인한다."""
+        got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
+        self.assertTrue(
+            any(m["text"] == "-657.0%" and m["title"] == "지표 값 < 0" for m in got["marked"]),
+            f"납입자본이익률 -657.0% 강조가 렌더되지 않았습니다: {got['marked']}",
+        )
+
+    def test_indicator_legend_shows_rule_text(self):
+        got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
+        self.assertTrue(
+            any("지표 값 < 0" in legend for legend in got["legends"]),
+            f"강조 범례에 규칙 문구가 없습니다: {got['legends']}",
+        )
+
+    def test_positive_indicator_value_is_not_marked(self):
+        """부채비율 130.2%(양수)는 강조 대상이 아니다."""
+        got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
+        self.assertFalse(
+            any(m["text"] == "130.2%" for m in got["marked"]),
+            "양수 지표(부채비율 130.2%)가 강조됐습니다",
+        )
+
+    def test_indicator_name_and_note_columns_are_not_marked(self):
+        """지표 이름·뜻 열은 강조 대상이 아니다 — 연도 값 칸만 본다."""
+        got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
+        marked_texts = {m["text"] for m in got["marked"]}
+        self.assertNotIn("순이익률", marked_texts)
+        self.assertNotIn("매출액 대비 당기순이익의 비율", marked_texts)
+
+    def test_no_legend_when_block_has_no_negative_value(self):
+        """SE-4g의 같은 원칙 — 강조된 셀이 하나도 없으면 범례 자체를 만들지
+        않는다. 활동성 분류(배당성향 25.1, 양수 하나뿐)만 담은 픽스처로
+        확인한다."""
+        rows = [
+            {"bsns_year": "2025", "category": "활동성", "idx_nm": "배당성향(%)", "idx_val": 25.1},
+        ]
+        got = run_render_section('"indicators"', json.dumps(rows, ensure_ascii=False))
+        self.assertEqual(got["marked"], [])
+        self.assertEqual(got["legends"], [])
 
 
 # ── SE-4h Task 3: 재무지표 추이 차트 ─────────────────────────────────────
