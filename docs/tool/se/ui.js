@@ -908,6 +908,16 @@ function blockEl(block) {
     h3.textContent = block.title;
     wrap.appendChild(h3);
   }
+  // task-6: sectionBlocks(app.js)가 isMetaOnlyRecords로 판정한 표에 붙인
+  // 사실 고지. 표는 지우지 않는다 — note는 table/text와 배타적이지 않고
+  // 항상 먼저 보여준다(표를 읽기 전에 "왜 다 -로 보이는지"를 먼저
+  // 알아야 한다).
+  if (typeof block.note === "string" && block.note) {
+    const note = document.createElement("p");
+    note.className = "note";
+    note.textContent = block.note;
+    wrap.appendChild(note);
+  }
   if (block.table) {
     wrap.appendChild(tableEl(block.table));
   } else if (typeof block.text === "string") {

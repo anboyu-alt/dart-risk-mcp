@@ -503,17 +503,38 @@ function isPlainObject(v) {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
-/** records(같은 source 그룹) 안에서, 표시했을 때(formatValue 기준) 모든
- *  행이 빈 문자열인 열을 제거한다. "표시했을 때"를 기준으로 삼는 이유는
- *  0과 false를 잃지 않기 위해서다 — formatValue(0)은 "0"이고 이는 빈
- *  문자열이 아니므로 지워지지 않는다(값이 있는 데이터를 조용히 숨기지
+/** DART가 "이 칸에 보고할 실데이터가 없다"는 뜻으로 관행적으로 쓰는 표기.
+ *
+ *  실측(task-6, 2026-07-28 — 엔켐·삼성전자 hyslrChgSttus·tesstkAcqsDspsSttus를
+ *  bsns_year=2025·reprt_code=11011로 직접 호출해 대조): 두 회사 모두 API는
+ *  status "000"(정상)을 주지만, 그 분기에 보고할 변동·거래가 없으면
+ *  실데이터 필드 값이 null도 빈 문자열도 아니라 **문자열 "-"** 그 자체로
+ *  채워져 온다(엔켐 hyslrChgSttus 1건 — change_on·change_cause·qota_rt 등
+ *  6개 필드 전부 "-". 삼성전자도 같은 엔드포인트에서 같은 모양이 나왔다 —
+ *  DART 쪽 관행이지 우리 필드 파싱 오류가 아니다). formatValue는 이 값을
+ *  그대로 "-"로 보여줘 옛 dropAllEmptyColumns(빈 문자열 기준)가 걸러내지
+ *  못했고, 그 결과 "전부 -"인 행이 실데이터가 있는 것처럼 표에 남아
+ *  사용자가 "무슨 의미인지 알 수 없다"고 지적한 원인이 됐다. null·빈
+ *  문자열도 같은 뜻이므로 하나의 판정 기준으로 합친다.
+ */
+function isNoDataMarker(v) {
+  if (v === null || v === undefined) return true;
+  if (typeof v !== "string") return false;
+  const t = v.trim();
+  return t === "" || t === "-";
+}
+
+/** records(같은 source 그룹) 안에서, 모든 행이 isNoDataMarker인 열을
+ *  제거한다. 0과 false는 잃지 않는다 — isNoDataMarker(0)·isNoDataMarker(false)는
+ *  둘 다 false다(문자열이 아니므로, 값이 있는 데이터를 조용히 숨기지
  *  않는다는 이 화면의 원칙과 같다). 값이 하나라도 있는 열은 반드시 남는다.
  *
  *  insider_timeline이 대표 사례다(dart_client.fetch_insider_timeline —
  *  elestock·hyslr·hyslr_chg·exec_treasury 4개 엔드포인트를 합친 결과라
  *  레코드마다 자기 엔드포인트 필드만 채우고 나머지는 전부 null이다).
  *  source별로 나눈(sourceGroupedBlocks) 뒤에도 그 그룹 안에서마저 전부
- *  비는 열(분기·연도별 응답 형태 차이 등)이 남을 수 있어 한 번 더 걷어낸다.
+ *  비는 열(분기·연도별 응답 형태 차이, 또는 위 isNoDataMarker의 "-" 등)이
+ *  남을 수 있어 한 번 더 걷어낸다.
  */
 function dropAllEmptyColumns(records) {
   if (!Array.isArray(records) || records.length === 0) return records;
@@ -523,7 +544,7 @@ function dropAllEmptyColumns(records) {
     for (const k of Object.keys(r)) if (!seen.has(k)) { seen.add(k); keys.push(k); }
   }
   const emptyKeys = keys.filter(function (k) {
-    return records.every(function (r) { return formatValue(k, r[k]) === ""; });
+    return records.every(function (r) { return isNoDataMarker(r[k]); });
   });
   if (emptyKeys.length === 0) return records;
   const emptySet = new Set(emptyKeys);
@@ -532,6 +553,53 @@ function dropAllEmptyColumns(records) {
     for (const k of Object.keys(r)) if (!emptySet.has(k)) out[k] = r[k];
     return out;
   });
+}
+
+// 레코드의 정체(어느 회사·어느 접수번호·어느 결산일·어느 보고서인지)를
+// 밝힐 뿐, "무슨 일이 있었는지"는 말하지 않는 필드. 값이 있어도 정보가
+// 아니다 — task-6 실측(엔켐 hyslrChgSttus 1건)이 정확히 이 모양이었다:
+// rcept_no·corp_cls·corp_code·corp_name·stlm_dt·bsns_year·reprt_code만
+// 채워지고 나머지는 전부 isNoDataMarker였다. **판단 근거**: 이 목록은
+// 브리프가 제시한 후보를 그대로 확정한 것이 아니라, 위 실측 응답과
+// field-inventory(docs/superpowers/plans/2026-07-27-se-4c-field-inventory.json)
+// 를 직접 대조해 "섹션마다 반복되지만 그 자체로는 사건을 서술하지 않는"
+// 필드만 추린 결과다 — 예를 들어 rcept_dt(접수일자)는 여기 넣지 않았다
+// (elestock 등 다른 source에서는 "언제 일어난 일인지"를 실제로 서술하는
+// 값이라 hyslr_chg·exec_treasury에는 애초에 나타나지도 않는다).
+//
+// corp_code·corp_cls는 sectionBlocks의 depth-0 omitHiddenIds가 이 함수가
+// 불리기 전에 이미 걷어내므로 이 시점엔 보통 안 남아 있지만, 방어적으로
+// 함께 둔다(재귀 경로·향후 호출부 변경에도 이 판정이 깨지지 않도록).
+const META_ONLY_KEYS = new Set([
+  "rcept_no", "corp_cls", "corp_code", "corp_name",
+  "stlm_dt", "bsns_year", "reprt_code",
+]);
+
+/** records(표 하나로 그려질 레코드 목록, source 필드는 이미 뺀 상태)에
+ *  META_ONLY_KEYS 밖의 키가 있고, 그 키들의 값이 모든 레코드에서 전부
+ *  isNoDataMarker면 true — "레코드에 식별자·메타 필드만 있고 실데이터가
+ *  하나도 없다"는 뜻이다.
+ *
+ *  "값이 하나라도 있으면 표를 그대로 보여준다" 원칙의 반대쪽을 정확히
+ *  판정한다 — 메타 키 밖의 값이 단 하나라도 실데이터면(예: 2026 1분기
+ *  최대주주 변동현황의 17.40%·변동사유) false를 돌려줘 표를 그대로
+ *  두게 한다. 메타 아닌 키가 아예 없는 레코드(모든 키가 META_ONLY_KEYS)도
+ *  "보고할 내용이 없다"와 같은 뜻이라 true다.
+ *
+ *  특정 섹션 키를 검사하지 않는다 — 값의 모양만 보므로 hyslr_chg·
+ *  exec_treasury뿐 아니라 같은 모양(식별자만 채워진 레코드)이 나오는 어떤
+ *  source 그룹에도 그대로 동작한다.
+ */
+function isMetaOnlyRecords(records) {
+  if (!Array.isArray(records) || records.length === 0) return false;
+  for (const r of records) {
+    if (!isPlainObject(r)) return false;
+    for (const k of Object.keys(r)) {
+      if (META_ONLY_KEYS.has(k)) continue;
+      if (!isNoDataMarker(r[k])) return false;
+    }
+  }
+  return true;
 }
 
 /** 레코드 전부가 비어 있지 않은 문자열 source 필드를 가지면 true다.
@@ -587,7 +655,18 @@ function sourceGroupedBlocks(records) {
     // records는 표가 실제로 그린 것과 같은 레코드(source 제거·빈 열 제거
     // 반영 후)를 그대로 싣는다 — 다음 태스크(차트)가 이 레코드로 그리므로
     // 표와 다른 값을 보여주면 안 된다.
-    if (t) blocks.push({ title: label(s), table: t, records: cleaned });
+    if (t) {
+      const block = { title: label(s), table: t, records: cleaned };
+      // task-6: 표는 지우지 않는다(접수번호로 원문을 직접 열어 확인할 수
+      // 있어야 한다 — 우리 판단이 틀렸을 때의 검증 경로이기도 하다). 다만
+      // 남은 열이 식별자·메타뿐이면(isMetaOnlyRecords) 그 사실 자체를
+      // 문구로 알린다 — "이상 없음"·"정상" 같은 판정 어휘가 아니라
+      // "보고된 내역이 없다"는 사실만 말한다(v0.8.5 원칙).
+      if (isMetaOnlyRecords(cleaned)) {
+        block.note = "해당 기간에 보고된 내역이 없습니다.";
+      }
+      blocks.push(block);
+    }
   }
   return blocks;
 }

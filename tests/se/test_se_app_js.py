@@ -1272,6 +1272,170 @@ class TestInsiderTimelineSourceSplit(unittest.TestCase):
                          "표 제목이 이미 출처를 말하는데 캡션에도 원본 값이 남아 있습니다")
 
 
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestMetaOnlyRecordsGetNoDataNote(unittest.TestCase):
+    """task-6: "최대주주 변동현황"·"임원·주요주주 자기주식" 섹션이 빈 표처럼
+    보이는 문제의 실측 원인 — DART는 해당 분기에 보고할 변동이 없으면 필드를
+    null이나 빈 문자열이 아니라 **문자열 "-"**로 채워 돌려준다(status는
+    "000" 정상). 아래 첫 두 픽스처는 2026-07-28 실제 API 호출 결과를 그대로
+    옮긴 것이다(엔켐·삼성전자, bsns_year=2025, reprt_code=11011):
+
+      - 엔켐 hyslrChgSttus: 1건, 식별자(rcept_no·corp_cls·corp_code·corp_name·
+        stlm_dt) 밖의 필드(change_on·mxmm_shrholdr_nm·posesn_stock_co·
+        qota_rt·change_cause·rm) 전부 "-".
+      - 삼성전자 tesstkAcqsDspsSttus: 18건 중 다수 행에 실제 수량(bsis_qy
+        29,700,000 등)·구분(stock_knd "보통주" 등)이 있다 — "표를 그대로
+        보여준다" 쪽을 검증한다.
+
+    세 번째 픽스처(2026 1분기 최대주주 변동현황 필드 모양)는 사용자가 화면에서
+    실제로 본 값(17.40%·"기존 최대주주의 시간외 장외매도로 인한 변경")을
+    hyslrChgSttus 스키마 그대로 재현한 것이다 — "전부 -"가 아니라 "값이
+    있으면"의 대조군이다.
+    """
+
+    _ENKEM_HYSLR_CHG_EMPTY = [{
+        "source": "hyslr_chg",
+        "rcept_no": "20260326001049",
+        "corp_cls": "K",
+        "corp_code": "01011526",
+        "corp_name": "엔켐",
+        "change_on": "-",
+        "mxmm_shrholdr_nm": "-",
+        "posesn_stock_co": "-",
+        "qota_rt": "-",
+        "change_cause": "-",
+        "rm": "-",
+        "stlm_dt": "2025-12-31",
+        "bsns_year": "2025",
+        "reprt_code": "11011",
+    }]
+
+    _SAMSUNG_EXEC_TREASURY_FILLED = [
+        {
+            "source": "exec_treasury",
+            "rcept_no": "20260310002820",
+            "corp_cls": "Y",
+            "corp_code": "00126380",
+            "corp_name": "삼성전자",
+            "stock_knd": "보통주",
+            "acqs_mth1": "배당가능이익범위 이내 취득",
+            "acqs_mth2": "직접취득",
+            "acqs_mth3": "장내직접취득",
+            "bsis_qy": "29,700,000",
+            "change_qy_acqs": "118,314,495",
+            "change_qy_dsps": "6,040,880",
+            "change_qy_incnr": "50,144,628",
+            "trmend_qy": "91,828,987",
+            "rm": "-",
+            "stlm_dt": "2025-12-31",
+            "bsns_year": "2025",
+            "reprt_code": "11011",
+        },
+        {
+            "source": "exec_treasury",
+            "rcept_no": "20260310002820",
+            "corp_cls": "Y",
+            "corp_code": "00126380",
+            "corp_name": "삼성전자",
+            "stock_knd": "우선주",
+            "acqs_mth1": "배당가능이익범위 이내 취득",
+            "acqs_mth2": "신탁계약에 의한취득",
+            "acqs_mth3": "수탁자보유물량",
+            "bsis_qy": "-",
+            "change_qy_acqs": "-",
+            "change_qy_dsps": "-",
+            "change_qy_incnr": "-",
+            "trmend_qy": "-",
+            "rm": "-",
+            "stlm_dt": "2025-12-31",
+            "bsns_year": "2025",
+            "reprt_code": "11011",
+        },
+    ]
+
+    _FILLED_HYSLR_CHG = [{
+        "source": "hyslr_chg",
+        "rcept_no": "20260415000535",
+        "corp_cls": "K",
+        "corp_code": "01011526",
+        "corp_name": "엔켐",
+        "change_on": "2026년 04월 12일",
+        "mxmm_shrholdr_nm": "오정강 외 2인",
+        "posesn_stock_co": "1,234,567",
+        "qota_rt": "17.40",
+        "change_cause": "기존 최대주주의 시간외 장외매도로 인한 변경",
+        "rm": "-",
+        "stlm_dt": "2026-03-31",
+        "bsns_year": "2026",
+        "reprt_code": "11013",
+    }]
+
+    def test_enkem_empty_record_gets_no_data_note(self):
+        got = run_js(
+            f"sectionBlocks({json.dumps(self._ENKEM_HYSLR_CHG_EMPTY, ensure_ascii=False)})"
+        )
+        self.assertEqual(len(got), 1)
+        self.assertEqual(
+            got[0].get("note"), "해당 기간에 보고된 내역이 없습니다.",
+            "식별자·메타 필드만 있고 실데이터가 전부 \"-\"인 레코드는 "
+            "해당 없음으로 표기해야 합니다",
+        )
+
+    def test_enkem_empty_record_keeps_rcept_no_reachable(self):
+        """판단이 틀렸을 경우를 대비해 접수번호는 지우지 않는다 —
+        사용자가 원문을 직접 열어 확인할 수 있어야 한다."""
+        got = run_js(
+            f"sectionBlocks({json.dumps(self._ENKEM_HYSLR_CHG_EMPTY, ensure_ascii=False)})"
+        )
+        table = got[0]["table"]
+        present = set(table["keys"]) | {c["key"] for c in table["caption"]}
+        self.assertIn("rcept_no", present)
+
+    def test_samsung_filled_record_has_no_note(self):
+        """값이 하나라도 있으면(삼성전자 자기주식 실수량) 표를 그대로
+        보여준다 — 해당 없음 문구를 붙이면 안 된다."""
+        got = run_js(
+            f"sectionBlocks({json.dumps(self._SAMSUNG_EXEC_TREASURY_FILLED, ensure_ascii=False)})"
+        )
+        self.assertEqual(len(got), 1)
+        self.assertNotIn("note", got[0])
+
+    def test_filled_hyslr_chg_has_no_note(self):
+        """2026 1분기처럼 실제 변동(17.40%)이 있으면 해당 없음으로
+        덮으면 안 된다 — 있는 데이터를 없다고 하는 게 더 나쁘다."""
+        got = run_js(
+            f"sectionBlocks({json.dumps(self._FILLED_HYSLR_CHG, ensure_ascii=False)})"
+        )
+        self.assertEqual(len(got), 1)
+        self.assertNotIn("note", got[0])
+        table = got[0]["table"]
+        formatted = json.dumps(table, ensure_ascii=False)
+        self.assertIn("17.4", formatted)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestMetaOnlyNoteRendersInDom(unittest.TestCase):
+    """sectionBlocks가 note를 돌려줘도 ui.js의 blockEl이 실제로 그리지
+    않으면 죽은 데이터다(이 저장소에서 반복된 "정의만 있고 배선이 없는"
+    사고 유형과 같다) — renderSection을 실제로 실행해 DOM에 문구가
+    나오는지 확인한다.
+    """
+
+    def test_note_text_appears_in_rendered_dom(self):
+        records = TestMetaOnlyRecordsGetNoDataNote._ENKEM_HYSLR_CHG_EMPTY
+        got = run_render_section(
+            '"insider_timeline"', json.dumps(records, ensure_ascii=False)
+        )
+        self.assertIn("해당 기간에 보고된 내역이 없습니다.", got["notes"])
+
+    def test_filled_record_does_not_render_the_note(self):
+        records = TestMetaOnlyRecordsGetNoDataNote._FILLED_HYSLR_CHG
+        got = run_render_section(
+            '"insider_timeline"', json.dumps(records, ensure_ascii=False)
+        )
+        self.assertNotIn("해당 기간에 보고된 내역이 없습니다.", got["notes"])
+
+
 @unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
 class TestInsiderTimelineRenderWiring(unittest.TestCase):
     """sectionBlocks 단독 검증만으로는 renderSection(ui.js) 호출부가 실제로
