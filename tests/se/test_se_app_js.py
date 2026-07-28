@@ -5252,7 +5252,7 @@ process.stdout.write(JSON.stringify({
   indicatorSeries: indicatorCharts.map(function (c) {
     return c.data.datasets.map(function (d) { return d.label; });
   }),
-  // 리뷰 지적 ④ — 표는 "130.248%"인데 툴팁이 맨숫자면 같은 값을 둘이
+  // 리뷰 지적 ④ — 표는 "130.2%"인데 툴팁이 맨숫자면 같은 값을 둘이
   // 다르게 말하는 셈이다. 이름에 이미 "(%)"가 있는 지표의 중복도 함께 본다.
   indicatorTooltip: indicatorCharts[0]
     ? indicatorCharts[0].config.options.plugins.tooltip.callbacks.label(
@@ -5528,10 +5528,10 @@ class TestChartRenderExecution(unittest.TestCase):
             self.assertNotIn("매입채무회전율", names)
 
     def test_indicator_tooltip_carries_the_percent_unit_like_the_table(self):
-        """리뷰 지적 ④: 표는 "130.248%"인데 툴팁이 맨숫자면 같은 값을 둘이
+        """리뷰 지적 ④: 표는 "130.2%"인데 툴팁이 맨숫자면 같은 값을 둘이
         다르게 말한다. 이름에 이미 "(%)"가 있으면 단위를 겹쳐 붙이지 않는다."""
         got = run_chart_render()
-        self.assertEqual(got["indicatorTooltip"], "순이익률: 130.248%")
+        self.assertEqual(got["indicatorTooltip"], "순이익률: 130.2%")
         self.assertEqual(got["indicatorTooltipPercentInName"], "배당성향(%): 25.1")
 
     def test_missing_years_are_stated_on_screen(self):
@@ -7230,7 +7230,23 @@ class TestIndicatorBlocks(unittest.TestCase):
 
     def test_format_indicator_appends_percent(self):
         got = run_js('formatIndicator("부채비율", 130.248)')
-        self.assertEqual(got, "130.248%")
+        self.assertEqual(got, "130.2%")
+
+    def test_format_indicator_rounds_to_one_decimal(self):
+        # DART가 주는 자릿수는 제각각이다 — 실측으로 -22.56 · -152.661 ·
+        # -144.09 가 한 표에 나란히 온다. 그대로 쓰면 읽기 어려워 표시만
+        # 소수 첫째 자리로 통일한다(원본 값은 idx_val 로 그대로 남는다).
+        got = run_js(
+            '[formatIndicator("순이익률", -22.56),'
+            ' formatIndicator("순이익률", -152.661),'
+            ' formatIndicator("ROE", -144.09),'
+            ' formatIndicator("자본유보율", 3931.533)]'
+        )
+        self.assertEqual(got, ["-22.6%", "-152.7%", "-144.1%", "3931.5%"])
+
+    def test_format_indicator_keeps_zero_visible(self):
+        # 0 은 "—"(값 없음)와 다르다. 반올림 뒤에도 0 이 사라지면 안 된다.
+        self.assertEqual(run_js('formatIndicator("부채비율", 0)'), "0.0%")
 
     def test_format_indicator_does_not_double_percent_when_name_has_it(self):
         got = run_js('formatIndicator("배당성향(%)", 25.1)')
@@ -7330,7 +7346,7 @@ class TestIndicatorSectionRender(unittest.TestCase):
         got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
         cells = got["cells"]
         self.assertIn("부채비율", cells)
-        self.assertIn("130.248%", cells)
+        self.assertIn("130.2%", cells)
         self.assertTrue(
             any("빌린 돈이 자기 돈의 몇 %인가" in c for c in cells),
             "부채비율의 뜻(note)이 렌더된 셀에 없습니다",

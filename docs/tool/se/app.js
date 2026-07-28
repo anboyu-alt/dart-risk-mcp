@@ -2317,7 +2317,12 @@ const INDICATOR_NOTES = Object.assign(Object.create(null), {
 function formatIndicator(idxNm, idxVal) {
   if (idxVal === null || idxVal === undefined) return "—";
   if (typeof idxVal === "number" && Number.isNaN(idxVal)) return "—";
-  const s = String(idxVal);
+  // DART가 주는 자릿수는 지표·연도마다 제각각이다(실측: -22.56 · -152.661 ·
+  // -144.09 가 한 표에 나란히 온다). 그대로 쓰면 자릿수가 들쭉날쭉해 읽기
+  // 어렵다 — 소수 첫째 자리로 통일한다. 반올림은 표시에만 적용하고 원본
+  // 값은 indicatorBlocks의 idx_val로 그대로 남아 툴팁·차트가 쓴다.
+  const n = typeof idxVal === "number" ? idxVal : Number(idxVal);
+  const s = Number.isFinite(n) ? n.toFixed(1) : String(idxVal);
   const hasPercentInName = typeof idxNm === "string" && idxNm.indexOf("(%)") !== -1;
   return hasPercentInName ? s : s + "%";
 }
