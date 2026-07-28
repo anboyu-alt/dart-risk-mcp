@@ -2004,5 +2004,108 @@ class TestChartRendering(unittest.TestCase):
                             "차트가 판정 색을 씁니다")
 
 
+class TestFinancialRatiosDerivedBlockIsWired(unittest.TestCase):
+    """SE-4f Task 2 — financialRatios(app.js)는 순수 함수라 아무도 부르지
+    않아도 조용히 존재만 한다. "정의만 있고 호출부가 없다"는 사고가 이
+    계획에서 이미 다섯 번 났다(task-2-brief) — renderSection이 financials
+    섹션에서 실제로 그 결과를 그리는지 소스로 확인한다.
+    """
+
+    def test_render_section_calls_financial_ratios_for_financials_key(self):
+        ui = _sources()["ui.js"]
+        body = _extract_function_body(ui, "renderSection")
+        m = re.search(r'key\s*===\s*"financials"[^{]*\{', body)
+        self.assertIsNotNone(m, "renderSection이 financials 섹션을 특별히 다루지 않습니다")
+        guard_block = _extract_braced_block(body, m.end() - 1)
+        self.assertIn("financialRatios(", guard_block,
+                      "renderSection이 financialRatios()를 부르지 않습니다 — "
+                      "정의만 있고 호출부가 없는 사고입니다")
+
+    def test_derived_block_is_appended_before_the_raw_table_blocks(self):
+        """브리프: "파생 블록은 기존 financials 표 위에 얹는다" — DOM 순서상
+        원본 표보다 먼저(화면에서 더 위) 나와야 한다."""
+        ui = _sources()["ui.js"]
+        body = _extract_function_body(ui, "renderSection")
+        m_ratio = re.search(r"holder\.appendChild\(\s*ratioBlock\.el\s*\)", body)
+        m_loop = re.search(r"for\s*\(const block of blocks\)", body)
+        self.assertIsNotNone(m_ratio, "renderSection이 파생 블록을 붙이지 않습니다")
+        self.assertIsNotNone(m_loop, "renderSection이 원본 표 블록 루프를 잃었습니다")
+        self.assertLess(m_ratio.start(), m_loop.start(),
+                        "파생 블록이 원본 표보다 먼저 붙지 않습니다 — 브리프: "
+                        "\"파생 블록은 기존 financials 표 위에 얹는다\"")
+
+    def test_raw_table_blocks_are_still_rendered(self):
+        """파생 블록을 추가한다고 원본 표 렌더 경로를 지워버리면 안 된다
+        (브리프: "표를 없애지 마세요")."""
+        ui = _sources()["ui.js"]
+        body = _extract_function_body(ui, "renderSection")
+        self.assertIn("for (const block of blocks)", body,
+                      "renderSection이 원본 표 블록을 더 이상 그리지 않습니다")
+
+    def test_notice_discloses_the_values_are_calculated(self):
+        """브리프: '"DART 공시 수치로 계산한 값"이라는 고지' — 공시 원본
+        숫자와 우리 계산값이 화면에서 구분되지 않으면 그것도 거짓말이다."""
+        ui = _sources()["ui.js"]
+        self.assertIn("DART 공시 수치로 계산한 값", ui,
+                      "파생 지표 블록에 계산값이라는 고지가 없습니다")
+
+    def test_missing_ratio_values_show_the_reason_not_silently_dropped(self):
+        """브리프: "값이 없는 지표는 사유와 함께 표기한다." financialRatios가
+        돌려주는 사유(row.사유)를 렌더가 실제로 쓰는지 확인한다."""
+        ui = _sources()["ui.js"]
+        body = _extract_function_body(ui, "buildFinancialRatiosBlock")
+        self.assertRegex(body, r"\.사유",
+                         "값이 없을 때 사유를 표시하지 않습니다 — 조용히 빠집니다")
+
+    def test_basis_text_shows_formula_and_material_values_together(self):
+        """브리프 예시: "영업이익 -783.9억 ÷ 매출액 3,127.9억"처럼 계산식과
+        재료 값이 함께 보여야 한다."""
+        ui = _sources()["ui.js"]
+        body = _extract_function_body(ui, "ratioBasisText")
+        self.assertIn("계산식", body)
+        self.assertIn("재료", body)
+        self.assertIn("formatAmount(", body,
+                      "재료 값을 억/조 단위로 사람이 읽기 쉽게 바꾸지 않습니다")
+
+    def test_chart_uses_the_derived_spec_key_not_the_raw_financials_key(self):
+        """CHART_SPECS에는 일부러 "financials" 키가 없다(연결·별도가 섞여
+        SE-4d에서 차트를 뺐다) — 파생 차트는 반드시 "financial_ratios"
+        키로 불러야 그 스펙(CHART_SPECS.financial_ratios)을 찾는다."""
+        ui = _sources()["ui.js"]
+        body = _extract_function_body(ui, "buildFinancialRatiosBlock")
+        self.assertRegex(
+            body, r'renderChart\(\s*wrap\s*,\s*"financial_ratios"\s*,\s*ratios\s*\)',
+            "파생 차트가 CHART_SPECS.financial_ratios를 쓰지 않습니다",
+        )
+
+    def test_derived_block_has_a_css_class_distinct_from_raw_tables(self):
+        """브리프 판정선: "공시 원본 숫자와 우리 계산값이 구분되지 않으면
+        그것도 거짓말이다" — 문구뿐 아니라 시각적으로도 나뉘어야 한다."""
+        ui = _sources()["ui.js"]
+        html = _sources()["index.html"]
+        body = _extract_function_body(ui, "buildFinancialRatiosBlock")
+        m = re.search(r'\.className\s*=\s*"([^"]+)"', body)
+        self.assertIsNotNone(m, "파생 블록에 별도 class를 주지 않습니다")
+        css_class = m.group(1)
+        self.assertIn("." + css_class + "{", html,
+                      f"index.html에 .{css_class} 스타일이 없습니다")
+
+    def test_derived_class_is_not_a_verdict_color(self):
+        """색은 계열 구분이지 판정이 아니다(v0.8.5) — --red를 쓰면 안 된다."""
+        html = _sources()["index.html"]
+        m = re.search(r"\.derived\{([^}]*)\}", html)
+        self.assertIsNotNone(m, ".derived 스타일 규칙을 찾지 못했습니다")
+        self.assertNotIn("--red", m.group(1), ".derived가 판정 색(--red)을 씁니다")
+
+    def test_derived_block_text_has_no_verdict_words(self):
+        """판정선(SE-4f 계획): "악화"·"개선"·"위험 수준" 같은 해석 어휘를
+        쓰면 안 된다 — 계산은 사실, 해석은 판정이다."""
+        ui = _sources()["ui.js"]
+        for name in ("buildFinancialRatiosBlock", "ratioBasisText"):
+            body = _extract_function_body(ui, name)
+            for word in ("악화", "개선", "위험", "주의", "양호", "부실"):
+                self.assertNotIn(word, body, f"{name}에 판정 어휘 '{word}'")
+
+
 if __name__ == "__main__":
     unittest.main()

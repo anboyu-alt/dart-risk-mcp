@@ -3788,15 +3788,27 @@ class TestChartData(unittest.TestCase):
                         sp_stock_lmp_rate:"5"}], CHART_SPECS.insider_timeline)''')
         self.assertEqual(got["datasets"][0]["data"], [5])
 
+    # 서버가 주지 않는(STAGE1_SPECS에 없는) 섹션 키인데도 CHART_SPECS에
+    # 있는 게 정상인 예외 목록. app.js가 DART 원본이 아니라 **클라이언트가
+    # 계산한 파생값**을 렌더하는 섹션이다 — financial_ratios는
+    # financialRatios(financials)가 만든 구분·기간·지표·값 레코드를 그린다
+    # (financials 자체를 그대로 그리지 않는 이유는 위
+    # test_financials_has_no_chart_spec 참고). 서버 레지스트리를 건드리지
+    # 않고도(se_server/ API 계약 무변경 원칙) 이 키가 "오타"로 오인돼
+    # 이 테스트에 걸리지 않도록 명시적으로 허용한다.
+    KNOWN_DERIVED_CHART_KEYS = {"financial_ratios"}
+
     def test_spec_keys_all_exist_in_the_server_registry(self):
-        """CHART_SPECS의 섹션 키가 서버가 실제로 주는 키여야 한다.
-        오타가 있으면 차트가 조용히 안 그려진다."""
+        """CHART_SPECS의 섹션 키는 서버가 실제로 주는 키이거나, 위
+        KNOWN_DERIVED_CHART_KEYS에 명시된 클라이언트 파생 섹션이어야 한다.
+        어느 쪽도 아니면 오타일 가능성이 높다 — 오타가 있으면 차트가
+        조용히 안 그려진다."""
         from se_server.jobs.registry import STAGE1_SPECS
 
-        known = {s.key for s in STAGE1_SPECS}
+        known = {s.key for s in STAGE1_SPECS} | self.KNOWN_DERIVED_CHART_KEYS
         specs = run_js("Object.keys(CHART_SPECS)")
         unknown = sorted(set(specs) - known)
-        self.assertEqual(unknown, [], f"registry에 없는 섹션 키: {unknown}")
+        self.assertEqual(unknown, [], f"registry에도 없고 파생 섹션 허용목록에도 없는 키: {unknown}")
 
     def test_no_spec_uses_a_time_scale(self):
         """time 축은 별도 어댑터를 요구한다. category 축만 쓴다.
@@ -4922,6 +4934,147 @@ class TestCompanySwitchDestroysCharts(unittest.TestCase):
         이어붙을 수 있다."""
         got = run_company_switch()
         self.assertEqual(got["chartsAfterPostSwitchRender"], got["chartsAfterSwitch"] + 1)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFinancialRatios(unittest.TestCase):
+    # 엔켐 2025 사업보고서 연결 실측값(계정과목 전체 — API 직접 조회).
+    # 당기순이익은 DART 원문 그대로 "당기순이익(손실)"로 온다(괄호 포함) —
+    # 브리프 픽스처에 이 계정이 아예 없어서 별칭 결함이 초록으로 통과했던
+    # 사고를 재현 방지하려고 실측 전체 계정을 그대로 옮겨 적는다.
+    # "법인세차감전 순이익"도 함께 넣어 별칭이 그 계정을 "당기순이익"으로
+    # 잘못 집지 않는지 같은 픽스처로 검증한다.
+    _CFS = """[
+      {fs_div:"CFS", sj_div:"BS", account_nm:"유동자산",
+       thstrm_amount:"355,778,989,218", frmtrm_amount:"442,931,976,422"},
+      {fs_div:"CFS", sj_div:"BS", account_nm:"비유동자산",
+       thstrm_amount:"751,770,189,243"},
+      {fs_div:"CFS", sj_div:"BS", account_nm:"자산총계",
+       thstrm_amount:"1,107,549,178,461"},
+      {fs_div:"CFS", sj_div:"BS", account_nm:"유동부채",
+       thstrm_amount:"580,445,377,198", frmtrm_amount:"618,068,574,810"},
+      {fs_div:"CFS", sj_div:"BS", account_nm:"비유동부채",
+       thstrm_amount:"46,078,749,534"},
+      {fs_div:"CFS", sj_div:"BS", account_nm:"부채총계",
+       thstrm_amount:"626,524,126,732", frmtrm_amount:"675,004,911,778"},
+      {fs_div:"CFS", sj_div:"BS", account_nm:"자본금",
+       thstrm_amount:"10,925,068,000", frmtrm_amount:"10,555,112,500"},
+      {fs_div:"CFS", sj_div:"BS", account_nm:"이익잉여금",
+       thstrm_amount:"-677,559,097,436"},
+      {fs_div:"CFS", sj_div:"BS", account_nm:"자본총계",
+       thstrm_amount:"481,025,051,729", frmtrm_amount:"484,842,224,968"},
+      {fs_div:"CFS", sj_div:"IS", account_nm:"매출액",
+       thstrm_amount:"312,794,042,228", frmtrm_amount:"365,708,579,550"},
+      {fs_div:"CFS", sj_div:"IS", account_nm:"영업이익",
+       thstrm_amount:"-78,386,657,935", frmtrm_amount:"-50,403,019,697"},
+      {fs_div:"CFS", sj_div:"IS", account_nm:"법인세차감전 순이익",
+       thstrm_amount:"-58,836,298,293"},
+      {fs_div:"CFS", sj_div:"IS", account_nm:"당기순이익(손실)",
+       thstrm_amount:"-70,567,058,674", frmtrm_amount:"-558,294,328,262"},
+      {fs_div:"CFS", sj_div:"IS", account_nm:"총포괄손익",
+       thstrm_amount:"-71,645,284,911"}
+    ]"""
+
+    def test_operating_margin_matches_hand_calculation(self):
+        got = run_js(f"financialRatios({self._CFS})")
+        cur = [r for r in got if r["지표"] == "영업이익률" and r["기간"] == "당기"][0]
+        self.assertAlmostEqual(cur["값"], -25.1, places=1)
+
+    def test_debt_ratio_matches_hand_calculation(self):
+        got = run_js(f"financialRatios({self._CFS})")
+        cur = [r for r in got if r["지표"] == "부채비율" and r["기간"] == "당기"][0]
+        self.assertAlmostEqual(cur["값"], 130.2, places=1)
+
+    def test_net_margin_resolves_the_parenthesized_account_name(self):
+        """DART가 실제로 주는 계정명은 "당기순이익(손실)"이다(괄호 포함,
+        엔켐 실측) — 정확 일치만 보면 이 지표가 영원히 null이 된다."""
+        got = run_js(f"financialRatios({self._CFS})")
+        cur = [r for r in got if r["지표"] == "순이익률" and r["기간"] == "당기"][0]
+        self.assertAlmostEqual(cur["값"], -22.6, places=1)
+        pri = [r for r in got if r["지표"] == "순이익률" and r["기간"] == "전기"][0]
+        self.assertAlmostEqual(pri["값"], -152.7, places=1)
+
+    def test_current_ratio_matches_hand_calculation(self):
+        got = run_js(f"financialRatios({self._CFS})")
+        cur = [r for r in got if r["지표"] == "유동비율" and r["기간"] == "당기"][0]
+        self.assertAlmostEqual(cur["값"], 61.3, places=1)
+
+    def test_alias_does_not_pick_pretax_income_as_net_income(self):
+        """"법인세차감전 순이익"도 "순이익"을 포함하지만 당기순이익이 아니다.
+        별칭이 이 계정을 대신 집으면 값은 나오지만 틀린 숫자다 — 값이
+        없는 것보다 나쁘다(브리프 경고)."""
+        got = run_js('''financialRatios([
+          {fs_div:"CFS", sj_div:"IS", account_nm:"매출액", thstrm_amount:"1000"},
+          {fs_div:"CFS", sj_div:"IS", account_nm:"법인세차감전 순이익", thstrm_amount:"999"}
+        ])''')
+        r = [x for x in got if x["지표"] == "순이익률"][0]
+        self.assertIsNone(r["값"])
+        self.assertIn("당기순이익", r.get("사유", ""))
+
+    def test_prior_period_is_computed_too(self):
+        """한 시점만 계산하면 추이가 안 나온다 — 그게 이 태스크의 존재 이유다."""
+        got = run_js(f"financialRatios({self._CFS})")
+        periods = {r["기간"] for r in got}
+        self.assertIn("전기", periods)
+
+    def test_formula_and_inputs_are_returned(self):
+        """우리가 만든 숫자는 검증 가능해야 한다."""
+        got = run_js(f"financialRatios({self._CFS})")
+        r = [x for x in got if x["지표"] == "영업이익률"][0]
+        self.assertTrue(r["계산식"])
+        self.assertTrue(r["재료"])
+
+    def test_capital_impairment_is_not_reported_when_there_is_none(self):
+        """자본총계가 자본금보다 크면 잠식이 아니다.
+        공식을 그대로 쓰면 -4302.9% 가 나오는데 그건 정보가 아니다."""
+        got = run_js(f"financialRatios({self._CFS})")
+        imp = [r for r in got if r["지표"] == "자본잠식률"]
+        for r in imp:
+            self.assertIsNone(r["값"], f"잠식이 없는데 값을 표기합니다: {r}")
+
+    def test_capital_impairment_is_reported_when_it_exists(self):
+        got = run_js('''financialRatios([
+          {fs_div:"CFS", sj_div:"BS", account_nm:"자본금", thstrm_amount:"1000"},
+          {fs_div:"CFS", sj_div:"BS", account_nm:"자본총계", thstrm_amount:"400"}
+        ])''')
+        imp = [r for r in got if r["지표"] == "자본잠식률" and r["기간"] == "당기"][0]
+        self.assertAlmostEqual(imp["값"], 60.0, places=1)
+
+    def test_consolidated_and_separate_are_not_mixed(self):
+        """연결과 별도를 한 계산에 섞으면 거짓이 된다."""
+        got = run_js('''financialRatios([
+          {fs_div:"CFS", sj_div:"IS", account_nm:"매출액", thstrm_amount:"1000"},
+          {fs_div:"CFS", sj_div:"IS", account_nm:"영업이익", thstrm_amount:"100"},
+          {fs_div:"OFS", sj_div:"IS", account_nm:"매출액", thstrm_amount:"500"},
+          {fs_div:"OFS", sj_div:"IS", account_nm:"영업이익", thstrm_amount:"250"}
+        ])''')
+        by = {(r["구분"], r["지표"]): r["값"] for r in got if r["지표"] == "영업이익률"}
+        self.assertAlmostEqual(by[("연결", "영업이익률")], 10.0, places=1)
+        self.assertAlmostEqual(by[("별도", "영업이익률")], 50.0, places=1)
+
+    def test_zero_denominator_yields_null_not_infinity(self):
+        got = run_js('''financialRatios([
+          {fs_div:"CFS", sj_div:"IS", account_nm:"매출액", thstrm_amount:"0"},
+          {fs_div:"CFS", sj_div:"IS", account_nm:"영업이익", thstrm_amount:"100"}
+        ])''')
+        r = [x for x in got if x["지표"] == "영업이익률"][0]
+        self.assertIsNone(r["값"])
+
+    def test_missing_account_yields_null_with_a_reason(self):
+        """계정이 없으면 왜 없는지 말해야 한다 — 조용히 빼면 안 된다."""
+        got = run_js('''financialRatios([
+          {fs_div:"CFS", sj_div:"IS", account_nm:"매출액", thstrm_amount:"1000"}
+        ])''')
+        r = [x for x in got if x["지표"] == "영업이익률"][0]
+        self.assertIsNone(r["값"])
+        self.assertTrue(r.get("사유"))
+
+    def test_no_verdict_words_anywhere_in_output(self):
+        """계산은 사실, 해석은 판정이다(v0.8.5)."""
+        import json as _json
+        got = _json.dumps(run_js(f"financialRatios({self._CFS})"), ensure_ascii=False)
+        for word in ("악화", "개선", "위험", "주의", "양호", "부실"):
+            self.assertNotIn(word, got, f"판정 어휘 '{word}'")
 
 
 if __name__ == "__main__":

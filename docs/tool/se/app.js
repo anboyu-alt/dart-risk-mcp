@@ -1084,6 +1084,210 @@ function documentBlocks(text) {
   return blocks;
 }
 
+// fs_div("CFS"/"OFS") → 화면 표기. financials 원본 레코드가 이 두 값만
+// 갖는다(field-inventory 실측) — 그 외 값은 아래서 통째로 건너뛴다.
+const FS_DIV_LABELS = Object.create(null);
+FS_DIV_LABELS.CFS = "연결";
+FS_DIV_LABELS.OFS = "별도";
+
+// financialRatios가 만드는 기간 3종과, 각 기간이 financials 레코드의 어느
+// 금액 열에서 오는지의 대응표. **당기를 마지막에 둔다** — 이 배열 순서가
+// 곧 출력 레코드의 순서이고(전전기→전기→당기), 그 순서가 그대로 두 곳에서
+// 쓰인다: ① 아래 CHART_SPECS.financial_ratios의 x축("기간")은 숫자가
+// 없는 순수 범주형이라 chartData가 정렬하지 않고 등장 순서를 그대로
+// 쓴다(위 chartData 주석 ③) — 당기가 마지막이어야 그래프가 왼쪽(과거)에서
+// 오른쪽(현재)으로 흐른다. ② 같은 (구분, 지표) 조합이 기간마다 반복
+// 나오므로, 이 조합만으로 마지막 값을 찾는 코드(예: dict 컴프리헨션)는
+// 자연히 당기 값을 얻는다 — 순서를 바꾸면 이런 코드가 조용히 옛 기간
+// 값을 돌려주게 된다.
+const RATIO_PERIODS = [
+  { period: "전전기", field: "bfefrmtrm_amount" },
+  { period: "전기", field: "frmtrm_amount" },
+  { period: "당기", field: "thstrm_amount" },
+];
+
+// 계산 가능한 지표 4종(자본잠식률은 표기 조건이 달라 별도 처리한다,
+// financialRatios·computeCapitalImpairment 참고). num/den은 계정
+// "개념"의 대표 이름이다 — 실제 financials.account_nm은 DART 제출
+// 기업마다 표기가 갈린다(엔켐 실측: 당기순이익이 "당기순이익(손실)"로
+// 옴). 대표 이름 그대로는 accounts.get()이 못 찾으므로 ACCOUNT_ALIASES·
+// pickAccount(아래)를 거쳐 조회한다 — 사유 문구는 그래도 이 대표
+// 이름을 써서 "당기순이익 없음"처럼 어떤 개념이 빠졌는지를 말한다
+// (실제 만난 표기가 아니라 찾던 개념 기준 — 표기가 열 종류든 사용자가
+// 찾을 대상은 하나다).
+const RATIO_DEFS = [
+  { name: "영업이익률", num: "영업이익", den: "매출액", formula: "영업이익 ÷ 매출액" },
+  { name: "순이익률", num: "당기순이익", den: "매출액", formula: "당기순이익 ÷ 매출액" },
+  { name: "부채비율", num: "부채총계", den: "자본총계", formula: "부채총계 ÷ 자본총계" },
+  { name: "유동비율", num: "유동자산", den: "유동부채", formula: "유동자산 ÷ 유동부채" },
+];
+
+// 대표 계정명 → DART 실제 표기 별칭 목록(우선순위순, 대표 이름이 항상
+// 1순위). dart_risk_mcp/core/dart_client.py의 _FS_ALIASES·
+// docs/tool/signals-data.json의 fs_aliases와 같은 문제(표기 분산)를
+// 겨냥하지만 이 파일은 순수 함수 유지가 우선이라(브리프 제약 1) 독립
+// 상수로 별도 유지한다 — signals-data.json은 비동기 로드라 얽으면
+// financialRatios가 더 이상 순수 함수가 아니게 된다. 여기 있는 6개
+// 대표명만 필요하므로 그 부분집합을 그대로 옮겨 적었다(전체 표는 위
+// 두 파일이 원본).
+//
+// **별칭을 무한정 넓히지 않는다** — "법인세차감전 순이익"처럼 다른
+// 계정과 이름이 겹치는 표기는 넣지 않는다. 넣으면 값이 없는 것보다
+// 나쁜, 틀린 계정을 자신 있게 보여주는 결과가 된다(브리프 경고).
+const ACCOUNT_ALIASES = Object.create(null);
+ACCOUNT_ALIASES["매출액"] = [
+  "매출액", "영업수익", "수익(매출액)", "영업수익(매출액)", "매출",
+  "순매출액", "수입금액", "매출수익", "영업수입", "영업매출액", "수익",
+];
+ACCOUNT_ALIASES["영업이익"] = ["영업이익", "영업이익(손실)", "영업손익", "영업이익(영업손실)"];
+ACCOUNT_ALIASES["당기순이익"] = [
+  "당기순이익", "당기순이익(손실)", "당기순이익(당기순손실)",
+  "당기순손익", "분기순이익", "반기순이익", "연결당기순이익",
+];
+ACCOUNT_ALIASES["부채총계"] = ["부채총계", "부채 총계"];
+ACCOUNT_ALIASES["자본총계"] = ["자본총계", "자본 총계", "자본합계"];
+ACCOUNT_ALIASES["유동자산"] = ["유동자산"];
+ACCOUNT_ALIASES["유동부채"] = ["유동부채", "유동부채 합계"];
+ACCOUNT_ALIASES["자본금"] = ["자본금"];
+
+/** account_nm → 그 계정의 raw financials 행(연결 또는 별도 한 그룹 안).
+ *  같은 계정명이 한 그룹 안에 두 번 나오면(정상적인 DART 응답에서는
+ *  없어야 하지만) 먼저 만난 행을 신뢰값으로 삼는다 — 뒤 행이 조용히
+ *  덮어쓰면 어느 쪽이 실제 계산에 쓰였는지 알 수 없게 된다. */
+function indexAccountsByDiv(records) {
+  const byDiv = new Map();
+  for (const r of records) {
+    if (!r || typeof r !== "object") continue;
+    const div = r.fs_div;
+    if (div !== "CFS" && div !== "OFS") continue; // 실측 밖 값은 계산하지 않는다
+    if (!byDiv.has(div)) byDiv.set(div, new Map());
+    const accounts = byDiv.get(div);
+    if (!accounts.has(r.account_nm)) accounts.set(r.account_nm, r);
+  }
+  return byDiv;
+}
+
+/** 대표 계정명(예: "당기순이익")으로 accounts 맵을 조회한다. ACCOUNT_ALIASES에
+ *  등록된 별칭을 우선순위대로 시도하고(대표 이름 자신이 항상 1순위),
+ *  등록되지 않은 이름은 그 이름 그대로 한 번만 시도한다(RATIO_DEFS가
+ *  모르는 새 계정을 요구해도 조용히 죽지 않는다). */
+function pickAccount(accounts, canonicalName) {
+  const aliases = ACCOUNT_ALIASES[canonicalName] || [canonicalName];
+  for (const alias of aliases) {
+    const row = accounts.get(alias);
+    if (row) return row;
+  }
+  return undefined;
+}
+
+/** 지표 하나(예: 영업이익률)를 한 기간에 대해 계산한다. 분자·분모 계정 중
+ *  하나라도 없거나(계정 자체가 안 잡힘) 분모가 0이면 값은 null이고
+ *  **왜 없는지 사유로 남긴다** — 조용히 항목을 빼지 않는다(브리프 원칙).
+ *  재료는 항상 두 계정 이름을 키로 갖는 객체를 돌려준다(값이 null이어도
+ *  키 자체는 있다) — 검증 가능성(계산식+재료)이 값의 유무와 무관하게
+ *  항상 보장돼야 하기 때문이다. */
+function computeRatio(구분, 기간, def, accounts, field) {
+  const numRow = pickAccount(accounts, def.num);
+  const denRow = pickAccount(accounts, def.den);
+  const numVal = numRow ? numeric(numRow[field]) : null;
+  const denVal = denRow ? numeric(denRow[field]) : null;
+  const 재료 = Object.create(null);
+  재료[def.num] = numVal;
+  재료[def.den] = denVal;
+
+  let 값 = null;
+  let 사유 = null;
+  if (numVal === null && denVal === null) {
+    사유 = def.num + "·" + def.den + " 없음";
+  } else if (numVal === null) {
+    사유 = def.num + " 없음";
+  } else if (denVal === null) {
+    사유 = def.den + " 없음";
+  } else if (denVal === 0) {
+    // 0으로 나누면 Infinity/NaN이 나온다 — "매출액 0인 회사가 실제로
+    // 있다"(브리프) 그 경우를 계산 불가로 명시한다.
+    사유 = def.den + " 0";
+  } else {
+    값 = (numVal / denVal) * 100;
+  }
+
+  const out = { 구분: 구분, 기간: 기간, 지표: def.name, 값: 값, 계산식: def.formula, 재료: 재료 };
+  if (값 === null) out.사유 = 사유;
+  return out;
+}
+
+/** 자본잠식률은 다른 4개와 표기 조건이 다르다 — 공식(자본금−자본총계)÷
+ *  자본금을 그대로 계산하면 잠식이 없는 정상 회사도 큰 음수가 나온다
+ *  (브리프 예시: 엔켐 −4302.9%, 자본총계가 자본금보다 훨씬 크기 때문).
+ *  그 값은 계산은 맞지만 정보가 아니다 — **양수(자본금이 자본총계보다
+ *  커서 실제로 까먹은 경우)일 때만** 값으로 남기고, 0 이하는 "잠식
+ *  없음"으로 null 처리한다(브리프 판정선: 계산은 사실, 해석은 판정이지만
+ *  "표기하지 않는다"는 판정이 아니라 이 지표의 정의 자체다 — 잠식률은
+ *  잠식이 있을 때만 존재하는 개념이다). */
+function computeCapitalImpairment(구분, 기간, accounts, field) {
+  const capRow = pickAccount(accounts, "자본금");
+  const totalRow = pickAccount(accounts, "자본총계");
+  const capVal = capRow ? numeric(capRow[field]) : null;
+  const totalVal = totalRow ? numeric(totalRow[field]) : null;
+  const 재료 = Object.create(null);
+  재료["자본금"] = capVal;
+  재료["자본총계"] = totalVal;
+
+  let 값 = null;
+  let 사유 = null;
+  if (capVal === null && totalVal === null) {
+    사유 = "자본금·자본총계 없음";
+  } else if (capVal === null) {
+    사유 = "자본금 없음";
+  } else if (totalVal === null) {
+    사유 = "자본총계 없음";
+  } else if (capVal === 0) {
+    사유 = "자본금 0";
+  } else {
+    const ratio = ((capVal - totalVal) / capVal) * 100;
+    if (ratio > 0) {
+      값 = ratio;
+    } else {
+      사유 = "잠식 없음";
+    }
+  }
+
+  const out = {
+    구분: 구분, 기간: 기간, 지표: "자본잠식률",
+    값: 값, 계산식: "(자본금 − 자본총계) ÷ 자본금", 재료: 재료,
+  };
+  if (값 === null) out.사유 = 사유;
+  return out;
+}
+
+/** financials(원본 재무제표 레코드 배열)에서 파생 지표 5종을 연결/별도 ×
+ *  3기간(전전기/전기/당기)으로 계산한다. DART가 주는 건 한 시점 스냅샷
+ *  (indicators)이지만, financials의 thstrm_amount·frmtrm_amount·
+ *  bfefrmtrm_amount 세 열이 이미 같은 계정의 세 시점 값을 담고 있으므로
+ *  그대로 추이를 만들 수 있다 — "공시가 주는 건 사진, 우리가 만드는 건
+ *  흐름"(브리프).
+ *
+ *  **연결과 별도를 절대 같은 계산에 섞지 않는다.** fs_div별로 완전히
+ *  독립된 계정 조회 테이블(indexAccountsByDiv)을 만들어 계산하고, 결과
+ *  행마다 "구분"을 그대로 남긴다 — SE-4d에서 financials 원본 차트를 뺀
+ *  이유가 바로 이 혼입이었다(위 CHART_SPECS 주석 참고). */
+function financialRatios(records) {
+  if (!Array.isArray(records)) return [];
+  const byDiv = indexAccountsByDiv(records);
+
+  const out = [];
+  for (const [div, accounts] of byDiv) {
+    const 구분 = FS_DIV_LABELS[div] || div;
+    for (const p of RATIO_PERIODS) {
+      for (const def of RATIO_DEFS) {
+        out.push(computeRatio(구분, p.period, def, accounts, p.field));
+      }
+      out.push(computeCapitalImpairment(구분, p.period, accounts, p.field));
+    }
+  }
+  return out;
+}
+
 // 섹션별 차트 정의. 여기 없는 섹션은 차트 없이 표만 나온다.
 //
 // **`time` 축을 쓰지 않는다.** Chart.js의 time scale은 별도 날짜 어댑터를
@@ -1194,6 +1398,24 @@ const CHART_SPECS = Object.assign(Object.create(null), {
   disclosures: {
     kind: "bar", title: "월별 공시 건수", xScale: "category",
     monthlyCountOf: "rcept_dt", yLabel: "건수",
+  },
+  // financialRatios(위)가 만든 파생 레코드(구분·기간·지표·값)를 그린다.
+  // financials 원본과 달리 이 레코드는 이미 fs_div를 "구분"(연결/별도)
+  // 문자열로 정규화했고, 같은 계정명이 두 재무제표에 겹쳐 나오는 문제
+  // 자체가 없다(계산 시점에 이미 갈랐다) — 그래도 "지표"만으로 계열을
+  // 나누면 연결 영업이익률과 별도 영업이익률이 같은 계열(같은 이름)에서
+  // 충돌한다. compositeGroupFields로 "지표 (구분)"를 계열 이름으로 쪼갠다
+  // (dividends의 se×stock_knd와 같은 방식, 위 CHART_SPECS.dividends 주석
+  // 참고). x는 "기간"("전전기"/"전기"/"당기" — 숫자가 없는 순수 범주형이라
+  // chartData가 정렬하지 않고 등장 순서를 그대로 쓴다, chartData 주석 ③) —
+  // financialRatios가 전전기→전기→당기 순으로 내보내므로 그 등장 순서가
+  // 곧 시간순이다(위 RATIO_PERIODS 주석 참고). 다섯 지표 모두 단위가 %로
+  // 같으므로(dividends처럼 원/%가 섞이는 문제가 없다) 한 y축에 같이 그려도
+  // 스케일이 왜곡되지 않는다.
+  financial_ratios: {
+    kind: "line", title: "재무 파생 지표 추이 (%, 연결·별도 구분)",
+    x: "기간", groupBy: "지표", compositeGroupFields: ["지표", "구분"],
+    y: "값", yLabel: "%", xScale: "category",
   },
 });
 
@@ -1512,5 +1734,6 @@ if (typeof module !== "undefined" && module.exports) {
     DOC_LIST_KEY, docKeyRceptNo, docListRow,
     CHART_SPECS, chartData, axisLabel, numeric, axisSortKey,
     normalizeDebtByKind, monthlyCounts, compositeXValue,
+    financialRatios,
   };
 }

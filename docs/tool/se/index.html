@@ -69,6 +69,13 @@ th{color:var(--dim2);background:var(--rail);font-weight:normal}
 #panel.open{transform:none}
 .note{color:var(--dim);font-size:12px}
 .warn{color:var(--amber);font-size:12px}
+/* 파생 지표(계산값) 블록 — financials 섹션에서만 쓰인다(ui.js
+   buildFinancialRatiosBlock). 공시 원본 표와 시각적으로도 구분해야
+   한다(SE-4f 판정선: "공시 원본 숫자와 우리 계산값이 구분되지 않으면
+   그것도 거짓말이다") — 왼쪽 테두리 색은 값과 무관하게 항상 같은
+   색이다(v0.8.5 — 판정 색 --red를 쓰지 않는다, 계열 색과 같은 이유로
+   --amber2를 쓴다). */
+.derived{border-left:3px solid var(--amber2);padding-left:12px;margin-bottom:16px}
 #head{display:flex;align-items:center;gap:12px;justify-content:space-between}
 /* #theme-toggle(아래)는 position:fixed로 항상 top:10px;right:12px에
    떠 있고 #panel보다 z-index가 높다.
