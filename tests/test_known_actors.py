@@ -901,6 +901,40 @@ class TestKnownActors(unittest.TestCase):
             {"홍길동", "아레스1호투자조합", "(주)베이트리"})
         self.assertEqual(len(data["actors"]), 3)
 
+    # ── 최종 리뷰 Finding 1: actor_status 화이트리스트 판정 통합 ──────────
+    # 세 군데(se_server/api/handlers.py, known_actors._filter_institutions,
+    # server.py 인라인 3곳)에 흩어져 있던 status 판정을 이 함수 하나로
+    # 합쳤다. 빈 문자열·None·미지 값이 전부 "auto_matched"로 강등되는지를
+    # 이 함수 자체에서 고정한다 — 라우팅 지점 각각의 렌더 테스트는
+    # test_lookup_known_actor.py·test_registry_company_section.py·
+    # test_find_actor_overlap.py에 있다.
+
+    def test_actor_status_blank_string_is_auto_matched(self):
+        from dart_risk_mcp.core.known_actors import actor_status
+        self.assertEqual(actor_status({"status": ""}), "auto_matched")
+
+    def test_actor_status_missing_key_is_auto_matched(self):
+        from dart_risk_mcp.core.known_actors import actor_status
+        self.assertEqual(actor_status({}), "auto_matched")
+
+    def test_actor_status_none_is_auto_matched(self):
+        from dart_risk_mcp.core.known_actors import actor_status
+        self.assertEqual(actor_status({"status": None}), "auto_matched")
+
+    def test_actor_status_unknown_string_is_auto_matched(self):
+        from dart_risk_mcp.core.known_actors import actor_status
+        self.assertEqual(actor_status({"status": "오타"}), "auto_matched")
+
+    def test_actor_status_non_string_is_auto_matched(self):
+        # 리스트/딕셔너리 같은 해시 불가 타입이 와도 죽지 않고 강등한다.
+        from dart_risk_mcp.core.known_actors import actor_status
+        self.assertEqual(actor_status({"status": ["auto_matched"]}), "auto_matched")
+
+    def test_actor_status_valid_values_pass_through(self):
+        from dart_risk_mcp.core.known_actors import actor_status
+        for v in ("verified", "maintainer_seed", "auto_matched"):
+            self.assertEqual(actor_status({"status": v}), v)
+
 
 if __name__ == "__main__":
     unittest.main()

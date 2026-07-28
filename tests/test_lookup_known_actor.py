@@ -47,6 +47,46 @@ class TestLookupKnownActor(unittest.TestCase):
         self.assertIn("동명이인", out)
         self.assertIn("동일인 여부", out)   # 강한 경고 문구
 
+    def test_blank_status_treated_as_unverified(self):
+        # 최종 리뷰 Finding 1: Notion 파서가 status select 비어있는 행을
+        # 내보내면 키는 있고 값이 ""인 레코드가 된다. `== "auto_matched"`
+        # 동등비교였다면 이 경우 아무 경고도 안 붙어 미검증 실명이 검증된
+        # 것처럼 보였다 — actor_status 화이트리스트로 강등돼야 한다.
+        import json
+        from pathlib import Path
+        from dart_risk_mcp.server import lookup_known_actor
+        Path(self._path).write_text(json.dumps({"version": 1, "actors": {
+            "이준민": [{"source": "자동 발굴", "status": "",
+                       "evidence": "△△전자 CB 인수자로 등장"}]
+        }}, ensure_ascii=False), encoding="utf-8")
+        out = lookup_known_actor("이준민")
+        self.assertIn("자동 매칭", out)
+        self.assertIn("동일인 여부", out)   # 강한 경고 문구
+
+    def test_none_status_treated_as_unverified(self):
+        import json
+        from pathlib import Path
+        from dart_risk_mcp.server import lookup_known_actor
+        Path(self._path).write_text(json.dumps({"version": 1, "actors": {
+            "이준민": [{"source": "자동 발굴", "status": None,
+                       "evidence": "△△전자 CB 인수자로 등장"}]
+        }}, ensure_ascii=False), encoding="utf-8")
+        out = lookup_known_actor("이준민")
+        self.assertIn("자동 매칭", out)
+        self.assertIn("동일인 여부", out)
+
+    def test_unknown_status_treated_as_unverified(self):
+        import json
+        from pathlib import Path
+        from dart_risk_mcp.server import lookup_known_actor
+        Path(self._path).write_text(json.dumps({"version": 1, "actors": {
+            "이준민": [{"source": "자동 발굴", "status": "오타",
+                       "evidence": "△△전자 CB 인수자로 등장"}]
+        }}, ensure_ascii=False), encoding="utf-8")
+        out = lookup_known_actor("이준민")
+        self.assertIn("자동 매칭", out)
+        self.assertIn("동일인 여부", out)
+
     def test_maintainer_seed_marked_distinctly(self):
         # 제작자 등록(근거 사후 확보) 인물은 verified와 구분 표기 + 강한 면책
         import json

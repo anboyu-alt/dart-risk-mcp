@@ -561,16 +561,28 @@ def ensure_registry_schema(token: str = "", db_id: str = "") -> bool:
 # ── 로더 ─────────────────────────────────────────────────────────
 
 # 근거 강도 3단계. 이 밖의 값(빈 문자열·None·오타 등)은 전부 가장 약한
-# auto_matched로 강등한다 — se_server/api/handlers.py의 _actor_status와 동일
-# 원칙. Notion 파서가 status select 비어있으면 키는 있고 값이 ""인 레코드를
-# 만드는데, `== "auto_matched"`로 판정하면 그 빈 문자열이 화이트리스트 밖인
-# "사람이 넣은 것"으로 잘못 분류돼 기관 필터를 피해간다. 모르면 기계 등재로
-# 보는 쪽(보수적)으로 강등해야 안전하다.
+# auto_matched로 강등한다. Notion 파서가 status select 비어있으면 키는 있고
+# 값이 ""인 레코드를 만드는데, `== "auto_matched"`로 판정하면 그 빈 문자열이
+# 화이트리스트 밖인 "사람이 넣은 것"으로 잘못 분류돼 기관 필터·렌더 양쪽에서
+# 미검증 실명이 검증된 것처럼 새어나간다. 모르면 기계 등재로 보는 쪽(보수적)
+# 으로 강등해야 안전하다.
 _VALID_ACTOR_STATUSES = frozenset({"verified", "maintainer_seed", "auto_matched"})
 
 
-def _record_status(rec: dict) -> str:
-    """기록에서 status를 뽑아 화이트리스트로 검증(비문자열·미지값은 auto_matched)."""
+def actor_status(rec: dict) -> str:
+    """기록에서 status를 뽑아 화이트리스트로 검증(비문자열·미지값은 auto_matched).
+
+    **이 판정의 유일한 소스** (SE-5b 리뷰). 전에는 이 로직이 세 곳에
+    독립 구현돼 있었다 — `_filter_institutions`가 쓰던 이 함수의 옛 사설
+    버전(`_record_status`), `se_server/api/handlers.py::_actor_status`,
+    그리고 `server.py`의 `st == "auto_matched"` 인라인 동등비교 3곳
+    (`_registry_company_section`·`lookup_known_actor`·`find_actor_overlap`).
+    인라인 동등비교는 이 함수가 정확히 막으려는 결함 그 자체다 — Notion
+    행에 빈 status가 오면 `== "auto_matched"`는 False가 되어 "동명이인
+    미확인" 경고 없이 미검증 실명이 검증된 것처럼 렌더된다. 세 구현을
+    이 함수 하나로 합치고 나머지는 여기서 import해 쓴다
+    (`se_server/api/handlers.py`, `dart_risk_mcp/server.py`).
+    """
     value = (rec or {}).get("status")
     return value if isinstance(value, str) and value in _VALID_ACTOR_STATUSES \
         else "auto_matched"
@@ -598,7 +610,7 @@ def _filter_institutions(data: dict) -> dict:
     filtered = {
         name: recs for name, recs in actors.items()
         if should_store(name)
-        or any(_record_status(r) != "auto_matched" for r in recs)
+        or any(actor_status(r) != "auto_matched" for r in recs)
     }
     if len(filtered) == len(actors):
         return data

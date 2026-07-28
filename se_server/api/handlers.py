@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from dart_risk_mcp.core.dart_client import fetch_disclosure_full, resolve_corp
-from dart_risk_mcp.core.known_actors import lookup_actors_by_company
+from dart_risk_mcp.core.known_actors import actor_status, lookup_actors_by_company
 from se_server.api.auth import AuthError, extract_bearer
 from se_server.api.router import match
 from se_server.api.types import Request, Response
@@ -267,31 +267,14 @@ _ACTOR_DISCLAIMER = (
     "있습니다. status가 auto_matched인 항목은 동명이인 확인이 되지 않았습니다."
 )
 
-# 근거 강도 3단계. 이 밖의 값(빈 문자열·None·오타·사람이 손으로 넣은 값 등)은
-# 전부 가장 약한 auto_matched로 강등한다 — 실명이 걸린 항목이므로 근거를
-# 모를 때 강해 보이는 쪽으로 새는 오차는 허용하지 않는다.
-_VALID_ACTOR_STATUSES = frozenset({"verified", "maintainer_seed", "auto_matched"})
-
-
-def _actor_status(rec: dict) -> str:
-    """레코드에서 status를 뽑아 화이트리스트로 검증한다.
-
-    운영 로더(Notion 파서, known_actors.py:439 부근)는 status select가
-    비어 있으면 키는 존재하되 값이 `""`인 레코드를 만든다. `.get(키, 기본값)`은
-    키가 있으면 기본값을 쓰지 않으므로, 단순 `.get("status", "auto_matched")`은
-    이 빈 문자열 케이스에서 발화하지 않고 `""`가 그대로 응답에 실린다.
-    그래서 존재 여부가 아니라 **값 자체**를 화이트리스트로 검증한다.
-
-    `value in frozenset(...)` 멤버십 검사는 value가 리스트·dict 같은 해시
-    불가 타입이면 `TypeError`를 던진다. 레코드 하나가 그런 값을 갖고
-    들어오면 `/api/se/actors` 전체가 500이 되므로, 문자열인지 먼저
-    확인한 뒤에만 화이트리스트를 대조한다. 문자열이 아니면 근거를 모르는
-    것과 같으니 가장 약한 `auto_matched`로 강등한다(등급 상향 없음).
-    """
-    value = rec.get("status")
-    if isinstance(value, str) and value in _VALID_ACTOR_STATUSES:
-        return value
-    return "auto_matched"
+# status 화이트리스트 판정은 dart_risk_mcp.core.known_actors.actor_status가
+# 유일한 소스다(SE-5b 리뷰 — 전에는 이 판정이 여기·known_actors.py·
+# server.py 셋으로 갈라져 있었고, 인라인 동등비교(`== "auto_matched"`) 쪽은
+# Notion의 빈 status(`""`)를 "사람이 넣은 것"으로 잘못 승격시켜 미검증
+# 실명이 검증된 것처럼 렌더되는 결함이 있었다). 여기서는 로컬 별칭으로만
+# 쓴다 — 실명이 걸린 항목이므로 근거를 모를 때 강해 보이는 쪽으로 새는
+# 오차는 허용하지 않는다.
+_actor_status = actor_status
 
 
 def _query(request: Request, name: str) -> str:

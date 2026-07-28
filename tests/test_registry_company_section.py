@@ -60,6 +60,39 @@ class TestRegistryCompanySection(unittest.TestCase):
         self.assertIn("동일인 여부 미확인", text)
         self.assertIn("제작자 모니터링 등록", text)
 
+    def test_blank_status_still_warns(self):
+        # 최종 리뷰 Finding 1: status가 빈 문자열이면 `== "auto_matched"`
+        # 동등비교는 False가 되어 [자동 매칭 · 동명이인 미확인] 접두어도
+        # 동일인 여부 미확인 경고도 안 붙는다 — actor_status로 강등돼야 한다.
+        from dart_risk_mcp.server import _registry_company_section
+        self._write({"version": 1, "actors": {
+            "이호영": [{"source": "자동 발굴", "evidence": "e", "date": "2025",
+                       "status": "", "companies": ["티쓰리"]}],
+        }})
+        text = "\n".join(_registry_company_section("티쓰리"))
+        self.assertIn("[자동 매칭 · 동명이인 미확인] 이호영", text)
+        self.assertIn("동일인 여부 미확인", text)
+
+    def test_none_status_still_warns(self):
+        from dart_risk_mcp.server import _registry_company_section
+        self._write({"version": 1, "actors": {
+            "이호영": [{"source": "자동 발굴", "evidence": "e", "date": "2025",
+                       "status": None, "companies": ["티쓰리"]}],
+        }})
+        text = "\n".join(_registry_company_section("티쓰리"))
+        self.assertIn("[자동 매칭 · 동명이인 미확인] 이호영", text)
+        self.assertIn("동일인 여부 미확인", text)
+
+    def test_unknown_status_still_warns(self):
+        from dart_risk_mcp.server import _registry_company_section
+        self._write({"version": 1, "actors": {
+            "이호영": [{"source": "자동 발굴", "evidence": "e", "date": "2025",
+                       "status": "오타", "companies": ["티쓰리"]}],
+        }})
+        text = "\n".join(_registry_company_section("티쓰리"))
+        self.assertIn("[자동 매칭 · 동명이인 미확인] 이호영", text)
+        self.assertIn("동일인 여부 미확인", text)
+
     def test_no_drilldown_hint_when_all_shown(self):
         from dart_risk_mcp.server import _registry_company_section
         self._write({"version": 1, "actors": {

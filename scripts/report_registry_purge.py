@@ -45,7 +45,7 @@ sys.path.insert(0, str(_ROOT))
 from dart_risk_mcp.core.known_actors import (  # noqa: E402
     _filter_institutions,
     _load_raw,
-    _record_status,
+    actor_status,
     classify_actor,
     sector_of,
 )
@@ -105,7 +105,7 @@ def build_report() -> dict:
     for name, records in raw_actors.items():
         if name in filtered_names:
             continue
-        statuses = sorted({_record_status(r) for r in records})
+        statuses = sorted({actor_status(r) for r in records})
         excluded.append({
             "name": name,
             "status": "/".join(statuses),
