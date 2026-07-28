@@ -6238,6 +6238,26 @@ class TestFundChain(unittest.TestCase):
         uses_by_purpose = {u["purpose"]: u for u in enchem["uses"]}
         self.assertEqual(uses_by_purpose["운영자금"]["plan"], 35291000000)
 
+    def test_largest_wins_even_when_it_comes_first(self):
+        # 위 픽스처는 실측 순서(34,291 → 35,291)라 큰 값이 뒤에 온다.
+        # 그래서 "최댓값을 고른다"와 "마지막 값을 고른다"가 같은 답을 낸다 —
+        # 구현을 last-wins 로 바꿔도 통과한다(리뷰에서 변이로 확인).
+        # 큰 값을 앞에 놓아 두 규칙을 실제로 갈라놓는다.
+        rows = [
+            {"kind": "public", "year": 2024, "tm": "-", "pay_de": "2022.03.10",
+             "pay_amount": 0, "plan_useprps": "운영자금", "plan_amount": 90000000000,
+             "real_dtls_cn": "운영자금", "real_dtls_amount": 90000000000,
+             "dffrnc_resn": "-", "flags": []},
+            {"kind": "public", "year": 2025, "tm": "-", "pay_de": "2022.03.10",
+             "pay_amount": 0, "plan_useprps": "운영자금", "plan_amount": 10000000000,
+             "real_dtls_cn": "운영자금", "real_dtls_amount": 10000000000,
+             "dffrnc_resn": "-", "flags": []},
+        ]
+        got = run_js(f"fundChain({json.dumps(rows, ensure_ascii=False)})")
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["total_plan"], 90000000000)
+        self.assertEqual(got[0]["uses"][0]["plan"], 90000000000)
+
     def test_rows_field_reflects_original_report_count_per_use(self):
         got = run_js(f"fundChain({json.dumps(self._ROWS, ensure_ascii=False)})")
         by_pay = {g["pay_de"]: g for g in got}
