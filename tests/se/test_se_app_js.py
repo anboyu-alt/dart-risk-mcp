@@ -5575,6 +5575,265 @@ class TestFinancialRatios(unittest.TestCase):
             self.assertNotIn(word, got, f"판정 어휘 '{word}'")
 
 
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestDividendVsIncome(unittest.TestCase):
+    """SE-4f Task 4 — dividends(alotMatter)의 se 항목 중 이미 같은 백만원
+    단위로 나란히 있는 "현금배당금총액"과 "당기순이익"을 사업연도·
+    보고서구분별로 묶는다(task-4-brief.md: "섹션 간 조인이 필요 없습니다").
+    실측(2026-07-28, 삼성전자 corp_code=00126380, rcept_no=20250311001085,
+    bsns_year=2024, reprt_code=11011)과 같은 se 문자열·값을 그대로 쓴다 —
+    "픽스처는 실제 API 응답 형태로"(브리프 검증 요구).
+    """
+
+    _SAMSUNG_2024 = [
+        {"bsns_year": "2024", "reprt_code": "11011", "se": "주당액면가액(원)",
+         "thstrm": "100"},
+        {"bsns_year": "2024", "reprt_code": "11011", "se": "현금배당금총액(백만원)",
+         "thstrm": "9,810,767"},
+        {"bsns_year": "2024", "reprt_code": "11011", "se": "(연결)당기순이익(백만원)",
+         "thstrm": "33,621,363"},
+        {"bsns_year": "2024", "reprt_code": "11011", "se": "(별도)당기순이익(백만원)",
+         "thstrm": "23,582,565"},
+        {"bsns_year": "2024", "reprt_code": "11011", "se": "주식배당금총액(백만원)",
+         "thstrm": "-"},
+        {"bsns_year": "2024", "reprt_code": "11011", "se": "(연결)현금배당성향(%)",
+         "thstrm": "29.20"},
+    ]
+
+    def test_pairs_dividend_and_net_income_for_same_report(self):
+        got = run_js(f"dividendVsIncome({json.dumps(self._SAMSUNG_2024, ensure_ascii=False)})")
+        self.assertEqual(len(got), 1)
+        row = got[0]
+        self.assertEqual(row["bsns_year"], "2024")
+        self.assertEqual(row["reprt_code"], "11011")
+        self.assertEqual(row["현금배당금총액(백만원)"], 9810767)
+        self.assertEqual(row["(연결)당기순이익(백만원)"], 33621363)
+        self.assertEqual(row["(별도)당기순이익(백만원)"], 23582565)
+
+    def test_dash_value_is_null_not_zero(self):
+        """"주식배당금총액"이 "-"(DART 무값 표기)이면 0이 아니라 null이어야
+        한다 — 0으로 채우면 "실제로 0이었다"는 거짓말이 된다(numeric() 주석
+        원칙과 같다)."""
+        got = run_js(f"dividendVsIncome({json.dumps(self._SAMSUNG_2024, ensure_ascii=False)})")
+        self.assertIsNone(got[0]["주식배당금총액(백만원)"])
+
+    def test_percent_field_is_kept_as_number(self):
+        got = run_js(f"dividendVsIncome({json.dumps(self._SAMSUNG_2024, ensure_ascii=False)})")
+        self.assertAlmostEqual(got[0]["(연결)현금배당성향(%)"], 29.2, places=1)
+
+    def test_no_dividend_record_produces_no_row(self):
+        """엔켐처럼 현금배당금총액이 "-"인 회사는 이 비교가 발화하지 않는다
+        (브리프: "엔켐은 배당이 없습니다 … 배당하는 회사를 직접 찾아 확인").
+        빈 배열이지 숨기는 게 아니라 비교할 배당액 자체가 없는 것이다."""
+        records = [
+            {"bsns_year": "2025", "reprt_code": "11011", "se": "현금배당금총액(백만원)",
+             "thstrm": "-"},
+            {"bsns_year": "2025", "reprt_code": "11011", "se": "(연결)당기순이익(백만원)",
+             "thstrm": "-142,974"},
+        ]
+        got = run_js(f"dividendVsIncome({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(got, [])
+
+    def test_separates_rows_by_report_code_within_same_year(self):
+        """같은 사업연도라도 분기 보고서마다 다른 보고이므로 한 행으로
+        뭉치지 않는다(dividends는 fund_usage와 달리 reprt_code가 정규화
+        과정에서 탈락하지 않는다 — 위 CHART_SPECS.dividends 주석 참고)."""
+        records = [
+            {"bsns_year": "2025", "reprt_code": "11013", "se": "현금배당금총액(백만원)",
+             "thstrm": "1,000,000"},
+            {"bsns_year": "2025", "reprt_code": "11013", "se": "(연결)당기순이익(백만원)",
+             "thstrm": "5,000,000"},
+            {"bsns_year": "2025", "reprt_code": "11011", "se": "현금배당금총액(백만원)",
+             "thstrm": "2,000,000"},
+            {"bsns_year": "2025", "reprt_code": "11011", "se": "(연결)당기순이익(백만원)",
+             "thstrm": "9,000,000"},
+        ]
+        got = run_js(f"dividendVsIncome({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(len(got), 2)
+        by_reprt = {r["reprt_code"]: r for r in got}
+        self.assertEqual(by_reprt["11013"]["현금배당금총액(백만원)"], 1000000)
+        self.assertEqual(by_reprt["11011"]["현금배당금총액(백만원)"], 2000000)
+
+    def test_not_an_array_returns_empty(self):
+        self.assertEqual(run_js("dividendVsIncome(null)"), [])
+        self.assertEqual(run_js("dividendVsIncome({})"), [])
+
+    def test_no_verdict_words(self):
+        import json as _json
+        got = _json.dumps(
+            run_js(f"dividendVsIncome({json.dumps(self._SAMSUNG_2024, ensure_ascii=False)})"),
+            ensure_ascii=False,
+        )
+        for word in ("부족", "부적절", "의심", "위험", "과다", "여력"):
+            self.assertNotIn(word, got, f"판정 어휘 '{word}'")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestDividendVsIncomeRenderWiring(unittest.TestCase):
+    """dividendVsIncome이 정의만 있고 renderSection이 부르지 않는 사고를
+    막는다 — "정의만 있고 부르는 곳이 없다"는 이 저장소에서 이미 다섯 번
+    난 사고 유형이다(브리프 참고). sectionBlocks 단독 검증으로는 이
+    호출부 배선 누락을 못 잡는다."""
+
+    _RECORDS = [
+        {"bsns_year": "2024", "reprt_code": "11011", "se": "현금배당금총액(백만원)",
+         "thstrm": "9,810,767"},
+        {"bsns_year": "2024", "reprt_code": "11011", "se": "(연결)당기순이익(백만원)",
+         "thstrm": "33,621,363"},
+    ]
+
+    def test_derived_block_title_is_rendered(self):
+        got = run_render_section('"dividends"', json.dumps(self._RECORDS, ensure_ascii=False))
+        self.assertIn("배당 vs 당기순이익 (사실 비교)", got["titles"])
+
+    def test_formatted_amounts_appear_in_cells(self):
+        got = run_render_section('"dividends"', json.dumps(self._RECORDS, ensure_ascii=False))
+        cells = got["cells"]
+        self.assertIn("9,810,767", cells)
+        self.assertIn("33,621,363", cells)
+
+    def test_original_table_is_not_removed(self):
+        """새 표기는 표 위에 얹는 것이지 원본 표를 지우는 게 아니다
+        (전역 제약: "표를 없애지 않습니다")."""
+        got = run_render_section('"dividends"', json.dumps(self._RECORDS, ensure_ascii=False))
+        cells = got["cells"]
+        self.assertIn("현금배당금총액(백만원)", cells)  # 원본 표의 se 열 값
+
+    def test_no_block_when_no_dividend(self):
+        records = [{"bsns_year": "2025", "reprt_code": "11011", "se": "현금배당금총액(백만원)",
+                    "thstrm": "-"}]
+        got = run_render_section('"dividends"', json.dumps(records, ensure_ascii=False))
+        self.assertNotIn("배당 vs 당기순이익 (사실 비교)", got["titles"])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFundPlanChanges(unittest.TestCase):
+    """SE-4f Task 7 — 같은 조달 건(같은 pay_de·같은 plan_useprps)의
+    계획 금액(plan_amount)이 보고 시점마다 다르게 보고된 사실을 뽑는다
+    (task-7-brief.md). 2026-07-28 엔켐 실측(corp_code=01011526,
+    bsns_year=2022, pssrpCptalUseDtls.json, pay_de=2021.10.26)을 그대로
+    쓴다: 1분기 보고(11013)는 운영자금 계획 342.91억(34,291,000,000),
+    반기(11012)·3분기(11014)·사업보고서(11011)는 352.91억(35,291,000,000)
+    이었다 — 브리프가 말한 그 값 그대로다."""
+
+    def test_detects_differing_plan_amount_for_same_fund_event(self):
+        records = [
+            {"kind": "public", "year": 2022, "pay_de": "2021.10.26",
+             "plan_useprps": "운영자금", "plan_amount": "34,291,000,000"},
+            {"kind": "public", "year": 2022, "pay_de": "2021.10.26",
+             "plan_useprps": "운영자금", "plan_amount": "35,291,000,000"},
+        ]
+        got = run_js(f"fundPlanChanges({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(len(got), 1)
+        change = got[0]
+        self.assertEqual(change["pay_de"], "2021.10.26")
+        self.assertEqual(change["plan_useprps"], "운영자금")
+        self.assertEqual(change["amounts"], [34291000000, 35291000000])
+
+    def test_identical_repeated_amount_is_not_a_change(self):
+        """엔켐 사업보고서(11011) 실측처럼 같은 건이 두 번 중복 수집돼도
+        값 자체가 같으면 계획이 바뀐 게 아니다(리뷰 지적: 반복 수집 자체는
+        오류가 아니다 — 위 fund_usage 안내문과 같은 원칙)."""
+        records = [
+            {"kind": "public", "year": 2022, "pay_de": "2021.10.26",
+             "plan_useprps": "시설자금", "plan_amount": "13,082,000,000"},
+            {"kind": "public", "year": 2022, "pay_de": "2021.10.26",
+             "plan_useprps": "시설자금", "plan_amount": "13,082,000,000"},
+        ]
+        got = run_js(f"fundPlanChanges({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(got, [])
+
+    def test_different_purpose_is_not_grouped_together(self):
+        records = [
+            {"kind": "public", "year": 2022, "pay_de": "2021.10.26",
+             "plan_useprps": "운영자금", "plan_amount": "34,291,000,000"},
+            {"kind": "public", "year": 2022, "pay_de": "2021.10.26",
+             "plan_useprps": "기타", "plan_amount": "47,657,000,000"},
+        ]
+        got = run_js(f"fundPlanChanges({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(got, [])
+
+    def test_different_pay_de_is_not_grouped_together(self):
+        records = [
+            {"kind": "public", "year": 2021, "pay_de": "2021.10.26",
+             "plan_useprps": "운영자금", "plan_amount": "34,291,000,000"},
+            {"kind": "public", "year": 2022, "pay_de": "2022.05.01",
+             "plan_useprps": "운영자금", "plan_amount": "35,291,000,000"},
+        ]
+        got = run_js(f"fundPlanChanges({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(got, [])
+
+    def test_records_missing_pay_de_or_purpose_are_skipped(self):
+        records = [
+            {"kind": "public", "year": 2022, "pay_de": "", "plan_useprps": "운영자금",
+             "plan_amount": "1"},
+            {"kind": "public", "year": 2022, "pay_de": "2021.10.26", "plan_useprps": "",
+             "plan_amount": "2"},
+        ]
+        got = run_js(f"fundPlanChanges({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(got, [])
+
+    def test_not_an_array_returns_empty(self):
+        self.assertEqual(run_js("fundPlanChanges(null)"), [])
+        self.assertEqual(run_js("fundPlanChanges({})"), [])
+
+    def test_no_verdict_words(self):
+        import json as _json
+        records = [
+            {"kind": "public", "year": 2022, "pay_de": "2021.10.26",
+             "plan_useprps": "운영자금", "plan_amount": "34,291,000,000"},
+            {"kind": "public", "year": 2022, "pay_de": "2021.10.26",
+             "plan_useprps": "운영자금", "plan_amount": "35,291,000,000"},
+        ]
+        got = _json.dumps(
+            run_js(f"fundPlanChanges({json.dumps(records, ensure_ascii=False)})"),
+            ensure_ascii=False,
+        )
+        for word in ("의심", "유용", "부정", "위험"):
+            self.assertNotIn(word, got, f"판정 어휘 '{word}'")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestFundPlanChangesRenderWiring(unittest.TestCase):
+    """fundPlanChanges가 정의만 있고 renderSection이 부르지 않는 사고를
+    막는다(위 TestDividendVsIncomeRenderWiring과 같은 이유)."""
+
+    _RECORDS = [
+        {"kind": "public", "year": 2022, "tm": "-", "pay_de": "2021.10.26",
+         "pay_amount": None, "plan_useprps": "운영자금", "plan_amount": "34,291,000,000",
+         "real_dtls_cn": "", "real_dtls_amount": None, "dffrnc_resn": "", "flags": []},
+        {"kind": "public", "year": 2022, "tm": "-", "pay_de": "2021.10.26",
+         "pay_amount": None, "plan_useprps": "운영자금", "plan_amount": "35,291,000,000",
+         "real_dtls_cn": "", "real_dtls_amount": None, "dffrnc_resn": "", "flags": []},
+    ]
+
+    def test_derived_block_title_is_rendered(self):
+        got = run_render_section('"fund_usage"', json.dumps(self._RECORDS, ensure_ascii=False))
+        self.assertIn("계획 금액 변경 (사실 표기)", got["titles"])
+
+    def test_both_amounts_appear_formatted(self):
+        got = run_render_section('"fund_usage"', json.dumps(self._RECORDS, ensure_ascii=False))
+        cells = " ".join(got["cells"])
+        self.assertIn("342.9억", cells)
+        self.assertIn("352.9억", cells)
+
+    def test_existing_note_and_table_are_not_removed(self):
+        """새 표기는 표 위에 얹는 것 — 기존 fund_usage 안내문과 원본 표
+        (전역 제약: "표를 없애지 않습니다")를 지우지 않는다."""
+        got = run_render_section('"fund_usage"', json.dumps(self._RECORDS, ensure_ascii=False))
+        notes = " ".join(got["notes"])
+        self.assertIn("같은 회차가 여러 행으로 나오는 것은 오류가 아닙니다", notes)
+        self.assertIn("운영자금", got["cells"])  # 원본 표의 plan_useprps 열 값
+
+    def test_no_block_when_amounts_identical(self):
+        records = [
+            {"kind": "public", "year": 2022, "pay_de": "2021.10.26",
+             "plan_useprps": "시설자금", "plan_amount": "13,082,000,000", "flags": []},
+        ]
+        got = run_render_section('"fund_usage"', json.dumps(records, ensure_ascii=False))
+        self.assertNotIn("계획 금액 변경 (사실 표기)", got["titles"])
+
+
 if __name__ == "__main__":
     unittest.main()
 

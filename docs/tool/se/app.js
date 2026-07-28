@@ -1367,6 +1367,114 @@ function financialRatios(records) {
   return out;
 }
 
+/** dividends(alotMatter)의 se(항목) 중 이 태스크가 비교하는 5종.
+ *  현금배당금총액·(연결/별도)당기순이익·주식배당금총액·현금배당성향이
+ *  이미 같은 "백만원"(또는 "%") 단위로 한 응답 안에 나란히 있다(2026-07-28
+ *  삼성전자 실측, corp_code=00126380, rcept_no=20250311001085) — 섹션 간
+ *  조인이나 단위 환산 없이 그대로 나란히 놓을 수 있다(SE-4f Task 4,
+ *  task-4-brief.md). 이익잉여금(financials, 원 단위)은 이번 범위가
+ *  아니다 — 단위 혼동(백만원↔원)은 이 프로젝트에서 이미 financials 원본
+ *  차트를 통째로 뺀 사유였다(위 CHART_SPECS 주석 참고), 섹션 간 조인 +
+ *  단위 환산은 별건이다(브리프). */
+const DIVIDEND_SE_FIELDS = [
+  "현금배당금총액(백만원)",
+  "(연결)당기순이익(백만원)",
+  "(별도)당기순이익(백만원)",
+  "주식배당금총액(백만원)",
+  "(연결)현금배당성향(%)",
+];
+
+/** dividends 레코드에서 "배당총액 vs 벌어들인 돈"을 사업연도·보고서구분
+ *  (bsns_year × reprt_code)별로 나란히 뽑는다.
+ *
+ *  현금배당금총액이 없거나("-", DART의 무값 표기) 읽을 수 없는 보고는
+ *  아예 행을 만들지 않는다 — 배당이 없는 회사(예: 엔켐, 브리프 경고
+ *  "엔켐은 배당이 없습니다")에서 이 비교가 조용히 발화하지 않는 것이
+ *  맞는 동작이다: 감추는 게 아니라 비교할 배당액 자체가 없는 것이다.
+ *
+ *  dividends는 fund_usage와 달리 정규화 과정에서 reprt_code가 탈락하지
+ *  않는다(위 CHART_SPECS.dividends 주석 참고) — 같은 사업연도라도 분기
+ *  보고서마다 다른 보고이므로 (bsns_year, reprt_code) 쌍으로 묶어 값이
+ *  조용히 덮이지 않게 한다. */
+function dividendVsIncome(records) {
+  if (!Array.isArray(records)) return [];
+  const groups = new Map();
+  const order = [];
+  for (const r of records) {
+    if (!r || typeof r !== "object") continue;
+    const year = r.bsns_year !== undefined && r.bsns_year !== null ? String(r.bsns_year) : "";
+    const reprt = r.reprt_code !== undefined && r.reprt_code !== null ? String(r.reprt_code) : "";
+    const key = year + " " + reprt;
+    if (!groups.has(key)) {
+      groups.set(key, { bsns_year: year, reprt_code: reprt, se: Object.create(null) });
+      order.push(key);
+    }
+    const se = r.se;
+    if (typeof se === "string" && DIVIDEND_SE_FIELDS.indexOf(se) !== -1) {
+      groups.get(key).se[se] = r.thstrm;
+    }
+  }
+
+  const out = [];
+  for (const key of order) {
+    const g = groups.get(key);
+    const dividend = numeric(g.se["현금배당금총액(백만원)"]);
+    if (dividend === null) continue; // 배당 기록 자체가 없다 — 비교가 발화하지 않는다
+    const row = { bsns_year: g.bsns_year, reprt_code: g.reprt_code };
+    for (const se of DIVIDEND_SE_FIELDS) {
+      row[se] = numeric(g.se[se]);
+    }
+    out.push(row);
+  }
+  return out;
+}
+
+/** fund_usage 레코드에서 같은 조달 건(같은 pay_de·같은 plan_useprps)의
+ *  계획 금액(plan_amount)이 보고 시점마다 다르게 보고된 사실을 뽑는다
+ *  (SE-4f Task 7, task-7-brief.md).
+ *
+ *  fetch_fund_usage(dart_client.py)는 reprt_code(어느 분기 보고인지)를
+ *  정규화 과정에서 버린다(core 수정 불가, 위 CHART_SPECS.fund_usage 주석
+ *  참고) — 그래서 "1분기엔 342.91억, 반기부터는 352.91억"처럼 **어느
+ *  시점에 바뀌었는지**는 여기서 말할 수 없다. 대신 "이 조달 건에 보고된
+ *  계획 금액이 서로 다른 값으로 존재한다"는 사실(등장한 서로 다른 값의
+ *  집합, 최초 등장 순서)만 표기한다 — 없는 순서 정보를 지어내지 않는다.
+ *
+ *  2026-07-28 엔켐 실측(corp_code=01011526, bsns_year=2022,
+ *  pssrpCptalUseDtls.json)으로 확인: pay_de="2021.10.26"·
+ *  plan_useprps="운영자금" 조합에서 plan_amount가 34,291,000,000(1분기
+ *  보고)과 35,291,000,000(반기·3분기·사업보고서) 두 값으로 갈린다.
+ *  같은 사업보고서(11011) 안에서도 항목이 두 번 중복 수집되지만 값
+ *  자체는 같다(pay_de·plan_useprps·plan_amount 모두 동일) — 값이 같으면
+ *  "변경"이 아니다(indexOf로 중복 값은 한 번만 센다). */
+function fundPlanChanges(records) {
+  if (!Array.isArray(records)) return [];
+  const groups = new Map();
+  const order = [];
+  for (const r of records) {
+    if (!r || typeof r !== "object") continue;
+    const payDe = r.pay_de !== undefined && r.pay_de !== null ? String(r.pay_de) : "";
+    const purpose = r.plan_useprps !== undefined && r.plan_useprps !== null ? String(r.plan_useprps) : "";
+    if (!payDe || !purpose) continue; // 조달 건을 특정할 식별자가 없으면 묶지 않는다
+    const key = payDe + " " + purpose;
+    if (!groups.has(key)) {
+      groups.set(key, { pay_de: payDe, plan_useprps: purpose, kind: r.kind, amounts: [] });
+      order.push(key);
+    }
+    const amt = numeric(r.plan_amount);
+    if (amt === null) continue;
+    const g = groups.get(key);
+    if (g.amounts.indexOf(amt) === -1) g.amounts.push(amt);
+  }
+
+  const out = [];
+  for (const key of order) {
+    const g = groups.get(key);
+    if (g.amounts.length > 1) out.push(g);
+  }
+  return out;
+}
+
 // 섹션별 차트 정의. 여기 없는 섹션은 차트 없이 표만 나온다.
 //
 // **`time` 축을 쓰지 않는다.** Chart.js의 time scale은 별도 날짜 어댑터를
@@ -1929,5 +2037,6 @@ if (typeof module !== "undefined" && module.exports) {
     CHART_SPECS, chartData, axisLabel, numeric, axisSortKey,
     normalizeDebtByKind, monthlyCounts, compositeXValue,
     financialRatios, classifyDisclosureCategory, monthlyCountsByCategory,
+    DIVIDEND_SE_FIELDS, dividendVsIncome, fundPlanChanges,
   };
 }

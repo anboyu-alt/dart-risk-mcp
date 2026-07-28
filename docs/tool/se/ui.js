@@ -1051,6 +1051,89 @@ function buildFinancialRatiosBlock(ratios) {
   return { el: wrap, table: table };
 }
 
+/** "%" 항목만 뒤에 "%"를 붙이고, 그 밖의 백만원 단위 값은 천 단위
+ *  구분자로 사람이 읽기 쉽게 만든다. null(값 자체가 없음)은 빈 문자열 —
+ *  0으로 채우지 않는다(numeric() 주석과 같은 원칙, formatValue와 달리
+ *  이 값들은 이미 백만원 단위라 억·조로 다시 줄이면 오히려 헷갈린다). */
+function formatDividendSeValue(se, value) {
+  if (value === null || value === undefined) return "";
+  if (se.indexOf("(%)") !== -1) return value + "%";
+  return value.toLocaleString("ko-KR");
+}
+
+/** dividendVsIncome(app.js)이 뽑은 "배당 vs 당기순이익" 사실 비교를
+ *  표로 그린다(SE-4f Task 4).
+ *
+ *  **공시 원본과 반드시 구분한다**(buildFinancialRatiosBlock과 같은
+ *  이유) — class="derived"로 시각적으로 나누고, 이 값이 dividends 원본
+ *  se 항목을 그대로 나란히 놓은 것일 뿐 새로 계산하거나 판정한 게
+ *  아니라고 문구로도 밝힌다(판정선: "배당 여력 부족" 같은 해석은 쓰지
+ *  않는다). */
+function buildDividendVsIncomeBlock(rows) {
+  const wrap = document.createElement("div");
+  wrap.className = "derived";
+
+  const h3 = document.createElement("h3");
+  h3.textContent = "배당 vs 당기순이익 (사실 비교)";
+  wrap.appendChild(h3);
+
+  const notice = document.createElement("p");
+  notice.className = "note";
+  notice.textContent = "DART 배당(dividends) 공시의 항목(se) 중 이미 같은 백만원 단위로 "
+    + "들어있는 현금배당금총액과 당기순이익을 보고 시점(사업연도·보고서구분)별로 "
+    + "나란히 보여줍니다 — 공시 원본 항목 두 개를 나란히 놓은 것일 뿐 새로 계산하거나 "
+    + "판정한 값이 아닙니다.";
+  wrap.appendChild(notice);
+
+  const records = rows.map(function (r) {
+    const out = { bsns_year: r.bsns_year, reprt_code: r.reprt_code };
+    for (const se of DIVIDEND_SE_FIELDS) out[se] = formatDividendSeValue(se, r[se]);
+    return out;
+  });
+  const table = tableLayout(records);
+  if (table) wrap.appendChild(tableEl(table));
+
+  return { el: wrap, table: table };
+}
+
+/** fundPlanChanges(app.js)가 뽑은 "계획 금액이 보고 시점마다 다르게
+ *  보고된 조달 건" 목록을 표로 그린다(SE-4f Task 7).
+ *
+ *  amounts는 등장한 서로 다른 값들이지 "이전값→이후값" 순서가 아니다
+ *  (reprt_code가 core 정규화 과정에서 탈락해 어느 보고가 먼저인지 이
+ *  레벨에서 알 수 없다, 위 fundPlanChanges 주석 참고) — 그래서 "→"
+ *  같은 방향 표시 없이 " / "로 나열만 한다. 판정선: "용도 변경 의심"
+ *  같은 해석은 쓰지 않는다 — 서로 다른 값이 보고됐다는 사실만 말한다. */
+function buildFundPlanChangeBlock(changes) {
+  const wrap = document.createElement("div");
+  wrap.className = "derived";
+
+  const h3 = document.createElement("h3");
+  h3.textContent = "계획 금액 변경 (사실 표기)";
+  wrap.appendChild(h3);
+
+  const notice = document.createElement("p");
+  notice.className = "note";
+  notice.textContent = "같은 자금 납입일·계획 용도인데 계획 금액이 서로 다른 값으로 "
+    + "보고된 조달 건입니다. 어느 보고가 먼저인지는 원본 데이터(reprt_code)가 "
+    + "남아있지 않아 표시하지 않습니다 — 서로 다른 값이 보고된 적이 있다는 "
+    + "사실만 보여줍니다.";
+  wrap.appendChild(notice);
+
+  const records = changes.map(function (c) {
+    return {
+      pay_de: c.pay_de,
+      plan_useprps: c.plan_useprps,
+      kind: c.kind,
+      "보고된 계획 금액": c.amounts.map(formatAmount).join(" / "),
+    };
+  });
+  const table = tableLayout(records);
+  if (table) wrap.appendChild(tableEl(table));
+
+  return { el: wrap, table: table };
+}
+
 /** 섹션 하나를 그린다. 같은 키로 다시 불리면 **교체**한다 — 누적하면
  *  화면에 같은 섹션이 계속 쌓인다(섹션은 한 번만 오도록 돼 있지만,
  *  렌더 함수가 누적식이면 다른 경로에서 쉽게 깨진다).
@@ -1080,19 +1163,40 @@ function renderSection(key, value) {
     if (ratios.length > 0) ratioBlock = buildFinancialRatiosBlock(ratios);
   }
 
+  // dividends: "배당 vs 당기순이익" 사실 비교(SE-4f Task 4) — 배당
+  // 기록 자체가 없는 회사(엔켐 등)는 dividendVsIncome이 빈 배열을
+  // 돌려주므로 이 블록 자체가 안 생긴다(위 dividendVsIncome 주석 참고).
+  let dividendBlock = null;
+  if (key === "dividends") {
+    const dvRows = dividendVsIncome(Array.isArray(value) ? value : []);
+    if (dvRows.length > 0) dividendBlock = buildDividendVsIncomeBlock(dvRows);
+  }
+
+  // fund_usage: 계획 금액 변경 사실 표기(SE-4f Task 7) — 변경이 없는
+  // 조달 건만 있으면 fundPlanChanges가 빈 배열을 돌려주므로 이 블록
+  // 자체가 안 생긴다(위 fundPlanChanges 주석 참고).
+  let fundChangeBlock = null;
+  if (key === "fund_usage") {
+    const changes = fundPlanChanges(Array.isArray(value) ? value : []);
+    if (changes.length > 0) fundChangeBlock = buildFundPlanChangeBlock(changes);
+  }
+
   // 가로(여러 행) 표가 하나라도 있으면 2단 폭 중 한 칸에 가두지 않고
   // 전체 폭을 쓴다 — 세로(1건, 키-값) 표는 원래도 좁아 한 칸이면
   // 충분하다(app.js tableLayout 주석 참고: 세로/가로 구분 기준과 같다).
   // 앞 태스크에서 12열까지 보이게 넓힌 표가 2단으로 다시 좁아지는
-  // 재발을 막는다. ratioBlock의 표도 가로일 수 있어 함께 본다 — 안
+  // 재발을 막는다. 파생 블록들의 표도 가로일 수 있어 함께 본다 — 안
   // 그러면 파생 표가 넓은데 .sec은 좁게 남는다.
+  const derivedBlocks = [ratioBlock, dividendBlock, fundChangeBlock];
   const hasWideTable = blocks.some(function (b) {
     return b.table && b.table.orientation === "horizontal";
-  }) || !!(ratioBlock && ratioBlock.table && ratioBlock.table.orientation === "horizontal");
+  }) || derivedBlocks.some(function (b) {
+    return !!(b && b.table && b.table.orientation === "horizontal");
+  });
   const wrap = SEC_WRAP[key];
   if (wrap) wrap.className = hasWideTable ? "sec wide" : "sec";
 
-  if (blocks.length === 0 && !ratioBlock) {
+  if (blocks.length === 0 && !ratioBlock && !dividendBlock && !fundChangeBlock) {
     const p = document.createElement("p");
     p.className = "note";
     p.textContent = "표시할 데이터가 없습니다.";
@@ -1122,10 +1226,13 @@ function renderSection(key, value) {
       + "집행일이 아닙니다.";
     holder.appendChild(note);
   }
-  // 파생 지표 블록을 원본 표들보다 먼저 붙인다 — "파생 블록은 기존
-  // financials 표 위에 얹는다"(브리프)를 DOM 순서(위쪽에 먼저 나온다)로
-  // 그대로 지킨다. 원본 표(아래 for 루프)는 지우지 않는다.
+  // 파생 블록들을 원본 표들보다 먼저 붙인다 — "파생 블록은 기존 표 위에
+  // 얹는다"(브리프, financials·dividends·fund_usage 공통)를 DOM 순서
+  // (위쪽에 먼저 나온다)로 그대로 지킨다. 원본 표(아래 for 루프)는
+  // 지우지 않는다.
   if (ratioBlock) holder.appendChild(ratioBlock.el);
+  if (dividendBlock) holder.appendChild(dividendBlock.el);
+  if (fundChangeBlock) holder.appendChild(fundChangeBlock.el);
   for (const block of blocks) {
     const el = blockEl(block);
     // 차트는 표 위에 얹는다 — 표를 지우지 않는다. canvas 안의 숫자는
