@@ -925,6 +925,72 @@ function blockEl(block) {
   return wrap;
 }
 
+/** financialRatios(app.js)가 만든 한 행의 계산식(row.계산식)에서 재료
+ *  이름을 실제 값으로 치환한다 — "영업이익 ÷ 매출액"이 "영업이익
+ *  -783.9억 ÷ 매출액 3,127.9억"이 된다(브리프 예시와 같은 형태). 값이
+ *  null인 재료는 "이름 없음"으로 바꿔 어느 재료가 빠졌는지 그대로
+ *  드러낸다 — 조용히 숨기지 않는다.
+ *
+ *  재료 이름(영업이익·매출액·부채총계·자본총계·유동자산·유동부채·자본금)은
+ *  서로의 부분 문자열이 아니므로(app.js RATIO_DEFS·computeCapitalImpairment
+ *  참고) split/join 치환이 서로 다른 재료를 잘못 건드릴 위험이 없다. */
+function ratioBasisText(row) {
+  let basis = row.계산식 || "";
+  const materials = row.재료 || {};
+  for (const name of Object.keys(materials)) {
+    const v = materials[name];
+    const shown = v === null ? (name + " 없음") : (name + " " + formatAmount(v));
+    basis = basis.split(name).join(shown);
+  }
+  return basis;
+}
+
+/** financials 섹션에서만 쓰는 파생 지표(계산값) 블록을 만든다.
+ *  financialRatios(app.js)가 만든 구분·기간·지표·값·계산식·재료·사유
+ *  레코드를 표(계산식+재료를 문장으로 풀어서)로 그리고, CHART_SPECS.
+ *  financial_ratios로 3기간(전전기→전기→당기) 추이도 함께 그린다.
+ *
+ *  **공시 원본과 반드시 구분한다**(SE-4f 판정선: "공시 원본 숫자와 우리
+ *  계산값이 구분되지 않으면 그것도 거짓말이다") — class="derived"로
+ *  시각적으로도 나누고(index.html), "DART 공시 수치로 계산한 값"이라고
+ *  문구로도 밝힌다.
+ *
+ *  값이 없는 지표도 조용히 빼지 않는다 — 값 칸에 그 행의 사유(row.사유,
+ *  예: "매출액 없음"·"잠식 없음")를 그대로 보여준다.
+ *
+ *  차트에는 financialRatios가 돌려준 원본 레코드(ratios, 값이 숫자|null인
+ *  그대로)를 넘긴다 — 표시용으로 문자열화한 records를 넘기면 chartData
+ *  (app.js)가 숫자를 못 읽어 그려지지 않는다. */
+function buildFinancialRatiosBlock(ratios) {
+  const wrap = document.createElement("div");
+  wrap.className = "derived";
+
+  const h3 = document.createElement("h3");
+  h3.textContent = "재무 파생 지표 (계산값)";
+  wrap.appendChild(h3);
+
+  const notice = document.createElement("p");
+  notice.className = "note";
+  notice.textContent = "DART 공시 수치로 계산한 값입니다 — 공시 원본이 아닙니다. "
+    + "연결과 별도를 섞지 않고 계산식과 재료 값을 함께 표시합니다.";
+  wrap.appendChild(notice);
+
+  const records = ratios.map(function (r) {
+    return {
+      구분: r.구분,
+      기간: r.기간,
+      지표: r.지표,
+      값: r.값 === null ? r.사유 : (r.값.toFixed(1) + "%"),
+      "계산식·재료": ratioBasisText(r),
+    };
+  });
+  const table = tableLayout(records);
+  if (table) wrap.appendChild(tableEl(table));
+
+  renderChart(wrap, "financial_ratios", ratios);
+  return { el: wrap, table: table };
+}
+
 /** 섹션 하나를 그린다. 같은 키로 다시 불리면 **교체**한다 — 누적하면
  *  화면에 같은 섹션이 계속 쌓인다(섹션은 한 번만 오도록 돼 있지만,
  *  렌더 함수가 누적식이면 다른 경로에서 쉽게 깨진다).
@@ -942,18 +1008,31 @@ function renderSection(key, value) {
 
   const blocks = sectionBlocks(value, 0, key);
 
+  // financials는 원본 표 외에 파생 지표(계산값) 블록도 함께 그린다
+  // (SE-4f Task 2) — financialRatios(app.js)는 순수 함수로 계산만 하고,
+  // 여기서는 그 결과를 표+차트로 렌더만 한다. 원본 표는 지우지 않는다 —
+  // 브리프 원칙("파생 블록은 기존 표 위에 얹는다")대로 derived 블록을
+  // 원본 표보다 먼저(=화면에서 더 위에) 붙인다(아래 holder.appendChild
+  // 순서 참고).
+  let ratioBlock = null;
+  if (key === "financials") {
+    const ratios = financialRatios(Array.isArray(value) ? value : []);
+    if (ratios.length > 0) ratioBlock = buildFinancialRatiosBlock(ratios);
+  }
+
   // 가로(여러 행) 표가 하나라도 있으면 2단 폭 중 한 칸에 가두지 않고
   // 전체 폭을 쓴다 — 세로(1건, 키-값) 표는 원래도 좁아 한 칸이면
   // 충분하다(app.js tableLayout 주석 참고: 세로/가로 구분 기준과 같다).
   // 앞 태스크에서 12열까지 보이게 넓힌 표가 2단으로 다시 좁아지는
-  // 재발을 막는다.
+  // 재발을 막는다. ratioBlock의 표도 가로일 수 있어 함께 본다 — 안
+  // 그러면 파생 표가 넓은데 .sec은 좁게 남는다.
   const hasWideTable = blocks.some(function (b) {
     return b.table && b.table.orientation === "horizontal";
-  });
+  }) || !!(ratioBlock && ratioBlock.table && ratioBlock.table.orientation === "horizontal");
   const wrap = SEC_WRAP[key];
   if (wrap) wrap.className = hasWideTable ? "sec wide" : "sec";
 
-  if (blocks.length === 0) {
+  if (blocks.length === 0 && !ratioBlock) {
     const p = document.createElement("p");
     p.className = "note";
     p.textContent = "표시할 데이터가 없습니다.";
@@ -983,6 +1062,10 @@ function renderSection(key, value) {
       + "집행일이 아닙니다.";
     holder.appendChild(note);
   }
+  // 파생 지표 블록을 원본 표들보다 먼저 붙인다 — "파생 블록은 기존
+  // financials 표 위에 얹는다"(브리프)를 DOM 순서(위쪽에 먼저 나온다)로
+  // 그대로 지킨다. 원본 표(아래 for 루프)는 지우지 않는다.
+  if (ratioBlock) holder.appendChild(ratioBlock.el);
   for (const block of blocks) {
     const el = blockEl(block);
     // 차트는 표 위에 얹는다 — 표를 지우지 않는다. canvas 안의 숫자는
