@@ -810,6 +810,80 @@ class TestKnownActors(unittest.TestCase):
         hits = lookup_actors_by_company("아무회사")
         self.assertEqual([n for n, _ in hits], [])
 
+    # ── SE-5b Part A: 폴딩 티어까지 병합 ────────────────────────────
+    # 실측(2026-07-29): '(주)베이트리'(1건·회사7개)와 '주식회사 베이트리'
+    # (2건·회사6개)는 normalize_name은 다르지만(법인 접사 정규화는
+    # normalize_name이 아니라 fold_name의 몫) fold_variants 교집합은 같다
+    # ({'베이트리'}). 그런데 lookup_actor는 정규화(normalize) 티어에서
+    # 매칭이 있으면 즉시 반환해 폴딩 티어로 내려가지 않아, 조회 표기에 따라
+    # 답이 갈렸다(Task 1이 없앤 것과 같은 결함이 한 티어 아래서 재발). 폴딩
+    # 티어는 이미 "매칭 없을 때 답을 내는" 최종 권한을 가지므로, 답할 권한이
+    # 있다면 병합할 권한도 있다고 본다 — 그래서 fold_keys를 조건부 폴백이
+    # 아니라 항상 계산해 정규화 결과와 합집합으로 반환한다.
+    #
+    # 과잉 병합 경계: fold_name은 법인 접사·공백·구두점 제거 + 라틴 음차뿐
+    # 이라 "완전한 문자열"이 일치해야 교집합이 생긴다 — 접사를 떼도 나머지
+    # 글자가 다른 서로 다른 실체는 교집합이 생기지 않는다
+    # (test_lookup_fold_tier_does_not_merge_similar_but_distinct_entities로
+    # 고정).
+    _BAETRI_CO = "(주)베이트리"
+    _BAETRI_JUSIK = "주식회사 베이트리"
+
+    def test_lookup_fold_tier_merges_corp_suffix_variant_keys(self):
+        from dart_risk_mcp.core.known_actors import (
+            lookup_actor, normalize_name, fold_variants)
+        self._write({"version": 1, "actors": {
+            self._BAETRI_CO: [
+                {"source": "CB 인수", "evidence": "e1", "rcept_no": "R1",
+                 "companies": ["가", "나", "다", "라", "마", "바", "사"]},
+            ],
+            self._BAETRI_JUSIK: [
+                {"source": "CB 인수", "evidence": "e2", "rcept_no": "R2",
+                 "companies": ["가", "나", "다"]},
+                {"source": "CB 인수", "evidence": "e3", "rcept_no": "R3",
+                 "companies": ["라", "마", "바"]},
+            ],
+        }})
+        # 전제 확인: 실측대로 normalize_name은 다르고 fold_variants는 겹친다
+        self.assertNotEqual(normalize_name(self._BAETRI_CO),
+                             normalize_name(self._BAETRI_JUSIK))
+        self.assertTrue(
+            set(fold_variants(normalize_name(self._BAETRI_CO)))
+            & set(fold_variants(normalize_name(self._BAETRI_JUSIK))))
+
+        for query in (self._BAETRI_CO, self._BAETRI_JUSIK):
+            recs = lookup_actor(query)
+            self.assertEqual(len(recs), 3, f"query={query!r}")
+            companies = {c for r in recs for c in r.get("companies", [])}
+            self.assertEqual(companies, {"가", "나", "다", "라", "마", "바", "사"})
+
+    def test_lookup_fold_tier_merge_dedupes_and_is_deterministic(self):
+        from dart_risk_mcp.core.known_actors import lookup_actor
+        rec = {"source": "CB 인수", "evidence": "동일 근거", "rcept_no": "R1"}
+        self._write({"version": 1, "actors": {
+            self._BAETRI_CO: [dict(rec)],
+            self._BAETRI_JUSIK: [
+                dict(rec),  # 다른 키에 완전히 동일한 레코드 — 1회만 반환돼야 함
+                {"source": "CB 인수", "evidence": "e2", "rcept_no": "R2"},
+            ],
+        }})
+        first = lookup_actor(self._BAETRI_CO)
+        second = lookup_actor(self._BAETRI_JUSIK)
+        self.assertEqual(len(first), 2)  # 중복 1건 dedup + 별개 R2
+        self.assertEqual(first, second)  # 어느 표기로 조회해도 동일 + 결정적
+
+    def test_lookup_fold_tier_does_not_merge_similar_but_distinct_entities(self):
+        # 과잉 병합 경계: 접사를 떼도 나머지 글자가 다르면 fold도 갈린다 —
+        # '베이트리'와 '베이트리무역'은 같은 실체가 아니므로 합쳐지면 안 된다.
+        from dart_risk_mcp.core.known_actors import lookup_actor
+        self._write({"version": 1, "actors": {
+            "(주)베이트리": [{"source": "A", "evidence": "e1"}],
+            "주식회사 베이트리무역": [{"source": "B", "evidence": "e2"}],
+        }})
+        recs = lookup_actor("(주)베이트리")
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0]["source"], "A")
+
     def test_load_filter_does_not_over_delete(self):
         # 브리프 시나리오 8: 필터 적용 후에도 나머지 인물 수가 그대로다
         # (과잉 삭제 방어) — 기관 1명만 제외되고 개인·조합·법인 3명은 그대로.

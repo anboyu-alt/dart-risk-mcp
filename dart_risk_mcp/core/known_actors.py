@@ -671,44 +671,57 @@ def _record_fingerprint(rec: dict) -> str:
 def lookup_actor(name: str) -> list[dict]:
     """인물명 매칭 → 기록 리스트(없으면 []).
 
-    표기 정규화(공백·대소문자·역할 괄호·HTML 엔티티) 일치 → 폴딩 변형
-    (fold_variants) 일치 순으로 폴백. 레지스트리 키가 'LIU HUAN'일 때
-    'Liu Huan' 조회, '주식회사 액션' 등재일 때 '(주)액션' 조회, '정소영
-    (DING SHAO YING)' 등재일 때 'DING SHAO YING' 조회가 각각 매칭된다.
+    표기 정규화(공백·대소문자·역할 괄호·HTML 엔티티) 일치 + 폴딩 변형
+    (fold_variants — 법인 접사·구두점 제거, 라틴 음차) 일치를 **모두** 합쳐
+    반환한다. 레지스트리 키가 'LIU HUAN'일 때 'Liu Huan' 조회, '주식회사
+    액션' 등재일 때 '(주)액션' 조회, '정소영 (DING SHAO YING)' 등재일 때
+    'DING SHAO YING' 조회가 각각 매칭된다.
+
+    두 티어를 조건부 폴백이 아니라 **항상 함께 합집합**으로 계산하는 이유
+    (SE-5b Part A): 정규화 티어에서 매칭이 있다고 바로 반환하면, 실측 사고
+    (2026-07-29)처럼 '(주)베이트리'(정규화 티어에서 자기 자신과만 일치)와
+    '주식회사 베이트리'(법인 접사 표기만 다름 — normalize_name은 접사를
+    건드리지 않으므로 다른 값)가 같은 실체인데도 폴딩 티어로 내려가지 못해
+    조회 표기에 따라 답(기록 수·태깅된 회사 수)이 달라진다. 폴딩 티어는
+    이미 "정규화 매칭이 하나도 없을 때 답을 내는" 최종 권한을 가진 티어다
+    — 매칭 없음 상태에서 답할 신뢰를 받는다면, 매칭 있음 상태에서 그 답을
+    합칠 신뢰도 마땅히 받는다. 반대로 완전히 다른 실체를 잘못 합치는 위험은
+    fold_name이 법인 접사·공백·구두점 제거와 라틴 음차만 하고 그 외
+    글자는 그대로 두는 '문자열 전체 일치' 비교라 낮다 — 접사를 떼도 나머지
+    글자가 다른 두 실체는 교집합이 생기지 않는다(예: '베이트리' ≠
+    '베이트리무역', 테스트로 고정).
 
     normalize_name이 같은 값을 내는 키가 여럿이면(예: 파싱 오류로 같은
     실체가 '삼성전자 주식회사'·'삼성전자 &CR;주식회사' 두 키로 저장된 경우)
     첫 매칭에서 끊지 않고 **모든 키의 기록을 합쳐** 반환한다 — 조회 표기에
-    따라 답이 달라지는 것을 막는다. 폴딩 변형 단계도 동일 원칙을 따른다.
-    각 단계 내에서는 키를 정렬해 순회해 반환 순서를 결정적으로 유지한다
-    (lookup_actors_by_company가 같은 이유로 정렬하는 것과 동일한 이유).
+    따라 답이 달라지는 것을 막는다. 폴딩 변형 단계도 동일 원칙을 따르며,
+    두 티어의 결과는 합집합으로 합쳐진다. 정렬 후 순회해 반환 순서를
+    결정적으로 유지한다(lookup_actors_by_company가 같은 이유로 정렬하는
+    것과 동일한 이유).
     """
     if not name or not name.strip():
         return []
     actors = load_known_actors().get("actors", {})
 
-    def _merge(keys) -> list[dict]:
-        seen: set = set()
-        out: list[dict] = []
-        for key in sorted(keys):
-            for rec in actors[key]:
-                fp = _record_fingerprint(rec)
-                if fp not in seen:
-                    seen.add(fp)
-                    out.append(rec)
-        return out
-
     want = normalize_name(name)
-    norm_keys = [key for key in actors if normalize_name(key) == want]
-    if norm_keys:
-        return _merge(norm_keys)
+    norm_keys = {key for key in actors if normalize_name(key) == want}
 
     wf = set(fold_variants(want))
-    fold_keys = [key for key in actors if wf & set(fold_variants(normalize_name(key)))]
-    if fold_keys:
-        return _merge(fold_keys)
+    fold_keys = {key for key in actors if wf & set(fold_variants(normalize_name(key)))}
 
-    return []
+    all_keys = norm_keys | fold_keys
+    if not all_keys:
+        return []
+
+    seen: set = set()
+    out: list[dict] = []
+    for key in sorted(all_keys):
+        for rec in actors[key]:
+            fp = _record_fingerprint(rec)
+            if fp not in seen:
+                seen.add(fp)
+                out.append(rec)
+    return out
 
 
 def lookup_actors_by_company(company_name: str) -> list[tuple[str, dict]]:
