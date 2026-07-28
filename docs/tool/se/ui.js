@@ -315,9 +315,19 @@ function renderChart(wrap, key, records, signalsData) {
           callbacks: {
             // 툴팁 값은 formatValue로 포맷한다 — 억/조 표기가 표와 어긋나면
             // 같은 값을 두 가지로 말하는 셈이 된다.
+            //
+            // 재무지표(spec.tooltipFormat === "indicator")만 예외다: 그 표는
+            // formatIndicator로 "130.248%"라고 쓰는데 formatValue는 단위 없는
+            // 맨숫자를 돌려줘, 같은 값을 표와 툴팁이 서로 다르게 말했다(리뷰
+            // 지적 ④). 계열 이름(dataset.label)이 곧 지표명이라 그대로 넘기면
+            // 이름에 이미 "(%)"가 있는 지표(배당성향(%))의 단위 중복도
+            // formatIndicator가 표와 똑같이 처리한다.
             label: function (ctx) {
               const k = seriesKeys ? seriesKeys[ctx.datasetIndex] : spec.y;
-              return ctx.dataset.label + ": " + formatValue(k, ctx.parsed.y);
+              const shown = spec.tooltipFormat === "indicator"
+                ? formatIndicator(ctx.dataset.label, ctx.parsed.y)
+                : formatValue(k, ctx.parsed.y);
+              return ctx.dataset.label + ": " + shown;
             },
           },
         },
@@ -1315,7 +1325,22 @@ function buildAffiliateOverviewBlock(records) {
  *  달라 그 함수를 그대로 재사용하지 않고 클래스만 같이 쓴다(아래
  *  indicatorRestFold 참고). */
 function renderIndicatorBlocks(holder, value, wrap) {
-  const blocks = indicatorBlocks(Array.isArray(value) ? value : []);
+  const blocks = indicatorBlocks(value);
+
+  // 어느 해가 실제로 조회됐는지 먼저 말한다(SE-4h 최종 수정, 리뷰 지적 ②).
+  // 12콜 중 몇 개가 실패해 한 해가 통째로 빠져도 화면은 남은 점을 그대로
+  // "추이"라고 그린다 — 그 침묵이 이 화면이 고치려던 실패 모양 그 자체다.
+  // 블록보다 위에 두는 이유: 표·차트를 읽기 *전에* 그 범위를 알아야 한다.
+  // 데이터가 아예 없을 때(아래 early return)도 이 문장은 남긴다 — 그때야말로
+  // "조회 실패인가 자료가 없는 것인가"가 가장 궁금한 순간이다.
+  const yearNote = indicatorYearNote(value);
+  if (yearNote) {
+    const yp = document.createElement("p");
+    yp.className = "note";
+    yp.textContent = yearNote;
+    holder.appendChild(yp);
+  }
+
   if (blocks.length === 0) {
     if (wrap) wrap.className = "sec";
     const p = document.createElement("p");

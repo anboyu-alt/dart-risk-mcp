@@ -1763,13 +1763,18 @@ const CHART_SPECS = Object.assign(Object.create(null), {
   // 표(indicatorTableEl)와 툴팁(renderChart의 formatValue 콜백)이 항상
   // 그대로 보여준다(브리프: "차트는 표를 대체하지 않는다", renderChart 주석
   // 과 같은 원칙).
+  // tooltipFormat: "indicator" — 툴팁 값을 formatIndicator로 포맷하라는
+  // 표시다(renderChart, ui.js). 없으면 표는 "130.248%"인데 툴팁은
+  // "130.248"이라 같은 값을 둘이 다르게 말한다(리뷰 지적 ④).
   indicators_수익성: {
     kind: "line", title: "수익성 추이 (%)",
     x: "bsns_year", groupBy: "idx_nm", y: "idx_val", yLabel: "%", xScale: "category",
+    tooltipFormat: "indicator",
   },
   indicators_안정성: {
     kind: "line", title: "안정성 추이 (%)",
     x: "bsns_year", groupBy: "idx_nm", y: "idx_val", yLabel: "%", xScale: "category",
+    tooltipFormat: "indicator",
   },
   // 성장성 18개는 이미 전년 대비 증가율(YoY)이다(indicatorBlocks 주석 참고)
   // — 그 증가율의 연도별 추이를 선으로 그린다. 레벨 지표(다른 분류)와 한
@@ -1778,10 +1783,12 @@ const CHART_SPECS = Object.assign(Object.create(null), {
   indicators_성장성: {
     kind: "line", title: "성장성(증가율) 추이 (%)",
     x: "bsns_year", groupBy: "idx_nm", y: "idx_val", yLabel: "%", xScale: "category",
+    tooltipFormat: "indicator",
   },
   indicators_활동성: {
     kind: "line", title: "활동성 추이 (%)",
     x: "bsns_year", groupBy: "idx_nm", y: "idx_val", yLabel: "%", xScale: "category",
+    tooltipFormat: "indicator",
   },
 });
 
@@ -2287,11 +2294,16 @@ const INDICATOR_NOTES = Object.assign(Object.create(null), {
   // 지적, SE-4h Task 2 — 이전 노트가 그 별도 지표의 정의를 옮겨 붙인
   // 오류였다).
   "재고자산회전율": "재고자산 대비 매출액의 비율",
-  // 매입채무회전율은 엔켐 실측이 null이라 위처럼 산술로 직접 검증하지는
-  // 못했다 — 총자산·매출채권·재고자산·자기자본·자본금회전율이 모두
-  // 매출액 기준인 같은 계열이라는 관행에 따라 맞춘 것이다(추정, 산술
-  // 검증 아님).
-  "매입채무회전율": "매입채무 대비 매출액의 비율",
+  // 매입채무회전율은 실측 값이 null이라 위 재고자산회전율처럼 산술로 직접
+  // 검증하지 못했다(엔켐·삼성전자·셀트리온·두산에너빌리티 4사 모두 DART가
+  // null을 준다) — 총자산·매출채권·재고자산·자기자본·자본금회전율이 모두
+  // 매출액 기준인 같은 계열이라는 관행에 따라 맞춘 것이다. 주석에만 "추정"
+  // 이라 적고 화면에는 단정형으로 내보내면, 우리가 아는 것보다 화면이 더
+  // 확신하는 셈이 된다 — **뜻 문구 자체에 추정임을 적는다**(리뷰 지적).
+  // 뜻을 아예 지우지 않는 이유: 같은 표의 다른 활동성 지표 4개에는 뜻이
+  // 있어 이것만 빈 칸이면 "설명할 수 없는 지표"로 보이는데, 실제로는
+  // "설명은 있으나 검증하지 못했다"가 정확한 사실이다.
+  "매입채무회전율": "매입채무 대비 매출액의 비율 (추정 — DART 값이 없어 산술로 확인하지 못했습니다)",
   "배당성향(%)": "당기순이익 중 현금배당금총액이 차지하는 비율",
 });
 
@@ -2310,8 +2322,61 @@ function formatIndicator(idxNm, idxVal) {
   return hasPercentInName ? s : s + "%";
 }
 
-/** rows({bsns_year, category, idx_nm, idx_val} 행 목록, dart_client.
- *  fetch_indicator_history 반환 형태 그대로)를 분류별 블록으로 묶는다.
+/** 서버가 준 indicators 값에서 행 목록만 꺼낸다.
+ *
+ *  fetch_indicator_history(dart_client)는 SE-4h 최종 수정부터 행 목록이
+ *  아니라 봉투(`{years_requested, years_retrieved, years_failed, rows}`)를
+ *  돌려준다 — 연도가 조용히 빠졌을 때 그 사실을 화면이 말할 수 있어야 하기
+ *  때문이다(indicatorYearNote 참고). 예전 형태(행 목록 그대로)도 그대로
+ *  받아 준다: 저장된 옛 작업 결과가 남아 있을 수 있고, 이 파일의 다른
+ *  함수들처럼 "모르는 형태를 만나면 죽지 않는다"가 원칙이다. */
+function indicatorRows(value) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === "object" && Array.isArray(value.rows)) return value.rows;
+  return [];
+}
+
+/** 요청한 연도보다 실제로 조회된 연도가 적으면 그 사실을 한 문장으로
+ *  만든다. 다 조회됐거나(또는 옛 형태라 알 수 없으면) 빈 문자열이다.
+ *
+ *  **왜 필요한가**: 12콜(4분류 × 3연도) 중 몇 개가 실패해 한 해가 통째로
+ *  빠져도, 화면은 남은 한 점을 그대로 "추이"라고 그린다 — 사용자는 그것이
+ *  조회 사고인지 그 회사에 자료가 없는 것인지 알 방법이 없다. 덜 보여주면서
+ *  다 보여주는 척하지 않기 위해, **어느 해가 실제로 조회됐는지**를 사실로
+ *  적는다.
+ *
+ *  조회 실패(years_failed)와 자료 없음(DART가 013으로 확정 답변)을 구분해
+ *  쓴다 — 사용자에게 서로 다른 사실이다. "데이터 부족" 같은 값매김 표현은
+ *  쓰지 않는다(v0.8.5: 사실만 적고 판정하지 않는다). */
+function indicatorYearNote(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  const requested = Array.isArray(value.years_requested) ? value.years_requested : [];
+  const retrieved = Array.isArray(value.years_retrieved) ? value.years_retrieved : [];
+  const failed = Array.isArray(value.years_failed) ? value.years_failed : [];
+  if (requested.length === 0) return "";
+  const missing = requested.filter(function (y) { return retrieved.indexOf(y) === -1; });
+  if (missing.length === 0) return "";
+
+  const parts = [
+    "최근 " + requested.length + "년(" + requested.join("·") + ") 중 "
+      + (retrieved.length > 0
+          ? retrieved.join("·") + "만 조회됐습니다"
+          : "조회된 연도가 없습니다"),
+  ];
+  const failedMissing = missing.filter(function (y) { return failed.indexOf(y) !== -1; });
+  const absentMissing = missing.filter(function (y) { return failed.indexOf(y) === -1; });
+  if (failedMissing.length > 0) {
+    parts.push(failedMissing.join("·") + "은 DART 조회에 실패했습니다 — 자료가 없다는 뜻이 아닙니다");
+  }
+  if (absentMissing.length > 0) {
+    parts.push(absentMissing.join("·") + "은 DART에 해당 자료가 없습니다");
+  }
+  return parts.join(". ") + ".";
+}
+
+/** rows({bsns_year, category, idx_nm, idx_val} 행 목록, 또는 그 목록을 담은
+ *  fetch_indicator_history 봉투 — indicatorRows가 둘 다 받는다)를 분류별
+ *  블록으로 묶는다.
  *
  *  분류 순서는 INDICATOR_CATEGORY_ORDER다. 그 목록에 없는 분류(응답이
  *  바뀌어 새 idx_cl_nm이 오는 경우)는 버리지 않고, 처음 등장한 순서
@@ -2327,8 +2392,9 @@ function formatIndicator(idxNm, idxVal) {
  *  INDICATOR_PRIMARY에 있는 지표만 note(뜻)를 달아 primary로 보내고,
  *  나머지는 rest로 보낸다 — 값이 전부 null이거나 자본금이 작아 값이 튀는
  *  지표(납입자본이익률 등)도 지우지 않고 rest에 남긴다. */
-function indicatorBlocks(rows) {
-  if (!Array.isArray(rows) || rows.length === 0) return [];
+function indicatorBlocks(value) {
+  const rows = indicatorRows(value);
+  if (rows.length === 0) return [];
 
   // category → idx_nm → bsns_year → idx_val. 일반 객체 대신 Map을 쓴다 —
   // 객체 키가 "2025" 같은 정수형 문자열이면 자바스크립트가 삽입 순서와
@@ -2413,8 +2479,9 @@ function indicatorBlocks(rows) {
  *  자체를 고치면 이 화면 밖의 다른 7개 스펙까지 동작이 바뀌므로, 여기서는
  *  값이 하나도 없는 지표의 행을 아예 넘기지 않는 방식으로 그 지표의
  *  계열이 애초에 생기지 않게 막는다. */
-function indicatorChartRecords(rows, category) {
-  if (!Array.isArray(rows) || !category) return [];
+function indicatorChartRecords(value, category) {
+  const rows = indicatorRows(value);
+  if (rows.length === 0 || !category) return [];
   const primaryNames = INDICATOR_PRIMARY[category] || [];
   if (primaryNames.length === 0) return [];
   const primarySet = new Set(primaryNames);
@@ -2656,6 +2723,6 @@ if (typeof module !== "undefined" && module.exports) {
     isAggregateRow, splitAggregateRows, splitVisibleFolded, MAX_VISIBLE_COLUMNS,
     INDICATOR_CATEGORY_ORDER, INDICATOR_PRIMARY, INDICATOR_NOTES,
     formatIndicator, indicatorBlocks, indicatorChartRecords,
-    normalizeIndicatorCategory,
+    normalizeIndicatorCategory, indicatorRows, indicatorYearNote,
   };
 }

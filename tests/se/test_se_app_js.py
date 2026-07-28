@@ -5104,6 +5104,74 @@ sandbox.renderSection("disclosures", [
 const chartCountAfterL = CHART_CALLS.length;
 const byTypeChart = chartCountAfterL > chartCountBeforeL ? CHART_CALLS[CHART_CALLS.length - 1] : null;
 
+// M) indicators — SE-4h Task 3의 산출물인 **분류별 추이 차트**.
+//
+//    이 블록이 생기기 전에는 ui.js의 `renderChart("indicators_" + ...)`
+//    호출을 통째로 지워도 전체 테스트가 초록이었다(리뷰가 돌린 16개 변형
+//    중 유일하게 안 잡힌 것). 이유: renderSection을 실제로 돌리는 다른
+//    하네스(_RENDER_SECTION_HARNESS)에는 Chart 스텁이 없어 renderChart가
+//    첫 줄(`typeof Chart === "undefined"`)에서 false로 빠진다 — 그 하네스로는
+//    차트 경로를 원리상 검증할 수 없다. Chart 스텁이 있는 이 하네스에서만
+//    "실제로 4개 차트가 만들어졌다"를 말할 수 있다.
+//
+//    페이로드는 실측 모양 그대로다: category는 DART 원문 접미어("수익성지표")
+//    를 쓰고(정규화가 죽으면 차트가 0개가 된다), 전 연도 null인 지표
+//    (매입채무회전율 — 4사 실측 모두 null)를 한 줄 섞어 빈 계열이 범례에
+//    남지 않는지도 같이 본다.
+const INDICATOR_LIVE_ROWS = [];
+[
+  ["수익성지표", "순이익률", -22.56],
+  ["수익성지표", "ROE", -30.1],
+  ["안정성지표", "부채비율", 130.248],
+  ["안정성지표", "자기자본비율", 43.4],
+  ["성장성지표", "매출액증가율(YoY)", -14.469],
+  ["성장성지표", "총자산증가율", 3.2],
+  ["활동성지표", "총자산회전율", 27.591],
+  ["활동성지표", "재고자산회전율", 454.463],
+  ["활동성지표", "매입채무회전율", null],
+].forEach(function (t) {
+  ["2025", "2024", "2023"].forEach(function (y, i) {
+    INDICATOR_LIVE_ROWS.push({
+      bsns_year: y, category: t[0], idx_nm: t[1],
+      idx_val: t[2] === null ? null : t[2] + i,
+    });
+  });
+});
+
+function countCanvases() {
+  return collectTags(bodyEl, []).filter(function (t) {
+    return t.tag === "canvas";
+  }).length;
+}
+const canvasesBeforeM = countCanvases();
+const chartCountBeforeM = CHART_CALLS.length;
+sandbox.renderSection("indicators", {
+  years_requested: ["2025", "2024", "2023"],
+  years_retrieved: ["2025", "2024", "2023"],
+  years_failed: [],
+  rows: INDICATOR_LIVE_ROWS,
+});
+const canvasesAfterM = countCanvases();
+const indicatorCharts = CHART_CALLS.slice(chartCountBeforeM);
+
+// N) 연도 누락 고지 — 12콜 중 일부가 실패해 한 해가 통째로 빠졌을 때,
+//    화면이 그 사실을 말하는지. 같은 하네스를 쓰는 이유: 이 경로도 결국
+//    renderIndicatorBlocks 안이라 한 번에 확인하는 편이 싸다.
+const chartCountBeforeN = CHART_CALLS.length;
+sandbox.renderSection("indicators", {
+  years_requested: ["2025", "2024", "2023"],
+  years_retrieved: ["2025"],
+  years_failed: ["2023"],
+  rows: INDICATOR_LIVE_ROWS.filter(function (r) { return r.bsns_year === "2025"; }),
+});
+const gapNotes = [];
+(function walk(node) {
+  if (!node) return;
+  if (node.tag === "p" && node.className === "note") gapNotes.push(node.textContent);
+  (node.children || []).forEach(walk);
+})(bodyEl);
+const gapCharts = CHART_CALLS.slice(chartCountBeforeN);
+
 function findIndex(tags, tag) {
   for (let i = 0; i < tags.length; i++) if (tags[i].tag === tag) return i;
   return -1;
@@ -5174,6 +5242,28 @@ process.stdout.write(JSON.stringify({
     ? byTypeChart.data.datasets.map(function (d) { return d.backgroundColor; }) : null,
   byTypeXStacked: byTypeChart ? byTypeChart.options.scales.x.stacked : null,
   byTypeYStacked: byTypeChart ? byTypeChart.options.scales.y.stacked : null,
+  indicatorChartCount: indicatorCharts.length,
+  indicatorCanvasDelta: canvasesAfterM - canvasesBeforeM,
+  indicatorChartTitles: indicatorCharts.map(function (c) {
+    return c.canvas.getAttribute("aria-label");
+  }),
+  indicatorChartKinds: indicatorCharts.map(function (c) { return c.config.type; }),
+  indicatorChartLabels: indicatorCharts.map(function (c) { return c.data.labels; }),
+  indicatorSeries: indicatorCharts.map(function (c) {
+    return c.data.datasets.map(function (d) { return d.label; });
+  }),
+  // 리뷰 지적 ④ — 표는 "130.248%"인데 툴팁이 맨숫자면 같은 값을 둘이
+  // 다르게 말하는 셈이다. 이름에 이미 "(%)"가 있는 지표의 중복도 함께 본다.
+  indicatorTooltip: indicatorCharts[0]
+    ? indicatorCharts[0].config.options.plugins.tooltip.callbacks.label(
+        { datasetIndex: 0, dataset: { label: "순이익률" }, parsed: { y: 130.248 } })
+    : null,
+  indicatorTooltipPercentInName: indicatorCharts[0]
+    ? indicatorCharts[0].config.options.plugins.tooltip.callbacks.label(
+        { datasetIndex: 0, dataset: { label: "배당성향(%)" }, parsed: { y: 25.1 } })
+    : null,
+  gapNotes: gapNotes,
+  gapChartCount: gapCharts.length,
 }));
 """
 
@@ -5397,6 +5487,69 @@ class TestChartRenderExecution(unittest.TestCase):
         )
         self.assertEqual(got["fundDatasets"][0]["data"], [1300000000, 500000000])
         self.assertEqual(got["fundDatasets"][1]["data"], [800000000, 500000000])
+
+    # ── SE-4h 최종 수정: 분류별 추이 차트 ────────────────────────────────
+    # 아래 네 테스트가 생기기 전에는 ui.js의 renderChart("indicators_" + ...)
+    # 호출을 통째로 지워도 1404/1404 초록이었다 — 이 작업의 산출물 전체가
+    # 무방비였다(리뷰가 돌린 16개 변형 중 유일하게 안 잡힌 것).
+
+    def test_four_indicator_charts_are_actually_created(self):
+        """4분류 각각에 Chart 인스턴스와 canvas가 하나씩 실제로 만들어진다."""
+        got = run_chart_render()
+        self.assertEqual(
+            got["indicatorChartCount"], 4,
+            "분류별 추이 차트가 4개가 아닙니다 — renderChart 호출이 죽었을 수 있습니다",
+        )
+        self.assertEqual(
+            got["indicatorCanvasDelta"], 4,
+            "canvas가 DOM에 4개 늘지 않았습니다 — Chart는 만들었지만 화면에 안 붙었을 수 있습니다",
+        )
+        self.assertEqual(
+            got["indicatorChartTitles"],
+            ["수익성 추이 (%)", "안정성 추이 (%)", "성장성(증가율) 추이 (%)", "활동성 추이 (%)"],
+        )
+        for kind in got["indicatorChartKinds"]:
+            self.assertEqual(kind, "line")
+
+    def test_indicator_charts_plot_every_requested_year_oldest_first(self):
+        """연도 축은 과거→최근이다(추세선이 아니라 실제 값의 시간순 나열)."""
+        got = run_chart_render()
+        for labels in got["indicatorChartLabels"]:
+            self.assertEqual(labels, ["2023", "2024", "2025"])
+
+    def test_all_null_indicator_gets_no_series(self):
+        """전 연도 null인 지표(매입채무회전율 — 4사 실측 모두 null)가 범례에
+        남으면 "값이 있는 척"이 된다."""
+        got = run_chart_render()
+        series = got["indicatorSeries"]
+        self.assertEqual(series[0], ["순이익률", "ROE"])
+        self.assertEqual(series[3], ["총자산회전율", "재고자산회전율"])
+        for names in series:
+            self.assertNotIn("매입채무회전율", names)
+
+    def test_indicator_tooltip_carries_the_percent_unit_like_the_table(self):
+        """리뷰 지적 ④: 표는 "130.248%"인데 툴팁이 맨숫자면 같은 값을 둘이
+        다르게 말한다. 이름에 이미 "(%)"가 있으면 단위를 겹쳐 붙이지 않는다."""
+        got = run_chart_render()
+        self.assertEqual(got["indicatorTooltip"], "순이익률: 130.248%")
+        self.assertEqual(got["indicatorTooltipPercentInName"], "배당성향(%): 25.1")
+
+    def test_missing_years_are_stated_on_screen(self):
+        """12콜 중 일부가 실패해 한 해가 빠지면, 화면이 어느 해를 실제로
+        조회했는지 말한다 — 침묵하면 점 하나짜리 "추이"가 그려진다."""
+        got = run_chart_render()
+        gap = [n for n in got["gapNotes"] if "최근 3년" in n]
+        self.assertEqual(len(gap), 1, f"연도 고지 문구를 찾지 못했습니다: {got['gapNotes']}")
+        note = gap[0]
+        self.assertIn("2025", note)
+        self.assertIn("2023", note)
+        self.assertIn("조회에 실패", note)
+        self.assertIn("2024", note)
+        # 값매김 표현은 쓰지 않는다(v0.8.5).
+        for banned in ("부족", "위험", "미흡", "불충분"):
+            self.assertNotIn(banned, note)
+        # 한 해만 남아도 차트는 그대로 그린다(사실은 사실이다).
+        self.assertEqual(got["gapChartCount"], 4)
 
     def test_x_scale_type_comes_from_the_spec_not_hardcoded(self):
         """리뷰 지적 ⑥: CHART_SPECS.fund_usage.xScale("category")이 실제로
@@ -7142,7 +7295,9 @@ class TestIndicatorBlocks(unittest.TestCase):
             "총자산회전율": "총자산 대비 매출액의 비율",
             "매출채권회전율": "매출채권 대비 매출액의 비율",
             "재고자산회전율": "재고자산 대비 매출액의 비율",
-            "매입채무회전율": "매입채무 대비 매출액의 비율",
+            # 화면 문구 자체에 추정임을 적는다 — 4사 실측 모두 DART가 null을
+            # 주어 산술 검증을 할 수 없었다(리뷰 지적 ③).
+            "매입채무회전율": "매입채무 대비 매출액의 비율 (추정 — DART 값이 없어 산술로 확인하지 못했습니다)",
             "배당성향(%)": "당기순이익 중 현금배당금총액이 차지하는 비율",
         }
         self.assertEqual(

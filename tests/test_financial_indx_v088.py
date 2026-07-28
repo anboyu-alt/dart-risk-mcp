@@ -250,6 +250,11 @@ class TestFetchIndicatorHistory(unittest.TestCase):
         )
         self._year_patch.start()
         self.addCleanup(self._year_patch.stop)
+        # 일시적 실패 재시도(_fetch_indx_page)가 실제로 1초·2초 잠들면 이
+        # 클래스가 수십 초로 늘어난다. 잠은 검증 대상이 아니다.
+        self._sleep_patch = patch("time.sleep")
+        self.mock_sleep = self._sleep_patch.start()
+        self.addCleanup(self._sleep_patch.stop)
 
     @patch("dart_risk_mcp.core.dart_client._retry")
     def test_rows_have_four_keys(self, mock_retry):
@@ -257,7 +262,7 @@ class TestFetchIndicatorHistory(unittest.TestCase):
             "2025": {"M210000": [{"idx_nm": "순이익률", "idx_cl_nm": "수익성",
                                     "idx_val": "-22.56"}]},
         })
-        rows = dart_client.fetch_indicator_history("01011526", "KEY", 1)
+        rows = dart_client.fetch_indicator_history("01011526", "KEY", 1)["rows"]
         self.assertTrue(rows)
         for row in rows:
             self.assertEqual(
@@ -274,7 +279,7 @@ class TestFetchIndicatorHistory(unittest.TestCase):
             "2023": {"M210000": [{"idx_nm": "순이익률", "idx_cl_nm": "수익성",
                                     "idx_val": "1.0"}]},
         })
-        rows = dart_client.fetch_indicator_history("01011526", "KEY", 1)
+        rows = dart_client.fetch_indicator_history("01011526", "KEY", 1)["rows"]
         years = {row["bsns_year"] for row in rows}
         self.assertEqual(years, {"2025", "2024", "2023"})
 
@@ -286,7 +291,7 @@ class TestFetchIndicatorHistory(unittest.TestCase):
             for y in range(2021, 2026)
         }
         mock_retry.side_effect = _make_indx_history_side(per_year)
-        rows = dart_client.fetch_indicator_history("01011526", "KEY", 5)
+        rows = dart_client.fetch_indicator_history("01011526", "KEY", 5)["rows"]
         years = {row["bsns_year"] for row in rows}
         self.assertEqual(years, {"2021", "2022", "2023", "2024", "2025"})
 
@@ -298,7 +303,7 @@ class TestFetchIndicatorHistory(unittest.TestCase):
             for y in range(2015, 2026)
         }
         mock_retry.side_effect = _make_indx_history_side(per_year)
-        rows = dart_client.fetch_indicator_history("01011526", "KEY", 99)
+        rows = dart_client.fetch_indicator_history("01011526", "KEY", 99)["rows"]
         years = {row["bsns_year"] for row in rows}
         self.assertEqual(len(years), 5)
         self.assertEqual(years, {"2021", "2022", "2023", "2024", "2025"})
@@ -309,7 +314,7 @@ class TestFetchIndicatorHistory(unittest.TestCase):
         mock_retry.side_effect = _make_indx_history_side({
             "2025": {"M210000": [{"idx_nm": "세전계속사업이익률", "idx_cl_nm": "수익성"}]},
         })
-        rows = dart_client.fetch_indicator_history("01011526", "KEY", 1)
+        rows = dart_client.fetch_indicator_history("01011526", "KEY", 1)["rows"]
         target = [r for r in rows if r["idx_nm"] == "세전계속사업이익률"]
         self.assertEqual(len(target), 1)
         self.assertIsNone(target[0]["idx_val"])
@@ -323,7 +328,7 @@ class TestFetchIndicatorHistory(unittest.TestCase):
                 {"idx_nm": "정상값", "idx_cl_nm": "수익성", "idx_val": "12.34"},
             ]},
         })
-        rows = dart_client.fetch_indicator_history("01011526", "KEY", 1)
+        rows = dart_client.fetch_indicator_history("01011526", "KEY", 1)["rows"]
         by_name = {r["idx_nm"]: r["idx_val"] for r in rows if r["bsns_year"] == "2025"}
         self.assertIsNone(by_name["빈값"])
         self.assertIsNone(by_name["문자값"])
@@ -337,7 +342,7 @@ class TestFetchIndicatorHistory(unittest.TestCase):
                 "M220000": [{"idx_nm": "부채비율", "idx_cl_nm": "안정성", "idx_val": "130.2"}],
             },
         })
-        rows = dart_client.fetch_indicator_history("01011526", "KEY", 1)
+        rows = dart_client.fetch_indicator_history("01011526", "KEY", 1)["rows"]
         by_name = {r["idx_nm"]: r["category"] for r in rows if r["bsns_year"] == "2025"}
         self.assertEqual(by_name["순이익률"], "수익성")
         self.assertEqual(by_name["부채비율"], "안정성")
@@ -360,7 +365,7 @@ class TestFetchIndicatorHistory(unittest.TestCase):
             ])
 
         mock_retry.side_effect = _side
-        rows = dart_client.fetch_indicator_history("01011526", "KEY", 1)
+        rows = dart_client.fetch_indicator_history("01011526", "KEY", 1)["rows"]
         by_name = {
             r["idx_nm"]: r["category"] for r in rows if r["bsns_year"] == "2025"
         }
@@ -385,15 +390,137 @@ class TestFetchIndicatorHistory(unittest.TestCase):
             return _resp(lst=[])
 
         mock_retry.side_effect = _side
-        rows = dart_client.fetch_indicator_history("01011526", "KEY", 1)
-        years_present = {row["bsns_year"] for row in rows}
+        result = dart_client.fetch_indicator_history("01011526", "KEY", 1)
+        years_present = {row["bsns_year"] for row in result["rows"]}
         self.assertIn("2025", years_present)
         self.assertIn("2023", years_present)
         self.assertNotIn("2024", years_present)
+        # 그리고 그 사실이 값으로 남아야 한다 — 빠진 해가 조용히 사라지면
+        # 화면은 점 두 개짜리 "추이"를 아무 설명 없이 그린다.
+        self.assertEqual(result["years_failed"], ["2024"])
+        self.assertEqual(result["years_retrieved"], ["2025", "2023"])
 
     def test_rejects_empty_inputs(self):
-        self.assertEqual(dart_client.fetch_indicator_history("", "KEY", 1), [])
-        self.assertEqual(dart_client.fetch_indicator_history("X", "", 1), [])
+        empty = {"years_requested": [], "years_retrieved": [],
+                 "years_failed": [], "rows": []}
+        self.assertEqual(dart_client.fetch_indicator_history("", "KEY", 1), empty)
+        self.assertEqual(dart_client.fetch_indicator_history("X", "", 1), empty)
+
+
+class TestIndicatorHistoryYearAccounting(unittest.TestCase):
+    """어느 연도가 실제로 조회됐는지를 값으로 돌려준다 (SE-4h 최종 수정).
+
+    리뷰가 라이브에서 관측한 증상: 같은 회사·같은 인자인데 첫 호출은 66행
+    (2025년만), 이후 호출은 198행(3개 연도). 12콜 버스트 중 일부가 실패하면
+    그 해가 통째로 사라지는데, 예전 구현은 debug 로그만 남기고 행 목록만
+    돌려줘 화면이 "조회 실패"와 "그 회사에 자료가 없음"을 구분할 수 없었다.
+    """
+
+    def setUp(self):
+        cache = getattr(dart_client, "_indicator_history_cache", None)
+        if cache is not None:
+            cache.clear()
+        self._year_patch = patch(
+            "dart_risk_mcp.core.dart_client._previous_business_year",
+            return_value=2025,
+        )
+        self._year_patch.start()
+        self.addCleanup(self._year_patch.stop)
+        self._sleep_patch = patch("time.sleep")
+        self.mock_sleep = self._sleep_patch.start()
+        self.addCleanup(self._sleep_patch.stop)
+
+    @patch("dart_risk_mcp.core.dart_client._retry")
+    def test_all_years_retrieved_reports_no_gap(self, mock_retry):
+        mock_retry.side_effect = _make_indx_history_side({
+            str(y): {"M210000": [{"idx_nm": "순이익률", "idx_cl_nm": "수익성지표",
+                                  "idx_val": "1.0"}]}
+            for y in (2023, 2024, 2025)
+        })
+        result = dart_client.fetch_indicator_history("01011526", "KEY", 1)
+        self.assertEqual(result["years_requested"], ["2025", "2024", "2023"])
+        self.assertEqual(result["years_retrieved"], ["2025", "2024", "2023"])
+        self.assertEqual(result["years_failed"], [])
+
+    @patch("dart_risk_mcp.core.dart_client._retry")
+    def test_status_013_year_is_absent_not_failed(self, mock_retry):
+        """013(데이터 없음)은 확정 답변이다 — 조회 실패로 적으면 거짓말이 된다."""
+
+        def _side(method, url, **kwargs):
+            if "fnlttSinglIndx" not in url:
+                return _resp(status="013")
+            year = (kwargs.get("params") or {}).get("bsns_year")
+            if year != "2025":
+                return _resp(status="013")
+            return _resp(lst=[{"idx_nm": "순이익률", "idx_cl_nm": "수익성지표",
+                               "idx_val": "1.0"}])
+
+        mock_retry.side_effect = _side
+        result = dart_client.fetch_indicator_history("01011526", "KEY", 1)
+        self.assertEqual(result["years_retrieved"], ["2025"])
+        self.assertEqual(result["years_failed"], [])
+
+    @patch("dart_risk_mcp.core.dart_client._retry")
+    def test_transient_status_020_is_retried_and_can_succeed(self, mock_retry):
+        """HTTP 200 + status 020은 예외도 5xx도 아니라 _retry가 절대 다시
+        시도하지 않는다. 그 재시도를 이 함수가 직접 책임진다."""
+        calls = {"n": 0}
+
+        def _side(method, url, **kwargs):
+            if "fnlttSinglIndx" not in url:
+                return _resp(status="013")
+            calls["n"] += 1
+            if calls["n"] == 1:  # 첫 호출만 스로틀
+                return _resp(status="020")
+            return _resp(lst=[{"idx_nm": "순이익률", "idx_cl_nm": "수익성지표",
+                               "idx_val": "1.0"}])
+
+        mock_retry.side_effect = _side
+        result = dart_client.fetch_indicator_history("01011526", "KEY", 1)
+        # 재시도가 성공했으므로 실패 연도는 없어야 한다.
+        self.assertEqual(result["years_failed"], [])
+        self.assertEqual(result["years_retrieved"], ["2025", "2024", "2023"])
+
+    @patch("dart_risk_mcp.core.dart_client._retry")
+    def test_permanent_status_is_not_retried(self, mock_retry):
+        """900(키 오류)은 몇 번을 물어도 같은 답이다 — 쿼터만 태운다."""
+        seen = []
+
+        def _side(method, url, **kwargs):
+            if "fnlttSinglIndx" not in url:
+                return _resp(status="013")
+            seen.append((kwargs.get("params") or {}).get("bsns_year"))
+            return _resp(status="900")
+
+        mock_retry.side_effect = _side
+        result = dart_client.fetch_indicator_history("01011526", "KEY", 1)
+        # 3개 연도 × 4분류 = 12콜. 재시도했다면 그보다 많아진다.
+        self.assertEqual(len(seen), 12)
+        self.assertEqual(result["years_failed"], ["2025", "2024", "2023"])
+        self.assertEqual(result["years_retrieved"], [])
+
+    @patch("dart_risk_mcp.core.dart_client._retry")
+    def test_failed_result_is_not_cached(self, mock_retry):
+        """일시적 사고를 10분 캐시에 굳히면 다시 눌러도 같은 반쪽 화면이다."""
+        state = {"fail": True}
+
+        def _side(method, url, **kwargs):
+            if "fnlttSinglIndx" not in url:
+                return _resp(status="013")
+            year = (kwargs.get("params") or {}).get("bsns_year")
+            if year == "2024" and state["fail"]:
+                return _resp(status="800")
+            return _resp(lst=[{"idx_nm": "순이익률", "idx_cl_nm": "수익성지표",
+                               "idx_val": "1.0"}])
+
+        mock_retry.side_effect = _side
+        first = dart_client.fetch_indicator_history("01011526", "KEY", 1)
+        self.assertEqual(first["years_failed"], ["2024"])
+
+        state["fail"] = False
+        second = dart_client.fetch_indicator_history("01011526", "KEY", 1)
+        self.assertEqual(second["years_failed"], [])
+        self.assertEqual(second["years_retrieved"], ["2025", "2024", "2023"])
 
 
 if __name__ == "__main__":
