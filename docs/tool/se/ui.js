@@ -23,6 +23,13 @@ let CHART_INSTANCES = []; // renderChart()가 만든 Chart.js 인스턴스 목�
                            // 비우는 자리와 같은 곳에서 함께 정리한다. 안
                            // 그러면 회사를 바꾸거나 로그아웃할 때마다
                            // 캔버스와 메모리가 쌓인다.
+let SIGNALS_DATA = null; // docs/tool/signals-data.json 로드 결과(SE-4f
+                          // Task 3, loadSignalsData()가 채운다) — 공시
+                          // 목록 차트를 유형별로 나누는 데 쓴다. init()이
+                          // 백그라운드로 불러오는 동안(또는 실패한 채로)
+                          // null일 수 있다 — renderChart→chartData(app.js)가
+                          // null이면 기존 단색 막대로 물러난다(화면이
+                          // 죽지 않는다).
 
 /** 사용자에게 그대로 보여줘도 되는 문구로만 만든 오류. 원시 오류(네트워크
  *  실패의 "Failed to fetch" 같은 브라우저 내부 문구, 서버 응답 원문 등)는
@@ -71,6 +78,31 @@ async function loadConfig() {
   }
   CONFIG = cfg;
   return CONFIG;
+}
+
+/** signals-data.json(공개 뷰어 docs/tool/index.html과 공유하는 신호 분류
+ *  데이터)을 불러온다. 실패하면(네트워크 오류·형태가 예상과 다름) null을
+ *  돌려준다 — 공시 목록 차트가 유형별로 못 나뉠 뿐 화면 전체가 죽으면
+ *  안 된다(브리프: "로드 실패에 대비하세요", chartData(app.js)가 이
+ *  신호로 기존 단색 막대로 물러난다).
+ *
+ *  **`/signals-data.json`처럼 루트 기준 절대경로를 쓴다** — 이 파일은
+ *  배포 루트(docs/tool, vercel.json의 outputDirectory)에 se/와 함께
+ *  있다. 상대경로("signals-data.json")를 쓰면 trailingSlash:false 때문에
+ *  `/se`가 `/se/`가 아니라 `/se`로 되돌아갈 때 상대경로가 루트 기준으로
+ *  잘못 해석돼 404가 난다 — 이 저장소가 실제로 겪은 사고와 같은 부류다
+ *  (tests/se/test_se_page_assets.py의 TestAssetPathsSurviveTrailingSlashRedirect·
+ *  TestFetchPathsAreRootAbsolute 참고). */
+async function loadSignalsData() {
+  try {
+    const r = await fetch("/signals-data.json");
+    if (!r.ok) return null;
+    const j = await r.json();
+    if (!j || !Array.isArray(j.signals)) return null;
+    return j;
+  } catch (e) {
+    return null;
+  }
 }
 
 /** GoTrue REST 직접 호출 — SDK를 쓰지 않는다. */
@@ -223,12 +255,16 @@ function resetCharts() {
  *
  *  색은 계열 구분 용도로만 쓴다(v0.8.5) — `--c0`~`--c8`을 값과 무관하게
  *  순서대로 배정한다. `--red` 등 판정 색은 여기서 절대 쓰지 않는다.
+ *
+ *  signalsData(선택, SE-4f Task 3)는 disclosures처럼 spec.classifyField가
+ *  있는 차트에서만 chartData(app.js)로 그대로 전달된다 — 다른 스펙은
+ *  이 인자를 쓰지 않으므로 undefined여도 그대로 이전과 같다.
  */
-function renderChart(wrap, key, records) {
+function renderChart(wrap, key, records, signalsData) {
   if (typeof Chart === "undefined") return false;
   const spec = CHART_SPECS[key];
   if (!spec) return false;
-  const data = chartData(records, spec);
+  const data = chartData(records, spec, signalsData);
   if (!data) return false;
 
   const gridColor = cssVar("--dim2");
@@ -290,9 +326,15 @@ function renderChart(wrap, key, records) {
         // spec.xScale(app.js CHART_SPECS)을 그대로 쓴다 — "category"만
         // 있고 "time"은 없다는 설계 결정(별도 날짜 어댑터 회피)을 여기서
         // 실제로 지킨다. 값이 없으면 Chart.js 기본값과 같은 "category"로
-        // 떨어진다.
-        x: { type: spec.xScale || "category", ticks: { color: textColor }, grid: { color: gridColor } },
+        // 떨어진다. spec.stacked(disclosures 등, SE-4f Task 3)는 x·y 축
+        // 양쪽에 걸어야 Chart.js가 막대를 누적으로 그린다 — 없으면
+        // Chart.js 기본값(false)과 같다(이전 동작 그대로).
+        x: {
+          type: spec.xScale || "category", stacked: !!spec.stacked,
+          ticks: { color: textColor }, grid: { color: gridColor },
+        },
         y: {
+          stacked: !!spec.stacked,
           ticks: { color: textColor }, grid: { color: gridColor },
           title: { display: !!spec.yLabel, text: spec.yLabel || "", color: textColor },
         },
@@ -578,6 +620,14 @@ async function init() {
   const themeToggleBtn = document.getElementById("theme-toggle");
   if (themeToggleBtn) themeToggleBtn.addEventListener("click", toggleTheme);
   resetToc(); // 페이지를 새로 열 때 목차를 빈 상태로 시작한다
+
+  // 공시 목록 차트를 유형별로 나누는 데 쓴다(SE-4f Task 3) — analyze()가
+  // 끝나 disclosures 섹션을 그릴 때까지는 시간이 걸리므로(수 분) 로그인
+  // 흐름을 기다리게 하지 않고 백그라운드로 불러온다. 실패해도 renderChart
+  // (chartData, app.js)가 signalsData=null을 받아 기존 단색 막대로
+  // 물러난다 — await하지 않는다고 오류를 삼키는 게 아니다(loadSignalsData
+  // 자체가 실패를 null로 흡수한다).
+  loadSignalsData().then(function (d) { SIGNALS_DATA = d; });
 
   document.getElementById("login").addEventListener("click", doLogin);
   document.getElementById("logout").addEventListener("click", doLogout);
@@ -997,7 +1047,7 @@ function buildFinancialRatiosBlock(ratios) {
   const table = tableLayout(records);
   if (table) wrap.appendChild(tableEl(table));
 
-  renderChart(wrap, "financial_ratios", ratios);
+  renderChart(wrap, "financial_ratios", ratios, SIGNALS_DATA);
   return { el: wrap, table: table };
 }
 
@@ -1081,8 +1131,10 @@ function renderSection(key, value) {
     // 차트는 표 위에 얹는다 — 표를 지우지 않는다. canvas 안의 숫자는
     // 복사도 검색도 안 되므로 정확한 값은 항상 표가 책임진다(브리프
     // 원칙). CHART_SPECS에 이 섹션 정의가 없거나 그릴 데이터가 없으면
-    // renderChart가 false를 돌려주고 el을 건드리지 않는다.
-    renderChart(el, key, block.records);
+    // renderChart가 false를 돌려주고 el을 건드리지 않는다. SIGNALS_DATA
+    // (SE-4f Task 3)는 disclosures에서만 실제로 쓰인다 — 다른 키는
+    // chartData(app.js)가 이 인자를 무시한다.
+    renderChart(el, key, block.records, SIGNALS_DATA);
     holder.appendChild(el);
   }
 }

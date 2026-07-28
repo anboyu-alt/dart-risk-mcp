@@ -4280,6 +4280,267 @@ class TestChartDataForDividendsDebtDisclosures(unittest.TestCase):
         self.assertEqual(len(got[0]["records"]), 3)
 
 
+# ── SE-4f Task 3: 공시 목록 차트 유형별 색상 분류 ────────────────────────
+#
+# task-3-brief.md: "로직을 새로 만들지 마라 — docs/tool/index.html의
+# matchSignals(564행)·AMEND_RE가 이미 있다. 읽어서 맞춘다." 공개 뷰어와
+# SE가 같은 공시를 다르게 분류하면 그 자체가 결함이므로, 아래 테스트는
+# 고정 픽스처가 아니라 **실제** docs/tool/signals-data.json을 읽어
+# 검증한다(그 파일이 나중에 바뀌어도 이 계약이 계속 맞는지 자동으로
+# 지킨다).
+_SIGNALS_DATA_PATH = _ROOT / "docs" / "tool" / "signals-data.json"
+
+
+def run_js_with_real_signals(expression: str):
+    """app.js를 불러오고, 공개 뷰어와 공유하는 실제 signals-data.json을
+    전역 SIGNALS로 얹어 표현식을 평가한다."""
+    script = (
+        f"Object.assign(globalThis, require({json.dumps(str(_APP))}));\n"
+        f"globalThis.SIGNALS = JSON.parse("
+        f"require('fs').readFileSync({json.dumps(str(_SIGNALS_DATA_PATH))}, 'utf-8'));\n"
+        f"process.stdout.write(JSON.stringify({expression}));\n"
+    )
+    out = subprocess.run(
+        [_NODE, "-e", script], capture_output=True, text=True, encoding="utf-8"
+    )
+    if out.returncode != 0:
+        raise AssertionError(f"node 실행 실패:\n{out.stderr}")
+    return json.loads(out.stdout)
+
+
+def call_js(fn_name: str, *json_args) -> object:
+    """fn_name(json_args...)를 JSON 리터럴로 안전하게 호출한다 — 손으로
+    JS 문자열 이스케이프를 쓰지 않아 따옴표·역슬래시 실수를 피한다."""
+    args_src = ", ".join(json.dumps(a, ensure_ascii=False) for a in json_args)
+    return run_js(f"{fn_name}({args_src})")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestClassifyDisclosureCategory(unittest.TestCase):
+    """classifyDisclosureCategory(reportNm, signalsData) — 공시 하나를
+    signals-data.json 기준으로 카테고리 번호(0~8, 0="기타")로 분류한다.
+    docs/tool/index.html의 matchSignals+AMEND_RE와 같은 로직이어야 한다.
+
+    픽스처는 브리프가 요구한 엔켐 실제 공시명이다."""
+
+    def test_matches_a_known_keyword_to_its_signals_data_category(self):
+        got = run_js_with_real_signals(
+            'classifyDisclosureCategory("주요사항보고서(전환사채권발행결정)", SIGNALS)'
+        )
+        self.assertEqual(got, 1, "CB_BW(category 1)로 분류돼야 합니다")
+
+    def test_unclassified_report_falls_back_to_other_category_zero(self):
+        """브리프 실측 예시 — 어떤 신호 키워드에도 걸리지 않는 공시다.
+        분류되지 않는다고 사라지면 안 되고 "기타"(0)로 남아야 한다."""
+        got = run_js_with_real_signals(
+            'classifyDisclosureCategory("타법인주식및출자증권취득결정", SIGNALS)'
+        )
+        self.assertEqual(got, 0)
+
+    def test_second_unclassified_example_also_falls_back(self):
+        got = run_js_with_real_signals(
+            'classifyDisclosureCategory("주요사항보고서(타법인주식및출자증권양도결정)", SIGNALS)'
+        )
+        self.assertEqual(got, 0)
+
+    def test_amendment_disclosure_is_not_classified_like_the_public_viewer(self):
+        """docs/tool/index.html의 buildResult: isAmend면 신호를 아예
+        매기지 않는다(sigs=[]) — "[기재정정]"이 안에 "전환사채"를
+        포함해도 공개 뷰어와 똑같이 기타(0)로 남아야 한다. 되돌리면(정정
+        판정을 빼면) 이 테스트는 1(CB_REPAY 또는 CB_BW)로 실패한다."""
+        got = run_js_with_real_signals(
+            'classifyDisclosureCategory('
+            '"[기재정정]주요사항보고서(자기전환사채매도결정)", SIGNALS)'
+        )
+        self.assertEqual(got, 0)
+
+    def test_matches_public_viewer_logic_for_a_batch_of_real_report_names(self):
+        """docs/tool/index.html의 matchSignals+AMEND_RE를 파이썬으로 그대로
+        재현해, classifyDisclosureCategory의 결과가 공개 뷰어가 매길 첫
+        신호의 category와 일치하는지 배치로 대조한다 — "로직을 새로
+        만들지 마라"를 기계적으로 강제한다."""
+        data = json.loads(_SIGNALS_DATA_PATH.read_text(encoding="utf-8"))
+        amend_re = re.compile(data["amendment_pattern"])
+        samples = [
+            "[기재정정]주요사항보고서(자기전환사채매도결정)",
+            "타법인주식및출자증권취득결정",
+            "주요사항보고서(타법인주식및출자증권양도결정)",
+            "주요사항보고서(전환사채권발행결정)",
+            "최대주주변경",
+            "임원의변동",
+            "조회공시요구(풍문또는보도에대한답변)",
+            "제3자배정유상증자결정",
+        ]
+
+        def public_viewer_category(nm: str) -> int:
+            if amend_re.match(nm):
+                return 0
+            for s in data["signals"]:
+                for kw in s["keywords"]:
+                    if kw and kw in nm:
+                        return s["category"]
+            return 0
+
+        expected = [public_viewer_category(nm) for nm in samples]
+        got = run_js_with_real_signals(
+            json.dumps(samples, ensure_ascii=False)
+            + ".map(function(nm){return classifyDisclosureCategory(nm, SIGNALS);})"
+        )
+        self.assertEqual(got, expected)
+
+    def test_returns_null_when_signals_data_is_unusable(self):
+        """로드 실패(브리프: "로드 실패에 대비하세요")에 대응하는 계약 —
+        null이거나 형태가 예상과 다르면 분류를 포기했다는 신호로 null을
+        돌려준다. 호출자(monthlyCountsByCategory/chartData)가 이 신호로
+        기존 단색 집계로 물러난다."""
+        self.assertIsNone(run_js('classifyDisclosureCategory("x", null)'))
+        self.assertIsNone(run_js('classifyDisclosureCategory("x", {})'))
+        self.assertIsNone(
+            run_js('classifyDisclosureCategory("x", {signals: "not-array"})')
+        )
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestMonthlyCountsByCategory(unittest.TestCase):
+    """monthlyCountsByCategory(rows, dateField, textField, signalsData) —
+    disclosures를 월×카테고리로 묶어 건수만 센다(monthlyCounts와 같은
+    "집계는 여기서 끝난다" 원칙, v0.8.5)."""
+
+    _SMALL_SIGNALS = {
+        "signals": [
+            {"key": "CB_BW", "category": 1, "keywords": ["전환사채권발행결정"]},
+            {"key": "SHAREHOLDER", "category": 3, "keywords": ["최대주주변경"]},
+        ],
+        "categories": {"0": "기타", "1": "CB/채권", "3": "경영권"},
+        "amendment_pattern": r"^\[(?:기재정정|첨부추가|정정)[^\]]*\]\s*",
+    }
+
+    def test_splits_counts_by_month_and_category(self):
+        records = [
+            {"rcept_dt": "20260110", "report_nm": "주요사항보고서(전환사채권발행결정)"},
+            {"rcept_dt": "20260112", "report_nm": "최대주주변경"},
+            {"rcept_dt": "20260115", "report_nm": "타법인주식및출자증권취득결정"},
+            {"rcept_dt": "20260210", "report_nm": "[기재정정]주요사항보고서(자기전환사채매도결정)"},
+        ]
+        got = call_js(
+            "monthlyCountsByCategory", records, "rcept_dt", "report_nm", self._SMALL_SIGNALS
+        )
+        by_month: dict = {}
+        for r in got:
+            by_month.setdefault(r["month"], {})[r["category"]] = r["count"]
+        self.assertEqual(by_month["202601"], {"CB/채권": 1, "경영권": 1, "기타": 1})
+        self.assertEqual(by_month["202602"], {"기타": 1})
+
+    def test_month_totals_match_the_original_record_count(self):
+        """브리프의 핵심 요구: "월별 합계가 원본 건수와 일치해야 합니다."
+        미분류·정정공시를 포함해 어떤 공시도 조용히 빠지면 안 된다."""
+        records = [
+            {"rcept_dt": "20260110", "report_nm": "a"},
+            {"rcept_dt": "20260112", "report_nm": "b"},
+            {"rcept_dt": "20260115", "report_nm": "c"},
+            {"rcept_dt": "20260210", "report_nm": "d"},
+        ]
+        got = call_js(
+            "monthlyCountsByCategory", records, "rcept_dt", "report_nm", self._SMALL_SIGNALS
+        )
+        self.assertEqual(sum(r["count"] for r in got), len(records))
+
+    def test_missing_or_short_dates_are_skipped_not_miscounted(self):
+        """monthlyCounts와 같은 계약 — 월을 특정할 수 없는 값은 0으로
+        채우지 않고 건너뛴다."""
+        records = [
+            {"rcept_dt": None, "report_nm": "a"},
+            {"rcept_dt": "2026", "report_nm": "b"},
+            {"rcept_dt": "20260415", "report_nm": "최대주주변경"},
+        ]
+        got = call_js(
+            "monthlyCountsByCategory", records, "rcept_dt", "report_nm", self._SMALL_SIGNALS
+        )
+        self.assertEqual(got, [{"month": "202604", "category": "경영권", "count": 1}])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestChartDataDisclosuresByType(unittest.TestCase):
+    """chartData(records, CHART_SPECS.disclosures, signalsData) — 공시
+    목록 월별 막대를 유형별로 쌓아 올리는 계약. 3번째 인자를 생략하거나
+    (기존 호출부) 못 쓸 형태면 기존 단색 막대로 물러난다(브리프: "로드
+    실패에 대비하세요"). signalsData는 순수 함수의 인자일 뿐이라(브리프:
+    "순수 함수는 분류 데이터를 인자로 받아 순수하게 유지") chartData
+    자체는 여전히 같은 입력에 같은 출력을 낸다."""
+
+    _RECORDS = [
+        {"rcept_no": 1, "rcept_dt": "20260110", "report_nm": "주요사항보고서(전환사채권발행결정)"},
+        {"rcept_no": 2, "rcept_dt": "20260112", "report_nm": "최대주주변경"},
+        {"rcept_no": 3, "rcept_dt": "20260115", "report_nm": "타법인주식및출자증권취득결정"},
+        {"rcept_no": 4, "rcept_dt": "20260210", "report_nm": "[기재정정]주요사항보고서(자기전환사채매도결정)"},
+        {"rcept_no": 5, "rcept_dt": "20260212", "report_nm": "주요사항보고서(타법인주식및출자증권양도결정)"},
+    ]
+
+    def test_without_signals_data_falls_back_to_a_single_solid_series(self):
+        """기존 호출부(2-인자)와 완전히 같은 동작을 유지해야 한다 — 이
+        저장소에서 결함이 초록으로 통과한 전례가 있어(브리프) 회귀
+        방지로 명시적으로 남긴다."""
+        got = run_js(
+            f"chartData({json.dumps(self._RECORDS, ensure_ascii=False)}, "
+            f"CHART_SPECS.disclosures)"
+        )
+        self.assertEqual([d["label"] for d in got["datasets"]], ["건수"])
+        self.assertEqual(sum(got["datasets"][0]["data"]), len(self._RECORDS))
+
+    def test_malformed_signals_data_also_falls_back_gracefully(self):
+        """null뿐 아니라 형태가 깨진 값(예: signals 배열이 없음)에도
+        화면이 죽지 않고 기존 단색 막대로 물러나야 한다."""
+        got = run_js(
+            f"chartData({json.dumps(self._RECORDS, ensure_ascii=False)}, "
+            f"CHART_SPECS.disclosures, {{}})"
+        )
+        self.assertEqual([d["label"] for d in got["datasets"]], ["건수"])
+
+    def test_with_real_signals_data_splits_into_type_stacked_series(self):
+        got = run_js_with_real_signals(
+            f"chartData({json.dumps(self._RECORDS, ensure_ascii=False)}, "
+            f"CHART_SPECS.disclosures, SIGNALS)"
+        )
+        self.assertIsNotNone(got)
+        labels = [d["label"] for d in got["datasets"]]
+        self.assertIn("기타", labels, "미분류 공시가 조용히 사라졌습니다")
+        self.assertGreater(len(labels), 1, "유형이 하나로만 나와 색 구분의 의미가 없습니다")
+
+    def test_monthly_stacked_sum_matches_the_original_disclosure_count_per_month(self):
+        """브리프의 핵심 요구: "월별 합계가 원본 건수와 일치해야 합니다."
+        엔켐 145건이면 145여야 한다는 요구를 축소판(5건, 2개월)으로
+        검증한다."""
+        got = run_js_with_real_signals(
+            f"chartData({json.dumps(self._RECORDS, ensure_ascii=False)}, "
+            f"CHART_SPECS.disclosures, SIGNALS)"
+        )
+        per_month_total = [0] * len(got["labels"])
+        for ds in got["datasets"]:
+            for i, v in enumerate(ds["data"]):
+                if v is not None:
+                    per_month_total[i] += v
+        self.assertEqual(got["labels"], ["2026.01", "2026.02"])
+        self.assertEqual(per_month_total, [3, 2])
+        self.assertEqual(sum(per_month_total), len(self._RECORDS))
+
+    def test_amendment_disclosure_is_counted_under_other_not_dropped(self):
+        """브리프 실측 예시 — 정정공시가 조용히 사라지지 않고 "기타"
+        막대에 포함돼야 한다."""
+        got = run_js_with_real_signals(
+            f"chartData({json.dumps(self._RECORDS, ensure_ascii=False)}, "
+            f"CHART_SPECS.disclosures, SIGNALS)"
+        )
+        other_ds = next(d for d in got["datasets"] if d["label"] == "기타")
+        feb_idx = got["labels"].index("2026.02")
+        self.assertIsNotNone(other_ds["data"][feb_idx])
+        self.assertGreaterEqual(other_ds["data"][feb_idx], 1)
+
+    def test_chart_spec_declares_stacking(self):
+        """renderChart(ui.js)가 Chart.js scales.x/y.stacked로 그대로 옮길
+        플래그다 — spec에 없으면 렌더 경로가 읽을 값 자체가 없다."""
+        self.assertTrue(run_js("!!CHART_SPECS.disclosures.stacked"))
+
+
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestNumeric(unittest.TestCase):
     """numeric()의 쉼표·배열 처리(리뷰 지적 ⑦ minor).
@@ -4643,6 +4904,38 @@ const sameRoundChart = CHART_CALLS[CHART_CALLS.length - 1];
 const sameRoundTable = findTable(ELEMENTS["sec-fund_usage"]);
 const sameRoundTableRows = sameRoundTable ? tableRowTexts(sameRoundTable) : [];
 
+// L) disclosures — SIGNALS_DATA(신호 분류 데이터, SE-4f Task 3)가 있으면
+//    renderSection이 실제로 그 값을 renderChart까지 배선해 월별 막대가
+//    유형별로 쌓여야 한다. 정의만 있고 호출부가 없는 사고가 이 저장소에서
+//    다섯 번 났다(TestPanelsAreWiredAndReachable 등) — 문자열 검사가
+//    아니라 실제 렌더 결과로 확인한다.
+//
+//    SIGNALS_DATA는 ui.js 최상위 `let` 선언이라 sandbox 객체 프로퍼티로는
+//    안 보인다(vm 렉시컬 환경 특성 — 함수 선언과 달리 let/const는 전역
+//    객체에 반영되지 않는다). 같은 컨텍스트에서 대입문만 담은 별도
+//    vm.Script를 돌려 그 바인딩 자체를 바꾼다.
+new vm.Script(
+  "SIGNALS_DATA = " + JSON.stringify({
+    signals: [
+      { key: "CB_BW", label: "CB/BW발행", keywords: ["전환사채권발행결정"], category: 1 },
+      { key: "SHAREHOLDER", label: "최대주주변경", keywords: ["최대주주변경"], category: 3 },
+    ],
+    categories: { "0": "기타", "1": "CB/채권", "3": "경영권" },
+    amendment_pattern: "^\\[(?:기재정정|첨부추가|정정)[^\\]]*\\]\\s*",
+  }) + ";",
+  { filename: "inject-signals-data.js" }
+).runInContext(sandbox);
+
+const chartCountBeforeL = CHART_CALLS.length;
+sandbox.renderSection("disclosures", [
+  { rcept_no: 10, rcept_dt: "20260110", report_nm: "주요사항보고서(전환사채권발행결정)" },
+  { rcept_no: 11, rcept_dt: "20260112", report_nm: "최대주주변경" },
+  { rcept_no: 12, rcept_dt: "20260115", report_nm: "타법인주식및출자증권취득결정" },
+  { rcept_no: 13, rcept_dt: "20260210", report_nm: "[기재정정]주요사항보고서(자기전환사채매도결정)" },
+]);
+const chartCountAfterL = CHART_CALLS.length;
+const byTypeChart = chartCountAfterL > chartCountBeforeL ? CHART_CALLS[CHART_CALLS.length - 1] : null;
+
 function findIndex(tags, tag) {
   for (let i = 0; i < tags.length; i++) if (tags[i].tag === tag) return i;
   return -1;
@@ -4702,6 +4995,17 @@ process.stdout.write(JSON.stringify({
     return d.label === "실제 집행 금액";
   }).data,
   sameRoundTableRows: sameRoundTableRows,
+  chartCountBeforeL: chartCountBeforeL,
+  chartCountAfterL: chartCountAfterL,
+  byTypeLabels: byTypeChart ? byTypeChart.data.labels : null,
+  byTypeDatasetLabels: byTypeChart
+    ? byTypeChart.data.datasets.map(function (d) { return d.label; }) : null,
+  byTypeDatasetData: byTypeChart
+    ? byTypeChart.data.datasets.map(function (d) { return d.data; }) : null,
+  byTypeColors: byTypeChart
+    ? byTypeChart.data.datasets.map(function (d) { return d.backgroundColor; }) : null,
+  byTypeXStacked: byTypeChart ? byTypeChart.options.scales.x.stacked : null,
+  byTypeYStacked: byTypeChart ? byTypeChart.options.scales.y.stacked : null,
 }));
 """
 
@@ -5025,6 +5329,36 @@ class TestChartRenderExecution(unittest.TestCase):
                          "disclosures 차트가 실제 렌더 경로에서 생기지 않았습니다")
         self.assertEqual(got["disclosuresLabels"], ["2026.04", "2026.05"])
         self.assertEqual(got["disclosuresData"], [2, 1])
+
+    def test_disclosures_chart_splits_into_type_stacked_series_when_signals_data_is_set(self):
+        """SE-4f Task 3: SIGNALS_DATA가 채워져 있으면 renderSection이 실제로
+        그 값을 renderChart까지 배선해, 월별 막대가 (CB/채권·경영권·기타)
+        유형별로 갈라져야 한다 — 정의만 있고 호출부가 없는 사고(이 저장소
+        다섯 번째)를 실제 렌더 결과로 잡는다."""
+        got = run_chart_render()
+        self.assertEqual(got["chartCountAfterL"] - got["chartCountBeforeL"], 1,
+                         "disclosures 유형별 차트가 실제 렌더 경로에서 생기지 않았습니다")
+        self.assertEqual(got["byTypeLabels"], ["2026.01", "2026.02"])
+        labels = got["byTypeDatasetLabels"]
+        self.assertIn("기타", labels, "미분류/정정 공시가 조용히 사라졌습니다")
+        self.assertGreater(len(labels), 1, "유형이 하나로만 나와 색 구분의 의미가 없습니다")
+        # 월별 합계가 원본 건수(1월 3건, 2월 1건)와 일치해야 한다(브리프).
+        totals = [0, 0]
+        for data in got["byTypeDatasetData"]:
+            for i, v in enumerate(data):
+                if v is not None:
+                    totals[i] += v
+        self.assertEqual(totals, [3, 1])
+
+    def test_disclosures_chart_uses_stacked_scales_and_distinct_non_verdict_colors(self):
+        got = run_chart_render()
+        self.assertTrue(got["byTypeXStacked"], "x축이 stacked로 설정되지 않았습니다")
+        self.assertTrue(got["byTypeYStacked"], "y축이 stacked로 설정되지 않았습니다")
+        colors = got["byTypeColors"]
+        self.assertEqual(len(colors), len(set(colors)), "유형별 계열 색이 구분되지 않습니다")
+        for c in colors:
+            self.assertNotIn(c, ("#e0564a", "#b3261e"),
+                             "차트 계열 색이 판정 색(--red)과 같습니다")
 
     def test_canvas_has_an_accessible_role_and_label(self):
         """리뷰 지적 ⑤: canvas 안의 그림은 스크린 리더가 읽지 못한다 —

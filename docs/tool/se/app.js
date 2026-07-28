@@ -1474,9 +1474,23 @@ const CHART_SPECS = Object.assign(Object.create(null), {
   // 판정이 된다(v0.8.5). monthlyCountOf는 chartData 안에서 건수만 세고
   // 멈춘다 — 순위·강조 없이 막대 높이로만 보여준다. 표는 원본 145행을
   // 그대로 유지한다(집계는 차트 전용 파생값, block.records는 손대지 않는다).
+  //
+  // **SE-4f Task 3: 단색 막대는 "몇 건"만 보여줄 뿐 "어떤 성격의 공시가
+  // 언제 몰렸는지"는 감춘다** — 사용자 요청("공시별 색상 구분"). classifyField
+  // (report_nm)가 있고 chartData 호출자가 signalsData(3번째 인자,
+  // docs/tool/signals-data.json 로드 결과)를 함께 주면, monthlyCountOf
+  // 처리(아래 chartData)가 월별 집계를 카테고리별로 더 잘게 쪼개
+  // stacked bar(누적 막대)로 그린다 — 로직은 새로 만들지 않는다.
+  // classifyDisclosureCategory·monthlyCountsByCategory가 docs/tool/
+  // index.html의 matchSignals·AMEND_RE를 그대로 재현한다(브리프).
+  // signalsData가 없거나(로드 실패) 형태가 예상과 다르면 chartData가
+  // 자동으로 이전 단색-단일 계열 집계로 물러난다 — 화면이 죽지 않는다.
+  // stacked:true는 renderChart(ui.js)가 Chart.js scales.x/y.stacked로
+  // 그대로 옮긴다. 색은 카테고리(유형) 구분 전용이다 — 특정 유형에
+  // 판정 색(--red)을 주거나 "위험"류 문구를 덧붙이지 않는다(v0.8.5).
   disclosures: {
-    kind: "bar", title: "월별 공시 건수", xScale: "category",
-    monthlyCountOf: "rcept_dt", yLabel: "건수",
+    kind: "bar", title: "월별 공시 건수 (유형별)", xScale: "category", stacked: true,
+    monthlyCountOf: "rcept_dt", classifyField: "report_nm", yLabel: "건수",
   },
   // financialRatios(위)가 만든 파생 레코드(구분·기간·지표·값)를 그린다.
   // financials 원본과 달리 이 레코드는 이미 fs_div를 "구분"(연결/별도)
@@ -1583,6 +1597,85 @@ function monthlyCounts(rows, field) {
   return order.map(function (m) { return { month: m, count: counts.get(m) }; });
 }
 
+/** reportNm 하나를 signalsData(docs/tool/signals-data.json 로드 결과) 기준
+ *  으로 분류해 카테고리 번호(0~8, 0="기타")를 돌려준다. docs/tool/
+ *  index.html의 matchSignals(564행)·AMEND_RE와 같은 로직이다(브리프:
+ *  "로직을 새로 만들지 마라 — 읽어서 맞춘다. 같은 공시를 공개 뷰어와
+ *  SE가 다르게 분류하면 그 자체가 결함") — 정정공시([기재정정] 등,
+ *  signalsData.amendment_pattern)는 공개 뷰어와 마찬가지로 신호를 매기지
+ *  않고 그대로 "기타"(0)로 남긴다.
+ *
+ *  **공시 하나는 정확히 한 카테고리에만 속한다.** matchSignals(공개
+ *  뷰어)는 여러 신호가 동시에 걸리면 배열 전부를 돌려주지만, 여기서는
+ *  signals 배열 순서상 첫 매칭만 쓴다 — 월별 스택 막대에서 한 공시를
+ *  두 카테고리에 겹쳐 세면 막대 합이 원본 건수를 넘어서는 거짓말이
+ *  된다(브리프: "월별 합계가 원본 건수와 일치해야 합니다").
+ *
+ *  signalsData가 없거나 signals 배열을 갖추지 못한 예상 밖 형태면(로드
+ *  실패·형태 변경) null을 돌려준다 — 호출자가 분류를 포기하고 기존
+ *  단색 집계로 물러나는 신호다(브리프: "로드 실패에 대비하세요"). */
+function classifyDisclosureCategory(reportNm, signalsData) {
+  if (!signalsData || !Array.isArray(signalsData.signals)) return null;
+  const nm = typeof reportNm === "string" ? reportNm : "";
+  if (typeof signalsData.amendment_pattern === "string") {
+    try {
+      if (new RegExp(signalsData.amendment_pattern).test(nm)) return 0;
+    } catch (e) {
+      // 정규식 자체가 깨졌으면(예상 밖 데이터) 정정 판정만 건너뛰고
+      // 아래 키워드 매칭으로 이어간다 — 분류를 통째로 포기하지 않는다.
+    }
+  }
+  for (const s of signalsData.signals) {
+    const keywords = Array.isArray(s.keywords) ? s.keywords : [];
+    for (const kw of keywords) {
+      if (kw && nm.indexOf(kw) !== -1) {
+        return typeof s.category === "number" ? s.category : 0;
+      }
+    }
+  }
+  return 0;
+}
+
+/** rows(disclosures 원본 레코드)를 월(YYYYMM)×카테고리 라벨별 건수로
+ *  묶는다. monthlyCounts와 같은 원칙 — **집계는 여기서 끝난다.** 어떤
+ *  유형이 많았는지 순위를 매기거나 강조하지 않는다(v0.8.5).
+ *
+ *  카테고리 라벨은 signalsData.categories(예: {"0":"기타","1":"CB/채권",
+ *  ...})를 그대로 쓴다 — 우리가 문구를 새로 짓거나 덧붙이지 않는다
+ *  (브리프: "signals-data.json의 label에 판정처럼 읽히는 것이 있으면
+ *  그대로 쓰되 우리가 덧붙이지는 마세요"). 못 찾으면(예상 밖 카테고리
+ *  번호) "기타"로 남긴다 — 조용히 빠뜨리지 않는다.
+ *
+ *  반환은 [{month, category, count}] — chartData가 이 모양을 그대로
+ *  groupBy(y="count", groupBy="category") 경로로 넘겨 재사용한다(새
+ *  렌더 분기를 만들지 않는다, monthlyCountOf의 기존 재사용 방식과
+ *  같다). 월별 합계가 원본 건수와 일치한다 — 공시 하나는
+ *  classifyDisclosureCategory로 정확히 한 카테고리에만 잡힌다. */
+function monthlyCountsByCategory(rows, dateField, textField, signalsData) {
+  const monthOrder = [];
+  const byMonth = new Map(); // month -> Map(label -> count)
+  for (const r of rows) {
+    const raw = r[dateField];
+    if (raw === null || raw === undefined || raw === "") continue;
+    const digits = String(raw).replace(/[^0-9]/g, "");
+    if (digits.length < 6) continue; // 월을 특정할 수 없다 — 건너뛴다(0으로 세지 않는다)
+    const month = digits.slice(0, 6);
+    const cat = classifyDisclosureCategory(r[textField], signalsData);
+    const catKey = cat === null ? 0 : cat;
+    const label = (signalsData.categories && signalsData.categories[String(catKey)]) || "기타";
+    if (!byMonth.has(month)) { byMonth.set(month, new Map()); monthOrder.push(month); }
+    const perLabel = byMonth.get(month);
+    perLabel.set(label, (perLabel.get(label) || 0) + 1);
+  }
+  const out = [];
+  for (const month of monthOrder) {
+    for (const [label, count] of byMonth.get(month)) {
+      out.push({ month: month, category: label, count: count });
+    }
+  }
+  return out;
+}
+
 /** row에서 fields의 값들을 이어 x축 표시용 문자열 하나로 합친다.
  *
  *  fund_usage처럼 한 필드(tm=회차)만으로는 서로 다른 레코드를 구분하지
@@ -1644,8 +1737,14 @@ function writeChartCell(data, conflicted, i, v) {
   }
 }
 
-/** 레코드 목록을 Chart.js가 받는 형태로 바꾼다. 그릴 게 없으면 null. */
-function chartData(records, spec) {
+/** 레코드 목록을 Chart.js가 받는 형태로 바꾼다. 그릴 게 없으면 null.
+ *
+ *  signalsData(3번째 인자, 선택)는 disclosures(classifyField가 있는
+ *  스펙)에서만 쓰인다 — docs/tool/signals-data.json 로드 결과를 그대로
+ *  넘긴다. **순수 함수 계약을 지킨다**(브리프: "순수 함수는 분류 데이터를
+ *  인자로 받아 순수하게 유지"): 이 함수 스스로 fetch하거나 전역을 읽지
+ *  않는다 — 같은 세 인자에는 항상 같은 결과다. */
+function chartData(records, spec, signalsData) {
   if (!Array.isArray(records) || records.length === 0 || !spec) return null;
   let rows = records.filter(function (r) { return r && typeof r === "object"; });
   if (rows.length === 0) return null;
@@ -1653,15 +1752,31 @@ function chartData(records, spec) {
   if (spec.monthlyCountOf) {
     // disclosures처럼 개별 레코드가 아니라 "월별 건수"를 그려야 하는
     // 경우다. 표(block.records)는 원본 개별 레코드를 그대로 유지하고,
-    // 이 집계는 차트 전용 파생값이다 — 아래로는 x="month",
-    // series=[{key:"count"}] 하나짜리 스펙으로 취급해 기존 series 경로를
-    // 그대로 재사용한다(새 렌더 분기를 만들지 않는다).
-    rows = monthlyCounts(rows, spec.monthlyCountOf);
-    if (rows.length === 0) return null;
-    spec = Object.assign({}, spec, {
-      x: "month",
-      series: [{ key: "count", label: spec.yLabel || "건수" }],
-    });
+    // 이 집계는 차트 전용 파생값이다.
+    //
+    // **SE-4f Task 3**: classifyField(spec)와 유효한 signalsData가 함께
+    // 있으면 월별 건수를 카테고리별로 더 잘게 쪼갠다(monthlyCountsByCategory)
+    // — 아래로는 x="month", groupBy="category", y="count"인 기존 groupBy
+    // 렌더 경로를 그대로 재사용한다(새 렌더 분기를 만들지 않는다). 그
+    // 조건이 아니면(호출자가 signalsData를 안 줬거나 — 기존 2-인자
+    // 호출부와 그대로 호환 — 로드에 실패해 형태가 깨졌으면) 이전과 똑같이
+    // x="month", series=[{key:"count"}] 단일 계열로 물러난다(브리프:
+    // "로드 실패에 대비하세요" — 차트가 죽지 않고 기존 단색 막대가 된다).
+    const canClassify = !!spec.classifyField && !!signalsData
+      && Array.isArray(signalsData.signals)
+      && signalsData.categories && typeof signalsData.categories === "object";
+    if (canClassify) {
+      rows = monthlyCountsByCategory(rows, spec.monthlyCountOf, spec.classifyField, signalsData);
+      if (rows.length === 0) return null;
+      spec = Object.assign({}, spec, { x: "month", groupBy: "category", y: "count" });
+    } else {
+      rows = monthlyCounts(rows, spec.monthlyCountOf);
+      if (rows.length === 0) return null;
+      spec = Object.assign({}, spec, {
+        x: "month",
+        series: [{ key: "count", label: spec.yLabel || "건수" }],
+      });
+    }
   }
 
   if (spec.compositeXFields) {
@@ -1813,6 +1928,6 @@ if (typeof module !== "undefined" && module.exports) {
     DOC_LIST_KEY, docKeyRceptNo, docListRow,
     CHART_SPECS, chartData, axisLabel, numeric, axisSortKey,
     normalizeDebtByKind, monthlyCounts, compositeXValue,
-    financialRatios,
+    financialRatios, classifyDisclosureCategory, monthlyCountsByCategory,
   };
 }
