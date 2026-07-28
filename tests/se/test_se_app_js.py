@@ -195,6 +195,13 @@ const fs = require("fs");
 
 const ELEMENTS = Object.create(null);
 
+// removeChild가 부른다 — 위 removeChild 주석 참고.
+function unregisterIds(node) {
+  if (!node) return;
+  if (node._id && ELEMENTS[node._id] === node) delete ELEMENTS[node._id];
+  (node.children || []).forEach(unregisterIds);
+}
+
 class FakeClassList {
   constructor() { this._set = new Set(); }
   add(c) { this._set.add(c); }
@@ -229,7 +236,18 @@ class FakeEl {
   }
   removeChild(c) {
     const idx = this.children.indexOf(c);
-    if (idx !== -1) this.children.splice(idx, 1);
+    if (idx !== -1) {
+      this.children.splice(idx, 1);
+      // 실제 DOM에서 document.getElementById는 **문서 트리에 붙어 있는**
+      // 노드만 찾는다 — 부모에서 떼어낸 노드는 그 순간부터 안 찾힌다.
+      // 이 가짜 DOM은 id를 ELEMENTS에 영구 등록해 뒀어서, showGate()가
+      // #body를 비운 뒤에도 sectionHolder("fund_usage")가 **떨어져 나간
+      // 옛 holder**를 그대로 돌려줬다 — 그러면 이후 렌더가 화면(bodyEl)에
+      // 붙지 않아, 잔류를 검사하는 테스트가 "아무것도 안 그려졌다"는
+      // 이유로 우연히 통과한다(잔류가 실제로 남아도 초록이다). 떼어낸
+      // 서브트리의 id 등록을 함께 지워 실제 DOM과 같은 조건으로 맞춘다.
+      unregisterIds(c);
+    }
     return c;
   }
   get firstChild() { return this.children.length ? this.children[0] : null; }
@@ -6679,6 +6697,74 @@ class TestFundChainRenderSection(unittest.TestCase):
         self.assertIn("3건이 있으나", combined)
         self.assertIn("납입일·용도가 공시되지 않았습니다", combined)
         self.assertNotIn("내역이 없습니다", combined)
+        # 이 문구를 낼 때는 카드가 하나도 없어야 한다 — 문구와 화면이
+        # 서로 다른 말을 하면 안 된다.
+        self.assertEqual(out["fundChainCards"], [])
+
+    def test_undated_group_with_filed_purposes_renders_card_not_a_false_message(self):
+        """리뷰 지적 ① — 납입일만 결측이고 용도(운영자금·시설자금)는 실제로
+        공시된 형태. 예전 구현은 "날짜 있는 조달건이 하나도 없다"만 보고
+        카드를 통째로 버린 뒤 "납입일·**용도**가 공시되지 않았습니다"라고
+        말했다 — 용도는 공시돼 있으므로 그 문장은 거짓이고, fundChain이 이미
+        계산해 둔 용도별 계획 합계까지 함께 버렸다. 날짜만 없는 것은 날짜만
+        없다고 말하고, 있는 데이터는 그대로 보여준다."""
+        rows = [
+            self._row("-", "운영자금", 80000000000),
+            self._row("-", "시설자금", 20000000000),
+        ]
+        out = run_render_section('"fund_usage"', json.dumps(rows, ensure_ascii=False))
+        self.assertEqual(len(out["fundChainCards"]), 1)
+        combined = " ".join(out["notes"])
+        self.assertNotIn(
+            "납입일·용도가 공시되지 않았습니다", combined,
+            "용도가 공시된 내역인데 '용도가 공시되지 않았다'고 말하고 있습니다",
+        )
+        card = out["fundChainCards"][0]["text"]
+        self.assertIn("납입일이 공시되지 않은", card)
+        self.assertIn("운영자금", card)
+        self.assertIn("시설자금", card)
+        # 용도별 계획 합계가 실제로 살아 있는지 — 막대 비율로 확인한다.
+        widths = {s["text"]: float(s["style"]["flexBasis"].rstrip("%"))
+                  for s in out["fundBarSegs"]}
+        self.assertAlmostEqual(widths["운영자금"], 80.0, delta=0.01)
+        self.assertAlmostEqual(widths["시설자금"], 20.0, delta=0.01)
+
+    def test_mixed_dated_and_undated_groups_heading_text_and_order(self):
+        """리뷰 지적 ③-2 — 날짜 있는 조달건과 날짜 없는 묶음이 섞인 경로가
+        통째로 미검증이었다(`h4.textContent`의 null 분기). 무날짜 묶음의
+        제목이 실제로 "납입일이 공시되지 않은 내역"이고, 날짜 있는 카드
+        **뒤에** 오는지(fundChain의 정렬 계약: sort_key null은 뒤로) 본다."""
+        rows = [
+            self._row("2021.10.26", "시설자금", 13082000000),
+            self._row("-", "운영자금", 35291000000),
+        ]
+        out = run_render_section('"fund_usage"', json.dumps(rows, ensure_ascii=False))
+        cards = [c["text"] for c in out["fundChainCards"]]
+        self.assertEqual(len(cards), 2)
+        self.assertIn("2021.10.26", cards[0])
+        self.assertNotIn("납입일이 공시되지 않은", cards[0])
+        self.assertIn("납입일이 공시되지 않은 내역", cards[1])
+        self.assertIn("운영자금", cards[1])
+
+    def test_bar_notice_is_not_shown_when_there_are_no_bars(self):
+        """리뷰 지적 ④ — 막대 설명 안내문이 "그릴 카드가 없다" 조기 반환
+        **앞에** 붙어 있어, 막대가 하나도 없는 화면에서 막대 설명만 읽히는
+        상태였다."""
+        rows = [
+            {"kind": "public", "year": 2023, "tm": "-", "pay_de": "-", "pay_amount": 0,
+             "plan_useprps": "-", "plan_amount": 0,
+             "real_dtls_cn": "-", "real_dtls_amount": 0, "dffrnc_resn": "-", "flags": []}
+        ]
+        out = run_render_section('"fund_usage"', json.dumps(rows, ensure_ascii=False))
+        combined = " ".join(out["notes"])
+        self.assertNotIn("막대", combined, f"막대가 없는데 막대 설명이 있다: {out['notes']}")
+        # 카드가 있을 때는 같은 안내문이 나온다 — 위 검사가 "문구를 아예
+        # 지워서" 통과하는 변이를 함께 막는다.
+        ok = run_render_section(
+            '"fund_usage"',
+            json.dumps([self._row("2021.10.26", "시설자금", 13082000000)], ensure_ascii=False),
+        )
+        self.assertIn("막대", " ".join(ok["notes"]))
 
     _SIGNALS_FIXTURE = {
         "signals": [
@@ -6747,6 +6833,114 @@ class TestFundChainRenderSection(unittest.TestCase):
         out = run_render_section('"fund_usage"', json.dumps(rows, ensure_ascii=False))
         self.assertEqual(len(out["fundChainCards"]), 1)
         self.assertEqual(out["afterGate"]["fundChainCards"], [])
+
+    # ── 리뷰 지적 ② — 늦게 도착/실패한 disclosures ───────────────────────
+    #
+    # 서버가 섹션 순서를 지키더라도(section_keys는 STAGE1_SPECS 순서를
+    # 따른다) `GET /section/disclosures`가 200이 아니면 그 키는 fetched에
+    # 들어가지 않는다 — 루프는 그대로 fund_usage를 힌트 없이 그리고, 다음
+    # 폴링에서 disclosures가 성공해도 fund_usage는 이미 fetched라 다시
+    # 그려지지 않는다. 힌트 블록이 조용히, 영구히 사라진다.
+
+    _HINT_ROWS = [{
+        "kind": "public", "year": 2021, "tm": "-", "pay_de": "2021.10.26",
+        "pay_amount": 0, "plan_useprps": "시설자금", "plan_amount": 13082000000,
+        "real_dtls_cn": "시설자금", "real_dtls_amount": 13082000000,
+        "dffrnc_resn": "-", "flags": [],
+    }]
+    _HINT_DISCLOSURES = [{
+        "rcept_no": "20210926000001", "rcept_dt": "20210926",
+        "report_nm": "주요사항보고서(전환사채권발행결정)",
+    }]
+
+    def _signals_only_setup(self):
+        signals_json = json.dumps(self._SIGNALS_FIXTURE, ensure_ascii=False)
+        return (
+            'new vm.Script("SIGNALS_DATA = " + JSON.stringify(' + signals_json + ') + ";", '
+            '{filename: "inject-signals.js"}).runInContext(sandbox);\n'
+        )
+
+    def test_disclosures_arriving_after_fund_usage_rerender_the_hint_block(self):
+        """fund_usage를 먼저 그린 뒤(힌트 없음) disclosures가 도착하면 조달건
+        블록을 다시 그려 힌트가 붙는다. 카드가 2배로 늘지 않는지도 함께 본다
+        (재렌더가 append가 아니라 교체여야 한다)."""
+        setup = (
+            self._signals_only_setup()
+            + "sandbox.renderSection(\"fund_usage\", "
+            + json.dumps(self._HINT_ROWS, ensure_ascii=False) + ");\n"
+        )
+        out = run_render_section(
+            '"disclosures"', json.dumps(self._HINT_DISCLOSURES, ensure_ascii=False), setup)
+        combined = " ".join(out["notes"])
+        self.assertIn(
+            "이내 조달 공시", combined,
+            "disclosures가 fund_usage보다 늦게 도착하자 힌트 블록이 영영 사라졌다",
+        )
+        self.assertEqual(len(out["fundChainCards"]), 1)
+
+    def test_failed_disclosures_are_stated_as_a_fact_in_the_fund_chain_block(self):
+        """disclosures를 끝내 못 가져왔으면 "대조하지 못했다"고 말한다 —
+        블록이 그냥 없는 것은 "대조했는데 걸린 공시가 없다"와 화면에서
+        구분되지 않는다. 그 둘은 서로 다른 사실이다."""
+        setup = (
+            self._signals_only_setup()
+            + "sandbox.renderSection(\"fund_usage\", "
+            + json.dumps(self._HINT_ROWS, ensure_ascii=False) + ");\n"
+            + 'sandbox.renderFailures([{key: "disclosures", error: "섹션 응답 오류(500)"}]);\n'
+        )
+        # 본 호출은 조달건과 무관한 섹션이다 — 실패 통지(setup 마지막 줄)만으로
+        # fund_usage가 다시 그려졌는지를 본다.
+        out = run_render_section('"dividends"', "[]", setup)
+        combined = " ".join(out["notes"])
+        self.assertIn("대조하지 못했습니다", combined)
+        self.assertEqual(len(out["fundChainCards"]), 1)
+
+    def test_disclosures_recovering_after_a_failure_removes_the_failure_note(self):
+        """실패는 최종 사실이 아니다 — 폴링이 다음 바퀴에 재시도해 성공하면
+        "대조하지 못했습니다" 문구를 걷어내고 힌트를 붙여야 한다. 안 그러면
+        화면이 이미 거짓이 된 문장을 계속 들고 있는다."""
+        setup = (
+            self._signals_only_setup()
+            + "sandbox.renderSection(\"fund_usage\", "
+            + json.dumps(self._HINT_ROWS, ensure_ascii=False) + ");\n"
+            + 'sandbox.renderFailures([{key: "disclosures", error: "섹션 응답 오류(500)"}]);\n'
+        )
+        out = run_render_section(
+            '"disclosures"', json.dumps(self._HINT_DISCLOSURES, ensure_ascii=False), setup)
+        combined = " ".join(out["notes"])
+        self.assertNotIn("대조하지 못했습니다", combined)
+        self.assertIn("이내 조달 공시", combined)
+
+    # ── 리뷰 지적 ③-1 — DISCLOSURES_DATA 리셋 두 경로 ────────────────────
+
+    def _no_hint_after(self, reset_js):
+        setup = (
+            self._signals_and_disclosures_setup(self._HINT_DISCLOSURES) + reset_js
+        )
+        return run_render_section(
+            '"fund_usage"', json.dumps(self._HINT_ROWS, ensure_ascii=False), setup)
+
+    def test_logout_forgets_the_previous_disclosures(self):
+        """showGate()(로그아웃·세션 만료) 뒤에 도착한 fund_usage는 이전
+        사용자의 공시로 힌트를 만들면 안 된다 — 이 저장소는 이미 이전
+        사용자 데이터 잔류 사고를 두 번 겪었고, 이 전역은 정확히 그
+        데이터를 들고 있다."""
+        out = self._no_hint_after('sandbox.showGate("세션이 만료됐습니다");\n')
+        self.assertEqual(len(out["fundChainCards"]), 1, "카드 자체는 그려져야 한다")
+        self.assertNotIn(
+            "이내 조달 공시", " ".join(out["notes"]),
+            "로그아웃 뒤인데 이전 사용자가 조회한 회사의 공시로 힌트가 떴다",
+        )
+
+    def test_starting_a_new_analysis_forgets_the_previous_disclosures(self):
+        """회사를 바꿔 새로 분석할 때(renderHeadPlaceholder)도 같다 —
+        로그아웃 경로만 막으면 같은 세션에서 회사만 바꾼 경우가 남는다."""
+        out = self._no_hint_after('sandbox.renderHeadPlaceholder("다른회사", null);\n')
+        self.assertEqual(len(out["fundChainCards"]), 1, "카드 자체는 그려져야 한다")
+        self.assertNotIn(
+            "이내 조달 공시", " ".join(out["notes"]),
+            "새 회사를 분석하는데 이전 회사의 공시로 힌트가 떴다",
+        )
 
 
 # ── SE-4f Task 5: 타법인 출자 — 피투자사 정보 + 최초취득일 순 시각화 ─────

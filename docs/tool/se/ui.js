@@ -48,6 +48,71 @@ let DISCLOSURES_DATA = null; // disclosures 섹션이 renderSection에 도착할
                               // (renderHeadPlaceholder·showGate) null로
                               // 되돌려 이전 회사의 공시가 새 화면에 섞이지
                               // 않게 한다.
+let DISCLOSURES_FAILED = false; // disclosures 섹션을 끝내 못 가져왔다는 사실
+                                 // (renderFailures가 세운다). "아직 안 왔다"와
+                                 // "못 가져왔다"는 다른 사실이고, 조달건 블록은
+                                 // 후자일 때만 "대조하지 못했습니다"라고 말한다.
+let FUND_USAGE_DATA = null; // fund_usage 섹션 원본 — disclosures가 fund_usage
+                             // **뒤에** 도착(또는 뒤늦게 실패 확정)했을 때
+                             // 조달건 블록만 다시 그리기 위해 들고 있는다.
+                             // 서버 응답을 다시 받지 않는다(폴링 루프는 이미
+                             // 받은 섹션을 두 번 주지 않는다 — fetched Set).
+let FUND_CHAIN_DISCLOSURE_STATE = null; // 조달건 블록에 **이미 반영된**
+                                         // disclosures 상태("ok"/"failed"/
+                                         // "pending"). 상태가 그대로면 다시
+                                         // 그리지 않는다 — renderFailures는
+                                         // 폴링마다 불리므로 이 가드가 없으면
+                                         // 매 바퀴 재렌더가 돈다.
+
+/** 지금 조달건 블록이 기댈 수 있는 disclosures 상태. 세 값은 서로 다른
+ *  사실이라 하나로 뭉치지 않는다: "ok"(목록을 받았다 — 걸린 공시가 0건일
+ *  수도 있고 그건 그것대로 사실이다), "failed"(못 가져왔다 — 대조 자체를
+ *  못 했다), "pending"(아직 안 왔다 — 곧 다시 그린다). */
+function fundChainDisclosureState() {
+  if (Array.isArray(DISCLOSURES_DATA)) return "ok";
+  if (DISCLOSURES_FAILED) return "failed";
+  return "pending";
+}
+
+/** disclosures 상태가 바뀌었으면 조달건 블록(fund_usage 섹션)만 다시
+ *  그린다(리뷰 지적 ②).
+ *
+ *  **왜 필요한가**: 폴링 루프(pollUntilDone)는 200으로 받은 섹션만
+ *  fetched에 넣는다 — `GET /section/disclosures`가 실패하면 그 키는
+ *  다음 바퀴에 재시도되지만, 그 사이 fund_usage는 이미 힌트 없이 그려지고
+ *  fetched에 들어간다. 그 뒤 disclosures가 성공해도 fund_usage를 다시
+ *  부르는 경로가 없어 힌트 블록이 조용히, 영구히 사라졌다.
+ *
+ *  **왜 renderSection(fund_usage) 하나만인가**: 다른 섹션은 disclosures에
+ *  의존하지 않는다. 전체를 다시 그리면 사용자가 보던 스크롤·접기 상태까지
+ *  뒤엎는다. renderSection은 자기 holder를 비우고 다시 채우므로(append가
+ *  아니다) 카드가 두 배로 늘지 않는다. */
+function refreshFundChainForDisclosures() {
+  if (FUND_USAGE_DATA === null) return; // fund_usage가 아직 안 왔다 — 도착할
+                                        // 때 최신 상태로 처음부터 그려진다
+  const state = fundChainDisclosureState();
+  if (FUND_CHAIN_DISCLOSURE_STATE === state) return;
+
+  // 상태가 바뀌었어도 **화면이 실제로 달라질 때만** 다시 그린다. 목록을
+  // 받았는데 걸린 조달 공시가 한 건도 없으면 재렌더 결과가 지금 화면과
+  // 글자 하나까지 같다 — 그런데 renderSection은 이 섹션의 차트를 지우고
+  // 새로 만든다(pruneChartsIn → new Chart). 눈에 보이는 변화가 없는데
+  // 캔버스만 새로 만드는 일은 피한다. 단, 직전에 "대조하지 못했습니다"
+  // 문구를 붙여 둔 상태(failed)라면 그 문구를 걷어내야 하므로 반드시
+  // 다시 그린다.
+  if (state === "ok" && FUND_CHAIN_DISCLOSURE_STATE !== "failed") {
+    const chain = fundChain(Array.isArray(FUND_USAGE_DATA) ? FUND_USAGE_DATA : []);
+    const hints = fundChainDisclosureHints(
+      chain, DISCLOSURES_DATA, SIGNALS_DATA, FUND_CHAIN_WINDOW_DAYS);
+    if (Object.keys(hints).length === 0) {
+      // 반영할 것이 없다는 사실 자체는 기록해 둔다 — 다음 폴링마다 같은
+      // 계산을 되풀이하지 않기 위해서다.
+      FUND_CHAIN_DISCLOSURE_STATE = state;
+      return;
+    }
+  }
+  renderSection("fund_usage", FUND_USAGE_DATA);
+}
 
 /** 사용자에게 그대로 보여줘도 되는 문구로만 만든 오류. 원시 오류(네트워크
  *  실패의 "Failed to fetch" 같은 브라우저 내부 문구, 서버 응답 원문 등)는
@@ -571,6 +636,13 @@ function showGate(msg) {
                             // 조회하면 fund_usage 카드의 공시 힌트가 이전
                             // 사용자의 회사 공시를 근거로 뜬다(같은 종류의
                             // 사고가 이 저장소에서 이미 두 번 났다).
+  DISCLOSURES_FAILED = false; // 같은 이유 — 이전 사용자 화면의 실패 사실이
+                               // 새 화면의 조달건 블록에 문구로 남는다.
+  FUND_USAGE_DATA = null;     // 같은 이유 — 이전 사용자가 조회한 회사의
+                               // 자금사용 원본을 들고 있으면, 다음 화면에서
+                               // disclosures가 도착하는 순간 그 원본으로
+                               // 조달건 블록이 되살아난다.
+  FUND_CHAIN_DISCLOSURE_STATE = null;
   const actorBtn = document.getElementById("actor-btn");
   if (actorBtn) actorBtn.hidden = true;
 }
@@ -745,6 +817,10 @@ function renderHeadPlaceholder(name, message) {
   DISCLOSURES_DATA = null; // showGate()와 같은 이유 — 새 회사의 fund_usage
                             // 카드가 아직 도착하지 않은 자기 disclosures
                             // 대신 이전 회사의 공시로 힌트를 만들지 않게 한다.
+  DISCLOSURES_FAILED = false;         // showGate()와 같은 이유(그 주석 참고)
+  FUND_USAGE_DATA = null;             // 〃 — 이전 회사의 자금사용 원본으로
+  FUND_CHAIN_DISCLOSURE_STATE = null; //    새 화면에 조달건 블록이 되살아나지
+                                      //    않게 한다.
   CURRENT_COMPANY = name;
   const btn = document.getElementById("actor-btn");
   if (btn) btn.hidden = false;
@@ -1408,8 +1484,24 @@ function fundChainCardEl(entry, hints, windowDays) {
  *  — 그 상태에서 카드를 그려봐야 "납입일이 공시되지 않은 내역" 카드
  *  하나에 용도조차 "(용도 미기재)"뿐이라 정보가 없다. 이때는 카드 대신
  *  "자금사용 내역 N건이 있으나 납입일·용도가 공시되지 않았습니다"라고
- *  말한다 — "내역이 없습니다"는 거짓이다(브리프, 내역 자체는 N건 있다). */
-function buildFundChainBlock(chain, hints, windowDays) {
+ *  말한다 — "내역이 없습니다"는 거짓이다(브리프, 내역 자체는 N건 있다).
+ *
+ *  **리뷰 지적 ① — 그 판정을 pay_de만으로 하면 안 된다**: 처음 구현은
+ *  "날짜 있는 조달건이 하나도 없다"만 보고 카드를 통째로 버린 뒤 위
+ *  문장을 냈다. 그런데 납입일만 "-"이고 용도(운영자금·시설자금)는 실제로
+ *  공시된 형태가 있다 — 그 화면은 **용도가 공시되지 않았다고 거짓을
+ *  말하면서** fundChain이 이미 계산해 둔 용도별 계획 합계까지 함께
+ *  버렸다. 그래서 판정 기준을 "카드로 보여줄 게 있는가"로 바꾼다: 날짜가
+ *  있거나(dated) 날짜가 없어도 용도가 하나라도 공시된 묶음이 있으면
+ *  카드를 그린다. 무날짜 묶음의 카드 제목이 "납입일이 공시되지 않은
+ *  내역"이라 날짜가 없다는 사실 자체는 화면에 그대로 남는다
+ *  (fundChainCardEl 참고). 위 문장은 날짜도 용도도 정말로 없을 때
+ *  (제이스코홀딩스: 26행 전 필드가 "-")만 낸다.
+ *
+ *  disclosureState는 fundChainDisclosureState()의 세 값 중 하나다 —
+ *  "failed"면 조달 공시 대조를 못 했다는 사실을 블록 안에서 말한다
+ *  (힌트가 그냥 없는 것과 "대조 자체를 못 했다"는 다른 사실이다). */
+function buildFundChainBlock(chain, hints, windowDays, disclosureState) {
   const wrap = document.createElement("div");
   wrap.className = "derived";
 
@@ -1417,15 +1509,13 @@ function buildFundChainBlock(chain, hints, windowDays) {
   h3.textContent = "자금 조달건 (조달일 단위)";
   wrap.appendChild(h3);
 
-  const notice = document.createElement("p");
-  notice.className = "note";
-  notice.textContent = "같은 납입일·같은 용도로 여러 번 보고된 자금사용 내역(아래 원본 표)을 "
-    + "조달건 하나로 묶고, 계획 금액에 비례한 막대로 용도별 비중을 보여줍니다 — "
-    + "새로 계산한 값이 아니라 원본 plan_amount를 용도별로 합친 것입니다.";
-  wrap.appendChild(notice);
+  // 카드로 보여줄 것이 하나라도 있는가 — 납입일이 있거나, 납입일이 없어도
+  // 용도가 공시된 묶음(위 주석).
+  const renderable = chain.some(function (e) {
+    return e.pay_de !== null || e.uses.some(function (u) { return u.purpose !== null; });
+  });
 
-  const dated = chain.filter(function (e) { return e.pay_de !== null; });
-  if (dated.length === 0) {
+  if (!renderable) {
     const totalRows = chain.reduce(function (s, e) { return s + e.row_count; }, 0);
     const p = document.createElement("p");
     p.className = "note";
@@ -1433,6 +1523,28 @@ function buildFundChainBlock(chain, hints, windowDays) {
       + "공시되지 않았습니다.";
     wrap.appendChild(p);
     return { el: wrap };
+  }
+
+  // 막대 설명은 막대를 실제로 그릴 때만 붙인다(리뷰 지적 ④) — 위 조기
+  // 반환보다 **뒤에** 있어야 한다. 앞에 두면 카드도 막대도 없는 화면에서
+  // 막대 설명만 읽힌다.
+  const notice = document.createElement("p");
+  notice.className = "note";
+  notice.textContent = "같은 납입일·같은 용도로 여러 번 보고된 자금사용 내역(아래 원본 표)을 "
+    + "조달건 하나로 묶고, 계획 금액에 비례한 막대로 용도별 비중을 보여줍니다 — "
+    + "새로 계산한 값이 아니라 원본 plan_amount를 용도별로 합친 것입니다.";
+  wrap.appendChild(notice);
+
+  // 조달 공시를 끝내 못 가져왔으면 그 사실을 말한다(리뷰 지적 ②) —
+  // 힌트 블록이 그냥 없는 화면은 "대조했는데 걸린 공시가 없다"와 구분되지
+  // 않는데, 그 둘은 서로 다른 사실이다.
+  if (disclosureState === "failed") {
+    const fp = document.createElement("p");
+    fp.className = "note";
+    fp.textContent = "공시 목록을 가져오지 못해 이 조달건들과 조달 공시(전환사채·"
+      + "유상증자 등)를 대조하지 못했습니다 — 대조 결과가 없다는 뜻이지 해당 "
+      + "공시가 없다는 뜻이 아닙니다.";
+    wrap.appendChild(fp);
   }
 
   chain.forEach(function (entry) {
@@ -1745,6 +1857,12 @@ function renderSection(key, value) {
   // 선언 주석 참고).
   if (key === "disclosures" && Array.isArray(value)) {
     DISCLOSURES_DATA = value;
+    DISCLOSURES_FAILED = false; // 앞선 폴링에서 실패했더라도 이제 받았다
+    // fund_usage가 이 섹션보다 먼저 도착해 힌트 없이 그려졌으면 지금 다시
+    // 그린다(리뷰 지적 ②) — 그 함수가 "상태가 바뀌었을 때만" 그리므로
+    // 여기서 조건을 중복해 판단하지 않는다. fund_usage 홀더 하나만 다시
+    // 그리므로 이 disclosures 렌더와 서로 간섭하지 않는다.
+    refreshFundChainForDisclosures();
   }
 
   const blocks = sectionBlocks(value, 0, key);
@@ -1776,6 +1894,11 @@ function renderSection(key, value) {
   // 별도로 다시 판정해 카드 대신 안내문을 낸다(위 함수 주석 참고).
   let fundChainBlock = null;
   if (key === "fund_usage") {
+    // disclosures가 뒤늦게 도착(또는 실패 확정)했을 때 이 섹션만 다시
+    // 그릴 수 있도록 원본과 "그릴 때 쓴 상태"를 남긴다 —
+    // refreshFundChainForDisclosures가 이 둘을 본다(리뷰 지적 ②).
+    FUND_USAGE_DATA = value;
+    FUND_CHAIN_DISCLOSURE_STATE = fundChainDisclosureState();
     const chain = fundChain(Array.isArray(value) ? value : []);
     if (chain.length > 0) {
       const hints = fundChainDisclosureHints(
@@ -1784,7 +1907,8 @@ function renderSection(key, value) {
         SIGNALS_DATA,
         FUND_CHAIN_WINDOW_DAYS
       );
-      fundChainBlock = buildFundChainBlock(chain, hints, FUND_CHAIN_WINDOW_DAYS);
+      fundChainBlock = buildFundChainBlock(
+        chain, hints, FUND_CHAIN_WINDOW_DAYS, FUND_CHAIN_DISCLOSURE_STATE);
     }
   }
 
@@ -1956,6 +2080,18 @@ function renderCompanyInfo(value) {
  * "0건" 문구가 남지 않게 한다.
  */
 function renderFailures(failed) {
+  // disclosures를 못 가져왔다는 사실은 실패 목록에만 있고 renderSection은
+  // 영영 불리지 않는다 — 조달건 블록이 그 사실을 말할 수 있도록 여기서
+  // 넘겨받는다(리뷰 지적 ②). 이미 목록을 받아 둔 뒤라면(다음 폴링에서
+  // 재시도 성공) 덮어쓰지 않는다.
+  const disclosuresFailed = (failed || []).some(function (f) {
+    return f && f.key === "disclosures";
+  });
+  if (disclosuresFailed && !Array.isArray(DISCLOSURES_DATA)) {
+    DISCLOSURES_FAILED = true;
+    refreshFundChainForDisclosures();
+  }
+
   const id = "sec-failures";
   let wrap = document.getElementById(id);
   if (!failed || failed.length === 0) {
