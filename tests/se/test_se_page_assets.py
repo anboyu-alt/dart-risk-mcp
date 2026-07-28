@@ -2280,7 +2280,17 @@ class TestIndicatorNotesVocabulary(unittest.TestCase):
         # 값만 본다.
         end = src.index("});", anchor) + len("});")
         block = src[anchor:end]
-        for w in ("높", "낮", "위험", "주의", "안전", "양호", "악화", "개선", "우수", "부실"):
+        # SE-4h Task 2 리뷰 지적(Finding 2): "…보통 100% 수준이며 그것을
+        # 넘으면 재무구조를 다시 볼 일이다" — 리뷰어가 실제로 붙인 문장은
+        # 위 10개 어휘를 하나도 안 쓰고도 문턱값+지시문(판정)을 말했다.
+        # 이 검사도, test_se_app_js.py의 test_indicator_notes_carry_no_verdict_words도
+        # 그 문장을 못 잡았다(부채비율의 정확한 문자열을 고정한 다른 테스트가
+        # 우연히 잡았을 뿐이다) — 문턱·정도 표현 계열을 추가한다.
+        for w in (
+            "높", "낮", "위험", "주의", "안전", "양호", "악화", "개선", "우수", "부실",
+            "수준", "넘으면", "이상이면", "미만이면", "바람직", "적정", "충분", "부족",
+            "우려", "클수록", "작을수록", "많을수록", "적을수록",
+        ):
             self.assertNotIn(w, block, f"INDICATOR_NOTES에 판정 어휘 '{w}' 가 있다")
 
 

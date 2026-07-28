@@ -7024,7 +7024,16 @@ _INDICATOR_ROWS = [
 ]
 _INDICATOR_ROWS_JS = json.dumps(_INDICATOR_ROWS, ensure_ascii=False)
 
-_VERDICT_WORDS = ("높", "낮", "위험", "주의", "안전", "양호", "악화", "개선", "우수", "부실")
+# SE-4h Task 2 리뷰 지적(Finding 2): 원래 10개 어휘로는 "…보통 100% 수준이며
+# 그것을 넘으면 재무구조를 다시 볼 일이다" 같은 문턱값+지시문(판정)을 못
+# 잡는다 — 판정 어휘가 하나도 없기 때문이다. test_se_page_assets.py의
+# TestIndicatorNotesVocabulary와 같은 목록을 쓴다(한쪽만 넓히면 다른 쪽이
+# 다시 구멍이 된다).
+_VERDICT_WORDS = (
+    "높", "낮", "위험", "주의", "안전", "양호", "악화", "개선", "우수", "부실",
+    "수준", "넘으면", "이상이면", "미만이면", "바람직", "적정", "충분", "부족",
+    "우려", "클수록", "작을수록", "많을수록", "적을수록",
+)
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
@@ -7090,6 +7099,59 @@ class TestIndicatorBlocks(unittest.TestCase):
         for word in _VERDICT_WORDS:
             self.assertNotIn(word, got, f"INDICATOR_NOTES에 판정 어휘 '{word}'")
 
+    def test_indicator_notes_snapshot(self):
+        """SE-4h Task 2 리뷰 지적(Finding 2) — 어휘 검사기는 "의미"를
+        판정할 수 없다(문턱값+지시문이 판정 어휘 없이도 판정이 될 수
+        있다는 것이 실제로 증명됐다: 부채비율 노트를 "…보통 100% 수준이며
+        그것을 넘으면 재무구조를 다시 볼 일이다"로 바꿔도 어휘 검사 두
+        개가 전부 통과했고, 부채비율의 정확한 문자열을 우연히 고정하고
+        있던 다른 테스트(test_primary_row_has_note_and_percent_value)만
+        간접적으로 잡았다 — 그 테스트는 부채비율 하나만 보므로 다른
+        21개 노트가 같은 방식으로 바뀌면 여전히 못 잡는다.
+
+        진짜 방어는 22개 전체를 스냅샷으로 고정해, 노트가 바뀔 때마다
+        사람이 명시적인 diff를 보고 "의도한 변경인가"를 판단하게 하는
+        것이다 — assertEqual(dict, dict)은 실패 시 바뀐 키·값을 그대로
+        보여준다."""
+        got = run_js("INDICATOR_NOTES")
+        expected = {
+            "순이익률": "매출액 대비 당기순이익의 비율",
+            "매출총이익률": "매출액에서 매출원가를 뺀 매출총이익이 매출액의 몇 %인가",
+            "매출원가율": "매출액 대비 매출원가의 비율",
+            "ROE": "자기자본 대비 당기순이익의 비율",
+            "판관비율": "매출액 대비 판매비와관리비의 비율",
+            "부채비율": "자기자본 대비 부채총계의 비율 — 빌린 돈이 자기 돈의 몇 %인가",
+            "자기자본비율": "총자산 대비 자기자본의 비율",
+            "유동비율": "1년 안에 갚을 유동부채 대비, 1년 안에 현금화할 수 있는 유동자산의 비율",
+            "당좌비율": "유동자산에서 재고자산을 뺀 당좌자산이 유동부채의 몇 %인가",
+            "이자보상배율": "영업이익이 이자비용의 몇 배인가 — 값은 DART가 준 그대로 %로 표시된다",
+            "자본유보율": "자본잉여금과 이익잉여금을 더한 유보액이 자본금의 몇 %인가",
+            "매출액증가율(YoY)": "전년 매출액 대비 이번 사업연도 매출액의 변화율",
+            "영업이익증가율(YoY)": "전년 영업이익 대비 이번 사업연도 영업이익의 변화율",
+            "순이익증가율(YoY)": "전년 당기순이익 대비 이번 사업연도 당기순이익의 변화율",
+            "총자산증가율": "전년 총자산 대비 이번 사업연도 총자산의 변화율",
+            "자기자본증가율": "전년 자기자본 대비 이번 사업연도 자기자본의 변화율",
+            "부채총계증가율": "전년 부채총계 대비 이번 사업연도 부채총계의 변화율",
+            "총자산회전율": "총자산 대비 매출액의 비율",
+            "매출채권회전율": "매출채권 대비 매출액의 비율",
+            "재고자산회전율": "재고자산 대비 매출액의 비율",
+            "매입채무회전율": "매입채무 대비 매출액의 비율",
+            "배당성향(%)": "당기순이익 중 현금배당금총액이 차지하는 비율",
+        }
+        self.assertEqual(
+            set(got.keys()), set(expected.keys()),
+            "INDICATOR_NOTES의 키(22개 지표) 목록이 스냅샷과 다릅니다 — "
+            "지표가 추가/삭제됐다면 아래 expected 딕셔너리도 함께 갱신하세요",
+        )
+        for name in expected:
+            self.assertEqual(
+                got[name], expected[name],
+                f"INDICATOR_NOTES[\"{name}\"]이 스냅샷과 다릅니다 — "
+                f"의도한 변경이면 이 테스트의 expected 값을 갱신하세요\n"
+                f"  스냅샷: {expected[name]!r}\n"
+                f"  실제값: {got[name]!r}",
+            )
+
 
 @unittest.skipUnless(_NODE, "node가 없어 ui.js 렌더링을 검증할 수 없습니다")
 class TestIndicatorSectionRender(unittest.TestCase):
@@ -7131,6 +7193,30 @@ class TestIndicatorSectionRender(unittest.TestCase):
         self.assertIn("나머지 2개 지표", got["buttons"])
         self.assertIn("나머지 1개 지표", got["buttons"])
         self.assertIn("납입자본이익률", got["cells"])
+
+    def test_rest_fold_table_has_no_note_column(self):
+        """SE-4h Task 2 리뷰 지적(Finding 3) — indicatorRestFold(ui.js)가
+        indicatorTableEl(restEntries, true)로 바뀌면(원래 false) rest
+        (접힌) 표에도 "뜻" 헤더 열이 생기고, rest 항목은 app.js
+        indicatorBlocks가 애초에 .note를 안 채우므로(withNote=false로
+        빌드) 그 열은 전부 빈 문자열 44칸이 된다 — 그런데도 이 mutation을
+        적용한 채로 기존 535개 테스트를 돌리면 전부 그대로 통과했다(브리프
+        에 적힌 사고). 이 테스트가 그 변형에 실제로 반응하는지 직접 확인:
+        mutation 적용 → 이 테스트 FAIL(5) → 원복 → PASS(3).
+
+        이 픽스처에서 "뜻" 헤더는 primary 표에만 있고, primary 표는
+        정확히 3개(수익성·안정성·활동성 각 1개 — 새분류는 primary가
+        비어 렌더되지 않는다, indicatorBlocks의 INDICATOR_PRIMARY 매핑
+        참고). rest 표(수익성 rest·새분류 rest)에 "뜻" 헤더가 새로
+        생기면 이 개수가 5로 늘어난다."""
+        got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
+        note_header_count = got["cells"].count("뜻")
+        self.assertEqual(
+            note_header_count, 3,
+            "\"뜻\" 헤더 개수가 예상(3, primary 표 3개)과 다릅니다 — "
+            "rest(접힌) 표에 뜻 열이 생겼을 수 있습니다 "
+            "(ui.js indicatorRestFold의 indicatorTableEl(..., withNote) 인자 확인)",
+        )
 
     def test_dart_sourced_notice_present_per_block(self):
         got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
