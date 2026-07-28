@@ -6198,6 +6198,17 @@ class TestMarkNumber(unittest.TestCase):
     def test_parses_commas_and_sign(self):
         self.assertEqual(run_js('markNumber("-10,534,000,000")'), -10534000000)
 
+    def test_negative_zero_is_not_marked(self):
+        # DART는 증감 비율을 소수 2자리로 반올림해 "-0.00"을 내보낸다
+        # (엔켐 elestock 실측 29건 중 1건). Number("-0.00")은 IEEE-754 -0 이고
+        # JS에서 -0 < 0 은 false 라 이 값은 강조되지 않는다. 우연이지만 옳다 —
+        # 화면에 "-0.00"이 찍힌 칸에 "증감 비율 < 0"이라고 표시하면 사용자에게는
+        # 오작동으로 보인다. 누가 "버그"로 보고 고치지 않도록 못 박는다.
+        rows = ('[{"sp_stock_lmp_irds_rate":"-0.00"},'
+                ' {"sp_stock_lmp_irds_rate":"-0.01"}]')
+        marks = run_js('cellMarks(%s, "insider_timeline")' % rows)
+        self.assertEqual(list(marks.keys()), ["1|sp_stock_lmp_irds_rate"])
+
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestAffiliateMarks(unittest.TestCase):
