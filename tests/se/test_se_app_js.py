@@ -4121,7 +4121,14 @@ class TestChartData(unittest.TestCase):
     # 않게 한다. 서버 레지스트리를 건드리지 않고도(se_server/ API 계약
     # 무변경 원칙) 이 키들이 "오타"로 오인돼 이 테스트에 걸리지 않도록
     # 명시적으로 허용한다.
-    KNOWN_DERIVED_CHART_KEYS = {"financial_ratios", "affiliate_timeline"}
+    # SE-4h Task 3: indicators_<분류> 4개는 indicatorChartRecords(app.js)가
+    # 서버 응답(fetch_indicator_history 행 목록)에서 분류·primary 지표로 걸러
+    # 만든 클라이언트 파생 records를 그린다 — financial_ratios·
+    # affiliate_timeline과 같은 부류다.
+    KNOWN_DERIVED_CHART_KEYS = {
+        "financial_ratios", "affiliate_timeline",
+        "indicators_수익성", "indicators_안정성", "indicators_성장성", "indicators_활동성",
+    }
 
     def test_spec_keys_all_exist_in_the_server_registry(self):
         """CHART_SPECS의 섹션 키는 서버가 실제로 주는 키이거나, 위
@@ -7229,6 +7236,153 @@ class TestIndicatorSectionRender(unittest.TestCase):
         got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
         self.assertEqual(got["afterGate"]["cells"], [])
         self.assertEqual(got["afterGate"]["bodyChildCount"], 0)
+
+
+# ── SE-4h Task 3: 재무지표 추이 차트 ─────────────────────────────────────
+#
+# task-3-brief.md Step 1 요구사항 4개(연도 오름차순·null 보존·전 연도 null
+# 지표 제외·분류별 차트 분리)를 검증한다. 픽스처는 입력을 일부러 연도
+# 내림차순 + 뒤섞인 순서로 준다 — "입력을 내림차순으로 넣어도" 오름차순이
+# 나오는지를 실제로 확인하기 위해서다(정렬을 안 해도 우연히 통과하는 걸
+# 막는다). 판관비율은 두 해 모두 null(전 연도 null인 primary 지표 — 계열
+# 자체가 없어야 한다), 매출총이익률은 2025 한 해만 온다(다른 해는 행 자체가
+# 없음 — null로 채워지되 0이 아니어야 한다).
+_INDICATOR_TREND_ROWS = [
+    {"bsns_year": "2025", "category": "수익성", "idx_nm": "순이익률", "idx_val": -22.56},
+    {"bsns_year": "2023", "category": "수익성", "idx_nm": "순이익률", "idx_val": -100.0},
+    {"bsns_year": "2024", "category": "수익성", "idx_nm": "순이익률", "idx_val": -152.661},
+    {"bsns_year": "2025", "category": "수익성", "idx_nm": "판관비율", "idx_val": None},
+    {"bsns_year": "2024", "category": "수익성", "idx_nm": "판관비율", "idx_val": None},
+    {"bsns_year": "2025", "category": "수익성", "idx_nm": "매출총이익률", "idx_val": 40.0},
+    {"bsns_year": "2025", "category": "안정성", "idx_nm": "부채비율", "idx_val": 130.248},
+    {"bsns_year": "2024", "category": "안정성", "idx_nm": "부채비율", "idx_val": 139.2},
+]
+_INDICATOR_TREND_ROWS_JS = json.dumps(_INDICATOR_TREND_ROWS, ensure_ascii=False)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestIndicatorTrendChart(unittest.TestCase):
+    """SE-4h Task 3 Step 1 — indicatorChartRecords + CHART_SPECS.indicators_*
+    + chartData(기존 함수 재사용)가 분류별 추이 차트 데이터를 만드는지
+    검증한다. renderChart(ui.js)는 Chart.js 전역이 있어야 실제로 canvas를
+    그리는데, 이 node vm 테스트 하네스에는 Chart가 없다(다른 CHART_SPECS
+    테스트들과 같은 이유로 chartData 파이프라인만 직접 검증한다)."""
+
+    def _chart(self, category):
+        return run_js(
+            f'chartData(indicatorChartRecords({_INDICATOR_TREND_ROWS_JS}, "{category}"), '
+            f'CHART_SPECS["indicators_{category}"])'
+        )
+
+    def test_years_ascending_even_though_input_is_not_sorted(self):
+        got = self._chart("수익성")
+        self.assertEqual(got["labels"], ["2023", "2024", "2025"])
+
+    def test_null_value_stays_null_not_zero(self):
+        got = self._chart("수익성")
+        series = next(d for d in got["datasets"] if d["label"] == "매출총이익률")
+        # labels 순서(2023,2024,2025)와 나란히: 2023·2024는 행 자체가 없어
+        # null, 2025만 40.0.
+        self.assertEqual(series["data"], [None, None, 40.0])
+
+    def test_all_null_indicator_has_no_series(self):
+        got = self._chart("수익성")
+        labels = [d["label"] for d in got["datasets"]]
+        self.assertNotIn("판관비율", labels,
+                          "전 연도가 null인 지표(판관비율)가 계열로 남아 있습니다")
+
+    def test_charts_split_by_category(self):
+        profit = self._chart("수익성")
+        stability = self._chart("안정성")
+        profit_labels = [d["label"] for d in profit["datasets"]]
+        stability_labels = [d["label"] for d in stability["datasets"]]
+        self.assertIn("순이익률", profit_labels)
+        self.assertNotIn("부채비율", profit_labels)
+        self.assertIn("부채비율", stability_labels)
+        self.assertNotIn("순이익률", stability_labels)
+
+    def test_indicator_chart_records_filters_to_category_and_primary_with_value(self):
+        """indicatorChartRecords 자체의 계약: category 일치 + INDICATOR_PRIMARY
+        소속 + 값이 하나라도 있는 지표만 남는다."""
+        got = run_js(f'indicatorChartRecords({_INDICATOR_TREND_ROWS_JS}, "수익성")')
+        names = {r["idx_nm"] for r in got}
+        self.assertIn("순이익률", names)
+        self.assertIn("매출총이익률", names)
+        self.assertNotIn("판관비율", names, "전 연도 null인 지표의 행이 남아 있습니다")
+        self.assertNotIn("부채비율", names, "다른 분류(안정성)의 지표가 섞여 들어왔습니다")
+
+    def test_unknown_category_yields_no_records_and_no_spec(self):
+        got = run_js(f'indicatorChartRecords({_INDICATOR_TREND_ROWS_JS}, "새분류")')
+        self.assertEqual(got, [])
+        # JSON.stringify(undefined)는 undefined 자체(문자열 "undefined"가
+        # 아니다)를 돌려줘 run_js의 JSON.parse가 깨진다 — 존재 여부는 불리언
+        # 식으로 바꿔 물어야 한다.
+        self.assertFalse(run_js('"indicators_새분류" in CHART_SPECS'))
+
+    def test_empty_or_null_rows_yield_empty_list(self):
+        self.assertEqual(run_js('indicatorChartRecords([], "수익성")'), [])
+        self.assertEqual(run_js('indicatorChartRecords(null, "수익성")'), [])
+
+
+# ── SE-4h Task 3 라이브 검증에서 발견한 사실: DART 원본 idx_cl_nm은
+# "수익성지표"·"안정성지표"·"성장성지표"·"활동성지표"다(2026-07-28 엔켐
+# corp_code=01011526 raw fnlttSinglIndx.json 재확인) — 계획 문서 "배경" 절이
+# 근거로 삼은 tmp/indicator_categories.json은 접미어 없는 이름이었는데, 그
+# 자료가 실제 API 응답과 달랐다. 정규화(normalizeIndicatorCategory) 없이는
+# INDICATOR_PRIMARY[category]가 실 데이터에서 언제나 빈 배열이 되어 primary·
+# 뜻·차트가 전부 죽은 코드였다 — 이 클래스는 "픽스처가 실데이터와 달라
+# 결함이 초록으로 통과한 사고"를 재발시키지 않도록 **실측 접미어가 붙은**
+# category 문자열로 검증한다(위 TestIndicatorTrendChart·TestIndicatorBlocks의
+# 접미어 없는 픽스처와 별개로).
+_LIVE_SHAPED_INDICATOR_ROWS = [
+    {"bsns_year": "2025", "category": "수익성지표", "idx_nm": "순이익률", "idx_val": -22.56},
+    {"bsns_year": "2024", "category": "수익성지표", "idx_nm": "순이익률", "idx_val": -152.661},
+    {"bsns_year": "2023", "category": "수익성지표", "idx_nm": "순이익률", "idx_val": -100.0},
+    {"bsns_year": "2025", "category": "안정성지표", "idx_nm": "부채비율", "idx_val": 130.248},
+    {"bsns_year": "2024", "category": "안정성지표", "idx_nm": "부채비율", "idx_val": 139.2},
+]
+_LIVE_SHAPED_INDICATOR_ROWS_JS = json.dumps(_LIVE_SHAPED_INDICATOR_ROWS, ensure_ascii=False)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestIndicatorCategoryNormalization(unittest.TestCase):
+    """DART가 실제로 주는 접미어 형태("수익성지표" 등)가 표준 이름
+    ("수익성")으로 정규화되고, 그 결과로 primary·차트가 실제로 채워지는지
+    검증한다."""
+
+    def test_alias_map_covers_all_four_categories(self):
+        for suffixed, bare in (
+            ("수익성지표", "수익성"), ("안정성지표", "안정성"),
+            ("성장성지표", "성장성"), ("활동성지표", "활동성"),
+        ):
+            got = run_js(f'normalizeIndicatorCategory("{suffixed}")')
+            self.assertEqual(got, bare)
+
+    def test_unknown_category_passes_through_unchanged(self):
+        self.assertEqual(run_js('normalizeIndicatorCategory("새분류")'), "새분류")
+        self.assertEqual(run_js('normalizeIndicatorCategory(null)'), "기타")
+
+    def test_live_shaped_category_yields_normalized_block_category(self):
+        got = run_js(f"indicatorBlocks({_LIVE_SHAPED_INDICATOR_ROWS_JS}).map(b => b.category)")
+        self.assertEqual(got, ["수익성", "안정성"])
+
+    def test_live_shaped_category_is_not_dead_primary(self):
+        """정규화가 없으면 이 값이 항상 []였다(Task 3 라이브 검증에서
+        실제로 재현·확인한 사고)."""
+        got = run_js(f"indicatorBlocks({_LIVE_SHAPED_INDICATOR_ROWS_JS})")
+        profit = next(b for b in got if b["category"] == "수익성")
+        self.assertEqual([e["idx_nm"] for e in profit["primary"]], ["순이익률"])
+        self.assertTrue(profit["primary"][0]["note"])
+
+    def test_live_shaped_category_chart_actually_renders_data(self):
+        got = run_js(
+            f'chartData(indicatorChartRecords({_LIVE_SHAPED_INDICATOR_ROWS_JS}, "수익성"), '
+            f'CHART_SPECS.indicators_수익성)'
+        )
+        self.assertIsNotNone(got, "실측 형태(접미어 포함) category로는 차트 데이터가 비어 있습니다")
+        self.assertEqual(got["labels"], ["2023", "2024", "2025"])
+        series = next(d for d in got["datasets"] if d["label"] == "순이익률")
+        self.assertEqual(series["data"], [-100.0, -152.661, -22.56])
 
 
 if __name__ == "__main__":

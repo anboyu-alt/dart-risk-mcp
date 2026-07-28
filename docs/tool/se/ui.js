@@ -1338,6 +1338,14 @@ function renderIndicatorBlocks(holder, value, wrap) {
 
     if (block.primary.length > 0) {
       section.appendChild(indicatorTableEl(block.primary, true));
+      // SE-4h Task 3 — 분류별 추이 차트. indicatorChartRecords(app.js)가
+      // 이 분류의 primary 지표 중 값이 있는 것만 걸러 records로 넘긴다 —
+      // renderChart는 표 바로 위(querySelector("table")로 찾은 자리)에
+      // canvas를 끼워 넣는다(위 renderChart 주석 참고, affiliate_timeline과
+      // 같은 "표 먼저 붙이고 renderChart" 순서). CHART_SPECS["indicators_" +
+      // category](app.js)가 없는 분류(모르는 분류가 온 경우)면 renderChart가
+      // 조용히 false를 돌려주고 표만 남는다 — 화면이 죽지 않는다.
+      renderChart(section, "indicators_" + block.category, indicatorChartRecords(value, block.category));
     }
     if (block.rest.length > 0) {
       section.appendChild(indicatorRestFold(block.rest));
