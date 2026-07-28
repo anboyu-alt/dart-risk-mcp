@@ -1397,8 +1397,19 @@ function renderIndicatorBlocks(holder, value, wrap) {
  *  레코드 키로 쓰면, 자바스크립트 객체는 정수형 문자열 키를 삽입 순서와
  *  무관하게 오름차순으로 먼저 나열한다(정수 인덱스 키 규칙) — "지표 |
  *  뜻 | 2025 | 2024"로 두려던 열 순서가 "2024 | 2025 | 지표 | 뜻"로
- *  뒤집힌다. 여기서는 열 순서를 배열로 직접 통제해 이 함정을 피한다. */
+ *  뒤집힌다. 여기서는 열 순서를 배열로 직접 통제해 이 함정을 피한다.
+ *
+ *  SE-4i — 사실 강조(.mk). SE-4g가 다른 모든 표에 붙인 강조가 이 표에는
+ *  없었다(indicatorTableEl이 cellMarks를 부르지 않고 만들어진 별도 경로라
+ *  — 이 함수 docstring 첫 줄이 이미 그 이유를 말한다). tableEl()과 같은
+ *  관례를 그대로 따른다: className·title은 이어 붙이고(대입하면 다른 곳에서
+ *  이미 겪은 사고 — 클릭 표시·툴팁 유실 — 가 재발한다), 표에 실제로 붙은
+ *  사유만 모아 표 아래 범례(.mk-legend)로 보여주며, 하나도 안 붙으면 범례
+ *  자체를 만들지 않는다(빈 범례는 "강조할 게 있었는데 없다"는 착각을
+ *  준다). 지표 이름·뜻 열은 대상이 아니다 — 연도 값 칸(entry.cells)만
+ *  본다. */
 function indicatorTableEl(entries, withNote) {
+  const frag = document.createDocumentFragment();
   const years = entries.length > 0 ? entries[0].cells.map(function (c) { return c.bsns_year; }) : [];
 
   const table = document.createElement("table");
@@ -1417,6 +1428,12 @@ function indicatorTableEl(entries, withNote) {
     thead.appendChild(th);
   });
 
+  const appliedWhys = [];
+  const seenWhys = new Set();
+  function noteApplied(why) {
+    if (!seenWhys.has(why)) { seenWhys.add(why); appliedWhys.push(why); }
+  }
+
   const tbody = table.createTBody();
   entries.forEach(function (entry) {
     const tr = tbody.insertRow();
@@ -1429,9 +1446,27 @@ function indicatorTableEl(entries, withNote) {
     entry.cells.forEach(function (c) {
       const td = tr.insertCell();
       td.textContent = c.display;
+      const why = indicatorCellWhy(c.idx_val);
+      if (why) {
+        td.className = td.className ? (td.className + " mk") : "mk";
+        td.title = td.title ? (td.title + " · " + why) : why;
+        noteApplied(why);
+      }
     });
   });
-  return table;
+  frag.appendChild(table);
+
+  if (appliedWhys.length > 0) {
+    const legend = document.createElement("div");
+    legend.className = "mk-legend";
+    const b = document.createElement("b");
+    b.textContent = "강조: ";
+    legend.appendChild(b);
+    legend.appendChild(document.createTextNode(appliedWhys.join(" · ")));
+    frag.appendChild(legend);
+  }
+
+  return frag;
 }
 
 /** rest(접힌 44개 지표)를 기존 .fold-btn/.fold-detail과 같은 시각

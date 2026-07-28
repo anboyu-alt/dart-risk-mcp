@@ -2532,6 +2532,23 @@ function markNeg(v) {
   return x !== null && x < 0;
 }
 
+// SE-4i — 주요 재무지표 표(indicatorTableEl, ui.js)는 위 MARK_RULES가 다루는
+// "레코드 배열 + rec[key]" 모양이 아니라, indicatorBlocks가 이미 연도×지표로
+// 피벗해 둔 cells({bsns_year, idx_val, display})를 그린다. 그래서 cellMarks를
+// 그대로 못 쓰고, 같은 markNeg 판정을 쓰는 얇은 전용 함수를 둔다(markNeg
+// 자체를 export하지 않고 이 wrapper만 내보낸다 — 호출부(ui.js)가 알아야 할
+// 것은 "이 값이 강조되는가·왜"뿐이지 markNumber 파싱 방식이 아니다).
+//
+// 규칙은 하나뿐이다: idx_val < 0. 순이익률·ROE·매출총이익률처럼 부호 있는
+// 지표가 실제로 음수인 것은 산술적 사실이지만, "매출원가율 > 100%"나
+// "부채비율 > 100%"처럼 우리가 고른 경계선은 판정이다(v0.8.5 — 점수·등급·
+// 임계값 금지). 0은 음수가 아니고(markNeg가 이미 `< 0`으로만 판정), null(값
+// 없음)도 markNumber가 먼저 null로 걸러 음수로 읽지 않는다 — 엔켐 실측에서
+// 51개 null 셀이 있다.
+function indicatorCellWhy(idxVal) {
+  return markNeg(idxVal) ? "지표 값 < 0" : null;
+}
+
 const MARK_RULES = Object.create(null);
 
 MARK_RULES.affiliates = [
@@ -2724,7 +2741,7 @@ if (typeof module !== "undefined" && module.exports) {
     normalizeDebtByKind, monthlyCounts, compositeXValue,
     financialRatios, classifyDisclosureCategory, monthlyCountsByCategory,
     DIVIDEND_SE_FIELDS, dividendVsIncome, fundPlanChanges, affiliateOverview,
-    markNumber, MARK_RULES, cellMarks, markedColumnKeys,
+    markNumber, MARK_RULES, cellMarks, markedColumnKeys, indicatorCellWhy,
     isAggregateRow, splitAggregateRows, splitVisibleFolded, MAX_VISIBLE_COLUMNS,
     INDICATOR_CATEGORY_ORDER, INDICATOR_PRIMARY, INDICATOR_NOTES,
     formatIndicator, indicatorBlocks, indicatorChartRecords,
