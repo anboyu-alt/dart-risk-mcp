@@ -278,6 +278,39 @@ class TestFindActorOverlapMerging(unittest.TestCase):
         self.assertIn("공개기록 참고", result)
         self.assertIn("제작자 모니터링 등록", result)
 
+    def test_blank_status_actor_still_warns_in_cross_reference(self):
+        # 최종 리뷰 Finding 1: status가 빈 문자열이면 `r.get("status") ==
+        # "auto_matched"` 동등비교는 False가 되어 "동일 매칭" 경고가 안
+        # 붙는다 — actor_status 화이트리스트로 강등돼야 한다.
+        import json, tempfile
+        from pathlib import Path
+        from dart_risk_mcp.server import find_actor_overlap
+
+        def _resolve(query, api_key):
+            return (query, {"corp_code": query.lower(), "stock_code": "000000"})
+
+        def _roster(corp_code, api_key, lookback_years):
+            if corp_code in ("a", "b"):
+                return {"신승수": {"2024"}}
+            return {}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ka = Path(tmp) / "ka.json"
+            ka.write_text(json.dumps({"version": 1, "actors": {
+                "신승수": [{"source": "자동 발굴", "status": "",
+                           "evidence": "CG인바이츠 등기임원"}]
+            }}, ensure_ascii=False), encoding="utf-8")
+            with patch.dict("os.environ", {
+                "DART_KNOWN_ACTORS_PATH": str(ka), "DART_API_KEY": "test_key",
+            }):
+                with patch("dart_risk_mcp.server.resolve_corp", side_effect=_resolve), \
+                     patch("dart_risk_mcp.server.fetch_company_disclosures", return_value=[]), \
+                     patch("dart_risk_mcp.server.fetch_executive_roster", side_effect=_roster):
+                    result = find_actor_overlap(["a", "b"])
+
+        self.assertIn("공개기록 참고", result)
+        self.assertIn("일부는 시장 공시 자동 매칭", result)
+
     def test_no_known_actor_no_section(self):
         # 레지스트리에 없으면 참고 섹션이 붙지 않는다
         import tempfile

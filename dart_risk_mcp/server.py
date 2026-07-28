@@ -53,10 +53,10 @@ from .core import (
     fetch_dividend_history,
     fetch_document_content,
     fetch_document_text,
+    actor_status,
     add_person,
     get_person_companies,
     list_persons,
-    load_known_actors,
     load_watchlist,
     lookup_actor,
     lookup_actors_by_company,
@@ -260,7 +260,7 @@ def _registry_company_section(corp_name: str) -> list[str]:
     has_auto = has_seed = False
     shown_counts: dict[str, int] = {}
     for nm, r in hits:
-        st = r.get("status", "")
+        st = actor_status(r)
         has_auto = has_auto or st == "auto_matched"
         has_seed = has_seed or st == "maintainer_seed"
         prefix = "[자동 매칭 · 동명이인 미확인] " if st == "auto_matched" else ""
@@ -269,9 +269,14 @@ def _registry_company_section(corp_name: str) -> list[str]:
         tag = f"{src}({date})" if date else src
         lines.append(f"  • {prefix}{nm} — {tag}: {r.get('evidence', '')}")
         shown_counts[nm] = shown_counts.get(nm, 0) + 1
-    registry_actors = load_known_actors().get("actors", {})
+    # lookup_actor(nm) — 정확 키가 아니라 lookup_actor와 동일한 정규화+폴딩
+    # 병합을 거친 카운트. registry_actors.get(nm, [])(정확 키 조회)로는
+    # SE-5b가 고친 '두 키에 나뉜 같은 실체'(예: '(주)베이트리' 1건 +
+    # '주식회사 베이트리' 2건)에서 이 안내가 가리키는 lookup_known_actor(nm)의
+    # 실제 반환 건수(3건)와 어긋난다 — 안내문이 자기가 가리키는 도구의 결과와
+    # 모순되면 안 된다.
     for nm, n_shown in shown_counts.items():
-        total = len(registry_actors.get(nm, []))
+        total = len(lookup_actor(nm))
         if total > n_shown:
             lines.append(
                 f"    ({nm} 레지스트리 전체 기록 {total}건 — "
@@ -1187,7 +1192,7 @@ def lookup_known_actor(name: str) -> str:
         ev = r.get("evidence", "")
         date = r.get("date", "")
         url = r.get("url", "")
-        st = r.get("status", "")
+        st = actor_status(r)
         if st == "maintainer_seed":
             has_seed = True
         elif st == "auto_matched":
@@ -1510,9 +1515,9 @@ def find_actor_overlap(
                 ev = r.get("evidence", "")
                 tag = f"{src}({date})" if date else src
                 lines.append(f"  • {nm} — {tag}: {ev}")
-        if any(r.get("status") == "auto_matched" for _, recs in known_hits for r in recs):
+        if any(actor_status(r) == "auto_matched" for _, recs in known_hits for r in recs):
             lines.append("  ⚠ 일부는 시장 공시 자동 매칭 (동일인 여부 미확인)")
-        if any(r.get("status") == "maintainer_seed" for _, recs in known_hits for r in recs):
+        if any(actor_status(r) == "maintainer_seed" for _, recs in known_hits for r in recs):
             lines.append("  ⚠ 일부는 제작자 모니터링 등록 (공시 자동매칭 아님, 혐의·확정 아님)")
         lines.append("  ⚠ 원본 공시로 사실 확인 권장 · 동명이인 가능성 있음")
         lines.append("")

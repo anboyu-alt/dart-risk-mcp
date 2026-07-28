@@ -587,6 +587,97 @@ class TestKnownActors(unittest.TestCase):
         payload = post.call_args.kwargs["json"]
         self.assertEqual(payload["properties"]["구분"]["select"]["name"], "조합")
 
+    def test_lookup_merges_records_across_html_entity_duplicate_keys(self):
+        # 실측 사고 재현: 파싱 오류로 같은 실체가 '삼성전자 주식회사'와
+        # '삼성전자 &CR;주식회사' 두 키로 저장됨. normalize_name은 이미 두 키를
+        # 같은 값으로 접지만(고치지 않는다), lookup_actor는 정확 키 일치에서
+        # 즉시 반환해 다른 키의 기록을 놓쳤다. 두 표기 어느 쪽으로 조회해도
+        # 합산 3건이 나와야 한다.
+        from dart_risk_mcp.core.known_actors import lookup_actor
+        self._write({"version": 1, "actors": {
+            "삼성전자 주식회사": [
+                {"source": "CB 인수", "evidence": "e1", "rcept_no": "R1"},
+            ],
+            "삼성전자 &CR;주식회사": [
+                {"source": "CB 인수", "evidence": "e2", "rcept_no": "R2"},
+                {"source": "CB 인수", "evidence": "e3", "rcept_no": "R3"},
+            ],
+        }})
+        recs_plain = lookup_actor("삼성전자 주식회사")
+        recs_entity = lookup_actor("삼성전자 &CR;주식회사")
+        self.assertEqual(len(recs_plain), 3)
+        self.assertEqual(len(recs_entity), 3)
+        self.assertEqual({r["rcept_no"] for r in recs_plain}, {"R1", "R2", "R3"})
+        self.assertEqual({r["rcept_no"] for r in recs_entity}, {"R1", "R2", "R3"})
+
+    def test_lookup_dedupes_identical_records_across_keys(self):
+        # 같은 키가 정확 일치·정규화 일치 양쪽에 걸리므로 그대로 합치면
+        # 기록이 겹친다 — 필드 전체가 같은 기록은 한 번만 반환한다.
+        from dart_risk_mcp.core.known_actors import lookup_actor
+        rec = {"source": "CB 인수", "evidence": "동일 근거", "rcept_no": "R1"}
+        self._write({"version": 1, "actors": {
+            "케이파트너스 주식회사": [dict(rec)],
+            "케이파트너스&CR;주식회사": [dict(rec)],
+        }})
+        recs = lookup_actor("케이파트너스 주식회사")
+        self.assertEqual(len(recs), 1)
+
+    def test_lookup_keeps_records_with_same_evidence_but_different_rcept(self):
+        # 근거 텍스트가 같아도 접수번호가 다르면 서로 다른 공시(별개 근거)이므로
+        # 중복으로 접지 않는다 — 판정 기준은 필드 전체 일치.
+        from dart_risk_mcp.core.known_actors import lookup_actor
+        self._write({"version": 1, "actors": {
+            "삼성전자 주식회사": [
+                {"source": "CB 인수", "evidence": "같은 문구", "rcept_no": "R1"},
+            ],
+            "삼성전자 &CR;주식회사": [
+                {"source": "CB 인수", "evidence": "같은 문구", "rcept_no": "R2"},
+            ],
+        }})
+        recs = lookup_actor("삼성전자 주식회사")
+        self.assertEqual(len(recs), 2)
+        self.assertEqual({r["rcept_no"] for r in recs}, {"R1", "R2"})
+
+    def test_lookup_deterministic_order_across_calls(self):
+        from dart_risk_mcp.core.known_actors import lookup_actor
+        self._write({"version": 1, "actors": {
+            "삼성전자 주식회사": [
+                {"source": "A", "evidence": "e1", "rcept_no": "R1"}],
+            "삼성전자 &CR;주식회사": [
+                {"source": "B", "evidence": "e2", "rcept_no": "R2"},
+                {"source": "C", "evidence": "e3", "rcept_no": "R3"},
+            ],
+        }})
+        first = lookup_actor("삼성전자 주식회사")
+        second = lookup_actor("삼성전자 주식회사")
+        self.assertEqual(first, second)
+
+    def test_lookup_does_not_merge_distinct_normalized_entities(self):
+        # 정규화해도 다른 실체인 두 인물은 합쳐지지 않는다.
+        from dart_risk_mcp.core.known_actors import lookup_actor
+        self._write({"version": 1, "actors": {
+            "홍길동": [{"source": "A", "evidence": "e1"}],
+            "김철수": [{"source": "B", "evidence": "e2"}],
+        }})
+        recs = lookup_actor("홍길동")
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0]["source"], "A")
+
+    def test_lookup_by_company_unaffected_by_entity_duplicate_keys(self):
+        # lookup_actors_by_company는 이미 전 키를 순회하므로 이 결함이 없다
+        # — 같은 실체가 두 키에 나뉘어도 각 키의 태깅된 회사 기록을 정상 반환.
+        from dart_risk_mcp.core.known_actors import lookup_actors_by_company
+        self._write({"version": 1, "actors": {
+            "삼성전자 주식회사": [
+                {"source": "A", "evidence": "e1", "companies": ["A전자"]}],
+            "삼성전자 &CR;주식회사": [
+                {"source": "B", "evidence": "e2", "companies": ["A전자"]}],
+        }})
+        hits = lookup_actors_by_company("A전자")
+        self.assertEqual(len(hits), 2)
+        self.assertEqual([n for n, _ in hits],
+                         sorted(["삼성전자 주식회사", "삼성전자 &CR;주식회사"]))
+
     def test_lookup_by_company_matches(self):
         from dart_risk_mcp.core.known_actors import lookup_actors_by_company
         self._write({"version": 1, "actors": {
@@ -630,6 +721,253 @@ class TestKnownActors(unittest.TestCase):
         from dart_risk_mcp.core.known_actors import lookup_actors_by_company
         self._write({"version": 1, "actors": {}})
         self.assertEqual(lookup_actors_by_company("티쓰리"), [])
+
+    # ── SE-5b Task 2: 읽기 단계 기관 필터 ────────────────────────────
+    # 실측(2026-07-29)에서 should_store가 거부하는 12명이 전부 auto_matched뿐인
+    # 채로 레지스트리 상위를 독점했다. 읽기 경로(load_known_actors)에서
+    # should_store를 적용해 그 노이즈를 걷어낸다. 사람이 넣은 기록
+    # (verified/maintainer_seed)은 어떤 경우에도 남긴다.
+
+    _NH_INSTITUTION = (
+        "엔에이치투자증권 주식회사 "
+        "(밸류시스템 코스닥벤처FAST 전문투자형 사모투자신탁의 신탁업자 지위에서)"
+    )
+
+    def test_load_filters_institution_with_only_auto_matched(self):
+        # 브리프 시나리오 1: 기관 + auto_matched만 → 제외된다
+        from dart_risk_mcp.core.known_actors import load_known_actors
+        self._write({"version": 1, "actors": {
+            self._NH_INSTITUTION: [
+                {"source": "자동 발굴", "evidence": "e", "status": "auto_matched"}],
+        }})
+        data = load_known_actors()
+        self.assertNotIn(self._NH_INSTITUTION, data["actors"])
+
+    def test_load_keeps_non_institution_auto_matched(self):
+        # 브리프 시나리오 2: 기관이 아닌 실체 + auto_matched → 남는다
+        from dart_risk_mcp.core.known_actors import load_known_actors
+        self._write({"version": 1, "actors": {
+            "시너지파트너스 주식회사": [
+                {"source": "자동 발굴", "evidence": "e", "status": "auto_matched"}],
+        }})
+        data = load_known_actors()
+        self.assertIn("시너지파트너스 주식회사", data["actors"])
+
+    def test_load_keeps_institution_with_maintainer_seed(self):
+        # 브리프 시나리오 3: 같은 기관명 + maintainer_seed → 남는다(사람이 넣었다)
+        from dart_risk_mcp.core.known_actors import load_known_actors
+        self._write({"version": 1, "actors": {
+            self._NH_INSTITUTION: [
+                {"source": "제작자 등록", "evidence": "e", "status": "maintainer_seed"}],
+        }})
+        data = load_known_actors()
+        self.assertIn(self._NH_INSTITUTION, data["actors"])
+
+    def test_load_filters_institution_with_blank_status(self):
+        # 브리프 시나리오 4: 같은 기관명 + status: "" → 제외된다
+        # (빈 값은 화이트리스트 밖 → 기계 등재로 강등, se_server _actor_status와
+        # 동일 원칙. status: "auto_matched"와 정확히 같아야만 통과하는 판정이면
+        # 빈 문자열이 "사람이 넣은 것"으로 잘못 분류돼 살아남는다.)
+        from dart_risk_mcp.core.known_actors import load_known_actors
+        self._write({"version": 1, "actors": {
+            self._NH_INSTITUTION: [
+                {"source": "자동 발굴", "evidence": "e", "status": ""}],
+        }})
+        data = load_known_actors()
+        self.assertNotIn(self._NH_INSTITUTION, data["actors"])
+
+    def test_load_keeps_institution_with_any_verified_record(self):
+        # 브리프 시나리오 5: 기록 2건 중 하나가 verified면 → 남는다
+        from dart_risk_mcp.core.known_actors import load_known_actors
+        self._write({"version": 1, "actors": {
+            self._NH_INSTITUTION: [
+                {"source": "자동 발굴", "evidence": "e1", "status": "auto_matched"},
+                {"source": "확인", "evidence": "e2", "status": "verified"},
+            ],
+        }})
+        data = load_known_actors()
+        self.assertIn(self._NH_INSTITUTION, data["actors"])
+        # 필터는 인물 단위 — 살아남은 인물의 기록 자체는 지우지 않는다
+        self.assertEqual(len(data["actors"][self._NH_INSTITUTION]), 2)
+
+    def test_lookup_actor_excludes_filtered_institution(self):
+        # 브리프 시나리오 6: lookup_actor(기관명) → []
+        from dart_risk_mcp.core.known_actors import lookup_actor
+        self._write({"version": 1, "actors": {
+            self._NH_INSTITUTION: [
+                {"source": "자동 발굴", "evidence": "e", "status": "auto_matched"}],
+        }})
+        self.assertEqual(lookup_actor(self._NH_INSTITUTION), [])
+
+    def test_lookup_by_company_excludes_filtered_institution(self):
+        # 브리프 시나리오 7: lookup_actors_by_company 결과에도 그 인물이 없다
+        from dart_risk_mcp.core.known_actors import lookup_actors_by_company
+        self._write({"version": 1, "actors": {
+            self._NH_INSTITUTION: [
+                {"source": "자동 발굴", "evidence": "e", "status": "auto_matched",
+                 "companies": ["아무회사"]}],
+        }})
+        hits = lookup_actors_by_company("아무회사")
+        self.assertEqual([n for n, _ in hits], [])
+
+    # ── SE-5b Part A: 폴딩 티어까지 병합 ────────────────────────────
+    # 실측(2026-07-29): '(주)베이트리'(1건·회사7개)와 '주식회사 베이트리'
+    # (2건·회사6개)는 normalize_name은 다르지만(법인 접사 정규화는
+    # normalize_name이 아니라 fold_name의 몫) fold_variants 교집합은 같다
+    # ({'베이트리'}). 그런데 lookup_actor는 정규화(normalize) 티어에서
+    # 매칭이 있으면 즉시 반환해 폴딩 티어로 내려가지 않아, 조회 표기에 따라
+    # 답이 갈렸다(Task 1이 없앤 것과 같은 결함이 한 티어 아래서 재발). 폴딩
+    # 티어는 이미 "매칭 없을 때 답을 내는" 최종 권한을 가지므로, 답할 권한이
+    # 있다면 병합할 권한도 있다고 본다 — 그래서 fold_keys를 조건부 폴백이
+    # 아니라 항상 계산해 정규화 결과와 합집합으로 반환한다.
+    #
+    # 과잉 병합 경계: fold_name은 법인 접사·공백·구두점 제거 + 라틴 음차뿐
+    # 이라 "완전한 문자열"이 일치해야 교집합이 생긴다 — 접사를 떼도 나머지
+    # 글자가 다른 서로 다른 실체는 교집합이 생기지 않는다
+    # (test_lookup_fold_tier_does_not_merge_similar_but_distinct_entities로
+    # 고정).
+    _BAETRI_CO = "(주)베이트리"
+    _BAETRI_JUSIK = "주식회사 베이트리"
+
+    def test_lookup_fold_tier_merges_corp_suffix_variant_keys(self):
+        from dart_risk_mcp.core.known_actors import (
+            lookup_actor, normalize_name, fold_variants)
+        self._write({"version": 1, "actors": {
+            self._BAETRI_CO: [
+                {"source": "CB 인수", "evidence": "e1", "rcept_no": "R1",
+                 "companies": ["가", "나", "다", "라", "마", "바", "사"]},
+            ],
+            self._BAETRI_JUSIK: [
+                {"source": "CB 인수", "evidence": "e2", "rcept_no": "R2",
+                 "companies": ["가", "나", "다"]},
+                {"source": "CB 인수", "evidence": "e3", "rcept_no": "R3",
+                 "companies": ["라", "마", "바"]},
+            ],
+        }})
+        # 전제 확인: 실측대로 normalize_name은 다르고 fold_variants는 겹친다
+        self.assertNotEqual(normalize_name(self._BAETRI_CO),
+                             normalize_name(self._BAETRI_JUSIK))
+        self.assertTrue(
+            set(fold_variants(normalize_name(self._BAETRI_CO)))
+            & set(fold_variants(normalize_name(self._BAETRI_JUSIK))))
+
+        for query in (self._BAETRI_CO, self._BAETRI_JUSIK):
+            recs = lookup_actor(query)
+            self.assertEqual(len(recs), 3, f"query={query!r}")
+            companies = {c for r in recs for c in r.get("companies", [])}
+            self.assertEqual(companies, {"가", "나", "다", "라", "마", "바", "사"})
+
+    def test_lookup_fold_tier_merge_dedupes_and_is_deterministic(self):
+        from dart_risk_mcp.core.known_actors import lookup_actor
+        rec = {"source": "CB 인수", "evidence": "동일 근거", "rcept_no": "R1"}
+        self._write({"version": 1, "actors": {
+            self._BAETRI_CO: [dict(rec)],
+            self._BAETRI_JUSIK: [
+                dict(rec),  # 다른 키에 완전히 동일한 레코드 — 1회만 반환돼야 함
+                {"source": "CB 인수", "evidence": "e2", "rcept_no": "R2"},
+            ],
+        }})
+        first = lookup_actor(self._BAETRI_CO)
+        second = lookup_actor(self._BAETRI_JUSIK)
+        self.assertEqual(len(first), 2)  # 중복 1건 dedup + 별개 R2
+        self.assertEqual(first, second)  # 어느 표기로 조회해도 동일 + 결정적
+
+    def test_lookup_fold_tier_does_not_merge_similar_but_distinct_entities(self):
+        # 과잉 병합 경계: 접사를 떼도 나머지 글자가 다르면 fold도 갈린다 —
+        # '베이트리'와 '베이트리무역'은 같은 실체가 아니므로 합쳐지면 안 된다.
+        from dart_risk_mcp.core.known_actors import lookup_actor
+        self._write({"version": 1, "actors": {
+            "(주)베이트리": [{"source": "A", "evidence": "e1"}],
+            "주식회사 베이트리무역": [{"source": "B", "evidence": "e2"}],
+        }})
+        recs = lookup_actor("(주)베이트리")
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0]["source"], "A")
+
+    def test_load_filter_does_not_over_delete(self):
+        # 브리프 시나리오 8: 필터 적용 후에도 나머지 인물 수가 그대로다
+        # (과잉 삭제 방어) — 기관 1명만 제외되고 개인·조합·법인 3명은 그대로.
+        from dart_risk_mcp.core.known_actors import load_known_actors
+        self._write({"version": 1, "actors": {
+            self._NH_INSTITUTION: [
+                {"source": "자동 발굴", "evidence": "e", "status": "auto_matched"}],
+            "홍길동": [{"source": "s", "evidence": "e", "status": "auto_matched"}],
+            "아레스1호투자조합": [{"source": "s", "evidence": "e", "status": "auto_matched"}],
+            "(주)베이트리": [{"source": "s", "evidence": "e", "status": "auto_matched"}],
+        }})
+        data = load_known_actors()
+        self.assertEqual(
+            set(data["actors"].keys()),
+            {"홍길동", "아레스1호투자조합", "(주)베이트리"})
+        self.assertEqual(len(data["actors"]), 3)
+
+    # ── 최종 리뷰 Finding 1: actor_status 화이트리스트 판정 통합 ──────────
+    # 세 군데(se_server/api/handlers.py, known_actors._filter_institutions,
+    # server.py 인라인 3곳)에 흩어져 있던 status 판정을 이 함수 하나로
+    # 합쳤다. 빈 문자열·None·미지 값이 전부 "auto_matched"로 강등되는지를
+    # 이 함수 자체에서 고정한다 — 라우팅 지점 각각의 렌더 테스트는
+    # test_lookup_known_actor.py·test_registry_company_section.py·
+    # test_find_actor_overlap.py에 있다.
+
+    def test_actor_status_blank_string_is_auto_matched(self):
+        from dart_risk_mcp.core.known_actors import actor_status
+        self.assertEqual(actor_status({"status": ""}), "auto_matched")
+
+    def test_actor_status_missing_key_is_auto_matched(self):
+        from dart_risk_mcp.core.known_actors import actor_status
+        self.assertEqual(actor_status({}), "auto_matched")
+
+    def test_actor_status_none_is_auto_matched(self):
+        from dart_risk_mcp.core.known_actors import actor_status
+        self.assertEqual(actor_status({"status": None}), "auto_matched")
+
+    def test_actor_status_unknown_string_is_auto_matched(self):
+        from dart_risk_mcp.core.known_actors import actor_status
+        self.assertEqual(actor_status({"status": "오타"}), "auto_matched")
+
+    def test_actor_status_non_string_is_auto_matched(self):
+        # 리스트/딕셔너리 같은 해시 불가 타입이 와도 죽지 않고 강등한다.
+        from dart_risk_mcp.core.known_actors import actor_status
+        self.assertEqual(actor_status({"status": ["auto_matched"]}), "auto_matched")
+
+    def test_actor_status_valid_values_pass_through(self):
+        from dart_risk_mcp.core.known_actors import actor_status
+        for v in ("verified", "maintainer_seed", "auto_matched"):
+            self.assertEqual(actor_status({"status": v}), v)
+
+    # ── 최종 리뷰 Finding 4: 손글씨 레지스트리의 malformed 기록 값이
+    # TypeError로 죽지 않는다 ────────────────────────────────────────────
+    # {"actors": {"이름": null}}처럼 기록 목록 자리에 리스트가 아닌 값이
+    # 오면 `for r in recs`(recs=None)가 'NoneType' object is not iterable로
+    # 죽었다. 파일이 없거나 형태가 다를 때(_valid 검사 실패)는 이미 조용히
+    # 빈 레지스트리로 저하하는데, "최상위는 맞는데 개별 항목만 이상한" 경우는
+    # 그 가드를 통과해 죽었다 — 이 저장소 원칙(로딩은 예외를 전파하지 않는다)
+    # 에 어긋난다.
+
+    def test_load_does_not_crash_on_null_record_list(self):
+        from dart_risk_mcp.core.known_actors import load_known_actors
+        self._write({"version": 1, "actors": {"이상한기록": None}})
+        data = load_known_actors()  # TypeError를 던지면 안 된다
+        self.assertEqual(data["actors"].get("이상한기록"), [])
+
+    def test_lookup_actor_does_not_crash_on_null_record_list(self):
+        from dart_risk_mcp.core.known_actors import lookup_actor
+        self._write({"version": 1, "actors": {"이상한기록": None}})
+        self.assertEqual(lookup_actor("이상한기록"), [])
+
+    def test_lookup_by_company_does_not_crash_on_null_record_list(self):
+        from dart_risk_mcp.core.known_actors import lookup_actors_by_company
+        self._write({"version": 1, "actors": {"이상한기록": None}})
+        self.assertEqual(lookup_actors_by_company("아무회사"), [])
+
+    def test_load_does_not_crash_on_null_record_list_for_institution(self):
+        # 기관명 + malformed 값 조합 — should_store가 거부하는 경로도 동시에
+        # 통과해야 한다(레코드가 없으니 verified/maintainer_seed 예외도 없어
+        # 보수적으로 제외되는 것이 맞는 동작).
+        from dart_risk_mcp.core.known_actors import load_known_actors
+        self._write({"version": 1, "actors": {self._NH_INSTITUTION: None}})
+        data = load_known_actors()
+        self.assertNotIn(self._NH_INSTITUTION, data["actors"])
 
 
 if __name__ == "__main__":

@@ -560,8 +560,75 @@ def ensure_registry_schema(token: str = "", db_id: str = "") -> bool:
 
 # ── 로더 ─────────────────────────────────────────────────────────
 
-def load_known_actors() -> dict:
-    """레지스트리 로드. 우선순위: 환경변수 경로 > 신선한 Notion 캐시 > Notion > 동봉.
+# 근거 강도 3단계. 이 밖의 값(빈 문자열·None·오타 등)은 전부 가장 약한
+# auto_matched로 강등한다. Notion 파서가 status select 비어있으면 키는 있고
+# 값이 ""인 레코드를 만드는데, `== "auto_matched"`로 판정하면 그 빈 문자열이
+# 화이트리스트 밖인 "사람이 넣은 것"으로 잘못 분류돼 기관 필터·렌더 양쪽에서
+# 미검증 실명이 검증된 것처럼 새어나간다. 모르면 기계 등재로 보는 쪽(보수적)
+# 으로 강등해야 안전하다.
+_VALID_ACTOR_STATUSES = frozenset({"verified", "maintainer_seed", "auto_matched"})
+
+
+def actor_status(rec: dict) -> str:
+    """기록에서 status를 뽑아 화이트리스트로 검증(비문자열·미지값은 auto_matched).
+
+    **이 판정의 유일한 소스** (SE-5b 리뷰). 전에는 이 로직이 세 곳에
+    독립 구현돼 있었다 — `_filter_institutions`가 쓰던 이 함수의 옛 사설
+    버전(`_record_status`), `se_server/api/handlers.py::_actor_status`,
+    그리고 `server.py`의 `st == "auto_matched"` 인라인 동등비교 3곳
+    (`_registry_company_section`·`lookup_known_actor`·`find_actor_overlap`).
+    인라인 동등비교는 이 함수가 정확히 막으려는 결함 그 자체다 — Notion
+    행에 빈 status가 오면 `== "auto_matched"`는 False가 되어 "동명이인
+    미확인" 경고 없이 미검증 실명이 검증된 것처럼 렌더된다. 세 구현을
+    이 함수 하나로 합치고 나머지는 여기서 import해 쓴다
+    (`se_server/api/handlers.py`, `dart_risk_mcp/server.py`).
+    """
+    value = (rec or {}).get("status")
+    return value if isinstance(value, str) and value in _VALID_ACTOR_STATUSES \
+        else "auto_matched"
+
+
+def _filter_institutions(data: dict) -> dict:
+    """읽기 단계 기관 필터 — should_store가 거부하고 전 기록이 기계 등재인
+    인물만 로드 결과에서 제외한다.
+
+    실측(2026-07-29): should_store를 레지스트리 1,270명에 재적용하면 12명이
+    거부되는데, 그 12명(전부 증권사/신탁업자 표기, 기록 95건 전부
+    auto_matched)이 "등장 회사 수" 상위를 독점해 진짜 추적 대상(시너지파트너스
+    등)을 가린다. should_store 자체는 정상 동작하는데 읽기 경로가 안 쓰고
+    있었던 것이 결함이었다 — 여기서만 적용하고 should_store/classify_actor는
+    재구현하지 않는다.
+
+    verified·maintainer_seed 기록이 하나라도 있으면 제작자가 직접 판단해
+    등재한 것이므로 무조건 남긴다(실측 0건이지만 미래 등재를 위한 방어).
+    Notion·캐시·동봉 데이터 자체는 건드리지 않고 이 함수가 반환하는 사본에만
+    적용한다.
+
+    손글씨 `DART_KNOWN_ACTORS_PATH` JSON이 `{"actors": {"이름": null}}`처럼
+    기록 목록 자리에 리스트가 아닌 값을 담고 있어도 죽지 않는다 — 레지스트리
+    로딩은 예외를 전파하지 않는다는 이 저장소의 원칙(파일이 없을 때와
+    동일하게 조용히 저하)에 따라, 리스트가 아닌 값은 빈 목록으로 취급한다.
+    `_valid`는 최상위 {version, actors} 형태만 검사하고 각 인물 항목의
+    형태까지는 보지 않으므로, 여기서 한 번 정규화해 두면 이 함수를 거치는
+    `lookup_actor`·`lookup_actors_by_company`도 같은 malformed 값을 다시
+    만나 죽지 않는다(정규화의 단일 관문).
+    """
+    if not _valid(data):
+        return data
+    actors = data.get("actors", {})
+    filtered = {
+        name: (recs if isinstance(recs, list) else [])
+        for name, recs in actors.items()
+        if should_store(name)
+        or any(actor_status(r) != "auto_matched"
+               for r in (recs if isinstance(recs, list) else []))
+    }
+    return {**data, "actors": filtered}
+
+
+def _load_raw() -> dict:
+    """레지스트리 원본 로드(필터 적용 전). 우선순위: 환경변수 경로 > 신선한
+    Notion 캐시 > Notion > 동봉.
 
     Notion 실패 시 동봉 데이터로 graceful fallback(예외 비전파).
     """
@@ -599,29 +666,84 @@ def load_known_actors() -> dict:
     return _bundled()
 
 
+def load_known_actors() -> dict:
+    """레지스트리 로드(`_load_raw`) + 읽기 단계 기관 필터(`_filter_institutions`).
+
+    Notion·캐시·동봉 데이터의 내용은 다시 쓰지 않는다 — 필터는 여기서 반환하는
+    사본에만 적용된다. `lookup_actor`·`lookup_actors_by_company`가 모두 이
+    함수를 거치므로 두 경로 모두 자동으로 필터가 적용된다.
+    """
+    return _filter_institutions(_load_raw())
+
+
+def _record_fingerprint(rec: dict) -> str:
+    """중복 판정용 지문 — 레코드의 필드 전체(값 포함)가 같아야 중복으로 본다.
+
+    rcept_no만 다르고 evidence 문구가 같은 두 기록은 서로 다른 공시에서 나온
+    별개 근거이므로 중복이 아니다. 반대로 파싱 원문에 `&CR;`가 섞여 같은
+    실체가 두 키('삼성전자 주식회사' / '삼성전자 &CR;주식회사')로 저장된
+    경우, 두 키의 기록을 합칠 때 완전히 동일한 필드 조합(예: 같은 rcept_no
+    +evidence)만 한 번으로 접는다. dict는 unhashable하므로 정렬된 JSON
+    문자열을 지문으로 쓴다.
+    """
+    return json.dumps(rec, ensure_ascii=False, sort_keys=True)
+
+
 def lookup_actor(name: str) -> list[dict]:
     """인물명 매칭 → 기록 리스트(없으면 []).
 
-    정확 일치 → 표기 정규화(공백·대소문자) 일치 → 폴딩 변형(fold_variants)
-    일치 순으로 폴백. 레지스트리 키가 'LIU HUAN'일 때 'Liu Huan' 조회,
-    '주식회사 액션' 등재일 때 '(주)액션' 조회, '정소영(DING SHAO YING)'
-    등재일 때 'DING SHAO YING' 조회가 각각 매칭된다.
+    표기 정규화(공백·대소문자·역할 괄호·HTML 엔티티) 일치 + 폴딩 변형
+    (fold_variants — 법인 접사·구두점 제거, 라틴 음차) 일치를 **모두** 합쳐
+    반환한다. 레지스트리 키가 'LIU HUAN'일 때 'Liu Huan' 조회, '주식회사
+    액션' 등재일 때 '(주)액션' 조회, '정소영 (DING SHAO YING)' 등재일 때
+    'DING SHAO YING' 조회가 각각 매칭된다.
+
+    매칭은 fold_variants 교집합 **하나**로 계산한다(SE-5b Part A, 최종
+    리뷰 Finding 5로 단순화). 예전에는 "정규화 일치 키(norm_keys)"와
+    "폴딩 일치 키(fold_keys)"를 따로 구해 합집합으로 냈는데, 그건 죽은
+    이중 계산이었다 — `normalize_name(key) == want`이면 `fold_variants`는
+    같은 입력에 같은 값을 내는 순수 함수이므로
+    `fold_variants(normalize_name(key)) == fold_variants(want)`가 되고,
+    자기 자신과의 교집합은 `fold_variants`가 항상 최소 1개 원소(기본 폴드)를
+    반환하므로 절대 비지 않는다. 즉 정규화 일치는 반드시 폴딩 일치를
+    함축한다(norm_keys ⊆ fold_keys, 늘 성립) — 그래서 폴딩 교집합 하나만
+    구하면 두 티어를 합친 것과 정확히 같은 결과가 나온다.
+
+    이 단일 폴딩 비교로 실측 사고(2026-07-29)의 두 사례를 모두 잡는다:
+    '삼성전자 주식회사'/'삼성전자 &CR;주식회사'(엔티티만 다름 — 정규화
+    단계에서 이미 같은 값)와 '(주)베이트리'/'주식회사 베이트리'(법인 접사
+    표기만 다름 — 정규화 단계에서는 다른 값이지만 폴딩에서 수렴)가 각각
+    같은 실체로 병합된다. 반대로 완전히 다른 실체를 잘못 합치는 위험은
+    fold_name이 법인 접사·공백·구두점 제거와 라틴 음차만 하고 그 외
+    글자는 그대로 두는 '문자열 전체 일치' 비교라 낮다 — 접사를 떼도 나머지
+    글자가 다른 두 실체는 교집합이 생기지 않는다(예: '베이트리' ≠
+    '베이트리무역', 테스트로 고정).
+
+    매칭 키가 여럿이면(예: 파싱 오류로 같은 실체가 '삼성전자 주식회사'·
+    '삼성전자 &CR;주식회사' 두 키로 저장된 경우) 첫 매칭에서 끊지 않고
+    **모든 키의 기록을 합쳐** 반환한다 — 조회 표기에 따라 답이 달라지는
+    것을 막는다. 정렬 후 순회해 반환 순서를 결정적으로 유지한다
+    (lookup_actors_by_company가 같은 이유로 정렬하는 것과 동일한 이유).
     """
     if not name or not name.strip():
         return []
     actors = load_known_actors().get("actors", {})
-    hit = actors.get(name.strip())
-    if hit is not None:
-        return list(hit)
-    want = normalize_name(name)
-    for key, recs in actors.items():
-        if normalize_name(key) == want:
-            return list(recs)
-    wf = set(fold_variants(want))
-    for key, recs in actors.items():
-        if wf & set(fold_variants(normalize_name(key))):
-            return list(recs)
-    return []
+
+    wf = set(fold_variants(normalize_name(name)))
+    all_keys = {key for key in actors if wf & set(fold_variants(normalize_name(key)))}
+
+    if not all_keys:
+        return []
+
+    seen: set = set()
+    out: list[dict] = []
+    for key in sorted(all_keys):
+        for rec in actors[key]:
+            fp = _record_fingerprint(rec)
+            if fp not in seen:
+                seen.add(fp)
+                out.append(rec)
+    return out
 
 
 def lookup_actors_by_company(company_name: str) -> list[tuple[str, dict]]:
