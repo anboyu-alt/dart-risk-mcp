@@ -560,8 +560,54 @@ def ensure_registry_schema(token: str = "", db_id: str = "") -> bool:
 
 # ── 로더 ─────────────────────────────────────────────────────────
 
-def load_known_actors() -> dict:
-    """레지스트리 로드. 우선순위: 환경변수 경로 > 신선한 Notion 캐시 > Notion > 동봉.
+# 근거 강도 3단계. 이 밖의 값(빈 문자열·None·오타 등)은 전부 가장 약한
+# auto_matched로 강등한다 — se_server/api/handlers.py의 _actor_status와 동일
+# 원칙. Notion 파서가 status select 비어있으면 키는 있고 값이 ""인 레코드를
+# 만드는데, `== "auto_matched"`로 판정하면 그 빈 문자열이 화이트리스트 밖인
+# "사람이 넣은 것"으로 잘못 분류돼 기관 필터를 피해간다. 모르면 기계 등재로
+# 보는 쪽(보수적)으로 강등해야 안전하다.
+_VALID_ACTOR_STATUSES = frozenset({"verified", "maintainer_seed", "auto_matched"})
+
+
+def _record_status(rec: dict) -> str:
+    """기록에서 status를 뽑아 화이트리스트로 검증(비문자열·미지값은 auto_matched)."""
+    value = (rec or {}).get("status")
+    return value if isinstance(value, str) and value in _VALID_ACTOR_STATUSES \
+        else "auto_matched"
+
+
+def _filter_institutions(data: dict) -> dict:
+    """읽기 단계 기관 필터 — should_store가 거부하고 전 기록이 기계 등재인
+    인물만 로드 결과에서 제외한다.
+
+    실측(2026-07-29): should_store를 레지스트리 1,270명에 재적용하면 12명이
+    거부되는데, 그 12명(전부 증권사/신탁업자 표기, 기록 95건 전부
+    auto_matched)이 "등장 회사 수" 상위를 독점해 진짜 추적 대상(시너지파트너스
+    등)을 가린다. should_store 자체는 정상 동작하는데 읽기 경로가 안 쓰고
+    있었던 것이 결함이었다 — 여기서만 적용하고 should_store/classify_actor는
+    재구현하지 않는다.
+
+    verified·maintainer_seed 기록이 하나라도 있으면 제작자가 직접 판단해
+    등재한 것이므로 무조건 남긴다(실측 0건이지만 미래 등재를 위한 방어).
+    Notion·캐시·동봉 데이터 자체는 건드리지 않고 이 함수가 반환하는 사본에만
+    적용한다.
+    """
+    if not _valid(data):
+        return data
+    actors = data.get("actors", {})
+    filtered = {
+        name: recs for name, recs in actors.items()
+        if should_store(name)
+        or any(_record_status(r) != "auto_matched" for r in recs)
+    }
+    if len(filtered) == len(actors):
+        return data
+    return {**data, "actors": filtered}
+
+
+def _load_raw() -> dict:
+    """레지스트리 원본 로드(필터 적용 전). 우선순위: 환경변수 경로 > 신선한
+    Notion 캐시 > Notion > 동봉.
 
     Notion 실패 시 동봉 데이터로 graceful fallback(예외 비전파).
     """
@@ -597,6 +643,16 @@ def load_known_actors() -> dict:
         return data
 
     return _bundled()
+
+
+def load_known_actors() -> dict:
+    """레지스트리 로드(`_load_raw`) + 읽기 단계 기관 필터(`_filter_institutions`).
+
+    Notion·캐시·동봉 데이터의 내용은 다시 쓰지 않는다 — 필터는 여기서 반환하는
+    사본에만 적용된다. `lookup_actor`·`lookup_actors_by_company`가 모두 이
+    함수를 거치므로 두 경로 모두 자동으로 필터가 적용된다.
+    """
+    return _filter_institutions(_load_raw())
 
 
 def _record_fingerprint(rec: dict) -> str:

@@ -722,6 +722,111 @@ class TestKnownActors(unittest.TestCase):
         self._write({"version": 1, "actors": {}})
         self.assertEqual(lookup_actors_by_company("티쓰리"), [])
 
+    # ── SE-5b Task 2: 읽기 단계 기관 필터 ────────────────────────────
+    # 실측(2026-07-29)에서 should_store가 거부하는 12명이 전부 auto_matched뿐인
+    # 채로 레지스트리 상위를 독점했다. 읽기 경로(load_known_actors)에서
+    # should_store를 적용해 그 노이즈를 걷어낸다. 사람이 넣은 기록
+    # (verified/maintainer_seed)은 어떤 경우에도 남긴다.
+
+    _NH_INSTITUTION = (
+        "엔에이치투자증권 주식회사 "
+        "(밸류시스템 코스닥벤처FAST 전문투자형 사모투자신탁의 신탁업자 지위에서)"
+    )
+
+    def test_load_filters_institution_with_only_auto_matched(self):
+        # 브리프 시나리오 1: 기관 + auto_matched만 → 제외된다
+        from dart_risk_mcp.core.known_actors import load_known_actors
+        self._write({"version": 1, "actors": {
+            self._NH_INSTITUTION: [
+                {"source": "자동 발굴", "evidence": "e", "status": "auto_matched"}],
+        }})
+        data = load_known_actors()
+        self.assertNotIn(self._NH_INSTITUTION, data["actors"])
+
+    def test_load_keeps_non_institution_auto_matched(self):
+        # 브리프 시나리오 2: 기관이 아닌 실체 + auto_matched → 남는다
+        from dart_risk_mcp.core.known_actors import load_known_actors
+        self._write({"version": 1, "actors": {
+            "시너지파트너스 주식회사": [
+                {"source": "자동 발굴", "evidence": "e", "status": "auto_matched"}],
+        }})
+        data = load_known_actors()
+        self.assertIn("시너지파트너스 주식회사", data["actors"])
+
+    def test_load_keeps_institution_with_maintainer_seed(self):
+        # 브리프 시나리오 3: 같은 기관명 + maintainer_seed → 남는다(사람이 넣었다)
+        from dart_risk_mcp.core.known_actors import load_known_actors
+        self._write({"version": 1, "actors": {
+            self._NH_INSTITUTION: [
+                {"source": "제작자 등록", "evidence": "e", "status": "maintainer_seed"}],
+        }})
+        data = load_known_actors()
+        self.assertIn(self._NH_INSTITUTION, data["actors"])
+
+    def test_load_filters_institution_with_blank_status(self):
+        # 브리프 시나리오 4: 같은 기관명 + status: "" → 제외된다
+        # (빈 값은 화이트리스트 밖 → 기계 등재로 강등, se_server _actor_status와
+        # 동일 원칙. status: "auto_matched"와 정확히 같아야만 통과하는 판정이면
+        # 빈 문자열이 "사람이 넣은 것"으로 잘못 분류돼 살아남는다.)
+        from dart_risk_mcp.core.known_actors import load_known_actors
+        self._write({"version": 1, "actors": {
+            self._NH_INSTITUTION: [
+                {"source": "자동 발굴", "evidence": "e", "status": ""}],
+        }})
+        data = load_known_actors()
+        self.assertNotIn(self._NH_INSTITUTION, data["actors"])
+
+    def test_load_keeps_institution_with_any_verified_record(self):
+        # 브리프 시나리오 5: 기록 2건 중 하나가 verified면 → 남는다
+        from dart_risk_mcp.core.known_actors import load_known_actors
+        self._write({"version": 1, "actors": {
+            self._NH_INSTITUTION: [
+                {"source": "자동 발굴", "evidence": "e1", "status": "auto_matched"},
+                {"source": "확인", "evidence": "e2", "status": "verified"},
+            ],
+        }})
+        data = load_known_actors()
+        self.assertIn(self._NH_INSTITUTION, data["actors"])
+        # 필터는 인물 단위 — 살아남은 인물의 기록 자체는 지우지 않는다
+        self.assertEqual(len(data["actors"][self._NH_INSTITUTION]), 2)
+
+    def test_lookup_actor_excludes_filtered_institution(self):
+        # 브리프 시나리오 6: lookup_actor(기관명) → []
+        from dart_risk_mcp.core.known_actors import lookup_actor
+        self._write({"version": 1, "actors": {
+            self._NH_INSTITUTION: [
+                {"source": "자동 발굴", "evidence": "e", "status": "auto_matched"}],
+        }})
+        self.assertEqual(lookup_actor(self._NH_INSTITUTION), [])
+
+    def test_lookup_by_company_excludes_filtered_institution(self):
+        # 브리프 시나리오 7: lookup_actors_by_company 결과에도 그 인물이 없다
+        from dart_risk_mcp.core.known_actors import lookup_actors_by_company
+        self._write({"version": 1, "actors": {
+            self._NH_INSTITUTION: [
+                {"source": "자동 발굴", "evidence": "e", "status": "auto_matched",
+                 "companies": ["아무회사"]}],
+        }})
+        hits = lookup_actors_by_company("아무회사")
+        self.assertEqual([n for n, _ in hits], [])
+
+    def test_load_filter_does_not_over_delete(self):
+        # 브리프 시나리오 8: 필터 적용 후에도 나머지 인물 수가 그대로다
+        # (과잉 삭제 방어) — 기관 1명만 제외되고 개인·조합·법인 3명은 그대로.
+        from dart_risk_mcp.core.known_actors import load_known_actors
+        self._write({"version": 1, "actors": {
+            self._NH_INSTITUTION: [
+                {"source": "자동 발굴", "evidence": "e", "status": "auto_matched"}],
+            "홍길동": [{"source": "s", "evidence": "e", "status": "auto_matched"}],
+            "아레스1호투자조합": [{"source": "s", "evidence": "e", "status": "auto_matched"}],
+            "(주)베이트리": [{"source": "s", "evidence": "e", "status": "auto_matched"}],
+        }})
+        data = load_known_actors()
+        self.assertEqual(
+            set(data["actors"].keys()),
+            {"홍길동", "아레스1호투자조합", "(주)베이트리"})
+        self.assertEqual(len(data["actors"]), 3)
+
 
 if __name__ == "__main__":
     unittest.main()
