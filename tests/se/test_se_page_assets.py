@@ -2260,6 +2260,30 @@ class TestMarkVocabulary(unittest.TestCase):
             self.assertNotIn(w, block, f"규칙 문구에 판정 어휘 '{w}' 가 있다")
 
 
+class TestIndicatorNotesVocabulary(unittest.TestCase):
+    """SE-4h Task 2 — 지표 뜻(INDICATOR_NOTES)은 뜻만 설명하고 값을
+    평가하면 안 된다(v0.8.5 판정선). "높"·"낮"은 부분 문자열로 막아
+    "높을수록 ~"·"낮으면 ~" 류의 문장을 통째로 차단한다(브리프 명시)."""
+
+    def test_notes_declaration_carries_no_verdict_words(self):
+        src = read_app_js()
+        # 앵커는 선언문이어야 한다(TestMarkVocabulary와 같은 이유 — SE-4g에서
+        # 앵커가 넓어 검사 범위가 파일 대부분으로 번져 통과한 사고가 있었다).
+        # "INDICATOR_NOTES"라는 이름만 찾으면 그 앞의 설명 주석에 걸릴 수
+        # 있으므로 실제 선언 키워드로 좁힌다.
+        anchor = src.index("const INDICATOR_NOTES")
+        # TestMarkVocabulary(MARK_RULES)는 앵커부터 파일 끝까지를 그대로
+        # 본다 — 그 뒤에 나오는 다른 섹션의 주석(예: "위험 판정이 아니다")에
+        # 우연히 판정 어휘가 있으면 검사 범위가 아닌데도 걸린다. 여기서는
+        # 그 함정을 피하려고 선언문 자체(Object.assign(...) 호출이 닫히는
+        # 첫 "});" )까지로 블록을 정확히 자른다 — INDICATOR_NOTES의 실제
+        # 값만 본다.
+        end = src.index("});", anchor) + len("});")
+        block = src[anchor:end]
+        for w in ("높", "낮", "위험", "주의", "안전", "양호", "악화", "개선", "우수", "부실"):
+            self.assertNotIn(w, block, f"INDICATOR_NOTES에 판정 어휘 '{w}' 가 있다")
+
+
 class TestMarksClearedOnGate:
     """SE-4g Task 4, Step 1 — 브리프가 준 그대로의 소스-grep 검사.
 

@@ -362,6 +362,18 @@ function collectLegends(node, out) {
   return out;
 }
 
+// SE-4h Task 2 — indicators의 "나머지 N개 지표" 접기 버튼처럼, 버튼
+// 텍스트 자체가 검증 대상인 경우를 위한 수집기다. collectCells는 td/th만
+// 모아 button은 잡히지 않는다(fold-btn이 td 밖에 있다 — indicatorRestFold
+// 참고). 기존 fold-btn(tableEl 열 접기)도 이 수집기로 함께 잡힌다.
+function collectButtons(node, out) {
+  out = out || [];
+  if (!node) return out;
+  if (node.tag === "button") out.push(node.textContent);
+  (node.children || []).forEach(function (c) { collectButtons(c, out); });
+  return out;
+}
+
 const sandbox = {
   console: console,
   document: {
@@ -396,6 +408,7 @@ const beforeGate = {
   marked: collectMarked(bodyEl, []),
   legends: collectLegends(bodyEl, []),
   tableRows: collectTableRows(bodyEl, []),
+  buttons: collectButtons(bodyEl, []),
 };
 
 // 로그아웃(세션 만료 포함) 잔류 확인 — 강조 범례는 실명이 아니지만
@@ -6990,6 +7003,146 @@ class TestMarksClearedOnGate(unittest.TestCase):
                           "showGate() 이후에도 표 셀이 남아 있습니다")
         self.assertEqual(after["bodyChildCount"], 0,
                           "showGate() 이후에도 #body에 자식 노드가 남아 있습니다")
+
+
+# ── SE-4h Task 2: 재무지표 4분류 · 용어 · 단위 · 우선순위 ──────────────────
+#
+# 픽스처는 브리프가 준 실측 형태 그대로다(task-2-brief.md: "이 계열에서
+# 픽스처가 실데이터와 달라 결함이 초록으로 통과한 사고가 여섯 번 있었다").
+# idx_val이 null인 행(세전계속사업이익률), 한 해만 온 행(납입자본이익률),
+# 모르는 분류(새분류)를 그대로 포함한다.
+_INDICATOR_ROWS = [
+    {"bsns_year": "2025", "category": "수익성", "idx_nm": "순이익률", "idx_val": -22.56},
+    {"bsns_year": "2024", "category": "수익성", "idx_nm": "순이익률", "idx_val": -152.661},
+    {"bsns_year": "2025", "category": "수익성", "idx_nm": "세전계속사업이익률", "idx_val": None},
+    {"bsns_year": "2024", "category": "수익성", "idx_nm": "세전계속사업이익률", "idx_val": None},
+    {"bsns_year": "2025", "category": "수익성", "idx_nm": "납입자본이익률", "idx_val": -657.043},
+    {"bsns_year": "2025", "category": "안정성", "idx_nm": "부채비율", "idx_val": 130.248},
+    {"bsns_year": "2024", "category": "안정성", "idx_nm": "부채비율", "idx_val": 139.2},
+    {"bsns_year": "2025", "category": "활동성", "idx_nm": "배당성향(%)", "idx_val": 25.1},
+    {"bsns_year": "2025", "category": "새분류", "idx_nm": "미지의지표", "idx_val": 1.0},
+]
+_INDICATOR_ROWS_JS = json.dumps(_INDICATOR_ROWS, ensure_ascii=False)
+
+_VERDICT_WORDS = ("높", "낮", "위험", "주의", "안전", "양호", "악화", "개선", "우수", "부실")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestIndicatorBlocks(unittest.TestCase):
+    """SE-4h Task 2 Step 1 — fnlttSinglIndx 4분류(수익성·안정성·성장성·
+    활동성)를 보존한 행 목록을 분류별 블록으로 묶는다(task-2-brief.md)."""
+
+    def test_category_order_with_unknown_category_appended_at_end(self):
+        got = run_js(f"indicatorBlocks({_INDICATOR_ROWS_JS}).map(b => b.category)")
+        # 성장성은 이 픽스처에 없다 — 있는 분류만 정해진 순서로, 모르는
+        # 분류("새분류")는 버려지지 않고 맨 뒤에 온다.
+        self.assertEqual(got, ["수익성", "안정성", "활동성", "새분류"])
+
+    def test_primary_vs_rest_split(self):
+        got = run_js(f"indicatorBlocks({_INDICATOR_ROWS_JS})")
+        profit = next(b for b in got if b["category"] == "수익성")
+        primary_names = [e["idx_nm"] for e in profit["primary"]]
+        rest_names = [e["idx_nm"] for e in profit["rest"]]
+        self.assertIn("순이익률", primary_names)
+        self.assertIn("납입자본이익률", rest_names)
+        self.assertNotIn("납입자본이익률", primary_names)
+
+    def test_all_null_indicator_is_not_dropped(self):
+        """값이 없는 지표를 조용히 숨기지 않는다(Global Constraints)."""
+        got = run_js(f"indicatorBlocks({_INDICATOR_ROWS_JS})")
+        profit = next(b for b in got if b["category"] == "수익성")
+        names = [e["idx_nm"] for e in profit["primary"] + profit["rest"]]
+        self.assertIn("세전계속사업이익률", names)
+
+    def test_indicator_notes_has_debt_ratio_as_nonempty_string(self):
+        note = run_js('INDICATOR_NOTES["부채비율"]')
+        self.assertIsInstance(note, str)
+        self.assertTrue(note)
+
+    def test_format_indicator_appends_percent(self):
+        got = run_js('formatIndicator("부채비율", 130.248)')
+        self.assertEqual(got, "130.248%")
+
+    def test_format_indicator_does_not_double_percent_when_name_has_it(self):
+        got = run_js('formatIndicator("배당성향(%)", 25.1)')
+        self.assertEqual(got, "25.1")
+        self.assertNotIn("%", got)
+
+    def test_format_indicator_null_is_em_dash_not_silently_dropped(self):
+        got = run_js('formatIndicator("순이익률", null)')
+        self.assertEqual(got, "—")
+
+    def test_same_indicator_two_years_side_by_side(self):
+        got = run_js(f"indicatorBlocks({_INDICATOR_ROWS_JS})")
+        stability = next(b for b in got if b["category"] == "안정성")
+        debt = next(e for e in stability["primary"] if e["idx_nm"] == "부채비율")
+        years = [c["bsns_year"] for c in debt["cells"]]
+        self.assertEqual(years, ["2025", "2024"])
+
+    def test_empty_and_null_input_yield_empty_list(self):
+        self.assertEqual(run_js("indicatorBlocks([])"), [])
+        self.assertEqual(run_js("indicatorBlocks(null)"), [])
+
+    def test_indicator_notes_carry_no_verdict_words(self):
+        """뜻만 쓰고 값을 평가하지 않는다(v0.8.5) — "높"·"낮"은 "높을수록
+        ~"·"낮으면 ~" 류를 통째로 막기 위한 것이다(브리프 명시)."""
+        got = run_js("Object.values(INDICATOR_NOTES).join(' / ')")
+        for word in _VERDICT_WORDS:
+            self.assertNotIn(word, got, f"INDICATOR_NOTES에 판정 어휘 '{word}'")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js 렌더링을 검증할 수 없습니다")
+class TestIndicatorSectionRender(unittest.TestCase):
+    """SE-4h Task 2 Step 5 — renderSection("indicators", rows)이 실제로
+    4블록을 그리는지 node vm으로 확인한다(run_render_section). 소스
+    문자열을 grep하는 검사는 배선이 빠진 죽은 코드를 못 잡는다 — 이
+    저장소는 파일이 맞는데 화면이 죽어 있던 사고를 이미 겪었다."""
+
+    def test_four_category_titles_in_order(self):
+        got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
+        self.assertEqual(got["titles"], ["수익성", "안정성", "활동성", "새분류"])
+
+    def test_primary_row_has_note_and_percent_value(self):
+        got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
+        cells = got["cells"]
+        self.assertIn("부채비율", cells)
+        self.assertIn("130.248%", cells)
+        self.assertTrue(
+            any("빌린 돈이 자기 돈의 몇 %인가" in c for c in cells),
+            "부채비율의 뜻(note)이 렌더된 셀에 없습니다",
+        )
+
+    def test_dividend_payout_value_has_no_double_percent(self):
+        got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
+        self.assertIn("25.1", got["cells"])
+        self.assertNotIn("25.1%", got["cells"])
+
+    def test_null_value_shown_as_em_dash_not_dropped(self):
+        got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
+        self.assertIn("세전계속사업이익률", got["cells"])
+        self.assertIn("—", got["cells"])
+
+    def test_rest_indicators_are_folded_not_dumped_flat(self):
+        """rest(세전계속사업이익률·납입자본이익률·미지의지표)는 44개짜리
+        평평한 표가 아니라 기존과 같은 접기 버튼(.fold-btn)으로 접힌다."""
+        got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
+        # 수익성 rest 2개(세전계속사업이익률·납입자본이익률), 새분류 rest
+        # 1개(미지의지표) — 각 분류 블록마다 별도 접기 버튼이 생긴다.
+        self.assertIn("나머지 2개 지표", got["buttons"])
+        self.assertIn("나머지 1개 지표", got["buttons"])
+        self.assertIn("납입자본이익률", got["cells"])
+
+    def test_dart_sourced_notice_present_per_block(self):
+        got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
+        self.assertIn(
+            "DART가 계산해 공시한 값입니다 — 우리가 계산한 값이 아닙니다.",
+            got["notes"],
+        )
+
+    def test_indicator_dom_cleared_on_logout(self):
+        got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
+        self.assertEqual(got["afterGate"]["cells"], [])
+        self.assertEqual(got["afterGate"]["bodyChildCount"], 0)
 
 
 if __name__ == "__main__":
