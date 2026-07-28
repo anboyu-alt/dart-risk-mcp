@@ -5658,6 +5658,32 @@ class TestDividendVsIncome(unittest.TestCase):
         self.assertEqual(by_reprt["11013"]["현금배당금총액(백만원)"], 1000000)
         self.assertEqual(by_reprt["11011"]["현금배당금총액(백만원)"], 2000000)
 
+    def test_annual_and_half_year_reports_both_survive_same_bsns_year(self):
+        """최종 리뷰 지적 ② — 그룹 키에서 reprt_code를 빼는 뮤테이션에
+        대한 회귀 방어. 삼성전자 2025년은 11011(사업보고서, 연간
+        11,107,906백만원)과 11012(반기보고서, 4,901,077백만원)가 같은
+        bsns_year 안에 함께 온다(브리프 지적 실측 패턴) — 키가
+        (bsns_year, reprt_code) 두 축이 아니라 bsns_year 하나로만
+        무너지면 두 보고가 한 행으로 뭉개져 연간값이 반기값에 조용히
+        덮인다. 이 테스트는 두 행이 모두 살아남고 각자의 값을 갖는지
+        직접 확인한다."""
+        records = [
+            {"bsns_year": "2025", "reprt_code": "11011", "se": "현금배당금총액(백만원)",
+             "thstrm": "11,107,906"},
+            {"bsns_year": "2025", "reprt_code": "11011", "se": "(연결)당기순이익(백만원)",
+             "thstrm": "40,000,000"},
+            {"bsns_year": "2025", "reprt_code": "11012", "se": "현금배당금총액(백만원)",
+             "thstrm": "4,901,077"},
+            {"bsns_year": "2025", "reprt_code": "11012", "se": "(연결)당기순이익(백만원)",
+             "thstrm": "18,000,000"},
+        ]
+        got = run_js(f"dividendVsIncome({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(len(got), 2, "연간(11011)·반기(11012) 두 보고가 한 행으로 뭉개졌습니다")
+        by_reprt = {r["reprt_code"]: r for r in got}
+        self.assertEqual(by_reprt["11011"]["현금배당금총액(백만원)"], 11107906)
+        self.assertEqual(by_reprt["11012"]["현금배당금총액(백만원)"], 4901077,
+                          "반기(11012) 값이 연간(11011) 값에 덮였습니다")
+
     def test_not_an_array_returns_empty(self):
         self.assertEqual(run_js("dividendVsIncome(null)"), [])
         self.assertEqual(run_js("dividendVsIncome({})"), [])
@@ -5853,7 +5879,7 @@ class TestFundPlanChangesRenderWiring(unittest.TestCase):
 # 장부가액을 주장하는 게 아니다.
 _ENCHEM_POLAND = {
     "inv_prm": "Enchem Poland Sp. z o.o.", "invstmnt_purps": "경영참여",
-    "frst_acqs_de": 20180507, "bsis_blce_qy": "131,705",
+    "frst_acqs_de": "2018.05.07", "bsis_blce_qy": "131,705",
     "bsis_blce_qota_rt": 100.0, "bsis_blce_acntbk_amount": 1800000000,
     "trmend_blce_qy": "131,705", "trmend_blce_qota_rt": 100.0,
     "trmend_blce_acntbk_amount": 2004000000,
@@ -5862,7 +5888,7 @@ _ENCHEM_POLAND = {
 }
 _DFD_YANGFU = {
     "inv_prm": "DFD Yangfu New Materials Co.,Ld", "invstmnt_purps": "일반투자",
-    "frst_acqs_de": 20220730, "bsis_blce_qota_rt": 15.0,
+    "frst_acqs_de": "2022.07.30", "bsis_blce_qota_rt": 15.0,
     "bsis_blce_acntbk_amount": 60000000000, "trmend_blce_qota_rt": 15.0,
     "trmend_blce_acntbk_amount": 63481000000,
     "recent_bsns_year_fnnr_sttus_tot_assets": 267990000000,
@@ -5870,22 +5896,23 @@ _DFD_YANGFU = {
 }
 _PT_INDONESIA = {
     "inv_prm": "PT Enchem Elyte Indonesia", "invstmnt_purps": "경영참여",
-    "frst_acqs_de": 20220831, "bsis_blce_qota_rt": 99.17,
+    "frst_acqs_de": "2022.08.31", "bsis_blce_qota_rt": 99.17,
     "bsis_blce_acntbk_amount": 12500000000, "trmend_blce_qota_rt": 99.17,
     "trmend_blce_acntbk_amount": 12017000000,
     "recent_bsns_year_fnnr_sttus_tot_assets": 26610000000,
     "recent_bsns_year_fnnr_sttus_thstrm_ntpf": -1412000000,
 }
 # 동률(같은 최초취득일) 실측 — 엔켐 2026-07-28 응답에서 두 조합 모두
-# frst_acqs_de=2025.09.25다. 장부가액은 실측값 그대로.
+# frst_acqs_de="2025.09.25"(점 구분 문자열, DART 실측 형태 그대로)다.
+# 장부가액은 실측값 그대로.
 _GOLDENVALUE_3 = {
     "inv_prm": "골든밸류 제3호 신기술조합", "invstmnt_purps": "일반투자",
-    "frst_acqs_de": 20250925, "trmend_blce_qota_rt": 60.29,
+    "frst_acqs_de": "2025.09.25", "trmend_blce_qota_rt": 60.29,
     "trmend_blce_acntbk_amount": 41442000000,
 }
 _GOLDENVALUE_4 = {
     "inv_prm": "골든밸류 제4호 신기술조합", "invstmnt_purps": "일반투자",
-    "frst_acqs_de": 20250925, "trmend_blce_qota_rt": 48.32,
+    "frst_acqs_de": "2025.09.25", "trmend_blce_qota_rt": 48.32,
     "trmend_blce_acntbk_amount": 7011000000,
 }
 
@@ -5905,6 +5932,23 @@ class TestAffiliateOverview(unittest.TestCase):
              "PT Enchem Elyte Indonesia"],
         )
 
+    def test_reversed_input_still_comes_out_in_ascending_date_order(self):
+        """최종 리뷰 지적 ① — 이미 정렬된(또는 우연히 맞는) 입력으로는 정렬
+        로직이 죽어도 통과한다(numeric()이 "2018.05.07"처럼 점 섞인 실측
+        날짜를 전부 null로 읽어 원래 순서를 그대로 돌려줘도, 입력이 우연히
+        날짜순이면 출력도 우연히 날짜순으로 보인다). 입력을 시간 역순으로
+        완전히 뒤집어 넣어도 여전히 최초취득일 오름차순으로 나오는지
+        확인해야 정렬이 실제로 일어났다고 말할 수 있다."""
+        records = [_PT_INDONESIA, _DFD_YANGFU, _ENCHEM_POLAND]  # 최신 → 과거
+        got = run_js(f"affiliateOverview({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(
+            [r["inv_prm"] for r in got],
+            ["Enchem Poland Sp. z o.o.", "DFD Yangfu New Materials Co.,Ld",
+             "PT Enchem Elyte Indonesia"],
+            "입력을 시간 역순으로 뒤집었는데도 최초취득일 오름차순이 아닙니다 "
+            "— 정렬 키(axisSortKey)가 실제로 동작하지 않고 있을 수 있습니다",
+        )
+
     def test_records_without_date_go_last_keeping_relative_order(self):
         no_date_a = {"inv_prm": "무취득일A"}
         no_date_b = {"inv_prm": "무취득일B"}
@@ -5914,6 +5958,18 @@ class TestAffiliateOverview(unittest.TestCase):
             [r["inv_prm"] for r in got],
             ["Enchem Poland Sp. z o.o.", "무취득일A", "무취득일B"],
             "취득일이 없는 레코드가 지어낸 순서로 끼어들었거나 서로 순서가 바뀌었습니다",
+        )
+
+    def test_dash_date_goes_last(self):
+        """DART 실측 응답에서 최초취득일이 없으면 "-"(하이픈 문자열)로
+        온다 — 필드 자체가 없는 경우와 별도로, 이 형태도 뒤로 가는지
+        확인한다(axisSortKey("-") → 숫자 없음 → null)."""
+        dash_date = {"inv_prm": "취득일하이픈", "frst_acqs_de": "-"}
+        records = [dash_date, _ENCHEM_POLAND]
+        got = run_js(f"affiliateOverview({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(
+            [r["inv_prm"] for r in got],
+            ["Enchem Poland Sp. z o.o.", "취득일하이픈"],
         )
 
     def test_tied_dates_keep_original_relative_order(self):

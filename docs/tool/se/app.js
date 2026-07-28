@@ -1500,14 +1500,26 @@ function fundPlanChanges(records) {
  *
  *  inv_prm(피출자 법인명)이 없는 레코드는 애초에 어느 법인인지 알 수 없어
  *  뺀다 — core(fetch_affiliate_investments)가 이미 "계"/"합계" 등 요약행을
- *  걸러내지만, 이 함수는 그 계약에 기대지 않고 방어적으로 한 번 더 본다. */
+ *  걸러내지만, 이 함수는 그 계약에 기대지 않고 방어적으로 한 번 더 본다.
+ *
+ *  **정렬 키는 numeric()이 아니라 axisSortKey()로 뽑는다(최종 리뷰 지적 ①,
+ *  다섯 번째 픽스처발 결함).** frst_acqs_de의 실측 형태는 "2018.05.07"처럼
+ *  점으로 구분된 문자열인데, numeric()은 "이 값 자체가 순수 숫자다"를
+ *  요구해(위 numeric() 주석) 점이 섞이면 무조건 null을 돌려준다 — 즉
+ *  실데이터에서는 매 레코드가 null이 되어 이 함수가 사실상 아무 일도
+ *  하지 않고 원래 순서를 그대로 돌려주는데, 화면은 여전히 "최초취득일
+ *  순"이라 단언한다(입력이 우연히 날짜순이면 눈으로는 맞아 보여 들키지
+ *  않는다). axisSortKey()는 문자열에서 숫자만 이어붙이므로
+ *  "2018.05.07" → 20180507, "-"(날짜 없음) → 빈 문자열 → null로 자연히
+ *  뒤로 간다 — numeric()은 고치지 않는다(금액·비율 파싱에 쓰여 파급이
+ *  크다), 여기서만 날짜 전용으로 axisSortKey()를 쓴다. */
 function affiliateOverview(records) {
   if (!Array.isArray(records)) return [];
   const rows = records.filter(function (r) {
     return r && typeof r === "object" && typeof r.inv_prm === "string" && r.inv_prm.trim() !== "";
   });
   const withKey = rows.map(function (r, idx) {
-    return { r: r, key: numeric(r.frst_acqs_de), idx: idx };
+    return { r: r, key: axisSortKey(r.frst_acqs_de), idx: idx };
   });
   withKey.sort(function (a, b) {
     if (a.key === null && b.key === null) return a.idx - b.idx;
