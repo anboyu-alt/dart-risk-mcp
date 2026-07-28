@@ -132,7 +132,21 @@
 - Test: `tests/se/test_se_app_js.py`
 
 **Interfaces:**
-- Produces: `financialRatios(records)` → `[{기간, 지표명, 값, 계산식, 재료}]`
+- Produces: `financialRatios(records)` → 레코드 배열. **각 항목의 키는 정확히 이것이다** (테스트가 이 이름으로 조회한다):
+
+```js
+{
+  구분: "연결" | "별도",   // fs_div — 섞으면 거짓이 되므로 반드시 나뉜다
+  기간: "당기" | "전기" | "전전기",
+  지표: "영업이익률" | "순이익률" | "부채비율" | "유동비율" | "자본잠식률",
+  값: number | null,        // null = 계산 불가 또는 표기 부적절(자본잠식 없음)
+  계산식: "영업이익 ÷ 매출액",
+  재료: { "영업이익": -78386657935, "매출액": 312794042228 },
+  사유: "매출액 없음"        // 값이 null일 때만. 왜 없는지 반드시 말한다
+}
+```
+
+**값이 `null`이어도 항목 자체는 돌려준다.** 조용히 빼면 사용자는 그 지표가 존재하는 줄도 모른다.
 
 **계산할 지표** (전부 `financials`의 계정과목만으로 가능):
 
@@ -282,6 +296,10 @@ Run: `python -m pytest tests/se/test_se_app_js.py -k FinancialRatios -v`
 **로직을 새로 만들지 마라.** `docs/tool/index.html`에 `matchSignal`이 이미 있고(564·620행), `docs/tool/signals-data.json`이 분류 데이터다. **읽어서 맞춘다.**
 
 `signals-data.json`은 같은 배포 루트에 있으므로 `/signals-data.json`으로 로드한다(루트 기준 절대경로 — `trailingSlash:false` 때문에 상대경로는 404다).
+
+**⚠️ 기존 자산 경로 검사가 이걸 못 잡는다.** `TestAssetPathsSurviveTrailingSlashRedirect`는 `<script src>`·`<link href>` **태그만** 본다. `fetch()`로 부르는 경로는 검사 밖이라, 상대경로로 써도 테스트는 초록인 채 프로덕션에서만 404가 난다 — **이 저장소에서 실제로 겪은 사고와 똑같은 부류다.**
+
+`fetch()` 대상 경로도 루트 절대경로인지 검사하는 테스트를 함께 넣어라.
 
 **월별 건수 막대를 유형별로 쌓아 올린다.** 지금은 단색 막대라 "몇 건"만 보이는데, 유형이 나뉘면 **어떤 성격의 공시가 언제 몰렸는지**가 보인다.
 
