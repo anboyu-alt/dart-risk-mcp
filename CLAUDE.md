@@ -205,7 +205,7 @@ dart_risk_mcp/
 최대주주·5% 대량보유자·임원·주요주주의 지분 변동 시계열을 분기 보고 단위로 분석합니다.
 
 - 내부 흐름: `resolve_corp` → `fetch_insider_timeline` (4개 엔드포인트 통합) → `fetch_company_disclosures` + `match_signals` → `detect_insider_pre_disclosure`
-- 통합 엔드포인트: `elestock`(5% 대량보유, 전체 이력) + `hyslrSttus`(최대주주 현황) + `hyslrChgSttus`(최대주주 변동현황) + `tesstkAcqsDspsSttus`(임원·주요주주 자기주식). 신규 3개는 4개 분기 reprt_code(11011·11012·11013·11014) × N년 루프.
+- 통합 엔드포인트: `elestock`(임원·주요주주 특정증권 소유보고, 전체 이력 — 등기임원·지배주주 중심이며 5% 대량보유가 아니다. 그건 `fetch_major_holdings`/`majorstock.json`이다) + `hyslrSttus`(최대주주 현황) + `hyslrChgSttus`(최대주주 변동현황) + `tesstkAcqsDspsSttus`(임원·주요주주 자기주식). 신규 3개는 4개 분기 reprt_code(11011·11012·11013·11014) × N년 루프.
 - v0.8.6 출력 보정: 합산 행("계"/"합계") 스킵, 인접 분기 동일 비율(<0.005%p) dedup, lookback 윈도우 외 데이터 필터, `exec_treasury`(회사 자기주식)는 보고자별 시계열에서 분리.
 - 추가 플래그 `INSIDER_PRE_DISCLOSURE` (taxonomy 3.6, base_score 0): 매도 이벤트(Δ<0) ±30일 내 부정 공시(AUDIT/INSOLVENCY/EMBEZZLE/INQUIRY/GOING_CONCERN/DISCLOSURE_VIOL/DEBT_RESTR) 동시 발생 시 사실 표기. 점수 가산 없음(v0.8.5 원칙).
 - 보유 비율(Δ) 계산 + 30일 윈도우 매수/매도 클러스터 탐지(0.5%p 임계).
@@ -370,7 +370,7 @@ dart_risk_mcp/
 | `GET /api/fnlttMultiAcnt.json` | 다중 기업 재무 비교 (corp_codes 목록) |
 | `GET /api/fnlttXbrl.xml` | 사업보고서 XBRL 원본 ZIP (rcept_no) — 감가상각비 좁은 추출 전용 (v1.6.0) |
 | `GET /api/majorstock.json` | 최대주주 현황 (corp_code, 연도) |
-| `GET /api/elestock.json` | 5% 이상 대량보유 현황 (corp_code, 연도) |
+| `GET /api/elestock.json` | 임원·주요주주 특정증권 소유보고 현황 (corp_code, 연도) — 등기임원·지배주주 중심, 5% 대량보유가 아니다(그건 `/api/majorstock.json`) |
 | `GET /api/hyslrSttus.json` | 최대주주 현황 (corp_code, bsns_year, reprt_code) |
 | `GET /api/hyslrChgSttus.json` | 최대주주 변동현황 (corp_code, bsns_year, reprt_code) — v0.8.6 |
 | `GET /api/tesstkAcqsDspsSttus.json` | 임원·주요주주 자기주식 취득·처분 현황 (corp_code, bsns_year, reprt_code) — v0.8.6 |

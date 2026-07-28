@@ -880,7 +880,7 @@ class TestInsiderTimelineSourceSplit(unittest.TestCase):
         ]
         got = run_js(f"sectionBlocks({json.dumps(records, ensure_ascii=False)})")
         by_title = {b["title"]: b["table"] for b in got}
-        elestock_table = by_title["5% 대량보유 이력"]
+        elestock_table = by_title["임원·주요주주 소유보고 이력"]
         hyslr_table = by_title["최대주주 현황"]
         self.assertNotIn("mxmm_shrholdr_nm", elestock_table["keys"])
         self.assertNotIn("nm", hyslr_table["keys"])
@@ -938,18 +938,20 @@ class TestInsiderTimelineSourceSplit(unittest.TestCase):
 
     def test_source_group_title_does_not_collide_with_bulk_holders_label(self):
         """bulk_holders 섹션(fetch_shareholder_status, 최신 현황)과
-        elestock(fetch_insider_timeline, 전체 이력)은 서로 다른 데이터라
-        같은 "5% 대량보유" 라벨을 쓰면 라벨 충돌 검사에 걸리고 사용자도
-        두 표를 구분할 수 없다."""
+        elestock(fetch_insider_timeline, 전체 이력)은 서로 다른 데이터다 —
+        elestock은 애초에 5% 대량보유가 아니라 임원·주요주주 특정증권
+        소유보고다(dart_client.fetch_bulk_holdings docstring 근거, 위
+        app.js LABELS 주석 참고). 같은 "5% 대량보유" 라벨을 쓰면 라벨
+        충돌 검사에도 걸리고 사용자도 두 표를 구분할 수 없다."""
         got = run_js('sectionBlocks([{source:"elestock",a:1}])')
         self.assertNotEqual(got[0]["title"], "5% 대량보유")
 
     def test_source_value_is_not_repeated_as_a_mismatched_caption(self):
-        """리뷰 지적 ③: 표 제목이 이미 "5% 대량보유 이력"(label(source))인데
-        바로 아래 캡션에 "출처: elestock"(원본 값)이 다시 떴다 — 같은
-        것을 두 가지로 부르는 표기 불일치. 표 안에서는 source 필드
-        자체를 빼서 이 중복을 없앤다(값은 title에 여전히 남는다 — 숨기는
-        게 아니다).
+        """리뷰 지적 ③: 표 제목이 이미 "임원·주요주주 소유보고 이력"
+        (label(source))인데 바로 아래 캡션에 "출처: elestock"(원본 값)이
+        다시 떴다 — 같은 것을 두 가지로 부르는 표기 불일치. 표 안에서는
+        source 필드 자체를 빼서 이 중복을 없앤다(값은 title에 여전히
+        남는다 — 숨기는 게 아니다).
         """
         records = [
             {"source": "elestock", "rcept_no": "1", "nm": "오정강"},
@@ -957,7 +959,7 @@ class TestInsiderTimelineSourceSplit(unittest.TestCase):
         ]
         got = run_js(f"sectionBlocks({json.dumps(records, ensure_ascii=False)})")
         table = got[0]["table"]
-        self.assertEqual(got[0]["title"], "5% 대량보유 이력")
+        self.assertEqual(got[0]["title"], "임원·주요주주 소유보고 이력")
         caption_keys = [c["key"] for c in table["caption"]]
         self.assertNotIn("source", table["keys"])
         self.assertNotIn("source", caption_keys,
@@ -980,7 +982,7 @@ class TestInsiderTimelineRenderWiring(unittest.TestCase):
         got = run_render_section(
             '"insider_timeline"', json.dumps(records, ensure_ascii=False)
         )
-        self.assertIn("5% 대량보유 이력", got["titles"])
+        self.assertIn("임원·주요주주 소유보고 이력", got["titles"])
         self.assertIn("최대주주 현황", got["titles"])
 
 

@@ -70,7 +70,15 @@ th{color:var(--dim2);background:var(--rail);font-weight:normal}
 .note{color:var(--dim);font-size:12px}
 .warn{color:var(--amber);font-size:12px}
 #head{display:flex;align-items:center;gap:12px;justify-content:space-between}
-#panel-close{float:right}
+/* #theme-toggle(아래)는 position:fixed로 항상 top:10px;right:12px에
+   떠 있고 #panel보다 z-index가 높다 — #panel-close가 패널 맨 위(padding
+   시작점, top:20px 상당)에서 그냥 float:right만 하면 두 버튼이 화면
+   오른쪽 위 같은 자리에서 겹친다(실측: 패널을 열면 "닫기"와 "라이트
+   모드"/"다크 모드" 버튼이 포개진다). 패널 레이아웃을 바꾸는 대신
+   panel-close 하나만 아래로 밀어 토글 버튼의 세로 영역(약 10px~43px,
+   버튼 높이 ≈ 테두리 2px + 위아래 패딩 12px + 줄높이 12px×1.6)을
+   비켜간다. */
+#panel-close{float:right;margin-top:36px}
 
 /* ── 다크/라이트 토글 버튼 — 로그인 화면에서도 눌러야 하므로 #gate·
    #main 어느 쪽이 보이든 항상 뜨는 고정 위치에 둔다. #panel(z-index:10)
