@@ -67,7 +67,7 @@ const LABELS = Object.assign(Object.create(null), {
   // ── 공통 식별자
   rcept_no: "접수번호", rcept_dt: "접수일자", corp_code: "고유번호",
   corp_name: "회사명", corp_cls: "법인구분", stock_code: "종목코드",
-  stock_name: "종목명", bsns_year: "사업연도", reprt_code: "보고서코드",
+  stock_name: "종목명", bsns_year: "사업연도", reprt_code: "보고서 구분",
   stlm_dt: "결산일", rm: "비고", nm: "성명",
 
   // ── 기업 개요
@@ -83,8 +83,22 @@ const LABELS = Object.assign(Object.create(null), {
   flr_nm: "공시제출인", report_nm: "공시명",
 
   // ── 자금사용 (dart_client._normalize_fund_usage)
+  // year는 fetch_debt_balance(채무증권 잔액의 기준연도)도 같은 키를 쓴다
+  // (dart_client.fetch_debt_balance 반환: {"year": int, ...}) — 두 곳
+  // 모두 "이 값을 어느 사업연도로 보고/조회했는지"라는 같은 뜻이라 라벨을
+  // 나누지 않는다. fund_usage 쪽 의미(bsns_year × reprt_code 루프의
+  // "보고 연도"이지 자금이 실제로 들어오거나 쓰인 시점이 아니다)는
+  // ui.js renderSection의 fund_usage 안내문이 별도로 설명한다 — pay_de
+  // (아래)와 헷갈리지 않도록 그쪽 라벨을 명확히 하는 쪽을 택했다.
   tm: "회차", kind: "구분", year: "연도", flags: "이상 표시",
-  pay_de: "납입일", pay_amount: "납입 금액",
+  // pay_de는 자금이 "들어온" 날짜(납입일)다 — 계획 대비 실제 집행(plan_
+  // amount·real_dtls_amount)이 언제 이뤄졌는지는 이 필드로 알 수 없다.
+  // "납입일"만 쓰면 집행일로 오해하기 쉽다(실제 사용자 지적: pay_de
+  // 2021.10.26을 보고 "이 날짜에 집행됐다"로 읽었다) — "자금"을 붙여
+  // 무엇의 납입인지 명확히 한다. _normalize_fund_usage는 reprt_code(어느
+  // 분기 보고인지)를 남기지 않는다(core 수정 불가, 위 브리프 ② 참고) —
+  // 있는 필드로 할 수 있는 만큼만 명확히 한다.
+  pay_de: "자금 납입일", pay_amount: "납입 금액",
   plan_useprps: "계획 용도", plan_amount: "계획 금액",
   real_dtls_cn: "실제 집행 내역", real_dtls_amount: "실제 집행 금액",
   dffrnc_resn: "차이 발생 사유",
@@ -119,11 +133,24 @@ const LABELS = Object.assign(Object.create(null), {
   // 제목으로 쓴다. dart_client.fetch_insider_timeline이 4개 엔드포인트를
   // 합치며 붙이는 값이라 필드명이 아니라 필드 "값"을 키로 쓴다 — label()이
   // 필드명과 값을 구분하지 않고 같은 사전에서 찾으므로 여기 등록해도 된다.
-  // bulk_holders의 "5% 대량보유"와 겹치면 라벨 충돌 검사(test_no_label_
-  // collides_with_a_different_raw_key)에 걸린다 — elestock은 전체 이력을
-  // 반환하고(fetch_insider_timeline 주석) bulk_holders는 최신 현황만이라
-  // 뜻도 실제로 다르므로 "이력"을 붙여 구분한다.
-  elestock: "5% 대량보유 이력", hyslr: "최대주주 현황",
+  //
+  // elestock을 "5% 대량보유 이력"이라 부르던 이전 라벨은 틀렸다.
+  // dart_client.fetch_bulk_holdings의 docstring이 직접 말한다: elestock은
+  // "임원·주요주주 특정증권 소유보고"이고 "등기임원·지배주주 중심"이며,
+  // "외부 5% 투자자 진입/이탈은 fetch_major_holdings 사용"이라고 명시한다.
+  // 실제 5% 대량보유는 /majorstock.json(fetch_major_holdings)이고, 그
+  // 결과는 이 화면에서 shareholders 섹션의 bulk_holders로 따로 들어간다.
+  // 필드도 근거다 — isu_exctv_ofcps(임원 직위)·isu_exctv_rgist_at(등기
+  // 임원 여부)·isu_main_shrholdr(주요주주 구분)는 5% 대량보유 신고서가
+  // 아니라 임원현황 신고서 전용 필드다. 틀린 라벨 탓에 사용자가 지분율
+  // 0.00%인 임원(150주·100주 보유)을 보고 "5% 보유자가 지분을 다
+  // 팔았나"로 오해했다 — 애초에 5% 보유자가 아니었다.
+  //
+  // bulk_holders의 "5% 대량보유"와는 뜻 자체가 다르므로 같은 말을 쓰면
+  // 안 되고(라벨 충돌 검사 test_no_label_collides_with_a_different_raw_key
+  // 도 같은 문자열을 막는다), elestock이 전체 이력을 반환한다는 사실
+  // (fetch_insider_timeline 주석)은 "이력"으로 남긴다.
+  elestock: "임원·주요주주 소유보고 이력", hyslr: "최대주주 현황",
   hyslr_chg: "최대주주 변동현황", exec_treasury: "임원·주요주주 자기주식",
 
   // ── 내부자 지분
@@ -216,6 +243,21 @@ const DATE_FIELDS = new Set([
   "rcept_dt", "est_dt", "pay_de", "stlm_dt", "frst_acqs_de", "change_on",
 ]);
 
+// 보고서 코드 → 사람이 읽는 한국어. dart_client.py의 _REPORT_CODES 주석과
+// 같은 값이다("보고서 코드: 11011=사업보고서, 11012=반기, 11013=1분기,
+// 11014=3분기"). reprt_code는 이 서비스를 만드는 사람에게나 익숙한 내부
+// 코드일 뿐 값 자체가 사용자에게 의미가 없다(사용자 지적: "보고서코드
+// 같은건 이걸 만드는 우리는 쓰지만 이용자에게는 필요없는 정보야") —
+// 다만 **정보 자체(어느 시점 보고인지)는 지우지 않는다**(fund_usage가
+// 바로 이 정보가 없어서 반복 행을 설명하지 못하는 사례다, 위 LABELS의
+// year·pay_de 주석 참고) — 같은 정보를 사람이 읽을 말로만 바꾼다. 여기
+// 없는 코드(예상 밖 값)는 formatValue가 원본 그대로 보여준다(label()과
+// 같은 "모르면 숨기지 않는다" 계약).
+const REPRT_CODE_LABELS = Object.assign(Object.create(null), {
+  "11011": "사업보고서", "11012": "반기보고서",
+  "11013": "1분기보고서", "11014": "3분기보고서",
+});
+
 /** 금액을 한국식 단위로 줄인다. 0과 음수를 잃지 않는다. */
 function formatAmount(n) {
   const v = Number(n);
@@ -252,6 +294,13 @@ function formatValue(key, value) {
   }
   if (typeof value === "object") return JSON.stringify(value);
   const s = String(value);
+  // reprt_code 값 자체를 사람이 읽는 말로 바꾼다(위 REPRT_CODE_LABELS
+  // 주석 참고) — corp_code·corp_cls(아래 HIDDEN_ID_KEYS)처럼 지우는 게
+  // 아니라, 이 필드는 값을 그대로 두면 오히려 뜻이 없는 내부 코드라서
+  // 바꾼다.
+  if (key === "reprt_code" && Object.prototype.hasOwnProperty.call(REPRT_CODE_LABELS, s)) {
+    return REPRT_CODE_LABELS[s];
+  }
   if (AMOUNT_FIELDS.has(key) && /^-?[\d,]*\d$/.test(s)) {
     return formatAmount(s.replace(/,/g, ""));
   }
@@ -605,6 +654,81 @@ function normalizeDebtByKind(value) {
   });
 }
 
+// 반복되는 "내부용" 회사 식별자. 화면 맨 위 고정 박스(company_info,
+// renderCompanyInfo)에 이미 한 번 떠 있다 — 회사명·종목코드와 달리
+// corp_code(고유번호)·corp_cls(법인구분)는 "사용자가 지금 검색한 회사
+// 자체"를 가리키는 값이라 섹션마다 달라지지 않는다(사용자 지적: "보고서
+// 코드 같은건 이걸 만드는 우리는 쓰지만 이용자에게는 필요없는 정보야" —
+// 같은 부류로 지목됨).
+//
+// **판단 근거(이 화면의 "데이터를 숨기지 않는다" 원칙과 충돌하지 않는
+// 이유):** 이 두 필드만 예외로 다룬다 — 값이 섹션마다 달라지는 다른
+// 어떤 필드도 여기 추가하지 않는다. 회사 식별자는 이미 한 곳(company_
+// info)에 정확히 남아 있으므로 다른 모든 섹션에서 매번 반복하는 것은
+// 새 정보가 아니라 소음이다(재무제표 30줄, 출자현황 27줄이 전부 같은
+// corp_code를 반복해 캡션으로 승격되는 실측이 그 소음의 크기다). "숨기지
+// 않는다" 원칙은 **관측 데이터**(신호·금액·이름·날짜처럼 섹션마다 값이
+// 달라질 수 있는 사실)를 보호하기 위한 것이지, 조회 대상 자체를 가리키는
+// 고정 상수를 모든 표에서 반복하라는 뜻이 아니다.
+const HIDDEN_ID_KEYS = new Set(["corp_code", "corp_cls"]);
+
+/** value(어떤 모양이든) 트리 전체에서 HIDDEN_ID_KEYS의 키를 재귀적으로
+ *  걷어낸다. 원본은 건드리지 않고 새 값을 돌려준다(원본을 참조로 공유하는
+ *  다른 호출부가 있을 수 있어 mutate하지 않는다).
+ *
+ *  company_info 섹션 자신에는 이 함수를 부르지 않는다(sectionBlocks의
+ *  호출부가 게이트한다) — 이 값들이 사용자 눈에 보이는 유일한 자리이기
+ *  때문이다. */
+function omitHiddenIds(value) {
+  if (Array.isArray(value)) {
+    return value.map(function (v) { return omitHiddenIds(v); });
+  }
+  if (isPlainObject(value)) {
+    const out = {};
+    for (const k of Object.keys(value)) {
+      if (HIDDEN_ID_KEYS.has(k)) continue;
+      out[k] = omitHiddenIds(value[k]);
+    }
+    return out;
+  }
+  return value;
+}
+
+// 최대주주 현황(major_holders)에 섞여 오는 합계 행의 이름 값. dart_client.
+// fetch_affiliate_investments가 같은 이유로 같은 값 집합을 걸러내는 선례가
+// 있다("합계 행('계'/'합계')은 제거하고 반환" — docstring). 그쪽은 core라
+// 아예 제거해 반환하지만, major_holders는 core(fetch_shareholder_status)가
+// 원본 그대로(합계 행 포함) 주므로 **여기서는 지우지 않는다** — 사람 목록
+// 사이에 뒤섞여 읽기 힘든 게 문제이지 합계 자체가 문제가 아니다(브리프
+// 원칙: "합계를 없애라는 게 아니다"). splitAggregateRows가 같은 표 안에서
+// 사람 행과 합계 행을 분리해 각자 제자리(사람 목록 / 합계 소계)에 둔다.
+const AGGREGATE_ROW_NAMES = new Set(["계", "합계", "총계"]);
+
+/** records(major_holders 등, nm 필드로 사람을 식별하는 레코드 목록)를
+ *  {people, totals}로 나눈다. nm이 AGGREGATE_ROW_NAMES에 있으면 합계 행,
+ *  아니면 사람 행이다. nm이 아예 없거나 문자열이 아니면(예상 밖 응답)
+ *  안전하게 사람 행으로 남긴다 — 판정을 못 하면 지우지 않는 쪽이 안전하다.
+ *
+ *  비교 전에 모든 공백(앞뒤·내부)을 제거한다 — DART가 "합 계"처럼 내부에
+ *  공백을 넣어 보내는 경우가 있어 trim()만으로는 사람 목록에 남는다.
+ *  다만 공백 "제거"이지 부분/접두 일치가 아니다 — "계상혁"처럼 실제
+ *  인물명은 공백이 없어 원래 글자 그대로 남고, AGGREGATE_ROW_NAMES의
+ *  어떤 항목과도 같아지지 않는다(동명이인 원칙과 같은 이유로 정확히
+ *  일치할 때만 합계로 분류한다). */
+function splitAggregateRows(records) {
+  const people = [];
+  const totals = [];
+  for (const r of records) {
+    const nm = isPlainObject(r) ? r.nm : undefined;
+    if (typeof nm === "string" && AGGREGATE_ROW_NAMES.has(nm.replace(/\s+/g, ""))) {
+      totals.push(r);
+    } else {
+      people.push(r);
+    }
+  }
+  return { people: people, totals: totals };
+}
+
 /** 섹션 값을 화면에 그릴 블록 목록 [{title, table}] 또는 [{title, text}]로
  *  바꾼다. title은 없을 수 있다(null). table/text 둘 다 없으면(표로 만들
  *  근거 자체가 없는 하위 키) 그 사실도 블록으로 남긴다 — 하위 항목이
@@ -629,6 +753,14 @@ function normalizeDebtByKind(value) {
 function sectionBlocks(value, depth, key) {
   const d = depth || 0;
   if (value === null || value === undefined) return [];
+
+  // corp_code·corp_cls는 company_info(헤더, 화면 맨 위 고정 박스)에서만
+  // 보여준다 — 다른 모든 섹션에서는 반복 소음이라 걷어낸다(위 HIDDEN_ID_
+  // KEYS 주석 참고). depth 0에서만 게이트하는 이유는 executive_roster·
+  // debt_balance.by_kind와 같다 — 재귀 호출에는 key가 전달되지 않으므로
+  // 하위 어딘가에 우연히 "company_info"라는 이름의 중첩 키가 있어도 이
+  // 예외가 잘못 적용되지 않는다.
+  if (d === 0 && key !== "company_info") value = omitHiddenIds(value);
 
   if (d > MAX_SECTION_DEPTH) {
     return [{
@@ -709,6 +841,31 @@ function sectionBlocks(value, depth, key) {
       blocks.push(t
         ? { title: label(k), table: t, records: records }
         : { title: label(k), table: null, records: null });
+      continue;
+    }
+    // shareholders.major_holders만 특수 처리한다(같은 게이트 방식 — depth
+    // 0 + 부모 key). 최대주주 현황에는 합계 행("계")이 사람 이름 자리에
+    // 섞여 온다(dart_client.fetch_shareholder_status가 /hyslrSttus.json
+    // 원본을 그대로 준다 — fetch_affiliate_investments처럼 core에서 걸러
+    // 반환하지 않는다). 합계를 지우라는 게 아니라(브리프 원칙: "합계를
+    // 없애라는 게 아닙니다") 사람 목록 사이에 뒤섞여 읽기 힘든 게 문제라,
+    // 같은 표 데이터를 사람 표 + 합계 표(제자리에 소계로) 두 블록으로
+    // 나눈다 — splitAggregateRows가 판정 못 하면(nm 없음 등) 안전하게
+    // 사람 쪽에 남긴다.
+    if (d === 0 && key === "shareholders" && k === "major_holders") {
+      const arr = Array.isArray(value[k]) ? value[k] : [];
+      const split = splitAggregateRows(arr);
+      const peopleRecords = toRecords(split.people) || [];
+      const pt = tableLayout(peopleRecords);
+      if (pt) blocks.push({ title: label(k), table: pt, records: peopleRecords });
+      if (split.totals.length > 0) {
+        const totalRecords = toRecords(split.totals) || [];
+        const tt = tableLayout(totalRecords);
+        if (tt) blocks.push({ title: label(k) + " · 합계", table: tt, records: totalRecords });
+      }
+      if (!pt && split.totals.length === 0) {
+        blocks.push({ title: label(k), table: null, records: null });
+      }
       continue;
     }
     const sub = sectionBlocks(value[k], d + 1);

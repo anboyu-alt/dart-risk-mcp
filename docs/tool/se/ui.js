@@ -960,6 +960,29 @@ function renderSection(key, value) {
     holder.appendChild(p);
     return;
   }
+  // fund_usage: 같은 회차(tm)가 분기 보고서(1분기·반기·3분기·사업보고서)
+  // 마다 반복 수집된다(fetch_fund_usage 루프: bsns_year × reprt_code
+  // 4종) — 그런데 정규화 과정(dart_client._normalize_fund_usage)이
+  // reprt_code를 버려(core 수정 불가) 표 안 어느 행이 어느 분기 보고인지
+  // 구분할 수 없다. sectionBlocks(순수 데이터 변환)에 넣지 않고 여기
+  // 렌더 단계에서만 안내문을 얹는 이유: sectionBlocks의 반환 모양(블록
+  // 개수·순서)은 다른 여러 테스트·차트 삽입 로직(renderChart가 block.
+  // records를 그대로 쓴다)이 그대로 의존하고 있어, 표 블록이 아닌 안내
+  // 문단을 그 목록 안에 섞으면 그 계약이 깨진다 — 안내는 화면에만
+  // 붙이고 데이터 모양은 건드리지 않는다. 같은 회차가 여러 행으로
+  // 나오는 것이 오류가 아니라는 사실을 감추지 않고 말한다(v0.8.5: 판정이
+  // 아니라 있는 그대로의 사실 고지) — 사용자가 "같은 수치가 두 번씩
+  // 들어가는 모양"이라고 지적한 것이 이 반복이다.
+  if (key === "fund_usage") {
+    const note = document.createElement("p");
+    note.className = "note";
+    note.textContent = "같은 회차가 여러 행으로 나오는 것은 오류가 아닙니다 — "
+      + "자금 조달 건 하나를 분기 보고서(1분기·반기·3분기·사업보고서)마다 "
+      + "다시 보고하기 때문입니다. 어느 분기의 보고인지는 원본 데이터에 "
+      + "없어 표시하지 않습니다. \"자금 납입일\"은 자금이 들어온 날짜이며 "
+      + "집행일이 아닙니다.";
+    holder.appendChild(note);
+  }
   for (const block of blocks) {
     const el = blockEl(block);
     // 차트는 표 위에 얹는다 — 표를 지우지 않는다. canvas 안의 숫자는
