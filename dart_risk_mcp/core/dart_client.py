@@ -3358,6 +3358,124 @@ def fetch_company_indicators(
     return merged
 
 
+def _previous_business_year() -> int:
+    """직전 사업연도. `se_server/jobs/registry.py`의 동명 함수와 같은 계산이다.
+
+    core는 se_server를 import할 수 없어(레이어 경계) 별도로 둔다. 이 모듈
+    안에서도 같은 계산(`datetime.now().year - 1`)이 여러 곳에 인라인돼
+    있으나(예: fetch_affiliate_investments), 다년 루프의 기준 연도로 재사용할
+    이름 있는 지점이 없어 fetch_indicator_history 전용으로 추가한다.
+    """
+    return datetime.now().year - 1
+
+
+_indicator_history_cache: dict[tuple, tuple[float, list]] = {}
+_INDX_HISTORY_CACHE_MAX = 20
+_INDX_HISTORY_CACHE_TTL = 600  # 10분
+_INDX_HISTORY_MIN_YEARS = 3   # 추이는 최소 2점, 재무는 3기간이 관례
+_INDX_HISTORY_MAX_YEARS = 5   # 기존 _MAX_YEARS(registry.py) 상한과 맞춤
+
+
+def fetch_indicator_history(
+    corp_code: str,
+    api_key: str,
+    lookback_years: int = 1,
+    reprt_code: str = "11011",
+) -> list[dict]:
+    """연도별 주요 재무지표를 분류(idx_cl_nm)를 보존한 행 목록으로 반환.
+
+    `fetch_company_indicators`는 4개 idx_cl_code 응답을 `{idx_nm: float}`
+    평평한 dict로 합치며 분류와 다년 흐름을 버린다. 이 함수는 그 옆에 별도로
+    추가한 신규 함수로, 기존 함수는 손대지 않는다(`scan_financial_anomaly`가
+    그대로 의존).
+
+    조회 연도 수는 `max(3, lookback_years)`를 5로 상한한다 — 사용자가 1년을
+    선택해도 추이를 보여주려면 최소 3개 연도가 필요하다. 가장 최근 사업연도
+    (직전 사업연도)부터 과거로 내려간다.
+
+    각 행: {"bsns_year": "2025", "category": "수익성",
+            "idx_nm": "순이익률", "idx_val": -22.56 | None}
+
+    `idx_val` 키가 아예 없는 레코드가 실측에 존재한다(엔켐 세전계속사업이익률)
+    — `.get()`으로 읽고, 빈 문자열·None·숫자 변환 불가 값은 `idx_val: None`
+    행으로 남긴다(행 자체는 버리지 않는다 — 지표가 존재한다는 사실은 남긴다).
+
+    `idx_cl_nm`이 응답에 없으면 `idx_cl_code`로, 그것도 없으면 `"기타"`로
+    분류한다.
+
+    한 (연도, idx_cl_code) 호출이 실패해도 예외를 밖으로 던지지 않는다
+    (프로젝트 규칙: API 실패 시 빈 값). 그 조합만 빠지고 나머지는 반환된다.
+    """
+    if not corp_code or not api_key:
+        return []
+
+    try:
+        ly = int(lookback_years)
+    except (TypeError, ValueError):
+        ly = 1
+    year_count = min(_INDX_HISTORY_MAX_YEARS, max(_INDX_HISTORY_MIN_YEARS, ly))
+
+    cache_key = (corp_code, year_count, reprt_code)
+    cached = _cache_get(_indicator_history_cache, cache_key, _INDX_HISTORY_CACHE_TTL)
+    if cached is not None:
+        return cached
+
+    base_year = _previous_business_year()
+    rows: list[dict] = []
+    for offset in range(year_count):
+        bsns_year = str(base_year - offset)
+        for cl in _INDX_CL_CODES:
+            try:
+                resp = _retry(
+                    "GET", f"{DART_BASE}/fnlttSinglIndx.json",
+                    params={
+                        "crtfc_key": api_key,
+                        "corp_code": corp_code,
+                        "bsns_year": bsns_year,
+                        "reprt_code": reprt_code,
+                        "idx_cl_code": cl,
+                    },
+                )
+                data = resp.json()
+                if data.get("status") != "000":
+                    _log_dart_status(
+                        data.get("status", "?"),
+                        f"fnlttSinglIndx history cl={cl} corp_code={corp_code} "
+                        f"year={bsns_year}",
+                    )
+                    continue
+                for item in data.get("list") or []:
+                    nm = (item.get("idx_nm") or "").strip()
+                    if not nm:
+                        continue
+                    category = (
+                        item.get("idx_cl_nm") or item.get("idx_cl_code") or "기타"
+                    )
+                    raw = item.get("idx_val")
+                    val: float | None
+                    if raw is None or raw == "":
+                        val = None
+                    else:
+                        try:
+                            val = float(str(raw).replace(",", "").strip())
+                        except (TypeError, ValueError):
+                            val = None
+                    rows.append({
+                        "bsns_year": bsns_year,
+                        "category": category,
+                        "idx_nm": nm,
+                        "idx_val": val,
+                    })
+            except Exception as e:
+                log.debug(
+                    "fnlttSinglIndx history cl=%s year=%s 조회 실패 (%s): %s",
+                    cl, bsns_year, corp_code, e,
+                )
+
+    _cache_set(_indicator_history_cache, cache_key, rows, _INDX_HISTORY_CACHE_MAX)
+    return rows
+
+
 # v0.9.0: 부실 후속 4종 통합 (#7) ----------------------------------------
 _DISTRESS_ENDPOINTS: tuple[tuple[str, str], ...] = (
     # (path, subtype)

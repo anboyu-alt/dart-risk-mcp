@@ -1,4 +1,5 @@
 """v0.8.8 — fetch_company_indicators + detect_financial_anomaly prior_indx YoY.
+v0.8.9(SE-4h) — fetch_indicator_history (분류 보존 + 다년 조회) 추가.
 
 검증:
 1. fetch_company_indicators는 4개 idx_cl_code(M210000·M220000·M230000·M240000)를
@@ -10,6 +11,8 @@
    기존 호출(인자 미지정)과 호환.
 6. prior_indx가 있으면 metrics에 indx 기반 항목이 추가되며,
    YoY 변동률(delta_pct)이 계산되고 flagged=False 유지(절대 임계 없음).
+7. fetch_indicator_history는 연도별·분류별 행 목록을 반환하며
+   fetch_company_indicators는 완전히 무변경이다(플랫 dict 계약 유지).
 """
 from __future__ import annotations
 
@@ -37,6 +40,27 @@ def _make_indx_side(per_cl: dict[str, list]):
             return _resp(status="013")
         cl = (kwargs.get("params") or {}).get("idx_cl_code")
         return _resp(lst=per_cl.get(cl, []))
+
+    return _side
+
+
+def _make_indx_history_side(per_year_cl: dict[str, dict[str, list]]):
+    """(bsns_year, idx_cl_code) → list[item] 매핑으로 _retry side_effect 생성.
+
+    per_year_cl에 없는 (year, cl) 조합은 status=000, 빈 list로 응답한다
+    (다년 루프에서 매 연도·분류를 다 지정하지 않아도 되도록).
+    """
+
+    def _side(method, url, **kwargs):
+        if "fnlttSinglIndx" not in url:
+            return _resp(status="013")
+        params = kwargs.get("params") or {}
+        year = params.get("bsns_year")
+        cl = params.get("idx_cl_code")
+        year_map = per_year_cl.get(year)
+        if year_map is None:
+            return _resp(lst=[])
+        return _resp(lst=year_map.get(cl, []))
 
     return _side
 
@@ -176,6 +200,194 @@ class TestDetectFinancialAnomalyWithIndx(unittest.TestCase):
         for m in indx_metrics:
             if m["name"] == "매출액증가율(YoY)":
                 self.assertIsNone(m.get("delta_pct"))
+
+
+class TestFetchCompanyIndicatorsUnchanged(unittest.TestCase):
+    """fetch_indicator_history 추가가 fetch_company_indicators에 영향 없음을 증명.
+
+    scan_financial_anomaly가 이 함수를 그대로 쓴다. 같은 입력에 대해
+    이전과 동일한 평평한 dict를 반환해야 하며(분류 키가 섞이지 않음),
+    이것이 MCP 도구 무영향의 증거다(SE-4h Task 1).
+    """
+
+    def setUp(self):
+        cache = getattr(dart_client, "_company_indicators_cache", None)
+        if cache is not None:
+            cache.clear()
+
+    @patch("dart_risk_mcp.core.dart_client._retry")
+    def test_flat_dict_contract_unchanged(self, mock_retry):
+        mock_retry.side_effect = _make_indx_side({
+            "M210000": [{"idx_nm": "순이익률", "idx_val": "-22.56"}],
+            "M220000": [{"idx_nm": "부채비율", "idx_val": "130.248"}],
+            "M230000": [{"idx_nm": "매출액증가율(YoY)", "idx_val": "-14.469"}],
+            "M240000": [{"idx_nm": "매출채권회전율", "idx_val": "8.1"}],
+        })
+        result = dart_client.fetch_company_indicators(
+            "01011526", "KEY", "2025", "11011"
+        )
+        self.assertEqual(result, {
+            "순이익률": -22.56,
+            "부채비율": 130.248,
+            "매출액증가율(YoY)": -14.469,
+            "매출채권회전율": 8.1,
+        })
+        self.assertIsInstance(result, dict)
+        for v in result.values():
+            self.assertIsInstance(v, float)
+
+
+class TestFetchIndicatorHistory(unittest.TestCase):
+    """fetch_indicator_history — 연도별·분류 보존 다년 조회 (SE-4h Task 1)."""
+
+    def setUp(self):
+        cache = getattr(dart_client, "_indicator_history_cache", None)
+        if cache is not None:
+            cache.clear()
+        self._year_patch = patch(
+            "dart_risk_mcp.core.dart_client._previous_business_year",
+            return_value=2025,
+        )
+        self._year_patch.start()
+        self.addCleanup(self._year_patch.stop)
+
+    @patch("dart_risk_mcp.core.dart_client._retry")
+    def test_rows_have_four_keys(self, mock_retry):
+        mock_retry.side_effect = _make_indx_history_side({
+            "2025": {"M210000": [{"idx_nm": "순이익률", "idx_cl_nm": "수익성",
+                                    "idx_val": "-22.56"}]},
+        })
+        rows = dart_client.fetch_indicator_history("01011526", "KEY", 1)
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertEqual(
+                set(row.keys()), {"bsns_year", "category", "idx_nm", "idx_val"}
+            )
+
+    @patch("dart_risk_mcp.core.dart_client._retry")
+    def test_lookback_years_1_still_fetches_three_years(self, mock_retry):
+        mock_retry.side_effect = _make_indx_history_side({
+            "2025": {"M210000": [{"idx_nm": "순이익률", "idx_cl_nm": "수익성",
+                                    "idx_val": "-22.56"}]},
+            "2024": {"M210000": [{"idx_nm": "순이익률", "idx_cl_nm": "수익성",
+                                    "idx_val": "-152.661"}]},
+            "2023": {"M210000": [{"idx_nm": "순이익률", "idx_cl_nm": "수익성",
+                                    "idx_val": "1.0"}]},
+        })
+        rows = dart_client.fetch_indicator_history("01011526", "KEY", 1)
+        years = {row["bsns_year"] for row in rows}
+        self.assertEqual(years, {"2025", "2024", "2023"})
+
+    @patch("dart_risk_mcp.core.dart_client._retry")
+    def test_lookback_years_5_fetches_five_years(self, mock_retry):
+        per_year = {
+            str(y): {"M210000": [{"idx_nm": "순이익률", "idx_cl_nm": "수익성",
+                                    "idx_val": "1.0"}]}
+            for y in range(2021, 2026)
+        }
+        mock_retry.side_effect = _make_indx_history_side(per_year)
+        rows = dart_client.fetch_indicator_history("01011526", "KEY", 5)
+        years = {row["bsns_year"] for row in rows}
+        self.assertEqual(years, {"2021", "2022", "2023", "2024", "2025"})
+
+    @patch("dart_risk_mcp.core.dart_client._retry")
+    def test_lookback_years_99_capped_at_five(self, mock_retry):
+        per_year = {
+            str(y): {"M210000": [{"idx_nm": "순이익률", "idx_cl_nm": "수익성",
+                                    "idx_val": "1.0"}]}
+            for y in range(2015, 2026)
+        }
+        mock_retry.side_effect = _make_indx_history_side(per_year)
+        rows = dart_client.fetch_indicator_history("01011526", "KEY", 99)
+        years = {row["bsns_year"] for row in rows}
+        self.assertEqual(len(years), 5)
+        self.assertEqual(years, {"2021", "2022", "2023", "2024", "2025"})
+
+    @patch("dart_risk_mcp.core.dart_client._retry")
+    def test_missing_idx_val_key_becomes_none_no_keyerror(self, mock_retry):
+        # 엔켐 실측 사례: idx_val 키 자체가 없는 레코드.
+        mock_retry.side_effect = _make_indx_history_side({
+            "2025": {"M210000": [{"idx_nm": "세전계속사업이익률", "idx_cl_nm": "수익성"}]},
+        })
+        rows = dart_client.fetch_indicator_history("01011526", "KEY", 1)
+        target = [r for r in rows if r["idx_nm"] == "세전계속사업이익률"]
+        self.assertEqual(len(target), 1)
+        self.assertIsNone(target[0]["idx_val"])
+
+    @patch("dart_risk_mcp.core.dart_client._retry")
+    def test_empty_or_nonnumeric_idx_val_becomes_none(self, mock_retry):
+        mock_retry.side_effect = _make_indx_history_side({
+            "2025": {"M210000": [
+                {"idx_nm": "빈값", "idx_cl_nm": "수익성", "idx_val": ""},
+                {"idx_nm": "문자값", "idx_cl_nm": "수익성", "idx_val": "abc"},
+                {"idx_nm": "정상값", "idx_cl_nm": "수익성", "idx_val": "12.34"},
+            ]},
+        })
+        rows = dart_client.fetch_indicator_history("01011526", "KEY", 1)
+        by_name = {r["idx_nm"]: r["idx_val"] for r in rows if r["bsns_year"] == "2025"}
+        self.assertIsNone(by_name["빈값"])
+        self.assertIsNone(by_name["문자값"])
+        self.assertEqual(by_name["정상값"], 12.34)
+
+    @patch("dart_risk_mcp.core.dart_client._retry")
+    def test_category_filled_from_idx_cl_nm(self, mock_retry):
+        mock_retry.side_effect = _make_indx_history_side({
+            "2025": {
+                "M210000": [{"idx_nm": "순이익률", "idx_cl_nm": "수익성", "idx_val": "1.0"}],
+                "M220000": [{"idx_nm": "부채비율", "idx_cl_nm": "안정성", "idx_val": "130.2"}],
+            },
+        })
+        rows = dart_client.fetch_indicator_history("01011526", "KEY", 1)
+        by_name = {r["idx_nm"]: r["category"] for r in rows if r["bsns_year"] == "2025"}
+        self.assertEqual(by_name["순이익률"], "수익성")
+        self.assertEqual(by_name["부채비율"], "안정성")
+
+    @patch("dart_risk_mcp.core.dart_client._retry")
+    def test_category_falls_back_to_idx_cl_code_then_gita(self, mock_retry):
+        def _side(method, url, **kwargs):
+            if "fnlttSinglIndx" not in url:
+                return _resp(status="013")
+            params = kwargs.get("params") or {}
+            cl = params.get("idx_cl_code")
+            if cl != "M210000":
+                return _resp(lst=[])
+            return _resp(lst=[
+                {"idx_nm": "이름만있음", "idx_val": "1.0"},  # idx_cl_nm/code 둘 다 없음
+            ])
+
+        mock_retry.side_effect = _side
+        rows = dart_client.fetch_indicator_history("01011526", "KEY", 1)
+        target = [r for r in rows if r["idx_nm"] == "이름만있음" and r["bsns_year"] == "2025"]
+        self.assertEqual(len(target), 1)
+        self.assertEqual(target[0]["category"], "기타")
+
+    @patch("dart_risk_mcp.core.dart_client._retry")
+    def test_one_year_failure_does_not_abort_others(self, mock_retry):
+        def _side(method, url, **kwargs):
+            if "fnlttSinglIndx" not in url:
+                return _resp(status="013")
+            params = kwargs.get("params") or {}
+            year = params.get("bsns_year")
+            if year == "2024":
+                raise RuntimeError("network err")
+            if year == "2025":
+                return _resp(lst=[{"idx_nm": "순이익률", "idx_cl_nm": "수익성",
+                                    "idx_val": "1.0"}])
+            if year == "2023":
+                return _resp(lst=[{"idx_nm": "순이익률", "idx_cl_nm": "수익성",
+                                    "idx_val": "2.0"}])
+            return _resp(lst=[])
+
+        mock_retry.side_effect = _side
+        rows = dart_client.fetch_indicator_history("01011526", "KEY", 1)
+        years_present = {row["bsns_year"] for row in rows}
+        self.assertIn("2025", years_present)
+        self.assertIn("2023", years_present)
+        self.assertNotIn("2024", years_present)
+
+    def test_rejects_empty_inputs(self):
+        self.assertEqual(dart_client.fetch_indicator_history("", "KEY", 1), [])
+        self.assertEqual(dart_client.fetch_indicator_history("X", "", 1), [])
 
 
 if __name__ == "__main__":

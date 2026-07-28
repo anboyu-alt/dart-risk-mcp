@@ -83,9 +83,9 @@ class TestSpecs(unittest.TestCase):
         """
         by_key = {s.key: s for s in STAGE1_SPECS}
         for key in ("fund_usage", "insider_timeline", "executive_roster",
-                    "audit_history", "dividends", "disclosures"):
+                    "audit_history", "dividends", "disclosures", "indicators"):
             self.assertTrue(by_key[key].oversized, f"{key}는 oversized여야 한다")
-        for key in ("company_info", "affiliates", "financials", "indicators",
+        for key in ("company_info", "affiliates", "financials",
                     "shareholders", "debt_balance", "distress"):
             self.assertFalse(by_key[key].oversized, f"{key}는 oversized가 아니어야 한다")
 
