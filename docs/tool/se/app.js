@@ -356,8 +356,13 @@ function toRecords(value) {
 
 /** 레코드 목록을 화면에 낼 형태로 바꾼다.
  *
- * 1건이면 세로(키-값), 여러 건이면 가로(표)다. 1건짜리 49열(indicators)을
- * 가로로 펴면 열 하나가 몇 픽셀이 되어 글자가 세로로 쪼개진다.
+ * 1건이면 세로(키-값), 여러 건이면 가로(표)다. 1건짜리 레코드가 필드
+ * 수십 개면 가로로 펴는 순간 열 하나가 몇 픽셀이 되어 글자가 세로로
+ * 쪼개진다 — 예전에는 indicators(주요 재무지표, 1건 49열)가 이 경로로
+ * 왔지만, SE-4h부터 분류(수익성·안정성·성장성·활동성)를 보존한 행
+ * 목록으로 바뀌어 이 경로 자체를 타지 않는다(ui.js의 renderSection이
+ * key === "indicators"를 sectionBlocks보다 먼저 가로채 indicatorBlocks로
+ * 직접 그린다 — 아래 flatKeys 분기 주석도 같은 이유로 갱신했다).
  *
  * 비객체 항목(문자열 등)을 조용히 버리지 않는 것은 호출부의 책임이 아니라
  * 이 함수의 계약이다 — sectionBlocks는 이미 toRecords로 감싸서 넘기지만,
@@ -922,7 +927,10 @@ function sectionBlocks(value, depth, key) {
     const flat = Object.create(null);
     for (const k of flatKeys) flat[k] = value[k];
     // flat은 항상 단일 평면 객체다 — 레코드 1건짜리 배열로 감싸 넘긴다.
-    // 이 경로가 indicators(1건 49열)를 세로로 바꾸는 핵심 지점이다.
+    // (예전에는 이 경로가 indicators(1건 49열)를 세로로 바꾸는 핵심
+    // 지점이었다. SE-4h부터 indicators는 행 목록으로 오고 ui.js가
+    // key === "indicators"에서 sectionBlocks 자체를 부르지 않으므로 이
+    // flatKeys 경로는 이제 이 섹션과 무관하다 — 위 tableLayout 주석 참고.)
     const records = [flat];
     const t = tableLayout(records);
     if (t) blocks.push({ title: null, table: t, records: records });
@@ -1726,6 +1734,62 @@ const CHART_SPECS = Object.assign(Object.create(null), {
       { key: "trmend_blce_acntbk_amount", label: "기말 장부가액" },
     ],
   },
+  // SE-4h Task 3 — 재무지표 분류별 추이. indicatorChartRecords(아래,
+  // indicatorBlocks 다음에 정의)가 그 분류의 primary 지표 중 값이 하나라도
+  // 있는 행만 걸러 넘기므로, 여기 스펙 자체는 financial_ratios와 같은 모양
+  // (x=연도, groupBy=지표, y=값)이면 충분하다. bsns_year 값("2025" 등)은
+  // 순수 숫자 문자열이라 chartData의 allNumeric 분기(위 xs.sort 주석 ①)에
+  // 걸려 항상 오름차순(과거→최근)으로 정렬된다 — fetch_indicator_history가
+  // 최근 연도부터 내려오는 순서로 행을 줘도(dart_client.py) 여기서 뒤집을
+  // 필요가 없다.
+  //
+  // **활동성 단위(크기) 혼입 결정 — 그대로 둔다(브리프 요구사항: 이유를
+  // 남긴다).** 활동성 primary 5개(총자산회전율·매출채권회전율·
+  // 재고자산회전율·매입채무회전율·배당성향(%))는 전부 DART 원본이 %라
+  // *단위*는 섞이지 않는다(dividends의 원/%처럼 서로 다른 단위가 섞이는
+  // 문제가 아니다) — 다만 *자릿수*가 갈린다(엔켐 실측: 재고자산회전율
+  // 454.463 대 총자산회전율 27.6, 약 16배 차이). 검토한 대안과 기각 이유:
+  // ① **두 번째 y축(yAxisID)** — renderChart(ui.js)는 이 화면의 다른 8개
+  //   스펙 전부가 y축 하나만 쓴다는 전제로 색·범례·툴팁 배선이 돼 있다.
+  //   이 스펙 하나만 예외로 두 번째 스케일을 추가하면 그 공용 배선을 다시
+  //   검증해야 하는데(다른 스펙에 영향이 없는지), 위험 대비 이득이 작다.
+  //   또한 어느 지표를 "주 축"에 두고 어느 지표를 "보조 축"에 둘지 우리가
+  //   고르는 순간 그 배치 자체가 이미 판단("이 지표가 더 중요하다")이라
+  //   v0.8.5 판정 금지 원칙과 결이 어긋난다.
+  // ② **계열 줄이기(예: 재고자산회전율만 차트에서 제외)** — 결국 "이 지표는
+  //   차트에 넣을 만큼 안 중요하다"는 값매김과 같은 부류의 선택이다.
+  // 그래서 **그대로 한 축에 둔다**: 계열이 눌려 보이는 것은 표현의 한계일
+  // 뿐 정보 손실이 아니다 — 정확한 숫자는 이 차트 바로 아래 primary
+  // 표(indicatorTableEl)와 툴팁(renderChart의 formatValue 콜백)이 항상
+  // 그대로 보여준다(브리프: "차트는 표를 대체하지 않는다", renderChart 주석
+  // 과 같은 원칙).
+  // tooltipFormat: "indicator" — 툴팁 값을 formatIndicator로 포맷하라는
+  // 표시다(renderChart, ui.js). 없으면 표는 "130.248%"인데 툴팁은
+  // "130.248"이라 같은 값을 둘이 다르게 말한다(리뷰 지적 ④).
+  indicators_수익성: {
+    kind: "line", title: "수익성 추이 (%)",
+    x: "bsns_year", groupBy: "idx_nm", y: "idx_val", yLabel: "%", xScale: "category",
+    tooltipFormat: "indicator",
+  },
+  indicators_안정성: {
+    kind: "line", title: "안정성 추이 (%)",
+    x: "bsns_year", groupBy: "idx_nm", y: "idx_val", yLabel: "%", xScale: "category",
+    tooltipFormat: "indicator",
+  },
+  // 성장성 18개는 이미 전년 대비 증가율(YoY)이다(indicatorBlocks 주석 참고)
+  // — 그 증가율의 연도별 추이를 선으로 그린다. 레벨 지표(다른 분류)와 한
+  // 차트에 섞이는 문제는 분류별로 스펙이 나뉘어 자동으로 해결된다(브리프)
+  // — 여기서는 축 라벨만 "%"로 맞춘다.
+  indicators_성장성: {
+    kind: "line", title: "성장성(증가율) 추이 (%)",
+    x: "bsns_year", groupBy: "idx_nm", y: "idx_val", yLabel: "%", xScale: "category",
+    tooltipFormat: "indicator",
+  },
+  indicators_활동성: {
+    kind: "line", title: "활동성 추이 (%)",
+    x: "bsns_year", groupBy: "idx_nm", y: "idx_val", yLabel: "%", xScale: "category",
+    tooltipFormat: "indicator",
+  },
 });
 
 /** "20260415" → "2026.04.15", "2026-04-15" → "2026.04.15". 날짜가 아니면
@@ -2133,6 +2197,315 @@ function chartData(records, spec, signalsData) {
   return { labels: labels, datasets: datasets };
 }
 
+// ── 재무지표 4분류 · 용어 · 단위 (SE-4h Task 2) ───────────────────────────
+// fnlttSinglIndx(주요 재무지표)는 4분류(수익성·안정성·성장성·활동성)
+// 66개를 idx_cl_nm과 함께 준다(dart_client.fetch_indicator_history, SE-4h
+// Task 1). 여기서는 그 분류를 보존해 4블록으로 묶고, 22개 핵심 지표에만
+// 뜻을 달아 나머지 44개는 접는다(indicatorBlocks). ui.js가 이 함수들을
+// renderSection에서 직접 불러 그린다 — indicators는 더 이상
+// sectionBlocks/tableLayout 경로를 타지 않는다(위 tableLayout·flatKeys
+// 분기 주석 참고).
+
+// DART 응답의 idx_cl_nm 값 그대로다 — 원본 카탈로그 순서를 우리가 다시
+// 정하지 않는다. 이 목록에 없는 분류가 오면(응답이 바뀌는 경우) 버리지
+// 않고 맨 뒤에 붙인다(indicatorBlocks 참고).
+const INDICATOR_CATEGORY_ORDER = ["수익성", "안정성", "성장성", "활동성"];
+
+// **SE-4h Task 3 라이브 검증에서 발견한 사실**: fnlttSinglIndx의 idx_cl_nm
+// 실측값은 "수익성지표"·"안정성지표"·"성장성지표"·"활동성지표"다(2026-07-28
+// 엔켐 corp_code=01011526 raw API 재확인 — idx_cl_code=M210000 응답의
+// idx_cl_nm이 정확히 "수익성지표"). 계획 문서 "배경" 절이 근거로 삼은
+// tmp/indicator_categories.json은 접미어 없는 "수익성" 등으로 적혀 있었는데
+// (그 자료가 실제 API와 달랐다), Task 2가 그 값을 그대로 옮겨 위
+// INDICATOR_CATEGORY_ORDER·아래 INDICATOR_PRIMARY·INDICATOR_NOTES를 전부
+// "지표" 없는 키로 만들었다 — 실 데이터로는 이 키들이 단 하나도 매칭되지
+// 않아 `INDICATOR_PRIMARY[category]`가 항상 빈 배열이 되고, primary·뜻·
+// (Task 3의) 추이 차트가 전부 죽은 코드였다(indicatorBlocks(rows).primary
+// 가 실 데이터에서 언제나 []). 화면 문구("수익성" 등, "지표"를 빼는 쪽이
+// 더 자연스럽다)는 그대로 유지하면서, 여기서 DART 원본 접미어만 표준
+// 4개 이름으로 정규화해 그 아래 모든 조회(INDICATOR_CATEGORY_ORDER·
+// INDICATOR_PRIMARY·INDICATOR_NOTES·indicatorChartRecords)가 실제로
+// 동작하게 한다. **알려진 4개 접미어 형태만** 명시적으로 대응하고, 그 외
+// (예: "기타", 미래에 DART가 줄 수 있는 다른 분류)는 원본을 그대로
+// 통과시킨다 — "지표"로 끝나면 기계적으로 벗기는 규칙을 쓰면, 언젠가 DART가
+// 실제로 "OO지표"라는 별개 분류를 새로 주면 의도치 않게 다른 이름과
+// 충돌할 수 있다.
+const INDICATOR_CATEGORY_ALIASES = Object.assign(Object.create(null), {
+  "수익성지표": "수익성",
+  "안정성지표": "안정성",
+  "성장성지표": "성장성",
+  "활동성지표": "활동성",
+});
+
+/** DART가 준 분류 원문(idx_cl_nm, 예: "수익성지표")을 화면·조회에 쓰는
+ *  표준 이름("수익성")으로 정규화한다. 빈 값은 "기타", 매핑에 없는 값은
+ *  원본을 그대로 돌려준다(모르는 분류를 조용히 삼키지 않는다는 이 파일의
+ *  원칙과 같다 — indicatorBlocks의 unknown 처리 참고). */
+function normalizeIndicatorCategory(raw) {
+  const s = (raw === null || raw === undefined || raw === "") ? "기타" : String(raw);
+  return INDICATOR_CATEGORY_ALIASES[s] || s;
+}
+
+// 분류당 5~6개, 총 22개(브리프: "나머지 44개는 rest로 접는다"). 여기 없는
+// 지표(예: 납입자본이익률·자본금회전율 — 자본금이 작으면 값이 폭발한다,
+// 엔켐 실측 각각 -657.0·2912.4)는 지우지 않고 indicatorBlocks의 rest로
+// 보낸다 — "이름만으로 뜻이 서는 것들"이라 설명 없이 이름만 보여준다.
+const INDICATOR_PRIMARY = Object.assign(Object.create(null), {
+  "수익성": ["순이익률", "매출총이익률", "매출원가율", "ROE", "판관비율"],
+  "안정성": ["부채비율", "자기자본비율", "유동비율", "당좌비율", "이자보상배율", "자본유보율"],
+  "성장성": [
+    "매출액증가율(YoY)", "영업이익증가율(YoY)", "순이익증가율(YoY)",
+    "총자산증가율", "자기자본증가율", "부채총계증가율",
+  ],
+  "활동성": ["총자산회전율", "매출채권회전율", "재고자산회전율", "매입채무회전율", "배당성향(%)"],
+});
+
+// 뜻만 쓰고 값을 평가하지 않는다(v0.8.5 판정선) — 아래 선언문에는
+// "높을수록 ~"·"낮으면 ~"·"위험"·"안전" 같은 문장을 쓰지 않는다.
+// tests/se/test_se_page_assets.py::TestIndicatorNotesVocabulary가 이
+// 선언문(다음 "});"까지)에 판정 어휘가 없는지 기계적으로 검사한다.
+const INDICATOR_NOTES = Object.assign(Object.create(null), {
+  "순이익률": "매출액 대비 당기순이익의 비율",
+  "매출총이익률": "매출액에서 매출원가를 뺀 매출총이익이 매출액의 몇 %인가",
+  "매출원가율": "매출액 대비 매출원가의 비율",
+  "ROE": "자기자본 대비 당기순이익의 비율",
+  "판관비율": "매출액 대비 판매비와관리비의 비율",
+  "부채비율": "자기자본 대비 부채총계의 비율 — 빌린 돈이 자기 돈의 몇 %인가",
+  "자기자본비율": "총자산 대비 자기자본의 비율",
+  "유동비율": "1년 안에 갚을 유동부채 대비, 1년 안에 현금화할 수 있는 유동자산의 비율",
+  "당좌비율": "유동자산에서 재고자산을 뺀 당좌자산이 유동부채의 몇 %인가",
+  "이자보상배율": "영업이익이 이자비용의 몇 배인가 — 값은 DART가 준 그대로 %로 표시된다",
+  // 자본유보율 = (자본잉여금+이익잉여금)/자본금 — 자본잉여금(주식발행초과금
+  // 등 납입된 돈)까지 포함한다. "벌어서 쌓아둔 돈"(이익잉여금만)이라고만
+  // 쓰면 절반(자본잉여금)을 빼먹은 설명이 된다(리뷰 지적, SE-4h Task 2).
+  "자본유보율": "자본잉여금과 이익잉여금을 더한 유보액이 자본금의 몇 %인가",
+  "매출액증가율(YoY)": "전년 매출액 대비 이번 사업연도 매출액의 변화율",
+  "영업이익증가율(YoY)": "전년 영업이익 대비 이번 사업연도 영업이익의 변화율",
+  "순이익증가율(YoY)": "전년 당기순이익 대비 이번 사업연도 당기순이익의 변화율",
+  "총자산증가율": "전년 총자산 대비 이번 사업연도 총자산의 변화율",
+  "자기자본증가율": "전년 자기자본 대비 이번 사업연도 자기자본의 변화율",
+  "부채총계증가율": "전년 부채총계 대비 이번 사업연도 부채총계의 변화율",
+  "총자산회전율": "총자산 대비 매출액의 비율",
+  "매출채권회전율": "매출채권 대비 매출액의 비율",
+  // 재고자산회전율 자체는 매출액 ÷ 재고자산이다("매출원가 ÷ 재고자산"이
+  // 아니다 — 그건 DART가 별도로 제공하는 다른 지표다). 엔켐 실측으로
+  // 산술 검증: 재고자산회전율 454.463 ÷ (매출원가/재고자산) 456.673 =
+  // 0.99516, 매출액÷매출원가(=1/매출원가율)도 0.99516로 일치한다(리뷰
+  // 지적, SE-4h Task 2 — 이전 노트가 그 별도 지표의 정의를 옮겨 붙인
+  // 오류였다).
+  "재고자산회전율": "재고자산 대비 매출액의 비율",
+  // 매입채무회전율은 실측 값이 null이라 위 재고자산회전율처럼 산술로 직접
+  // 검증하지 못했다(엔켐·삼성전자·셀트리온·두산에너빌리티 4사 모두 DART가
+  // null을 준다) — 총자산·매출채권·재고자산·자기자본·자본금회전율이 모두
+  // 매출액 기준인 같은 계열이라는 관행에 따라 맞춘 것이다. 주석에만 "추정"
+  // 이라 적고 화면에는 단정형으로 내보내면, 우리가 아는 것보다 화면이 더
+  // 확신하는 셈이 된다 — **뜻 문구 자체에 추정임을 적는다**(리뷰 지적).
+  // 뜻을 아예 지우지 않는 이유: 같은 표의 다른 활동성 지표 4개에는 뜻이
+  // 있어 이것만 빈 칸이면 "설명할 수 없는 지표"로 보이는데, 실제로는
+  // "설명은 있으나 검증하지 못했다"가 정확한 사실이다.
+  "매입채무회전율": "매입채무 대비 매출액의 비율 (추정 — DART 값이 없어 산술로 확인하지 못했습니다)",
+  "배당성향(%)": "당기순이익 중 현금배당금총액이 차지하는 비율",
+});
+
+/** 표시용 문자열. null·undefined·NaN이면 "—"다 — 값 없음을 조용히
+ *  숨기지 않는다(0과는 다른 표기). 이름에 이미 "(%)"가 있으면(예:
+ *  "배당성향(%)") %를 더 붙이지 않는다 — 안 그러면 "배당성향(%) 25.1%"
+ *  처럼 단위가 중복된다(실측 경고, 계획 문서 "배경" 절 참고). DART가
+ *  주는 값은 전부 %다(재무레버리지·이자보상배율처럼 이름이 "배"여도
+ *  마찬가지) — 우리가 배수로 환산하지 않는다. 잘못 환산하면 틀린 숫자를
+ *  자신 있게 보여주게 된다. */
+function formatIndicator(idxNm, idxVal) {
+  if (idxVal === null || idxVal === undefined) return "—";
+  if (typeof idxVal === "number" && Number.isNaN(idxVal)) return "—";
+  // DART가 주는 자릿수는 지표·연도마다 제각각이다(실측: -22.56 · -152.661 ·
+  // -144.09 가 한 표에 나란히 온다). 그대로 쓰면 자릿수가 들쭉날쭉해 읽기
+  // 어렵다 — 소수 첫째 자리로 통일한다. 반올림은 표시에만 적용하고 원본
+  // 값은 indicatorBlocks의 idx_val로 그대로 남아 툴팁·차트가 쓴다.
+  const n = typeof idxVal === "number" ? idxVal : Number(idxVal);
+  const s = Number.isFinite(n) ? n.toFixed(1) : String(idxVal);
+  const hasPercentInName = typeof idxNm === "string" && idxNm.indexOf("(%)") !== -1;
+  return hasPercentInName ? s : s + "%";
+}
+
+/** 서버가 준 indicators 값에서 행 목록만 꺼낸다.
+ *
+ *  fetch_indicator_history(dart_client)는 SE-4h 최종 수정부터 행 목록이
+ *  아니라 봉투(`{years_requested, years_retrieved, years_failed, rows}`)를
+ *  돌려준다 — 연도가 조용히 빠졌을 때 그 사실을 화면이 말할 수 있어야 하기
+ *  때문이다(indicatorYearNote 참고). 예전 형태(행 목록 그대로)도 그대로
+ *  받아 준다: 저장된 옛 작업 결과가 남아 있을 수 있고, 이 파일의 다른
+ *  함수들처럼 "모르는 형태를 만나면 죽지 않는다"가 원칙이다. */
+function indicatorRows(value) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === "object" && Array.isArray(value.rows)) return value.rows;
+  return [];
+}
+
+/** 요청한 연도보다 실제로 조회된 연도가 적으면 그 사실을 한 문장으로
+ *  만든다. 다 조회됐거나(또는 옛 형태라 알 수 없으면) 빈 문자열이다.
+ *
+ *  **왜 필요한가**: 12콜(4분류 × 3연도) 중 몇 개가 실패해 한 해가 통째로
+ *  빠져도, 화면은 남은 한 점을 그대로 "추이"라고 그린다 — 사용자는 그것이
+ *  조회 사고인지 그 회사에 자료가 없는 것인지 알 방법이 없다. 덜 보여주면서
+ *  다 보여주는 척하지 않기 위해, **어느 해가 실제로 조회됐는지**를 사실로
+ *  적는다.
+ *
+ *  조회 실패(years_failed)와 자료 없음(DART가 013으로 확정 답변)을 구분해
+ *  쓴다 — 사용자에게 서로 다른 사실이다. "데이터 부족" 같은 값매김 표현은
+ *  쓰지 않는다(v0.8.5: 사실만 적고 판정하지 않는다). */
+function indicatorYearNote(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  const requested = Array.isArray(value.years_requested) ? value.years_requested : [];
+  const retrieved = Array.isArray(value.years_retrieved) ? value.years_retrieved : [];
+  const failed = Array.isArray(value.years_failed) ? value.years_failed : [];
+  if (requested.length === 0) return "";
+  const missing = requested.filter(function (y) { return retrieved.indexOf(y) === -1; });
+  if (missing.length === 0) return "";
+
+  const parts = [
+    "최근 " + requested.length + "년(" + requested.join("·") + ") 중 "
+      + (retrieved.length > 0
+          ? retrieved.join("·") + "만 조회됐습니다"
+          : "조회된 연도가 없습니다"),
+  ];
+  const failedMissing = missing.filter(function (y) { return failed.indexOf(y) !== -1; });
+  const absentMissing = missing.filter(function (y) { return failed.indexOf(y) === -1; });
+  if (failedMissing.length > 0) {
+    parts.push(failedMissing.join("·") + "은 DART 조회에 실패했습니다 — 자료가 없다는 뜻이 아닙니다");
+  }
+  if (absentMissing.length > 0) {
+    parts.push(absentMissing.join("·") + "은 DART에 해당 자료가 없습니다");
+  }
+  return parts.join(". ") + ".";
+}
+
+/** rows({bsns_year, category, idx_nm, idx_val} 행 목록, 또는 그 목록을 담은
+ *  fetch_indicator_history 봉투 — indicatorRows가 둘 다 받는다)를 분류별
+ *  블록으로 묶는다.
+ *
+ *  분류 순서는 INDICATOR_CATEGORY_ORDER다. 그 목록에 없는 분류(응답이
+ *  바뀌어 새 idx_cl_nm이 오는 경우)는 버리지 않고, 처음 등장한 순서
+ *  그대로 맨 뒤에 붙인다 — "모르는 데이터를 조용히 삼키지 않는다"는 이
+ *  파일 전체의 원칙과 같다(toRecords·tableLayout 주석 참고).
+ *
+ *  분류 안에서는 그 분류에 등장한 모든 연도의 합집합을 열로 쓴다 —
+ *  지표마다 보고된 연도 수가 달라도(세전계속사업이익률처럼 두 해 다
+ *  null이거나, 납입자본이익률처럼 한 해만 오거나) 표의 연도 열은 하나로
+ *  맞추고, 없는 칸은 formatIndicator(idxNm, null)이 "—"로 채운다. 연도는
+ *  최신이 먼저다.
+ *
+ *  INDICATOR_PRIMARY에 있는 지표만 note(뜻)를 달아 primary로 보내고,
+ *  나머지는 rest로 보낸다 — 값이 전부 null이거나 자본금이 작아 값이 튀는
+ *  지표(납입자본이익률 등)도 지우지 않고 rest에 남긴다. */
+function indicatorBlocks(value) {
+  const rows = indicatorRows(value);
+  if (rows.length === 0) return [];
+
+  // category → idx_nm → bsns_year → idx_val. 일반 객체 대신 Map을 쓴다 —
+  // 객체 키가 "2025" 같은 정수형 문자열이면 자바스크립트가 삽입 순서와
+  // 무관하게 오름차순으로 먼저 나열해 열 순서가 뒤집힌다(ui.js
+  // indicatorTableEl 주석에 같은 함정을 적어 뒀다). Map은 이 재정렬이
+  // 없다.
+  const byCategory = new Map();
+  for (const r of rows) {
+    if (!r || typeof r !== "object") continue;
+    if (r.idx_nm === undefined || r.idx_nm === null || r.idx_nm === "") continue;
+    // normalizeIndicatorCategory: DART 원문("수익성지표" 등)을 표준 이름
+    // ("수익성")으로 정규화한다 — 위 INDICATOR_CATEGORY_ALIASES 주석 참고
+    // (SE-4h Task 3 라이브 검증에서 발견: 정규화 없이는 실 데이터에서
+    // primary가 항상 빈 배열이 됐다).
+    const category = normalizeIndicatorCategory(r.category);
+    if (!byCategory.has(category)) byCategory.set(category, new Map());
+    const byName = byCategory.get(category);
+    if (!byName.has(r.idx_nm)) byName.set(r.idx_nm, new Map());
+    byName.get(r.idx_nm).set(r.bsns_year, r.idx_val === undefined ? null : r.idx_val);
+  }
+
+  const present = Array.from(byCategory.keys());
+  const known = INDICATOR_CATEGORY_ORDER.filter(function (c) { return present.indexOf(c) !== -1; });
+  const unknown = present.filter(function (c) { return INDICATOR_CATEGORY_ORDER.indexOf(c) === -1; });
+  const orderedCategories = known.concat(unknown);
+
+  return orderedCategories.map(function (category) {
+    const byName = byCategory.get(category);
+
+    const yearSet = new Set();
+    byName.forEach(function (byYear) {
+      byYear.forEach(function (_v, y) { yearSet.add(y); });
+    });
+    const years = Array.from(yearSet).sort(function (a, b) { return Number(b) - Number(a); });
+    const latestYear = years.length > 0 ? years[0] : null;
+
+    const primaryNames = INDICATOR_PRIMARY[category] || [];
+    const primarySet = new Set(primaryNames);
+    const allNames = Array.from(byName.keys());
+
+    function buildEntry(idxNm, withNote) {
+      const byYear = byName.get(idxNm);
+      const cells = years.map(function (y) {
+        const v = byYear.has(y) ? byYear.get(y) : null;
+        return { bsns_year: y, idx_val: v, display: formatIndicator(idxNm, v) };
+      });
+      const entry = { idx_nm: idxNm, cells: cells };
+      if (withNote) entry.note = INDICATOR_NOTES[idxNm] || "";
+      return entry;
+    }
+
+    const primary = primaryNames
+      .filter(function (n) { return byName.has(n); })
+      .map(function (n) { return buildEntry(n, true); });
+    const rest = allNames
+      .filter(function (n) { return !primarySet.has(n); })
+      .map(function (n) { return buildEntry(n, false); });
+
+    return { category: category, latestYear: latestYear, primary: primary, rest: rest };
+  });
+}
+
+/** indicatorBlocks(rows)가 다루는 것과 같은 원본 행 목록에서, 한 분류
+ *  (category)의 INDICATOR_PRIMARY 지표 중 값이 하나라도 있는 것만 걸러
+ *  CHART_SPECS.indicators_<분류>가 그릴 수 있는 형태로 되돌린다(SE-4h
+ *  Task 3). renderChart(ui.js)에 그대로 넘기는 `records` 인자가 이 함수의
+ *  반환값이다.
+ *
+ *  **왜 indicatorBlocks의 피벗 결과(cells)가 아니라 원본 rows에서 다시
+ *  거르나**: chartData(위)는 x=bsns_year·groupBy=idx_nm·y=idx_val인
+ *  "평평한" 레코드 목록을 받는 계약이다(financial_ratios와 같은 모양) —
+ *  indicatorBlocks가 이미 연도×지표로 피벗해 둔 cells 구조를 다시 풀어
+ *  넣는 것보다, 원본에서 한 번만 필터링하는 편이 코드가 적고 chartData·
+ *  writeChartCell(충돌 감지)을 그대로 재사용한다(새 렌더 경로를 만들지
+ *  않는다, 이 파일의 기존 원칙).
+ *
+ *  **전 연도가 null인 지표는 계열 자체를 만들지 않는다**(브리프 요구사항
+ *  — "선이 0으로 떨어지면 거짓이다"와 같은 이유로, 빈 계열이 범례에 남는
+ *  것도 "값이 있는 척"이라 마찬가지로 거짓이다). chartData의 groupBy
+ *  분기는 그 지표 이름이 한 번이라도 나오면(값이 전부 null이어도) 계열을
+ *  만든다(값 유무와 무관하게 groups.set이 먼저 실행된다) — chartData
+ *  자체를 고치면 이 화면 밖의 다른 7개 스펙까지 동작이 바뀌므로, 여기서는
+ *  값이 하나도 없는 지표의 행을 아예 넘기지 않는 방식으로 그 지표의
+ *  계열이 애초에 생기지 않게 막는다. */
+function indicatorChartRecords(value, category) {
+  const rows = indicatorRows(value);
+  if (rows.length === 0 || !category) return [];
+  const primaryNames = INDICATOR_PRIMARY[category] || [];
+  if (primaryNames.length === 0) return [];
+  const primarySet = new Set(primaryNames);
+  // r.category를 그대로 비교하지 않는다 — 실 DART 값은 "수익성지표"처럼
+  // 접미어가 붙어 있다(위 INDICATOR_CATEGORY_ALIASES 주석 참고). category
+  // 인자(호출자가 넘기는 block.category)는 이미 indicatorBlocks가 정규화한
+  // 값이므로, 여기서도 같은 정규화를 거쳐야 서로 비교가 맞는다.
+  const filtered = rows.filter(function (r) {
+    return r && typeof r === "object"
+      && normalizeIndicatorCategory(r.category) === category
+      && primarySet.has(r.idx_nm);
+  });
+  const hasValue = new Set();
+  for (const r of filtered) {
+    if (numeric(r.idx_val) !== null) hasValue.add(r.idx_nm);
+  }
+  return filtered.filter(function (r) { return hasValue.has(r.idx_nm); });
+}
+
 // ── 사실 강조 ────────────────────────────────────────────────────────────
 // 표 안에서 눈으로 놓치기 쉬운 산술적 사실을 셀 단위로 표시한다.
 // 강조는 사실의 가시화이지 위험 판정이 아니다 — 규칙은 부호·두 값의 비교·
@@ -2353,5 +2726,8 @@ if (typeof module !== "undefined" && module.exports) {
     DIVIDEND_SE_FIELDS, dividendVsIncome, fundPlanChanges, affiliateOverview,
     markNumber, MARK_RULES, cellMarks, markedColumnKeys,
     isAggregateRow, splitAggregateRows, splitVisibleFolded, MAX_VISIBLE_COLUMNS,
+    INDICATOR_CATEGORY_ORDER, INDICATOR_PRIMARY, INDICATOR_NOTES,
+    formatIndicator, indicatorBlocks, indicatorChartRecords,
+    normalizeIndicatorCategory, indicatorRows, indicatorYearNote,
   };
 }

@@ -362,6 +362,18 @@ function collectLegends(node, out) {
   return out;
 }
 
+// SE-4h Task 2 — indicators의 "나머지 N개 지표" 접기 버튼처럼, 버튼
+// 텍스트 자체가 검증 대상인 경우를 위한 수집기다. collectCells는 td/th만
+// 모아 button은 잡히지 않는다(fold-btn이 td 밖에 있다 — indicatorRestFold
+// 참고). 기존 fold-btn(tableEl 열 접기)도 이 수집기로 함께 잡힌다.
+function collectButtons(node, out) {
+  out = out || [];
+  if (!node) return out;
+  if (node.tag === "button") out.push(node.textContent);
+  (node.children || []).forEach(function (c) { collectButtons(c, out); });
+  return out;
+}
+
 const sandbox = {
   console: console,
   document: {
@@ -396,6 +408,7 @@ const beforeGate = {
   marked: collectMarked(bodyEl, []),
   legends: collectLegends(bodyEl, []),
   tableRows: collectTableRows(bodyEl, []),
+  buttons: collectButtons(bodyEl, []),
 };
 
 // 로그아웃(세션 만료 포함) 잔류 확인 — 강조 범례는 실명이 아니지만
@@ -4108,7 +4121,14 @@ class TestChartData(unittest.TestCase):
     # 않게 한다. 서버 레지스트리를 건드리지 않고도(se_server/ API 계약
     # 무변경 원칙) 이 키들이 "오타"로 오인돼 이 테스트에 걸리지 않도록
     # 명시적으로 허용한다.
-    KNOWN_DERIVED_CHART_KEYS = {"financial_ratios", "affiliate_timeline"}
+    # SE-4h Task 3: indicators_<분류> 4개는 indicatorChartRecords(app.js)가
+    # 서버 응답(fetch_indicator_history 행 목록)에서 분류·primary 지표로 걸러
+    # 만든 클라이언트 파생 records를 그린다 — financial_ratios·
+    # affiliate_timeline과 같은 부류다.
+    KNOWN_DERIVED_CHART_KEYS = {
+        "financial_ratios", "affiliate_timeline",
+        "indicators_수익성", "indicators_안정성", "indicators_성장성", "indicators_활동성",
+    }
 
     def test_spec_keys_all_exist_in_the_server_registry(self):
         """CHART_SPECS의 섹션 키는 서버가 실제로 주는 키이거나, 위
@@ -5084,6 +5104,74 @@ sandbox.renderSection("disclosures", [
 const chartCountAfterL = CHART_CALLS.length;
 const byTypeChart = chartCountAfterL > chartCountBeforeL ? CHART_CALLS[CHART_CALLS.length - 1] : null;
 
+// M) indicators — SE-4h Task 3의 산출물인 **분류별 추이 차트**.
+//
+//    이 블록이 생기기 전에는 ui.js의 `renderChart("indicators_" + ...)`
+//    호출을 통째로 지워도 전체 테스트가 초록이었다(리뷰가 돌린 16개 변형
+//    중 유일하게 안 잡힌 것). 이유: renderSection을 실제로 돌리는 다른
+//    하네스(_RENDER_SECTION_HARNESS)에는 Chart 스텁이 없어 renderChart가
+//    첫 줄(`typeof Chart === "undefined"`)에서 false로 빠진다 — 그 하네스로는
+//    차트 경로를 원리상 검증할 수 없다. Chart 스텁이 있는 이 하네스에서만
+//    "실제로 4개 차트가 만들어졌다"를 말할 수 있다.
+//
+//    페이로드는 실측 모양 그대로다: category는 DART 원문 접미어("수익성지표")
+//    를 쓰고(정규화가 죽으면 차트가 0개가 된다), 전 연도 null인 지표
+//    (매입채무회전율 — 4사 실측 모두 null)를 한 줄 섞어 빈 계열이 범례에
+//    남지 않는지도 같이 본다.
+const INDICATOR_LIVE_ROWS = [];
+[
+  ["수익성지표", "순이익률", -22.56],
+  ["수익성지표", "ROE", -30.1],
+  ["안정성지표", "부채비율", 130.248],
+  ["안정성지표", "자기자본비율", 43.4],
+  ["성장성지표", "매출액증가율(YoY)", -14.469],
+  ["성장성지표", "총자산증가율", 3.2],
+  ["활동성지표", "총자산회전율", 27.591],
+  ["활동성지표", "재고자산회전율", 454.463],
+  ["활동성지표", "매입채무회전율", null],
+].forEach(function (t) {
+  ["2025", "2024", "2023"].forEach(function (y, i) {
+    INDICATOR_LIVE_ROWS.push({
+      bsns_year: y, category: t[0], idx_nm: t[1],
+      idx_val: t[2] === null ? null : t[2] + i,
+    });
+  });
+});
+
+function countCanvases() {
+  return collectTags(bodyEl, []).filter(function (t) {
+    return t.tag === "canvas";
+  }).length;
+}
+const canvasesBeforeM = countCanvases();
+const chartCountBeforeM = CHART_CALLS.length;
+sandbox.renderSection("indicators", {
+  years_requested: ["2025", "2024", "2023"],
+  years_retrieved: ["2025", "2024", "2023"],
+  years_failed: [],
+  rows: INDICATOR_LIVE_ROWS,
+});
+const canvasesAfterM = countCanvases();
+const indicatorCharts = CHART_CALLS.slice(chartCountBeforeM);
+
+// N) 연도 누락 고지 — 12콜 중 일부가 실패해 한 해가 통째로 빠졌을 때,
+//    화면이 그 사실을 말하는지. 같은 하네스를 쓰는 이유: 이 경로도 결국
+//    renderIndicatorBlocks 안이라 한 번에 확인하는 편이 싸다.
+const chartCountBeforeN = CHART_CALLS.length;
+sandbox.renderSection("indicators", {
+  years_requested: ["2025", "2024", "2023"],
+  years_retrieved: ["2025"],
+  years_failed: ["2023"],
+  rows: INDICATOR_LIVE_ROWS.filter(function (r) { return r.bsns_year === "2025"; }),
+});
+const gapNotes = [];
+(function walk(node) {
+  if (!node) return;
+  if (node.tag === "p" && node.className === "note") gapNotes.push(node.textContent);
+  (node.children || []).forEach(walk);
+})(bodyEl);
+const gapCharts = CHART_CALLS.slice(chartCountBeforeN);
+
 function findIndex(tags, tag) {
   for (let i = 0; i < tags.length; i++) if (tags[i].tag === tag) return i;
   return -1;
@@ -5154,6 +5242,28 @@ process.stdout.write(JSON.stringify({
     ? byTypeChart.data.datasets.map(function (d) { return d.backgroundColor; }) : null,
   byTypeXStacked: byTypeChart ? byTypeChart.options.scales.x.stacked : null,
   byTypeYStacked: byTypeChart ? byTypeChart.options.scales.y.stacked : null,
+  indicatorChartCount: indicatorCharts.length,
+  indicatorCanvasDelta: canvasesAfterM - canvasesBeforeM,
+  indicatorChartTitles: indicatorCharts.map(function (c) {
+    return c.canvas.getAttribute("aria-label");
+  }),
+  indicatorChartKinds: indicatorCharts.map(function (c) { return c.config.type; }),
+  indicatorChartLabels: indicatorCharts.map(function (c) { return c.data.labels; }),
+  indicatorSeries: indicatorCharts.map(function (c) {
+    return c.data.datasets.map(function (d) { return d.label; });
+  }),
+  // 리뷰 지적 ④ — 표는 "130.2%"인데 툴팁이 맨숫자면 같은 값을 둘이
+  // 다르게 말하는 셈이다. 이름에 이미 "(%)"가 있는 지표의 중복도 함께 본다.
+  indicatorTooltip: indicatorCharts[0]
+    ? indicatorCharts[0].config.options.plugins.tooltip.callbacks.label(
+        { datasetIndex: 0, dataset: { label: "순이익률" }, parsed: { y: 130.248 } })
+    : null,
+  indicatorTooltipPercentInName: indicatorCharts[0]
+    ? indicatorCharts[0].config.options.plugins.tooltip.callbacks.label(
+        { datasetIndex: 0, dataset: { label: "배당성향(%)" }, parsed: { y: 25.1 } })
+    : null,
+  gapNotes: gapNotes,
+  gapChartCount: gapCharts.length,
 }));
 """
 
@@ -5377,6 +5487,69 @@ class TestChartRenderExecution(unittest.TestCase):
         )
         self.assertEqual(got["fundDatasets"][0]["data"], [1300000000, 500000000])
         self.assertEqual(got["fundDatasets"][1]["data"], [800000000, 500000000])
+
+    # ── SE-4h 최종 수정: 분류별 추이 차트 ────────────────────────────────
+    # 아래 네 테스트가 생기기 전에는 ui.js의 renderChart("indicators_" + ...)
+    # 호출을 통째로 지워도 1404/1404 초록이었다 — 이 작업의 산출물 전체가
+    # 무방비였다(리뷰가 돌린 16개 변형 중 유일하게 안 잡힌 것).
+
+    def test_four_indicator_charts_are_actually_created(self):
+        """4분류 각각에 Chart 인스턴스와 canvas가 하나씩 실제로 만들어진다."""
+        got = run_chart_render()
+        self.assertEqual(
+            got["indicatorChartCount"], 4,
+            "분류별 추이 차트가 4개가 아닙니다 — renderChart 호출이 죽었을 수 있습니다",
+        )
+        self.assertEqual(
+            got["indicatorCanvasDelta"], 4,
+            "canvas가 DOM에 4개 늘지 않았습니다 — Chart는 만들었지만 화면에 안 붙었을 수 있습니다",
+        )
+        self.assertEqual(
+            got["indicatorChartTitles"],
+            ["수익성 추이 (%)", "안정성 추이 (%)", "성장성(증가율) 추이 (%)", "활동성 추이 (%)"],
+        )
+        for kind in got["indicatorChartKinds"]:
+            self.assertEqual(kind, "line")
+
+    def test_indicator_charts_plot_every_requested_year_oldest_first(self):
+        """연도 축은 과거→최근이다(추세선이 아니라 실제 값의 시간순 나열)."""
+        got = run_chart_render()
+        for labels in got["indicatorChartLabels"]:
+            self.assertEqual(labels, ["2023", "2024", "2025"])
+
+    def test_all_null_indicator_gets_no_series(self):
+        """전 연도 null인 지표(매입채무회전율 — 4사 실측 모두 null)가 범례에
+        남으면 "값이 있는 척"이 된다."""
+        got = run_chart_render()
+        series = got["indicatorSeries"]
+        self.assertEqual(series[0], ["순이익률", "ROE"])
+        self.assertEqual(series[3], ["총자산회전율", "재고자산회전율"])
+        for names in series:
+            self.assertNotIn("매입채무회전율", names)
+
+    def test_indicator_tooltip_carries_the_percent_unit_like_the_table(self):
+        """리뷰 지적 ④: 표는 "130.2%"인데 툴팁이 맨숫자면 같은 값을 둘이
+        다르게 말한다. 이름에 이미 "(%)"가 있으면 단위를 겹쳐 붙이지 않는다."""
+        got = run_chart_render()
+        self.assertEqual(got["indicatorTooltip"], "순이익률: 130.2%")
+        self.assertEqual(got["indicatorTooltipPercentInName"], "배당성향(%): 25.1")
+
+    def test_missing_years_are_stated_on_screen(self):
+        """12콜 중 일부가 실패해 한 해가 빠지면, 화면이 어느 해를 실제로
+        조회했는지 말한다 — 침묵하면 점 하나짜리 "추이"가 그려진다."""
+        got = run_chart_render()
+        gap = [n for n in got["gapNotes"] if "최근 3년" in n]
+        self.assertEqual(len(gap), 1, f"연도 고지 문구를 찾지 못했습니다: {got['gapNotes']}")
+        note = gap[0]
+        self.assertIn("2025", note)
+        self.assertIn("2023", note)
+        self.assertIn("조회에 실패", note)
+        self.assertIn("2024", note)
+        # 값매김 표현은 쓰지 않는다(v0.8.5).
+        for banned in ("부족", "위험", "미흡", "불충분"):
+            self.assertNotIn(banned, note)
+        # 한 해만 남아도 차트는 그대로 그린다(사실은 사실이다).
+        self.assertEqual(got["gapChartCount"], 4)
 
     def test_x_scale_type_comes_from_the_spec_not_hardcoded(self):
         """리뷰 지적 ⑥: CHART_SPECS.fund_usage.xScale("category")이 실제로
@@ -6990,6 +7163,397 @@ class TestMarksClearedOnGate(unittest.TestCase):
                           "showGate() 이후에도 표 셀이 남아 있습니다")
         self.assertEqual(after["bodyChildCount"], 0,
                           "showGate() 이후에도 #body에 자식 노드가 남아 있습니다")
+
+
+# ── SE-4h Task 2: 재무지표 4분류 · 용어 · 단위 · 우선순위 ──────────────────
+#
+# 픽스처는 브리프가 준 실측 형태 그대로다(task-2-brief.md: "이 계열에서
+# 픽스처가 실데이터와 달라 결함이 초록으로 통과한 사고가 여섯 번 있었다").
+# idx_val이 null인 행(세전계속사업이익률), 한 해만 온 행(납입자본이익률),
+# 모르는 분류(새분류)를 그대로 포함한다.
+_INDICATOR_ROWS = [
+    {"bsns_year": "2025", "category": "수익성", "idx_nm": "순이익률", "idx_val": -22.56},
+    {"bsns_year": "2024", "category": "수익성", "idx_nm": "순이익률", "idx_val": -152.661},
+    {"bsns_year": "2025", "category": "수익성", "idx_nm": "세전계속사업이익률", "idx_val": None},
+    {"bsns_year": "2024", "category": "수익성", "idx_nm": "세전계속사업이익률", "idx_val": None},
+    {"bsns_year": "2025", "category": "수익성", "idx_nm": "납입자본이익률", "idx_val": -657.043},
+    {"bsns_year": "2025", "category": "안정성", "idx_nm": "부채비율", "idx_val": 130.248},
+    {"bsns_year": "2024", "category": "안정성", "idx_nm": "부채비율", "idx_val": 139.2},
+    {"bsns_year": "2025", "category": "활동성", "idx_nm": "배당성향(%)", "idx_val": 25.1},
+    {"bsns_year": "2025", "category": "새분류", "idx_nm": "미지의지표", "idx_val": 1.0},
+]
+_INDICATOR_ROWS_JS = json.dumps(_INDICATOR_ROWS, ensure_ascii=False)
+
+# SE-4h Task 2 리뷰 지적(Finding 2): 원래 10개 어휘로는 "…보통 100% 수준이며
+# 그것을 넘으면 재무구조를 다시 볼 일이다" 같은 문턱값+지시문(판정)을 못
+# 잡는다 — 판정 어휘가 하나도 없기 때문이다. test_se_page_assets.py의
+# TestIndicatorNotesVocabulary와 같은 목록을 쓴다(한쪽만 넓히면 다른 쪽이
+# 다시 구멍이 된다).
+_VERDICT_WORDS = (
+    "높", "낮", "위험", "주의", "안전", "양호", "악화", "개선", "우수", "부실",
+    "수준", "넘으면", "이상이면", "미만이면", "바람직", "적정", "충분", "부족",
+    "우려", "클수록", "작을수록", "많을수록", "적을수록",
+)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestIndicatorBlocks(unittest.TestCase):
+    """SE-4h Task 2 Step 1 — fnlttSinglIndx 4분류(수익성·안정성·성장성·
+    활동성)를 보존한 행 목록을 분류별 블록으로 묶는다(task-2-brief.md)."""
+
+    def test_category_order_with_unknown_category_appended_at_end(self):
+        got = run_js(f"indicatorBlocks({_INDICATOR_ROWS_JS}).map(b => b.category)")
+        # 성장성은 이 픽스처에 없다 — 있는 분류만 정해진 순서로, 모르는
+        # 분류("새분류")는 버려지지 않고 맨 뒤에 온다.
+        self.assertEqual(got, ["수익성", "안정성", "활동성", "새분류"])
+
+    def test_primary_vs_rest_split(self):
+        got = run_js(f"indicatorBlocks({_INDICATOR_ROWS_JS})")
+        profit = next(b for b in got if b["category"] == "수익성")
+        primary_names = [e["idx_nm"] for e in profit["primary"]]
+        rest_names = [e["idx_nm"] for e in profit["rest"]]
+        self.assertIn("순이익률", primary_names)
+        self.assertIn("납입자본이익률", rest_names)
+        self.assertNotIn("납입자본이익률", primary_names)
+
+    def test_all_null_indicator_is_not_dropped(self):
+        """값이 없는 지표를 조용히 숨기지 않는다(Global Constraints)."""
+        got = run_js(f"indicatorBlocks({_INDICATOR_ROWS_JS})")
+        profit = next(b for b in got if b["category"] == "수익성")
+        names = [e["idx_nm"] for e in profit["primary"] + profit["rest"]]
+        self.assertIn("세전계속사업이익률", names)
+
+    def test_indicator_notes_has_debt_ratio_as_nonempty_string(self):
+        note = run_js('INDICATOR_NOTES["부채비율"]')
+        self.assertIsInstance(note, str)
+        self.assertTrue(note)
+
+    def test_format_indicator_appends_percent(self):
+        got = run_js('formatIndicator("부채비율", 130.248)')
+        self.assertEqual(got, "130.2%")
+
+    def test_format_indicator_rounds_to_one_decimal(self):
+        # DART가 주는 자릿수는 제각각이다 — 실측으로 -22.56 · -152.661 ·
+        # -144.09 가 한 표에 나란히 온다. 그대로 쓰면 읽기 어려워 표시만
+        # 소수 첫째 자리로 통일한다(원본 값은 idx_val 로 그대로 남는다).
+        got = run_js(
+            '[formatIndicator("순이익률", -22.56),'
+            ' formatIndicator("순이익률", -152.661),'
+            ' formatIndicator("ROE", -144.09),'
+            ' formatIndicator("자본유보율", 3931.533)]'
+        )
+        self.assertEqual(got, ["-22.6%", "-152.7%", "-144.1%", "3931.5%"])
+
+    def test_format_indicator_keeps_zero_visible(self):
+        # 0 은 "—"(값 없음)와 다르다. 반올림 뒤에도 0 이 사라지면 안 된다.
+        self.assertEqual(run_js('formatIndicator("부채비율", 0)'), "0.0%")
+
+    def test_format_indicator_does_not_double_percent_when_name_has_it(self):
+        got = run_js('formatIndicator("배당성향(%)", 25.1)')
+        self.assertEqual(got, "25.1")
+        self.assertNotIn("%", got)
+
+    def test_format_indicator_null_is_em_dash_not_silently_dropped(self):
+        got = run_js('formatIndicator("순이익률", null)')
+        self.assertEqual(got, "—")
+
+    def test_same_indicator_two_years_side_by_side(self):
+        got = run_js(f"indicatorBlocks({_INDICATOR_ROWS_JS})")
+        stability = next(b for b in got if b["category"] == "안정성")
+        debt = next(e for e in stability["primary"] if e["idx_nm"] == "부채비율")
+        years = [c["bsns_year"] for c in debt["cells"]]
+        self.assertEqual(years, ["2025", "2024"])
+
+    def test_empty_and_null_input_yield_empty_list(self):
+        self.assertEqual(run_js("indicatorBlocks([])"), [])
+        self.assertEqual(run_js("indicatorBlocks(null)"), [])
+
+    def test_indicator_notes_carry_no_verdict_words(self):
+        """뜻만 쓰고 값을 평가하지 않는다(v0.8.5) — "높"·"낮"은 "높을수록
+        ~"·"낮으면 ~" 류를 통째로 막기 위한 것이다(브리프 명시)."""
+        got = run_js("Object.values(INDICATOR_NOTES).join(' / ')")
+        for word in _VERDICT_WORDS:
+            self.assertNotIn(word, got, f"INDICATOR_NOTES에 판정 어휘 '{word}'")
+
+    def test_indicator_notes_snapshot(self):
+        """SE-4h Task 2 리뷰 지적(Finding 2) — 어휘 검사기는 "의미"를
+        판정할 수 없다(문턱값+지시문이 판정 어휘 없이도 판정이 될 수
+        있다는 것이 실제로 증명됐다: 부채비율 노트를 "…보통 100% 수준이며
+        그것을 넘으면 재무구조를 다시 볼 일이다"로 바꿔도 어휘 검사 두
+        개가 전부 통과했고, 부채비율의 정확한 문자열을 우연히 고정하고
+        있던 다른 테스트(test_primary_row_has_note_and_percent_value)만
+        간접적으로 잡았다 — 그 테스트는 부채비율 하나만 보므로 다른
+        21개 노트가 같은 방식으로 바뀌면 여전히 못 잡는다.
+
+        진짜 방어는 22개 전체를 스냅샷으로 고정해, 노트가 바뀔 때마다
+        사람이 명시적인 diff를 보고 "의도한 변경인가"를 판단하게 하는
+        것이다 — assertEqual(dict, dict)은 실패 시 바뀐 키·값을 그대로
+        보여준다."""
+        got = run_js("INDICATOR_NOTES")
+        expected = {
+            "순이익률": "매출액 대비 당기순이익의 비율",
+            "매출총이익률": "매출액에서 매출원가를 뺀 매출총이익이 매출액의 몇 %인가",
+            "매출원가율": "매출액 대비 매출원가의 비율",
+            "ROE": "자기자본 대비 당기순이익의 비율",
+            "판관비율": "매출액 대비 판매비와관리비의 비율",
+            "부채비율": "자기자본 대비 부채총계의 비율 — 빌린 돈이 자기 돈의 몇 %인가",
+            "자기자본비율": "총자산 대비 자기자본의 비율",
+            "유동비율": "1년 안에 갚을 유동부채 대비, 1년 안에 현금화할 수 있는 유동자산의 비율",
+            "당좌비율": "유동자산에서 재고자산을 뺀 당좌자산이 유동부채의 몇 %인가",
+            "이자보상배율": "영업이익이 이자비용의 몇 배인가 — 값은 DART가 준 그대로 %로 표시된다",
+            "자본유보율": "자본잉여금과 이익잉여금을 더한 유보액이 자본금의 몇 %인가",
+            "매출액증가율(YoY)": "전년 매출액 대비 이번 사업연도 매출액의 변화율",
+            "영업이익증가율(YoY)": "전년 영업이익 대비 이번 사업연도 영업이익의 변화율",
+            "순이익증가율(YoY)": "전년 당기순이익 대비 이번 사업연도 당기순이익의 변화율",
+            "총자산증가율": "전년 총자산 대비 이번 사업연도 총자산의 변화율",
+            "자기자본증가율": "전년 자기자본 대비 이번 사업연도 자기자본의 변화율",
+            "부채총계증가율": "전년 부채총계 대비 이번 사업연도 부채총계의 변화율",
+            "총자산회전율": "총자산 대비 매출액의 비율",
+            "매출채권회전율": "매출채권 대비 매출액의 비율",
+            "재고자산회전율": "재고자산 대비 매출액의 비율",
+            # 화면 문구 자체에 추정임을 적는다 — 4사 실측 모두 DART가 null을
+            # 주어 산술 검증을 할 수 없었다(리뷰 지적 ③).
+            "매입채무회전율": "매입채무 대비 매출액의 비율 (추정 — DART 값이 없어 산술로 확인하지 못했습니다)",
+            "배당성향(%)": "당기순이익 중 현금배당금총액이 차지하는 비율",
+        }
+        self.assertEqual(
+            set(got.keys()), set(expected.keys()),
+            "INDICATOR_NOTES의 키(22개 지표) 목록이 스냅샷과 다릅니다 — "
+            "지표가 추가/삭제됐다면 아래 expected 딕셔너리도 함께 갱신하세요",
+        )
+        for name in expected:
+            self.assertEqual(
+                got[name], expected[name],
+                f"INDICATOR_NOTES[\"{name}\"]이 스냅샷과 다릅니다 — "
+                f"의도한 변경이면 이 테스트의 expected 값을 갱신하세요\n"
+                f"  스냅샷: {expected[name]!r}\n"
+                f"  실제값: {got[name]!r}",
+            )
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js 렌더링을 검증할 수 없습니다")
+class TestIndicatorSectionRender(unittest.TestCase):
+    """SE-4h Task 2 Step 5 — renderSection("indicators", rows)이 실제로
+    4블록을 그리는지 node vm으로 확인한다(run_render_section). 소스
+    문자열을 grep하는 검사는 배선이 빠진 죽은 코드를 못 잡는다 — 이
+    저장소는 파일이 맞는데 화면이 죽어 있던 사고를 이미 겪었다."""
+
+    def test_four_category_titles_in_order(self):
+        got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
+        self.assertEqual(got["titles"], ["수익성", "안정성", "활동성", "새분류"])
+
+    def test_primary_row_has_note_and_percent_value(self):
+        got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
+        cells = got["cells"]
+        self.assertIn("부채비율", cells)
+        self.assertIn("130.2%", cells)
+        self.assertTrue(
+            any("빌린 돈이 자기 돈의 몇 %인가" in c for c in cells),
+            "부채비율의 뜻(note)이 렌더된 셀에 없습니다",
+        )
+
+    def test_dividend_payout_value_has_no_double_percent(self):
+        got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
+        self.assertIn("25.1", got["cells"])
+        self.assertNotIn("25.1%", got["cells"])
+
+    def test_null_value_shown_as_em_dash_not_dropped(self):
+        got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
+        self.assertIn("세전계속사업이익률", got["cells"])
+        self.assertIn("—", got["cells"])
+
+    def test_rest_indicators_are_folded_not_dumped_flat(self):
+        """rest(세전계속사업이익률·납입자본이익률·미지의지표)는 44개짜리
+        평평한 표가 아니라 기존과 같은 접기 버튼(.fold-btn)으로 접힌다."""
+        got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
+        # 수익성 rest 2개(세전계속사업이익률·납입자본이익률), 새분류 rest
+        # 1개(미지의지표) — 각 분류 블록마다 별도 접기 버튼이 생긴다.
+        self.assertIn("나머지 2개 지표", got["buttons"])
+        self.assertIn("나머지 1개 지표", got["buttons"])
+        self.assertIn("납입자본이익률", got["cells"])
+
+    def test_rest_fold_table_has_no_note_column(self):
+        """SE-4h Task 2 리뷰 지적(Finding 3) — indicatorRestFold(ui.js)가
+        indicatorTableEl(restEntries, true)로 바뀌면(원래 false) rest
+        (접힌) 표에도 "뜻" 헤더 열이 생기고, rest 항목은 app.js
+        indicatorBlocks가 애초에 .note를 안 채우므로(withNote=false로
+        빌드) 그 열은 전부 빈 문자열 44칸이 된다 — 그런데도 이 mutation을
+        적용한 채로 기존 535개 테스트를 돌리면 전부 그대로 통과했다(브리프
+        에 적힌 사고). 이 테스트가 그 변형에 실제로 반응하는지 직접 확인:
+        mutation 적용 → 이 테스트 FAIL(5) → 원복 → PASS(3).
+
+        이 픽스처에서 "뜻" 헤더는 primary 표에만 있고, primary 표는
+        정확히 3개(수익성·안정성·활동성 각 1개 — 새분류는 primary가
+        비어 렌더되지 않는다, indicatorBlocks의 INDICATOR_PRIMARY 매핑
+        참고). rest 표(수익성 rest·새분류 rest)에 "뜻" 헤더가 새로
+        생기면 이 개수가 5로 늘어난다."""
+        got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
+        note_header_count = got["cells"].count("뜻")
+        self.assertEqual(
+            note_header_count, 3,
+            "\"뜻\" 헤더 개수가 예상(3, primary 표 3개)과 다릅니다 — "
+            "rest(접힌) 표에 뜻 열이 생겼을 수 있습니다 "
+            "(ui.js indicatorRestFold의 indicatorTableEl(..., withNote) 인자 확인)",
+        )
+
+    def test_dart_sourced_notice_present_per_block(self):
+        got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
+        self.assertIn(
+            "DART가 계산해 공시한 값입니다 — 우리가 계산한 값이 아닙니다.",
+            got["notes"],
+        )
+
+    def test_indicator_dom_cleared_on_logout(self):
+        got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
+        self.assertEqual(got["afterGate"]["cells"], [])
+        self.assertEqual(got["afterGate"]["bodyChildCount"], 0)
+
+
+# ── SE-4h Task 3: 재무지표 추이 차트 ─────────────────────────────────────
+#
+# task-3-brief.md Step 1 요구사항 4개(연도 오름차순·null 보존·전 연도 null
+# 지표 제외·분류별 차트 분리)를 검증한다. 픽스처는 입력을 일부러 연도
+# 내림차순 + 뒤섞인 순서로 준다 — "입력을 내림차순으로 넣어도" 오름차순이
+# 나오는지를 실제로 확인하기 위해서다(정렬을 안 해도 우연히 통과하는 걸
+# 막는다). 판관비율은 두 해 모두 null(전 연도 null인 primary 지표 — 계열
+# 자체가 없어야 한다), 매출총이익률은 2025 한 해만 온다(다른 해는 행 자체가
+# 없음 — null로 채워지되 0이 아니어야 한다).
+_INDICATOR_TREND_ROWS = [
+    {"bsns_year": "2025", "category": "수익성", "idx_nm": "순이익률", "idx_val": -22.56},
+    {"bsns_year": "2023", "category": "수익성", "idx_nm": "순이익률", "idx_val": -100.0},
+    {"bsns_year": "2024", "category": "수익성", "idx_nm": "순이익률", "idx_val": -152.661},
+    {"bsns_year": "2025", "category": "수익성", "idx_nm": "판관비율", "idx_val": None},
+    {"bsns_year": "2024", "category": "수익성", "idx_nm": "판관비율", "idx_val": None},
+    {"bsns_year": "2025", "category": "수익성", "idx_nm": "매출총이익률", "idx_val": 40.0},
+    {"bsns_year": "2025", "category": "안정성", "idx_nm": "부채비율", "idx_val": 130.248},
+    {"bsns_year": "2024", "category": "안정성", "idx_nm": "부채비율", "idx_val": 139.2},
+]
+_INDICATOR_TREND_ROWS_JS = json.dumps(_INDICATOR_TREND_ROWS, ensure_ascii=False)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestIndicatorTrendChart(unittest.TestCase):
+    """SE-4h Task 3 Step 1 — indicatorChartRecords + CHART_SPECS.indicators_*
+    + chartData(기존 함수 재사용)가 분류별 추이 차트 데이터를 만드는지
+    검증한다. renderChart(ui.js)는 Chart.js 전역이 있어야 실제로 canvas를
+    그리는데, 이 node vm 테스트 하네스에는 Chart가 없다(다른 CHART_SPECS
+    테스트들과 같은 이유로 chartData 파이프라인만 직접 검증한다)."""
+
+    def _chart(self, category):
+        return run_js(
+            f'chartData(indicatorChartRecords({_INDICATOR_TREND_ROWS_JS}, "{category}"), '
+            f'CHART_SPECS["indicators_{category}"])'
+        )
+
+    def test_years_ascending_even_though_input_is_not_sorted(self):
+        got = self._chart("수익성")
+        self.assertEqual(got["labels"], ["2023", "2024", "2025"])
+
+    def test_null_value_stays_null_not_zero(self):
+        got = self._chart("수익성")
+        series = next(d for d in got["datasets"] if d["label"] == "매출총이익률")
+        # labels 순서(2023,2024,2025)와 나란히: 2023·2024는 행 자체가 없어
+        # null, 2025만 40.0.
+        self.assertEqual(series["data"], [None, None, 40.0])
+
+    def test_all_null_indicator_has_no_series(self):
+        got = self._chart("수익성")
+        labels = [d["label"] for d in got["datasets"]]
+        self.assertNotIn("판관비율", labels,
+                          "전 연도가 null인 지표(판관비율)가 계열로 남아 있습니다")
+
+    def test_charts_split_by_category(self):
+        profit = self._chart("수익성")
+        stability = self._chart("안정성")
+        profit_labels = [d["label"] for d in profit["datasets"]]
+        stability_labels = [d["label"] for d in stability["datasets"]]
+        self.assertIn("순이익률", profit_labels)
+        self.assertNotIn("부채비율", profit_labels)
+        self.assertIn("부채비율", stability_labels)
+        self.assertNotIn("순이익률", stability_labels)
+
+    def test_indicator_chart_records_filters_to_category_and_primary_with_value(self):
+        """indicatorChartRecords 자체의 계약: category 일치 + INDICATOR_PRIMARY
+        소속 + 값이 하나라도 있는 지표만 남는다."""
+        got = run_js(f'indicatorChartRecords({_INDICATOR_TREND_ROWS_JS}, "수익성")')
+        names = {r["idx_nm"] for r in got}
+        self.assertIn("순이익률", names)
+        self.assertIn("매출총이익률", names)
+        self.assertNotIn("판관비율", names, "전 연도 null인 지표의 행이 남아 있습니다")
+        self.assertNotIn("부채비율", names, "다른 분류(안정성)의 지표가 섞여 들어왔습니다")
+
+    def test_unknown_category_yields_no_records_and_no_spec(self):
+        got = run_js(f'indicatorChartRecords({_INDICATOR_TREND_ROWS_JS}, "새분류")')
+        self.assertEqual(got, [])
+        # JSON.stringify(undefined)는 undefined 자체(문자열 "undefined"가
+        # 아니다)를 돌려줘 run_js의 JSON.parse가 깨진다 — 존재 여부는 불리언
+        # 식으로 바꿔 물어야 한다.
+        self.assertFalse(run_js('"indicators_새분류" in CHART_SPECS'))
+
+    def test_empty_or_null_rows_yield_empty_list(self):
+        self.assertEqual(run_js('indicatorChartRecords([], "수익성")'), [])
+        self.assertEqual(run_js('indicatorChartRecords(null, "수익성")'), [])
+
+
+# ── SE-4h Task 3 라이브 검증에서 발견한 사실: DART 원본 idx_cl_nm은
+# "수익성지표"·"안정성지표"·"성장성지표"·"활동성지표"다(2026-07-28 엔켐
+# corp_code=01011526 raw fnlttSinglIndx.json 재확인) — 계획 문서 "배경" 절이
+# 근거로 삼은 tmp/indicator_categories.json은 접미어 없는 이름이었는데, 그
+# 자료가 실제 API 응답과 달랐다. 정규화(normalizeIndicatorCategory) 없이는
+# INDICATOR_PRIMARY[category]가 실 데이터에서 언제나 빈 배열이 되어 primary·
+# 뜻·차트가 전부 죽은 코드였다 — 이 클래스는 "픽스처가 실데이터와 달라
+# 결함이 초록으로 통과한 사고"를 재발시키지 않도록 **실측 접미어가 붙은**
+# category 문자열로 검증한다(위 TestIndicatorTrendChart·TestIndicatorBlocks의
+# 접미어 없는 픽스처와 별개로).
+_LIVE_SHAPED_INDICATOR_ROWS = [
+    {"bsns_year": "2025", "category": "수익성지표", "idx_nm": "순이익률", "idx_val": -22.56},
+    {"bsns_year": "2024", "category": "수익성지표", "idx_nm": "순이익률", "idx_val": -152.661},
+    {"bsns_year": "2023", "category": "수익성지표", "idx_nm": "순이익률", "idx_val": -100.0},
+    {"bsns_year": "2025", "category": "안정성지표", "idx_nm": "부채비율", "idx_val": 130.248},
+    {"bsns_year": "2024", "category": "안정성지표", "idx_nm": "부채비율", "idx_val": 139.2},
+]
+_LIVE_SHAPED_INDICATOR_ROWS_JS = json.dumps(_LIVE_SHAPED_INDICATOR_ROWS, ensure_ascii=False)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestIndicatorCategoryNormalization(unittest.TestCase):
+    """DART가 실제로 주는 접미어 형태("수익성지표" 등)가 표준 이름
+    ("수익성")으로 정규화되고, 그 결과로 primary·차트가 실제로 채워지는지
+    검증한다."""
+
+    def test_alias_map_covers_all_four_categories(self):
+        for suffixed, bare in (
+            ("수익성지표", "수익성"), ("안정성지표", "안정성"),
+            ("성장성지표", "성장성"), ("활동성지표", "활동성"),
+        ):
+            got = run_js(f'normalizeIndicatorCategory("{suffixed}")')
+            self.assertEqual(got, bare)
+
+    def test_unknown_category_passes_through_unchanged(self):
+        self.assertEqual(run_js('normalizeIndicatorCategory("새분류")'), "새분류")
+        self.assertEqual(run_js('normalizeIndicatorCategory(null)'), "기타")
+
+    def test_live_shaped_category_yields_normalized_block_category(self):
+        got = run_js(f"indicatorBlocks({_LIVE_SHAPED_INDICATOR_ROWS_JS}).map(b => b.category)")
+        self.assertEqual(got, ["수익성", "안정성"])
+
+    def test_live_shaped_category_is_not_dead_primary(self):
+        """정규화가 없으면 이 값이 항상 []였다(Task 3 라이브 검증에서
+        실제로 재현·확인한 사고)."""
+        got = run_js(f"indicatorBlocks({_LIVE_SHAPED_INDICATOR_ROWS_JS})")
+        profit = next(b for b in got if b["category"] == "수익성")
+        self.assertEqual([e["idx_nm"] for e in profit["primary"]], ["순이익률"])
+        self.assertTrue(profit["primary"][0]["note"])
+
+    def test_live_shaped_category_chart_actually_renders_data(self):
+        got = run_js(
+            f'chartData(indicatorChartRecords({_LIVE_SHAPED_INDICATOR_ROWS_JS}, "수익성"), '
+            f'CHART_SPECS.indicators_수익성)'
+        )
+        self.assertIsNotNone(got, "실측 형태(접미어 포함) category로는 차트 데이터가 비어 있습니다")
+        self.assertEqual(got["labels"], ["2023", "2024", "2025"])
+        series = next(d for d in got["datasets"] if d["label"] == "순이익률")
+        self.assertEqual(series["data"], [-100.0, -152.661, -22.56])
 
 
 if __name__ == "__main__":

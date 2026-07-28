@@ -315,9 +315,19 @@ function renderChart(wrap, key, records, signalsData) {
           callbacks: {
             // 툴팁 값은 formatValue로 포맷한다 — 억/조 표기가 표와 어긋나면
             // 같은 값을 두 가지로 말하는 셈이 된다.
+            //
+            // 재무지표(spec.tooltipFormat === "indicator")만 예외다: 그 표는
+            // formatIndicator로 "130.248%"라고 쓰는데 formatValue는 단위 없는
+            // 맨숫자를 돌려줘, 같은 값을 표와 툴팁이 서로 다르게 말했다(리뷰
+            // 지적 ④). 계열 이름(dataset.label)이 곧 지표명이라 그대로 넘기면
+            // 이름에 이미 "(%)"가 있는 지표(배당성향(%))의 단위 중복도
+            // formatIndicator가 표와 똑같이 처리한다.
             label: function (ctx) {
               const k = seriesKeys ? seriesKeys[ctx.datasetIndex] : spec.y;
-              return ctx.dataset.label + ": " + formatValue(k, ctx.parsed.y);
+              const shown = spec.tooltipFormat === "indicator"
+                ? formatIndicator(ctx.dataset.label, ctx.parsed.y)
+                : formatValue(k, ctx.parsed.y);
+              return ctx.dataset.label + ": " + shown;
             },
           },
         },
@@ -1303,6 +1313,152 @@ function buildAffiliateOverviewBlock(records) {
   return { el: wrap, table: table };
 }
 
+/** indicators 전용 렌더(SE-4h Task 2) — indicatorBlocks(app.js)가 만든
+ *  4분류(수익성·안정성·성장성·활동성, 모르는 분류는 맨 뒤) 블록을 각각
+ *  그린다. renderSection이 sectionBlocks/tableLayout 경로를 아예 타지
+ *  않고 이 함수를 직접 부른다(위 renderSection 주석 참고).
+ *
+ *  뜻(note) 열은 primary 표에만 있다 — rest 표까지 뜻 열을 만들면 44개
+ *  지표 대부분이 빈 칸으로 줄줄이 이어진다(브리프 지적). rest는 기존
+ *  열 접기와 같은 시각 패턴(.fold-btn 버튼 + .fold-detail 토글)을
+ *  재사용한다 — "표 전체를 접는다"는 tableEl()의 열 단위 접기와 모양이
+ *  달라 그 함수를 그대로 재사용하지 않고 클래스만 같이 쓴다(아래
+ *  indicatorRestFold 참고). */
+function renderIndicatorBlocks(holder, value, wrap) {
+  const blocks = indicatorBlocks(value);
+
+  // 어느 해가 실제로 조회됐는지 먼저 말한다(SE-4h 최종 수정, 리뷰 지적 ②).
+  // 12콜 중 몇 개가 실패해 한 해가 통째로 빠져도 화면은 남은 점을 그대로
+  // "추이"라고 그린다 — 그 침묵이 이 화면이 고치려던 실패 모양 그 자체다.
+  // 블록보다 위에 두는 이유: 표·차트를 읽기 *전에* 그 범위를 알아야 한다.
+  // 데이터가 아예 없을 때(아래 early return)도 이 문장은 남긴다 — 그때야말로
+  // "조회 실패인가 자료가 없는 것인가"가 가장 궁금한 순간이다.
+  const yearNote = indicatorYearNote(value);
+  if (yearNote) {
+    const yp = document.createElement("p");
+    yp.className = "note";
+    yp.textContent = yearNote;
+    holder.appendChild(yp);
+  }
+
+  if (blocks.length === 0) {
+    if (wrap) wrap.className = "sec";
+    const p = document.createElement("p");
+    p.className = "note";
+    p.textContent = "표시할 데이터가 없습니다.";
+    holder.appendChild(p);
+    return;
+  }
+  // 지표 표는 지표명+연도 여러 열이라 항상 넓다 — 다른 섹션의
+  // hasWideTable 판정(orientation === "horizontal")과 결론이 같으므로
+  // 여기서는 무조건 wide로 둔다(narrow 2단 그리드에 가두면 연도 열이
+  // 줄바꿈된다).
+  if (wrap) wrap.className = "sec wide";
+
+  blocks.forEach(function (block) {
+    const section = document.createElement("div");
+    const h3 = document.createElement("h3");
+    h3.textContent = block.category;
+    section.appendChild(h3);
+
+    if (block.primary.length > 0) {
+      section.appendChild(indicatorTableEl(block.primary, true));
+      // SE-4h Task 3 — 분류별 추이 차트. indicatorChartRecords(app.js)가
+      // 이 분류의 primary 지표 중 값이 있는 것만 걸러 records로 넘긴다 —
+      // renderChart는 표 바로 위(querySelector("table")로 찾은 자리)에
+      // canvas를 끼워 넣는다(위 renderChart 주석 참고, affiliate_timeline과
+      // 같은 "표 먼저 붙이고 renderChart" 순서). CHART_SPECS["indicators_" +
+      // category](app.js)가 없는 분류(모르는 분류가 온 경우)면 renderChart가
+      // 조용히 false를 돌려주고 표만 남는다 — 화면이 죽지 않는다.
+      renderChart(section, "indicators_" + block.category, indicatorChartRecords(value, block.category));
+    }
+    if (block.rest.length > 0) {
+      section.appendChild(indicatorRestFold(block.rest));
+    }
+
+    // SE-4f에서 파생 지표(계산값)에 붙인 고지("DART 공시 수치로 계산한
+    // 값입니다 — 공시 원본이 아닙니다")와 방향이 반대다 — 이 표는 우리가
+    // 계산하지 않은 DART 원본 지표라서 문구를 구분한다(브리프 요구사항).
+    const notice = document.createElement("p");
+    notice.className = "note";
+    notice.textContent = "DART가 계산해 공시한 값입니다 — 우리가 계산한 값이 아닙니다.";
+    section.appendChild(notice);
+
+    holder.appendChild(section);
+  });
+}
+
+/** indicatorBlocks 항목(entries: [{idx_nm, note?, cells}]) 하나를 표로
+ *  그린다. withNote가 true면 지표 열 바로 뒤에 뜻 열을 넣는다(primary
+ *  전용). 연도 열은 entries[0].cells 순서(indicatorBlocks가 이미 최신
+ *  연도부터 정렬해 뒀다)를 그대로 쓴다.
+ *
+ *  tableLayout(app.js)을 재사용하지 않는 이유: 연도 문자열("2025" 등)을
+ *  레코드 키로 쓰면, 자바스크립트 객체는 정수형 문자열 키를 삽입 순서와
+ *  무관하게 오름차순으로 먼저 나열한다(정수 인덱스 키 규칙) — "지표 |
+ *  뜻 | 2025 | 2024"로 두려던 열 순서가 "2024 | 2025 | 지표 | 뜻"로
+ *  뒤집힌다. 여기서는 열 순서를 배열로 직접 통제해 이 함정을 피한다. */
+function indicatorTableEl(entries, withNote) {
+  const years = entries.length > 0 ? entries[0].cells.map(function (c) { return c.bsns_year; }) : [];
+
+  const table = document.createElement("table");
+  const thead = table.createTHead().insertRow();
+  const th0 = document.createElement("th");
+  th0.textContent = "지표";
+  thead.appendChild(th0);
+  if (withNote) {
+    const thNote = document.createElement("th");
+    thNote.textContent = "뜻";
+    thead.appendChild(thNote);
+  }
+  years.forEach(function (y) {
+    const th = document.createElement("th");
+    th.textContent = y;
+    thead.appendChild(th);
+  });
+
+  const tbody = table.createTBody();
+  entries.forEach(function (entry) {
+    const tr = tbody.insertRow();
+    const tdName = tr.insertCell();
+    tdName.textContent = entry.idx_nm;
+    if (withNote) {
+      const tdNote = tr.insertCell();
+      tdNote.textContent = entry.note || "";
+    }
+    entry.cells.forEach(function (c) {
+      const td = tr.insertCell();
+      td.textContent = c.display;
+    });
+  });
+  return table;
+}
+
+/** rest(접힌 44개 지표)를 기존 .fold-btn/.fold-detail과 같은 시각
+ *  패턴(버튼 + hidden 토글)으로 접는다 — 없애는 게 아니라 접는 것이므로
+ *  클릭하면 언제든 볼 수 있다(tableEl()의 열 접기와 같은 원칙). */
+function indicatorRestFold(restEntries) {
+  const wrap = document.createElement("div");
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "fold-btn";
+  btn.textContent = "나머지 " + restEntries.length + "개 지표";
+  wrap.appendChild(btn);
+
+  const detail = document.createElement("div");
+  detail.className = "fold-detail";
+  detail.hidden = true;
+  detail.appendChild(indicatorTableEl(restEntries, false));
+  wrap.appendChild(detail);
+
+  btn.addEventListener("click", function () {
+    detail.hidden = !detail.hidden;
+  });
+
+  return wrap;
+}
+
 /** 강조가 붙은 열이 접히지 않도록 이 블록의 표를 다시 배치한다.
  *
  *  왜 다시 부르나: sectionBlocks(app.js)가 표를 만드는 시점에는 강조가
@@ -1343,6 +1499,17 @@ function renderSection(key, value) {
   // 사라질 뿐 CHART_INSTANCES의 참조는 그대로 남는다.
   pruneChartsIn(holder);
   while (holder.firstChild) holder.removeChild(holder.firstChild);
+
+  // indicators(주요 재무지표)는 SE-4h부터 {bsns_year, category, idx_nm,
+  // idx_val} 행 목록으로 온다 — sectionBlocks/tableLayout에 그대로
+  // 넘기면 지표 × 연도가 뒤섞인 표 하나가 되어(엔켐 실측 기준 최대
+  // 198행) 예전 49열 세로 표보다 오히려 읽기 나쁘다(app.js indicatorBlocks
+  // 주석 참고). sectionBlocks 자체를 부르지 않고 여기서 가로채 4분류
+  // 블록으로 그린다.
+  if (key === "indicators") {
+    renderIndicatorBlocks(holder, value, SEC_WRAP[key]);
+    return;
+  }
 
   const blocks = sectionBlocks(value, 0, key);
 

@@ -3358,6 +3358,209 @@ def fetch_company_indicators(
     return merged
 
 
+def _previous_business_year() -> int:
+    """직전 사업연도. `se_server/jobs/registry.py`의 동명 함수와 같은 계산이다.
+
+    core는 se_server를 import할 수 없어(레이어 경계) 별도로 둔다. 이 모듈
+    안에서도 같은 계산(`datetime.now().year - 1`)이 여러 곳에 인라인돼
+    있으나(예: fetch_affiliate_investments), 다년 루프의 기준 연도로 재사용할
+    이름 있는 지점이 없어 fetch_indicator_history 전용으로 추가한다.
+    """
+    return datetime.now().year - 1
+
+
+_indicator_history_cache: dict[tuple, tuple[float, dict]] = {}
+_INDX_HISTORY_CACHE_MAX = 20
+_INDX_HISTORY_CACHE_TTL = 600  # 10분
+_INDX_HISTORY_MIN_YEARS = 3   # 추이는 최소 2점, 재무는 3기간이 관례
+_INDX_HISTORY_MAX_YEARS = 5   # 기존 _MAX_YEARS(registry.py) 상한과 맞춤
+
+# **DART는 실패를 HTTP 상태가 아니라 바디의 status 필드로 알린다** — HTTP는
+# 200이고 예외도 아니므로 `_retry`(예외와 429/5xx만 재시도)가 이 실패를 절대
+# 다시 시도하지 않는다. 12콜 버스트 중 한 (연도, 분류) 호출이 이렇게 실패하면
+# 그 해가 통째로 사라진 채 "추이"가 그려진다(SE-4h 리뷰에서 실제로 관측:
+# 첫 호출 66행/2025년만, 이후 호출 198행/3개 연도).
+#
+# 여기 있는 코드만 일시적 장애다 — 재시도하면 성공할 수 있다.
+#   020 요청 한도 초과(분당 스로틀), 800 시스템 점검
+# 013(데이터 없음)은 "그 조건에 자료가 없다"는 확정 답변이라 재시도 대상이
+# 아니고, 900(키 오류)·100번대(요청 오류)는 재시도해도 같은 답이다.
+# `_retry` 자체를 고치지 않는 이유: 그 함수는 모든 엔드포인트가 공유하며,
+# 바디 status 해석은 엔드포인트마다 다르다(예: document.xml은 JSON이 아니다).
+_INDX_TRANSIENT_STATUSES = frozenset({"020", "800"})
+_INDX_STATUS_RETRIES = 3          # 최초 1회 + 재시도 2회
+_INDX_STATUS_RETRY_SLEEP = 1.0    # 초. 시도마다 2배(1s, 2s)
+
+
+def _fetch_indx_page(
+    corp_code: str, api_key: str, bsns_year: str, reprt_code: str, cl: str,
+) -> tuple[str, list]:
+    """fnlttSinglIndx 한 (연도, 분류) 호출. (status, list)를 돌려준다.
+
+    일시적 status(_INDX_TRANSIENT_STATUSES)와 예외는 지수 백오프로 다시
+    시도한다. 끝내 실패하면 status는 마지막 코드(예외면 "exception")이고
+    list는 비어 있다 — 호출자가 "조회 실패한 연도"로 기록할 수 있게
+    성공/실패를 값으로 구분해 돌려주는 것이 이 함수의 존재 이유다.
+    """
+    status = "exception"
+    for attempt in range(_INDX_STATUS_RETRIES):
+        try:
+            resp = _retry(
+                "GET", f"{DART_BASE}/fnlttSinglIndx.json",
+                params={
+                    "crtfc_key": api_key,
+                    "corp_code": corp_code,
+                    "bsns_year": bsns_year,
+                    "reprt_code": reprt_code,
+                    "idx_cl_code": cl,
+                },
+            )
+            data = resp.json()
+            status = str(data.get("status", "?"))
+            if status == "000":
+                return status, list(data.get("list") or [])
+            _log_dart_status(
+                status,
+                f"fnlttSinglIndx history cl={cl} corp_code={corp_code} "
+                f"year={bsns_year}",
+            )
+            if status not in _INDX_TRANSIENT_STATUSES:
+                return status, []
+        except Exception as e:
+            status = "exception"
+            log.debug(
+                "fnlttSinglIndx history cl=%s year=%s 조회 실패 (%s): %s",
+                cl, bsns_year, corp_code, e,
+            )
+        if attempt < _INDX_STATUS_RETRIES - 1:
+            time.sleep(_INDX_STATUS_RETRY_SLEEP * (2 ** attempt))
+    return status, []
+
+
+def fetch_indicator_history(
+    corp_code: str,
+    api_key: str,
+    lookback_years: int = 1,
+    reprt_code: str = "11011",
+) -> dict:
+    """연도별 주요 재무지표를 분류(idx_cl_nm)를 보존해 반환.
+
+    반환 형태(SE-4h 최종 수정 — 예전에는 행 목록 자체를 돌려줬다):
+
+        {"years_requested": ["2025", "2024", "2023"],   # 요청한 연도(최신순)
+         "years_retrieved": ["2025", "2024"],           # 실제로 행이 온 연도
+         "years_failed":    ["2023"],                   # 조회 자체가 실패한 연도
+         "rows": [...]}                                 # 예전의 반환값 그대로
+
+    **왜 행 목록만으로는 부족한가**: 12콜 중 몇 개가 실패해 한 해가 통째로
+    빠져도, 행 목록만 받은 화면은 그것이 "API가 실패했다"인지 "그 회사는
+    그 해 자료가 아예 없다"인지 구분할 수 없다 — 점 하나짜리 "추이"가
+    아무 설명 없이 그려진다. 이 화면이 존재하는 이유가 바로 "덜 보여주면서
+    다 보여주는 척하지 않는다"이므로, 요청한 연도와 실제로 받아온 연도를
+    사실로 함께 돌려준다(판정이 아니라 사실 표기 — v0.8.5).
+
+    `years_failed`가 `years_retrieved`와 별개인 이유: 전자는 우리 쪽 조회
+    사고(재시도해도 실패), 후자에 없고 전자에도 없는 연도는 DART가 "그 해
+    자료 없음(013)"이라고 확정 답변한 경우다. 둘은 사용자에게 다른 사실이다.
+
+    `fetch_company_indicators`는 4개 idx_cl_code 응답을 `{idx_nm: float}`
+    평평한 dict로 합치며 분류와 다년 흐름을 버린다. 이 함수는 그 옆에 별도로
+    추가한 신규 함수로, 기존 함수는 손대지 않는다(`scan_financial_anomaly`가
+    그대로 의존).
+
+    조회 연도 수는 `max(3, lookback_years)`를 5로 상한한다 — 사용자가 1년을
+    선택해도 추이를 보여주려면 최소 3개 연도가 필요하다. 가장 최근 사업연도
+    (직전 사업연도)부터 과거로 내려간다.
+
+    각 행: {"bsns_year": "2025", "category": "수익성",
+            "idx_nm": "순이익률", "idx_val": -22.56 | None}
+
+    `idx_val` 키가 아예 없는 레코드가 실측에 존재한다(엔켐 세전계속사업이익률)
+    — `.get()`으로 읽고, 빈 문자열·None·숫자 변환 불가 값은 `idx_val: None`
+    행으로 남긴다(행 자체는 버리지 않는다 — 지표가 존재한다는 사실은 남긴다).
+
+    `idx_cl_nm`이 응답에 없으면 `idx_cl_code`로, 그것도 없으면 `"기타"`로
+    분류한다.
+
+    한 (연도, idx_cl_code) 호출이 실패해도 예외를 밖으로 던지지 않는다
+    (프로젝트 규칙: API 실패 시 빈 값). 그 조합만 빠지고 나머지는 반환되며,
+    그 연도는 `years_failed`에 기록된다(`_fetch_indx_page` 참고).
+    """
+    if not corp_code or not api_key:
+        return {"years_requested": [], "years_retrieved": [],
+                "years_failed": [], "rows": []}
+
+    try:
+        ly = int(lookback_years)
+    except (TypeError, ValueError):
+        ly = 1
+    year_count = min(_INDX_HISTORY_MAX_YEARS, max(_INDX_HISTORY_MIN_YEARS, ly))
+
+    cache_key = (corp_code, year_count, reprt_code)
+    cached = _cache_get(_indicator_history_cache, cache_key, _INDX_HISTORY_CACHE_TTL)
+    if cached is not None:
+        return cached
+
+    base_year = _previous_business_year()
+    rows: list[dict] = []
+    years_requested: list[str] = []
+    years_retrieved: list[str] = []
+    years_failed: list[str] = []
+    for offset in range(year_count):
+        bsns_year = str(base_year - offset)
+        years_requested.append(bsns_year)
+        year_has_rows = False
+        year_failed = False
+        for cl in _INDX_CL_CODES:
+            status, items = _fetch_indx_page(
+                corp_code, api_key, bsns_year, reprt_code, cl,
+            )
+            # 013(데이터 없음)은 실패가 아니라 확정 답변이다 — 위 상수 주석 참고.
+            if status not in ("000", "013"):
+                year_failed = True
+            for item in items:
+                nm = (item.get("idx_nm") or "").strip()
+                if not nm:
+                    continue
+                category = (
+                    item.get("idx_cl_nm") or item.get("idx_cl_code") or "기타"
+                )
+                raw = item.get("idx_val")
+                val: float | None
+                if raw is None or raw == "":
+                    val = None
+                else:
+                    try:
+                        val = float(str(raw).replace(",", "").strip())
+                    except (TypeError, ValueError):
+                        val = None
+                year_has_rows = True
+                rows.append({
+                    "bsns_year": bsns_year,
+                    "category": category,
+                    "idx_nm": nm,
+                    "idx_val": val,
+                })
+        if year_has_rows:
+            years_retrieved.append(bsns_year)
+        if year_failed:
+            years_failed.append(bsns_year)
+
+    result = {
+        "years_requested": years_requested,
+        "years_retrieved": years_retrieved,
+        "years_failed": years_failed,
+        "rows": rows,
+    }
+    # 조회에 실패한 연도가 있으면 캐시하지 않는다 — 일시적 사고를 10분 동안
+    # 굳혀 두면 사용자가 다시 눌러도 같은 반쪽 화면을 본다(리뷰가 관측한
+    # 증상이 정확히 그 모양이다).
+    if not years_failed:
+        _cache_set(_indicator_history_cache, cache_key, result,
+                   _INDX_HISTORY_CACHE_MAX)
+    return result
+
+
 # v0.9.0: 부실 후속 4종 통합 (#7) ----------------------------------------
 _DISTRESS_ENDPOINTS: tuple[tuple[str, str], ...] = (
     # (path, subtype)
