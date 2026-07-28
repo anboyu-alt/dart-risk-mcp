@@ -227,6 +227,19 @@ function collectTitles(node, out) {
   return out;
 }
 
+// fund_usage 안내문(renderSection이 holder에 직접 붙이는 <p class="note">)
+// 처럼 표가 아닌 문단이 실제로 DOM에 그려지는지 확인하기 위한 수집기 —
+// collectTitles(h3)와 같은 방식이다. blockEl()이 데이터 없음 안내에도
+// 같은 className("note")을 쓰므로, 특정 섹션 전용 문구인지는 텍스트
+// 내용으로 호출부에서 구분한다.
+function collectNotes(node, out) {
+  out = out || [];
+  if (!node) return out;
+  if (node.tag === "p" && node.className === "note") out.push(node.textContent);
+  (node.children || []).forEach(function (c) { collectNotes(c, out); });
+  return out;
+}
+
 const sandbox = {
   console: console,
   document: {
@@ -253,6 +266,7 @@ sandbox.renderSection(%(key)s, %(value)s);
 process.stdout.write(JSON.stringify({
   cells: collectCells(bodyEl, []),
   titles: collectTitles(bodyEl, []),
+  notes: collectNotes(bodyEl, []),
 }));
 """
 
@@ -517,6 +531,75 @@ class TestTableLayoutPreservesData(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestReprtCodeLabels(unittest.TestCase):
+    """reprt_code(11011 등) 내부 코드를 사람이 읽는 한국어로 바꾸는
+    REPRT_CODE_LABELS 검증. 내부 함수(formatValue 안의 변환 분기)는
+    export되지 않으므로 실제 진입점인 formatValue·tableLayout으로
+    검증한다.
+
+    확인 대상: 네 코드(11011/11012/11013/11014) 전부가 변환되는지, 모르는
+    코드는 원본을 그대로 두는지("데이터를 숨기지 않는다" — label()과 같은
+    계약), 코드처럼 생긴 다른 필드 값(예: 접수번호)이 reprt_code가 아닌
+    필드에 있을 때 잘못 변환되지 않는지.
+    """
+
+    def test_all_four_known_codes_convert(self):
+        expected = {
+            "11011": "사업보고서", "11012": "반기보고서",
+            "11013": "1분기보고서", "11014": "3분기보고서",
+        }
+        for code, label_ko in expected.items():
+            got = run_js(f'formatValue("reprt_code", "{code}")')
+            self.assertEqual(got, label_ko, f"reprt_code {code}가 변환되지 않았습니다")
+
+    def test_numeric_report_code_value_also_converts(self):
+        """field-inventory 실측(financials.reprt_code 등)은 문자열이 아니라
+        숫자 타입("숫자")이다 — JSON에서 숫자로 오는 실제 형태도
+        변환돼야 한다."""
+        got = run_js('formatValue("reprt_code", 11011)')
+        self.assertEqual(got, "사업보고서")
+
+    def test_unknown_report_code_is_shown_as_is(self):
+        """예상 밖 코드를 숨기면 안 된다 — "모르면 원본 그대로"가 label()과
+        동일한 계약이라는 것이 REPRT_CODE_LABELS 주석의 명시적 근거다."""
+        got = run_js('formatValue("reprt_code", "99999")')
+        self.assertEqual(got, "99999")
+
+    def test_code_like_value_under_a_different_key_is_not_converted(self):
+        """이 변환은 필드 **이름**(key==="reprt_code")에 묶여 있어야 한다 —
+        우연히 같은 문자열 값을 가진 다른 필드(접수번호·사업연도 등)까지
+        같이 바뀌면 안 된다."""
+        self.assertEqual(run_js('formatValue("rcept_no", "11011")'), "11011")
+        self.assertEqual(run_js('formatValue("bsns_year", "11012")'), "11012")
+
+    def test_wired_through_table_layout_for_a_constant_column(self):
+        """financials 실측(field-inventory: reprt_code가 constant_columns에
+        있다)처럼 여러 행에서 값이 같아 캡션으로 승격되는 경로에서도
+        변환이 적용돼야 한다."""
+        got = run_js(
+            'tableLayout([{reprt_code:"11011",account_nm:"유동자산"},'
+            ' {reprt_code:"11011",account_nm:"비유동자산"}])'
+        )
+        caption_values = {c["key"]: c["value"] for c in got["caption"]}
+        self.assertEqual(caption_values.get("reprt_code"), "사업보고서",
+                          "캡션으로 승격된 reprt_code가 변환되지 않았습니다")
+
+    def test_wired_through_table_layout_when_it_varies_by_row(self):
+        """fund_usage처럼 회차마다 분기 보고서가 다를 수 있는 가로 표에서는
+        열 본문(캡션이 아니라)에 남는다 — 각 행의 값이 올바르게 변환돼야
+        한다."""
+        got = run_js(
+            'tableLayout([{reprt_code:"11011",tm:"제1회"},'
+            ' {reprt_code:"11013",tm:"제1회"}])'
+        )
+        self.assertIn("reprt_code", got["keys"], "reprt_code가 본문 열에 남아있지 않습니다")
+        idx = got["keys"].index("reprt_code")
+        cells = [row[idx] for row in got["rows"]]
+        self.assertIn("사업보고서", cells)
+        self.assertIn("1분기보고서", cells)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestTableLayout(unittest.TestCase):
     """세로/가로 자동 판단 + 상수열 캡션 승격.
 
@@ -741,6 +824,197 @@ class TestSectionBlocks(unittest.TestCase):
                 for row in b["table"]["rows"]:
                     for c in row:
                         self.assertNotIn(long_text, c, "긴 문자열이 표 셀에 욱여넣어졌습니다")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestHiddenIdKeysOmission(unittest.TestCase):
+    """corp_code·corp_cls를 company_info 밖의 모든 섹션에서 걷어내는
+    omitHiddenIds(HIDDEN_ID_KEYS)의 실제 진입점(sectionBlocks)을 검증한다
+    — 내부 함수 자체는 export되지 않는다.
+
+    확인 대상: 대상 필드가 실제로 빠지는지 / company_info에서는 살아
+    있는지 / 다른 필드가 같이 사라지지 않는지(가장 위험한 실패 모드 —
+    데이터 유실).
+    """
+
+    def test_corp_code_and_corp_cls_are_dropped_outside_company_info(self):
+        records = [
+            {"corp_code": "00126380", "corp_cls": "Y", "account_nm": "유동자산", "thstrm_amount": 100},
+            {"corp_code": "00126380", "corp_cls": "Y", "account_nm": "비유동자산", "thstrm_amount": 200},
+        ]
+        got = run_js(
+            f'sectionBlocks({json.dumps(records, ensure_ascii=False)}, 0, "financials")'
+        )
+        table = got[0]["table"]
+        present = set(table["keys"]) | {c["key"] for c in table["caption"]}
+        self.assertNotIn("corp_code", present, "corp_code가 financials 섹션에서 안 걸러졌습니다")
+        self.assertNotIn("corp_cls", present, "corp_cls가 financials 섹션에서 안 걸러졌습니다")
+
+    def test_company_info_keeps_both_fields(self):
+        """company_info는 이 값들이 사용자 눈에 보이는 유일한 자리다 —
+        여기서까지 지우면 데이터가 화면 어디에도 남지 않는다."""
+        value = {
+            "corp_code": "00126380", "corp_cls": "Y",
+            "corp_name": "엔켐", "ceo_nm": "오정강",
+        }
+        got = run_js(f'sectionBlocks({json.dumps(value, ensure_ascii=False)}, 0, "company_info")')
+        table = got[0]["table"]
+        self.assertEqual(table["orientation"], "vertical")
+        self.assertIn("corp_code", table["keys"], "company_info에서 corp_code가 사라졌습니다")
+        self.assertIn("corp_cls", table["keys"], "company_info에서 corp_cls가 사라졌습니다")
+
+    def test_only_the_two_id_fields_are_dropped_not_neighbors(self):
+        """가장 위험한 실패 모드: 다른 필드가 함께 사라지는 것. stock_code
+        (종목코드)처럼 이름이 비슷하거나 나란히 오는 다른 필드는 살아남아야
+        한다(field-inventory의 disclosures 실측 필드 구성)."""
+        records = [
+            {"corp_code": "00126380", "corp_cls": "Y", "stock_code": "348370",
+             "corp_name": "엔켐", "report_nm": "[기재정정]주요사항보고서"},
+            {"corp_code": "00126380", "corp_cls": "Y", "stock_code": "348370",
+             "corp_name": "엔켐", "report_nm": "전환사채발행결정"},
+        ]
+        got = run_js(
+            f'sectionBlocks({json.dumps(records, ensure_ascii=False)}, 0, "disclosures")'
+        )
+        table = got[0]["table"]
+        present = set(table["keys"]) | {c["key"] for c in table["caption"]}
+        for must_keep in ("stock_code", "corp_name", "report_nm"):
+            self.assertIn(must_keep, present, f"{must_keep}가 corp_code와 함께 사라졌습니다")
+
+    def test_dropped_recursively_from_nested_dict_of_lists(self):
+        """shareholders({major_holders, bulk_holders})처럼 값이 중첩돼 있어도
+        하위 리스트 안의 corp_code까지 빠져야 한다 — omitHiddenIds는 트리
+        전체를 재귀적으로 훑는다(sectionBlocks 재귀 깊이가 아니라)."""
+        value = {
+            "major_holders": [{"corp_code": "00126380", "nm": "오정강"}],
+            "bulk_holders": [{"corp_code": "00126380", "nm": "와이어트그룹"}],
+        }
+        got = run_js(f'sectionBlocks({json.dumps(value, ensure_ascii=False)}, 0, "shareholders")')
+        for block in got:
+            table = block.get("table")
+            if not table:
+                continue
+            present = set(table["keys"]) | {c["key"] for c in table["caption"]}
+            self.assertNotIn("corp_code", present,
+                              f"{block['title']} 표에 corp_code가 남아 있습니다")
+
+    def test_corp_code_does_appear_when_the_gate_is_not_applied(self):
+        """대조군: 같은 데이터를 company_info로 위장해 게이트를 우회하면
+        corp_code가 실제로 표에 나온다는 것을 확인해, 위 검사들이 애초에
+        무언가를 검증하고 있다는 것을 보장한다(항상-초록 테스트 방지)."""
+        records = [{"corp_code": "00126380", "account_nm": "유동자산"}]
+        got = run_js(
+            f'sectionBlocks({json.dumps(records, ensure_ascii=False)}, 0, "company_info")'
+        )
+        table = got[0]["table"]
+        self.assertIn("corp_code", table["keys"])
+
+
+def _flatten_table_cells(table):
+    """세로(rows: [[label,value], ...])·가로(rows: [[v1,v2,...], ...]) 둘
+    다 "행 목록의 목록"이라는 같은 모양이라, 방향을 가리지 않고 모든 셀
+    문자열을 한 목록으로 편다."""
+    return [c for row in table["rows"] for c in row]
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestAggregateRowSplit(unittest.TestCase):
+    """최대주주 현황(shareholders.major_holders)에 섞여 오는 합계
+    ("계"/"합계"/"총계") 행을 사람 목록에서 분리하는 splitAggregateRows의
+    실제 진입점(sectionBlocks, key="shareholders")을 검증한다.
+
+    확인 대상: "계" 행이 사람 목록에서 빠지는지 / 합계 자체가 사라지지
+    않고 어딘가에 남는지(없애는 게 아니라 분리하는 것) / 이름이 "계"로
+    시작하는 실제 인물(예: "계상훈")이 오탐되지 않는지 / 합계 행이 없는
+    데이터에서도 안전한지.
+    """
+
+    _PEOPLE = [
+        {"nm": "오정강", "relate": "본인", "trmend_posesn_stock_qota_rt": "17.40"},
+        {"nm": "오정섭", "relate": "특수관계인", "trmend_posesn_stock_qota_rt": "2.10"},
+    ]
+
+    def _blocks_for(self, major_holders):
+        value = {"major_holders": major_holders, "bulk_holders": []}
+        return run_js(f'sectionBlocks({json.dumps(value, ensure_ascii=False)}, 0, "shareholders")')
+
+    def _people_block(self, blocks):
+        return next(b for b in blocks if b["title"] == "최대주주")
+
+    def test_aggregate_row_is_removed_from_the_people_table(self):
+        total_row = {"nm": "계", "relate": "-", "trmend_posesn_stock_qota_rt": "19.50"}
+        got = self._blocks_for(self._PEOPLE + [total_row])
+        people_block = self._people_block(got)
+        idx = people_block["table"]["keys"].index("nm")
+        names = [row[idx] for row in people_block["table"]["rows"]]
+        self.assertNotIn("계", names, "합계 행이 사람 목록에서 빠지지 않았습니다")
+        self.assertIn("오정강", names)
+        self.assertIn("오정섭", names)
+
+    def test_aggregate_row_survives_in_its_own_block_not_deleted(self):
+        """"합계를 없애라는 게 아니다"(브리프 원칙) — 소계 블록으로
+        어딘가에 남아야 한다."""
+        total_row = {"nm": "계", "relate": "-", "trmend_posesn_stock_qota_rt": "19.50"}
+        got = self._blocks_for(self._PEOPLE + [total_row])
+        titles = [b["title"] for b in got]
+        self.assertIn("최대주주 · 합계", titles, "합계 블록이 안 보입니다")
+        total_block = next(b for b in got if b["title"] == "최대주주 · 합계")
+        flat = _flatten_table_cells(total_block["table"])
+        self.assertIn("계", flat, "합계 행의 값 자체가 사라졌습니다")
+
+    def test_person_named_starting_with_the_aggregate_word_is_not_misdetected(self):
+        """"계상훈"은 진짜 사람이다 — 접두/부분 일치가 아니라 정확히
+        "계"/"합계"/"총계"와 같을 때만(splitAggregateRows의 Set.has, trim
+        비교) 합계로 분류해야 한다."""
+        records = self._PEOPLE + [{"nm": "계상훈", "relate": "특수관계인",
+                                     "trmend_posesn_stock_qota_rt": "0.50"}]
+        got = self._blocks_for(records)
+        people_block = self._people_block(got)
+        idx = people_block["table"]["keys"].index("nm")
+        names = [row[idx] for row in people_block["table"]["rows"]]
+        self.assertIn("계상훈", names, "실제 인물 '계상훈'이 합계로 오탐돼 사람 목록에서 빠졌습니다")
+        titles = [b["title"] for b in got]
+        self.assertNotIn("최대주주 · 합계", titles,
+                          "합계 행이 없는데도(계상훈은 사람이다) 합계 블록이 생겼습니다")
+
+    def test_hap_gye_and_chong_gye_are_also_recognized(self):
+        for total_name in ("합계", "총계"):
+            records = self._PEOPLE + [{"nm": total_name, "relate": "-",
+                                         "trmend_posesn_stock_qota_rt": "19.50"}]
+            got = self._blocks_for(records)
+            people_block = self._people_block(got)
+            idx = people_block["table"]["keys"].index("nm")
+            names = [row[idx] for row in people_block["table"]["rows"]]
+            self.assertNotIn(total_name, names, f"{total_name} 행이 사람 목록에서 분리되지 않았습니다")
+
+    def test_no_aggregate_row_present_is_still_safe(self):
+        """합계 행이 아예 없는 데이터에서도 사람 목록은 그대로, 합계 블록은
+        생기지 않아야 한다."""
+        got = self._blocks_for(self._PEOPLE)
+        titles = [b["title"] for b in got]
+        self.assertIn("최대주주", titles)
+        self.assertNotIn("최대주주 · 합계", titles)
+        people_block = self._people_block(got)
+        idx = people_block["table"]["keys"].index("nm")
+        names = [row[idx] for row in people_block["table"]["rows"]]
+        self.assertEqual(set(names), {"오정강", "오정섭"})
+
+    def test_empty_major_holders_still_gets_its_own_block(self):
+        """빈 리스트는 표를 만들 근거가 없다는 사실 자체를 블록으로
+        남긴다 — 기존 원칙(test_empty_nested_list_still_gets_its_own_block)과
+        같다."""
+        got = self._blocks_for([])
+        titles = [b["title"] for b in got]
+        self.assertIn("최대주주", titles)
+
+    def test_record_without_nm_field_is_kept_as_a_person_not_dropped(self):
+        """판정을 못 하면(예상 밖 응답 — nm 필드 자체가 없음) 지우지 않는
+        쪽이 안전하다 — splitAggregateRows 주석의 명시적 규칙."""
+        malformed = [{"relate": "본인", "trmend_posesn_stock_qota_rt": "17.40"}]
+        got = self._blocks_for(self._PEOPLE + malformed)
+        people_block = self._people_block(got)
+        self.assertEqual(len(people_block["table"]["rows"]), 3,
+                          "nm이 없는 레코드가 사람 목록에서 조용히 사라졌습니다")
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
@@ -984,6 +1258,52 @@ class TestInsiderTimelineRenderWiring(unittest.TestCase):
         )
         self.assertIn("임원·주요주주 소유보고 이력", got["titles"])
         self.assertIn("최대주주 현황", got["titles"])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestFundUsagePayDeLabelAndNote(unittest.TestCase):
+    """pay_de 라벨이 "자금 납입일"로 바뀌었는지, fund_usage를 렌더링할 때
+    ui.js의 안내 문구가 실제로 DOM에 그려지는지 검증한다.
+
+    "정의만 있고 부르는 곳이 없다" 사고가 이 저장소에서 다섯 번(브리프
+    지적) 났으므로, ui.js 소스 문자열에 안내 문구가 있는지가 아니라
+    renderSection을 실제로 실행해(app.js·ui.js를 같은 vm에서 순서대로
+    실행하는 run_render_section) DOM에 그 문단이 붙는지로 확인한다.
+    """
+
+    def test_pay_de_label_is_fund_payment_date(self):
+        got = run_js(
+            'tableLayout([{tm:"제14회",pay_de:"20211026",pay_amount:1000},'
+            ' {tm:"제15회",pay_de:"20220101",pay_amount:2000}])'
+        )
+        self.assertIn("자금 납입일", got["columns"], "pay_de 라벨이 '자금 납입일'이 아닙니다")
+        # 라벨만 바뀐 것이지 날짜 표시 형식(DATE_FIELDS)이 깨지면 안 된다.
+        key_idx = got["keys"].index("pay_de")
+        self.assertEqual(got["rows"][0][key_idx], "2021.10.26")
+
+    def test_fund_usage_note_is_actually_rendered_in_the_dom(self):
+        records = [
+            {"tm": "제14회", "kind": "public", "year": 2021, "pay_de": "20211026",
+             "pay_amount": 1000, "plan_amount": 1000, "plan_useprps": "원재료 매입",
+             "real_dtls_cn": "원재료 매입", "real_dtls_amount": 1000,
+             "dffrnc_resn": "-", "flags": []},
+        ]
+        got = run_render_section('"fund_usage"', json.dumps(records, ensure_ascii=False))
+        notes = " ".join(got.get("notes", []))
+        self.assertIn("같은 회차가 여러 행으로 나오는 것은 오류가 아닙니다", notes,
+                       "fund_usage 안내 문구가 실제 DOM에 그려지지 않았습니다 — "
+                       "정의만 있고 renderSection이 부르지 않을 수 있습니다")
+        self.assertIn("자금 납입일", notes, "안내 문구가 '자금 납입일' 표현을 쓰지 않습니다")
+
+    def test_note_is_not_rendered_for_other_sections(self):
+        """안내문이 fund_usage 전용이어야 한다 — 조건 없이 항상 붙는
+        회귀(다른 섹션에도 새는 것)를 잡는다."""
+        got = run_render_section(
+            '"affiliates"', json.dumps([{"inv_prm": "Enchem Poland"}], ensure_ascii=False)
+        )
+        notes = " ".join(got.get("notes", []))
+        self.assertNotIn("같은 회차가 여러 행으로", notes,
+                          "fund_usage 안내문이 다른 섹션(affiliates)에도 그려졌습니다")
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")

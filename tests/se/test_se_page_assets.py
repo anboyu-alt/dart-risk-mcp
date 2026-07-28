@@ -1683,6 +1683,76 @@ class TestLayoutCssRuleStructure(unittest.TestCase):
                             "있습니다")
 
 
+class TestPanelCloseDoesNotOverlapThemeToggle(unittest.TestCase):
+    """#panel-close(패널 닫기 버튼)와 #theme-toggle(다크/라이트 토글,
+    position:fixed로 항상 화면 오른쪽 위에 떠 있다)이 겹치던 CSS 버그
+    수정 검증.
+
+    문자열 존재 검사("margin-top이 있다")만으로는 값이 너무 작아 여전히
+    겹치는 회귀를 못 잡는다 — TestLayoutCssRuleStructure의 선례대로 실제
+    선언 값을 파싱해, #panel-close가 내려가는 지점이 #theme-toggle의
+    세로 영역(버튼 높이) 아래인지 계산으로 확인한다.
+    """
+
+    @staticmethod
+    def _px(rule: str, prop: str) -> float:
+        m = re.search(re.escape(prop) + r"\s*:\s*([\d.]+)px", rule)
+        assert m is not None, f"{prop} 선언을 찾지 못했습니다: {rule}"
+        return float(m.group(1))
+
+    def test_panel_close_margin_top_clears_the_theme_toggle_button(self):
+        html = _sources()["index.html"]
+        base, _ = _split_media_and_base(html)
+        style_block = re.search(r"<style>(.*?)</style>", base, re.S)
+        self.assertIsNotNone(style_block, "<style> 블록을 찾지 못했습니다")
+        css = style_block.group(1)
+
+        panel_rule = _css_rule(css, "#panel")
+        self.assertIsNotNone(panel_rule, "#panel 규칙을 찾지 못했습니다")
+        panel_padding_top = self._px(panel_rule, "padding")
+
+        close_rule = _css_rule(css, "#panel-close")
+        self.assertIsNotNone(close_rule, "#panel-close 규칙을 찾지 못했습니다")
+        self.assertRegex(close_rule, r"margin-top\s*:\s*[\d.]+px",
+                          "#panel-close에 margin-top 선언이 없습니다")
+        margin_top = self._px(close_rule, "margin-top")
+
+        toggle_rule = _css_rule(css, "#theme-toggle")
+        self.assertIsNotNone(toggle_rule, "#theme-toggle 규칙을 찾지 못했습니다")
+        toggle_top = self._px(toggle_rule, "top")
+        toggle_font_size = self._px(toggle_rule, "font-size")
+        m = re.search(r"padding\s*:\s*([\d.]+)px", toggle_rule)
+        self.assertIsNotNone(m, "#theme-toggle padding 선언을 찾지 못했습니다")
+        toggle_padding_v = float(m.group(1))  # "6px 10px" 축약형의 첫 값(위아래)
+
+        # 버튼 테두리는 전역 input,button 규칙에서 온다(#theme-toggle이
+        # border를 따로 재정의하지 않는다).
+        generic_button_rule = _css_rule(css, "input,button")
+        self.assertIsNotNone(generic_button_rule, "input,button 공통 규칙을 찾지 못했습니다")
+        border = self._px(generic_button_rule, "border")
+
+        # line-height는 body{font:14px/1.6 ...} 축약형의 비율을 그대로
+        # 물려받는다(버튼에 별도 line-height 선언이 없다).
+        body_rule = _css_rule(css, "body")
+        self.assertIsNotNone(body_rule, "body 규칙을 찾지 못했습니다")
+        lh_m = re.search(r"font\s*:\s*[\d.]+px/([\d.]+)", body_rule)
+        self.assertIsNotNone(lh_m, "line-height 비율(font 축약형)을 찾지 못했습니다")
+        line_height_ratio = float(lh_m.group(1))
+
+        toggle_bottom = (
+            toggle_top + border * 2 + toggle_padding_v * 2
+            + toggle_font_size * line_height_ratio
+        )
+        panel_close_top = panel_padding_top + margin_top
+
+        self.assertGreaterEqual(
+            panel_close_top, toggle_bottom,
+            f"#panel-close(약 {panel_close_top}px 지점에서 시작)가 "
+            f"#theme-toggle의 세로 영역(약 {toggle_top}px~{toggle_bottom}px)과 "
+            "겹칠 수 있습니다 — margin-top이 충분하지 않습니다",
+        )
+
+
 class TestCompanyInfoIsAHeaderNotAnOrphanSection(unittest.TestCase):
     """리뷰 지적 ③(Medium): company_info(STAGE1_SPECS의 "헤더")가 그룹이
     없다는 이유로 "기타" 섹션으로 밀려나 화면 맨 아래(약 18,000px 지점)에
