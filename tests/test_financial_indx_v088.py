@@ -352,14 +352,20 @@ class TestFetchIndicatorHistory(unittest.TestCase):
             if cl != "M210000":
                 return _resp(lst=[])
             return _resp(lst=[
+                # idx_cl_nm 은 없고 code 만 있다 → code 로 폴백해야 한다.
+                # 이 행이 없으면 폴백을 통째로 지워도 테스트가 통과한다
+                # (아래 "기타" 행만으로는 code 분기가 실행되지 않는다).
+                {"idx_nm": "코드만있음", "idx_cl_code": "M210000", "idx_val": "2.0"},
                 {"idx_nm": "이름만있음", "idx_val": "1.0"},  # idx_cl_nm/code 둘 다 없음
             ])
 
         mock_retry.side_effect = _side
         rows = dart_client.fetch_indicator_history("01011526", "KEY", 1)
-        target = [r for r in rows if r["idx_nm"] == "이름만있음" and r["bsns_year"] == "2025"]
-        self.assertEqual(len(target), 1)
-        self.assertEqual(target[0]["category"], "기타")
+        by_name = {
+            r["idx_nm"]: r["category"] for r in rows if r["bsns_year"] == "2025"
+        }
+        self.assertEqual(by_name["코드만있음"], "M210000")
+        self.assertEqual(by_name["이름만있음"], "기타")
 
     @patch("dart_risk_mcp.core.dart_client._retry")
     def test_one_year_failure_does_not_abort_others(self, mock_retry):
