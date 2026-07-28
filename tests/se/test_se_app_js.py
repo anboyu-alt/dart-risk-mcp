@@ -6332,9 +6332,12 @@ class TestFundChainDisclosureHints(unittest.TestCase):
     ①납입일 이전만 잡는지 ②창(windowDays) 밖은 빠지는지 ③한 조달건에
     여러 공시가 걸리면 전부 돌려주는지(하나로 좁히지 않는지) ④days_before가
     맞게 계산되는지 ⑤signalsData 로드 실패 시 예외 없이 {}인지 ⑥조달
-    신호가 아닌 공시(분기보고서 등)는 안 잡히는지 ⑦공시일(하이픈 없는
-    8자리)·납입일(점 구분) 형식이 달라도 axisSortKey 정규화로 정상
-    매칭되는지(SE-4f numeric() 사고 재발 방지 회귀).
+    신호가 아닌 공시(분기보고서·정정공시)는 안 잡히는지 ⑦공시일(하이픈
+    없는 8자리)·납입일(점 구분, fundChain이 이미 정수로 정규화한 값)이
+    서로 다른 원본 형식에서 왔어도 정상 매칭되는지(교차 형식 통합 회귀 —
+    numeric() 사고 재발 방지 자체는 아니다, 아래 test_date_format_mismatch_
+    still_matches_via_axis_sort_key 참고) ⑧창 경계(정확히 windowDays 전)가
+    포함인지 ⑨당일(days_before=0) 공시가 빠지는지.
 
     납입일은 2021.10.26로 고정하고, 공시일은 그 날짜에서 파이썬
     datetime으로 역산한 실제 달력일수 차이를 픽스처에 그대로 박아
@@ -6372,6 +6375,23 @@ class TestFundChainDisclosureHints(unittest.TestCase):
     _DISC_NON_PROCUREMENT_IN_WINDOW = {
         "rcept_no": "20211016000001", "rcept_dt": "20211016",
         "report_nm": "분기보고서",
+    }
+    # 정확히 90일 전(기본 창 크기 자체) — 경계 포함 여부를 가르는 값.
+    _DISC_90D_AT_WINDOW_BOUNDARY = {
+        "rcept_no": "20210728000001", "rcept_dt": "20210728",
+        "report_nm": "주요사항보고서(전환사채권발행결정)",
+    }
+    # 납입일과 같은 날(days_before=0) — 당일 포함 여부를 가르는 값.
+    _DISC_SAME_DAY_AS_PAYMENT = {
+        "rcept_no": "20211026000001", "rcept_dt": "20211026",
+        "report_nm": "주요사항보고서(전환사채권발행결정)",
+    }
+    # 창 안(29일 전)이지만 [기재정정] 접두 — 원본 키워드("전환사채권발행
+    # 결정")는 그대로 있어도 정정공시라 isProcurementDisclosure가 걸러야
+    # 한다.
+    _DISC_AMENDMENT_IN_WINDOW = {
+        "rcept_no": "20210927000001", "rcept_dt": "20210927",
+        "report_nm": "[기재정정]주요사항보고서(전환사채권발행결정)",
     }
 
     def _hints(self, disclosures, window_days=90):
@@ -6423,10 +6443,35 @@ class TestFundChainDisclosureHints(unittest.TestCase):
         self.assertEqual(got, {})
 
     def test_date_format_mismatch_still_matches_via_axis_sort_key(self):
-        """공시일이 하이픈 없는 8자리(20211020), 납입일이 점 구분
-        (2021.10.26)인 실측 형식 그대로도 정상 매칭돼야 한다 — 이건
-        numeric()이 점 섞인 문자열을 null로 돌려줘 정렬이 죽은 SE-4f
-        사고의 재발 방지 회귀다."""
+        """공시일이 하이픈 없는 8자리(20211020), 조달건의 sort_key가
+        점 구분(2021.10.26) 납입일에서 온 값이어도 정상 매칭돼야 한다.
+
+        **이 테스트가 실제로 증명하는 것(리뷰 지적 후 정정)**: entry.sort_key
+        는 이미 fundChain(Task 1)이 axisSortKey로 정수화해 둔 값이고,
+        d.rcept_dt는 이 함수 안에서 axisSortKey(d.rcept_dt)로 정수화된다
+        — 서로 다른 두 정규화 경로(하나는 상류에서 이미 끝난 정수, 하나는
+        이 함수 안에서 막 정수화되는 원본 문자열)를 나란히 놓고 날짜 차이를
+        계산해도 옳은 값(6일)이 나오는지를 검증한다.
+
+        **이 테스트가 증명하지 못하는 것**: 이전 버전의 이 docstring은
+        "numeric()이 점 섞인 문자열을 null로 돌려줘 정렬이 죽은 SE-4f 사고의
+        재발 방지 회귀"라고 주장했으나 틀렸다. 리뷰에서 app.js:1734의
+        axisSortKey(d.rcept_dt)를 numeric(d.rcept_dt)로 바꿔도(SE-4f와 같은
+        종류의 변이) 이 테스트를 포함해 8개 전부 통과했다 — d.rcept_dt는
+        DART API 원본 그대로 항상 하이픈 없는 8자리 숫자 문자열
+        ("20260123" 꼴)이고 점이 섞인 형태로 이 함수에 들어오는 경로가
+        없기 때문에, numeric()과 axisSortKey()가 이 필드에 한해서는 항상
+        같은 값을 낸다(numeric("20211020") === axisSortKey("20211020")
+        === 20211020). 즉 SE-4f급 회귀가 실제로 발생할 수 있는 지점은
+        여기(rcept_dt)가 아니라 점 구분 문자열이 처음 정수로 바뀌는
+        지점 — fundChain의 payDe 정규화(app.js:1603,
+        `sort_key: ... axisSortKey(payDe)`) 다.
+
+        그 지점의 회귀는 이미 다른 곳에 실제로 핀됐다: app.js:1603의
+        axisSortKey(payDe)를 numeric(payDe)로 바꾸면(리뷰에서 검증)
+        TestFundChain::test_sorted_descending_by_sort_key_even_when_
+        input_is_ascending이 실패한다(모든 sort_key가 null이 되어 정렬
+        기대값이 깨짐) — 그 테스트가 진짜 회귀 방지선이다."""
         disc = {
             "rcept_no": "20211020000001", "rcept_dt": "20211020",
             "report_nm": "주요사항보고서(전환사채권발행결정)",
@@ -6435,6 +6480,46 @@ class TestFundChainDisclosureHints(unittest.TestCase):
         hits = got["20211026"]
         self.assertEqual(len(hits), 1)
         self.assertEqual(hits[0]["days_before"], 6)
+
+    def test_filing_exactly_at_window_boundary_is_included(self):
+        """창 경계는 포함(<=)이다 — 정확히 windowDays(기본 90일) 전인
+        공시도 "창 이내"로 잡혀야 한다(구현 주석의 "창 이내(days_before <=
+        windowDays)"). 91일 전은 빠지고(위
+        test_disclosure_beyond_window_is_excluded) 정확히 90일 전은
+        잡혀야 그 경계가 실제로 포함형임이 증명된다.
+
+        `daysBefore <= 0 || daysBefore > window`에서 `> window`를
+        `>= window`로 바꾸는 변이(경계를 포함에서 배타로 뒤집는 변이)는
+        이 테스트가 없으면 8개 테스트 전부를 통과했다(리뷰 지적) — 검증
+        후 되돌림, 아래 커밋 메시지·보고서 참고."""
+        got = self._hints([self._DISC_90D_AT_WINDOW_BOUNDARY])
+        hits = got["20211026"]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["days_before"], 90)
+
+    def test_filing_on_payment_date_is_excluded(self):
+        """당일(days_before=0) 공시는 빠진다. 조달 결정은 납입에 앞선다는
+        인과 전제(구현 주석 "days_before가 0 이하(당일 포함)이거나
+        음수(공시가 납입 이후)면 인과가 뒤집히므로 제외한다")를 당일까지
+        포함해 지킨다 — 당일 공시가 "이 납입 때문에 난 공시"인지 "이
+        납입과 무관하게 우연히 같은 날 난 공시"인지는 이 데이터만으로
+        구분할 수 없으므로, 인과 순서가 명확한 쪽(엄격히 이전)만 남긴다.
+
+        `daysBefore <= 0`을 `daysBefore < 0`으로 바꾸는 변이(당일 포함
+        배제를 당일 포함 인정으로 뒤집는 변이)는 이 테스트가 없으면 8개
+        테스트 전부를 통과했다(리뷰 지적)."""
+        got = self._hints([self._DISC_SAME_DAY_AS_PAYMENT])
+        self.assertEqual(got, {})
+
+    def test_amendment_disclosure_in_window_is_not_matched(self):
+        """[기재정정] 접두 공시는 창 안(29일 전)이라도 잡히면 안 된다 —
+        원본 키워드("전환사채권발행결정")는 그대로 남아 있어도
+        isProcurementDisclosure가 amendment_pattern으로 먼저 걸러낸다
+        (정정은 새 조달 결정이 아니라 기존 보고를 고친 것이라는 판단,
+        위 isProcurementDisclosure 주석). 라이브로 이미 확인된 동작이나
+        (task-2-report.md) 이 클래스에는 회귀 테스트가 없었다."""
+        got = self._hints([self._DISC_AMENDMENT_IN_WINDOW])
+        self.assertEqual(got, {})
 
     def test_no_verdict_words(self):
         got = json.dumps(
