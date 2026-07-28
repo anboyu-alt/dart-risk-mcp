@@ -24,6 +24,16 @@
      칠해져 강조가 배경이 되므로 --mark-bg는 알파 0.10 이하로만 쓴다
      (아래 .mk 참고). */
   --mark:#d98a3a; --mark-bg:rgba(217, 138, 58, 0.08);
+  /* 조달건 비례 막대(SE-5a Task 3, ui.js fundChainCardEl) 전용 — 조각
+     자체의 배경은 위 --c0~--c8을 재사용하고(판정 색이 아니라 계열
+     구분이라는 같은 이유), 이 둘만 새로 정의한다. --fund-bar-track은
+     반올림 오차로 조각 폭 합이 100%에 살짝 못 미칠 때 드러나는 트랙
+     바탕색이고, --fund-bar-label은 --c0~--c8 채워진 조각 위에 얹는
+     라벨 글자색이다 — 두 테마의 --c* 팔레트가 각각 그 테마의 --bg와
+     대비되도록 조정돼 있어(다크: --bg 대비 밝은 색, 라이트: --bg 대비
+     짙은 색), 라벨 색으로 상대 테마의 --bg를 그대로 쓰면 두 테마 모두
+     제 색을 새로 고르지 않고도 무난한 대비를 얻는다. */
+  --fund-bar-track:var(--cell); --fund-bar-label:var(--bg);
 }
 /* 라이트 모드 — 다크 :root의 색상 변수를 하나도 빠짐없이 다시 정의한다.
    일부만 덮으면 배경만 밝아지고 글자는 다크 모드 색(밝은 회색 계열)
@@ -42,6 +52,13 @@
   --c0:#2f5fd0; --c1:#1f9d6e; --c2:#ad8c00; --c3:#5433d6; --c4:#0f8fc4;
   --c5:#7a3fa0; --c6:#cc6a10; --c7:#00615f; --c8:#c2477a;
   --mark:#b5661c; --mark-bg:rgba(181, 102, 28, 0.08);
+  /* var(--cell)·var(--bg) 참조 자체는 다크 블록과 같지만, 이 두 변수도
+     라이트 블록에서 다시 선언해야 한다 — 그러지 않으면 라이트 모드에서
+     :root(다크 값)의 --fund-bar-track·--fund-bar-label이 그대로 남아
+     테마 전환이 이 두 변수에서만 조용히 깨진다(다른 모든 --* 변수와
+     같은 원칙, test_light_theme_overrides_every_dark_variable이 기계적
+     으로 검증한다). */
+  --fund-bar-track:var(--cell); --fund-bar-label:var(--bg);
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--tx);
@@ -93,6 +110,31 @@ th{color:var(--dim2);background:var(--rail);font-weight:normal}
    색이다(v0.8.5 — 판정 색 --red를 쓰지 않는다, 계열 색과 같은 이유로
    --amber2를 쓴다). */
 .derived{border-left:3px solid var(--amber2);padding-left:12px;margin-bottom:16px}
+/* 조달건 카드 + 비례 막대(SE-5a Task 3, ui.js fundChainCardEl/buildFundChainBlock).
+   Chart.js(vendor/chart.umd.js, 이미 반입돼 있다)를 쓰지 않는 이유: 이 표현은
+   "한 조달건의 계획 금액을 용도별로 나눈 비율"이라 축도 시간도 없다 —
+   CSS flexbox 비율 막대면 (a) 라벨이 실제 텍스트 노드라 선택·복사가 되고
+   (b) canvas destroy 관리(CHART_INSTANCES)가 필요 없고 (c) 다크·라이트
+   전환이 위 --fund-bar-* 두 변수만으로 자동 처리된다(task-3-brief.md). */
+.fund-chain-card{margin-bottom:20px}
+.fund-chain-card h4{font-size:13px;font-weight:normal;color:var(--dim2);
+                     font-family:var(--mono);margin:0 0 6px}
+/* 조각 배경(--c0~--c8)은 인라인 style로 ui.js가 매긴다(값마다 폭이 달라
+   유한한 CSS 클래스로 표현할 수 없다) — 여기서는 트랙 배경·조각 사이
+   구분선·라벨 자르기만 정의한다. min-width는 %가 아니라 px다 — %로
+   최소 폭을 주면 아주 작은 조각(실측 1.7%)의 폭이 부풀려져 "막대 조각
+   폭의 합이 100%" 자체가 거짓이 된다(브리프 "비례가 거짓말이 되는 것"
+   경계). px 최소폭은 합계를 건드리지 않고 조각이 완전히 안 보이는
+   것만 막는다. */
+.fund-bar{display:flex;width:100%;border-radius:3px;overflow:hidden;
+          background:var(--fund-bar-track);margin-bottom:8px}
+.fund-bar-seg{flex-grow:0;flex-shrink:0;min-width:3px;overflow:hidden;
+              white-space:nowrap;padding:4px 6px;font-size:11px;
+              font-family:var(--mono);color:var(--fund-bar-label);
+              border-right:1px solid var(--bg)}
+.fund-bar-seg:last-child{border-right:none}
+.fund-hint-list{margin:4px 0 8px;padding-left:18px;font-size:12px}
+.fund-hint-list li.doc{cursor:pointer}
 #head{display:flex;align-items:center;gap:12px;justify-content:space-between}
 /* #theme-toggle(아래)는 position:fixed로 항상 top:10px;right:12px에
    떠 있고 #panel보다 z-index가 높다.

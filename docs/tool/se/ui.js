@@ -30,6 +30,24 @@ let SIGNALS_DATA = null; // docs/tool/signals-data.json 로드 결과(SE-4f
                           // null일 수 있다 — renderChart→chartData(app.js)가
                           // null이면 기존 단색 막대로 물러난다(화면이
                           // 죽지 않는다).
+let DISCLOSURES_DATA = null; // disclosures 섹션이 renderSection에 도착할
+                              // 때마다 원본 배열을 그대로 기억해 둔다(SE-5a
+                              // Task 3). fund_usage 카드의 조달 공시 근접
+                              // 힌트(fundChainDisclosureHints, Task 2)가 이
+                              // 배열을 필요로 하는데, 두 섹션은 서로 다른
+                              // 폴링 응답으로 각각 도착해 fund_usage 쪽
+                              // 렌더 호출만으로는 접근할 방법이 없다.
+                              // STAGE1_SPECS(se_server/jobs/registry.py)에서
+                              // disclosures가 fund_usage보다 먼저 등록돼
+                              // 있어 보통 이 값이 fund_usage보다 먼저
+                              // 채워진다 — 그렇지 않더라도(아직 도착 전이면)
+                              // SIGNALS_DATA와 같은 폴백 계약이다:
+                              // fundChainDisclosureHints가 빈 배열을 받아
+                              // {}를 돌려주고, 카드 자체는 힌트 블록만 뺀 채
+                              // 그대로 렌더된다. 회사를 바꾸거나 로그아웃하면
+                              // (renderHeadPlaceholder·showGate) null로
+                              // 되돌려 이전 회사의 공시가 새 화면에 섞이지
+                              // 않게 한다.
 
 /** 사용자에게 그대로 보여줘도 되는 문구로만 만든 오류. 원시 오류(네트워크
  *  실패의 "Failed to fetch" 같은 브라우저 내부 문구, 서버 응답 원문 등)는
@@ -548,6 +566,11 @@ function showGate(msg) {
   resetToc(); // #body를 비우는 자리와 같이 — 목차만 남으면 죽은 링크가 된다
   resetCharts(); // 같은 자리 — 인스턴스가 남으면 다음 사용자 화면 위에 이어붙는다
   CURRENT_COMPANY = null;
+  DISCLOSURES_DATA = null; // #body는 지웠지만(위) 이 JS 변수 자체는 남아있던
+                            // 문제 — 다음 사용자가 새로 로그인해 다른 회사를
+                            // 조회하면 fund_usage 카드의 공시 힌트가 이전
+                            // 사용자의 회사 공시를 근거로 뜬다(같은 종류의
+                            // 사고가 이 저장소에서 이미 두 번 났다).
   const actorBtn = document.getElementById("actor-btn");
   if (actorBtn) actorBtn.hidden = true;
 }
@@ -719,6 +742,9 @@ function renderHeadPlaceholder(name, message) {
   }
   resetToc(); // 같은 이유 — 새 회사의 목차를 처음부터 다시 쌓는다
   resetCharts(); // 이전 회사의 차트 인스턴스가 새 회사 화면 위에 남지 않게 정리한다
+  DISCLOSURES_DATA = null; // showGate()와 같은 이유 — 새 회사의 fund_usage
+                            // 카드가 아직 도착하지 않은 자기 disclosures
+                            // 대신 이전 회사의 공시로 힌트를 만들지 않게 한다.
   CURRENT_COMPANY = name;
   const btn = document.getElementById("actor-btn");
   if (btn) btn.hidden = false;
@@ -1249,6 +1275,173 @@ function buildFundPlanChangeBlock(changes) {
   return { el: wrap, table: table };
 }
 
+// fundChainDisclosureHints(app.js, SE-5a Task 2)의 기본 조회 창과 같은
+// 값이다 — 여기서 다시 선언하는 이유는 화면 문구("납입일 이전 90일 이내")가
+// 실제로 힌트를 만들 때 쓴 값과 어긋나지 않게 하기 위해서다(문구와 계산이
+// 서로 다른 상수를 쓰면, 창을 나중에 조정할 때 한쪽만 고치고 잊는 사고가
+// 난다). fundChainDisclosureHints(chain, disclosures, signalsData, windowDays)
+// 호출부(아래 renderSection)가 이 상수를 그대로 인자로 넘긴다.
+const FUND_CHAIN_WINDOW_DAYS = 90;
+
+/** fundChain(app.js, Task 1) 결과 조달건 하나를 카드로 그린다(SE-5a
+ *  Task 3, task-3-brief.md).
+ *
+ *  **왜 Chart.js가 아니라 CSS flexbox 비례 막대인가**: 이 표현은 "한
+ *  조달건의 계획 금액을 용도별로 나눈 비율"이다 — 축도 시간도 없다.
+ *  flexbox 막대면 (a) 라벨이 실제 텍스트 노드라 선택·복사가 되고
+ *  (canvas는 그림일 뿐이라 안 된다), (b) canvas destroy 관리
+ *  (CHART_INSTANCES/pruneChartsIn, resetCharts)가 필요 없고, (c)
+ *  다크·라이트 전환이 --fund-bar-*(index.html) 두 값만으로 자동
+ *  처리된다. 막대 조각의 배경은 여기서 --c0~--c8(index.html, "차트 계열
+ *  구분 전용 색 9종… 판정 색이 아니다")를 재사용한다 — 이 카드도 용도
+ *  구분일 뿐 판정이 아니므로 같은 색 계열을 쓰는 것이 자연스럽다.
+ *
+ *  막대 폭은 plan/total_plan이다. 아주 좁은 조각(실측: 130.8억/7,682.4억
+ *  = 1.7%)은 라벨이 잘려 안 보일 수 있는데, 폭 자체를 부풀리지 않는다 —
+ *  대신 바로 아래 표(전 용도 행)가 항상 같이 붙어 있어 막대에서 사라진
+ *  정보가 표에는 반드시 남는다(브리프 요구사항). 라벨이 넘치면 CSS
+ *  overflow:hidden이 자연스럽게 자른다 — JS가 "이 라벨은 숨긴다"를
+ *  판단하지 않는다(판단할수록 임계값이 생긴다, v0.8.5).
+ */
+function fundChainCardEl(entry, hints, windowDays) {
+  const card = document.createElement("div");
+  card.className = "fund-chain-card";
+
+  const h4 = document.createElement("h4");
+  h4.textContent = (entry.pay_de === null ? "납입일이 공시되지 않은 내역" : entry.pay_de)
+    + " 조달 · 계획 합계 " + formatAmount(entry.total_plan);
+  card.appendChild(h4);
+
+  // total_plan이 0이면 분모가 0이라 폭 계산이 NaN%가 된다 — 막대 자체를
+  // 그리지 않는다(브리프 "0으로 나누지 마라"). 계획 합계가 0이라는 사실은
+  // 위 h4가 이미 말하고 있어 사라지지 않는다.
+  if (entry.total_plan > 0) {
+    const bar = document.createElement("div");
+    bar.className = "fund-bar";
+    entry.uses.forEach(function (u, i) {
+      const seg = document.createElement("span");
+      seg.className = "fund-bar-seg";
+      const label = u.purpose === null ? "(용도 미기재)" : u.purpose;
+      const pct = (u.plan / entry.total_plan) * 100;
+      seg.style.flexBasis = pct + "%";
+      seg.style.backgroundColor = "var(--c" + (i % 9) + ")";
+      seg.textContent = label;
+      seg.title = label + " · " + formatAmount(u.plan);
+      bar.appendChild(seg);
+    });
+    card.appendChild(bar);
+  }
+
+  // 표 — 막대에서 좁아 안 보이는 라벨도 여기서는 항상 읽힌다.
+  const rows = entry.uses.map(function (u) {
+    return {
+      "용도": u.purpose === null ? "(용도 미기재)" : u.purpose,
+      "계획": formatAmount(u.plan),
+      "보고된 집행": u.real === null ? "—" : formatAmount(u.real),
+      "차이 사유": u.diff_reason === null ? "—" : u.diff_reason,
+    };
+  });
+  const table = tableLayout(rows);
+  if (table) card.appendChild(tableEl(table));
+
+  // 반복 보고 — (납입일,용도) 조합이 여러 보고서에서 되풀이돼 fundChain이
+  // 한 건만 남긴 사실을 숨기지 않는다(브리프: "우리가 골라 버린 것이
+  // 있음을 숨기지 않는다"). entry.row_count(원본 행 수)가 uses.length
+  // (남긴 용도 수)보다 많으면 어딘가에서 접힌 것이다.
+  if (entry.row_count > entry.uses.length) {
+    const repeated = entry.uses.filter(function (u) { return u.rows > 1; });
+    const p = document.createElement("p");
+    p.className = "note";
+    p.textContent = "이 조달건은 원본 " + entry.row_count + "건의 보고에서 용도별로 "
+      + "한 건씩(" + entry.uses.length + "건)만 남겼습니다 — 같은 금액이 여러 "
+      + "보고서에 반복 보고됐기 때문입니다"
+      + (repeated.length > 0
+        ? "(" + repeated.map(function (u) {
+            return (u.purpose === null ? "(용도 미기재)" : u.purpose) + " " + u.rows + "회";
+          }).join(", ") + ")."
+        : ".");
+    card.appendChild(p);
+  }
+
+  // 조달 공시 근접 힌트(Task 2) — hints[sort_key]가 undefined인지로
+  // 판정한다(length===0이 아니라). fundChainDisclosureHints는 히트가 없는
+  // 조달건을 아예 담지 않는 희소 맵을 돌려준다(브리프 인터페이스 절, 이
+  // 파일의 cellMarks 관례와 같다) — sort_key가 null인(납입일 미공시)
+  // 묶음은 애초에 이 맵에 없다. **조인이 아니다** — 화면에도 그 불확실성을
+  // 지우지 않는다: 창 크기(windowDays)를 반드시 문구에 적고, 여러 건이면
+  // 하나로 좁히지 않고 전부 나열한다(fundChainDisclosureHints 주석 참고).
+  const hits = (entry.sort_key !== null && hints) ? hints[entry.sort_key] : undefined;
+  if (hits !== undefined && hits.length > 0) {
+    const hp = document.createElement("p");
+    hp.className = "note";
+    hp.textContent = "납입일 이전 " + windowDays + "일 이내 조달 공시 "
+      + hits.length + "건 · 클릭하면 원문";
+    card.appendChild(hp);
+
+    const ul = document.createElement("ul");
+    ul.className = "fund-hint-list";
+    hits.forEach(function (h) {
+      const li = document.createElement("li");
+      li.className = "doc";
+      li.textContent = h.report_nm + " (" + h.rcept_dt + " · " + h.days_before + "일 전)";
+      // 기존 openDocPanel(rcept_no) 배선을 그대로 재사용한다(브리프) —
+      // tableEl()의 rcept_no 열 클릭과 같은 함수, 새 경로를 만들지 않는다.
+      li.addEventListener("click", function () { openDocPanel(h.rcept_no); });
+      ul.appendChild(li);
+    });
+    card.appendChild(ul);
+  }
+
+  return card;
+}
+
+/** fundChain(records) 결과 전체를 조달건 카드 목록으로 그린다(SE-5a
+ *  Task 3). chain이 비어 있으면(records 자체가 없거나 빈 배열) 호출하지
+ *  않는다 — 다른 파생 블록(ratioBlock 등)과 같은 "값이 없으면 안 만든다"
+ *  패턴(renderSection 참고).
+ *
+ *  **"조달건이 하나도 없다"의 정의**: fundChain은 모든 행이 pay_de 결측
+ *  (제이스코홀딩스처럼 전부 "-")이어도 예외 없이 pay_de:null 묶음
+ *  하나를 돌려준다(Task 1 계약) — 즉 chain.length가 0이 되는 경우는
+ *  거의 없다. 여기서 "조달건이 없다"는 chain.length===0이 아니라 **날짜를
+ *  알 수 있는 조달건이 하나도 없다**(모든 항목의 pay_de가 null)는 뜻이다
+ *  — 그 상태에서 카드를 그려봐야 "납입일이 공시되지 않은 내역" 카드
+ *  하나에 용도조차 "(용도 미기재)"뿐이라 정보가 없다. 이때는 카드 대신
+ *  "자금사용 내역 N건이 있으나 납입일·용도가 공시되지 않았습니다"라고
+ *  말한다 — "내역이 없습니다"는 거짓이다(브리프, 내역 자체는 N건 있다). */
+function buildFundChainBlock(chain, hints, windowDays) {
+  const wrap = document.createElement("div");
+  wrap.className = "derived";
+
+  const h3 = document.createElement("h3");
+  h3.textContent = "자금 조달건 (조달일 단위)";
+  wrap.appendChild(h3);
+
+  const notice = document.createElement("p");
+  notice.className = "note";
+  notice.textContent = "같은 납입일·같은 용도로 여러 번 보고된 자금사용 내역(아래 원본 표)을 "
+    + "조달건 하나로 묶고, 계획 금액에 비례한 막대로 용도별 비중을 보여줍니다 — "
+    + "새로 계산한 값이 아니라 원본 plan_amount를 용도별로 합친 것입니다.";
+  wrap.appendChild(notice);
+
+  const dated = chain.filter(function (e) { return e.pay_de !== null; });
+  if (dated.length === 0) {
+    const totalRows = chain.reduce(function (s, e) { return s + e.row_count; }, 0);
+    const p = document.createElement("p");
+    p.className = "note";
+    p.textContent = "자금사용 내역 " + totalRows + "건이 있으나 납입일·용도가 "
+      + "공시되지 않았습니다.";
+    wrap.appendChild(p);
+    return { el: wrap };
+  }
+
+  chain.forEach(function (entry) {
+    wrap.appendChild(fundChainCardEl(entry, hints, windowDays));
+  });
+
+  return { el: wrap };
+}
+
 /** affiliateOverview(app.js)가 최초취득일 순으로 재배열한 타법인 출자
  *  레코드를 표+차트로 그린다(SE-4f Task 5, task-5-brief.md).
  *
@@ -1546,6 +1739,14 @@ function renderSection(key, value) {
     return;
   }
 
+  // disclosures 원본을 기억해 둔다(SE-5a Task 3) — fund_usage 카드의 조달
+  // 공시 근접 힌트(fundChainDisclosureHints)가 이 배열을 필요로 하는데, 두
+  // 섹션은 서로 다른 renderSection 호출로 각각 도착한다(위 DISCLOSURES_DATA
+  // 선언 주석 참고).
+  if (key === "disclosures" && Array.isArray(value)) {
+    DISCLOSURES_DATA = value;
+  }
+
   const blocks = sectionBlocks(value, 0, key);
 
   // financials는 원본 표 외에 파생 지표(계산값) 블록도 함께 그린다
@@ -1567,6 +1768,24 @@ function renderSection(key, value) {
   if (key === "dividends") {
     const dvRows = dividendVsIncome(Array.isArray(value) ? value : []);
     if (dvRows.length > 0) dividendBlock = buildDividendVsIncomeBlock(dvRows);
+  }
+
+  // fund_usage: 조달건 카드 + 비례 막대(SE-5a Task 3) — fundChain(records)이
+  // 빈 배열을 돌려주면(원본 자체가 없다) 이 블록도 안 생긴다. buildFundChainBlock
+  // 안에서 "날짜를 알 수 있는 조달건이 하나도 없다"(제이스코 형태)는
+  // 별도로 다시 판정해 카드 대신 안내문을 낸다(위 함수 주석 참고).
+  let fundChainBlock = null;
+  if (key === "fund_usage") {
+    const chain = fundChain(Array.isArray(value) ? value : []);
+    if (chain.length > 0) {
+      const hints = fundChainDisclosureHints(
+        chain,
+        Array.isArray(DISCLOSURES_DATA) ? DISCLOSURES_DATA : [],
+        SIGNALS_DATA,
+        FUND_CHAIN_WINDOW_DAYS
+      );
+      fundChainBlock = buildFundChainBlock(chain, hints, FUND_CHAIN_WINDOW_DAYS);
+    }
   }
 
   // fund_usage: 계획 금액 변경 사실 표기(SE-4f Task 7) — 변경이 없는
@@ -1594,7 +1813,7 @@ function renderSection(key, value) {
   // 앞 태스크에서 12열까지 보이게 넓힌 표가 2단으로 다시 좁아지는
   // 재발을 막는다. 파생 블록들의 표도 가로일 수 있어 함께 본다 — 안
   // 그러면 파생 표가 넓은데 .sec은 좁게 남는다.
-  const derivedBlocks = [ratioBlock, dividendBlock, fundChangeBlock, affiliateBlock];
+  const derivedBlocks = [ratioBlock, dividendBlock, fundChainBlock, fundChangeBlock, affiliateBlock];
   const hasWideTable = blocks.some(function (b) {
     return b.table && b.table.orientation === "horizontal";
   }) || derivedBlocks.some(function (b) {
@@ -1603,7 +1822,7 @@ function renderSection(key, value) {
   const wrap = SEC_WRAP[key];
   if (wrap) wrap.className = hasWideTable ? "sec wide" : "sec";
 
-  if (blocks.length === 0 && !ratioBlock && !dividendBlock && !fundChangeBlock && !affiliateBlock) {
+  if (blocks.length === 0 && !ratioBlock && !dividendBlock && !fundChainBlock && !fundChangeBlock && !affiliateBlock) {
     const p = document.createElement("p");
     p.className = "note";
     p.textContent = "표시할 데이터가 없습니다.";
@@ -1639,6 +1858,7 @@ function renderSection(key, value) {
   // 지우지 않는다.
   if (ratioBlock) holder.appendChild(ratioBlock.el);
   if (dividendBlock) holder.appendChild(dividendBlock.el);
+  if (fundChainBlock) holder.appendChild(fundChainBlock.el);
   if (fundChangeBlock) holder.appendChild(fundChangeBlock.el);
   if (affiliateBlock) holder.appendChild(affiliateBlock.el);
   for (const block of blocks) {

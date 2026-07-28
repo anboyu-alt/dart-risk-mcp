@@ -213,6 +213,12 @@ class FakeEl {
     this._listeners = {};
     this.hidden = false;
     this.classList = new FakeClassList();
+    // SE-5a Task 3 — 실제 HTMLElement.style은 생성 시점부터 항상 존재하는
+    // 객체다(빈 CSSStyleDeclaration). ui.js가 조달건 막대 폭을 el.style.
+    // flexBasis = "1.7%%" 식으로 인라인 지정한다(값이 조달건마다 달라
+    // 유한한 CSS 클래스 집합으로는 표현할 수 없다) — 이 가짜 엘리먼트도
+    // 처음부터 style 객체를 갖고 있어야 그 대입이 TypeError 없이 된다.
+    this.style = {};
   }
   appendChild(c) { this.children.push(c); return c; }
   insertBefore(node, ref) {
@@ -374,6 +380,36 @@ function collectButtons(node, out) {
   return out;
 }
 
+// SE-5a Task 3 — className 토큰 하나로 임의 노드를 모으는 범용 수집기.
+// 조달건 카드(.fund-chain-card)·비례 막대 조각(.fund-bar-seg)은 위
+// 전용 수집기들(td/th·h3·button 등 특정 태그 전용)로 잡을 수 없다 —
+// style(막대 폭 인라인 지정)까지 함께 돌려줘야 비례를 검증할 수 있다.
+function collectByClass(node, cls, out) {
+  out = out || [];
+  if (!node) return out;
+  const tokens = String(node.className || "").split(/\s+/);
+  if (tokens.indexOf(cls) !== -1) {
+    out.push({ tag: node.tag, text: textOf(node), title: node.title || null,
+               style: node.style || {} });
+  }
+  (node.children || []).forEach(function (c) { collectByClass(c, cls, out); });
+  return out;
+}
+
+// class="doc"인 모든 노드를 모아 돌려준다 — 공시 힌트 클릭 → openDocPanel
+// 배선(task-3-brief "이미 있는 배선 재사용")을 문자열 검사가 아니라 실제
+// 클릭 이벤트로 확인하기 위해서다(_DOC_CLICK_HARNESS와 같은 목적이지만,
+// 여기서는 sectionHolder/groupHolder를 거친 renderSection 전체 경로 위에서
+// 확인한다는 점이 다르다).
+function collectDocEls(node, out) {
+  out = out || [];
+  if (!node) return out;
+  const tokens = String(node.className || "").split(/\s+/);
+  if (tokens.indexOf("doc") !== -1) out.push(node);
+  (node.children || []).forEach(function (c) { collectDocEls(c, out); });
+  return out;
+}
+
 const sandbox = {
   console: console,
   document: {
@@ -394,8 +430,20 @@ vm.createContext(sandbox);
 new vm.Script(fs.readFileSync(process.argv[1], "utf-8"), { filename: "app.js" }).runInContext(sandbox);
 new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).runInContext(sandbox);
 
-sandbox.openDocPanel = function () {};
+const OPENED_DOCS = [];
+sandbox.openDocPanel = function (rceptNo) { OPENED_DOCS.push(rceptNo); };
+// setup(기본 빈 문자열)은 renderSection(key, value)를 부르기 전에 실행할
+// 추가 JS문이다 — SIGNALS_DATA 주입(let 바인딩이라 vm.Script로 다시 실행해야
+// 값이 바뀐다, 아래 예시처럼 sandbox를 대상으로 runInContext한다)이나 다른
+// 섹션(예: disclosures)을 먼저 렌더해 그 부수효과(fund_usage가 읽는 전역)를
+// 재현하는 데 쓴다. 기본값(빈 문자열)이면 지금까지의 모든 호출부와 동일하게
+// 아무 일도 하지 않는다.
+%(setup)s
 sandbox.renderSection(%(key)s, %(value)s);
+
+// 공시 힌트를 실제로 클릭해(openDocPanel 배선 검증) 결과를 OPENED_DOCS에
+// 남긴다 — showGate() 이전에 해야 패널이 실제로 열릴 뻔한 시점을 잡는다.
+collectDocEls(bodyEl, []).forEach(function (e) { e.dispatch("click"); });
 
 // 기존 필드(cells·titles·notes·marked·legends)는 항상 showGate() 이전
 // 상태를 그대로 담는다 — 아래에서 showGate()를 부르지만, 그 결과는 별도
@@ -409,6 +457,9 @@ const beforeGate = {
   legends: collectLegends(bodyEl, []),
   tableRows: collectTableRows(bodyEl, []),
   buttons: collectButtons(bodyEl, []),
+  fundChainCards: collectByClass(bodyEl, "fund-chain-card", []),
+  fundBarSegs: collectByClass(bodyEl, "fund-bar-seg", []),
+  openedDocs: OPENED_DOCS.slice(),
 };
 
 // 로그아웃(세션 만료 포함) 잔류 확인 — 강조 범례는 실명이 아니지만
@@ -422,19 +473,30 @@ const afterGate = {
   marked: collectMarked(bodyEl, []),
   legends: collectLegends(bodyEl, []),
   bodyChildCount: bodyEl.children.length,
+  // SE-5a Task 3 — 조달건 카드도 showGate()가 지우는 범위 안에 있는지
+  // 실행으로 확인한다(이 저장소는 로그아웃 후 이전 사용자 실명·사실이
+  // 남은 사고를 두 번 겪었다).
+  fundChainCards: collectByClass(bodyEl, "fund-chain-card", []),
 };
 
 process.stdout.write(JSON.stringify(Object.assign({}, beforeGate, { afterGate: afterGate })));
 """
 
 
-def run_render_section(key_js: str, value_js: str):
+def run_render_section(key_js: str, value_js: str, setup_js: str = ""):
     """renderSection(key, value)을 실제로 호출해(app.js·ui.js를 같은 vm
     컨텍스트에서 순서대로 실행) 결과 DOM에서 표 셀 텍스트와 소제목(h3)
     텍스트를 모은다. sectionBlocks 단독 호출(위 클래스들)로는 못 잡는,
     ui.js 호출부 자체의 배선 누락(key 전달 누락)을 잡기 위한 것이다.
+
+    setup_js: renderSection(key, value)를 부르기 전에 실행할 추가 JS문
+    (기본값은 빈 문자열 — 기존 호출부 전부와 동일하게 아무 일도 하지
+    않는다). SIGNALS_DATA 주입이나 다른 섹션을 먼저 렌더하는 데 쓴다
+    (SE-5a Task 3 — fundChainDisclosureHints가 disclosures 섹션 값을
+    필요로 하는데, 두 섹션은 서로 다른 renderSection 호출로 각각
+    도착한다).
     """
-    script = _RENDER_SECTION_HARNESS % {"key": key_js, "value": value_js}
+    script = _RENDER_SECTION_HARNESS % {"key": key_js, "value": value_js, "setup": setup_js}
     out = subprocess.run(
         [_NODE, "-e", script, str(_APP), str(_UI)],
         capture_output=True, text=True, encoding="utf-8",
@@ -6528,6 +6590,163 @@ class TestFundChainDisclosureHints(unittest.TestCase):
         )
         for word in ("의심", "유용", "부정", "위험"):
             self.assertNotIn(word, got, f"판정 어휘 '{word}'")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFundChainRenderSection(unittest.TestCase):
+    """SE-5a Task 3 — fundChain(Task 1)·fundChainDisclosureHints(Task 2)를
+    조달건 카드 + 비례 막대로 실제 렌더한다(task-3-brief.md).
+
+    sectionBlocks/fundChain을 단독 호출하는 게 아니라 run_render_section
+    (renderSection 전체 경로, sectionHolder/groupHolder를 거친다)으로
+    검증한다 — 이 저장소는 "정의만 있고 호출부가 없는" 배선 누락 사고를
+    일곱 번 겪었고, 매번 소스 문자열 검사(grep)는 초록이었다(브리프
+    경고). 여기서는 렌더 결과 DOM만 본다.
+    """
+
+    def _row(self, pay_de, purpose, plan, real=None, dffrnc="-"):
+        return {
+            "kind": "public", "year": 2023, "tm": "-", "pay_de": pay_de, "pay_amount": 0,
+            "plan_useprps": purpose, "plan_amount": plan,
+            "real_dtls_cn": purpose, "real_dtls_amount": plan if real is None else real,
+            "dffrnc_resn": dffrnc, "flags": [],
+        }
+
+    def test_one_card_per_procurement_entry(self):
+        """조달건(서로 다른 pay_de) 수만큼 카드가 렌더된다."""
+        rows = [
+            self._row("2021.10.26", "시설자금", 13082000000),
+            self._row("2023.06.02", "운영자금", 1320000000000),
+        ]
+        out = run_render_section('"fund_usage"', json.dumps(rows, ensure_ascii=False))
+        self.assertEqual(len(out["fundChainCards"]), 2)
+
+    def test_bar_segment_widths_are_proportional_to_plan_and_sum_to_100(self):
+        """막대 조각 폭은 plan/total_plan이고 합은 100%(부동소수 오차
+        허용)다. 80/20처럼 균등하지 않게 나눈다 — 50/50 같은 균등 분할을
+        쓰면 "폭 계산을 고정값(균등분배)으로 바꾸는" 변이(브리프 Step 5)가
+        합계 검증만으로는 우연히 통과해버린다. 개별 조각 폭을 각각
+        확인해야 그 변이를 잡는다."""
+        rows = [
+            self._row("2021.10.26", "시설자금", 80000000000),
+            self._row("2021.10.26", "운영자금", 20000000000),
+        ]
+        out = run_render_section('"fund_usage"', json.dumps(rows, ensure_ascii=False))
+        segs = out["fundBarSegs"]
+        self.assertEqual(len(segs), 2)
+        widths = {s["text"]: float(s["style"]["flexBasis"].rstrip("%")) for s in segs}
+        self.assertAlmostEqual(widths["시설자금"], 80.0, delta=0.01)
+        self.assertAlmostEqual(widths["운영자금"], 20.0, delta=0.01)
+        self.assertAlmostEqual(sum(widths.values()), 100.0, delta=0.01)
+
+    def test_zero_total_plan_entry_renders_card_without_bar_and_no_exception(self):
+        """total_plan이 0인 묶음은 막대를 그리지 않는다(0으로 나누면
+        NaN%가 나온다) — 하지만 카드 자체(계획 합계 0이라는 사실)는
+        그대로 렌더돼야 하고, node 프로세스가 예외 없이 끝나야 한다
+        (run_render_section은 node가 0이 아닌 코드로 끝나면 그 자체로
+        AssertionError를 던진다 — 이 테스트가 끝까지 도달했다는 것 자체가
+        "예외 없음"의 증거다)."""
+        rows = [self._row("2022.01.01", "시설자금", 0)]
+        out = run_render_section('"fund_usage"', json.dumps(rows, ensure_ascii=False))
+        self.assertEqual(len(out["fundChainCards"]), 1)
+        self.assertEqual(out["fundBarSegs"], [])
+
+    def test_repeated_report_rows_are_disclosed_not_silently_collapsed(self):
+        """(납입일,용도)가 여러 보고서에서 반복 보고돼 한 건만 남긴
+        사실을 화면이 말한다 — 우리가 골라 버린 것이 있음을 숨기지
+        않는다(브리프)."""
+        rows = [
+            self._row("2021.10.26", "시설자금", 13082000000),
+            self._row("2021.10.26", "시설자금", 13082000000),
+        ]
+        out = run_render_section('"fund_usage"', json.dumps(rows, ensure_ascii=False))
+        self.assertTrue(
+            any("반복" in n for n in out["notes"]),
+            f"반복 보고 사실 문구가 없다: {out['notes']}",
+        )
+
+    def test_no_dated_entries_says_undisclosed_not_no_data(self):
+        """제이스코홀딩스 형태(pay_de·plan_useprps 전부 결측) — 내역
+        자체는 있으므로(원본 행 3건) "내역이 없습니다"는 거짓이다."""
+        rows = [
+            {"kind": "public", "year": y, "tm": "-", "pay_de": "-", "pay_amount": 0,
+             "plan_useprps": "-", "plan_amount": 0,
+             "real_dtls_cn": "-", "real_dtls_amount": 0, "dffrnc_resn": "-", "flags": []}
+            for y in (2023, 2024, 2025)
+        ]
+        out = run_render_section('"fund_usage"', json.dumps(rows, ensure_ascii=False))
+        combined = " ".join(out["notes"])
+        self.assertIn("3건이 있으나", combined)
+        self.assertIn("납입일·용도가 공시되지 않았습니다", combined)
+        self.assertNotIn("내역이 없습니다", combined)
+
+    _SIGNALS_FIXTURE = {
+        "signals": [
+            {"key": "CB_BW", "label": "CB/BW발행", "keywords": ["전환사채권발행결정"], "category": 1},
+        ],
+        "categories": {"0": "기타", "1": "CB/채권"},
+        "amendment_pattern": "^\\[(?:기재정정|첨부추가|정정)[^\\]]*\\]\\s*",
+    }
+
+    def _signals_and_disclosures_setup(self, disclosures):
+        # SIGNALS_DATA는 ui.js 최상위 let 선언이라 sandbox 프로퍼티 대입으로는
+        # 안 보인다(vm 렉시컬 환경 특성) — 같은 컨텍스트에서 대입문만 담은
+        # 별도 vm.Script를 돌려 그 바인딩 자체를 바꾼다(기존 "L" 테스트의
+        # 관례, 위 run_render_section docstring 참고). disclosures는 실제
+        # renderSection("disclosures", ...) 호출로 렌더해 DISCLOSURES_DATA
+        # (ui.js)가 채워지는 부수효과를 그대로 재현한다 — 내부 바인딩을
+        # 직접 대입하지 않는다(그 필드가 어떻게 채워지는지는 ui.js 구현
+        # 세부사항이다).
+        signals_json = json.dumps(self._SIGNALS_FIXTURE, ensure_ascii=False)
+        disclosures_json = json.dumps(disclosures, ensure_ascii=False)
+        return (
+            'new vm.Script("SIGNALS_DATA = " + JSON.stringify(' + signals_json + ') + ";", '
+            '{filename: "inject-signals.js"}).runInContext(sandbox);\n'
+            "sandbox.renderSection(\"disclosures\", " + disclosures_json + ");\n"
+        )
+
+    def test_disclosure_hints_render_with_window_size_and_are_clickable(self):
+        """공시 힌트가 렌더되고 창 크기(90일)가 문구에 들어 있으며, 클릭하면
+        기존 openDocPanel(rcept_no) 배선을 그대로 탄다."""
+        rows = [self._row("2021.10.26", "시설자금", 13082000000)]
+        disclosures = [{
+            "rcept_no": "20210926000001", "rcept_dt": "20210926",
+            "report_nm": "주요사항보고서(전환사채권발행결정)",
+        }]
+        setup = self._signals_and_disclosures_setup(disclosures)
+        out = run_render_section('"fund_usage"', json.dumps(rows, ensure_ascii=False), setup)
+        combined = " ".join(out["notes"])
+        self.assertIn("90일", combined)
+        self.assertIn("20210926000001", out["openedDocs"])
+
+    def test_signals_data_load_failure_only_drops_hints_block_cards_still_render(self):
+        """SIGNALS_DATA가 없으면(로드 실패·아직 도착 전) 힌트 블록만
+        빠지고 카드는 그대로 렌더된다 — setup_js를 안 넘기면 ui.js의
+        SIGNALS_DATA는 초기값(null) 그대로다."""
+        rows = [self._row("2021.10.26", "시설자금", 13082000000)]
+        out = run_render_section('"fund_usage"', json.dumps(rows, ensure_ascii=False))
+        self.assertEqual(len(out["fundChainCards"]), 1)
+        combined = " ".join(out["notes"])
+        self.assertNotIn("이내 조달 공시", combined)
+
+    def test_no_verdict_words_in_render_output(self):
+        rows = [
+            self._row("2021.10.26", "시설자금", 13082000000),
+            self._row("2021.10.26", "운영자금", 35291000000),
+        ]
+        out = run_render_section('"fund_usage"', json.dumps(rows, ensure_ascii=False))
+        combined = json.dumps(out, ensure_ascii=False)
+        for word in ("의심", "유용", "부정", "위험", "매우위험", "고위험", "위험도", "위험등급"):
+            self.assertNotIn(word, combined, f"판정 어휘 '{word}'")
+
+    def test_cards_are_cleared_by_show_gate(self):
+        """showGate()(로그아웃·세션 만료)가 조달건 카드도 지우는지 실행으로
+        확인한다 — 이 저장소는 로그아웃 후 이전 사용자 사실이 남은 사고를
+        이미 두 번 겪었다."""
+        rows = [self._row("2021.10.26", "시설자금", 13082000000)]
+        out = run_render_section('"fund_usage"', json.dumps(rows, ensure_ascii=False))
+        self.assertEqual(len(out["fundChainCards"]), 1)
+        self.assertEqual(out["afterGate"]["fundChainCards"], [])
 
 
 # ── SE-4f Task 5: 타법인 출자 — 피투자사 정보 + 최초취득일 순 시각화 ─────
