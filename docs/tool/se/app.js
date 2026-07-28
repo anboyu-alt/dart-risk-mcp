@@ -67,7 +67,7 @@ const LABELS = Object.assign(Object.create(null), {
   // ── 공통 식별자
   rcept_no: "접수번호", rcept_dt: "접수일자", corp_code: "고유번호",
   corp_name: "회사명", corp_cls: "법인구분", stock_code: "종목코드",
-  stock_name: "종목명", bsns_year: "사업연도", reprt_code: "보고서코드",
+  stock_name: "종목명", bsns_year: "사업연도", reprt_code: "보고서 구분",
   stlm_dt: "결산일", rm: "비고", nm: "성명",
 
   // ── 기업 개요
@@ -707,14 +707,24 @@ const AGGREGATE_ROW_NAMES = new Set(["계", "합계", "총계"]);
 /** records(major_holders 등, nm 필드로 사람을 식별하는 레코드 목록)를
  *  {people, totals}로 나눈다. nm이 AGGREGATE_ROW_NAMES에 있으면 합계 행,
  *  아니면 사람 행이다. nm이 아예 없거나 문자열이 아니면(예상 밖 응답)
- *  안전하게 사람 행으로 남긴다 — 판정을 못 하면 지우지 않는 쪽이 안전하다. */
+ *  안전하게 사람 행으로 남긴다 — 판정을 못 하면 지우지 않는 쪽이 안전하다.
+ *
+ *  비교 전에 모든 공백(앞뒤·내부)을 제거한다 — DART가 "합 계"처럼 내부에
+ *  공백을 넣어 보내는 경우가 있어 trim()만으로는 사람 목록에 남는다.
+ *  다만 공백 "제거"이지 부분/접두 일치가 아니다 — "계상혁"처럼 실제
+ *  인물명은 공백이 없어 원래 글자 그대로 남고, AGGREGATE_ROW_NAMES의
+ *  어떤 항목과도 같아지지 않는다(동명이인 원칙과 같은 이유로 정확히
+ *  일치할 때만 합계로 분류한다). */
 function splitAggregateRows(records) {
   const people = [];
   const totals = [];
   for (const r of records) {
     const nm = isPlainObject(r) ? r.nm : undefined;
-    if (typeof nm === "string" && AGGREGATE_ROW_NAMES.has(nm.trim())) totals.push(r);
-    else people.push(r);
+    if (typeof nm === "string" && AGGREGATE_ROW_NAMES.has(nm.replace(/\s+/g, ""))) {
+      totals.push(r);
+    } else {
+      people.push(r);
+    }
   }
   return { people: people, totals: totals };
 }

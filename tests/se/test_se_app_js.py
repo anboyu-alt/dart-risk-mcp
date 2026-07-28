@@ -987,6 +987,38 @@ class TestAggregateRowSplit(unittest.TestCase):
             names = [row[idx] for row in people_block["table"]["rows"]]
             self.assertNotIn(total_name, names, f"{total_name} 행이 사람 목록에서 분리되지 않았습니다")
 
+    def test_internal_whitespace_aggregate_name_is_still_recognized(self):
+        """DART가 "합 계"처럼 이름 내부에 공백을 넣어 보내는 경우가 있다 —
+        trim()은 앞뒤 공백만 없애므로 내부 공백까지 있는 값은 여전히
+        AGGREGATE_ROW_NAMES와 정확히 일치하지 않아 사람 목록에 남는다."""
+        records = self._PEOPLE + [{"nm": "합 계", "relate": "-",
+                                     "trmend_posesn_stock_qota_rt": "19.50"}]
+        got = self._blocks_for(records)
+        titles = [b["title"] for b in got]
+        self.assertIn("최대주주 · 합계", titles,
+                      "내부 공백이 있는 '합 계' 행이 합계 블록으로 분리되지 않았습니다")
+        people_block = self._people_block(got)
+        idx = people_block["table"]["keys"].index("nm")
+        names = [row[idx] for row in people_block["table"]["rows"]]
+        self.assertNotIn("합 계", names, "'합 계' 행이 여전히 사람 목록에 남아 있습니다")
+
+    def test_person_named_gye_sang_hyeok_is_not_misdetected(self):
+        """공백 정규화가 부분/접두 일치로 번지면 "계상혁" 같은 실제 인물이
+        오탐될 수 있다 — 정규화는 공백 제거일 뿐이고, 공백이 없는 이름은
+        원래 글자 그대로 남아 AGGREGATE_ROW_NAMES의 어떤 항목과도 같아지지
+        않아야 한다."""
+        records = self._PEOPLE + [{"nm": "계상혁", "relate": "특수관계인",
+                                     "trmend_posesn_stock_qota_rt": "0.30"}]
+        got = self._blocks_for(records)
+        people_block = self._people_block(got)
+        idx = people_block["table"]["keys"].index("nm")
+        names = [row[idx] for row in people_block["table"]["rows"]]
+        self.assertIn("계상혁", names,
+                      "실제 인물 '계상혁'이 합계로 오탐돼 사람 목록에서 빠졌습니다")
+        titles = [b["title"] for b in got]
+        self.assertNotIn("최대주주 · 합계", titles,
+                         "합계 행이 없는데도(계상혁은 사람이다) 합계 블록이 생겼습니다")
+
     def test_no_aggregate_row_present_is_still_safe(self):
         """합계 행이 아예 없는 데이터에서도 사람 목록은 그대로, 합계 블록은
         생기지 않아야 한다."""
@@ -1609,6 +1641,14 @@ class TestLabels(unittest.TestCase):
         }
         for key, want in cases.items():
             self.assertEqual(run_js(f'label({json.dumps(key)})'), want)
+
+    def test_reprt_code_label_names_a_category_not_a_code(self):
+        """reprt_code의 값 자체는 REPRT_CODE_LABELS(formatValue)가 이미
+        "1분기보고서" 같은 한국어로 바꾼다 — 그런데 열 라벨(키)이 여전히
+        "보고서코드"면 "보고서코드: 1분기보고서"처럼 코드가 아닌 값에
+        '코드'라는 이름이 붙어 읽힌다. 라벨도 값처럼 구분을 말해야 한다."""
+        self.assertEqual(run_js('label("reprt_code")'), "보고서 구분")
+        self.assertNotEqual(run_js('label("reprt_code")'), "보고서코드")
 
     def test_unknown_field_keeps_raw_key(self):
         """라벨이 없다고 숨기거나 바꾸면 안 된다."""

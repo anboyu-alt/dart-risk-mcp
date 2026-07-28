@@ -1753,6 +1753,68 @@ class TestPanelCloseDoesNotOverlapThemeToggle(unittest.TestCase):
         )
 
 
+class TestPanelBodyTextDoesNotOverlapThemeToggle(unittest.TestCase):
+    """버튼 대 버튼(위 TestPanelCloseDoesNotOverlapThemeToggle) 겹침을 고친
+    뒤에도, 리뷰어가 실제 브라우저로 재측정하니 #panel-body(패널 본문)
+    **첫 줄 텍스트**가 여전히 #theme-toggle 아래로 지나가며 가려졌다
+    (실측: 토글 y:10px~42.8px·x:1254px~1338px·z-index:15 vs 패널 본문 첫
+    줄 y:36px~89px·x~1330px). 공시 원문·실명이 그 첫 줄에 있을 수 있어
+    "데이터를 조용히 숨기지 않는다" 원칙과 부딪힌다.
+
+    #panel-body는 별도 CSS 규칙이 없어 시작점이 #panel의 padding-top
+    그대로다(panel-close처럼 자기 margin-top이 없다 — float가 아니라 그냥
+    다음 형제 블록이라 앞선 형제의 margin에 영향받지 않는다). 그래서 이
+    검사는 #panel-close가 아니라 **#panel 자체의 padding-top 값**이
+    #theme-toggle의 세로 영역 아래에 있는지를 계산으로 확인한다 — 문자열
+    존재 검사는 padding-top이 1px이어도 통과해버려 이 회귀를 못 잡는다.
+    """
+
+    def test_panel_padding_top_clears_the_theme_toggle_button(self):
+        html = _sources()["index.html"]
+        base, _ = _split_media_and_base(html)
+        style_block = re.search(r"<style>(.*?)</style>", base, re.S)
+        self.assertIsNotNone(style_block, "<style> 블록을 찾지 못했습니다")
+        css = style_block.group(1)
+
+        panel_rule = _css_rule(css, "#panel")
+        self.assertIsNotNone(panel_rule, "#panel 규칙을 찾지 못했습니다")
+        panel_padding_top = TestPanelCloseDoesNotOverlapThemeToggle._px(panel_rule, "padding")
+
+        toggle_rule = _css_rule(css, "#theme-toggle")
+        self.assertIsNotNone(toggle_rule, "#theme-toggle 규칙을 찾지 못했습니다")
+        toggle_top = TestPanelCloseDoesNotOverlapThemeToggle._px(toggle_rule, "top")
+        toggle_font_size = TestPanelCloseDoesNotOverlapThemeToggle._px(toggle_rule, "font-size")
+        m = re.search(r"padding\s*:\s*([\d.]+)px", toggle_rule)
+        self.assertIsNotNone(m, "#theme-toggle padding 선언을 찾지 못했습니다")
+        toggle_padding_v = float(m.group(1))
+
+        generic_button_rule = _css_rule(css, "input,button")
+        self.assertIsNotNone(generic_button_rule, "input,button 공통 규칙을 찾지 못했습니다")
+        border = TestPanelCloseDoesNotOverlapThemeToggle._px(generic_button_rule, "border")
+
+        body_rule = _css_rule(css, "body")
+        self.assertIsNotNone(body_rule, "body 규칙을 찾지 못했습니다")
+        lh_m = re.search(r"font\s*:\s*[\d.]+px/([\d.]+)", body_rule)
+        self.assertIsNotNone(lh_m, "line-height 비율(font 축약형)을 찾지 못했습니다")
+        line_height_ratio = float(lh_m.group(1))
+
+        toggle_bottom = (
+            toggle_top + border * 2 + toggle_padding_v * 2
+            + toggle_font_size * line_height_ratio
+        )
+
+        # #panel-body는 float가 아니라 일반 블록이라, panel-close처럼 자기
+        # margin으로 더 내려가지 않는다 — #panel의 padding-top이 시작점
+        # 전부다. 그 값 자체가 토글 아래여야 첫 줄이 가려지지 않는다.
+        self.assertGreaterEqual(
+            panel_padding_top, toggle_bottom,
+            f"#panel의 padding-top(약 {panel_padding_top}px)이 "
+            f"#theme-toggle의 세로 영역(약 {toggle_top}px~{toggle_bottom}px)보다 "
+            "작습니다 — #panel-body 첫 줄이 토글 버튼 뒤로 지나가며 가려질 "
+            "수 있습니다",
+        )
+
+
 class TestCompanyInfoIsAHeaderNotAnOrphanSection(unittest.TestCase):
     """리뷰 지적 ③(Medium): company_info(STAGE1_SPECS의 "헤더")가 그룹이
     없다는 이유로 "기타" 섹션으로 밀려나 화면 맨 아래(약 18,000px 지점)에
