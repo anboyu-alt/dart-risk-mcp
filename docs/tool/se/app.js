@@ -2203,19 +2203,39 @@ MARK_RULES.financial_ratios = [
   },
 ];
 
-// insider_timeline: se_server의 fetch_insider_timeline(elestock/hyslrSttus/
-// hyslrChgSttus/tesstkAcqsDspsSttus 통합)이 반환하는 레코드에는 "증감"을
-// 뜻하는 확정된 단일 키가 없다(계획서가 가정한 delta는 이 파이프라인에
-// 없는 값이다 — MCP 도구 track_insider_trading의 텍스트 리포트 경로에서만
-// detect_insider_pre_disclosure가 분기 간 차이를 계산하고, se_server는 그
-// 함수를 호출하지 않는다). 추측한 키로 규칙을 넣으면 화면에서 조용히
-// 아무 일도 하지 않으므로(SE-4f 정렬 결함과 같은 부류) 이 섹션은
-// 의도적으로 규칙을 비워 둔다.
+// insider_timeline: elestock(5% 이상 대량보유) 레코드에는 "특정증권 등
+// 소유 증감"을 DART가 직접 신고하는 필드가 둘 있다 — sp_stock_lmp_irds_cnt
+// (증감 주식수)와 sp_stock_lmp_irds_rate(증감 비율). 우리가 분기 간 차이를
+// 계산한 값이 아니라 그 공시 건 자체가 보고하는 부호 있는 값이라 markNeg로
+// 부호만 본다.
+//
+// 두 필드는 반드시 따로 규칙을 둔다. 실측(엔켐 오정강)에서 갈라진다:
+//   2024-07-29  증감비율 -1.49   증감수 -32,123   ← 둘 다 감소
+//   2025-05-20  증감비율 -0.26   증감수  +6,000   ← 주식은 늘었는데 비율은 감소
+// 다른 특정증권 발행 등으로 전체 모수가 늘면 보유 주식수가 늘어도 비율은
+// 내려갈 수 있다(희석) — 매도 없이도 벌어지는 일이다. 한 규칙으로 합치면
+// 두 번째 행에서 "주식수도 줄었다"는 사실이 아닌 판정을 만들게 된다.
+MARK_RULES.insider_timeline = [
+  {
+    key: "sp_stock_lmp_irds_cnt",
+    when: function (r) { return markNeg(r.sp_stock_lmp_irds_cnt); },
+    why: "증감 주식수 < 0",
+  },
+  {
+    key: "sp_stock_lmp_irds_rate",
+    when: function (r) { return markNeg(r.sp_stock_lmp_irds_rate); },
+    why: "증감 비율 < 0",
+  },
+];
 
-// 부실 이벤트(부도·영업정지·회생절차·해산)는 존재 자체가 사실이라 임계값이
-// 필요 없다 — 레코드가 있다는 것 자체를 표시한다.
+// 부도·영업정지·회생절차·해산사유 4개 엔드포인트를 통합한 레코드는 존재
+// 자체가 사실이라 임계값이 필요 없다 — 레코드가 있다는 것 자체를 표시한다.
 MARK_RULES.distress = [
-  { key: "rcept_no", when: function () { return true; }, why: "부실 관련 공시가 보고됨" },
+  {
+    key: "rcept_no",
+    when: function () { return true; },
+    why: "부도·영업정지·회생절차·해산사유 중 하나가 보고됨",
+  },
 ];
 
 // 반환 키는 ui.js 의 tableEl()이 이미 계산하는 좌표와 같은 형식이다:

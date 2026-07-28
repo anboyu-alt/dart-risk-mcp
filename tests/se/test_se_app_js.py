@@ -6211,6 +6211,13 @@ class TestDisclosureAmendmentMark(unittest.TestCase):
         rows = '[{"report_nm":"[첨부추가]사업보고서"}]'
         self.assertEqual(run_js('cellMarks(%s,"disclosures")' % rows), {})
 
+    def test_amendment_word_outside_bracket_is_not_marked(self):
+        # 대괄호 안(첨부추가)에는 "정정"이 없다 — 대괄호 밖 본문에 "정정"이
+        # 있어도 그건 판정 대상이 아니다. isAmendmentName을 전체 문자열
+        # 부분일치(s.indexOf("정정") >= 0)로 짜면 이 케이스가 잘못 표시된다.
+        rows = '[{"report_nm":"[첨부추가]사업보고서 정정 관련 안내"}]'
+        self.assertEqual(run_js('cellMarks(%s,"disclosures")' % rows), {})
+
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestRatioMark(unittest.TestCase):
@@ -6229,10 +6236,45 @@ class TestRatioMark(unittest.TestCase):
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestDistressMark(unittest.TestCase):
     def test_record_presence_is_marked(self):
-        # 부실 이벤트는 존재 자체가 사실이다 — 임계값 없이 레코드 존재만으로 표시한다.
+        # 부도·영업정지·회생절차·해산사유 레코드는 존재 자체가 사실이다 —
+        # 임계값 없이 레코드 존재만으로 표시한다.
         rows = '[{"rcept_no":"20260101000001"}]'
         got = run_js('cellMarks(%s,"distress")' % rows)
-        self.assertEqual(got, {"0|rcept_no": "부실 관련 공시가 보고됨"})
+        self.assertEqual(got, {"0|rcept_no": "부도·영업정지·회생절차·해산사유 중 하나가 보고됨"})
+
+    def test_marked_even_when_rcept_no_is_empty(self):
+        # rcept_no 값이 비어 있어도 레코드 자체는 존재한다 — 표시 여부는
+        # rcept_no가 참값인지가 아니라 레코드 존재 자체에 달려 있다. when을
+        # "!!r.rcept_no" 같은 조건으로 바꾸는 변형이 들어오면 여기서 잡힌다.
+        rows = '[{"rcept_no":""}]'
+        got = run_js('cellMarks(%s,"distress")' % rows)
+        self.assertEqual(got, {"0|rcept_no": "부도·영업정지·회생절차·해산사유 중 하나가 보고됨"})
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestInsiderTimelineMark(unittest.TestCase):
+    def test_negative_count_and_rate_are_separate_rules(self):
+        # 실측(엔켐 오정강) 3개 행. 가운데 행이 이 규칙 분리의 이유다:
+        # 증감비율은 -0.26(감소)인데 증감수는 +6,000(증가) — 매도 없이
+        # 희석만으로 비율이 떨어질 수 있다. 두 필드를 한 규칙으로 합치면
+        # 이 행에서 "주식수도 줄었다"는 거짓 사실이 만들어진다.
+        rows = (
+            '[{"rcept_dt":"20240729","sp_stock_lmp_irds_cnt":"-32,123","sp_stock_lmp_irds_rate":"-1.49"},'
+            ' {"rcept_dt":"20250520","sp_stock_lmp_irds_cnt":"+6,000","sp_stock_lmp_irds_rate":"-0.26"},'
+            ' {"rcept_dt":"20250101","sp_stock_lmp_irds_cnt":"+1,000","sp_stock_lmp_irds_rate":"0.10"}]'
+        )
+        got = run_js('cellMarks(%s,"insider_timeline")' % rows)
+        self.assertEqual(got, {
+            "0|sp_stock_lmp_irds_cnt": "증감 주식수 < 0",
+            "0|sp_stock_lmp_irds_rate": "증감 비율 < 0",
+            "1|sp_stock_lmp_irds_rate": "증감 비율 < 0",
+        })
+        # 가운데 행은 비율만 표시되고 주식수 셀은 표시되지 않는다 — divergence pin.
+        self.assertNotIn("1|sp_stock_lmp_irds_cnt", got)
+
+    def test_positive_values_are_not_marked(self):
+        rows = '[{"sp_stock_lmp_irds_cnt":"+1,000","sp_stock_lmp_irds_rate":"0.10"}]'
+        self.assertEqual(run_js('cellMarks(%s,"insider_timeline")' % rows), {})
 
 
 if __name__ == "__main__":
