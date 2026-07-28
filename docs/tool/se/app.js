@@ -1107,15 +1107,48 @@ const RATIO_PERIODS = [
 ];
 
 // 계산 가능한 지표 4종(자본잠식률은 표기 조건이 달라 별도 처리한다,
-// financialRatios·computeCapitalImpairment 참고). num/den은 financials의
-// account_nm 값 그대로다 — 사유 문구도 이 이름을 그대로 써서 "매출액
-// 없음"처럼 사용자가 실제 계정명을 보게 한다.
+// financialRatios·computeCapitalImpairment 참고). num/den은 계정
+// "개념"의 대표 이름이다 — 실제 financials.account_nm은 DART 제출
+// 기업마다 표기가 갈린다(엔켐 실측: 당기순이익이 "당기순이익(손실)"로
+// 옴). 대표 이름 그대로는 accounts.get()이 못 찾으므로 ACCOUNT_ALIASES·
+// pickAccount(아래)를 거쳐 조회한다 — 사유 문구는 그래도 이 대표
+// 이름을 써서 "당기순이익 없음"처럼 어떤 개념이 빠졌는지를 말한다
+// (실제 만난 표기가 아니라 찾던 개념 기준 — 표기가 열 종류든 사용자가
+// 찾을 대상은 하나다).
 const RATIO_DEFS = [
   { name: "영업이익률", num: "영업이익", den: "매출액", formula: "영업이익 ÷ 매출액" },
   { name: "순이익률", num: "당기순이익", den: "매출액", formula: "당기순이익 ÷ 매출액" },
   { name: "부채비율", num: "부채총계", den: "자본총계", formula: "부채총계 ÷ 자본총계" },
   { name: "유동비율", num: "유동자산", den: "유동부채", formula: "유동자산 ÷ 유동부채" },
 ];
+
+// 대표 계정명 → DART 실제 표기 별칭 목록(우선순위순, 대표 이름이 항상
+// 1순위). dart_risk_mcp/core/dart_client.py의 _FS_ALIASES·
+// docs/tool/signals-data.json의 fs_aliases와 같은 문제(표기 분산)를
+// 겨냥하지만 이 파일은 순수 함수 유지가 우선이라(브리프 제약 1) 독립
+// 상수로 별도 유지한다 — signals-data.json은 비동기 로드라 얽으면
+// financialRatios가 더 이상 순수 함수가 아니게 된다. 여기 있는 6개
+// 대표명만 필요하므로 그 부분집합을 그대로 옮겨 적었다(전체 표는 위
+// 두 파일이 원본).
+//
+// **별칭을 무한정 넓히지 않는다** — "법인세차감전 순이익"처럼 다른
+// 계정과 이름이 겹치는 표기는 넣지 않는다. 넣으면 값이 없는 것보다
+// 나쁜, 틀린 계정을 자신 있게 보여주는 결과가 된다(브리프 경고).
+const ACCOUNT_ALIASES = Object.create(null);
+ACCOUNT_ALIASES["매출액"] = [
+  "매출액", "영업수익", "수익(매출액)", "영업수익(매출액)", "매출",
+  "순매출액", "수입금액", "매출수익", "영업수입", "영업매출액", "수익",
+];
+ACCOUNT_ALIASES["영업이익"] = ["영업이익", "영업이익(손실)", "영업손익", "영업이익(영업손실)"];
+ACCOUNT_ALIASES["당기순이익"] = [
+  "당기순이익", "당기순이익(손실)", "당기순이익(당기순손실)",
+  "당기순손익", "분기순이익", "반기순이익", "연결당기순이익",
+];
+ACCOUNT_ALIASES["부채총계"] = ["부채총계", "부채 총계"];
+ACCOUNT_ALIASES["자본총계"] = ["자본총계", "자본 총계", "자본합계"];
+ACCOUNT_ALIASES["유동자산"] = ["유동자산"];
+ACCOUNT_ALIASES["유동부채"] = ["유동부채", "유동부채 합계"];
+ACCOUNT_ALIASES["자본금"] = ["자본금"];
 
 /** account_nm → 그 계정의 raw financials 행(연결 또는 별도 한 그룹 안).
  *  같은 계정명이 한 그룹 안에 두 번 나오면(정상적인 DART 응답에서는
@@ -1134,6 +1167,19 @@ function indexAccountsByDiv(records) {
   return byDiv;
 }
 
+/** 대표 계정명(예: "당기순이익")으로 accounts 맵을 조회한다. ACCOUNT_ALIASES에
+ *  등록된 별칭을 우선순위대로 시도하고(대표 이름 자신이 항상 1순위),
+ *  등록되지 않은 이름은 그 이름 그대로 한 번만 시도한다(RATIO_DEFS가
+ *  모르는 새 계정을 요구해도 조용히 죽지 않는다). */
+function pickAccount(accounts, canonicalName) {
+  const aliases = ACCOUNT_ALIASES[canonicalName] || [canonicalName];
+  for (const alias of aliases) {
+    const row = accounts.get(alias);
+    if (row) return row;
+  }
+  return undefined;
+}
+
 /** 지표 하나(예: 영업이익률)를 한 기간에 대해 계산한다. 분자·분모 계정 중
  *  하나라도 없거나(계정 자체가 안 잡힘) 분모가 0이면 값은 null이고
  *  **왜 없는지 사유로 남긴다** — 조용히 항목을 빼지 않는다(브리프 원칙).
@@ -1141,8 +1187,8 @@ function indexAccountsByDiv(records) {
  *  키 자체는 있다) — 검증 가능성(계산식+재료)이 값의 유무와 무관하게
  *  항상 보장돼야 하기 때문이다. */
 function computeRatio(구분, 기간, def, accounts, field) {
-  const numRow = accounts.get(def.num);
-  const denRow = accounts.get(def.den);
+  const numRow = pickAccount(accounts, def.num);
+  const denRow = pickAccount(accounts, def.den);
   const numVal = numRow ? numeric(numRow[field]) : null;
   const denVal = denRow ? numeric(denRow[field]) : null;
   const 재료 = Object.create(null);
@@ -1179,8 +1225,8 @@ function computeRatio(구분, 기간, def, accounts, field) {
  *  "표기하지 않는다"는 판정이 아니라 이 지표의 정의 자체다 — 잠식률은
  *  잠식이 있을 때만 존재하는 개념이다). */
 function computeCapitalImpairment(구분, 기간, accounts, field) {
-  const capRow = accounts.get("자본금");
-  const totalRow = accounts.get("자본총계");
+  const capRow = pickAccount(accounts, "자본금");
+  const totalRow = pickAccount(accounts, "자본총계");
   const capVal = capRow ? numeric(capRow[field]) : null;
   const totalVal = totalRow ? numeric(totalRow[field]) : null;
   const 재료 = Object.create(null);

@@ -4938,18 +4938,41 @@ class TestCompanySwitchDestroysCharts(unittest.TestCase):
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestFinancialRatios(unittest.TestCase):
-    # 엔켐 2025 사업보고서 연결 실측값
+    # 엔켐 2025 사업보고서 연결 실측값(계정과목 전체 — API 직접 조회).
+    # 당기순이익은 DART 원문 그대로 "당기순이익(손실)"로 온다(괄호 포함) —
+    # 브리프 픽스처에 이 계정이 아예 없어서 별칭 결함이 초록으로 통과했던
+    # 사고를 재현 방지하려고 실측 전체 계정을 그대로 옮겨 적는다.
+    # "법인세차감전 순이익"도 함께 넣어 별칭이 그 계정을 "당기순이익"으로
+    # 잘못 집지 않는지 같은 픽스처로 검증한다.
     _CFS = """[
+      {fs_div:"CFS", sj_div:"BS", account_nm:"유동자산",
+       thstrm_amount:"355,778,989,218", frmtrm_amount:"442,931,976,422"},
+      {fs_div:"CFS", sj_div:"BS", account_nm:"비유동자산",
+       thstrm_amount:"751,770,189,243"},
+      {fs_div:"CFS", sj_div:"BS", account_nm:"자산총계",
+       thstrm_amount:"1,107,549,178,461"},
+      {fs_div:"CFS", sj_div:"BS", account_nm:"유동부채",
+       thstrm_amount:"580,445,377,198", frmtrm_amount:"618,068,574,810"},
+      {fs_div:"CFS", sj_div:"BS", account_nm:"비유동부채",
+       thstrm_amount:"46,078,749,534"},
+      {fs_div:"CFS", sj_div:"BS", account_nm:"부채총계",
+       thstrm_amount:"626,524,126,732", frmtrm_amount:"675,004,911,778"},
+      {fs_div:"CFS", sj_div:"BS", account_nm:"자본금",
+       thstrm_amount:"10,925,068,000", frmtrm_amount:"10,555,112,500"},
+      {fs_div:"CFS", sj_div:"BS", account_nm:"이익잉여금",
+       thstrm_amount:"-677,559,097,436"},
+      {fs_div:"CFS", sj_div:"BS", account_nm:"자본총계",
+       thstrm_amount:"481,025,051,729", frmtrm_amount:"484,842,224,968"},
       {fs_div:"CFS", sj_div:"IS", account_nm:"매출액",
        thstrm_amount:"312,794,042,228", frmtrm_amount:"365,708,579,550"},
       {fs_div:"CFS", sj_div:"IS", account_nm:"영업이익",
        thstrm_amount:"-78,386,657,935", frmtrm_amount:"-50,403,019,697"},
-      {fs_div:"CFS", sj_div:"BS", account_nm:"부채총계",
-       thstrm_amount:"626,524,126,732", frmtrm_amount:"675,004,911,778"},
-      {fs_div:"CFS", sj_div:"BS", account_nm:"자본총계",
-       thstrm_amount:"481,025,051,729", frmtrm_amount:"484,842,224,968"},
-      {fs_div:"CFS", sj_div:"BS", account_nm:"자본금",
-       thstrm_amount:"10,925,068,000", frmtrm_amount:"10,555,112,500"}
+      {fs_div:"CFS", sj_div:"IS", account_nm:"법인세차감전 순이익",
+       thstrm_amount:"-58,836,298,293"},
+      {fs_div:"CFS", sj_div:"IS", account_nm:"당기순이익(손실)",
+       thstrm_amount:"-70,567,058,674", frmtrm_amount:"-558,294,328,262"},
+      {fs_div:"CFS", sj_div:"IS", account_nm:"총포괄손익",
+       thstrm_amount:"-71,645,284,911"}
     ]"""
 
     def test_operating_margin_matches_hand_calculation(self):
@@ -4961,6 +4984,32 @@ class TestFinancialRatios(unittest.TestCase):
         got = run_js(f"financialRatios({self._CFS})")
         cur = [r for r in got if r["지표"] == "부채비율" and r["기간"] == "당기"][0]
         self.assertAlmostEqual(cur["값"], 130.2, places=1)
+
+    def test_net_margin_resolves_the_parenthesized_account_name(self):
+        """DART가 실제로 주는 계정명은 "당기순이익(손실)"이다(괄호 포함,
+        엔켐 실측) — 정확 일치만 보면 이 지표가 영원히 null이 된다."""
+        got = run_js(f"financialRatios({self._CFS})")
+        cur = [r for r in got if r["지표"] == "순이익률" and r["기간"] == "당기"][0]
+        self.assertAlmostEqual(cur["값"], -22.6, places=1)
+        pri = [r for r in got if r["지표"] == "순이익률" and r["기간"] == "전기"][0]
+        self.assertAlmostEqual(pri["값"], -152.7, places=1)
+
+    def test_current_ratio_matches_hand_calculation(self):
+        got = run_js(f"financialRatios({self._CFS})")
+        cur = [r for r in got if r["지표"] == "유동비율" and r["기간"] == "당기"][0]
+        self.assertAlmostEqual(cur["값"], 61.3, places=1)
+
+    def test_alias_does_not_pick_pretax_income_as_net_income(self):
+        """"법인세차감전 순이익"도 "순이익"을 포함하지만 당기순이익이 아니다.
+        별칭이 이 계정을 대신 집으면 값은 나오지만 틀린 숫자다 — 값이
+        없는 것보다 나쁘다(브리프 경고)."""
+        got = run_js('''financialRatios([
+          {fs_div:"CFS", sj_div:"IS", account_nm:"매출액", thstrm_amount:"1000"},
+          {fs_div:"CFS", sj_div:"IS", account_nm:"법인세차감전 순이익", thstrm_amount:"999"}
+        ])''')
+        r = [x for x in got if x["지표"] == "순이익률"][0]
+        self.assertIsNone(r["값"])
+        self.assertIn("당기순이익", r.get("사유", ""))
 
     def test_prior_period_is_computed_too(self):
         """한 시점만 계산하면 추이가 안 나온다 — 그게 이 태스크의 존재 이유다."""
