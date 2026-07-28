@@ -2234,25 +2234,15 @@ class TestMarkStyling(unittest.TestCase):
         self.assertLessEqual(float(m.group(1)), 0.10, f"--mark-bg 알파 {m.group(1)} — 너무 진하다")
 
 
-class TestMarkRenderPaths(unittest.TestCase):
-    """caption(승격된 열)·접힌 열에도 marks가 적용되는지 — 본문 셀만
-    처리하면 이 두 경로에서 강조가 조용히 사라진다(브리프가 지적한 함정)."""
-
-    def test_caption_path_applies_marks(self):
-        # 값이 모든 행에서 같으면 tableLayout 이 그 열을 caption 으로 올린다.
-        # 본문 셀만 처리하면 그때 표시가 조용히 사라진다.
-        src = read_ui_js()
-        cap = extract_function(src, "tableEl")
-        head, _, tail = cap.partition("const t = document.createElement(\"table\")")
-        self.assertIn("marks", head, "caption 렌더 경로에 marks 적용이 없다")
-
-    def test_folded_path_applies_marks(self):
-        src = read_ui_js()
-        self.assertRegex(
-            extract_function(src, "tableEl"),
-            r"folded[\s\S]{0,600}?marks",
-            "접힌 열 렌더 경로에 marks 적용이 없다",
-        )
+# caption(승격된 열)·접힌 열·본문 셀 세 경로에 marks가 실제로 적용되는지는
+# 더 이상 여기서 소스 문자열로 짐작하지 않는다(과거 TestMarkRenderPaths —
+# 리뷰 지적: `assertIn("marks", head)`가 tableEl(table, marks) 함수
+# 시그니처 자체와 항상 일치해 아무 렌더 결과도 확인하지 않고 통과했다).
+# 실제 DOM을 그려 셀에 강조가 붙는지는
+# tests/se/test_se_app_js.py::TestMarkRenderBehavior가 renderSection을
+# 직접 호출해(run_render_section) 검증한다 — 세 경로 각각을 무력화하는
+# 변형(body-cell why=null·범례 게이트 무력화·capWhy=null)이 실제로 그
+# 테스트를 실패시키는지까지 확인했다(해당 클래스 docstring 참고).
 
 
 class TestMarkVocabulary(unittest.TestCase):

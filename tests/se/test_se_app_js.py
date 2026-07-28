@@ -240,6 +240,45 @@ function collectNotes(node, out) {
   return out;
 }
 
+// 강조(.mk) 실제 렌더 검증용 — 소스 문자열이 아니라 renderSection이 실제로
+// 만든 DOM에서 className 토큰에 "mk"가 있는 td/span만 모은다. 본문 셀·
+// caption span·접힌 열 span 세 경로 모두 이 하나의 수집기로 잡힌다(셋 다
+// className에 "mk"를 붙이는 지점이 코드에서 물리적으로 분리돼 있으므로,
+// 한 경로가 무력화돼도 나머지는 여기 그대로 잡힌다 — 각 경로를 무너뜨리는
+// 변형이 서로 다른 테스트를 실패시켜야 "표시 자체가 됐다"가 아니라
+// "그 경로가 작동했다"를 증명한다).
+function collectMarked(node, out) {
+  out = out || [];
+  if (!node) return out;
+  const tokens = String(node.className || "").split(/\s+/);
+  if ((node.tag === "td" || node.tag === "span") && tokens.indexOf("mk") !== -1) {
+    out.push({ tag: node.tag, text: node.textContent, title: node.title || null });
+  }
+  (node.children || []).forEach(function (c) { collectMarked(c, out); });
+  return out;
+}
+
+// FakeEl.textContent는 setter로 값을 넣은 노드에서만 채워진다(appendChild로
+// 자식을 쌓기만 한 컨테이너는 자기 _text가 빈 문자열로 남는다) — 실제
+// DOM의 textContent는 하위 트리 전체를 이어붙인 값이므로, div.mk-legend
+// 처럼 <b>와 텍스트 노드를 자식으로 붙여 만든 노드는 재귀로 직접 이어야
+// 한다.
+function textOf(node) {
+  if (!node) return "";
+  if (node.children && node.children.length) {
+    return node.children.map(textOf).join("");
+  }
+  return node.textContent || "";
+}
+
+function collectLegends(node, out) {
+  out = out || [];
+  if (!node) return out;
+  if (node.className === "mk-legend") out.push(textOf(node));
+  (node.children || []).forEach(function (c) { collectLegends(c, out); });
+  return out;
+}
+
 const sandbox = {
   console: console,
   document: {
@@ -267,6 +306,8 @@ process.stdout.write(JSON.stringify({
   cells: collectCells(bodyEl, []),
   titles: collectTitles(bodyEl, []),
   notes: collectNotes(bodyEl, []),
+  marked: collectMarked(bodyEl, []),
+  legends: collectLegends(bodyEl, []),
 }));
 """
 
@@ -6147,15 +6188,19 @@ class TestAffiliateMarks(unittest.TestCase):
         )
         self.assertEqual(got, ["0|incrs_dcrs_evl_lstmn"])
 
-    def test_legend_lists_only_fired_rules(self):
-        legend = run_js('markLegend(%s, "affiliates")' % AFFILIATE_ROWS)
-        self.assertEqual(len(legend), 3)
-        self.assertTrue(all(isinstance(s, str) and s for s in legend))
+    def test_three_distinct_rules_fire(self):
+        # markLegend는 죽은 코드라 제거했다(SE-4g Task 3 리뷰 지적) —
+        # 범례가 실제로 무엇을 보여주는지는 이제 run_render_section으로
+        # 실제 DOM을 그려 확인한다(아래 TestMarkRenderBehavior 참고).
+        # 여기서는 cellMarks 자체가 세 규칙 모두 발화시키는지만 본다.
+        got = run_js('cellMarks(%s, "affiliates")' % AFFILIATE_ROWS)
+        whys = set(got.values())
+        self.assertEqual(len(whys), 3)
 
-    def test_legend_empty_when_nothing_fires(self):
+    def test_nothing_fires_when_all_values_are_favorable(self):
         clean = ('[{"frst_acqs_amount":"1,000","trmend_blce_acntbk_amount":"2,000",'
                  '"incrs_dcrs_evl_lstmn":"500","recent_bsns_year_fnnr_sttus_thstrm_ntpf":"900"}]')
-        self.assertEqual(run_js('markLegend(%s, "affiliates")' % clean), [])
+        self.assertEqual(run_js('cellMarks(%s, "affiliates")' % clean), {})
 
     def test_unknown_section_returns_empty(self):
         self.assertEqual(run_js('cellMarks([{"a":1}], "nope")'), {})
@@ -6167,24 +6212,38 @@ class TestAffiliateMarks(unittest.TestCase):
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestAuditOpinionMark(unittest.TestCase):
+    """fetch_audit_opinion_history(dart_client.py)가 실제로 내보내는 필드는
+    "opinion"이다 — DART 원본 accnutAdtorNmNdAdtOpinion.json의 필드명
+    adt_opinion을 그대로 옮겨 적었던 이전 버전은 이 필드가 레코드에 전혀
+    없어(cellMarks의 `rule.key in rec` 게이트) 영원히 발화하지 않았다
+    (리뷰 지적 — 실측 페이로드로 렌더해 0건 마크를 직접 확인한 사례).
+    필드명은 dart_client.py fetch_audit_opinion_history docstring 그대로다."""
+
     def test_jeokjeong_is_not_marked(self):
-        rows = '[{"adt_opinion":"적정의견"}]'
+        rows = '[{"opinion":"적정의견"}]'
         self.assertEqual(run_js('cellMarks(%s,"audit_history")' % rows), {})
 
     def test_bujeokjeong_is_marked(self):
         # "부적정의견"은 부분 문자열 "적정"을 포함한다. indexOf 로 짜면
         # 가장 무거운 의견을 정상으로 읽는다 — 접두 일치여야 한다.
-        rows = '[{"adt_opinion":"부적정의견"}]'
+        rows = '[{"opinion":"부적정의견"}]'
         got = run_js('cellMarks(%s,"audit_history")' % rows)
-        self.assertEqual(got, {"0|adt_opinion": '감사의견이 "적정"이 아님'})
+        self.assertEqual(got, {"0|opinion": '감사의견이 "적정"이 아님'})
 
     def test_hanjeong_and_georeol_are_marked(self):
-        rows = '[{"adt_opinion":"한정의견"},{"adt_opinion":"의견거절"}]'
+        rows = '[{"opinion":"한정의견"},{"opinion":"의견거절"}]'
         got = run_js('cellMarks(%s,"audit_history")' % rows)
-        self.assertEqual(sorted(got.keys()), ["0|adt_opinion", "1|adt_opinion"])
+        self.assertEqual(sorted(got.keys()), ["0|opinion", "1|opinion"])
 
     def test_whitespace_around_jeokjeong_is_tolerated(self):
-        rows = '[{"adt_opinion":" 적정의견 "}]'
+        rows = '[{"opinion":" 적정의견 "}]'
+        self.assertEqual(run_js('cellMarks(%s,"audit_history")' % rows), {})
+
+    def test_dart_raw_field_name_does_not_fire(self):
+        # 회귀 고정: adt_opinion(DART 원본 필드명)이 레코드에 있어도 이
+        # 규칙은 "opinion" 키만 본다 — SE 서버가 실제로 내보내는 필드가
+        # 아닌 이름으로 다시 회귀하면 이 테스트가 잡는다.
+        rows = '[{"adt_opinion":"부적정의견"}]'
         self.assertEqual(run_js('cellMarks(%s,"audit_history")' % rows), {})
 
 
@@ -6275,6 +6334,134 @@ class TestInsiderTimelineMark(unittest.TestCase):
     def test_positive_values_are_not_marked(self):
         rows = '[{"sp_stock_lmp_irds_cnt":"+1,000","sp_stock_lmp_irds_rate":"0.10"}]'
         self.assertEqual(run_js('cellMarks(%s,"insider_timeline")' % rows), {})
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestMarkRenderBehavior(unittest.TestCase):
+    """SE-4g Task 3 리뷰 지적(Finding 2) — 이전 검증은 소스 문자열만 봤다
+    (예: `assertIn("marks", head)`는 tableEl(table, marks) 시그니처
+    자체와 항상 일치해 실제 렌더 여부와 무관하게 통과했다). 리뷰어가 세
+    변형을 넣고 전체 스위트가 그대로 초록임을 실측했다:
+
+      - 본문 셀 `const why = ...` → `null`: 강조 렌더 자체가 전부 죽는다
+      - 범례 `if (appliedWhys.length > 0)` → `if (false)`: 범례가 사라진다
+      - caption `capWhy = null`: 승격된 열의 강조가 사라진다
+
+    이 클래스는 renderSection을 실제로 호출해(run_render_section, 위
+    _RENDER_SECTION_HARNESS의 collectMarked/collectLegends) 세 변형이
+    각각 최소 한 테스트를 실패시키는지 직접 확인했다(아래 각 테스트
+    docstring에 어느 변형을 겨냥하는지 적어 둔다). 적용·되돌리기 로그는
+    task-3-report.md 참고."""
+
+    # 4열(nm·relate·기초/기말 지분율), 행마다 지분율이 달라 caption으로
+    # 승격되지 않고(모든 행이 같은 값이어야 승격된다) 12열 미만이라
+    # 접히지도 않는다 — 강조가 나올 수 있는 경로가 본문 셀 하나뿐이다.
+    _SHAREHOLDER_RECORDS = [
+        {"nm": "오정강", "relate": "본인",
+         "bsis_posesn_stock_qota_rt": "14.82", "trmend_posesn_stock_qota_rt": "14.41"},
+        {"nm": "박수정", "relate": "특수관계인",
+         "bsis_posesn_stock_qota_rt": "0.07", "trmend_posesn_stock_qota_rt": "0.07"},
+        {"nm": "정지선", "relate": "특수관계인",
+         "bsis_posesn_stock_qota_rt": "0.00", "trmend_posesn_stock_qota_rt": "0.03"},
+    ]
+
+    def _render_shareholders(self):
+        value = {"major_holders": self._SHAREHOLDER_RECORDS, "bulk_holders": []}
+        return run_render_section('"shareholders"', json.dumps(value, ensure_ascii=False))
+
+    def test_body_cell_gets_marked(self):
+        """변형 표의 ①(body-cell why=null)을 겨냥한다 — 이 표는 caption도
+        접힌 열도 없으므로 강조는 본문 셀 경로로만 나올 수 있다."""
+        got = self._render_shareholders()
+        marked = got["marked"]
+        self.assertTrue(
+            any(m["tag"] == "td" and m["title"] == "기말 지분율 < 기초 지분율" for m in marked),
+            f"본문 셀 강조가 렌더되지 않았습니다: {marked}",
+        )
+
+    def test_legend_appears_when_marks_fire(self):
+        """변형 표의 ②(범례 게이트 `if (false)`)를 겨냥한다."""
+        got = self._render_shareholders()
+        self.assertTrue(
+            any("기말 지분율 < 기초 지분율" in legend for legend in got["legends"]),
+            f"범례가 렌더되지 않았습니다: {got['legends']}",
+        )
+
+    def test_legend_absent_when_nothing_fires(self):
+        """빈 줄을 남기지 않는다는 브리프 원칙(ui.js tableEl 주석)의
+        반대쪽도 확인한다 — 아무 규칙도 안 붙으면 범례 자체가 없어야 한다."""
+        value = {
+            "major_holders": [
+                {"nm": "오정강", "relate": "본인",
+                 "bsis_posesn_stock_qota_rt": "14.00", "trmend_posesn_stock_qota_rt": "14.00"},
+            ],
+            "bulk_holders": [],
+        }
+        got = run_render_section('"shareholders"', json.dumps(value, ensure_ascii=False))
+        self.assertEqual(got["legends"], [])
+        self.assertEqual(got["marked"], [])
+
+    def test_caption_gets_marked(self):
+        """변형 표의 ③(caption `capWhy = null`)을 겨냥한다 — opinion이
+        두 레코드 모두 같은 값이라 caption으로 승격되고, 그 열에만
+        MARK_RULES.audit_history 규칙이 걸려 있어 본문 셀에는 강조가
+        나올 수 없는 표다(year만 본문에 남는데 그 열엔 규칙이 없다)."""
+        value = {
+            "opinions": [
+                {"year": 2024, "opinion": "한정의견", "auditor": "가나회계법인", "tenure_years": 3},
+                {"year": 2023, "opinion": "한정의견", "auditor": "가나회계법인", "tenure_years": 2},
+            ],
+            "auditor_changes": [],
+            "independence_warnings": [],
+        }
+        got = run_render_section('"audit_history"', json.dumps(value, ensure_ascii=False))
+        marked = got["marked"]
+        self.assertTrue(
+            any(m["tag"] == "span" and m["title"] == '감사의견이 "적정"이 아님' for m in marked),
+            f"caption 강조가 렌더되지 않았습니다: {marked}",
+        )
+
+    def test_folded_column_gets_marked(self):
+        """접힌 열(12열 초과 시 뒤로 밀리는 열) 경로 — foldWhy가 무너지면
+        여기서만 잡힌다(본문·caption과는 다른 변수). elestock 실측 필드
+        sp_stock_lmp_irds_cnt를 13번째(=접히는 자리)에 두고 음수를 준다."""
+        def row(cnt, tag):
+            r = {f"a{i}": f"{tag}-{i}" for i in range(1, 13)}
+            r["sp_stock_lmp_irds_cnt"] = cnt
+            r["source"] = "elestock"
+            return r
+
+        records = [row("-32124", "r0"), row("100", "r1")]
+        got = run_render_section('"insider_timeline"', json.dumps(records, ensure_ascii=False))
+        marked = got["marked"]
+        self.assertTrue(
+            any(m["tag"] == "span" and m["title"] == "증감 주식수 < 0" for m in marked),
+            f"접힌 열 강조가 렌더되지 않았습니다: {marked}",
+        )
+        # 양수인 두 번째 행은 표시되면 안 된다(오탐 방지 확인).
+        self.assertEqual(
+            len([m for m in marked if m["title"] == "증감 주식수 < 0"]), 1,
+        )
+
+    def test_affiliates_legend_differs_original_vs_derived(self):
+        """appliedWhys 버그 수정(task-3-report.md "발견하고 고친 버그" ②)의
+        회귀 테스트 — 파생 "피투자사 정보" 표(buildAffiliateOverviewBlock)는
+        7열만 그리고 그중 incrs_dcrs_evl_lstmn(증감 평가손익) 열이 없다.
+        cellMarks는 원본 레코드로 3규칙 전부 계산하지만, 파생 표의 범례가
+        marks 전체를 그대로 나열하면 "그 표에 없는 열의 규칙이 강조됐다"고
+        말하는 모순이 생긴다(수정 전 실제로 벌어졌던 사고). 원본 표
+        범례에는 3규칙 전부, 파생 표 범례에는 2규칙만 있어야 한다."""
+        got = run_render_section('"affiliates"', AFFILIATE_ROWS)
+        legends = got["legends"]
+        self.assertEqual(len(legends), 2, f"범례가 2개(원본+파생)가 아닙니다: {legends}")
+
+        full = [l for l in legends if "증감 평가손익 < 0" in l]
+        partial = [l for l in legends if "증감 평가손익 < 0" not in l]
+        self.assertEqual(len(full), 1, "3규칙 전부인 원본 표 범례를 찾지 못했습니다")
+        self.assertEqual(len(partial), 1, "2규칙만인 파생 표 범례를 찾지 못했습니다")
+        for why in ("기말 장부가액 < 최초 취득금액", "피투자사 당기순이익 < 0"):
+            self.assertIn(why, partial[0], f"파생 표 범례에 '{why}'가 없습니다: {partial[0]}")
+            self.assertIn(why, full[0], f"원본 표 범례에 '{why}'가 없습니다: {full[0]}")
 
 
 if __name__ == "__main__":

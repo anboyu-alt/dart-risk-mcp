@@ -2164,10 +2164,19 @@ function isCleanOpinion(v) {
   return String(v == null ? "" : v).trim().indexOf("적정") === 0;
 }
 
+// fetch_audit_opinion_history(dart_client.py)가 SE 서버로 내보내는 필드는
+// "opinion"이다(DART 원본 accnutAdtorNmNdAdtOpinion.json의 필드명은
+// adt_opinion이지만, core가 {"year","opinion","auditor","tenure_years",...}
+// 로 다시 감싸 반환한다 — dart_client.py fetch_audit_opinion_history
+// 반환 docstring 참고). registry.py Stage1Spec("audit_history", ...,
+// "fetch_audit_opinion_history", ...)가 이 core 함수를 그대로 부르므로
+// SE 화면에 실제로 도달하는 레코드는 opinion이지 adt_opinion이 아니다 —
+// DART 원본 필드명을 그대로 옮겨 적으면(리뷰 지적) cellMarks의
+// `rule.key in rec` 게이트에 걸려 영원히 발화하지 않는다.
 MARK_RULES.audit_history = [
   {
-    key: "adt_opinion",
-    when: function (r) { return !isNoDataMarker(r.adt_opinion) && !isCleanOpinion(r.adt_opinion); },
+    key: "opinion",
+    when: function (r) { return !isNoDataMarker(r.opinion) && !isCleanOpinion(r.opinion); },
     why: '감사의견이 "적정"이 아님',
   },
 ];
@@ -2256,18 +2265,6 @@ function cellMarks(records, sectionKey) {
   return out;
 }
 
-function markLegend(records, sectionKey) {
-  const marks = cellMarks(records, sectionKey);
-  const fired = new Set(Object.keys(marks).map(function (k) { return marks[k]; }));
-  const rules = MARK_RULES[sectionKey] || [];
-  const seen = new Set();
-  const out = [];
-  for (const rule of rules) {
-    if (fired.has(rule.why) && !seen.has(rule.why)) { seen.add(rule.why); out.push(rule.why); }
-  }
-  return out;
-}
-
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     LS_DART_KEY, LS_SESSION, LS_JOB, LS_THEME, SECTION_GROUPS, formatCount,
@@ -2281,6 +2278,6 @@ if (typeof module !== "undefined" && module.exports) {
     normalizeDebtByKind, monthlyCounts, compositeXValue,
     financialRatios, classifyDisclosureCategory, monthlyCountsByCategory,
     DIVIDEND_SE_FIELDS, dividendVsIncome, fundPlanChanges, affiliateOverview,
-    markNumber, MARK_RULES, cellMarks, markLegend,
+    markNumber, MARK_RULES, cellMarks,
   };
 }
