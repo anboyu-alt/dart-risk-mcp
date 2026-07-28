@@ -2158,6 +2158,66 @@ MARK_RULES.affiliates = [
   },
 ];
 
+// "부적정의견"은 부분 문자열 "적정"을 포함한다 — indexOf 로 판정하면
+// 가장 무거운 의견을 정상으로 읽는다. 반드시 접두 일치로 본다.
+function isCleanOpinion(v) {
+  return String(v == null ? "" : v).trim().indexOf("적정") === 0;
+}
+
+MARK_RULES.audit_history = [
+  {
+    key: "adt_opinion",
+    when: function (r) { return !isNoDataMarker(r.adt_opinion) && !isCleanOpinion(r.adt_opinion); },
+    why: '감사의견이 "적정"이 아님',
+  },
+];
+
+MARK_RULES.shareholders = [
+  {
+    key: "trmend_posesn_stock_qota_rt",
+    when: function (r) { return markLt(r.trmend_posesn_stock_qota_rt, r.bsis_posesn_stock_qota_rt); },
+    why: "기말 지분율 < 기초 지분율",
+  },
+];
+
+// core 의 is_amendment_disclosure 는 파이썬이라 여기서 부를 수 없다.
+// 실측 접두어를 테스트로 고정해 두고 같은 판별을 다시 쓴다.
+function isAmendmentName(v) {
+  const s = String(v == null ? "" : v).trim();
+  if (s.charAt(0) !== "[") return false;
+  const close = s.indexOf("]");
+  return close > 0 && s.slice(1, close).indexOf("정정") >= 0;
+}
+
+MARK_RULES.disclosures = [
+  { key: "report_nm", when: function (r) { return isAmendmentName(r.report_nm); }, why: "정정공시" },
+];
+
+const MARGIN_INDICATORS = ["영업이익률", "순이익률"];
+
+MARK_RULES.financial_ratios = [
+  {
+    key: "값",
+    when: function (r) { return MARGIN_INDICATORS.indexOf(r["지표"]) >= 0 && markNeg(r["값"]); },
+    why: "이익률 < 0",
+  },
+];
+
+// insider_timeline: se_server의 fetch_insider_timeline(elestock/hyslrSttus/
+// hyslrChgSttus/tesstkAcqsDspsSttus 통합)이 반환하는 레코드에는 "증감"을
+// 뜻하는 확정된 단일 키가 없다(계획서가 가정한 delta는 이 파이프라인에
+// 없는 값이다 — MCP 도구 track_insider_trading의 텍스트 리포트 경로에서만
+// detect_insider_pre_disclosure가 분기 간 차이를 계산하고, se_server는 그
+// 함수를 호출하지 않는다). 추측한 키로 규칙을 넣으면 화면에서 조용히
+// 아무 일도 하지 않으므로(SE-4f 정렬 결함과 같은 부류) 이 섹션은
+// 의도적으로 규칙을 비워 둔다.
+
+// 부실 이벤트(부도·영업정지·회생절차·해산)는 존재 자체가 사실이라 임계값이
+// 필요 없다 — 레코드가 있다는 것 자체를 표시한다.
+MARK_RULES.distress = [
+  { key: "rcept_no", when: function () { return true; }, why: "부실 관련 공시가 보고됨" },
+];
+
 // 반환 키는 ui.js 의 tableEl()이 이미 계산하는 좌표와 같은 형식이다:
 // 가로 표는 (행번호, keys[열]), 세로 표는 (0, keys[행]).
 function cellMarks(records, sectionKey) {

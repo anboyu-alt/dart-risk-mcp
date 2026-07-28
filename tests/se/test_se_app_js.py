@@ -6165,6 +6165,76 @@ class TestAffiliateMarks(unittest.TestCase):
         self.assertEqual(got, [{}, {}])
 
 
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestAuditOpinionMark(unittest.TestCase):
+    def test_jeokjeong_is_not_marked(self):
+        rows = '[{"adt_opinion":"적정의견"}]'
+        self.assertEqual(run_js('cellMarks(%s,"audit_history")' % rows), {})
+
+    def test_bujeokjeong_is_marked(self):
+        # "부적정의견"은 부분 문자열 "적정"을 포함한다. indexOf 로 짜면
+        # 가장 무거운 의견을 정상으로 읽는다 — 접두 일치여야 한다.
+        rows = '[{"adt_opinion":"부적정의견"}]'
+        got = run_js('cellMarks(%s,"audit_history")' % rows)
+        self.assertEqual(got, {"0|adt_opinion": '감사의견이 "적정"이 아님'})
+
+    def test_hanjeong_and_georeol_are_marked(self):
+        rows = '[{"adt_opinion":"한정의견"},{"adt_opinion":"의견거절"}]'
+        got = run_js('cellMarks(%s,"audit_history")' % rows)
+        self.assertEqual(sorted(got.keys()), ["0|adt_opinion", "1|adt_opinion"])
+
+    def test_whitespace_around_jeokjeong_is_tolerated(self):
+        rows = '[{"adt_opinion":" 적정의견 "}]'
+        self.assertEqual(run_js('cellMarks(%s,"audit_history")' % rows), {})
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestShareholderMark(unittest.TestCase):
+    def test_decrease_is_marked(self):
+        # 실측: 오정강 14.82 → 14.41
+        rows = ('[{"nm":"오정강","bsis_posesn_stock_qota_rt":"14.82","trmend_posesn_stock_qota_rt":"14.41"},'
+                '{"nm":"박수정","bsis_posesn_stock_qota_rt":"0.07","trmend_posesn_stock_qota_rt":"0.07"},'
+                '{"nm":"정지선","bsis_posesn_stock_qota_rt":"0.00","trmend_posesn_stock_qota_rt":"0.03"}]')
+        got = run_js('cellMarks(%s,"shareholders")' % rows)
+        self.assertEqual(list(got.keys()), ["0|trmend_posesn_stock_qota_rt"])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestDisclosureAmendmentMark(unittest.TestCase):
+    def test_known_amendment_prefixes(self):
+        rows = ('[{"report_nm":"[기재정정]주요사항보고서"},{"report_nm":"[첨부정정]사업보고서"},'
+                '{"report_nm":"[정정]반기보고서"},{"report_nm":"사업보고서 (2025.12)"}]')
+        got = run_js('cellMarks(%s,"disclosures")' % rows)
+        self.assertEqual(sorted(got.keys()), ["0|report_nm", "1|report_nm", "2|report_nm"])
+
+    def test_bracket_without_amendment_is_not_marked(self):
+        rows = '[{"report_nm":"[첨부추가]사업보고서"}]'
+        self.assertEqual(run_js('cellMarks(%s,"disclosures")' % rows), {})
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestRatioMark(unittest.TestCase):
+    def test_negative_margin_marked_but_other_negatives_not(self):
+        rows = ('[{"지표":"영업이익률","값":-25.1},{"지표":"순이익률","값":-22.6},'
+                '{"지표":"부채비율","값":130.2},{"지표":"유동비율","값":61.3},'
+                '{"지표":"영업이익률","값":3.4}]')
+        got = run_js('cellMarks(%s,"financial_ratios")' % rows)
+        self.assertEqual(sorted(got.keys()), ["0|값", "1|값"])
+
+    def test_null_value_is_not_marked(self):
+        rows = '[{"지표":"순이익률","값":null,"사유":"매출액 없음"}]'
+        self.assertEqual(run_js('cellMarks(%s,"financial_ratios")' % rows), {})
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestDistressMark(unittest.TestCase):
+    def test_record_presence_is_marked(self):
+        # 부실 이벤트는 존재 자체가 사실이다 — 임계값 없이 레코드 존재만으로 표시한다.
+        rows = '[{"rcept_no":"20260101000001"}]'
+        got = run_js('cellMarks(%s,"distress")' % rows)
+        self.assertEqual(got, {"0|rcept_no": "부실 관련 공시가 보고됨"})
+
+
 if __name__ == "__main__":
     unittest.main()
 
