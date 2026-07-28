@@ -587,6 +587,97 @@ class TestKnownActors(unittest.TestCase):
         payload = post.call_args.kwargs["json"]
         self.assertEqual(payload["properties"]["구분"]["select"]["name"], "조합")
 
+    def test_lookup_merges_records_across_html_entity_duplicate_keys(self):
+        # 실측 사고 재현: 파싱 오류로 같은 실체가 '삼성전자 주식회사'와
+        # '삼성전자 &CR;주식회사' 두 키로 저장됨. normalize_name은 이미 두 키를
+        # 같은 값으로 접지만(고치지 않는다), lookup_actor는 정확 키 일치에서
+        # 즉시 반환해 다른 키의 기록을 놓쳤다. 두 표기 어느 쪽으로 조회해도
+        # 합산 3건이 나와야 한다.
+        from dart_risk_mcp.core.known_actors import lookup_actor
+        self._write({"version": 1, "actors": {
+            "삼성전자 주식회사": [
+                {"source": "CB 인수", "evidence": "e1", "rcept_no": "R1"},
+            ],
+            "삼성전자 &CR;주식회사": [
+                {"source": "CB 인수", "evidence": "e2", "rcept_no": "R2"},
+                {"source": "CB 인수", "evidence": "e3", "rcept_no": "R3"},
+            ],
+        }})
+        recs_plain = lookup_actor("삼성전자 주식회사")
+        recs_entity = lookup_actor("삼성전자 &CR;주식회사")
+        self.assertEqual(len(recs_plain), 3)
+        self.assertEqual(len(recs_entity), 3)
+        self.assertEqual({r["rcept_no"] for r in recs_plain}, {"R1", "R2", "R3"})
+        self.assertEqual({r["rcept_no"] for r in recs_entity}, {"R1", "R2", "R3"})
+
+    def test_lookup_dedupes_identical_records_across_keys(self):
+        # 같은 키가 정확 일치·정규화 일치 양쪽에 걸리므로 그대로 합치면
+        # 기록이 겹친다 — 필드 전체가 같은 기록은 한 번만 반환한다.
+        from dart_risk_mcp.core.known_actors import lookup_actor
+        rec = {"source": "CB 인수", "evidence": "동일 근거", "rcept_no": "R1"}
+        self._write({"version": 1, "actors": {
+            "케이파트너스 주식회사": [dict(rec)],
+            "케이파트너스&CR;주식회사": [dict(rec)],
+        }})
+        recs = lookup_actor("케이파트너스 주식회사")
+        self.assertEqual(len(recs), 1)
+
+    def test_lookup_keeps_records_with_same_evidence_but_different_rcept(self):
+        # 근거 텍스트가 같아도 접수번호가 다르면 서로 다른 공시(별개 근거)이므로
+        # 중복으로 접지 않는다 — 판정 기준은 필드 전체 일치.
+        from dart_risk_mcp.core.known_actors import lookup_actor
+        self._write({"version": 1, "actors": {
+            "삼성전자 주식회사": [
+                {"source": "CB 인수", "evidence": "같은 문구", "rcept_no": "R1"},
+            ],
+            "삼성전자 &CR;주식회사": [
+                {"source": "CB 인수", "evidence": "같은 문구", "rcept_no": "R2"},
+            ],
+        }})
+        recs = lookup_actor("삼성전자 주식회사")
+        self.assertEqual(len(recs), 2)
+        self.assertEqual({r["rcept_no"] for r in recs}, {"R1", "R2"})
+
+    def test_lookup_deterministic_order_across_calls(self):
+        from dart_risk_mcp.core.known_actors import lookup_actor
+        self._write({"version": 1, "actors": {
+            "삼성전자 주식회사": [
+                {"source": "A", "evidence": "e1", "rcept_no": "R1"}],
+            "삼성전자 &CR;주식회사": [
+                {"source": "B", "evidence": "e2", "rcept_no": "R2"},
+                {"source": "C", "evidence": "e3", "rcept_no": "R3"},
+            ],
+        }})
+        first = lookup_actor("삼성전자 주식회사")
+        second = lookup_actor("삼성전자 주식회사")
+        self.assertEqual(first, second)
+
+    def test_lookup_does_not_merge_distinct_normalized_entities(self):
+        # 정규화해도 다른 실체인 두 인물은 합쳐지지 않는다.
+        from dart_risk_mcp.core.known_actors import lookup_actor
+        self._write({"version": 1, "actors": {
+            "홍길동": [{"source": "A", "evidence": "e1"}],
+            "김철수": [{"source": "B", "evidence": "e2"}],
+        }})
+        recs = lookup_actor("홍길동")
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0]["source"], "A")
+
+    def test_lookup_by_company_unaffected_by_entity_duplicate_keys(self):
+        # lookup_actors_by_company는 이미 전 키를 순회하므로 이 결함이 없다
+        # — 같은 실체가 두 키에 나뉘어도 각 키의 태깅된 회사 기록을 정상 반환.
+        from dart_risk_mcp.core.known_actors import lookup_actors_by_company
+        self._write({"version": 1, "actors": {
+            "삼성전자 주식회사": [
+                {"source": "A", "evidence": "e1", "companies": ["A전자"]}],
+            "삼성전자 &CR;주식회사": [
+                {"source": "B", "evidence": "e2", "companies": ["A전자"]}],
+        }})
+        hits = lookup_actors_by_company("A전자")
+        self.assertEqual(len(hits), 2)
+        self.assertEqual([n for n, _ in hits],
+                         sorted(["삼성전자 주식회사", "삼성전자 &CR;주식회사"]))
+
     def test_lookup_by_company_matches(self):
         from dart_risk_mcp.core.known_actors import lookup_actors_by_company
         self._write({"version": 1, "actors": {

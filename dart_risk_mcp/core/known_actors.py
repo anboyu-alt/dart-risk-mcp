@@ -599,28 +599,59 @@ def load_known_actors() -> dict:
     return _bundled()
 
 
+def _record_fingerprint(rec: dict) -> str:
+    """중복 판정용 지문 — 레코드의 필드 전체(값 포함)가 같아야 중복으로 본다.
+
+    rcept_no만 다르고 evidence 문구가 같은 두 기록은 서로 다른 공시에서 나온
+    별개 근거이므로 중복이 아니다. 반대로 파싱 원문에 `&CR;`가 섞여 같은
+    실체가 두 키('삼성전자 주식회사' / '삼성전자 &CR;주식회사')로 저장된
+    경우, 두 키의 기록을 합칠 때 완전히 동일한 필드 조합(예: 같은 rcept_no
+    +evidence)만 한 번으로 접는다. dict는 unhashable하므로 정렬된 JSON
+    문자열을 지문으로 쓴다.
+    """
+    return json.dumps(rec, ensure_ascii=False, sort_keys=True)
+
+
 def lookup_actor(name: str) -> list[dict]:
     """인물명 매칭 → 기록 리스트(없으면 []).
 
-    정확 일치 → 표기 정규화(공백·대소문자) 일치 → 폴딩 변형(fold_variants)
-    일치 순으로 폴백. 레지스트리 키가 'LIU HUAN'일 때 'Liu Huan' 조회,
-    '주식회사 액션' 등재일 때 '(주)액션' 조회, '정소영(DING SHAO YING)'
-    등재일 때 'DING SHAO YING' 조회가 각각 매칭된다.
+    표기 정규화(공백·대소문자·역할 괄호·HTML 엔티티) 일치 → 폴딩 변형
+    (fold_variants) 일치 순으로 폴백. 레지스트리 키가 'LIU HUAN'일 때
+    'Liu Huan' 조회, '주식회사 액션' 등재일 때 '(주)액션' 조회, '정소영
+    (DING SHAO YING)' 등재일 때 'DING SHAO YING' 조회가 각각 매칭된다.
+
+    normalize_name이 같은 값을 내는 키가 여럿이면(예: 파싱 오류로 같은
+    실체가 '삼성전자 주식회사'·'삼성전자 &CR;주식회사' 두 키로 저장된 경우)
+    첫 매칭에서 끊지 않고 **모든 키의 기록을 합쳐** 반환한다 — 조회 표기에
+    따라 답이 달라지는 것을 막는다. 폴딩 변형 단계도 동일 원칙을 따른다.
+    각 단계 내에서는 키를 정렬해 순회해 반환 순서를 결정적으로 유지한다
+    (lookup_actors_by_company가 같은 이유로 정렬하는 것과 동일한 이유).
     """
     if not name or not name.strip():
         return []
     actors = load_known_actors().get("actors", {})
-    hit = actors.get(name.strip())
-    if hit is not None:
-        return list(hit)
+
+    def _merge(keys) -> list[dict]:
+        seen: set = set()
+        out: list[dict] = []
+        for key in sorted(keys):
+            for rec in actors[key]:
+                fp = _record_fingerprint(rec)
+                if fp not in seen:
+                    seen.add(fp)
+                    out.append(rec)
+        return out
+
     want = normalize_name(name)
-    for key, recs in actors.items():
-        if normalize_name(key) == want:
-            return list(recs)
+    norm_keys = [key for key in actors if normalize_name(key) == want]
+    if norm_keys:
+        return _merge(norm_keys)
+
     wf = set(fold_variants(want))
-    for key, recs in actors.items():
-        if wf & set(fold_variants(normalize_name(key))):
-            return list(recs)
+    fold_keys = [key for key in actors if wf & set(fold_variants(normalize_name(key)))]
+    if fold_keys:
+        return _merge(fold_keys)
+
     return []
 
 
