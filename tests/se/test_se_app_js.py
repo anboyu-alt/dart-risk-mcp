@@ -3957,10 +3957,14 @@ class TestChartData(unittest.TestCase):
     # 계산한 파생값**을 렌더하는 섹션이다 — financial_ratios는
     # financialRatios(financials)가 만든 구분·기간·지표·값 레코드를 그린다
     # (financials 자체를 그대로 그리지 않는 이유는 위
-    # test_financials_has_no_chart_spec 참고). 서버 레지스트리를 건드리지
-    # 않고도(se_server/ API 계약 무변경 원칙) 이 키가 "오타"로 오인돼
-    # 이 테스트에 걸리지 않도록 명시적으로 허용한다.
-    KNOWN_DERIVED_CHART_KEYS = {"financial_ratios"}
+    # test_financials_has_no_chart_spec 참고). affiliate_timeline은
+    # affiliateOverview(affiliates)가 최초취득일 순으로 재배열한 레코드를
+    # 그린다(SE-4f Task 5) — affiliates 원본 키와 일부러 다른 이름을 써서,
+    # 원본 표(affiliates)의 자동 차트와 이 파생 차트가 같은 키로 겹치지
+    # 않게 한다. 서버 레지스트리를 건드리지 않고도(se_server/ API 계약
+    # 무변경 원칙) 이 키들이 "오타"로 오인돼 이 테스트에 걸리지 않도록
+    # 명시적으로 허용한다.
+    KNOWN_DERIVED_CHART_KEYS = {"financial_ratios", "affiliate_timeline"}
 
     def test_spec_keys_all_exist_in_the_server_registry(self):
         """CHART_SPECS의 섹션 키는 서버가 실제로 주는 키이거나, 위
@@ -5832,6 +5836,193 @@ class TestFundPlanChangesRenderWiring(unittest.TestCase):
         ]
         got = run_render_section('"fund_usage"', json.dumps(records, ensure_ascii=False))
         self.assertNotIn("계획 금액 변경 (사실 표기)", got["titles"])
+
+
+# ── SE-4f Task 5: 타법인 출자 — 피투자사 정보 + 최초취득일 순 시각화 ─────
+#
+# 픽스처는 실제 API 응답 형태다: ENCHEM_POLAND·DFD_YANGFU·PT_INDONESIA
+# 세 레코드는 2026-07-28 엔켐(corp_code=01011526) get_affiliate_investments
+# 실측 응답의 기말지분율·기말장부가액·최초취득일·피투자사 당기순이익을
+# 그대로 쓴다(예: Enchem Poland Sp. z o.o. 기말장부가액 2,004,000,000·
+# 당기순이익 -10,534,000,000). 피투자사 총자산(recent_bsns_year_fnnr_sttus_
+# tot_assets)은 task-5-brief.md가 제시한 같은 회사 실측 화면값(479.7억·
+# 2679.9억·266.1억)에서 역산했다 — 세 값 모두 formatAmount로 다시 억 단위로
+# 바꾸면 브리프의 화면 표기와 정확히 일치한다(교차 검증됨). bsis_blce_
+# acntbk_amount(기초 장부가액)만 실측 원문에 없어 대표값을 썼다 — 두 계열
+# (기초/기말) 렌더 메커니즘 자체를 확인하는 용도이지 특정 회사의 기초
+# 장부가액을 주장하는 게 아니다.
+_ENCHEM_POLAND = {
+    "inv_prm": "Enchem Poland Sp. z o.o.", "invstmnt_purps": "경영참여",
+    "frst_acqs_de": 20180507, "bsis_blce_qy": "131,705",
+    "bsis_blce_qota_rt": 100.0, "bsis_blce_acntbk_amount": 1800000000,
+    "trmend_blce_qy": "131,705", "trmend_blce_qota_rt": 100.0,
+    "trmend_blce_acntbk_amount": 2004000000,
+    "recent_bsns_year_fnnr_sttus_tot_assets": 47970000000,
+    "recent_bsns_year_fnnr_sttus_thstrm_ntpf": -10534000000,
+}
+_DFD_YANGFU = {
+    "inv_prm": "DFD Yangfu New Materials Co.,Ld", "invstmnt_purps": "일반투자",
+    "frst_acqs_de": 20220730, "bsis_blce_qota_rt": 15.0,
+    "bsis_blce_acntbk_amount": 60000000000, "trmend_blce_qota_rt": 15.0,
+    "trmend_blce_acntbk_amount": 63481000000,
+    "recent_bsns_year_fnnr_sttus_tot_assets": 267990000000,
+    "recent_bsns_year_fnnr_sttus_thstrm_ntpf": 5148000000,
+}
+_PT_INDONESIA = {
+    "inv_prm": "PT Enchem Elyte Indonesia", "invstmnt_purps": "경영참여",
+    "frst_acqs_de": 20220831, "bsis_blce_qota_rt": 99.17,
+    "bsis_blce_acntbk_amount": 12500000000, "trmend_blce_qota_rt": 99.17,
+    "trmend_blce_acntbk_amount": 12017000000,
+    "recent_bsns_year_fnnr_sttus_tot_assets": 26610000000,
+    "recent_bsns_year_fnnr_sttus_thstrm_ntpf": -1412000000,
+}
+# 동률(같은 최초취득일) 실측 — 엔켐 2026-07-28 응답에서 두 조합 모두
+# frst_acqs_de=2025.09.25다. 장부가액은 실측값 그대로.
+_GOLDENVALUE_3 = {
+    "inv_prm": "골든밸류 제3호 신기술조합", "invstmnt_purps": "일반투자",
+    "frst_acqs_de": 20250925, "trmend_blce_qota_rt": 60.29,
+    "trmend_blce_acntbk_amount": 41442000000,
+}
+_GOLDENVALUE_4 = {
+    "inv_prm": "골든밸류 제4호 신기술조합", "invstmnt_purps": "일반투자",
+    "frst_acqs_de": 20250925, "trmend_blce_qota_rt": 48.32,
+    "trmend_blce_acntbk_amount": 7011000000,
+}
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestAffiliateOverview(unittest.TestCase):
+    """SE-4f Task 5 — affiliates(타법인 출자현황) 레코드를 최초취득일
+    (frst_acqs_de) 오름차순으로 재배열한다(task-5-brief.md)."""
+
+    def test_sorts_by_first_acquisition_date_ascending(self):
+        # 입력 순서를 일부러 뒤섞는다 — 정렬이 실제로 동작하는지 확인한다.
+        records = [_DFD_YANGFU, _PT_INDONESIA, _ENCHEM_POLAND]
+        got = run_js(f"affiliateOverview({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(
+            [r["inv_prm"] for r in got],
+            ["Enchem Poland Sp. z o.o.", "DFD Yangfu New Materials Co.,Ld",
+             "PT Enchem Elyte Indonesia"],
+        )
+
+    def test_records_without_date_go_last_keeping_relative_order(self):
+        no_date_a = {"inv_prm": "무취득일A"}
+        no_date_b = {"inv_prm": "무취득일B"}
+        records = [no_date_a, _ENCHEM_POLAND, no_date_b]
+        got = run_js(f"affiliateOverview({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(
+            [r["inv_prm"] for r in got],
+            ["Enchem Poland Sp. z o.o.", "무취득일A", "무취득일B"],
+            "취득일이 없는 레코드가 지어낸 순서로 끼어들었거나 서로 순서가 바뀌었습니다",
+        )
+
+    def test_tied_dates_keep_original_relative_order(self):
+        """어느 쪽이 "먼저"인지 원본에 없는 정보이므로 지어내지 않는다
+        (위 _GOLDENVALUE_3/4 주석 참고)."""
+        records = [_GOLDENVALUE_3, _GOLDENVALUE_4]
+        got = run_js(f"affiliateOverview({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual([r["inv_prm"] for r in got],
+                         ["골든밸류 제3호 신기술조합", "골든밸류 제4호 신기술조합"])
+
+    def test_records_without_inv_prm_are_dropped(self):
+        records = [{"frst_acqs_de": 20200101}, _ENCHEM_POLAND, {"inv_prm": ""}]
+        got = run_js(f"affiliateOverview({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["inv_prm"], "Enchem Poland Sp. z o.o.")
+
+    def test_not_an_array_returns_empty(self):
+        self.assertEqual(run_js("affiliateOverview(null)"), [])
+        self.assertEqual(run_js("affiliateOverview({})"), [])
+
+    def test_records_are_returned_unmodified(self):
+        """순서만 바꾼다 — 표·차트가 나머지 열(예: recent_bsns_year_fnnr_sttus_
+        tot_assets)도 그대로 쓸 수 있어야 한다."""
+        got = run_js(f"affiliateOverview({json.dumps([_DFD_YANGFU], ensure_ascii=False)})")
+        self.assertEqual(got[0]["recent_bsns_year_fnnr_sttus_tot_assets"], 267990000000)
+        self.assertEqual(got[0]["invstmnt_purps"], "일반투자")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestAffiliateTimelineChartSpec(unittest.TestCase):
+    """CHART_SPECS.affiliate_timeline — affiliateOverview가 정렬한 순서를
+    chartData가 다시 흩트리지 않는지, 기초→기말 장부가액 두 계열이 모두
+    나오는지 확인한다."""
+
+    def test_x_axis_order_matches_the_pre_sorted_records_not_alphabetical(self):
+        """세 회사명 모두 숫자를 포함하지 않으므로(위 CHART_SPECS.
+        affiliate_timeline 주석 참고) chartData가 재정렬하지 않고
+        affiliateOverview가 만든 등장 순서를 그대로 보존해야 한다."""
+        ordered = [_ENCHEM_POLAND, _DFD_YANGFU, _PT_INDONESIA]
+        got = run_js(
+            f"chartData({json.dumps(ordered, ensure_ascii=False)}, CHART_SPECS.affiliate_timeline)"
+        )
+        self.assertEqual(
+            got["labels"],
+            ["Enchem Poland Sp. z o.o.", "DFD Yangfu New Materials Co.,Ld",
+             "PT Enchem Elyte Indonesia"],
+        )
+
+    def test_both_book_value_series_are_present(self):
+        got = run_js(
+            f"chartData({json.dumps([_ENCHEM_POLAND], ensure_ascii=False)}, "
+            "CHART_SPECS.affiliate_timeline)"
+        )
+        labels = sorted(d["label"] for d in got["datasets"])
+        self.assertEqual(labels, ["기말 장부가액", "기초 장부가액"])
+        by_label = {d["label"]: d["data"] for d in got["datasets"]}
+        self.assertEqual(by_label["기초 장부가액"], [1800000000])
+        self.assertEqual(by_label["기말 장부가액"], [2004000000])
+
+    def test_x_scale_is_category(self):
+        self.assertEqual(run_js("CHART_SPECS.affiliate_timeline.xScale"), "category")
+
+    def test_returns_null_when_no_book_value_fields_present(self):
+        got = run_js(
+            'chartData([{inv_prm:"이름만있음"}], CHART_SPECS.affiliate_timeline)'
+        )
+        self.assertIsNone(got)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestAffiliateOverviewRenderWiring(unittest.TestCase):
+    """affiliateOverview·buildAffiliateOverviewBlock이 정의만 있고
+    renderSection이 부르지 않는 사고를 막는다(이 저장소에서 이미 다섯 번
+    난 사고 유형 — 브리프 참고)."""
+
+    _RECORDS = [_DFD_YANGFU, _ENCHEM_POLAND, _PT_INDONESIA]
+
+    def test_derived_block_title_is_rendered(self):
+        got = run_render_section('"affiliates"', json.dumps(self._RECORDS, ensure_ascii=False))
+        self.assertIn("피투자사 정보 (최초취득일 순)", got["titles"])
+
+    def test_investee_financials_appear_in_the_curated_table(self):
+        """브리프가 제시한 화면 표기(총자산·당기순이익)가 실제로 렌더된다 —
+        formatAmount(app.js)를 거친 억 단위 표기와 정확히 일치해야 한다."""
+        got = run_render_section('"affiliates"', json.dumps(self._RECORDS, ensure_ascii=False))
+        cells = " ".join(got["cells"])
+        self.assertIn("479.7억", cells)   # Enchem Poland 총자산
+        self.assertIn("-105.3억", cells)  # Enchem Poland 당기순이익
+        self.assertIn("2679.9억", cells)  # DFD Yangfu 총자산
+        self.assertIn("51.5억", cells)    # DFD Yangfu 당기순이익
+        self.assertIn("20억", cells)      # Enchem Poland 기말장부가액
+
+    def test_original_table_is_not_removed(self):
+        """새 블록은 표 위에 얹는 것이지 원본 20열 표를 지우는 게 아니다
+        (전역 제약: "표를 없애지 않습니다"). bsis_blce_qy(기초 수량)는
+        curated 블록에 없는 열이라 원본 표에만 남아 있어야 한다."""
+        got = run_render_section('"affiliates"', json.dumps(self._RECORDS, ensure_ascii=False))
+        self.assertIn("131,705", got["cells"])
+
+    def test_no_block_when_no_valid_investee(self):
+        records = [{"invstmnt_purps": "경영참여"}]  # inv_prm이 없다
+        got = run_render_section('"affiliates"', json.dumps(records, ensure_ascii=False))
+        self.assertNotIn("피투자사 정보 (최초취득일 순)", got["titles"])
+
+    def test_no_verdict_words(self):
+        got = run_render_section('"affiliates"', json.dumps(self._RECORDS, ensure_ascii=False))
+        text = " ".join(got["titles"] + got["notes"] + got["cells"])
+        for word in ("부실", "위험", "집중", "의심", "우량", "건전"):
+            self.assertNotIn(word, text, f"판정 어휘 '{word}'")
 
 
 if __name__ == "__main__":

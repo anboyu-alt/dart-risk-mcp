@@ -1475,6 +1475,50 @@ function fundPlanChanges(records) {
   return out;
 }
 
+/** affiliates(타법인 출자현황) 레코드를 최초취득일(frst_acqs_de) 오름차순으로
+ *  다시 배열한다(SE-4f Task 5, task-5-brief.md: "피투자사에 대한 정보를
+ *  처음부터 보여줄 필요도 있음", "시간의 순서에 따라 투자 규모 변화").
+ *
+ *  **한 사업연도 스냅샷이다.** affiliates는 최근 사업보고서 한 번의 응답이라
+ *  여러 해에 걸친 추이는 이 데이터만으로 만들 수 없다(브리프: "없는 것을
+ *  있는 것처럼 만들지 마라") — 만들 수 있는 것은 이 스냅샷 안에서 ①언제부터
+ *  투자했는지(frst_acqs_de) 순서, ②이번 사업연도 안에서 기초→기말 장부가액이
+ *  어떻게 바뀌었는지 둘뿐이다. 이 함수는 ①의 순서만 만든다 — 값을 다시
+ *  계산하지 않고 원본 레코드를 그대로, 순서만 바꿔 돌려준다(buildAffiliate
+ *  OverviewBlock·CHART_SPECS.affiliate_timeline이 그 순서를 표·차트에 그대로
+ *  쓴다).
+ *
+ *  최초취득일이 없거나 읽을 수 없는 레코드(예상 밖 응답)는 정렬 기준이
+ *  없으므로 맨 뒤로 보낸다(없는 순서를 지어내 앞뒤 어딘가에 끼워 넣지
+ *  않는다) — 그런 레코드끼리는 원래 등장 순서를 그대로 유지한다(비교 함수가
+ *  a.idx-b.idx로 그 순서를 명시한다. Array.prototype.sort 자체가 안정 정렬인
+ *  현대 엔진에 기대지 않는다).
+ *
+ *  같은 날짜(동률)인 레코드도 등장 순서를 유지한다 — 실측(엔켐)에 "골든밸류
+ *  제3호"·"제4호" 신기술조합이 둘 다 frst_acqs_de=2025.09.25로 같다. 어느 쪽이
+ *  "먼저"인지 원본에 없는 정보이므로 지어내지 않는다.
+ *
+ *  inv_prm(피출자 법인명)이 없는 레코드는 애초에 어느 법인인지 알 수 없어
+ *  뺀다 — core(fetch_affiliate_investments)가 이미 "계"/"합계" 등 요약행을
+ *  걸러내지만, 이 함수는 그 계약에 기대지 않고 방어적으로 한 번 더 본다. */
+function affiliateOverview(records) {
+  if (!Array.isArray(records)) return [];
+  const rows = records.filter(function (r) {
+    return r && typeof r === "object" && typeof r.inv_prm === "string" && r.inv_prm.trim() !== "";
+  });
+  const withKey = rows.map(function (r, idx) {
+    return { r: r, key: numeric(r.frst_acqs_de), idx: idx };
+  });
+  withKey.sort(function (a, b) {
+    if (a.key === null && b.key === null) return a.idx - b.idx;
+    if (a.key === null) return 1;
+    if (b.key === null) return -1;
+    if (a.key !== b.key) return a.key - b.key;
+    return a.idx - b.idx; // 동률(같은 날짜)은 등장 순서를 유지한다
+  });
+  return withKey.map(function (w) { return w.r; });
+}
+
 // 섹션별 차트 정의. 여기 없는 섹션은 차트 없이 표만 나온다.
 //
 // **`time` 축을 쓰지 않는다.** Chart.js의 time scale은 별도 날짜 어댑터를
@@ -1617,6 +1661,37 @@ const CHART_SPECS = Object.assign(Object.create(null), {
     kind: "line", title: "재무 파생 지표 추이 (%, 연결·별도 구분)",
     x: "기간", groupBy: "지표", compositeGroupFields: ["지표", "구분"],
     y: "값", yLabel: "%", xScale: "category",
+  },
+  // affiliateOverview(위)가 최초취득일(frst_acqs_de) 순으로 재배열한
+  // 레코드를 그린다(SE-4f Task 5). x는 원본 필드 inv_prm(피출자 법인명)을
+  // 그대로 쓴다 — chartData의 x축 정렬 규칙(위 xs.sort 주석 ①~③) 상, x값
+  // 전부가 숫자를 포함해야만(allHaveDigits) 정렬이 다시 일어나는데, 실측
+  // (엔켐 27건)처럼 회사명 중 하나라도 숫자가 전혀 없으면(예: "중앙첨단소재")
+  // 정렬 자체가 스킵되고 affiliateOverview가 만든 순서(등장 순서)가 그대로
+  // 보존된다 — 그래서 새 합성 필드를 만들지 않고 inv_prm을 그대로 x로 쓴다.
+  //
+  // **주의(문서화된 한계)**: 만약 어느 회사의 피출자 법인명 전부가 우연히
+  // 숫자를 포함하면(예: 전부 "2025 ○○투자조합" 식) chartData가 그 숫자
+  // 기준으로 다시 정렬해 최초취득일 순서와 달라질 수 있다 — 실제 회사·조합명
+  // 목록에서는 매우 드문 경우라 별도 방어(합성 라벨 등)를 두지 않았다.
+  // compositeXFields로 날짜를 x에 섞어 이 위험을 없애는 방법도 검토했지만,
+  // "2022 대신-SBI 코넥스 스케일업 펀드"처럼 회사명 자체에 4자리 연도가
+  // 박힌 실측 사례(엔켐)가 axisSortKey(문자열 전체의 숫자를 모두 이어붙임)를
+  // 오염시켜 오히려 더 나쁜 순서를 만든다는 것을 확인했다 — 그래서 합성하지
+  // 않는 쪽을 택했다.
+  //
+  // series는 기초→기말 장부가액 두 계열이다 — "이번 사업연도 안에서 규모가
+  // 늘었나 줄었나"(브리프 판정선: 허용)만 보여줄 뿐, "집중 투자 시기" 같은
+  // 해석은 붙이지 않는다(v0.8.5). 여러 해에 걸친 추이는 이 데이터(한 사업연도
+  // 스냅샷)로 만들 수 없다 — buildAffiliateOverviewBlock(ui.js)의 안내문이
+  // 그 한계를 그대로 말한다.
+  affiliate_timeline: {
+    kind: "bar", title: "출자 규모 — 최초취득일 순 (기초→기말 장부가액)",
+    x: "inv_prm", xScale: "category", yLabel: "장부가액",
+    series: [
+      { key: "bsis_blce_acntbk_amount", label: "기초 장부가액" },
+      { key: "trmend_blce_acntbk_amount", label: "기말 장부가액" },
+    ],
   },
 });
 
@@ -2037,6 +2112,6 @@ if (typeof module !== "undefined" && module.exports) {
     CHART_SPECS, chartData, axisLabel, numeric, axisSortKey,
     normalizeDebtByKind, monthlyCounts, compositeXValue,
     financialRatios, classifyDisclosureCategory, monthlyCountsByCategory,
-    DIVIDEND_SE_FIELDS, dividendVsIncome, fundPlanChanges,
+    DIVIDEND_SE_FIELDS, dividendVsIncome, fundPlanChanges, affiliateOverview,
   };
 }

@@ -1134,6 +1134,63 @@ function buildFundPlanChangeBlock(changes) {
   return { el: wrap, table: table };
 }
 
+/** affiliateOverview(app.js)가 최초취득일 순으로 재배열한 타법인 출자
+ *  레코드를 표+차트로 그린다(SE-4f Task 5, task-5-brief.md).
+ *
+ *  사용자 요청: "피투자사에 대한 정보를 처음부터 보여줄 필요도 있음" —
+ *  원본 표(affiliates)는 20열 중 피투자사 재무(총자산·당기순이익)가 맨
+ *  뒤쪽 두 열에 있어 눈에 잘 안 띈다. 여기서는 피출자 법인·출자목적·
+ *  최초취득일·기말지분율·기말장부가액·피투자사 총자산·피투자사 당기순이익
+ *  일곱 열만 추려 원본 표보다 먼저(위쪽에) 보여준다 — 값을 새로 계산하지
+ *  않고 원본 필드를 그대로 옮긴다(label()·formatValue()가 원본 키로 자동
+ *  으로 한글 라벨·금액/날짜 서식을 입힌다 — dividendVsIncome처럼 새 한글
+ *  키를 만들지 않는 이유는, 이 값들이 이미 LABELS·AMOUNT_FIELDS·
+ *  DATE_FIELDS에 등록돼 있어 그대로 재사용할 수 있기 때문이다).
+ *
+ *  **공시 원본과 반드시 구분한다**(buildFinancialRatiosBlock과 같은 이유) —
+ *  class="derived"로 나누고, 순서를 다시 배열했을 뿐 새 값이 아니라고
+ *  문구로 밝힌다. 적자 피투자사가 여러 건 있어도(엔켐 실측: -105.3억·
+ *  -14.1억 등) 색을 칠하거나 "부실 자회사" 같은 말을 붙이지 않는다(v0.8.5
+ *  판정선 — 사실 표기만).
+ *
+ *  차트(CHART_SPECS.affiliate_timeline)에는 이 함수가 받은 것과 같은
+ *  정렬된 레코드를 그대로 넘긴다 — 표와 차트가 다른 순서를 말하면 안 된다. */
+function buildAffiliateOverviewBlock(records) {
+  const wrap = document.createElement("div");
+  wrap.className = "derived";
+
+  const h3 = document.createElement("h3");
+  h3.textContent = "피투자사 정보 (최초취득일 순)";
+  wrap.appendChild(h3);
+
+  const notice = document.createElement("p");
+  notice.className = "note";
+  notice.textContent = "타법인 출자현황(아래 원본 표)의 값을 최초취득일 순으로 다시 "
+    + "배열해 피출자 법인과 피투자사 재무(총자산·당기순이익)를 먼저 보여줍니다 — "
+    + "새로 계산하거나 판정한 값이 아니라 원본 값을 그대로 옮긴 것입니다. 이 "
+    + "데이터는 한 사업연도 스냅샷이라 여러 사업연도에 걸친 추이는 알 수 없고, "
+    + "기초→기말 장부가액 변화(아래 차트)는 이번 사업연도 안에서의 증감만 "
+    + "보여줍니다.";
+  wrap.appendChild(notice);
+
+  const rows = records.map(function (r) {
+    return {
+      inv_prm: r.inv_prm,
+      invstmnt_purps: r.invstmnt_purps,
+      frst_acqs_de: r.frst_acqs_de,
+      trmend_blce_qota_rt: r.trmend_blce_qota_rt,
+      trmend_blce_acntbk_amount: r.trmend_blce_acntbk_amount,
+      recent_bsns_year_fnnr_sttus_tot_assets: r.recent_bsns_year_fnnr_sttus_tot_assets,
+      recent_bsns_year_fnnr_sttus_thstrm_ntpf: r.recent_bsns_year_fnnr_sttus_thstrm_ntpf,
+    };
+  });
+  const table = tableLayout(rows);
+  if (table) wrap.appendChild(tableEl(table));
+
+  renderChart(wrap, "affiliate_timeline", records, SIGNALS_DATA);
+  return { el: wrap, table: table };
+}
+
 /** 섹션 하나를 그린다. 같은 키로 다시 불리면 **교체**한다 — 누적하면
  *  화면에 같은 섹션이 계속 쌓인다(섹션은 한 번만 오도록 돼 있지만,
  *  렌더 함수가 누적식이면 다른 경로에서 쉽게 깨진다).
@@ -1181,13 +1238,23 @@ function renderSection(key, value) {
     if (changes.length > 0) fundChangeBlock = buildFundPlanChangeBlock(changes);
   }
 
+  // affiliates: 피투자사 정보를 최초취득일 순으로 먼저 보여준다(SE-4f
+  // Task 5) — 유효한 레코드(inv_prm이 있는)가 하나도 없으면
+  // affiliateOverview가 빈 배열을 돌려주므로 이 블록 자체가 안 생긴다
+  // (위 dividendBlock·fundChangeBlock과 같은 패턴).
+  let affiliateBlock = null;
+  if (key === "affiliates") {
+    const overview = affiliateOverview(Array.isArray(value) ? value : []);
+    if (overview.length > 0) affiliateBlock = buildAffiliateOverviewBlock(overview);
+  }
+
   // 가로(여러 행) 표가 하나라도 있으면 2단 폭 중 한 칸에 가두지 않고
   // 전체 폭을 쓴다 — 세로(1건, 키-값) 표는 원래도 좁아 한 칸이면
   // 충분하다(app.js tableLayout 주석 참고: 세로/가로 구분 기준과 같다).
   // 앞 태스크에서 12열까지 보이게 넓힌 표가 2단으로 다시 좁아지는
   // 재발을 막는다. 파생 블록들의 표도 가로일 수 있어 함께 본다 — 안
   // 그러면 파생 표가 넓은데 .sec은 좁게 남는다.
-  const derivedBlocks = [ratioBlock, dividendBlock, fundChangeBlock];
+  const derivedBlocks = [ratioBlock, dividendBlock, fundChangeBlock, affiliateBlock];
   const hasWideTable = blocks.some(function (b) {
     return b.table && b.table.orientation === "horizontal";
   }) || derivedBlocks.some(function (b) {
@@ -1196,7 +1263,7 @@ function renderSection(key, value) {
   const wrap = SEC_WRAP[key];
   if (wrap) wrap.className = hasWideTable ? "sec wide" : "sec";
 
-  if (blocks.length === 0 && !ratioBlock && !dividendBlock && !fundChangeBlock) {
+  if (blocks.length === 0 && !ratioBlock && !dividendBlock && !fundChangeBlock && !affiliateBlock) {
     const p = document.createElement("p");
     p.className = "note";
     p.textContent = "표시할 데이터가 없습니다.";
@@ -1233,6 +1300,7 @@ function renderSection(key, value) {
   if (ratioBlock) holder.appendChild(ratioBlock.el);
   if (dividendBlock) holder.appendChild(dividendBlock.el);
   if (fundChangeBlock) holder.appendChild(fundChangeBlock.el);
+  if (affiliateBlock) holder.appendChild(affiliateBlock.el);
   for (const block of blocks) {
     const el = blockEl(block);
     // 차트는 표 위에 얹는다 — 표를 지우지 않는다. canvas 안의 숫자는
