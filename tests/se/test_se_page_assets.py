@@ -2251,7 +2251,11 @@ class TestMarkVocabulary(unittest.TestCase):
 
     def test_rule_texts_carry_no_verdict_words(self):
         src = read_app_js()
-        block = src[src.index("MARK_RULES"):]
+        # 앵커는 선언문이어야 한다. 단순히 "MARK_RULES" 를 찾으면 그 문자열을
+        # 언급한 앞쪽 주석에 걸려 검사 범위가 파일 대부분으로 번지고, 규칙과
+        # 무관한 곳의 낱말 때문에 터진다(실제로 한 번 걸렸다).
+        anchor = src.index("const MARK_RULES")
+        block = src[anchor:]
         for w in ("부실", "위험", "주의", "손상", "악화", "양호", "이상 징후", "경고", "심각"):
             self.assertNotIn(w, block, f"규칙 문구에 판정 어휘 '{w}' 가 있다")
 
