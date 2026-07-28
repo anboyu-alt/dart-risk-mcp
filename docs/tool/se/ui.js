@@ -1138,7 +1138,6 @@ function buildFinancialRatiosBlock(ratios) {
       "계산식·재료": ratioBasisText(r),
     };
   });
-  const table = tableLayout(records);
   // cellMarks는 원본 ratios(값이 숫자|null)로 계산한다 — 위 records는
   // 표시용으로 "%"를 붙여 문자열화해서, 거기다 markNeg를 돌리면 숫자
   // 파싱이 깨진다(app.js markNumber는 "%"를 걷어내지 않는다). records가
@@ -1146,7 +1145,11 @@ function buildFinancialRatiosBlock(ratios) {
   // 그대로 맞는다 — sectionKey는 renderSection이 받는 "financials"가
   // 아니라 이 파생 표 전용 키 "financial_ratios"다(MARK_RULES.financial_ratios
   // 참고, 다른 어떤 호출부도 이 sectionKey로 cellMarks를 부르지 않는다).
+  // 강조가 붙은 열은 접지 않는다(app.js splitVisibleFolded 주석) — 이 표는
+  // 5열뿐이라 오늘은 접힐 일이 없지만, 열이 늘어도 강조가 버튼 뒤로 숨지
+  // 않도록 renderSection의 relayoutForMarks와 같은 계약을 여기서도 지킨다.
   const ratioMarks = cellMarks(ratios, "financial_ratios");
+  const table = tableLayout(records, markedColumnKeys(ratioMarks));
   if (table) wrap.appendChild(tableEl(table, ratioMarks));
 
   renderChart(wrap, "financial_ratios", ratios, SIGNALS_DATA);
@@ -1286,14 +1289,44 @@ function buildAffiliateOverviewBlock(records) {
       recent_bsns_year_fnnr_sttus_thstrm_ntpf: r.recent_bsns_year_fnnr_sttus_thstrm_ntpf,
     };
   });
-  const table = tableLayout(rows);
   // records는 원본 필드를 전부 가진 채 순서만 바뀐 것이라(위 주석 —
   // affiliateOverview가 재배열만 한다) cellMarks("affiliates")가 그대로
-  // 통한다. rows는 records.map(...)으로 만들어져 행번호가 그대로 맞는다.
-  if (table) wrap.appendChild(tableEl(table, cellMarks(records, "affiliates")));
+  // 통한다. rows는 **이 함수가 받은 records를 그대로 map한 것**이라 행번호가
+  // 맞는다 — records를 여기서 다시 정렬하거나 거르면 그 순간 강조가 한 칸씩
+  // 밀려 다른 회사의 사실이 된다(정렬은 호출부의 affiliateOverview가 이미
+  // 끝냈고, 이 함수는 정렬된 결과만 받는다).
+  const marks = cellMarks(records, "affiliates");
+  const table = tableLayout(rows, markedColumnKeys(marks));
+  if (table) wrap.appendChild(tableEl(table, marks));
 
   renderChart(wrap, "affiliate_timeline", records, SIGNALS_DATA);
   return { el: wrap, table: table };
+}
+
+/** 강조가 붙은 열이 접히지 않도록 이 블록의 표를 다시 배치한다.
+ *
+ *  왜 다시 부르나: sectionBlocks(app.js)가 표를 만드는 시점에는 강조가
+ *  아직 계산되지 않았다(강조는 섹션 키가 필요한데, 그 키는 재귀 안쪽까지
+ *  전달되지 않는다 — sectionBlocks 주석의 게이트 원칙). 강조는 여기
+ *  renderSection에서 block.records로 계산되므로, 그 결과를 알고 난 뒤에
+ *  같은 레코드로 tableLayout을 한 번 더 부르는 것이 배선을 가장 적게
+ *  건드리는 방법이다.
+ *
+ *  **안전한 이유**: sectionBlocks가 만드는 모든 블록에서 block.table은
+ *  예외 없이 `tableLayout(block.records)`다(source 제거·빈 열 제거 등
+ *  가공은 전부 block.records 자체에 이미 반영돼 있다 — sourceGroupedBlocks
+ *  의 `cleaned`, shareholders의 peopleRecords 등). 따라서 같은 레코드로
+ *  다시 부른 결과는 markedKeys를 뺀 모든 면에서 원래와 같다. 실패해도
+ *  (null 반환) 원래 표를 그대로 둔다.
+ *
+ *  강조가 하나도 없으면 아무 일도 하지 않는다 — 접기 규칙이 조용히
+ *  달라지는 일이 없도록 발화한 경우에만 개입한다. */
+function relayoutForMarks(block, marks) {
+  if (!block || !block.table || !Array.isArray(block.records) || !marks) return;
+  const markedKeys = markedColumnKeys(marks);
+  if (markedKeys.length === 0) return;
+  const relaid = tableLayout(block.records, markedKeys);
+  if (relaid) block.table = relaid;
 }
 
 /** 섹션 하나를 그린다. 같은 키로 다시 불리면 **교체**한다 — 누적하면
@@ -1414,6 +1447,7 @@ function renderSection(key, value) {
     // table만 있고 records가 null인 블록) 빈 객체를 돌려줄 뿐이라 다른
     // 섹션·블록에 부작용이 없다.
     const marks = block.records ? cellMarks(block.records, key) : undefined;
+    relayoutForMarks(block, marks);
     const el = blockEl(block, marks);
     // 차트는 표 위에 얹는다 — 표를 지우지 않는다. canvas 안의 숫자는
     // 복사도 검색도 안 되므로 정확한 값은 항상 표가 책임진다(브리프

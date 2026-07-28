@@ -92,6 +92,23 @@ function collectCells(node, out) {
   return out;
 }
 
+// tableEl(table, marks)를 **직접** 부르는 경로에서 강조를 관찰하기 위한
+// 최소 수집기. renderSection 하네스 쪽 collectMarked와 목적은 같지만, 이
+// 하네스는 tableLayout → tableEl 두 층만 재현한다(그 위의 renderSection·
+// relayoutForMarks를 거치지 않는다) — 그래서 "강조된 열이 접힌 채로
+// tableEl에 들어왔을 때"라는, 호출부가 정상이면 도달하지 않는 방어 경로를
+// 여기서만 직접 만들어 볼 수 있다.
+function collectMk(node, out) {
+  out = out || [];
+  if (!node) return out;
+  const tokens = String(node.className || "").split(/\s+/);
+  if (tokens.indexOf("mk") !== -1) {
+    out.push({ tag: node.tag, text: node.textContent, title: node.title || null });
+  }
+  (node.children || []).forEach(function (c) { collectMk(c, out); });
+  return out;
+}
+
 const sandbox = {
   console: console,
   document: {
@@ -123,22 +140,28 @@ const CAPTURED = [];
 sandbox.openDocPanel = function (rceptNo) { CAPTURED.push(rceptNo); };
 
 const records = %(records)s;
+const marks = %(marks)s;
+// markedKeys를 **일부러 넘기지 않는다** — 강조가 붙은 열이 접힌 상태로
+// tableEl에 도달하는 조건을 만들기 위해서다(호출부 3곳은 전부 넘긴다).
 const table = sandbox.tableLayout(records);
-const frag = table ? sandbox.tableEl(table) : null;
+const frag = table ? sandbox.tableEl(table, marks) : null;
 const docEls = frag ? collectDocEls(frag, []) : [];
 docEls.forEach(function (e) { e.dispatch("click"); });
 
 process.stdout.write(JSON.stringify({
   orientation: table ? table.orientation : null,
   caption: table ? table.caption : null,
+  foldedKeys: table ? (table.foldedKeys || []) : [],
+  keys: table ? (table.keys || []) : [],
   docTexts: docEls.map(function (e) { return e.textContent; }),
   captured: CAPTURED,
   cells: frag ? collectCells(frag, []) : [],
+  marked: frag ? collectMk(frag, []) : [],
 }));
 """
 
 
-def run_doc_click(records_js: str):
+def run_doc_click(records_js: str, marks_js: str = "null"):
     """records_js(레코드 배열 JS 리터럴)를 tableLayout → tableEl로 그린 뒤,
     class="doc"인 모든 엘리먼트를 실제로 클릭해(이벤트 리스너를 호출해)
     openDocPanel이 어떤 인자로 몇 번 불렸는지를 돌려준다.
@@ -149,7 +172,7 @@ def run_doc_click(records_js: str):
     사라진다" 같은 배선 유실은 문자열 검사로는 못 잡는다(이번에 실제로
     그렇게 통과해버린 사고였다).
     """
-    script = _DOC_CLICK_HARNESS % {"records": records_js}
+    script = _DOC_CLICK_HARNESS % {"records": records_js, "marks": marks_js}
     out = subprocess.run(
         [_NODE, "-e", script, str(_APP), str(_UI)],
         capture_output=True, text=True, encoding="utf-8",
@@ -284,9 +307,37 @@ function collectMarked(node, out) {
   if (!node) return out;
   const tokens = String(node.className || "").split(/\s+/);
   if ((node.tag === "td" || node.tag === "span") && tokens.indexOf("mk") !== -1) {
-    out.push({ tag: node.tag, text: node.textContent, title: node.title || null });
+    out.push({
+      tag: node.tag, text: node.textContent, title: node.title || null,
+      // className 전체를 함께 싣는다 — 강조가 기존 클래스(.doc 등)를
+      // 덮어쓰지 않는지 확인하려면 "mk가 있다"만으로는 부족하다.
+      className: node.className || "",
+    });
   }
   (node.children || []).forEach(function (c) { collectMarked(c, out); });
+  return out;
+}
+
+// 표 행 단위 수집기 — 강조가 **어느 행에** 붙었는지 확인해야 하는 검사
+// (marks 좌표계 ↔ 렌더된 행 순서의 정합)를 위해서다. collectMarked는
+// 강조된 셀만 평평하게 모으므로 "그 셀이 어느 회사 행이었나"를 말할 수
+// 없다 — 정렬 버그는 정확히 그 자리에서 숨는다.
+function collectTableRows(node, out) {
+  out = out || [];
+  if (!node) return out;
+  if (node.tag === "tr") {
+    const cells = [];
+    (node.children || []).forEach(function (c) {
+      if (c.tag !== "td" && c.tag !== "th") return;
+      const tokens = String(c.className || "").split(/\s+/);
+      cells.push({
+        tag: c.tag, text: textOf(c), mk: tokens.indexOf("mk") !== -1,
+        title: c.title || null, className: c.className || "",
+      });
+    });
+    out.push(cells);
+  }
+  (node.children || []).forEach(function (c) { collectTableRows(c, out); });
   return out;
 }
 
@@ -344,6 +395,7 @@ const beforeGate = {
   notes: collectNotes(bodyEl, []),
   marked: collectMarked(bodyEl, []),
   legends: collectLegends(bodyEl, []),
+  tableRows: collectTableRows(bodyEl, []),
 };
 
 // 로그아웃(세션 만료 포함) 잔류 확인 — 강조 범례는 실명이 아니지만
@@ -6186,6 +6238,77 @@ AFFILIATE_ROWS = """[
 ]"""
 
 
+# 엔켐 실측 형태(otrCprInvstmntSttus 20필드)를 그대로 따른 affiliates 픽스처.
+# 위 AFFILIATE_ROWS는 5필드만 남긴 축약본이라 열이 접히지 않는다 — 강조가
+# 접힌 열 뒤로 숨는 문제(SE-4g 최종 리뷰 Finding B)는 실측 열 수에서만
+# 재현된다(rcept_no·corp_name·stlm_dt는 전 행 동일 → 캡션 승격, 남는 본문
+# 열 15개 > MAX_VISIBLE_COLUMNS 12).
+#
+# **frst_acqs_de를 일부러 뒤섞어 둔다**(2023 → 2019 → 2021). affiliateOverview
+# 가 최초취득일 순으로 재정렬하므로 입력 순서와 렌더 순서가 실제로 달라진다 —
+# 실측 엔켐 응답은 우연히 거의 날짜순이라 정렬 관련 버그가 그 안에서는 숨는다
+# (이 저장소가 이미 한 번 그렇게 놓쳤다: affiliateOverview의 numeric() 버그).
+LIVE_SHAPED_AFFILIATE_ROWS = json.dumps([
+    {
+        "rcept_no": "20250515000123", "corp_cls": "K", "corp_code": "01234567",
+        "corp_name": "엔켐", "inv_prm": "제이알에너지솔루션",
+        "frst_acqs_de": "2023.08.11", "invstmnt_purps": "경영참여",
+        "frst_acqs_amount": "10,000,000,000",
+        "bsis_blce_qy": "2,000,000", "bsis_blce_qota_rt": "40.00",
+        "bsis_blce_acntbk_amount": "6,250,000,000",
+        "incrs_dcrs_acqs_dsps_qy": "-", "incrs_dcrs_acqs_dsps_amount": "-",
+        "incrs_dcrs_evl_lstmn": "-1,259,000,000",
+        "trmend_blce_qy": "2,000,000", "trmend_blce_qota_rt": "40.00",
+        "trmend_blce_acntbk_amount": "4,991,000,000",
+        "recent_bsns_year_fnnr_sttus_tot_assets": "31,000,000,000",
+        "recent_bsns_year_fnnr_sttus_thstrm_ntpf": "-10,378,000,000",
+        "stlm_dt": "2024-12-31",
+    },
+    {
+        "rcept_no": "20250515000123", "corp_cls": "K", "corp_code": "01234567",
+        "corp_name": "엔켐", "inv_prm": "DFD Yangfu New Mater",
+        "frst_acqs_de": "2019.03.02", "invstmnt_purps": "단순투자",
+        "frst_acqs_amount": "38,687,000,000",
+        "bsis_blce_qy": "5,000,000", "bsis_blce_qota_rt": "25.00",
+        "bsis_blce_acntbk_amount": "37,675,000,000",
+        "incrs_dcrs_acqs_dsps_qy": "-", "incrs_dcrs_acqs_dsps_amount": "-",
+        "incrs_dcrs_evl_lstmn": "25,806,000,000",
+        "trmend_blce_qy": "5,000,000", "trmend_blce_qota_rt": "25.00",
+        "trmend_blce_acntbk_amount": "63,481,000,000",
+        "recent_bsns_year_fnnr_sttus_tot_assets": "180,000,000,000",
+        "recent_bsns_year_fnnr_sttus_thstrm_ntpf": "5,148,000,000",
+        "stlm_dt": "2024-12-31",
+    },
+    {
+        "rcept_no": "20250515000123", "corp_cls": "K", "corp_code": "01234567",
+        "corp_name": "엔켐", "inv_prm": "Enchem Poland Sp. z",
+        "frst_acqs_de": "2021.06.15", "invstmnt_purps": "경영참여",
+        "frst_acqs_amount": "2,004,000,000",
+        "bsis_blce_qy": "400,000", "bsis_blce_qota_rt": "100.00",
+        "bsis_blce_acntbk_amount": "2,004,000,000",
+        "incrs_dcrs_acqs_dsps_qy": "-", "incrs_dcrs_acqs_dsps_amount": "-",
+        "incrs_dcrs_evl_lstmn": "-",
+        "trmend_blce_qy": "400,000", "trmend_blce_qota_rt": "100.00",
+        "trmend_blce_acntbk_amount": "2,004,000,000",
+        "recent_bsns_year_fnnr_sttus_tot_assets": "9,000,000,000",
+        "recent_bsns_year_fnnr_sttus_thstrm_ntpf": "-10,534,000,000",
+        "stlm_dt": "2024-12-31",
+    },
+], ensure_ascii=False)
+
+
+def _header_rows(rendered):
+    """run_render_section 결과에서 표별 헤더 행(th)의 텍스트 목록만 뽑는다.
+    한 섹션에 표가 여러 개(원본 + 파생) 그려질 수 있어, 어느 표를 보는지
+    호출부가 명시적으로 고르게 한다."""
+    out = []
+    for row in rendered["tableRows"]:
+        if row and all(c["tag"] == "th" for c in row if c["text"] != ""):
+            if any(c["tag"] == "th" for c in row):
+                out.append([c["text"] for c in row])
+    return out
+
+
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestMarkNumber(unittest.TestCase):
     def test_hyphen_is_missing_not_zero(self):
@@ -6483,26 +6606,77 @@ class TestMarkRenderBehavior(unittest.TestCase):
             f"caption 강조가 렌더되지 않았습니다: {marked}",
         )
 
-    def test_folded_column_gets_marked(self):
-        """접힌 열(12열 초과 시 뒤로 밀리는 열) 경로 — foldWhy가 무너지면
-        여기서만 잡힌다(본문·caption과는 다른 변수). elestock 실측 필드
-        sp_stock_lmp_irds_cnt를 13번째(=접히는 자리)에 두고 음수를 준다."""
-        def row(cnt, tag):
-            r = {f"a{i}": f"{tag}-{i}" for i in range(1, 13)}
-            r["sp_stock_lmp_irds_cnt"] = cnt
-            r["source"] = "elestock"
-            return r
+    @staticmethod
+    def _wide_insider_row(cnt, tag):
+        """13번째 자리(=접히는 자리)에 elestock 실측 필드를 둔 넓은 행."""
+        r = {f"a{i}": f"{tag}-{i}" for i in range(1, 13)}
+        r["sp_stock_lmp_irds_cnt"] = cnt
+        r["source"] = "elestock"
+        return r
 
-        records = [row("-32124", "r0"), row("100", "r1")]
+    def test_marked_column_is_not_folded(self):
+        """SE-4g 최종 리뷰 Finding B — 강조가 붙은 열은 접히면 안 된다.
+
+        실측(엔켐 affiliates 20열)에서 59개 강조 중 56개가 접힌 열에 있어
+        행마다 버튼을 눌러야 보였다. 범례는 세 규칙을 다 말하는데 화면에는
+        3개만 보이는 상태였다 — "눈에 띄게"의 반대다.
+
+        여기서는 13열짜리(=12열 상한 초과) 표를 만들고, 강조 규칙이 걸린
+        열을 맨 뒤(원래대로면 가장 먼저 접히는 자리)에 둔다. 강조는 접힌
+        열 상세(span)가 아니라 **본문 셀(td)**로 나와야 한다."""
+        records = [self._wide_insider_row("-32124", "r0"),
+                   self._wide_insider_row("100", "r1")]
         got = run_render_section('"insider_timeline"', json.dumps(records, ensure_ascii=False))
-        marked = got["marked"]
-        self.assertTrue(
-            any(m["tag"] == "span" and m["title"] == "증감 주식수 < 0" for m in marked),
-            f"접힌 열 강조가 렌더되지 않았습니다: {marked}",
-        )
-        # 양수인 두 번째 행은 표시되면 안 된다(오탐 방지 확인).
+        marked = [m for m in got["marked"] if m["title"] == "증감 주식수 < 0"]
+        self.assertEqual(len(marked), 1, f"강조가 1개가 아닙니다: {got['marked']}")
         self.assertEqual(
-            len([m for m in marked if m["title"] == "증감 주식수 < 0"]), 1,
+            marked[0]["tag"], "td",
+            f"강조된 열이 접혀 펼치기 버튼 뒤에 숨었습니다: {marked[0]}",
+        )
+        # 표 헤더에 그 열의 라벨이 실제로 보여야 한다(접힌 열은 헤더가 없다).
+        headers = _header_rows(got)
+        self.assertEqual(len(headers), 1, f"표가 1개가 아닙니다: {headers}")
+        self.assertIn(
+            "특정증권 증감 주식수", headers[0],
+            f"강조된 열이 표 헤더에 없습니다: {headers[0]}",
+        )
+        # 열 예산은 그대로다 — 확보한 만큼 다른 열이 대신 접힐 뿐 표가
+        # 무한정 넓어지지 않는다(13열 중 12열만 보이고 + 펼치기 버튼 칸).
+        self.assertEqual(len(headers[0]), 12 + 1, "펼치기 버튼 칸 포함 13칸이어야 합니다")
+
+    def test_live_shaped_affiliates_keeps_all_three_marked_columns(self):
+        """Finding B의 실제 재현 조건 — 엔켐 실측 형태(20열) affiliates에서
+        세 규칙이 걸린 열이 전부 접히지 않고 보여야 한다. 수정 전에는
+        증감 평가손익만 보이고 기말 장부가액·피투자사 당기순이익 두 열이
+        접혀, 범례는 세 규칙을 말하는데 화면에는 하나만 보였다."""
+        got = run_render_section('"affiliates"', LIVE_SHAPED_AFFILIATE_ROWS)
+        headers = _header_rows(got)
+        # 원본 표(넓은 쪽)를 고른다 — 파생 "피투자사 정보" 표는 7열뿐이다.
+        wide = max(headers, key=len)
+        for lbl in ("기말 장부가액", "증감 평가손익", "피투자사 당기순이익"):
+            self.assertIn(lbl, wide, f"강조 열 '{lbl}'이 접혔습니다: {wide}")
+        # 강조는 전부 본문 셀(td)로 나와야 한다 — 접힌 열이면 span이다.
+        for m in got["marked"]:
+            self.assertEqual(m["tag"], "td", f"강조가 접힌 열 안에 있습니다: {m}")
+
+    def test_folded_column_path_still_marks(self):
+        """접힌 열 강조 경로(tableEl의 foldWhy)는 방어용으로 남겨 둔다 —
+        호출부 3곳이 전부 markedKeys를 넘기므로 화면에서는 도달하지 않지만,
+        marks만 넘기고 markedKeys를 빠뜨린 새 호출부가 생기면 이 경로가
+        강조를 살린다. run_doc_click은 tableLayout을 markedKeys 없이 부르는
+        유일한 경로라 그 조건을 직접 만들 수 있다."""
+        records = [self._wide_insider_row("-32124", "r0"),
+                   self._wide_insider_row("100", "r1")]
+        marks = {"0|sp_stock_lmp_irds_cnt": "증감 주식수 < 0"}
+        got = run_doc_click(
+            json.dumps(records, ensure_ascii=False),
+            json.dumps(marks, ensure_ascii=False),
+        )
+        self.assertIn("sp_stock_lmp_irds_cnt", got["foldedKeys"],
+                      "사전 조건 실패: 그 열이 접히지 않았습니다")
+        self.assertTrue(
+            any(m["tag"] == "span" and m["title"] == "증감 주식수 < 0" for m in got["marked"]),
+            f"접힌 열 강조가 렌더되지 않았습니다: {got['marked']}",
         )
 
     def test_affiliates_legend_differs_original_vs_derived(self):
@@ -6524,6 +6698,264 @@ class TestMarkRenderBehavior(unittest.TestCase):
         for why in ("기말 장부가액 < 최초 취득금액", "피투자사 당기순이익 < 0"):
             self.assertIn(why, partial[0], f"파생 표 범례에 '{why}'가 없습니다: {partial[0]}")
             self.assertIn(why, full[0], f"원본 표 범례에 '{why}'가 없습니다: {full[0]}")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestMarkRowAlignment(unittest.TestCase):
+    """SE-4g 최종 리뷰 Finding A — cellMarks의 좌표는 **자기가 받은 배열의
+    인덱스**다. 강조를 계산한 배열과 실제로 그린 배열이 다르면(정렬·필터·
+    분할이 사이에 끼면) 모든 강조가 다른 회사의 행으로 간다. 표시가 사라지는
+    게 아니라 **다른 회사의 사실이 된다** — 화면만 봐서는 알 수 없다.
+
+    affiliates가 유일하게 위험한 경로다: affiliateOverview(app.js)가
+    최초취득일 순으로 재정렬한다. 실측 엔켐 응답이 거의 날짜순이라 이
+    함정은 실데이터로도 잘 드러나지 않으므로, 입력 순서와 정렬 결과가 확실히
+    다른 픽스처(LIVE_SHAPED_AFFILIATE_ROWS)로 고정한다."""
+
+    def _rows_by_company(self, key, value_js):
+        got = run_render_section(key, value_js)
+        out = []
+        for row in got["tableRows"]:
+            texts = [c["text"] for c in row]
+            # 금액 열의 title은 "원본값 · 사유" 형태다(tableEl) — 여기서는
+            # 어느 규칙이 붙었는지만 보면 되므로 마지막 " · " 뒤를 취한다.
+            marked = [c["title"].split(" · ")[-1] for c in row if c["mk"]]
+            out.append((texts, marked))
+        return out
+
+    def test_sort_actually_reorders_the_fixture(self):
+        """사전 조건 — 정렬이 실제로 순서를 바꾸지 않으면 아래 두 테스트가
+        아무것도 증명하지 못한다(정렬 버그가 숨는 조건 그 자체)."""
+        got = run_js(
+            'affiliateOverview(%s).map(r => r.inv_prm)' % LIVE_SHAPED_AFFILIATE_ROWS
+        )
+        self.assertEqual(
+            got, ["DFD Yangfu New Mater", "Enchem Poland Sp. z", "제이알에너지솔루션"],
+        )
+        original = [r["inv_prm"] for r in json.loads(LIVE_SHAPED_AFFILIATE_ROWS)]
+        self.assertNotEqual(got, original, "정렬이 순서를 바꾸지 않는 픽스처입니다")
+
+    def test_marks_land_on_the_right_company_after_sorting(self):
+        """회사별로 붙어야 할 강조가 정확히 그 회사 행에만 있어야 한다.
+
+        정렬 전 인덱스를 쓰면 0번(제이알, 3규칙 전부)의 강조가 정렬 후
+        0번인 DFD 행으로 옮겨간다 — DFD는 세 규칙 모두 해당 없는 회사라
+        화면이 없는 사실을 만들어낸다. 그래서 "DFD 행에는 강조가 하나도
+        없다"가 이 테스트의 핵심 단언이다."""
+        rows = self._rows_by_company('"affiliates"', LIVE_SHAPED_AFFILIATE_ROWS)
+        seen = {}
+        for texts, whys in rows:
+            joined = " | ".join(texts)
+            for company in ("제이알에너지솔루션", "DFD Yangfu New Mater",
+                            "Enchem Poland Sp. z"):
+                if company in joined:
+                    seen.setdefault(company, []).append(set(whys))
+        self.assertEqual(len(seen), 3, f"세 회사 행이 다 렌더되지 않았습니다: {seen}")
+
+        for whys in seen["DFD Yangfu New Mater"]:
+            self.assertEqual(
+                whys, set(),
+                f"해당 규칙이 없는 DFD 행에 강조가 붙었습니다(좌표 밀림): {whys}",
+            )
+        for whys in seen["Enchem Poland Sp. z"]:
+            self.assertEqual(whys, {"피투자사 당기순이익 < 0"},
+                             f"Poland 행의 강조가 기대와 다릅니다: {whys}")
+        for whys in seen["제이알에너지솔루션"]:
+            # 파생 표에는 증감 평가손익 열이 없으므로 2규칙, 원본 표는 3규칙.
+            self.assertIn("기말 장부가액 < 최초 취득금액", whys)
+            self.assertIn("피투자사 당기순이익 < 0", whys)
+
+    def test_poland_negative_income_is_marked_on_polands_own_row(self):
+        """Poland는 '피투자사 당기순이익 < 0' 하나만 해당한다(장부가액은
+        최초취득과 동일, 평가손익은 결측 "-"). 좌표가 밀리면 이 하나가
+        제이알이나 DFD 행으로 옮겨간다."""
+        rows = self._rows_by_company('"affiliates"', LIVE_SHAPED_AFFILIATE_ROWS)
+        poland = [(t, w) for t, w in rows if "Enchem Poland Sp. z" in " | ".join(t)]
+        self.assertTrue(poland, "Poland 행이 렌더되지 않았습니다")
+        for texts, whys in poland:
+            self.assertEqual(
+                sorted(set(whys)), ["피투자사 당기순이익 < 0"],
+                f"Poland 행의 강조가 기대와 다릅니다: {whys}",
+            )
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestRatioMarksAreWired(unittest.TestCase):
+    """SE-4g 최종 리뷰 Finding C① — ui.js buildFinancialRatiosBlock의
+    `tableEl(table, ratioMarks)`에서 두 번째 인자를 지우면 재무 파생 지표
+    표의 강조 11개와 범례가 통째로 사라지는데, 그 변형으로도 전체 스위트가
+    초록이었다. financial_ratios는 renderSection의 섹션 키("financials")와
+    다른 전용 sectionKey라 다른 어떤 호출부도 이 규칙을 발화시키지 못한다 —
+    이 배선이 유일한 경로다."""
+
+    # 영업이익률 -25.1%, 순이익률 -22.6% (당기). 전기·전전기는 값이 없어
+    # 사유만 표기되므로 강조 대상이 아니다.
+    _FS_ROWS = json.dumps([
+        {"fs_div": "CFS", "sj_div": "IS", "account_nm": "매출액", "thstrm_amount": "1000"},
+        {"fs_div": "CFS", "sj_div": "IS", "account_nm": "영업이익", "thstrm_amount": "-251"},
+        {"fs_div": "CFS", "sj_div": "IS", "account_nm": "당기순이익", "thstrm_amount": "-226"},
+    ], ensure_ascii=False)
+
+    def test_negative_margin_cells_are_marked_in_the_derived_table(self):
+        got = run_render_section('"financials"', self._FS_ROWS)
+        marked = [m for m in got["marked"] if m["title"] == "이익률 < 0"]
+        self.assertEqual(
+            len(marked), 2,
+            f"파생 지표 표의 강조가 2개(영업이익률·순이익률)가 아닙니다: {got['marked']}",
+        )
+
+    def test_derived_table_has_a_legend(self):
+        got = run_render_section('"financials"', self._FS_ROWS)
+        self.assertTrue(
+            any("이익률 < 0" in legend for legend in got["legends"]),
+            f"파생 지표 표의 범례가 없습니다: {got['legends']}",
+        )
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestMarkDoesNotOverwriteExistingCellState(unittest.TestCase):
+    """SE-4g 최종 리뷰 Finding C② — 강조는 className·title에 **이어 붙인다**.
+    대입으로 바꾸면 (a) rcept_no 셀의 .doc 클래스(=공시 원문 클릭)가 지워지고
+    (b) 금액 열의 원본값 툴팁이 강조 사유로 덮인다. 두 변형 모두 지금까지
+    아무 테스트도 실패시키지 않았다. caption 경로(승격된 rcept_no)도 같은
+    구조라 함께 고정한다."""
+
+    # distress 규칙은 "레코드 존재 자체"라 rcept_no 셀에 항상 강조가 붙는다 —
+    # .doc(클릭)과 .mk(강조)가 같은 셀에서 만나는 유일한 조합이다.
+    _DISTRESS_ROWS = json.dumps([
+        {"rcept_no": "20260101000001", "rcept_dt": "20260101"},
+        {"rcept_no": "20260202000002", "rcept_dt": "20260202"},
+    ], ensure_ascii=False)
+
+    def test_marked_rcept_no_cell_keeps_doc_class(self):
+        got = run_render_section('"distress"', self._DISTRESS_ROWS)
+        docs = [m for m in got["marked"] if "20260101000001" == m["text"]]
+        self.assertTrue(docs, f"강조된 rcept_no 셀을 찾지 못했습니다: {got['marked']}")
+        tokens = docs[0]["className"].split()
+        self.assertIn("mk", tokens)
+        self.assertIn("doc", tokens,
+                      f"강조가 .doc 클래스를 덮어썼습니다: {docs[0]['className']!r}")
+
+    def test_marked_rcept_no_caption_keeps_doc_class(self):
+        # 모든 행의 rcept_no가 같으면 그 열은 caption으로 승격된다 — 그쪽도
+        # 같은 이어붙이기 규칙을 지켜야 클릭이 살아남는다.
+        rows = json.dumps([
+            {"rcept_no": "20260101000001", "rcept_dt": "20260101"},
+            {"rcept_no": "20260101000001", "rcept_dt": "20260202"},
+        ], ensure_ascii=False)
+        got = run_render_section('"distress"', rows)
+        caps = [m for m in got["marked"]
+                if m["tag"] == "span" and m["text"] == "20260101000001"]
+        self.assertTrue(caps, f"강조된 caption span을 찾지 못했습니다: {got['marked']}")
+        tokens = caps[0]["className"].split()
+        self.assertIn("mk", tokens)
+        self.assertIn("doc", tokens,
+                      f"caption 강조가 .doc 클래스를 덮어썼습니다: {caps[0]['className']!r}")
+
+    def test_marked_amount_cell_keeps_raw_value_tooltip(self):
+        # 기말 장부가액은 AMOUNT_FIELDS라 "49.9억"으로 줄여 표시되고, 원 단위
+        # 원본값이 title에 남는다. 강조 사유를 대입하면 그 원본값이 사라진다.
+        got = run_render_section('"affiliates"', LIVE_SHAPED_AFFILIATE_ROWS)
+        hits = [m for m in got["marked"]
+                if m["title"] and "기말 장부가액 < 최초 취득금액" in m["title"]]
+        self.assertTrue(hits, f"기말 장부가액 강조를 찾지 못했습니다: {got['marked']}")
+        for m in hits:
+            self.assertIn(
+                "4,991,000,000", m["title"],
+                f"강조 사유가 원본값 툴팁을 덮어썼습니다: {m['title']!r}",
+            )
+            self.assertIn(" · ", m["title"])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestMarkLtRequiresBothSides(unittest.TestCase):
+    """SE-4g 최종 리뷰 Finding C③ — markLt는 두 값이 **모두** 있을 때만
+    비교한다. 결측을 0으로 읽는 변형은 실데이터에서 바로 터진다:
+    frst_acqs_amount가 "-"인 행이 실제로 존재한다(DART의 무값 표기).
+    "모르는 것"을 0으로 읽으면 없는 사실을 만들어낸다."""
+
+    def test_missing_left_side_is_not_marked(self):
+        # 결측을 0으로 읽으면 0 < 10,000,000,000 이 참이 되어 강조된다.
+        rows = ('[{"trmend_blce_acntbk_amount":"-",'
+                ' "frst_acqs_amount":"10,000,000,000"}]')
+        got = run_js('cellMarks(%s,"affiliates")' % rows)
+        self.assertEqual(got, {})
+
+    def test_missing_right_side_is_not_marked(self):
+        # 결측을 0으로 읽으면 -1,000 < 0 이 참이 되어 강조된다.
+        rows = '[{"trmend_blce_acntbk_amount":"-1,000","frst_acqs_amount":"-"}]'
+        got = run_js('cellMarks(%s,"affiliates")' % rows)
+        self.assertNotIn("0|trmend_blce_acntbk_amount", got)
+
+    def test_both_sides_missing_is_not_marked(self):
+        rows = '[{"trmend_blce_acntbk_amount":"-","frst_acqs_amount":"-"}]'
+        self.assertEqual(run_js('cellMarks(%s,"affiliates")' % rows), {})
+
+    def test_shareholder_rule_also_requires_both_sides(self):
+        # 같은 markLt를 쓰는 두 번째 사용처 — 한 곳만 고쳐도 다른 곳이 남는다.
+        rows = ('[{"nm":"오정강","trmend_posesn_stock_qota_rt":"-",'
+                ' "bsis_posesn_stock_qota_rt":"14.82"}]')
+        self.assertEqual(run_js('cellMarks(%s,"shareholders")' % rows), {})
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestShareholderAggregateAndBulkRules(unittest.TestCase):
+    """SE-4g 최종 리뷰 Finding E — 합계 행 제외 + 대량보유 지분율 증감 규칙."""
+
+    def test_aggregate_row_is_not_marked(self):
+        # 실측(엔켐): 구성원 행들과 "계" 행(21.63 → 21.04)이 함께 온다.
+        # 합계의 감소는 구성원 감소의 합일 뿐 — 같은 사실을 두 번 말한다.
+        rows = ('[{"nm":"오정강","bsis_posesn_stock_qota_rt":"14.82","trmend_posesn_stock_qota_rt":"14.41"},'
+                '{"nm":"계","bsis_posesn_stock_qota_rt":"21.63","trmend_posesn_stock_qota_rt":"21.04"}]')
+        got = run_js('cellMarks(%s,"shareholders")' % rows)
+        self.assertEqual(list(got.keys()), ["0|trmend_posesn_stock_qota_rt"])
+
+    def test_aggregate_row_with_inner_space_is_not_marked(self):
+        rows = ('[{"nm":"합 계","bsis_posesn_stock_qota_rt":"21.63",'
+                '"trmend_posesn_stock_qota_rt":"21.04"}]')
+        self.assertEqual(run_js('cellMarks(%s,"shareholders")' % rows), {})
+
+    def test_person_named_gyesanghyeok_is_still_marked(self):
+        """"계상혁"은 사람이다 — 접두/부분 일치로 합계를 걸러내면 이 사람의
+        지분 감소가 조용히 사라진다(isAggregateRow가 이미 막고 있는 함정을
+        강조 규칙 쪽에서 다시 뚫지 않는지 확인한다)."""
+        rows = ('[{"nm":"계상혁","bsis_posesn_stock_qota_rt":"14.82",'
+                '"trmend_posesn_stock_qota_rt":"14.41"}]')
+        got = run_js('cellMarks(%s,"shareholders")' % rows)
+        self.assertEqual(list(got.keys()), ["0|trmend_posesn_stock_qota_rt"])
+
+    def test_aggregate_detection_is_shared_with_split(self):
+        """판정을 두 군데서 각자 짜지 않았는지 — 같은 입력에 같은 답."""
+        got = run_js('[isAggregateRow({nm:"계"}), isAggregateRow({nm:"합 계"}),'
+                     ' isAggregateRow({nm:"계상혁"}), isAggregateRow({}),'
+                     ' splitAggregateRows([{nm:"계"},{nm:"계상혁"}]).totals.length]')
+        self.assertEqual(got, [True, True, False, False, 1])
+
+    def test_bulk_holder_negative_rate_change_is_marked(self):
+        # /majorstock.json 원본 필드 그대로(dart_client가 개명하지 않는다).
+        # 엔켐 실측 23건 중 9건이 음수다.
+        rows = ('[{"repror":"오정강","stkrt":"14.41","stkrt_irds":"-1.49"},'
+                '{"repror":"오정강","stkrt":"15.90","stkrt_irds":"0.62"},'
+                '{"repror":"박수정","stkrt":"5.10","stkrt_irds":"-"}]')
+        got = run_js('cellMarks(%s,"shareholders")' % rows)
+        self.assertEqual(got, {"0|stkrt_irds": "지분율 증감 < 0"})
+
+    def test_bulk_holder_rule_survives_the_render(self):
+        """규칙이 화면까지 실제로 도달하는지 — 필드명이 SE가 내보내는 것과
+        다르면 `rule.key in rec` 게이트에 걸려 영원히 발화하지 않는다
+        (audit_history의 adt_opinion 사고와 같은 부류)."""
+        value = {
+            "major_holders": [],
+            "bulk_holders": [
+                {"repror": "오정강", "stkrt": "14.41", "stkrt_irds": "-1.49"},
+                {"repror": "오정강", "stkrt": "15.90", "stkrt_irds": "0.62"},
+            ],
+        }
+        got = run_render_section('"shareholders"', json.dumps(value, ensure_ascii=False))
+        self.assertTrue(
+            any(m["title"] == "지분율 증감 < 0" for m in got["marked"]),
+            f"대량보유 지분율 증감 강조가 렌더되지 않았습니다: {got['marked']}",
+        )
 
 
 @unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 로그아웃 정리 동작을 검증할 수 없습니다")

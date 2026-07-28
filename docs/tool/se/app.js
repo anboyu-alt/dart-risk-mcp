@@ -366,7 +366,7 @@ function toRecords(value) {
  * 같은 감싸기 규칙을 여기서도 한 번 더 적용해, tableLayout 하나만 불러도
  * 안전하다.
  */
-function tableLayout(records) {
+function tableLayout(records, markedKeys) {
   if (!Array.isArray(records)) return null;
   const rows = records.map(function (r) {
     return (r && typeof r === "object" && !Array.isArray(r)) ? r : { "값": r };
@@ -420,7 +420,7 @@ function tableLayout(records) {
   // insider_timeline(상수열 제외 36열)처럼 MAX_VISIBLE_COLUMNS를 넘으면
   // 뒤쪽 열을 접는다 — 버리는 게 아니라 ui.js가 행마다 펼칠 수 있게
   // foldedKeys·foldedRows로 함께 돌려준다(splitVisibleFolded 주석 참고).
-  const split = splitVisibleFolded(finalKeys);
+  const split = splitVisibleFolded(finalKeys, markedKeys);
   const visibleKeys = split.visible;
   const foldedKeys = split.folded;
 
@@ -477,13 +477,27 @@ const ALWAYS_VISIBLE_KEYS = ["rcept_no"];
  * MAX_VISIBLE_COLUMNS 이하면 전부 visible이다(접을 필요가 없다). 넘으면
  * ALWAYS_VISIBLE_KEYS에 있는 열을 우선 확보하고, 남은 자리를 원래 순서
  * 그대로 앞에서부터 채운다 — essential 열이 뒤로 밀려 있었어도 제자리
- * (원래 열 순서)에서 보이도록 순서 자체는 다시 섞지 않는다. */
-function splitVisibleFolded(finalKeys) {
+ * (원래 열 순서)에서 보이도록 순서 자체는 다시 섞지 않는다.
+ *
+ * `markedKeys`(선택 인자, markedColumnKeys()가 만든 키 목록/Set)에 있는
+ * 열도 ALWAYS_VISIBLE_KEYS와 같은 자격으로 확보한다. **강조는 "눈에 띄게"
+ * 하려고 붙이는 것인데, 그 열이 접히면 행마다 버튼을 눌러야 보인다** —
+ * 실측(엔켐 affiliates 20열)에서 59개 강조 중 56개가 접힌 열에 있었고,
+ * 범례만 세 규칙을 말하고 화면에는 강조가 3개뿐이었다(범례와 화면이
+ * 어긋나는 것 자체가 사실 왜곡이다). rcept_no가 접혀 공시 원문 패널이
+ * 통째로 죽었던 사고(위 ALWAYS_VISIBLE_KEYS 주석)와 같은 부류다.
+ *
+ * 열 예산(MAX_VISIBLE_COLUMNS)은 그대로다 — 확보한 열만큼 나머지 자리가
+ * 줄어들 뿐 표가 무한정 넓어지지 않는다. */
+function splitVisibleFolded(finalKeys, markedKeys) {
   if (finalKeys.length <= MAX_VISIBLE_COLUMNS) {
     return { visible: finalKeys, folded: [] };
   }
+  const keep = markedKeys instanceof Set
+    ? markedKeys
+    : new Set(Array.isArray(markedKeys) ? markedKeys : []);
   const essential = finalKeys.filter(function (k) {
-    return ALWAYS_VISIBLE_KEYS.indexOf(k) !== -1;
+    return ALWAYS_VISIBLE_KEYS.indexOf(k) !== -1 || keep.has(k);
   });
   const essentialSet = new Set(essential);
   const budget = Math.max(MAX_VISIBLE_COLUMNS - essential.length, 0);
@@ -783,27 +797,34 @@ function omitHiddenIds(value) {
 // 사람 행과 합계 행을 분리해 각자 제자리(사람 목록 / 합계 소계)에 둔다.
 const AGGREGATE_ROW_NAMES = new Set(["계", "합계", "총계"]);
 
-/** records(major_holders 등, nm 필드로 사람을 식별하는 레코드 목록)를
- *  {people, totals}로 나눈다. nm이 AGGREGATE_ROW_NAMES에 있으면 합계 행,
- *  아니면 사람 행이다. nm이 아예 없거나 문자열이 아니면(예상 밖 응답)
- *  안전하게 사람 행으로 남긴다 — 판정을 못 하면 지우지 않는 쪽이 안전하다.
+/** 이 레코드가 합계 행("계"·"합계"·"총계")인가. nm이 아예 없거나 문자열이
+ *  아니면(예상 밖 응답) 사람 행으로 본다 — 판정을 못 하면 지우지도, 다르게
+ *  다루지도 않는 쪽이 안전하다.
  *
  *  비교 전에 모든 공백(앞뒤·내부)을 제거한다 — DART가 "합 계"처럼 내부에
  *  공백을 넣어 보내는 경우가 있어 trim()만으로는 사람 목록에 남는다.
  *  다만 공백 "제거"이지 부분/접두 일치가 아니다 — "계상혁"처럼 실제
  *  인물명은 공백이 없어 원래 글자 그대로 남고, AGGREGATE_ROW_NAMES의
  *  어떤 항목과도 같아지지 않는다(동명이인 원칙과 같은 이유로 정확히
- *  일치할 때만 합계로 분류한다). */
+ *  일치할 때만 합계로 분류한다).
+ *
+ *  splitAggregateRows(표를 사람/합계로 나누기)와 shareholders 강조 규칙
+ *  (합계 행에는 강조를 붙이지 않기, 이 파일 아래쪽) 두 곳이 이 하나의
+ *  판정을 공유한다 — 같은 질문을 두 군데서 각자 답하면 "계상혁 함정"도
+ *  두 군데서 각자 재발한다. */
+function isAggregateRow(r) {
+  const nm = isPlainObject(r) ? r.nm : undefined;
+  return typeof nm === "string" && AGGREGATE_ROW_NAMES.has(nm.replace(/\s+/g, ""));
+}
+
+/** records(major_holders 등, nm 필드로 사람을 식별하는 레코드 목록)를
+ *  {people, totals}로 나눈다(판정은 isAggregateRow 하나에 맡긴다). */
 function splitAggregateRows(records) {
   const people = [];
   const totals = [];
   for (const r of records) {
-    const nm = isPlainObject(r) ? r.nm : undefined;
-    if (typeof nm === "string" && AGGREGATE_ROW_NAMES.has(nm.replace(/\s+/g, ""))) {
-      totals.push(r);
-    } else {
-      people.push(r);
-    }
+    if (isAggregateRow(r)) totals.push(r);
+    else people.push(r);
   }
   return { people: people, totals: totals };
 }
@@ -2181,16 +2202,45 @@ MARK_RULES.audit_history = [
   },
 ];
 
+// major_holders(최대주주 현황)에는 합계 행("계")이 사람 이름 자리에 섞여
+// 온다. 합계 행에도 기초·기말 지분율이 있어(엔켐 실측 21.63 → 21.04) 규칙이
+// 그대로 발화하는데, 그 행의 감소는 바로 위 구성원 행들의 감소를 더한 값일
+// 뿐이다 — 같은 사실을 두 번 말하게 된다. track_insider_trading(v0.8.6)이
+// 합산 행("계"/"합계")을 건너뛰는 것과 같은 관례를 화면에서도 지킨다.
+// 판정은 isAggregateRow 하나에 맡긴다(공백 정규화·"계상혁" 함정이 이미
+// 거기서 해결돼 있다 — 여기서 다시 짜면 그 함정도 다시 생긴다).
+//
+// bulk_holders(5% 대량보유, /majorstock.json 원본 그대로)의 stkrt_irds는
+// 우리가 계산한 차이가 아니라 **보고서 자체가 부호를 달아 신고하는 값**
+// (보유비율 증감)이다 — insider_timeline의 sp_stock_lmp_irds_rate와 같은
+// 부류라 markNeg로 부호만 본다. 필드명은 dart_client.fetch_shareholder_
+// status가 majorstock 응답을 개명 없이 그대로 실어 보내는 것을 확인했다
+// (audit_history에서 DART 원본 필드명을 그대로 적어 규칙이 영원히
+// 발화하지 않았던 사고의 반대 확인 — 여기서는 원본 이름이 곧 화면 이름이다).
 MARK_RULES.shareholders = [
   {
     key: "trmend_posesn_stock_qota_rt",
-    when: function (r) { return markLt(r.trmend_posesn_stock_qota_rt, r.bsis_posesn_stock_qota_rt); },
+    when: function (r) {
+      return !isAggregateRow(r)
+        && markLt(r.trmend_posesn_stock_qota_rt, r.bsis_posesn_stock_qota_rt);
+    },
     why: "기말 지분율 < 기초 지분율",
+  },
+  {
+    key: "stkrt_irds",
+    when: function (r) { return markNeg(r.stkrt_irds); },
+    why: "지분율 증감 < 0",
   },
 ];
 
-// core 의 is_amendment_disclosure 는 파이썬이라 여기서 부를 수 없다.
-// 실측 접두어를 테스트로 고정해 두고 같은 판별을 다시 쓴다.
+// core(signals.is_amendment_disclosure)와 **같은 판별이 아니다.** 여기 규칙은
+// "제목 맨 앞 대괄호 안에 '정정'이 들어 있는가" 하나뿐이다(대괄호 밖 본문의
+// "정정"은 보지 않는다 — test_amendment_word_outside_bracket_is_not_marked).
+// core의 정규식과는 양방향으로 어긋난다: "[첨부정정]"은 여기서 표시되지만
+// core는 정정으로 보지 않고, "[첨부추가]"는 core가 정정으로 보지만 여기서는
+// 표시하지 않는다(엔켐 실측 145건 중 1건이 실제로 갈렸다). 화면에 붙는
+// 라벨("정정공시")은 대괄호 표기 그대로라 어느 쪽도 거짓말이 아니지만,
+// 두 판별이 같다고 적어 두면 다음 사람이 한쪽만 고치고 같아졌다고 믿는다.
 function isAmendmentName(v) {
   const s = String(v == null ? "" : v).trim();
   if (s.charAt(0) !== "[") return false;
@@ -2212,8 +2262,8 @@ MARK_RULES.financial_ratios = [
   },
 ];
 
-// insider_timeline: elestock(5% 이상 대량보유) 레코드에는 "특정증권 등
-// 소유 증감"을 DART가 직접 신고하는 필드가 둘 있다 — sp_stock_lmp_irds_cnt
+// insider_timeline: elestock 레코드에는 "특정증권 등 소유 증감"을 DART가
+// 직접 신고하는 필드가 둘 있다 — sp_stock_lmp_irds_cnt
 // (증감 주식수)와 sp_stock_lmp_irds_rate(증감 비율). 우리가 분기 간 차이를
 // 계산한 값이 아니라 그 공시 건 자체가 보고하는 부호 있는 값이라 markNeg로
 // 부호만 본다.
@@ -2224,6 +2274,12 @@ MARK_RULES.financial_ratios = [
 // 다른 특정증권 발행 등으로 전체 모수가 늘면 보유 주식수가 늘어도 비율은
 // 내려갈 수 있다(희석) — 매도 없이도 벌어지는 일이다. 한 규칙으로 합치면
 // 두 번째 행에서 "주식수도 줄었다"는 사실이 아닌 판정을 만들게 된다.
+//
+// ※ elestock은 **임원·주요주주 특정증권 등 소유상황보고**(opendart_api_
+// guide.md §4.2)다. 5% 이상 대량보유 상황보고는 majorstock(§4.1)으로 다른
+// 엔드포인트이고 필드도 다르다(stkrt·stkrt_irds — 위 MARK_RULES.shareholders
+// 의 bulk_holders 규칙이 그쪽이다). 두 보고를 같은 이름으로 부르면 어느
+// 보고서가 무엇을 신고한 것인지가 화면 설명에서 뒤바뀐다.
 MARK_RULES.insider_timeline = [
   {
     key: "sp_stock_lmp_irds_cnt",
@@ -2265,6 +2321,23 @@ function cellMarks(records, sectionKey) {
   return out;
 }
 
+/** cellMarks() 결과에서 강조가 하나라도 붙은 **열 키**만 뽑는다(중복 없이).
+ *  tableLayout(records, markedKeys)이 이 목록을 받아 그 열을 접지 않는다 —
+ *  좌표 "행번호|열키"에서 첫 "|" 뒤가 열 키다(열 키 자체에 "|"가 들어갈 일은
+ *  없지만, split이 아니라 indexOf로 자르는 편이 그 가정에 덜 기댄다). */
+function markedColumnKeys(marks) {
+  const out = [];
+  const seen = new Set();
+  if (!marks || typeof marks !== "object") return out;
+  for (const coord of Object.keys(marks)) {
+    const bar = coord.indexOf("|");
+    if (bar < 0) continue;
+    const key = coord.slice(bar + 1);
+    if (!seen.has(key)) { seen.add(key); out.push(key); }
+  }
+  return out;
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     LS_DART_KEY, LS_SESSION, LS_JOB, LS_THEME, SECTION_GROUPS, formatCount,
@@ -2278,6 +2351,7 @@ if (typeof module !== "undefined" && module.exports) {
     normalizeDebtByKind, monthlyCounts, compositeXValue,
     financialRatios, classifyDisclosureCategory, monthlyCountsByCategory,
     DIVIDEND_SE_FIELDS, dividendVsIncome, fundPlanChanges, affiliateOverview,
-    markNumber, MARK_RULES, cellMarks,
+    markNumber, MARK_RULES, cellMarks, markedColumnKeys,
+    isAggregateRow, splitAggregateRows, splitVisibleFolded, MAX_VISIBLE_COLUMNS,
   };
 }
