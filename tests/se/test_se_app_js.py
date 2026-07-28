@@ -6324,6 +6324,127 @@ class TestFundChain(unittest.TestCase):
             self.assertNotIn(word, got, f"판정 어휘 '{word}'")
 
 
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFundChainDisclosureHints(unittest.TestCase):
+    """SE-5a Task 2 — fundChain 결과(조달건)와 disclosures(공시 원본
+    레코드)를 날짜 근접으로 병치한다(task-2-brief.md). **조인이 아니다**
+    — 자금사용 행과 공시를 잇는 열쇠가 DART 응답에 없다. 검증할 것은
+    ①납입일 이전만 잡는지 ②창(windowDays) 밖은 빠지는지 ③한 조달건에
+    여러 공시가 걸리면 전부 돌려주는지(하나로 좁히지 않는지) ④days_before가
+    맞게 계산되는지 ⑤signalsData 로드 실패 시 예외 없이 {}인지 ⑥조달
+    신호가 아닌 공시(분기보고서 등)는 안 잡히는지 ⑦공시일(하이픈 없는
+    8자리)·납입일(점 구분) 형식이 달라도 axisSortKey 정규화로 정상
+    매칭되는지(SE-4f numeric() 사고 재발 방지 회귀).
+
+    납입일은 2021.10.26로 고정하고, 공시일은 그 날짜에서 파이썬
+    datetime으로 역산한 실제 달력일수 차이를 픽스처에 그대로 박아
+    넣는다 — days_before 기대값을 손으로 세지 않고 기계로 검산한 값이다.
+    """
+
+    _PAY_DE = "2021.10.26"
+    # fundChain이 요구하는 최소 필드를 갖춘 조달건 원본 행 하나.
+    _FUND_ROW = {
+        "kind": "public", "year": 2023, "tm": "-", "pay_de": _PAY_DE, "pay_amount": 0,
+        "plan_useprps": "시설자금", "plan_amount": 13082000000,
+        "real_dtls_cn": "시설자금", "real_dtls_amount": 13082000000,
+        "dffrnc_resn": "-", "flags": [],
+    }
+    _CHAIN_EXPR = f"fundChain({json.dumps([_FUND_ROW], ensure_ascii=False)})"
+
+    # 실측 공시명(CB_BW 키워드 "전환사채권발행결정" 포함) — 2021.10.26
+    # 기준 각각 60일 전·91일 전(창 밖)·1일 후(인과 역전)·30일 전이다.
+    _DISC_60D_BEFORE = {
+        "rcept_no": "20210827000001", "rcept_dt": "20210827",
+        "report_nm": "주요사항보고서(전환사채권발행결정)",
+    }
+    _DISC_91D_BEFORE_OUT_OF_WINDOW = {
+        "rcept_no": "20210727000001", "rcept_dt": "20210727",
+        "report_nm": "주요사항보고서(전환사채권발행결정)",
+    }
+    _DISC_1D_AFTER = {
+        "rcept_no": "20211027000001", "rcept_dt": "20211027",
+        "report_nm": "주요사항보고서(전환사채권발행결정)",
+    }
+    _DISC_30D_BEFORE = {
+        "rcept_no": "20210926000001", "rcept_dt": "20210926",
+        "report_nm": "주요사항보고서(전환사채권발행결정)",
+    }
+    _DISC_NON_PROCUREMENT_IN_WINDOW = {
+        "rcept_no": "20211016000001", "rcept_dt": "20211016",
+        "report_nm": "분기보고서",
+    }
+
+    def _hints(self, disclosures, window_days=90):
+        return run_js_with_real_signals(
+            f"fundChainDisclosureHints({self._CHAIN_EXPR}, "
+            f"{json.dumps(disclosures, ensure_ascii=False)}, SIGNALS, {window_days})"
+        )
+
+    def test_disclosure_after_payment_date_is_excluded(self):
+        """납입 인과는 조달 결정 → 납입 순이다. 하루 뒤 공시를 끌어오면
+        인과가 뒤집힌다."""
+        got = self._hints([self._DISC_1D_AFTER])
+        self.assertEqual(got, {})
+
+    def test_disclosure_beyond_window_is_excluded(self):
+        """91일 전은 기본 창(90일) 밖이다."""
+        got = self._hints([self._DISC_91D_BEFORE_OUT_OF_WINDOW])
+        self.assertEqual(got, {})
+
+    def test_multiple_matching_disclosures_are_all_returned_not_narrowed(self):
+        """한 조달건에 공시가 여러 건 걸리면 전부 돌려준다 — 하나로
+        좁히면 그것이 곧 우리의 판정이 된다(브리프)."""
+        got = self._hints([self._DISC_60D_BEFORE, self._DISC_30D_BEFORE])
+        hits = got["20211026"]
+        self.assertEqual(len(hits), 2)
+        rcept_nos = {h["rcept_no"] for h in hits}
+        self.assertEqual(
+            rcept_nos,
+            {self._DISC_60D_BEFORE["rcept_no"], self._DISC_30D_BEFORE["rcept_no"]},
+        )
+
+    def test_days_before_is_computed_correctly(self):
+        got = self._hints([self._DISC_60D_BEFORE])
+        hits = got["20211026"]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["days_before"], 60)
+
+    def test_null_signals_data_returns_empty_object_without_exception(self):
+        got = run_js(
+            f"fundChainDisclosureHints({self._CHAIN_EXPR}, "
+            f"{json.dumps([self._DISC_60D_BEFORE], ensure_ascii=False)}, null)"
+        )
+        self.assertEqual(got, {})
+
+    def test_non_procurement_disclosure_in_window_is_not_matched(self):
+        """분기보고서처럼 조달 신호 키워드에 안 걸리는 공시는 창 안에
+        있어도 잡히지 않는다."""
+        got = self._hints([self._DISC_NON_PROCUREMENT_IN_WINDOW])
+        self.assertEqual(got, {})
+
+    def test_date_format_mismatch_still_matches_via_axis_sort_key(self):
+        """공시일이 하이픈 없는 8자리(20211020), 납입일이 점 구분
+        (2021.10.26)인 실측 형식 그대로도 정상 매칭돼야 한다 — 이건
+        numeric()이 점 섞인 문자열을 null로 돌려줘 정렬이 죽은 SE-4f
+        사고의 재발 방지 회귀다."""
+        disc = {
+            "rcept_no": "20211020000001", "rcept_dt": "20211020",
+            "report_nm": "주요사항보고서(전환사채권발행결정)",
+        }
+        got = self._hints([disc])
+        hits = got["20211026"]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["days_before"], 6)
+
+    def test_no_verdict_words(self):
+        got = json.dumps(
+            self._hints([self._DISC_60D_BEFORE, self._DISC_30D_BEFORE]),
+            ensure_ascii=False,
+        )
+        for word in ("의심", "유용", "부정", "위험"):
+            self.assertNotIn(word, got, f"판정 어휘 '{word}'")
+
+
 # ── SE-4f Task 5: 타법인 출자 — 피투자사 정보 + 최초취득일 순 시각화 ─────
 #
 # 픽스처는 실제 API 응답 형태다: ENCHEM_POLAND·DFD_YANGFU·PT_INDONESIA
