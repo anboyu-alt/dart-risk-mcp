@@ -6081,6 +6081,90 @@ class TestAffiliateOverviewRenderWiring(unittest.TestCase):
             self.assertNotIn(word, text, f"판정 어휘 '{word}'")
 
 
+AFFILIATE_ROWS = """[
+  {"inv_prm":"제이알에너지솔루션","frst_acqs_amount":"10,000,000,000",
+   "incrs_dcrs_evl_lstmn":"-1,259,000,000","trmend_blce_acntbk_amount":"4,991,000,000",
+   "recent_bsns_year_fnnr_sttus_thstrm_ntpf":"-10,378,000,000"},
+  {"inv_prm":"DFD Yangfu New Mater","frst_acqs_amount":"38,687,000,000",
+   "incrs_dcrs_evl_lstmn":"25,806,000,000","trmend_blce_acntbk_amount":"63,481,000,000",
+   "recent_bsns_year_fnnr_sttus_thstrm_ntpf":"5,148,000,000"},
+  {"inv_prm":"Enchem Poland Sp. z","frst_acqs_amount":"2,004,000,000",
+   "incrs_dcrs_evl_lstmn":"-","trmend_blce_acntbk_amount":"2,004,000,000",
+   "recent_bsns_year_fnnr_sttus_thstrm_ntpf":"-10,534,000,000"}
+]"""
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestMarkNumber(unittest.TestCase):
+    def test_hyphen_is_missing_not_zero(self):
+        # 실측 27건 중 21건이 "-" 다. 0이나 음수로 읽으면 21건이 잘못 강조된다.
+        self.assertIsNone(run_js('markNumber("-")'))
+
+    def test_blank_and_null_are_missing(self):
+        self.assertEqual(run_js('[markNumber(""), markNumber(null)]'), [None, None])
+
+    def test_parses_commas_and_sign(self):
+        self.assertEqual(run_js('markNumber("-10,534,000,000")'), -10534000000)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestAffiliateMarks(unittest.TestCase):
+    def test_book_value_below_acquisition(self):
+        got = run_js(
+            '(() => { const m = cellMarks(%s, "affiliates");'
+            ' return Object.keys(m).filter(k => k.endsWith("|trmend_blce_acntbk_amount")).sort(); })()'
+            % AFFILIATE_ROWS
+        )
+        # 제이알(100억→49.9억)만 해당. DFD는 증가, Poland는 동일(< 가 아니다).
+        self.assertEqual(got, ["0|trmend_blce_acntbk_amount"])
+
+    def test_equal_book_value_is_not_marked(self):
+        # Poland 는 최초취득 == 기말장부(2,004,000,000). "낮은 경우"이지 "같은 경우"가 아니다.
+        got = run_js(
+            '(() => { const m = cellMarks(%s, "affiliates");'
+            ' return m["2|trmend_blce_acntbk_amount"] || null; })()'
+            % AFFILIATE_ROWS
+        )
+        self.assertIsNone(got)
+
+    def test_investee_net_loss(self):
+        got = run_js(
+            '(() => { const m = cellMarks(%s, "affiliates");'
+            ' return Object.keys(m).filter(k => k.indexOf("thstrm_ntpf") >= 0).sort(); })()'
+            % AFFILIATE_ROWS
+        )
+        self.assertEqual(got, [
+            "0|recent_bsns_year_fnnr_sttus_thstrm_ntpf",
+            "2|recent_bsns_year_fnnr_sttus_thstrm_ntpf",
+        ])
+
+    def test_hyphen_valuation_is_not_marked(self):
+        # Poland 의 평가손익은 "-" 다. 결측을 음수로 읽으면 여기서 터진다.
+        got = run_js(
+            '(() => { const m = cellMarks(%s, "affiliates");'
+            ' return Object.keys(m).filter(k => k.indexOf("evl_lstmn") >= 0).sort(); })()'
+            % AFFILIATE_ROWS
+        )
+        self.assertEqual(got, ["0|incrs_dcrs_evl_lstmn"])
+
+    def test_legend_lists_only_fired_rules(self):
+        legend = run_js('markLegend(%s, "affiliates")' % AFFILIATE_ROWS)
+        self.assertEqual(len(legend), 3)
+        self.assertTrue(all(isinstance(s, str) and s for s in legend))
+
+    def test_legend_empty_when_nothing_fires(self):
+        clean = ('[{"frst_acqs_amount":"1,000","trmend_blce_acntbk_amount":"2,000",'
+                 '"incrs_dcrs_evl_lstmn":"500","recent_bsns_year_fnnr_sttus_thstrm_ntpf":"900"}]')
+        self.assertEqual(run_js('markLegend(%s, "affiliates")' % clean), [])
+
+    def test_unknown_section_returns_empty(self):
+        self.assertEqual(run_js('cellMarks([{"a":1}], "nope")'), {})
+
+    def test_non_array_input_is_safe(self):
+        got = run_js('[cellMarks(null,"affiliates"), cellMarks({},"affiliates")]')
+        self.assertEqual(got, [{}, {}])
+
+
 if __name__ == "__main__":
     unittest.main()
 

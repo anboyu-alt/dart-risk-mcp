@@ -2112,6 +2112,82 @@ function chartData(records, spec, signalsData) {
   return { labels: labels, datasets: datasets };
 }
 
+// ── 사실 강조 ────────────────────────────────────────────────────────────
+// 표 안에서 눈으로 놓치기 쉬운 산술적 사실을 셀 단위로 표시한다.
+// 강조는 사실의 가시화이지 위험 판정이 아니다 — 규칙은 부호·두 값의 비교·
+// 원본 값 동등 비교뿐이고, 임계값("N% 초과")은 두지 않는다(v0.8.5).
+
+// DART는 결측을 null이 아니라 문자열 "-" 로 채운다. 엔켐 타법인 출자
+// 27건 중 21건이 그렇다 — "-"를 음수로 읽으면 21건이 전부 잘못 강조된다.
+function markNumber(v) {
+  if (isNoDataMarker(v)) return null;
+  if (typeof v === "number") return isFinite(v) ? v : null;
+  const n = Number(String(v).replace(/[,\s]/g, ""));
+  return isFinite(n) ? n : null;
+}
+
+// 두 값 모두 있을 때만 비교한다. 한쪽이라도 결측이면 강조하지 않는다 —
+// 모르는 것을 강조하면 없는 사실을 만들어내는 것이다.
+function markLt(a, b) {
+  const x = markNumber(a), y = markNumber(b);
+  return x !== null && y !== null && x < y;
+}
+
+function markNeg(v) {
+  const x = markNumber(v);
+  return x !== null && x < 0;
+}
+
+const MARK_RULES = Object.create(null);
+
+MARK_RULES.affiliates = [
+  {
+    key: "trmend_blce_acntbk_amount",
+    when: function (r) { return markLt(r.trmend_blce_acntbk_amount, r.frst_acqs_amount); },
+    why: "기말 장부가액 < 최초 취득금액",
+  },
+  {
+    key: "incrs_dcrs_evl_lstmn",
+    when: function (r) { return markNeg(r.incrs_dcrs_evl_lstmn); },
+    why: "증감 평가손익 < 0",
+  },
+  {
+    key: "recent_bsns_year_fnnr_sttus_thstrm_ntpf",
+    when: function (r) { return markNeg(r.recent_bsns_year_fnnr_sttus_thstrm_ntpf); },
+    why: "피투자사 당기순이익 < 0",
+  },
+];
+
+// 반환 키는 ui.js 의 tableEl()이 이미 계산하는 좌표와 같은 형식이다:
+// 가로 표는 (행번호, keys[열]), 세로 표는 (0, keys[행]).
+function cellMarks(records, sectionKey) {
+  const out = Object.create(null);
+  const rules = MARK_RULES[sectionKey];
+  if (!Array.isArray(records) || !Array.isArray(rules)) return out;
+  records.forEach(function (rec, i) {
+    if (!rec || typeof rec !== "object") return;
+    for (const rule of rules) {
+      if (!(rule.key in rec)) continue;
+      let hit = false;
+      try { hit = !!rule.when(rec); } catch (e) { hit = false; }
+      if (hit) out[i + "|" + rule.key] = rule.why;
+    }
+  });
+  return out;
+}
+
+function markLegend(records, sectionKey) {
+  const marks = cellMarks(records, sectionKey);
+  const fired = new Set(Object.keys(marks).map(function (k) { return marks[k]; }));
+  const rules = MARK_RULES[sectionKey] || [];
+  const seen = new Set();
+  const out = [];
+  for (const rule of rules) {
+    if (fired.has(rule.why) && !seen.has(rule.why)) { seen.add(rule.why); out.push(rule.why); }
+  }
+  return out;
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     LS_DART_KEY, LS_SESSION, LS_JOB, LS_THEME, SECTION_GROUPS, formatCount,
@@ -2125,5 +2201,6 @@ if (typeof module !== "undefined" && module.exports) {
     normalizeDebtByKind, monthlyCounts, compositeXValue,
     financialRatios, classifyDisclosureCategory, monthlyCountsByCategory,
     DIVIDEND_SE_FIELDS, dividendVsIncome, fundPlanChanges, affiliateOverview,
+    markNumber, MARK_RULES, cellMarks, markLegend,
   };
 }
