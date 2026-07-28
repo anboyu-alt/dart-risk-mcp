@@ -1465,6 +1465,67 @@ class TestAssetPathsSurviveTrailingSlashRedirect(unittest.TestCase):
             "참조하는 자산 파일이 배포 트리에 없습니다:\n  " + "\n  ".join(missing),
         )
 
+
+class TestFetchPathsAreRootAbsolute(unittest.TestCase):
+    """fetch()로 부르는 경로는 위 TestAssetPathsSurviveTrailingSlashRedirect가
+    못 잡는다 — 그 테스트는 `<script src>`·`<link href>` **태그만** 본다.
+    task-3-brief.md가 지목한 함정: signals-data.json을 상대경로
+    ("signals-data.json")로 부르면, `/se`가 trailingSlash:false 때문에
+    상대경로를 루트 기준으로 해석해 정적 검사(태그 검사)는 초록인 채
+    프로덕션에서만 404가 난다 — 이 저장소가 실제로 겪은 사고와 같은
+    부류다.
+
+    이 검사는 소스에 있는 **리터럴 문자열** fetch("...") 호출만 본다 —
+    `fetch(path, ...)`(ui.js의 api())처럼 변수를 넘기는 호출은 정적으로
+    목적지를 알 수 없어 대상이 아니다(위 _local_refs()와 같은 범위 제한).
+    """
+
+    def _literal_fetch_targets(self):
+        """소스에서 fetch("...") 또는 fetch('...')처럼 첫 인자가 문자열
+        리터럴인 호출만 (파일명, URL) 목록으로 뽑는다."""
+        targets = []
+        for name, src in _sources().items():
+            if not name.endswith(".js"):
+                continue
+            for m in re.finditer(r'fetch\(\s*(["\'])([^"\']*)\1', src):
+                targets.append((name, m.group(2)))
+        return targets
+
+    def test_there_is_at_least_one_literal_fetch_call(self):
+        """검사 대상이 없으면 아래 검사들이 공허하게 통과한다."""
+        self.assertTrue(self._literal_fetch_targets(),
+                        "검사할 리터럴 fetch() 호출을 찾지 못했습니다")
+
+    def test_literal_fetch_targets_use_root_absolute_paths(self):
+        offenders = [
+            f'{name}: fetch("{url}")'
+            for name, url in self._literal_fetch_targets()
+            if not url.startswith(("http://", "https://", "//", "/"))
+        ]
+        self.assertEqual(
+            offenders, [],
+            "fetch()가 상대경로 문자열 리터럴을 쓰고 있습니다. "
+            "trailingSlash:false 때문에 /se/ 가 /se 로 되돌아가면 상대경로는 "
+            "루트 기준으로 해석돼 404가 납니다. `/signals-data.json`처럼 "
+            "루트 기준 절대경로를 쓰세요:\n  " + "\n  ".join(offenders),
+        )
+
+    def test_literal_fetch_targets_exist_in_the_deployed_tree(self):
+        """경로가 절대적이어도 가리키는 파일이 실제로 없으면 똑같이 404다."""
+        output_dir = _ROOT / "docs" / "tool"
+        missing = []
+        for name, url in self._literal_fetch_targets():
+            if url.startswith(("http://", "https://", "//")):
+                continue  # 외부 요청은 배포 트리 검사 대상이 아니다
+            target = output_dir / url.lstrip("/").split("?")[0]
+            if not target.exists():
+                missing.append(f'{name}: fetch("{url}") → {target} 없음')
+        self.assertEqual(
+            missing, [],
+            "fetch()가 부르는 파일이 배포 트리에 없습니다:\n  " + "\n  ".join(missing),
+        )
+
+
 class TestLayoutAndTheme(unittest.TestCase):
     """Task 5: 2단 레이아웃·좌측 목차·라이트 모드 토글.
 
@@ -2070,11 +2131,15 @@ class TestFinancialRatiosDerivedBlockIsWired(unittest.TestCase):
     def test_chart_uses_the_derived_spec_key_not_the_raw_financials_key(self):
         """CHART_SPECS에는 일부러 "financials" 키가 없다(연결·별도가 섞여
         SE-4d에서 차트를 뺐다) — 파생 차트는 반드시 "financial_ratios"
-        키로 불러야 그 스펙(CHART_SPECS.financial_ratios)을 찾는다."""
+        키로 불러야 그 스펙(CHART_SPECS.financial_ratios)을 찾는다.
+
+        SE-4f Task 3에서 renderChart에 signalsData(4번째, 선택) 인자가
+        붙었다 — 뒤에 인자가 더 있어도(", SIGNALS_DATA" 등) 통과하도록
+        닫는 괄호 앞에 나머지 인자를 허용한다(`[^)]*`)."""
         ui = _sources()["ui.js"]
         body = _extract_function_body(ui, "buildFinancialRatiosBlock")
         self.assertRegex(
-            body, r'renderChart\(\s*wrap\s*,\s*"financial_ratios"\s*,\s*ratios\s*\)',
+            body, r'renderChart\(\s*wrap\s*,\s*"financial_ratios"\s*,\s*ratios\s*(,[^)]*)?\)',
             "파생 차트가 CHART_SPECS.financial_ratios를 쓰지 않습니다",
         )
 

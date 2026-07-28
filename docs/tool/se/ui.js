@@ -23,6 +23,13 @@ let CHART_INSTANCES = []; // renderChart()가 만든 Chart.js 인스턴스 목�
                            // 비우는 자리와 같은 곳에서 함께 정리한다. 안
                            // 그러면 회사를 바꾸거나 로그아웃할 때마다
                            // 캔버스와 메모리가 쌓인다.
+let SIGNALS_DATA = null; // docs/tool/signals-data.json 로드 결과(SE-4f
+                          // Task 3, loadSignalsData()가 채운다) — 공시
+                          // 목록 차트를 유형별로 나누는 데 쓴다. init()이
+                          // 백그라운드로 불러오는 동안(또는 실패한 채로)
+                          // null일 수 있다 — renderChart→chartData(app.js)가
+                          // null이면 기존 단색 막대로 물러난다(화면이
+                          // 죽지 않는다).
 
 /** 사용자에게 그대로 보여줘도 되는 문구로만 만든 오류. 원시 오류(네트워크
  *  실패의 "Failed to fetch" 같은 브라우저 내부 문구, 서버 응답 원문 등)는
@@ -71,6 +78,31 @@ async function loadConfig() {
   }
   CONFIG = cfg;
   return CONFIG;
+}
+
+/** signals-data.json(공개 뷰어 docs/tool/index.html과 공유하는 신호 분류
+ *  데이터)을 불러온다. 실패하면(네트워크 오류·형태가 예상과 다름) null을
+ *  돌려준다 — 공시 목록 차트가 유형별로 못 나뉠 뿐 화면 전체가 죽으면
+ *  안 된다(브리프: "로드 실패에 대비하세요", chartData(app.js)가 이
+ *  신호로 기존 단색 막대로 물러난다).
+ *
+ *  **`/signals-data.json`처럼 루트 기준 절대경로를 쓴다** — 이 파일은
+ *  배포 루트(docs/tool, vercel.json의 outputDirectory)에 se/와 함께
+ *  있다. 상대경로("signals-data.json")를 쓰면 trailingSlash:false 때문에
+ *  `/se`가 `/se/`가 아니라 `/se`로 되돌아갈 때 상대경로가 루트 기준으로
+ *  잘못 해석돼 404가 난다 — 이 저장소가 실제로 겪은 사고와 같은 부류다
+ *  (tests/se/test_se_page_assets.py의 TestAssetPathsSurviveTrailingSlashRedirect·
+ *  TestFetchPathsAreRootAbsolute 참고). */
+async function loadSignalsData() {
+  try {
+    const r = await fetch("/signals-data.json");
+    if (!r.ok) return null;
+    const j = await r.json();
+    if (!j || !Array.isArray(j.signals)) return null;
+    return j;
+  } catch (e) {
+    return null;
+  }
 }
 
 /** GoTrue REST 직접 호출 — SDK를 쓰지 않는다. */
@@ -223,12 +255,16 @@ function resetCharts() {
  *
  *  색은 계열 구분 용도로만 쓴다(v0.8.5) — `--c0`~`--c8`을 값과 무관하게
  *  순서대로 배정한다. `--red` 등 판정 색은 여기서 절대 쓰지 않는다.
+ *
+ *  signalsData(선택, SE-4f Task 3)는 disclosures처럼 spec.classifyField가
+ *  있는 차트에서만 chartData(app.js)로 그대로 전달된다 — 다른 스펙은
+ *  이 인자를 쓰지 않으므로 undefined여도 그대로 이전과 같다.
  */
-function renderChart(wrap, key, records) {
+function renderChart(wrap, key, records, signalsData) {
   if (typeof Chart === "undefined") return false;
   const spec = CHART_SPECS[key];
   if (!spec) return false;
-  const data = chartData(records, spec);
+  const data = chartData(records, spec, signalsData);
   if (!data) return false;
 
   const gridColor = cssVar("--dim2");
@@ -290,9 +326,15 @@ function renderChart(wrap, key, records) {
         // spec.xScale(app.js CHART_SPECS)을 그대로 쓴다 — "category"만
         // 있고 "time"은 없다는 설계 결정(별도 날짜 어댑터 회피)을 여기서
         // 실제로 지킨다. 값이 없으면 Chart.js 기본값과 같은 "category"로
-        // 떨어진다.
-        x: { type: spec.xScale || "category", ticks: { color: textColor }, grid: { color: gridColor } },
+        // 떨어진다. spec.stacked(disclosures 등, SE-4f Task 3)는 x·y 축
+        // 양쪽에 걸어야 Chart.js가 막대를 누적으로 그린다 — 없으면
+        // Chart.js 기본값(false)과 같다(이전 동작 그대로).
+        x: {
+          type: spec.xScale || "category", stacked: !!spec.stacked,
+          ticks: { color: textColor }, grid: { color: gridColor },
+        },
         y: {
+          stacked: !!spec.stacked,
           ticks: { color: textColor }, grid: { color: gridColor },
           title: { display: !!spec.yLabel, text: spec.yLabel || "", color: textColor },
         },
@@ -578,6 +620,14 @@ async function init() {
   const themeToggleBtn = document.getElementById("theme-toggle");
   if (themeToggleBtn) themeToggleBtn.addEventListener("click", toggleTheme);
   resetToc(); // 페이지를 새로 열 때 목차를 빈 상태로 시작한다
+
+  // 공시 목록 차트를 유형별로 나누는 데 쓴다(SE-4f Task 3) — analyze()가
+  // 끝나 disclosures 섹션을 그릴 때까지는 시간이 걸리므로(수 분) 로그인
+  // 흐름을 기다리게 하지 않고 백그라운드로 불러온다. 실패해도 renderChart
+  // (chartData, app.js)가 signalsData=null을 받아 기존 단색 막대로
+  // 물러난다 — await하지 않는다고 오류를 삼키는 게 아니다(loadSignalsData
+  // 자체가 실패를 null로 흡수한다).
+  loadSignalsData().then(function (d) { SIGNALS_DATA = d; });
 
   document.getElementById("login").addEventListener("click", doLogin);
   document.getElementById("logout").addEventListener("click", doLogout);
@@ -908,6 +958,16 @@ function blockEl(block) {
     h3.textContent = block.title;
     wrap.appendChild(h3);
   }
+  // task-6: sectionBlocks(app.js)가 isMetaOnlyRecords로 판정한 표에 붙인
+  // 사실 고지. 표는 지우지 않는다 — note는 table/text와 배타적이지 않고
+  // 항상 먼저 보여준다(표를 읽기 전에 "왜 다 -로 보이는지"를 먼저
+  // 알아야 한다).
+  if (typeof block.note === "string" && block.note) {
+    const note = document.createElement("p");
+    note.className = "note";
+    note.textContent = block.note;
+    wrap.appendChild(note);
+  }
   if (block.table) {
     wrap.appendChild(tableEl(block.table));
   } else if (typeof block.text === "string") {
@@ -987,7 +1047,147 @@ function buildFinancialRatiosBlock(ratios) {
   const table = tableLayout(records);
   if (table) wrap.appendChild(tableEl(table));
 
-  renderChart(wrap, "financial_ratios", ratios);
+  renderChart(wrap, "financial_ratios", ratios, SIGNALS_DATA);
+  return { el: wrap, table: table };
+}
+
+/** "%" 항목만 뒤에 "%"를 붙이고, 그 밖의 백만원 단위 값은 천 단위
+ *  구분자로 사람이 읽기 쉽게 만든다. null(값 자체가 없음)은 빈 문자열 —
+ *  0으로 채우지 않는다(numeric() 주석과 같은 원칙, formatValue와 달리
+ *  이 값들은 이미 백만원 단위라 억·조로 다시 줄이면 오히려 헷갈린다). */
+function formatDividendSeValue(se, value) {
+  if (value === null || value === undefined) return "";
+  if (se.indexOf("(%)") !== -1) return value + "%";
+  return value.toLocaleString("ko-KR");
+}
+
+/** dividendVsIncome(app.js)이 뽑은 "배당 vs 당기순이익" 사실 비교를
+ *  표로 그린다(SE-4f Task 4).
+ *
+ *  **공시 원본과 반드시 구분한다**(buildFinancialRatiosBlock과 같은
+ *  이유) — class="derived"로 시각적으로 나누고, 이 값이 dividends 원본
+ *  se 항목을 그대로 나란히 놓은 것일 뿐 새로 계산하거나 판정한 게
+ *  아니라고 문구로도 밝힌다(판정선: "배당 여력 부족" 같은 해석은 쓰지
+ *  않는다). */
+function buildDividendVsIncomeBlock(rows) {
+  const wrap = document.createElement("div");
+  wrap.className = "derived";
+
+  const h3 = document.createElement("h3");
+  h3.textContent = "배당 vs 당기순이익 (사실 비교)";
+  wrap.appendChild(h3);
+
+  const notice = document.createElement("p");
+  notice.className = "note";
+  notice.textContent = "DART 배당(dividends) 공시의 항목(se) 중 이미 같은 백만원 단위로 "
+    + "들어있는 현금배당금총액과 당기순이익을 보고 시점(사업연도·보고서구분)별로 "
+    + "나란히 보여줍니다 — 공시 원본 항목 두 개를 나란히 놓은 것일 뿐 새로 계산하거나 "
+    + "판정한 값이 아닙니다.";
+  wrap.appendChild(notice);
+
+  const records = rows.map(function (r) {
+    const out = { bsns_year: r.bsns_year, reprt_code: r.reprt_code };
+    for (const se of DIVIDEND_SE_FIELDS) out[se] = formatDividendSeValue(se, r[se]);
+    return out;
+  });
+  const table = tableLayout(records);
+  if (table) wrap.appendChild(tableEl(table));
+
+  return { el: wrap, table: table };
+}
+
+/** fundPlanChanges(app.js)가 뽑은 "계획 금액이 보고 시점마다 다르게
+ *  보고된 조달 건" 목록을 표로 그린다(SE-4f Task 7).
+ *
+ *  amounts는 등장한 서로 다른 값들이지 "이전값→이후값" 순서가 아니다
+ *  (reprt_code가 core 정규화 과정에서 탈락해 어느 보고가 먼저인지 이
+ *  레벨에서 알 수 없다, 위 fundPlanChanges 주석 참고) — 그래서 "→"
+ *  같은 방향 표시 없이 " / "로 나열만 한다. 판정선: "용도 변경 의심"
+ *  같은 해석은 쓰지 않는다 — 서로 다른 값이 보고됐다는 사실만 말한다. */
+function buildFundPlanChangeBlock(changes) {
+  const wrap = document.createElement("div");
+  wrap.className = "derived";
+
+  const h3 = document.createElement("h3");
+  h3.textContent = "계획 금액 변경 (사실 표기)";
+  wrap.appendChild(h3);
+
+  const notice = document.createElement("p");
+  notice.className = "note";
+  notice.textContent = "같은 자금 납입일·계획 용도인데 계획 금액이 서로 다른 값으로 "
+    + "보고된 조달 건입니다. 어느 보고가 먼저인지는 원본 데이터(reprt_code)가 "
+    + "남아있지 않아 표시하지 않습니다 — 서로 다른 값이 보고된 적이 있다는 "
+    + "사실만 보여줍니다.";
+  wrap.appendChild(notice);
+
+  const records = changes.map(function (c) {
+    return {
+      pay_de: c.pay_de,
+      plan_useprps: c.plan_useprps,
+      kind: c.kind,
+      "보고된 계획 금액": c.amounts.map(formatAmount).join(" / "),
+    };
+  });
+  const table = tableLayout(records);
+  if (table) wrap.appendChild(tableEl(table));
+
+  return { el: wrap, table: table };
+}
+
+/** affiliateOverview(app.js)가 최초취득일 순으로 재배열한 타법인 출자
+ *  레코드를 표+차트로 그린다(SE-4f Task 5, task-5-brief.md).
+ *
+ *  사용자 요청: "피투자사에 대한 정보를 처음부터 보여줄 필요도 있음" —
+ *  원본 표(affiliates)는 20열 중 피투자사 재무(총자산·당기순이익)가 맨
+ *  뒤쪽 두 열에 있어 눈에 잘 안 띈다. 여기서는 피출자 법인·출자목적·
+ *  최초취득일·기말지분율·기말장부가액·피투자사 총자산·피투자사 당기순이익
+ *  일곱 열만 추려 원본 표보다 먼저(위쪽에) 보여준다 — 값을 새로 계산하지
+ *  않고 원본 필드를 그대로 옮긴다(label()·formatValue()가 원본 키로 자동
+ *  으로 한글 라벨·금액/날짜 서식을 입힌다 — dividendVsIncome처럼 새 한글
+ *  키를 만들지 않는 이유는, 이 값들이 이미 LABELS·AMOUNT_FIELDS·
+ *  DATE_FIELDS에 등록돼 있어 그대로 재사용할 수 있기 때문이다).
+ *
+ *  **공시 원본과 반드시 구분한다**(buildFinancialRatiosBlock과 같은 이유) —
+ *  class="derived"로 나누고, 순서를 다시 배열했을 뿐 새 값이 아니라고
+ *  문구로 밝힌다. 적자 피투자사가 여러 건 있어도(엔켐 실측: -105.3억·
+ *  -14.1억 등) 색을 칠하거나 "부실 자회사" 같은 말을 붙이지 않는다(v0.8.5
+ *  판정선 — 사실 표기만).
+ *
+ *  차트(CHART_SPECS.affiliate_timeline)에는 이 함수가 받은 것과 같은
+ *  정렬된 레코드를 그대로 넘긴다 — 표와 차트가 다른 순서를 말하면 안 된다. */
+function buildAffiliateOverviewBlock(records) {
+  const wrap = document.createElement("div");
+  wrap.className = "derived";
+
+  const h3 = document.createElement("h3");
+  h3.textContent = "피투자사 정보 (최초취득일 순)";
+  wrap.appendChild(h3);
+
+  const notice = document.createElement("p");
+  notice.className = "note";
+  notice.textContent = "타법인 출자현황(아래 원본 표)의 값을 최초취득일 순으로 다시 "
+    + "배열해 피출자 법인과 피투자사 재무(총자산·당기순이익)를 먼저 보여줍니다 — "
+    + "새로 계산하거나 판정한 값이 아니라 원본 값을 그대로 옮긴 것입니다. 이 "
+    + "데이터는 한 사업연도 스냅샷이라 여러 사업연도에 걸친 추이는 알 수 없고, "
+    + "기초→기말 장부가액 변화(아래 차트)는 이번 사업연도 안에서의 증감만 "
+    + "보여줍니다.";
+  wrap.appendChild(notice);
+
+  const rows = records.map(function (r) {
+    return {
+      inv_prm: r.inv_prm,
+      invstmnt_purps: r.invstmnt_purps,
+      frst_acqs_de: r.frst_acqs_de,
+      trmend_blce_qota_rt: r.trmend_blce_qota_rt,
+      trmend_blce_acntbk_amount: r.trmend_blce_acntbk_amount,
+      recent_bsns_year_fnnr_sttus_tot_assets: r.recent_bsns_year_fnnr_sttus_tot_assets,
+      recent_bsns_year_fnnr_sttus_thstrm_ntpf: r.recent_bsns_year_fnnr_sttus_thstrm_ntpf,
+    };
+  });
+  const table = tableLayout(rows);
+  if (table) wrap.appendChild(tableEl(table));
+
+  renderChart(wrap, "affiliate_timeline", records, SIGNALS_DATA);
   return { el: wrap, table: table };
 }
 
@@ -1020,19 +1220,50 @@ function renderSection(key, value) {
     if (ratios.length > 0) ratioBlock = buildFinancialRatiosBlock(ratios);
   }
 
+  // dividends: "배당 vs 당기순이익" 사실 비교(SE-4f Task 4) — 배당
+  // 기록 자체가 없는 회사(엔켐 등)는 dividendVsIncome이 빈 배열을
+  // 돌려주므로 이 블록 자체가 안 생긴다(위 dividendVsIncome 주석 참고).
+  let dividendBlock = null;
+  if (key === "dividends") {
+    const dvRows = dividendVsIncome(Array.isArray(value) ? value : []);
+    if (dvRows.length > 0) dividendBlock = buildDividendVsIncomeBlock(dvRows);
+  }
+
+  // fund_usage: 계획 금액 변경 사실 표기(SE-4f Task 7) — 변경이 없는
+  // 조달 건만 있으면 fundPlanChanges가 빈 배열을 돌려주므로 이 블록
+  // 자체가 안 생긴다(위 fundPlanChanges 주석 참고).
+  let fundChangeBlock = null;
+  if (key === "fund_usage") {
+    const changes = fundPlanChanges(Array.isArray(value) ? value : []);
+    if (changes.length > 0) fundChangeBlock = buildFundPlanChangeBlock(changes);
+  }
+
+  // affiliates: 피투자사 정보를 최초취득일 순으로 먼저 보여준다(SE-4f
+  // Task 5) — 유효한 레코드(inv_prm이 있는)가 하나도 없으면
+  // affiliateOverview가 빈 배열을 돌려주므로 이 블록 자체가 안 생긴다
+  // (위 dividendBlock·fundChangeBlock과 같은 패턴).
+  let affiliateBlock = null;
+  if (key === "affiliates") {
+    const overview = affiliateOverview(Array.isArray(value) ? value : []);
+    if (overview.length > 0) affiliateBlock = buildAffiliateOverviewBlock(overview);
+  }
+
   // 가로(여러 행) 표가 하나라도 있으면 2단 폭 중 한 칸에 가두지 않고
   // 전체 폭을 쓴다 — 세로(1건, 키-값) 표는 원래도 좁아 한 칸이면
   // 충분하다(app.js tableLayout 주석 참고: 세로/가로 구분 기준과 같다).
   // 앞 태스크에서 12열까지 보이게 넓힌 표가 2단으로 다시 좁아지는
-  // 재발을 막는다. ratioBlock의 표도 가로일 수 있어 함께 본다 — 안
+  // 재발을 막는다. 파생 블록들의 표도 가로일 수 있어 함께 본다 — 안
   // 그러면 파생 표가 넓은데 .sec은 좁게 남는다.
+  const derivedBlocks = [ratioBlock, dividendBlock, fundChangeBlock, affiliateBlock];
   const hasWideTable = blocks.some(function (b) {
     return b.table && b.table.orientation === "horizontal";
-  }) || !!(ratioBlock && ratioBlock.table && ratioBlock.table.orientation === "horizontal");
+  }) || derivedBlocks.some(function (b) {
+    return !!(b && b.table && b.table.orientation === "horizontal");
+  });
   const wrap = SEC_WRAP[key];
   if (wrap) wrap.className = hasWideTable ? "sec wide" : "sec";
 
-  if (blocks.length === 0 && !ratioBlock) {
+  if (blocks.length === 0 && !ratioBlock && !dividendBlock && !fundChangeBlock && !affiliateBlock) {
     const p = document.createElement("p");
     p.className = "note";
     p.textContent = "표시할 데이터가 없습니다.";
@@ -1062,17 +1293,23 @@ function renderSection(key, value) {
       + "집행일이 아닙니다.";
     holder.appendChild(note);
   }
-  // 파생 지표 블록을 원본 표들보다 먼저 붙인다 — "파생 블록은 기존
-  // financials 표 위에 얹는다"(브리프)를 DOM 순서(위쪽에 먼저 나온다)로
-  // 그대로 지킨다. 원본 표(아래 for 루프)는 지우지 않는다.
+  // 파생 블록들을 원본 표들보다 먼저 붙인다 — "파생 블록은 기존 표 위에
+  // 얹는다"(브리프, financials·dividends·fund_usage 공통)를 DOM 순서
+  // (위쪽에 먼저 나온다)로 그대로 지킨다. 원본 표(아래 for 루프)는
+  // 지우지 않는다.
   if (ratioBlock) holder.appendChild(ratioBlock.el);
+  if (dividendBlock) holder.appendChild(dividendBlock.el);
+  if (fundChangeBlock) holder.appendChild(fundChangeBlock.el);
+  if (affiliateBlock) holder.appendChild(affiliateBlock.el);
   for (const block of blocks) {
     const el = blockEl(block);
     // 차트는 표 위에 얹는다 — 표를 지우지 않는다. canvas 안의 숫자는
     // 복사도 검색도 안 되므로 정확한 값은 항상 표가 책임진다(브리프
     // 원칙). CHART_SPECS에 이 섹션 정의가 없거나 그릴 데이터가 없으면
-    // renderChart가 false를 돌려주고 el을 건드리지 않는다.
-    renderChart(el, key, block.records);
+    // renderChart가 false를 돌려주고 el을 건드리지 않는다. SIGNALS_DATA
+    // (SE-4f Task 3)는 disclosures에서만 실제로 쓰인다 — 다른 키는
+    // chartData(app.js)가 이 인자를 무시한다.
+    renderChart(el, key, block.records, SIGNALS_DATA);
     holder.appendChild(el);
   }
 }

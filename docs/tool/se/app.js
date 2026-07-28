@@ -503,17 +503,38 @@ function isPlainObject(v) {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
-/** records(같은 source 그룹) 안에서, 표시했을 때(formatValue 기준) 모든
- *  행이 빈 문자열인 열을 제거한다. "표시했을 때"를 기준으로 삼는 이유는
- *  0과 false를 잃지 않기 위해서다 — formatValue(0)은 "0"이고 이는 빈
- *  문자열이 아니므로 지워지지 않는다(값이 있는 데이터를 조용히 숨기지
+/** DART가 "이 칸에 보고할 실데이터가 없다"는 뜻으로 관행적으로 쓰는 표기.
+ *
+ *  실측(task-6, 2026-07-28 — 엔켐·삼성전자 hyslrChgSttus·tesstkAcqsDspsSttus를
+ *  bsns_year=2025·reprt_code=11011로 직접 호출해 대조): 두 회사 모두 API는
+ *  status "000"(정상)을 주지만, 그 분기에 보고할 변동·거래가 없으면
+ *  실데이터 필드 값이 null도 빈 문자열도 아니라 **문자열 "-"** 그 자체로
+ *  채워져 온다(엔켐 hyslrChgSttus 1건 — change_on·change_cause·qota_rt 등
+ *  6개 필드 전부 "-". 삼성전자도 같은 엔드포인트에서 같은 모양이 나왔다 —
+ *  DART 쪽 관행이지 우리 필드 파싱 오류가 아니다). formatValue는 이 값을
+ *  그대로 "-"로 보여줘 옛 dropAllEmptyColumns(빈 문자열 기준)가 걸러내지
+ *  못했고, 그 결과 "전부 -"인 행이 실데이터가 있는 것처럼 표에 남아
+ *  사용자가 "무슨 의미인지 알 수 없다"고 지적한 원인이 됐다. null·빈
+ *  문자열도 같은 뜻이므로 하나의 판정 기준으로 합친다.
+ */
+function isNoDataMarker(v) {
+  if (v === null || v === undefined) return true;
+  if (typeof v !== "string") return false;
+  const t = v.trim();
+  return t === "" || t === "-";
+}
+
+/** records(같은 source 그룹) 안에서, 모든 행이 isNoDataMarker인 열을
+ *  제거한다. 0과 false는 잃지 않는다 — isNoDataMarker(0)·isNoDataMarker(false)는
+ *  둘 다 false다(문자열이 아니므로, 값이 있는 데이터를 조용히 숨기지
  *  않는다는 이 화면의 원칙과 같다). 값이 하나라도 있는 열은 반드시 남는다.
  *
  *  insider_timeline이 대표 사례다(dart_client.fetch_insider_timeline —
  *  elestock·hyslr·hyslr_chg·exec_treasury 4개 엔드포인트를 합친 결과라
  *  레코드마다 자기 엔드포인트 필드만 채우고 나머지는 전부 null이다).
  *  source별로 나눈(sourceGroupedBlocks) 뒤에도 그 그룹 안에서마저 전부
- *  비는 열(분기·연도별 응답 형태 차이 등)이 남을 수 있어 한 번 더 걷어낸다.
+ *  비는 열(분기·연도별 응답 형태 차이, 또는 위 isNoDataMarker의 "-" 등)이
+ *  남을 수 있어 한 번 더 걷어낸다.
  */
 function dropAllEmptyColumns(records) {
   if (!Array.isArray(records) || records.length === 0) return records;
@@ -523,7 +544,7 @@ function dropAllEmptyColumns(records) {
     for (const k of Object.keys(r)) if (!seen.has(k)) { seen.add(k); keys.push(k); }
   }
   const emptyKeys = keys.filter(function (k) {
-    return records.every(function (r) { return formatValue(k, r[k]) === ""; });
+    return records.every(function (r) { return isNoDataMarker(r[k]); });
   });
   if (emptyKeys.length === 0) return records;
   const emptySet = new Set(emptyKeys);
@@ -532,6 +553,53 @@ function dropAllEmptyColumns(records) {
     for (const k of Object.keys(r)) if (!emptySet.has(k)) out[k] = r[k];
     return out;
   });
+}
+
+// 레코드의 정체(어느 회사·어느 접수번호·어느 결산일·어느 보고서인지)를
+// 밝힐 뿐, "무슨 일이 있었는지"는 말하지 않는 필드. 값이 있어도 정보가
+// 아니다 — task-6 실측(엔켐 hyslrChgSttus 1건)이 정확히 이 모양이었다:
+// rcept_no·corp_cls·corp_code·corp_name·stlm_dt·bsns_year·reprt_code만
+// 채워지고 나머지는 전부 isNoDataMarker였다. **판단 근거**: 이 목록은
+// 브리프가 제시한 후보를 그대로 확정한 것이 아니라, 위 실측 응답과
+// field-inventory(docs/superpowers/plans/2026-07-27-se-4c-field-inventory.json)
+// 를 직접 대조해 "섹션마다 반복되지만 그 자체로는 사건을 서술하지 않는"
+// 필드만 추린 결과다 — 예를 들어 rcept_dt(접수일자)는 여기 넣지 않았다
+// (elestock 등 다른 source에서는 "언제 일어난 일인지"를 실제로 서술하는
+// 값이라 hyslr_chg·exec_treasury에는 애초에 나타나지도 않는다).
+//
+// corp_code·corp_cls는 sectionBlocks의 depth-0 omitHiddenIds가 이 함수가
+// 불리기 전에 이미 걷어내므로 이 시점엔 보통 안 남아 있지만, 방어적으로
+// 함께 둔다(재귀 경로·향후 호출부 변경에도 이 판정이 깨지지 않도록).
+const META_ONLY_KEYS = new Set([
+  "rcept_no", "corp_cls", "corp_code", "corp_name",
+  "stlm_dt", "bsns_year", "reprt_code",
+]);
+
+/** records(표 하나로 그려질 레코드 목록, source 필드는 이미 뺀 상태)에
+ *  META_ONLY_KEYS 밖의 키가 있고, 그 키들의 값이 모든 레코드에서 전부
+ *  isNoDataMarker면 true — "레코드에 식별자·메타 필드만 있고 실데이터가
+ *  하나도 없다"는 뜻이다.
+ *
+ *  "값이 하나라도 있으면 표를 그대로 보여준다" 원칙의 반대쪽을 정확히
+ *  판정한다 — 메타 키 밖의 값이 단 하나라도 실데이터면(예: 2026 1분기
+ *  최대주주 변동현황의 17.40%·변동사유) false를 돌려줘 표를 그대로
+ *  두게 한다. 메타 아닌 키가 아예 없는 레코드(모든 키가 META_ONLY_KEYS)도
+ *  "보고할 내용이 없다"와 같은 뜻이라 true다.
+ *
+ *  특정 섹션 키를 검사하지 않는다 — 값의 모양만 보므로 hyslr_chg·
+ *  exec_treasury뿐 아니라 같은 모양(식별자만 채워진 레코드)이 나오는 어떤
+ *  source 그룹에도 그대로 동작한다.
+ */
+function isMetaOnlyRecords(records) {
+  if (!Array.isArray(records) || records.length === 0) return false;
+  for (const r of records) {
+    if (!isPlainObject(r)) return false;
+    for (const k of Object.keys(r)) {
+      if (META_ONLY_KEYS.has(k)) continue;
+      if (!isNoDataMarker(r[k])) return false;
+    }
+  }
+  return true;
 }
 
 /** 레코드 전부가 비어 있지 않은 문자열 source 필드를 가지면 true다.
@@ -587,7 +655,18 @@ function sourceGroupedBlocks(records) {
     // records는 표가 실제로 그린 것과 같은 레코드(source 제거·빈 열 제거
     // 반영 후)를 그대로 싣는다 — 다음 태스크(차트)가 이 레코드로 그리므로
     // 표와 다른 값을 보여주면 안 된다.
-    if (t) blocks.push({ title: label(s), table: t, records: cleaned });
+    if (t) {
+      const block = { title: label(s), table: t, records: cleaned };
+      // task-6: 표는 지우지 않는다(접수번호로 원문을 직접 열어 확인할 수
+      // 있어야 한다 — 우리 판단이 틀렸을 때의 검증 경로이기도 하다). 다만
+      // 남은 열이 식별자·메타뿐이면(isMetaOnlyRecords) 그 사실 자체를
+      // 문구로 알린다 — "이상 없음"·"정상" 같은 판정 어휘가 아니라
+      // "보고된 내역이 없다"는 사실만 말한다(v0.8.5 원칙).
+      if (isMetaOnlyRecords(cleaned)) {
+        block.note = "해당 기간에 보고된 내역이 없습니다.";
+      }
+      blocks.push(block);
+    }
   }
   return blocks;
 }
@@ -1288,6 +1367,170 @@ function financialRatios(records) {
   return out;
 }
 
+/** dividends(alotMatter)의 se(항목) 중 이 태스크가 비교하는 5종.
+ *  현금배당금총액·(연결/별도)당기순이익·주식배당금총액·현금배당성향이
+ *  이미 같은 "백만원"(또는 "%") 단위로 한 응답 안에 나란히 있다(2026-07-28
+ *  삼성전자 실측, corp_code=00126380, rcept_no=20250311001085) — 섹션 간
+ *  조인이나 단위 환산 없이 그대로 나란히 놓을 수 있다(SE-4f Task 4,
+ *  task-4-brief.md). 이익잉여금(financials, 원 단위)은 이번 범위가
+ *  아니다 — 단위 혼동(백만원↔원)은 이 프로젝트에서 이미 financials 원본
+ *  차트를 통째로 뺀 사유였다(위 CHART_SPECS 주석 참고), 섹션 간 조인 +
+ *  단위 환산은 별건이다(브리프). */
+const DIVIDEND_SE_FIELDS = [
+  "현금배당금총액(백만원)",
+  "(연결)당기순이익(백만원)",
+  "(별도)당기순이익(백만원)",
+  "주식배당금총액(백만원)",
+  "(연결)현금배당성향(%)",
+];
+
+/** dividends 레코드에서 "배당총액 vs 벌어들인 돈"을 사업연도·보고서구분
+ *  (bsns_year × reprt_code)별로 나란히 뽑는다.
+ *
+ *  현금배당금총액이 없거나("-", DART의 무값 표기) 읽을 수 없는 보고는
+ *  아예 행을 만들지 않는다 — 배당이 없는 회사(예: 엔켐, 브리프 경고
+ *  "엔켐은 배당이 없습니다")에서 이 비교가 조용히 발화하지 않는 것이
+ *  맞는 동작이다: 감추는 게 아니라 비교할 배당액 자체가 없는 것이다.
+ *
+ *  dividends는 fund_usage와 달리 정규화 과정에서 reprt_code가 탈락하지
+ *  않는다(위 CHART_SPECS.dividends 주석 참고) — 같은 사업연도라도 분기
+ *  보고서마다 다른 보고이므로 (bsns_year, reprt_code) 쌍으로 묶어 값이
+ *  조용히 덮이지 않게 한다. */
+function dividendVsIncome(records) {
+  if (!Array.isArray(records)) return [];
+  const groups = new Map();
+  const order = [];
+  for (const r of records) {
+    if (!r || typeof r !== "object") continue;
+    const year = r.bsns_year !== undefined && r.bsns_year !== null ? String(r.bsns_year) : "";
+    const reprt = r.reprt_code !== undefined && r.reprt_code !== null ? String(r.reprt_code) : "";
+    const key = year + " " + reprt;
+    if (!groups.has(key)) {
+      groups.set(key, { bsns_year: year, reprt_code: reprt, se: Object.create(null) });
+      order.push(key);
+    }
+    const se = r.se;
+    if (typeof se === "string" && DIVIDEND_SE_FIELDS.indexOf(se) !== -1) {
+      groups.get(key).se[se] = r.thstrm;
+    }
+  }
+
+  const out = [];
+  for (const key of order) {
+    const g = groups.get(key);
+    const dividend = numeric(g.se["현금배당금총액(백만원)"]);
+    if (dividend === null) continue; // 배당 기록 자체가 없다 — 비교가 발화하지 않는다
+    const row = { bsns_year: g.bsns_year, reprt_code: g.reprt_code };
+    for (const se of DIVIDEND_SE_FIELDS) {
+      row[se] = numeric(g.se[se]);
+    }
+    out.push(row);
+  }
+  return out;
+}
+
+/** fund_usage 레코드에서 같은 조달 건(같은 pay_de·같은 plan_useprps)의
+ *  계획 금액(plan_amount)이 보고 시점마다 다르게 보고된 사실을 뽑는다
+ *  (SE-4f Task 7, task-7-brief.md).
+ *
+ *  fetch_fund_usage(dart_client.py)는 reprt_code(어느 분기 보고인지)를
+ *  정규화 과정에서 버린다(core 수정 불가, 위 CHART_SPECS.fund_usage 주석
+ *  참고) — 그래서 "1분기엔 342.91억, 반기부터는 352.91억"처럼 **어느
+ *  시점에 바뀌었는지**는 여기서 말할 수 없다. 대신 "이 조달 건에 보고된
+ *  계획 금액이 서로 다른 값으로 존재한다"는 사실(등장한 서로 다른 값의
+ *  집합, 최초 등장 순서)만 표기한다 — 없는 순서 정보를 지어내지 않는다.
+ *
+ *  2026-07-28 엔켐 실측(corp_code=01011526, bsns_year=2022,
+ *  pssrpCptalUseDtls.json)으로 확인: pay_de="2021.10.26"·
+ *  plan_useprps="운영자금" 조합에서 plan_amount가 34,291,000,000(1분기
+ *  보고)과 35,291,000,000(반기·3분기·사업보고서) 두 값으로 갈린다.
+ *  같은 사업보고서(11011) 안에서도 항목이 두 번 중복 수집되지만 값
+ *  자체는 같다(pay_de·plan_useprps·plan_amount 모두 동일) — 값이 같으면
+ *  "변경"이 아니다(indexOf로 중복 값은 한 번만 센다). */
+function fundPlanChanges(records) {
+  if (!Array.isArray(records)) return [];
+  const groups = new Map();
+  const order = [];
+  for (const r of records) {
+    if (!r || typeof r !== "object") continue;
+    const payDe = r.pay_de !== undefined && r.pay_de !== null ? String(r.pay_de) : "";
+    const purpose = r.plan_useprps !== undefined && r.plan_useprps !== null ? String(r.plan_useprps) : "";
+    if (!payDe || !purpose) continue; // 조달 건을 특정할 식별자가 없으면 묶지 않는다
+    const key = payDe + " " + purpose;
+    if (!groups.has(key)) {
+      groups.set(key, { pay_de: payDe, plan_useprps: purpose, kind: r.kind, amounts: [] });
+      order.push(key);
+    }
+    const amt = numeric(r.plan_amount);
+    if (amt === null) continue;
+    const g = groups.get(key);
+    if (g.amounts.indexOf(amt) === -1) g.amounts.push(amt);
+  }
+
+  const out = [];
+  for (const key of order) {
+    const g = groups.get(key);
+    if (g.amounts.length > 1) out.push(g);
+  }
+  return out;
+}
+
+/** affiliates(타법인 출자현황) 레코드를 최초취득일(frst_acqs_de) 오름차순으로
+ *  다시 배열한다(SE-4f Task 5, task-5-brief.md: "피투자사에 대한 정보를
+ *  처음부터 보여줄 필요도 있음", "시간의 순서에 따라 투자 규모 변화").
+ *
+ *  **한 사업연도 스냅샷이다.** affiliates는 최근 사업보고서 한 번의 응답이라
+ *  여러 해에 걸친 추이는 이 데이터만으로 만들 수 없다(브리프: "없는 것을
+ *  있는 것처럼 만들지 마라") — 만들 수 있는 것은 이 스냅샷 안에서 ①언제부터
+ *  투자했는지(frst_acqs_de) 순서, ②이번 사업연도 안에서 기초→기말 장부가액이
+ *  어떻게 바뀌었는지 둘뿐이다. 이 함수는 ①의 순서만 만든다 — 값을 다시
+ *  계산하지 않고 원본 레코드를 그대로, 순서만 바꿔 돌려준다(buildAffiliate
+ *  OverviewBlock·CHART_SPECS.affiliate_timeline이 그 순서를 표·차트에 그대로
+ *  쓴다).
+ *
+ *  최초취득일이 없거나 읽을 수 없는 레코드(예상 밖 응답)는 정렬 기준이
+ *  없으므로 맨 뒤로 보낸다(없는 순서를 지어내 앞뒤 어딘가에 끼워 넣지
+ *  않는다) — 그런 레코드끼리는 원래 등장 순서를 그대로 유지한다(비교 함수가
+ *  a.idx-b.idx로 그 순서를 명시한다. Array.prototype.sort 자체가 안정 정렬인
+ *  현대 엔진에 기대지 않는다).
+ *
+ *  같은 날짜(동률)인 레코드도 등장 순서를 유지한다 — 실측(엔켐)에 "골든밸류
+ *  제3호"·"제4호" 신기술조합이 둘 다 frst_acqs_de=2025.09.25로 같다. 어느 쪽이
+ *  "먼저"인지 원본에 없는 정보이므로 지어내지 않는다.
+ *
+ *  inv_prm(피출자 법인명)이 없는 레코드는 애초에 어느 법인인지 알 수 없어
+ *  뺀다 — core(fetch_affiliate_investments)가 이미 "계"/"합계" 등 요약행을
+ *  걸러내지만, 이 함수는 그 계약에 기대지 않고 방어적으로 한 번 더 본다.
+ *
+ *  **정렬 키는 numeric()이 아니라 axisSortKey()로 뽑는다(최종 리뷰 지적 ①,
+ *  다섯 번째 픽스처발 결함).** frst_acqs_de의 실측 형태는 "2018.05.07"처럼
+ *  점으로 구분된 문자열인데, numeric()은 "이 값 자체가 순수 숫자다"를
+ *  요구해(위 numeric() 주석) 점이 섞이면 무조건 null을 돌려준다 — 즉
+ *  실데이터에서는 매 레코드가 null이 되어 이 함수가 사실상 아무 일도
+ *  하지 않고 원래 순서를 그대로 돌려주는데, 화면은 여전히 "최초취득일
+ *  순"이라 단언한다(입력이 우연히 날짜순이면 눈으로는 맞아 보여 들키지
+ *  않는다). axisSortKey()는 문자열에서 숫자만 이어붙이므로
+ *  "2018.05.07" → 20180507, "-"(날짜 없음) → 빈 문자열 → null로 자연히
+ *  뒤로 간다 — numeric()은 고치지 않는다(금액·비율 파싱에 쓰여 파급이
+ *  크다), 여기서만 날짜 전용으로 axisSortKey()를 쓴다. */
+function affiliateOverview(records) {
+  if (!Array.isArray(records)) return [];
+  const rows = records.filter(function (r) {
+    return r && typeof r === "object" && typeof r.inv_prm === "string" && r.inv_prm.trim() !== "";
+  });
+  const withKey = rows.map(function (r, idx) {
+    return { r: r, key: axisSortKey(r.frst_acqs_de), idx: idx };
+  });
+  withKey.sort(function (a, b) {
+    if (a.key === null && b.key === null) return a.idx - b.idx;
+    if (a.key === null) return 1;
+    if (b.key === null) return -1;
+    if (a.key !== b.key) return a.key - b.key;
+    return a.idx - b.idx; // 동률(같은 날짜)은 등장 순서를 유지한다
+  });
+  return withKey.map(function (w) { return w.r; });
+}
+
 // 섹션별 차트 정의. 여기 없는 섹션은 차트 없이 표만 나온다.
 //
 // **`time` 축을 쓰지 않는다.** Chart.js의 time scale은 별도 날짜 어댑터를
@@ -1395,9 +1638,23 @@ const CHART_SPECS = Object.assign(Object.create(null), {
   // 판정이 된다(v0.8.5). monthlyCountOf는 chartData 안에서 건수만 세고
   // 멈춘다 — 순위·강조 없이 막대 높이로만 보여준다. 표는 원본 145행을
   // 그대로 유지한다(집계는 차트 전용 파생값, block.records는 손대지 않는다).
+  //
+  // **SE-4f Task 3: 단색 막대는 "몇 건"만 보여줄 뿐 "어떤 성격의 공시가
+  // 언제 몰렸는지"는 감춘다** — 사용자 요청("공시별 색상 구분"). classifyField
+  // (report_nm)가 있고 chartData 호출자가 signalsData(3번째 인자,
+  // docs/tool/signals-data.json 로드 결과)를 함께 주면, monthlyCountOf
+  // 처리(아래 chartData)가 월별 집계를 카테고리별로 더 잘게 쪼개
+  // stacked bar(누적 막대)로 그린다 — 로직은 새로 만들지 않는다.
+  // classifyDisclosureCategory·monthlyCountsByCategory가 docs/tool/
+  // index.html의 matchSignals·AMEND_RE를 그대로 재현한다(브리프).
+  // signalsData가 없거나(로드 실패) 형태가 예상과 다르면 chartData가
+  // 자동으로 이전 단색-단일 계열 집계로 물러난다 — 화면이 죽지 않는다.
+  // stacked:true는 renderChart(ui.js)가 Chart.js scales.x/y.stacked로
+  // 그대로 옮긴다. 색은 카테고리(유형) 구분 전용이다 — 특정 유형에
+  // 판정 색(--red)을 주거나 "위험"류 문구를 덧붙이지 않는다(v0.8.5).
   disclosures: {
-    kind: "bar", title: "월별 공시 건수", xScale: "category",
-    monthlyCountOf: "rcept_dt", yLabel: "건수",
+    kind: "bar", title: "월별 공시 건수 (유형별)", xScale: "category", stacked: true,
+    monthlyCountOf: "rcept_dt", classifyField: "report_nm", yLabel: "건수",
   },
   // financialRatios(위)가 만든 파생 레코드(구분·기간·지표·값)를 그린다.
   // financials 원본과 달리 이 레코드는 이미 fs_div를 "구분"(연결/별도)
@@ -1416,6 +1673,37 @@ const CHART_SPECS = Object.assign(Object.create(null), {
     kind: "line", title: "재무 파생 지표 추이 (%, 연결·별도 구분)",
     x: "기간", groupBy: "지표", compositeGroupFields: ["지표", "구분"],
     y: "값", yLabel: "%", xScale: "category",
+  },
+  // affiliateOverview(위)가 최초취득일(frst_acqs_de) 순으로 재배열한
+  // 레코드를 그린다(SE-4f Task 5). x는 원본 필드 inv_prm(피출자 법인명)을
+  // 그대로 쓴다 — chartData의 x축 정렬 규칙(위 xs.sort 주석 ①~③) 상, x값
+  // 전부가 숫자를 포함해야만(allHaveDigits) 정렬이 다시 일어나는데, 실측
+  // (엔켐 27건)처럼 회사명 중 하나라도 숫자가 전혀 없으면(예: "중앙첨단소재")
+  // 정렬 자체가 스킵되고 affiliateOverview가 만든 순서(등장 순서)가 그대로
+  // 보존된다 — 그래서 새 합성 필드를 만들지 않고 inv_prm을 그대로 x로 쓴다.
+  //
+  // **주의(문서화된 한계)**: 만약 어느 회사의 피출자 법인명 전부가 우연히
+  // 숫자를 포함하면(예: 전부 "2025 ○○투자조합" 식) chartData가 그 숫자
+  // 기준으로 다시 정렬해 최초취득일 순서와 달라질 수 있다 — 실제 회사·조합명
+  // 목록에서는 매우 드문 경우라 별도 방어(합성 라벨 등)를 두지 않았다.
+  // compositeXFields로 날짜를 x에 섞어 이 위험을 없애는 방법도 검토했지만,
+  // "2022 대신-SBI 코넥스 스케일업 펀드"처럼 회사명 자체에 4자리 연도가
+  // 박힌 실측 사례(엔켐)가 axisSortKey(문자열 전체의 숫자를 모두 이어붙임)를
+  // 오염시켜 오히려 더 나쁜 순서를 만든다는 것을 확인했다 — 그래서 합성하지
+  // 않는 쪽을 택했다.
+  //
+  // series는 기초→기말 장부가액 두 계열이다 — "이번 사업연도 안에서 규모가
+  // 늘었나 줄었나"(브리프 판정선: 허용)만 보여줄 뿐, "집중 투자 시기" 같은
+  // 해석은 붙이지 않는다(v0.8.5). 여러 해에 걸친 추이는 이 데이터(한 사업연도
+  // 스냅샷)로 만들 수 없다 — buildAffiliateOverviewBlock(ui.js)의 안내문이
+  // 그 한계를 그대로 말한다.
+  affiliate_timeline: {
+    kind: "bar", title: "출자 규모 — 최초취득일 순 (기초→기말 장부가액)",
+    x: "inv_prm", xScale: "category", yLabel: "장부가액",
+    series: [
+      { key: "bsis_blce_acntbk_amount", label: "기초 장부가액" },
+      { key: "trmend_blce_acntbk_amount", label: "기말 장부가액" },
+    ],
   },
 });
 
@@ -1504,6 +1792,85 @@ function monthlyCounts(rows, field) {
   return order.map(function (m) { return { month: m, count: counts.get(m) }; });
 }
 
+/** reportNm 하나를 signalsData(docs/tool/signals-data.json 로드 결과) 기준
+ *  으로 분류해 카테고리 번호(0~8, 0="기타")를 돌려준다. docs/tool/
+ *  index.html의 matchSignals(564행)·AMEND_RE와 같은 로직이다(브리프:
+ *  "로직을 새로 만들지 마라 — 읽어서 맞춘다. 같은 공시를 공개 뷰어와
+ *  SE가 다르게 분류하면 그 자체가 결함") — 정정공시([기재정정] 등,
+ *  signalsData.amendment_pattern)는 공개 뷰어와 마찬가지로 신호를 매기지
+ *  않고 그대로 "기타"(0)로 남긴다.
+ *
+ *  **공시 하나는 정확히 한 카테고리에만 속한다.** matchSignals(공개
+ *  뷰어)는 여러 신호가 동시에 걸리면 배열 전부를 돌려주지만, 여기서는
+ *  signals 배열 순서상 첫 매칭만 쓴다 — 월별 스택 막대에서 한 공시를
+ *  두 카테고리에 겹쳐 세면 막대 합이 원본 건수를 넘어서는 거짓말이
+ *  된다(브리프: "월별 합계가 원본 건수와 일치해야 합니다").
+ *
+ *  signalsData가 없거나 signals 배열을 갖추지 못한 예상 밖 형태면(로드
+ *  실패·형태 변경) null을 돌려준다 — 호출자가 분류를 포기하고 기존
+ *  단색 집계로 물러나는 신호다(브리프: "로드 실패에 대비하세요"). */
+function classifyDisclosureCategory(reportNm, signalsData) {
+  if (!signalsData || !Array.isArray(signalsData.signals)) return null;
+  const nm = typeof reportNm === "string" ? reportNm : "";
+  if (typeof signalsData.amendment_pattern === "string") {
+    try {
+      if (new RegExp(signalsData.amendment_pattern).test(nm)) return 0;
+    } catch (e) {
+      // 정규식 자체가 깨졌으면(예상 밖 데이터) 정정 판정만 건너뛰고
+      // 아래 키워드 매칭으로 이어간다 — 분류를 통째로 포기하지 않는다.
+    }
+  }
+  for (const s of signalsData.signals) {
+    const keywords = Array.isArray(s.keywords) ? s.keywords : [];
+    for (const kw of keywords) {
+      if (kw && nm.indexOf(kw) !== -1) {
+        return typeof s.category === "number" ? s.category : 0;
+      }
+    }
+  }
+  return 0;
+}
+
+/** rows(disclosures 원본 레코드)를 월(YYYYMM)×카테고리 라벨별 건수로
+ *  묶는다. monthlyCounts와 같은 원칙 — **집계는 여기서 끝난다.** 어떤
+ *  유형이 많았는지 순위를 매기거나 강조하지 않는다(v0.8.5).
+ *
+ *  카테고리 라벨은 signalsData.categories(예: {"0":"기타","1":"CB/채권",
+ *  ...})를 그대로 쓴다 — 우리가 문구를 새로 짓거나 덧붙이지 않는다
+ *  (브리프: "signals-data.json의 label에 판정처럼 읽히는 것이 있으면
+ *  그대로 쓰되 우리가 덧붙이지는 마세요"). 못 찾으면(예상 밖 카테고리
+ *  번호) "기타"로 남긴다 — 조용히 빠뜨리지 않는다.
+ *
+ *  반환은 [{month, category, count}] — chartData가 이 모양을 그대로
+ *  groupBy(y="count", groupBy="category") 경로로 넘겨 재사용한다(새
+ *  렌더 분기를 만들지 않는다, monthlyCountOf의 기존 재사용 방식과
+ *  같다). 월별 합계가 원본 건수와 일치한다 — 공시 하나는
+ *  classifyDisclosureCategory로 정확히 한 카테고리에만 잡힌다. */
+function monthlyCountsByCategory(rows, dateField, textField, signalsData) {
+  const monthOrder = [];
+  const byMonth = new Map(); // month -> Map(label -> count)
+  for (const r of rows) {
+    const raw = r[dateField];
+    if (raw === null || raw === undefined || raw === "") continue;
+    const digits = String(raw).replace(/[^0-9]/g, "");
+    if (digits.length < 6) continue; // 월을 특정할 수 없다 — 건너뛴다(0으로 세지 않는다)
+    const month = digits.slice(0, 6);
+    const cat = classifyDisclosureCategory(r[textField], signalsData);
+    const catKey = cat === null ? 0 : cat;
+    const label = (signalsData.categories && signalsData.categories[String(catKey)]) || "기타";
+    if (!byMonth.has(month)) { byMonth.set(month, new Map()); monthOrder.push(month); }
+    const perLabel = byMonth.get(month);
+    perLabel.set(label, (perLabel.get(label) || 0) + 1);
+  }
+  const out = [];
+  for (const month of monthOrder) {
+    for (const [label, count] of byMonth.get(month)) {
+      out.push({ month: month, category: label, count: count });
+    }
+  }
+  return out;
+}
+
 /** row에서 fields의 값들을 이어 x축 표시용 문자열 하나로 합친다.
  *
  *  fund_usage처럼 한 필드(tm=회차)만으로는 서로 다른 레코드를 구분하지
@@ -1565,8 +1932,14 @@ function writeChartCell(data, conflicted, i, v) {
   }
 }
 
-/** 레코드 목록을 Chart.js가 받는 형태로 바꾼다. 그릴 게 없으면 null. */
-function chartData(records, spec) {
+/** 레코드 목록을 Chart.js가 받는 형태로 바꾼다. 그릴 게 없으면 null.
+ *
+ *  signalsData(3번째 인자, 선택)는 disclosures(classifyField가 있는
+ *  스펙)에서만 쓰인다 — docs/tool/signals-data.json 로드 결과를 그대로
+ *  넘긴다. **순수 함수 계약을 지킨다**(브리프: "순수 함수는 분류 데이터를
+ *  인자로 받아 순수하게 유지"): 이 함수 스스로 fetch하거나 전역을 읽지
+ *  않는다 — 같은 세 인자에는 항상 같은 결과다. */
+function chartData(records, spec, signalsData) {
   if (!Array.isArray(records) || records.length === 0 || !spec) return null;
   let rows = records.filter(function (r) { return r && typeof r === "object"; });
   if (rows.length === 0) return null;
@@ -1574,15 +1947,31 @@ function chartData(records, spec) {
   if (spec.monthlyCountOf) {
     // disclosures처럼 개별 레코드가 아니라 "월별 건수"를 그려야 하는
     // 경우다. 표(block.records)는 원본 개별 레코드를 그대로 유지하고,
-    // 이 집계는 차트 전용 파생값이다 — 아래로는 x="month",
-    // series=[{key:"count"}] 하나짜리 스펙으로 취급해 기존 series 경로를
-    // 그대로 재사용한다(새 렌더 분기를 만들지 않는다).
-    rows = monthlyCounts(rows, spec.monthlyCountOf);
-    if (rows.length === 0) return null;
-    spec = Object.assign({}, spec, {
-      x: "month",
-      series: [{ key: "count", label: spec.yLabel || "건수" }],
-    });
+    // 이 집계는 차트 전용 파생값이다.
+    //
+    // **SE-4f Task 3**: classifyField(spec)와 유효한 signalsData가 함께
+    // 있으면 월별 건수를 카테고리별로 더 잘게 쪼갠다(monthlyCountsByCategory)
+    // — 아래로는 x="month", groupBy="category", y="count"인 기존 groupBy
+    // 렌더 경로를 그대로 재사용한다(새 렌더 분기를 만들지 않는다). 그
+    // 조건이 아니면(호출자가 signalsData를 안 줬거나 — 기존 2-인자
+    // 호출부와 그대로 호환 — 로드에 실패해 형태가 깨졌으면) 이전과 똑같이
+    // x="month", series=[{key:"count"}] 단일 계열로 물러난다(브리프:
+    // "로드 실패에 대비하세요" — 차트가 죽지 않고 기존 단색 막대가 된다).
+    const canClassify = !!spec.classifyField && !!signalsData
+      && Array.isArray(signalsData.signals)
+      && signalsData.categories && typeof signalsData.categories === "object";
+    if (canClassify) {
+      rows = monthlyCountsByCategory(rows, spec.monthlyCountOf, spec.classifyField, signalsData);
+      if (rows.length === 0) return null;
+      spec = Object.assign({}, spec, { x: "month", groupBy: "category", y: "count" });
+    } else {
+      rows = monthlyCounts(rows, spec.monthlyCountOf);
+      if (rows.length === 0) return null;
+      spec = Object.assign({}, spec, {
+        x: "month",
+        series: [{ key: "count", label: spec.yLabel || "건수" }],
+      });
+    }
   }
 
   if (spec.compositeXFields) {
@@ -1734,6 +2123,7 @@ if (typeof module !== "undefined" && module.exports) {
     DOC_LIST_KEY, docKeyRceptNo, docListRow,
     CHART_SPECS, chartData, axisLabel, numeric, axisSortKey,
     normalizeDebtByKind, monthlyCounts, compositeXValue,
-    financialRatios,
+    financialRatios, classifyDisclosureCategory, monthlyCountsByCategory,
+    DIVIDEND_SE_FIELDS, dividendVsIncome, fundPlanChanges, affiliateOverview,
   };
 }

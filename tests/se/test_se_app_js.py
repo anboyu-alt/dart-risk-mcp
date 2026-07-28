@@ -1272,6 +1272,170 @@ class TestInsiderTimelineSourceSplit(unittest.TestCase):
                          "표 제목이 이미 출처를 말하는데 캡션에도 원본 값이 남아 있습니다")
 
 
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestMetaOnlyRecordsGetNoDataNote(unittest.TestCase):
+    """task-6: "최대주주 변동현황"·"임원·주요주주 자기주식" 섹션이 빈 표처럼
+    보이는 문제의 실측 원인 — DART는 해당 분기에 보고할 변동이 없으면 필드를
+    null이나 빈 문자열이 아니라 **문자열 "-"**로 채워 돌려준다(status는
+    "000" 정상). 아래 첫 두 픽스처는 2026-07-28 실제 API 호출 결과를 그대로
+    옮긴 것이다(엔켐·삼성전자, bsns_year=2025, reprt_code=11011):
+
+      - 엔켐 hyslrChgSttus: 1건, 식별자(rcept_no·corp_cls·corp_code·corp_name·
+        stlm_dt) 밖의 필드(change_on·mxmm_shrholdr_nm·posesn_stock_co·
+        qota_rt·change_cause·rm) 전부 "-".
+      - 삼성전자 tesstkAcqsDspsSttus: 18건 중 다수 행에 실제 수량(bsis_qy
+        29,700,000 등)·구분(stock_knd "보통주" 등)이 있다 — "표를 그대로
+        보여준다" 쪽을 검증한다.
+
+    세 번째 픽스처(2026 1분기 최대주주 변동현황 필드 모양)는 사용자가 화면에서
+    실제로 본 값(17.40%·"기존 최대주주의 시간외 장외매도로 인한 변경")을
+    hyslrChgSttus 스키마 그대로 재현한 것이다 — "전부 -"가 아니라 "값이
+    있으면"의 대조군이다.
+    """
+
+    _ENKEM_HYSLR_CHG_EMPTY = [{
+        "source": "hyslr_chg",
+        "rcept_no": "20260326001049",
+        "corp_cls": "K",
+        "corp_code": "01011526",
+        "corp_name": "엔켐",
+        "change_on": "-",
+        "mxmm_shrholdr_nm": "-",
+        "posesn_stock_co": "-",
+        "qota_rt": "-",
+        "change_cause": "-",
+        "rm": "-",
+        "stlm_dt": "2025-12-31",
+        "bsns_year": "2025",
+        "reprt_code": "11011",
+    }]
+
+    _SAMSUNG_EXEC_TREASURY_FILLED = [
+        {
+            "source": "exec_treasury",
+            "rcept_no": "20260310002820",
+            "corp_cls": "Y",
+            "corp_code": "00126380",
+            "corp_name": "삼성전자",
+            "stock_knd": "보통주",
+            "acqs_mth1": "배당가능이익범위 이내 취득",
+            "acqs_mth2": "직접취득",
+            "acqs_mth3": "장내직접취득",
+            "bsis_qy": "29,700,000",
+            "change_qy_acqs": "118,314,495",
+            "change_qy_dsps": "6,040,880",
+            "change_qy_incnr": "50,144,628",
+            "trmend_qy": "91,828,987",
+            "rm": "-",
+            "stlm_dt": "2025-12-31",
+            "bsns_year": "2025",
+            "reprt_code": "11011",
+        },
+        {
+            "source": "exec_treasury",
+            "rcept_no": "20260310002820",
+            "corp_cls": "Y",
+            "corp_code": "00126380",
+            "corp_name": "삼성전자",
+            "stock_knd": "우선주",
+            "acqs_mth1": "배당가능이익범위 이내 취득",
+            "acqs_mth2": "신탁계약에 의한취득",
+            "acqs_mth3": "수탁자보유물량",
+            "bsis_qy": "-",
+            "change_qy_acqs": "-",
+            "change_qy_dsps": "-",
+            "change_qy_incnr": "-",
+            "trmend_qy": "-",
+            "rm": "-",
+            "stlm_dt": "2025-12-31",
+            "bsns_year": "2025",
+            "reprt_code": "11011",
+        },
+    ]
+
+    _FILLED_HYSLR_CHG = [{
+        "source": "hyslr_chg",
+        "rcept_no": "20260415000535",
+        "corp_cls": "K",
+        "corp_code": "01011526",
+        "corp_name": "엔켐",
+        "change_on": "2026년 04월 12일",
+        "mxmm_shrholdr_nm": "오정강 외 2인",
+        "posesn_stock_co": "1,234,567",
+        "qota_rt": "17.40",
+        "change_cause": "기존 최대주주의 시간외 장외매도로 인한 변경",
+        "rm": "-",
+        "stlm_dt": "2026-03-31",
+        "bsns_year": "2026",
+        "reprt_code": "11013",
+    }]
+
+    def test_enkem_empty_record_gets_no_data_note(self):
+        got = run_js(
+            f"sectionBlocks({json.dumps(self._ENKEM_HYSLR_CHG_EMPTY, ensure_ascii=False)})"
+        )
+        self.assertEqual(len(got), 1)
+        self.assertEqual(
+            got[0].get("note"), "해당 기간에 보고된 내역이 없습니다.",
+            "식별자·메타 필드만 있고 실데이터가 전부 \"-\"인 레코드는 "
+            "해당 없음으로 표기해야 합니다",
+        )
+
+    def test_enkem_empty_record_keeps_rcept_no_reachable(self):
+        """판단이 틀렸을 경우를 대비해 접수번호는 지우지 않는다 —
+        사용자가 원문을 직접 열어 확인할 수 있어야 한다."""
+        got = run_js(
+            f"sectionBlocks({json.dumps(self._ENKEM_HYSLR_CHG_EMPTY, ensure_ascii=False)})"
+        )
+        table = got[0]["table"]
+        present = set(table["keys"]) | {c["key"] for c in table["caption"]}
+        self.assertIn("rcept_no", present)
+
+    def test_samsung_filled_record_has_no_note(self):
+        """값이 하나라도 있으면(삼성전자 자기주식 실수량) 표를 그대로
+        보여준다 — 해당 없음 문구를 붙이면 안 된다."""
+        got = run_js(
+            f"sectionBlocks({json.dumps(self._SAMSUNG_EXEC_TREASURY_FILLED, ensure_ascii=False)})"
+        )
+        self.assertEqual(len(got), 1)
+        self.assertNotIn("note", got[0])
+
+    def test_filled_hyslr_chg_has_no_note(self):
+        """2026 1분기처럼 실제 변동(17.40%)이 있으면 해당 없음으로
+        덮으면 안 된다 — 있는 데이터를 없다고 하는 게 더 나쁘다."""
+        got = run_js(
+            f"sectionBlocks({json.dumps(self._FILLED_HYSLR_CHG, ensure_ascii=False)})"
+        )
+        self.assertEqual(len(got), 1)
+        self.assertNotIn("note", got[0])
+        table = got[0]["table"]
+        formatted = json.dumps(table, ensure_ascii=False)
+        self.assertIn("17.4", formatted)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestMetaOnlyNoteRendersInDom(unittest.TestCase):
+    """sectionBlocks가 note를 돌려줘도 ui.js의 blockEl이 실제로 그리지
+    않으면 죽은 데이터다(이 저장소에서 반복된 "정의만 있고 배선이 없는"
+    사고 유형과 같다) — renderSection을 실제로 실행해 DOM에 문구가
+    나오는지 확인한다.
+    """
+
+    def test_note_text_appears_in_rendered_dom(self):
+        records = TestMetaOnlyRecordsGetNoDataNote._ENKEM_HYSLR_CHG_EMPTY
+        got = run_render_section(
+            '"insider_timeline"', json.dumps(records, ensure_ascii=False)
+        )
+        self.assertIn("해당 기간에 보고된 내역이 없습니다.", got["notes"])
+
+    def test_filled_record_does_not_render_the_note(self):
+        records = TestMetaOnlyRecordsGetNoDataNote._FILLED_HYSLR_CHG
+        got = run_render_section(
+            '"insider_timeline"', json.dumps(records, ensure_ascii=False)
+        )
+        self.assertNotIn("해당 기간에 보고된 내역이 없습니다.", got["notes"])
+
+
 @unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
 class TestInsiderTimelineRenderWiring(unittest.TestCase):
     """sectionBlocks 단독 검증만으로는 renderSection(ui.js) 호출부가 실제로
@@ -3793,10 +3957,14 @@ class TestChartData(unittest.TestCase):
     # 계산한 파생값**을 렌더하는 섹션이다 — financial_ratios는
     # financialRatios(financials)가 만든 구분·기간·지표·값 레코드를 그린다
     # (financials 자체를 그대로 그리지 않는 이유는 위
-    # test_financials_has_no_chart_spec 참고). 서버 레지스트리를 건드리지
-    # 않고도(se_server/ API 계약 무변경 원칙) 이 키가 "오타"로 오인돼
-    # 이 테스트에 걸리지 않도록 명시적으로 허용한다.
-    KNOWN_DERIVED_CHART_KEYS = {"financial_ratios"}
+    # test_financials_has_no_chart_spec 참고). affiliate_timeline은
+    # affiliateOverview(affiliates)가 최초취득일 순으로 재배열한 레코드를
+    # 그린다(SE-4f Task 5) — affiliates 원본 키와 일부러 다른 이름을 써서,
+    # 원본 표(affiliates)의 자동 차트와 이 파생 차트가 같은 키로 겹치지
+    # 않게 한다. 서버 레지스트리를 건드리지 않고도(se_server/ API 계약
+    # 무변경 원칙) 이 키들이 "오타"로 오인돼 이 테스트에 걸리지 않도록
+    # 명시적으로 허용한다.
+    KNOWN_DERIVED_CHART_KEYS = {"financial_ratios", "affiliate_timeline"}
 
     def test_spec_keys_all_exist_in_the_server_registry(self):
         """CHART_SPECS의 섹션 키는 서버가 실제로 주는 키이거나, 위
@@ -4114,6 +4282,267 @@ class TestChartDataForDividendsDebtDisclosures(unittest.TestCase):
         self.assertEqual(len(got), 1)
         self.assertEqual(len(got[0]["table"]["rows"]), 3, "표가 월별로 집계되어 버렸습니다")
         self.assertEqual(len(got[0]["records"]), 3)
+
+
+# ── SE-4f Task 3: 공시 목록 차트 유형별 색상 분류 ────────────────────────
+#
+# task-3-brief.md: "로직을 새로 만들지 마라 — docs/tool/index.html의
+# matchSignals(564행)·AMEND_RE가 이미 있다. 읽어서 맞춘다." 공개 뷰어와
+# SE가 같은 공시를 다르게 분류하면 그 자체가 결함이므로, 아래 테스트는
+# 고정 픽스처가 아니라 **실제** docs/tool/signals-data.json을 읽어
+# 검증한다(그 파일이 나중에 바뀌어도 이 계약이 계속 맞는지 자동으로
+# 지킨다).
+_SIGNALS_DATA_PATH = _ROOT / "docs" / "tool" / "signals-data.json"
+
+
+def run_js_with_real_signals(expression: str):
+    """app.js를 불러오고, 공개 뷰어와 공유하는 실제 signals-data.json을
+    전역 SIGNALS로 얹어 표현식을 평가한다."""
+    script = (
+        f"Object.assign(globalThis, require({json.dumps(str(_APP))}));\n"
+        f"globalThis.SIGNALS = JSON.parse("
+        f"require('fs').readFileSync({json.dumps(str(_SIGNALS_DATA_PATH))}, 'utf-8'));\n"
+        f"process.stdout.write(JSON.stringify({expression}));\n"
+    )
+    out = subprocess.run(
+        [_NODE, "-e", script], capture_output=True, text=True, encoding="utf-8"
+    )
+    if out.returncode != 0:
+        raise AssertionError(f"node 실행 실패:\n{out.stderr}")
+    return json.loads(out.stdout)
+
+
+def call_js(fn_name: str, *json_args) -> object:
+    """fn_name(json_args...)를 JSON 리터럴로 안전하게 호출한다 — 손으로
+    JS 문자열 이스케이프를 쓰지 않아 따옴표·역슬래시 실수를 피한다."""
+    args_src = ", ".join(json.dumps(a, ensure_ascii=False) for a in json_args)
+    return run_js(f"{fn_name}({args_src})")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestClassifyDisclosureCategory(unittest.TestCase):
+    """classifyDisclosureCategory(reportNm, signalsData) — 공시 하나를
+    signals-data.json 기준으로 카테고리 번호(0~8, 0="기타")로 분류한다.
+    docs/tool/index.html의 matchSignals+AMEND_RE와 같은 로직이어야 한다.
+
+    픽스처는 브리프가 요구한 엔켐 실제 공시명이다."""
+
+    def test_matches_a_known_keyword_to_its_signals_data_category(self):
+        got = run_js_with_real_signals(
+            'classifyDisclosureCategory("주요사항보고서(전환사채권발행결정)", SIGNALS)'
+        )
+        self.assertEqual(got, 1, "CB_BW(category 1)로 분류돼야 합니다")
+
+    def test_unclassified_report_falls_back_to_other_category_zero(self):
+        """브리프 실측 예시 — 어떤 신호 키워드에도 걸리지 않는 공시다.
+        분류되지 않는다고 사라지면 안 되고 "기타"(0)로 남아야 한다."""
+        got = run_js_with_real_signals(
+            'classifyDisclosureCategory("타법인주식및출자증권취득결정", SIGNALS)'
+        )
+        self.assertEqual(got, 0)
+
+    def test_second_unclassified_example_also_falls_back(self):
+        got = run_js_with_real_signals(
+            'classifyDisclosureCategory("주요사항보고서(타법인주식및출자증권양도결정)", SIGNALS)'
+        )
+        self.assertEqual(got, 0)
+
+    def test_amendment_disclosure_is_not_classified_like_the_public_viewer(self):
+        """docs/tool/index.html의 buildResult: isAmend면 신호를 아예
+        매기지 않는다(sigs=[]) — "[기재정정]"이 안에 "전환사채"를
+        포함해도 공개 뷰어와 똑같이 기타(0)로 남아야 한다. 되돌리면(정정
+        판정을 빼면) 이 테스트는 1(CB_REPAY 또는 CB_BW)로 실패한다."""
+        got = run_js_with_real_signals(
+            'classifyDisclosureCategory('
+            '"[기재정정]주요사항보고서(자기전환사채매도결정)", SIGNALS)'
+        )
+        self.assertEqual(got, 0)
+
+    def test_matches_public_viewer_logic_for_a_batch_of_real_report_names(self):
+        """docs/tool/index.html의 matchSignals+AMEND_RE를 파이썬으로 그대로
+        재현해, classifyDisclosureCategory의 결과가 공개 뷰어가 매길 첫
+        신호의 category와 일치하는지 배치로 대조한다 — "로직을 새로
+        만들지 마라"를 기계적으로 강제한다."""
+        data = json.loads(_SIGNALS_DATA_PATH.read_text(encoding="utf-8"))
+        amend_re = re.compile(data["amendment_pattern"])
+        samples = [
+            "[기재정정]주요사항보고서(자기전환사채매도결정)",
+            "타법인주식및출자증권취득결정",
+            "주요사항보고서(타법인주식및출자증권양도결정)",
+            "주요사항보고서(전환사채권발행결정)",
+            "최대주주변경",
+            "임원의변동",
+            "조회공시요구(풍문또는보도에대한답변)",
+            "제3자배정유상증자결정",
+        ]
+
+        def public_viewer_category(nm: str) -> int:
+            if amend_re.match(nm):
+                return 0
+            for s in data["signals"]:
+                for kw in s["keywords"]:
+                    if kw and kw in nm:
+                        return s["category"]
+            return 0
+
+        expected = [public_viewer_category(nm) for nm in samples]
+        got = run_js_with_real_signals(
+            json.dumps(samples, ensure_ascii=False)
+            + ".map(function(nm){return classifyDisclosureCategory(nm, SIGNALS);})"
+        )
+        self.assertEqual(got, expected)
+
+    def test_returns_null_when_signals_data_is_unusable(self):
+        """로드 실패(브리프: "로드 실패에 대비하세요")에 대응하는 계약 —
+        null이거나 형태가 예상과 다르면 분류를 포기했다는 신호로 null을
+        돌려준다. 호출자(monthlyCountsByCategory/chartData)가 이 신호로
+        기존 단색 집계로 물러난다."""
+        self.assertIsNone(run_js('classifyDisclosureCategory("x", null)'))
+        self.assertIsNone(run_js('classifyDisclosureCategory("x", {})'))
+        self.assertIsNone(
+            run_js('classifyDisclosureCategory("x", {signals: "not-array"})')
+        )
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestMonthlyCountsByCategory(unittest.TestCase):
+    """monthlyCountsByCategory(rows, dateField, textField, signalsData) —
+    disclosures를 월×카테고리로 묶어 건수만 센다(monthlyCounts와 같은
+    "집계는 여기서 끝난다" 원칙, v0.8.5)."""
+
+    _SMALL_SIGNALS = {
+        "signals": [
+            {"key": "CB_BW", "category": 1, "keywords": ["전환사채권발행결정"]},
+            {"key": "SHAREHOLDER", "category": 3, "keywords": ["최대주주변경"]},
+        ],
+        "categories": {"0": "기타", "1": "CB/채권", "3": "경영권"},
+        "amendment_pattern": r"^\[(?:기재정정|첨부추가|정정)[^\]]*\]\s*",
+    }
+
+    def test_splits_counts_by_month_and_category(self):
+        records = [
+            {"rcept_dt": "20260110", "report_nm": "주요사항보고서(전환사채권발행결정)"},
+            {"rcept_dt": "20260112", "report_nm": "최대주주변경"},
+            {"rcept_dt": "20260115", "report_nm": "타법인주식및출자증권취득결정"},
+            {"rcept_dt": "20260210", "report_nm": "[기재정정]주요사항보고서(자기전환사채매도결정)"},
+        ]
+        got = call_js(
+            "monthlyCountsByCategory", records, "rcept_dt", "report_nm", self._SMALL_SIGNALS
+        )
+        by_month: dict = {}
+        for r in got:
+            by_month.setdefault(r["month"], {})[r["category"]] = r["count"]
+        self.assertEqual(by_month["202601"], {"CB/채권": 1, "경영권": 1, "기타": 1})
+        self.assertEqual(by_month["202602"], {"기타": 1})
+
+    def test_month_totals_match_the_original_record_count(self):
+        """브리프의 핵심 요구: "월별 합계가 원본 건수와 일치해야 합니다."
+        미분류·정정공시를 포함해 어떤 공시도 조용히 빠지면 안 된다."""
+        records = [
+            {"rcept_dt": "20260110", "report_nm": "a"},
+            {"rcept_dt": "20260112", "report_nm": "b"},
+            {"rcept_dt": "20260115", "report_nm": "c"},
+            {"rcept_dt": "20260210", "report_nm": "d"},
+        ]
+        got = call_js(
+            "monthlyCountsByCategory", records, "rcept_dt", "report_nm", self._SMALL_SIGNALS
+        )
+        self.assertEqual(sum(r["count"] for r in got), len(records))
+
+    def test_missing_or_short_dates_are_skipped_not_miscounted(self):
+        """monthlyCounts와 같은 계약 — 월을 특정할 수 없는 값은 0으로
+        채우지 않고 건너뛴다."""
+        records = [
+            {"rcept_dt": None, "report_nm": "a"},
+            {"rcept_dt": "2026", "report_nm": "b"},
+            {"rcept_dt": "20260415", "report_nm": "최대주주변경"},
+        ]
+        got = call_js(
+            "monthlyCountsByCategory", records, "rcept_dt", "report_nm", self._SMALL_SIGNALS
+        )
+        self.assertEqual(got, [{"month": "202604", "category": "경영권", "count": 1}])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestChartDataDisclosuresByType(unittest.TestCase):
+    """chartData(records, CHART_SPECS.disclosures, signalsData) — 공시
+    목록 월별 막대를 유형별로 쌓아 올리는 계약. 3번째 인자를 생략하거나
+    (기존 호출부) 못 쓸 형태면 기존 단색 막대로 물러난다(브리프: "로드
+    실패에 대비하세요"). signalsData는 순수 함수의 인자일 뿐이라(브리프:
+    "순수 함수는 분류 데이터를 인자로 받아 순수하게 유지") chartData
+    자체는 여전히 같은 입력에 같은 출력을 낸다."""
+
+    _RECORDS = [
+        {"rcept_no": 1, "rcept_dt": "20260110", "report_nm": "주요사항보고서(전환사채권발행결정)"},
+        {"rcept_no": 2, "rcept_dt": "20260112", "report_nm": "최대주주변경"},
+        {"rcept_no": 3, "rcept_dt": "20260115", "report_nm": "타법인주식및출자증권취득결정"},
+        {"rcept_no": 4, "rcept_dt": "20260210", "report_nm": "[기재정정]주요사항보고서(자기전환사채매도결정)"},
+        {"rcept_no": 5, "rcept_dt": "20260212", "report_nm": "주요사항보고서(타법인주식및출자증권양도결정)"},
+    ]
+
+    def test_without_signals_data_falls_back_to_a_single_solid_series(self):
+        """기존 호출부(2-인자)와 완전히 같은 동작을 유지해야 한다 — 이
+        저장소에서 결함이 초록으로 통과한 전례가 있어(브리프) 회귀
+        방지로 명시적으로 남긴다."""
+        got = run_js(
+            f"chartData({json.dumps(self._RECORDS, ensure_ascii=False)}, "
+            f"CHART_SPECS.disclosures)"
+        )
+        self.assertEqual([d["label"] for d in got["datasets"]], ["건수"])
+        self.assertEqual(sum(got["datasets"][0]["data"]), len(self._RECORDS))
+
+    def test_malformed_signals_data_also_falls_back_gracefully(self):
+        """null뿐 아니라 형태가 깨진 값(예: signals 배열이 없음)에도
+        화면이 죽지 않고 기존 단색 막대로 물러나야 한다."""
+        got = run_js(
+            f"chartData({json.dumps(self._RECORDS, ensure_ascii=False)}, "
+            f"CHART_SPECS.disclosures, {{}})"
+        )
+        self.assertEqual([d["label"] for d in got["datasets"]], ["건수"])
+
+    def test_with_real_signals_data_splits_into_type_stacked_series(self):
+        got = run_js_with_real_signals(
+            f"chartData({json.dumps(self._RECORDS, ensure_ascii=False)}, "
+            f"CHART_SPECS.disclosures, SIGNALS)"
+        )
+        self.assertIsNotNone(got)
+        labels = [d["label"] for d in got["datasets"]]
+        self.assertIn("기타", labels, "미분류 공시가 조용히 사라졌습니다")
+        self.assertGreater(len(labels), 1, "유형이 하나로만 나와 색 구분의 의미가 없습니다")
+
+    def test_monthly_stacked_sum_matches_the_original_disclosure_count_per_month(self):
+        """브리프의 핵심 요구: "월별 합계가 원본 건수와 일치해야 합니다."
+        엔켐 145건이면 145여야 한다는 요구를 축소판(5건, 2개월)으로
+        검증한다."""
+        got = run_js_with_real_signals(
+            f"chartData({json.dumps(self._RECORDS, ensure_ascii=False)}, "
+            f"CHART_SPECS.disclosures, SIGNALS)"
+        )
+        per_month_total = [0] * len(got["labels"])
+        for ds in got["datasets"]:
+            for i, v in enumerate(ds["data"]):
+                if v is not None:
+                    per_month_total[i] += v
+        self.assertEqual(got["labels"], ["2026.01", "2026.02"])
+        self.assertEqual(per_month_total, [3, 2])
+        self.assertEqual(sum(per_month_total), len(self._RECORDS))
+
+    def test_amendment_disclosure_is_counted_under_other_not_dropped(self):
+        """브리프 실측 예시 — 정정공시가 조용히 사라지지 않고 "기타"
+        막대에 포함돼야 한다."""
+        got = run_js_with_real_signals(
+            f"chartData({json.dumps(self._RECORDS, ensure_ascii=False)}, "
+            f"CHART_SPECS.disclosures, SIGNALS)"
+        )
+        other_ds = next(d for d in got["datasets"] if d["label"] == "기타")
+        feb_idx = got["labels"].index("2026.02")
+        self.assertIsNotNone(other_ds["data"][feb_idx])
+        self.assertGreaterEqual(other_ds["data"][feb_idx], 1)
+
+    def test_chart_spec_declares_stacking(self):
+        """renderChart(ui.js)가 Chart.js scales.x/y.stacked로 그대로 옮길
+        플래그다 — spec에 없으면 렌더 경로가 읽을 값 자체가 없다."""
+        self.assertTrue(run_js("!!CHART_SPECS.disclosures.stacked"))
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
@@ -4479,6 +4908,38 @@ const sameRoundChart = CHART_CALLS[CHART_CALLS.length - 1];
 const sameRoundTable = findTable(ELEMENTS["sec-fund_usage"]);
 const sameRoundTableRows = sameRoundTable ? tableRowTexts(sameRoundTable) : [];
 
+// L) disclosures — SIGNALS_DATA(신호 분류 데이터, SE-4f Task 3)가 있으면
+//    renderSection이 실제로 그 값을 renderChart까지 배선해 월별 막대가
+//    유형별로 쌓여야 한다. 정의만 있고 호출부가 없는 사고가 이 저장소에서
+//    다섯 번 났다(TestPanelsAreWiredAndReachable 등) — 문자열 검사가
+//    아니라 실제 렌더 결과로 확인한다.
+//
+//    SIGNALS_DATA는 ui.js 최상위 `let` 선언이라 sandbox 객체 프로퍼티로는
+//    안 보인다(vm 렉시컬 환경 특성 — 함수 선언과 달리 let/const는 전역
+//    객체에 반영되지 않는다). 같은 컨텍스트에서 대입문만 담은 별도
+//    vm.Script를 돌려 그 바인딩 자체를 바꾼다.
+new vm.Script(
+  "SIGNALS_DATA = " + JSON.stringify({
+    signals: [
+      { key: "CB_BW", label: "CB/BW발행", keywords: ["전환사채권발행결정"], category: 1 },
+      { key: "SHAREHOLDER", label: "최대주주변경", keywords: ["최대주주변경"], category: 3 },
+    ],
+    categories: { "0": "기타", "1": "CB/채권", "3": "경영권" },
+    amendment_pattern: "^\\[(?:기재정정|첨부추가|정정)[^\\]]*\\]\\s*",
+  }) + ";",
+  { filename: "inject-signals-data.js" }
+).runInContext(sandbox);
+
+const chartCountBeforeL = CHART_CALLS.length;
+sandbox.renderSection("disclosures", [
+  { rcept_no: 10, rcept_dt: "20260110", report_nm: "주요사항보고서(전환사채권발행결정)" },
+  { rcept_no: 11, rcept_dt: "20260112", report_nm: "최대주주변경" },
+  { rcept_no: 12, rcept_dt: "20260115", report_nm: "타법인주식및출자증권취득결정" },
+  { rcept_no: 13, rcept_dt: "20260210", report_nm: "[기재정정]주요사항보고서(자기전환사채매도결정)" },
+]);
+const chartCountAfterL = CHART_CALLS.length;
+const byTypeChart = chartCountAfterL > chartCountBeforeL ? CHART_CALLS[CHART_CALLS.length - 1] : null;
+
 function findIndex(tags, tag) {
   for (let i = 0; i < tags.length; i++) if (tags[i].tag === tag) return i;
   return -1;
@@ -4538,6 +4999,17 @@ process.stdout.write(JSON.stringify({
     return d.label === "실제 집행 금액";
   }).data,
   sameRoundTableRows: sameRoundTableRows,
+  chartCountBeforeL: chartCountBeforeL,
+  chartCountAfterL: chartCountAfterL,
+  byTypeLabels: byTypeChart ? byTypeChart.data.labels : null,
+  byTypeDatasetLabels: byTypeChart
+    ? byTypeChart.data.datasets.map(function (d) { return d.label; }) : null,
+  byTypeDatasetData: byTypeChart
+    ? byTypeChart.data.datasets.map(function (d) { return d.data; }) : null,
+  byTypeColors: byTypeChart
+    ? byTypeChart.data.datasets.map(function (d) { return d.backgroundColor; }) : null,
+  byTypeXStacked: byTypeChart ? byTypeChart.options.scales.x.stacked : null,
+  byTypeYStacked: byTypeChart ? byTypeChart.options.scales.y.stacked : null,
 }));
 """
 
@@ -4862,6 +5334,36 @@ class TestChartRenderExecution(unittest.TestCase):
         self.assertEqual(got["disclosuresLabels"], ["2026.04", "2026.05"])
         self.assertEqual(got["disclosuresData"], [2, 1])
 
+    def test_disclosures_chart_splits_into_type_stacked_series_when_signals_data_is_set(self):
+        """SE-4f Task 3: SIGNALS_DATA가 채워져 있으면 renderSection이 실제로
+        그 값을 renderChart까지 배선해, 월별 막대가 (CB/채권·경영권·기타)
+        유형별로 갈라져야 한다 — 정의만 있고 호출부가 없는 사고(이 저장소
+        다섯 번째)를 실제 렌더 결과로 잡는다."""
+        got = run_chart_render()
+        self.assertEqual(got["chartCountAfterL"] - got["chartCountBeforeL"], 1,
+                         "disclosures 유형별 차트가 실제 렌더 경로에서 생기지 않았습니다")
+        self.assertEqual(got["byTypeLabels"], ["2026.01", "2026.02"])
+        labels = got["byTypeDatasetLabels"]
+        self.assertIn("기타", labels, "미분류/정정 공시가 조용히 사라졌습니다")
+        self.assertGreater(len(labels), 1, "유형이 하나로만 나와 색 구분의 의미가 없습니다")
+        # 월별 합계가 원본 건수(1월 3건, 2월 1건)와 일치해야 한다(브리프).
+        totals = [0, 0]
+        for data in got["byTypeDatasetData"]:
+            for i, v in enumerate(data):
+                if v is not None:
+                    totals[i] += v
+        self.assertEqual(totals, [3, 1])
+
+    def test_disclosures_chart_uses_stacked_scales_and_distinct_non_verdict_colors(self):
+        got = run_chart_render()
+        self.assertTrue(got["byTypeXStacked"], "x축이 stacked로 설정되지 않았습니다")
+        self.assertTrue(got["byTypeYStacked"], "y축이 stacked로 설정되지 않았습니다")
+        colors = got["byTypeColors"]
+        self.assertEqual(len(colors), len(set(colors)), "유형별 계열 색이 구분되지 않습니다")
+        for c in colors:
+            self.assertNotIn(c, ("#e0564a", "#b3261e"),
+                             "차트 계열 색이 판정 색(--red)과 같습니다")
+
     def test_canvas_has_an_accessible_role_and_label(self):
         """리뷰 지적 ⑤: canvas 안의 그림은 스크린 리더가 읽지 못한다 —
         role="img" + aria-label로 최소한 무슨 차트인지는 전달해야 한다."""
@@ -5075,6 +5577,508 @@ class TestFinancialRatios(unittest.TestCase):
         got = _json.dumps(run_js(f"financialRatios({self._CFS})"), ensure_ascii=False)
         for word in ("악화", "개선", "위험", "주의", "양호", "부실"):
             self.assertNotIn(word, got, f"판정 어휘 '{word}'")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestDividendVsIncome(unittest.TestCase):
+    """SE-4f Task 4 — dividends(alotMatter)의 se 항목 중 이미 같은 백만원
+    단위로 나란히 있는 "현금배당금총액"과 "당기순이익"을 사업연도·
+    보고서구분별로 묶는다(task-4-brief.md: "섹션 간 조인이 필요 없습니다").
+    실측(2026-07-28, 삼성전자 corp_code=00126380, rcept_no=20250311001085,
+    bsns_year=2024, reprt_code=11011)과 같은 se 문자열·값을 그대로 쓴다 —
+    "픽스처는 실제 API 응답 형태로"(브리프 검증 요구).
+    """
+
+    _SAMSUNG_2024 = [
+        {"bsns_year": "2024", "reprt_code": "11011", "se": "주당액면가액(원)",
+         "thstrm": "100"},
+        {"bsns_year": "2024", "reprt_code": "11011", "se": "현금배당금총액(백만원)",
+         "thstrm": "9,810,767"},
+        {"bsns_year": "2024", "reprt_code": "11011", "se": "(연결)당기순이익(백만원)",
+         "thstrm": "33,621,363"},
+        {"bsns_year": "2024", "reprt_code": "11011", "se": "(별도)당기순이익(백만원)",
+         "thstrm": "23,582,565"},
+        {"bsns_year": "2024", "reprt_code": "11011", "se": "주식배당금총액(백만원)",
+         "thstrm": "-"},
+        {"bsns_year": "2024", "reprt_code": "11011", "se": "(연결)현금배당성향(%)",
+         "thstrm": "29.20"},
+    ]
+
+    def test_pairs_dividend_and_net_income_for_same_report(self):
+        got = run_js(f"dividendVsIncome({json.dumps(self._SAMSUNG_2024, ensure_ascii=False)})")
+        self.assertEqual(len(got), 1)
+        row = got[0]
+        self.assertEqual(row["bsns_year"], "2024")
+        self.assertEqual(row["reprt_code"], "11011")
+        self.assertEqual(row["현금배당금총액(백만원)"], 9810767)
+        self.assertEqual(row["(연결)당기순이익(백만원)"], 33621363)
+        self.assertEqual(row["(별도)당기순이익(백만원)"], 23582565)
+
+    def test_dash_value_is_null_not_zero(self):
+        """"주식배당금총액"이 "-"(DART 무값 표기)이면 0이 아니라 null이어야
+        한다 — 0으로 채우면 "실제로 0이었다"는 거짓말이 된다(numeric() 주석
+        원칙과 같다)."""
+        got = run_js(f"dividendVsIncome({json.dumps(self._SAMSUNG_2024, ensure_ascii=False)})")
+        self.assertIsNone(got[0]["주식배당금총액(백만원)"])
+
+    def test_percent_field_is_kept_as_number(self):
+        got = run_js(f"dividendVsIncome({json.dumps(self._SAMSUNG_2024, ensure_ascii=False)})")
+        self.assertAlmostEqual(got[0]["(연결)현금배당성향(%)"], 29.2, places=1)
+
+    def test_no_dividend_record_produces_no_row(self):
+        """엔켐처럼 현금배당금총액이 "-"인 회사는 이 비교가 발화하지 않는다
+        (브리프: "엔켐은 배당이 없습니다 … 배당하는 회사를 직접 찾아 확인").
+        빈 배열이지 숨기는 게 아니라 비교할 배당액 자체가 없는 것이다."""
+        records = [
+            {"bsns_year": "2025", "reprt_code": "11011", "se": "현금배당금총액(백만원)",
+             "thstrm": "-"},
+            {"bsns_year": "2025", "reprt_code": "11011", "se": "(연결)당기순이익(백만원)",
+             "thstrm": "-142,974"},
+        ]
+        got = run_js(f"dividendVsIncome({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(got, [])
+
+    def test_separates_rows_by_report_code_within_same_year(self):
+        """같은 사업연도라도 분기 보고서마다 다른 보고이므로 한 행으로
+        뭉치지 않는다(dividends는 fund_usage와 달리 reprt_code가 정규화
+        과정에서 탈락하지 않는다 — 위 CHART_SPECS.dividends 주석 참고)."""
+        records = [
+            {"bsns_year": "2025", "reprt_code": "11013", "se": "현금배당금총액(백만원)",
+             "thstrm": "1,000,000"},
+            {"bsns_year": "2025", "reprt_code": "11013", "se": "(연결)당기순이익(백만원)",
+             "thstrm": "5,000,000"},
+            {"bsns_year": "2025", "reprt_code": "11011", "se": "현금배당금총액(백만원)",
+             "thstrm": "2,000,000"},
+            {"bsns_year": "2025", "reprt_code": "11011", "se": "(연결)당기순이익(백만원)",
+             "thstrm": "9,000,000"},
+        ]
+        got = run_js(f"dividendVsIncome({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(len(got), 2)
+        by_reprt = {r["reprt_code"]: r for r in got}
+        self.assertEqual(by_reprt["11013"]["현금배당금총액(백만원)"], 1000000)
+        self.assertEqual(by_reprt["11011"]["현금배당금총액(백만원)"], 2000000)
+
+    def test_annual_and_half_year_reports_both_survive_same_bsns_year(self):
+        """최종 리뷰 지적 ② — 그룹 키에서 reprt_code를 빼는 뮤테이션에
+        대한 회귀 방어. 삼성전자 2025년은 11011(사업보고서, 연간
+        11,107,906백만원)과 11012(반기보고서, 4,901,077백만원)가 같은
+        bsns_year 안에 함께 온다(브리프 지적 실측 패턴) — 키가
+        (bsns_year, reprt_code) 두 축이 아니라 bsns_year 하나로만
+        무너지면 두 보고가 한 행으로 뭉개져 연간값이 반기값에 조용히
+        덮인다. 이 테스트는 두 행이 모두 살아남고 각자의 값을 갖는지
+        직접 확인한다."""
+        records = [
+            {"bsns_year": "2025", "reprt_code": "11011", "se": "현금배당금총액(백만원)",
+             "thstrm": "11,107,906"},
+            {"bsns_year": "2025", "reprt_code": "11011", "se": "(연결)당기순이익(백만원)",
+             "thstrm": "40,000,000"},
+            {"bsns_year": "2025", "reprt_code": "11012", "se": "현금배당금총액(백만원)",
+             "thstrm": "4,901,077"},
+            {"bsns_year": "2025", "reprt_code": "11012", "se": "(연결)당기순이익(백만원)",
+             "thstrm": "18,000,000"},
+        ]
+        got = run_js(f"dividendVsIncome({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(len(got), 2, "연간(11011)·반기(11012) 두 보고가 한 행으로 뭉개졌습니다")
+        by_reprt = {r["reprt_code"]: r for r in got}
+        self.assertEqual(by_reprt["11011"]["현금배당금총액(백만원)"], 11107906)
+        self.assertEqual(by_reprt["11012"]["현금배당금총액(백만원)"], 4901077,
+                          "반기(11012) 값이 연간(11011) 값에 덮였습니다")
+
+    def test_not_an_array_returns_empty(self):
+        self.assertEqual(run_js("dividendVsIncome(null)"), [])
+        self.assertEqual(run_js("dividendVsIncome({})"), [])
+
+    def test_no_verdict_words(self):
+        import json as _json
+        got = _json.dumps(
+            run_js(f"dividendVsIncome({json.dumps(self._SAMSUNG_2024, ensure_ascii=False)})"),
+            ensure_ascii=False,
+        )
+        for word in ("부족", "부적절", "의심", "위험", "과다", "여력"):
+            self.assertNotIn(word, got, f"판정 어휘 '{word}'")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestDividendVsIncomeRenderWiring(unittest.TestCase):
+    """dividendVsIncome이 정의만 있고 renderSection이 부르지 않는 사고를
+    막는다 — "정의만 있고 부르는 곳이 없다"는 이 저장소에서 이미 다섯 번
+    난 사고 유형이다(브리프 참고). sectionBlocks 단독 검증으로는 이
+    호출부 배선 누락을 못 잡는다."""
+
+    _RECORDS = [
+        {"bsns_year": "2024", "reprt_code": "11011", "se": "현금배당금총액(백만원)",
+         "thstrm": "9,810,767"},
+        {"bsns_year": "2024", "reprt_code": "11011", "se": "(연결)당기순이익(백만원)",
+         "thstrm": "33,621,363"},
+    ]
+
+    def test_derived_block_title_is_rendered(self):
+        got = run_render_section('"dividends"', json.dumps(self._RECORDS, ensure_ascii=False))
+        self.assertIn("배당 vs 당기순이익 (사실 비교)", got["titles"])
+
+    def test_formatted_amounts_appear_in_cells(self):
+        got = run_render_section('"dividends"', json.dumps(self._RECORDS, ensure_ascii=False))
+        cells = got["cells"]
+        self.assertIn("9,810,767", cells)
+        self.assertIn("33,621,363", cells)
+
+    def test_original_table_is_not_removed(self):
+        """새 표기는 표 위에 얹는 것이지 원본 표를 지우는 게 아니다
+        (전역 제약: "표를 없애지 않습니다")."""
+        got = run_render_section('"dividends"', json.dumps(self._RECORDS, ensure_ascii=False))
+        cells = got["cells"]
+        self.assertIn("현금배당금총액(백만원)", cells)  # 원본 표의 se 열 값
+
+    def test_no_block_when_no_dividend(self):
+        records = [{"bsns_year": "2025", "reprt_code": "11011", "se": "현금배당금총액(백만원)",
+                    "thstrm": "-"}]
+        got = run_render_section('"dividends"', json.dumps(records, ensure_ascii=False))
+        self.assertNotIn("배당 vs 당기순이익 (사실 비교)", got["titles"])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFundPlanChanges(unittest.TestCase):
+    """SE-4f Task 7 — 같은 조달 건(같은 pay_de·같은 plan_useprps)의
+    계획 금액(plan_amount)이 보고 시점마다 다르게 보고된 사실을 뽑는다
+    (task-7-brief.md). 2026-07-28 엔켐 실측(corp_code=01011526,
+    bsns_year=2022, pssrpCptalUseDtls.json, pay_de=2021.10.26)을 그대로
+    쓴다: 1분기 보고(11013)는 운영자금 계획 342.91억(34,291,000,000),
+    반기(11012)·3분기(11014)·사업보고서(11011)는 352.91억(35,291,000,000)
+    이었다 — 브리프가 말한 그 값 그대로다."""
+
+    def test_detects_differing_plan_amount_for_same_fund_event(self):
+        records = [
+            {"kind": "public", "year": 2022, "pay_de": "2021.10.26",
+             "plan_useprps": "운영자금", "plan_amount": "34,291,000,000"},
+            {"kind": "public", "year": 2022, "pay_de": "2021.10.26",
+             "plan_useprps": "운영자금", "plan_amount": "35,291,000,000"},
+        ]
+        got = run_js(f"fundPlanChanges({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(len(got), 1)
+        change = got[0]
+        self.assertEqual(change["pay_de"], "2021.10.26")
+        self.assertEqual(change["plan_useprps"], "운영자금")
+        self.assertEqual(change["amounts"], [34291000000, 35291000000])
+
+    def test_identical_repeated_amount_is_not_a_change(self):
+        """엔켐 사업보고서(11011) 실측처럼 같은 건이 두 번 중복 수집돼도
+        값 자체가 같으면 계획이 바뀐 게 아니다(리뷰 지적: 반복 수집 자체는
+        오류가 아니다 — 위 fund_usage 안내문과 같은 원칙)."""
+        records = [
+            {"kind": "public", "year": 2022, "pay_de": "2021.10.26",
+             "plan_useprps": "시설자금", "plan_amount": "13,082,000,000"},
+            {"kind": "public", "year": 2022, "pay_de": "2021.10.26",
+             "plan_useprps": "시설자금", "plan_amount": "13,082,000,000"},
+        ]
+        got = run_js(f"fundPlanChanges({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(got, [])
+
+    def test_different_purpose_is_not_grouped_together(self):
+        records = [
+            {"kind": "public", "year": 2022, "pay_de": "2021.10.26",
+             "plan_useprps": "운영자금", "plan_amount": "34,291,000,000"},
+            {"kind": "public", "year": 2022, "pay_de": "2021.10.26",
+             "plan_useprps": "기타", "plan_amount": "47,657,000,000"},
+        ]
+        got = run_js(f"fundPlanChanges({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(got, [])
+
+    def test_different_pay_de_is_not_grouped_together(self):
+        records = [
+            {"kind": "public", "year": 2021, "pay_de": "2021.10.26",
+             "plan_useprps": "운영자금", "plan_amount": "34,291,000,000"},
+            {"kind": "public", "year": 2022, "pay_de": "2022.05.01",
+             "plan_useprps": "운영자금", "plan_amount": "35,291,000,000"},
+        ]
+        got = run_js(f"fundPlanChanges({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(got, [])
+
+    def test_records_missing_pay_de_or_purpose_are_skipped(self):
+        records = [
+            {"kind": "public", "year": 2022, "pay_de": "", "plan_useprps": "운영자금",
+             "plan_amount": "1"},
+            {"kind": "public", "year": 2022, "pay_de": "2021.10.26", "plan_useprps": "",
+             "plan_amount": "2"},
+        ]
+        got = run_js(f"fundPlanChanges({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(got, [])
+
+    def test_not_an_array_returns_empty(self):
+        self.assertEqual(run_js("fundPlanChanges(null)"), [])
+        self.assertEqual(run_js("fundPlanChanges({})"), [])
+
+    def test_no_verdict_words(self):
+        import json as _json
+        records = [
+            {"kind": "public", "year": 2022, "pay_de": "2021.10.26",
+             "plan_useprps": "운영자금", "plan_amount": "34,291,000,000"},
+            {"kind": "public", "year": 2022, "pay_de": "2021.10.26",
+             "plan_useprps": "운영자금", "plan_amount": "35,291,000,000"},
+        ]
+        got = _json.dumps(
+            run_js(f"fundPlanChanges({json.dumps(records, ensure_ascii=False)})"),
+            ensure_ascii=False,
+        )
+        for word in ("의심", "유용", "부정", "위험"):
+            self.assertNotIn(word, got, f"판정 어휘 '{word}'")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestFundPlanChangesRenderWiring(unittest.TestCase):
+    """fundPlanChanges가 정의만 있고 renderSection이 부르지 않는 사고를
+    막는다(위 TestDividendVsIncomeRenderWiring과 같은 이유)."""
+
+    _RECORDS = [
+        {"kind": "public", "year": 2022, "tm": "-", "pay_de": "2021.10.26",
+         "pay_amount": None, "plan_useprps": "운영자금", "plan_amount": "34,291,000,000",
+         "real_dtls_cn": "", "real_dtls_amount": None, "dffrnc_resn": "", "flags": []},
+        {"kind": "public", "year": 2022, "tm": "-", "pay_de": "2021.10.26",
+         "pay_amount": None, "plan_useprps": "운영자금", "plan_amount": "35,291,000,000",
+         "real_dtls_cn": "", "real_dtls_amount": None, "dffrnc_resn": "", "flags": []},
+    ]
+
+    def test_derived_block_title_is_rendered(self):
+        got = run_render_section('"fund_usage"', json.dumps(self._RECORDS, ensure_ascii=False))
+        self.assertIn("계획 금액 변경 (사실 표기)", got["titles"])
+
+    def test_both_amounts_appear_formatted(self):
+        got = run_render_section('"fund_usage"', json.dumps(self._RECORDS, ensure_ascii=False))
+        cells = " ".join(got["cells"])
+        self.assertIn("342.9억", cells)
+        self.assertIn("352.9억", cells)
+
+    def test_existing_note_and_table_are_not_removed(self):
+        """새 표기는 표 위에 얹는 것 — 기존 fund_usage 안내문과 원본 표
+        (전역 제약: "표를 없애지 않습니다")를 지우지 않는다."""
+        got = run_render_section('"fund_usage"', json.dumps(self._RECORDS, ensure_ascii=False))
+        notes = " ".join(got["notes"])
+        self.assertIn("같은 회차가 여러 행으로 나오는 것은 오류가 아닙니다", notes)
+        self.assertIn("운영자금", got["cells"])  # 원본 표의 plan_useprps 열 값
+
+    def test_no_block_when_amounts_identical(self):
+        records = [
+            {"kind": "public", "year": 2022, "pay_de": "2021.10.26",
+             "plan_useprps": "시설자금", "plan_amount": "13,082,000,000", "flags": []},
+        ]
+        got = run_render_section('"fund_usage"', json.dumps(records, ensure_ascii=False))
+        self.assertNotIn("계획 금액 변경 (사실 표기)", got["titles"])
+
+
+# ── SE-4f Task 5: 타법인 출자 — 피투자사 정보 + 최초취득일 순 시각화 ─────
+#
+# 픽스처는 실제 API 응답 형태다: ENCHEM_POLAND·DFD_YANGFU·PT_INDONESIA
+# 세 레코드는 2026-07-28 엔켐(corp_code=01011526) get_affiliate_investments
+# 실측 응답의 기말지분율·기말장부가액·최초취득일·피투자사 당기순이익을
+# 그대로 쓴다(예: Enchem Poland Sp. z o.o. 기말장부가액 2,004,000,000·
+# 당기순이익 -10,534,000,000). 피투자사 총자산(recent_bsns_year_fnnr_sttus_
+# tot_assets)은 task-5-brief.md가 제시한 같은 회사 실측 화면값(479.7억·
+# 2679.9억·266.1억)에서 역산했다 — 세 값 모두 formatAmount로 다시 억 단위로
+# 바꾸면 브리프의 화면 표기와 정확히 일치한다(교차 검증됨). bsis_blce_
+# acntbk_amount(기초 장부가액)만 실측 원문에 없어 대표값을 썼다 — 두 계열
+# (기초/기말) 렌더 메커니즘 자체를 확인하는 용도이지 특정 회사의 기초
+# 장부가액을 주장하는 게 아니다.
+_ENCHEM_POLAND = {
+    "inv_prm": "Enchem Poland Sp. z o.o.", "invstmnt_purps": "경영참여",
+    "frst_acqs_de": "2018.05.07", "bsis_blce_qy": "131,705",
+    "bsis_blce_qota_rt": 100.0, "bsis_blce_acntbk_amount": 1800000000,
+    "trmend_blce_qy": "131,705", "trmend_blce_qota_rt": 100.0,
+    "trmend_blce_acntbk_amount": 2004000000,
+    "recent_bsns_year_fnnr_sttus_tot_assets": 47970000000,
+    "recent_bsns_year_fnnr_sttus_thstrm_ntpf": -10534000000,
+}
+_DFD_YANGFU = {
+    "inv_prm": "DFD Yangfu New Materials Co.,Ld", "invstmnt_purps": "일반투자",
+    "frst_acqs_de": "2022.07.30", "bsis_blce_qota_rt": 15.0,
+    "bsis_blce_acntbk_amount": 60000000000, "trmend_blce_qota_rt": 15.0,
+    "trmend_blce_acntbk_amount": 63481000000,
+    "recent_bsns_year_fnnr_sttus_tot_assets": 267990000000,
+    "recent_bsns_year_fnnr_sttus_thstrm_ntpf": 5148000000,
+}
+_PT_INDONESIA = {
+    "inv_prm": "PT Enchem Elyte Indonesia", "invstmnt_purps": "경영참여",
+    "frst_acqs_de": "2022.08.31", "bsis_blce_qota_rt": 99.17,
+    "bsis_blce_acntbk_amount": 12500000000, "trmend_blce_qota_rt": 99.17,
+    "trmend_blce_acntbk_amount": 12017000000,
+    "recent_bsns_year_fnnr_sttus_tot_assets": 26610000000,
+    "recent_bsns_year_fnnr_sttus_thstrm_ntpf": -1412000000,
+}
+# 동률(같은 최초취득일) 실측 — 엔켐 2026-07-28 응답에서 두 조합 모두
+# frst_acqs_de="2025.09.25"(점 구분 문자열, DART 실측 형태 그대로)다.
+# 장부가액은 실측값 그대로.
+_GOLDENVALUE_3 = {
+    "inv_prm": "골든밸류 제3호 신기술조합", "invstmnt_purps": "일반투자",
+    "frst_acqs_de": "2025.09.25", "trmend_blce_qota_rt": 60.29,
+    "trmend_blce_acntbk_amount": 41442000000,
+}
+_GOLDENVALUE_4 = {
+    "inv_prm": "골든밸류 제4호 신기술조합", "invstmnt_purps": "일반투자",
+    "frst_acqs_de": "2025.09.25", "trmend_blce_qota_rt": 48.32,
+    "trmend_blce_acntbk_amount": 7011000000,
+}
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestAffiliateOverview(unittest.TestCase):
+    """SE-4f Task 5 — affiliates(타법인 출자현황) 레코드를 최초취득일
+    (frst_acqs_de) 오름차순으로 재배열한다(task-5-brief.md)."""
+
+    def test_sorts_by_first_acquisition_date_ascending(self):
+        # 입력 순서를 일부러 뒤섞는다 — 정렬이 실제로 동작하는지 확인한다.
+        records = [_DFD_YANGFU, _PT_INDONESIA, _ENCHEM_POLAND]
+        got = run_js(f"affiliateOverview({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(
+            [r["inv_prm"] for r in got],
+            ["Enchem Poland Sp. z o.o.", "DFD Yangfu New Materials Co.,Ld",
+             "PT Enchem Elyte Indonesia"],
+        )
+
+    def test_reversed_input_still_comes_out_in_ascending_date_order(self):
+        """최종 리뷰 지적 ① — 이미 정렬된(또는 우연히 맞는) 입력으로는 정렬
+        로직이 죽어도 통과한다(numeric()이 "2018.05.07"처럼 점 섞인 실측
+        날짜를 전부 null로 읽어 원래 순서를 그대로 돌려줘도, 입력이 우연히
+        날짜순이면 출력도 우연히 날짜순으로 보인다). 입력을 시간 역순으로
+        완전히 뒤집어 넣어도 여전히 최초취득일 오름차순으로 나오는지
+        확인해야 정렬이 실제로 일어났다고 말할 수 있다."""
+        records = [_PT_INDONESIA, _DFD_YANGFU, _ENCHEM_POLAND]  # 최신 → 과거
+        got = run_js(f"affiliateOverview({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(
+            [r["inv_prm"] for r in got],
+            ["Enchem Poland Sp. z o.o.", "DFD Yangfu New Materials Co.,Ld",
+             "PT Enchem Elyte Indonesia"],
+            "입력을 시간 역순으로 뒤집었는데도 최초취득일 오름차순이 아닙니다 "
+            "— 정렬 키(axisSortKey)가 실제로 동작하지 않고 있을 수 있습니다",
+        )
+
+    def test_records_without_date_go_last_keeping_relative_order(self):
+        no_date_a = {"inv_prm": "무취득일A"}
+        no_date_b = {"inv_prm": "무취득일B"}
+        records = [no_date_a, _ENCHEM_POLAND, no_date_b]
+        got = run_js(f"affiliateOverview({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(
+            [r["inv_prm"] for r in got],
+            ["Enchem Poland Sp. z o.o.", "무취득일A", "무취득일B"],
+            "취득일이 없는 레코드가 지어낸 순서로 끼어들었거나 서로 순서가 바뀌었습니다",
+        )
+
+    def test_dash_date_goes_last(self):
+        """DART 실측 응답에서 최초취득일이 없으면 "-"(하이픈 문자열)로
+        온다 — 필드 자체가 없는 경우와 별도로, 이 형태도 뒤로 가는지
+        확인한다(axisSortKey("-") → 숫자 없음 → null)."""
+        dash_date = {"inv_prm": "취득일하이픈", "frst_acqs_de": "-"}
+        records = [dash_date, _ENCHEM_POLAND]
+        got = run_js(f"affiliateOverview({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(
+            [r["inv_prm"] for r in got],
+            ["Enchem Poland Sp. z o.o.", "취득일하이픈"],
+        )
+
+    def test_tied_dates_keep_original_relative_order(self):
+        """어느 쪽이 "먼저"인지 원본에 없는 정보이므로 지어내지 않는다
+        (위 _GOLDENVALUE_3/4 주석 참고)."""
+        records = [_GOLDENVALUE_3, _GOLDENVALUE_4]
+        got = run_js(f"affiliateOverview({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual([r["inv_prm"] for r in got],
+                         ["골든밸류 제3호 신기술조합", "골든밸류 제4호 신기술조합"])
+
+    def test_records_without_inv_prm_are_dropped(self):
+        records = [{"frst_acqs_de": 20200101}, _ENCHEM_POLAND, {"inv_prm": ""}]
+        got = run_js(f"affiliateOverview({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["inv_prm"], "Enchem Poland Sp. z o.o.")
+
+    def test_not_an_array_returns_empty(self):
+        self.assertEqual(run_js("affiliateOverview(null)"), [])
+        self.assertEqual(run_js("affiliateOverview({})"), [])
+
+    def test_records_are_returned_unmodified(self):
+        """순서만 바꾼다 — 표·차트가 나머지 열(예: recent_bsns_year_fnnr_sttus_
+        tot_assets)도 그대로 쓸 수 있어야 한다."""
+        got = run_js(f"affiliateOverview({json.dumps([_DFD_YANGFU], ensure_ascii=False)})")
+        self.assertEqual(got[0]["recent_bsns_year_fnnr_sttus_tot_assets"], 267990000000)
+        self.assertEqual(got[0]["invstmnt_purps"], "일반투자")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestAffiliateTimelineChartSpec(unittest.TestCase):
+    """CHART_SPECS.affiliate_timeline — affiliateOverview가 정렬한 순서를
+    chartData가 다시 흩트리지 않는지, 기초→기말 장부가액 두 계열이 모두
+    나오는지 확인한다."""
+
+    def test_x_axis_order_matches_the_pre_sorted_records_not_alphabetical(self):
+        """세 회사명 모두 숫자를 포함하지 않으므로(위 CHART_SPECS.
+        affiliate_timeline 주석 참고) chartData가 재정렬하지 않고
+        affiliateOverview가 만든 등장 순서를 그대로 보존해야 한다."""
+        ordered = [_ENCHEM_POLAND, _DFD_YANGFU, _PT_INDONESIA]
+        got = run_js(
+            f"chartData({json.dumps(ordered, ensure_ascii=False)}, CHART_SPECS.affiliate_timeline)"
+        )
+        self.assertEqual(
+            got["labels"],
+            ["Enchem Poland Sp. z o.o.", "DFD Yangfu New Materials Co.,Ld",
+             "PT Enchem Elyte Indonesia"],
+        )
+
+    def test_both_book_value_series_are_present(self):
+        got = run_js(
+            f"chartData({json.dumps([_ENCHEM_POLAND], ensure_ascii=False)}, "
+            "CHART_SPECS.affiliate_timeline)"
+        )
+        labels = sorted(d["label"] for d in got["datasets"])
+        self.assertEqual(labels, ["기말 장부가액", "기초 장부가액"])
+        by_label = {d["label"]: d["data"] for d in got["datasets"]}
+        self.assertEqual(by_label["기초 장부가액"], [1800000000])
+        self.assertEqual(by_label["기말 장부가액"], [2004000000])
+
+    def test_x_scale_is_category(self):
+        self.assertEqual(run_js("CHART_SPECS.affiliate_timeline.xScale"), "category")
+
+    def test_returns_null_when_no_book_value_fields_present(self):
+        got = run_js(
+            'chartData([{inv_prm:"이름만있음"}], CHART_SPECS.affiliate_timeline)'
+        )
+        self.assertIsNone(got)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestAffiliateOverviewRenderWiring(unittest.TestCase):
+    """affiliateOverview·buildAffiliateOverviewBlock이 정의만 있고
+    renderSection이 부르지 않는 사고를 막는다(이 저장소에서 이미 다섯 번
+    난 사고 유형 — 브리프 참고)."""
+
+    _RECORDS = [_DFD_YANGFU, _ENCHEM_POLAND, _PT_INDONESIA]
+
+    def test_derived_block_title_is_rendered(self):
+        got = run_render_section('"affiliates"', json.dumps(self._RECORDS, ensure_ascii=False))
+        self.assertIn("피투자사 정보 (최초취득일 순)", got["titles"])
+
+    def test_investee_financials_appear_in_the_curated_table(self):
+        """브리프가 제시한 화면 표기(총자산·당기순이익)가 실제로 렌더된다 —
+        formatAmount(app.js)를 거친 억 단위 표기와 정확히 일치해야 한다."""
+        got = run_render_section('"affiliates"', json.dumps(self._RECORDS, ensure_ascii=False))
+        cells = " ".join(got["cells"])
+        self.assertIn("479.7억", cells)   # Enchem Poland 총자산
+        self.assertIn("-105.3억", cells)  # Enchem Poland 당기순이익
+        self.assertIn("2679.9억", cells)  # DFD Yangfu 총자산
+        self.assertIn("51.5억", cells)    # DFD Yangfu 당기순이익
+        self.assertIn("20억", cells)      # Enchem Poland 기말장부가액
+
+    def test_original_table_is_not_removed(self):
+        """새 블록은 표 위에 얹는 것이지 원본 20열 표를 지우는 게 아니다
+        (전역 제약: "표를 없애지 않습니다"). bsis_blce_qy(기초 수량)는
+        curated 블록에 없는 열이라 원본 표에만 남아 있어야 한다."""
+        got = run_render_section('"affiliates"', json.dumps(self._RECORDS, ensure_ascii=False))
+        self.assertIn("131,705", got["cells"])
+
+    def test_no_block_when_no_valid_investee(self):
+        records = [{"invstmnt_purps": "경영참여"}]  # inv_prm이 없다
+        got = run_render_section('"affiliates"', json.dumps(records, ensure_ascii=False))
+        self.assertNotIn("피투자사 정보 (최초취득일 순)", got["titles"])
+
+    def test_no_verdict_words(self):
+        got = run_render_section('"affiliates"', json.dumps(self._RECORDS, ensure_ascii=False))
+        text = " ".join(got["titles"] + got["notes"] + got["cells"])
+        for word in ("부실", "위험", "집중", "의심", "우량", "건전"):
+            self.assertNotIn(word, text, f"판정 어휘 '{word}'")
 
 
 if __name__ == "__main__":
