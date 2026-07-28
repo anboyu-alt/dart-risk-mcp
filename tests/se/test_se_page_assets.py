@@ -2256,5 +2256,28 @@ class TestMarkVocabulary(unittest.TestCase):
             self.assertNotIn(w, block, f"규칙 문구에 판정 어휘 '{w}' 가 있다")
 
 
+class TestMarksClearedOnGate:
+    """SE-4g Task 4, Step 1 — 브리프가 준 그대로의 소스-grep 검사.
+
+    이 저장소는 소스-grep만으로는 배선 유실을 못 잡는다는 사고를 이미
+    반복했다(예: `assertIn("marks", head)`가 tableEl(table, marks) 함수
+    시그니처와만 일치해 실제 렌더와 무관하게 통과한 사례, TestMarkRenderBehavior
+    docstring 참고). 그래서 이 검사는 **보조**일 뿐이다 — 강조·범례가
+    실제로 그려졌다가 showGate() 이후 실제로 사라지는지의 1차 증거는
+    tests/se/test_se_app_js.py::TestMarksClearedOnGate가 renderSection과
+    showGate()를 node vm으로 직접 실행해(run_render_section의 afterGate)
+    확인한다. 여기서는 그 결론과 어긋나지 않는 정적 사실만 재확인한다:
+    tableEl()이 범례를 표 조각(frag) 밖(document.body 등)에 직접 붙이지
+    않는다는 것, showGate()가 #body를 언급한다는 것."""
+
+    def test_legend_lives_inside_cleared_container(self):
+        # 범례가 #body 밖에 붙으면 로그아웃 후에도 남는다.
+        src = read_ui_js()
+        gate = extract_function(src, "showGate")
+        assert "#body" in gate or "body" in gate
+        te = extract_function(src, "tableEl")
+        assert "document.body.appendChild" not in te, "범례가 표 조각 밖에 붙는다"
+
+
 if __name__ == "__main__":
     unittest.main()

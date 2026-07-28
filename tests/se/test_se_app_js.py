@@ -172,6 +172,13 @@ const fs = require("fs");
 
 const ELEMENTS = Object.create(null);
 
+class FakeClassList {
+  constructor() { this._set = new Set(); }
+  add(c) { this._set.add(c); }
+  remove(c) { this._set.delete(c); }
+  contains(c) { return this._set.has(c); }
+}
+
 class FakeEl {
   constructor(tag) {
     this.tag = tag;
@@ -181,6 +188,8 @@ class FakeEl {
     this._id = "";
     this.dataset = {};
     this._listeners = {};
+    this.hidden = false;
+    this.classList = new FakeClassList();
   }
   appendChild(c) { this.children.push(c); return c; }
   insertBefore(node, ref) {
@@ -194,6 +203,7 @@ class FakeEl {
     if (idx !== -1) this.children.splice(idx, 1);
     return c;
   }
+  get firstChild() { return this.children.length ? this.children[0] : null; }
   insertRow() { const tr = new FakeEl("tr"); this.appendChild(tr); return tr; }
   insertCell() { const td = new FakeEl("td"); this.appendChild(td); return td; }
   createTHead() { const el = new FakeEl("thead"); this.appendChild(el); return el; }
@@ -210,6 +220,28 @@ class FakeEl {
 
 const bodyEl = new FakeEl("div");
 bodyEl.id = "body";
+
+// showGate()가 실제로 참조하는 나머지 고정 엘리먼트들 — 위 _TOC_BEHAVIOR_
+// HARNESS(목차 행동 검사용)와 같은 최소 집합이다. gate·main·gate-msg·
+// panel(classList.remove를 무조건 부른다, closePanel 참고)이 없으면
+// showGate()가 그 자리에서 TypeError로 죽는다. panel-body·head-name·bar·
+// company-info·actor-btn은 showGate()가 `if (el)`로 방어하므로 없어도
+// 죽지는 않지만, 실측 배선(SE-4d/e/f 잔류 사고들)과 같은 조건으로 확인하기
+// 위해 전부 등록해 둔다.
+function makeEl(tag, id) {
+  const el = new FakeEl(tag);
+  if (id) el.id = id;
+  return el;
+}
+makeEl("section", "gate");
+makeEl("main", "main");
+makeEl("p", "gate-msg");
+makeEl("aside", "panel");
+makeEl("div", "panel-body");
+makeEl("span", "head-name");
+makeEl("div", "bar");
+makeEl("div", "company-info");
+makeEl("button", "actor-btn");
 
 function collectCells(node, out) {
   out = out || [];
@@ -302,13 +334,32 @@ new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).
 sandbox.openDocPanel = function () {};
 sandbox.renderSection(%(key)s, %(value)s);
 
-process.stdout.write(JSON.stringify({
+// 기존 필드(cells·titles·notes·marked·legends)는 항상 showGate() 이전
+// 상태를 그대로 담는다 — 아래에서 showGate()를 부르지만, 그 결과는 별도
+// afterGate 키에만 담아 기존 호출부(run_render_section을 쓰는 다른 모든
+// 테스트) 출력을 그대로 유지한다.
+const beforeGate = {
   cells: collectCells(bodyEl, []),
   titles: collectTitles(bodyEl, []),
   notes: collectNotes(bodyEl, []),
   marked: collectMarked(bodyEl, []),
   legends: collectLegends(bodyEl, []),
-}));
+};
+
+// 로그아웃(세션 만료 포함) 잔류 확인 — 강조 범례는 실명이 아니지만
+// "이전 사용자가 조회한 회사의 사실"을 드러낸다. #body 자체가 지워지면
+// 그 안의 강조·범례도 함께 지워지는지, 소스 문자열이 아니라 실제 렌더 →
+// 실제 showGate() 호출로 확인한다.
+sandbox.showGate("메시지");
+
+const afterGate = {
+  cells: collectCells(bodyEl, []),
+  marked: collectMarked(bodyEl, []),
+  legends: collectLegends(bodyEl, []),
+  bodyChildCount: bodyEl.children.length,
+};
+
+process.stdout.write(JSON.stringify(Object.assign({}, beforeGate, { afterGate: afterGate })));
 """
 
 
@@ -6462,6 +6513,40 @@ class TestMarkRenderBehavior(unittest.TestCase):
         for why in ("기말 장부가액 < 최초 취득금액", "피투자사 당기순이익 < 0"):
             self.assertIn(why, partial[0], f"파생 표 범례에 '{why}'가 없습니다: {partial[0]}")
             self.assertIn(why, full[0], f"원본 표 범례에 '{why}'가 없습니다: {full[0]}")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 로그아웃 정리 동작을 검증할 수 없습니다")
+class TestMarksClearedOnGate(unittest.TestCase):
+    """SE-4g Task 4 — 강조 범례는 실명은 아니지만 "이전 사용자가 조회한
+    회사의 사실"을 드러낸다(예: "기말 장부가액 < 최초 취득금액"이 어떤
+    출자에 붙었는지). 공유 PC 제품에서 이 저장소는 이미 두 번(우측 패널
+    실명 잔류, #body 미정리) 로그아웃 잔류 사고를 냈다 — 그래서 여기서는
+    소스 문자열 검사가 아니라 renderSection을 실제로 호출해 강조·범례가
+    실제로 그려지는지 먼저 확인하고, showGate()를 실제로 호출해 그 강조·
+    범례가 함께 사라지는지를 같은 가짜 DOM에서 직접 관찰한다(위
+    _RENDER_SECTION_HARNESS의 afterGate, run_render_section 참고 —
+    Task 3이 만든 렌더 하네스를 그대로 확장했다. 새 하네스를 병렬로 만들지
+    않는다는 이 태스크의 제약)."""
+
+    def test_marks_actually_fire_before_gate(self):
+        """뒤 테스트(사라짐 확인)가 의미를 가지려면 먼저 강조·범례가 실제로
+        그려졌다는 사실이 필요하다 — 애초에 아무것도 안 그려졌다면
+        showGate() 이후 텅 비어 있는 것이 당연해서 테스트가 무력하다."""
+        got = run_render_section('"affiliates"', AFFILIATE_ROWS)
+        self.assertGreater(len(got["marked"]), 0, "사전 조건 실패: 강조 셀이 렌더되지 않았습니다")
+        self.assertGreater(len(got["legends"]), 0, "사전 조건 실패: 범례가 렌더되지 않았습니다")
+
+    def test_marked_cells_and_legend_do_not_survive_show_gate(self):
+        got = run_render_section('"affiliates"', AFFILIATE_ROWS)
+        after = got["afterGate"]
+        self.assertEqual(after["marked"], [],
+                          f"showGate() 이후에도 강조 셀이 남아 있습니다: {after['marked']}")
+        self.assertEqual(after["legends"], [],
+                          f"showGate() 이후에도 범례가 남아 있습니다: {after['legends']}")
+        self.assertEqual(after["cells"], [],
+                          "showGate() 이후에도 표 셀이 남아 있습니다")
+        self.assertEqual(after["bodyChildCount"], 0,
+                          "showGate() 이후에도 #body에 자식 노드가 남아 있습니다")
 
 
 if __name__ == "__main__":
