@@ -935,6 +935,40 @@ class TestKnownActors(unittest.TestCase):
         for v in ("verified", "maintainer_seed", "auto_matched"):
             self.assertEqual(actor_status({"status": v}), v)
 
+    # ── 최종 리뷰 Finding 4: 손글씨 레지스트리의 malformed 기록 값이
+    # TypeError로 죽지 않는다 ────────────────────────────────────────────
+    # {"actors": {"이름": null}}처럼 기록 목록 자리에 리스트가 아닌 값이
+    # 오면 `for r in recs`(recs=None)가 'NoneType' object is not iterable로
+    # 죽었다. 파일이 없거나 형태가 다를 때(_valid 검사 실패)는 이미 조용히
+    # 빈 레지스트리로 저하하는데, "최상위는 맞는데 개별 항목만 이상한" 경우는
+    # 그 가드를 통과해 죽었다 — 이 저장소 원칙(로딩은 예외를 전파하지 않는다)
+    # 에 어긋난다.
+
+    def test_load_does_not_crash_on_null_record_list(self):
+        from dart_risk_mcp.core.known_actors import load_known_actors
+        self._write({"version": 1, "actors": {"이상한기록": None}})
+        data = load_known_actors()  # TypeError를 던지면 안 된다
+        self.assertEqual(data["actors"].get("이상한기록"), [])
+
+    def test_lookup_actor_does_not_crash_on_null_record_list(self):
+        from dart_risk_mcp.core.known_actors import lookup_actor
+        self._write({"version": 1, "actors": {"이상한기록": None}})
+        self.assertEqual(lookup_actor("이상한기록"), [])
+
+    def test_lookup_by_company_does_not_crash_on_null_record_list(self):
+        from dart_risk_mcp.core.known_actors import lookup_actors_by_company
+        self._write({"version": 1, "actors": {"이상한기록": None}})
+        self.assertEqual(lookup_actors_by_company("아무회사"), [])
+
+    def test_load_does_not_crash_on_null_record_list_for_institution(self):
+        # 기관명 + malformed 값 조합 — should_store가 거부하는 경로도 동시에
+        # 통과해야 한다(레코드가 없으니 verified/maintainer_seed 예외도 없어
+        # 보수적으로 제외되는 것이 맞는 동작).
+        from dart_risk_mcp.core.known_actors import load_known_actors
+        self._write({"version": 1, "actors": {self._NH_INSTITUTION: None}})
+        data = load_known_actors()
+        self.assertNotIn(self._NH_INSTITUTION, data["actors"])
+
 
 if __name__ == "__main__":
     unittest.main()

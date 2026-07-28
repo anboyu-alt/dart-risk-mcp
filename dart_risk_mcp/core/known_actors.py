@@ -603,17 +603,26 @@ def _filter_institutions(data: dict) -> dict:
     등재한 것이므로 무조건 남긴다(실측 0건이지만 미래 등재를 위한 방어).
     Notion·캐시·동봉 데이터 자체는 건드리지 않고 이 함수가 반환하는 사본에만
     적용한다.
+
+    손글씨 `DART_KNOWN_ACTORS_PATH` JSON이 `{"actors": {"이름": null}}`처럼
+    기록 목록 자리에 리스트가 아닌 값을 담고 있어도 죽지 않는다 — 레지스트리
+    로딩은 예외를 전파하지 않는다는 이 저장소의 원칙(파일이 없을 때와
+    동일하게 조용히 저하)에 따라, 리스트가 아닌 값은 빈 목록으로 취급한다.
+    `_valid`는 최상위 {version, actors} 형태만 검사하고 각 인물 항목의
+    형태까지는 보지 않으므로, 여기서 한 번 정규화해 두면 이 함수를 거치는
+    `lookup_actor`·`lookup_actors_by_company`도 같은 malformed 값을 다시
+    만나 죽지 않는다(정규화의 단일 관문).
     """
     if not _valid(data):
         return data
     actors = data.get("actors", {})
     filtered = {
-        name: recs for name, recs in actors.items()
+        name: (recs if isinstance(recs, list) else [])
+        for name, recs in actors.items()
         if should_store(name)
-        or any(actor_status(r) != "auto_matched" for r in recs)
+        or any(actor_status(r) != "auto_matched"
+               for r in (recs if isinstance(recs, list) else []))
     }
-    if len(filtered) == len(actors):
-        return data
     return {**data, "actors": filtered}
 
 
@@ -689,39 +698,40 @@ def lookup_actor(name: str) -> list[dict]:
     액션' 등재일 때 '(주)액션' 조회, '정소영 (DING SHAO YING)' 등재일 때
     'DING SHAO YING' 조회가 각각 매칭된다.
 
-    두 티어를 조건부 폴백이 아니라 **항상 함께 합집합**으로 계산하는 이유
-    (SE-5b Part A): 정규화 티어에서 매칭이 있다고 바로 반환하면, 실측 사고
-    (2026-07-29)처럼 '(주)베이트리'(정규화 티어에서 자기 자신과만 일치)와
-    '주식회사 베이트리'(법인 접사 표기만 다름 — normalize_name은 접사를
-    건드리지 않으므로 다른 값)가 같은 실체인데도 폴딩 티어로 내려가지 못해
-    조회 표기에 따라 답(기록 수·태깅된 회사 수)이 달라진다. 폴딩 티어는
-    이미 "정규화 매칭이 하나도 없을 때 답을 내는" 최종 권한을 가진 티어다
-    — 매칭 없음 상태에서 답할 신뢰를 받는다면, 매칭 있음 상태에서 그 답을
-    합칠 신뢰도 마땅히 받는다. 반대로 완전히 다른 실체를 잘못 합치는 위험은
+    매칭은 fold_variants 교집합 **하나**로 계산한다(SE-5b Part A, 최종
+    리뷰 Finding 5로 단순화). 예전에는 "정규화 일치 키(norm_keys)"와
+    "폴딩 일치 키(fold_keys)"를 따로 구해 합집합으로 냈는데, 그건 죽은
+    이중 계산이었다 — `normalize_name(key) == want`이면 `fold_variants`는
+    같은 입력에 같은 값을 내는 순수 함수이므로
+    `fold_variants(normalize_name(key)) == fold_variants(want)`가 되고,
+    자기 자신과의 교집합은 `fold_variants`가 항상 최소 1개 원소(기본 폴드)를
+    반환하므로 절대 비지 않는다. 즉 정규화 일치는 반드시 폴딩 일치를
+    함축한다(norm_keys ⊆ fold_keys, 늘 성립) — 그래서 폴딩 교집합 하나만
+    구하면 두 티어를 합친 것과 정확히 같은 결과가 나온다.
+
+    이 단일 폴딩 비교로 실측 사고(2026-07-29)의 두 사례를 모두 잡는다:
+    '삼성전자 주식회사'/'삼성전자 &CR;주식회사'(엔티티만 다름 — 정규화
+    단계에서 이미 같은 값)와 '(주)베이트리'/'주식회사 베이트리'(법인 접사
+    표기만 다름 — 정규화 단계에서는 다른 값이지만 폴딩에서 수렴)가 각각
+    같은 실체로 병합된다. 반대로 완전히 다른 실체를 잘못 합치는 위험은
     fold_name이 법인 접사·공백·구두점 제거와 라틴 음차만 하고 그 외
     글자는 그대로 두는 '문자열 전체 일치' 비교라 낮다 — 접사를 떼도 나머지
     글자가 다른 두 실체는 교집합이 생기지 않는다(예: '베이트리' ≠
     '베이트리무역', 테스트로 고정).
 
-    normalize_name이 같은 값을 내는 키가 여럿이면(예: 파싱 오류로 같은
-    실체가 '삼성전자 주식회사'·'삼성전자 &CR;주식회사' 두 키로 저장된 경우)
-    첫 매칭에서 끊지 않고 **모든 키의 기록을 합쳐** 반환한다 — 조회 표기에
-    따라 답이 달라지는 것을 막는다. 폴딩 변형 단계도 동일 원칙을 따르며,
-    두 티어의 결과는 합집합으로 합쳐진다. 정렬 후 순회해 반환 순서를
-    결정적으로 유지한다(lookup_actors_by_company가 같은 이유로 정렬하는
-    것과 동일한 이유).
+    매칭 키가 여럿이면(예: 파싱 오류로 같은 실체가 '삼성전자 주식회사'·
+    '삼성전자 &CR;주식회사' 두 키로 저장된 경우) 첫 매칭에서 끊지 않고
+    **모든 키의 기록을 합쳐** 반환한다 — 조회 표기에 따라 답이 달라지는
+    것을 막는다. 정렬 후 순회해 반환 순서를 결정적으로 유지한다
+    (lookup_actors_by_company가 같은 이유로 정렬하는 것과 동일한 이유).
     """
     if not name or not name.strip():
         return []
     actors = load_known_actors().get("actors", {})
 
-    want = normalize_name(name)
-    norm_keys = {key for key in actors if normalize_name(key) == want}
+    wf = set(fold_variants(normalize_name(name)))
+    all_keys = {key for key in actors if wf & set(fold_variants(normalize_name(key)))}
 
-    wf = set(fold_variants(want))
-    fold_keys = {key for key in actors if wf & set(fold_variants(normalize_name(key)))}
-
-    all_keys = norm_keys | fold_keys
     if not all_keys:
         return []
 
