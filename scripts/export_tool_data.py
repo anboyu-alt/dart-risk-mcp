@@ -48,6 +48,35 @@ CATEGORY_LABELS = {
     "8": "위기/부실",
 }
 
+# SE 표시 전용 — 위험 신호가 아닌 고빈도 정기 보고 (SE-7 Task 3).
+# core SIGNAL_TYPES에는 절대 넣지 않는다(계획 Global Constraints: 위험
+# 신호 8분류와 다른 층위라 섞으면 calculate_risk_score 등 위험 신호
+# 집계가 오염된다). 임원 개개인이 지분 1주만 바뀌어도 각자 내는 개별
+# 보고처럼 정례적으로 나오고 위험 신호가 아닌 게 맞는 유형만 담는다 —
+# "기타"(모른다)가 아니라 "안다, 정기 보고다"(안다 + 위험 신호 아님)라는
+# 별도 사실 범주다. 실측(task-3-brief.md): 삼성전자 "기타" 982건 중
+# 924건이 아래 목록 첫 항목 하나 때문이었고, insider_timeline 섹션이
+# 이미 그 데이터를 별도로 다룬다 — 여기서는 목록 색칠에서 중복
+# 강조하지 않고 "기타"와만 구분한다.
+ROUTINE_FILING_KEYWORDS = [
+    "임원ㆍ주요주주특정증권등소유상황보고서",
+    "최대주주등소유주식변동신고서",
+    "사업보고서",
+    "반기보고서",
+    "분기보고서",
+    "주주총회소집공고",
+    "주주총회소집결의",
+    "기업설명회",
+]
+
+# 위 목록에 매칭된 공시가 받는 카테고리 번호. 위험 신호(SIGNAL_TYPES)의
+# taxonomy 카테고리는 0(기타)~8(위기/부실)만 쓰므로 9는 절대 충돌하지
+# 않는다 — docs/tool/se/app.js의 classifyDisclosureCategory가 위험 신호
+# 키워드 매칭에 전부 실패한 뒤에만(위험 신호가 항상 먼저 이긴다) 이
+# 번호를 반환한다.
+ROUTINE_FILING_CATEGORY = 9
+ROUTINE_FILING_LABEL = "정기 보고"  # 사실 라벨 — 판정 어휘 아님(v0.8.5)
+
 
 def _taxonomies_of(signal_key: str) -> list[str]:
     """신호의 taxonomy ID 전체 목록 (단일 매핑도 리스트로 정규화)."""
@@ -95,12 +124,21 @@ def build_signals_data() -> dict:
         }
         for slug, p in CROSS_SIGNAL_PATTERNS.items()
     ]
+    # 위험 신호 카테고리(0~8) 라벨은 그대로 두고, 정기 보고 카테고리 하나만
+    # 얹는다 — CATEGORY_LABELS 자체는 taxonomy 파생값이라는 원래 뜻을
+    # 유지하도록 복사본에만 추가한다(원본을 바꾸지 않는다).
+    categories = dict(CATEGORY_LABELS)
+    categories[str(ROUTINE_FILING_CATEGORY)] = ROUTINE_FILING_LABEL
     return {
         "signals": signals,
         "patterns": patterns,
-        "categories": CATEGORY_LABELS,
+        "categories": categories,
         "capital_event_keys": sorted(CAPITAL_EVENT_KEYS),
         "amendment_pattern": _AMENDMENT_RE.pattern,
+        # 위험 신호(signals)와 층위가 다른 별도 키다 — 이름에 "signal"·
+        # "risk"를 넣지 않는다(브리프: 위험 신호가 아니라는 게 이 태스크의
+        # 요점이다).
+        "routine_filing_keywords": list(ROUTINE_FILING_KEYWORDS),
         "fs_aliases": {**{k: list(_FS_ALIASES[k]) for k in _FS_ALIAS_KEYS},
                        **_VIEWER_EXTRA_ALIASES},
     }

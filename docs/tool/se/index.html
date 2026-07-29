@@ -11,11 +11,15 @@
   --dim2:#9fb0c0; --faint:#4a5566; --amber:#e8a33d; --amber2:#f2bc63;
   --red:#e0564a; --green:#4ad295;
   --mono:Consolas,"Cascadia Code","SF Mono",monospace;
-  /* 차트 계열 구분 전용 색 9종(--c0~--c8) — ui.js의 renderChart()가 값과
+  /* 차트 계열 구분 전용 색 10종(--c0~--c9) — ui.js의 renderChart()가 값과
      무관하게 순서로만 배정한다(v0.8.5: 판정 색이 아니다). --red를 여기
-     섞지 않는다 — 판정 색과 계열 색은 항상 분리해 둔다. */
+     섞지 않는다 — 판정 색과 계열 색은 항상 분리해 둔다. --c9는 SE-7
+     Task 3(task-3-brief.md)에서 disclosures 차트의 "정기 보고" 범주를
+     "기타"와 구분하려고 추가했다 — 붉은 계열(--red 근처 색상)은 판정
+     색처럼 읽힐 수 있어 피하고, 기존 9색과 겹치지 않는 올리브 계열을
+     썼다. */
   --c0:#5b8ff9; --c1:#61ddaa; --c2:#f6bd16; --c3:#7262fd; --c4:#78d3f8;
-  --c5:#9661bc; --c6:#f6903d; --c7:#008685; --c8:#f08bb4;
+  --c5:#9661bc; --c6:#f6903d; --c7:#008685; --c8:#f08bb4; --c9:#b5c95e;
   /* 사실 강조(마크) 전용 색 — ui.js의 tableEl()이 app.js cellMarks()가
      찍은 셀에 쓴다(v0.8.5: 판정이 아니라 사실의 가시화라 --red를 쓰지
      않는다 — --red는 없지만 위 --c* 계열 색과도 섞지 않는다, 계열
@@ -25,10 +29,10 @@
      (아래 .mk 참고). */
   --mark:#d98a3a; --mark-bg:rgba(217, 138, 58, 0.08);
   /* 조달건 비례 막대(SE-5a Task 3, ui.js fundChainCardEl) 전용 — 조각
-     자체의 배경은 위 --c0~--c8을 재사용하고(판정 색이 아니라 계열
+     자체의 배경은 위 --c0~--c9을 재사용하고(판정 색이 아니라 계열
      구분이라는 같은 이유), 이 둘만 새로 정의한다. --fund-bar-track은
      반올림 오차로 조각 폭 합이 100%에 살짝 못 미칠 때 드러나는 트랙
-     바탕색이고, --fund-bar-label은 --c0~--c8 채워진 조각 위에 얹는
+     바탕색이고, --fund-bar-label은 --c0~--c9 채워진 조각 위에 얹는
      라벨 글자색이다 — 두 테마의 --c* 팔레트가 각각 그 테마의 --bg와
      대비되도록 조정돼 있어(다크: --bg 대비 밝은 색, 라이트: --bg 대비
      짙은 색), 라벨 색으로 상대 테마의 --bg를 그대로 쓰면 두 테마 모두
@@ -50,7 +54,7 @@
   --dim2:#333c48; --faint:#88909c; --amber:#a8660a; --amber2:#8a5410;
   --red:#b3261e; --green:#1f7a51;
   --c0:#2f5fd0; --c1:#1f9d6e; --c2:#ad8c00; --c3:#5433d6; --c4:#0f8fc4;
-  --c5:#7a3fa0; --c6:#cc6a10; --c7:#00615f; --c8:#c2477a;
+  --c5:#7a3fa0; --c6:#cc6a10; --c7:#00615f; --c8:#c2477a; --c9:#6b7a1f;
   --mark:#b5661c; --mark-bg:rgba(181, 102, 28, 0.08);
   /* var(--cell)·var(--bg) 참조 자체는 다크 블록과 같지만, 이 두 변수도
      라이트 블록에서 다시 선언해야 한다 — 그러지 않으면 라이트 모드에서
@@ -125,7 +129,7 @@ th{color:var(--dim2);background:var(--rail);font-weight:normal}
 .fund-chain-card{margin-bottom:20px}
 .fund-chain-card h4{font-size:13px;font-weight:normal;color:var(--dim2);
                      font-family:var(--mono);margin:0 0 6px}
-/* 조각 배경(--c0~--c8)은 인라인 style로 ui.js가 매긴다(값마다 폭이 달라
+/* 조각 배경(--c0~--c9)은 인라인 style로 ui.js가 매긴다(값마다 폭이 달라
    유한한 CSS 클래스로 표현할 수 없다) — 여기서는 트랙 배경·조각 사이
    구분선·라벨 자르기만 정의한다. min-width는 %가 아니라 px다 — %로
    최소 폭을 주면 아주 작은 조각(실측 1.7%)의 폭이 부풀려져 "막대 조각

@@ -5709,24 +5709,43 @@ class TestClassifyDisclosureCategory(unittest.TestCase):
         )
         self.assertEqual(got, 0)
 
-    def test_amendment_disclosure_is_not_classified_like_the_public_viewer(self):
-        """docs/tool/index.html의 buildResult: isAmend면 신호를 아예
-        매기지 않는다(sigs=[]) — "[기재정정]"이 안에 "전환사채"를
-        포함해도 공개 뷰어와 똑같이 기타(0)로 남아야 한다. 되돌리면(정정
-        판정을 빼면) 이 테스트는 1(CB_REPAY 또는 CB_BW)로 실패한다."""
+    def test_amendment_disclosure_is_classified_by_content_after_prefix_strip(self):
+        """SE-7 Task 2(docs/superpowers/plans/2026-07-29-se-7-disclosure-
+        classification.md '원인 2'): docs/tool/index.html의 공개 뷰어와
+        core의 match_signals는 정정공시를 "같은 사건의 재신고"로 보고
+        신호를 아예 매기지 않는다 — 위험 신호 **집계 중복 방지**에는
+        옳다. 하지만 SE의 disclosures 차트는 전체 공시 목록을 색칠하는
+        표시 계층이라 그 배제를 그대로 재사용하면 정정 접두어가 붙은
+        공시가 내용과 무관하게 전부 "기타"로 뭉개진다(엔켐 실측 110건
+        중 61건이 정정 배제 때문이었다). 이 테스트부터는
+        classifyDisclosureCategory가 그 배제를 쓰지 않고 접두어를 벗긴
+        나머지로 매칭을 계속한다 — "[기재정정]"이 붙어도 "전환사채"를
+        포함하면 CB_BW(1)로 분류돼야 한다(수정 전에는 0이었다 — 바로
+        위 옛 버전 테스트가 그 결함을 고정하고 있었다)."""
         got = run_js_with_real_signals(
             'classifyDisclosureCategory('
             '"[기재정정]주요사항보고서(자기전환사채매도결정)", SIGNALS)'
         )
-        self.assertEqual(got, 0)
+        self.assertEqual(
+            got, 1, "정정 접두어를 벗긴 뒤 '전환사채' 키워드로 CB_BW(1)이 매칭돼야 합니다"
+        )
 
-    def test_matches_public_viewer_logic_for_a_batch_of_real_report_names(self):
-        """docs/tool/index.html의 matchSignals+AMEND_RE를 파이썬으로 그대로
-        재현해, classifyDisclosureCategory의 결과가 공개 뷰어가 매길 첫
-        신호의 category와 일치하는지 배치로 대조한다 — "로직을 새로
-        만들지 마라"를 기계적으로 강제한다."""
+    def test_matches_prefix_stripped_matching_for_a_batch_of_real_report_names(self):
+        """docs/tool/index.html의 matchSignals(키워드 서브스트링 매칭
+        순서)는 그대로 재사용하되, SE-7 Task 2가 의도적으로 바꾼 지점
+        (정정 접두어는 "배제"가 아니라 "스트립 대상")만 반영한 파이썬
+        참조 구현으로 배치 대조한다. amend_re는 signals-data.json 실측값
+        그대로 쓴다(^로 시작하는 접두어 전용 정규식임을 여기서도 다시
+        확인 — anchored가 아니면 스트립하지 않는다는 app.js 쪽 방어와
+        같은 전제). 정정공시 샘플 하나의 기대값만 공개 뷰어(0)와
+        달라진다 — 나머지 샘플(정정이 아님)은 이전과 동일해야 한다는
+        것이 회귀 방지다."""
         data = json.loads(_SIGNALS_DATA_PATH.read_text(encoding="utf-8"))
         amend_re = re.compile(data["amendment_pattern"])
+        self.assertTrue(
+            data["amendment_pattern"].startswith("^"),
+            "amendment_pattern이 접두어 전용(anchored)이 아니면 아래 스트립 로직 전제가 깨집니다",
+        )
         samples = [
             "[기재정정]주요사항보고서(자기전환사채매도결정)",
             "타법인주식및출자증권취득결정",
@@ -5738,16 +5757,16 @@ class TestClassifyDisclosureCategory(unittest.TestCase):
             "제3자배정유상증자결정",
         ]
 
-        def public_viewer_category(nm: str) -> int:
-            if amend_re.match(nm):
-                return 0
+        def expected_category(nm: str) -> int:
+            m = amend_re.match(nm)
+            text = nm[m.end():] if m else nm
             for s in data["signals"]:
                 for kw in s["keywords"]:
-                    if kw and kw in nm:
+                    if kw and kw in text:
                         return s["category"]
             return 0
 
-        expected = [public_viewer_category(nm) for nm in samples]
+        expected = [expected_category(nm) for nm in samples]
         got = run_js_with_real_signals(
             json.dumps(samples, ensure_ascii=False)
             + ".map(function(nm){return classifyDisclosureCategory(nm, SIGNALS);})"
@@ -5763,6 +5782,264 @@ class TestClassifyDisclosureCategory(unittest.TestCase):
         self.assertIsNone(run_js('classifyDisclosureCategory("x", {})'))
         self.assertIsNone(
             run_js('classifyDisclosureCategory("x", {signals: "not-array"})')
+        )
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestClassifyDisclosureCategoryAmendmentPrefixStrip(unittest.TestCase):
+    """SE-7 Task 2(task-2-brief.md Step 1, 6개 항목)를 항목별로 명시적으로
+    고정한다. 픽스처는 브리프가 요구한 대로 실측 signals-data.json 그대로
+    쓴다."""
+
+    def test_1_non_amendment_cb_bw_disclosure_classifies_as_category_1(self):
+        got = run_js_with_real_signals(
+            'classifyDisclosureCategory("주요사항보고서(전환사채권발행결정)", SIGNALS)'
+        )
+        self.assertEqual(got, 1)
+
+    def test_2_amendment_prefixed_cb_bw_disclosure_classifies_the_same_category(self):
+        """수정 전에는 0(기타)이 나왔다 — 이 태스크가 고치는 결함 그
+        자체(브리프 Step 1 항목 2)."""
+        got = run_js_with_real_signals(
+            'classifyDisclosureCategory('
+            '"[기재정정]주요사항보고서(전환사채권발행결정)", SIGNALS)'
+        )
+        self.assertEqual(got, 1)
+
+    def test_3_amendment_prefixed_disclosure_violation_matches_task1_keyword(self):
+        """Task 1(커밋 6ea232a)이 DISCLOSURE_VIOL에 추가한 '불성실공시법인'
+        키워드가 signals-data.json에도 반영돼 있어야 이 테스트가 뜻을
+        갖는다(브리프: "core와 signals-data.json 양쪽에 키워드가 있어야
+        하므로, 이 테스트는 Task 1 완료 후 실행 가능"). 먼저 그 전제를
+        확인한 뒤 실제 분류를 검증한다."""
+        data = json.loads(_SIGNALS_DATA_PATH.read_text(encoding="utf-8"))
+        disclosure_viol = next(
+            (s for s in data["signals"] if s["key"] == "DISCLOSURE_VIOL"), None
+        )
+        self.assertIsNotNone(disclosure_viol, "DISCLOSURE_VIOL 신호 자체가 없습니다")
+        self.assertIn(
+            "불성실공시법인",
+            disclosure_viol["keywords"],
+            "signals-data.json이 Task 1의 신규 키워드로 재생성되지 않았습니다 — "
+            "scripts/export_tool_data.py를 다시 돌려야 할 수 있습니다",
+        )
+        got = run_js_with_real_signals(
+            'classifyDisclosureCategory("[기재정정]불성실공시법인지정", SIGNALS)'
+        )
+        self.assertEqual(got, disclosure_viol["category"])
+
+    def test_4_amendment_prefix_stripped_but_no_keyword_matches_falls_back_to_other(self):
+        """"정정이라 매칭 안 됨"과 "내용상 매칭 안 됨"이 최종적으로 같은
+        0이어도, 접두어를 벗기고 내용까지 본 뒤에 도달한 0이어야 한다는
+        것이 브리프 항목 4의 요지다. 아래 broken-regex 테스트가 "안 보고
+        그냥 0"과 이 경우를 구분해 준다."""
+        got = run_js_with_real_signals(
+            'classifyDisclosureCategory("[기재정정]타법인주식및출자증권취득결정", SIGNALS)'
+        )
+        self.assertEqual(got, 0)
+
+    def test_5a_missing_amendment_pattern_key_does_not_throw(self):
+        signals = {
+            "signals": [{"key": "CB_BW", "category": 1, "keywords": ["전환사채권발행결정"]}],
+            "categories": {"0": "기타", "1": "CB/채권"},
+        }
+        got = call_js(
+            "classifyDisclosureCategory",
+            "[기재정정]주요사항보고서(전환사채권발행결정)",
+            signals,
+        )
+        self.assertEqual(
+            got, 1, "amendment_pattern이 없어도 예외 없이 키워드 매칭은 그대로 동작해야 합니다"
+        )
+
+    def test_5b_malformed_amendment_pattern_regex_does_not_throw(self):
+        signals = {
+            "signals": [{"key": "CB_BW", "category": 1, "keywords": ["전환사채권발행결정"]}],
+            "categories": {"0": "기타", "1": "CB/채권"},
+            "amendment_pattern": "[unterminated",
+        }
+        got = call_js(
+            "classifyDisclosureCategory",
+            "[기재정정]주요사항보고서(전환사채권발행결정)",
+            signals,
+        )
+        self.assertEqual(
+            got, 1, "정규식이 깨져도 예외를 던지지 않고 기존처럼 키워드 매칭으로 이어가야 합니다"
+        )
+
+    def test_6_non_amendment_disclosure_is_unaffected_by_this_change(self):
+        """회귀 방지(브리프 항목 6) — 정정이 아닌 공시는 이 태스크
+        전후로 동일해야 한다."""
+        got = run_js_with_real_signals('classifyDisclosureCategory("최대주주변경", SIGNALS)')
+        self.assertEqual(got, 3)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestClassifyDisclosureCategoryRoutineFiling(unittest.TestCase):
+    """SE-7 Task 3(task-3-brief.md) — 고빈도 정기 보고(임원 지분 1주 변동
+    보고 등)는 위험 신호(1~8)가 아니다. 실측: 삼성전자 "기타" 982건 중
+    924건이 '임원ㆍ주요주주특정증권등소유상황보고서' 하나 때문이었다 —
+    "기타"(모른다)가 아니라 "안다, 정기 보고다"(별도 범주)로 분류돼야
+    한다. Task 2가 만든 정정 접두어 스트립 로직 위에 얹는다(정정이어도
+    정기 보고로 잡혀야 한다)."""
+
+    def _routine_category(self) -> int:
+        data = json.loads(_SIGNALS_DATA_PATH.read_text(encoding="utf-8"))
+        for k, v in data["categories"].items():
+            if v not in ("기타", "CB/채권", "자본구조", "경영권", "거버넌스",
+                         "기업활동", "회계/재무", "시장감시", "위기/부실"):
+                return int(k)
+        raise AssertionError("signals-data.json에 정기 보고 카테고리가 없습니다")
+
+    def test_1_routine_filing_keyword_classifies_as_routine_not_a_risk_category(self):
+        routine = self._routine_category()
+        got = run_js_with_real_signals(
+            'classifyDisclosureCategory('
+            '"임원ㆍ주요주주특정증권등소유상황보고서", SIGNALS)'
+        )
+        self.assertEqual(got, routine)
+        self.assertNotIn(got, range(0, 9), "정기 보고가 위험 신호 카테고리(0~8)와 겹칩니다")
+
+    def test_2_amendment_prefixed_routine_filing_still_classifies_as_routine(self):
+        """정정 접두어가 붙어도 정기 보고로 잡혀야 한다 — Task 2의 스트립
+        로직 위에 얹는다(스트립보다 아래 단계에서 새로 배제하지 않는다)."""
+        routine = self._routine_category()
+        got = run_js_with_real_signals(
+            'classifyDisclosureCategory('
+            '"[기재정정]임원ㆍ주요주주특정증권등소유상황보고서", SIGNALS)'
+        )
+        self.assertEqual(got, routine)
+
+    def test_3_risk_signal_keyword_wins_over_routine_filing_keyword(self):
+        """분류 우선순위: 위험 신호(1~8) 매칭이 먼저다. 위험 신호 키워드
+        ('전환사채권발행결정')와 정기 보고 키워드('사업보고서')가 한
+        제목에 동시에 걸리는 합성 케이스에서 위험 신호가 이겨야 한다 —
+        정기 보고 라벨이 실제 위험 신호를 가리면 안 된다."""
+        got = run_js_with_real_signals(
+            'classifyDisclosureCategory('
+            '"주요사항보고서(전환사채권발행결정) 사업보고서", SIGNALS)'
+        )
+        self.assertEqual(got, 1, "CB_BW(category 1)가 이겨야 합니다")
+
+    def test_4_neither_risk_nor_routine_still_falls_back_to_other(self):
+        got = run_js_with_real_signals(
+            'classifyDisclosureCategory("타법인주식및출자증권취득결정", SIGNALS)'
+        )
+        self.assertEqual(got, 0)
+
+    def test_routine_filing_category_label_is_not_named_other(self):
+        data = json.loads(_SIGNALS_DATA_PATH.read_text(encoding="utf-8"))
+        routine = str(self._routine_category())
+        self.assertNotEqual(data["categories"][routine], "기타")
+
+    def test_missing_routine_filing_keywords_key_does_not_throw_or_misclassify(self):
+        """구버전 signals-data.json(이 키가 없음)을 만나도 예외 없이 기존
+        위험 신호 매칭 계약을 그대로 지켜야 한다(브리프: 로드 실패에
+        대비하세요와 같은 원칙)."""
+        signals = {
+            "signals": [{"key": "CB_BW", "category": 1, "keywords": ["전환사채권발행결정"]}],
+            "categories": {"0": "기타", "1": "CB/채권"},
+        }
+        got = call_js(
+            "classifyDisclosureCategory", "임원ㆍ주요주주특정증권등소유상황보고서", signals
+        )
+        self.assertEqual(got, 0, "routine_filing_keywords가 없으면 조용히 기타로 물러나야 합니다")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestIsAmendmentDisclosure(unittest.TestCase):
+    """isAmendmentDisclosure(reportNm, signalsData) — SE-7 Task 2가 새로
+    추가한, "정정 여부" 사실 전용 함수(task-2-brief.md: "정정 여부 자체는
+    사실로 남긴다").
+
+    classifyDisclosureCategory는 카테고리 숫자만 돌려주는 기존 계약을
+    유지한다 — monthlyCountsByCategory가 그 숫자를 그대로 합산하고,
+    SE-4f에서 "월별 합계 = 원본 건수" 불변식을 고정해 뒀다. 반환 모양을
+    {category, isAmendment}로 바꾸면 그 불변식을 검증하는 기존 테스트까지
+    전부 같이 고쳐야 해서 위험이 커진다(브리프가 제시한 두 선택지 중
+    "숫자 반환은 그대로 두고 별도 함수를 둔다" 쪽을 골랐다).
+
+    이 함수는 죽은 코드가 아니다 — classifyDisclosureCategory 내부에서
+    "접두어를 벗길지" 판단하는 데도 그대로 재사용된다(단일 출처: 정정
+    판별 정규식을 두 곳에서 손으로 따로 맞추지 않는다)."""
+
+    def test_true_for_a_real_amendment_prefixed_title(self):
+        got = run_js_with_real_signals(
+            'isAmendmentDisclosure("[기재정정]주요사항보고서(전환사채권발행결정)", SIGNALS)'
+        )
+        self.assertTrue(got)
+
+    def test_false_for_a_non_amendment_title(self):
+        got = run_js_with_real_signals(
+            'isAmendmentDisclosure("주요사항보고서(전환사채권발행결정)", SIGNALS)'
+        )
+        self.assertFalse(got)
+
+    def test_false_when_signals_data_is_missing_or_unusable(self):
+        self.assertFalse(run_js('isAmendmentDisclosure("[기재정정]x", null)'))
+        self.assertFalse(run_js('isAmendmentDisclosure("[기재정정]x", {})'))
+
+    def test_false_not_throw_when_pattern_is_malformed(self):
+        signals = {"amendment_pattern": "[unterminated"}
+        got = call_js("isAmendmentDisclosure", "[기재정정]x", signals)
+        self.assertFalse(got)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestClassifyDisclosureCategoryAnchorGuard(unittest.TestCase):
+    """리뷰 지적: classifyDisclosureCategory(app.js:2398)의
+    `signalsData.amendment_pattern.charAt(0) === "^"` 가드에 테스트 커버리지가
+    전혀 없었다. 리뷰어가 이 가드를 통째로 지우고 전체 스위트를 돌렸더니
+    1007 passed, 실패 0건 — 가드가 없어져도 아무 테스트도 눈치채지 못했다.
+
+    이 가드는 amendment_pattern이 **비앵커**(문자열 시작에 고정되지 않은)일
+    때를 대비한다. 오늘의 실제 signals-data.json 패턴(`^\\[...\\]\\s*`)은
+    앵커라 가드가 사실상 항상 통과하지만, 그건 "오늘 우연히 안전하다"는
+    뜻이지 "가드가 필요 없다"는 뜻이 아니다. 앞으로 export_tool_data.py가
+    비앵커 패턴을 내보내는 날 이 테스트가 없으면 아무도 못 알아챈다.
+
+    합성 signalsData로 비앵커 패턴을 만들고, 그 패턴이 제목 **중간**에서
+    매칭되는 상황(문장 끝의 접두어가 아니라)을 구성한다. 가드가 없다면
+    `.replace()`가 무조건 실행돼 중간의 `[정정]`이 잘려나가고, 그 결과
+    나머지 키워드 매칭이 실패해 분류 결과가 달라진다 — 가드가 있으면 원본
+    문자열 그대로 매칭이 이어져야 한다."""
+
+    _SIGNALS = {
+        "signals": [
+            {"key": "TEST_MID_BRACKET", "category": 5, "keywords": ["공고[정정]관련"]}
+        ],
+        "categories": {"0": "기타", "5": "테스트"},
+        # 의도적으로 비앵커(^ 없음) — 오늘의 실제 amendment_pattern과 달리
+        # 문자열 어디서든 걸릴 수 있다.
+        "amendment_pattern": r"\[(?:기재정정|정정)[^\]]*\]",
+    }
+    _TITLE = "주주총회소집공고[정정]관련"
+
+    def test_pattern_actually_matches_mid_string_not_just_as_a_prefix(self):
+        """전제 확인 — 이 픽스처의 amendment_pattern이 접두어가 아니라
+        제목 중간의 [정정]에서 매칭됨을 먼저 보장한다(그렇지 않으면 아래
+        본 검증이 공허하다)."""
+        self.assertTrue(self._TITLE.startswith("주주총회소집공고["))
+        got = call_js("isAmendmentDisclosure", self._TITLE, self._SIGNALS)
+        self.assertTrue(got, "합성 패턴이 제목 중간의 [정정]과 매칭돼야 이 테스트가 뜻을 갖습니다")
+
+    def test_guard_prevents_mid_string_replace_and_keeps_original_title(self):
+        """가드(charAt(0) === "^")가 살아있으면: 비앵커 패턴이므로
+        .replace()를 건너뛰고 원본 문자열 그대로 키워드 매칭을 계속한다.
+        원본에는 "공고[정정]관련"이 그대로 있으므로 그 키워드로 매칭돼
+        category 5가 나와야 한다.
+
+        가드가 삭제되면(리뷰어의 정확한 뮤테이션): .replace()가 무조건
+        실행돼 중간의 "[정정]"이 잘려나가 "주주총회소집공고관련"이 되고,
+        "공고[정정]관련" 키워드는 더 이상 부분 문자열로 존재하지 않아
+        매칭에 실패한다 — 결과가 0(기타)으로 바뀐다. 즉 이 assertEqual(5)는
+        가드가 없으면 실패해야 정상이다."""
+        got = call_js("classifyDisclosureCategory", self._TITLE, self._SIGNALS)
+        self.assertEqual(
+            got, 5,
+            "가드가 원본 제목을 보존해 중간 키워드 매칭이 이어져야 합니다 — "
+            "0이 나왔다면 비앵커 패턴에서도 .replace()가 무조건 실행돼 "
+            "중간 문자열이 잘려나갔다는 뜻입니다(가드 소실 회귀)",
         )
 
 
@@ -5823,6 +6100,28 @@ class TestMonthlyCountsByCategory(unittest.TestCase):
             "monthlyCountsByCategory", records, "rcept_dt", "report_nm", self._SMALL_SIGNALS
         )
         self.assertEqual(got, [{"month": "202604", "category": "경영권", "count": 1}])
+
+    def test_month_totals_still_match_original_count_with_routine_filing_category(self):
+        """SE-7 Task 3 — 정기 보고 범주가 새로 생겨도(브리프: "합계가
+        원본 건수와 여전히 일치해야 합니다") 월별 합계 불변식은 깨지지
+        않아야 한다. 실제 signals-data.json(routine_filing_keywords 포함)
+        으로, 위험 신호·정기 보고·미분류가 섞인 배치를 검증한다."""
+        records = [
+            {"rcept_dt": "20260110", "report_nm": "주요사항보고서(전환사채권발행결정)"},
+            {"rcept_dt": "20260112", "report_nm": "임원ㆍ주요주주특정증권등소유상황보고서"},
+            {"rcept_dt": "20260115", "report_nm": "[기재정정]임원ㆍ주요주주특정증권등소유상황보고서"},
+            {"rcept_dt": "20260118", "report_nm": "타법인주식및출자증권취득결정"},
+            {"rcept_dt": "20260210", "report_nm": "사업보고서"},
+        ]
+        got = run_js_with_real_signals(
+            "monthlyCountsByCategory("
+            f"{json.dumps(records, ensure_ascii=False)}, "
+            '"rcept_dt", "report_nm", SIGNALS)'
+        )
+        self.assertEqual(sum(r["count"] for r in got), len(records))
+        labels = {r["category"] for r in got}
+        self.assertIn("정기 보고", labels)
+        self.assertIn("기타", labels)
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")

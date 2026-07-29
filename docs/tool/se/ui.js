@@ -305,11 +305,15 @@ function toggleTheme() {
 // 확인해, 없으면 표만 그리고 조용히 물러난다(표를 지우지 않는다: 차트는
 // "얹는" 것일 뿐 필수가 아니다).
 
-// 계열 구분에만 쓰는 색 9종. 값에 따라 바뀌지 않는다(v0.8.5 — 판정
+// 계열 구분에만 쓰는 색 10종. 값에 따라 바뀌지 않는다(v0.8.5 — 판정
 // 색이 되면 안 된다). index.html의 :root/:root[data-theme="light"]가
-// --c0~--c8을 정의한다.
+// --c0~--c9를 정의한다. --c9는 SE-7 Task 3에서 "정기 보고" 범주(disclosures
+// 차트, 위험 신호 8종 + 기타 = 9종에 이어 10번째 계열)를 "기타"와
+// 시각적으로 구분하려고 기존 팔레트에 하나만 얹은 것이다 — 새 팔레트를
+// 설계하지 않았다(task-3-brief.md).
 const CHART_SERIES_VARS = [
   "--c0", "--c1", "--c2", "--c3", "--c4", "--c5", "--c6", "--c7", "--c8",
+  "--c9",
 ];
 
 /** CSS 변수 값을 읽는다. getComputedStyle이 없는 환경(가짜 DOM 테스트)
@@ -323,7 +327,7 @@ function cssVar(name) {
 }
 
 /** i번째 계열의 색. 값과 무관하게 순서로만 정해진다(위 CHART_SERIES_VARS
- *  주석과 같은 이유) — `--c0`~`--c8`을 순환한다. */
+ *  주석과 같은 이유) — `--c0`~`--c9`를 순환한다. */
 function chartSeriesColor(i) {
   return cssVar(CHART_SERIES_VARS[i % CHART_SERIES_VARS.length]);
 }
@@ -354,7 +358,7 @@ function resetCharts() {
  *  (텍스트 블록 등, records 자체가 비어 chartData가 null을 주므로
  *  실제로는 여기까지 오지 않는다) 방어적으로 끝에 붙인다.
  *
- *  색은 계열 구분 용도로만 쓴다(v0.8.5) — `--c0`~`--c8`을 값과 무관하게
+ *  색은 계열 구분 용도로만 쓴다(v0.8.5) — `--c0`~`--c9`를 값과 무관하게
  *  순서대로 배정한다. `--red` 등 판정 색은 여기서 절대 쓰지 않는다.
  *
  *  signalsData(선택, SE-4f Task 3)는 disclosures처럼 spec.classifyField가
@@ -1424,8 +1428,8 @@ const FUND_CHAIN_WINDOW_DAYS = 90;
  *  (canvas는 그림일 뿐이라 안 된다), (b) canvas destroy 관리
  *  (CHART_INSTANCES/pruneChartsIn, resetCharts)가 필요 없고, (c)
  *  다크·라이트 전환이 --fund-bar-*(index.html) 두 값만으로 자동
- *  처리된다. 막대 조각의 배경은 여기서 --c0~--c8(index.html, "차트 계열
- *  구분 전용 색 9종… 판정 색이 아니다")를 재사용한다 — 이 카드도 용도
+ *  처리된다. 막대 조각의 배경은 여기서 --c0~--c9(index.html, "차트 계열
+ *  구분 전용 색 10종… 판정 색이 아니다")를 재사용한다 — 이 카드도 용도
  *  구분일 뿐 판정이 아니므로 같은 색 계열을 쓰는 것이 자연스럽다.
  *
  *  막대 폭은 plan/total_plan이다. 아주 좁은 조각(실측: 130.8억/7,682.4억
