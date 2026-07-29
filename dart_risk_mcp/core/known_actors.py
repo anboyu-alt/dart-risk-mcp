@@ -515,42 +515,164 @@ def fetch_registry_from_notion(token: str = "", db_id: str = "") -> dict | None:
     return {"version": 1, "actors": actors}
 
 
+def notion_credentials_configured() -> bool:
+    """NOTION_TOKEN + DB_KNOWN_ACTORS 둘 다 설정됐는지 여부(공개 헬퍼).
+
+    add_registry_record는 이 둘이 없으면 네트워크를 건드리지 않고 조용히
+    False를 반환한다(opt-in 기능이 꺼진 정상 상태) — 그런데 호출측(크론
+    스크립트)은 "쓰기 실패"의 원인을 "자격증명 미설정"과 "그 외 실패(레이트
+    리밋·네트워크 등)"로 구분할 방법이 없었다. add_registry_record가 내부에서
+    쓰는 것과 동일한 판정(_notion_env)을 공개해, 호출측이 원인을 추측하지
+    않고 사실로 알 수 있게 한다 (2026-07-29 사고: 4/5건 성공을 자격증명
+    문제로 오진단 — 자격증명이 잘못됐다면 애초에 0/5건이어야 했다).
+    """
+    return all(_notion_env())
+
+
+# Notion 레이트리밋(429)·일시 장애(5xx) 재시도 대상 — dart_client._retry와
+# 동일한 상태코드 집합.
+_NOTION_RETRY_STATUSES = (429, 500, 502, 503, 504)
+_NOTION_MAX_ATTEMPTS = 3
+# Notion 오류 message는 요청 페이로드 일부를 에코할 가능성을 배제할 수 없다
+# (예: 필드 값 검증 실패 시 그 값을 인용하는 사례). 이 레포는 public이고
+# Actions 로그도 public이며 레지스트리는 실명 데이터이므로, 로그에는 원문을
+# 통째로 남기지 않고 길이를 제한한다.
+_NOTION_ERROR_MSG_MAX = 300
+
+
+def _retry_after_seconds(resp) -> float | None:
+    """응답의 Retry-After 헤더를 초 단위 실수로 파싱. 없거나 파싱 불가면 None.
+
+    dart_client._retry는 DART 전용이라 이 헤더를 보지 않는다(DART가 안 주므로).
+    Notion은 429에 이 헤더를 실어 보내므로 여기서만 별도로 처리한다.
+    """
+    try:
+        val = (resp.headers or {}).get("Retry-After") if resp is not None else None
+    except Exception:
+        return None
+    if not val:
+        return None
+    try:
+        return max(0.0, float(val))
+    except (TypeError, ValueError):
+        return None
+
+
+def _notion_error_detail(resp) -> str:
+    """Notion 오류 응답에서 code(고정 enum)·message(길이 상한)를 로그용으로 뽑는다.
+
+    code는 Notion이 정의한 고정 문자열(예: "rate_limited"·"validation_error")
+    이라 그 자체로는 실명·회사명을 담을 수 없어 그대로 남긴다. message는
+    상한(_NOTION_ERROR_MSG_MAX)을 넘는 부분을 잘라 요청 내용 에코 위험을
+    제한한다.
+    """
+    try:
+        body = resp.json()
+    except Exception:
+        return "(오류 응답 본문 파싱 불가)"
+    if not isinstance(body, dict):
+        return "(오류 응답 형식 예상과 다름)"
+    code = body.get("code", "")
+    message = (body.get("message") or "")[:_NOTION_ERROR_MSG_MAX]
+    return f"code={code} message={message}"
+
+
+def _post_with_retry(url: str, headers: dict, payload: dict):
+    """Notion POST — 429/5xx는 백오프 재시도(dart_client._retry와 동일 정책:
+    최대 3회, 재시도 대상 상태코드 동일). Retry-After 헤더가 있으면 그 값을
+    우선 대기하고, 없으면 dart_client._retry와 동일한 지수 백오프
+    (min(2**i, 10))를 쓴다.
+
+    dart_client._retry를 직접 호출하지 않는 이유: 그 함수는
+    `dart_client.requests.request`를 호출해, 이 모듈의 `requests.post`를
+    패치하는 기존 테스트(add_registry_record 호출측 계약)와 어긋난다.
+    재시도 정책(대상 상태코드·횟수·백오프)은 동일하게 따르고 Retry-After
+    처리만 이 모듈 전용으로 추가한다 — "다른 재시도 스타일을 새로 만들지
+    않는다"는 요구를 정책 수준에서 지키되, 패치 지점은 이 모듈에 둔다.
+
+    반환: (response|None, exc|None). 네트워크 예외가 재시도를 모두 소진해도
+    예외를 전파하지 않고 (None, exc)로 반환한다 — 레지스트리 코드는 예외를
+    호출측에 전파하지 않는다는 이 저장소의 원칙(add_registry_record 전체가
+    지켜야 하는 계약이지 이 헬퍼만의 예외가 아니다).
+    """
+    last_exc = None
+    resp = None
+    for i in range(_NOTION_MAX_ATTEMPTS):
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=15)
+        except requests.RequestException as exc:
+            last_exc = exc
+            resp = None
+            if i < _NOTION_MAX_ATTEMPTS - 1:
+                time.sleep(min(2 ** i, 10))
+            continue
+        last_exc = None
+        if resp.status_code not in _NOTION_RETRY_STATUSES:
+            return resp, None
+        if i < _NOTION_MAX_ATTEMPTS - 1:
+            wait = _retry_after_seconds(resp)
+            time.sleep(wait if wait is not None else min(2 ** i, 10))
+    return resp, last_exc
+
+
 def add_registry_record(name: str, record: dict, token: str = "", db_id: str = "") -> bool:
     """레지스트리 DB에 기록 행 추가. env 미설정/실패 시 False (graceful skip).
 
     record에 "companies"(list[str])가 있으면 관련기업 multi_select로 태깅해
     Notion에서 회사별로 필터링·추적 가능하게 한다. 이름 100자·목록 20개 상한
     (Notion multi_select 옵션 제약).
+
+    반환값은 기존 호출자 3곳(refresh_known_actors.py·discover_actors.py·
+    setup_known_actors_db.py)이 `if add_registry_record(...)`로 그대로 쓰므로
+    True/False를 유지한다(2026-07-29 사고 대응 PR에서 시그니처 불변 확정).
+    실패 원인(자격증명 미설정 / HTTP 오류 / 네트워크 예외 / 그 외 예외)은
+    반환값으로 구분하지 않는 대신 진단 로그(WARNING)로 남긴다 — 자격증명
+    미설정은 opt-in이 꺼진 정상 상태라 로그를 남기지 않고, 그 외 세 경우는
+    호출측이 원인을 알 수 있도록 상태코드·Notion 오류 코드/메시지(길이 상한)
+    또는 예외 종류를 남긴다. "N/M건 기록"처럼 실명이 들어갈 수 있는 값은
+    이 함수가 로그에 넣지 않는다 — 인물명·record 자체를 로그 인자로 쓰지 않음.
     """
     if not (token and db_id):
         token, db_id = _notion_env()
     if not (token and db_id):
-        return False
-    props: dict = {
-        "인물명": {"title": [{"text": {"content": name}}]},
-        "status": {"select": {"name": record.get("status") or "auto_matched"}},
-        "source": {"rich_text": [{"text": {"content": record.get("source", "")}}]},
-        "evidence": {"rich_text": _evidence_rich_text(
-            record.get("evidence"), record.get("company_links"))},
-        "date": {"rich_text": [{"text": {"content": record.get("date", "")}}]},
-        "tags": {"multi_select": [{"name": t} for t in record.get("tags", []) if t]},
-    }
-    companies = [c[:100] for c in (record.get("companies") or []) if c][:20]
-    if companies:
-        props["관련기업"] = {"multi_select": [{"name": c} for c in companies]}
-    if record.get("kind"):
-        props["구분"] = {"select": {"name": record["kind"]}}
-    if record.get("url"):
-        props["url"] = {"url": record["url"]}
-    if record.get("rcept_no"):
-        props["rcept_no"] = {"rich_text": [{"text": {"content": record["rcept_no"]}}]}
+        return False  # opt-in 미설정 — 정상 skip, 로그 없음
     try:
-        resp = requests.post(
-            f"{_NOTION_BASE}/pages", headers=_notion_headers(token),
-            json={"parent": {"database_id": db_id}, "properties": props}, timeout=15)
-        return resp.status_code == 200
-    except Exception:
+        props: dict = {
+            "인물명": {"title": [{"text": {"content": name}}]},
+            "status": {"select": {"name": record.get("status") or "auto_matched"}},
+            "source": {"rich_text": [{"text": {"content": record.get("source", "")}}]},
+            "evidence": {"rich_text": _evidence_rich_text(
+                record.get("evidence"), record.get("company_links"))},
+            "date": {"rich_text": [{"text": {"content": record.get("date", "")}}]},
+            "tags": {"multi_select": [{"name": t} for t in record.get("tags", []) if t]},
+        }
+        companies = [c[:100] for c in (record.get("companies") or []) if c][:20]
+        if companies:
+            props["관련기업"] = {"multi_select": [{"name": c} for c in companies]}
+        if record.get("kind"):
+            props["구분"] = {"select": {"name": record["kind"]}}
+        if record.get("url"):
+            props["url"] = {"url": record["url"]}
+        if record.get("rcept_no"):
+            props["rcept_no"] = {"rich_text": [{"text": {"content": record["rcept_no"]}}]}
+        resp, exc = _post_with_retry(
+            f"{_NOTION_BASE}/pages", _notion_headers(token),
+            {"parent": {"database_id": db_id}, "properties": props})
+    except Exception as e:
+        # 레코드 형태 이상 등 그 외 예외 — 예외 종류만 남긴다(레코드 내용
+        # 자체를 로그 인자로 쓰지 않아 실명·회사명 유출 경로를 만들지 않음).
+        log.warning("Notion 레지스트리 기록 실패(예외): %s", type(e).__name__)
         return False
+    if exc is not None:
+        log.warning("Notion 레지스트리 기록 실패(네트워크, 재시도 소진): %s",
+                    type(exc).__name__)
+        return False
+    if resp is None or resp.status_code != 200:
+        status = resp.status_code if resp is not None else "?"
+        detail = _notion_error_detail(resp) if resp is not None else "(응답 없음)"
+        log.warning("Notion 레지스트리 기록 실패: status=%s %s", status, detail)
+        return False
+    return True
 
 
 def ensure_registry_schema(token: str = "", db_id: str = "") -> bool:

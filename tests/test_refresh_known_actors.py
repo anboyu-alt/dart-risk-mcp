@@ -165,6 +165,65 @@ class TestMainNoiseSweep(unittest.TestCase):
             }})
         self.assertEqual(captured["known_names"], {"홍길동", "이준민"})
 
+    def test_main_reports_credential_missing_when_write_fails_without_creds(self):
+        # 2026-07-29 사고 대응: 자격증명이 실제로 없을 때만 이 원인을 지목해야 한다.
+        import scripts.refresh_known_actors as rk
+        registry = {"actors": {"홍길동": [{"source": "x"}]}}
+        matches = {"홍길동": [{"source": "y", "status": "auto_matched", "rcept_no": "R1"}]}
+        with patch.dict("os.environ", {"NOTION_TOKEN": "", "DB_KNOWN_ACTORS": ""}, clear=False), \
+             patch.object(rk, "_api_key", return_value="k"), \
+             patch.object(rk, "archive_fragment_rows", return_value=0), \
+             patch.object(rk, "fetch_registry_from_notion", return_value=registry), \
+             patch.object(rk, "collect_auto_matches", return_value=matches), \
+             patch.object(rk, "add_registry_record", return_value=False), \
+             patch.object(rk, "notion_credentials_configured", return_value=False), \
+             patch.object(rk, "send_mail") as mail:
+            rk.main()
+        body = mail.call_args.args[1]
+        self.assertIn("0/1건", body)
+        self.assertIn("미설정", body)
+        self.assertNotIn("자격증명은 정상", body)
+
+    def test_main_does_not_blame_credentials_when_configured_but_write_fails(self):
+        # 오늘 사고의 핵심 재현: 자격증명은 있는데 일부(또는 전부)만 실패해도
+        # "설정 확인 필요"라고 잘못 안내하면 안 된다 — 4/5건 성공이 그 증거였다.
+        import scripts.refresh_known_actors as rk
+        registry = {"actors": {"홍길동": [{"source": "x"}]}}
+        matches = {"홍길동": [{"source": "y", "status": "auto_matched", "rcept_no": "R1"}]}
+        with patch.dict("os.environ", {"NOTION_TOKEN": "t", "DB_KNOWN_ACTORS": "db"}, clear=False), \
+             patch.object(rk, "_api_key", return_value="k"), \
+             patch.object(rk, "archive_fragment_rows", return_value=0), \
+             patch.object(rk, "fetch_registry_from_notion", return_value=registry), \
+             patch.object(rk, "collect_auto_matches", return_value=matches), \
+             patch.object(rk, "add_registry_record", return_value=False), \
+             patch.object(rk, "notion_credentials_configured", return_value=True), \
+             patch.object(rk, "send_mail") as mail:
+            rk.main()
+        body = mail.call_args.args[1]
+        self.assertIn("0/1건", body)
+        self.assertIn("자격증명은 정상", body)
+        self.assertNotIn("설정 확인 필요", body)
+        self.assertNotIn("미설정", body)
+
+    def test_main_no_note_when_all_writes_succeed(self):
+        import scripts.refresh_known_actors as rk
+        registry = {"actors": {"홍길동": [{"source": "x"}]}}
+        matches = {"홍길동": [{"source": "y", "status": "auto_matched", "rcept_no": "R1"}]}
+        with patch.dict("os.environ", {"NOTION_TOKEN": "t", "DB_KNOWN_ACTORS": "db"}, clear=False), \
+             patch.object(rk, "_api_key", return_value="k"), \
+             patch.object(rk, "archive_fragment_rows", return_value=0), \
+             patch.object(rk, "fetch_registry_from_notion", return_value=registry), \
+             patch.object(rk, "collect_auto_matches", return_value=matches), \
+             patch.object(rk, "add_registry_record", return_value=True), \
+             patch.object(rk, "notion_credentials_configured", return_value=True), \
+             patch.object(rk, "send_mail") as mail:
+            rk.main()
+        body = mail.call_args.args[1]
+        self.assertIn("1/1건", body)
+        self.assertNotIn("설정 확인 필요", body)
+        self.assertNotIn("미설정", body)
+        self.assertNotIn("자격증명은 정상", body)
+
 
 if __name__ == "__main__":
     unittest.main()
