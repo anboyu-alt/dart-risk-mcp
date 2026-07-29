@@ -2585,6 +2585,210 @@ class TestExecutiveRosterLogoutRace(unittest.TestCase):
                           "로그아웃 뒤 #body에 자식 노드가 다시 생겼습니다")
 
 
+# ── 임원 1명뿐인 회사(세로 표) — 클릭이 실제 패널까지 도달하는지 통합 재현 ──
+#
+# 리뷰 지적(CRITICAL, task-3-report.md에 "발견된 제약(결함 아님)"으로
+# 기록됐던 항목). tableLayout은 레코드가 정확히 1건이면 세로(라벨:값) 표를
+# 만든다(app.js "rows.length === 1" 분기) — 위
+# TestExecutiveRosterActorLinkRendering은 2명 명단(가로 표)만 다뤄 이
+# 좌표계를 검증하지 못했다. 등기임원이 1명뿐인 회사(소형·SPC성 법인 —
+# 이 도구가 정확히 겨냥하는 대상)에서는 강조(.mk)는 뜨지만 클릭이
+# 배선되지 않아, 레지스트리 매칭이 실제로 있어도 경고·확인 방법으로 가는
+# 길이 없었다(ui.js의 isNameCell이 "!isVertical"을 요구했다). 그 수정을
+# 검증하려면 ".mk가 붙는다"만으로는 부족하다 — openExecutivePanel을
+# 스파이로 바꿔치기하지 않고 실제로 실행시켜(fetch·token만 스텁) 클릭이
+# 진짜로 경고 내용이 그려진 패널까지 도달하는지 확인해야 한다.
+_EXEC_VERTICAL_CLICK_HARNESS = r"""
+const vm = require("vm");
+const fs = require("fs");
+
+const ELEMENTS = Object.create(null);
+
+class FakeClassList {
+  constructor() { this._set = new Set(); }
+  add(c) { this._set.add(c); }
+  remove(c) { this._set.delete(c); }
+  contains(c) { return this._set.has(c); }
+}
+
+class FakeEl {
+  constructor(tag) {
+    this.tag = tag;
+    this.children = [];
+    this._text = "";
+    this._className = "";
+    this._id = "";
+    this.dataset = {};
+    this._listeners = {};
+    this.hidden = false;
+    this.classList = new FakeClassList();
+    this.style = {};
+  }
+  appendChild(c) { this.children.push(c); return c; }
+  insertBefore(node, ref) {
+    const idx = ref ? this.children.indexOf(ref) : -1;
+    if (idx === -1) this.children.push(node);
+    else this.children.splice(idx, 0, node);
+    return node;
+  }
+  removeChild(c) {
+    const idx = this.children.indexOf(c);
+    if (idx !== -1) this.children.splice(idx, 1);
+    return c;
+  }
+  get firstChild() { return this.children.length ? this.children[0] : null; }
+  insertRow() { const tr = new FakeEl("tr"); this.appendChild(tr); return tr; }
+  insertCell() { const td = new FakeEl("td"); this.appendChild(td); return td; }
+  createTHead() { const el = new FakeEl("thead"); this.appendChild(el); return el; }
+  createTBody() { const el = new FakeEl("tbody"); this.appendChild(el); return el; }
+  addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); }
+  dispatch(type) { (this._listeners[type] || []).forEach(function (fn) { fn({}); }); }
+  set textContent(v) { this._text = String(v); this.children = []; }
+  get textContent() { return this._text; }
+  set className(v) { this._className = v; }
+  get className() { return this._className; }
+  set id(v) { this._id = v; ELEMENTS[v] = this; }
+  get id() { return this._id; }
+}
+
+const bodyEl = new FakeEl("div");
+bodyEl.id = "body";
+function makeEl(tag, id) { const el = new FakeEl(tag); if (id) el.id = id; return el; }
+makeEl("section", "gate");
+makeEl("main", "main");
+makeEl("p", "gate-msg");
+const panelEl = makeEl("aside", "panel");
+const panelBodyEl = makeEl("div", "panel-body");
+makeEl("span", "head-name");
+makeEl("div", "bar");
+makeEl("div", "company-info");
+makeEl("button", "actor-btn");
+
+function textOf(node) {
+  if (!node) return "";
+  if (node.children && node.children.length) return node.children.map(textOf).join(" ");
+  return node.textContent || "";
+}
+
+function collectExecNameEls(node, out) {
+  out = out || [];
+  if (!node) return out;
+  const tokens = String(node.className || "").split(/\s+/);
+  if (tokens.indexOf("exec-name") !== -1) out.push(node);
+  (node.children || []).forEach(function (c) { collectExecNameEls(c, out); });
+  return out;
+}
+
+function collectMarked(node, out) {
+  out = out || [];
+  if (!node) return out;
+  const tokens = String(node.className || "").split(/\s+/);
+  if ((node.tag === "td" || node.tag === "span") && tokens.indexOf("mk") !== -1) {
+    out.push({ tag: node.tag, text: node.textContent, className: node.className || "" });
+  }
+  (node.children || []).forEach(function (c) { collectMarked(c, out); });
+  return out;
+}
+
+const sandbox = {
+  console: console,
+  document: {
+    createElement: function (tag) { return new FakeEl(tag); },
+    createDocumentFragment: function () { return new FakeEl("#fragment"); },
+    createTextNode: function (t) { const n = new FakeEl("#text"); n.textContent = t; return n; },
+    addEventListener: function () {},
+    getElementById: function (id) { return ELEMENTS[id] || null; },
+  },
+  localStorage: {
+    getItem: function () { return null; },
+    setItem: function () {},
+    removeItem: function () {},
+  },
+  fetch: function () { return Promise.reject(new Error("no network in test")); },
+};
+vm.createContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[1], "utf-8"), { filename: "app.js" }).runInContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).runInContext(sandbox);
+
+sandbox.token = async function () { return "fake-token"; };
+sandbox.fetch = function () {
+  return Promise.resolve({
+    status: 200,
+    json: async function () {
+      return { name: "이승호", actors: [{ name: "이승호", status: "auto_matched",
+        companies: ["FSN", "위노바"], evidence: "자동 발굴 근거",
+        url: "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=X" }], disclaimer: "면책" };
+    },
+  });
+};
+
+// openExecutivePanel을 스파이로 바꿔치기하지 않는다 — 대신 진짜 구현을
+// 감싸(래핑) 클릭이 만든 Promise를 밖에서 기다릴 수 있게만 한다. tableEl()
+// 안의 호출은 이름을 클릭 시점마다 다시 찾아가므로(클로저로 미리 굳지
+// 않는다 — openDocPanel 스파이 교체와 같은 원리, 위 여러 하네스 주석
+// 참고) 스크립트 실행 뒤에 재할당해도 클릭 시점에는 이 래퍼가 불린다.
+const realOpenExecutivePanel = sandbox.openExecutivePanel;
+let panelPromise = null;
+sandbox.openExecutivePanel = function (row) {
+  panelPromise = realOpenExecutivePanel(row);
+  return panelPromise;
+};
+
+const roster = [{"nm":"이승호","corp_name":"엔켐","birth_ym":"197203",
+  "ofcps":"사내이사","rgist_exctv_at":"등기","years":["2025","2026"]}];
+
+(async function () {
+  await sandbox.renderSection("executive_roster", roster);
+
+  const nameEls = collectExecNameEls(bodyEl, []);
+  nameEls.forEach(function (e) { e.dispatch("click"); });
+  if (panelPromise) await panelPromise;
+
+  process.stdout.write(JSON.stringify({
+    nameCellCount: nameEls.length,
+    marked: collectMarked(bodyEl, []),
+    panelOpen: panelEl.classList.contains("open"),
+    panelFlat: textOf(panelBodyEl),
+  }));
+})().catch(function (e) {
+  process.stderr.write(String((e && e.stack) || e) + "\n");
+  process.exit(1);
+});
+"""
+
+
+def run_exec_vertical_click():
+    """임원 1명(세로 표) 명단을 렌더하고 이름 셀을 실제로 클릭한 뒤,
+    (스파이가 아닌) 진짜 openExecutivePanel이 그린 패널 내용을 돌려준다."""
+    out = subprocess.run(
+        [_NODE, "-e", _EXEC_VERTICAL_CLICK_HARNESS, str(_APP), str(_UI)],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    if out.returncode != 0:
+        raise AssertionError(f"node 실행 실패:\n{out.stderr}")
+    return json.loads(out.stdout)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestExecutiveSingleRowVerticalTableClick(unittest.TestCase):
+    """리뷰 지적(CRITICAL) — 임원이 1명뿐이면 tableLayout이 세로 표를
+    만들고, 그 좌표계에서 이름 클릭이 배선되지 않았던 문제를 검증한다.
+    강조(.mk)만으로는 부족하다 — 실제로 클릭해 패널이 경고 내용을 그리는
+    것까지 확인한다(브리프: "소스를 grep하는 테스트를 쓰지 마라")."""
+
+    def test_single_executive_row_click_opens_panel_with_warning_content(self):
+        got = run_exec_vertical_click()
+        self.assertEqual(got["nameCellCount"], 1,
+                          "세로 표에서 이름 셀(.exec-name)을 찾지 못했습니다 — "
+                          "클릭 배선이 세로 좌표계에서 빠져 있습니다")
+        self.assertTrue(any("이승호" in m["text"] for m in got["marked"]),
+                         f"세로 표에서 강조(.mk)가 붙지 않았습니다: {got['marked']}")
+        self.assertTrue(got["panelOpen"], "이름 클릭이 실제 패널을 열지 못했습니다")
+        for token in ("동명이인", "공시 원문", "직접 문의",
+                      "레지스트리에는 생년월이 없어 자동 대조가 불가능합니다"):
+            self.assertIn(token, got["panelFlat"], f"{token}이 패널에 없습니다")
+
+
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestLabels(unittest.TestCase):
     def test_known_dart_fields_get_korean_labels(self):
@@ -3890,6 +4094,21 @@ class TestExecutivePanelRendersRegistryMatch(unittest.TestCase):
         # 방증한다. hidden 속성이 있었다면 애초에 이 FakeEl은 지원하지
         # 않아 여기 도달하기 전에 TypeError로 죽었을 것이다.
         self.assertTrue(got["panelOpen"])
+
+    def test_exec_namesake_warn_constant_text_is_rendered(self):
+        """리뷰 지적(IMPORTANT) — 위 테스트의 assertIn("동명이인", ...)은
+        actorLine()의 status별 경고(app.js ACTOR_STATUS.auto_matched.warn:
+        "자동으로 매칭된 이름입니다. 동명이인일 수 있으며 확인되지
+        않았습니다")에도 "동명이인"이 들어 있어, ui.js의 EXEC_NAMESAKE_WARN
+        상수 자체를 warnBox에서 통째로 지워도 초록으로 남는다 — 실제로
+        그렇게 983/983 통과한 사고였다. EXEC_NAMESAKE_WARN에만 있는 문구로
+        좁혀서 그 상수가 실제로 렌더되는지를 직접 확인한다."""
+        got = run_exec_panel(self._ROW, self._MATCHED_BODY)
+        self.assertIn(
+            "이름 표기가 일치한다는 뜻이지 신원을 확인한 것이 아닙니다",
+            got["flat"],
+            "EXEC_NAMESAKE_WARN(패널 고정 경고 상수)의 문구가 패널에 없습니다",
+        )
 
     def test_three_verification_steps_are_present(self):
         """"확인되지 않았습니다"로 끝내면 안 된다 — 공시 원문·등기 기록·

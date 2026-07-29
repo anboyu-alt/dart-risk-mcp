@@ -1004,14 +1004,21 @@ function tableEl(table, marks, records) {
         td.className = "doc";
         td.addEventListener("click", function () { openDocPanel(v); });
       }
-      // SE-6 Task 3 — 세로 표(임원 1명뿐인 회사, 드문 경우)는 클릭을
-      // 배선하지 않는다 — 강조(.mk)는 이 좌표계에서도 그대로 동작하므로
-      // (executiveRosterMarks가 record 순번을 "0|성명"으로 낸다) 안전
-      // 신호는 남지만, 상호작용은 이 드문 경우에서만 빠진다.
-      const isNameCell = !isVertical && i === nameCol && Array.isArray(records) && records[rowIdx];
+      // SE-6 Task 3 리뷰 수정 — 세로 표(임원 1명뿐인 회사)도 클릭을
+      // 배선한다. 처음엔 배선하지 않았으나, 이사회가 작은 회사·SPC성
+      // 법인일수록 이 도구가 정확히 노리는 대상이라 "강조는 뜨는데
+      // 경고·확인방법으로 가는 길이 없다"가 더 위험하다는 지적을 받아
+      // 뒤집었다. 세로에서는 rowIdx가 곧 table.keys의 필드 순번이라
+      // (tableLayout이 keys.map(...)으로 rows를 만든다) rowIdx===nameCol일
+      // 때가 "성명" 필드 행이고, 값 칸은 i===1(isValueCell)이다. 레코드는
+      // 항상 하나뿐이므로 records[0]을 쓴다(records[rowIdx]가 아니다 —
+      // rowIdx는 여기서 필드 순번이지 레코드 순번이 아니다).
+      const isNameCell = Array.isArray(records) && (isVertical
+        ? (rowIdx === nameCol && i === 1 && records[0])
+        : (i === nameCol && records[rowIdx]));
       if (isNameCell) {
         td.className = td.className ? (td.className + " exec-name") : "exec-name";
-        const rec = records[rowIdx];
+        const rec = isVertical ? records[0] : records[rowIdx];
         td.addEventListener("click", function () { openExecutivePanel(rec); });
       }
       // 강조 사유는 원본 값 툴팁 다음에 붙인다(순서가 반대면 아래 줄이
