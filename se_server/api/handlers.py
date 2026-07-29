@@ -8,11 +8,16 @@ Vercel 어댑터가 변환을 담당한다.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from dart_risk_mcp.core.dart_client import fetch_disclosure_full, resolve_corp
-from dart_risk_mcp.core.known_actors import actor_status, lookup_actors_by_company
+from dart_risk_mcp.core.known_actors import (
+    actor_status,
+    load_known_actors,
+    lookup_actors_by_company,
+)
 from se_server.api.auth import AuthError, extract_bearer
 from se_server.api.router import match
 from se_server.api.types import Request, Response
@@ -287,17 +292,51 @@ def _query(request: Request, name: str) -> str:
     return values[0].strip() if values else ""
 
 
+def _registry_opted_in() -> bool:
+    """Notion 레지스트리 opt-in 여부(NOTION_TOKEN + DB_KNOWN_ACTORS 둘 다 설정).
+
+    dart_risk_mcp.core.known_actors._notion_env()과 판정 기준이 같다(그
+    함수는 private이라 여기서 같은 두 env var를 직접 본다 — SE가 보는
+    유일한 opt-in 신호이고 core의 opt-in 계약이라 바뀔 일이 거의 없다).
+
+    "레지스트리를 못 가져왔다"와 "이 회사에 등재 인물이 없다"를 구분하는
+    유일한 판단 재료다(_actors 참고). DART_KNOWN_ACTORS_PATH 로컬 오버라이드
+    경로는 다루지 않는다 — Vercel은 파일시스템이 비영속이라 SE 운영에
+    쓰이지 않는다(개발자 로컬 전용 경로).
+    """
+    return bool(os.environ.get("NOTION_TOKEN")) and bool(os.environ.get("DB_KNOWN_ACTORS"))
+
+
 def _actors(request: Request, deps: Deps) -> Response:
     """회사에 등장한 공개기록 행위자.
 
     실명을 내보내므로 status와 면책을 **항상** 동반한다. 판정·점수는 없다.
     레지스트리는 opt-in이라 미설정 시 빈 목록이 정상이다(500이 아니다).
+
+    "없음"과 "못 가져옴"을 구분한다(SE-5c Task 2). load_known_actors()는
+    캐시·Notion이 둘 다 실패해도 예외를 던지지 않고 동봉 빈 스켈레톤으로
+    조용히 graceful-fallback한다(core 원칙) — 그래서 예외를 잡는 것만으로는
+    "이 회사에 인물이 없다"와 "레지스트리 전체를 못 가져왔다"를 구분할 수
+    없다. 둘 다 "성공했지만 텅 빈 결과"로 보인다. opt-in(_registry_opted_in)
+    인데도 레지스트리 전체(이 회사만이 아니라 전체)가 비어 있으면 그 자체가
+    실패 신호다 — opt-in 상태에서 진짜 등재 인물이 0명일 수는 없다(실측
+    1,258명, 2026-07-29).
     """
     company = _query(request, "company")
     if not company:
         return Response.error(400, "company 파라미터가 필요합니다")
 
     try:
+        # 회사별 조회(lookup_actors_by_company) 전에 레지스트리 전체가
+        # 실제로 로드됐는지 먼저 본다. 두 호출이 load_known_actors()를
+        # 각각 한 번씩 부르지만(총 2회), 콜드가 아닌 한 두 번째 호출은
+        # 첫 호출이 방금 채운 파일·주입 캐시를 그대로 맞아 사실상
+        # 공짜다 — 콜드(둘 다 실패)면 아래에서 즉시 502로 끊어 두 번째
+        # 호출(추가 Notion 왕복) 자체가 발생하지 않는다.
+        registry = load_known_actors()
+        registry_actors = registry.get("actors") if isinstance(registry, dict) else None
+        if not registry_actors and _registry_opted_in():
+            return Response.error(502, "레지스트리를 조회하지 못했습니다")
         found = lookup_actors_by_company(company) or []
     except Exception:
         return Response.error(502, "레지스트리를 조회하지 못했습니다")
@@ -335,13 +374,26 @@ def _config(deps: Deps) -> Response:
 
 def build_deps() -> Deps:
     """환경변수에서 의존성을 조립한다. Vercel 어댑터가 요청마다 호출한다."""
+    from se_server import registry_cache
     from se_server.api.auth import SupabaseAuth
     from se_server.cache import SupabaseCache
     from se_server.config import SEConfig
-    from se_server.http_cache import install
+    from se_server.http_cache import install as install_http_cache
     from se_server.jobs.supabase_store import SupabaseJobStore
 
     config = SEConfig.from_env()
+    cache_backend = SupabaseCache(config)
     # DART 응답 캐시를 core 시임에 주입한다(SE-1).
-    install(SupabaseCache(config))
+    install_http_cache(cache_backend)
+    # 행위자 레지스트리 캐시도 같은 Supabase 백엔드(se_cache 테이블)에
+    # 고정 키 하나로 얹는다(SE-5c) — 신규 벤더·신규 자격증명 없이 기존
+    # 배선을 재사용한다(근거: se_server/registry_cache.py 모듈 docstring).
+    # 레지스트리는 opt-in 기능이고 이 캐시는 순수 성능 최적화이므로,
+    # 설치 자체가 실패해도(지금은 SupabaseCache 생성자·registry_cache.install
+    # 둘 다 예외를 던지지 않지만 방어적으로) SE 전체(작업 생성·조회 등
+    # 캐시와 무관한 기능)가 함께 죽으면 안 된다.
+    try:
+        registry_cache.install(cache_backend)
+    except Exception:
+        pass
     return Deps(store=SupabaseJobStore(config), auth=SupabaseAuth(config), config=config)
