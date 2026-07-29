@@ -3175,6 +3175,144 @@ class TestDocPanelRendersDocumentBlocks(unittest.TestCase):
         self.assertIn("12,345자 중 일부입니다", got["flat"])
 
 
+# ── 행위자 패널(ui.js의 openActorPanel) 재오픈 시 클리어 확인 ──────────
+#
+# openActorPanel은 이 파일의 다른 클리어 지점(showGate·doc 목록 렌더 등,
+# 모두 `while (box.firstChild) box.removeChild(box.firstChild);`)과 달리
+# `box.innerHTML = "";`를 썼다 — 실제 브라우저에서는 동작하지만 패턴이
+# 어긋나 있었고, 위 _DOC_PANEL_HARNESS의 FakeEl은 innerHTML을 구현하지
+# 않아 그 경로로는 "이전 회사 내용이 실제로 지워지는가"를 검증할 수 없었다
+# (그래서 openActorPanel은 실 렌더 테스트가 0건이었다). 지금은 다른
+# 지점들과 같은 while(firstChild) 패턴으로 통일했고, 여기서는
+# _DOC_PANEL_HARNESS와 같은 최소 구성에 firstChild·removeChild를 실제로
+# 구현하는 FakeEl을 더해 회사 A → 회사 B 순서로 두 번 열어 A의 행위자
+# 이름이 B의 렌더에 남지 않는지 확인한다.
+_ACTOR_PANEL_HARNESS = r"""
+const vm = require("vm");
+const fs = require("fs");
+
+const ELEMENTS = Object.create(null);
+
+class FakeEl {
+  constructor(tag) {
+    this.tag = tag;
+    this.children = [];
+    this._text = "";
+    this._className = "";
+    this._id = "";
+    this.classList = { add: function () {}, remove: function () {} };
+  }
+  appendChild(c) { this.children.push(c); return c; }
+  get firstChild() { return this.children.length ? this.children[0] : null; }
+  removeChild(c) {
+    const idx = this.children.indexOf(c);
+    if (idx !== -1) this.children.splice(idx, 1);
+    return c;
+  }
+  set textContent(v) { this._text = String(v); this.children = []; }
+  get textContent() { return this._text; }
+  set className(v) { this._className = v; }
+  get className() { return this._className; }
+  set id(v) { this._id = v; ELEMENTS[v] = this; }
+  get id() { return this._id; }
+}
+
+const panelBody = new FakeEl("div");
+panelBody.id = "panel-body";
+const panel = new FakeEl("aside");
+panel.id = "panel";
+
+function flattenText(node) {
+  if (!node) return "";
+  if (!node.children || node.children.length === 0) return node.textContent || "";
+  return node.children.map(flattenText).join(" ");
+}
+
+const sandbox = {
+  console: console,
+  document: {
+    createElement: function (tag) { return new FakeEl(tag); },
+    createDocumentFragment: function () { return new FakeEl("#fragment"); },
+    createTextNode: function (t) { const n = new FakeEl("#text"); n.textContent = t; return n; },
+    addEventListener: function () {},
+    getElementById: function (id) { return ELEMENTS[id] || null; },
+  },
+  localStorage: {
+    getItem: function () { return null; },
+    setItem: function () {},
+    removeItem: function () {},
+  },
+  fetch: function () { return Promise.reject(new Error("no network in test")); },
+};
+vm.createContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[1], "utf-8"), { filename: "app.js" }).runInContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).runInContext(sandbox);
+
+sandbox.token = async function () { return "fake-token"; };
+sandbox.fetch = function (path) {
+  const isFirstCompany = path.indexOf("company=%(companyA)s") !== -1;
+  const body = isFirstCompany ? %(bodyA)s : %(bodyB)s;
+  return Promise.resolve({
+    status: 200,
+    json: async function () { return body; },
+  });
+};
+
+(async function () {
+  await sandbox.openActorPanel("%(companyA)s");
+  const afterFirst = flattenText(panelBody);
+  await sandbox.openActorPanel("%(companyB)s");
+  const afterSecond = flattenText(panelBody);
+  process.stdout.write(JSON.stringify({ afterFirst: afterFirst, afterSecond: afterSecond }));
+})().catch(function (e) {
+  process.stderr.write(String((e && e.stack) || e) + "\n");
+  process.exit(1);
+});
+"""
+
+
+def run_actor_panel(company_a: str, company_b: str, body_a_js: str, body_b_js: str):
+    """openActorPanel(company)을 두 회사에 대해 순서대로 실행해, 각 호출
+    직후 #panel-body에 실제로 그려진 전체 텍스트를 돌려준다."""
+    script = _ACTOR_PANEL_HARNESS % {
+        "companyA": company_a,
+        "companyB": company_b,
+        "bodyA": body_a_js,
+        "bodyB": body_b_js,
+    }
+    out = subprocess.run(
+        [_NODE, "-e", script, str(_APP), str(_UI)],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    if out.returncode != 0:
+        raise AssertionError(f"node 실행 실패:\n{out.stderr}")
+    return json.loads(out.stdout)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestActorPanelClearsPreviousCompanyOnReopen(unittest.TestCase):
+    """openActorPanel(company)을 다른 회사로 다시 열면 이전 회사의 내용이
+    실제로 지워지는지 확인한다 (box.innerHTML = "" → 클리어 패턴 통일)."""
+
+    _BODY_A = json.dumps({
+        "actors": [{"name": "김철수", "status": "verified", "companies": ["알파"]}],
+    }, ensure_ascii=False)
+
+    _BODY_B = json.dumps({
+        "actors": [{"name": "이영희", "status": "verified", "companies": ["베타"]}],
+    }, ensure_ascii=False)
+
+    def test_first_company_name_does_not_leak_into_second_render(self):
+        got = run_actor_panel("Alpha", "Beta", self._BODY_A, self._BODY_B)
+        self.assertIn("김철수", got["afterFirst"], "첫 번째 회사(Alpha)의 행위자가 렌더되지 않았습니다")
+        self.assertIn("이영희", got["afterSecond"], "두 번째 회사(Beta)의 행위자가 렌더되지 않았습니다")
+        self.assertNotIn(
+            "김철수", got["afterSecond"],
+            "이전 회사(Alpha)의 행위자 이름이 다음 회사(Beta) 패널에 남아 "
+            "있습니다 — openActorPanel이 이전 내용을 실제로 지우지 않았습니다",
+        )
+
+
 # ── doc: 섹션 본문 목록 통합(ui.js의 addDocListEntry) ──────────────────
 #
 # 원인: documentBlocks(파이프를 표로 복원)는 openDocPanel(우측 패널)에만
