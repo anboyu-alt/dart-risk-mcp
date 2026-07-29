@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from dart_risk_mcp.core.dart_client import fetch_disclosure_full, resolve_corp
 from dart_risk_mcp.core.known_actors import (
     actor_status,
-    load_known_actors,
+    load_known_actors_with_source,
     lookup_actors_by_company,
 )
 from se_server.api.auth import AuthError, extract_bearer
@@ -299,8 +299,10 @@ def _registry_opted_in() -> bool:
     함수는 private이라 여기서 같은 두 env var를 직접 본다 — SE가 보는
     유일한 opt-in 신호이고 core의 opt-in 계약이라 바뀔 일이 거의 없다).
 
-    "레지스트리를 못 가져왔다"와 "이 회사에 등재 인물이 없다"를 구분하는
-    유일한 판단 재료다(_actors 참고). DART_KNOWN_ACTORS_PATH 로컬 오버라이드
+    "레지스트리를 못 가져왔다"와 "이 회사에 등재 인물이 없다"를 구분할 때
+    core가 알려주는 출처(`load_known_actors_with_source`)와 함께 보는 값이다
+    (_actors 참고 — opt-in + 출처 bundled = 조회 실패).
+    DART_KNOWN_ACTORS_PATH 로컬 오버라이드
     경로는 다루지 않는다 — Vercel은 파일시스템이 비영속이라 SE 운영에
     쓰이지 않는다(개발자 로컬 전용 경로).
     """
@@ -313,31 +315,33 @@ def _actors(request: Request, deps: Deps) -> Response:
     실명을 내보내므로 status와 면책을 **항상** 동반한다. 판정·점수는 없다.
     레지스트리는 opt-in이라 미설정 시 빈 목록이 정상이다(500이 아니다).
 
-    "없음"과 "못 가져옴"을 구분한다(SE-5c Task 2). load_known_actors()는
-    캐시·Notion이 둘 다 실패해도 예외를 던지지 않고 동봉 빈 스켈레톤으로
-    조용히 graceful-fallback한다(core 원칙) — 그래서 예외를 잡는 것만으로는
-    "이 회사에 인물이 없다"와 "레지스트리 전체를 못 가져왔다"를 구분할 수
-    없다. 둘 다 "성공했지만 텅 빈 결과"로 보인다. opt-in(_registry_opted_in)
-    인데도 레지스트리 전체(이 회사만이 아니라 전체)가 비어 있으면 그 자체가
-    실패 신호다 — opt-in 상태에서 진짜 등재 인물이 0명일 수는 없다(실측
-    1,258명, 2026-07-29).
+    "없음"과 "못 가져옴"을 구분한다(SE-5c Task 2). 레지스트리 로딩은 캐시·
+    Notion이 둘 다 실패해도 예외를 던지지 않고 동봉 빈 스켈레톤으로 조용히
+    graceful-fallback한다(core 원칙) — 그래서 예외를 잡는 것만으로는 "이
+    회사에 인물이 없다"와 "레지스트리 전체를 못 가져왔다"를 구분할 수 없다.
+    둘 다 "성공했지만 텅 빈 결과"로 보인다.
+
+    구분 기준은 **출처**다(`load_known_actors_with_source`). opt-in인데
+    출처가 `bundled`(= 동봉 빈 스켈레톤으로 떨어졌다)면 조회 실패다.
+    "인물이 0명이면 실패"라는 예전 추론은 부트스트랩 직후나 should_store
+    필터가 전부 걸러낸 **진짜로 빈 레지스트리**를 실패로 오판했다
+    (SE-5c 최종 리뷰 Finding 1b).
     """
     company = _query(request, "company")
     if not company:
         return Response.error(400, "company 파라미터가 필요합니다")
 
     try:
-        # 회사별 조회(lookup_actors_by_company) 전에 레지스트리 전체가
-        # 실제로 로드됐는지 먼저 본다. 두 호출이 load_known_actors()를
-        # 각각 한 번씩 부르지만(총 2회), 콜드가 아닌 한 두 번째 호출은
-        # 첫 호출이 방금 채운 파일·주입 캐시를 그대로 맞아 사실상
-        # 공짜다 — 콜드(둘 다 실패)면 아래에서 즉시 502로 끊어 두 번째
-        # 호출(추가 Notion 왕복) 자체가 발생하지 않는다.
-        registry = load_known_actors()
-        registry_actors = registry.get("actors") if isinstance(registry, dict) else None
-        if not registry_actors and _registry_opted_in():
+        # 레지스트리는 요청당 **한 번만** 로드한다. 예전에는 건강 확인용으로
+        # 한 번, lookup_actors_by_company 안에서 또 한 번 로드했는데, 주입
+        # 캐시 적중 경로는 파일 캐시를 쓰지 않으므로(known_actors 참고)
+        # 두 번째 호출도 실제 Supabase 왕복이었다 — Vercel에는 영속
+        # $HOME이 없어 매 요청이 캐시 지연을 두 배로 물었다
+        # (SE-5c 최종 리뷰 Finding 1a). 로드한 레지스트리를 그대로 넘긴다.
+        registry, source = load_known_actors_with_source()
+        if source == "bundled" and _registry_opted_in():
             return Response.error(502, "레지스트리를 조회하지 못했습니다")
-        found = lookup_actors_by_company(company) or []
+        found = lookup_actors_by_company(company, registry=registry) or []
     except Exception:
         return Response.error(502, "레지스트리를 조회하지 못했습니다")
 
