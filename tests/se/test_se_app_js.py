@@ -428,6 +428,17 @@ function collectDocEls(node, out) {
   return out;
 }
 
+// SE-6 Task 3 — 임원 이름 클릭 배선 검증용. collectDocEls와 같은 목적,
+// 다른 클래스("exec-name")다.
+function collectExecNameEls(node, out) {
+  out = out || [];
+  if (!node) return out;
+  const tokens = String(node.className || "").split(/\s+/);
+  if (tokens.indexOf("exec-name") !== -1) out.push(node);
+  (node.children || []).forEach(function (c) { collectExecNameEls(c, out); });
+  return out;
+}
+
 const sandbox = {
   console: console,
   document: {
@@ -450,54 +461,76 @@ new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).
 
 const OPENED_DOCS = [];
 sandbox.openDocPanel = function (rceptNo) { OPENED_DOCS.push(rceptNo); };
+// SE-6 Task 3 — openExecutivePanel을 실제로 실행하면(기본 fetch는 항상
+// reject라) 네트워크 실패 경로만 타고 만다. 배선(어느 행이 어느 이름으로
+// 불렸는지) 확인이 목적이므로 doc-click 스파이와 같은 방식으로 캡처만
+// 한다 — 패널이 실제로 그리는 내용(등재 회사·경고·DART 링크)은
+// _EXEC_PANEL_HARNESS(아래, openExecutivePanel을 직접 실행)가 따로 본다.
+const EXEC_PANEL_CALLS = [];
+sandbox.openExecutivePanel = function (row) { EXEC_PANEL_CALLS.push(row); };
+
 // setup(기본 빈 문자열)은 renderSection(key, value)를 부르기 전에 실행할
 // 추가 JS문이다 — SIGNALS_DATA 주입(let 바인딩이라 vm.Script로 다시 실행해야
 // 값이 바뀐다, 아래 예시처럼 sandbox를 대상으로 runInContext한다)이나 다른
 // 섹션(예: disclosures)을 먼저 렌더해 그 부수효과(fund_usage가 읽는 전역)를
 // 재현하는 데 쓴다. 기본값(빈 문자열)이면 지금까지의 모든 호출부와 동일하게
 // 아무 일도 하지 않는다.
+(async function () {
 %(setup)s
-sandbox.renderSection(%(key)s, %(value)s);
+  // SE-6 Task 3 — executive_roster는 renderSection이 레지스트리 대조
+  // (비동기, 임원 수만큼 GET /api/se/actors?name=)를 기다리는 Promise를
+  // 돌려준다. 다른 모든 키는 여전히 undefined를 돌려주므로
+  // Promise.resolve(undefined)가 다음 마이크로태스크에서 바로 풀려 기존
+  // 호출부(run_render_section을 쓰는 다른 모든 테스트) 순서·타이밍은
+  // 그대로다.
+  await Promise.resolve(sandbox.renderSection(%(key)s, %(value)s));
 
-// 공시 힌트를 실제로 클릭해(openDocPanel 배선 검증) 결과를 OPENED_DOCS에
-// 남긴다 — showGate() 이전에 해야 패널이 실제로 열릴 뻔한 시점을 잡는다.
-collectDocEls(bodyEl, []).forEach(function (e) { e.dispatch("click"); });
+  // 공시 힌트를 실제로 클릭해(openDocPanel 배선 검증) 결과를 OPENED_DOCS에
+  // 남긴다 — showGate() 이전에 해야 패널이 실제로 열릴 뻔한 시점을 잡는다.
+  collectDocEls(bodyEl, []).forEach(function (e) { e.dispatch("click"); });
+  // 임원 이름 셀도 같은 시점에 클릭해 openExecutivePanel 배선을 확인한다.
+  collectExecNameEls(bodyEl, []).forEach(function (e) { e.dispatch("click"); });
 
-// 기존 필드(cells·titles·notes·marked·legends)는 항상 showGate() 이전
-// 상태를 그대로 담는다 — 아래에서 showGate()를 부르지만, 그 결과는 별도
-// afterGate 키에만 담아 기존 호출부(run_render_section을 쓰는 다른 모든
-// 테스트) 출력을 그대로 유지한다.
-const beforeGate = {
-  cells: collectCells(bodyEl, []),
-  titles: collectTitles(bodyEl, []),
-  notes: collectNotes(bodyEl, []),
-  marked: collectMarked(bodyEl, []),
-  legends: collectLegends(bodyEl, []),
-  tableRows: collectTableRows(bodyEl, []),
-  buttons: collectButtons(bodyEl, []),
-  fundChainCards: collectByClass(bodyEl, "fund-chain-card", []),
-  fundBarSegs: collectByClass(bodyEl, "fund-bar-seg", []),
-  openedDocs: OPENED_DOCS.slice(),
-};
+  // 기존 필드(cells·titles·notes·marked·legends)는 항상 showGate() 이전
+  // 상태를 그대로 담는다 — 아래에서 showGate()를 부르지만, 그 결과는 별도
+  // afterGate 키에만 담아 기존 호출부(run_render_section을 쓰는 다른 모든
+  // 테스트) 출력을 그대로 유지한다.
+  const beforeGate = {
+    cells: collectCells(bodyEl, []),
+    titles: collectTitles(bodyEl, []),
+    notes: collectNotes(bodyEl, []),
+    marked: collectMarked(bodyEl, []),
+    legends: collectLegends(bodyEl, []),
+    tableRows: collectTableRows(bodyEl, []),
+    buttons: collectButtons(bodyEl, []),
+    fundChainCards: collectByClass(bodyEl, "fund-chain-card", []),
+    fundBarSegs: collectByClass(bodyEl, "fund-bar-seg", []),
+    openedDocs: OPENED_DOCS.slice(),
+    execPanelCalls: EXEC_PANEL_CALLS.slice(),
+  };
 
-// 로그아웃(세션 만료 포함) 잔류 확인 — 강조 범례는 실명이 아니지만
-// "이전 사용자가 조회한 회사의 사실"을 드러낸다. #body 자체가 지워지면
-// 그 안의 강조·범례도 함께 지워지는지, 소스 문자열이 아니라 실제 렌더 →
-// 실제 showGate() 호출로 확인한다.
-sandbox.showGate("메시지");
+  // 로그아웃(세션 만료 포함) 잔류 확인 — 강조 범례는 실명이 아니지만
+  // "이전 사용자가 조회한 회사의 사실"을 드러낸다. #body 자체가 지워지면
+  // 그 안의 강조·범례도 함께 지워지는지, 소스 문자열이 아니라 실제 렌더 →
+  // 실제 showGate() 호출로 확인한다.
+  sandbox.showGate("메시지");
 
-const afterGate = {
-  cells: collectCells(bodyEl, []),
-  marked: collectMarked(bodyEl, []),
-  legends: collectLegends(bodyEl, []),
-  bodyChildCount: bodyEl.children.length,
-  // SE-5a Task 3 — 조달건 카드도 showGate()가 지우는 범위 안에 있는지
-  // 실행으로 확인한다(이 저장소는 로그아웃 후 이전 사용자 실명·사실이
-  // 남은 사고를 두 번 겪었다).
-  fundChainCards: collectByClass(bodyEl, "fund-chain-card", []),
-};
+  const afterGate = {
+    cells: collectCells(bodyEl, []),
+    marked: collectMarked(bodyEl, []),
+    legends: collectLegends(bodyEl, []),
+    bodyChildCount: bodyEl.children.length,
+    // SE-5a Task 3 — 조달건 카드도 showGate()가 지우는 범위 안에 있는지
+    // 실행으로 확인한다(이 저장소는 로그아웃 후 이전 사용자 실명·사실이
+    // 남은 사고를 두 번 겪었다).
+    fundChainCards: collectByClass(bodyEl, "fund-chain-card", []),
+  };
 
-process.stdout.write(JSON.stringify(Object.assign({}, beforeGate, { afterGate: afterGate })));
+  process.stdout.write(JSON.stringify(Object.assign({}, beforeGate, { afterGate: afterGate })));
+})().catch(function (e) {
+  process.stderr.write(String((e && e.stack) || e) + "\n");
+  process.exit(1);
+});
 """
 
 
@@ -1961,6 +1994,241 @@ class TestExecutiveRoster(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestExecutiveRosterDetailShape(unittest.TestCase):
+    """SE-6 Task 2b: fetch_executive_roster_detail은 dict가 아니라 사람
+    단위 행 목록(list[dict])을 돌려준다. normalizeRoster는 이 새 형태와
+    옛 형태({이름: {연도}}) 둘 다 받아야 한다 — 저장된 옛 작업 결과가
+    남아 있을 수 있다(SE-4h가 같은 이유로 봉투/배열 양쪽을 받았다).
+    """
+
+    _DETAIL_SAMPLE = (
+        '[{"nm":"이승호","corp_name":"엔켐","birth_ym":"197203",'
+        '"ofcps":"사내이사","rgist_exctv_at":"등기","years":["2025","2026"]},'
+        '{"nm":"박시묵","corp_name":"엔켐","birth_ym":"198001",'
+        '"ofcps":"사외이사","rgist_exctv_at":"등기","years":["2026"]}]'
+    )
+
+    def test_new_shape_names_become_rows(self):
+        got = run_js(f'normalizeRoster({self._DETAIL_SAMPLE})')
+        self.assertEqual(len(got), 2)
+        self.assertEqual(got[0]["성명"], "이승호")
+
+    def test_new_shape_years_are_joined_readably(self):
+        got = run_js(f'normalizeRoster({self._DETAIL_SAMPLE})')
+        self.assertIn("2025", got[0]["재직 연도"])
+        self.assertIn("2026", got[0]["재직 연도"])
+
+    def test_new_shape_preserves_detail_fields(self):
+        """corp_name·birth_ym·ofcps·rgist_exctv_at이 행에 그대로 남아야
+        executiveMatches(이미 이 필드를 기대함)와 Task 3의 패널이 쓸 수
+        있다 — 여기서 버리면 확인 재료가 다시 화면에 도착하지 못한다."""
+        got = run_js(f'normalizeRoster({self._DETAIL_SAMPLE})')
+        row = got[0]
+        self.assertEqual(row["corp_name"], "엔켐")
+        self.assertEqual(row["birth_ym"], "197203")
+        self.assertEqual(row["ofcps"], "사내이사")
+        self.assertEqual(row["rgist_exctv_at"], "등기")
+
+    def test_old_shape_still_works_unchanged(self):
+        """옛 dict-of-name-to-years 형태(저장된 과거 작업 결과)도 계속
+        렌더된다 — 새 배열 분기를 추가해도 기존 경로를 깨면 안 된다."""
+        got = run_js(f'normalizeRoster({TestExecutiveRoster._SAMPLE})')
+        self.assertEqual(len(got), 2)
+        self.assertEqual(got[0]["성명"], "김기범")
+
+    def test_empty_array_is_empty_list(self):
+        self.assertEqual(run_js("normalizeRoster([])"), [])
+
+    def test_rows_without_nm_are_dropped_not_crashed(self):
+        got = run_js('normalizeRoster([{"corp_name":"엔켐"},{"nm":"박시묵","years":[]}])')
+        self.assertEqual([r["성명"] for r in got], ["박시묵"])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestExecutiveMatches(unittest.TestCase):
+    """executiveMatches(rosterRows, lookupResults) — 임원 명단과 GET
+    /api/se/actors?name= 조회 결과(handlers.py `_actors` name 분기, SE-6
+    Task 1)를 대조하는 순수 로직. 이름 매칭 자체는 서버(lookup_actor)가
+    이미 정확·정규화·폴딩 3단계로 처리하므로 여기서는 재구현하지 않는다
+    — lookupResults[성명]을 그대로 찾아 쓸 뿐이다.
+
+    rosterRows는 normalizeRoster(value)의 출력(최소 {"성명", "재직 연도"})
+    이다. 실제 호출부(ui.js, Task 3)가 exctvSttus 원문 필드(corp_name·
+    birth_ym·ofcps·rgist_exctv_at)를 같은 행에 덧붙일 수 있으므로, 픽스처는
+    그 확장 형태 그대로 쓴다(SE-6 Task 2 브리핑 — "실측 형태 그대로").
+    "이 회사 자신" 제외 판정은 그중 corp_name 필드 하나만 본다 — 없으면
+    비교할 방법이 없으므로 아무것도 빼지 않는다(정보를 남기는 쪽으로
+    실패한다).
+    """
+
+    _ENCHEM_ROW = (
+        '{"성명":"이승호","재직 연도":"2025, 2026","nm":"이승호",'
+        '"corp_name":"엔켐","birth_ym":"197203","ofcps":"사내이사",'
+        '"rgist_exctv_at":"등기"}'
+    )
+    _UNMATCHED_ROW = (
+        '{"성명":"박시묵","재직 연도":"2026","nm":"박시묵",'
+        '"corp_name":"엔켐","birth_ym":"198001","ofcps":"사외이사",'
+        '"rgist_exctv_at":"등기"}'
+    )
+    # 실측(2026-07-29): 엔켐 임원 이승호 → 레지스트리 FSN·위노바, auto_matched
+    _LOOKUPS = (
+        '{"이승호":{"name":"이승호","actors":[{"name":"이승호",'
+        '"status":"auto_matched","companies":["FSN","위노바"],'
+        '"evidence":"..."}],"disclaimer":"..."},'
+        '"박시묵":{"name":"박시묵","actors":[],"disclaimer":"..."}}'
+    )
+
+    def test_matched_executive_gets_registered_true_and_companies(self):
+        got = run_js(f'executiveMatches([{self._ENCHEM_ROW}], {self._LOOKUPS})')
+        self.assertTrue(got["이승호"]["registered"])
+        self.assertEqual(sorted(got["이승호"]["companies"]), ["FSN", "위노바"])
+
+    def test_unmatched_executive_is_present_with_registered_false(self):
+        got = run_js(
+            f'executiveMatches([{self._ENCHEM_ROW}, {self._UNMATCHED_ROW}], {self._LOOKUPS})'
+        )
+        self.assertIn("박시묵", got, "매칭 0건인 임원이 결과에서 빠졌습니다")
+        self.assertFalse(got["박시묵"]["registered"])
+        self.assertEqual(got["박시묵"]["companies"], [])
+
+    def test_own_company_is_excluded_from_companies(self):
+        lookups = (
+            '{"이승호":{"name":"이승호","actors":[{"name":"이승호",'
+            '"status":"auto_matched","companies":["FSN","엔켐","위노바"],'
+            '"evidence":"..."}],"disclaimer":"..."}}'
+        )
+        got = run_js(f'executiveMatches([{self._ENCHEM_ROW}], {lookups})')
+        self.assertNotIn(
+            "엔켐", got["이승호"]["companies"],
+            "엔켐 임원이 엔켐에 등장한다는, 정보 없는 사실이 그대로 남았습니다",
+        )
+        self.assertEqual(sorted(got["이승호"]["companies"]), ["FSN", "위노바"])
+
+    def test_own_company_field_missing_does_not_exclude_anything(self):
+        """corp_name이 없는 행은 비교할 방법이 없다 — 어긋날 때 제외하지
+        않는 쪽(정보를 남기는 쪽)으로 실패해야 한다(SE-6 Task 2 브리핑)."""
+        row = '{"성명":"이승호","재직 연도":"2025"}'
+        lookups = (
+            '{"이승호":{"name":"이승호","actors":[{"name":"이승호",'
+            '"status":"auto_matched","companies":["FSN","이승호"],'
+            '"evidence":"..."}],"disclaimer":"..."}}'
+        )
+        got = run_js(f'executiveMatches([{row}], {lookups})')
+        self.assertEqual(sorted(got["이승호"]["companies"]), ["FSN", "이승호"])
+
+    def test_statuses_keep_auto_matched_as_is(self):
+        got = run_js(f'executiveMatches([{self._ENCHEM_ROW}], {self._LOOKUPS})')
+        self.assertIn("auto_matched", got["이승호"]["statuses"])
+
+    def test_empty_or_non_array_roster_rows_returns_empty_object(self):
+        for expr in (
+            "executiveMatches([], {})",
+            "executiveMatches(null, {})",
+            'executiveMatches("x", {})',
+            "executiveMatches({}, {})",
+        ):
+            self.assertEqual(run_js(expr), {})
+
+    def test_missing_or_malformed_lookup_results_does_not_throw(self):
+        for lookups_expr in ("null", "undefined", '"x"', "[]"):
+            got = run_js(f'executiveMatches([{self._ENCHEM_ROW}], {lookups_expr})')
+            self.assertFalse(got["이승호"]["registered"])
+            self.assertEqual(got["이승호"]["companies"], [])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestExecutiveRosterMarks(unittest.TestCase):
+    """executiveRosterMarks(records, matches) — executiveMatches()의 결과를
+    cellMarks()와 같은 좌표 형식({"행번호|열키": 문구})으로 바꾼다. ui.js
+    (Task 3)가 이 결과를 tableEl(table, marks)에 그대로 넘겨 기존 SE-4g
+    강조 파이프라인(.mk + 범례)을 재사용한다.
+    """
+
+    def test_matched_row_gets_marked_at_name_column(self):
+        records = '[{"성명":"이승호","corp_name":"엔켐"}]'
+        matches = '{"이승호":{"registered":true,"companies":["FSN","위노바"],"statuses":["auto_matched"]}}'
+        got = run_js(f'executiveRosterMarks({records}, {matches})')
+        self.assertEqual(got, {"0|성명": "같은 이름이 레지스트리에 있음"})
+
+    def test_verdict_language_is_never_used(self):
+        """판정선(계획 문서) — "이 임원이 다른 회사에도 등장"이라고 쓰면
+        안 된다. 문구 자체를 고정 상수로 검사한다."""
+        records = '[{"성명":"이승호"}]'
+        matches = '{"이승호":{"registered":true,"companies":["FSN"],"statuses":["auto_matched"]}}'
+        got = run_js(f'executiveRosterMarks({records}, {matches})')
+        why = got["0|성명"]
+        self.assertNotIn("다른 회사", why)
+        self.assertNotIn("등장", why)
+        self.assertNotIn("관여", why)
+        self.assertNotIn("연루", why)
+
+    def test_unmatched_row_is_not_marked(self):
+        records = '[{"성명":"박시묵"}]'
+        matches = '{"박시묵":{"registered":false,"companies":[],"statuses":[]}}'
+        got = run_js(f'executiveRosterMarks({records}, {matches})')
+        self.assertEqual(got, {})
+
+    def test_row_not_present_in_matches_is_not_marked(self):
+        """조회 자체가 안 된 임원(matches에 이름이 없음)도 강조 없음 —
+        "매칭 없음"과 "조회 안 됨"을 같은 방식(강조 없음)으로 처리한다."""
+        records = '[{"성명":"조회안된사람"}]'
+        got = run_js(f'executiveRosterMarks({records}, {{}})')
+        self.assertEqual(got, {})
+
+    def test_row_index_is_preserved_for_multiple_rows(self):
+        records = '[{"성명":"박시묵"},{"성명":"이승호"}]'
+        matches = ('{"박시묵":{"registered":false,"companies":[],"statuses":[]},'
+                   '"이승호":{"registered":true,"companies":["FSN"],"statuses":["auto_matched"]}}')
+        got = run_js(f'executiveRosterMarks({records}, {matches})')
+        self.assertEqual(list(got.keys()), ["1|성명"])
+
+    def test_non_array_records_or_non_object_matches_returns_empty(self):
+        for expr in (
+            "executiveRosterMarks(null, {})",
+            'executiveRosterMarks("x", {})',
+            "executiveRosterMarks([], null)",
+            'executiveRosterMarks([{"성명":"a"}], "x")',
+        ):
+            self.assertEqual(run_js(expr), {})
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestDartDisclosureLink(unittest.TestCase):
+    """dartDisclosureLink(url) — 레지스트리의 url이 dart.fss.or.kr 호스트일
+    때만 그대로 돌려주고, 그 외는 null(브리프: "호스트가 dart.fss.or.kr인
+    것만 링크로 만들고, 아니면 텍스트로만 둔다" — 레지스트리는 외부
+    (Notion) 데이터다).
+    """
+
+    def test_dart_host_passes_through(self):
+        url = "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260715900769"
+        self.assertEqual(run_js(f'dartDisclosureLink({json.dumps(url)})'), url)
+
+    def test_dart_host_bare_root_passes_through(self):
+        self.assertEqual(
+            run_js('dartDisclosureLink("https://dart.fss.or.kr")'),
+            "https://dart.fss.or.kr",
+        )
+
+    def test_other_host_is_rejected(self):
+        self.assertIsNone(run_js('dartDisclosureLink("https://evil.example.com/x")'))
+
+    def test_host_spoofing_via_subdomain_suffix_is_rejected(self):
+        self.assertIsNone(run_js('dartDisclosureLink("https://dart.fss.or.kr.evil.com/x")'))
+
+    def test_host_spoofing_via_userinfo_is_rejected(self):
+        self.assertIsNone(run_js('dartDisclosureLink("https://dart.fss.or.kr@evil.com/x")'))
+
+    def test_non_string_is_rejected(self):
+        for expr in ("dartDisclosureLink(null)", "dartDisclosureLink(undefined)", "dartDisclosureLink(123)"):
+            self.assertIsNone(run_js(expr))
+
+    def test_empty_string_is_rejected(self):
+        self.assertIsNone(run_js('dartDisclosureLink("")'))
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestExecutiveRosterWiredIntoSectionBlocks(unittest.TestCase):
     """normalizeRoster를 정의만 하고 sectionBlocks 경로에 안 꽂으면(이 저장소에서
     이미 세 번 난 사고 유형) 화면은 여전히 이름을 열 제목으로 그린다 —
@@ -2029,6 +2297,496 @@ class TestExecutiveRosterRenderWiring(unittest.TestCase):
                           "이름이 여전히 소제목(h3)으로 떨어져 나옵니다 — "
                           "renderSection이 key를 sectionBlocks에 넘기지 않는 회귀입니다")
         self.assertNotIn("박시묵", got["titles"])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestExecutiveRosterActorLinkRendering(unittest.TestCase):
+    """SE-6 Task 3 — 임원 표에 레지스트리 대조 표시를 달고, 이름 클릭으로
+    우측 패널을 여는 배선을 실렌더로 확인한다(브리프: "소스를 grep하는
+    테스트를 쓰지 마라").
+
+    실측(2026-07-29): 엔켐 임원 이승호 → 레지스트리 FSN·위노바,
+    auto_matched. 박시묵은 매칭 없음(대조는 됐지만 등재가 없다).
+    """
+
+    _ROSTER = (
+        '[{"nm":"이승호","corp_name":"엔켐","birth_ym":"197203",'
+        '"ofcps":"사내이사","rgist_exctv_at":"등기","years":["2025","2026"]},'
+        '{"nm":"박시묵","corp_name":"엔켐","birth_ym":"198001",'
+        '"ofcps":"사외이사","rgist_exctv_at":"등기","years":["2026"]}]'
+    )
+
+    # 이승호만 레지스트리에 있고, 그 외 이름(박시묵 포함)은 빈 목록으로
+    # 응답한다 — 서버(lookup_actor)가 실제로 이렇게 동작한다(정확히 그
+    # 이름으로만 찾는다).
+    _MATCH_SETUP = (
+        'sandbox.token = async function () { return "fake-token"; };\n'
+        'sandbox.fetch = function (path) {\n'
+        '  var url = String(path);\n'
+        '  var body;\n'
+        '  if (url.indexOf("name=" + encodeURIComponent("이승호")) !== -1) {\n'
+        '    body = {name: "이승호", actors: [{name: "이승호", status: "auto_matched",\n'
+        '      companies: ["FSN", "위노바"], evidence: "자동 발굴",\n'
+        '      url: "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=X"}], disclaimer: "면책"};\n'
+        '  } else {\n'
+        '    body = {name: "", actors: [], disclaimer: "면책"};\n'
+        '  }\n'
+        '  return Promise.resolve({ status: 200, json: function () { return Promise.resolve(body); } });\n'
+        '};\n'
+    )
+
+    def test_matched_executive_row_is_marked_with_fact_only_phrase(self):
+        got = run_render_section('"executive_roster"', self._ROSTER, self._MATCH_SETUP)
+        marked_texts = [m["text"] for m in got["marked"]]
+        self.assertIn("이승호", marked_texts, f"매칭된 임원이 강조되지 않았습니다: {got['marked']}")
+        self.assertIn(
+            "같은 이름이 레지스트리에 있음", " ".join(got["legends"]),
+            "범례에 판정선 문구가 없습니다",
+        )
+
+    def test_unmatched_executive_row_is_not_marked(self):
+        got = run_render_section('"executive_roster"', self._ROSTER, self._MATCH_SETUP)
+        marked_texts = [m["text"] for m in got["marked"]]
+        self.assertNotIn("박시묵", marked_texts, "매칭 안 된 임원이 강조됐습니다")
+
+    def test_clicking_name_opens_panel_for_that_row(self):
+        got = run_render_section('"executive_roster"', self._ROSTER, self._MATCH_SETUP)
+        calls = got["execPanelCalls"]
+        self.assertEqual(len(calls), 2, f"이름 클릭 배선이 모든 행에 없습니다: {calls}")
+        names = sorted(c["성명"] for c in calls)
+        self.assertEqual(names, ["박시묵", "이승호"])
+
+    def test_zero_executives_shows_dart_unavailable_not_generic_empty(self):
+        """DART가 013(자료 없음)을 주는 회사가 실제로 있다(셀트리온).
+        "해당 없음"이 아니라 "DART가 이 회사의 임원현황을 제공하지
+        않습니다"라고 써야 한다."""
+        got = run_render_section('"executive_roster"', "[]")
+        combined = " ".join(got["notes"])
+        self.assertIn("DART가 이 회사의 임원현황을 제공하지 않습니다", combined)
+        self.assertNotIn("표시할 데이터가 없습니다", combined)
+
+    def test_lookup_failure_states_that_it_was_not_checked(self):
+        """세션·네트워크 실패(setup_js 없음 — 기본 fetch는 항상 reject,
+        기본 token()은 SESSION이 없어 즉시 throw)로 대조 자체를 못 했으면,
+        침묵하는 대신(→ "대조했는데 없었다"로 오독됨) 그 사실을 표기한다."""
+        got = run_render_section('"executive_roster"', self._ROSTER)
+        combined = " ".join(got["notes"])
+        self.assertIn("대조", combined)
+        self.assertTrue(
+            "못했습니다" in combined or "하지 않았습니다" in combined or "실패" in combined,
+            f"조회 실패 사실이 문구로 드러나지 않습니다: {got['notes']}",
+        )
+        # 실패했다는 사실만 말해야 한다 — 매칭이 있는 것처럼 강조가 붙으면
+        # 안 된다(조회를 안 했으니 강조할 근거가 없다).
+        self.assertEqual(got["marked"], [])
+
+    def test_show_gate_clears_matched_names_marks_and_legend(self):
+        got = run_render_section('"executive_roster"', self._ROSTER, self._MATCH_SETUP)
+        self.assertIn("이승호", got["cells"])  # 전제 — 지워지기 전엔 있어야 한다
+        self.assertNotIn("이승호", got["afterGate"]["cells"],
+                          "showGate() 이후에도 임원 실명이 #body에 남아 있습니다")
+        self.assertEqual(got["afterGate"]["marked"], [],
+                          "showGate() 이후에도 강조가 남아 있습니다")
+        self.assertEqual(got["afterGate"]["legends"], [],
+                          "showGate() 이후에도 범례가 남아 있습니다")
+
+    def test_no_verdict_or_identity_language_anywhere(self):
+        """판정선(계획 문서 "말할 수 있는 것과 없는 것") — "이 임원이 다른
+        회사에도 등장" 류의 신원 단정 문구가 어디에도 나오면 안 된다."""
+        got = run_render_section('"executive_roster"', self._ROSTER, self._MATCH_SETUP)
+        combined = json.dumps(got, ensure_ascii=False)
+        for phrase in ("다른 회사에도 등장", "관여", "연루", "확인됨", "검증됨"):
+            self.assertNotIn(phrase, combined, f"금지 문구 '{phrase}'가 출력에 있습니다")
+
+
+# ── 로그아웃 경합 — 배치 조회가 아직 날아가 있는 채로 showGate()가 먼저 ──
+#
+# 위 TestExecutiveRosterActorLinkRendering의 showGate 검사는 대조가 끝난
+# "정착된" 상태에서 showGate()를 부른다. 그런데 실제 사고 경로는 다르다 —
+# enrichExecutiveRoster(서버 조회, 순차)가 아직 끝나지 않은 채로 로그아웃
+# (또는 세션 만료)이 먼저 일어나면, 뒤늦게 돌아온 응답이 이미 비운 화면
+# 위에 이전 사용자의 실명을 다시 그릴 수 있다(EXEC_GEN 가드가 막아야 하는
+# 정확히 그 경합). run_render_section은 항상 "전체 완료 후 showGate"
+# 순서로만 부르므로 이 경합을 재현하지 못한다 — 별도로 renderSection이
+# 돌려주는 Promise를 await하지 않고 그 사이에 showGate()를 끼워 넣는다.
+_EXEC_LOGOUT_RACE_HARNESS = r"""
+const vm = require("vm");
+const fs = require("fs");
+
+const ELEMENTS = Object.create(null);
+
+// removeChild가 부른다 — _RENDER_SECTION_HARNESS의 같은 이름 함수와 같은
+// 이유(그 하네스 주석 참고): 떨어져 나간 서브트리의 id 등록을 남겨두면
+// sectionHolder(key)가 "떨어져 나간 옛 holder"를 그대로 돌려줘, 뒤늦게
+// 끝난 배치가 화면(bodyEl)에 안 붙는데도 잔류 검사가 우연히 통과해버린다
+// (이 파일이 실제로 한 번 그렇게 속았다 — 이 하네스를 처음 짤 때도
+// 똑같이 속을 뻔해서 여기 남긴다).
+function unregisterIds(node) {
+  if (!node) return;
+  if (node._id && ELEMENTS[node._id] === node) delete ELEMENTS[node._id];
+  (node.children || []).forEach(unregisterIds);
+}
+
+class FakeClassList {
+  constructor() { this._set = new Set(); }
+  add(c) { this._set.add(c); }
+  remove(c) { this._set.delete(c); }
+  contains(c) { return this._set.has(c); }
+}
+
+class FakeEl {
+  constructor(tag) {
+    this.tag = tag;
+    this.children = [];
+    this._text = "";
+    this._className = "";
+    this._id = "";
+    this.dataset = {};
+    this._listeners = {};
+    this.hidden = false;
+    this.classList = new FakeClassList();
+    this.style = {};
+  }
+  appendChild(c) { this.children.push(c); return c; }
+  insertBefore(node, ref) {
+    const idx = ref ? this.children.indexOf(ref) : -1;
+    if (idx === -1) this.children.push(node);
+    else this.children.splice(idx, 0, node);
+    return node;
+  }
+  removeChild(c) {
+    const idx = this.children.indexOf(c);
+    if (idx !== -1) {
+      this.children.splice(idx, 1);
+      unregisterIds(c);
+    }
+    return c;
+  }
+  get firstChild() { return this.children.length ? this.children[0] : null; }
+  insertRow() { const tr = new FakeEl("tr"); this.appendChild(tr); return tr; }
+  insertCell() { const td = new FakeEl("td"); this.appendChild(td); return td; }
+  createTHead() { const el = new FakeEl("thead"); this.appendChild(el); return el; }
+  createTBody() { const el = new FakeEl("tbody"); this.appendChild(el); return el; }
+  addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); }
+  dispatch(type) { (this._listeners[type] || []).forEach(function (fn) { fn({}); }); }
+  set textContent(v) { this._text = String(v); this.children = []; }
+  get textContent() { return this._text; }
+  set className(v) { this._className = v; }
+  get className() { return this._className; }
+  set id(v) { this._id = v; ELEMENTS[v] = this; }
+  get id() { return this._id; }
+}
+
+const bodyEl = new FakeEl("div");
+bodyEl.id = "body";
+function makeEl(tag, id) { const el = new FakeEl(tag); if (id) el.id = id; return el; }
+makeEl("section", "gate");
+makeEl("main", "main");
+makeEl("p", "gate-msg");
+makeEl("aside", "panel");
+makeEl("div", "panel-body");
+makeEl("span", "head-name");
+makeEl("div", "bar");
+makeEl("div", "company-info");
+makeEl("button", "actor-btn");
+
+function collectCells(node, out) {
+  out = out || [];
+  if (!node) return out;
+  if (node.tag === "td" || node.tag === "th") out.push(node.textContent);
+  (node.children || []).forEach(function (c) { collectCells(c, out); });
+  return out;
+}
+
+const sandbox = {
+  console: console,
+  document: {
+    createElement: function (tag) { return new FakeEl(tag); },
+    createDocumentFragment: function () { return new FakeEl("#fragment"); },
+    createTextNode: function (t) { const n = new FakeEl("#text"); n.textContent = t; return n; },
+    addEventListener: function () {},
+    getElementById: function (id) { return ELEMENTS[id] || null; },
+  },
+  localStorage: {
+    getItem: function () { return null; },
+    setItem: function () {},
+    removeItem: function () {},
+  },
+  fetch: function () { return Promise.reject(new Error("no network in test")); },
+};
+vm.createContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[1], "utf-8"), { filename: "app.js" }).runInContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).runInContext(sandbox);
+
+// 이름마다 GET /api/se/actors?name=을 흉내 낸다 — 매 호출을 한 마이크로
+//태스크 뒤로 늦춰 "아직 배치가 끝나지 않은 사이" 구간을 실제로 만든다.
+sandbox.token = async function () { return "fake-token"; };
+sandbox.fetch = function (path) {
+  return new Promise(function (resolve) {
+    setTimeout(function () {
+      resolve({
+        status: 200,
+        json: async function () {
+          return { name: "이승호", actors: [{ name: "이승호", status: "auto_matched",
+            companies: ["FSN", "위노바"], evidence: "e", url: "https://dart.fss.or.kr/x" }],
+            disclaimer: "면책" };
+        },
+      });
+    }, 5);
+  });
+};
+
+const roster = %(roster)s;
+
+(async function () {
+  const pending = sandbox.renderSection("executive_roster", roster); // await하지 않는다
+  sandbox.showGate("세션이 만료되었습니다"); // 배치가 아직 날아가 있는 사이에 로그아웃
+  await pending; // 이제 배치가 끝난다 — 그 결과가 화면에 다시 그려지면 안 된다
+
+  process.stdout.write(JSON.stringify({
+    cells: collectCells(bodyEl, []),
+    bodyChildCount: bodyEl.children.length,
+  }));
+})().catch(function (e) {
+  process.stderr.write(String((e && e.stack) || e) + "\n");
+  process.exit(1);
+});
+"""
+
+
+def run_exec_logout_race(roster_js: str):
+    script = _EXEC_LOGOUT_RACE_HARNESS % {"roster": roster_js}
+    out = subprocess.run(
+        [_NODE, "-e", script, str(_APP), str(_UI)],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    if out.returncode != 0:
+        raise AssertionError(f"node 실행 실패:\n{out.stderr}")
+    return json.loads(out.stdout)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestExecutiveRosterLogoutRace(unittest.TestCase):
+    """SE-6 Task 3 — 대조 배치가 아직 끝나지 않은 채로 로그아웃(세션 만료
+    포함)이 먼저 일어나면, 뒤늦게 돌아온 서버 응답이 이미 비운 화면 위에
+    이전 사용자의 실명을 다시 그리면 안 된다(EXEC_GEN 세대 가드).
+    """
+
+    _ROSTER = (
+        '[{"nm":"이승호","corp_name":"엔켐","birth_ym":"197203",'
+        '"ofcps":"사내이사","rgist_exctv_at":"등기","years":["2025","2026"]}]'
+    )
+
+    def test_late_batch_response_does_not_resurrect_names_after_gate(self):
+        got = run_exec_logout_race(self._ROSTER)
+        self.assertNotIn("이승호", got["cells"],
+                          "로그아웃 뒤 늦게 도착한 대조 응답이 실명을 화면에 다시 그렸습니다")
+        self.assertEqual(got["bodyChildCount"], 0,
+                          "로그아웃 뒤 #body에 자식 노드가 다시 생겼습니다")
+
+
+# ── 임원 1명뿐인 회사(세로 표) — 클릭이 실제 패널까지 도달하는지 통합 재현 ──
+#
+# 리뷰 지적(CRITICAL, task-3-report.md에 "발견된 제약(결함 아님)"으로
+# 기록됐던 항목). tableLayout은 레코드가 정확히 1건이면 세로(라벨:값) 표를
+# 만든다(app.js "rows.length === 1" 분기) — 위
+# TestExecutiveRosterActorLinkRendering은 2명 명단(가로 표)만 다뤄 이
+# 좌표계를 검증하지 못했다. 등기임원이 1명뿐인 회사(소형·SPC성 법인 —
+# 이 도구가 정확히 겨냥하는 대상)에서는 강조(.mk)는 뜨지만 클릭이
+# 배선되지 않아, 레지스트리 매칭이 실제로 있어도 경고·확인 방법으로 가는
+# 길이 없었다(ui.js의 isNameCell이 "!isVertical"을 요구했다). 그 수정을
+# 검증하려면 ".mk가 붙는다"만으로는 부족하다 — openExecutivePanel을
+# 스파이로 바꿔치기하지 않고 실제로 실행시켜(fetch·token만 스텁) 클릭이
+# 진짜로 경고 내용이 그려진 패널까지 도달하는지 확인해야 한다.
+_EXEC_VERTICAL_CLICK_HARNESS = r"""
+const vm = require("vm");
+const fs = require("fs");
+
+const ELEMENTS = Object.create(null);
+
+class FakeClassList {
+  constructor() { this._set = new Set(); }
+  add(c) { this._set.add(c); }
+  remove(c) { this._set.delete(c); }
+  contains(c) { return this._set.has(c); }
+}
+
+class FakeEl {
+  constructor(tag) {
+    this.tag = tag;
+    this.children = [];
+    this._text = "";
+    this._className = "";
+    this._id = "";
+    this.dataset = {};
+    this._listeners = {};
+    this.hidden = false;
+    this.classList = new FakeClassList();
+    this.style = {};
+  }
+  appendChild(c) { this.children.push(c); return c; }
+  insertBefore(node, ref) {
+    const idx = ref ? this.children.indexOf(ref) : -1;
+    if (idx === -1) this.children.push(node);
+    else this.children.splice(idx, 0, node);
+    return node;
+  }
+  removeChild(c) {
+    const idx = this.children.indexOf(c);
+    if (idx !== -1) this.children.splice(idx, 1);
+    return c;
+  }
+  get firstChild() { return this.children.length ? this.children[0] : null; }
+  insertRow() { const tr = new FakeEl("tr"); this.appendChild(tr); return tr; }
+  insertCell() { const td = new FakeEl("td"); this.appendChild(td); return td; }
+  createTHead() { const el = new FakeEl("thead"); this.appendChild(el); return el; }
+  createTBody() { const el = new FakeEl("tbody"); this.appendChild(el); return el; }
+  addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); }
+  dispatch(type) { (this._listeners[type] || []).forEach(function (fn) { fn({}); }); }
+  set textContent(v) { this._text = String(v); this.children = []; }
+  get textContent() { return this._text; }
+  set className(v) { this._className = v; }
+  get className() { return this._className; }
+  set id(v) { this._id = v; ELEMENTS[v] = this; }
+  get id() { return this._id; }
+}
+
+const bodyEl = new FakeEl("div");
+bodyEl.id = "body";
+function makeEl(tag, id) { const el = new FakeEl(tag); if (id) el.id = id; return el; }
+makeEl("section", "gate");
+makeEl("main", "main");
+makeEl("p", "gate-msg");
+const panelEl = makeEl("aside", "panel");
+const panelBodyEl = makeEl("div", "panel-body");
+makeEl("span", "head-name");
+makeEl("div", "bar");
+makeEl("div", "company-info");
+makeEl("button", "actor-btn");
+
+function textOf(node) {
+  if (!node) return "";
+  if (node.children && node.children.length) return node.children.map(textOf).join(" ");
+  return node.textContent || "";
+}
+
+function collectExecNameEls(node, out) {
+  out = out || [];
+  if (!node) return out;
+  const tokens = String(node.className || "").split(/\s+/);
+  if (tokens.indexOf("exec-name") !== -1) out.push(node);
+  (node.children || []).forEach(function (c) { collectExecNameEls(c, out); });
+  return out;
+}
+
+function collectMarked(node, out) {
+  out = out || [];
+  if (!node) return out;
+  const tokens = String(node.className || "").split(/\s+/);
+  if ((node.tag === "td" || node.tag === "span") && tokens.indexOf("mk") !== -1) {
+    out.push({ tag: node.tag, text: node.textContent, className: node.className || "" });
+  }
+  (node.children || []).forEach(function (c) { collectMarked(c, out); });
+  return out;
+}
+
+const sandbox = {
+  console: console,
+  document: {
+    createElement: function (tag) { return new FakeEl(tag); },
+    createDocumentFragment: function () { return new FakeEl("#fragment"); },
+    createTextNode: function (t) { const n = new FakeEl("#text"); n.textContent = t; return n; },
+    addEventListener: function () {},
+    getElementById: function (id) { return ELEMENTS[id] || null; },
+  },
+  localStorage: {
+    getItem: function () { return null; },
+    setItem: function () {},
+    removeItem: function () {},
+  },
+  fetch: function () { return Promise.reject(new Error("no network in test")); },
+};
+vm.createContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[1], "utf-8"), { filename: "app.js" }).runInContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).runInContext(sandbox);
+
+sandbox.token = async function () { return "fake-token"; };
+sandbox.fetch = function () {
+  return Promise.resolve({
+    status: 200,
+    json: async function () {
+      return { name: "이승호", actors: [{ name: "이승호", status: "auto_matched",
+        companies: ["FSN", "위노바"], evidence: "자동 발굴 근거",
+        url: "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=X" }], disclaimer: "면책" };
+    },
+  });
+};
+
+// openExecutivePanel을 스파이로 바꿔치기하지 않는다 — 대신 진짜 구현을
+// 감싸(래핑) 클릭이 만든 Promise를 밖에서 기다릴 수 있게만 한다. tableEl()
+// 안의 호출은 이름을 클릭 시점마다 다시 찾아가므로(클로저로 미리 굳지
+// 않는다 — openDocPanel 스파이 교체와 같은 원리, 위 여러 하네스 주석
+// 참고) 스크립트 실행 뒤에 재할당해도 클릭 시점에는 이 래퍼가 불린다.
+const realOpenExecutivePanel = sandbox.openExecutivePanel;
+let panelPromise = null;
+sandbox.openExecutivePanel = function (row) {
+  panelPromise = realOpenExecutivePanel(row);
+  return panelPromise;
+};
+
+const roster = [{"nm":"이승호","corp_name":"엔켐","birth_ym":"197203",
+  "ofcps":"사내이사","rgist_exctv_at":"등기","years":["2025","2026"]}];
+
+(async function () {
+  await sandbox.renderSection("executive_roster", roster);
+
+  const nameEls = collectExecNameEls(bodyEl, []);
+  nameEls.forEach(function (e) { e.dispatch("click"); });
+  if (panelPromise) await panelPromise;
+
+  process.stdout.write(JSON.stringify({
+    nameCellCount: nameEls.length,
+    marked: collectMarked(bodyEl, []),
+    panelOpen: panelEl.classList.contains("open"),
+    panelFlat: textOf(panelBodyEl),
+  }));
+})().catch(function (e) {
+  process.stderr.write(String((e && e.stack) || e) + "\n");
+  process.exit(1);
+});
+"""
+
+
+def run_exec_vertical_click():
+    """임원 1명(세로 표) 명단을 렌더하고 이름 셀을 실제로 클릭한 뒤,
+    (스파이가 아닌) 진짜 openExecutivePanel이 그린 패널 내용을 돌려준다."""
+    out = subprocess.run(
+        [_NODE, "-e", _EXEC_VERTICAL_CLICK_HARNESS, str(_APP), str(_UI)],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    if out.returncode != 0:
+        raise AssertionError(f"node 실행 실패:\n{out.stderr}")
+    return json.loads(out.stdout)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestExecutiveSingleRowVerticalTableClick(unittest.TestCase):
+    """리뷰 지적(CRITICAL) — 임원이 1명뿐이면 tableLayout이 세로 표를
+    만들고, 그 좌표계에서 이름 클릭이 배선되지 않았던 문제를 검증한다.
+    강조(.mk)만으로는 부족하다 — 실제로 클릭해 패널이 경고 내용을 그리는
+    것까지 확인한다(브리프: "소스를 grep하는 테스트를 쓰지 마라")."""
+
+    def test_single_executive_row_click_opens_panel_with_warning_content(self):
+        got = run_exec_vertical_click()
+        self.assertEqual(got["nameCellCount"], 1,
+                          "세로 표에서 이름 셀(.exec-name)을 찾지 못했습니다 — "
+                          "클릭 배선이 세로 좌표계에서 빠져 있습니다")
+        self.assertTrue(any("이승호" in m["text"] for m in got["marked"]),
+                         f"세로 표에서 강조(.mk)가 붙지 않았습니다: {got['marked']}")
+        self.assertTrue(got["panelOpen"], "이름 클릭이 실제 패널을 열지 못했습니다")
+        for token in ("동명이인", "공시 원문", "직접 문의",
+                      "레지스트리에는 생년월이 없어 자동 대조가 불가능합니다"):
+            self.assertIn(token, got["panelFlat"], f"{token}이 패널에 없습니다")
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
@@ -3173,6 +3931,228 @@ class TestDocPanelRendersDocumentBlocks(unittest.TestCase):
         }, ensure_ascii=False)
         got = run_doc_panel(body)
         self.assertIn("12,345자 중 일부입니다", got["flat"])
+
+
+# ── 임원 클릭 패널(ui.js의 openExecutivePanel) 실제 렌더 재현 ───────────
+#
+# SE-6 Task 3. run_render_section의 클릭 배선 검증(위)은 openExecutivePanel을
+# 스파이로 바꿔치기해 "불렸는가·어떤 행으로"만 본다 — 패널이 실제로 그리는
+# 내용(등재 회사·근거·동명이인 경고·확인 방법·DART 링크)까지 보려면 진짜
+# 함수를 실행해야 한다. _DOC_PANEL_HARNESS(openDocPanel)와 같은 이유·같은
+# 최소 구성이다: 인증(token())·네트워크(fetch)만 스텁으로 바꾸고 나머지는
+# 실제 코드를 그대로 돌린다.
+_EXEC_PANEL_HARNESS = r"""
+const vm = require("vm");
+const fs = require("fs");
+
+const ELEMENTS = Object.create(null);
+
+class FakeClassList {
+  constructor() { this._set = new Set(); }
+  add(c) { this._set.add(c); }
+  remove(c) { this._set.delete(c); }
+  contains(c) { return this._set.has(c); }
+}
+
+class FakeEl {
+  constructor(tag) {
+    this.tag = tag;
+    this.children = [];
+    this._text = "";
+    this._className = "";
+    this._id = "";
+    this.classList = new FakeClassList();
+  }
+  appendChild(c) { this.children.push(c); return c; }
+  get firstChild() { return this.children.length ? this.children[0] : null; }
+  removeChild(c) {
+    const idx = this.children.indexOf(c);
+    if (idx !== -1) this.children.splice(idx, 1);
+    return c;
+  }
+  set textContent(v) { this._text = String(v); this.children = []; }
+  get textContent() { return this._text; }
+  set className(v) { this._className = v; }
+  get className() { return this._className; }
+  set id(v) { this._id = v; ELEMENTS[v] = this; }
+  get id() { return this._id; }
+}
+
+const panelBody = new FakeEl("div");
+panelBody.id = "panel-body";
+const panel = new FakeEl("aside");
+panel.id = "panel";
+
+function textOf(node) {
+  if (!node) return "";
+  if (node.children && node.children.length) return node.children.map(textOf).join(" ");
+  return node.textContent || "";
+}
+
+function collectAnchors(node, out) {
+  out = out || [];
+  if (!node) return out;
+  if (node.tag === "a") out.push({ href: node.href || "", text: textOf(node) });
+  (node.children || []).forEach(function (c) { collectAnchors(c, out); });
+  return out;
+}
+
+const sandbox = {
+  console: console,
+  document: {
+    createElement: function (tag) { return new FakeEl(tag); },
+    createDocumentFragment: function () { return new FakeEl("#fragment"); },
+    createTextNode: function (t) { const n = new FakeEl("#text"); n.textContent = t; return n; },
+    addEventListener: function () {},
+    getElementById: function (id) { return ELEMENTS[id] || null; },
+  },
+  localStorage: {
+    getItem: function () { return null; },
+    setItem: function () {},
+    removeItem: function () {},
+  },
+  fetch: function () { return Promise.reject(new Error("no network in test")); },
+};
+vm.createContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[1], "utf-8"), { filename: "app.js" }).runInContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).runInContext(sandbox);
+
+sandbox.token = async function () { return "fake-token"; };
+sandbox.fetch = function () {
+  return Promise.resolve({
+    status: 200,
+    json: async function () { return %(body)s; },
+  });
+};
+
+(async function () {
+  await sandbox.openExecutivePanel(%(row)s);
+  process.stdout.write(JSON.stringify({
+    panelOpen: panel.classList.contains("open"),
+    flat: textOf(panelBody),
+    anchors: collectAnchors(panelBody, []),
+  }));
+})().catch(function (e) {
+  process.stderr.write(String((e && e.stack) || e) + "\n");
+  process.exit(1);
+});
+"""
+
+
+def run_exec_panel(row_js: str, body_js: str):
+    """openExecutivePanel(row)을 실제로 실행해 #panel-body에 실제로 그려진
+    전체 텍스트와 앵커(href) 목록을 돌려준다."""
+    script = _EXEC_PANEL_HARNESS % {"row": row_js, "body": body_js}
+    out = subprocess.run(
+        [_NODE, "-e", script, str(_APP), str(_UI)],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    if out.returncode != 0:
+        raise AssertionError(f"node 실행 실패:\n{out.stderr}")
+    return json.loads(out.stdout)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestExecutivePanelRendersRegistryMatch(unittest.TestCase):
+    """SE-6 Task 3 — openExecutivePanel(row)이 실제로 그리는 내용을 확인한다.
+
+    계획 문서 "말할 수 있는 것과 없는 것"이 이 태스크의 핵심이다: 동명이인
+    경고는 접거나 숨기지 않고, 확인 방법 세 가지를 함께 적으며, 근거 링크는
+    dart.fss.or.kr 호스트일 때만 앵커가 된다.
+    """
+
+    _ROW = ('{"성명":"이승호","corp_name":"엔켐","birth_ym":"197203",'
+            '"ofcps":"사내이사","rgist_exctv_at":"등기"}')
+
+    _MATCHED_BODY = json.dumps({
+        "name": "이승호",
+        "actors": [{
+            "name": "이승호", "status": "auto_matched",
+            "companies": ["FSN", "위노바"], "evidence": "자동 발굴 근거",
+            "url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260715900769",
+        }],
+        "disclaimer": "공개기록에 근거한 사실 표기입니다.",
+    }, ensure_ascii=False)
+
+    def test_role_fields_from_row_are_shown(self):
+        """이 회사에서의 직위·등기 여부·생년월(ofcps·rgist_exctv_at·
+        birth_ym)은 네트워크 없이 이미 갖고 있는 값이다."""
+        got = run_exec_panel(self._ROW, self._MATCHED_BODY)
+        for token in ("사내이사", "등기", "197203"):
+            self.assertIn(token, got["flat"], f"{token}이 패널에 없습니다")
+
+    def test_registered_companies_and_evidence_are_shown(self):
+        got = run_exec_panel(self._ROW, self._MATCHED_BODY)
+        for token in ("FSN", "위노바", "자동 발굴 근거"):
+            self.assertIn(token, got["flat"], f"{token}이 패널에 없습니다")
+
+    def test_namesake_warning_is_always_visible_not_hidden_or_collapsed(self):
+        got = run_exec_panel(self._ROW, self._MATCHED_BODY)
+        self.assertIn("동명이인", got["flat"])
+        # 접거나 숨기는 표시(<details>·hidden 속성)를 이 화면은 아예 쓰지
+        # 않는다 — 그 사실 자체를 panelOpen(패널이 실제로 열렸다)으로
+        # 방증한다. hidden 속성이 있었다면 애초에 이 FakeEl은 지원하지
+        # 않아 여기 도달하기 전에 TypeError로 죽었을 것이다.
+        self.assertTrue(got["panelOpen"])
+
+    def test_exec_namesake_warn_constant_text_is_rendered(self):
+        """리뷰 지적(IMPORTANT) — 위 테스트의 assertIn("동명이인", ...)은
+        actorLine()의 status별 경고(app.js ACTOR_STATUS.auto_matched.warn:
+        "자동으로 매칭된 이름입니다. 동명이인일 수 있으며 확인되지
+        않았습니다")에도 "동명이인"이 들어 있어, ui.js의 EXEC_NAMESAKE_WARN
+        상수 자체를 warnBox에서 통째로 지워도 초록으로 남는다 — 실제로
+        그렇게 983/983 통과한 사고였다. EXEC_NAMESAKE_WARN에만 있는 문구로
+        좁혀서 그 상수가 실제로 렌더되는지를 직접 확인한다."""
+        got = run_exec_panel(self._ROW, self._MATCHED_BODY)
+        self.assertIn(
+            "이름 표기가 일치한다는 뜻이지 신원을 확인한 것이 아닙니다",
+            got["flat"],
+            "EXEC_NAMESAKE_WARN(패널 고정 경고 상수)의 문구가 패널에 없습니다",
+        )
+
+    def test_three_verification_steps_are_present(self):
+        """"확인되지 않았습니다"로 끝내면 안 된다 — 공시 원문·등기 기록·
+        직접 문의 세 가지를 구체적으로 적어야 한다."""
+        got = run_exec_panel(self._ROW, self._MATCHED_BODY)
+        for token in ("공시 원문", "등기", "직접 문의"):
+            self.assertIn(token, got["flat"], f"확인 방법 '{token}'이 패널에 없습니다")
+
+    def test_missing_birth_data_limitation_is_disclosed(self):
+        got = run_exec_panel(self._ROW, self._MATCHED_BODY)
+        self.assertIn("레지스트리에는 생년월이 없어 자동 대조가 불가능합니다", got["flat"])
+
+    def test_dart_host_url_becomes_a_link(self):
+        got = run_exec_panel(self._ROW, self._MATCHED_BODY)
+        hrefs = [a["href"] for a in got["anchors"]]
+        self.assertIn("https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260715900769", hrefs)
+
+    def test_non_dart_host_url_is_not_a_link(self):
+        """레지스트리는 외부(Notion) 데이터다 — dart.fss.or.kr이 아닌
+        호스트는 앵커로 만들지 않는다(텍스트로만 남긴다)."""
+        body = json.dumps({
+            "name": "이승호",
+            "actors": [{
+                "name": "이승호", "status": "auto_matched",
+                "companies": ["FSN"], "evidence": "e",
+                "url": "https://evil.example.com/x",
+            }],
+            "disclaimer": "면책",
+        }, ensure_ascii=False)
+        got = run_exec_panel(self._ROW, body)
+        hrefs = [a["href"] for a in got["anchors"]]
+        self.assertNotIn("https://evil.example.com/x", hrefs)
+        self.assertEqual(got["anchors"], [], "신뢰할 수 없는 호스트가 앵커로 만들어졌습니다")
+
+    def test_no_match_states_registry_has_no_such_name(self):
+        body = json.dumps({"name": "이승호", "actors": [], "disclaimer": "면책"},
+                           ensure_ascii=False)
+        got = run_exec_panel(self._ROW, body)
+        self.assertIn("레지스트리에 같은 이름이 없습니다", got["flat"])
+
+    def test_no_verdict_or_identity_language(self):
+        got = run_exec_panel(self._ROW, self._MATCHED_BODY)
+        for phrase in ("다른 회사에도 등장", "관여", "연루", "확인됨", "검증됨"):
+            self.assertNotIn(phrase, got["flat"], f"금지 문구 '{phrase}'가 패널에 있습니다")
 
 
 # ── doc: 섹션 본문 목록 통합(ui.js의 addDocListEntry) ──────────────────

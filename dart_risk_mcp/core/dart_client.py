@@ -2816,6 +2816,91 @@ def fetch_executive_roster(
     return roster
 
 
+def fetch_executive_roster_detail(
+    corp_code: str,
+    api_key: str,
+    lookback_years: int = 1,
+) -> list[dict]:
+    """임원현황(exctvSttus)을 최근 N개 사업연도 수집해 사람 단위 행 목록으로 반환.
+
+    `fetch_executive_roster`와 같은 엔드포인트·같은 연도 루프·같은
+    재시도/오류 처리(예외를 삼키고 다음 연도로 계속)를 쓰지만, 그 함수가
+    버리는 exctvSttus 원본 필드(`birth_ym`·`ofcps`·`rgist_exctv_at`·
+    `corp_name`)를 보존한다.
+
+    SE-6 계획은 동명이인을 자동으로 가리지 않고 이용자가 직접 확인하도록
+    설계했다(레지스트리 등재 인물 522명 중 99.5%가 auto_matched이고
+    생년월이 없어 자동 대조가 불가능하다). 확인에 쓸 재료가 바로
+    생년월·직위·등기 여부인데, `fetch_executive_roster`는 그것들을 버려서
+    화면이 "확인하세요"라고만 말하고 확인할 재료를 주지 못했다 — 이
+    함수가 그 재료를 화면까지 보낸다.
+
+    **`fetch_executive_roster`는 이 함수 추가로 손대지 않는다.**
+    `server.py`의 `find_actor_overlap`(MCP 도구)과
+    `se_server/jobs/runner.py`의 겸직 판정이 그 함수의
+    `dict[str, set[str]]` 반환형에 그대로 묶여 있다. SE-5c가
+    `fetch_company_indicators` 옆에 `fetch_indicator_history`를 별도로
+    추가한 것과 같은 방식으로, 같은 엔드포인트를 다시 호출하는 새 함수를
+    옆에 둔다.
+
+    같은 사람이 여러 해에 나오면 한 행으로 합치고 재직 연도를 합집합으로
+    쌓는다. 연도 루프가 과거→최신 오름차순이므로 `corp_name`·`birth_ym`·
+    `ofcps`·`rgist_exctv_at`은 **가장 최근에 조회된 값으로 덮어쓴다** —
+    직위는 해마다 바뀔 수 있고(예: 사내이사→대표이사) 화면은 "지금" 기준
+    정보를 보여줘야 한다.
+
+    Args:
+        corp_code: DART 기업 고유번호
+        api_key: DART API 키
+        lookback_years: 조회할 직전 사업연도 수 (1~5)
+
+    Returns:
+        사람 단위 행 목록. 각 행은
+        {"nm": str, "corp_name": str, "birth_ym": str, "ofcps": str,
+         "rgist_exctv_at": str, "years": [str, ...]} (years는 정렬된 목록).
+        이름이 최초로 등장한 순서를 보존한다. corp_code·api_key가 비었거나
+        DART가 자료 없음(예: `013`, 셀트리온 실측 사례)을 주면 빈 목록.
+    """
+    rows: dict[str, dict] = {}
+    if not corp_code or not api_key:
+        return []
+    if not isinstance(lookback_years, int) or not (1 <= lookback_years <= 5):
+        lookback_years = 1
+
+    current_year = datetime.now().year
+    for year_int in range(current_year - lookback_years, current_year + 1):
+        try:
+            resp = _retry("GET", f"{DART_BASE}/exctvSttus.json", params={
+                "crtfc_key": api_key,
+                "corp_code": corp_code,
+                "bsns_year": str(year_int),
+                "reprt_code": "11011",
+            }, timeout=15)
+            data = resp.json() if resp is not None else {}
+            if data.get("status") != "000":
+                continue
+            for row in data.get("list", []):
+                nm = (row.get("nm") or "").strip()
+                if not nm or nm in ("계", "합계"):
+                    continue
+                entry = rows.setdefault(nm, {
+                    "nm": nm, "corp_name": "", "birth_ym": "",
+                    "ofcps": "", "rgist_exctv_at": "", "years": set(),
+                })
+                entry["corp_name"] = (row.get("corp_name") or "").strip()
+                entry["birth_ym"] = (row.get("birth_ym") or "").strip()
+                entry["ofcps"] = (row.get("ofcps") or "").strip()
+                entry["rgist_exctv_at"] = (row.get("rgist_exctv_at") or "").strip()
+                entry["years"].add(str(year_int))
+        except Exception:
+            continue
+
+    return [
+        {**entry, "years": sorted(entry["years"])}
+        for entry in rows.values()
+    ]
+
+
 def fetch_affiliate_investments(
     corp_code: str,
     api_key: str,

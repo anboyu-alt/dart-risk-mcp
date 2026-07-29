@@ -157,6 +157,15 @@ const LABELS = Object.assign(Object.create(null), {
   repror: "보고자", source: "출처", relate: "관계", stock_knd: "주식 종류",
   isu_exctv_ofcps: "직위", isu_exctv_rgist_at: "등기 여부",
   isu_main_shrholdr: "주요주주 구분", mxmm_shrholdr_nm: "최대주주명",
+  // exctvSttus(임원현황, executive_roster — SE-6 Task 2b가 화면까지
+  // 보낸 필드)의 ofcps·rgist_exctv_at·birth_ym이다. 위 isu_exctv_ofcps·
+  // isu_exctv_rgist_at(내부자 지분 신고서 전용 필드)와 같은 한글 라벨을
+  // 쓰면 라벨 충돌 검사(test_no_label_collides_with_a_different_raw_key)에
+  // 걸린다 — 두 raw key가 서로 다른 신고서 필드이므로 라벨도 구분한다.
+  // Task 3 브리핑이 요구하는 "이 회사에서의 직위·등기 여부·생년월"을
+  // 사람이 읽을 수 있게 한다(레지스트리에 없는 생년월을 이용자가 직접
+  // 대조할 재료다).
+  ofcps: "임원 직위", rgist_exctv_at: "등기임원 여부", birth_ym: "생년월",
   // 출자(affiliates)의 "기초/기말 지분율"과 이름이 겹치지 않게 접두어를
   // 붙인다. 같은 라벨이 두 필드에 걸리면 열을 구분할 수 없다.
   sp_stock_lmp_cnt: "특정증권 소유 주식수", sp_stock_lmp_rate: "특정증권 소유 비율",
@@ -706,20 +715,45 @@ function isLongText(v) {
 // 깊이(2~3단)보다 넉넉히 크게 잡는다.
 const MAX_SECTION_DEPTH = 20;
 
-/** 임원현황을 {이름: 연도들} 에서 레코드 목록으로 바꾼다.
+/** 임원현황을 레코드 목록으로 바꾼다. 서버가 두 형태를 보낼 수 있다.
  *
- * fetch_executive_roster(dart_client.py)는 {임원명: {연도}}(set)를 돌려주고,
- * se_server의 _jsonable이 set을 정렬된 list로 낮춰 JSON화한다 — 그 결과
- * 화면에 오는 값은 {"김기범": ["2025","2026"], ...} 형태다. 이름을 열
- * 제목으로 쓰면 임원 7명일 때 7열짜리 1행 표가 되어 읽을 수 없다(실측
- * docs/superpowers/plans/2026-07-27-se-4c-field-inventory.json). 사람이
- * 행이 되어야 한다.
+ * **새 형태(SE-6 Task 2b, `fetch_executive_roster_detail`)**: 사람 단위
+ * 행 목록 `[{nm, corp_name, birth_ym, ofcps, rgist_exctv_at, years}, ...]`.
+ * `birth_ym`(생년월)·`ofcps`(직위)·`rgist_exctv_at`(등기 여부)은 레지스트리에
+ * 동명이인을 자동으로 가리지 않는 이 화면에서 이용자가 직접 확인할 재료다
+ * — 여기서 지우면 확인할 재료 없이 "확인하세요"만 남는다. 그래서 이
+ * 필드들을 행에 그대로 남긴다(executiveMatches·Task 3 패널이 그대로 씀).
  *
- * 연도 쪽은 배열이 정상 형태지만, 방어적으로 객체(키가 연도인 형태)와
- * 스칼라/null도 흡수한다 — 어느 쪽이 와도 이름 자체는 잃지 않는다.
+ * **옛 형태**: `fetch_executive_roster`(dart_client.py)가 돌려주는
+ * {임원명: {연도}}(set)를 se_server의 _jsonable이 정렬된 list로 낮춘
+ * {"김기범": ["2025","2026"], ...}. 저장된 옛 작업 결과가 남아 있을 수
+ * 있어(SE-4h가 같은 이유로 봉투/배열 양쪽을 받았다) 계속 받아준다.
+ *
+ * 어느 형태든 이름을 열 제목으로 쓰면 임원 7명일 때 7열짜리 1행 표가
+ * 되어 읽을 수 없다(실측 docs/superpowers/plans/2026-07-27-se-4c-field-
+ * inventory.json). 사람이 행이 되어야 한다.
  */
 function normalizeRoster(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  if (Array.isArray(value)) {
+    // 새 형태: 이름이 없는 행(예상 밖 응답)은 조용히 건너뛴다 — 여기서
+    // 던지면 나머지 임원까지 렌더가 통째로 멈춘다.
+    return value
+      .filter(function (row) { return row && typeof row === "object" && row.nm; })
+      .map(function (row) {
+        const years = Array.isArray(row.years) ? row.years : [];
+        return {
+          "성명": row.nm,
+          "재직 연도": years.slice().sort().join(", "),
+          corp_name: row.corp_name || "",
+          birth_ym: row.birth_ym || "",
+          ofcps: row.ofcps || "",
+          rgist_exctv_at: row.rgist_exctv_at || "",
+        };
+      });
+  }
+  if (!value || typeof value !== "object") return [];
+  // 옛 형태 — 연도 쪽은 배열이 정상이지만, 방어적으로 객체(키가 연도인
+  // 형태)와 스칼라/null도 흡수한다. 어느 쪽이 와도 이름 자체는 잃지 않는다.
   return Object.keys(value).map(function (name) {
     const raw = value[name];
     const years = Array.isArray(raw) ? raw
@@ -727,6 +761,126 @@ function normalizeRoster(value) {
                 : (raw === null || raw === undefined) ? [] : [String(raw)];
     return { "성명": name, "재직 연도": years.slice().sort().join(", ") };
   });
+}
+
+/** executiveMatches(rosterRows, lookupResults) — 임원 명단을 GET
+ *  /api/se/actors?name= 조회 결과(handlers.py `_actors`의 name 분기, SE-6
+ *  Task 1)와 대조한다.
+ *
+ *  rosterRows는 normalizeRoster(value)가 만드는 최소 형태({"성명",
+ *  "재직 연도"})다. 호출부(ui.js, Task 3)가 exctvSttus 원문 필드
+ *  (corp_name·birth_ym·ofcps·rgist_exctv_at)를 같은 행에 덧붙여 넘길 수
+ *  있으므로 그 확장 형태도 그대로 받아들인다.
+ *
+ *  lookupResults는 UI가 임원 이름마다 그 엔드포인트를 호출해 모은
+ *  "이름 → 서버 응답"(`{name, actors, disclaimer}`) 묶음이다. **이름
+ *  매칭 자체는 서버(`lookup_actor`)가 이미 정확·정규화·폴딩 3단계로
+ *  처리한다** — 여기서는 그 결과를 그대로 lookupResults[성명]으로
+ *  찾아 쓸 뿐, 클라이언트에서 별도의 매칭 규칙을 새로 만들지 않는다
+ *  (규칙이 두 벌이면 서버와 화면이 다른 답을 낼 수 있다).
+ *
+ *  "이 회사 자신"을 companies에서 빼는 판정은 행의 corp_name 필드
+ *  하나만 본다. corp_name이 없으면 비교할 방법이 없으므로 아무것도
+ *  빼지 않는다 — 회사명 표기가 서버 쪽 정규화와 어긋날 수 있으니
+ *  "어긋날 때는 제외하지 않는 쪽(정보를 남기는 쪽)으로 실패하라"는
+ *  지침(SE-6 Task 2 브리핑)을 그대로 따른다. corp_name이 있을 때도
+ *  앞뒤 공백·대소문자 차이만 흡수하는 최소 정규화만 쓴다 — "엔켐"과
+ *  "(주)엔켐"처럼 표기 자체가 갈리는 경우까지 맞히려 들면 그게 바로
+ *  금지된 클라이언트 쪽 매칭 규칙이 된다.
+ *
+ *  status는 그대로 statuses 배열에 싣는다(정보를 지우지 않는다) —
+ *  actor_status가 서버에서 이미 화이트리스트 검증을 마쳤으므로 여기서
+ *  다시 걸러내지 않는다.
+ *
+ *  매칭이 0건인 임원도 결과에 포함한다(registered: false) — 화면이
+ *  "대조했고 없었다"와 "대조하지 않았다"를 구분해야 한다.
+ */
+function executiveMatches(rosterRows, lookupResults) {
+  const out = {};
+  if (!Array.isArray(rosterRows) || rosterRows.length === 0) return out;
+  const lookups = (lookupResults && typeof lookupResults === "object") ? lookupResults : {};
+
+  for (const row of rosterRows) {
+    if (!row || typeof row !== "object") continue;
+    const name = row["성명"];
+    if (!name) continue;
+
+    const ownCompany = typeof row.corp_name === "string" ? row.corp_name.trim().toLowerCase() : "";
+    const resp = (lookups[name] && typeof lookups[name] === "object") ? lookups[name] : null;
+    const actors = (resp && Array.isArray(resp.actors)) ? resp.actors : [];
+
+    const companies = [];
+    const seen = new Set();
+    const statuses = [];
+    for (const actor of actors) {
+      if (!actor || typeof actor !== "object") continue;
+      statuses.push(actor.status);
+      const list = Array.isArray(actor.companies) ? actor.companies : [];
+      for (const c of list) {
+        if (typeof c !== "string") continue;
+        if (ownCompany && c.trim().toLowerCase() === ownCompany) continue;
+        if (!seen.has(c)) { seen.add(c); companies.push(c); }
+      }
+    }
+
+    out[name] = { registered: actors.length > 0, companies, statuses };
+  }
+  return out;
+}
+
+// SE-6 Task 3이 표에 붙이는 강조 문구. 신원을 단정하는 표현(이 임원이
+// 다른 곳에도 나타난다는 식)이 아니라 "같은 이름이 레지스트리에 있음"만
+// 말한다 — 판정선(계획 문서 "말할 수 있는 것과 없는 것")이 요구하는
+// 정확한 문구다. 동일인 여부는 이 문구가 말하지 않는다.
+const EXEC_MATCH_WHY = "같은 이름이 레지스트리에 있음";
+
+/** executiveMatches(records, lookupResults)의 결과(matches)를
+ *  cellMarks(records, sectionKey)와 같은 좌표 형식({"행번호|열키": 문구})
+ *  으로 바꾼다.
+ *
+ *  executive_roster의 강조는 서버 조회(비동기, 임원 이름마다 GET
+ *  /api/se/actors?name=)에 의존한다 — MARK_RULES(app.js)의 다른 모든
+ *  규칙처럼 레코드 하나만 보고 동기적으로 판정할 수 없다. 그래서
+ *  MARK_RULES에 넣는 대신 이 별도 변환을 두되, **반환 좌표 형식은 완전히
+ *  같게 맞춘다** — 그래야 ui.js가 이미 갖고 있는 SE-4g 강조 파이프라인
+ *  (tableEl(table, marks)의 `.mk` 클래스 + 범례)에 새 렌더 경로 없이
+ *  그대로 꽂힌다.
+ *
+ *  records는 normalizeRoster(value)의 출력(각 행에 "성명" 키가 있다)이고,
+ *  matches는 executiveMatches(records, lookupResults)의 출력이다. 매칭
+ *  안 된 임원(registered:false)이나 조회 자체가 안 된 임원(matches에
+ *  이름이 없음)은 강조하지 않는다 — 둘 다 "강조할 근거가 없다"는 점에서
+ *  같다.
+ */
+function executiveRosterMarks(records, matches) {
+  const out = {};
+  if (!Array.isArray(records) || !matches || typeof matches !== "object") return out;
+  records.forEach(function (r, i) {
+    if (!r || typeof r !== "object") return;
+    const name = r["성명"];
+    const m = name ? matches[name] : null;
+    if (m && m.registered) out[i + "|성명"] = EXEC_MATCH_WHY;
+  });
+  return out;
+}
+
+/** url이 dart.fss.or.kr 호스트일 때만 그대로 돌려주고, 그 외(다른 호스트·
+ *  문자열이 아님)는 null.
+ *
+ *  레지스트리는 Notion에서 오는 외부 데이터다(계획 문서: "레지스트리는
+ *  외부 데이터다 — 저장소를 신뢰해 렌더 규칙을 느슨하게 할 이유가
+ *  없다"). 호출부(ui.js)는 이 함수가 null을 돌려주면 앵커를 만들지 않고
+ *  텍스트로만 둔다.
+ *
+ *  `new URL()`을 쓰지 않는다 — ui.js 테스트 하네스(node vm 샌드박스)에는
+ *  DOM 표준 전역인 URL이 없다(WHATWG 전역이지 ECMAScript 표준이 아니다).
+ *  스킴+호스트 바로 뒤가 경로 구분자(`/`·`?`·`#`) 또는 문자열 끝이어야만
+ *  통과시켜, `https://dart.fss.or.kr.evil.com/`이나
+ *  `https://dart.fss.or.kr@evil.com/`처럼 호스트를 흉내 낸 값을 걸러낸다.
+ */
+function dartDisclosureLink(url) {
+  if (typeof url !== "string") return null;
+  return /^https?:\/\/dart\.fss\.or\.kr(?:[/?#]|$)/i.test(url) ? url : null;
 }
 
 /** debt_balance.by_kind({회사채: {total, maturity_under_1y}, ...})를
@@ -2985,6 +3139,7 @@ if (typeof module !== "undefined" && module.exports) {
     nextKeysToFetch, pollDecision, toRecords, tableLayout, LABELS, label,
     formatValue, formatAmount, AMOUNT_FIELDS, DATE_FIELDS,
     sectionBlocks, groupTitleFor, groupOrderIndex, normalizeRoster,
+    executiveMatches, executiveRosterMarks, dartDisclosureLink,
     ACTOR_STATUS, actorLine, resumeTarget, documentBlocks,
     dropAllEmptyColumns, recordsHaveSourceField, sourceGroupedBlocks,
     DOC_LIST_KEY, docKeyRceptNo, docListRow,
