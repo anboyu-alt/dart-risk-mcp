@@ -7,6 +7,7 @@
 `tests/se/test_vercel_bundle.py`와 같은 계열이다: 로컬에서는 아무 문제가
 없어 보이지만 배포하면 깨지거나 새는 부류를 소스 대조로 잡는다.
 """
+import json
 import pathlib
 import re
 import unittest
@@ -215,6 +216,35 @@ class TestNoVerdictVocabulary(unittest.TestCase):
         for name, src in _sources().items():
             for word in self._BANNED:
                 self.assertNotIn(word, src, f"{name}에 판정 어휘 '{word}'")
+
+
+class TestSignalsDataCategoryLabelsAvoidVerdictVocabulary(unittest.TestCase):
+    """SE-7 Task 3 — "정기 보고" 카테고리 라벨은 docs/tool/signals-data.json
+    (SE 전용 디렉터리 밖)에 산다. TestNoVerdictVocabulary의 _sources()는
+    docs/tool/se/*.js·*.html만 훑어 이 파일을 커버하지 않으므로 여기서
+    따로 확인한다(task-3-brief.md: "정적 검사가 이 새 라벨을 커버하지
+    않으면 자체 테스트로 확인하라").
+
+    기존 위험 신호 카테고리(0~8) 라벨은 검사 대상이 아니다 — "위기/부실"
+    (category 8)처럼 이미 승인된 라벨이 도메인 어휘로 "부실"을 정당하게
+    쓰고 있어, 전체 카테고리를 같은 금지어 목록으로 훑으면 오탐이 난다.
+    여기서는 이번 태스크가 새로 추가하는 라벨 하나만 검사한다."""
+
+    _BANNED = ("안전", "위험", "매우위험", "고위험", "위험도", "위험등급",
+               "의심스", "종합점수", "리스크 점수", "등급 부여", "주의",
+               "양호", "악화", "개선", "부실")
+    _ORIGINAL_LABELS = ("기타", "CB/채권", "자본구조", "경영권", "거버넌스",
+                         "기업활동", "회계/재무", "시장감시", "위기/부실")
+
+    def test_no_verdict_words_in_the_newly_added_category_label(self):
+        data_path = _ROOT / "docs" / "tool" / "signals-data.json"
+        data = json.loads(data_path.read_text(encoding="utf-8"))
+        new_labels = [v for v in data["categories"].values()
+                      if v not in self._ORIGINAL_LABELS]
+        self.assertTrue(new_labels, "새로 추가된 카테고리 라벨을 찾지 못했습니다")
+        for label in new_labels:
+            for word in self._BANNED:
+                self.assertNotIn(word, label, f"새 카테고리 라벨 '{label}'에 판정 어휘 '{word}'")
 
 
 class TestNoIdentityAssertionVocabulary(unittest.TestCase):
@@ -2118,6 +2148,35 @@ class TestChartRendering(unittest.TestCase):
         body = _extract_function_body(ui, "renderChart")
         self.assertNotRegex(body, r"--red|#e0564a",
                             "차트가 판정 색을 씁니다")
+
+
+class TestRoutineFilingCategoryHasADistinctColor(unittest.TestCase):
+    """SE-7 Task 3 — "정기 보고" 범주가 화면에서 "기타"와 시각적으로
+    구분돼야 한다(task-3-brief.md Step 6). 기존 --c0~--c8(9종) 계열
+    팔레트에 --c9 하나만 추가하는 최소 변경이어야 한다(브리프: "색상
+    팔레트를 새로 설계하지 말고 기존 체계에 하나 추가")."""
+
+    def test_chart_series_vars_gained_a_tenth_slot(self):
+        ui = _sources()["ui.js"]
+        m = re.search(r"CHART_SERIES_VARS\s*=\s*\[([^\]]*)\]", ui)
+        self.assertIsNotNone(m, "ui.js에서 CHART_SERIES_VARS를 찾지 못했습니다")
+        var_list = re.findall(r'"(--c\d+)"', m.group(1))
+        self.assertIn("--c9", var_list,
+                       "정기 보고 범주를 위한 --c9가 계열 팔레트에 없습니다")
+        self.assertEqual(len(var_list), len(set(var_list)),
+                          "계열 색 목록에 중복이 있습니다")
+
+    def test_index_html_defines_c9_in_both_themes(self):
+        """test_light_theme_overrides_every_dark_variable이 라이트 쪽
+        누락은 이미 잡지만, --c9 자체가 다크 쪽에 존재하는지는 이 테스트가
+        확인한다(둘 다 없으면 그 검사조차 통과해 버린다)."""
+        html = _sources()["index.html"]
+        dark_block = html.split('[data-theme="light"]')[0]
+        light_block = html.split('[data-theme="light"]')[1]
+        self.assertRegex(dark_block, r"--c9\s*:\s*#[0-9a-fA-F]{3,8}",
+                          "다크 테마에 --c9 정의가 없습니다")
+        self.assertRegex(light_block, r"--c9\s*:\s*#[0-9a-fA-F]{3,8}",
+                          "라이트 테마에 --c9 정의가 없습니다")
 
 
 class TestFinancialRatiosDerivedBlockIsWired(unittest.TestCase):

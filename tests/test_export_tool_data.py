@@ -11,7 +11,13 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
-from export_tool_data import build_signals_data  # noqa: E402
+from export_tool_data import (  # noqa: E402
+    build_signals_data,
+    CATEGORY_LABELS,
+    ROUTINE_FILING_CATEGORY,
+    ROUTINE_FILING_KEYWORDS,
+    ROUTINE_FILING_LABEL,
+)
 
 from dart_risk_mcp.core.signals import (  # noqa: E402
     SIGNAL_TYPES,
@@ -92,6 +98,62 @@ class TestBuildSignalsData(unittest.TestCase):
 
     def test_json_serializable(self):
         json.dumps(self.data, ensure_ascii=False)
+
+
+class TestRoutineFilingCategory(unittest.TestCase):
+    """SE-7 Task 3 — 고빈도 정기 보고(임원 지분 1주 변동 보고 등)는 위험
+    신호가 아니다. core SIGNAL_TYPES에는 절대 넣지 않고(Global
+    Constraints), signals-data.json에 별도 키·별도 카테고리 번호로만
+    노출한다(task-3-brief.md)."""
+
+    def setUp(self):
+        self.data = build_signals_data()
+
+    def test_routine_filing_keywords_key_exists_and_has_no_signal_or_risk_word(self):
+        """브리프: 키 이름에 'signal'·'risk'라는 단어를 넣지 마라 — 위험
+        신호가 아니라는 게 이 태스크의 요점이다."""
+        self.assertIn("routine_filing_keywords", self.data)
+        self.assertIsInstance(self.data["routine_filing_keywords"], list)
+        self.assertNotIn("signal", "routine_filing_keywords")
+        self.assertNotIn("risk", "routine_filing_keywords")
+
+    def test_routine_filing_keywords_cover_the_live_measured_minimum(self):
+        expected = [
+            "임원ㆍ주요주주특정증권등소유상황보고서",
+            "최대주주등소유주식변동신고서",
+            "사업보고서",
+            "반기보고서",
+            "분기보고서",
+            "주주총회소집공고",
+            "주주총회소집결의",
+            "기업설명회",
+        ]
+        for kw in expected:
+            self.assertIn(kw, self.data["routine_filing_keywords"])
+
+    def test_routine_filing_category_number_does_not_collide_with_risk_categories(self):
+        """위험 신호 taxonomy 카테고리는 0(기타)~8(위기/부실)만 쓴다 —
+        "9"는 CATEGORY_LABELS(위험 신호 전용 맵)에 원래 없어야 한다."""
+        self.assertNotIn(str(ROUTINE_FILING_CATEGORY), CATEGORY_LABELS)
+        self.assertEqual(self.data["categories"][str(ROUTINE_FILING_CATEGORY)],
+                          ROUTINE_FILING_LABEL)
+
+    def test_routine_filing_label_reads_as_fact_not_verdict(self):
+        """v0.8.5 판정 금지 — "정기 보고"는 사실 라벨이지 "안전"·"위험
+        없음"으로 읽히는 등급이 아니다."""
+        banned = ("안전", "위험", "매우위험", "고위험", "위험도", "위험등급",
+                  "의심스", "종합점수", "리스크 점수", "등급 부여", "주의",
+                  "양호", "악화", "개선", "부실")
+        for word in banned:
+            self.assertNotIn(word, ROUTINE_FILING_LABEL,
+                              f"정기 보고 라벨에 판정 어휘 '{word}'")
+        self.assertNotEqual(ROUTINE_FILING_LABEL, CATEGORY_LABELS["0"],
+                             "정기 보고는 '기타'와 구분되는 라벨이어야 합니다")
+
+    def test_all_original_category_labels_still_present(self):
+        """기존 위험 신호 카테고리(0~8) 라벨은 하나도 안 바뀌어야 한다."""
+        for k, v in CATEGORY_LABELS.items():
+            self.assertEqual(self.data["categories"][k], v)
 
 
 if __name__ == "__main__":

@@ -5875,6 +5875,78 @@ class TestClassifyDisclosureCategoryAmendmentPrefixStrip(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestClassifyDisclosureCategoryRoutineFiling(unittest.TestCase):
+    """SE-7 Task 3(task-3-brief.md) — 고빈도 정기 보고(임원 지분 1주 변동
+    보고 등)는 위험 신호(1~8)가 아니다. 실측: 삼성전자 "기타" 982건 중
+    924건이 '임원ㆍ주요주주특정증권등소유상황보고서' 하나 때문이었다 —
+    "기타"(모른다)가 아니라 "안다, 정기 보고다"(별도 범주)로 분류돼야
+    한다. Task 2가 만든 정정 접두어 스트립 로직 위에 얹는다(정정이어도
+    정기 보고로 잡혀야 한다)."""
+
+    def _routine_category(self) -> int:
+        data = json.loads(_SIGNALS_DATA_PATH.read_text(encoding="utf-8"))
+        for k, v in data["categories"].items():
+            if v not in ("기타", "CB/채권", "자본구조", "경영권", "거버넌스",
+                         "기업활동", "회계/재무", "시장감시", "위기/부실"):
+                return int(k)
+        raise AssertionError("signals-data.json에 정기 보고 카테고리가 없습니다")
+
+    def test_1_routine_filing_keyword_classifies_as_routine_not_a_risk_category(self):
+        routine = self._routine_category()
+        got = run_js_with_real_signals(
+            'classifyDisclosureCategory('
+            '"임원ㆍ주요주주특정증권등소유상황보고서", SIGNALS)'
+        )
+        self.assertEqual(got, routine)
+        self.assertNotIn(got, range(0, 9), "정기 보고가 위험 신호 카테고리(0~8)와 겹칩니다")
+
+    def test_2_amendment_prefixed_routine_filing_still_classifies_as_routine(self):
+        """정정 접두어가 붙어도 정기 보고로 잡혀야 한다 — Task 2의 스트립
+        로직 위에 얹는다(스트립보다 아래 단계에서 새로 배제하지 않는다)."""
+        routine = self._routine_category()
+        got = run_js_with_real_signals(
+            'classifyDisclosureCategory('
+            '"[기재정정]임원ㆍ주요주주특정증권등소유상황보고서", SIGNALS)'
+        )
+        self.assertEqual(got, routine)
+
+    def test_3_risk_signal_keyword_wins_over_routine_filing_keyword(self):
+        """분류 우선순위: 위험 신호(1~8) 매칭이 먼저다. 위험 신호 키워드
+        ('전환사채권발행결정')와 정기 보고 키워드('사업보고서')가 한
+        제목에 동시에 걸리는 합성 케이스에서 위험 신호가 이겨야 한다 —
+        정기 보고 라벨이 실제 위험 신호를 가리면 안 된다."""
+        got = run_js_with_real_signals(
+            'classifyDisclosureCategory('
+            '"주요사항보고서(전환사채권발행결정) 사업보고서", SIGNALS)'
+        )
+        self.assertEqual(got, 1, "CB_BW(category 1)가 이겨야 합니다")
+
+    def test_4_neither_risk_nor_routine_still_falls_back_to_other(self):
+        got = run_js_with_real_signals(
+            'classifyDisclosureCategory("타법인주식및출자증권취득결정", SIGNALS)'
+        )
+        self.assertEqual(got, 0)
+
+    def test_routine_filing_category_label_is_not_named_other(self):
+        data = json.loads(_SIGNALS_DATA_PATH.read_text(encoding="utf-8"))
+        routine = str(self._routine_category())
+        self.assertNotEqual(data["categories"][routine], "기타")
+
+    def test_missing_routine_filing_keywords_key_does_not_throw_or_misclassify(self):
+        """구버전 signals-data.json(이 키가 없음)을 만나도 예외 없이 기존
+        위험 신호 매칭 계약을 그대로 지켜야 한다(브리프: 로드 실패에
+        대비하세요와 같은 원칙)."""
+        signals = {
+            "signals": [{"key": "CB_BW", "category": 1, "keywords": ["전환사채권발행결정"]}],
+            "categories": {"0": "기타", "1": "CB/채권"},
+        }
+        got = call_js(
+            "classifyDisclosureCategory", "임원ㆍ주요주주특정증권등소유상황보고서", signals
+        )
+        self.assertEqual(got, 0, "routine_filing_keywords가 없으면 조용히 기타로 물러나야 합니다")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestIsAmendmentDisclosure(unittest.TestCase):
     """isAmendmentDisclosure(reportNm, signalsData) — SE-7 Task 2가 새로
     추가한, "정정 여부" 사실 전용 함수(task-2-brief.md: "정정 여부 자체는
@@ -5970,6 +6042,28 @@ class TestMonthlyCountsByCategory(unittest.TestCase):
             "monthlyCountsByCategory", records, "rcept_dt", "report_nm", self._SMALL_SIGNALS
         )
         self.assertEqual(got, [{"month": "202604", "category": "경영권", "count": 1}])
+
+    def test_month_totals_still_match_original_count_with_routine_filing_category(self):
+        """SE-7 Task 3 — 정기 보고 범주가 새로 생겨도(브리프: "합계가
+        원본 건수와 여전히 일치해야 합니다") 월별 합계 불변식은 깨지지
+        않아야 한다. 실제 signals-data.json(routine_filing_keywords 포함)
+        으로, 위험 신호·정기 보고·미분류가 섞인 배치를 검증한다."""
+        records = [
+            {"rcept_dt": "20260110", "report_nm": "주요사항보고서(전환사채권발행결정)"},
+            {"rcept_dt": "20260112", "report_nm": "임원ㆍ주요주주특정증권등소유상황보고서"},
+            {"rcept_dt": "20260115", "report_nm": "[기재정정]임원ㆍ주요주주특정증권등소유상황보고서"},
+            {"rcept_dt": "20260118", "report_nm": "타법인주식및출자증권취득결정"},
+            {"rcept_dt": "20260210", "report_nm": "사업보고서"},
+        ]
+        got = run_js_with_real_signals(
+            "monthlyCountsByCategory("
+            f"{json.dumps(records, ensure_ascii=False)}, "
+            '"rcept_dt", "report_nm", SIGNALS)'
+        )
+        self.assertEqual(sum(r["count"] for r in got), len(records))
+        labels = {r["category"] for r in got}
+        self.assertIn("정기 보고", labels)
+        self.assertIn("기타", labels)
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")

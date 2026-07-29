@@ -2315,11 +2315,20 @@ function isAmendmentDisclosure(reportNm, signalsData) {
   }
 }
 
+/** 정기 보고 카테고리 번호(SE-7 Task 3, task-3-brief.md). 위험 신호
+ *  (SIGNAL_TYPES) taxonomy 카테고리는 0(기타)~8(위기/부실)만 쓰므로 9는
+ *  절대 겹치지 않는다 — scripts/export_tool_data.py의
+ *  ROUTINE_FILING_CATEGORY와 같은 값이어야 한다(그쪽이 categories 맵의
+ *  "9" 키에 "정기 보고" 라벨을 실어 나른다. 숫자 자체가 위험 신호와
+ *  안 겹친다는 계약이라 여기 상수로 하드코딩한다 — signalsData에서
+ *  읽어오면 로드 실패 시 undefined가 되어 오히려 위험해진다). */
+const ROUTINE_FILING_CATEGORY = 9;
+
 /** reportNm 하나를 signalsData(docs/tool/signals-data.json 로드 결과) 기준
- *  으로 분류해 카테고리 번호(0~8, 0="기타")를 돌려준다. 키워드 매칭
- *  순서(signals 배열 순서상 첫 매칭)는 docs/tool/index.html의
- *  matchSignals(564행)와 같은 로직이다(브리프: "로직을 새로 만들지
- *  마라 — 읽어서 맞춘다").
+ *  으로 분류해 카테고리 번호(0~8은 위험 신호, 0="기타", 9="정기 보고" —
+ *  SE-7 Task 3)를 돌려준다. 키워드 매칭 순서(signals 배열 순서상 첫
+ *  매칭)는 docs/tool/index.html의 matchSignals(564행)와 같은 로직이다
+ *  (브리프: "로직을 새로 만들지 마라 — 읽어서 맞춘다").
  *
  *  **정정공시(is_amendment_disclosure) 처리는 SE-7 Task 2에서 공개
  *  뷰어·core와 의도적으로 갈라졌다.** core의 `match_signals`는
@@ -2359,7 +2368,24 @@ function isAmendmentDisclosure(reportNm, signalsData) {
  *
  *  signalsData가 없거나 signals 배열을 갖추지 못한 예상 밖 형태면(로드
  *  실패·형태 변경) null을 돌려준다 — 호출자가 분류를 포기하고 기존
- *  단색 집계로 물러나는 신호다(브리프: "로드 실패에 대비하세요"). */
+ *  단색 집계로 물러나는 신호다(브리프: "로드 실패에 대비하세요").
+ *
+ *  **SE-7 Task 3**: 위험 신호(1~8) 어디에도 안 걸리면, "기타"(0)로
+ *  떨어지기 전에 signalsData.routine_filing_keywords(고빈도 정기 보고
+ *  목록 — 임원 지분 1주 변동 보고 등, task-3-brief.md)를 마지막으로
+ *  검사한다. 위험 신호 매칭이 **항상 먼저**이므로(위 for 루프가 이미
+ *  return으로 끝낸 뒤에만 여기 도달한다) 정기 보고 키워드가 실제 위험
+ *  신호를 가리는 경우는 없다 — 위험 신호와 정기 보고 키워드가 한
+ *  제목에 동시에 걸리는 합성 케이스에서도 위험 신호가 이긴다.
+ *
+ *  정정 접두어 스트립(위)은 이미 끝난 뒤라 "[기재정정]임원ㆍ주요주주
+ *  특정증권등소유상황보고서"도 접두어가 벗겨진 나머지 텍스트로 이
+ *  검사를 받는다 — Task 2의 스트립 로직 위에 얹을 뿐 새로 만들지
+ *  않는다.
+ *
+ *  routine_filing_keywords가 없거나 배열이 아니면(구버전 signals-
+ *  data.json, 로드 실패) 빈 배열로 취급해 조용히 "기타"로 물러난다 —
+ *  위험 신호 매칭 계약 자체는 이 필드 유무와 무관하게 그대로다. */
 function classifyDisclosureCategory(reportNm, signalsData) {
   if (!signalsData || !Array.isArray(signalsData.signals)) return null;
   let nm = typeof reportNm === "string" ? reportNm : "";
@@ -2385,6 +2411,15 @@ function classifyDisclosureCategory(reportNm, signalsData) {
         return typeof s.category === "number" ? s.category : 0;
       }
     }
+  }
+  // 위험 신호(1~8) 어디에도 안 걸렸다 — 여기 도달했다는 사실 자체가
+  // "위험 신호가 이긴다"는 우선순위를 이미 지킨 것이다(위 for 루프가
+  // 매칭되면 곧장 return하므로 아래로 내려오지 않는다). 정기 보고
+  // 후보를 마지막으로 검사한다.
+  const routineKeywords = Array.isArray(signalsData.routine_filing_keywords)
+    ? signalsData.routine_filing_keywords : [];
+  for (const kw of routineKeywords) {
+    if (kw && nm.indexOf(kw) !== -1) return ROUTINE_FILING_CATEGORY;
   }
   return 0;
 }
