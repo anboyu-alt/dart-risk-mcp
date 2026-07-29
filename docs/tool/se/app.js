@@ -2080,8 +2080,11 @@ const CHART_SPECS = Object.assign(Object.create(null), {
   // 처리(아래 chartData)가 월별 집계를 카테고리별로 더 잘게 쪼개
   // stacked bar(누적 막대)로 그린다 — 로직은 새로 만들지 않는다.
   // classifyDisclosureCategory·monthlyCountsByCategory가 docs/tool/
-  // index.html의 matchSignals·AMEND_RE를 그대로 재현한다(브리프).
-  // signalsData가 없거나(로드 실패) 형태가 예상과 다르면 chartData가
+  // index.html의 matchSignals 키워드 매칭 순서를 그대로 재현한다(브리프).
+  // 단, 정정공시(AMEND_RE) 처리는 SE-7 Task 2에서 갈라졌다 — 공개
+  // 뷰어는 정정이면 배제하지만 여기는 접두어만 벗기고 내용을 계속
+  // 본다(아래 classifyDisclosureCategory 주석 참고). signalsData가
+  // 없거나(로드 실패) 형태가 예상과 다르면 chartData가
   // 자동으로 이전 단색-단일 계열 집계로 물러난다 — 화면이 죽지 않는다.
   // stacked:true는 renderChart(ui.js)가 Chart.js scales.x/y.stacked로
   // 그대로 옮긴다. 색은 카테고리(유형) 구분 전용이다 — 특정 유형에
@@ -2282,13 +2285,71 @@ function monthlyCounts(rows, field) {
   return order.map(function (m) { return { month: m, count: counts.get(m) }; });
 }
 
+/** reportNm이 signalsData.amendment_pattern(정정 접두어 전용 정규식,
+ *  실측: `^\[(?:기재정정|첨부추가|정정)[^\]]*\]\s*`)에 걸리는 "정정
+ *  공시"인지 사실만 돌려준다(SE-7 Task 2, task-2-brief.md).
+ *
+ *  core의 `is_amendment_disclosure`(dart_risk_mcp/core/signals.py)와
+ *  같은 원본 정규식을 쓰지만 이 함수는 표시 계층 전용이다 — core
+ *  버전을 대신 부르지 않는 이유는 그게 Python이라 브라우저/node에서
+ *  못 부르기 때문이고, signals-data.json이 export_tool_data.py를 통해
+ *  이미 그 정규식 문자열을 그대로 실어 나른다(브리프: "이미 있어서
+ *  만들지 않는 것" — 재구현이 아니라 같은 데이터를 그대로 읽는 것).
+ *
+ *  signalsData가 없거나 amendment_pattern이 문자열이 아니거나(로드
+ *  실패·형태 변경) 정규식 자체가 깨졌으면(예상 밖 데이터) false —
+ *  "정정인지 모른다"를 "정정이 아니다"로 보수적으로 처리해, 아래
+ *  classifyDisclosureCategory가 접두어를 벗기지 않고 원본 그대로
+ *  키워드 매칭을 계속하게 한다(분류를 통째로 포기하지 않는다).
+ *
+ *  죽은 코드가 아니다 — classifyDisclosureCategory가 접두어를 벗길지
+ *  판단하는 데 그대로 재사용한다(정정 판별 정규식을 두 곳에서 따로
+ *  손으로 맞추지 않는 단일 출처). */
+function isAmendmentDisclosure(reportNm, signalsData) {
+  if (!signalsData || typeof signalsData.amendment_pattern !== "string") return false;
+  const nm = typeof reportNm === "string" ? reportNm : "";
+  try {
+    return new RegExp(signalsData.amendment_pattern).test(nm);
+  } catch (e) {
+    return false;
+  }
+}
+
 /** reportNm 하나를 signalsData(docs/tool/signals-data.json 로드 결과) 기준
- *  으로 분류해 카테고리 번호(0~8, 0="기타")를 돌려준다. docs/tool/
- *  index.html의 matchSignals(564행)·AMEND_RE와 같은 로직이다(브리프:
- *  "로직을 새로 만들지 마라 — 읽어서 맞춘다. 같은 공시를 공개 뷰어와
- *  SE가 다르게 분류하면 그 자체가 결함") — 정정공시([기재정정] 등,
- *  signalsData.amendment_pattern)는 공개 뷰어와 마찬가지로 신호를 매기지
- *  않고 그대로 "기타"(0)로 남긴다.
+ *  으로 분류해 카테고리 번호(0~8, 0="기타")를 돌려준다. 키워드 매칭
+ *  순서(signals 배열 순서상 첫 매칭)는 docs/tool/index.html의
+ *  matchSignals(564행)와 같은 로직이다(브리프: "로직을 새로 만들지
+ *  마라 — 읽어서 맞춘다").
+ *
+ *  **정정공시(is_amendment_disclosure) 처리는 SE-7 Task 2에서 공개
+ *  뷰어·core와 의도적으로 갈라졌다.** core의 `match_signals`는
+ *  정정공시를 만나면 빈 리스트를 돌려준다 — 위험 신호 **집계**에서
+ *  같은 사건의 정정본을 중복 계산하지 않으려는 것으로, 그 용도로는
+ *  옳다. 하지만 여기(SE 표시 계층)는 "이번 달 공시가 무슨 색이었나"
+ *  전체 목록을 색칠하는 게 목적이라 그 배제를 그대로 재사용하면
+ *  정정 접두어가 붙었다는 이유만으로 내용과 무관하게 전부 "기타"로
+ *  뭉개진다(엔켐 실측: "기타" 110건 중 61건이 정정 배제 때문이었고,
+ *  접두어를 벗기고 재매칭하면 40건이 회복된다). 그래서 이 함수는
+ *  정정 접두어를 만나면 **제외하지 않고 벗겨낸 뒤** 나머지 텍스트로
+ *  키워드 매칭을 계속한다 — 매칭되면 그 카테고리, 안 되면 여전히
+ *  "기타"(0)이지만 그 0은 "내용까지 보고 못 찾은 0"이다.
+ *
+ *  amendment_pattern이 `^`로 시작하는 접두어 전용(anchored) 정규식임을
+ *  실측으로 확인했다 — 문자열 시작에만 걸리므로 `.replace()`로 접두어를
+ *  잘라내도 본문 중간이 잘릴 위험이 없다. 혹시 이후 데이터가 `^`로
+ *  시작하지 않는(문자열 어디서든 걸리는) 패턴을 준다면 `.replace()`를
+ *  적용하지 않고 원본 그대로 매칭한다 — 검증 안 된 패턴으로 본문을
+ *  잘라내는 쪽보다, 접두어를 못 벗겨 "기타"로 떨어지는 쪽이 안전하다.
+ *
+ *  **정정 여부 자체("이 공시가 정정이었다"는 사실)는 이 함수의 반환값
+ *  에서는 사라진다 — 대신 isAmendmentDisclosure(위)로 따로 노출한다.**
+ *  카테고리 숫자만 반환하던 기존 계약을 유지하기로 했다:
+ *  monthlyCountsByCategory(아래)가 이 반환값을 그대로 합산하고,
+ *  SE-4f에서 "월별 합계 = 원본 건수" 불변식을 고정해 뒀다({category,
+ *  isAmendment} 객체로 바꾸면 그 불변식 검증 테스트까지 전부 같이
+ *  고쳐야 해서 위험이 커진다) — 정정 여부가 필요한 화면(범례·툴팁
+ *  등)은 이 함수 대신 isAmendmentDisclosure를 직접 부르는 편이 더
+ *  안전하다는 판단이다.
  *
  *  **공시 하나는 정확히 한 카테고리에만 속한다.** matchSignals(공개
  *  뷰어)는 여러 신호가 동시에 걸리면 배열 전부를 돌려주지만, 여기서는
@@ -2301,14 +2362,21 @@ function monthlyCounts(rows, field) {
  *  단색 집계로 물러나는 신호다(브리프: "로드 실패에 대비하세요"). */
 function classifyDisclosureCategory(reportNm, signalsData) {
   if (!signalsData || !Array.isArray(signalsData.signals)) return null;
-  const nm = typeof reportNm === "string" ? reportNm : "";
-  if (typeof signalsData.amendment_pattern === "string") {
-    try {
-      if (new RegExp(signalsData.amendment_pattern).test(nm)) return 0;
-    } catch (e) {
-      // 정규식 자체가 깨졌으면(예상 밖 데이터) 정정 판정만 건너뛰고
-      // 아래 키워드 매칭으로 이어간다 — 분류를 통째로 포기하지 않는다.
+  let nm = typeof reportNm === "string" ? reportNm : "";
+  if (isAmendmentDisclosure(nm, signalsData)) {
+    // isAmendmentDisclosure가 true를 돌려준 시점에 signalsData.amendment_
+    // pattern은 이미 문자열이고 정규식 컴파일·매칭에 성공했다는 뜻이라
+    // (내부에서 실패하면 false만 돌려준다) 아래 재구성이 새로 던질 예외는
+    // 없다 — 그래도 방어적으로 값 자체는 다시 안 만들고 같은 문자열만
+    // 재사용한다.
+    if (signalsData.amendment_pattern.charAt(0) === "^") {
+      nm = nm.replace(new RegExp(signalsData.amendment_pattern), "");
     }
+    // else: 앞으로 들어올지 모르는, 문자열 시작에 고정되지 않은 패턴이다
+    // — 어디를 잘라야 안전한지 알 수 없으므로 원본 그대로 두고 아래
+    // 키워드 매칭으로 넘어간다(정정이라는 사실 자체는 이미
+    // isAmendmentDisclosure로 확인됐고, 위 함수를 부르는 쪽이 필요하면
+    // 그 사실을 따로 쓸 수 있다).
   }
   for (const s of signalsData.signals) {
     const keywords = Array.isArray(s.keywords) ? s.keywords : [];
@@ -3145,7 +3213,7 @@ if (typeof module !== "undefined" && module.exports) {
     DOC_LIST_KEY, docKeyRceptNo, docListRow,
     CHART_SPECS, chartData, axisLabel, numeric, axisSortKey,
     normalizeDebtByKind, monthlyCounts, compositeXValue,
-    financialRatios, classifyDisclosureCategory, monthlyCountsByCategory,
+    financialRatios, isAmendmentDisclosure, classifyDisclosureCategory, monthlyCountsByCategory,
     DIVIDEND_SE_FIELDS, dividendVsIncome, fundPlanChanges, fundChain, affiliateOverview,
     fundChainDisclosureHints,
     markNumber, MARK_RULES, cellMarks, markedColumnKeys, indicatorCellWhy,
