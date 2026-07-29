@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 행위자 조회가 콜드 호출마다 Notion을 15회 왕복하며 **15.1초**를 쓰는 것을 **0.5~0.9초**로 줄인다. 그리고 콜드일 때 조용히 죽지 않게 한다.
+**Goal:** 행위자 조회가 콜드 호출마다 Notion을 15회 왕복하며 **14~15초**를 쓰는 것을 **1.4초**로 줄인다(실측 10.2배). 그리고 콜드일 때 조용히 죽지 않게 한다.
 
 **Architecture:** core에 캐시 시임을 하나 더 판다 — `dart_client.set_http_cache`와 **같은 패턴**(`se_server`가 주입, core는 se_server를 모른다). `load_known_actors`가 Notion보다 먼저 그 캐시를 본다. 매일 도는 cron이 캐시를 미리 채워, 24시간 만료 직후 걸린 사용자가 15초를 물지 않게 한다.
 
@@ -86,6 +86,34 @@ Vercel Hobby 기본 상한이 10초라면, **15.1초짜리 콜드 레지스트�
 캐시를 깔아도 **TTL 만료 직후 첫 요청은 여전히 15.1초를 문다.** 매일 한 명이 그 비용을 낸다(그리고 위 타임아웃이 사실이면 실패한다).
 
 레지스트리는 이미 **매일 cron으로 재구성된다**(`.github/workflows/refresh-known-actors.yml` → `scripts/refresh_known_actors.py`). 그 작업이 끝나면서 Supabase 캐시를 함께 채우면 사용자 요청이 만료된 캐시를 만날 일이 없다.
+
+### Task 4 실측 결과 (2026-07-29 기록)
+
+**단축은 10.2배다 — 계획 첫머리에 적은 "20배"는 틀렸다.**
+
+| 경로 | 시간 |
+|---|---:|
+| A. 캐시 미설정 + 파일 캐시 없음 (MCP·CLI 현행) | **14.06초** |
+| B. Supabase 캐시 적중 (Vercel 콜드 경로) | **1.38초** |
+| C. 같은 프로세스 재호출 | 0.81초 |
+
+**왜 20배가 아니었나:** 계획 작성자가 `get_json` 단독(0.52~0.93초)만 재고 `load_known_actors` **전체 경로**(응답 검증 `_valid`, `should_store` 필터 1,258건, 파일 캐시 쓰기)를 재지 않았다. `2fedf74`가 경고한 것과 같은 유형 — **부분을 재고 전체라고 말한 것**이다. 실제 개선은 여전히 크지만(14.06→1.38초) 배수는 정확히 적는다.
+
+### ⚠️ 프로덕션 타임아웃 가정 — **확인하지 못했다**
+
+배경 절의 미확인 가정(`maxDuration` 미설정 → 콜드 15초가 타임아웃인가)을 **확정하지 못했다.**
+
+프로덕션 측정 결과:
+
+| 엔드포인트 | 상태 | 시간 |
+|---|---:|---:|
+| `/api/se/config` | 200 | 1.21초 |
+| `/api/se/actors?company=…` (토큰 없음) | 401 | 0.29초 |
+| `/api/se/actors?company=…` (잘못된 토큰) | 401 | 0.55초 |
+
+**인증 가드가 레지스트리 로드보다 앞에 있어, 로그인 토큰 없이는 그 경로를 측정할 수 없다.** 함수 자체는 살아 있다.
+
+**따라서 이 계획이 "성능 개선"인지 "결함 수정"인지 확정하지 못했다.** PR에는 성능 개선으로만 쓰고, 타임아웃 가능성은 **미확인 항목**으로 남긴다. 로그인 토큰을 가진 사람이 배포 후 `/api/se/actors`를 한 번 호출해 보면 즉시 갈린다.
 
 ---
 
