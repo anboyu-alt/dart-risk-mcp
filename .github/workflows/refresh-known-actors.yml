@@ -28,6 +28,13 @@ jobs:
           MAIL_APP_PASSWORD: ${{ secrets.MAIL_APP_PASSWORD }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
         run: python scripts/refresh_known_actors.py
+      - name: Warm registry cache (Supabase)
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          DB_KNOWN_ACTORS: ${{ secrets.DB_KNOWN_ACTORS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/warm_registry_cache.py
       - name: Checkout sightings (private)
         uses: actions/checkout@v5
         with:
