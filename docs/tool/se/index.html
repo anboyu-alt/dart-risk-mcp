@@ -78,6 +78,12 @@ th,td{border:1px solid var(--line);padding:4px 8px;text-align:left;
       vertical-align:top;max-width:280px;overflow-wrap:anywhere}
 th{color:var(--dim2);background:var(--rail);font-weight:normal}
 .doc{color:var(--amber);cursor:pointer;text-decoration:underline dotted}
+/* SE-6 Task 3 — 임원 이름 클릭(우측 패널). .doc(공시 원문 열기)와 같은
+   "클릭 가능" 시각 신호를 재사용하되 별도 클래스를 쓴다 — 문서를 여는
+   것과 사람 패널을 여는 것은 다른 동작이라 같은 색·의미를 겹치면 어느
+   쪽을 눌렀는지 구분이 안 된다. 새 CSS 변수는 만들지 않는다(기존 --tx
+   재사용, 다크·라이트 양쪽에 이미 정의돼 있다). */
+.exec-name{cursor:pointer;text-decoration:underline dotted;color:var(--tx)}
 .cap{color:var(--dim2);font-size:12px;margin:0 0 6px;font-family:var(--mono)}
 .cap b{color:var(--tx);font-weight:normal}
 .fold-btn{font-size:11px;padding:2px 6px;color:var(--dim2)}

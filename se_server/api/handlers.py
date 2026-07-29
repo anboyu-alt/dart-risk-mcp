@@ -16,6 +16,7 @@ from dart_risk_mcp.core.dart_client import fetch_disclosure_full, resolve_corp
 from dart_risk_mcp.core.known_actors import (
     actor_status,
     load_known_actors_with_source,
+    lookup_actor,
     lookup_actors_by_company,
 )
 from se_server.api.auth import AuthError, extract_bearer
@@ -310,26 +311,32 @@ def _registry_opted_in() -> bool:
 
 
 def _actors(request: Request, deps: Deps) -> Response:
-    """회사에 등장한 공개기록 행위자.
+    """공개기록 행위자 — 회사 단위 또는 이름 단위 조회.
 
     실명을 내보내므로 status와 면책을 **항상** 동반한다. 판정·점수는 없다.
     레지스트리는 opt-in이라 미설정 시 빈 목록이 정상이다(500이 아니다).
 
+    `?company=`와 `?name=`은 라우터 정규식이 하나(`router.py`)라 여기서
+    분기한다 — 새 라우트를 만들지 않는다(SE-6 Task 1). 어느 쪽인지 모호한
+    요청(둘 다 오거나 둘 다 없음)에는 답하지 않고 400으로 떨어뜨린다.
+
     "없음"과 "못 가져옴"을 구분한다(SE-5c Task 2). 레지스트리 로딩은 캐시·
     Notion이 둘 다 실패해도 예외를 던지지 않고 동봉 빈 스켈레톤으로 조용히
     graceful-fallback한다(core 원칙) — 그래서 예외를 잡는 것만으로는 "이
-    회사에 인물이 없다"와 "레지스트리 전체를 못 가져왔다"를 구분할 수 없다.
-    둘 다 "성공했지만 텅 빈 결과"로 보인다.
+    회사(또는 이 이름)에 해당이 없다"와 "레지스트리 전체를 못 가져왔다"를
+    구분할 수 없다. 둘 다 "성공했지만 텅 빈 결과"로 보인다.
 
     구분 기준은 **출처**다(`load_known_actors_with_source`). opt-in인데
     출처가 `bundled`(= 동봉 빈 스켈레톤으로 떨어졌다)면 조회 실패다.
     "인물이 0명이면 실패"라는 예전 추론은 부트스트랩 직후나 should_store
     필터가 전부 걸러낸 **진짜로 빈 레지스트리**를 실패로 오판했다
-    (SE-5c 최종 리뷰 Finding 1b).
+    (SE-5c 최종 리뷰 Finding 1b). 두 분기 모두 이 기준을 그대로 쓴다.
     """
     company = _query(request, "company")
-    if not company:
-        return Response.error(400, "company 파라미터가 필요합니다")
+    name = _query(request, "name")
+    if bool(company) == bool(name):
+        # 둘 다 있거나(모호) 둘 다 없다(대상 불명) — 어느 쪽도 답하지 않는다.
+        return Response.error(400, "company 또는 name 파라미터 중 하나가 필요합니다")
 
     try:
         # 레지스트리는 요청당 **한 번만** 로드한다. 예전에는 건강 확인용으로
@@ -337,30 +344,57 @@ def _actors(request: Request, deps: Deps) -> Response:
         # 캐시 적중 경로는 파일 캐시를 쓰지 않으므로(known_actors 참고)
         # 두 번째 호출도 실제 Supabase 왕복이었다 — Vercel에는 영속
         # $HOME이 없어 매 요청이 캐시 지연을 두 배로 물었다
-        # (SE-5c 최종 리뷰 Finding 1a). 로드한 레지스트리를 그대로 넘긴다.
+        # (SE-5c 최종 리뷰 Finding 1a). company 분기는 로드한 레지스트리를
+        # 그대로 넘긴다. name 분기는 `lookup_actor(name)`이 registry 인자를
+        # 받지 않으므로(core, 변경 금지) 이 이중 로드를 피할 수 없다 — 여기서는
+        # 출처 판정(bundled+opt-in=실패)에만 이 레지스트리를 쓴다.
         registry, source = load_known_actors_with_source()
         if source == "bundled" and _registry_opted_in():
             return Response.error(502, "레지스트리를 조회하지 못했습니다")
-        found = lookup_actors_by_company(company, registry=registry) or []
+
+        if company:
+            found = lookup_actors_by_company(company, registry=registry) or []
+            return Response(200, {
+                "company": company,
+                "actors": [
+                    {
+                        "name": actor_name,
+                        # status는 화이트리스트 검증 후 강등한다 — 키가 없을
+                        # 때뿐 아니라 빈 문자열·예상 밖 값일 때도
+                        # auto_matched로 떨어진다. (_actor_status 참고)
+                        "status": _actor_status(rec or {}),
+                        "companies": (rec or {}).get("companies", []),
+                        "evidence": (rec or {}).get("evidence", ""),
+                        # SE-6 Task 3 계획 오류 정정 — 근거 공시는 url(DART)로
+                        # 연다(rcept_no는 레지스트리 1,342건 중 3%뿐이라 내부
+                        # 원문 패널에 의존할 수 없다). url은 known_actors.py의
+                        # 레코드에 이미 있다(add_registry_record가
+                        # disclosure_url()로 채운다) — evidence·companies와
+                        # 같은 방식으로 그대로 통과시킨다.
+                        "url": (rec or {}).get("url", ""),
+                    }
+                    for actor_name, rec in found
+                ],
+                "disclaimer": _ACTOR_DISCLAIMER,
+            })
+
+        records = lookup_actor(name) or []
+        return Response(200, {
+            "name": name,
+            "actors": [
+                {
+                    "name": name,
+                    "status": _actor_status(rec or {}),
+                    "companies": (rec or {}).get("companies", []),
+                    "evidence": (rec or {}).get("evidence", ""),
+                    "url": (rec or {}).get("url", ""),
+                }
+                for rec in records
+            ],
+            "disclaimer": _ACTOR_DISCLAIMER,
+        })
     except Exception:
         return Response.error(502, "레지스트리를 조회하지 못했습니다")
-
-    return Response(200, {
-        "company": company,
-        "actors": [
-            {
-                "name": name,
-                # status는 화이트리스트 검증 후 강등한다 — 키가 없을 때뿐 아니라
-                # 빈 문자열·예상 밖 값일 때도 auto_matched로 떨어진다.
-                # (_actor_status 참고)
-                "status": _actor_status(rec or {}),
-                "companies": (rec or {}).get("companies", []),
-                "evidence": (rec or {}).get("evidence", ""),
-            }
-            for name, rec in found
-        ],
-        "disclaimer": _ACTOR_DISCLAIMER,
-    })
 
 
 def _config(deps: Deps) -> Response:

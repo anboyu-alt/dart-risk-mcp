@@ -211,11 +211,60 @@
 
 ---
 
-## Task 3: 렌더 — 표시와 클릭
+## Task 2b: 임원 상세 필드를 화면까지 보낸다
+
+> **⚠️ 계획 오류 정정(2026-07-29).** Task 3은 패널에 `직위·등기 여부·생년월`을 띄우라고 적었지만, **그 값들은 화면에 도착하지 않는다.** 계획 작성자가 `exctvSttus` 원본 응답 필드만 보고 그게 클라이언트까지 온다고 가정했다 — 파이프라인을 따라가지 않았다. Task 2 구현자가 실제 데이터 경로를 확인해 잡았다.
+
+**확인된 사실:** `fetch_executive_roster`(`dart_client.py:2775`)는 `dict[str, set[str]]` = `{임원명: {연도}}`만 돌려주고 **`birth_ym`·`ofcps`·`rgist_exctv_at`·`corp_name`을 버린다.**
+
+**왜 필요한가:** 이 계획은 동명이인을 우리가 가리지 않고 **이용자가 확인하게** 한다. 그런데 확인할 재료가 바로 생년월·직위다. 그게 없으면 화면이 "확인하세요"라고 말하고 아무것도 주지 않는다.
 
 **Files:**
-- Modify: `docs/tool/se/ui.js`, 필요 시 `docs/tool/se/index.html`
-- Test: `tests/se/test_se_app_js.py`(실렌더 하네스), `tests/se/test_se_page_assets.py`(정적)
+- Modify(추가만): `dart_risk_mcp/core/dart_client.py`, `dart_risk_mcp/core/__init__.py`
+- Modify: `se_server/jobs/registry.py`
+- Test: 기존 `fetch_executive_roster` 테스트가 있는 파일(`tests/test_executive_roster.py`)
+
+**요구사항:**
+
+- **기존 `fetch_executive_roster`를 고치지 마라.** `server.py:1391`의 `find_actor_overlap`과 `runner.py`의 특수 처리(`dict[str, set[str]]` 가정)가 그것에 묶여 있다. **새 함수를 옆에 추가한다** — SE-5c가 `fetch_company_indicators` 옆에 `fetch_indicator_history`를 둔 것과 같은 방식이다.
+- 새 함수는 **사람 단위 행 목록**을 돌려준다. 최소한 `nm`·`birth_ym`·`ofcps`·`rgist_exctv_at`·`corp_name`과 재직 연도를 보존한다.
+- 같은 사람이 여러 해에 나오면 **합친다**(연도 집합). 기존 함수의 합집합 동작과 같은 원칙이다.
+- 연도 루프·`_retry`·오류 처리는 **기존 함수와 같은 방식**을 따른다. 새 패턴을 만들지 마라.
+- `se_server/jobs/registry.py`의 `executive_roster` 스펙을 새 함수로 교체한다. **`runner.py:154`가 `dict[str, set[str]]`을 특수 처리**하고 있으니, 반환형이 바뀌면 그 경로가 깨지는지 **먼저 읽고** 확인하라.
+- **MCP 도구 26개는 그대로다** — `fetch_executive_roster`가 무변경이므로 `find_actor_overlap`이 영향받지 않는다. 그 사실을 테스트로 고정하라.
+- 클라이언트의 `normalizeRoster`가 새 형태를 받게 조정하되, **옛 형태(`{이름: {연도}}`)도 계속 받아 준다** — 저장된 옛 작업 결과가 남아 있을 수 있다(SE-4h에서 같은 이유로 봉투/배열 양쪽을 받았다).
+
+- [ ] **Step 1: 실패하는 테스트를 쓴다**
+
+1. 새 함수가 `nm`·`birth_ym`·`ofcps`·`rgist_exctv_at`을 보존한다
+2. 같은 사람이 두 해에 나오면 한 행으로 합쳐지고 연도가 둘 다 남는다
+3. **`fetch_executive_roster`의 반환이 그대로다**(같은 입력·같은 출력) — MCP 무영향의 증거
+4. DART가 `013`(자료 없음)을 주면 빈 목록이고 예외가 없다(셀트리온 실측 사례)
+5. `runner.py`의 특수 처리가 새 형태에서도 깨지지 않는다
+6. `normalizeRoster`가 새 형태와 옛 형태를 **둘 다** 받는다
+
+- [ ] **Step 2~4: 실패 확인 → 구현 → 통과 확인**
+
+- [ ] **Step 5: 전체 회귀 + 커밋**
+
+---
+
+## Task 3: 렌더 — 표시와 클릭
+
+> **⚠️ 계획 오류 정정(2026-07-29, Task 2b와 같은 종류).** 브리프는 "근거
+> 공시는 `url`(DART)로 연다"고 적었지만, `se_server/api/handlers.py`의
+> `_actors` 핸들러는 응답에 `url` 필드를 아예 담지 않고 있었다(`status`·
+> `companies`·`evidence`만 통과시켰다). `known_actors.py` 레코드에는 이미
+> `url`이 있다(`add_registry_record`가 `disclosure_url()`로 채운다) —
+> Task 3 구현자가 `evidence`와 같은 방식으로 그대로 통과시키는 한 줄을
+> 양쪽 분기(`?company=`·`?name=`)에 추가했다(TDD, `tests/se/
+> test_api_actors.py::TestActorsIncludeUrl` 3건). `dart_risk_mcp/`는
+> 건드리지 않는다(Global Constraints 유지) — `se_server/api/handlers.py`는
+> SE 서버 레이어라 그 제약 밖이다.
+
+**Files:**
+- Modify: `docs/tool/se/ui.js`, `se_server/api/handlers.py`(url 필드 통과, 위 정정), 필요 시 `docs/tool/se/index.html`
+- Test: `tests/se/test_se_app_js.py`(실렌더 하네스), `tests/se/test_se_page_assets.py`(정적), `tests/se/test_api_actors.py`(url 정정)
 
 **요구사항 — 문구가 이 태스크의 전부다**
 
@@ -282,6 +331,20 @@
 | 삼성전자 | 9명 | **0명** |
 | 셀트리온 | **0명**(DART `013`) | 0명 |
 | 엔켐 | 7명 | **1명** (`이승호` → `FSN`·`위노바`) |
+
+### Task 4 실측 결과 (2026-07-29 기록)
+
+**기대값과 정확히 일치.** `fetch_executive_roster_detail`(Task 2b 신규 함수)로 재확인: 삼성전자 9/0, 셀트리온 0/0, 엔켐 7/1(`이승호` → `FSN`·`위노바`, `생년월=1954년 05월`·`직위=이사`·`등기=사외이사`).
+
+**브라우저 실렌더 검증(로컬 정적 서버 + `api()` 스텁, 실제 `renderSection`/`openExecutivePanel` 구동):**
+
+- 엔켐 7명 중 1명(`이승호`)에 `.mk` + 범례 `강조: 같은 이름이 레지스트리에 있음` — "관여" 류 어휘 없음
+- 클릭 → 패널: 직위·등기·생년월 + 등재 회사(`FSN`·`위노바`) + 근거 + **동명이인 경고·확인방법 3종·생년월 미보유 안내가 항상 보이는 자리에** 출력
+- 셀트리온(임원 0명) → `DART가 이 회사의 임원현황을 제공하지 않습니다`(`해당 없음` 아님) 확인
+- **악성 URL 통제 확인**: `dart.fss.or.kr`이 아닌 호스트(`evil.example.com`)는 `<a href>`로 안 만들어지고 `근거 링크(출처 미확인): https://…` 평문으로만 표시 — 숨기지도 클릭되게도 하지 않음
+- 로그아웃(`showGate()`) 후 `#body`·`#panel-body` 양쪽에서 실명 완전 제거, 패널도 닫힘
+
+**⚠️→✅ 정정(최종 리뷰, 2026-07-29):** 위 "결함 아님" 판단은 틀렸다. 임원 1명뿐인 회사는 소형 쉘·SPC성 법인에서 드물지 않고, 그런 회사가 정확히 이 도구가 보려는 대상이다. **강조는 뜨는데 검증 경로(경고·확인방법 3종·근거 링크)가 막히면, 사실을 표시하면서 그 사실에 필요한 안전장치를 못 주는 셈이다.** 세로 표 렌더 경로에도 같은 클릭 배선을 추가해 고쳤다(강조를 숨기는 방향이 아니라 상호작용을 살리는 방향 — 신호를 지우면 그 경우에만 아무 정보도 안 남는다). 1명짜리 명단으로 클릭→패널 열림을 검증하는 테스트를 추가했고 변이로 실패를 확인했다.
 
 **다르면 멈추고 보고하라.** 레지스트리는 매일 cron으로 바뀌므로 며칠 뒤엔 값이 달라질 수 있다 — 그 경우 **차이의 원인을 확인하고 새 값을 기록**하되, 숫자에 코드를 맞추지 마라.
 

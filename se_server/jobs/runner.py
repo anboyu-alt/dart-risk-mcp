@@ -151,7 +151,13 @@ def _jsonable(value):
     """JSON으로 직렬화되지 않는 타입을 변환한다.
 
     core 함수는 반환 타입이 제각각이라(list·dict·set) 통일이 필요하다.
-    특히 fetch_executive_roster는 dict[str, set[str]]을 돌려준다.
+    특히 fetch_executive_roster는 dict[str, set[str]]을 돌려준다 — set 분기가
+    이 함수를 위해 있다. 다만 registry.py의 executive_roster 작업 스펙은
+    현재 그 함수가 아니라 fetch_executive_roster_detail(사람 단위 행
+    리스트, SE-6 Task 2b)을 호출한다. fetch_executive_roster 자체는
+    find_actor_overlap(server.py)이 여전히 쓰므로 남겨 두며, 여기 set 분기도
+    다른 job이 dict[str, set[str]]를 돌려줄 가능성을 위해 그대로 둔다(제거
+    대상 아님 — 리뷰 확인).
 
     저장소(JSONB)에 넣기 직전에 터지면 진행이 통째로 유실되므로, 알 수 없는
     타입은 예외를 던지는 대신 str()로 낮춘다 — 데이터 형태가 조금 나빠지는

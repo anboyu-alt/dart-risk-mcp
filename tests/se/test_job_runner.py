@@ -420,6 +420,48 @@ class TestJsonable(unittest.TestCase):
 
         json.dumps(runner._jsonable({"x": Odd()}))
 
+    def test_executive_roster_detail_row_list_survives_jsonable(self):
+        """SE-6 Task 2b: registry.py의 executive_roster 스펙이
+        fetch_executive_roster_detail(사람 단위 행 목록)을 가리키게 바뀐다.
+        이 함수는 fetch_executive_roster와 달리 dict[str, set[str]]이 아니라
+        list[dict]를 돌려주므로, _jsonable의 set 특수 처리(위
+        test_converts_set_of_strings)가 걸리는 경로가 아니다 — 일반
+        list/dict 재귀 경로로 값이 그대로 통과해야 한다(섹션 페이로드가
+        조용히 깨지지 않는다는 증거)."""
+        rows = [
+            {"nm": "이승호", "corp_name": "엔켐", "birth_ym": "197203",
+             "ofcps": "사내이사", "rgist_exctv_at": "등기", "years": ["2025", "2026"]},
+        ]
+        self.assertEqual(runner._jsonable(rows), rows)
+
+
+class TestExecutiveRosterSpecPointsToDetailFunction(unittest.TestCase):
+    """registry.py의 executive_roster Stage1Spec이 SE-6 Task 2b의 새
+    함수를 가리켜야 birth_ym·ofcps·rgist_exctv_at이 화면까지 도착한다.
+    기존 fetch_executive_roster(dict[str, set[str]])는 find_actor_overlap과
+    이 파일의 겸직 판정에 그대로 묶여 있으므로 손대지 않는다.
+    """
+
+    def test_spec_func_name_is_detail_variant(self):
+        from se_server.jobs.registry import STAGE1_SPECS
+
+        by_key = {s.key: s for s in STAGE1_SPECS}
+        self.assertEqual(
+            by_key["executive_roster"].func_name, "fetch_executive_roster_detail"
+        )
+
+    def test_new_func_name_resolves_and_old_func_untouched(self):
+        from dart_risk_mcp.core import dart_client
+        from se_server.jobs.registry import resolve_callable
+
+        self.assertIs(
+            resolve_callable("fetch_executive_roster_detail"),
+            dart_client.fetch_executive_roster_detail,
+        )
+        # 기존 겸직 판정(find_actor_overlap·이 파일의 특수 처리)이 의존하는
+        # 옛 함수는 여전히 개별적으로 호출 가능해야 한다.
+        self.assertTrue(callable(dart_client.fetch_executive_roster))
+
 
 class TestStage2Execution(unittest.TestCase):
     def test_stage2_item_calls_document_fetch(self):

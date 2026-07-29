@@ -217,6 +217,26 @@ class TestNoVerdictVocabulary(unittest.TestCase):
                 self.assertNotIn(word, src, f"{name}에 판정 어휘 '{word}'")
 
 
+class TestNoIdentityAssertionVocabulary(unittest.TestCase):
+    """SE-6 Task 3 — 계획 문서 "말할 수 있는 것과 없는 것" 판정선. 레지스트리
+    개인 545명 중 522명이 흔한 2~4자 한글 이름이고 99.5%가 auto_matched(기계
+    매칭, 동일인 검증 없음)다 — "이 임원이 다른 회사에도 등장"처럼 신원을
+    단정하는 표현이 화면에 나가면 무고한 동명이인을 지목하게 된다.
+
+    실행 결과(test_se_app_js.py의 TestExecutiveRosterActorLinkRendering·
+    TestExecutivePanelRendersRegistryMatch)로 실제 렌더 출력을 이미
+    확인했지만, 브리프가 "정적 검사로도 막는다"고 요구한 만큼 소스 자체에도
+    같은 표현이 남지 않는지 이중으로 막는다.
+    """
+
+    _BANNED = ("다른 회사에도 등장", "관여", "연루")
+
+    def test_no_identity_assertion_words(self):
+        for name, src in _sources().items():
+            for word in self._BANNED:
+                self.assertNotIn(word, src, f"{name}에 신원 단정 어휘 '{word}'")
+
+
 class TestLogoutClearsDartKey(unittest.TestCase):
     """계획 인수 기준(`task-5-brief.md`): "로그아웃 후 — DART 키와 세션이
     지워진다". doLogout()이 세션만 지우고 DART 키(localStorage + 입력
