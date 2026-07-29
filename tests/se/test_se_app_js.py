@@ -2083,6 +2083,111 @@ class TestInsiderTimelineRenderWiring(unittest.TestCase):
         self.assertIn("최대주주 현황", got["titles"])
 
 
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestHyslrAggregateRowSplit(unittest.TestCase):
+    """SE-8 Task 6 — 실사용자(SG, corp_code=00963976) 지적: insider_timeline의
+    hyslr(최대주주 현황) 하위 블록에 합계 행("계")이 사람 이름("최순복"·
+    "박창호") 사이에 섞여 나와 무엇을 합산한 값인지 알 수 없었다.
+
+    shareholders.major_holders가 이미 겪은 같은 문제다(위
+    TestAggregateRowSplit 참고, sectionBlocks의 major_holders 분기) —
+    판정(isAggregateRow)·분리(splitAggregateRows)를 재구현하지 않고 그대로
+    가져와 insider_timeline의 진입점인 sourceGroupedBlocks의 hyslr 그룹에
+    배선한다.
+
+    fixture: SG hyslr 실측 nm 값 집합(계·최순복·박창호)을 그대로 쓴다."""
+
+    _SG_HYSLR = [
+        {"source": "hyslr", "nm": "최순복", "relate": "본인",
+         "trmend_posesn_stock_qota_rt": "12.34"},
+        {"source": "hyslr", "nm": "박창호", "relate": "특수관계인",
+         "trmend_posesn_stock_qota_rt": "3.21"},
+        {"source": "hyslr", "nm": "계", "relate": "-",
+         "trmend_posesn_stock_qota_rt": "15.55"},
+    ]
+
+    def test_aggregate_row_separated_from_people_at_block_level(self):
+        blocks = run_js(
+            f'sourceGroupedBlocks({json.dumps(self._SG_HYSLR, ensure_ascii=False)})'
+        )
+        titles = [b["title"] for b in blocks]
+        self.assertIn("최대주주 현황", titles)
+        self.assertIn("최대주주 현황 · 합계", titles,
+                       "hyslr의 '계' 행이 합계 블록으로 분리되지 않았습니다")
+        people_block = next(b for b in blocks if b["title"] == "최대주주 현황")
+        idx = people_block["table"]["keys"].index("nm")
+        names = [row[idx] for row in people_block["table"]["rows"]]
+        self.assertNotIn("계", names, "'계' 행이 사람 목록에서 빠지지 않았습니다")
+        self.assertIn("최순복", names)
+        self.assertIn("박창호", names)
+
+    def test_aggregate_row_value_is_not_deleted_stays_in_totals_block(self):
+        """합계를 없애라는 게 아니다 — 무엇을 합산했는지 사용자가 볼 수
+        있어야 한다."""
+        blocks = run_js(
+            f'sourceGroupedBlocks({json.dumps(self._SG_HYSLR, ensure_ascii=False)})'
+        )
+        total_block = next(b for b in blocks if b["title"] == "최대주주 현황 · 합계")
+        flat = _flatten_table_cells(total_block["table"])
+        self.assertIn("계", flat, "합계 행의 '계' 원문이 사라졌습니다")
+
+    def test_person_named_gye_sang_hyeok_is_not_misdetected_in_hyslr(self):
+        """isAggregateRow의 "계상혁" 함정 방지(SE-5b)가 이 새 호출부에서도
+        그대로 지켜지는지 재확인한다 — 로직 자체는 건드리지 않는다."""
+        records = self._SG_HYSLR + [
+            {"source": "hyslr", "nm": "계상혁", "relate": "특수관계인",
+             "trmend_posesn_stock_qota_rt": "0.11"},
+        ]
+        blocks = run_js(f'sourceGroupedBlocks({json.dumps(records, ensure_ascii=False)})')
+        people_block = next(b for b in blocks if b["title"] == "최대주주 현황")
+        idx = people_block["table"]["keys"].index("nm")
+        names = [row[idx] for row in people_block["table"]["rows"]]
+        self.assertIn("계상혁", names,
+                       "실제 인물 '계상혁'이 합계로 오탐돼 hyslr 사람 목록에서 빠졌습니다")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestHyslrAggregateRowSplitRenderWiring(unittest.TestCase):
+    """sourceGroupedBlocks 단독 검증(위 TestHyslrAggregateRowSplit)만으로는
+    renderSection(ui.js) 호출부가 실제로 이 분기를 타는지 못 잡는다 — 이
+    저장소에서 반복된 "정의만 있고 배선이 없는" 사고 유형과 같다.
+    run_render_section으로 app.js·ui.js를 실제로 함께 실행해 확인한다."""
+
+    _SG_HYSLR = [
+        {"source": "hyslr", "nm": "최순복", "relate": "본인",
+         "trmend_posesn_stock_qota_rt": "12.34"},
+        {"source": "hyslr", "nm": "박창호", "relate": "특수관계인",
+         "trmend_posesn_stock_qota_rt": "3.21"},
+        {"source": "hyslr", "nm": "계", "relate": "-",
+         "trmend_posesn_stock_qota_rt": "15.55"},
+    ]
+
+    def test_aggregate_and_people_render_as_separate_titled_blocks(self):
+        got = run_render_section(
+            '"insider_timeline"', json.dumps(self._SG_HYSLR, ensure_ascii=False)
+        )
+        self.assertIn("최대주주 현황", got["titles"])
+        self.assertIn("최대주주 현황 · 합계", got["titles"],
+                       "'계' 행이 실제 렌더에서 별도 블록으로 분리되지 않았습니다")
+
+    def test_gye_text_is_not_deleted_from_the_rendered_dom(self):
+        got = run_render_section(
+            '"insider_timeline"', json.dumps(self._SG_HYSLR, ensure_ascii=False)
+        )
+        self.assertIn("계", got["cells"], "'계' 원문이 실제 렌더에서 사라졌습니다")
+        self.assertIn("최순복", got["cells"])
+        self.assertIn("박창호", got["cells"])
+
+    def test_gye_sang_hyeok_stays_with_named_people_in_rendered_dom(self):
+        records = self._SG_HYSLR + [
+            {"source": "hyslr", "nm": "계상혁", "relate": "특수관계인",
+             "trmend_posesn_stock_qota_rt": "0.11"},
+        ]
+        got = run_render_section('"insider_timeline"', json.dumps(records, ensure_ascii=False))
+        self.assertIn("계상혁", got["cells"],
+                       "실제 인물 '계상혁'이 실제 렌더에서 빠졌습니다")
+
+
 @unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
 class TestFundUsagePayDeLabelAndNote(unittest.TestCase):
     """pay_de 라벨이 "자금 납입일"로 바뀌었는지, fund_usage를 렌더링할 때
@@ -3157,6 +3262,35 @@ class TestLabels(unittest.TestCase):
         }
         for key, want in cases.items():
             self.assertEqual(run_js(f'label({json.dumps(key)})'), want)
+
+    def test_bulk_holders_majorstock_fields_get_korean_labels(self):
+        """SE-8 Task 6 — 실사용자(SG, corp_code=00963976) 지적: "5% 대량보유"
+        표(shareholders.bulk_holders, dart_client.fetch_shareholder_status가
+        /majorstock.json 원본을 그대로 준다)에 stkqy·stkrt·ctr_stkqy 등이
+        raw 필드명 그대로 노출됐다.
+
+        여기 값은 opendart_api_guide.md §4.1(대량보유 상황보고, 2019021)
+        "응답 결과" 표의 "명칭" 열을 그대로 옮긴 것이다 — 추측이 아니다.
+        브리프가 제시한 괄호 속 글로스("주식수"·"지분율"·"계약체결
+        주식수")는 근사치일 뿐 가이드 원문과 다르므로 쓰지 않았다(가이드
+        원문: stkqy="보유주식등의 수", stkrt="보유비율",
+        ctr_stkqy="주요체결 주식등의 수"). 같은 표의 나머지 형제 필드
+        (stkqy_irds·stkrt_irds·ctr_stkrt·report_tp·report_resn)도 같은
+        표에서 가져와 함께 채운다 — 셋만 고치면 같은 표의 나머지 열이
+        여전히 raw로 남는다."""
+        cases = {
+            "stkqy": "보유주식등의 수",
+            "stkqy_irds": "보유주식등의 증감",
+            "stkrt": "보유비율",
+            "stkrt_irds": "보유비율 증감",
+            "ctr_stkqy": "주요체결 주식등의 수",
+            "ctr_stkrt": "주요체결 보유비율",
+            "report_tp": "보고구분",
+            "report_resn": "보고사유",
+        }
+        for key, want in cases.items():
+            self.assertEqual(run_js(f'label({json.dumps(key)})'), want,
+                              f"{key} 라벨이 opendart_api_guide.md §4.1과 다릅니다")
 
     def test_reprt_code_label_names_a_category_not_a_code(self):
         """reprt_code의 값 자체는 REPRT_CODE_LABELS(formatValue)가 이미

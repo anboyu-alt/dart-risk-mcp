@@ -198,6 +198,18 @@ const LABELS = Object.assign(Object.create(null), {
   opinions: "감사의견", auditor_changes: "감사인 교체",
   independence_warnings: "감사인 독립성 경고",
   major_holders: "최대주주", bulk_holders: "5% 대량보유",
+  // bulk_holders(위)의 원본 필드(dart_client.fetch_shareholder_status가
+  // /majorstock.json 응답을 개명 없이 그대로 싣는다 — 위 MARK_RULES.
+  // shareholders 주석에서 이미 확인됨). SE-8 Task 6 실사용자(SG,
+  // corp_code=00963976) 지적: stkqy·stkrt·ctr_stkqy가 raw로 노출됐다.
+  // 값은 opendart_api_guide.md §4.1(대량보유 상황보고, 2019021) "응답
+  // 결과" 표의 "명칭" 열을 그대로 옮긴 것이다(추측 금지 — 임의로 지어낸
+  // 한글명이 아니다). 같은 표의 나머지 형제 필드도 함께 채운다 — 셋만
+  // 고치면 같은 표의 나머지 열이 여전히 raw로 남는다.
+  stkqy: "보유주식등의 수", stkqy_irds: "보유주식등의 증감",
+  stkrt: "보유비율", stkrt_irds: "보유비율 증감",
+  ctr_stkqy: "주요체결 주식등의 수", ctr_stkrt: "주요체결 보유비율",
+  report_tp: "보고구분", report_resn: "보고사유",
 
   // ── 공시 원문
   text: "본문", files: "파일 목록", main_file: "주 파일",
@@ -797,6 +809,39 @@ function sourceGroupedBlocks(records) {
       delete copy.source;
       return copy;
     });
+
+    // hyslr(최대주주 현황)에는 합계 행("계")이 사람 이름(nm) 자리에 섞여
+    // 온다 — shareholders.major_holders와 정확히 같은 문제다(둘 다
+    // dart_client가 /hyslrSttus.json 원본을 그대로 준다, 위 splitAggregateRows
+    // 주석 참고). SE-8 Task 6 실사용자(SG) 지적: 무엇을 합산한 행인지
+    // 설명 없이 사람 이름 사이에 섞여 나왔다. 같은 판정(isAggregateRow)·
+    // 같은 분리(splitAggregateRows)를 재구현하지 않고 그대로 가져와
+    // 사람 표 + 합계 표(제자리에 소계로) 두 블록으로 나눈다 — "계" 원문은
+    // 지우지 않는다(합계 표 자체에 nm="계"로 그대로 남는다).
+    if (s === "hyslr") {
+      const split = splitAggregateRows(withoutSource);
+      const peopleCleaned = dropAllEmptyColumns(split.people);
+      const pt = tableLayout(peopleCleaned);
+      if (pt) {
+        const pBlock = { title: label(s), table: pt, records: peopleCleaned };
+        if (isMetaOnlyRecords(peopleCleaned)) {
+          pBlock.note = "해당 기간에 보고된 내역이 없습니다.";
+        }
+        blocks.push(pBlock);
+      }
+      if (split.totals.length > 0) {
+        const totalsCleaned = dropAllEmptyColumns(split.totals);
+        const tt = tableLayout(totalsCleaned);
+        if (tt) {
+          blocks.push({ title: label(s) + " · 합계", table: tt, records: totalsCleaned });
+        }
+      }
+      if (!pt && split.totals.length === 0) {
+        blocks.push({ title: label(s), table: null, records: null });
+      }
+      continue;
+    }
+
     const cleaned = dropAllEmptyColumns(withoutSource);
     const t = tableLayout(cleaned);
     // records는 표가 실제로 그린 것과 같은 레코드(source 제거·빈 열 제거
