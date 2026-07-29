@@ -880,9 +880,17 @@ class TestRemarkAndKindLabels(unittest.TestCase):
     """
 
     def test_single_known_remark_codes(self):
+        # DART 공식 비고 코드 8종 전부 개별 고정 — 3종만 고정하면 나머지
+        # 5종(유·채·넥·공·철)은 값이 뒤바뀌어도(예: 채↔넥 swap) 아무 테스트도
+        # 안 잡는다(리뷰에서 실제로 변이로 확인된 구멍).
+        self.assertEqual(run_js('formatRemark("유")'), "유가증권")
+        self.assertEqual(run_js('formatRemark("코")'), "코스닥")
+        self.assertEqual(run_js('formatRemark("채")'), "채권상장법인")
+        self.assertEqual(run_js('formatRemark("넥")'), "코넥스")
+        self.assertEqual(run_js('formatRemark("공")'), "공정위 대상 기업집단")
         self.assertEqual(run_js('formatRemark("연")'), "연결대상 종속회사 있음")
         self.assertEqual(run_js('formatRemark("정")'), "정정신고")
-        self.assertEqual(run_js('formatRemark("코")'), "코스닥")
+        self.assertEqual(run_js('formatRemark("철")'), "철회")
 
     def test_combined_remark_code_is_decomposed_char_by_char(self):
         """실측 "코정" = 코스닥 + 정정신고, 구분자 없이 붙어 나온다."""
