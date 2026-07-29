@@ -251,9 +251,20 @@
 
 ## Task 3: 렌더 — 표시와 클릭
 
+> **⚠️ 계획 오류 정정(2026-07-29, Task 2b와 같은 종류).** 브리프는 "근거
+> 공시는 `url`(DART)로 연다"고 적었지만, `se_server/api/handlers.py`의
+> `_actors` 핸들러는 응답에 `url` 필드를 아예 담지 않고 있었다(`status`·
+> `companies`·`evidence`만 통과시켰다). `known_actors.py` 레코드에는 이미
+> `url`이 있다(`add_registry_record`가 `disclosure_url()`로 채운다) —
+> Task 3 구현자가 `evidence`와 같은 방식으로 그대로 통과시키는 한 줄을
+> 양쪽 분기(`?company=`·`?name=`)에 추가했다(TDD, `tests/se/
+> test_api_actors.py::TestActorsIncludeUrl` 3건). `dart_risk_mcp/`는
+> 건드리지 않는다(Global Constraints 유지) — `se_server/api/handlers.py`는
+> SE 서버 레이어라 그 제약 밖이다.
+
 **Files:**
-- Modify: `docs/tool/se/ui.js`, 필요 시 `docs/tool/se/index.html`
-- Test: `tests/se/test_se_app_js.py`(실렌더 하네스), `tests/se/test_se_page_assets.py`(정적)
+- Modify: `docs/tool/se/ui.js`, `se_server/api/handlers.py`(url 필드 통과, 위 정정), 필요 시 `docs/tool/se/index.html`
+- Test: `tests/se/test_se_app_js.py`(실렌더 하네스), `tests/se/test_se_page_assets.py`(정적), `tests/se/test_api_actors.py`(url 정정)
 
 **요구사항 — 문구가 이 태스크의 전부다**
 

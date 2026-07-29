@@ -369,6 +369,38 @@ class TestActorsByName(unittest.TestCase):
         self.assertEqual(resp.body["actors"][0]["status"], "auto_matched")
 
 
+class TestActorsIncludeUrl(unittest.TestCase):
+    """SE-6 Task 3 계획 오류 정정(2026-07-29) — 브리프는 "근거 공시는
+    url(DART)로 연다"고 적었지만, 실제로는 이 핸들러가 url 필드 자체를
+    응답에 담지 않았다(rec.get("url")을 아무 분기에서도 안 부른다).
+    known_actors.py의 레코드에는 이미 url이 있다(add_registry_record가
+    disclosure_url()로 채운다, 라이브 실측 1,337/1,342건=100%) — 여기서는
+    그 필드를 그대로 통과시키기만 한다(evidence·companies와 같은 패턴).
+    """
+
+    def test_name_lookup_passes_through_url(self):
+        sample = [{"status": "auto_matched", "companies": ["FSN"], "evidence": "e",
+                   "url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=X"}]
+        with mock.patch("se_server.api.handlers.lookup_actor", return_value=sample):
+            resp = handle(_req("/api/se/actors?name=이승호"), _deps())
+        self.assertEqual(resp.body["actors"][0]["url"],
+                          "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=X")
+
+    def test_company_lookup_passes_through_url(self):
+        sample = [("이승호", {"status": "auto_matched", "companies": ["FSN"], "evidence": "e",
+                             "url": "https://dart.fss.or.kr/x"})]
+        with mock.patch("se_server.api.handlers.lookup_actors_by_company", return_value=sample):
+            resp = handle(_req("/api/se/actors?company=엔켐"), _deps())
+        self.assertEqual(resp.body["actors"][0]["url"], "https://dart.fss.or.kr/x")
+
+    def test_missing_url_field_is_empty_string_not_missing_key(self):
+        """url이 없는 옛 기록도 있다(레지스트리 전체 1,342건 중 5건) — 키
+        자체가 없어서 화면이 KeyError를 내면 안 된다."""
+        with mock.patch("se_server.api.handlers.lookup_actor", return_value=_SAMPLE_RECORDS):
+            resp = handle(_req("/api/se/actors?name=이승호"), _deps())
+        self.assertEqual(resp.body["actors"][0]["url"], "")
+
+
 class TestQueryParsing(unittest.TestCase):
     def test_company_is_url_decoded(self):
         with mock.patch("se_server.api.handlers.lookup_actors_by_company",

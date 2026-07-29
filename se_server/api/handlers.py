@@ -365,6 +365,13 @@ def _actors(request: Request, deps: Deps) -> Response:
                         "status": _actor_status(rec or {}),
                         "companies": (rec or {}).get("companies", []),
                         "evidence": (rec or {}).get("evidence", ""),
+                        # SE-6 Task 3 계획 오류 정정 — 근거 공시는 url(DART)로
+                        # 연다(rcept_no는 레지스트리 1,342건 중 3%뿐이라 내부
+                        # 원문 패널에 의존할 수 없다). url은 known_actors.py의
+                        # 레코드에 이미 있다(add_registry_record가
+                        # disclosure_url()로 채운다) — evidence·companies와
+                        # 같은 방식으로 그대로 통과시킨다.
+                        "url": (rec or {}).get("url", ""),
                     }
                     for actor_name, rec in found
                 ],
@@ -380,6 +387,7 @@ def _actors(request: Request, deps: Deps) -> Response:
                     "status": _actor_status(rec or {}),
                     "companies": (rec or {}).get("companies", []),
                     "evidence": (rec or {}).get("evidence", ""),
+                    "url": (rec or {}).get("url", ""),
                 }
                 for rec in records
             ],

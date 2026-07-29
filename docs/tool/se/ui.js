@@ -9,6 +9,24 @@ let ANALYZING = false;  // 분석 버튼 연타로 중복 작업이 생성되는
 let CURRENT_COMPANY = null; // 지금 화면에 떠 있는 분석의 회사명 — 행위자
                              // 패널을 "이 회사"로 열 때 쓴다(누가 사람인지
                              // 추측하지 않고, 헤더 버튼 하나로만 연다).
+
+// ── SE-6 Task 3 — 임원 명단 ↔ 레지스트리 대조 상태 ──────────────────
+// executive_roster는 서버 조회(임원 이름마다 GET /api/se/actors?name=,
+// 순차)가 끝나야 강조(.mk)를 붙일 수 있다 — DISCLOSURES_DATA·
+// FUND_USAGE_DATA와 같은 자리에 모듈 전역으로 둔다. showGate()가 전부
+// 초기화한다(실명 잔류 금지 — 이 저장소가 이미 두 번 겪었다).
+let EXEC_ROSTER_SOURCE = null; // 마지막으로 대조를 시작한 원본 roster
+                                // 값(참조 비교로 "새로 도착한 값"인지
+                                // 판단 — 같은 값으로 renderSection이 다시
+                                // 불리면(아래 enrichExecutiveRoster의
+                                // 내부 재호출) 대조를 다시 시작하지 않는다).
+let EXEC_MATCHES = {};   // executiveMatches(records, lookups) 결과 캐시
+let EXEC_LOOKUPS = {};   // 이름 → GET /api/se/actors?name= 원본 응답(패널 재사용)
+let EXEC_STATUS = "idle"; // "idle" | "done" | "partial" | "failed"
+let EXEC_GEN = 0; // 로그아웃·재분석 중인 배치를 무효화하는 세대 번호
+                   // (POLL_GEN과 같은 패턴) — showGate()가 올리면, 이미
+                   // 날아간 서버 조회가 뒤늦게 돌아와도 지워진 화면
+                   // 위에 이전 사용자의 실명을 다시 그리지 않는다.
 let POLL_GEN = 0; // 폴링 세대 토큰. analyze()·resumeIfAny()가 폴링을 새로
                    // 시작할 때마다 올린다. pollUntilDone()은 매 확인 지점에서
                    // 자기 세대를 이 값과 비교해, 더 새 루프가 시작된 뒤에는
@@ -645,6 +663,17 @@ function showGate(msg) {
   FUND_CHAIN_DISCLOSURE_STATE = null;
   const actorBtn = document.getElementById("actor-btn");
   if (actorBtn) actorBtn.hidden = true;
+  // SE-6 Task 3 — #body·#panel-body는 위에서 이미 비웠지만(실명 DOM은
+  // 지워졌다), 진행 중인 enrichExecutiveRoster 배치가 아직 날아가 있는
+  // 채로 남을 수 있다. EXEC_GEN을 올리면 그 배치의 myGen 비교가 어긋나
+  // (enrichExecutiveRoster 참고) 늦게 돌아온 응답이 이미 비운 화면 위에
+  // 이전 사용자의 실명을 다시 그리지 않는다. 나머지 EXEC_* 캐시도 함께
+  // 비운다 — 이 저장소는 로그아웃 후 잔류 사고를 이미 두 번 겪었다.
+  EXEC_ROSTER_SOURCE = null;
+  EXEC_MATCHES = {};
+  EXEC_LOOKUPS = {};
+  EXEC_STATUS = "idle";
+  EXEC_GEN++;
 }
 
 function loadStoredSession() {
@@ -862,7 +891,7 @@ function renderHeadPlaceholder(name, message) {
  *  경로라 강조 배선이 거기서 끊기기 쉽다). 좌표는 이미 위에서 계산한
  *  isValueCell/cellKey를 그대로 쓴다(브리프: "새로 계산하지 않는다") —
  *  세로 표는 레코드가 하나라 행번호는 항상 0이다. */
-function tableEl(table, marks) {
+function tableEl(table, marks, records) {
   const frag = document.createDocumentFragment();
   // 범례는 이 표에 실제로 찍힌 강조만 말해야 한다 — marks(cellMarks 반환값)
   // 전체가 아니라, 아래 세 경로(caption·본문·접힌 열)가 셀에 실제로 붙인
@@ -937,6 +966,13 @@ function tableEl(table, marks) {
     }
   }
   const rceptCol = Array.isArray(table.keys) ? table.keys.indexOf("rcept_no") : -1;
+  // SE-6 Task 3 — 임원 이름 클릭 → 우측 패널. "성명"은 normalizeRoster
+  // (app.js)가 executive_roster에서만 실제로 만드는 리터럴 키다 — 다른
+  // 어떤 DART 원본 필드도 이 한글 키를 쓰지 않는다("nm"이 label()로
+  // "성명"이라 *보일* 뿐, table.keys 자체는 원본 키 그대로다). records가
+  // 함께 넘어오지 않으면(다른 모든 섹션·renderCompanyInfo·doc-click
+  // 하네스 등) 아무 일도 하지 않는다.
+  const nameCol = Array.isArray(table.keys) ? table.keys.indexOf("성명") : -1;
   const tb = t.createTBody();
   table.rows.forEach(function (row, rowIdx) {
     const tr = tb.insertRow();
@@ -967,6 +1003,16 @@ function tableEl(table, marks) {
       if (isDocCell && v) {
         td.className = "doc";
         td.addEventListener("click", function () { openDocPanel(v); });
+      }
+      // SE-6 Task 3 — 세로 표(임원 1명뿐인 회사, 드문 경우)는 클릭을
+      // 배선하지 않는다 — 강조(.mk)는 이 좌표계에서도 그대로 동작하므로
+      // (executiveRosterMarks가 record 순번을 "0|성명"으로 낸다) 안전
+      // 신호는 남지만, 상호작용은 이 드문 경우에서만 빠진다.
+      const isNameCell = !isVertical && i === nameCol && Array.isArray(records) && records[rowIdx];
+      if (isNameCell) {
+        td.className = td.className ? (td.className + " exec-name") : "exec-name";
+        const rec = records[rowIdx];
+        td.addEventListener("click", function () { openExecutivePanel(rec); });
       }
       // 강조 사유는 원본 값 툴팁 다음에 붙인다(순서가 반대면 아래 줄이
       // 위 raw 툴팁을 덮어써 왜 강조됐는지가 사라진다 — affiliates 3개
@@ -1156,8 +1202,11 @@ function sectionHolder(key) {
 /** 블록 하나(소제목 + 표, 또는 소제목 + 원문 텍스트)를 DOM으로 만든다.
  *  `marks`(선택 인자)는 그대로 tableEl에 넘긴다 — cellMarks(records,
  *  sectionKey)의 반환값이다(호출부인 renderSection이 block.records로
- *  계산한다, block 자신은 자기 sectionKey를 모른다). */
-function blockEl(block, marks) {
+ *  계산한다, block 자신은 자기 sectionKey를 모른다).
+ *  `records`(선택 인자, SE-6 Task 3)도 그대로 tableEl에 넘긴다 — 임원
+ *  이름 클릭 배선(tableEl의 isNameCell)에만 쓰이고, "성명" 열이 없는
+ *  표에서는 tableEl이 아무 일도 하지 않는다. */
+function blockEl(block, marks, records) {
   const wrap = document.createElement("div");
   if (block.title) {
     const h3 = document.createElement("h3");
@@ -1175,7 +1224,7 @@ function blockEl(block, marks) {
     wrap.appendChild(note);
   }
   if (block.table) {
-    wrap.appendChild(tableEl(block.table, marks));
+    wrap.appendChild(tableEl(block.table, marks, records));
   } else if (typeof block.text === "string") {
     // 표 셀(max-width:280px)에 욱여넣기엔 너무 긴 문자열 — 별도 문단으로
     // 그대로 보여준다. textContent만 쓴다.
@@ -1949,7 +1998,20 @@ function renderSection(key, value) {
   if (blocks.length === 0 && !ratioBlock && !dividendBlock && !fundChainBlock && !fundChangeBlock && !affiliateBlock) {
     const p = document.createElement("p");
     p.className = "note";
-    p.textContent = "표시할 데이터가 없습니다.";
+    // SE-6 Task 3 — DART가 013(자료 없음)을 주는 회사가 실제로 있다
+    // (실측: 셀트리온). "표시할 데이터가 없습니다"(다른 모든 섹션의
+    // 일반 문구)는 "우리가 확인했는데 0건"으로 읽힌다 — 여기서는 DART
+    // 자체가 제공하지 않는다는 사실을 구분해 말한다.
+    if (key === "executive_roster") {
+      p.textContent = "DART가 이 회사의 임원현황을 제공하지 않습니다.";
+      EXEC_ROSTER_SOURCE = null;
+      EXEC_MATCHES = {};
+      EXEC_LOOKUPS = {};
+      EXEC_STATUS = "idle";
+      EXEC_GEN++;
+    } else {
+      p.textContent = "표시할 데이터가 없습니다.";
+    }
     holder.appendChild(p);
     return;
   }
@@ -1976,6 +2038,37 @@ function renderSection(key, value) {
       + "집행일이 아닙니다.";
     holder.appendChild(note);
   }
+  // SE-6 Task 3 — 임원 명단 ↔ 레지스트리 대조. value(원본 roster)가 마지막
+  // 대조를 시작한 값과 다르면(참조 비교) 새 데이터가 도착한 것이므로
+  // 대조를 새로 시작한다 — enrichExecutiveRoster가 끝나면 이 함수를
+  // **같은 값**으로 다시 불러(재귀 재조회는 이 가드에 걸려 안 일어난다)
+  // 강조(.mk)·안내문을 반영한다. execEnrichPromise는 이 함수 끝에서
+  // 반환한다 — renderSection이 언제나 동기였던 기존 호출부는
+  // undefined를 그대로 받아 영향이 없다.
+  let execEnrichPromise;
+  if (key === "executive_roster" && value !== EXEC_ROSTER_SOURCE) {
+    EXEC_ROSTER_SOURCE = value;
+    EXEC_MATCHES = {};
+    EXEC_LOOKUPS = {};
+    EXEC_STATUS = "idle";
+    const myGen = ++EXEC_GEN;
+    execEnrichPromise = enrichExecutiveRoster(blocks[0] && blocks[0].records, myGen);
+  }
+  if (key === "executive_roster" && EXEC_STATUS !== "idle" && EXEC_STATUS !== "done") {
+    const note = document.createElement("p");
+    note.className = "note";
+    if (EXEC_STATUS === "failed") {
+      // 침묵하면 "대조했는데 없었다"로 읽힌다(브리프) — 대조 자체를
+      // 시도하지 못했다는 사실을 명시한다. 표시가 없다고 해서 등재가
+      // 없다는 뜻이 아니다.
+      note.textContent = "레지스트리 대조를 하지 못했습니다 — 조회 자체가 실패해 "
+        + "표시가 비어 있는 것이며, 등재가 없다고 확인된 것이 아닙니다.";
+    } else if (EXEC_STATUS === "partial") {
+      note.textContent = "일부 임원은 레지스트리 대조를 하지 못했습니다 — 그 이름들은 "
+        + "표시 여부와 무관하게 대조되지 않은 상태입니다.";
+    }
+    holder.appendChild(note);
+  }
   // 파생 블록들을 원본 표들보다 먼저 붙인다 — "파생 블록은 기존 표 위에
   // 얹는다"(브리프, financials·dividends·fund_usage 공통)를 DOM 순서
   // (위쪽에 먼저 나온다)로 그대로 지킨다. 원본 표(아래 for 루프)는
@@ -1992,9 +2085,16 @@ function renderSection(key, value) {
     // 등록된 규칙이 없거나 records가 없으면(예: debt_balance.by_kind처럼
     // table만 있고 records가 null인 블록) 빈 객체를 돌려줄 뿐이라 다른
     // 섹션·블록에 부작용이 없다.
-    const marks = block.records ? cellMarks(block.records, key) : undefined;
+    // SE-6 Task 3 — executive_roster는 서버 조회(비동기) 결과에 의존해
+    // MARK_RULES(레코드 하나만 보는 동기 규칙)로 표현할 수 없다.
+    // executiveRosterMarks(app.js)가 EXEC_MATCHES를 cellMarks와 같은
+    // 좌표 형식으로 바꿔주므로, 그 결과를 그대로 tableEl에 넘겨 기존
+    // SE-4g 강조 파이프라인(.mk + 범례)을 그대로 재사용한다.
+    const marks = key === "executive_roster"
+      ? executiveRosterMarks(block.records, EXEC_MATCHES)
+      : (block.records ? cellMarks(block.records, key) : undefined);
     relayoutForMarks(block, marks);
-    const el = blockEl(block, marks);
+    const el = blockEl(block, marks, block.records);
     // 차트는 표 위에 얹는다 — 표를 지우지 않는다. canvas 안의 숫자는
     // 복사도 검색도 안 되므로 정확한 값은 항상 표가 책임진다(브리프
     // 원칙). CHART_SPECS에 이 섹션 정의가 없거나 그릴 데이터가 없으면
@@ -2004,6 +2104,7 @@ function renderSection(key, value) {
     renderChart(el, key, block.records, SIGNALS_DATA);
     holder.appendChild(el);
   }
+  return execEnrichPromise;
 }
 
 /** doc:<접수번호> 섹션이 도착할 때마다 부른다(pollUntilDone).
@@ -2432,6 +2533,204 @@ async function openActorPanel(company) {
   }
   // 서버가 준 면책 문구를 그대로 붙인다. 서버가 빠뜨렸으면(예상 밖 응답)
   // 빈 문단만 남기지 않는다 — 아예 붙이지 않는다.
+  if (body.disclaimer) {
+    const dis = document.createElement("p");
+    dis.className = "note";
+    dis.textContent = body.disclaimer;
+    box.appendChild(dis);
+  }
+  panel.classList.add("open");
+}
+
+// ── SE-6 Task 3 — 임원 명단 ↔ 레지스트리 대조 ───────────────────────
+
+/** 임원 명단 전체를 레지스트리와 대조한다. 등기임원만 대상이라 보통
+ *  7~16명(계획 문서 실측) — 순차로 이름마다 GET /api/se/actors?name=을
+ *  부른다. 이름 하나가 실패해도 나머지는 계속 조회한다(브리프: "실패한
+ *  이름은 건너뛰고 나머지는 그대로 렌더한다"). 세션 자체가 없거나
+ *  네트워크가 통째로 죽어 **한 건도** 성공하지 못하면 EXEC_STATUS를
+ *  "failed"로 남긴다 — 침묵하면 "대조했는데 없었다"로 읽힌다(브리프).
+ *
+ *  대조가 끝나면 renderSection(key, EXEC_ROSTER_SOURCE)을 **같은 값으로**
+ *  다시 불러 강조(.mk)·안내문을 반영한다 — EXEC_ROSTER_SOURCE 참조가
+ *  그대로이므로 renderSection 쪽 "새 값인가" 가드에 걸려 대조를 다시
+ *  시작하지 않는다. 이 재호출 하나로 SE-4g 강조 파이프라인(cellMarks
+ *  대신 executiveRosterMarks, app.js)을 그대로 재사용한다 — 표를 다시
+ *  그리는 새 렌더 경로를 따로 만들지 않는다.
+ *
+ *  myGen(호출 시점의 EXEC_GEN)이 끝날 때 달라져 있으면(로그아웃·새 분석
+ *  시작이 먼저 세대를 올렸으면) 결과를 버리고 조용히 멈춘다 — 안 그러면
+ *  로그아웃 뒤 뒤늦게 돌아온 응답이 이미 비운 화면 위에 이전 사용자의
+ *  실명을 다시 그릴 수 있다.
+ */
+async function enrichExecutiveRoster(records, myGen) {
+  const names = [];
+  const seen = new Set();
+  (records || []).forEach(function (r) {
+    const n = r && r["성명"];
+    if (n && !seen.has(n)) { seen.add(n); names.push(n); }
+  });
+
+  let tok;
+  try {
+    tok = await token();
+  } catch (e) {
+    if (myGen === EXEC_GEN) {
+      EXEC_STATUS = "failed";
+      renderSection("executive_roster", EXEC_ROSTER_SOURCE);
+    }
+    return;
+  }
+
+  const lookups = {};
+  let succeeded = 0;
+  for (const name of names) {
+    if (myGen !== EXEC_GEN) return;
+    try {
+      const r = await api("GET", "/api/se/actors?name=" + encodeURIComponent(name),
+                          { token: tok });
+      if (r.status === 200 && r.body && Array.isArray(r.body.actors)) {
+        lookups[name] = r.body;
+        succeeded++;
+      }
+    } catch (e) {
+      // 이 이름만 건너뛴다 — 나머지는 계속 조회한다.
+    }
+  }
+  if (myGen !== EXEC_GEN) return;
+
+  EXEC_LOOKUPS = lookups;
+  EXEC_MATCHES = executiveMatches(records, lookups);
+  EXEC_STATUS = succeeded === 0 ? "failed" : (succeeded < names.length ? "partial" : "done");
+  renderSection("executive_roster", EXEC_ROSTER_SOURCE);
+}
+
+// 패널에서 항상 보이는 자리에(접거나 숨기지 않고) 함께 적는 고정 문구
+// 셋 — 계획 문서 "말할 수 있는 것과 없는 것"이 요구하는 그대로다.
+const EXEC_NAMESAKE_WARN =
+  "동명이인일 수 있습니다 — 이름 표기가 일치한다는 뜻이지 신원을 확인한 것이 아닙니다.";
+const EXEC_VERIFY_STEPS =
+  "확인 방법 — ① 근거 공시 원문을 직접 확인 ② 법인 등기 기록을 조회 ③ 회사 또는 본인에게 직접 문의";
+const EXEC_NO_BIRTH_NOTE = "레지스트리에는 생년월이 없어 자동 대조가 불가능합니다.";
+
+/** 임원 이름 클릭 → 우측 패널(SE-6 Task 3).
+ *
+ * openActorPanel(company)을 억지로 재사용하지 않고 별도 함수로 둔다 —
+ * 쿼리 파라미터(company vs name)도, 패널에 보여줄 것(이 회사에서의
+ * 직위·등기 여부·생년월 vs 없음)도 다르다. 다만 행위자 하나를 "이름·
+ * status 라벨·경고"로 바꾸는 재료(actorLine, app.js)는 그대로 재사용한다
+ * — 나눠 두면 한쪽만 그리는 경로가 생기고, 그 경로로 실명이 경고 없이
+ * 나간다(openActorPanel 주석과 같은 이유).
+ *
+ * **동명이인 경고(EXEC_NAMESAKE_WARN)·확인 방법 3가지(EXEC_VERIFY_STEPS)·
+ * 생년월 미보유 안내(EXEC_NO_BIRTH_NOTE)는 접거나 숨기지 않는다** — 매칭이
+ * 하나라도 있을 때 항상 같은 자리에 렌더한다(계획 문서: "동명이인 경고 —
+ * 접거나 툴팁에 숨기지 않는다").
+ *
+ * 근거 링크는 `url`로만 연다(`rcept_no`는 레지스트리 1,342건 중 3%뿐이라
+ * 내부 원문 패널에 의존할 수 없다). dartDisclosureLink(app.js)가 호스트를
+ * dart.fss.or.kr로 검증한 뒤에만 앵커를 만든다 — 그 외 호스트는 텍스트로만
+ * 남겨(레지스트리는 외부 Notion 데이터라 그대로 링크를 신뢰하지 않는다)
+ * 사용자가 실수로 임의 사이트로 이동하지 않게 한다.
+ */
+async function openExecutivePanel(row) {
+  const box = document.getElementById("panel-body");
+  const panel = document.getElementById("panel");
+  while (box.firstChild) box.removeChild(box.firstChild);
+
+  const r0 = row || {};
+  const name = typeof r0["성명"] === "string" ? r0["성명"] : "";
+
+  const h = document.createElement("h3");
+  h.textContent = name;
+  box.appendChild(h);
+
+  // 이 회사에서의 직위·등기 여부·생년월 — 네트워크 없이 이미 갖고 있는
+  // 값이다(exctvSttus 원문 필드, SE-6 Task 2b가 화면까지 보냈다). 아래
+  // 조회가 실패해도 이 정보는 남는다.
+  const role = document.createElement("p");
+  role.className = "note";
+  role.textContent = "이 회사에서: 직위 " + (r0.ofcps || "정보 없음")
+    + " · 등기 여부 " + (r0.rgist_exctv_at || "정보 없음")
+    + " · 생년월 " + (r0.birth_ym || "정보 없음");
+  box.appendChild(role);
+
+  let resp;
+  try {
+    resp = await api("GET", "/api/se/actors?name=" + encodeURIComponent(name),
+                     { token: await token() });
+  } catch (e) {
+    const p = document.createElement("p");
+    p.className = "note";
+    p.textContent = safeMessage(e, "레지스트리를 조회하지 못했습니다 — 대조를 시도하지 못한 상태입니다.");
+    box.appendChild(p);
+    panel.classList.add("open");
+    return;
+  }
+
+  const body = resp.body || {};
+  const actors = Array.isArray(body.actors) ? body.actors : null;
+  if (resp.status !== 200 || actors === null) {
+    const p = document.createElement("p");
+    p.className = "note";
+    p.textContent = (typeof body.error === "string" && body.error)
+      || "레지스트리를 조회하지 못했습니다 — 대조를 시도하지 못한 상태입니다.";
+    box.appendChild(p);
+    panel.classList.add("open");
+    return;
+  }
+
+  if (actors.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "note";
+    empty.textContent = "레지스트리에 같은 이름이 없습니다.";
+    box.appendChild(empty);
+  } else {
+    for (const raw of actors) {
+      const a = actorLine(raw);
+      const d = document.createElement("div");
+      const s = document.createElement("p"); s.className = "note";
+      s.textContent = a.statusLabel; d.appendChild(s);
+      const w = document.createElement("p"); w.className = "warn";
+      w.textContent = a.warn; d.appendChild(w);
+      const c = document.createElement("p"); c.className = "note";
+      c.textContent = "레지스트리 등재 회사: " + a.companies.join(", ");
+      d.appendChild(c);
+      if (raw && typeof raw.evidence === "string" && raw.evidence) {
+        const ev = document.createElement("p"); ev.className = "note";
+        ev.textContent = "근거: " + raw.evidence;
+        d.appendChild(ev);
+      }
+      const dartUrl = dartDisclosureLink(raw && raw.url);
+      if (dartUrl) {
+        const link = document.createElement("a");
+        link.href = dartUrl;
+        link.target = "_blank";
+        link.rel = "noopener";
+        link.textContent = "근거 공시 원문 (DART)";
+        d.appendChild(link);
+      } else if (raw && typeof raw.url === "string" && raw.url) {
+        // dart.fss.or.kr이 아닌 호스트는 앵커로 만들지 않는다 — 레지스트리는
+        // 외부(Notion) 데이터라 그대로 링크를 신뢰하지 않는다(계획 문서).
+        const up = document.createElement("p"); up.className = "note";
+        up.textContent = "근거 링크(출처 미확인): " + raw.url;
+        d.appendChild(up);
+      }
+      box.appendChild(d);
+    }
+
+    // 동명이인 경고 + 확인 방법 + 생년월 미보유 안내 — 매칭이 있을 때만,
+    // 그러나 항상 보이는 자리에(접지도 숨기지도 않는다).
+    const warnBox = document.createElement("div");
+    warnBox.className = "warn";
+    [EXEC_NAMESAKE_WARN, EXEC_VERIFY_STEPS, EXEC_NO_BIRTH_NOTE].forEach(function (t) {
+      const p = document.createElement("p");
+      p.textContent = t;
+      warnBox.appendChild(p);
+    });
+    box.appendChild(warnBox);
+  }
+
   if (body.disclaimer) {
     const dis = document.createElement("p");
     dis.className = "note";

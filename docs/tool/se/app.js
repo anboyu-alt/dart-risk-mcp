@@ -157,6 +157,15 @@ const LABELS = Object.assign(Object.create(null), {
   repror: "보고자", source: "출처", relate: "관계", stock_knd: "주식 종류",
   isu_exctv_ofcps: "직위", isu_exctv_rgist_at: "등기 여부",
   isu_main_shrholdr: "주요주주 구분", mxmm_shrholdr_nm: "최대주주명",
+  // exctvSttus(임원현황, executive_roster — SE-6 Task 2b가 화면까지
+  // 보낸 필드)의 ofcps·rgist_exctv_at·birth_ym이다. 위 isu_exctv_ofcps·
+  // isu_exctv_rgist_at(내부자 지분 신고서 전용 필드)와 같은 한글 라벨을
+  // 쓰면 라벨 충돌 검사(test_no_label_collides_with_a_different_raw_key)에
+  // 걸린다 — 두 raw key가 서로 다른 신고서 필드이므로 라벨도 구분한다.
+  // Task 3 브리핑이 요구하는 "이 회사에서의 직위·등기 여부·생년월"을
+  // 사람이 읽을 수 있게 한다(레지스트리에 없는 생년월을 이용자가 직접
+  // 대조할 재료다).
+  ofcps: "임원 직위", rgist_exctv_at: "등기임원 여부", birth_ym: "생년월",
   // 출자(affiliates)의 "기초/기말 지분율"과 이름이 겹치지 않게 접두어를
   // 붙인다. 같은 라벨이 두 필드에 걸리면 열을 구분할 수 없다.
   sp_stock_lmp_cnt: "특정증권 소유 주식수", sp_stock_lmp_rate: "특정증권 소유 비율",
@@ -817,6 +826,61 @@ function executiveMatches(rosterRows, lookupResults) {
     out[name] = { registered: actors.length > 0, companies, statuses };
   }
   return out;
+}
+
+// SE-6 Task 3이 표에 붙이는 강조 문구. 신원을 단정하는 표현(이 임원이
+// 다른 곳에도 나타난다는 식)이 아니라 "같은 이름이 레지스트리에 있음"만
+// 말한다 — 판정선(계획 문서 "말할 수 있는 것과 없는 것")이 요구하는
+// 정확한 문구다. 동일인 여부는 이 문구가 말하지 않는다.
+const EXEC_MATCH_WHY = "같은 이름이 레지스트리에 있음";
+
+/** executiveMatches(records, lookupResults)의 결과(matches)를
+ *  cellMarks(records, sectionKey)와 같은 좌표 형식({"행번호|열키": 문구})
+ *  으로 바꾼다.
+ *
+ *  executive_roster의 강조는 서버 조회(비동기, 임원 이름마다 GET
+ *  /api/se/actors?name=)에 의존한다 — MARK_RULES(app.js)의 다른 모든
+ *  규칙처럼 레코드 하나만 보고 동기적으로 판정할 수 없다. 그래서
+ *  MARK_RULES에 넣는 대신 이 별도 변환을 두되, **반환 좌표 형식은 완전히
+ *  같게 맞춘다** — 그래야 ui.js가 이미 갖고 있는 SE-4g 강조 파이프라인
+ *  (tableEl(table, marks)의 `.mk` 클래스 + 범례)에 새 렌더 경로 없이
+ *  그대로 꽂힌다.
+ *
+ *  records는 normalizeRoster(value)의 출력(각 행에 "성명" 키가 있다)이고,
+ *  matches는 executiveMatches(records, lookupResults)의 출력이다. 매칭
+ *  안 된 임원(registered:false)이나 조회 자체가 안 된 임원(matches에
+ *  이름이 없음)은 강조하지 않는다 — 둘 다 "강조할 근거가 없다"는 점에서
+ *  같다.
+ */
+function executiveRosterMarks(records, matches) {
+  const out = {};
+  if (!Array.isArray(records) || !matches || typeof matches !== "object") return out;
+  records.forEach(function (r, i) {
+    if (!r || typeof r !== "object") return;
+    const name = r["성명"];
+    const m = name ? matches[name] : null;
+    if (m && m.registered) out[i + "|성명"] = EXEC_MATCH_WHY;
+  });
+  return out;
+}
+
+/** url이 dart.fss.or.kr 호스트일 때만 그대로 돌려주고, 그 외(다른 호스트·
+ *  문자열이 아님)는 null.
+ *
+ *  레지스트리는 Notion에서 오는 외부 데이터다(계획 문서: "레지스트리는
+ *  외부 데이터다 — 저장소를 신뢰해 렌더 규칙을 느슨하게 할 이유가
+ *  없다"). 호출부(ui.js)는 이 함수가 null을 돌려주면 앵커를 만들지 않고
+ *  텍스트로만 둔다.
+ *
+ *  `new URL()`을 쓰지 않는다 — ui.js 테스트 하네스(node vm 샌드박스)에는
+ *  DOM 표준 전역인 URL이 없다(WHATWG 전역이지 ECMAScript 표준이 아니다).
+ *  스킴+호스트 바로 뒤가 경로 구분자(`/`·`?`·`#`) 또는 문자열 끝이어야만
+ *  통과시켜, `https://dart.fss.or.kr.evil.com/`이나
+ *  `https://dart.fss.or.kr@evil.com/`처럼 호스트를 흉내 낸 값을 걸러낸다.
+ */
+function dartDisclosureLink(url) {
+  if (typeof url !== "string") return null;
+  return /^https?:\/\/dart\.fss\.or\.kr(?:[/?#]|$)/i.test(url) ? url : null;
 }
 
 /** debt_balance.by_kind({회사채: {total, maturity_under_1y}, ...})를
@@ -3075,7 +3139,7 @@ if (typeof module !== "undefined" && module.exports) {
     nextKeysToFetch, pollDecision, toRecords, tableLayout, LABELS, label,
     formatValue, formatAmount, AMOUNT_FIELDS, DATE_FIELDS,
     sectionBlocks, groupTitleFor, groupOrderIndex, normalizeRoster,
-    executiveMatches,
+    executiveMatches, executiveRosterMarks, dartDisclosureLink,
     ACTOR_STATUS, actorLine, resumeTarget, documentBlocks,
     dropAllEmptyColumns, recordsHaveSourceField, sourceGroupedBlocks,
     DOC_LIST_KEY, docKeyRceptNo, docListRow,
