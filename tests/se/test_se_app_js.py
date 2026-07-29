@@ -898,13 +898,21 @@ class TestRemarkAndKindLabels(unittest.TestCase):
         self.assertIn("코스닥", got)
         self.assertIn("정정신고", got)
 
-    def test_unknown_character_mixed_with_known_ones_is_kept_visible(self):
+    def test_unknown_character_mixed_with_known_ones_is_kept_visible_as_is(self):
         """모르는 문자를 침묵하며 지우면 안 된다 — SE-4h의 "값이 없으면
         없다고 표기" 원칙과 같다. "X"는 이 저장소가 만든 가짜 코드로,
         DART 공식 비고 코드 어디에도 없다(실측 대상이 아님을 스스로
-        보증)."""
+        보증).
+
+        SE-8 최종 리뷰 지적(Finding 1) 이전에는 "코"만 번역하고 "X"는
+        원문 그대로 붙여 "코스닥X"처럼 부분 번역했다. 이제는 자유서술형
+        비고 오탐(formatRemark("시간외매매") 참고)을 막기 위해 한 글자라도
+        모르면 전체를 원문 그대로 돌려준다 — "코"·"X"가 둘 다 보이는 것은
+        같지만, 부분 번역이 아니라 원문 문자열 전체가 그대로 남는 방식으로
+        바뀌었다."""
         got = run_js('formatRemark("코X")')
-        self.assertIn("코스닥", got)
+        self.assertEqual(got, "코X")
+        self.assertIn("코", got)
         self.assertIn("X", got)
 
     def test_empty_and_null_remark_uses_existing_missing_data_path(self):
@@ -925,6 +933,37 @@ class TestRemarkAndKindLabels(unittest.TestCase):
         번역하면 안 된다."""
         got = run_js('formatValue("kind", "미지값")')
         self.assertEqual(got, "미지값")
+
+    def test_free_text_remark_is_not_shredded(self):
+        """SE-8 최종 리뷰 지적(Finding 1) — hyslrSttus·hyslrChgSttus 등
+        여러 엔드포인트는 같은 필드 이름(rm)을 자유서술형 비고로 쓴다.
+        라이브 재현(삼성전자, corp_code=00126380, fetch_insider_timeline):
+        "시간외매매"가 8개 코드(유·코·채·넥·공·연·정·철) 어디에도 없는
+        문자만으로 이뤄져 있는데도 문자 단위로 분해돼 "시 · 간 · 외 · 매 ·
+        매"로 쪼개졌다. 한 글자라도 코드가 아니면 통째로 원문을 지킨다."""
+        got = run_js('formatRemark("시간외매매")')
+        self.assertEqual(got, "시간외매매")
+        self.assertNotIn(" · ", got)
+
+    def test_free_text_remark_with_space_is_not_shredded(self):
+        got = run_js('formatRemark("이사 임기만료")')
+        self.assertEqual(got, "이사 임기만료")
+        self.assertNotIn(" · ", got)
+
+    def test_free_text_remark_with_particles_is_not_shredded(self):
+        got = run_js('formatRemark("신규 선임 및자사주 상여금")')
+        self.assertEqual(got, "신규 선임 및자사주 상여금")
+        self.assertNotIn(" · ", got)
+
+    def test_multi_code_disclosure_value_still_decomposes_exactly(self):
+        """진짜 다중 코드 값("코정" = 코 + 정, 둘 다 유효 코드)은 여전히
+        분해돼야 한다 — 자유서술형 통과 수정이 이 경로를 죽이면 안 된다."""
+        self.assertEqual(run_js('formatRemark("코정")'), "코스닥 · 정정신고")
+
+    def test_free_text_rm_via_format_value_is_not_shredded(self):
+        """실제 호출부(formatValue("rm", ...))로도 같은 사실을 확인한다."""
+        got = run_js('formatValue("rm", "시간외매매")')
+        self.assertEqual(got, "시간외매매")
 
     def test_remark_wired_through_format_value_for_rm_key(self):
         """브리프 요구: formatValue가 rm 필드를 만나면 formatRemark를
@@ -9936,6 +9975,24 @@ class TestFundChainMark(unittest.TestCase):
         self.assertEqual(why, "보고된 집행 ≠ 계획")
         for w in ("유용", "의심", "부정", "위험", "손상"):
             self.assertNotIn(w, why)
+
+    def test_coerced_zero_plan_is_not_marked(self):
+        """SE-8 최종 리뷰 지적(Finding 2) — plan_amount가 한 번도 보고되지
+        않으면 fundChain(2099번 줄)이 plan을 0으로 채운다("모른다"의 표시값일
+        뿐 DART가 실제로 보고한 계획 금액이 아니다). 라이브 재현
+        (real_dtls_amount=5,000,000,000, plan_amount=null인 레코드)에서
+        "보고된 집행 ≠ 계획(계획 0원)"이라는, DART가 말한 적 없는 사실을
+        만들어내면 안 된다. core의 동등 판정(_detect_fund_anomaly,
+        plan_amount > 0 게이트)과 같은 기준."""
+        uses = '[{"purpose":"운영자금","plan":0,"real":5000000000}]'
+        self.assertEqual(run_js('cellMarks(%s, "fund_chain")' % uses), {})
+
+    def test_genuine_nonzero_mismatch_still_marks_after_zero_guard(self):
+        """0-guard가 진짜 불일치까지 죽이면 안 된다 — 회귀 확인
+        (test_mismatch_is_marked와 같은 픽스처)."""
+        uses = '[{"purpose":"시설자금","plan":100,"real":50}]'
+        got = run_js('cellMarks(%s, "fund_chain")' % uses)
+        self.assertEqual(got, {"0|real": "보고된 집행 ≠ 계획"})
 
 
 @unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")

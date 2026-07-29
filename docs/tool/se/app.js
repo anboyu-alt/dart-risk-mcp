@@ -324,11 +324,21 @@ const DART_REMARK_LABELS = Object.assign(Object.create(null), {
   "정": "정정신고", "철": "철회",
 });
 
-/** rm(비고) 값을 사람이 읽는 말로 바꾼다. 문자 단위로 분해해 각각
- *  DART_REMARK_LABELS로 매핑하고 " · "로 이어붙인다("코정" ->
- *  "코스닥 · 정정신고"). **모르는 문자는 지우지 않고 원문 그대로
- *  남긴다** — REPRT_CODE_LABELS·label()과 같은 "모르면 숨기지 않는다"
- *  계약이다.
+/** rm(비고) 값을 사람이 읽는 말로 바꾼다. **모든 문자가 DART_REMARK_LABELS에
+ *  있는 여덟 개 코드 중 하나일 때만** 문자 단위로 분해해 각각 매핑하고
+ *  " · "로 이어붙인다("코정" -> "코스닥 · 정정신고"). 이 필드(rm)는 두
+ *  서로 다른 코드 체계를 같은 이름으로 쓴다(위 DART_REMARK_LABELS 주석
+ *  참고): 공시 목록(list.json)에서는 8개 코드의 문자 조합이지만, 다른
+ *  여러 엔드포인트(예: hyslrSttus·hyslrChgSttus)에서는 같은 필드 이름이
+ *  자유서술형 비고("시간외매매", "이사 임기만료" 등)로 온다. 문자 단위
+ *  분해를 무조건 적용하면 이런 자유서술형 문장이 한 글자씩 쪼개져
+ *  " · "로 이어붙는 사고가 난다(SE-8 최종 리뷰 지적 — 삼성전자
+ *  fetch_insider_timeline 라이브 재현: "시간외매매" -> "시 · 간 · 외 ·
+ *  매 · 매"). **한 글자라도 8개 코드에 없으면(공백·조사·코드 아닌
+ *  한글 등) 분해하지 않고 원문을 그대로 돌려준다** — REPRT_CODE_LABELS·
+ *  label()과 같은 "모르면 숨기지 않는다" 계약이되, 여기서는 "부분적으로
+ *  안다"고 절반만 번역하지 않고 통째로 원문을 지킨다(전부 알거나 전혀
+ *  건드리지 않거나, 둘 중 하나).
  *
  *  빈 값·"-"는 isNoDataMarker가 이미 결측으로 판정하는 값이라 새로
  *  재구현하지 않고 그대로 재사용한다: null/undefined는 formatValue의
@@ -339,10 +349,12 @@ const DART_REMARK_LABELS = Object.assign(Object.create(null), {
 function formatRemark(rm) {
   if (isNoDataMarker(rm)) return (rm === null || rm === undefined) ? "" : rm;
   const s = String(rm);
-  return s.split("").map(function (ch) {
-    return Object.prototype.hasOwnProperty.call(DART_REMARK_LABELS, ch)
-      ? DART_REMARK_LABELS[ch] : ch;
-  }).join(" · ");
+  const chars = s.split("");
+  const allCoded = chars.length > 0 && chars.every(function (ch) {
+    return Object.prototype.hasOwnProperty.call(DART_REMARK_LABELS, ch);
+  });
+  if (!allCoded) return s;
+  return chars.map(function (ch) { return DART_REMARK_LABELS[ch]; }).join(" · ");
 }
 
 // SE-8 Task 3 — dffrnc_resn(자금 차이 사유)·rm(최대주주 합계 각주) 등에서
@@ -3669,10 +3681,20 @@ MARK_RULES.distress = [
 // STAGE1_SPECS의 실제 섹션 키가 아니라 이 파생 카드 전용으로 새로 만든
 // cellMarks 버킷 이름이다 — cellMarks(records, sectionKey)의 sectionKey는
 // MARK_RULES의 임의 키일 뿐 서버 섹션 이름과 일치할 필요가 없다.
+// SE-8 최종 리뷰 지적 — fundChain()은 그 조달건×용도에서 plan_amount가
+// 한 번도 보고되지 않았을 때도 위 plan(2099번 줄)을 0으로 채운다("모른다"를
+// "0으로 계획했다"로 바꿔치기하지 않기 위한 표시값일 뿐, DART가 실제로
+// 보고한 계획 금액이 아니다). markNeq(real, plan)만으로는 이 코드화된 0과
+// "진짜로 계획이 0원"을 구분하지 못해, {plan_amount: null, real: 50억}
+// 레코드에 "보고된 집행 ≠ 계획(계획 0원)"이라는, DART가 말한 적 없는
+// 사실을 만들어낸다(라이브 재현: real_dtls_amount=5,000,000,000 사례).
+// core의 동등 판정(dart_client.py _detect_fund_anomaly, plan_amount > 0
+// 게이트)과 같은 기준을 맞춘다 — plan이 실제로 양수로 보고된 경우에만
+// 비교를 발화시킨다.
 MARK_RULES.fund_chain = [
   {
     key: "real",
-    when: function (u) { return markNeq(u.real, u.plan); },
+    when: function (u) { return markNumber(u.plan) > 0 && markNeq(u.real, u.plan); },
     why: "보고된 집행 ≠ 계획",
   },
 ];
