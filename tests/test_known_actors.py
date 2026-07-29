@@ -668,27 +668,36 @@ class TestKnownActors(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(post.call_count, 3)
 
-    def test_add_registry_record_error_log_bounds_notion_message_length(self):
-        """Notion 오류 message는 요청 내용을 에코할 수 있으므로(실명·회사명
-        유출 위험) 로그에는 상한을 두고 남긴다 — 그 이후 내용은 로그에
-        남으면 안 된다(이 레포는 public이고 Actions 로그도 public)."""
+    def test_add_registry_record_error_log_omits_notion_message_entirely(self):
+        """Notion 오류 message는 검증 실패 시 문제가 된 값을 인용하는 사례가
+        있다. 이 레포는 public이고 Actions 로그도 public이며 레지스트리는
+        실명 데이터이므로 **자유 텍스트를 통째로 남기지 않는다.**
+
+        길이 제한으로는 부족하다 — 이름이 메시지 앞부분에 오면 잘라도 남는다.
+        조치는 code(고정 enum)만으로 정해지므로 그것만 남긴다."""
         from unittest.mock import patch as _p, MagicMock
         from dart_risk_mcp.core import known_actors as ka
-        marker_early = "이른마커"
-        marker_late = "늦은마커실명유출테스트"
-        long_message = marker_early + ("x" * 400) + marker_late
+        leaked_name = "홍길동"
+        leaked_company = "주식회사에코"
+        message = f"body.properties.관련기업 should be defined, got {leaked_name}/{leaked_company}"
         resp = MagicMock(status_code=400, headers={})
-        resp.json.return_value = {"code": "validation_error", "message": long_message}
+        resp.json.return_value = {"code": "validation_error", "message": message}
         with _p("dart_risk_mcp.core.known_actors.requests.post",
                 return_value=resp), \
                 self.assertLogs("dart_risk_mcp.core.known_actors", level="WARNING") as logs:
             ok = ka.add_registry_record(
-                "홍길동", {"source": "s", "evidence": "e"}, token="t", db_id="db")
+                leaked_name, {"source": "s", "evidence": "e",
+                              "companies": [leaked_company]},
+                token="t", db_id="db")
         self.assertFalse(ok)
         joined = "\n".join(logs.output)
+        # 조치에 필요한 것은 남는다
         self.assertIn("400", joined)
-        self.assertIn(marker_early, joined)
-        self.assertNotIn(marker_late, joined)  # 상한 밖 — 로그에 남지 않아야 함
+        self.assertIn("validation_error", joined)
+        # 실명·회사명은 어디에도 남지 않는다 — 메시지 앞부분이어도 마찬가지
+        self.assertNotIn(leaked_name, joined)
+        self.assertNotIn(leaked_company, joined)
+        self.assertNotIn("should be defined", joined)
 
     def test_add_registry_record_other_exception_returns_false_without_raising(self):
         """레코드 형태가 예상과 달라 내부에서 예외가 나도(예: build_change_summary

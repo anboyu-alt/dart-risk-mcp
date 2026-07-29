@@ -533,11 +533,6 @@ def notion_credentials_configured() -> bool:
 # 동일한 상태코드 집합.
 _NOTION_RETRY_STATUSES = (429, 500, 502, 503, 504)
 _NOTION_MAX_ATTEMPTS = 3
-# Notion 오류 message는 요청 페이로드 일부를 에코할 가능성을 배제할 수 없다
-# (예: 필드 값 검증 실패 시 그 값을 인용하는 사례). 이 레포는 public이고
-# Actions 로그도 public이며 레지스트리는 실명 데이터이므로, 로그에는 원문을
-# 통째로 남기지 않고 길이를 제한한다.
-_NOTION_ERROR_MSG_MAX = 300
 
 
 def _retry_after_seconds(resp) -> float | None:
@@ -559,12 +554,18 @@ def _retry_after_seconds(resp) -> float | None:
 
 
 def _notion_error_detail(resp) -> str:
-    """Notion 오류 응답에서 code(고정 enum)·message(길이 상한)를 로그용으로 뽑는다.
+    """Notion 오류 응답에서 **code만** 뽑는다. 자유 텍스트는 남기지 않는다.
 
-    code는 Notion이 정의한 고정 문자열(예: "rate_limited"·"validation_error")
-    이라 그 자체로는 실명·회사명을 담을 수 없어 그대로 남긴다. message는
-    상한(_NOTION_ERROR_MSG_MAX)을 넘는 부분을 잘라 요청 내용 에코 위험을
-    제한한다.
+    code는 Notion이 정의한 고정 문자열(`rate_limited`·`validation_error`·
+    `unauthorized`·`object_not_found` 등)이라 그 자체로 실명·회사명을 담을
+    수 없고, 조치를 정하기에는 이것으로 충분하다 — rate_limited면 페이싱,
+    validation_error면 속성 스키마, unauthorized면 자격증명이다.
+
+    **message는 의도적으로 버린다.** Notion은 검증 실패 시 문제가 된 값을
+    메시지에 인용하는 사례가 있는데, 이 레포는 public이고 Actions 로그도
+    public이며 레지스트리는 실명 데이터다. 길이를 자르는 것으로는 앞부분에
+    이름이 오는 경우를 막지 못한다. 원문이 필요하면 자격증명을 가진 사람이
+    로컬에서 재현하면 된다 — 편의보다 노출 차단을 택한다.
     """
     try:
         body = resp.json()
@@ -572,9 +573,7 @@ def _notion_error_detail(resp) -> str:
         return "(오류 응답 본문 파싱 불가)"
     if not isinstance(body, dict):
         return "(오류 응답 형식 예상과 다름)"
-    code = body.get("code", "")
-    message = (body.get("message") or "")[:_NOTION_ERROR_MSG_MAX]
-    return f"code={code} message={message}"
+    return f"code={body.get('code', '')}"
 
 
 def _post_with_retry(url: str, headers: dict, payload: dict):
