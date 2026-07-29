@@ -4,7 +4,8 @@
 원본이며, 접근 권한(NOTION_TOKEN + DB_KNOWN_ACTORS)을 부여받은 사용자만
 opt-in으로 조회한다. 동봉 JSON은 빈 스켈레톤이다.
 
-로드 우선순위: DART_KNOWN_ACTORS_PATH(로컬 JSON) > Notion(24h 캐시) > 동봉.
+로드 우선순위: DART_KNOWN_ACTORS_PATH(로컬 JSON) > 신선한 파일 캐시(24h) >
+주입 캐시(se_server 등이 set_registry_cache로 주입, 선택) > Notion > 동봉.
 """
 
 # PEP 604(`X | None`) 표기를 쓰므로 이 import가 없으면 Python 3.10 미만에서
@@ -13,6 +14,7 @@ opt-in으로 조회한다. 동봉 JSON은 빈 스켈레톤이다.
 from __future__ import annotations
 import html
 import json
+import logging
 import os
 import re
 import time
@@ -21,8 +23,39 @@ from pathlib import Path
 
 import requests
 
+log = logging.getLogger(__name__)
+
 _CACHE_FILE = Path.home() / ".cache" / "dart-risk-mcp" / "known_actors_notion.json"
 _CACHE_TTL = 24 * 3600
+
+
+# ── 선택적 레지스트리 캐시 시임 ───────────────────────────────
+# dart_client.py:48~59의 _http_cache/set_http_cache/get_http_cache와 동일한
+# 패턴. se_server 등 외부 소비자가 Notion 레지스트리 캐시(예: Supabase)를
+# 주입하는 유일한 지점이다. 기본값 None이면 캐시 없이 지금과 완전히 동일하게
+# 동작한다(MCP 서버·CLI는 이 시임을 쓰지 않는다).
+#
+# 주입 객체는 아래 두 메서드만 제공하면 된다(CacheBackend 전체가 아니다 —
+# core가 se_server 타입을 알 필요가 없다):
+#   get_json(key) -> dict | None
+#   put_json(key, value, ttl_seconds) -> None
+#
+# 캐시 키는 이 모듈이 고정 문자열 하나로 계산한다(레지스트리는 전역 단일
+# 자산이라 회사·인물별로 나눌 필요가 없다). NOTION_TOKEN 등 자격증명은
+# 키에도 값에도 들어가지 않는다.
+_registry_cache = None
+_REGISTRY_CACHE_KEY = "known_actors_registry"
+
+
+def set_registry_cache(cache) -> None:
+    """레지스트리 캐시를 주입한다. None이면 캐시를 사용하지 않는다(기본값)."""
+    global _registry_cache
+    _registry_cache = cache
+
+
+def get_registry_cache():
+    """현재 주입된 레지스트리 캐시를 반환한다 (미설정 시 None)."""
+    return _registry_cache
 
 _NOTION_BASE = "https://api.notion.com/v1"
 _NOTION_VERSION = "2022-06-28"
@@ -654,6 +687,19 @@ def _load_raw() -> dict:
     except Exception:
         pass
 
+    # 주입 캐시(예: se_server의 Supabase) — 파일시스템이 휘발성인 서버리스
+    # 환경(Vercel)에서 위 파일 캐시가 매 콜드 인보케이션마다 미스가 나
+    # Notion 15회 왕복(15초)을 매번 무는 문제의 시임. 저장은 이 함수 아래
+    # (필터 적용 전 원본) — 이유는 모듈 상단 주석·테스트 참고.
+    # get_json 실패(예외·깨진 형태)는 미스로 간주하고 Notion으로 진행한다.
+    if _registry_cache is not None:
+        try:
+            cached = _registry_cache.get_json(_REGISTRY_CACHE_KEY)
+            if _valid(cached):
+                return cached
+        except Exception:
+            log.warning("레지스트리 캐시 조회 실패, Notion으로 폴백", exc_info=True)
+
     data = fetch_registry_from_notion()
     if data is not None:
         try:
@@ -661,6 +707,11 @@ def _load_raw() -> dict:
             _CACHE_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         except Exception:
             pass
+        if _registry_cache is not None:
+            try:
+                _registry_cache.put_json(_REGISTRY_CACHE_KEY, data, _CACHE_TTL)
+            except Exception:
+                log.warning("레지스트리 캐시 저장 실패, 로드는 정상 반환", exc_info=True)
         return data
 
     return _bundled()
