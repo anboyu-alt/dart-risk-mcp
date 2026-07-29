@@ -1055,6 +1055,148 @@ class TestWideTableFolding(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFoldMinimum(unittest.TestCase):
+    """splitVisibleFolded()에 최소 접힘 개수(MIN_FOLD_COUNT)를 둔다
+    (task-2-brief 요구사항 B). SG 타법인 출자 실측(20필드 원본, essential
+    승격 후 접힐 열이 정확히 1개)에서 "나머지 1개열" 버튼 하나 누르자고
+    클릭을 요구하는 게 배보다 배꼽이 크다는 게 이 요구사항의 근거다.
+
+    splitVisibleFolded는 순수 함수라 finalKeys 목록을 직접 구성해 검증한다
+    (tableLayout을 거치지 않는다 — records를 안 만들어도 된다). essential
+    열이 없는 finalKeys에서는 "wouldFold = finalKeys.length -
+    MAX_VISIBLE_COLUMNS" 관계가 성립하므로, 이 식으로 원하는 접힘 개수를
+    정확히 지정해 새 최소치 경계(하나 아래·정확히·하나 위) 그리고 기존
+    다수 접힘 회귀를 함께 확인한다.
+    """
+
+    @staticmethod
+    def _keys(n):
+        return json.dumps([f"f{i}" for i in range(n)])
+
+    def test_min_fold_count_constant_is_at_least_two(self):
+        """상수가 실행값으로 몇인지 직접 읽는다(소스 문자열 검색이 아니라
+        run_js로 app.js를 실제 실행해 얻은 값) — 아래 경계 테스트들이
+        이 상수 값에 기대므로, 상수 자체가 퇴화(1 이하)하면 여기서 먼저
+        걸린다."""
+        got = run_js("MIN_FOLD_COUNT")
+        self.assertGreaterEqual(got, 2)
+
+    def test_below_minimum_is_absorbed_into_visible(self):
+        """접힐 열이 1개(새 최소치 미만) → 접지 않고 예산을 늘려 전부
+        보여준다. SG 타법인 출자 실측과 정확히 같은 모양(essential 없이
+        13개 열 → 12 초과분 1개)이다."""
+        n = 12 + 1
+        got = run_js(f"splitVisibleFolded({self._keys(n)}, [])")
+        self.assertEqual(got["folded"], [])
+        self.assertEqual(len(got["visible"]), n)
+
+    def test_at_minimum_still_folds(self):
+        """정확히 MIN_FOLD_COUNT(경계값)만큼 접힐 상황이면 접는다 — 미만일
+        때만 흡수한다는 "미만" 조건의 경계를 고정한다."""
+        got = run_js("MIN_FOLD_COUNT")
+        min_fold = got
+        n = 12 + min_fold
+        result = run_js(f"splitVisibleFolded({self._keys(n)}, [])")
+        self.assertEqual(len(result["folded"]), min_fold)
+        self.assertEqual(len(result["visible"]), 12)
+
+    def test_one_above_minimum_still_folds(self):
+        got = run_js("MIN_FOLD_COUNT")
+        n = 12 + got + 1
+        result = run_js(f"splitVisibleFolded({self._keys(n)}, [])")
+        self.assertEqual(len(result["folded"]), got + 1)
+
+    def test_many_folded_columns_still_folds(self):
+        """기존 동작 회귀 — insider_timeline류(접힘이 충분히 많을 때)는
+        새 최소치가 상한을 무력화하면 안 된다."""
+        n = 12 + 8
+        got = run_js(f"splitVisibleFolded({self._keys(n)}, [])")
+        self.assertEqual(len(got["folded"]), 8)
+        self.assertEqual(len(got["visible"]), 12)
+
+    def test_no_fold_needed_is_unchanged(self):
+        """접힐 열이 원래도 0개(12개 이하)면 기존과 동일하다(회귀)."""
+        got = run_js(f"splitVisibleFolded({self._keys(12)}, [])")
+        self.assertEqual(got["folded"], [])
+        self.assertEqual(len(got["visible"]), 12)
+
+    def test_absorbed_columns_keep_original_order(self):
+        """흡수돼 전부 visible이 된 열도 원래 순서 그대로 남아야 한다 —
+        값이 사라지거나 순서가 섞이면 안 된다."""
+        n = 13
+        got = run_js(f"splitVisibleFolded({self._keys(n)}, [])")
+        self.assertEqual(got["visible"], [f"f{i}" for i in range(n)])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestDisclosureColumnWidthRender(unittest.TestCase):
+    """공시 목록 표에서만 report_nm(공시명)이 넓고 flr_nm(공시제출인)이
+    좁아야 한다(task-2-brief 요구사항 A). 전역 th,td{max-width:280px}는
+    그대로 두고 disclosures 섹션 렌더 시 셀에 클래스를 붙이는 방식이므로,
+    소스에 클래스 문자열이 있다는 것만으로는 실제로 셀에 붙는지 알 수
+    없다 — run_render_section으로 실제 renderSection("disclosures", ...)를
+    실행해 만들어진 DOM(tableRows)에서 className을 직접 읽는다.
+    """
+
+    # SG(corp_code=00963976) 실측 필드 구성(rcept_no·corp_cls·corp_code·
+    # corp_name·stock_code·report_nm·rcept_dt·flr_nm·rm)을 그대로 따르되,
+    # corp_cls·corp_code·corp_name·stock_code는 두 레코드에서 같은 값을
+    # 줘서 caption으로 승격시킨다(실제 공시 목록도 같은 회사 안에서는
+    # 동일하다) — report_nm·flr_nm·rcept_dt·rcept_no·rm만 본문 열로
+    # 남아야 disclosures 실제 렌더와 같은 조건이 된다.
+    _RECORDS = [
+        {"rcept_no": "20260720900747", "corp_cls": "K", "corp_code": "00963976",
+         "corp_name": "SG", "stock_code": "255220",
+         "report_nm": "매출액또는손익구조30%(대규모법인은15%)이상변경",
+         "flr_nm": "SG", "rcept_dt": "20260720", "rm": "코"},
+        {"rcept_no": "20260715900123", "corp_cls": "K", "corp_code": "00963976",
+         "corp_name": "SG", "stock_code": "255220",
+         "report_nm": "분기보고서 (2026.06)",
+         "flr_nm": "SG자산운용조합", "rcept_dt": "20260715", "rm": ""},
+    ]
+
+    def test_report_nm_cell_gets_wide_class(self):
+        got = run_render_section('"disclosures"', json.dumps(self._RECORDS, ensure_ascii=False))
+        header = [c["text"] for c in got["tableRows"][0]]
+        report_idx = header.index("공시명")
+        body_row = got["tableRows"][1]
+        self.assertIn("wide", body_row[report_idx]["className"].split())
+
+    def test_flr_nm_cell_gets_narrow_class(self):
+        got = run_render_section('"disclosures"', json.dumps(self._RECORDS, ensure_ascii=False))
+        header = [c["text"] for c in got["tableRows"][0]]
+        filer_idx = header.index("공시제출인")
+        body_row = got["tableRows"][1]
+        self.assertIn("narrow", body_row[filer_idx]["className"].split())
+
+    def test_other_columns_are_unaffected(self):
+        """report_nm·flr_nm 외 열(rcept_dt 등)에는 wide·narrow가 붙지
+        않는다 — 전체 열에 무차별로 붙는 회귀를 막는다."""
+        got = run_render_section('"disclosures"', json.dumps(self._RECORDS, ensure_ascii=False))
+        header = [c["text"] for c in got["tableRows"][0]]
+        date_idx = header.index("접수일자")
+        body_row = got["tableRows"][1]
+        classes = body_row[date_idx]["className"].split()
+        self.assertNotIn("wide", classes)
+        self.assertNotIn("narrow", classes)
+
+    def test_other_sections_do_not_get_the_classes(self):
+        """report_nm·flr_nm이 아닌 다른 표(예: 재무제표)는 이 클래스를
+        전혀 얻지 않는다 — 실제 렌더 경로로 확인한다(정적 검사는
+        test_se_page_assets.py가 별도로 CSS 규칙 자체를 검사한다)."""
+        records = [
+            {"account_nm": "매출액", "thstrm_amount": "1,000,000", "frmtrm_amount": "900,000"},
+            {"account_nm": "영업이익", "thstrm_amount": "100,000", "frmtrm_amount": "80,000"},
+        ]
+        got = run_render_section('"financials"', json.dumps(records, ensure_ascii=False))
+        for row in got["tableRows"]:
+            for cell in row:
+                classes = cell["className"].split()
+                self.assertNotIn("wide", classes)
+                self.assertNotIn("narrow", classes)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestSectionBlocks(unittest.TestCase):
     """dict-of-lists 섹션(shareholders/audit_history/debt_balance 등)을
     소제목 + 개별 표 블록 목록으로 펼치는 sectionBlocks() 검증.
@@ -9032,8 +9174,15 @@ class TestMarkRenderBehavior(unittest.TestCase):
 
     @staticmethod
     def _wide_insider_row(cnt, tag):
-        """13번째 자리(=접히는 자리)에 elestock 실측 필드를 둔 넓은 행."""
-        r = {f"a{i}": f"{tag}-{i}" for i in range(1, 13)}
+        """맨 뒤(=접히는 자리)에 elestock 실측 필드를 둔 넓은 행.
+
+        a1..a13(13개) + sp_stock_lmp_irds_cnt = 본문 열 14개 —
+        MAX_VISIBLE_COLUMNS(12) 초과분이 2개(=MIN_FOLD_COUNT)라 SE-8
+        Task 2의 최소 접힘 흡수(splitVisibleFolded)가 발동하지 않는다.
+        원래는 초과분이 1개(a1..a12 12개 + 특수 필드)였는데, 그 모양이
+        바로 MIN_FOLD_COUNT가 흡수하도록 만든 "나머지 1개열" 퇴화
+        사례라 이 표(방어 경로 검증용)에는 더 이상 맞지 않는다."""
+        r = {f"a{i}": f"{tag}-{i}" for i in range(1, 14)}
         r["sp_stock_lmp_irds_cnt"] = cnt
         r["source"] = "elestock"
         return r
@@ -9045,9 +9194,10 @@ class TestMarkRenderBehavior(unittest.TestCase):
         행마다 버튼을 눌러야 보였다. 범례는 세 규칙을 다 말하는데 화면에는
         3개만 보이는 상태였다 — "눈에 띄게"의 반대다.
 
-        여기서는 13열짜리(=12열 상한 초과) 표를 만들고, 강조 규칙이 걸린
-        열을 맨 뒤(원래대로면 가장 먼저 접히는 자리)에 둔다. 강조는 접힌
-        열 상세(span)가 아니라 **본문 셀(td)**로 나와야 한다."""
+        여기서는 14열짜리(=12열 상한을 2열 초과, SE-8 Task 2의 최소 접힘
+        흡수가 발동하지 않는 폭) 표를 만들고, 강조 규칙이 걸린 열을 맨
+        뒤(원래대로면 가장 먼저 접히는 자리)에 둔다. 강조는 접힌 열
+        상세(span)가 아니라 **본문 셀(td)**로 나와야 한다."""
         records = [self._wide_insider_row("-32124", "r0"),
                    self._wide_insider_row("100", "r1")]
         got = run_render_section('"insider_timeline"', json.dumps(records, ensure_ascii=False))

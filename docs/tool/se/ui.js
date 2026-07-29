@@ -1025,6 +1025,21 @@ function tableEl(table, marks, records) {
         const rec = isVertical ? records[0] : records[rowIdx];
         td.addEventListener("click", function () { openExecutivePanel(rec); });
       }
+      // SE-8 Task 2 — 공시 목록 표만 report_nm(공시명)·flr_nm(공시제출인)
+      // 열 폭을 개별화한다(task-2-brief 요구사항 A, index.html 실측 ②).
+      // 전역 th,td{max-width:280px}는 모든 표·모든 열에 같은 상한을 걸어
+      // 공시명(긴 텍스트)이 잘리고 제출인(짧은 이름) 칸은 남는 문제가
+      // 있었다. report_nm·flr_nm은 disclosures 섹션에서만 실제로 쓰이는
+      // 원본 키라(다른 어떤 표도 이 두 열을 갖지 않는다) tableEl()이
+      // 키 이름만으로 셀에 클래스를 붙여도 다른 표 열 폭에 영향이 없다 —
+      // 별도 "이 표는 disclosures인가"를 판별해 넘길 필요가 없다. 가로
+      // 표에서만 의미가 있다(세로는 회사 1건이라 이미 [라벨,값] 두 칸뿐
+      // 이고 잘림 문제 자체가 없다).
+      if (!isVertical && cellKey === "report_nm") {
+        td.className = td.className ? (td.className + " wide") : "wide";
+      } else if (!isVertical && cellKey === "flr_nm") {
+        td.className = td.className ? (td.className + " narrow") : "narrow";
+      }
       // 강조 사유는 원본 값 툴팁 다음에 붙인다(순서가 반대면 아래 줄이
       // 위 raw 툴팁을 덮어써 왜 강조됐는지가 사라진다 — affiliates 3개
       // 규칙 열이 전부 AMOUNT_FIELDS라 실제로 겹친다). className은 이어

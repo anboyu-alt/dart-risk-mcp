@@ -81,6 +81,15 @@ table{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:12px
 th,td{border:1px solid var(--line);padding:4px 8px;text-align:left;
       vertical-align:top;max-width:280px;overflow-wrap:anywhere}
 th{color:var(--dim2);background:var(--rail);font-weight:normal}
+/* SE-8 Task 2 — 공시 목록 표에서만 report_nm(공시명)·flr_nm(공시제출인)
+   열 폭을 개별화한다(ui.js tableEl()이 이 두 키에만 붙이는 클래스,
+   task-2-brief 요구사항 A). 위 전역 th,td{max-width:280px}는 그대로 두고
+   이 두 규칙만 덧붙인다 — 다른 표는 이 클래스가 붙는 열 자체가 없어
+   전역 280px를 그대로 적용받는다. 420(wide)+140(narrow)=560은 기존 두
+   열의 합(280+280=560)과 같아, 표 전체 폭 예산은 그대로다(가로 스크롤을
+   만들지 않는다). */
+td.wide{max-width:420px}
+td.narrow{max-width:140px}
 .doc{color:var(--amber);cursor:pointer;text-decoration:underline dotted}
 /* SE-6 Task 3 — 임원 이름 클릭(우측 패널). .doc(공시 원문 열기)와 같은
    "클릭 가능" 시각 신호를 재사용하되 별도 클래스를 쓴다 — 문서를 여는

@@ -536,6 +536,14 @@ const MAX_VISIBLE_COLUMNS = 12;
 // 순서에서 똑같은 사고가 반복된다.
 const ALWAYS_VISIBLE_KEYS = ["rcept_no"];
 
+// 접어서 얻는 게 없는 최소 접힘 개수(task-2-brief 요구사항 B). SG 타법인
+// 출자 실측(20필드 원본, essential 승격 후 12열 초과분이 정확히 1개)에서
+// "나머지 1개열" 버튼을 누르자고 클릭을 요구하는 건 배보다 배꼽이 크다 —
+// 접힐 열이 이 값 미만이면 접지 않고 그 자리만큼 예산을 늘려 전부
+// 보여준다. 2 미만(0·1)일 이유가 없다: 0은 애초에 접을 게 없는 경우이고,
+// "나머지 1개"가 바로 이 상수가 막으려는 퇴화 사례다.
+const MIN_FOLD_COUNT = 2;
+
 /** finalKeys(캡션 승격 이후 남은 열)를 visible/folded로 나눈다.
  *
  * MAX_VISIBLE_COLUMNS 이하면 전부 visible이다(접을 필요가 없다). 넘으면
@@ -552,7 +560,10 @@ const ALWAYS_VISIBLE_KEYS = ["rcept_no"];
  * 통째로 죽었던 사고(위 ALWAYS_VISIBLE_KEYS 주석)와 같은 부류다.
  *
  * 열 예산(MAX_VISIBLE_COLUMNS)은 그대로다 — 확보한 열만큼 나머지 자리가
- * 줄어들 뿐 표가 무한정 넓어지지 않는다. */
+ * 줄어들 뿐 표가 무한정 넓어지지 않는다. 단, 그 예산을 넘어 접힐 열이
+ * MIN_FOLD_COUNT 미만이면(위 상수 주석 참고) 예산 자체를 늘려 전부
+ * visible로 흡수한다 — 접힘이 충분히 많을 때(예: insider_timeline)는
+ * 이 흡수가 발동하지 않으므로 기존 동작 그대로다. */
 function splitVisibleFolded(finalKeys, markedKeys) {
   if (finalKeys.length <= MAX_VISIBLE_COLUMNS) {
     return { visible: finalKeys, folded: [] };
@@ -564,10 +575,13 @@ function splitVisibleFolded(finalKeys, markedKeys) {
     return ALWAYS_VISIBLE_KEYS.indexOf(k) !== -1 || keep.has(k);
   });
   const essentialSet = new Set(essential);
-  const budget = Math.max(MAX_VISIBLE_COLUMNS - essential.length, 0);
-  const rest = finalKeys
-    .filter(function (k) { return !essentialSet.has(k); })
-    .slice(0, budget);
+  const restAll = finalKeys.filter(function (k) { return !essentialSet.has(k); });
+  let budget = Math.max(MAX_VISIBLE_COLUMNS - essential.length, 0);
+  const wouldFold = Math.max(restAll.length - budget, 0);
+  if (wouldFold > 0 && wouldFold < MIN_FOLD_COUNT) {
+    budget = restAll.length; // 접을 게 애매하게 1개뿐이면 전부 보여준다
+  }
+  const rest = restAll.slice(0, budget);
   const restSet = new Set(rest);
   const visible = finalKeys.filter(function (k) {
     return restSet.has(k) || essentialSet.has(k);
@@ -3303,6 +3317,7 @@ if (typeof module !== "undefined" && module.exports) {
     fundChainDisclosureHints,
     markNumber, MARK_RULES, cellMarks, markedColumnKeys, indicatorCellWhy,
     isAggregateRow, splitAggregateRows, splitVisibleFolded, MAX_VISIBLE_COLUMNS,
+    MIN_FOLD_COUNT,
     INDICATOR_CATEGORY_ORDER, INDICATOR_PRIMARY, INDICATOR_NOTES,
     formatIndicator, indicatorBlocks, indicatorChartRecords,
     normalizeIndicatorCategory, indicatorRows, indicatorYearNote,

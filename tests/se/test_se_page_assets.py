@@ -1829,6 +1829,33 @@ class TestLayoutCssRuleStructure(unittest.TestCase):
                             "있습니다")
 
 
+class TestDisclosureColumnWidthDoesNotChangeOtherTables(unittest.TestCase):
+    """task-2-brief 요구사항 A — 공시 목록 표에서만 report_nm(공시명)을
+    넓히고 flr_nm(공시제출인)을 좁힌다. 전역 `th,td{...max-width:280px}`는
+    **모든 표, 모든 열**에 적용되는 규칙이라(index.html:81~82, 실측
+    2026-07-29) 이 작업이 그 규칙 자체를 건드리면 재무제표 등 다른 모든
+    표의 열 폭도 함께 바뀐다 — 그래서 개별화는 report_nm·flr_nm 셀에
+    새 클래스를 붙이는 방식으로만 하고, 전역 규칙은 그대로 둬야 한다.
+
+    report_nm·flr_nm 셀에 실제로 클래스가 붙는지는 이 파일이 아니라
+    test_se_app_js.py의 TestDisclosureColumnWidthRender가 renderSection을
+    실제로 실행해 DOM에서 확인한다(정적 검사만으로는 "클래스 문자열이
+    소스에 있다"만 증명하지 "그 셀에 실제로 붙는다"는 증명하지 못한다) —
+    여기서는 그 반대쪽, **다른 표가 이 작업으로 영향받지 않는지**만
+    선택자별로 확인한다.
+    """
+
+    def test_global_td_max_width_rule_is_unchanged(self):
+        base = read_index_css()
+        rule = _css_rule(base, "th,td")
+        self.assertIsNotNone(rule, "th,td 규칙을 찾지 못했습니다")
+        self.assertRegex(
+            rule, r"max-width\s*:\s*280px",
+            "전역 th,td max-width가 280px에서 바뀌었습니다 — 공시 목록 외 "
+            "다른 모든 표(재무제표 등)의 열 폭에도 영향을 줍니다"
+        )
+
+
 class TestPanelCloseDoesNotOverlapThemeToggle(unittest.TestCase):
     """#panel-close(패널 닫기 버튼)와 #theme-toggle(다크/라이트 토글,
     position:fixed로 항상 화면 오른쪽 위에 떠 있다)이 겹치던 CSS 버그
