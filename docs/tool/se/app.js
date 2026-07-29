@@ -300,6 +300,47 @@ function formatRemark(rm) {
   }).join(" · ");
 }
 
+// SE-8 Task 3 — dffrnc_resn(자금 차이 사유)·rm(최대주주 합계 각주) 등에서
+// DART가 "주1)" 같은 각주 마커만 돌려주고 본문(각주 내용)은 주지 않는지
+// 판별한다. 실측(SG, corp_code=00963976, fetch_fund_usage): 차이 사유가
+// 있는 8건 전부 dffrnc_occrrnc_resn == "주1)"였다 — 이건 우리 버그가
+// 아니다. 각주 본문은 공시 원문(사람이 읽는 문서)에만 있고 API 구조화
+// 데이터엔 없다(task-3-brief). hyslrSttus(최대주주 현황)의 rm 실측 값
+// 집합에는 "주)"(번호 없음)·"주1,2)"(여러 각주 동시 표기)도 나온다 —
+// "주" 뒤에 숫자·쉼표만 오고 그 외 본문이 없는 값 전부를 마커로 본다.
+//
+// **rm은 두 가지 서로 다른 코드 체계를 같은 필드 이름으로 쓴다**: 공시
+// 목록(fetch_company_disclosures)에서는 DART_REMARK_LABELS 코드 조합
+// ("코정")이고, hyslrSttus에서는 이 각주 마커다. 두 값 집합은 겹치지
+// 않는다(DART 공식 비고 코드 8종은 전부 단일 한글 글자, 이 마커는 항상
+// "주"로 시작해 숫자·쉼표·닫는 괄호로 끝난다) — formatValue가 이 함수로
+// 먼저 분기해 formatRemark(문자 단위 분해)가 마커를 "주" · "1" · ")"로
+// 쪼개 깨뜨리지 않게 한다.
+function isFootnoteMarkerOnly(v) {
+  if (typeof v !== "string") return false;
+  return /^주[0-9,]*\)$/.test(v.trim());
+}
+
+/** isFootnoteMarkerOnly에 걸리는 값에 정직한 안내를 덧붙인다. **원문
+ *  마커 자체는 지우지 않는다**(task-3-brief: "사용자가 원문에서 '주1)'을
+ *  찾아 대조할 수 있어야 한다") — 마커 뒤에 안내를 잇는 형태다. 마커가
+ *  아니면(서술형 사유·결측 등) 값을 그대로 돌려준다 — 이 함수는 마커만
+ *  있는 경우만 건드린다.
+ *
+ *  rceptNo가 주어지면(그 레코드에 실제로 rcept_no가 있을 때만 — DART
+ *  원본 값을 지어내지 않는다, Global Constraints) 원문 확인 안내에
+ *  접수번호를 남긴다. fund_usage 레코드는 실측(dart_client.
+ *  _normalize_fund_usage)상 애초에 rcept_no를 담지 않아 이 경로에서는
+ *  항상 undefined다 — 그래도 값을 지어내 채우지 않고 정직한 안내
+ *  문구만 남긴다(호출부가 undefined를 넘기면 이 함수는 안내만 붙인다).
+ */
+function footnoteMarkerNote(v, rceptNo) {
+  if (!isFootnoteMarkerOnly(v)) return v;
+  let note = v + " (공시 원문의 각주로만 제공됩니다 — 본문은 DART 구조화 데이터에 없습니다)";
+  if (rceptNo) note += " · 접수번호 " + rceptNo + "의 원문에서 확인 가능";
+  return note;
+}
+
 // 자금 사용 내역 kind(구분) 필드. 실측(SG)된 값은 두 가지뿐이다
 // ({'public','private'}) — 그 외 값이 오면 formatValue가 원문을 그대로
 // 보여준다(지어내 번역하지 않는다, 위 REPRT_CODE_LABELS 계약과 동일).
@@ -352,8 +393,22 @@ function formatValue(key, value) {
   }
   // 공시 목록 rm(비고) 값을 사람이 읽는 말로 바꾼다(위 DART_REMARK_LABELS·
   // formatRemark 주석 참고) — 컬럼 헤더 라벨(LABELS.rm)은 건드리지 않고
-  // 값만 고친다.
-  if (key === "rm") return formatRemark(s);
+  // 값만 고친다. 단, hyslrSttus(최대주주 현황)는 같은 필드 이름(rm)을
+  // 각주 마커("주1)")로 쓴다(위 isFootnoteMarkerOnly 주석 참고) — 먼저
+  // 이 값을 걸러 footnoteMarkerNote로 보내지 않으면 formatRemark의 문자
+  // 단위 분해가 마커를 깨뜨린다.
+  if (key === "rm") {
+    return isFootnoteMarkerOnly(s) ? footnoteMarkerNote(s) : formatRemark(s);
+  }
+  // SE-8 Task 3 — fund_usage 원본 표(sectionBlocks가 그리는, fundChain으로
+  // 묶이기 전의 400건 그대로)의 dffrnc_resn(차이 발생 사유) 열도 같은
+  // 각주 마커 문제를 겪는다 — fundChain()에서 고친 것은 파생 카드
+  // ("차이 사유" 열, 조달건 단위로 묶은 대표값)뿐이고, 이 원본 표는 별도
+  // 경로(formatValue)로 각 레코드를 그대로 그린다. 여기서 고치지 않으면
+  // 원본 표에는 여전히 "주1)"만 남는다(라이브 검증: SG 8건 전부 재현).
+  if (key === "dffrnc_resn") {
+    return isFootnoteMarkerOnly(s) ? footnoteMarkerNote(s) : s;
+  }
   // 자금 사용 내역 kind(구분) 값. 실측 두 값만 안다 — 그 외 값은(모르는
   // 값을 지어내 번역하지 않는다는 REPRT_CODE_LABELS와 같은 계약으로)
   // 원문 그대로 s를 돌려준다.
@@ -1807,11 +1862,19 @@ function fundChain(records) {
       }
       const plan = bestAmount === null ? 0 : bestAmount;
       totalPlan += plan;
+      // SE-8 Task 3 — dffrnc_resn이 각주 마커("주1)")뿐이면 원문 마커를
+      // 지우지 않고 정직한 안내를 덧붙인다(footnoteMarkerNote, 위 주석
+      // 참고). best.rcept_no는 실측(dart_client._normalize_fund_usage)
+      // 상 fund_usage 레코드에 애초에 없는 필드라 오늘은 항상 undefined지만,
+      // 값을 지어내는 대신 있으면 쓰고 없으면 안내만 남기도록 그대로
+      // 넘긴다(있지도 않은 값을 만들어내지 않는다).
+      const diffReason = isNoDataMarker(best.dffrnc_resn) ? null
+        : footnoteMarkerNote(best.dffrnc_resn, isNoDataMarker(best.rcept_no) ? null : best.rcept_no);
       useList.push({
         purpose: purpose,
         plan: plan,
         real: markNumber(best.real_dtls_amount),
-        diff_reason: isNoDataMarker(best.dffrnc_resn) ? null : best.dffrnc_resn,
+        diff_reason: diffReason,
         rows: useRows.length,
       });
     }
@@ -3322,5 +3385,6 @@ if (typeof module !== "undefined" && module.exports) {
     formatIndicator, indicatorBlocks, indicatorChartRecords,
     normalizeIndicatorCategory, indicatorRows, indicatorYearNote,
     DART_REMARK_LABELS, formatRemark, KIND_LABELS,
+    isFootnoteMarkerOnly, footnoteMarkerNote,
   };
 }

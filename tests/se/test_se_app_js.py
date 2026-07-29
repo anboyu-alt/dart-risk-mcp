@@ -942,6 +942,149 @@ class TestRemarkAndKindLabels(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFootnoteMarkerOnly(unittest.TestCase):
+    """SE-8 Task 3 — DART가 dffrnc_resn(자금 차이 사유)에 "주1)" 같은
+    각주 마커만 돌려주고 본문(각주 내용)은 주지 않는 경우를 판별한다.
+
+    실측(SG, corp_code=00963976, fetch_fund_usage): 차이 사유가 있는 8건
+    전부 dffrnc_occrrnc_resn == "주1)"였다. 이건 우리 버그가 아니다 — 각주
+    본문은 공시 원문(사람이 읽는 문서)에만 있고 API 구조화 데이터엔 없다
+    (task-3-brief, docs/superpowers/plans/2026-07-29-se-8-usability-feedback.md
+    "배경 ④"). hyslrSttus(최대주주 현황) rm 실측 값 집합에는 "주)"·
+    "주1,2)"(여러 각주 동시 표기)도 나온다 — 숫자·쉼표 조합 전부 같은
+    마커류로 본다.
+    """
+
+    def test_marker_only_values_are_detected(self):
+        self.assertTrue(run_js('isFootnoteMarkerOnly("주1)")'))
+        self.assertTrue(run_js('isFootnoteMarkerOnly("주2)")'))
+
+    def test_multi_and_bare_marker_variants_are_detected(self):
+        """실측(SG hyslrSttus)에 나온 변형 — "주1,2)"(여러 각주 동시
+        표기)·"주)"(번호 없는 각주)도 같은 마커류다."""
+        self.assertTrue(run_js('isFootnoteMarkerOnly("주1,2)")'))
+        self.assertTrue(run_js('isFootnoteMarkerOnly("주)")'))
+
+    def test_prose_reason_is_not_a_marker(self):
+        got = run_js('isFootnoteMarkerOnly("자금 재배분에 따른 차이")')
+        self.assertFalse(got)
+
+    def test_missing_data_markers_are_not_footnote_markers(self):
+        """결측("-"/null)은 isNoDataMarker가 이미 처리하는 다른 경로다 —
+        이 함수가 걸면 두 경로가 충돌한다."""
+        self.assertFalse(run_js('isFootnoteMarkerOnly("-")'))
+        self.assertFalse(run_js('isFootnoteMarkerOnly(null)'))
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFootnoteMarkerNote(unittest.TestCase):
+    """isFootnoteMarkerOnly에 걸리는 값에 정직한 안내를 덧붙이는
+    footnoteMarkerNote. 원문 마커는 지우지 않는다(task-3-brief: "원문
+    마커 자체는 지우지 않는다 — 사용자가 원문에서 '주1)'을 찾아 대조할
+    수 있어야 한다") — 마커 뒤에 안내를 잇는 형태다.
+    """
+
+    def test_marker_keeps_original_marker_and_adds_honest_note(self):
+        got = run_js('footnoteMarkerNote("주1)")')
+        self.assertIn("주1)", got, "원문 마커가 사라졌습니다")
+        self.assertIn("각주", got, "정직한 안내 문구가 없습니다")
+
+    def test_prose_reason_passes_through_unchanged(self):
+        """진짜 본문이 있는 사유는 지금처럼 그대로 보여준다 — 이 함수는
+        마커만 있는 경우만 건드린다."""
+        got = run_js('footnoteMarkerNote("자금 재배분에 따른 차이")')
+        self.assertEqual(got, "자금 재배분에 따른 차이")
+
+    def test_rcept_no_is_included_when_given(self):
+        got = run_js('footnoteMarkerNote("주1)", "20250318000939")')
+        self.assertIn("20250318000939", got)
+
+    def test_no_rcept_no_produces_honest_note_alone(self):
+        """fund_usage 레코드는 실측상(dart_client._normalize_fund_usage)
+        rcept_no 자체를 담지 않는다 — 없는 값을 지어내 채우지 않는다."""
+        got = run_js('footnoteMarkerNote("주1)")')
+        self.assertNotRegex(got, r"\d{14}")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFootnoteMarkerRmReuse(unittest.TestCase):
+    """SE-8 Task 3 — 최대주주 합계(hyslrSttus)의 rm 각주도 같은 함수를
+    재사용한다(브리프: "새 함수를 또 만들지 않는다"). rm 필드는 공시
+    목록(fetch_company_disclosures)에서는 코드 조합("코정")이지만
+    hyslrSttus(최대주주 현황)에서는 각주 마커("주1)")다 — 실측(SG)으로
+    확인된 필드 이름 충돌이다. 같은 필드 이름을 무조건 formatRemark(문자
+    단위 분해)로 돌리면 "주1)"이 "주" · "1" · ")"로 쪼개져 문자 단위로
+    깨진다(어느 문자도 DART_REMARK_LABELS에 없으므로) — 이 회귀를 잡는다.
+    """
+
+    def test_rm_footnote_marker_gets_honest_note_not_mangled_by_remark_decode(self):
+        got = run_js('formatValue("rm", "주1)")')
+        self.assertIn("주1)", got, "원문 마커가 사라지거나 문자 단위로 깨졌습니다")
+        self.assertIn("각주", got)
+        self.assertNotIn("주 · 1 · )", got, "formatRemark의 문자 단위 분해로 깨졌습니다")
+
+    def test_rm_disclosure_code_still_uses_remark_decode(self):
+        """회귀 — 공시 목록 rm 코드("코정")는 여전히 formatRemark를 탄다."""
+        got = run_js('formatValue("rm", "코정")')
+        self.assertIn("코스닥", got)
+        self.assertIn("정정신고", got)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFootnoteMarkerRenderedInFundChain(unittest.TestCase):
+    """SE-8 Task 3 — 자금 조달건 카드의 "차이 사유" 열이 "주1)"만 보여주고
+    끝나던 문제(사용자 실제 지적). 실측(SG, corp_code=00963976): 차이
+    사유가 있는 8건 전부 dffrnc_occrrnc_resn == "주1)"였다. 문자열 검사가
+    아니라 renderSection을 실제로 실행해(run_render_section) DOM에 그
+    문단이 붙는지로 확인한다 — "정의만 있고 부르는 곳이 없다" 사고가 이
+    저장소에서 반복됐다(TestFundUsagePayDeLabelAndNote와 같은 이유).
+    """
+
+    def test_marker_only_diff_reason_shows_marker_and_honest_note_in_dom(self):
+        records = [
+            {"tm": "제18회", "kind": "private", "year": 2025, "pay_de": "20240627",
+             "pay_amount": 1000, "plan_amount": 1000, "plan_useprps": "운영자금",
+             "real_dtls_cn": "운영자금", "real_dtls_amount": 900,
+             "dffrnc_resn": "주1)", "flags": []},
+        ]
+        got = run_render_section('"fund_usage"', json.dumps(records, ensure_ascii=False))
+        cell_texts = got["cells"]
+        matched = [t for t in cell_texts if "주1)" in t]
+        self.assertTrue(matched, "차이 사유 셀에 원문 마커 '주1)'이 없습니다")
+        # renderSection("fund_usage", ...)은 두 표를 그린다 — sectionBlocks가
+        # 그리는 원본 표(레코드 그대로, 400건이면 400행)와 fundChain()이
+        # 조달건 단위로 묶은 파생 카드(fundChainBlock) — 같은 dffrnc_resn
+        # 값이 두 곳 모두에 나타난다. "차이 사유" 안내는 이 함수를 실제로
+        # 거친 곳이면 어디든 다 있어야 한다 — bare(정확히 "주1)"뿐인) 셀이
+        # 하나라도 남으면 두 경로 중 하나가 이 함수를 안 거친 것이다(실제로
+        # 처음에는 fundChain()만 고치고 원본 표의 formatValue("dffrnc_resn",
+        # ...)를 빼먹어 이 값 그대로 통과했다).
+        self.assertFalse(
+            any(t == "주1)" for t in cell_texts),
+            "각주 마커만 있고 안내 문구가 없는 셀이 남아 있습니다 — "
+            "원본 표와 파생 카드 중 한쪽만 고쳐진 것으로 보입니다",
+        )
+        self.assertTrue(any("각주" in t for t in matched),
+                         "원문 마커 옆에 정직한 안내 문구가 실제 DOM에 없습니다")
+
+    def test_prose_diff_reason_still_renders_as_is(self):
+        """회귀 — 서술형 사유는 안내 문구 없이 그대로 렌더된다."""
+        records = [
+            {"tm": "제19회", "kind": "private", "year": 2025, "pay_de": "20240729",
+             "pay_amount": 1000, "plan_amount": 1000, "plan_useprps": "시설자금",
+             "real_dtls_cn": "시설자금", "real_dtls_amount": 800,
+             "dffrnc_resn": "자금 재배분에 따른 차이", "flags": []},
+        ]
+        got = run_render_section('"fund_usage"', json.dumps(records, ensure_ascii=False))
+        cell_texts = got["cells"]
+        self.assertIn("자금 재배분에 따른 차이", cell_texts)
+        self.assertFalse(
+            any("각주" in t for t in cell_texts if "자금 재배분" in t),
+            "서술형 사유에 안내 문구가 잘못 붙었습니다",
+        )
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestTableLayout(unittest.TestCase):
     """세로/가로 자동 판단 + 상수열 캡션 승격.
 
