@@ -267,6 +267,46 @@ const REPRT_CODE_LABELS = Object.assign(Object.create(null), {
   "11013": "1분기보고서", "11014": "3분기보고서",
 });
 
+// 공시 목록 rm(비고) 필드의 DART 공식 코드 → 한국어. dart_client 실측(SG,
+// corp_code=00963976)에서 나온 값 집합은 {'연','정','코','코정'}이었지만
+// DART가 공식 문서에 정의한 코드는 여덟 개다(fetch_company_disclosures
+// docstring 근거) — 실측에 없던 나머지도 미리 채운다. 값 자체가 **문자
+// 단위로 조합**돼 나온다("코정" = "코"+"정", 구분자 없음)는 것이 이
+// 코드의 핵심 함정이다 — 아래 formatRemark가 문자 단위로 분해한다.
+const DART_REMARK_LABELS = Object.assign(Object.create(null), {
+  "유": "유가증권", "코": "코스닥", "채": "채권상장법인", "넥": "코넥스",
+  "공": "공정위 대상 기업집단", "연": "연결대상 종속회사 있음",
+  "정": "정정신고", "철": "철회",
+});
+
+/** rm(비고) 값을 사람이 읽는 말로 바꾼다. 문자 단위로 분해해 각각
+ *  DART_REMARK_LABELS로 매핑하고 " · "로 이어붙인다("코정" ->
+ *  "코스닥 · 정정신고"). **모르는 문자는 지우지 않고 원문 그대로
+ *  남긴다** — REPRT_CODE_LABELS·label()과 같은 "모르면 숨기지 않는다"
+ *  계약이다.
+ *
+ *  빈 값·"-"는 isNoDataMarker가 이미 결측으로 판정하는 값이라 새로
+ *  재구현하지 않고 그대로 재사용한다: null/undefined는 formatValue의
+ *  다른 필드와 같은 결측 표기("")로 맞추고, "-"는 이미 그 자체로 DART가
+ *  쓰는 결측 마커라 문자 분해 없이 원문 그대로 돌려준다(빈 문자열도
+ *  같은 경로로 그대로 ""를 돌려준다 — 분해할 문자가 없다는 뜻).
+ */
+function formatRemark(rm) {
+  if (isNoDataMarker(rm)) return (rm === null || rm === undefined) ? "" : rm;
+  const s = String(rm);
+  return s.split("").map(function (ch) {
+    return Object.prototype.hasOwnProperty.call(DART_REMARK_LABELS, ch)
+      ? DART_REMARK_LABELS[ch] : ch;
+  }).join(" · ");
+}
+
+// 자금 사용 내역 kind(구분) 필드. 실측(SG)된 값은 두 가지뿐이다
+// ({'public','private'}) — 그 외 값이 오면 formatValue가 원문을 그대로
+// 보여준다(지어내 번역하지 않는다, 위 REPRT_CODE_LABELS 계약과 동일).
+const KIND_LABELS = Object.assign(Object.create(null), {
+  public: "공모", private: "사모",
+});
+
 /** 금액을 한국식 단위로 줄인다. 0과 음수를 잃지 않는다. */
 function formatAmount(n) {
   const v = Number(n);
@@ -309,6 +349,16 @@ function formatValue(key, value) {
   // 바꾼다.
   if (key === "reprt_code" && Object.prototype.hasOwnProperty.call(REPRT_CODE_LABELS, s)) {
     return REPRT_CODE_LABELS[s];
+  }
+  // 공시 목록 rm(비고) 값을 사람이 읽는 말로 바꾼다(위 DART_REMARK_LABELS·
+  // formatRemark 주석 참고) — 컬럼 헤더 라벨(LABELS.rm)은 건드리지 않고
+  // 값만 고친다.
+  if (key === "rm") return formatRemark(s);
+  // 자금 사용 내역 kind(구분) 값. 실측 두 값만 안다 — 그 외 값은(모르는
+  // 값을 지어내 번역하지 않는다는 REPRT_CODE_LABELS와 같은 계약으로)
+  // 원문 그대로 s를 돌려준다.
+  if (key === "kind" && Object.prototype.hasOwnProperty.call(KIND_LABELS, s)) {
+    return KIND_LABELS[s];
   }
   if (AMOUNT_FIELDS.has(key) && /^-?[\d,]*\d$/.test(s)) {
     return formatAmount(s.replace(/,/g, ""));
@@ -3256,5 +3306,6 @@ if (typeof module !== "undefined" && module.exports) {
     INDICATOR_CATEGORY_ORDER, INDICATOR_PRIMARY, INDICATOR_NOTES,
     formatIndicator, indicatorBlocks, indicatorChartRecords,
     normalizeIndicatorCategory, indicatorRows, indicatorYearNote,
+    DART_REMARK_LABELS, formatRemark, KIND_LABELS,
   };
 }

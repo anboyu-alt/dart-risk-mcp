@@ -870,6 +870,70 @@ class TestReprtCodeLabels(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestRemarkAndKindLabels(unittest.TestCase):
+    """SE-8 Task 1 — 공시 목록 `rm`(비고) 코드·자금 사용 `kind` 원문값
+    한글화. DART 공식 비고 코드는 문자 단위로 조합돼 나온다(실측 SG:
+    {'연','정','코','코정'}) — formatRemark는 이걸 문자 단위로 분해해
+    이어붙인다. kind는 실측 두 값(public/private)만 안다 — 그 외 값은
+    지어내지 않고 원문 그대로 보여준다(REPRT_CODE_LABELS·label()과 같은
+    "모르면 숨기지 않는다" 계약).
+    """
+
+    def test_single_known_remark_codes(self):
+        self.assertEqual(run_js('formatRemark("연")'), "연결대상 종속회사 있음")
+        self.assertEqual(run_js('formatRemark("정")'), "정정신고")
+        self.assertEqual(run_js('formatRemark("코")'), "코스닥")
+
+    def test_combined_remark_code_is_decomposed_char_by_char(self):
+        """실측 "코정" = 코스닥 + 정정신고, 구분자 없이 붙어 나온다."""
+        got = run_js('formatRemark("코정")')
+        self.assertIn("코스닥", got)
+        self.assertIn("정정신고", got)
+
+    def test_unknown_character_mixed_with_known_ones_is_kept_visible(self):
+        """모르는 문자를 침묵하며 지우면 안 된다 — SE-4h의 "값이 없으면
+        없다고 표기" 원칙과 같다. "X"는 이 저장소가 만든 가짜 코드로,
+        DART 공식 비고 코드 어디에도 없다(실측 대상이 아님을 스스로
+        보증)."""
+        got = run_js('formatRemark("코X")')
+        self.assertIn("코스닥", got)
+        self.assertIn("X", got)
+
+    def test_empty_and_null_remark_uses_existing_missing_data_path(self):
+        """isNoDataMarker는 export되지 않는 내부 함수라 여기서 직접 부를
+        수 없다 — 진입점(formatRemark)의 결과가 formatValue의 다른
+        필드와 같은 결측 표기("")로 수렴하는지로 간접 검증한다."""
+        empty = run_js('formatRemark("")')
+        null = run_js('formatRemark(null)')
+        self.assertEqual(empty, "")
+        self.assertEqual(empty, null)
+
+    def test_kind_public_and_private_translate(self):
+        self.assertEqual(run_js('formatValue("kind", "public")'), "공모")
+        self.assertEqual(run_js('formatValue("kind", "private")'), "사모")
+
+    def test_kind_unknown_value_is_shown_as_is(self):
+        """실측된 값은 public/private 둘뿐이다 — 그 외 값을 지어내
+        번역하면 안 된다."""
+        got = run_js('formatValue("kind", "미지값")')
+        self.assertEqual(got, "미지값")
+
+    def test_remark_wired_through_format_value_for_rm_key(self):
+        """브리프 요구: formatValue가 rm 필드를 만나면 formatRemark를
+        거치도록 배선돼야 한다(값만 고치는 배선 — LABELS.rm 헤더는
+        그대로 둔다)."""
+        got = run_js('formatValue("rm", "코정")')
+        self.assertIn("코스닥", got)
+        self.assertIn("정정신고", got)
+
+    def test_column_header_labels_untouched(self):
+        """이 태스크는 값만 고친다 — 컬럼 헤더 라벨(LABELS.rm, LABELS.kind)은
+        건드리지 않는다."""
+        self.assertEqual(run_js('label("rm")'), "비고")
+        self.assertEqual(run_js('label("kind")'), "구분")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestTableLayout(unittest.TestCase):
     """세로/가로 자동 판단 + 상수열 캡션 승격.
 
