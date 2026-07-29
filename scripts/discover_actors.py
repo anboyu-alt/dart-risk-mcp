@@ -36,6 +36,7 @@ from dart_risk_mcp.core.known_actors import (
     fold_variants,
     load_known_actors,
     add_registry_record,
+    notion_credentials_configured,
     classify_actor,
     should_store,
     KIND_LABELS,
@@ -589,9 +590,20 @@ def main():
     report = build_daily_report(sdata, kdata, s_changed, promoted, stats=stats,
                                 watch=watch)
     if promoted:
-        report += (f"\n※ Notion 레지스트리 기록: {written}/{len(promoted)}건"
-                   + ("" if written == len(promoted)
-                      else " — NOTION_TOKEN/DB_KNOWN_ACTORS 설정 확인 필요"))
+        if written == len(promoted):
+            note = ""
+        elif not notion_credentials_configured():
+            # 자격증명이 실제로 없을 때만 이 원인을 지목한다 — add_registry_record는
+            # 이 경우 요청 자체를 보내지 않고 조용히 False를 반환하므로, 여기서
+            # 확인한 사실(설정 안 됨)과 그 반환값이 항상 일치한다.
+            note = " — NOTION_TOKEN/DB_KNOWN_ACTORS 미설정(요청 자체가 나가지 않음)"
+        else:
+            # 자격증명은 있는데 일부만 성공 — 레이트리밋(429)·일시 장애(5xx)·
+            # 기타 오류 가능성. 원인은 add_registry_record가 남긴 WARNING 로그
+            # (상태코드 + Notion 오류코드/메시지)를 봐야 알 수 있다. 자격증명을
+            # 지목하는 건 오진단이다(2026-07-29 사고, refresh_known_actors 동일 결함).
+            note = " — 자격증명은 정상, 일부 기록 실패(원인은 로그 확인)"
+        report += f"\n※ Notion 레지스트리 기록: {written}/{len(promoted)}건{note}"
     sent = send_mail("[known_actors] 일일 자동 발굴 리포트", report)
 
     print(f"공시 {stats['scanned']}건 · 자금조달 {stats['funding']}건 · sighting {stats['extracted']}건"

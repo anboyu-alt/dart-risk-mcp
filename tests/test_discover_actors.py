@@ -568,3 +568,57 @@ class TestFoldDedupe(unittest.TestCase):
         da.merge_sightings(data, [], window_months=12)
         # 별칭이 아닌 '(주)씨알엠'이 정본 — 체인 없이 병합
         self.assertIn("(주)씨알엠", data["aliases"].values())
+
+
+class TestDiscoverMainRegistryWriteNote(unittest.TestCase):
+    """Notion 기록 실패 원인 안내가 자격증명을 오진단하지 않는지 검증."""
+
+    def _patches(self, da, write_ok, creds_ok):
+        registry = {"actors": {"홍길동": [{"source": "y", "status": "auto_matched"}]}}
+        stats = {"scanned": 0, "funding": 0, "extracted": 0}
+        return [
+            patch.object(da, "_api_key", return_value="k"),
+            patch.object(da, "_load", return_value={"version": 1, "sightings": {}}),
+            patch.object(da, "load_known_actors", return_value=registry),
+            patch.object(da, "collect_funding_sightings", return_value=([], stats)),
+            patch.object(da, "merge_sightings", return_value=False),
+            patch.object(da, "reconcile_corp_renames", return_value=False),
+            patch.object(da, "_corp_name_index", return_value={}),
+            patch.object(da, "_legacy_name_index", return_value={}),
+            patch.object(da, "promote_repeat_actors", return_value=["홍길동"]),
+            patch.object(da, "build_daily_report", return_value="본문"),
+            patch.object(da, "add_registry_record", return_value=write_ok),
+            patch.object(da, "notion_credentials_configured", return_value=creds_ok),
+        ]
+
+    def _run_main(self, write_ok, creds_ok):
+        import contextlib
+        import scripts.discover_actors as da
+        with contextlib.ExitStack() as stack:
+            for p in self._patches(da, write_ok, creds_ok):
+                stack.enter_context(p)
+            mail = stack.enter_context(patch.object(da, "send_mail"))
+            da.main()
+        return mail.call_args.args[1]
+
+    def test_main_reports_credential_missing_when_write_fails_without_creds(self):
+        body = self._run_main(write_ok=False, creds_ok=False)
+        self.assertIn("0/1건", body)
+        self.assertIn("미설정", body)
+        self.assertNotIn("자격증명은 정상", body)
+
+    def test_main_does_not_blame_credentials_when_configured_but_write_fails(self):
+        # 2026-07-29 사고 재현: 자격증명은 정상인데 429·5xx로 실패한 경우
+        # "설정 확인 필요"라고 안내하면 오진단이다.
+        body = self._run_main(write_ok=False, creds_ok=True)
+        self.assertIn("0/1건", body)
+        self.assertIn("자격증명은 정상", body)
+        self.assertNotIn("설정 확인 필요", body)
+        self.assertNotIn("미설정", body)
+
+    def test_main_no_note_when_all_writes_succeed(self):
+        body = self._run_main(write_ok=True, creds_ok=True)
+        self.assertIn("1/1건", body)
+        self.assertNotIn("설정 확인 필요", body)
+        self.assertNotIn("미설정", body)
+        self.assertNotIn("자격증명은 정상", body)
