@@ -416,7 +416,8 @@ dart_risk_mcp/
 | 채무증권 잔액 | 메모리 `_debt_balance_cache` (최대 20건) | 10분 |
 | XBRL 감가상각비 | 메모리 `_xbrl_dep_cache` (최대 10건) | 10분 |
 | 워치리스트(영속, 캐시 아님) | `~/.config/dart-risk-mcp/watchlist.json` (`DART_WATCHLIST_PATH`로 오버라이드) | 영속(비휘발) |
-| 공개기록 원격 캐시 | `~/.cache/dart-risk-mcp/known_actors_remote.json` (GitHub raw fetch) | 24시간 |
+| 행위자 레지스트리(Notion) | `~/.cache/dart-risk-mcp/known_actors_notion.json` | 24시간 |
+| 행위자 레지스트리(주입 캐시) | `known_actors.set_registry_cache()` 시임 — SE가 Supabase를 주입. 미주입이 기본값이라 MCP·CLI는 파일 캐시만 쓴다 | 24시간 |
 
 > 워치리스트는 캐시가 아니라 사용자 자산이라 `~/.cache`가 아닌 `~/.config`에 영속 저장합니다. `core/watchlist.py`의 `add_person`/`remove_person`/`get_person_companies`/`list_persons`/`load_watchlist`/`save_watchlist`가 관리합니다.
 

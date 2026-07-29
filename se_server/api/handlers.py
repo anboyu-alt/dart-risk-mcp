@@ -8,11 +8,16 @@ Vercel 어댑터가 변환을 담당한다.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from dart_risk_mcp.core.dart_client import fetch_disclosure_full, resolve_corp
-from dart_risk_mcp.core.known_actors import actor_status, lookup_actors_by_company
+from dart_risk_mcp.core.known_actors import (
+    actor_status,
+    load_known_actors_with_source,
+    lookup_actors_by_company,
+)
 from se_server.api.auth import AuthError, extract_bearer
 from se_server.api.router import match
 from se_server.api.types import Request, Response
@@ -287,18 +292,56 @@ def _query(request: Request, name: str) -> str:
     return values[0].strip() if values else ""
 
 
+def _registry_opted_in() -> bool:
+    """Notion 레지스트리 opt-in 여부(NOTION_TOKEN + DB_KNOWN_ACTORS 둘 다 설정).
+
+    dart_risk_mcp.core.known_actors._notion_env()과 판정 기준이 같다(그
+    함수는 private이라 여기서 같은 두 env var를 직접 본다 — SE가 보는
+    유일한 opt-in 신호이고 core의 opt-in 계약이라 바뀔 일이 거의 없다).
+
+    "레지스트리를 못 가져왔다"와 "이 회사에 등재 인물이 없다"를 구분할 때
+    core가 알려주는 출처(`load_known_actors_with_source`)와 함께 보는 값이다
+    (_actors 참고 — opt-in + 출처 bundled = 조회 실패).
+    DART_KNOWN_ACTORS_PATH 로컬 오버라이드
+    경로는 다루지 않는다 — Vercel은 파일시스템이 비영속이라 SE 운영에
+    쓰이지 않는다(개발자 로컬 전용 경로).
+    """
+    return bool(os.environ.get("NOTION_TOKEN")) and bool(os.environ.get("DB_KNOWN_ACTORS"))
+
+
 def _actors(request: Request, deps: Deps) -> Response:
     """회사에 등장한 공개기록 행위자.
 
     실명을 내보내므로 status와 면책을 **항상** 동반한다. 판정·점수는 없다.
     레지스트리는 opt-in이라 미설정 시 빈 목록이 정상이다(500이 아니다).
+
+    "없음"과 "못 가져옴"을 구분한다(SE-5c Task 2). 레지스트리 로딩은 캐시·
+    Notion이 둘 다 실패해도 예외를 던지지 않고 동봉 빈 스켈레톤으로 조용히
+    graceful-fallback한다(core 원칙) — 그래서 예외를 잡는 것만으로는 "이
+    회사에 인물이 없다"와 "레지스트리 전체를 못 가져왔다"를 구분할 수 없다.
+    둘 다 "성공했지만 텅 빈 결과"로 보인다.
+
+    구분 기준은 **출처**다(`load_known_actors_with_source`). opt-in인데
+    출처가 `bundled`(= 동봉 빈 스켈레톤으로 떨어졌다)면 조회 실패다.
+    "인물이 0명이면 실패"라는 예전 추론은 부트스트랩 직후나 should_store
+    필터가 전부 걸러낸 **진짜로 빈 레지스트리**를 실패로 오판했다
+    (SE-5c 최종 리뷰 Finding 1b).
     """
     company = _query(request, "company")
     if not company:
         return Response.error(400, "company 파라미터가 필요합니다")
 
     try:
-        found = lookup_actors_by_company(company) or []
+        # 레지스트리는 요청당 **한 번만** 로드한다. 예전에는 건강 확인용으로
+        # 한 번, lookup_actors_by_company 안에서 또 한 번 로드했는데, 주입
+        # 캐시 적중 경로는 파일 캐시를 쓰지 않으므로(known_actors 참고)
+        # 두 번째 호출도 실제 Supabase 왕복이었다 — Vercel에는 영속
+        # $HOME이 없어 매 요청이 캐시 지연을 두 배로 물었다
+        # (SE-5c 최종 리뷰 Finding 1a). 로드한 레지스트리를 그대로 넘긴다.
+        registry, source = load_known_actors_with_source()
+        if source == "bundled" and _registry_opted_in():
+            return Response.error(502, "레지스트리를 조회하지 못했습니다")
+        found = lookup_actors_by_company(company, registry=registry) or []
     except Exception:
         return Response.error(502, "레지스트리를 조회하지 못했습니다")
 
@@ -335,13 +378,26 @@ def _config(deps: Deps) -> Response:
 
 def build_deps() -> Deps:
     """환경변수에서 의존성을 조립한다. Vercel 어댑터가 요청마다 호출한다."""
+    from se_server import registry_cache
     from se_server.api.auth import SupabaseAuth
     from se_server.cache import SupabaseCache
     from se_server.config import SEConfig
-    from se_server.http_cache import install
+    from se_server.http_cache import install as install_http_cache
     from se_server.jobs.supabase_store import SupabaseJobStore
 
     config = SEConfig.from_env()
+    cache_backend = SupabaseCache(config)
     # DART 응답 캐시를 core 시임에 주입한다(SE-1).
-    install(SupabaseCache(config))
+    install_http_cache(cache_backend)
+    # 행위자 레지스트리 캐시도 같은 Supabase 백엔드(se_cache 테이블)에
+    # 고정 키 하나로 얹는다(SE-5c) — 신규 벤더·신규 자격증명 없이 기존
+    # 배선을 재사용한다(근거: se_server/registry_cache.py 모듈 docstring).
+    # 레지스트리는 opt-in 기능이고 이 캐시는 순수 성능 최적화이므로,
+    # 설치 자체가 실패해도(지금은 SupabaseCache 생성자·registry_cache.install
+    # 둘 다 예외를 던지지 않지만 방어적으로) SE 전체(작업 생성·조회 등
+    # 캐시와 무관한 기능)가 함께 죽으면 안 된다.
+    try:
+        registry_cache.install(cache_backend)
+    except Exception:
+        pass
     return Deps(store=SupabaseJobStore(config), auth=SupabaseAuth(config), config=config)

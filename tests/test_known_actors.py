@@ -969,6 +969,421 @@ class TestKnownActors(unittest.TestCase):
         data = load_known_actors()
         self.assertNotIn(self._NH_INSTITUTION, data["actors"])
 
+    # ── SE-5c Task 1: 주입 레지스트리 캐시 시임 ─────────────────────────
+    # dart_client.py의 _http_cache/set_http_cache/get_http_cache를 그대로
+    # 본뜬 패턴. se_server가 Notion 직전에 캐시(예: Supabase)를 주입한다.
+    #
+    # 저장 시점 결정 — **필터(_filter_institutions/should_store) 적용 전**
+    # 데이터를 캐시한다. 이유:
+    #   1) 기존 파일 캐시(_CACHE_FILE)가 이미 필터 전(raw) 데이터를 저장하고
+    #      있다 — 주입 캐시가 필터 후를 저장하면 두 캐시의 저장 정책이
+    #      갈라져 "같은 자리에서 캐시 하나 더"라는 설계 취지가 깨진다.
+    #   2) load_known_actors()는 호출마다 _filter_institutions를 다시
+    #      적용하는 구조다. 그 비용은 최대 1,270개 dict 항목을 순회하는
+    #      순수 in-memory 연산이라 Notion 15회 왕복(15초)에 비해 무시할
+    #      수 있다.
+    #   3) 반대로 필터 후를 캐시하면 should_store 규칙이 바뀌어도 캐시가
+    #      최대 24시간(_CACHE_TTL) 동안 옛 규칙의 결과를 그대로 물고 있게
+    #      된다 — 필터 규칙 변경은 배포 즉시 반영돼야 한다.
+
+    class _FakeRegistryCache:
+        """get_json/put_json 두 메서드만 요구하는 최소 캐시 더블."""
+
+        def __init__(self, preload=None, get_exc=None, put_exc=None):
+            self.preload = preload
+            self.get_exc = get_exc
+            self.put_exc = put_exc
+            self.gets = []
+            self.puts = []
+
+        def get_json(self, key):
+            self.gets.append(key)
+            if self.get_exc:
+                raise self.get_exc
+            return self.preload
+
+        def put_json(self, key, value, ttl_seconds):
+            self.puts.append((key, value, ttl_seconds))
+            if self.put_exc:
+                raise self.put_exc
+
+    def _notion_success_resp(self, name, status="verified"):
+        from unittest.mock import MagicMock
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {
+            "results": [self._notion_page(name, status=status)],
+            "has_more": False,
+        }
+        return resp
+
+    def test_registry_cache_default_is_none(self):
+        from dart_risk_mcp.core.known_actors import get_registry_cache
+        self.assertIsNone(get_registry_cache())
+
+    def test_no_cache_injected_behaves_like_before(self):
+        # 검증 1: 캐시 미주입 시 지금과 동일 — Notion을 정상 호출한다
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch as _p
+        from dart_risk_mcp.core import known_actors as ka
+        self._env.stop()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                cache_file = Path(tmp) / "notion.json"
+                resp = self._notion_success_resp("홍길동")
+                with _p("dart_risk_mcp.core.known_actors._CACHE_FILE", cache_file), \
+                     _p("dart_risk_mcp.core.known_actors.requests.post",
+                        return_value=resp) as post, \
+                     _p.dict("os.environ", {"NOTION_TOKEN": "t", "DB_KNOWN_ACTORS": "db"}):
+                    os.environ.pop("DART_KNOWN_ACTORS_PATH", None)
+                    self.assertIsNone(ka.get_registry_cache())
+                    data = ka.load_known_actors()
+                post.assert_called_once()
+                self.assertIn("홍길동", data["actors"])
+        finally:
+            self._env.start()
+
+    def test_cache_hit_skips_notion(self):
+        # 검증 2: 캐시에 유효한 레지스트리가 있으면 Notion을 한 번도 부르지 않는다
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch as _p
+        from dart_risk_mcp.core import known_actors as ka
+        preload = {"version": 1, "actors": {
+            "홍길동": [{"source": "s", "evidence": "e", "status": "verified"}]}}
+        cache = self._FakeRegistryCache(preload=preload)
+        self._env.stop()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                cache_file = Path(tmp) / "notion.json"  # 미존재 → 신선 파일캐시 없음
+                with _p("dart_risk_mcp.core.known_actors._CACHE_FILE", cache_file), \
+                     _p("dart_risk_mcp.core.known_actors.requests.post") as post, \
+                     _p.dict("os.environ", {"NOTION_TOKEN": "t", "DB_KNOWN_ACTORS": "db"}):
+                    os.environ.pop("DART_KNOWN_ACTORS_PATH", None)
+                    ka.set_registry_cache(cache)
+                    try:
+                        data = ka.load_known_actors()
+                    finally:
+                        ka.set_registry_cache(None)
+                post.assert_not_called()
+                self.assertIn("홍길동", data["actors"])
+        finally:
+            self._env.start()
+
+    def test_cache_miss_calls_notion_and_stores_pre_filter_data(self):
+        # 검증 3: 캐시가 비어 있으면 Notion을 부르고, 그 결과를 캐시에 쓴다
+        # (필터 적용 전 원본을 쓴다 — 위 저장 시점 결정 참고)
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch as _p
+        from dart_risk_mcp.core import known_actors as ka
+        cache = self._FakeRegistryCache(preload=None)
+        resp = self._notion_success_resp("홍길동")
+        self._env.stop()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                cache_file = Path(tmp) / "notion.json"
+                with _p("dart_risk_mcp.core.known_actors._CACHE_FILE", cache_file), \
+                     _p("dart_risk_mcp.core.known_actors.requests.post",
+                        return_value=resp) as post, \
+                     _p.dict("os.environ", {"NOTION_TOKEN": "t", "DB_KNOWN_ACTORS": "db"}):
+                    os.environ.pop("DART_KNOWN_ACTORS_PATH", None)
+                    ka.set_registry_cache(cache)
+                    try:
+                        data = ka.load_known_actors()
+                    finally:
+                        ka.set_registry_cache(None)
+                post.assert_called_once()
+                self.assertEqual(len(cache.puts), 1)
+                key, value, ttl = cache.puts[0]
+                self.assertEqual(ttl, ka._CACHE_TTL)
+                self.assertIn("홍길동", value["actors"])
+                self.assertIn("홍길동", data["actors"])
+        finally:
+            self._env.start()
+
+    def test_cache_broken_shape_falls_back_to_notion(self):
+        # 검증 4: 캐시가 깨진 형태를 돌려주면 무시하고 Notion으로 간다
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch as _p
+        from dart_risk_mcp.core import known_actors as ka
+        cache = self._FakeRegistryCache(preload={"actors": "문자열"})
+        resp = self._notion_success_resp("홍길동")
+        self._env.stop()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                cache_file = Path(tmp) / "notion.json"
+                with _p("dart_risk_mcp.core.known_actors._CACHE_FILE", cache_file), \
+                     _p("dart_risk_mcp.core.known_actors.requests.post",
+                        return_value=resp) as post, \
+                     _p.dict("os.environ", {"NOTION_TOKEN": "t", "DB_KNOWN_ACTORS": "db"}):
+                    os.environ.pop("DART_KNOWN_ACTORS_PATH", None)
+                    ka.set_registry_cache(cache)
+                    try:
+                        data = ka.load_known_actors()
+                    finally:
+                        ka.set_registry_cache(None)
+                post.assert_called_once()
+                self.assertIn("홍길동", data["actors"])
+        finally:
+            self._env.start()
+
+    def test_cache_get_exception_falls_back_to_notion(self):
+        # 검증 5: get_json이 예외를 던져도 예외가 밖으로 안 나가고 Notion으로 폴백
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch as _p
+        from dart_risk_mcp.core import known_actors as ka
+        cache = self._FakeRegistryCache(get_exc=RuntimeError("cache down"))
+        resp = self._notion_success_resp("홍길동")
+        self._env.stop()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                cache_file = Path(tmp) / "notion.json"
+                with _p("dart_risk_mcp.core.known_actors._CACHE_FILE", cache_file), \
+                     _p("dart_risk_mcp.core.known_actors.requests.post",
+                        return_value=resp) as post, \
+                     _p.dict("os.environ", {"NOTION_TOKEN": "t", "DB_KNOWN_ACTORS": "db"}):
+                    os.environ.pop("DART_KNOWN_ACTORS_PATH", None)
+                    ka.set_registry_cache(cache)
+                    try:
+                        data = ka.load_known_actors()
+                    finally:
+                        ka.set_registry_cache(None)
+                post.assert_called_once()
+                self.assertIn("홍길동", data["actors"])
+        finally:
+            self._env.start()
+
+    def test_cache_put_exception_load_still_succeeds(self):
+        # 검증 6: put_json이 예외를 던져도 로드는 성공한다
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch as _p
+        from dart_risk_mcp.core import known_actors as ka
+        cache = self._FakeRegistryCache(preload=None, put_exc=RuntimeError("cache down"))
+        resp = self._notion_success_resp("홍길동")
+        self._env.stop()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                cache_file = Path(tmp) / "notion.json"
+                with _p("dart_risk_mcp.core.known_actors._CACHE_FILE", cache_file), \
+                     _p("dart_risk_mcp.core.known_actors.requests.post",
+                        return_value=resp), \
+                     _p.dict("os.environ", {"NOTION_TOKEN": "t", "DB_KNOWN_ACTORS": "db"}):
+                    os.environ.pop("DART_KNOWN_ACTORS_PATH", None)
+                    ka.set_registry_cache(cache)
+                    try:
+                        data = ka.load_known_actors()  # 예외가 밖으로 나가면 안 된다
+                    finally:
+                        ka.set_registry_cache(None)
+                self.assertIn("홍길동", data["actors"])
+        finally:
+            self._env.start()
+
+    def test_override_path_skips_injected_cache(self):
+        # 검증 7: DART_KNOWN_ACTORS_PATH가 설정돼 있으면 캐시를 보지도 않는다
+        from dart_risk_mcp.core import known_actors as ka
+        self._write({"version": 1, "actors": {"X": [{"source": "s", "evidence": "e"}]}})
+        cache = self._FakeRegistryCache(preload={"version": 1, "actors": {}})
+        ka.set_registry_cache(cache)
+        try:
+            data = ka.load_known_actors()
+        finally:
+            ka.set_registry_cache(None)
+        self.assertEqual(cache.gets, [])
+        self.assertEqual(cache.puts, [])
+        self.assertIn("X", data["actors"])
+
+    def test_override_missing_file_does_not_fall_through_to_cache(self):
+        """검증 7-b: 오버라이드 파일이 **없어도** 캐시로 흘러내리지 않는다.
+
+        SE-5c 최종 리뷰 Finding 4 — 위 test_override_path_skips_injected_cache는
+        오버라이드 파일이 존재하는 행복 경로만 고정한다. 파일이 없을 때
+        `return`을 지우고 아래 캐시 경로로 흘려보내는 변형이 전체 스위트를
+        통과해 버렸다. 오버라이드는 "이 JSON만 본다"는 명시적 선언이므로,
+        비어 있는 결과가 나오더라도 다른 출처의 데이터가 섞이면 안 된다.
+        """
+        import os
+        from pathlib import Path
+        from dart_risk_mcp.core import known_actors as ka
+        missing = Path(self._tmp.name) / "does-not-exist.json"
+        self.assertFalse(missing.exists())
+        os.environ["DART_KNOWN_ACTORS_PATH"] = str(missing)
+        cache = self._FakeRegistryCache(preload={
+            "version": 1, "actors": {"캐시인물": [{"source": "s", "evidence": "e"}]}})
+        ka.set_registry_cache(cache)
+        try:
+            data, source = ka.load_known_actors_with_source()
+        finally:
+            ka.set_registry_cache(None)
+        self.assertEqual(cache.gets, [])
+        self.assertEqual(data, {"version": 1, "actors": {}})
+        self.assertEqual(source, "override")
+
+    def test_override_malformed_file_does_not_fall_through_to_cache(self):
+        """검증 7-c: 오버라이드 JSON이 깨져 있어도 캐시로 흘러내리지 않는다."""
+        from pathlib import Path
+        from dart_risk_mcp.core import known_actors as ka
+        Path(self._path).write_text("{ not json ", encoding="utf-8")
+        cache = self._FakeRegistryCache(preload={
+            "version": 1, "actors": {"캐시인물": [{"source": "s", "evidence": "e"}]}})
+        ka.set_registry_cache(cache)
+        try:
+            data, source = ka.load_known_actors_with_source()
+        finally:
+            ka.set_registry_cache(None)
+        self.assertEqual(cache.gets, [])
+        self.assertEqual(data, {"version": 1, "actors": {}})
+        self.assertEqual(source, "override")
+
+    def test_fresh_file_cache_wins_over_injected_cache(self):
+        """검증 9: 신선한 파일 캐시가 있으면 주입 캐시를 **읽지도 않는다**.
+
+        SE-5c 최종 리뷰 Finding 4 — 모듈 문서가 선언한 우선순위(파일 캐시 >
+        주입 캐시)를 고정하는 테스트가 하나도 없었다. 두 블록의 순서를
+        맞바꾸는 변형이 전체 스위트를 통과했다. 로컬 파일 읽기가 네트워크
+        왕복보다 싸므로 이 순서는 의도된 것이다.
+        """
+        import json as _json
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch as _p
+        from dart_risk_mcp.core import known_actors as ka
+        file_data = {"version": 1, "actors": {
+            "파일인물": [{"source": "s", "evidence": "e", "status": "verified"}]}}
+        cache = self._FakeRegistryCache(preload={"version": 1, "actors": {
+            "캐시인물": [{"source": "s", "evidence": "e", "status": "verified"}]}})
+        self._env.stop()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                cache_file = Path(tmp) / "notion.json"
+                cache_file.write_text(_json.dumps(file_data, ensure_ascii=False),
+                                      encoding="utf-8")  # 방금 썼으니 신선하다
+                with _p("dart_risk_mcp.core.known_actors._CACHE_FILE", cache_file), \
+                     _p("dart_risk_mcp.core.known_actors.requests.post") as post, \
+                     _p.dict("os.environ", {"NOTION_TOKEN": "t", "DB_KNOWN_ACTORS": "db"}):
+                    os.environ.pop("DART_KNOWN_ACTORS_PATH", None)
+                    ka.set_registry_cache(cache)
+                    try:
+                        data, source = ka.load_known_actors_with_source()
+                    finally:
+                        ka.set_registry_cache(None)
+                post.assert_not_called()
+                self.assertEqual(cache.gets, [], "파일 캐시가 있으면 주입 캐시를 읽지 않는다")
+                self.assertIn("파일인물", data["actors"])
+                self.assertNotIn("캐시인물", data["actors"])
+                self.assertEqual(source, "file")
+        finally:
+            self._env.start()
+
+    def test_load_source_labels_each_path(self):
+        """검증 10: 출처 라벨이 경로별로 정확하다(SE-5c 최종 리뷰 Finding 1b).
+
+        SE 핸들러가 "opt-in인데 인물 0명"이라는 **추론** 대신 이 라벨을
+        보고 실패를 판정한다 — 진짜로 비어 있는 레지스트리(부트스트랩)와
+        조회 실패를 구분하는 유일한 근거다.
+        """
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch as _p
+        from dart_risk_mcp.core import known_actors as ka
+        opt_in = {"NOTION_TOKEN": "t", "DB_KNOWN_ACTORS": "db"}
+        self._env.stop()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                # 하위 케이스마다 별도 파일 경로를 쓴다 — Notion 성공 경로가
+                # 파일 캐시를 채우므로 같은 경로를 재사용하면 다음 케이스가
+                # 그 파일을 맞아 "file"이 나온다.
+                def cache_file_for(n):
+                    return Path(tmp) / f"notion{n}.json"  # 미존재 → 파일 캐시 없음
+
+                # (1) 주입 캐시 적중 → "cache"
+                cache_file = cache_file_for(1)
+                cache = self._FakeRegistryCache(preload={"version": 1, "actors": {}})
+                with _p("dart_risk_mcp.core.known_actors._CACHE_FILE", cache_file), \
+                     _p.dict("os.environ", opt_in):
+                    os.environ.pop("DART_KNOWN_ACTORS_PATH", None)
+                    ka.set_registry_cache(cache)
+                    try:
+                        self.assertEqual(ka.load_known_actors_with_source()[1], "cache")
+                    finally:
+                        ka.set_registry_cache(None)
+
+                # (2) Notion 조회 성공(인물 0명이어도) → "notion", bundled 아님
+                cache_file = cache_file_for(2)
+                empty_resp = self._notion_success_resp("홍길동")
+                empty_resp.json.return_value = {"results": [], "has_more": False}
+                with _p("dart_risk_mcp.core.known_actors._CACHE_FILE", cache_file), \
+                     _p("dart_risk_mcp.core.known_actors.requests.post",
+                        return_value=empty_resp), \
+                     _p.dict("os.environ", opt_in):
+                    os.environ.pop("DART_KNOWN_ACTORS_PATH", None)
+                    data, source = ka.load_known_actors_with_source()
+                self.assertEqual(source, "notion")
+                self.assertEqual(data["actors"], {})
+
+                # (3) Notion 실패 → "bundled" (opt-in인데 bundled = 조회 실패)
+                cache_file = cache_file_for(3)
+                fail_resp = self._notion_success_resp("홍길동")
+                fail_resp.status_code = 500
+                with _p("dart_risk_mcp.core.known_actors._CACHE_FILE", cache_file), \
+                     _p("dart_risk_mcp.core.known_actors.requests.post",
+                        return_value=fail_resp), \
+                     _p.dict("os.environ", opt_in):
+                    os.environ.pop("DART_KNOWN_ACTORS_PATH", None)
+                    self.assertEqual(ka.load_known_actors_with_source()[1], "bundled")
+
+                # (4) opt-in 미설정 → "bundled" (정상 상태)
+                cache_file = cache_file_for(4)
+                with _p("dart_risk_mcp.core.known_actors._CACHE_FILE", cache_file), \
+                     _p.dict("os.environ", {}, clear=True):
+                    self.assertEqual(ka.load_known_actors_with_source()[1], "bundled")
+        finally:
+            self._env.start()
+
+    def test_registry_cache_key_has_no_credentials(self):
+        # 검증 8: 캐시 키에 NOTION_TOKEN 값이 들어가지 않는다 (고정 문자열 키)
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch as _p
+        from dart_risk_mcp.core import known_actors as ka
+        cache = self._FakeRegistryCache(preload=None)
+        resp = self._notion_success_resp("홍길동")
+        secret_token = "secret-notion-token-xyz"
+        self._env.stop()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                cache_file = Path(tmp) / "notion.json"
+                with _p("dart_risk_mcp.core.known_actors._CACHE_FILE", cache_file), \
+                     _p("dart_risk_mcp.core.known_actors.requests.post",
+                        return_value=resp), \
+                     _p.dict("os.environ", {"NOTION_TOKEN": secret_token,
+                                            "DB_KNOWN_ACTORS": "db"}):
+                    os.environ.pop("DART_KNOWN_ACTORS_PATH", None)
+                    ka.set_registry_cache(cache)
+                    try:
+                        ka.load_known_actors()
+                    finally:
+                        ka.set_registry_cache(None)
+                seen_keys = cache.gets + [p[0] for p in cache.puts]
+                self.assertTrue(seen_keys)
+                for key in seen_keys:
+                    self.assertNotIn(secret_token, str(key))
+        finally:
+            self._env.start()
+
 
 if __name__ == "__main__":
     unittest.main()

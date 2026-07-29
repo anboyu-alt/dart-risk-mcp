@@ -56,6 +56,7 @@ from .watchlist import (
 )
 from .known_actors import (
     load_known_actors,
+    load_known_actors_with_source,
     lookup_actor,
     lookup_actors_by_company,
     actor_status,
@@ -150,6 +151,7 @@ __all__ = [
     "get_person_companies",
     "list_persons",
     "load_known_actors",
+    "load_known_actors_with_source",
     "lookup_actor",
     "lookup_actors_by_company",
     "actor_status",

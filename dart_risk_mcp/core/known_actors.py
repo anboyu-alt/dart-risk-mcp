@@ -4,7 +4,8 @@
 원본이며, 접근 권한(NOTION_TOKEN + DB_KNOWN_ACTORS)을 부여받은 사용자만
 opt-in으로 조회한다. 동봉 JSON은 빈 스켈레톤이다.
 
-로드 우선순위: DART_KNOWN_ACTORS_PATH(로컬 JSON) > Notion(24h 캐시) > 동봉.
+로드 우선순위: DART_KNOWN_ACTORS_PATH(로컬 JSON) > 신선한 파일 캐시(24h) >
+주입 캐시(se_server 등이 set_registry_cache로 주입, 선택) > Notion > 동봉.
 """
 
 # PEP 604(`X | None`) 표기를 쓰므로 이 import가 없으면 Python 3.10 미만에서
@@ -13,6 +14,7 @@ opt-in으로 조회한다. 동봉 JSON은 빈 스켈레톤이다.
 from __future__ import annotations
 import html
 import json
+import logging
 import os
 import re
 import time
@@ -21,8 +23,39 @@ from pathlib import Path
 
 import requests
 
+log = logging.getLogger(__name__)
+
 _CACHE_FILE = Path.home() / ".cache" / "dart-risk-mcp" / "known_actors_notion.json"
 _CACHE_TTL = 24 * 3600
+
+
+# ── 선택적 레지스트리 캐시 시임 ───────────────────────────────
+# dart_client.py:48~59의 _http_cache/set_http_cache/get_http_cache와 동일한
+# 패턴. se_server 등 외부 소비자가 Notion 레지스트리 캐시(예: Supabase)를
+# 주입하는 유일한 지점이다. 기본값 None이면 캐시 없이 지금과 완전히 동일하게
+# 동작한다(MCP 서버·CLI는 이 시임을 쓰지 않는다).
+#
+# 주입 객체는 아래 두 메서드만 제공하면 된다(CacheBackend 전체가 아니다 —
+# core가 se_server 타입을 알 필요가 없다):
+#   get_json(key) -> dict | None
+#   put_json(key, value, ttl_seconds) -> None
+#
+# 캐시 키는 이 모듈이 고정 문자열 하나로 계산한다(레지스트리는 전역 단일
+# 자산이라 회사·인물별로 나눌 필요가 없다). NOTION_TOKEN 등 자격증명은
+# 키에도 값에도 들어가지 않는다.
+_registry_cache = None
+_REGISTRY_CACHE_KEY = "known_actors_registry"
+
+
+def set_registry_cache(cache) -> None:
+    """레지스트리 캐시를 주입한다. None이면 캐시를 사용하지 않는다(기본값)."""
+    global _registry_cache
+    _registry_cache = cache
+
+
+def get_registry_cache():
+    """현재 주입된 레지스트리 캐시를 반환한다 (미설정 시 None)."""
+    return _registry_cache
 
 _NOTION_BASE = "https://api.notion.com/v1"
 _NOTION_VERSION = "2022-06-28"
@@ -626,33 +659,68 @@ def _filter_institutions(data: dict) -> dict:
     return {**data, "actors": filtered}
 
 
-def _load_raw() -> dict:
-    """레지스트리 원본 로드(필터 적용 전). 우선순위: 환경변수 경로 > 신선한
-    Notion 캐시 > Notion > 동봉.
+# 레지스트리가 "어디서 왔는지"를 나타내는 값. 호출자가 "못 가져왔다"와
+# "가져왔는데 비어 있다"를 **추론이 아니라 사실로** 구분하기 위한 것이다
+# (SE-5c 최종 리뷰 Finding 1b). 전에는 SE 핸들러가 "opt-in인데 인물이 0명"
+# 이면 실패로 간주했는데, 그 추론은 부트스트랩 직후나 should_store 필터가
+# 전부 걸러낸 진짜 빈 레지스트리를 실패로 오판해 502를 낸다.
+#
+#   override : DART_KNOWN_ACTORS_PATH 로컬 JSON 경로가 결과를 결정했다
+#              (파일이 없거나 깨져 빈 결과가 된 경우도 포함 — 그 경우에도
+#              오버라이드가 다른 경로로 넘어가지 않는다는 사실은 같다)
+#   file     : 신선한 파일 캐시(24h)
+#   cache    : 주입 캐시(se_server의 Supabase 등)
+#   notion   : Notion 원본 조회 성공
+#   bundled  : 동봉 빈 스켈레톤 — opt-in이 아니거나, opt-in인데 위 경로가
+#              전부 실패한 경우. **opt-in + bundled = 조회 실패**다.
+REGISTRY_SOURCES = ("override", "file", "cache", "notion", "bundled")
+
+
+def _load_raw_with_source() -> tuple[dict, str]:
+    """레지스트리 원본 로드(필터 적용 전) + 출처. 우선순위: 환경변수 경로 >
+    신선한 파일 캐시 > 주입 캐시 > Notion > 동봉.
 
     Notion 실패 시 동봉 데이터로 graceful fallback(예외 비전파).
     """
     override = os.environ.get("DART_KNOWN_ACTORS_PATH")
     if override:
+        # 오버라이드가 설정돼 있으면 그것이 **결론**이다 — 파일이 없거나
+        # 깨져 있어도 파일 캐시·주입 캐시·Notion으로 흘러내리지 않는다.
+        # 개발자가 "이 JSON만 본다"고 명시한 경로이므로, 조용히 다른
+        # 출처의 데이터를 섞으면 로컬 재현이 거짓이 된다.
         try:
             with open(override, encoding="utf-8") as f:
                 data = json.load(f)
-            return data if _valid(data) else {"version": 1, "actors": {}}
+            return (data if _valid(data) else {"version": 1, "actors": {}}), "override"
         except Exception:
-            return {"version": 1, "actors": {}}
+            return {"version": 1, "actors": {}}, "override"
 
     # Notion 미설정이면 캐시·조회 없이 동봉 데이터로 (opt-in)
     if not all(_notion_env()):
-        return _bundled()
+        return _bundled(), "bundled"
 
-    # 24h 신선 캐시
+    # 24h 신선 캐시 — 주입 캐시보다 **먼저** 본다(로컬 파일이 네트워크
+    # 왕복보다 싸다). 이 순서는 테스트로 고정돼 있다.
     try:
         if _CACHE_FILE.exists() and (time.time() - _CACHE_FILE.stat().st_mtime) < _CACHE_TTL:
             data = json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
             if _valid(data):
-                return data
+                return data, "file"
     except Exception:
         pass
+
+    # 주입 캐시(예: se_server의 Supabase) — 파일시스템이 휘발성인 서버리스
+    # 환경(Vercel)에서 위 파일 캐시가 매 콜드 인보케이션마다 미스가 나
+    # Notion 15회 왕복(15초)을 매번 무는 문제의 시임. 저장은 이 함수 아래
+    # (필터 적용 전 원본) — 이유는 모듈 상단 주석·테스트 참고.
+    # get_json 실패(예외·깨진 형태)는 미스로 간주하고 Notion으로 진행한다.
+    if _registry_cache is not None:
+        try:
+            cached = _registry_cache.get_json(_REGISTRY_CACHE_KEY)
+            if _valid(cached):
+                return cached, "cache"
+        except Exception:
+            log.warning("레지스트리 캐시 조회 실패, Notion으로 폴백", exc_info=True)
 
     data = fetch_registry_from_notion()
     if data is not None:
@@ -661,9 +729,33 @@ def _load_raw() -> dict:
             _CACHE_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         except Exception:
             pass
-        return data
+        if _registry_cache is not None:
+            try:
+                _registry_cache.put_json(_REGISTRY_CACHE_KEY, data, _CACHE_TTL)
+            except Exception:
+                log.warning("레지스트리 캐시 저장 실패, 로드는 정상 반환", exc_info=True)
+        return data, "notion"
 
-    return _bundled()
+    return _bundled(), "bundled"
+
+
+def _load_raw() -> dict:
+    """`_load_raw_with_source()`의 데이터만 반환(출처 없이 쓰는 기존 호출자용)."""
+    return _load_raw_with_source()[0]
+
+
+def load_known_actors_with_source() -> tuple[dict, str]:
+    """`load_known_actors()` + 그 레지스트리가 **어디서 왔는지**(REGISTRY_SOURCES).
+
+    호출 시점에 로드를 수행하고 그 로드의 출처를 함께 돌려주므로, "아직
+    아무것도 로드되지 않았을 때 호출하면 무엇이 나오나"라는 모호함이 없다
+    (전역 상태에 마지막 출처를 기록하는 방식은 그 함정이 있어 택하지 않았다).
+
+    `load_known_actors()`와 완전히 같은 데이터를 반환한다 — MCP·CLI 경로의
+    동작은 한 글자도 달라지지 않는다.
+    """
+    data, source = _load_raw_with_source()
+    return _filter_institutions(data), source
 
 
 def load_known_actors() -> dict:
@@ -673,7 +765,7 @@ def load_known_actors() -> dict:
     사본에만 적용된다. `lookup_actor`·`lookup_actors_by_company`가 모두 이
     함수를 거치므로 두 경로 모두 자동으로 필터가 적용된다.
     """
-    return _filter_institutions(_load_raw())
+    return load_known_actors_with_source()[0]
 
 
 def _record_fingerprint(rec: dict) -> str:
@@ -746,18 +838,26 @@ def lookup_actor(name: str) -> list[dict]:
     return out
 
 
-def lookup_actors_by_company(company_name: str) -> list[tuple[str, dict]]:
+def lookup_actors_by_company(company_name: str,
+                             registry: dict | None = None) -> list[tuple[str, dict]]:
     """회사명 역방향 조회 → [(인물명, 기록)] (없으면 []).
 
     각 기록의 companies(레지스트리 '관련기업' 태그)와 정규화 + 폴딩 변형
     비교한다 — 태그가 '(주)베이트리'일 때 '주식회사 베이트리' 조회도 매칭.
     반환은 인물명 오름차순 — 렌더 결정성(테스트 안정성) 보장.
+
+    `registry`를 주면 그 레지스트리(이미 `load_known_actors_with_source()`로
+    로드·필터된 것)를 쓰고 다시 로드하지 않는다. 서버리스에서 같은 요청이
+    레지스트리를 두 번 로드하면 주입 캐시를 두 번 왕복하기 때문이다
+    (SE-5c 최종 리뷰 Finding 1a). 생략하면 지금까지와 동일하게 직접 로드한다.
     """
     if not company_name or not company_name.strip():
         return []
     want = normalize_name(company_name)
     wf = set(fold_variants(want))
-    actors = load_known_actors().get("actors", {})
+    if registry is None:
+        registry = load_known_actors()
+    actors = (registry or {}).get("actors", {}) or {}
     hits: list[tuple[str, dict]] = []
     for name in sorted(actors.keys()):
         for rec in actors[name]:
