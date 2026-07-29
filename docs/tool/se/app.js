@@ -197,6 +197,30 @@ const LABELS = Object.assign(Object.create(null), {
   debt_kind: "채무 종류",
   opinions: "감사의견", auditor_changes: "감사인 교체",
   independence_warnings: "감사인 독립성 경고",
+  // ── 감사의견 이력(audit_history.opinions 레코드, SE-8 Task 7) — 실사용자
+  // (SG, corp_code=00963976) 지적: opinion·auditor·tenure_years가 영문
+  // 필드명 그대로 노출됐다. 단위 모호성이 없는 필드라 정상 라벨링한다
+  // (dart_client.fetch_audit_opinion_history docstring 그대로:
+  // {year, opinion, auditor, tenure_years, audit_fee_okwon,
+  // non_audit_fee_okwon}). audit_fee_okwon·non_audit_fee_okwon은 여기
+  // 없다 — CLAUDE.md 269행의 기존 결정("단위 천원/백만원 혼용으로
+  // v0.8.0에서 생략")을 그대로 따라 렌더 경로에서 뺀다(아래
+  // sectionBlocks의 audit_history.opinions 특수 처리 참고). 새 단위
+  // 라벨을 짓지 않는다 — 그 자체가 v0.8.0이 피하려던 함정이다.
+  //
+  // opinion을 "감사의견"으로 쓰지 못한다 — 그 값은 이미 위 opinions(리스트
+  // 키, 이 레코드 배열 전체를 감싸는 블록 제목)가 쓰고 있어 LABELS 값
+  // 전역 유일성(test_no_label_collides_with_a_different_raw_key)과
+  // 충돌한다. 표 자체가 이미 "감사의견"이라는 제목 아래 그려지므로,
+  // 그 안에서 구분되는 "의견"을 쓴다.
+  opinion: "의견", auditor: "감사인", tenure_years: "연속 재직 연수",
+  // auditor_changes 레코드({from_year, to_year, from, to}). 라이브 검증
+  // (2026-07-30, 두산에너빌리티 00159193, lookback_years=5):
+  // {"from_year": 2024, "to_year": 2025, "from": "한영회계법인",
+  // "to": "삼정회계법인"} 1건 실측 — SG는 이 목록이 비어 있어(실측 확인)
+  // 검증하지 못했다.
+  from_year: "교체 전 연도", to_year: "교체 후 연도",
+  from: "교체 전 감사인", to: "교체 후 감사인",
   major_holders: "최대주주", bulk_holders: "5% 대량보유",
   // bulk_holders(위)의 원본 필드(dart_client.fetch_shareholder_status가
   // /majorstock.json 응답을 개명 없이 그대로 싣는다 — 위 MARK_RULES.
@@ -1299,6 +1323,35 @@ function sectionBlocks(value, depth, key) {
       if (!pt && split.totals.length === 0) {
         blocks.push({ title: label(k), table: null, records: null });
       }
+      continue;
+    }
+    // audit_history.opinions만 특수 처리한다(같은 게이트 방식 — depth 0 +
+    // 부모 key). SE-8 Task 7 — 실사용자(SG, corp_code=00963976) 지적:
+    // audit_fee_okwon(280)·non_audit_fee_okwon(220000)이 단위 설명 없는
+    // 숫자로 그대로 노출됐다. CLAUDE.md 269행의 기존 결정("DART 감사보수
+    // 절대 금액 표시는 단위 천원/백만원 혼용으로 v0.8.0에서 생략. 비중만
+    // 경고 섹션에서 제공.")을 SE에도 그대로 적용한다 — **새 단위 라벨을
+    // 짓지 않고 이 두 필드를 렌더 경로에서만 뺀다.** 비율 기반 대체
+    // (비감사용역 비중 경고)는 이미 independence_warnings로 따로 나온다.
+    //
+    // **숨기는 것은 렌더 경로뿐이다.** value[k](원본 opinions 배열과 그
+    // 안의 레코드 객체)는 건드리지 않는다 — 각 레코드를 Object.assign으로
+    // 복사한 뒤 그 복사본에서만 두 필드를 지운다. 원본을 직접
+    // delete하면 나중에 이 값을 다른 용도로 쓰려는 호출부(brief: "향후
+    // 다른 용도로 필요할 수 있다")가 이미 지워진 데이터를 받는다.
+    if (d === 0 && key === "audit_history" && k === "opinions") {
+      const arr = Array.isArray(value[k]) ? value[k] : [];
+      const records = arr.map(function (r) {
+        if (!r || typeof r !== "object" || Array.isArray(r)) return r;
+        const copy = Object.assign({}, r);
+        delete copy.audit_fee_okwon;
+        delete copy.non_audit_fee_okwon;
+        return copy;
+      });
+      const t = tableLayout(records);
+      blocks.push(t
+        ? { title: label(k), table: t, records: records }
+        : { title: label(k), table: null, records: null });
       continue;
     }
     const sub = sectionBlocks(value[k], d + 1);

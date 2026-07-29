@@ -1677,6 +1677,85 @@ class TestAggregateRowSplit(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestAuditFeeOmission(unittest.TestCase):
+    """SE-8 Task 7 — 실사용자(SG, corp_code=00963976) 지적: 감사의견 이력
+    표에 audit_fee_okwon(280)·non_audit_fee_okwon(220000) 같은 숫자가 단위
+    설명 없이 그대로 노출됐다.
+
+    CLAUDE.md 269행의 기존 결정("DART 감사보수 절대 금액 표시는 단위
+    (천원/백만원) 혼용으로 v0.8.0에서 생략. 비중(%)만 경고 섹션에서
+    제공.")을 SE 화면에도 그대로 적용한다 — **새 단위 라벨을 짓지 않고
+    두 필드를 렌더 경로에서만 뺀다.** 비율 기반 대체 표시(비감사용역 비중
+    경고)는 이미 independence_warnings로 별도 렌더된다(변경 대상 아님).
+
+    핵심은 "숨김"이지 "새 라벨"이 아니다 — 아래 값(audit_fee_okwon=
+    913579 등)은 formatValue가 AMOUNT_FIELDS에 없는 숫자를 그냥
+    String(value)로 찍으므로(app.js formatValue 참고) 콤마 없이 그대로
+    셀에 나온다. 두 필드가 AMOUNT_FIELDS에 없다는 사실 자체는
+    scan_financial_anomaly 등 다른 곳과 무관하며, 이 테스트가 요구하는
+    것은 "어떤 형태로도 렌더되지 않는다"이지 "포맷이 맞다"가 아니다.
+    """
+
+    _OPINIONS = [
+        {"year": 2025, "opinion": "적정", "auditor": "삼일회계법인",
+         "tenure_years": 2, "audit_fee_okwon": 913579, "non_audit_fee_okwon": 246813},
+        {"year": 2024, "opinion": "적정", "auditor": "삼일회계법인",
+         "tenure_years": 1, "audit_fee_okwon": 812345, "non_audit_fee_okwon": 135792},
+    ]
+
+    def _value(self):
+        return {"opinions": self._OPINIONS, "auditor_changes": [], "independence_warnings": []}
+
+    def test_fee_fields_are_absent_from_the_opinions_table(self):
+        """sectionBlocks 결과(표 열 목록 — 본문·caption·접힌 열 전부)에
+        두 필드가 없어야 한다."""
+        got = run_js(f'sectionBlocks({json.dumps(self._value(), ensure_ascii=False)}, 0, "audit_history")')
+        opinions_block = next(b for b in got if b["title"] == "감사의견")
+        table = opinions_block["table"]
+        present = (set(table["keys"]) | {c["key"] for c in table["caption"]}
+                   | set(table.get("foldedKeys", [])))
+        self.assertNotIn("audit_fee_okwon", present)
+        self.assertNotIn("non_audit_fee_okwon", present)
+        # 다른 필드까지 함께 지워지면 안 된다 — 오미션은 이 두 키 한정이다.
+        self.assertIn("opinion", present)
+        self.assertIn("auditor", present)
+
+    def test_fee_fields_never_appear_in_the_real_rendered_dom(self):
+        """소스 코드 검사(grep)가 아니라 실제 DOM 렌더로 확인한다 — 이
+        섹션 어딘가의 "나머지 키 전부 그리기" 같은 범용 폴백 경로로 값이
+        새어나갈 수 있고, sectionBlocks 단독 호출만으로는 그 경로를 잡지
+        못한다(run_render_section이 app.js+ui.js를 실제 DOM에 렌더한
+        결과를 본다)."""
+        got = run_render_section('"audit_history"', json.dumps(self._value(), ensure_ascii=False))
+        haystacks = got["cells"] + got["titles"] + got["notes"]
+        all_text = " ".join(str(x) for x in haystacks if x is not None)
+        forbidden = [
+            "audit_fee_okwon", "non_audit_fee_okwon",
+            "913579", "246813", "812345", "135792",
+            "913,579", "246,813", "812,345", "135,792",
+        ]
+        for token in forbidden:
+            self.assertNotIn(token, all_text, f"{token}가 렌더된 DOM에 남아 있습니다")
+
+    def test_omission_does_not_mutate_the_original_data(self):
+        """숨기는 것은 렌더 경로뿐이다 — 원본 opinions 레코드는 두 필드를
+        그대로 갖고 있어야 한다(브리프: 향후 다른 용도로 필요할 수 있으므로
+        원본 객체를 건드리지 않는다). sectionBlocks가 delete로 직접
+        지우는 대신 복사본을 만드는지를, 반환값이 아니라 **호출 후 원본
+        참조 자체**를 다시 읽어 확인한다."""
+        got = run_js(
+            '(function () {'
+            '  var original = ' + json.dumps(self._OPINIONS, ensure_ascii=False) + ';'
+            '  var value = {opinions: original, auditor_changes: [], independence_warnings: []};'
+            '  sectionBlocks(value, 0, "audit_history");'
+            '  return original;'
+            '})()'
+        )
+        self.assertEqual(got, self._OPINIONS,
+                          "sectionBlocks 호출이 원본 opinions 레코드를 건드렸습니다(mutate)")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestNormalizeDebtByKind(unittest.TestCase):
     """debt_balance.by_kind({회사채: {total, maturity_under_1y}, ...})는
     dart_client.fetch_debt_balance가 종류를 키로 쓰는 dict다(레코드
@@ -3291,6 +3370,47 @@ class TestLabels(unittest.TestCase):
         for key, want in cases.items():
             self.assertEqual(run_js(f'label({json.dumps(key)})'), want,
                               f"{key} 라벨이 opendart_api_guide.md §4.1과 다릅니다")
+
+    def test_audit_history_row_fields_get_korean_labels(self):
+        """SE-8 Task 7 — 실사용자(SG, corp_code=00963976) 지적: 감사의견
+        이력 표에 opinion·auditor·tenure_years가 영문 필드명 그대로 노출됐다.
+        이 세 필드는(audit_fee_okwon과 달리) 단위 모호성이 없어 정상
+        라벨링 대상이다(브리프).
+
+        opinion은 "감사의견"을 쓸 수 없다 — 그 라벨은 이미 상위 리스트 키
+        "opinions"(sectionBlocks가 이 레코드 배열 전체를 감싸는 블록
+        제목, test_empty_nested_list_still_gets_its_own_block에서 고정된
+        값)가 쓰고 있어, LABELS 값 전역 유일성을 요구하는
+        test_no_label_collides_with_a_different_raw_key와 정면으로
+        충돌한다. 표 자체가 이미 "감사의견"이라는 제목 아래 그려지므로
+        열 이름은 그 안에서 구분되는 "의견"을 쓴다.
+        """
+        cases = {
+            "opinion": "의견",
+            "auditor": "감사인",
+            "tenure_years": "연속 재직 연수",
+            "year": "연도",  # 이미 fund_usage/debt_balance가 쓰는 라벨 — 회귀 확인만.
+        }
+        for key, want in cases.items():
+            self.assertEqual(run_js(f'label({json.dumps(key)})'), want)
+
+    def test_auditor_changes_fields_get_korean_labels(self):
+        """dart_client.fetch_audit_opinion_history의 auditor_changes
+        레코드({from_year, to_year, from, to})도 같은 표 안에서 영문
+        그대로 나온다. 라이브 검증(2026-07-30, 두산에너빌리티
+        00159193, lookback_years=5): auditor_changes 1건 실측
+        — {"from_year": 2024, "to_year": 2025, "from": "한영회계법인",
+        "to": "삼정회계법인"}. SG(corp_code=00963976)는 이 목록이 비어
+        있어(실측 확인) 검증할 수 없었다 — 브리프가 요구한 대로 다른
+        회사로 재현했다."""
+        cases = {
+            "from_year": "교체 전 연도",
+            "to_year": "교체 후 연도",
+            "from": "교체 전 감사인",
+            "to": "교체 후 감사인",
+        }
+        for key, want in cases.items():
+            self.assertEqual(run_js(f'label({json.dumps(key)})'), want)
 
     def test_reprt_code_label_names_a_category_not_a_code(self):
         """reprt_code의 값 자체는 REPRT_CODE_LABELS(formatValue)가 이미
