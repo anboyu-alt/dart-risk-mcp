@@ -706,20 +706,45 @@ function isLongText(v) {
 // 깊이(2~3단)보다 넉넉히 크게 잡는다.
 const MAX_SECTION_DEPTH = 20;
 
-/** 임원현황을 {이름: 연도들} 에서 레코드 목록으로 바꾼다.
+/** 임원현황을 레코드 목록으로 바꾼다. 서버가 두 형태를 보낼 수 있다.
  *
- * fetch_executive_roster(dart_client.py)는 {임원명: {연도}}(set)를 돌려주고,
- * se_server의 _jsonable이 set을 정렬된 list로 낮춰 JSON화한다 — 그 결과
- * 화면에 오는 값은 {"김기범": ["2025","2026"], ...} 형태다. 이름을 열
- * 제목으로 쓰면 임원 7명일 때 7열짜리 1행 표가 되어 읽을 수 없다(실측
- * docs/superpowers/plans/2026-07-27-se-4c-field-inventory.json). 사람이
- * 행이 되어야 한다.
+ * **새 형태(SE-6 Task 2b, `fetch_executive_roster_detail`)**: 사람 단위
+ * 행 목록 `[{nm, corp_name, birth_ym, ofcps, rgist_exctv_at, years}, ...]`.
+ * `birth_ym`(생년월)·`ofcps`(직위)·`rgist_exctv_at`(등기 여부)은 레지스트리에
+ * 동명이인을 자동으로 가리지 않는 이 화면에서 이용자가 직접 확인할 재료다
+ * — 여기서 지우면 확인할 재료 없이 "확인하세요"만 남는다. 그래서 이
+ * 필드들을 행에 그대로 남긴다(executiveMatches·Task 3 패널이 그대로 씀).
  *
- * 연도 쪽은 배열이 정상 형태지만, 방어적으로 객체(키가 연도인 형태)와
- * 스칼라/null도 흡수한다 — 어느 쪽이 와도 이름 자체는 잃지 않는다.
+ * **옛 형태**: `fetch_executive_roster`(dart_client.py)가 돌려주는
+ * {임원명: {연도}}(set)를 se_server의 _jsonable이 정렬된 list로 낮춘
+ * {"김기범": ["2025","2026"], ...}. 저장된 옛 작업 결과가 남아 있을 수
+ * 있어(SE-4h가 같은 이유로 봉투/배열 양쪽을 받았다) 계속 받아준다.
+ *
+ * 어느 형태든 이름을 열 제목으로 쓰면 임원 7명일 때 7열짜리 1행 표가
+ * 되어 읽을 수 없다(실측 docs/superpowers/plans/2026-07-27-se-4c-field-
+ * inventory.json). 사람이 행이 되어야 한다.
  */
 function normalizeRoster(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  if (Array.isArray(value)) {
+    // 새 형태: 이름이 없는 행(예상 밖 응답)은 조용히 건너뛴다 — 여기서
+    // 던지면 나머지 임원까지 렌더가 통째로 멈춘다.
+    return value
+      .filter(function (row) { return row && typeof row === "object" && row.nm; })
+      .map(function (row) {
+        const years = Array.isArray(row.years) ? row.years : [];
+        return {
+          "성명": row.nm,
+          "재직 연도": years.slice().sort().join(", "),
+          corp_name: row.corp_name || "",
+          birth_ym: row.birth_ym || "",
+          ofcps: row.ofcps || "",
+          rgist_exctv_at: row.rgist_exctv_at || "",
+        };
+      });
+  }
+  if (!value || typeof value !== "object") return [];
+  // 옛 형태 — 연도 쪽은 배열이 정상이지만, 방어적으로 객체(키가 연도인
+  // 형태)와 스칼라/null도 흡수한다. 어느 쪽이 와도 이름 자체는 잃지 않는다.
   return Object.keys(value).map(function (name) {
     const raw = value[name];
     const years = Array.isArray(raw) ? raw

@@ -63,7 +63,11 @@ STAGE1_SPECS: tuple[Stage1Spec, ...] = (
     Stage1Spec("shareholders", "지배구조", "fetch_shareholder_status", ("corp_code",)),
     Stage1Spec("insider_timeline", "지배구조", "fetch_insider_timeline",
                ("corp_code", "lookback_years"), oversized=True),
-    Stage1Spec("executive_roster", "지배구조", "fetch_executive_roster",
+    # SE-6 Task 2b: fetch_executive_roster(dict[str, set[str]])는
+    # find_actor_overlap(server.py)·이 파일의 겸직 판정에 그대로 묶여
+    # 있어 손대지 않는다. 화면은 birth_ym·ofcps·rgist_exctv_at(동명이인
+    # 확인 재료)이 필요하므로 그 필드를 보존하는 옆 함수를 대신 부른다.
+    Stage1Spec("executive_roster", "지배구조", "fetch_executive_roster_detail",
                ("corp_code", "lookback_years"), oversized=True),
     Stage1Spec("audit_history", "감사부실", "fetch_audit_opinion_history",
                ("corp_code", "lookback_years"), oversized=True),

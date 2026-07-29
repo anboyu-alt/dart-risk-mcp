@@ -1961,6 +1961,57 @@ class TestExecutiveRoster(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestExecutiveRosterDetailShape(unittest.TestCase):
+    """SE-6 Task 2b: fetch_executive_roster_detail은 dict가 아니라 사람
+    단위 행 목록(list[dict])을 돌려준다. normalizeRoster는 이 새 형태와
+    옛 형태({이름: {연도}}) 둘 다 받아야 한다 — 저장된 옛 작업 결과가
+    남아 있을 수 있다(SE-4h가 같은 이유로 봉투/배열 양쪽을 받았다).
+    """
+
+    _DETAIL_SAMPLE = (
+        '[{"nm":"이승호","corp_name":"엔켐","birth_ym":"197203",'
+        '"ofcps":"사내이사","rgist_exctv_at":"등기","years":["2025","2026"]},'
+        '{"nm":"박시묵","corp_name":"엔켐","birth_ym":"198001",'
+        '"ofcps":"사외이사","rgist_exctv_at":"등기","years":["2026"]}]'
+    )
+
+    def test_new_shape_names_become_rows(self):
+        got = run_js(f'normalizeRoster({self._DETAIL_SAMPLE})')
+        self.assertEqual(len(got), 2)
+        self.assertEqual(got[0]["성명"], "이승호")
+
+    def test_new_shape_years_are_joined_readably(self):
+        got = run_js(f'normalizeRoster({self._DETAIL_SAMPLE})')
+        self.assertIn("2025", got[0]["재직 연도"])
+        self.assertIn("2026", got[0]["재직 연도"])
+
+    def test_new_shape_preserves_detail_fields(self):
+        """corp_name·birth_ym·ofcps·rgist_exctv_at이 행에 그대로 남아야
+        executiveMatches(이미 이 필드를 기대함)와 Task 3의 패널이 쓸 수
+        있다 — 여기서 버리면 확인 재료가 다시 화면에 도착하지 못한다."""
+        got = run_js(f'normalizeRoster({self._DETAIL_SAMPLE})')
+        row = got[0]
+        self.assertEqual(row["corp_name"], "엔켐")
+        self.assertEqual(row["birth_ym"], "197203")
+        self.assertEqual(row["ofcps"], "사내이사")
+        self.assertEqual(row["rgist_exctv_at"], "등기")
+
+    def test_old_shape_still_works_unchanged(self):
+        """옛 dict-of-name-to-years 형태(저장된 과거 작업 결과)도 계속
+        렌더된다 — 새 배열 분기를 추가해도 기존 경로를 깨면 안 된다."""
+        got = run_js(f'normalizeRoster({TestExecutiveRoster._SAMPLE})')
+        self.assertEqual(len(got), 2)
+        self.assertEqual(got[0]["성명"], "김기범")
+
+    def test_empty_array_is_empty_list(self):
+        self.assertEqual(run_js("normalizeRoster([])"), [])
+
+    def test_rows_without_nm_are_dropped_not_crashed(self):
+        got = run_js('normalizeRoster([{"corp_name":"엔켐"},{"nm":"박시묵","years":[]}])')
+        self.assertEqual([r["성명"] for r in got], ["박시묵"])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestExecutiveMatches(unittest.TestCase):
     """executiveMatches(rosterRows, lookupResults) — 임원 명단과 GET
     /api/se/actors?name= 조회 결과(handlers.py `_actors` name 분기, SE-6
