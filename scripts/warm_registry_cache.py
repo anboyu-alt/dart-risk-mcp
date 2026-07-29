@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import time
@@ -76,29 +77,64 @@ def load_env_file() -> None:
 _READBACK_CHILD = """
 import sys
 sys.path.insert(0, {root!r})
-from se_server.cache import SupabaseCache
-from se_server.config import SEConfig
-from dart_risk_mcp.core.known_actors import _REGISTRY_CACHE_KEY
+try:
+    from se_server.cache import SupabaseCache
+    from se_server.config import SEConfig
+    from dart_risk_mcp.core.known_actors import _REGISTRY_CACHE_KEY
 
-cache = SupabaseCache(SEConfig.from_env())
-data = cache.get_json(_REGISTRY_CACHE_KEY)
-if isinstance(data, dict) and isinstance(data.get("actors"), dict):
-    print(f"READBACK_OK {{len(data['actors'])}}")
+    cache = SupabaseCache(SEConfig.from_env())
+    data = cache.get_json(_REGISTRY_CACHE_KEY)
+except Exception as exc:
+    # 예외 '유형 이름'만 내보낸다 — 메시지에는 URL·키·인물명이 섞일 수 있다.
+    print("READBACK_ERR " + type(exc).__name__)
 else:
-    print("READBACK_FAIL")
+    if isinstance(data, dict) and isinstance(data.get("actors"), dict):
+        print(f"READBACK_OK {{len(data['actors'])}}")
+    else:
+        print("READBACK_FAIL")
 """
+
+# 자식이 보고한 예외 유형 이름으로 인정할 형태. 파이썬 식별자만 통과시킨다 —
+# 공백·따옴표·한글·경로가 섞인 문자열은 전부 버린다.
+_ERR_TYPE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 
 
 def _readback_in_child_process() -> tuple[bool, int, str]:
-    """별도 프로세스에서 캐시를 읽어 (성공 여부, 인물 수, stderr 일부)를 반환한다."""
+    """별도 프로세스에서 캐시를 읽어 (성공 여부, 인물 수, 실패 사유)를 반환한다.
+
+    ⚠️ **자식의 출력 원문은 절대 그대로 통과시키지 않는다.** 이 저장소는
+    public이고 Actions 로그도 public인데, 자식이 다루는 데이터는 실명
+    레지스트리다. 예외 메시지·stderr에는 Supabase URL, 응답 본문 조각,
+    인물명이 섞일 수 있다 — 길이를 자르는 것으로는 그 채널을 닫을 수 없다
+    (SE-5c 최종 리뷰 Finding 3). 그래서 반환하는 사유는 **길이가 아니라
+    형태로 제한된 값**만으로 조립한다: 파이썬 식별자 형태의 예외 유형
+    이름, 정수 종료코드, 또는 "stderr가 있었다"는 사실 자체뿐이다.
+    """
     code = _READBACK_CHILD.format(root=str(_ROOT))
     proc = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True,
         encoding="utf-8", errors="replace", env=os.environ.copy(), cwd=str(_ROOT))
+    err_type = ""
     for line in (proc.stdout or "").splitlines():
         if line.startswith("READBACK_OK "):
-            return True, int(line.split()[-1]), ""
-    return False, 0, (proc.stderr or "").strip()[-300:]
+            try:
+                return True, int(line.split()[-1]), ""
+            except ValueError:
+                continue
+        if line.startswith("READBACK_ERR "):
+            token = line[len("READBACK_ERR "):].strip()
+            if _ERR_TYPE_RE.match(token):
+                err_type = token
+
+    if err_type:
+        reason = f"자식 예외 유형 {err_type}"
+    elif proc.returncode:
+        reason = f"자식 종료코드 {int(proc.returncode)}"
+    elif (proc.stderr or "").strip():
+        reason = "자식 stderr 있음(내용은 출력하지 않음)"
+    else:
+        reason = ""
+    return False, 0, reason
 
 
 def main() -> int:
@@ -162,13 +198,13 @@ def main() -> int:
     put_s = time.monotonic() - put_started
 
     verify_started = time.monotonic()
-    ok, readback_n, err_tail = _readback_in_child_process()
+    ok, readback_n, reason = _readback_in_child_process()
     verify_s = time.monotonic() - verify_started
 
     if not ok:
         print(f"[FAIL] 캐시 읽기 검증 실패 — 인물 {n_actors}명·{n_bytes}바이트를 썼지만 "
               f"별도 프로세스에서 확인되지 않음 (조회 {fetch_s:.1f}초, 쓰기 {put_s:.1f}초, "
-              f"검증 {verify_s:.1f}초)" + (f" — {err_tail}" if err_tail else ""))
+              f"검증 {verify_s:.1f}초)" + (f" — {reason}" if reason else ""))
         return 0
 
     if readback_n != n_actors:
