@@ -729,6 +729,71 @@ function normalizeRoster(value) {
   });
 }
 
+/** executiveMatches(rosterRows, lookupResults) — 임원 명단을 GET
+ *  /api/se/actors?name= 조회 결과(handlers.py `_actors`의 name 분기, SE-6
+ *  Task 1)와 대조한다.
+ *
+ *  rosterRows는 normalizeRoster(value)가 만드는 최소 형태({"성명",
+ *  "재직 연도"})다. 호출부(ui.js, Task 3)가 exctvSttus 원문 필드
+ *  (corp_name·birth_ym·ofcps·rgist_exctv_at)를 같은 행에 덧붙여 넘길 수
+ *  있으므로 그 확장 형태도 그대로 받아들인다.
+ *
+ *  lookupResults는 UI가 임원 이름마다 그 엔드포인트를 호출해 모은
+ *  "이름 → 서버 응답"(`{name, actors, disclaimer}`) 묶음이다. **이름
+ *  매칭 자체는 서버(`lookup_actor`)가 이미 정확·정규화·폴딩 3단계로
+ *  처리한다** — 여기서는 그 결과를 그대로 lookupResults[성명]으로
+ *  찾아 쓸 뿐, 클라이언트에서 별도의 매칭 규칙을 새로 만들지 않는다
+ *  (규칙이 두 벌이면 서버와 화면이 다른 답을 낼 수 있다).
+ *
+ *  "이 회사 자신"을 companies에서 빼는 판정은 행의 corp_name 필드
+ *  하나만 본다. corp_name이 없으면 비교할 방법이 없으므로 아무것도
+ *  빼지 않는다 — 회사명 표기가 서버 쪽 정규화와 어긋날 수 있으니
+ *  "어긋날 때는 제외하지 않는 쪽(정보를 남기는 쪽)으로 실패하라"는
+ *  지침(SE-6 Task 2 브리핑)을 그대로 따른다. corp_name이 있을 때도
+ *  앞뒤 공백·대소문자 차이만 흡수하는 최소 정규화만 쓴다 — "엔켐"과
+ *  "(주)엔켐"처럼 표기 자체가 갈리는 경우까지 맞히려 들면 그게 바로
+ *  금지된 클라이언트 쪽 매칭 규칙이 된다.
+ *
+ *  status는 그대로 statuses 배열에 싣는다(정보를 지우지 않는다) —
+ *  actor_status가 서버에서 이미 화이트리스트 검증을 마쳤으므로 여기서
+ *  다시 걸러내지 않는다.
+ *
+ *  매칭이 0건인 임원도 결과에 포함한다(registered: false) — 화면이
+ *  "대조했고 없었다"와 "대조하지 않았다"를 구분해야 한다.
+ */
+function executiveMatches(rosterRows, lookupResults) {
+  const out = {};
+  if (!Array.isArray(rosterRows) || rosterRows.length === 0) return out;
+  const lookups = (lookupResults && typeof lookupResults === "object") ? lookupResults : {};
+
+  for (const row of rosterRows) {
+    if (!row || typeof row !== "object") continue;
+    const name = row["성명"];
+    if (!name) continue;
+
+    const ownCompany = typeof row.corp_name === "string" ? row.corp_name.trim().toLowerCase() : "";
+    const resp = (lookups[name] && typeof lookups[name] === "object") ? lookups[name] : null;
+    const actors = (resp && Array.isArray(resp.actors)) ? resp.actors : [];
+
+    const companies = [];
+    const seen = new Set();
+    const statuses = [];
+    for (const actor of actors) {
+      if (!actor || typeof actor !== "object") continue;
+      statuses.push(actor.status);
+      const list = Array.isArray(actor.companies) ? actor.companies : [];
+      for (const c of list) {
+        if (typeof c !== "string") continue;
+        if (ownCompany && c.trim().toLowerCase() === ownCompany) continue;
+        if (!seen.has(c)) { seen.add(c); companies.push(c); }
+      }
+    }
+
+    out[name] = { registered: actors.length > 0, companies, statuses };
+  }
+  return out;
+}
+
 /** debt_balance.by_kind({회사채: {total, maturity_under_1y}, ...})를
  *  레코드 목록으로 바꾼다.
  *
@@ -2985,6 +3050,7 @@ if (typeof module !== "undefined" && module.exports) {
     nextKeysToFetch, pollDecision, toRecords, tableLayout, LABELS, label,
     formatValue, formatAmount, AMOUNT_FIELDS, DATE_FIELDS,
     sectionBlocks, groupTitleFor, groupOrderIndex, normalizeRoster,
+    executiveMatches,
     ACTOR_STATUS, actorLine, resumeTarget, documentBlocks,
     dropAllEmptyColumns, recordsHaveSourceField, sourceGroupedBlocks,
     DOC_LIST_KEY, docKeyRceptNo, docListRow,

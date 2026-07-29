@@ -1961,6 +1961,99 @@ class TestExecutiveRoster(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestExecutiveMatches(unittest.TestCase):
+    """executiveMatches(rosterRows, lookupResults) — 임원 명단과 GET
+    /api/se/actors?name= 조회 결과(handlers.py `_actors` name 분기, SE-6
+    Task 1)를 대조하는 순수 로직. 이름 매칭 자체는 서버(lookup_actor)가
+    이미 정확·정규화·폴딩 3단계로 처리하므로 여기서는 재구현하지 않는다
+    — lookupResults[성명]을 그대로 찾아 쓸 뿐이다.
+
+    rosterRows는 normalizeRoster(value)의 출력(최소 {"성명", "재직 연도"})
+    이다. 실제 호출부(ui.js, Task 3)가 exctvSttus 원문 필드(corp_name·
+    birth_ym·ofcps·rgist_exctv_at)를 같은 행에 덧붙일 수 있으므로, 픽스처는
+    그 확장 형태 그대로 쓴다(SE-6 Task 2 브리핑 — "실측 형태 그대로").
+    "이 회사 자신" 제외 판정은 그중 corp_name 필드 하나만 본다 — 없으면
+    비교할 방법이 없으므로 아무것도 빼지 않는다(정보를 남기는 쪽으로
+    실패한다).
+    """
+
+    _ENCHEM_ROW = (
+        '{"성명":"이승호","재직 연도":"2025, 2026","nm":"이승호",'
+        '"corp_name":"엔켐","birth_ym":"197203","ofcps":"사내이사",'
+        '"rgist_exctv_at":"등기"}'
+    )
+    _UNMATCHED_ROW = (
+        '{"성명":"박시묵","재직 연도":"2026","nm":"박시묵",'
+        '"corp_name":"엔켐","birth_ym":"198001","ofcps":"사외이사",'
+        '"rgist_exctv_at":"등기"}'
+    )
+    # 실측(2026-07-29): 엔켐 임원 이승호 → 레지스트리 FSN·위노바, auto_matched
+    _LOOKUPS = (
+        '{"이승호":{"name":"이승호","actors":[{"name":"이승호",'
+        '"status":"auto_matched","companies":["FSN","위노바"],'
+        '"evidence":"..."}],"disclaimer":"..."},'
+        '"박시묵":{"name":"박시묵","actors":[],"disclaimer":"..."}}'
+    )
+
+    def test_matched_executive_gets_registered_true_and_companies(self):
+        got = run_js(f'executiveMatches([{self._ENCHEM_ROW}], {self._LOOKUPS})')
+        self.assertTrue(got["이승호"]["registered"])
+        self.assertEqual(sorted(got["이승호"]["companies"]), ["FSN", "위노바"])
+
+    def test_unmatched_executive_is_present_with_registered_false(self):
+        got = run_js(
+            f'executiveMatches([{self._ENCHEM_ROW}, {self._UNMATCHED_ROW}], {self._LOOKUPS})'
+        )
+        self.assertIn("박시묵", got, "매칭 0건인 임원이 결과에서 빠졌습니다")
+        self.assertFalse(got["박시묵"]["registered"])
+        self.assertEqual(got["박시묵"]["companies"], [])
+
+    def test_own_company_is_excluded_from_companies(self):
+        lookups = (
+            '{"이승호":{"name":"이승호","actors":[{"name":"이승호",'
+            '"status":"auto_matched","companies":["FSN","엔켐","위노바"],'
+            '"evidence":"..."}],"disclaimer":"..."}}'
+        )
+        got = run_js(f'executiveMatches([{self._ENCHEM_ROW}], {lookups})')
+        self.assertNotIn(
+            "엔켐", got["이승호"]["companies"],
+            "엔켐 임원이 엔켐에 등장한다는, 정보 없는 사실이 그대로 남았습니다",
+        )
+        self.assertEqual(sorted(got["이승호"]["companies"]), ["FSN", "위노바"])
+
+    def test_own_company_field_missing_does_not_exclude_anything(self):
+        """corp_name이 없는 행은 비교할 방법이 없다 — 어긋날 때 제외하지
+        않는 쪽(정보를 남기는 쪽)으로 실패해야 한다(SE-6 Task 2 브리핑)."""
+        row = '{"성명":"이승호","재직 연도":"2025"}'
+        lookups = (
+            '{"이승호":{"name":"이승호","actors":[{"name":"이승호",'
+            '"status":"auto_matched","companies":["FSN","이승호"],'
+            '"evidence":"..."}],"disclaimer":"..."}}'
+        )
+        got = run_js(f'executiveMatches([{row}], {lookups})')
+        self.assertEqual(sorted(got["이승호"]["companies"]), ["FSN", "이승호"])
+
+    def test_statuses_keep_auto_matched_as_is(self):
+        got = run_js(f'executiveMatches([{self._ENCHEM_ROW}], {self._LOOKUPS})')
+        self.assertIn("auto_matched", got["이승호"]["statuses"])
+
+    def test_empty_or_non_array_roster_rows_returns_empty_object(self):
+        for expr in (
+            "executiveMatches([], {})",
+            "executiveMatches(null, {})",
+            'executiveMatches("x", {})',
+            "executiveMatches({}, {})",
+        ):
+            self.assertEqual(run_js(expr), {})
+
+    def test_missing_or_malformed_lookup_results_does_not_throw(self):
+        for lookups_expr in ("null", "undefined", '"x"', "[]"):
+            got = run_js(f'executiveMatches([{self._ENCHEM_ROW}], {lookups_expr})')
+            self.assertFalse(got["이승호"]["registered"])
+            self.assertEqual(got["이승호"]["companies"], [])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestExecutiveRosterWiredIntoSectionBlocks(unittest.TestCase):
     """normalizeRoster를 정의만 하고 sectionBlocks 경로에 안 꽂으면(이 저장소에서
     이미 세 번 난 사고 유형) 화면은 여전히 이름을 열 제목으로 그린다 —
