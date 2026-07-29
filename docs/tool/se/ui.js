@@ -1492,17 +1492,32 @@ function fundChainCardEl(entry, hints, windowDays) {
     card.appendChild(bar);
   }
 
-  // 표 — 막대에서 좁아 안 보이는 라벨도 여기서는 항상 읽힌다.
+  // 표 — 막대에서 좁아 안 보이는 라벨도 여기서는 항상 읽힌다. 열 키는
+  // entry.uses의 원본 필드명(purpose/plan/real/diff_reason, app.js LABELS
+  // 주석 참고)을 그대로 쓴다 — 한글 문자열이 아니다. cellMarks(아래)가
+  // 계산하는 강조 좌표는 "행번호|열키" 형식이고, 그 열키는 tableLayout에
+  // 넘긴 레코드의 property 이름 그 자체다(affiliates 표와 같은 관례,
+  // buildAffiliateOverviewBlock 주석 참고) — 한글로 바꿔 넘기면 좌표가
+  // 어긋나 강조가 조용히 사라진다. 화면에 보이는 헤더 문구는 그대로다
+  // (LABELS.purpose 등이 "용도" 등을 낸다).
   const rows = entry.uses.map(function (u) {
     return {
-      "용도": u.purpose === null ? "(용도 미기재)" : u.purpose,
-      "계획": formatAmount(u.plan),
-      "보고된 집행": u.real === null ? "—" : formatAmount(u.real),
-      "차이 사유": u.diff_reason === null ? "—" : u.diff_reason,
+      purpose: u.purpose === null ? "(용도 미기재)" : u.purpose,
+      plan: formatAmount(u.plan),
+      real: u.real === null ? "—" : formatAmount(u.real),
+      diff_reason: u.diff_reason === null ? "—" : u.diff_reason,
     };
   });
-  const table = tableLayout(rows);
-  if (table) card.appendChild(tableEl(table));
+  // SE-8 Task 8B — plan(계획)과 real(보고된 집행)이 DART 원본 두 값에서
+  // 그대로 다르면 강조한다(MARK_RULES.fund_chain, app.js). cellMarks는
+  // rows(이미 formatAmount를 거친 문자열)가 아니라 entry.uses(원본 숫자
+  // 필드)를 받는다 — 표시용 문자열로는 markNeq의 숫자 비교를 할 수 없다
+  // (affiliates와 같은 이유, cellMarks는 "표가 실제로 그린 레코드"의
+  // 원본을 받는 관례). rows와 entry.uses는 map()으로 만들어져 순서가
+  // 같으므로 cellMarks의 행번호 좌표가 그대로 rows에도 맞는다.
+  const marks = cellMarks(entry.uses, "fund_chain");
+  const table = tableLayout(rows, markedColumnKeys(marks));
+  if (table) card.appendChild(tableEl(table, marks));
 
   // 반복 보고 — (납입일,용도) 조합이 여러 보고서에서 되풀이돼 fundChain이
   // 한 건만 남긴 사실을 숨기지 않는다(브리프: "우리가 골라 버린 것이

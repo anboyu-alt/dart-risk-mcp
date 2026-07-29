@@ -102,6 +102,15 @@ const LABELS = Object.assign(Object.create(null), {
   plan_useprps: "계획 용도", plan_amount: "계획 금액",
   real_dtls_cn: "실제 집행 내역", real_dtls_amount: "실제 집행 금액",
   dffrnc_resn: "차이 발생 사유",
+  // fundChain(uses[], SE-5a Task 3)이 조달건×용도 단위로 묶은 뒤 만드는
+  // 파생 필드다 — DART 원본 필드명(plan_useprps 등)과는 다른 별도 이름을
+  // 쓴다. fundChainCardEl(ui.js)의 표 열 키가 이 이름 그대로다 — SE-8
+  // Task 8B의 강조 규칙(MARK_RULES.fund_chain, key: "real")이 좌표
+  // "행번호|열키"로 표의 열과 짝을 맞추려면 rows의 property 이름이 이
+  // 라벨의 키와 글자 그대로 같아야 한다(affiliates 등 다른 표와 같은
+  // 관례 — 한글 문자열을 직접 키로 쓰면 그 좌표가 어긋나 강조가 조용히
+  // 사라진다).
+  purpose: "용도", plan: "계획", real: "보고된 집행", diff_reason: "차이 사유",
 
   // ── 타법인 출자
   inv_prm: "피출자 법인명", invstmnt_purps: "출자 목적",
@@ -1238,6 +1247,11 @@ function sectionBlocks(value, depth, key) {
     // 방식이라 재귀 호출(하위 어딘가의 우연한 "financials" 키)에는 적용되지
     // 않는다.
     if (d === 0 && key === "financials") records = reorderFinancialsFields(records);
+    // dividends 원본 표: 기준 기간(bsns_year/stlm_dt)이 항목(se)보다도
+    // 뒤에 오는 DART 원본 열 순서를 보기 좋게 재배치한다(SE-8 Task 8A,
+    // reorderDividendsFields 주석 참고). financials와 같은 게이트 방식
+    // (depth 0 + 부모 key)이라 재귀 호출에는 적용되지 않는다.
+    if (d === 0 && key === "dividends") records = reorderDividendsFields(records);
     // insider_timeline처럼 레코드 전부가 source 필드를 가지면(4개
     // 엔드포인트를 합친 결과) source별로 작은 표 여러 개로 나눈다 —
     // source가 없는 다른 섹션은 이 분기를 타지 않는다(recordsHaveSourceField
@@ -1621,6 +1635,55 @@ function reorderFinancialsRecord(r) {
 function reorderFinancialsFields(records) {
   if (!Array.isArray(records)) return records;
   return records.map(reorderFinancialsRecord);
+}
+
+// dividends 원본 표(alotMatter, fetch_dividend_history)의 열 순서를
+// 기준 기간 → 항목 → 당기 값 중심으로 재배치한다(SE-8 Task 8A). 실측(SG,
+// corp_code=00963976, 2026-07-30, fetch_dividend_history 직접 호출)
+// 기준 원본 필드 순서는 rcept_no·corp_cls·corp_code·corp_name·se·
+// stock_knd·thstrm·frmtrm·lwfr·stlm_dt·bsns_year·reprt_code다(dart_client.
+// fetch_dividend_history가 dict(item) 뒤에 bsns_year·reprt_code를
+// 덧붙인다) — "이 값이 어느 시점 것인지"(bsns_year·stlm_dt)가 항목(se)
+// 보다도 뒤, 사실상 맨 끝 근처에 있다.
+//
+// reorderFinancialsRecord(META를 PRIORITY 뒤로 밀어내는 방식)와 달리
+// 여기는 **PRIORITY 자체를 앞으로 당긴다** — financials는 이미 계정과목
+// (account_nm)이 값보다 먼저 오고 fs_div류 분류 메타만 뒤로 보내면
+// 됐지만, dividends는 "이 값이 무슨 기간 것인지"조차 맨 끝에 있어 옮길
+// 기준점이 앞쪽에 없다(위 브리프: "항목을 없애는 게 아니라 기준 시점
+// 뒤로 둔다"의 반대 방향 — 여기서는 기준 시점을 앞으로 당긴다).
+// 우선순위 안의 상대 순서는 고정(bsns_year → stlm_dt → se → thstrm)이고,
+// 나머지 열(rcept_no·frmtrm·lwfr·reprt_code 등)은 원래 상대 순서를
+// 그대로 유지한다. 우선 열이 레코드에 하나도 없으면(예상 밖 모양) 원본을
+// 그대로 둔다 — reorderFinancialsRecord와 같은 이유(옮길 기준점이 없는데
+// 임의로 당기면 오히려 임의 순서가 된다).
+const DIVIDENDS_PRIORITY_KEYS = ["bsns_year", "stlm_dt", "se", "thstrm"];
+
+function reorderDividendsRecord(r) {
+  if (!r || typeof r !== "object") return r;
+  const keys = Object.keys(r);
+  const hasPriority = keys.some(function (k) { return DIVIDENDS_PRIORITY_KEYS.indexOf(k) !== -1; });
+  if (!hasPriority) return r;
+
+  const prioritySet = new Set(DIVIDENDS_PRIORITY_KEYS);
+  const present = DIVIDENDS_PRIORITY_KEYS.filter(function (k) { return prioritySet.has(k) && k in r; });
+  const rest = keys.filter(function (k) { return !prioritySet.has(k); });
+  const newKeys = present.concat(rest);
+
+  const out = Object.create(null);
+  for (const k of newKeys) out[k] = r[k];
+  return out;
+}
+
+/** dividends(원본 배당 레코드 배열) 전체에 reorderDividendsRecord를
+ *  적용한다. sectionBlocks가 "dividends" 섹션을 tableLayout에 넘기기
+ *  직전 호출한다 — 값 자체는 하나도 바꾸지 않는다(순서만). dividendVsIncome
+ *  (파생 "배당 vs 당기순이익" 비교 블록)은 이 함수와 무관하게 원본
+ *  value를 그대로 받는다 — 필드를 이름으로 찾을 뿐 순서에 기대지
+ *  않으므로 이 재배치와 상관없이 그대로 동작한다. */
+function reorderDividendsFields(records) {
+  if (!Array.isArray(records)) return records;
+  return records.map(reorderDividendsRecord);
 }
 
 // financialRatios가 만드는 기간 3종과, 각 기간이 financials 레코드의 어느
@@ -3419,6 +3482,16 @@ function markNeg(v) {
   return x !== null && x < 0;
 }
 
+// 두 값 모두 있고 서로 다를 때만 강조한다(markLt와 같은 결측 규약, 위 주석
+// 참고) — SE-8 Task 8B: fundChain(uses[])의 plan(계획)·real(보고된 집행)을
+// 비교하는 데 쓴다. real이 결측(보고 자체가 없음)이면 강조하지 않는다 —
+// "보고가 없다"와 "보고된 값이 다르다"는 다른 사실이라 결측을 강조하면
+// 없는 사실을 만들어내는 것이다.
+function markNeq(a, b) {
+  const x = markNumber(a), y = markNumber(b);
+  return x !== null && y !== null && x !== y;
+}
+
 // SE-4i — 주요 재무지표 표(indicatorTableEl, ui.js)는 위 MARK_RULES가 다루는
 // "레코드 배열 + rec[key]" 모양이 아니라, indicatorBlocks가 이미 연도×지표로
 // 피벗해 둔 cells({bsns_year, idx_val, display})를 그린다. 그래서 cellMarks를
@@ -3580,6 +3653,30 @@ MARK_RULES.distress = [
   },
 ];
 
+// SE-8 Task 8B — fundChain(uses[], 위 fundChain 함수)의 plan(계획 금액)·
+// real(보고된 집행 금액)은 DART 원본 두 값(plan_amount·real_dtls_amount)을
+// 조달건×용도 단위로 묶은 뒤 그대로 비교한 것이다 — 임계값도 판정도
+// 아니다(SE-4g 규칙과 동일한 부류, v0.8.5). 강조 문구는 사실만 말한다:
+// "유용"·"의심" 같은 평가 어휘를 쓰지 않는다(SE-5a가 이미 정한 원칙).
+//
+// **이 규칙이 실제로 발화하는 표는 fund_usage 원본 표(sectionBlocks가
+// 그리는, MARK_RULES.fund_usage — 그런 항목은 없다)가 아니라
+// fundChainCardEl(ui.js)이 그리는 파생 카드다.** 원본 표는 (pay_de,
+// purpose) 조합이 분기 보고서(1분기·반기·3분기·사업보고서)마다 반복
+// 보고되는 개별 행이라 real이 plan과 1:1로 짝지어 보이지 않는다 —
+// fundChain이 이미 그 반복 중 대표값 하나만 남겨 조달건×용도 단위로
+// 묶은 뒤에야 두 값이 나란히 비교 가능해진다. sectionKey "fund_chain"은
+// STAGE1_SPECS의 실제 섹션 키가 아니라 이 파생 카드 전용으로 새로 만든
+// cellMarks 버킷 이름이다 — cellMarks(records, sectionKey)의 sectionKey는
+// MARK_RULES의 임의 키일 뿐 서버 섹션 이름과 일치할 필요가 없다.
+MARK_RULES.fund_chain = [
+  {
+    key: "real",
+    when: function (u) { return markNeq(u.real, u.plan); },
+    why: "보고된 집행 ≠ 계획",
+  },
+];
+
 // 반환 키는 ui.js 의 tableEl()이 이미 계산하는 좌표와 같은 형식이다:
 // 가로 표는 (행번호, keys[열]), 세로 표는 (0, keys[행]).
 function cellMarks(records, sectionKey) {
@@ -3640,5 +3737,6 @@ if (typeof module !== "undefined" && module.exports) {
     isFootnoteMarkerOnly, footnoteMarkerNote,
     FINANCIALS_META_KEYS, FINANCIALS_PRIORITY_KEYS,
     reorderFinancialsRecord, reorderFinancialsFields,
+    DIVIDENDS_PRIORITY_KEYS, reorderDividendsRecord, reorderDividendsFields,
   };
 }

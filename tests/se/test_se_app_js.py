@@ -8217,6 +8217,52 @@ class TestReorderFinancialsFields(unittest.TestCase):
             self.assertEqual(list(r.keys())[0], "account_nm")
 
 
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestReorderDividendsFields(unittest.TestCase):
+    """reorderDividendsRecord/reorderDividendsFields(app.js, SE-8 Task 8A) —
+    배당 원본 표의 열 순서를 기준 기간(bsns_year/stlm_dt) → 항목(se) →
+    당기 값(thstrm) → 나머지로 재배치한다. reorderFinancialsFields(Task 4)와
+    같은 관례로 값은 하나도 바꾸지 않고 순서만 바꾸며, 우선 열이 하나도
+    없는 레코드는 원본을 그대로 둔다."""
+
+    def test_priority_keys_move_to_front_in_fixed_order_values_unchanged(self):
+        # 실측(SG, corp_code=00963976, 2026-07-30) 원본 필드 순서 그대로.
+        rec = {
+            "rcept_no": "20260515002529", "corp_cls": "K", "corp_code": "00963976",
+            "corp_name": "SG", "se": "현금배당금총액(백만원)", "stock_knd": "-",
+            "thstrm": "0", "frmtrm": "0", "lwfr": "0",
+            "stlm_dt": "2025-12-31", "bsns_year": "2025", "reprt_code": "11011",
+        }
+        got = run_js(f"reorderDividendsRecord({json.dumps(rec, ensure_ascii=False)})")
+        keys = list(got.keys())
+        self.assertEqual(keys[:4], ["bsns_year", "stlm_dt", "se", "thstrm"])
+        # 값 자체는 하나도 바뀌지 않는다 — 순서만 바뀐다.
+        self.assertEqual(got, rec)
+
+    def test_record_without_priority_keys_is_left_untouched(self):
+        """기준 기간·항목·값이 아예 없는 레코드(예상 밖 모양)는 옮길
+        기준점이 없다 — 원본 순서를 그대로 둔다."""
+        rec = {"rcept_no": "1", "corp_cls": "K"}
+        got = run_js(f"reorderDividendsRecord({json.dumps(rec, ensure_ascii=False)})")
+        self.assertEqual(list(got.keys()), ["rcept_no", "corp_cls"])
+
+    def test_partial_priority_keys_present_still_reorders(self):
+        """bsns_year·stlm_dt가 없고 se·thstrm만 있어도(예상 밖 모양) 있는
+        우선 열만 앞으로 옮긴다."""
+        rec = {"rcept_no": "1", "se": "항목", "thstrm": "1"}
+        got = run_js(f"reorderDividendsRecord({json.dumps(rec, ensure_ascii=False)})")
+        self.assertEqual(list(got.keys()), ["se", "thstrm", "rcept_no"])
+
+    def test_reorder_fields_maps_over_the_whole_array(self):
+        records = [
+            {"se": "항목1", "thstrm": "1", "bsns_year": "2025"},
+            {"se": "항목2", "thstrm": "2", "bsns_year": "2024"},
+        ]
+        got = run_js(f"reorderDividendsFields({json.dumps(records, ensure_ascii=False)})")
+        for r in got:
+            self.assertEqual(list(r.keys())[0], "bsns_year")
+
+
 @unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
 class TestOtherRawTablesAlreadyLeadWithTheUsefulColumn(unittest.TestCase):
     """SE-8 Task 4 브리프 3번째 요구사항 — financials 외 다른 원본 표에도
@@ -8236,10 +8282,18 @@ class TestOtherRawTablesAlreadyLeadWithTheUsefulColumn(unittest.TestCase):
       corp_cls·corp_code·corp_name·stock_knd는 SG 127건 실측에서 전부
       상수(unique count=1)라 캡션으로 승격된다. 남는 건 rcept_no·se(항목명)·
       thstrm/frmtrm/lwfr(값)·stlm_dt·bsns_year·reprt_code다 — se(그 행이
-      무엇인지)가 이미 값들 바로 앞에 온다. rcept_no가 se보다 앞서지만
-      그건 fs_div/sj_div류의 "분류 메타"가 아니라 원본 공시를 추적하는
-      식별자이고, financials처럼 계정과목을 밀어내는 패턴이 아니다 —
-      고치지 않는다.
+      무엇인지)가 이미 값들 바로 앞에 온다는 점에서 financials(계정과목이
+      분류 메타에 밀리는 패턴)와는 다르다고 이 태스크(Task 4)는 결론
+      냈었다.
+
+      **SE-8 Task 8이 이 결론을 다시 봤다**: se가 값보다 앞선 것은
+      맞지만, se·값이 무슨 **기간**의 것인지(bsns_year·stlm_dt)는 여전히
+      맨 끝 근처(rcept_no 뒤, reprt_code 앞)에 있었다 — 실사용자 지적은
+      "항목을 없애라"가 아니라 "항목을 기준 시점 뒤에 두라"였다. 그래서
+      reorderDividendsFields(app.js, 위 TestReorderDividendsFields)가
+      bsns_year/stlm_dt → se → thstrm 순으로 앞당긴다. 타법인 출자는
+      이미 핵심 값이 앞이라(위 문단) 이번에도 손대지 않는다 — 다른 표까지
+      추측으로 고치지 않는다(brief 제약).
 
     두 표 모두 아래 테스트로 이 결론(현재 렌더 헤더 순서)을 고정한다 —
     나중에 값이 상수가 아니게 되거나(회사가 바뀌거나) 필드 순서가
@@ -8305,9 +8359,9 @@ class TestOtherRawTablesAlreadyLeadWithTheUsefulColumn(unittest.TestCase):
     ], ensure_ascii=False)
 
     def test_dividends_raw_table_item_name_already_leads_the_value_columns(self):
-        """se(항목명)가 값(thstrm/frmtrm/lwfr) 바로 앞에 이미 와 있다 —
-        rcept_no가 se보다 앞서지만 그건 fs_div류의 분류 메타가 아니라
-        공시 식별자라 브리프가 말하는 패턴이 아니다(위 클래스 docstring)."""
+        """se(항목명)는 값(thstrm/frmtrm/lwfr) 바로 앞에 있다 — 이 상대
+        순서는 Task 8 재배치 전후로 바뀌지 않는다(reorderDividendsRecord의
+        우선순위 자체가 se → thstrm 순이다)."""
         got = run_render_section('"dividends"', self._SG_DIVIDENDS)
         headers = _header_rows(got)
         self.assertTrue(headers, "배당 표 헤더를 찾지 못했습니다")
@@ -8317,6 +8371,24 @@ class TestOtherRawTablesAlreadyLeadWithTheUsefulColumn(unittest.TestCase):
         self.assertLess(
             header.index("항목"), header.index("당기 값"),
             f"항목(se)이 값보다 뒤에 렌더됩니다: {header}",
+        )
+
+    def test_dividends_raw_table_now_leads_with_the_base_period_not_item(self):
+        """SE-8 Task 8A — 첫 열이 se(항목)가 아니라 기준 기간(사업연도)이어야
+        한다(brief Step 1 요구사항 1). rcept_no는 이 픽스처에서 상수가
+        아니라(두 행이 다른 접수번호) 캡션으로 승격되지 않으므로, 재배치
+        없이는 rcept_no나 se가 첫 열이었을 자리다."""
+        got = run_render_section('"dividends"', self._SG_DIVIDENDS)
+        headers = _header_rows(got)
+        self.assertTrue(headers, "배당 표 헤더를 찾지 못했습니다")
+        header = headers[0]
+        self.assertEqual(
+            header[0], "사업연도",
+            f"배당 원본 표의 첫 열이 기준 기간(사업연도)이 아닙니다: {header}",
+        )
+        self.assertLess(
+            header.index("사업연도"), header.index("항목"),
+            f"기준 기간이 항목(se)보다 뒤에 렌더됩니다: {header}",
         )
 
 
@@ -9286,6 +9358,31 @@ class TestFundChainRenderSection(unittest.TestCase):
             "새 회사를 분석하는데 이전 회사의 공시로 힌트가 떴다",
         )
 
+    # ── SE-8 Task 8B — plan(계획)·real(보고된 집행) 불일치 강조 ──────────
+
+    def test_reported_execution_different_from_plan_is_marked(self):
+        """plan(계획)·real(보고된 집행)이 DART 원본 두 값에서 그대로 다르면
+        강조한다(MARK_RULES.fund_chain). 강조 문구는 판정이 아니라 사실이다:
+        "보고된 집행 ≠ 계획"."""
+        rows = [self._row("2021.10.26", "시설자금", 13082000000, real=5000000000)]
+        out = run_render_section('"fund_usage"', json.dumps(rows, ensure_ascii=False))
+        self.assertTrue(
+            any(m["title"] == "보고된 집행 ≠ 계획" for m in out["marked"]),
+            f"계획≠실제 강조가 렌더되지 않았습니다: {out['marked']}",
+        )
+        self.assertTrue(
+            any("보고된 집행 ≠ 계획" in legend for legend in out["legends"]),
+            f"범례가 렌더되지 않았습니다: {out['legends']}",
+        )
+
+    def test_reported_execution_equal_to_plan_is_not_marked(self):
+        """계획과 실제 집행이 같으면(기본값 — _row의 real=None이면
+        real_dtls_amount가 plan_amount와 같다) 강조가 붙지 않는다."""
+        rows = [self._row("2021.10.26", "시설자금", 13082000000)]
+        out = run_render_section('"fund_usage"', json.dumps(rows, ensure_ascii=False))
+        self.assertEqual(out["marked"], [])
+        self.assertEqual(out["legends"], [])
+
 
 # ── SE-4f Task 5: 타법인 출자 — 피투자사 정보 + 최초취득일 순 시각화 ─────
 #
@@ -9798,6 +9895,47 @@ class TestInsiderTimelineMark(unittest.TestCase):
     def test_positive_values_are_not_marked(self):
         rows = '[{"sp_stock_lmp_irds_cnt":"+1,000","sp_stock_lmp_irds_rate":"0.10"}]'
         self.assertEqual(run_js('cellMarks(%s,"insider_timeline")' % rows), {})
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFundChainMark(unittest.TestCase):
+    """SE-8 Task 8B — fundChain(uses[])의 plan(계획)·real(보고된 집행)이
+    DART 원본 두 값(plan_amount·real_dtls_amount)에서 그대로 다르면
+    강조한다(MARK_RULES.fund_chain). markLt와 같은 결측 규약 — real이
+    결측(null)이면 강조하지 않는다."""
+
+    def test_mismatch_is_marked(self):
+        uses = ('[{"purpose":"시설자금","plan":100,"real":50},'
+                 '{"purpose":"운영자금","plan":100,"real":100}]')
+        got = run_js('cellMarks(%s, "fund_chain")' % uses)
+        self.assertEqual(got, {"0|real": "보고된 집행 ≠ 계획"})
+
+    def test_equal_plan_and_real_is_not_marked(self):
+        uses = '[{"purpose":"시설자금","plan":100,"real":100}]'
+        self.assertEqual(run_js('cellMarks(%s, "fund_chain")' % uses), {})
+
+    def test_missing_real_is_not_marked(self):
+        """real이 결측(null)이면 강조하지 않는다 — "보고 자체가 없다"와
+        "보고된 값이 다르다"는 다른 사실이다(markLt와 같은 결측 규약)."""
+        uses = '[{"purpose":"시설자금","plan":100,"real":null}]'
+        self.assertEqual(run_js('cellMarks(%s, "fund_chain")' % uses), {})
+
+    def test_zero_real_that_differs_from_plan_is_still_marked(self):
+        """real이 0이라도 있는 값이다 — null(결측)과는 다르다
+        (markNumber(0) !== null)."""
+        uses = '[{"purpose":"시설자금","plan":100,"real":0}]'
+        got = run_js('cellMarks(%s, "fund_chain")' % uses)
+        self.assertEqual(got, {"0|real": "보고된 집행 ≠ 계획"})
+
+    def test_rule_why_text_carries_no_verdict_words(self):
+        """강조 문구는 사실만 말한다 — brief 요구사항 B: "유용"·"의심" 같은
+        평가 어휘 금지."""
+        uses = '[{"purpose":"시설자금","plan":100,"real":50}]'
+        got = run_js('cellMarks(%s, "fund_chain")' % uses)
+        why = got["0|real"]
+        self.assertEqual(why, "보고된 집행 ≠ 계획")
+        for w in ("유용", "의심", "부정", "위험", "손상"):
+            self.assertNotIn(w, why)
 
 
 @unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
