@@ -5986,6 +5986,64 @@ class TestIsAmendmentDisclosure(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestClassifyDisclosureCategoryAnchorGuard(unittest.TestCase):
+    """리뷰 지적: classifyDisclosureCategory(app.js:2398)의
+    `signalsData.amendment_pattern.charAt(0) === "^"` 가드에 테스트 커버리지가
+    전혀 없었다. 리뷰어가 이 가드를 통째로 지우고 전체 스위트를 돌렸더니
+    1007 passed, 실패 0건 — 가드가 없어져도 아무 테스트도 눈치채지 못했다.
+
+    이 가드는 amendment_pattern이 **비앵커**(문자열 시작에 고정되지 않은)일
+    때를 대비한다. 오늘의 실제 signals-data.json 패턴(`^\\[...\\]\\s*`)은
+    앵커라 가드가 사실상 항상 통과하지만, 그건 "오늘 우연히 안전하다"는
+    뜻이지 "가드가 필요 없다"는 뜻이 아니다. 앞으로 export_tool_data.py가
+    비앵커 패턴을 내보내는 날 이 테스트가 없으면 아무도 못 알아챈다.
+
+    합성 signalsData로 비앵커 패턴을 만들고, 그 패턴이 제목 **중간**에서
+    매칭되는 상황(문장 끝의 접두어가 아니라)을 구성한다. 가드가 없다면
+    `.replace()`가 무조건 실행돼 중간의 `[정정]`이 잘려나가고, 그 결과
+    나머지 키워드 매칭이 실패해 분류 결과가 달라진다 — 가드가 있으면 원본
+    문자열 그대로 매칭이 이어져야 한다."""
+
+    _SIGNALS = {
+        "signals": [
+            {"key": "TEST_MID_BRACKET", "category": 5, "keywords": ["공고[정정]관련"]}
+        ],
+        "categories": {"0": "기타", "5": "테스트"},
+        # 의도적으로 비앵커(^ 없음) — 오늘의 실제 amendment_pattern과 달리
+        # 문자열 어디서든 걸릴 수 있다.
+        "amendment_pattern": r"\[(?:기재정정|정정)[^\]]*\]",
+    }
+    _TITLE = "주주총회소집공고[정정]관련"
+
+    def test_pattern_actually_matches_mid_string_not_just_as_a_prefix(self):
+        """전제 확인 — 이 픽스처의 amendment_pattern이 접두어가 아니라
+        제목 중간의 [정정]에서 매칭됨을 먼저 보장한다(그렇지 않으면 아래
+        본 검증이 공허하다)."""
+        self.assertTrue(self._TITLE.startswith("주주총회소집공고["))
+        got = call_js("isAmendmentDisclosure", self._TITLE, self._SIGNALS)
+        self.assertTrue(got, "합성 패턴이 제목 중간의 [정정]과 매칭돼야 이 테스트가 뜻을 갖습니다")
+
+    def test_guard_prevents_mid_string_replace_and_keeps_original_title(self):
+        """가드(charAt(0) === "^")가 살아있으면: 비앵커 패턴이므로
+        .replace()를 건너뛰고 원본 문자열 그대로 키워드 매칭을 계속한다.
+        원본에는 "공고[정정]관련"이 그대로 있으므로 그 키워드로 매칭돼
+        category 5가 나와야 한다.
+
+        가드가 삭제되면(리뷰어의 정확한 뮤테이션): .replace()가 무조건
+        실행돼 중간의 "[정정]"이 잘려나가 "주주총회소집공고관련"이 되고,
+        "공고[정정]관련" 키워드는 더 이상 부분 문자열로 존재하지 않아
+        매칭에 실패한다 — 결과가 0(기타)으로 바뀐다. 즉 이 assertEqual(5)는
+        가드가 없으면 실패해야 정상이다."""
+        got = call_js("classifyDisclosureCategory", self._TITLE, self._SIGNALS)
+        self.assertEqual(
+            got, 5,
+            "가드가 원본 제목을 보존해 중간 키워드 매칭이 이어져야 합니다 — "
+            "0이 나왔다면 비앵커 패턴에서도 .replace()가 무조건 실행돼 "
+            "중간 문자열이 잘려나갔다는 뜻입니다(가드 소실 회귀)",
+        )
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestMonthlyCountsByCategory(unittest.TestCase):
     """monthlyCountsByCategory(rows, dateField, textField, signalsData) —
     disclosures를 월×카테고리로 묶어 건수만 센다(monthlyCounts와 같은

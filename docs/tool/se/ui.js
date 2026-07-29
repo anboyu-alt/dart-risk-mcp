@@ -1428,8 +1428,8 @@ const FUND_CHAIN_WINDOW_DAYS = 90;
  *  (canvas는 그림일 뿐이라 안 된다), (b) canvas destroy 관리
  *  (CHART_INSTANCES/pruneChartsIn, resetCharts)가 필요 없고, (c)
  *  다크·라이트 전환이 --fund-bar-*(index.html) 두 값만으로 자동
- *  처리된다. 막대 조각의 배경은 여기서 --c0~--c8(index.html, "차트 계열
- *  구분 전용 색 9종… 판정 색이 아니다")를 재사용한다 — 이 카드도 용도
+ *  처리된다. 막대 조각의 배경은 여기서 --c0~--c9(index.html, "차트 계열
+ *  구분 전용 색 10종… 판정 색이 아니다")를 재사용한다 — 이 카드도 용도
  *  구분일 뿐 판정이 아니므로 같은 색 계열을 쓰는 것이 자연스럽다.
  *
  *  막대 폭은 plan/total_plan이다. 아주 좁은 조각(실측: 130.8억/7,682.4억
