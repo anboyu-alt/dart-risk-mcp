@@ -2486,7 +2486,7 @@ function closePanel() {
 async function openActorPanel(company) {
   const box = document.getElementById("panel-body");
   const panel = document.getElementById("panel");
-  box.innerHTML = "";
+  while (box.firstChild) box.removeChild(box.firstChild);
 
   let r;
   try {
