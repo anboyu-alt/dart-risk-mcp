@@ -7751,6 +7751,322 @@ class TestFinancialRatios(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFinancialRatiosKeyOrder(unittest.TestCase):
+    """SE-8 Task 4 — 실사용자(SG, corp_code=00963976 실측 기반) 지적:
+    "표를 구성할 때 이용자에게 어떤 정보가 유용할지 고민부터 하고 배치를
+    해야한다." 재무 파생 지표 표가 분류 메타(구분·기간)로 시작하고 정작
+    지표 이름·값이 뒤로 밀려 있었다. financialRatios()의 반환 키 순서를
+    지표→값→구분→기간→계산식→재료로 바꾼다(task-4-brief.md).
+
+    2026-07-30 SG 실측(fnlttSinglAcnt.json, corp_code=00963976,
+    bsns_year=2025, reprt_code=11011)에서 매출액·영업이익 CFS/OFS 값을
+    그대로 옮겨 적는다 — 연결 752,259,599 / 102,246,199,563,
+    별도 686,206,144 / 49,445,822,622."""
+
+    _SG_CFS_OFS = json.dumps([
+        {"fs_div": "CFS", "sj_div": "IS", "account_nm": "매출액", "thstrm_amount": "102,246,199,563"},
+        {"fs_div": "CFS", "sj_div": "IS", "account_nm": "영업이익", "thstrm_amount": "752,259,599"},
+        {"fs_div": "OFS", "sj_div": "IS", "account_nm": "매출액", "thstrm_amount": "49,445,822,622"},
+        {"fs_div": "OFS", "sj_div": "IS", "account_nm": "영업이익", "thstrm_amount": "686,206,144"},
+    ], ensure_ascii=False)
+
+    def test_indicator_name_is_the_first_key(self):
+        """브리프 검증 요구 1: Object.keys(item)[0] === '지표'."""
+        got = run_js(f"financialRatios({self._SG_CFS_OFS})")
+        self.assertTrue(got, "SG 실측 픽스처에서 결과가 비었습니다")
+        for item in got:
+            self.assertEqual(
+                list(item.keys())[0], "지표",
+                f"첫 키가 '지표'가 아닙니다: {list(item.keys())} (항목: {item})",
+            )
+
+    def test_division_key_still_present_and_valued(self):
+        """브리프 검증 요구 1: '구분'(연결/별도)이 반환 객체에 여전히
+        존재한다 — 순서만 옮기고 정보는 지우지 않는다(SE-4f 원칙)."""
+        got = run_js(f"financialRatios({self._SG_CFS_OFS})")
+        for item in got:
+            self.assertIn("구분", item)
+            self.assertIn(item["구분"], ("연결", "별도"))
+
+    def test_key_order_change_does_not_mix_consolidated_and_separate(self):
+        """브리프 검증 요구 3 / SE-4f 회귀: 키 순서를 바꿔도 같은 지표의
+        연결/별도 값이 서로의 계산에 섞이지 않는다. SG 실측값으로 손계산한
+        영업이익률과 대조한다."""
+        cfs_margin = 752259599 / 102246199563 * 100
+        ofs_margin = 686206144 / 49445822622 * 100
+        got = run_js(f"financialRatios({self._SG_CFS_OFS})")
+        by_div = {
+            (r["구분"], r["기간"]): r["값"]
+            for r in got if r["지표"] == "영업이익률"
+        }
+        self.assertAlmostEqual(by_div[("연결", "당기")], cfs_margin, places=6)
+        self.assertAlmostEqual(by_div[("별도", "당기")], ofs_margin, places=6)
+        # 연결과 별도가 서로 다른 값이어야 "섞이지 않았다"는 검증이 의미가
+        # 있다 — 둘이 우연히 같으면 이 비교는 통과해도 아무것도 증명하지
+        # 못한다.
+        self.assertNotAlmostEqual(cfs_margin, ofs_margin, places=2)
+
+    def test_capital_impairment_row_also_leads_with_indicator_name(self):
+        """computeRatio뿐 아니라 computeCapitalImpairment(자본잠식률 전용
+        분기)도 같은 순서를 지켜야 한다 — 별도 함수라 따로 확인한다."""
+        got = run_js('''financialRatios([
+          {fs_div:"CFS", sj_div:"BS", account_nm:"자본금", thstrm_amount:"1000"},
+          {fs_div:"CFS", sj_div:"BS", account_nm:"자본총계", thstrm_amount:"400"}
+        ])''')
+        imp = [r for r in got if r["지표"] == "자본잠식률"]
+        self.assertTrue(imp)
+        for r in imp:
+            self.assertEqual(list(r.keys())[0], "지표")
+            self.assertIn("구분", r)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFinancialsRawTableFieldOrder(unittest.TestCase):
+    """SE-8 Task 4 — 원본 financials 표(파생값이 아니라 DART 원본 그대로)도
+    같은 원칙을 적용한다. 2026-07-30 SG 실측(corp_code=00963976,
+    fnlttSinglAcnt.json)에서 확인한 실제 필드 순서를 그대로 옮겨 적는다:
+    rcept_no·reprt_code·bsns_year·corp_code·stock_code·fs_div·fs_nm·sj_div·
+    sj_nm·account_nm·thstrm_nm·thstrm_dt·thstrm_amount·... — 분류 메타
+    (fs_div·sj_div·fs_nm·sj_nm)가 계정과목보다 먼저 온다. 또한 같은 실측에서
+    fs_div·sj_div는 한 응답 안에 CFS/OFS·BS/IS가 공존해(상수열이 아니라)
+    승격되지 않고 표 헤더에 그대로 남는다는 것도 함께 확인됐다 — 그래서
+    이 재배치가 실제로 화면 헤더 순서를 바꾼다(우연히 캡션으로 승격돼 안
+    보이는 경우가 아니다)."""
+
+    # SG 실측 레코드 4건(연결·별도 × 유동자산·비유동자산) — 원본 API가 준
+    # 필드 순서 그대로(2026-07-30, rcept_no=20260316001642). account_nm이
+    # 두 값(유동자산/비유동자산) 다 있어야 상수열 캡션 승격으로 표
+    # 헤더에서 사라지지 않는다 — 그래야 이 테스트가 실제로 account_nm의
+    # 렌더 위치를 검증한다.
+    _SG_RAW_FIELD_ORDER = json.dumps([
+        {
+            "rcept_no": "20260316001642", "reprt_code": "11011", "bsns_year": "2025",
+            "corp_code": "00963976", "stock_code": "255220",
+            "fs_div": "CFS", "fs_nm": "연결재무제표", "sj_div": "BS", "sj_nm": "재무상태표",
+            "account_nm": "유동자산", "thstrm_nm": "제 17 기", "thstrm_dt": "2025.12.31 현재",
+            "thstrm_amount": "107,418,120,726", "frmtrm_nm": "제 16 기",
+            "frmtrm_dt": "2024.12.31 현재", "frmtrm_amount": "116,211,873,984",
+            "bfefrmtrm_nm": "제 15 기", "bfefrmtrm_dt": "2023.12.31 현재",
+            "bfefrmtrm_amount": "72,974,861,922", "ord": "1", "currency": "KRW",
+        },
+        {
+            "rcept_no": "20260316001642", "reprt_code": "11011", "bsns_year": "2025",
+            "corp_code": "00963976", "stock_code": "255220",
+            "fs_div": "CFS", "fs_nm": "연결재무제표", "sj_div": "BS", "sj_nm": "재무상태표",
+            "account_nm": "비유동자산", "thstrm_nm": "제 17 기", "thstrm_dt": "2025.12.31 현재",
+            "thstrm_amount": "116,974,720,925", "frmtrm_nm": "제 16 기",
+            "frmtrm_dt": "2024.12.31 현재", "frmtrm_amount": "116,620,861,282",
+            "bfefrmtrm_nm": "제 15 기", "bfefrmtrm_dt": "2023.12.31 현재",
+            "bfefrmtrm_amount": "115,084,845,829", "ord": "3", "currency": "KRW",
+        },
+        {
+            "rcept_no": "20260316001642", "reprt_code": "11011", "bsns_year": "2025",
+            "corp_code": "00963976", "stock_code": "255220",
+            "fs_div": "OFS", "fs_nm": "재무제표", "sj_div": "BS", "sj_nm": "재무상태표",
+            "account_nm": "유동자산", "thstrm_nm": "제 17 기", "thstrm_dt": "2025.12.31 현재",
+            "thstrm_amount": "68,240,213,217", "frmtrm_nm": "제 16 기",
+            "frmtrm_dt": "2024.12.31 현재", "frmtrm_amount": "62,931,296,103",
+            "bfefrmtrm_nm": "제 15 기", "bfefrmtrm_dt": "2023.12.31 현재",
+            "bfefrmtrm_amount": "35,454,929,770", "ord": "2", "currency": "KRW",
+        },
+        {
+            "rcept_no": "20260316001642", "reprt_code": "11011", "bsns_year": "2025",
+            "corp_code": "00963976", "stock_code": "255220",
+            "fs_div": "OFS", "fs_nm": "재무제표", "sj_div": "BS", "sj_nm": "재무상태표",
+            "account_nm": "비유동자산", "thstrm_nm": "제 17 기", "thstrm_dt": "2025.12.31 현재",
+            "thstrm_amount": "119,340,661,393", "frmtrm_nm": "제 16 기",
+            "frmtrm_dt": "2024.12.31 현재", "frmtrm_amount": "116,942,405,364",
+            "bfefrmtrm_nm": "제 15 기", "bfefrmtrm_dt": "2023.12.31 현재",
+            "bfefrmtrm_amount": "109,895,551,026", "ord": "4", "currency": "KRW",
+        },
+    ], ensure_ascii=False)
+
+    def test_account_name_renders_before_classification_meta(self):
+        """브리프 검증 요구 4(실렌더 검증): 원본 재무제표 표에서 account_nm이
+        fs_div보다 먼저 오는 열 순서로 실제 DOM에 렌더된다. financials
+        섹션은 파생 지표 표(financialRatios)도 함께 그리므로, 원본 표는
+        header_rows의 마지막(가장 아래, 원본이 파생 블록보다 나중에
+        붙는다는 ui.js 배선을 이용)에서 찾는다."""
+        got = run_render_section('"financials"', self._SG_RAW_FIELD_ORDER)
+        headers = _header_rows(got)
+        self.assertGreaterEqual(len(headers), 2, f"표가 2개(파생+원본) 미만입니다: {headers}")
+        raw_header = headers[-1]
+        self.assertIn("계정과목", raw_header, f"원본 표 헤더에 계정과목이 없습니다: {raw_header}")
+        self.assertIn("연결/별도", raw_header, f"원본 표 헤더에 연결/별도가 없습니다: {raw_header}")
+        self.assertLess(
+            raw_header.index("계정과목"), raw_header.index("연결/별도"),
+            f"account_nm이 fs_div보다 뒤에 렌더됩니다: {raw_header}",
+        )
+
+    def test_amount_columns_also_render_before_classification_meta(self):
+        """브리프 문구: "account_nm(계정과목)·금액보다 뒤로 보낸다" —
+        금액 열도 함께 확인한다."""
+        got = run_render_section('"financials"', self._SG_RAW_FIELD_ORDER)
+        raw_header = _header_rows(got)[-1]
+        self.assertIn("당기 금액", raw_header)
+        self.assertLess(
+            raw_header.index("당기 금액"), raw_header.index("연결/별도"),
+            f"금액 열이 fs_div보다 뒤에 렌더됩니다: {raw_header}",
+        )
+
+    def test_derived_ratio_table_also_leads_with_indicator_name(self):
+        """확장(브리프 명시 범위 밖, 같은 원칙 적용): 화면에 실제로 보이는
+        "재무 파생 지표" 표(buildFinancialRatiosBlock, ui.js)는
+        financialRatios()의 반환 키 순서가 아니라 자체 레코드 매핑으로
+        열을 결정한다 — financialRatios()만 고치면 이 표의 화면 순서는
+        바뀌지 않는다. 사용자가 실제로 지적한 표가 바로 이것이라 ui.js도
+        함께 고쳤다(financial_ratios sectionKey 전용, financials와
+        다르다)."""
+        got = run_render_section('"financials"', self._SG_RAW_FIELD_ORDER)
+        derived_header = _header_rows(got)[0]
+        self.assertEqual(
+            derived_header[0], "지표",
+            f"재무 파생 지표 표의 첫 열이 '지표'가 아닙니다: {derived_header}",
+        )
+        self.assertIn("구분", derived_header)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestReorderFinancialsFields(unittest.TestCase):
+    """reorderFinancialsRecord/reorderFinancialsFields(app.js) 자체를
+    직접 호출해 확인한다 — 위 실렌더 테스트와 별개로, 값 보존(키를 지우거나
+    바꾸지 않는다)과 경계 조건(우선 열이 아예 없는 레코드)을 순수 함수
+    수준에서 고정한다."""
+
+    def test_meta_keys_move_after_priority_keys_values_unchanged(self):
+        rec = {
+            "rcept_no": "1", "fs_div": "CFS", "fs_nm": "연결재무제표",
+            "sj_div": "BS", "sj_nm": "재무상태표", "account_nm": "유동자산",
+            "thstrm_amount": "100", "ord": "1",
+        }
+        got = run_js(f"reorderFinancialsRecord({json.dumps(rec, ensure_ascii=False)})")
+        keys = list(got.keys())
+        self.assertLess(keys.index("account_nm"), keys.index("fs_div"))
+        self.assertLess(keys.index("thstrm_amount"), keys.index("fs_div"))
+        # 값 자체는 하나도 바뀌지 않는다 — 순서만 바뀐다.
+        self.assertEqual(got, rec)
+
+    def test_record_without_priority_keys_is_left_untouched(self):
+        """계정과목·금액이 아예 없는 레코드(예상 밖 모양)는 옮길 기준점이
+        없다 — 원본 순서를 그대로 둔다(임의로 META를 앞으로 당기지 않는다)."""
+        rec = {"fs_div": "CFS", "sj_div": "BS", "rcept_no": "1"}
+        got = run_js(f"reorderFinancialsRecord({json.dumps(rec, ensure_ascii=False)})")
+        self.assertEqual(list(got.keys()), ["fs_div", "sj_div", "rcept_no"])
+
+    def test_reorder_fields_maps_over_the_whole_array(self):
+        records = [
+            {"fs_div": "CFS", "account_nm": "매출액", "thstrm_amount": "1"},
+            {"fs_div": "OFS", "account_nm": "영업이익", "thstrm_amount": "2"},
+        ]
+        got = run_js(f"reorderFinancialsFields({json.dumps(records, ensure_ascii=False)})")
+        for r in got:
+            self.assertEqual(list(r.keys())[0], "account_nm")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestOtherRawTablesAlreadyLeadWithTheUsefulColumn(unittest.TestCase):
+    """SE-8 Task 4 브리프 3번째 요구사항 — financials 외 다른 원본 표에도
+    "분류 메타가 핵심 값보다 앞에 있는" 패턴이 있는지 점검한다(추측이 아니라
+    각 실측으로 확인).
+
+    2026-07-30 SG(corp_code=00963976) 실측 결과:
+    - 타법인 출자(otrCprInvstmntSttus.json): 원본 필드 순서는
+      rcept_no·corp_cls·corp_code·corp_name·inv_prm·... 로 inv_prm(피출자
+      법인명)이 5번째지만, 앞 4개(rcept_no·corp_cls·corp_code·corp_name)가
+      **레코드 전부에서 값이 같다**(SG 10건 실측, 전부 unique count=1) —
+      tableLayout의 상수열 캡션 승격(app.js)이 그 4열을 표 헤더에서 걷어내
+      inv_prm이 실제 화면 헤더에서는 이미 첫 열이다. 브리프의 예상
+      ("이미 맞을 가능성 높음")이 맞았다 — 손대지 않는다.
+    - 배당(alotMatter.json → fetch_dividend_history): 원본 필드 순서는
+      rcept_no·corp_cls·corp_code·corp_name·se·stock_knd·thstrm·... 이고,
+      corp_cls·corp_code·corp_name·stock_knd는 SG 127건 실측에서 전부
+      상수(unique count=1)라 캡션으로 승격된다. 남는 건 rcept_no·se(항목명)·
+      thstrm/frmtrm/lwfr(값)·stlm_dt·bsns_year·reprt_code다 — se(그 행이
+      무엇인지)가 이미 값들 바로 앞에 온다. rcept_no가 se보다 앞서지만
+      그건 fs_div/sj_div류의 "분류 메타"가 아니라 원본 공시를 추적하는
+      식별자이고, financials처럼 계정과목을 밀어내는 패턴이 아니다 —
+      고치지 않는다.
+
+    두 표 모두 아래 테스트로 이 결론(현재 렌더 헤더 순서)을 고정한다 —
+    나중에 값이 상수가 아니게 되거나(회사가 바뀌거나) 필드 순서가
+    바뀌면 이 테스트가 먼저 깨진다."""
+
+    # SG 실측 타법인 출자 2건(2026-07-30, corp_code=00963976) — 원본
+    # 필드 순서 그대로, rcept_no·corp_cls·corp_code·corp_name·stlm_dt는
+    # 두 행 모두 같은 값(실측대로 상수).
+    _SG_AFFILIATES = json.dumps([
+        {
+            "rcept_no": "20260316001642", "corp_cls": "K", "corp_code": "00963976",
+            "corp_name": "SG", "inv_prm": "제이스코에이엠씨제일차조합",
+            "frst_acqs_de": "2015.01.21", "invstmnt_purps": "경영참여",
+            "frst_acqs_amount": "1,000,000,000", "bsis_blce_qy": "200,000",
+            "bsis_blce_qota_rt": "100.0", "bsis_blce_acntbk_amount": "2,320,000,000",
+            "incrs_dcrs_acqs_dsps_qy": "-", "incrs_dcrs_acqs_dsps_amount": "-",
+            "incrs_dcrs_evl_lstmn": "-", "trmend_blce_qy": "200,000",
+            "trmend_blce_qota_rt": "100.0", "trmend_blce_acntbk_amount": "2,320,000,000",
+            "recent_bsns_year_fnnr_sttus_tot_assets": "11,002,000,000",
+            "recent_bsns_year_fnnr_sttus_thstrm_ntpf": "-77,000,000",
+            "stlm_dt": "2025-12-31",
+        },
+        {
+            "rcept_no": "20260316001642", "corp_cls": "K", "corp_code": "00963976",
+            "corp_name": "SG", "inv_prm": "다른 피출자 법인",
+            "frst_acqs_de": "2016.03.01", "invstmnt_purps": "단순투자",
+            "frst_acqs_amount": "500,000,000", "bsis_blce_qy": "100,000",
+            "bsis_blce_qota_rt": "50.0", "bsis_blce_acntbk_amount": "1,000,000,000",
+            "incrs_dcrs_acqs_dsps_qy": "-", "incrs_dcrs_acqs_dsps_amount": "-",
+            "incrs_dcrs_evl_lstmn": "-", "trmend_blce_qy": "100,000",
+            "trmend_blce_qota_rt": "50.0", "trmend_blce_acntbk_amount": "1,000,000,000",
+            "recent_bsns_year_fnnr_sttus_tot_assets": "5,000,000,000",
+            "recent_bsns_year_fnnr_sttus_thstrm_ntpf": "100,000,000",
+            "stlm_dt": "2025-12-31",
+        },
+    ], ensure_ascii=False)
+
+    def test_affiliates_raw_table_already_leads_with_the_invested_company_name(self):
+        got = run_render_section('"affiliates"', self._SG_AFFILIATES)
+        headers = _header_rows(got)
+        self.assertTrue(headers, "타법인 출자 표 헤더를 찾지 못했습니다")
+        header = headers[0]
+        self.assertEqual(
+            header[0], "피출자 법인명",
+            f"타법인 출자 표의 첫 열이 피출자 법인명이 아닙니다: {header}",
+        )
+
+    # SG 실측 배당 2건(2026-07-30, corp_code=00963976) — corp_cls·
+    # corp_code·corp_name·stock_knd는 실측대로 상수, rcept_no·se는 변한다.
+    _SG_DIVIDENDS = json.dumps([
+        {
+            "rcept_no": "20260515002529", "corp_cls": "K", "corp_code": "00963976",
+            "corp_name": "SG", "se": "주당 액면가액(원)", "stock_knd": "-",
+            "thstrm": "500", "frmtrm": "500", "lwfr": "500",
+            "stlm_dt": "2026-03-31", "bsns_year": "2026", "reprt_code": "11013",
+        },
+        {
+            "rcept_no": "20260316001642", "corp_cls": "K", "corp_code": "00963976",
+            "corp_name": "SG", "se": "현금배당금총액(백만원)", "stock_knd": "-",
+            "thstrm": "0", "frmtrm": "0", "lwfr": "0",
+            "stlm_dt": "2025-12-31", "bsns_year": "2025", "reprt_code": "11011",
+        },
+    ], ensure_ascii=False)
+
+    def test_dividends_raw_table_item_name_already_leads_the_value_columns(self):
+        """se(항목명)가 값(thstrm/frmtrm/lwfr) 바로 앞에 이미 와 있다 —
+        rcept_no가 se보다 앞서지만 그건 fs_div류의 분류 메타가 아니라
+        공시 식별자라 브리프가 말하는 패턴이 아니다(위 클래스 docstring)."""
+        got = run_render_section('"dividends"', self._SG_DIVIDENDS)
+        headers = _header_rows(got)
+        self.assertTrue(headers, "배당 표 헤더를 찾지 못했습니다")
+        header = headers[0]
+        self.assertIn("항목", header)
+        self.assertIn("당기 값", header)
+        self.assertLess(
+            header.index("항목"), header.index("당기 값"),
+            f"항목(se)이 값보다 뒤에 렌더됩니다: {header}",
+        )
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestDividendVsIncome(unittest.TestCase):
     """SE-4f Task 4 — dividends(alotMatter)의 se 항목 중 이미 같은 백만원
     단위로 나란히 있는 "현금배당금총액"과 "당기순이익"을 사업연도·

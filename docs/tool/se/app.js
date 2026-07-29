@@ -1161,7 +1161,14 @@ function sectionBlocks(value, depth, key) {
     // 항목(문자열 등)을 "값" 한 칸에 감싸서 보존한 뒤 넘긴다. 그러지
     // 않으면 tableLayout이 비객체 항목을 조용히 걸러내(rows 필터), 예를
     // 들어 independence_warnings(문자열 리스트)가 흔적 없이 사라진다.
-    const records = toRecords(value) || [];
+    let records = toRecords(value) || [];
+    // financials 원본 표: 계정과목(account_nm)·금액이 분류 메타(fs_div·
+    // sj_div·fs_nm·sj_nm)보다 뒤에 오는 DART 원본 열 순서를 보기 좋게
+    // 재배치한다(SE-8 Task 4, reorderFinancialsFields 주석 참고). depth 0 +
+    // 부모 key로 게이트한다 — executive_roster·debt_balance.by_kind와 같은
+    // 방식이라 재귀 호출(하위 어딘가의 우연한 "financials" 키)에는 적용되지
+    // 않는다.
+    if (d === 0 && key === "financials") records = reorderFinancialsFields(records);
     // insider_timeline처럼 레코드 전부가 source 필드를 가지면(4개
     // 엔드포인트를 합친 결과) source별로 작은 표 여러 개로 나눈다 —
     // source가 없는 다른 섹션은 이 분기를 타지 않는다(recordsHaveSourceField
@@ -1471,6 +1478,53 @@ const FS_DIV_LABELS = Object.create(null);
 FS_DIV_LABELS.CFS = "연결";
 FS_DIV_LABELS.OFS = "별도";
 
+// financials 원본 표(원본 필드 그대로, financialRatios 파생값이 아니다)의
+// 열 순서를 계정과목·금액 중심으로 재배치한다(SE-8 Task 4). DART가 주는
+// /fnlttSinglAcnt.json 필드 순서는 실측(SG, corp_code=00963976, 2026-07-30)
+// 기준 rcept_no·reprt_code·bsns_year·corp_code·stock_code·**fs_div·fs_nm·
+// sj_div·sj_nm**·account_nm·thstrm_nm·thstrm_dt·thstrm_amount·... 순이다 —
+// 분류 메타(연결/별도, 재무상태표/손익계산서)가 계정과목보다 앞에 온다.
+// tableLayout(위)은 각 레코드의 키 "등장 순서"를 그대로 헤더 순서로 쓰므로
+// (Object.keys 기반), 렌더 직전 이 함수로 그 순서를 한 번 바꾼다 — DART
+// 응답 자체나 core(dart_client.py)는 건드리지 않는다(이 파일 수정
+// 범위 밖).
+//
+// META(분류 메타)를 PRIORITY(계정과목·금액) 중 마지막으로 등장하는 열
+// 바로 뒤로 옮긴다 — 그 외 열(rcept_no·기간명·순번 등)의 상대 순서는
+// 손대지 않는다. PRIORITY가 레코드에 하나도 없으면(예상 밖 모양) 원본을
+// 그대로 둔다 — 옮길 기준점이 없는데 META를 앞으로 당기면 오히려 임의
+// 순서가 된다.
+const FINANCIALS_META_KEYS = ["fs_div", "sj_div", "fs_nm", "sj_nm"];
+const FINANCIALS_PRIORITY_KEYS = ["account_nm", "thstrm_amount", "frmtrm_amount", "bfefrmtrm_amount"];
+
+function reorderFinancialsRecord(r) {
+  if (!r || typeof r !== "object") return r;
+  const keys = Object.keys(r);
+  const hasPriority = keys.some(function (k) { return FINANCIALS_PRIORITY_KEYS.indexOf(k) !== -1; });
+  if (!hasPriority) return r;
+
+  const metaSet = new Set(FINANCIALS_META_KEYS);
+  const rest = keys.filter(function (k) { return !metaSet.has(k); });
+  let insertAt = 0;
+  for (let i = 0; i < rest.length; i++) {
+    if (FINANCIALS_PRIORITY_KEYS.indexOf(rest[i]) !== -1) insertAt = i + 1;
+  }
+  const metaPresent = keys.filter(function (k) { return metaSet.has(k); });
+  const newKeys = rest.slice(0, insertAt).concat(metaPresent, rest.slice(insertAt));
+
+  const out = Object.create(null);
+  for (const k of newKeys) out[k] = r[k];
+  return out;
+}
+
+/** financials(원본 재무제표 레코드 배열) 전체에 reorderFinancialsRecord를
+ *  적용한다. sectionBlocks가 "financials" 섹션을 tableLayout에 넘기기
+ *  직전 호출한다 — 값 자체는 하나도 바꾸지 않는다(순서만). */
+function reorderFinancialsFields(records) {
+  if (!Array.isArray(records)) return records;
+  return records.map(reorderFinancialsRecord);
+}
+
 // financialRatios가 만드는 기간 3종과, 각 기간이 financials 레코드의 어느
 // 금액 열에서 오는지의 대응표. **당기를 마지막에 둔다** — 이 배열 순서가
 // 곧 출력 레코드의 순서이고(전전기→전기→당기), 그 순서가 그대로 두 곳에서
@@ -1592,7 +1646,14 @@ function computeRatio(구분, 기간, def, accounts, field) {
     값 = (numVal / denVal) * 100;
   }
 
-  const out = { 구분: 구분, 기간: 기간, 지표: def.name, 값: 값, 계산식: def.formula, 재료: 재료 };
+  // SE-8 Task 4: 반환 키 순서는 지표→값→구분→기간→계산식→재료다(task-4-brief.md
+  // — 실사용자 지적: "표를 구성할 때 이용자에게 어떤 정보가 유용할지 고민부터
+  // 하고 배치를 해야한다"). 구분(연결/별도)은 지우지 않는다 — 순서만
+  // 뒤로 밀 뿐, 각 값 옆에 그대로 붙어 있다(SE-4f 원칙: 연결·별도를 섞으면
+  // 거짓이 된다). 이 함수를 키 "이름"으로 읽는 호출부(ratioBasisText의
+  // row.계산식·row.재료, buildFinancialRatiosBlock의 r.구분 등)는 순서가
+  // 아니라 이름으로 접근하므로 이 재배치에 영향받지 않는다.
+  const out = { 지표: def.name, 값: 값, 구분: 구분, 기간: 기간, 계산식: def.formula, 재료: 재료 };
   if (값 === null) out.사유 = 사유;
   return out;
 }
@@ -1633,9 +1694,11 @@ function computeCapitalImpairment(구분, 기간, accounts, field) {
     }
   }
 
+  // 키 순서는 computeRatio와 같은 이유로 지표→값→구분→기간→계산식→재료다
+  // (SE-8 Task 4, 위 computeRatio 주석 참고).
   const out = {
-    구분: 구분, 기간: 기간, 지표: "자본잠식률",
-    값: 값, 계산식: "(자본금 − 자본총계) ÷ 자본금", 재료: 재료,
+    지표: "자본잠식률", 값: 값, 구분: 구분, 기간: 기간,
+    계산식: "(자본금 − 자본총계) ÷ 자본금", 재료: 재료,
   };
   if (값 === null) out.사유 = 사유;
   return out;
@@ -3386,5 +3449,7 @@ if (typeof module !== "undefined" && module.exports) {
     normalizeIndicatorCategory, indicatorRows, indicatorYearNote,
     DART_REMARK_LABELS, formatRemark, KIND_LABELS,
     isFootnoteMarkerOnly, footnoteMarkerNote,
+    FINANCIALS_META_KEYS, FINANCIALS_PRIORITY_KEYS,
+    reorderFinancialsRecord, reorderFinancialsFields,
   };
 }

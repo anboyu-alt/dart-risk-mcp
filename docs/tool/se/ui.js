@@ -1316,12 +1316,21 @@ function buildFinancialRatiosBlock(ratios) {
     + "연결과 별도를 섞지 않고 계산식과 재료 값을 함께 표시합니다.";
   wrap.appendChild(notice);
 
+  // SE-8 Task 4: 열 순서는 지표→값→구분→기간→계산식·재료다 — 실사용자가
+  // 이 표를 지적했다("표를 구성할 때 이용자에게 어떤 정보가 유용할지 고민부터
+  // 하고 배치를 해야한다"). 분류 메타(구분·기간)를 값보다 먼저 보여주던
+  // 순서를 뒤집는다. tableLayout(app.js)이 각 레코드의 키 등장 순서를
+  // 그대로 표 헤더로 쓰므로(Object.keys 기반) 여기서 만드는 객체의 키
+  // 순서가 곧 화면 순서다 — app.js의 financialRatios() 자체도 같은
+  // 원칙으로 반환 키 순서를 바꿨다(computeRatio·computeCapitalImpairment
+  // 주석 참고). 구분은 지우지 않는다 — 위치만 옮길 뿐, 각 값 옆에 그대로
+  // 남아 있다(SE-4f: 연결·별도를 섞으면 거짓이 된다).
   const records = ratios.map(function (r) {
     return {
-      구분: r.구분,
-      기간: r.기간,
       지표: r.지표,
       값: r.값 === null ? r.사유 : (r.값.toFixed(1) + "%"),
+      구분: r.구분,
+      기간: r.기간,
       "계산식·재료": ratioBasisText(r),
     };
   });
