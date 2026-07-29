@@ -291,6 +291,84 @@ class TestActorsLoadsRegistryOnce(unittest.TestCase):
         self.assertEqual(len(self.calls), 1, f"캐시 조회 {len(self.calls)}회")
 
 
+_SAMPLE_RECORDS = [
+    {"status": "auto_matched", "companies": ["FSN", "위노바"], "evidence": "자동 발굴"},
+]
+
+
+class TestActorsByName(unittest.TestCase):
+    """Task 1(SE-6) — 이름 단위 조회. `?name=`은 `?company=`와 같은 라우트,
+    같은 응답 껍데기를 쓰되 name/actors 형태로 낸다."""
+
+    def test_returns_actors_for_name(self):
+        with mock.patch("se_server.api.handlers.lookup_actor",
+                        return_value=_SAMPLE_RECORDS) as f:
+            resp = handle(_req("/api/se/actors?name=이승호"), _deps())
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(f.call_args[0][0], "이승호")
+        self.assertEqual(resp.body["name"], "이승호")
+        self.assertEqual(len(resp.body["actors"]), 1)
+        actor = resp.body["actors"][0]
+        self.assertEqual(actor["status"], "auto_matched")
+        self.assertEqual(actor["companies"], ["FSN", "위노바"])
+
+    def test_unknown_name_is_empty_not_404(self):
+        """없는 이름은 오류가 아니다 — 200 + 빈 목록."""
+        with mock.patch("se_server.api.handlers.lookup_actor", return_value=[]):
+            resp = handle(_req("/api/se/actors?name=존재안함"), _deps())
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(resp.body["actors"], [])
+
+    def test_name_and_company_together_is_400(self):
+        with mock.patch("se_server.api.handlers.lookup_actor") as la, \
+             mock.patch("se_server.api.handlers.lookup_actors_by_company") as lc:
+            resp = handle(_req("/api/se/actors?name=이승호&company=엔켐"), _deps())
+        self.assertEqual(resp.status, 400)
+        la.assert_not_called()
+        lc.assert_not_called()
+
+    def test_neither_name_nor_company_is_400(self):
+        with mock.patch("se_server.api.handlers.lookup_actor") as la:
+            resp = handle(_req("/api/se/actors"), _deps())
+        self.assertEqual(resp.status, 400)
+        la.assert_not_called()
+
+    def test_registry_unavailable_is_502_not_empty(self):
+        """bundled + opt-in = 조회 실패. 문구가 "없음"이 아니라 "조회 실패"."""
+        with mock.patch.dict("os.environ",
+                             {"NOTION_TOKEN": "t", "DB_KNOWN_ACTORS": "db"}, clear=False), \
+             mock.patch("se_server.api.handlers.load_known_actors_with_source",
+                         return_value=({"version": 1, "actors": {}}, "bundled")), \
+             mock.patch("se_server.api.handlers.lookup_actor") as la:
+            resp = handle(_req("/api/se/actors?name=이승호"), _deps())
+        self.assertEqual(resp.status, 502)
+        la.assert_not_called()
+        message = resp.body.get("error", "")
+        self.assertIn("조회", message)
+        self.assertNotIn("없습니다", message)
+
+    def test_disclaimer_is_always_present(self):
+        with mock.patch("se_server.api.handlers.lookup_actor",
+                        return_value=_SAMPLE_RECORDS):
+            resp = handle(_req("/api/se/actors?name=이승호"), _deps())
+        self.assertIn("disclaimer", resp.body)
+        self.assertTrue(resp.body["disclaimer"])
+
+    def test_requires_auth(self):
+        with mock.patch("se_server.api.handlers.lookup_actor") as la:
+            resp = handle(_req("/api/se/actors?name=이승호", token=""), _deps())
+        self.assertEqual(resp.status, 401)
+        la.assert_not_called()
+
+    def test_empty_status_downgrades_to_auto_matched(self):
+        """actor_status를 경유해야 한다 — `== "auto_matched"` 동등비교로 짜면
+        빈 문자열이 그대로 새어나가 이 테스트가 실패한다."""
+        sample = [{"status": "", "companies": ["FSN"], "evidence": "e"}]
+        with mock.patch("se_server.api.handlers.lookup_actor", return_value=sample):
+            resp = handle(_req("/api/se/actors?name=이승호"), _deps())
+        self.assertEqual(resp.body["actors"][0]["status"], "auto_matched")
+
+
 class TestQueryParsing(unittest.TestCase):
     def test_company_is_url_decoded(self):
         with mock.patch("se_server.api.handlers.lookup_actors_by_company",
