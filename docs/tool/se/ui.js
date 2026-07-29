@@ -1707,12 +1707,17 @@ function buildAffiliateOverviewBlock(records) {
  *  그린다. renderSection이 sectionBlocks/tableLayout 경로를 아예 타지
  *  않고 이 함수를 직접 부른다(위 renderSection 주석 참고).
  *
- *  뜻(note) 열은 primary 표에만 있다 — rest 표까지 뜻 열을 만들면 44개
- *  지표 대부분이 빈 칸으로 줄줄이 이어진다(브리프 지적). rest는 기존
- *  열 접기와 같은 시각 패턴(.fold-btn 버튼 + .fold-detail 토글)을
- *  재사용한다 — "표 전체를 접는다"는 tableEl()의 열 단위 접기와 모양이
- *  달라 그 함수를 그대로 재사용하지 않고 클래스만 같이 쓴다(아래
- *  indicatorRestFold 참고). */
+ *  뜻(note) 열은 primary·rest 표 모두에 있다(SE-8 Task 5). SE-4h
+ *  Task 2 때는 66개 중 22개에만 뜻이 있어 rest(접힌 44개) 표까지 뜻
+ *  열을 만들면 대부분이 빈 칸이었다 — 그래서 그때는 primary 표에만
+ *  열을 뒀다. 사용자가 실측으로 지적한 문제(일부 지표는 이름+뜻이
+ *  보이는데 접힌 지표는 뜻이 아예 안 보인다)가 바로 그 결과였다.
+ *  지금은 66개 중 65개(유보액대비율 제외)에 뜻이 있어 그 전제가 더는
+ *  맞지 않는다 — rest도 indicatorTableEl(..., true)로 그린다(아래
+ *  indicatorRestFold). rest는 여전히 기존 열 접기와 같은 시각 패턴
+ *  (.fold-btn 버튼 + .fold-detail 토글)을 쓴다 — "표 전체를 접는다"는
+ *  tableEl()의 열 단위 접기와 모양이 달라 그 함수를 그대로 재사용하지
+ *  않고 클래스만 같이 쓴다. */
 function renderIndicatorBlocks(holder, value, wrap) {
   const blocks = indicatorBlocks(value);
 
@@ -1858,9 +1863,14 @@ function indicatorTableEl(entries, withNote) {
   return frag;
 }
 
-/** rest(접힌 44개 지표)를 기존 .fold-btn/.fold-detail과 같은 시각
- *  패턴(버튼 + hidden 토글)으로 접는다 — 없애는 게 아니라 접는 것이므로
- *  클릭하면 언제든 볼 수 있다(tableEl()의 열 접기와 같은 원칙). */
+/** rest(접힌 지표)를 기존 .fold-btn/.fold-detail과 같은 시각 패턴(버튼 +
+ *  hidden 토글)으로 접는다 — 없애는 게 아니라 접는 것이므로 클릭하면
+ *  언제든 볼 수 있다(tableEl()의 열 접기와 같은 원칙).
+ *
+ *  indicatorTableEl(restEntries, true) — SE-8 Task 5부터 rest도 뜻 열을
+ *  그린다(위 renderIndicatorBlocks 주석 참고). 뜻이 없는 지표(유보액대비율
+ *  등)는 entry.note가 ""라 그 칸만 빈 채로 보인다 — 표 전체를 숨기지
+ *  않는다. */
 function indicatorRestFold(restEntries) {
   const wrap = document.createElement("div");
 
@@ -1873,7 +1883,7 @@ function indicatorRestFold(restEntries) {
   const detail = document.createElement("div");
   detail.className = "fold-detail";
   detail.hidden = true;
-  detail.appendChild(indicatorTableEl(restEntries, false));
+  detail.appendChild(indicatorTableEl(restEntries, true));
   wrap.appendChild(detail);
 
   btn.addEventListener("click", function () {
