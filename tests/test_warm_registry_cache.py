@@ -206,6 +206,36 @@ class TestChildOutputIsNeverPassedThrough(unittest.TestCase):
         self.assertEqual(n, 1258)
         self.assertEqual(reason, "")
 
+    def test_row_missing_is_reported_as_such(self):
+        """2026-07-29 첫 프로덕션 실행이 사유 없는 [FAIL]을 냈다. 쓰기는
+        실제로 성공했는데(별도 확인: 행 존재·인물 1273명) 읽기 실패의 사유가
+        비어 있어 조사가 막혔다. '행을 못 받았다'는 사실은 반드시 남는다."""
+        ok, _, reason = self._run_child(self._Proc(stdout="READBACK_NONE\n"))
+        self.assertFalse(ok)
+        self.assertTrue(reason)
+        self.assertIn("None", reason)
+        _no_names(self, reason)
+
+    def test_wrong_shape_reports_type_name_only(self):
+        ok, _, reason = self._run_child(
+            self._Proc(stdout="READBACK_SHAPE list\n"))
+        self.assertFalse(ok)
+        self.assertIn("list", reason)
+        _no_names(self, reason)
+
+    def test_shape_token_that_is_not_an_identifier_is_dropped(self):
+        ok, _, reason = self._run_child(self._Proc(
+            stdout=f"READBACK_SHAPE {_ACTOR_A}/{_COMPANY_A}\n"))
+        self.assertFalse(ok)
+        _no_names(self, reason)
+
+    def test_silent_child_still_yields_a_reason(self):
+        """자식이 아무 표식도 안 내고 종료코드 0·stderr 없음이면 예전엔
+        사유가 빈 문자열이었다 — 프로덕션에서 실제로 그렇게 나왔다."""
+        ok, _, reason = self._run_child(self._Proc(stdout=""))
+        self.assertFalse(ok)
+        self.assertTrue(reason, "사유가 비면 다음 조사가 막힌다")
+
     def test_stderr_presence_without_type_is_reported_as_fact_only(self):
         ok, _, reason = self._run_child(
             self._Proc(stderr=f"{_ACTOR_B} 경고", returncode=0))

@@ -90,8 +90,14 @@ except Exception as exc:
 else:
     if isinstance(data, dict) and isinstance(data.get("actors"), dict):
         print(f"READBACK_OK {{len(data['actors'])}}")
+    elif data is None:
+        # 캐시에 행이 없거나(미기록) 읽기가 거부됐다(자격증명·RLS). 둘 다
+        # get_json이 예외를 삼키고 None을 주므로 여기서는 구분되지 않는다 —
+        # 그래도 "형태가 이상함"과는 갈라 놔야 다음 조사가 가능하다.
+        print("READBACK_NONE")
     else:
-        print("READBACK_FAIL")
+        # 행은 있는데 모양이 다르다. 타입 이름만 낸다(값에는 실명이 있다).
+        print("READBACK_SHAPE " + type(data).__name__)
 """
 
 # 자식이 보고한 예외 유형 이름으로 인정할 형태. 파이썬 식별자만 통과시킨다 —
@@ -115,6 +121,7 @@ def _readback_in_child_process() -> tuple[bool, int, str]:
         [sys.executable, "-c", code], capture_output=True, text=True,
         encoding="utf-8", errors="replace", env=os.environ.copy(), cwd=str(_ROOT))
     err_type = ""
+    marker = ""
     for line in (proc.stdout or "").splitlines():
         if line.startswith("READBACK_OK "):
             try:
@@ -125,15 +132,31 @@ def _readback_in_child_process() -> tuple[bool, int, str]:
             token = line[len("READBACK_ERR "):].strip()
             if _ERR_TYPE_RE.match(token):
                 err_type = token
+        elif line.startswith("READBACK_NONE"):
+            marker = "none"
+        elif line.startswith("READBACK_SHAPE "):
+            token = line[len("READBACK_SHAPE "):].strip()
+            marker = f"shape:{token}" if _ERR_TYPE_RE.match(token) else "shape"
 
     if err_type:
         reason = f"자식 예외 유형 {err_type}"
+    elif marker == "none":
+        # 2026-07-29 첫 프로덕션 실행이 사유 없는 [FAIL]을 냈다. 쓰기는 실제로
+        # 성공했고(별도 확인: 행 존재, 인물 1273명) 읽기만 실패했는데, 그때
+        # 자식은 "형태가 아님"과 "아예 없음"을 구분하지 않아 조사가 막혔다.
+        # get_json은 자격증명·RLS 거부도 예외를 삼키고 None을 주므로 이 둘은
+        # 여기서 갈리지 않는다 — 그 사실까지 문구에 적어 다음 사람이 헛다리를
+        # 짚지 않게 한다.
+        reason = ("캐시에서 행을 받지 못함(get_json→None) — 미기록·자격증명·"
+                  "RLS 중 어느 것인지는 이 신호만으로 갈리지 않음")
+    elif marker.startswith("shape"):
+        reason = f"행은 있으나 형태가 예상과 다름({marker.split(':', 1)[-1]})"
     elif proc.returncode:
         reason = f"자식 종료코드 {int(proc.returncode)}"
     elif (proc.stderr or "").strip():
         reason = "자식 stderr 있음(내용은 출력하지 않음)"
     else:
-        reason = ""
+        reason = "자식이 아무 표식도 내지 않음"
     return False, 0, reason
 
 

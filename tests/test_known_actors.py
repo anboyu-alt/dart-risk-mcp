@@ -587,6 +587,128 @@ class TestKnownActors(unittest.TestCase):
         payload = post.call_args.kwargs["json"]
         self.assertEqual(payload["properties"]["구분"]["select"]["name"], "조합")
 
+    # ── 2026-07-29 사고 대응: 재시도 + 진단 로그 ──────────────────────
+    # 4/5건 성공(=레이트리밋 패턴)이 "자격증명 확인 필요"로 오진단됐다.
+    # add_registry_record는 상태코드·오류를 삼키고 True/False만 반환했고
+    # 429 재시도도 없었다. 아래는 그 결함을 재현하는 실패 테스트다.
+
+    def test_notion_credentials_configured_reflects_env(self):
+        import os
+        from unittest.mock import patch as _p
+        from dart_risk_mcp.core.known_actors import notion_credentials_configured
+        with _p.dict(os.environ, {"NOTION_TOKEN": "t", "DB_KNOWN_ACTORS": "db"}):
+            self.assertTrue(notion_credentials_configured())
+        with _p.dict(os.environ, {}, clear=False):
+            for k in ("NOTION_TOKEN", "DB_KNOWN_ACTORS"):
+                os.environ.pop(k, None)
+            self.assertFalse(notion_credentials_configured())
+
+    def test_add_registry_record_retries_on_429_then_succeeds(self):
+        """레이트리밋(429) 1회 후 200이면 재시도로 성공해야 한다 — 이게
+        오늘 사고(4/5건 성공)의 실제 원인일 가능성이 높다."""
+        from unittest.mock import patch as _p, MagicMock
+        from dart_risk_mcp.core import known_actors as ka
+        resp429 = MagicMock(status_code=429, headers={})
+        resp200 = MagicMock(status_code=200, headers={})
+        with _p("dart_risk_mcp.core.known_actors.requests.post",
+                side_effect=[resp429, resp200]) as post, \
+                _p.object(ka.time, "sleep") as sleep:
+            ok = ka.add_registry_record(
+                "홍길동", {"source": "s", "evidence": "e"}, token="t", db_id="db")
+        self.assertTrue(ok)
+        self.assertEqual(post.call_count, 2)
+        sleep.assert_called()  # 백오프 없이 즉시 재시도하면 안 됨
+
+    def test_add_registry_record_honors_retry_after_header(self):
+        """Notion이 Retry-After를 주면 그 값을 대기 시간으로 써야 한다
+        (DART용 dart_client._retry는 이 헤더를 보지 않으므로 별도 구현 필요)."""
+        from unittest.mock import patch as _p, MagicMock
+        from dart_risk_mcp.core import known_actors as ka
+        resp429 = MagicMock(status_code=429, headers={"Retry-After": "1.5"})
+        resp200 = MagicMock(status_code=200, headers={})
+        with _p("dart_risk_mcp.core.known_actors.requests.post",
+                side_effect=[resp429, resp200]), \
+                _p.object(ka.time, "sleep") as sleep:
+            ok = ka.add_registry_record(
+                "홍길동", {"source": "s", "evidence": "e"}, token="t", db_id="db")
+        self.assertTrue(ok)
+        sleep.assert_called_once_with(1.5)
+
+    def test_add_registry_record_exhausts_retries_returns_false_and_logs_diagnosis(self):
+        """재시도를 모두 소진해도 예외를 전파하지 않고 False를 반환하되,
+        상태코드와 Notion 오류 메시지를 로그로 남겨야 한다(사고 당시엔
+        아무 근거도 안 남아 원인을 알 수 없었다)."""
+        from unittest.mock import patch as _p, MagicMock
+        from dart_risk_mcp.core import known_actors as ka
+        resp = MagicMock(status_code=429, headers={})
+        resp.json.return_value = {"code": "rate_limited", "message": "너무 빠릅니다"}
+        with _p("dart_risk_mcp.core.known_actors.requests.post",
+                return_value=resp) as post, \
+                _p.object(ka.time, "sleep"), \
+                self.assertLogs("dart_risk_mcp.core.known_actors", level="WARNING") as logs:
+            ok = ka.add_registry_record(
+                "홍길동", {"source": "s", "evidence": "e"}, token="t", db_id="db")
+        self.assertFalse(ok)
+        self.assertEqual(post.call_count, 3)  # 최대 3회, dart_client._retry와 동일 정책
+        joined = "\n".join(logs.output)
+        self.assertIn("429", joined)
+        self.assertIn("rate_limited", joined)
+
+    def test_add_registry_record_network_exception_exhausted_returns_false(self):
+        """네트워크 예외가 재시도를 모두 소진해도 호출측에 전파되면 안 된다
+        (레지스트리 코드는 예외를 삼킨다는 저장소 원칙)."""
+        from unittest.mock import patch as _p
+        import requests as _requests
+        from dart_risk_mcp.core import known_actors as ka
+        with _p("dart_risk_mcp.core.known_actors.requests.post",
+                side_effect=_requests.exceptions.ConnectionError("boom")) as post, \
+                _p.object(ka.time, "sleep"):
+            ok = ka.add_registry_record(
+                "홍길동", {"source": "s", "evidence": "e"}, token="t", db_id="db")
+        self.assertFalse(ok)
+        self.assertEqual(post.call_count, 3)
+
+    def test_add_registry_record_error_log_omits_notion_message_entirely(self):
+        """Notion 오류 message는 검증 실패 시 문제가 된 값을 인용하는 사례가
+        있다. 이 레포는 public이고 Actions 로그도 public이며 레지스트리는
+        실명 데이터이므로 **자유 텍스트를 통째로 남기지 않는다.**
+
+        길이 제한으로는 부족하다 — 이름이 메시지 앞부분에 오면 잘라도 남는다.
+        조치는 code(고정 enum)만으로 정해지므로 그것만 남긴다."""
+        from unittest.mock import patch as _p, MagicMock
+        from dart_risk_mcp.core import known_actors as ka
+        leaked_name = "홍길동"
+        leaked_company = "주식회사에코"
+        message = f"body.properties.관련기업 should be defined, got {leaked_name}/{leaked_company}"
+        resp = MagicMock(status_code=400, headers={})
+        resp.json.return_value = {"code": "validation_error", "message": message}
+        with _p("dart_risk_mcp.core.known_actors.requests.post",
+                return_value=resp), \
+                self.assertLogs("dart_risk_mcp.core.known_actors", level="WARNING") as logs:
+            ok = ka.add_registry_record(
+                leaked_name, {"source": "s", "evidence": "e",
+                              "companies": [leaked_company]},
+                token="t", db_id="db")
+        self.assertFalse(ok)
+        joined = "\n".join(logs.output)
+        # 조치에 필요한 것은 남는다
+        self.assertIn("400", joined)
+        self.assertIn("validation_error", joined)
+        # 실명·회사명은 어디에도 남지 않는다 — 메시지 앞부분이어도 마찬가지
+        self.assertNotIn(leaked_name, joined)
+        self.assertNotIn(leaked_company, joined)
+        self.assertNotIn("should be defined", joined)
+
+    def test_add_registry_record_other_exception_returns_false_without_raising(self):
+        """레코드 형태가 예상과 달라 내부에서 예외가 나도(예: build_change_summary
+        가 아니라 props 조립 단계) 호출측에는 전파되지 않고 False만 온다."""
+        from dart_risk_mcp.core.known_actors import add_registry_record
+        # companies가 문자열 슬라이스 불가능한 값이면 내부 처리에서 예외가 남
+        ok = add_registry_record(
+            "홍길동", {"source": "s", "evidence": "e", "companies": [123, 456]},
+            token="t", db_id="db")
+        self.assertFalse(ok)
+
     def test_lookup_merges_records_across_html_entity_duplicate_keys(self):
         # 실측 사고 재현: 파싱 오류로 같은 실체가 '삼성전자 주식회사'와
         # '삼성전자 &CR;주식회사' 두 키로 저장됨. normalize_name은 이미 두 키를
