@@ -102,6 +102,15 @@ const LABELS = Object.assign(Object.create(null), {
   plan_useprps: "계획 용도", plan_amount: "계획 금액",
   real_dtls_cn: "실제 집행 내역", real_dtls_amount: "실제 집행 금액",
   dffrnc_resn: "차이 발생 사유",
+  // fundChain(uses[], SE-5a Task 3)이 조달건×용도 단위로 묶은 뒤 만드는
+  // 파생 필드다 — DART 원본 필드명(plan_useprps 등)과는 다른 별도 이름을
+  // 쓴다. fundChainCardEl(ui.js)의 표 열 키가 이 이름 그대로다 — SE-8
+  // Task 8B의 강조 규칙(MARK_RULES.fund_chain, key: "real")이 좌표
+  // "행번호|열키"로 표의 열과 짝을 맞추려면 rows의 property 이름이 이
+  // 라벨의 키와 글자 그대로 같아야 한다(affiliates 등 다른 표와 같은
+  // 관례 — 한글 문자열을 직접 키로 쓰면 그 좌표가 어긋나 강조가 조용히
+  // 사라진다).
+  purpose: "용도", plan: "계획", real: "보고된 집행", diff_reason: "차이 사유",
 
   // ── 타법인 출자
   inv_prm: "피출자 법인명", invstmnt_purps: "출자 목적",
@@ -197,7 +206,43 @@ const LABELS = Object.assign(Object.create(null), {
   debt_kind: "채무 종류",
   opinions: "감사의견", auditor_changes: "감사인 교체",
   independence_warnings: "감사인 독립성 경고",
+  // ── 감사의견 이력(audit_history.opinions 레코드, SE-8 Task 7) — 실사용자
+  // (SG, corp_code=00963976) 지적: opinion·auditor·tenure_years가 영문
+  // 필드명 그대로 노출됐다. 단위 모호성이 없는 필드라 정상 라벨링한다
+  // (dart_client.fetch_audit_opinion_history docstring 그대로:
+  // {year, opinion, auditor, tenure_years, audit_fee_okwon,
+  // non_audit_fee_okwon}). audit_fee_okwon·non_audit_fee_okwon은 여기
+  // 없다 — CLAUDE.md 269행의 기존 결정("단위 천원/백만원 혼용으로
+  // v0.8.0에서 생략")을 그대로 따라 렌더 경로에서 뺀다(아래
+  // sectionBlocks의 audit_history.opinions 특수 처리 참고). 새 단위
+  // 라벨을 짓지 않는다 — 그 자체가 v0.8.0이 피하려던 함정이다.
+  //
+  // opinion을 "감사의견"으로 쓰지 못한다 — 그 값은 이미 위 opinions(리스트
+  // 키, 이 레코드 배열 전체를 감싸는 블록 제목)가 쓰고 있어 LABELS 값
+  // 전역 유일성(test_no_label_collides_with_a_different_raw_key)과
+  // 충돌한다. 표 자체가 이미 "감사의견"이라는 제목 아래 그려지므로,
+  // 그 안에서 구분되는 "의견"을 쓴다.
+  opinion: "의견", auditor: "감사인", tenure_years: "연속 재직 연수",
+  // auditor_changes 레코드({from_year, to_year, from, to}). 라이브 검증
+  // (2026-07-30, 두산에너빌리티 00159193, lookback_years=5):
+  // {"from_year": 2024, "to_year": 2025, "from": "한영회계법인",
+  // "to": "삼정회계법인"} 1건 실측 — SG는 이 목록이 비어 있어(실측 확인)
+  // 검증하지 못했다.
+  from_year: "교체 전 연도", to_year: "교체 후 연도",
+  from: "교체 전 감사인", to: "교체 후 감사인",
   major_holders: "최대주주", bulk_holders: "5% 대량보유",
+  // bulk_holders(위)의 원본 필드(dart_client.fetch_shareholder_status가
+  // /majorstock.json 응답을 개명 없이 그대로 싣는다 — 위 MARK_RULES.
+  // shareholders 주석에서 이미 확인됨). SE-8 Task 6 실사용자(SG,
+  // corp_code=00963976) 지적: stkqy·stkrt·ctr_stkqy가 raw로 노출됐다.
+  // 값은 opendart_api_guide.md §4.1(대량보유 상황보고, 2019021) "응답
+  // 결과" 표의 "명칭" 열을 그대로 옮긴 것이다(추측 금지 — 임의로 지어낸
+  // 한글명이 아니다). 같은 표의 나머지 형제 필드도 함께 채운다 — 셋만
+  // 고치면 같은 표의 나머지 열이 여전히 raw로 남는다.
+  stkqy: "보유주식등의 수", stkqy_irds: "보유주식등의 증감",
+  stkrt: "보유비율", stkrt_irds: "보유비율 증감",
+  ctr_stkqy: "주요체결 주식등의 수", ctr_stkrt: "주요체결 보유비율",
+  report_tp: "보고구분", report_resn: "보고사유",
 
   // ── 공시 원문
   text: "본문", files: "파일 목록", main_file: "주 파일",
@@ -267,6 +312,99 @@ const REPRT_CODE_LABELS = Object.assign(Object.create(null), {
   "11013": "1분기보고서", "11014": "3분기보고서",
 });
 
+// 공시 목록 rm(비고) 필드의 DART 공식 코드 → 한국어. dart_client 실측(SG,
+// corp_code=00963976)에서 나온 값 집합은 {'연','정','코','코정'}이었지만
+// DART가 공식 문서에 정의한 코드는 여덟 개다(fetch_company_disclosures
+// docstring 근거) — 실측에 없던 나머지도 미리 채운다. 값 자체가 **문자
+// 단위로 조합**돼 나온다("코정" = "코"+"정", 구분자 없음)는 것이 이
+// 코드의 핵심 함정이다 — 아래 formatRemark가 문자 단위로 분해한다.
+const DART_REMARK_LABELS = Object.assign(Object.create(null), {
+  "유": "유가증권", "코": "코스닥", "채": "채권상장법인", "넥": "코넥스",
+  "공": "공정위 대상 기업집단", "연": "연결대상 종속회사 있음",
+  "정": "정정신고", "철": "철회",
+});
+
+/** rm(비고) 값을 사람이 읽는 말로 바꾼다. **모든 문자가 DART_REMARK_LABELS에
+ *  있는 여덟 개 코드 중 하나일 때만** 문자 단위로 분해해 각각 매핑하고
+ *  " · "로 이어붙인다("코정" -> "코스닥 · 정정신고"). 이 필드(rm)는 두
+ *  서로 다른 코드 체계를 같은 이름으로 쓴다(위 DART_REMARK_LABELS 주석
+ *  참고): 공시 목록(list.json)에서는 8개 코드의 문자 조합이지만, 다른
+ *  여러 엔드포인트(예: hyslrSttus·hyslrChgSttus)에서는 같은 필드 이름이
+ *  자유서술형 비고("시간외매매", "이사 임기만료" 등)로 온다. 문자 단위
+ *  분해를 무조건 적용하면 이런 자유서술형 문장이 한 글자씩 쪼개져
+ *  " · "로 이어붙는 사고가 난다(SE-8 최종 리뷰 지적 — 삼성전자
+ *  fetch_insider_timeline 라이브 재현: "시간외매매" -> "시 · 간 · 외 ·
+ *  매 · 매"). **한 글자라도 8개 코드에 없으면(공백·조사·코드 아닌
+ *  한글 등) 분해하지 않고 원문을 그대로 돌려준다** — REPRT_CODE_LABELS·
+ *  label()과 같은 "모르면 숨기지 않는다" 계약이되, 여기서는 "부분적으로
+ *  안다"고 절반만 번역하지 않고 통째로 원문을 지킨다(전부 알거나 전혀
+ *  건드리지 않거나, 둘 중 하나).
+ *
+ *  빈 값·"-"는 isNoDataMarker가 이미 결측으로 판정하는 값이라 새로
+ *  재구현하지 않고 그대로 재사용한다: null/undefined는 formatValue의
+ *  다른 필드와 같은 결측 표기("")로 맞추고, "-"는 이미 그 자체로 DART가
+ *  쓰는 결측 마커라 문자 분해 없이 원문 그대로 돌려준다(빈 문자열도
+ *  같은 경로로 그대로 ""를 돌려준다 — 분해할 문자가 없다는 뜻).
+ */
+function formatRemark(rm) {
+  if (isNoDataMarker(rm)) return (rm === null || rm === undefined) ? "" : rm;
+  const s = String(rm);
+  const chars = s.split("");
+  const allCoded = chars.length > 0 && chars.every(function (ch) {
+    return Object.prototype.hasOwnProperty.call(DART_REMARK_LABELS, ch);
+  });
+  if (!allCoded) return s;
+  return chars.map(function (ch) { return DART_REMARK_LABELS[ch]; }).join(" · ");
+}
+
+// SE-8 Task 3 — dffrnc_resn(자금 차이 사유)·rm(최대주주 합계 각주) 등에서
+// DART가 "주1)" 같은 각주 마커만 돌려주고 본문(각주 내용)은 주지 않는지
+// 판별한다. 실측(SG, corp_code=00963976, fetch_fund_usage): 차이 사유가
+// 있는 8건 전부 dffrnc_occrrnc_resn == "주1)"였다 — 이건 우리 버그가
+// 아니다. 각주 본문은 공시 원문(사람이 읽는 문서)에만 있고 API 구조화
+// 데이터엔 없다(task-3-brief). hyslrSttus(최대주주 현황)의 rm 실측 값
+// 집합에는 "주)"(번호 없음)·"주1,2)"(여러 각주 동시 표기)도 나온다 —
+// "주" 뒤에 숫자·쉼표만 오고 그 외 본문이 없는 값 전부를 마커로 본다.
+//
+// **rm은 두 가지 서로 다른 코드 체계를 같은 필드 이름으로 쓴다**: 공시
+// 목록(fetch_company_disclosures)에서는 DART_REMARK_LABELS 코드 조합
+// ("코정")이고, hyslrSttus에서는 이 각주 마커다. 두 값 집합은 겹치지
+// 않는다(DART 공식 비고 코드 8종은 전부 단일 한글 글자, 이 마커는 항상
+// "주"로 시작해 숫자·쉼표·닫는 괄호로 끝난다) — formatValue가 이 함수로
+// 먼저 분기해 formatRemark(문자 단위 분해)가 마커를 "주" · "1" · ")"로
+// 쪼개 깨뜨리지 않게 한다.
+function isFootnoteMarkerOnly(v) {
+  if (typeof v !== "string") return false;
+  return /^주[0-9,]*\)$/.test(v.trim());
+}
+
+/** isFootnoteMarkerOnly에 걸리는 값에 정직한 안내를 덧붙인다. **원문
+ *  마커 자체는 지우지 않는다**(task-3-brief: "사용자가 원문에서 '주1)'을
+ *  찾아 대조할 수 있어야 한다") — 마커 뒤에 안내를 잇는 형태다. 마커가
+ *  아니면(서술형 사유·결측 등) 값을 그대로 돌려준다 — 이 함수는 마커만
+ *  있는 경우만 건드린다.
+ *
+ *  rceptNo가 주어지면(그 레코드에 실제로 rcept_no가 있을 때만 — DART
+ *  원본 값을 지어내지 않는다, Global Constraints) 원문 확인 안내에
+ *  접수번호를 남긴다. fund_usage 레코드는 실측(dart_client.
+ *  _normalize_fund_usage)상 애초에 rcept_no를 담지 않아 이 경로에서는
+ *  항상 undefined다 — 그래도 값을 지어내 채우지 않고 정직한 안내
+ *  문구만 남긴다(호출부가 undefined를 넘기면 이 함수는 안내만 붙인다).
+ */
+function footnoteMarkerNote(v, rceptNo) {
+  if (!isFootnoteMarkerOnly(v)) return v;
+  let note = v + " (공시 원문의 각주로만 제공됩니다 — 본문은 DART 구조화 데이터에 없습니다)";
+  if (rceptNo) note += " · 접수번호 " + rceptNo + "의 원문에서 확인 가능";
+  return note;
+}
+
+// 자금 사용 내역 kind(구분) 필드. 실측(SG)된 값은 두 가지뿐이다
+// ({'public','private'}) — 그 외 값이 오면 formatValue가 원문을 그대로
+// 보여준다(지어내 번역하지 않는다, 위 REPRT_CODE_LABELS 계약과 동일).
+const KIND_LABELS = Object.assign(Object.create(null), {
+  public: "공모", private: "사모",
+});
+
 /** 금액을 한국식 단위로 줄인다. 0과 음수를 잃지 않는다. */
 function formatAmount(n) {
   const v = Number(n);
@@ -309,6 +447,30 @@ function formatValue(key, value) {
   // 바꾼다.
   if (key === "reprt_code" && Object.prototype.hasOwnProperty.call(REPRT_CODE_LABELS, s)) {
     return REPRT_CODE_LABELS[s];
+  }
+  // 공시 목록 rm(비고) 값을 사람이 읽는 말로 바꾼다(위 DART_REMARK_LABELS·
+  // formatRemark 주석 참고) — 컬럼 헤더 라벨(LABELS.rm)은 건드리지 않고
+  // 값만 고친다. 단, hyslrSttus(최대주주 현황)는 같은 필드 이름(rm)을
+  // 각주 마커("주1)")로 쓴다(위 isFootnoteMarkerOnly 주석 참고) — 먼저
+  // 이 값을 걸러 footnoteMarkerNote로 보내지 않으면 formatRemark의 문자
+  // 단위 분해가 마커를 깨뜨린다.
+  if (key === "rm") {
+    return isFootnoteMarkerOnly(s) ? footnoteMarkerNote(s) : formatRemark(s);
+  }
+  // SE-8 Task 3 — fund_usage 원본 표(sectionBlocks가 그리는, fundChain으로
+  // 묶이기 전의 400건 그대로)의 dffrnc_resn(차이 발생 사유) 열도 같은
+  // 각주 마커 문제를 겪는다 — fundChain()에서 고친 것은 파생 카드
+  // ("차이 사유" 열, 조달건 단위로 묶은 대표값)뿐이고, 이 원본 표는 별도
+  // 경로(formatValue)로 각 레코드를 그대로 그린다. 여기서 고치지 않으면
+  // 원본 표에는 여전히 "주1)"만 남는다(라이브 검증: SG 8건 전부 재현).
+  if (key === "dffrnc_resn") {
+    return isFootnoteMarkerOnly(s) ? footnoteMarkerNote(s) : s;
+  }
+  // 자금 사용 내역 kind(구분) 값. 실측 두 값만 안다 — 그 외 값은(모르는
+  // 값을 지어내 번역하지 않는다는 REPRT_CODE_LABELS와 같은 계약으로)
+  // 원문 그대로 s를 돌려준다.
+  if (key === "kind" && Object.prototype.hasOwnProperty.call(KIND_LABELS, s)) {
+    return KIND_LABELS[s];
   }
   if (AMOUNT_FIELDS.has(key) && /^-?[\d,]*\d$/.test(s)) {
     return formatAmount(s.replace(/,/g, ""));
@@ -486,6 +648,14 @@ const MAX_VISIBLE_COLUMNS = 12;
 // 순서에서 똑같은 사고가 반복된다.
 const ALWAYS_VISIBLE_KEYS = ["rcept_no"];
 
+// 접어서 얻는 게 없는 최소 접힘 개수(task-2-brief 요구사항 B). SG 타법인
+// 출자 실측(20필드 원본, essential 승격 후 12열 초과분이 정확히 1개)에서
+// "나머지 1개열" 버튼을 누르자고 클릭을 요구하는 건 배보다 배꼽이 크다 —
+// 접힐 열이 이 값 미만이면 접지 않고 그 자리만큼 예산을 늘려 전부
+// 보여준다. 2 미만(0·1)일 이유가 없다: 0은 애초에 접을 게 없는 경우이고,
+// "나머지 1개"가 바로 이 상수가 막으려는 퇴화 사례다.
+const MIN_FOLD_COUNT = 2;
+
 /** finalKeys(캡션 승격 이후 남은 열)를 visible/folded로 나눈다.
  *
  * MAX_VISIBLE_COLUMNS 이하면 전부 visible이다(접을 필요가 없다). 넘으면
@@ -502,7 +672,10 @@ const ALWAYS_VISIBLE_KEYS = ["rcept_no"];
  * 통째로 죽었던 사고(위 ALWAYS_VISIBLE_KEYS 주석)와 같은 부류다.
  *
  * 열 예산(MAX_VISIBLE_COLUMNS)은 그대로다 — 확보한 열만큼 나머지 자리가
- * 줄어들 뿐 표가 무한정 넓어지지 않는다. */
+ * 줄어들 뿐 표가 무한정 넓어지지 않는다. 단, 그 예산을 넘어 접힐 열이
+ * MIN_FOLD_COUNT 미만이면(위 상수 주석 참고) 예산 자체를 늘려 전부
+ * visible로 흡수한다 — 접힘이 충분히 많을 때(예: insider_timeline)는
+ * 이 흡수가 발동하지 않으므로 기존 동작 그대로다. */
 function splitVisibleFolded(finalKeys, markedKeys) {
   if (finalKeys.length <= MAX_VISIBLE_COLUMNS) {
     return { visible: finalKeys, folded: [] };
@@ -514,10 +687,13 @@ function splitVisibleFolded(finalKeys, markedKeys) {
     return ALWAYS_VISIBLE_KEYS.indexOf(k) !== -1 || keep.has(k);
   });
   const essentialSet = new Set(essential);
-  const budget = Math.max(MAX_VISIBLE_COLUMNS - essential.length, 0);
-  const rest = finalKeys
-    .filter(function (k) { return !essentialSet.has(k); })
-    .slice(0, budget);
+  const restAll = finalKeys.filter(function (k) { return !essentialSet.has(k); });
+  let budget = Math.max(MAX_VISIBLE_COLUMNS - essential.length, 0);
+  const wouldFold = Math.max(restAll.length - budget, 0);
+  if (wouldFold > 0 && wouldFold < MIN_FOLD_COUNT) {
+    budget = restAll.length; // 접을 게 애매하게 1개뿐이면 전부 보여준다
+  }
+  const rest = restAll.slice(0, budget);
   const restSet = new Set(rest);
   const visible = finalKeys.filter(function (k) {
     return restSet.has(k) || essentialSet.has(k);
@@ -678,6 +854,39 @@ function sourceGroupedBlocks(records) {
       delete copy.source;
       return copy;
     });
+
+    // hyslr(최대주주 현황)에는 합계 행("계")이 사람 이름(nm) 자리에 섞여
+    // 온다 — shareholders.major_holders와 정확히 같은 문제다(둘 다
+    // dart_client가 /hyslrSttus.json 원본을 그대로 준다, 위 splitAggregateRows
+    // 주석 참고). SE-8 Task 6 실사용자(SG) 지적: 무엇을 합산한 행인지
+    // 설명 없이 사람 이름 사이에 섞여 나왔다. 같은 판정(isAggregateRow)·
+    // 같은 분리(splitAggregateRows)를 재구현하지 않고 그대로 가져와
+    // 사람 표 + 합계 표(제자리에 소계로) 두 블록으로 나눈다 — "계" 원문은
+    // 지우지 않는다(합계 표 자체에 nm="계"로 그대로 남는다).
+    if (s === "hyslr") {
+      const split = splitAggregateRows(withoutSource);
+      const peopleCleaned = dropAllEmptyColumns(split.people);
+      const pt = tableLayout(peopleCleaned);
+      if (pt) {
+        const pBlock = { title: label(s), table: pt, records: peopleCleaned };
+        if (isMetaOnlyRecords(peopleCleaned)) {
+          pBlock.note = "해당 기간에 보고된 내역이 없습니다.";
+        }
+        blocks.push(pBlock);
+      }
+      if (split.totals.length > 0) {
+        const totalsCleaned = dropAllEmptyColumns(split.totals);
+        const tt = tableLayout(totalsCleaned);
+        if (tt) {
+          blocks.push({ title: label(s) + " · 합계", table: tt, records: totalsCleaned });
+        }
+      }
+      if (!pt && split.totals.length === 0) {
+        blocks.push({ title: label(s), table: null, records: null });
+      }
+      continue;
+    }
+
     const cleaned = dropAllEmptyColumns(withoutSource);
     const t = tableLayout(cleaned);
     // records는 표가 실제로 그린 것과 같은 레코드(source 제거·빈 열 제거
@@ -1042,7 +1251,19 @@ function sectionBlocks(value, depth, key) {
     // 항목(문자열 등)을 "값" 한 칸에 감싸서 보존한 뒤 넘긴다. 그러지
     // 않으면 tableLayout이 비객체 항목을 조용히 걸러내(rows 필터), 예를
     // 들어 independence_warnings(문자열 리스트)가 흔적 없이 사라진다.
-    const records = toRecords(value) || [];
+    let records = toRecords(value) || [];
+    // financials 원본 표: 계정과목(account_nm)·금액이 분류 메타(fs_div·
+    // sj_div·fs_nm·sj_nm)보다 뒤에 오는 DART 원본 열 순서를 보기 좋게
+    // 재배치한다(SE-8 Task 4, reorderFinancialsFields 주석 참고). depth 0 +
+    // 부모 key로 게이트한다 — executive_roster·debt_balance.by_kind와 같은
+    // 방식이라 재귀 호출(하위 어딘가의 우연한 "financials" 키)에는 적용되지
+    // 않는다.
+    if (d === 0 && key === "financials") records = reorderFinancialsFields(records);
+    // dividends 원본 표: 기준 기간(bsns_year/stlm_dt)이 항목(se)보다도
+    // 뒤에 오는 DART 원본 열 순서를 보기 좋게 재배치한다(SE-8 Task 8A,
+    // reorderDividendsFields 주석 참고). financials와 같은 게이트 방식
+    // (depth 0 + 부모 key)이라 재귀 호출에는 적용되지 않는다.
+    if (d === 0 && key === "dividends") records = reorderDividendsFields(records);
     // insider_timeline처럼 레코드 전부가 source 필드를 가지면(4개
     // 엔드포인트를 합친 결과) source별로 작은 표 여러 개로 나눈다 —
     // source가 없는 다른 섹션은 이 분기를 타지 않는다(recordsHaveSourceField
@@ -1128,6 +1349,35 @@ function sectionBlocks(value, depth, key) {
       if (!pt && split.totals.length === 0) {
         blocks.push({ title: label(k), table: null, records: null });
       }
+      continue;
+    }
+    // audit_history.opinions만 특수 처리한다(같은 게이트 방식 — depth 0 +
+    // 부모 key). SE-8 Task 7 — 실사용자(SG, corp_code=00963976) 지적:
+    // audit_fee_okwon(280)·non_audit_fee_okwon(220000)이 단위 설명 없는
+    // 숫자로 그대로 노출됐다. CLAUDE.md 269행의 기존 결정("DART 감사보수
+    // 절대 금액 표시는 단위 천원/백만원 혼용으로 v0.8.0에서 생략. 비중만
+    // 경고 섹션에서 제공.")을 SE에도 그대로 적용한다 — **새 단위 라벨을
+    // 짓지 않고 이 두 필드를 렌더 경로에서만 뺀다.** 비율 기반 대체
+    // (비감사용역 비중 경고)는 이미 independence_warnings로 따로 나온다.
+    //
+    // **숨기는 것은 렌더 경로뿐이다.** value[k](원본 opinions 배열과 그
+    // 안의 레코드 객체)는 건드리지 않는다 — 각 레코드를 Object.assign으로
+    // 복사한 뒤 그 복사본에서만 두 필드를 지운다. 원본을 직접
+    // delete하면 나중에 이 값을 다른 용도로 쓰려는 호출부(brief: "향후
+    // 다른 용도로 필요할 수 있다")가 이미 지워진 데이터를 받는다.
+    if (d === 0 && key === "audit_history" && k === "opinions") {
+      const arr = Array.isArray(value[k]) ? value[k] : [];
+      const records = arr.map(function (r) {
+        if (!r || typeof r !== "object" || Array.isArray(r)) return r;
+        const copy = Object.assign({}, r);
+        delete copy.audit_fee_okwon;
+        delete copy.non_audit_fee_okwon;
+        return copy;
+      });
+      const t = tableLayout(records);
+      blocks.push(t
+        ? { title: label(k), table: t, records: records }
+        : { title: label(k), table: null, records: null });
       continue;
     }
     const sub = sectionBlocks(value[k], d + 1);
@@ -1352,6 +1602,102 @@ const FS_DIV_LABELS = Object.create(null);
 FS_DIV_LABELS.CFS = "연결";
 FS_DIV_LABELS.OFS = "별도";
 
+// financials 원본 표(원본 필드 그대로, financialRatios 파생값이 아니다)의
+// 열 순서를 계정과목·금액 중심으로 재배치한다(SE-8 Task 4). DART가 주는
+// /fnlttSinglAcnt.json 필드 순서는 실측(SG, corp_code=00963976, 2026-07-30)
+// 기준 rcept_no·reprt_code·bsns_year·corp_code·stock_code·**fs_div·fs_nm·
+// sj_div·sj_nm**·account_nm·thstrm_nm·thstrm_dt·thstrm_amount·... 순이다 —
+// 분류 메타(연결/별도, 재무상태표/손익계산서)가 계정과목보다 앞에 온다.
+// tableLayout(위)은 각 레코드의 키 "등장 순서"를 그대로 헤더 순서로 쓰므로
+// (Object.keys 기반), 렌더 직전 이 함수로 그 순서를 한 번 바꾼다 — DART
+// 응답 자체나 core(dart_client.py)는 건드리지 않는다(이 파일 수정
+// 범위 밖).
+//
+// META(분류 메타)를 PRIORITY(계정과목·금액) 중 마지막으로 등장하는 열
+// 바로 뒤로 옮긴다 — 그 외 열(rcept_no·기간명·순번 등)의 상대 순서는
+// 손대지 않는다. PRIORITY가 레코드에 하나도 없으면(예상 밖 모양) 원본을
+// 그대로 둔다 — 옮길 기준점이 없는데 META를 앞으로 당기면 오히려 임의
+// 순서가 된다.
+const FINANCIALS_META_KEYS = ["fs_div", "sj_div", "fs_nm", "sj_nm"];
+const FINANCIALS_PRIORITY_KEYS = ["account_nm", "thstrm_amount", "frmtrm_amount", "bfefrmtrm_amount"];
+
+function reorderFinancialsRecord(r) {
+  if (!r || typeof r !== "object") return r;
+  const keys = Object.keys(r);
+  const hasPriority = keys.some(function (k) { return FINANCIALS_PRIORITY_KEYS.indexOf(k) !== -1; });
+  if (!hasPriority) return r;
+
+  const metaSet = new Set(FINANCIALS_META_KEYS);
+  const rest = keys.filter(function (k) { return !metaSet.has(k); });
+  let insertAt = 0;
+  for (let i = 0; i < rest.length; i++) {
+    if (FINANCIALS_PRIORITY_KEYS.indexOf(rest[i]) !== -1) insertAt = i + 1;
+  }
+  const metaPresent = keys.filter(function (k) { return metaSet.has(k); });
+  const newKeys = rest.slice(0, insertAt).concat(metaPresent, rest.slice(insertAt));
+
+  const out = Object.create(null);
+  for (const k of newKeys) out[k] = r[k];
+  return out;
+}
+
+/** financials(원본 재무제표 레코드 배열) 전체에 reorderFinancialsRecord를
+ *  적용한다. sectionBlocks가 "financials" 섹션을 tableLayout에 넘기기
+ *  직전 호출한다 — 값 자체는 하나도 바꾸지 않는다(순서만). */
+function reorderFinancialsFields(records) {
+  if (!Array.isArray(records)) return records;
+  return records.map(reorderFinancialsRecord);
+}
+
+// dividends 원본 표(alotMatter, fetch_dividend_history)의 열 순서를
+// 기준 기간 → 항목 → 당기 값 중심으로 재배치한다(SE-8 Task 8A). 실측(SG,
+// corp_code=00963976, 2026-07-30, fetch_dividend_history 직접 호출)
+// 기준 원본 필드 순서는 rcept_no·corp_cls·corp_code·corp_name·se·
+// stock_knd·thstrm·frmtrm·lwfr·stlm_dt·bsns_year·reprt_code다(dart_client.
+// fetch_dividend_history가 dict(item) 뒤에 bsns_year·reprt_code를
+// 덧붙인다) — "이 값이 어느 시점 것인지"(bsns_year·stlm_dt)가 항목(se)
+// 보다도 뒤, 사실상 맨 끝 근처에 있다.
+//
+// reorderFinancialsRecord(META를 PRIORITY 뒤로 밀어내는 방식)와 달리
+// 여기는 **PRIORITY 자체를 앞으로 당긴다** — financials는 이미 계정과목
+// (account_nm)이 값보다 먼저 오고 fs_div류 분류 메타만 뒤로 보내면
+// 됐지만, dividends는 "이 값이 무슨 기간 것인지"조차 맨 끝에 있어 옮길
+// 기준점이 앞쪽에 없다(위 브리프: "항목을 없애는 게 아니라 기준 시점
+// 뒤로 둔다"의 반대 방향 — 여기서는 기준 시점을 앞으로 당긴다).
+// 우선순위 안의 상대 순서는 고정(bsns_year → stlm_dt → se → thstrm)이고,
+// 나머지 열(rcept_no·frmtrm·lwfr·reprt_code 등)은 원래 상대 순서를
+// 그대로 유지한다. 우선 열이 레코드에 하나도 없으면(예상 밖 모양) 원본을
+// 그대로 둔다 — reorderFinancialsRecord와 같은 이유(옮길 기준점이 없는데
+// 임의로 당기면 오히려 임의 순서가 된다).
+const DIVIDENDS_PRIORITY_KEYS = ["bsns_year", "stlm_dt", "se", "thstrm"];
+
+function reorderDividendsRecord(r) {
+  if (!r || typeof r !== "object") return r;
+  const keys = Object.keys(r);
+  const hasPriority = keys.some(function (k) { return DIVIDENDS_PRIORITY_KEYS.indexOf(k) !== -1; });
+  if (!hasPriority) return r;
+
+  const prioritySet = new Set(DIVIDENDS_PRIORITY_KEYS);
+  const present = DIVIDENDS_PRIORITY_KEYS.filter(function (k) { return prioritySet.has(k) && k in r; });
+  const rest = keys.filter(function (k) { return !prioritySet.has(k); });
+  const newKeys = present.concat(rest);
+
+  const out = Object.create(null);
+  for (const k of newKeys) out[k] = r[k];
+  return out;
+}
+
+/** dividends(원본 배당 레코드 배열) 전체에 reorderDividendsRecord를
+ *  적용한다. sectionBlocks가 "dividends" 섹션을 tableLayout에 넘기기
+ *  직전 호출한다 — 값 자체는 하나도 바꾸지 않는다(순서만). dividendVsIncome
+ *  (파생 "배당 vs 당기순이익" 비교 블록)은 이 함수와 무관하게 원본
+ *  value를 그대로 받는다 — 필드를 이름으로 찾을 뿐 순서에 기대지
+ *  않으므로 이 재배치와 상관없이 그대로 동작한다. */
+function reorderDividendsFields(records) {
+  if (!Array.isArray(records)) return records;
+  return records.map(reorderDividendsRecord);
+}
+
 // financialRatios가 만드는 기간 3종과, 각 기간이 financials 레코드의 어느
 // 금액 열에서 오는지의 대응표. **당기를 마지막에 둔다** — 이 배열 순서가
 // 곧 출력 레코드의 순서이고(전전기→전기→당기), 그 순서가 그대로 두 곳에서
@@ -1473,7 +1819,14 @@ function computeRatio(구분, 기간, def, accounts, field) {
     값 = (numVal / denVal) * 100;
   }
 
-  const out = { 구분: 구분, 기간: 기간, 지표: def.name, 값: 값, 계산식: def.formula, 재료: 재료 };
+  // SE-8 Task 4: 반환 키 순서는 지표→값→구분→기간→계산식→재료다(task-4-brief.md
+  // — 실사용자 지적: "표를 구성할 때 이용자에게 어떤 정보가 유용할지 고민부터
+  // 하고 배치를 해야한다"). 구분(연결/별도)은 지우지 않는다 — 순서만
+  // 뒤로 밀 뿐, 각 값 옆에 그대로 붙어 있다(SE-4f 원칙: 연결·별도를 섞으면
+  // 거짓이 된다). 이 함수를 키 "이름"으로 읽는 호출부(ratioBasisText의
+  // row.계산식·row.재료, buildFinancialRatiosBlock의 r.구분 등)는 순서가
+  // 아니라 이름으로 접근하므로 이 재배치에 영향받지 않는다.
+  const out = { 지표: def.name, 값: 값, 구분: 구분, 기간: 기간, 계산식: def.formula, 재료: 재료 };
   if (값 === null) out.사유 = 사유;
   return out;
 }
@@ -1514,9 +1867,11 @@ function computeCapitalImpairment(구분, 기간, accounts, field) {
     }
   }
 
+  // 키 순서는 computeRatio와 같은 이유로 지표→값→구분→기간→계산식→재료다
+  // (SE-8 Task 4, 위 computeRatio 주석 참고).
   const out = {
-    구분: 구분, 기간: 기간, 지표: "자본잠식률",
-    값: 값, 계산식: "(자본금 − 자본총계) ÷ 자본금", 재료: 재료,
+    지표: "자본잠식률", 값: 값, 구분: 구분, 기간: 기간,
+    계산식: "(자본금 − 자본총계) ÷ 자본금", 재료: 재료,
   };
   if (값 === null) out.사유 = 사유;
   return out;
@@ -1743,11 +2098,19 @@ function fundChain(records) {
       }
       const plan = bestAmount === null ? 0 : bestAmount;
       totalPlan += plan;
+      // SE-8 Task 3 — dffrnc_resn이 각주 마커("주1)")뿐이면 원문 마커를
+      // 지우지 않고 정직한 안내를 덧붙인다(footnoteMarkerNote, 위 주석
+      // 참고). best.rcept_no는 실측(dart_client._normalize_fund_usage)
+      // 상 fund_usage 레코드에 애초에 없는 필드라 오늘은 항상 undefined지만,
+      // 값을 지어내는 대신 있으면 쓰고 없으면 안내만 남기도록 그대로
+      // 넘긴다(있지도 않은 값을 만들어내지 않는다).
+      const diffReason = isNoDataMarker(best.dffrnc_resn) ? null
+        : footnoteMarkerNote(best.dffrnc_resn, isNoDataMarker(best.rcept_no) ? null : best.rcept_no);
       useList.push({
         purpose: purpose,
         plan: plan,
         real: markNumber(best.real_dtls_amount),
-        diff_reason: isNoDataMarker(best.dffrnc_resn) ? null : best.dffrnc_resn,
+        diff_reason: diffReason,
         rows: useRows.length,
       });
     }
@@ -2705,14 +3068,18 @@ function chartData(records, spec, signalsData) {
   return { labels: labels, datasets: datasets };
 }
 
-// ── 재무지표 4분류 · 용어 · 단위 (SE-4h Task 2) ───────────────────────────
+// ── 재무지표 4분류 · 용어 · 단위 (SE-4h Task 2, SE-8 Task 5) ─────────────
 // fnlttSinglIndx(주요 재무지표)는 4분류(수익성·안정성·성장성·활동성)
 // 66개를 idx_cl_nm과 함께 준다(dart_client.fetch_indicator_history, SE-4h
-// Task 1). 여기서는 그 분류를 보존해 4블록으로 묶고, 22개 핵심 지표에만
-// 뜻을 달아 나머지 44개는 접는다(indicatorBlocks). ui.js가 이 함수들을
-// renderSection에서 직접 불러 그린다 — indicators는 더 이상
-// sectionBlocks/tableLayout 경로를 타지 않는다(위 tableLayout·flatKeys
-// 분기 주석 참고).
+// Task 1). 여기서는 그 분류를 보존해 4블록으로 묶고, 22개 핵심 지표는
+// primary로 앞에 두고 나머지 44개는 rest로 접는다(indicatorBlocks) — 이
+// primary/rest 구분은 여전히 22 vs 44다. 뜻(INDICATOR_NOTES)은 SE-4h
+// 때는 primary 22개에만 있었지만, SE-8 Task 5부터 66개 중 65개(유보액
+// 대비율 제외)로 확대돼 rest 표에도 대부분 뜻이 붙는다(사용자가 실측으로
+// 지적한 문제 — 접힌 지표는 뜻이 아예 안 보인다 — 를 고친 것, buildEntry·
+// indicatorRestFold 참고). ui.js가 이 함수들을 renderSection에서 직접
+// 불러 그린다 — indicators는 더 이상 sectionBlocks/tableLayout 경로를
+// 타지 않는다(위 tableLayout·flatKeys 분기 주석 참고).
 
 // DART 응답의 idx_cl_nm 값 그대로다 — 원본 카탈로그 순서를 우리가 다시
 // 정하지 않는다. 이 목록에 없는 분류가 오면(응답이 바뀌는 경우) 버리지
@@ -2778,21 +3145,87 @@ const INDICATOR_NOTES = Object.assign(Object.create(null), {
   "매출원가율": "매출액 대비 매출원가의 비율",
   "ROE": "자기자본 대비 당기순이익의 비율",
   "판관비율": "매출액 대비 판매비와관리비의 비율",
+  // SE-8 Task 5로 22개(SE-4h)에서 확대. 세전계속사업이익 계열 4종(세전
+  // 계속사업이익률·총자산세전계속사업이익률·자기자본세전계속사업이익률·
+  // 자본금세전계속사업이익률)은 분모만 매출액→총자산→자기자본→자본금으로
+  // 바뀌는 같은 계열이다(한국기업평가 "주요 재무지표의 정의" 웹 확인 —
+  // 세전계속사업이익률=(세전계속사업이익/매출액)*100, 2026-07-30).
+  "세전계속사업이익률": "매출액 대비 법인세비용 차감 전 계속사업이익의 비율",
+  "총포괄이익률": "매출액 대비 총포괄이익(당기순이익에 기타포괄손익을 더한 금액)의 비율",
+  "총자산영업이익률": "총자산 대비 영업이익의 비율",
+  "총자산세전계속사업이익률": "총자산 대비 세전계속사업이익의 비율",
+  "자기자본영업이익률": "자기자본 대비 영업이익의 비율",
+  "자기자본세전계속사업이익률": "자기자본 대비 세전계속사업이익의 비율",
+  "자본금영업이익률": "자본금 대비 영업이익의 비율",
+  "자본금세전계속사업이익률": "자본금 대비 세전계속사업이익의 비율",
+  // 납입자본이익률 = 당기순이익/납입자본금×100(시사경제용어사전 웹 확인,
+  // 2026-07-30) — 자본유보율(자본잉여금+이익잉여금÷자본금, 아래)과는
+  // 분자·분모가 다른 별개 지표다.
+  "납입자본이익률": "납입자본금 대비 당기순이익의 비율",
+  "영업수익경비율": "영업수익(매출액) 대비 영업비용의 비율",
   "부채비율": "자기자본 대비 부채총계의 비율 — 빌린 돈이 자기 돈의 몇 %인가",
   "자기자본비율": "총자산 대비 자기자본의 비율",
   "유동비율": "1년 안에 갚을 유동부채 대비, 1년 안에 현금화할 수 있는 유동자산의 비율",
   "당좌비율": "유동자산에서 재고자산을 뺀 당좌자산이 유동부채의 몇 %인가",
   "이자보상배율": "영업이익이 이자비용의 몇 배인가 — 값은 DART가 준 그대로 %로 표시된다",
+  "순이자보상배율": "영업이익이 이자비용에서 이자수익을 뺀 순이자비용의 몇 배인가 — 값은 DART가 준 그대로 %로 표시된다",
+  "유동부채비율": "자기자본 대비 유동부채의 비율",
+  "비유동부채비율": "자기자본 대비 비유동부채의 비율",
+  "비유동비율": "자기자본 대비 비유동자산의 비율",
+  "금융비용부담률": "매출액 대비 금융비용(이자비용 등)의 비율",
   // 자본유보율 = (자본잉여금+이익잉여금)/자본금 — 자본잉여금(주식발행초과금
   // 등 납입된 돈)까지 포함한다. "벌어서 쌓아둔 돈"(이익잉여금만)이라고만
   // 쓰면 절반(자본잉여금)을 빼먹은 설명이 된다(리뷰 지적, SE-4h Task 2).
   "자본유보율": "자본잉여금과 이익잉여금을 더한 유보액이 자본금의 몇 %인가",
+  // "유보액대비율"에는 일부러 뜻을 달지 않았다. 이름·산식이 위 자본유보율과
+  // 거의 같아 보이지만(둘 다 "유보액"이 들어간다), 두 지표가 정말 같은
+  // 산식인지 분모가 자본금인지 다른 값인지를 신뢰할 수 있는 출처로 확인하지
+  // 못했다(SE-8 Task 5 웹 조사 — DART API 문서·한국은행 기업경영분석
+  // 해설서 어디서도 이 지표만의 산식을 못 찾음). 확인 못 한 채 자본유보율과
+  // 같다고 적으면 실제로는 다른 두 지표를 같은 뜻으로 보여주는 거짓이 될
+  // 수 있다 — 지어내지 않는다는 이 프로젝트 원칙(재지 않은 값을 실측이라고
+  // 적지 않는다)에 따라 여기만 빈 칸으로 남긴다. indicatorBlocks의 rest에는
+  // 그대로 남아 이름만 보인다(값을 숨기지 않는다는 원칙과는 별개 — 뜻 설명만
+  // 비운 것이다).
+  // 재무레버리지 = 총자산/자기자본. 부채까지 포함한 총자산을 자기자본이
+  // 몇 배 굴리는가를 보는 지표다(아이투자 "재무레버리지(A/E)" 웹 확인,
+  // 2026-07-30). 이름은 "레버리지"지만 이자보상배율과 마찬가지로 DART는
+  // %로 준다 — 우리가 배수로 환산하지 않는다(계획 문서 "배경" 절과 동일
+  // 원칙).
+  "재무레버리지": "자기자본 대비 총자산의 비율 — 값은 DART가 준 그대로 %로 표시된다",
+  // 비유동적합률(고정장기적합률) = 비유동자산÷(자기자본+비유동부채)×100 —
+  // 장기간 쓸 자산을 장기 자금원으로 얼마나 충당했는가를 보는 지표다(웹
+  // 확인, 2026-07-30).
+  "비유동적합률": "비유동자산이 자기자본과 비유동부채를 합한 금액의 몇 %인가",
+  "비유동자산구성비율": "총자산 중 비유동자산이 차지하는 비율",
+  "유형자산구성비율": "총자산 중 유형자산이 차지하는 비율",
+  "유동자산구성비율": "총자산 중 유동자산이 차지하는 비율",
+  "재고자산구성비율": "총자산 중 재고자산이 차지하는 비율",
+  "유동자산/비유동자산비율": "비유동자산 대비 유동자산의 비율",
+  "재고자산/유동자산비율": "유동자산 대비 재고자산의 비율",
+  "매출채권/매입채무비율": "매입채무 대비 매출채권의 비율",
+  "매입채무/재고자산비율": "재고자산 대비 매입채무의 비율",
   "매출액증가율(YoY)": "전년 매출액 대비 이번 사업연도 매출액의 변화율",
+  // 아래 "…증가율"은 전부 같은 문형이다 — 전년 대비 이번 사업연도의
+  // 변화율. 이미 있던 6개(매출액·영업이익·순이익·총자산·자기자본·
+  // 부채총계)와 같은 계열이라 그대로 따른다(SE-8 Task 5).
+  "매출총이익증가율(YoY)": "전년 매출총이익 대비 이번 사업연도 매출총이익의 변화율",
   "영업이익증가율(YoY)": "전년 영업이익 대비 이번 사업연도 영업이익의 변화율",
+  "세전계속사업이익증가율(YoY)": "전년 세전계속사업이익 대비 이번 사업연도 세전계속사업이익의 변화율",
   "순이익증가율(YoY)": "전년 당기순이익 대비 이번 사업연도 당기순이익의 변화율",
+  "총포괄이익증가율(YoY)": "전년 총포괄이익 대비 이번 사업연도 총포괄이익의 변화율",
   "총자산증가율": "전년 총자산 대비 이번 사업연도 총자산의 변화율",
-  "자기자본증가율": "전년 자기자본 대비 이번 사업연도 자기자본의 변화율",
+  "비유동자산증가율": "전년 비유동자산 대비 이번 사업연도 비유동자산의 변화율",
+  "유형자산증가율": "전년 유형자산 대비 이번 사업연도 유형자산의 변화율",
   "부채총계증가율": "전년 부채총계 대비 이번 사업연도 부채총계의 변화율",
+  "총차입금증가율": "전년 총차입금 대비 이번 사업연도 총차입금의 변화율",
+  "자기자본증가율": "전년 자기자본 대비 이번 사업연도 자기자본의 변화율",
+  "유동자산증가율": "전년 유동자산 대비 이번 사업연도 유동자산의 변화율",
+  "매출채권증가율": "전년 매출채권 대비 이번 사업연도 매출채권의 변화율",
+  "재고자산증가율": "전년 재고자산 대비 이번 사업연도 재고자산의 변화율",
+  "유동부채증가율": "전년 유동부채 대비 이번 사업연도 유동부채의 변화율",
+  "매입채무증가율": "전년 매입채무 대비 이번 사업연도 매입채무의 변화율",
+  "비유동부채증가율": "전년 비유동부채 대비 이번 사업연도 비유동부채의 변화율",
   "총자산회전율": "총자산 대비 매출액의 비율",
   "매출채권회전율": "매출채권 대비 매출액의 비율",
   // 재고자산회전율 자체는 매출액 ÷ 재고자산이다("매출원가 ÷ 재고자산"이
@@ -2802,6 +3235,10 @@ const INDICATOR_NOTES = Object.assign(Object.create(null), {
   // 지적, SE-4h Task 2 — 이전 노트가 그 별도 지표의 정의를 옮겨 붙인
   // 오류였다).
   "재고자산회전율": "재고자산 대비 매출액의 비율",
+  // 매출원가/재고자산 = 매출원가÷재고자산 — 위 재고자산회전율(매출액÷
+  // 재고자산)과 분자만 다른 별개 지표다. 산술 검증은 위 재고자산회전율
+  // 주석과 동일한 실측 근거다(SE-8 Task 5).
+  "매출원가/재고자산": "재고자산 대비 매출원가의 비율",
   // 매입채무회전율은 실측 값이 null이라 위 재고자산회전율처럼 산술로 직접
   // 검증하지 못했다(엔켐·삼성전자·셀트리온·두산에너빌리티 4사 모두 DART가
   // null을 준다) — 총자산·매출채권·재고자산·자기자본·자본금회전율이 모두
@@ -2812,6 +3249,14 @@ const INDICATOR_NOTES = Object.assign(Object.create(null), {
   // 있어 이것만 빈 칸이면 "설명할 수 없는 지표"로 보이는데, 실제로는
   // "설명은 있으나 검증하지 못했다"가 정확한 사실이다.
   "매입채무회전율": "매입채무 대비 매출액의 비율 (추정 — DART 값이 없어 산술로 확인하지 못했습니다)",
+  // 아래 3개도 매입채무회전율과 같은 계열(매출액÷X)이다 — 코드 위 주석과
+  // 같은 관행을 따른 것이지 산술로 개별 검증하지는 못했다. 타인자본은
+  // 부채총계를 가리키는 표준 회계 용어다.
+  "비유동자산회전율": "비유동자산 대비 매출액의 비율",
+  "유형자산회전율": "유형자산 대비 매출액의 비율",
+  "타인자본회전율": "타인자본(부채총계) 대비 매출액의 비율",
+  "자기자본회전율": "자기자본 대비 매출액의 비율",
+  "자본금회전율": "자본금 대비 매출액의 비율",
   "배당성향(%)": "당기순이익 중 현금배당금총액이 차지하는 비율",
 });
 
@@ -2948,23 +3393,32 @@ function indicatorBlocks(value) {
     const primarySet = new Set(primaryNames);
     const allNames = Array.from(byName.keys());
 
-    function buildEntry(idxNm, withNote) {
+    // SE-8 Task 5: note는 primary·rest 구분 없이 항상 붙인다. SE-4h
+    // Task 2 때는 rest(44개) 중 22개만 뜻이 있어 rest 표에 뜻 열을 두면
+    // 대부분이 빈 칸이었다(그래서 당시 두 번째 인자로 primary만 true를
+    // 줬다) — 지금은 66개 중 65개(유보액대비율 제외)에 뜻이 있어 그
+    // 전제가 더 이상 맞지 않는다. 뜻이 없는 지표는 INDICATOR_NOTES[idxNm]
+    // 이 undefined라 ""로 떨어진다 — indicatorTableEl(ui.js)이 그대로
+    // 빈 칸으로 그린다(값을 숨기지 않는다는 원칙과 동일하게, 없으면 없다고
+    // 보여준다). rest 표에서 이 note를 실제로 보여주려면 ui.js
+    // indicatorRestFold가 indicatorTableEl(restEntries, true)를 불러야
+    // 한다(같이 수정) — 이 함수만 고치면 데이터는 있는데 화면에 안 나오는
+    // 죽은 값이 된다.
+    function buildEntry(idxNm) {
       const byYear = byName.get(idxNm);
       const cells = years.map(function (y) {
         const v = byYear.has(y) ? byYear.get(y) : null;
         return { bsns_year: y, idx_val: v, display: formatIndicator(idxNm, v) };
       });
-      const entry = { idx_nm: idxNm, cells: cells };
-      if (withNote) entry.note = INDICATOR_NOTES[idxNm] || "";
-      return entry;
+      return { idx_nm: idxNm, cells: cells, note: INDICATOR_NOTES[idxNm] || "" };
     }
 
     const primary = primaryNames
       .filter(function (n) { return byName.has(n); })
-      .map(function (n) { return buildEntry(n, true); });
+      .map(function (n) { return buildEntry(n); });
     const rest = allNames
       .filter(function (n) { return !primarySet.has(n); })
-      .map(function (n) { return buildEntry(n, false); });
+      .map(function (n) { return buildEntry(n); });
 
     return { category: category, latestYear: latestYear, primary: primary, rest: rest };
   });
@@ -3038,6 +3492,16 @@ function markLt(a, b) {
 function markNeg(v) {
   const x = markNumber(v);
   return x !== null && x < 0;
+}
+
+// 두 값 모두 있고 서로 다를 때만 강조한다(markLt와 같은 결측 규약, 위 주석
+// 참고) — SE-8 Task 8B: fundChain(uses[])의 plan(계획)·real(보고된 집행)을
+// 비교하는 데 쓴다. real이 결측(보고 자체가 없음)이면 강조하지 않는다 —
+// "보고가 없다"와 "보고된 값이 다르다"는 다른 사실이라 결측을 강조하면
+// 없는 사실을 만들어내는 것이다.
+function markNeq(a, b) {
+  const x = markNumber(a), y = markNumber(b);
+  return x !== null && y !== null && x !== y;
 }
 
 // SE-4i — 주요 재무지표 표(indicatorTableEl, ui.js)는 위 MARK_RULES가 다루는
@@ -3201,6 +3665,40 @@ MARK_RULES.distress = [
   },
 ];
 
+// SE-8 Task 8B — fundChain(uses[], 위 fundChain 함수)의 plan(계획 금액)·
+// real(보고된 집행 금액)은 DART 원본 두 값(plan_amount·real_dtls_amount)을
+// 조달건×용도 단위로 묶은 뒤 그대로 비교한 것이다 — 임계값도 판정도
+// 아니다(SE-4g 규칙과 동일한 부류, v0.8.5). 강조 문구는 사실만 말한다:
+// "유용"·"의심" 같은 평가 어휘를 쓰지 않는다(SE-5a가 이미 정한 원칙).
+//
+// **이 규칙이 실제로 발화하는 표는 fund_usage 원본 표(sectionBlocks가
+// 그리는, MARK_RULES.fund_usage — 그런 항목은 없다)가 아니라
+// fundChainCardEl(ui.js)이 그리는 파생 카드다.** 원본 표는 (pay_de,
+// purpose) 조합이 분기 보고서(1분기·반기·3분기·사업보고서)마다 반복
+// 보고되는 개별 행이라 real이 plan과 1:1로 짝지어 보이지 않는다 —
+// fundChain이 이미 그 반복 중 대표값 하나만 남겨 조달건×용도 단위로
+// 묶은 뒤에야 두 값이 나란히 비교 가능해진다. sectionKey "fund_chain"은
+// STAGE1_SPECS의 실제 섹션 키가 아니라 이 파생 카드 전용으로 새로 만든
+// cellMarks 버킷 이름이다 — cellMarks(records, sectionKey)의 sectionKey는
+// MARK_RULES의 임의 키일 뿐 서버 섹션 이름과 일치할 필요가 없다.
+// SE-8 최종 리뷰 지적 — fundChain()은 그 조달건×용도에서 plan_amount가
+// 한 번도 보고되지 않았을 때도 위 plan(2099번 줄)을 0으로 채운다("모른다"를
+// "0으로 계획했다"로 바꿔치기하지 않기 위한 표시값일 뿐, DART가 실제로
+// 보고한 계획 금액이 아니다). markNeq(real, plan)만으로는 이 코드화된 0과
+// "진짜로 계획이 0원"을 구분하지 못해, {plan_amount: null, real: 50억}
+// 레코드에 "보고된 집행 ≠ 계획(계획 0원)"이라는, DART가 말한 적 없는
+// 사실을 만들어낸다(라이브 재현: real_dtls_amount=5,000,000,000 사례).
+// core의 동등 판정(dart_client.py _detect_fund_anomaly, plan_amount > 0
+// 게이트)과 같은 기준을 맞춘다 — plan이 실제로 양수로 보고된 경우에만
+// 비교를 발화시킨다.
+MARK_RULES.fund_chain = [
+  {
+    key: "real",
+    when: function (u) { return markNumber(u.plan) > 0 && markNeq(u.real, u.plan); },
+    why: "보고된 집행 ≠ 계획",
+  },
+];
+
 // 반환 키는 ui.js 의 tableEl()이 이미 계산하는 좌표와 같은 형식이다:
 // 가로 표는 (행번호, keys[열]), 세로 표는 (0, keys[행]).
 function cellMarks(records, sectionKey) {
@@ -3253,8 +3751,14 @@ if (typeof module !== "undefined" && module.exports) {
     fundChainDisclosureHints,
     markNumber, MARK_RULES, cellMarks, markedColumnKeys, indicatorCellWhy,
     isAggregateRow, splitAggregateRows, splitVisibleFolded, MAX_VISIBLE_COLUMNS,
+    MIN_FOLD_COUNT,
     INDICATOR_CATEGORY_ORDER, INDICATOR_PRIMARY, INDICATOR_NOTES,
     formatIndicator, indicatorBlocks, indicatorChartRecords,
     normalizeIndicatorCategory, indicatorRows, indicatorYearNote,
+    DART_REMARK_LABELS, formatRemark, KIND_LABELS,
+    isFootnoteMarkerOnly, footnoteMarkerNote,
+    FINANCIALS_META_KEYS, FINANCIALS_PRIORITY_KEYS,
+    reorderFinancialsRecord, reorderFinancialsFields,
+    DIVIDENDS_PRIORITY_KEYS, reorderDividendsRecord, reorderDividendsFields,
   };
 }

@@ -1025,6 +1025,21 @@ function tableEl(table, marks, records) {
         const rec = isVertical ? records[0] : records[rowIdx];
         td.addEventListener("click", function () { openExecutivePanel(rec); });
       }
+      // SE-8 Task 2 — 공시 목록 표만 report_nm(공시명)·flr_nm(공시제출인)
+      // 열 폭을 개별화한다(task-2-brief 요구사항 A, index.html 실측 ②).
+      // 전역 th,td{max-width:280px}는 모든 표·모든 열에 같은 상한을 걸어
+      // 공시명(긴 텍스트)이 잘리고 제출인(짧은 이름) 칸은 남는 문제가
+      // 있었다. report_nm·flr_nm은 disclosures 섹션에서만 실제로 쓰이는
+      // 원본 키라(다른 어떤 표도 이 두 열을 갖지 않는다) tableEl()이
+      // 키 이름만으로 셀에 클래스를 붙여도 다른 표 열 폭에 영향이 없다 —
+      // 별도 "이 표는 disclosures인가"를 판별해 넘길 필요가 없다. 가로
+      // 표에서만 의미가 있다(세로는 회사 1건이라 이미 [라벨,값] 두 칸뿐
+      // 이고 잘림 문제 자체가 없다).
+      if (!isVertical && cellKey === "report_nm") {
+        td.className = td.className ? (td.className + " wide") : "wide";
+      } else if (!isVertical && cellKey === "flr_nm") {
+        td.className = td.className ? (td.className + " narrow") : "narrow";
+      }
       // 강조 사유는 원본 값 툴팁 다음에 붙인다(순서가 반대면 아래 줄이
       // 위 raw 툴팁을 덮어써 왜 강조됐는지가 사라진다 — affiliates 3개
       // 규칙 열이 전부 AMOUNT_FIELDS라 실제로 겹친다). className은 이어
@@ -1301,12 +1316,21 @@ function buildFinancialRatiosBlock(ratios) {
     + "연결과 별도를 섞지 않고 계산식과 재료 값을 함께 표시합니다.";
   wrap.appendChild(notice);
 
+  // SE-8 Task 4: 열 순서는 지표→값→구분→기간→계산식·재료다 — 실사용자가
+  // 이 표를 지적했다("표를 구성할 때 이용자에게 어떤 정보가 유용할지 고민부터
+  // 하고 배치를 해야한다"). 분류 메타(구분·기간)를 값보다 먼저 보여주던
+  // 순서를 뒤집는다. tableLayout(app.js)이 각 레코드의 키 등장 순서를
+  // 그대로 표 헤더로 쓰므로(Object.keys 기반) 여기서 만드는 객체의 키
+  // 순서가 곧 화면 순서다 — app.js의 financialRatios() 자체도 같은
+  // 원칙으로 반환 키 순서를 바꿨다(computeRatio·computeCapitalImpairment
+  // 주석 참고). 구분은 지우지 않는다 — 위치만 옮길 뿐, 각 값 옆에 그대로
+  // 남아 있다(SE-4f: 연결·별도를 섞으면 거짓이 된다).
   const records = ratios.map(function (r) {
     return {
-      구분: r.구분,
-      기간: r.기간,
       지표: r.지표,
       값: r.값 === null ? r.사유 : (r.값.toFixed(1) + "%"),
+      구분: r.구분,
+      기간: r.기간,
       "계산식·재료": ratioBasisText(r),
     };
   });
@@ -1468,17 +1492,32 @@ function fundChainCardEl(entry, hints, windowDays) {
     card.appendChild(bar);
   }
 
-  // 표 — 막대에서 좁아 안 보이는 라벨도 여기서는 항상 읽힌다.
+  // 표 — 막대에서 좁아 안 보이는 라벨도 여기서는 항상 읽힌다. 열 키는
+  // entry.uses의 원본 필드명(purpose/plan/real/diff_reason, app.js LABELS
+  // 주석 참고)을 그대로 쓴다 — 한글 문자열이 아니다. cellMarks(아래)가
+  // 계산하는 강조 좌표는 "행번호|열키" 형식이고, 그 열키는 tableLayout에
+  // 넘긴 레코드의 property 이름 그 자체다(affiliates 표와 같은 관례,
+  // buildAffiliateOverviewBlock 주석 참고) — 한글로 바꿔 넘기면 좌표가
+  // 어긋나 강조가 조용히 사라진다. 화면에 보이는 헤더 문구는 그대로다
+  // (LABELS.purpose 등이 "용도" 등을 낸다).
   const rows = entry.uses.map(function (u) {
     return {
-      "용도": u.purpose === null ? "(용도 미기재)" : u.purpose,
-      "계획": formatAmount(u.plan),
-      "보고된 집행": u.real === null ? "—" : formatAmount(u.real),
-      "차이 사유": u.diff_reason === null ? "—" : u.diff_reason,
+      purpose: u.purpose === null ? "(용도 미기재)" : u.purpose,
+      plan: formatAmount(u.plan),
+      real: u.real === null ? "—" : formatAmount(u.real),
+      diff_reason: u.diff_reason === null ? "—" : u.diff_reason,
     };
   });
-  const table = tableLayout(rows);
-  if (table) card.appendChild(tableEl(table));
+  // SE-8 Task 8B — plan(계획)과 real(보고된 집행)이 DART 원본 두 값에서
+  // 그대로 다르면 강조한다(MARK_RULES.fund_chain, app.js). cellMarks는
+  // rows(이미 formatAmount를 거친 문자열)가 아니라 entry.uses(원본 숫자
+  // 필드)를 받는다 — 표시용 문자열로는 markNeq의 숫자 비교를 할 수 없다
+  // (affiliates와 같은 이유, cellMarks는 "표가 실제로 그린 레코드"의
+  // 원본을 받는 관례). rows와 entry.uses는 map()으로 만들어져 순서가
+  // 같으므로 cellMarks의 행번호 좌표가 그대로 rows에도 맞는다.
+  const marks = cellMarks(entry.uses, "fund_chain");
+  const table = tableLayout(rows, markedColumnKeys(marks));
+  if (table) card.appendChild(tableEl(table, marks));
 
   // 반복 보고 — (납입일,용도) 조합이 여러 보고서에서 되풀이돼 fundChain이
   // 한 건만 남긴 사실을 숨기지 않는다(브리프: "우리가 골라 버린 것이
@@ -1683,12 +1722,17 @@ function buildAffiliateOverviewBlock(records) {
  *  그린다. renderSection이 sectionBlocks/tableLayout 경로를 아예 타지
  *  않고 이 함수를 직접 부른다(위 renderSection 주석 참고).
  *
- *  뜻(note) 열은 primary 표에만 있다 — rest 표까지 뜻 열을 만들면 44개
- *  지표 대부분이 빈 칸으로 줄줄이 이어진다(브리프 지적). rest는 기존
- *  열 접기와 같은 시각 패턴(.fold-btn 버튼 + .fold-detail 토글)을
- *  재사용한다 — "표 전체를 접는다"는 tableEl()의 열 단위 접기와 모양이
- *  달라 그 함수를 그대로 재사용하지 않고 클래스만 같이 쓴다(아래
- *  indicatorRestFold 참고). */
+ *  뜻(note) 열은 primary·rest 표 모두에 있다(SE-8 Task 5). SE-4h
+ *  Task 2 때는 66개 중 22개에만 뜻이 있어 rest(접힌 44개) 표까지 뜻
+ *  열을 만들면 대부분이 빈 칸이었다 — 그래서 그때는 primary 표에만
+ *  열을 뒀다. 사용자가 실측으로 지적한 문제(일부 지표는 이름+뜻이
+ *  보이는데 접힌 지표는 뜻이 아예 안 보인다)가 바로 그 결과였다.
+ *  지금은 66개 중 65개(유보액대비율 제외)에 뜻이 있어 그 전제가 더는
+ *  맞지 않는다 — rest도 indicatorTableEl(..., true)로 그린다(아래
+ *  indicatorRestFold). rest는 여전히 기존 열 접기와 같은 시각 패턴
+ *  (.fold-btn 버튼 + .fold-detail 토글)을 쓴다 — "표 전체를 접는다"는
+ *  tableEl()의 열 단위 접기와 모양이 달라 그 함수를 그대로 재사용하지
+ *  않고 클래스만 같이 쓴다. */
 function renderIndicatorBlocks(holder, value, wrap) {
   const blocks = indicatorBlocks(value);
 
@@ -1834,9 +1878,14 @@ function indicatorTableEl(entries, withNote) {
   return frag;
 }
 
-/** rest(접힌 44개 지표)를 기존 .fold-btn/.fold-detail과 같은 시각
- *  패턴(버튼 + hidden 토글)으로 접는다 — 없애는 게 아니라 접는 것이므로
- *  클릭하면 언제든 볼 수 있다(tableEl()의 열 접기와 같은 원칙). */
+/** rest(접힌 지표)를 기존 .fold-btn/.fold-detail과 같은 시각 패턴(버튼 +
+ *  hidden 토글)으로 접는다 — 없애는 게 아니라 접는 것이므로 클릭하면
+ *  언제든 볼 수 있다(tableEl()의 열 접기와 같은 원칙).
+ *
+ *  indicatorTableEl(restEntries, true) — SE-8 Task 5부터 rest도 뜻 열을
+ *  그린다(위 renderIndicatorBlocks 주석 참고). 뜻이 없는 지표(유보액대비율
+ *  등)는 entry.note가 ""라 그 칸만 빈 채로 보인다 — 표 전체를 숨기지
+ *  않는다. */
 function indicatorRestFold(restEntries) {
   const wrap = document.createElement("div");
 
@@ -1849,7 +1898,7 @@ function indicatorRestFold(restEntries) {
   const detail = document.createElement("div");
   detail.className = "fold-detail";
   detail.hidden = true;
-  detail.appendChild(indicatorTableEl(restEntries, false));
+  detail.appendChild(indicatorTableEl(restEntries, true));
   wrap.appendChild(detail);
 
   btn.addEventListener("click", function () {

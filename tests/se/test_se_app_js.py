@@ -870,6 +870,260 @@ class TestReprtCodeLabels(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestRemarkAndKindLabels(unittest.TestCase):
+    """SE-8 Task 1 — 공시 목록 `rm`(비고) 코드·자금 사용 `kind` 원문값
+    한글화. DART 공식 비고 코드는 문자 단위로 조합돼 나온다(실측 SG:
+    {'연','정','코','코정'}) — formatRemark는 이걸 문자 단위로 분해해
+    이어붙인다. kind는 실측 두 값(public/private)만 안다 — 그 외 값은
+    지어내지 않고 원문 그대로 보여준다(REPRT_CODE_LABELS·label()과 같은
+    "모르면 숨기지 않는다" 계약).
+    """
+
+    def test_single_known_remark_codes(self):
+        # DART 공식 비고 코드 8종 전부 개별 고정 — 3종만 고정하면 나머지
+        # 5종(유·채·넥·공·철)은 값이 뒤바뀌어도(예: 채↔넥 swap) 아무 테스트도
+        # 안 잡는다(리뷰에서 실제로 변이로 확인된 구멍).
+        self.assertEqual(run_js('formatRemark("유")'), "유가증권")
+        self.assertEqual(run_js('formatRemark("코")'), "코스닥")
+        self.assertEqual(run_js('formatRemark("채")'), "채권상장법인")
+        self.assertEqual(run_js('formatRemark("넥")'), "코넥스")
+        self.assertEqual(run_js('formatRemark("공")'), "공정위 대상 기업집단")
+        self.assertEqual(run_js('formatRemark("연")'), "연결대상 종속회사 있음")
+        self.assertEqual(run_js('formatRemark("정")'), "정정신고")
+        self.assertEqual(run_js('formatRemark("철")'), "철회")
+
+    def test_combined_remark_code_is_decomposed_char_by_char(self):
+        """실측 "코정" = 코스닥 + 정정신고, 구분자 없이 붙어 나온다."""
+        got = run_js('formatRemark("코정")')
+        self.assertIn("코스닥", got)
+        self.assertIn("정정신고", got)
+
+    def test_unknown_character_mixed_with_known_ones_is_kept_visible_as_is(self):
+        """모르는 문자를 침묵하며 지우면 안 된다 — SE-4h의 "값이 없으면
+        없다고 표기" 원칙과 같다. "X"는 이 저장소가 만든 가짜 코드로,
+        DART 공식 비고 코드 어디에도 없다(실측 대상이 아님을 스스로
+        보증).
+
+        SE-8 최종 리뷰 지적(Finding 1) 이전에는 "코"만 번역하고 "X"는
+        원문 그대로 붙여 "코스닥X"처럼 부분 번역했다. 이제는 자유서술형
+        비고 오탐(formatRemark("시간외매매") 참고)을 막기 위해 한 글자라도
+        모르면 전체를 원문 그대로 돌려준다 — "코"·"X"가 둘 다 보이는 것은
+        같지만, 부분 번역이 아니라 원문 문자열 전체가 그대로 남는 방식으로
+        바뀌었다."""
+        got = run_js('formatRemark("코X")')
+        self.assertEqual(got, "코X")
+        self.assertIn("코", got)
+        self.assertIn("X", got)
+
+    def test_empty_and_null_remark_uses_existing_missing_data_path(self):
+        """isNoDataMarker는 export되지 않는 내부 함수라 여기서 직접 부를
+        수 없다 — 진입점(formatRemark)의 결과가 formatValue의 다른
+        필드와 같은 결측 표기("")로 수렴하는지로 간접 검증한다."""
+        empty = run_js('formatRemark("")')
+        null = run_js('formatRemark(null)')
+        self.assertEqual(empty, "")
+        self.assertEqual(empty, null)
+
+    def test_kind_public_and_private_translate(self):
+        self.assertEqual(run_js('formatValue("kind", "public")'), "공모")
+        self.assertEqual(run_js('formatValue("kind", "private")'), "사모")
+
+    def test_kind_unknown_value_is_shown_as_is(self):
+        """실측된 값은 public/private 둘뿐이다 — 그 외 값을 지어내
+        번역하면 안 된다."""
+        got = run_js('formatValue("kind", "미지값")')
+        self.assertEqual(got, "미지값")
+
+    def test_free_text_remark_is_not_shredded(self):
+        """SE-8 최종 리뷰 지적(Finding 1) — hyslrSttus·hyslrChgSttus 등
+        여러 엔드포인트는 같은 필드 이름(rm)을 자유서술형 비고로 쓴다.
+        라이브 재현(삼성전자, corp_code=00126380, fetch_insider_timeline):
+        "시간외매매"가 8개 코드(유·코·채·넥·공·연·정·철) 어디에도 없는
+        문자만으로 이뤄져 있는데도 문자 단위로 분해돼 "시 · 간 · 외 · 매 ·
+        매"로 쪼개졌다. 한 글자라도 코드가 아니면 통째로 원문을 지킨다."""
+        got = run_js('formatRemark("시간외매매")')
+        self.assertEqual(got, "시간외매매")
+        self.assertNotIn(" · ", got)
+
+    def test_free_text_remark_with_space_is_not_shredded(self):
+        got = run_js('formatRemark("이사 임기만료")')
+        self.assertEqual(got, "이사 임기만료")
+        self.assertNotIn(" · ", got)
+
+    def test_free_text_remark_with_particles_is_not_shredded(self):
+        got = run_js('formatRemark("신규 선임 및자사주 상여금")')
+        self.assertEqual(got, "신규 선임 및자사주 상여금")
+        self.assertNotIn(" · ", got)
+
+    def test_multi_code_disclosure_value_still_decomposes_exactly(self):
+        """진짜 다중 코드 값("코정" = 코 + 정, 둘 다 유효 코드)은 여전히
+        분해돼야 한다 — 자유서술형 통과 수정이 이 경로를 죽이면 안 된다."""
+        self.assertEqual(run_js('formatRemark("코정")'), "코스닥 · 정정신고")
+
+    def test_free_text_rm_via_format_value_is_not_shredded(self):
+        """실제 호출부(formatValue("rm", ...))로도 같은 사실을 확인한다."""
+        got = run_js('formatValue("rm", "시간외매매")')
+        self.assertEqual(got, "시간외매매")
+
+    def test_remark_wired_through_format_value_for_rm_key(self):
+        """브리프 요구: formatValue가 rm 필드를 만나면 formatRemark를
+        거치도록 배선돼야 한다(값만 고치는 배선 — LABELS.rm 헤더는
+        그대로 둔다)."""
+        got = run_js('formatValue("rm", "코정")')
+        self.assertIn("코스닥", got)
+        self.assertIn("정정신고", got)
+
+    def test_column_header_labels_untouched(self):
+        """이 태스크는 값만 고친다 — 컬럼 헤더 라벨(LABELS.rm, LABELS.kind)은
+        건드리지 않는다."""
+        self.assertEqual(run_js('label("rm")'), "비고")
+        self.assertEqual(run_js('label("kind")'), "구분")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFootnoteMarkerOnly(unittest.TestCase):
+    """SE-8 Task 3 — DART가 dffrnc_resn(자금 차이 사유)에 "주1)" 같은
+    각주 마커만 돌려주고 본문(각주 내용)은 주지 않는 경우를 판별한다.
+
+    실측(SG, corp_code=00963976, fetch_fund_usage): 차이 사유가 있는 8건
+    전부 dffrnc_occrrnc_resn == "주1)"였다. 이건 우리 버그가 아니다 — 각주
+    본문은 공시 원문(사람이 읽는 문서)에만 있고 API 구조화 데이터엔 없다
+    (task-3-brief, docs/superpowers/plans/2026-07-29-se-8-usability-feedback.md
+    "배경 ④"). hyslrSttus(최대주주 현황) rm 실측 값 집합에는 "주)"·
+    "주1,2)"(여러 각주 동시 표기)도 나온다 — 숫자·쉼표 조합 전부 같은
+    마커류로 본다.
+    """
+
+    def test_marker_only_values_are_detected(self):
+        self.assertTrue(run_js('isFootnoteMarkerOnly("주1)")'))
+        self.assertTrue(run_js('isFootnoteMarkerOnly("주2)")'))
+
+    def test_multi_and_bare_marker_variants_are_detected(self):
+        """실측(SG hyslrSttus)에 나온 변형 — "주1,2)"(여러 각주 동시
+        표기)·"주)"(번호 없는 각주)도 같은 마커류다."""
+        self.assertTrue(run_js('isFootnoteMarkerOnly("주1,2)")'))
+        self.assertTrue(run_js('isFootnoteMarkerOnly("주)")'))
+
+    def test_prose_reason_is_not_a_marker(self):
+        got = run_js('isFootnoteMarkerOnly("자금 재배분에 따른 차이")')
+        self.assertFalse(got)
+
+    def test_missing_data_markers_are_not_footnote_markers(self):
+        """결측("-"/null)은 isNoDataMarker가 이미 처리하는 다른 경로다 —
+        이 함수가 걸면 두 경로가 충돌한다."""
+        self.assertFalse(run_js('isFootnoteMarkerOnly("-")'))
+        self.assertFalse(run_js('isFootnoteMarkerOnly(null)'))
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFootnoteMarkerNote(unittest.TestCase):
+    """isFootnoteMarkerOnly에 걸리는 값에 정직한 안내를 덧붙이는
+    footnoteMarkerNote. 원문 마커는 지우지 않는다(task-3-brief: "원문
+    마커 자체는 지우지 않는다 — 사용자가 원문에서 '주1)'을 찾아 대조할
+    수 있어야 한다") — 마커 뒤에 안내를 잇는 형태다.
+    """
+
+    def test_marker_keeps_original_marker_and_adds_honest_note(self):
+        got = run_js('footnoteMarkerNote("주1)")')
+        self.assertIn("주1)", got, "원문 마커가 사라졌습니다")
+        self.assertIn("각주", got, "정직한 안내 문구가 없습니다")
+
+    def test_prose_reason_passes_through_unchanged(self):
+        """진짜 본문이 있는 사유는 지금처럼 그대로 보여준다 — 이 함수는
+        마커만 있는 경우만 건드린다."""
+        got = run_js('footnoteMarkerNote("자금 재배분에 따른 차이")')
+        self.assertEqual(got, "자금 재배분에 따른 차이")
+
+    def test_rcept_no_is_included_when_given(self):
+        got = run_js('footnoteMarkerNote("주1)", "20250318000939")')
+        self.assertIn("20250318000939", got)
+
+    def test_no_rcept_no_produces_honest_note_alone(self):
+        """fund_usage 레코드는 실측상(dart_client._normalize_fund_usage)
+        rcept_no 자체를 담지 않는다 — 없는 값을 지어내 채우지 않는다."""
+        got = run_js('footnoteMarkerNote("주1)")')
+        self.assertNotRegex(got, r"\d{14}")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFootnoteMarkerRmReuse(unittest.TestCase):
+    """SE-8 Task 3 — 최대주주 합계(hyslrSttus)의 rm 각주도 같은 함수를
+    재사용한다(브리프: "새 함수를 또 만들지 않는다"). rm 필드는 공시
+    목록(fetch_company_disclosures)에서는 코드 조합("코정")이지만
+    hyslrSttus(최대주주 현황)에서는 각주 마커("주1)")다 — 실측(SG)으로
+    확인된 필드 이름 충돌이다. 같은 필드 이름을 무조건 formatRemark(문자
+    단위 분해)로 돌리면 "주1)"이 "주" · "1" · ")"로 쪼개져 문자 단위로
+    깨진다(어느 문자도 DART_REMARK_LABELS에 없으므로) — 이 회귀를 잡는다.
+    """
+
+    def test_rm_footnote_marker_gets_honest_note_not_mangled_by_remark_decode(self):
+        got = run_js('formatValue("rm", "주1)")')
+        self.assertIn("주1)", got, "원문 마커가 사라지거나 문자 단위로 깨졌습니다")
+        self.assertIn("각주", got)
+        self.assertNotIn("주 · 1 · )", got, "formatRemark의 문자 단위 분해로 깨졌습니다")
+
+    def test_rm_disclosure_code_still_uses_remark_decode(self):
+        """회귀 — 공시 목록 rm 코드("코정")는 여전히 formatRemark를 탄다."""
+        got = run_js('formatValue("rm", "코정")')
+        self.assertIn("코스닥", got)
+        self.assertIn("정정신고", got)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFootnoteMarkerRenderedInFundChain(unittest.TestCase):
+    """SE-8 Task 3 — 자금 조달건 카드의 "차이 사유" 열이 "주1)"만 보여주고
+    끝나던 문제(사용자 실제 지적). 실측(SG, corp_code=00963976): 차이
+    사유가 있는 8건 전부 dffrnc_occrrnc_resn == "주1)"였다. 문자열 검사가
+    아니라 renderSection을 실제로 실행해(run_render_section) DOM에 그
+    문단이 붙는지로 확인한다 — "정의만 있고 부르는 곳이 없다" 사고가 이
+    저장소에서 반복됐다(TestFundUsagePayDeLabelAndNote와 같은 이유).
+    """
+
+    def test_marker_only_diff_reason_shows_marker_and_honest_note_in_dom(self):
+        records = [
+            {"tm": "제18회", "kind": "private", "year": 2025, "pay_de": "20240627",
+             "pay_amount": 1000, "plan_amount": 1000, "plan_useprps": "운영자금",
+             "real_dtls_cn": "운영자금", "real_dtls_amount": 900,
+             "dffrnc_resn": "주1)", "flags": []},
+        ]
+        got = run_render_section('"fund_usage"', json.dumps(records, ensure_ascii=False))
+        cell_texts = got["cells"]
+        matched = [t for t in cell_texts if "주1)" in t]
+        self.assertTrue(matched, "차이 사유 셀에 원문 마커 '주1)'이 없습니다")
+        # renderSection("fund_usage", ...)은 두 표를 그린다 — sectionBlocks가
+        # 그리는 원본 표(레코드 그대로, 400건이면 400행)와 fundChain()이
+        # 조달건 단위로 묶은 파생 카드(fundChainBlock) — 같은 dffrnc_resn
+        # 값이 두 곳 모두에 나타난다. "차이 사유" 안내는 이 함수를 실제로
+        # 거친 곳이면 어디든 다 있어야 한다 — bare(정확히 "주1)"뿐인) 셀이
+        # 하나라도 남으면 두 경로 중 하나가 이 함수를 안 거친 것이다(실제로
+        # 처음에는 fundChain()만 고치고 원본 표의 formatValue("dffrnc_resn",
+        # ...)를 빼먹어 이 값 그대로 통과했다).
+        self.assertFalse(
+            any(t == "주1)" for t in cell_texts),
+            "각주 마커만 있고 안내 문구가 없는 셀이 남아 있습니다 — "
+            "원본 표와 파생 카드 중 한쪽만 고쳐진 것으로 보입니다",
+        )
+        self.assertTrue(any("각주" in t for t in matched),
+                         "원문 마커 옆에 정직한 안내 문구가 실제 DOM에 없습니다")
+
+    def test_prose_diff_reason_still_renders_as_is(self):
+        """회귀 — 서술형 사유는 안내 문구 없이 그대로 렌더된다."""
+        records = [
+            {"tm": "제19회", "kind": "private", "year": 2025, "pay_de": "20240729",
+             "pay_amount": 1000, "plan_amount": 1000, "plan_useprps": "시설자금",
+             "real_dtls_cn": "시설자금", "real_dtls_amount": 800,
+             "dffrnc_resn": "자금 재배분에 따른 차이", "flags": []},
+        ]
+        got = run_render_section('"fund_usage"', json.dumps(records, ensure_ascii=False))
+        cell_texts = got["cells"]
+        self.assertIn("자금 재배분에 따른 차이", cell_texts)
+        self.assertFalse(
+            any("각주" in t for t in cell_texts if "자금 재배분" in t),
+            "서술형 사유에 안내 문구가 잘못 붙었습니다",
+        )
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestTableLayout(unittest.TestCase):
     """세로/가로 자동 판단 + 상수열 캡션 승격.
 
@@ -980,6 +1234,148 @@ class TestWideTableFolding(unittest.TestCase):
         got = run_js(f"tableLayout({wide_with_rcept_no})")
         non_essential_visible = [k for k in got["keys"] if k != "rcept_no"]
         self.assertEqual(non_essential_visible, sorted(non_essential_visible, key=lambda k: int(k[1:])))
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFoldMinimum(unittest.TestCase):
+    """splitVisibleFolded()에 최소 접힘 개수(MIN_FOLD_COUNT)를 둔다
+    (task-2-brief 요구사항 B). SG 타법인 출자 실측(20필드 원본, essential
+    승격 후 접힐 열이 정확히 1개)에서 "나머지 1개열" 버튼 하나 누르자고
+    클릭을 요구하는 게 배보다 배꼽이 크다는 게 이 요구사항의 근거다.
+
+    splitVisibleFolded는 순수 함수라 finalKeys 목록을 직접 구성해 검증한다
+    (tableLayout을 거치지 않는다 — records를 안 만들어도 된다). essential
+    열이 없는 finalKeys에서는 "wouldFold = finalKeys.length -
+    MAX_VISIBLE_COLUMNS" 관계가 성립하므로, 이 식으로 원하는 접힘 개수를
+    정확히 지정해 새 최소치 경계(하나 아래·정확히·하나 위) 그리고 기존
+    다수 접힘 회귀를 함께 확인한다.
+    """
+
+    @staticmethod
+    def _keys(n):
+        return json.dumps([f"f{i}" for i in range(n)])
+
+    def test_min_fold_count_constant_is_at_least_two(self):
+        """상수가 실행값으로 몇인지 직접 읽는다(소스 문자열 검색이 아니라
+        run_js로 app.js를 실제 실행해 얻은 값) — 아래 경계 테스트들이
+        이 상수 값에 기대므로, 상수 자체가 퇴화(1 이하)하면 여기서 먼저
+        걸린다."""
+        got = run_js("MIN_FOLD_COUNT")
+        self.assertGreaterEqual(got, 2)
+
+    def test_below_minimum_is_absorbed_into_visible(self):
+        """접힐 열이 1개(새 최소치 미만) → 접지 않고 예산을 늘려 전부
+        보여준다. SG 타법인 출자 실측과 정확히 같은 모양(essential 없이
+        13개 열 → 12 초과분 1개)이다."""
+        n = 12 + 1
+        got = run_js(f"splitVisibleFolded({self._keys(n)}, [])")
+        self.assertEqual(got["folded"], [])
+        self.assertEqual(len(got["visible"]), n)
+
+    def test_at_minimum_still_folds(self):
+        """정확히 MIN_FOLD_COUNT(경계값)만큼 접힐 상황이면 접는다 — 미만일
+        때만 흡수한다는 "미만" 조건의 경계를 고정한다."""
+        got = run_js("MIN_FOLD_COUNT")
+        min_fold = got
+        n = 12 + min_fold
+        result = run_js(f"splitVisibleFolded({self._keys(n)}, [])")
+        self.assertEqual(len(result["folded"]), min_fold)
+        self.assertEqual(len(result["visible"]), 12)
+
+    def test_one_above_minimum_still_folds(self):
+        got = run_js("MIN_FOLD_COUNT")
+        n = 12 + got + 1
+        result = run_js(f"splitVisibleFolded({self._keys(n)}, [])")
+        self.assertEqual(len(result["folded"]), got + 1)
+
+    def test_many_folded_columns_still_folds(self):
+        """기존 동작 회귀 — insider_timeline류(접힘이 충분히 많을 때)는
+        새 최소치가 상한을 무력화하면 안 된다."""
+        n = 12 + 8
+        got = run_js(f"splitVisibleFolded({self._keys(n)}, [])")
+        self.assertEqual(len(got["folded"]), 8)
+        self.assertEqual(len(got["visible"]), 12)
+
+    def test_no_fold_needed_is_unchanged(self):
+        """접힐 열이 원래도 0개(12개 이하)면 기존과 동일하다(회귀)."""
+        got = run_js(f"splitVisibleFolded({self._keys(12)}, [])")
+        self.assertEqual(got["folded"], [])
+        self.assertEqual(len(got["visible"]), 12)
+
+    def test_absorbed_columns_keep_original_order(self):
+        """흡수돼 전부 visible이 된 열도 원래 순서 그대로 남아야 한다 —
+        값이 사라지거나 순서가 섞이면 안 된다."""
+        n = 13
+        got = run_js(f"splitVisibleFolded({self._keys(n)}, [])")
+        self.assertEqual(got["visible"], [f"f{i}" for i in range(n)])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestDisclosureColumnWidthRender(unittest.TestCase):
+    """공시 목록 표에서만 report_nm(공시명)이 넓고 flr_nm(공시제출인)이
+    좁아야 한다(task-2-brief 요구사항 A). 전역 th,td{max-width:280px}는
+    그대로 두고 disclosures 섹션 렌더 시 셀에 클래스를 붙이는 방식이므로,
+    소스에 클래스 문자열이 있다는 것만으로는 실제로 셀에 붙는지 알 수
+    없다 — run_render_section으로 실제 renderSection("disclosures", ...)를
+    실행해 만들어진 DOM(tableRows)에서 className을 직접 읽는다.
+    """
+
+    # SG(corp_code=00963976) 실측 필드 구성(rcept_no·corp_cls·corp_code·
+    # corp_name·stock_code·report_nm·rcept_dt·flr_nm·rm)을 그대로 따르되,
+    # corp_cls·corp_code·corp_name·stock_code는 두 레코드에서 같은 값을
+    # 줘서 caption으로 승격시킨다(실제 공시 목록도 같은 회사 안에서는
+    # 동일하다) — report_nm·flr_nm·rcept_dt·rcept_no·rm만 본문 열로
+    # 남아야 disclosures 실제 렌더와 같은 조건이 된다.
+    _RECORDS = [
+        {"rcept_no": "20260720900747", "corp_cls": "K", "corp_code": "00963976",
+         "corp_name": "SG", "stock_code": "255220",
+         "report_nm": "매출액또는손익구조30%(대규모법인은15%)이상변경",
+         "flr_nm": "SG", "rcept_dt": "20260720", "rm": "코"},
+        {"rcept_no": "20260715900123", "corp_cls": "K", "corp_code": "00963976",
+         "corp_name": "SG", "stock_code": "255220",
+         "report_nm": "분기보고서 (2026.06)",
+         "flr_nm": "SG자산운용조합", "rcept_dt": "20260715", "rm": ""},
+    ]
+
+    def test_report_nm_cell_gets_wide_class(self):
+        got = run_render_section('"disclosures"', json.dumps(self._RECORDS, ensure_ascii=False))
+        header = [c["text"] for c in got["tableRows"][0]]
+        report_idx = header.index("공시명")
+        body_row = got["tableRows"][1]
+        self.assertIn("wide", body_row[report_idx]["className"].split())
+
+    def test_flr_nm_cell_gets_narrow_class(self):
+        got = run_render_section('"disclosures"', json.dumps(self._RECORDS, ensure_ascii=False))
+        header = [c["text"] for c in got["tableRows"][0]]
+        filer_idx = header.index("공시제출인")
+        body_row = got["tableRows"][1]
+        self.assertIn("narrow", body_row[filer_idx]["className"].split())
+
+    def test_other_columns_are_unaffected(self):
+        """report_nm·flr_nm 외 열(rcept_dt 등)에는 wide·narrow가 붙지
+        않는다 — 전체 열에 무차별로 붙는 회귀를 막는다."""
+        got = run_render_section('"disclosures"', json.dumps(self._RECORDS, ensure_ascii=False))
+        header = [c["text"] for c in got["tableRows"][0]]
+        date_idx = header.index("접수일자")
+        body_row = got["tableRows"][1]
+        classes = body_row[date_idx]["className"].split()
+        self.assertNotIn("wide", classes)
+        self.assertNotIn("narrow", classes)
+
+    def test_other_sections_do_not_get_the_classes(self):
+        """report_nm·flr_nm이 아닌 다른 표(예: 재무제표)는 이 클래스를
+        전혀 얻지 않는다 — 실제 렌더 경로로 확인한다(정적 검사는
+        test_se_page_assets.py가 별도로 CSS 규칙 자체를 검사한다)."""
+        records = [
+            {"account_nm": "매출액", "thstrm_amount": "1,000,000", "frmtrm_amount": "900,000"},
+            {"account_nm": "영업이익", "thstrm_amount": "100,000", "frmtrm_amount": "80,000"},
+        ]
+        got = run_render_section('"financials"', json.dumps(records, ensure_ascii=False))
+        for row in got["tableRows"]:
+            for cell in row:
+                classes = cell["className"].split()
+                self.assertNotIn("wide", classes)
+                self.assertNotIn("narrow", classes)
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
@@ -1317,6 +1713,85 @@ class TestAggregateRowSplit(unittest.TestCase):
         people_block = self._people_block(got)
         self.assertEqual(len(people_block["table"]["rows"]), 3,
                           "nm이 없는 레코드가 사람 목록에서 조용히 사라졌습니다")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestAuditFeeOmission(unittest.TestCase):
+    """SE-8 Task 7 — 실사용자(SG, corp_code=00963976) 지적: 감사의견 이력
+    표에 audit_fee_okwon(280)·non_audit_fee_okwon(220000) 같은 숫자가 단위
+    설명 없이 그대로 노출됐다.
+
+    CLAUDE.md 269행의 기존 결정("DART 감사보수 절대 금액 표시는 단위
+    (천원/백만원) 혼용으로 v0.8.0에서 생략. 비중(%)만 경고 섹션에서
+    제공.")을 SE 화면에도 그대로 적용한다 — **새 단위 라벨을 짓지 않고
+    두 필드를 렌더 경로에서만 뺀다.** 비율 기반 대체 표시(비감사용역 비중
+    경고)는 이미 independence_warnings로 별도 렌더된다(변경 대상 아님).
+
+    핵심은 "숨김"이지 "새 라벨"이 아니다 — 아래 값(audit_fee_okwon=
+    913579 등)은 formatValue가 AMOUNT_FIELDS에 없는 숫자를 그냥
+    String(value)로 찍으므로(app.js formatValue 참고) 콤마 없이 그대로
+    셀에 나온다. 두 필드가 AMOUNT_FIELDS에 없다는 사실 자체는
+    scan_financial_anomaly 등 다른 곳과 무관하며, 이 테스트가 요구하는
+    것은 "어떤 형태로도 렌더되지 않는다"이지 "포맷이 맞다"가 아니다.
+    """
+
+    _OPINIONS = [
+        {"year": 2025, "opinion": "적정", "auditor": "삼일회계법인",
+         "tenure_years": 2, "audit_fee_okwon": 913579, "non_audit_fee_okwon": 246813},
+        {"year": 2024, "opinion": "적정", "auditor": "삼일회계법인",
+         "tenure_years": 1, "audit_fee_okwon": 812345, "non_audit_fee_okwon": 135792},
+    ]
+
+    def _value(self):
+        return {"opinions": self._OPINIONS, "auditor_changes": [], "independence_warnings": []}
+
+    def test_fee_fields_are_absent_from_the_opinions_table(self):
+        """sectionBlocks 결과(표 열 목록 — 본문·caption·접힌 열 전부)에
+        두 필드가 없어야 한다."""
+        got = run_js(f'sectionBlocks({json.dumps(self._value(), ensure_ascii=False)}, 0, "audit_history")')
+        opinions_block = next(b for b in got if b["title"] == "감사의견")
+        table = opinions_block["table"]
+        present = (set(table["keys"]) | {c["key"] for c in table["caption"]}
+                   | set(table.get("foldedKeys", [])))
+        self.assertNotIn("audit_fee_okwon", present)
+        self.assertNotIn("non_audit_fee_okwon", present)
+        # 다른 필드까지 함께 지워지면 안 된다 — 오미션은 이 두 키 한정이다.
+        self.assertIn("opinion", present)
+        self.assertIn("auditor", present)
+
+    def test_fee_fields_never_appear_in_the_real_rendered_dom(self):
+        """소스 코드 검사(grep)가 아니라 실제 DOM 렌더로 확인한다 — 이
+        섹션 어딘가의 "나머지 키 전부 그리기" 같은 범용 폴백 경로로 값이
+        새어나갈 수 있고, sectionBlocks 단독 호출만으로는 그 경로를 잡지
+        못한다(run_render_section이 app.js+ui.js를 실제 DOM에 렌더한
+        결과를 본다)."""
+        got = run_render_section('"audit_history"', json.dumps(self._value(), ensure_ascii=False))
+        haystacks = got["cells"] + got["titles"] + got["notes"]
+        all_text = " ".join(str(x) for x in haystacks if x is not None)
+        forbidden = [
+            "audit_fee_okwon", "non_audit_fee_okwon",
+            "913579", "246813", "812345", "135792",
+            "913,579", "246,813", "812,345", "135,792",
+        ]
+        for token in forbidden:
+            self.assertNotIn(token, all_text, f"{token}가 렌더된 DOM에 남아 있습니다")
+
+    def test_omission_does_not_mutate_the_original_data(self):
+        """숨기는 것은 렌더 경로뿐이다 — 원본 opinions 레코드는 두 필드를
+        그대로 갖고 있어야 한다(브리프: 향후 다른 용도로 필요할 수 있으므로
+        원본 객체를 건드리지 않는다). sectionBlocks가 delete로 직접
+        지우는 대신 복사본을 만드는지를, 반환값이 아니라 **호출 후 원본
+        참조 자체**를 다시 읽어 확인한다."""
+        got = run_js(
+            '(function () {'
+            '  var original = ' + json.dumps(self._OPINIONS, ensure_ascii=False) + ';'
+            '  var value = {opinions: original, auditor_changes: [], independence_warnings: []};'
+            '  sectionBlocks(value, 0, "audit_history");'
+            '  return original;'
+            '})()'
+        )
+        self.assertEqual(got, self._OPINIONS,
+                          "sectionBlocks 호출이 원본 opinions 레코드를 건드렸습니다(mutate)")
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
@@ -1724,6 +2199,111 @@ class TestInsiderTimelineRenderWiring(unittest.TestCase):
         )
         self.assertIn("임원·주요주주 소유보고 이력", got["titles"])
         self.assertIn("최대주주 현황", got["titles"])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestHyslrAggregateRowSplit(unittest.TestCase):
+    """SE-8 Task 6 — 실사용자(SG, corp_code=00963976) 지적: insider_timeline의
+    hyslr(최대주주 현황) 하위 블록에 합계 행("계")이 사람 이름("최순복"·
+    "박창호") 사이에 섞여 나와 무엇을 합산한 값인지 알 수 없었다.
+
+    shareholders.major_holders가 이미 겪은 같은 문제다(위
+    TestAggregateRowSplit 참고, sectionBlocks의 major_holders 분기) —
+    판정(isAggregateRow)·분리(splitAggregateRows)를 재구현하지 않고 그대로
+    가져와 insider_timeline의 진입점인 sourceGroupedBlocks의 hyslr 그룹에
+    배선한다.
+
+    fixture: SG hyslr 실측 nm 값 집합(계·최순복·박창호)을 그대로 쓴다."""
+
+    _SG_HYSLR = [
+        {"source": "hyslr", "nm": "최순복", "relate": "본인",
+         "trmend_posesn_stock_qota_rt": "12.34"},
+        {"source": "hyslr", "nm": "박창호", "relate": "특수관계인",
+         "trmend_posesn_stock_qota_rt": "3.21"},
+        {"source": "hyslr", "nm": "계", "relate": "-",
+         "trmend_posesn_stock_qota_rt": "15.55"},
+    ]
+
+    def test_aggregate_row_separated_from_people_at_block_level(self):
+        blocks = run_js(
+            f'sourceGroupedBlocks({json.dumps(self._SG_HYSLR, ensure_ascii=False)})'
+        )
+        titles = [b["title"] for b in blocks]
+        self.assertIn("최대주주 현황", titles)
+        self.assertIn("최대주주 현황 · 합계", titles,
+                       "hyslr의 '계' 행이 합계 블록으로 분리되지 않았습니다")
+        people_block = next(b for b in blocks if b["title"] == "최대주주 현황")
+        idx = people_block["table"]["keys"].index("nm")
+        names = [row[idx] for row in people_block["table"]["rows"]]
+        self.assertNotIn("계", names, "'계' 행이 사람 목록에서 빠지지 않았습니다")
+        self.assertIn("최순복", names)
+        self.assertIn("박창호", names)
+
+    def test_aggregate_row_value_is_not_deleted_stays_in_totals_block(self):
+        """합계를 없애라는 게 아니다 — 무엇을 합산했는지 사용자가 볼 수
+        있어야 한다."""
+        blocks = run_js(
+            f'sourceGroupedBlocks({json.dumps(self._SG_HYSLR, ensure_ascii=False)})'
+        )
+        total_block = next(b for b in blocks if b["title"] == "최대주주 현황 · 합계")
+        flat = _flatten_table_cells(total_block["table"])
+        self.assertIn("계", flat, "합계 행의 '계' 원문이 사라졌습니다")
+
+    def test_person_named_gye_sang_hyeok_is_not_misdetected_in_hyslr(self):
+        """isAggregateRow의 "계상혁" 함정 방지(SE-5b)가 이 새 호출부에서도
+        그대로 지켜지는지 재확인한다 — 로직 자체는 건드리지 않는다."""
+        records = self._SG_HYSLR + [
+            {"source": "hyslr", "nm": "계상혁", "relate": "특수관계인",
+             "trmend_posesn_stock_qota_rt": "0.11"},
+        ]
+        blocks = run_js(f'sourceGroupedBlocks({json.dumps(records, ensure_ascii=False)})')
+        people_block = next(b for b in blocks if b["title"] == "최대주주 현황")
+        idx = people_block["table"]["keys"].index("nm")
+        names = [row[idx] for row in people_block["table"]["rows"]]
+        self.assertIn("계상혁", names,
+                       "실제 인물 '계상혁'이 합계로 오탐돼 hyslr 사람 목록에서 빠졌습니다")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestHyslrAggregateRowSplitRenderWiring(unittest.TestCase):
+    """sourceGroupedBlocks 단독 검증(위 TestHyslrAggregateRowSplit)만으로는
+    renderSection(ui.js) 호출부가 실제로 이 분기를 타는지 못 잡는다 — 이
+    저장소에서 반복된 "정의만 있고 배선이 없는" 사고 유형과 같다.
+    run_render_section으로 app.js·ui.js를 실제로 함께 실행해 확인한다."""
+
+    _SG_HYSLR = [
+        {"source": "hyslr", "nm": "최순복", "relate": "본인",
+         "trmend_posesn_stock_qota_rt": "12.34"},
+        {"source": "hyslr", "nm": "박창호", "relate": "특수관계인",
+         "trmend_posesn_stock_qota_rt": "3.21"},
+        {"source": "hyslr", "nm": "계", "relate": "-",
+         "trmend_posesn_stock_qota_rt": "15.55"},
+    ]
+
+    def test_aggregate_and_people_render_as_separate_titled_blocks(self):
+        got = run_render_section(
+            '"insider_timeline"', json.dumps(self._SG_HYSLR, ensure_ascii=False)
+        )
+        self.assertIn("최대주주 현황", got["titles"])
+        self.assertIn("최대주주 현황 · 합계", got["titles"],
+                       "'계' 행이 실제 렌더에서 별도 블록으로 분리되지 않았습니다")
+
+    def test_gye_text_is_not_deleted_from_the_rendered_dom(self):
+        got = run_render_section(
+            '"insider_timeline"', json.dumps(self._SG_HYSLR, ensure_ascii=False)
+        )
+        self.assertIn("계", got["cells"], "'계' 원문이 실제 렌더에서 사라졌습니다")
+        self.assertIn("최순복", got["cells"])
+        self.assertIn("박창호", got["cells"])
+
+    def test_gye_sang_hyeok_stays_with_named_people_in_rendered_dom(self):
+        records = self._SG_HYSLR + [
+            {"source": "hyslr", "nm": "계상혁", "relate": "특수관계인",
+             "trmend_posesn_stock_qota_rt": "0.11"},
+        ]
+        got = run_render_section('"insider_timeline"', json.dumps(records, ensure_ascii=False))
+        self.assertIn("계상혁", got["cells"],
+                       "실제 인물 '계상혁'이 실제 렌더에서 빠졌습니다")
 
 
 @unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
@@ -2797,6 +3377,76 @@ class TestLabels(unittest.TestCase):
             "tm": "회차", "inv_prm": "피출자 법인명", "lwfr": "전전기",
             "plan_amount": "계획 금액", "real_dtls_amount": "실제 집행 금액",
             "maturity_under_1y": "1년 이내 만기 금액", "company_info": "기업 개요",
+        }
+        for key, want in cases.items():
+            self.assertEqual(run_js(f'label({json.dumps(key)})'), want)
+
+    def test_bulk_holders_majorstock_fields_get_korean_labels(self):
+        """SE-8 Task 6 — 실사용자(SG, corp_code=00963976) 지적: "5% 대량보유"
+        표(shareholders.bulk_holders, dart_client.fetch_shareholder_status가
+        /majorstock.json 원본을 그대로 준다)에 stkqy·stkrt·ctr_stkqy 등이
+        raw 필드명 그대로 노출됐다.
+
+        여기 값은 opendart_api_guide.md §4.1(대량보유 상황보고, 2019021)
+        "응답 결과" 표의 "명칭" 열을 그대로 옮긴 것이다 — 추측이 아니다.
+        브리프가 제시한 괄호 속 글로스("주식수"·"지분율"·"계약체결
+        주식수")는 근사치일 뿐 가이드 원문과 다르므로 쓰지 않았다(가이드
+        원문: stkqy="보유주식등의 수", stkrt="보유비율",
+        ctr_stkqy="주요체결 주식등의 수"). 같은 표의 나머지 형제 필드
+        (stkqy_irds·stkrt_irds·ctr_stkrt·report_tp·report_resn)도 같은
+        표에서 가져와 함께 채운다 — 셋만 고치면 같은 표의 나머지 열이
+        여전히 raw로 남는다."""
+        cases = {
+            "stkqy": "보유주식등의 수",
+            "stkqy_irds": "보유주식등의 증감",
+            "stkrt": "보유비율",
+            "stkrt_irds": "보유비율 증감",
+            "ctr_stkqy": "주요체결 주식등의 수",
+            "ctr_stkrt": "주요체결 보유비율",
+            "report_tp": "보고구분",
+            "report_resn": "보고사유",
+        }
+        for key, want in cases.items():
+            self.assertEqual(run_js(f'label({json.dumps(key)})'), want,
+                              f"{key} 라벨이 opendart_api_guide.md §4.1과 다릅니다")
+
+    def test_audit_history_row_fields_get_korean_labels(self):
+        """SE-8 Task 7 — 실사용자(SG, corp_code=00963976) 지적: 감사의견
+        이력 표에 opinion·auditor·tenure_years가 영문 필드명 그대로 노출됐다.
+        이 세 필드는(audit_fee_okwon과 달리) 단위 모호성이 없어 정상
+        라벨링 대상이다(브리프).
+
+        opinion은 "감사의견"을 쓸 수 없다 — 그 라벨은 이미 상위 리스트 키
+        "opinions"(sectionBlocks가 이 레코드 배열 전체를 감싸는 블록
+        제목, test_empty_nested_list_still_gets_its_own_block에서 고정된
+        값)가 쓰고 있어, LABELS 값 전역 유일성을 요구하는
+        test_no_label_collides_with_a_different_raw_key와 정면으로
+        충돌한다. 표 자체가 이미 "감사의견"이라는 제목 아래 그려지므로
+        열 이름은 그 안에서 구분되는 "의견"을 쓴다.
+        """
+        cases = {
+            "opinion": "의견",
+            "auditor": "감사인",
+            "tenure_years": "연속 재직 연수",
+            "year": "연도",  # 이미 fund_usage/debt_balance가 쓰는 라벨 — 회귀 확인만.
+        }
+        for key, want in cases.items():
+            self.assertEqual(run_js(f'label({json.dumps(key)})'), want)
+
+    def test_auditor_changes_fields_get_korean_labels(self):
+        """dart_client.fetch_audit_opinion_history의 auditor_changes
+        레코드({from_year, to_year, from, to})도 같은 표 안에서 영문
+        그대로 나온다. 라이브 검증(2026-07-30, 두산에너빌리티
+        00159193, lookback_years=5): auditor_changes 1건 실측
+        — {"from_year": 2024, "to_year": 2025, "from": "한영회계법인",
+        "to": "삼정회계법인"}. SG(corp_code=00963976)는 이 목록이 비어
+        있어(실측 확인) 검증할 수 없었다 — 브리프가 요구한 대로 다른
+        회사로 재현했다."""
+        cases = {
+            "from_year": "교체 전 연도",
+            "to_year": "교체 후 연도",
+            "from": "교체 전 감사인",
+            "to": "교체 후 감사인",
         }
         for key, want in cases.items():
             self.assertEqual(run_js(f'label({json.dumps(key)})'), want)
@@ -7394,6 +8044,394 @@ class TestFinancialRatios(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFinancialRatiosKeyOrder(unittest.TestCase):
+    """SE-8 Task 4 — 실사용자(SG, corp_code=00963976 실측 기반) 지적:
+    "표를 구성할 때 이용자에게 어떤 정보가 유용할지 고민부터 하고 배치를
+    해야한다." 재무 파생 지표 표가 분류 메타(구분·기간)로 시작하고 정작
+    지표 이름·값이 뒤로 밀려 있었다. financialRatios()의 반환 키 순서를
+    지표→값→구분→기간→계산식→재료로 바꾼다(task-4-brief.md).
+
+    2026-07-30 SG 실측(fnlttSinglAcnt.json, corp_code=00963976,
+    bsns_year=2025, reprt_code=11011)에서 매출액·영업이익 CFS/OFS 값을
+    그대로 옮겨 적는다 — 연결 752,259,599 / 102,246,199,563,
+    별도 686,206,144 / 49,445,822,622."""
+
+    _SG_CFS_OFS = json.dumps([
+        {"fs_div": "CFS", "sj_div": "IS", "account_nm": "매출액", "thstrm_amount": "102,246,199,563"},
+        {"fs_div": "CFS", "sj_div": "IS", "account_nm": "영업이익", "thstrm_amount": "752,259,599"},
+        {"fs_div": "OFS", "sj_div": "IS", "account_nm": "매출액", "thstrm_amount": "49,445,822,622"},
+        {"fs_div": "OFS", "sj_div": "IS", "account_nm": "영업이익", "thstrm_amount": "686,206,144"},
+    ], ensure_ascii=False)
+
+    def test_indicator_name_is_the_first_key(self):
+        """브리프 검증 요구 1: Object.keys(item)[0] === '지표'."""
+        got = run_js(f"financialRatios({self._SG_CFS_OFS})")
+        self.assertTrue(got, "SG 실측 픽스처에서 결과가 비었습니다")
+        for item in got:
+            self.assertEqual(
+                list(item.keys())[0], "지표",
+                f"첫 키가 '지표'가 아닙니다: {list(item.keys())} (항목: {item})",
+            )
+
+    def test_division_key_still_present_and_valued(self):
+        """브리프 검증 요구 1: '구분'(연결/별도)이 반환 객체에 여전히
+        존재한다 — 순서만 옮기고 정보는 지우지 않는다(SE-4f 원칙)."""
+        got = run_js(f"financialRatios({self._SG_CFS_OFS})")
+        for item in got:
+            self.assertIn("구분", item)
+            self.assertIn(item["구분"], ("연결", "별도"))
+
+    def test_key_order_change_does_not_mix_consolidated_and_separate(self):
+        """브리프 검증 요구 3 / SE-4f 회귀: 키 순서를 바꿔도 같은 지표의
+        연결/별도 값이 서로의 계산에 섞이지 않는다. SG 실측값으로 손계산한
+        영업이익률과 대조한다."""
+        cfs_margin = 752259599 / 102246199563 * 100
+        ofs_margin = 686206144 / 49445822622 * 100
+        got = run_js(f"financialRatios({self._SG_CFS_OFS})")
+        by_div = {
+            (r["구분"], r["기간"]): r["값"]
+            for r in got if r["지표"] == "영업이익률"
+        }
+        self.assertAlmostEqual(by_div[("연결", "당기")], cfs_margin, places=6)
+        self.assertAlmostEqual(by_div[("별도", "당기")], ofs_margin, places=6)
+        # 연결과 별도가 서로 다른 값이어야 "섞이지 않았다"는 검증이 의미가
+        # 있다 — 둘이 우연히 같으면 이 비교는 통과해도 아무것도 증명하지
+        # 못한다.
+        self.assertNotAlmostEqual(cfs_margin, ofs_margin, places=2)
+
+    def test_capital_impairment_row_also_leads_with_indicator_name(self):
+        """computeRatio뿐 아니라 computeCapitalImpairment(자본잠식률 전용
+        분기)도 같은 순서를 지켜야 한다 — 별도 함수라 따로 확인한다."""
+        got = run_js('''financialRatios([
+          {fs_div:"CFS", sj_div:"BS", account_nm:"자본금", thstrm_amount:"1000"},
+          {fs_div:"CFS", sj_div:"BS", account_nm:"자본총계", thstrm_amount:"400"}
+        ])''')
+        imp = [r for r in got if r["지표"] == "자본잠식률"]
+        self.assertTrue(imp)
+        for r in imp:
+            self.assertEqual(list(r.keys())[0], "지표")
+            self.assertIn("구분", r)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFinancialsRawTableFieldOrder(unittest.TestCase):
+    """SE-8 Task 4 — 원본 financials 표(파생값이 아니라 DART 원본 그대로)도
+    같은 원칙을 적용한다. 2026-07-30 SG 실측(corp_code=00963976,
+    fnlttSinglAcnt.json)에서 확인한 실제 필드 순서를 그대로 옮겨 적는다:
+    rcept_no·reprt_code·bsns_year·corp_code·stock_code·fs_div·fs_nm·sj_div·
+    sj_nm·account_nm·thstrm_nm·thstrm_dt·thstrm_amount·... — 분류 메타
+    (fs_div·sj_div·fs_nm·sj_nm)가 계정과목보다 먼저 온다. 또한 같은 실측에서
+    fs_div·sj_div는 한 응답 안에 CFS/OFS·BS/IS가 공존해(상수열이 아니라)
+    승격되지 않고 표 헤더에 그대로 남는다는 것도 함께 확인됐다 — 그래서
+    이 재배치가 실제로 화면 헤더 순서를 바꾼다(우연히 캡션으로 승격돼 안
+    보이는 경우가 아니다)."""
+
+    # SG 실측 레코드 4건(연결·별도 × 유동자산·비유동자산) — 원본 API가 준
+    # 필드 순서 그대로(2026-07-30, rcept_no=20260316001642). account_nm이
+    # 두 값(유동자산/비유동자산) 다 있어야 상수열 캡션 승격으로 표
+    # 헤더에서 사라지지 않는다 — 그래야 이 테스트가 실제로 account_nm의
+    # 렌더 위치를 검증한다.
+    _SG_RAW_FIELD_ORDER = json.dumps([
+        {
+            "rcept_no": "20260316001642", "reprt_code": "11011", "bsns_year": "2025",
+            "corp_code": "00963976", "stock_code": "255220",
+            "fs_div": "CFS", "fs_nm": "연결재무제표", "sj_div": "BS", "sj_nm": "재무상태표",
+            "account_nm": "유동자산", "thstrm_nm": "제 17 기", "thstrm_dt": "2025.12.31 현재",
+            "thstrm_amount": "107,418,120,726", "frmtrm_nm": "제 16 기",
+            "frmtrm_dt": "2024.12.31 현재", "frmtrm_amount": "116,211,873,984",
+            "bfefrmtrm_nm": "제 15 기", "bfefrmtrm_dt": "2023.12.31 현재",
+            "bfefrmtrm_amount": "72,974,861,922", "ord": "1", "currency": "KRW",
+        },
+        {
+            "rcept_no": "20260316001642", "reprt_code": "11011", "bsns_year": "2025",
+            "corp_code": "00963976", "stock_code": "255220",
+            "fs_div": "CFS", "fs_nm": "연결재무제표", "sj_div": "BS", "sj_nm": "재무상태표",
+            "account_nm": "비유동자산", "thstrm_nm": "제 17 기", "thstrm_dt": "2025.12.31 현재",
+            "thstrm_amount": "116,974,720,925", "frmtrm_nm": "제 16 기",
+            "frmtrm_dt": "2024.12.31 현재", "frmtrm_amount": "116,620,861,282",
+            "bfefrmtrm_nm": "제 15 기", "bfefrmtrm_dt": "2023.12.31 현재",
+            "bfefrmtrm_amount": "115,084,845,829", "ord": "3", "currency": "KRW",
+        },
+        {
+            "rcept_no": "20260316001642", "reprt_code": "11011", "bsns_year": "2025",
+            "corp_code": "00963976", "stock_code": "255220",
+            "fs_div": "OFS", "fs_nm": "재무제표", "sj_div": "BS", "sj_nm": "재무상태표",
+            "account_nm": "유동자산", "thstrm_nm": "제 17 기", "thstrm_dt": "2025.12.31 현재",
+            "thstrm_amount": "68,240,213,217", "frmtrm_nm": "제 16 기",
+            "frmtrm_dt": "2024.12.31 현재", "frmtrm_amount": "62,931,296,103",
+            "bfefrmtrm_nm": "제 15 기", "bfefrmtrm_dt": "2023.12.31 현재",
+            "bfefrmtrm_amount": "35,454,929,770", "ord": "2", "currency": "KRW",
+        },
+        {
+            "rcept_no": "20260316001642", "reprt_code": "11011", "bsns_year": "2025",
+            "corp_code": "00963976", "stock_code": "255220",
+            "fs_div": "OFS", "fs_nm": "재무제표", "sj_div": "BS", "sj_nm": "재무상태표",
+            "account_nm": "비유동자산", "thstrm_nm": "제 17 기", "thstrm_dt": "2025.12.31 현재",
+            "thstrm_amount": "119,340,661,393", "frmtrm_nm": "제 16 기",
+            "frmtrm_dt": "2024.12.31 현재", "frmtrm_amount": "116,942,405,364",
+            "bfefrmtrm_nm": "제 15 기", "bfefrmtrm_dt": "2023.12.31 현재",
+            "bfefrmtrm_amount": "109,895,551,026", "ord": "4", "currency": "KRW",
+        },
+    ], ensure_ascii=False)
+
+    def test_account_name_renders_before_classification_meta(self):
+        """브리프 검증 요구 4(실렌더 검증): 원본 재무제표 표에서 account_nm이
+        fs_div보다 먼저 오는 열 순서로 실제 DOM에 렌더된다. financials
+        섹션은 파생 지표 표(financialRatios)도 함께 그리므로, 원본 표는
+        header_rows의 마지막(가장 아래, 원본이 파생 블록보다 나중에
+        붙는다는 ui.js 배선을 이용)에서 찾는다."""
+        got = run_render_section('"financials"', self._SG_RAW_FIELD_ORDER)
+        headers = _header_rows(got)
+        self.assertGreaterEqual(len(headers), 2, f"표가 2개(파생+원본) 미만입니다: {headers}")
+        raw_header = headers[-1]
+        self.assertIn("계정과목", raw_header, f"원본 표 헤더에 계정과목이 없습니다: {raw_header}")
+        self.assertIn("연결/별도", raw_header, f"원본 표 헤더에 연결/별도가 없습니다: {raw_header}")
+        self.assertLess(
+            raw_header.index("계정과목"), raw_header.index("연결/별도"),
+            f"account_nm이 fs_div보다 뒤에 렌더됩니다: {raw_header}",
+        )
+
+    def test_amount_columns_also_render_before_classification_meta(self):
+        """브리프 문구: "account_nm(계정과목)·금액보다 뒤로 보낸다" —
+        금액 열도 함께 확인한다."""
+        got = run_render_section('"financials"', self._SG_RAW_FIELD_ORDER)
+        raw_header = _header_rows(got)[-1]
+        self.assertIn("당기 금액", raw_header)
+        self.assertLess(
+            raw_header.index("당기 금액"), raw_header.index("연결/별도"),
+            f"금액 열이 fs_div보다 뒤에 렌더됩니다: {raw_header}",
+        )
+
+    def test_derived_ratio_table_also_leads_with_indicator_name(self):
+        """확장(브리프 명시 범위 밖, 같은 원칙 적용): 화면에 실제로 보이는
+        "재무 파생 지표" 표(buildFinancialRatiosBlock, ui.js)는
+        financialRatios()의 반환 키 순서가 아니라 자체 레코드 매핑으로
+        열을 결정한다 — financialRatios()만 고치면 이 표의 화면 순서는
+        바뀌지 않는다. 사용자가 실제로 지적한 표가 바로 이것이라 ui.js도
+        함께 고쳤다(financial_ratios sectionKey 전용, financials와
+        다르다)."""
+        got = run_render_section('"financials"', self._SG_RAW_FIELD_ORDER)
+        derived_header = _header_rows(got)[0]
+        self.assertEqual(
+            derived_header[0], "지표",
+            f"재무 파생 지표 표의 첫 열이 '지표'가 아닙니다: {derived_header}",
+        )
+        self.assertIn("구분", derived_header)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestReorderFinancialsFields(unittest.TestCase):
+    """reorderFinancialsRecord/reorderFinancialsFields(app.js) 자체를
+    직접 호출해 확인한다 — 위 실렌더 테스트와 별개로, 값 보존(키를 지우거나
+    바꾸지 않는다)과 경계 조건(우선 열이 아예 없는 레코드)을 순수 함수
+    수준에서 고정한다."""
+
+    def test_meta_keys_move_after_priority_keys_values_unchanged(self):
+        rec = {
+            "rcept_no": "1", "fs_div": "CFS", "fs_nm": "연결재무제표",
+            "sj_div": "BS", "sj_nm": "재무상태표", "account_nm": "유동자산",
+            "thstrm_amount": "100", "ord": "1",
+        }
+        got = run_js(f"reorderFinancialsRecord({json.dumps(rec, ensure_ascii=False)})")
+        keys = list(got.keys())
+        self.assertLess(keys.index("account_nm"), keys.index("fs_div"))
+        self.assertLess(keys.index("thstrm_amount"), keys.index("fs_div"))
+        # 값 자체는 하나도 바뀌지 않는다 — 순서만 바뀐다.
+        self.assertEqual(got, rec)
+
+    def test_record_without_priority_keys_is_left_untouched(self):
+        """계정과목·금액이 아예 없는 레코드(예상 밖 모양)는 옮길 기준점이
+        없다 — 원본 순서를 그대로 둔다(임의로 META를 앞으로 당기지 않는다)."""
+        rec = {"fs_div": "CFS", "sj_div": "BS", "rcept_no": "1"}
+        got = run_js(f"reorderFinancialsRecord({json.dumps(rec, ensure_ascii=False)})")
+        self.assertEqual(list(got.keys()), ["fs_div", "sj_div", "rcept_no"])
+
+    def test_reorder_fields_maps_over_the_whole_array(self):
+        records = [
+            {"fs_div": "CFS", "account_nm": "매출액", "thstrm_amount": "1"},
+            {"fs_div": "OFS", "account_nm": "영업이익", "thstrm_amount": "2"},
+        ]
+        got = run_js(f"reorderFinancialsFields({json.dumps(records, ensure_ascii=False)})")
+        for r in got:
+            self.assertEqual(list(r.keys())[0], "account_nm")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestReorderDividendsFields(unittest.TestCase):
+    """reorderDividendsRecord/reorderDividendsFields(app.js, SE-8 Task 8A) —
+    배당 원본 표의 열 순서를 기준 기간(bsns_year/stlm_dt) → 항목(se) →
+    당기 값(thstrm) → 나머지로 재배치한다. reorderFinancialsFields(Task 4)와
+    같은 관례로 값은 하나도 바꾸지 않고 순서만 바꾸며, 우선 열이 하나도
+    없는 레코드는 원본을 그대로 둔다."""
+
+    def test_priority_keys_move_to_front_in_fixed_order_values_unchanged(self):
+        # 실측(SG, corp_code=00963976, 2026-07-30) 원본 필드 순서 그대로.
+        rec = {
+            "rcept_no": "20260515002529", "corp_cls": "K", "corp_code": "00963976",
+            "corp_name": "SG", "se": "현금배당금총액(백만원)", "stock_knd": "-",
+            "thstrm": "0", "frmtrm": "0", "lwfr": "0",
+            "stlm_dt": "2025-12-31", "bsns_year": "2025", "reprt_code": "11011",
+        }
+        got = run_js(f"reorderDividendsRecord({json.dumps(rec, ensure_ascii=False)})")
+        keys = list(got.keys())
+        self.assertEqual(keys[:4], ["bsns_year", "stlm_dt", "se", "thstrm"])
+        # 값 자체는 하나도 바뀌지 않는다 — 순서만 바뀐다.
+        self.assertEqual(got, rec)
+
+    def test_record_without_priority_keys_is_left_untouched(self):
+        """기준 기간·항목·값이 아예 없는 레코드(예상 밖 모양)는 옮길
+        기준점이 없다 — 원본 순서를 그대로 둔다."""
+        rec = {"rcept_no": "1", "corp_cls": "K"}
+        got = run_js(f"reorderDividendsRecord({json.dumps(rec, ensure_ascii=False)})")
+        self.assertEqual(list(got.keys()), ["rcept_no", "corp_cls"])
+
+    def test_partial_priority_keys_present_still_reorders(self):
+        """bsns_year·stlm_dt가 없고 se·thstrm만 있어도(예상 밖 모양) 있는
+        우선 열만 앞으로 옮긴다."""
+        rec = {"rcept_no": "1", "se": "항목", "thstrm": "1"}
+        got = run_js(f"reorderDividendsRecord({json.dumps(rec, ensure_ascii=False)})")
+        self.assertEqual(list(got.keys()), ["se", "thstrm", "rcept_no"])
+
+    def test_reorder_fields_maps_over_the_whole_array(self):
+        records = [
+            {"se": "항목1", "thstrm": "1", "bsns_year": "2025"},
+            {"se": "항목2", "thstrm": "2", "bsns_year": "2024"},
+        ]
+        got = run_js(f"reorderDividendsFields({json.dumps(records, ensure_ascii=False)})")
+        for r in got:
+            self.assertEqual(list(r.keys())[0], "bsns_year")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestOtherRawTablesAlreadyLeadWithTheUsefulColumn(unittest.TestCase):
+    """SE-8 Task 4 브리프 3번째 요구사항 — financials 외 다른 원본 표에도
+    "분류 메타가 핵심 값보다 앞에 있는" 패턴이 있는지 점검한다(추측이 아니라
+    각 실측으로 확인).
+
+    2026-07-30 SG(corp_code=00963976) 실측 결과:
+    - 타법인 출자(otrCprInvstmntSttus.json): 원본 필드 순서는
+      rcept_no·corp_cls·corp_code·corp_name·inv_prm·... 로 inv_prm(피출자
+      법인명)이 5번째지만, 앞 4개(rcept_no·corp_cls·corp_code·corp_name)가
+      **레코드 전부에서 값이 같다**(SG 10건 실측, 전부 unique count=1) —
+      tableLayout의 상수열 캡션 승격(app.js)이 그 4열을 표 헤더에서 걷어내
+      inv_prm이 실제 화면 헤더에서는 이미 첫 열이다. 브리프의 예상
+      ("이미 맞을 가능성 높음")이 맞았다 — 손대지 않는다.
+    - 배당(alotMatter.json → fetch_dividend_history): 원본 필드 순서는
+      rcept_no·corp_cls·corp_code·corp_name·se·stock_knd·thstrm·... 이고,
+      corp_cls·corp_code·corp_name·stock_knd는 SG 127건 실측에서 전부
+      상수(unique count=1)라 캡션으로 승격된다. 남는 건 rcept_no·se(항목명)·
+      thstrm/frmtrm/lwfr(값)·stlm_dt·bsns_year·reprt_code다 — se(그 행이
+      무엇인지)가 이미 값들 바로 앞에 온다는 점에서 financials(계정과목이
+      분류 메타에 밀리는 패턴)와는 다르다고 이 태스크(Task 4)는 결론
+      냈었다.
+
+      **SE-8 Task 8이 이 결론을 다시 봤다**: se가 값보다 앞선 것은
+      맞지만, se·값이 무슨 **기간**의 것인지(bsns_year·stlm_dt)는 여전히
+      맨 끝 근처(rcept_no 뒤, reprt_code 앞)에 있었다 — 실사용자 지적은
+      "항목을 없애라"가 아니라 "항목을 기준 시점 뒤에 두라"였다. 그래서
+      reorderDividendsFields(app.js, 위 TestReorderDividendsFields)가
+      bsns_year/stlm_dt → se → thstrm 순으로 앞당긴다. 타법인 출자는
+      이미 핵심 값이 앞이라(위 문단) 이번에도 손대지 않는다 — 다른 표까지
+      추측으로 고치지 않는다(brief 제약).
+
+    두 표 모두 아래 테스트로 이 결론(현재 렌더 헤더 순서)을 고정한다 —
+    나중에 값이 상수가 아니게 되거나(회사가 바뀌거나) 필드 순서가
+    바뀌면 이 테스트가 먼저 깨진다."""
+
+    # SG 실측 타법인 출자 2건(2026-07-30, corp_code=00963976) — 원본
+    # 필드 순서 그대로, rcept_no·corp_cls·corp_code·corp_name·stlm_dt는
+    # 두 행 모두 같은 값(실측대로 상수).
+    _SG_AFFILIATES = json.dumps([
+        {
+            "rcept_no": "20260316001642", "corp_cls": "K", "corp_code": "00963976",
+            "corp_name": "SG", "inv_prm": "제이스코에이엠씨제일차조합",
+            "frst_acqs_de": "2015.01.21", "invstmnt_purps": "경영참여",
+            "frst_acqs_amount": "1,000,000,000", "bsis_blce_qy": "200,000",
+            "bsis_blce_qota_rt": "100.0", "bsis_blce_acntbk_amount": "2,320,000,000",
+            "incrs_dcrs_acqs_dsps_qy": "-", "incrs_dcrs_acqs_dsps_amount": "-",
+            "incrs_dcrs_evl_lstmn": "-", "trmend_blce_qy": "200,000",
+            "trmend_blce_qota_rt": "100.0", "trmend_blce_acntbk_amount": "2,320,000,000",
+            "recent_bsns_year_fnnr_sttus_tot_assets": "11,002,000,000",
+            "recent_bsns_year_fnnr_sttus_thstrm_ntpf": "-77,000,000",
+            "stlm_dt": "2025-12-31",
+        },
+        {
+            "rcept_no": "20260316001642", "corp_cls": "K", "corp_code": "00963976",
+            "corp_name": "SG", "inv_prm": "다른 피출자 법인",
+            "frst_acqs_de": "2016.03.01", "invstmnt_purps": "단순투자",
+            "frst_acqs_amount": "500,000,000", "bsis_blce_qy": "100,000",
+            "bsis_blce_qota_rt": "50.0", "bsis_blce_acntbk_amount": "1,000,000,000",
+            "incrs_dcrs_acqs_dsps_qy": "-", "incrs_dcrs_acqs_dsps_amount": "-",
+            "incrs_dcrs_evl_lstmn": "-", "trmend_blce_qy": "100,000",
+            "trmend_blce_qota_rt": "50.0", "trmend_blce_acntbk_amount": "1,000,000,000",
+            "recent_bsns_year_fnnr_sttus_tot_assets": "5,000,000,000",
+            "recent_bsns_year_fnnr_sttus_thstrm_ntpf": "100,000,000",
+            "stlm_dt": "2025-12-31",
+        },
+    ], ensure_ascii=False)
+
+    def test_affiliates_raw_table_already_leads_with_the_invested_company_name(self):
+        got = run_render_section('"affiliates"', self._SG_AFFILIATES)
+        headers = _header_rows(got)
+        self.assertTrue(headers, "타법인 출자 표 헤더를 찾지 못했습니다")
+        header = headers[0]
+        self.assertEqual(
+            header[0], "피출자 법인명",
+            f"타법인 출자 표의 첫 열이 피출자 법인명이 아닙니다: {header}",
+        )
+
+    # SG 실측 배당 2건(2026-07-30, corp_code=00963976) — corp_cls·
+    # corp_code·corp_name·stock_knd는 실측대로 상수, rcept_no·se는 변한다.
+    _SG_DIVIDENDS = json.dumps([
+        {
+            "rcept_no": "20260515002529", "corp_cls": "K", "corp_code": "00963976",
+            "corp_name": "SG", "se": "주당 액면가액(원)", "stock_knd": "-",
+            "thstrm": "500", "frmtrm": "500", "lwfr": "500",
+            "stlm_dt": "2026-03-31", "bsns_year": "2026", "reprt_code": "11013",
+        },
+        {
+            "rcept_no": "20260316001642", "corp_cls": "K", "corp_code": "00963976",
+            "corp_name": "SG", "se": "현금배당금총액(백만원)", "stock_knd": "-",
+            "thstrm": "0", "frmtrm": "0", "lwfr": "0",
+            "stlm_dt": "2025-12-31", "bsns_year": "2025", "reprt_code": "11011",
+        },
+    ], ensure_ascii=False)
+
+    def test_dividends_raw_table_item_name_already_leads_the_value_columns(self):
+        """se(항목명)는 값(thstrm/frmtrm/lwfr) 바로 앞에 있다 — 이 상대
+        순서는 Task 8 재배치 전후로 바뀌지 않는다(reorderDividendsRecord의
+        우선순위 자체가 se → thstrm 순이다)."""
+        got = run_render_section('"dividends"', self._SG_DIVIDENDS)
+        headers = _header_rows(got)
+        self.assertTrue(headers, "배당 표 헤더를 찾지 못했습니다")
+        header = headers[0]
+        self.assertIn("항목", header)
+        self.assertIn("당기 값", header)
+        self.assertLess(
+            header.index("항목"), header.index("당기 값"),
+            f"항목(se)이 값보다 뒤에 렌더됩니다: {header}",
+        )
+
+    def test_dividends_raw_table_now_leads_with_the_base_period_not_item(self):
+        """SE-8 Task 8A — 첫 열이 se(항목)가 아니라 기준 기간(사업연도)이어야
+        한다(brief Step 1 요구사항 1). rcept_no는 이 픽스처에서 상수가
+        아니라(두 행이 다른 접수번호) 캡션으로 승격되지 않으므로, 재배치
+        없이는 rcept_no나 se가 첫 열이었을 자리다."""
+        got = run_render_section('"dividends"', self._SG_DIVIDENDS)
+        headers = _header_rows(got)
+        self.assertTrue(headers, "배당 표 헤더를 찾지 못했습니다")
+        header = headers[0]
+        self.assertEqual(
+            header[0], "사업연도",
+            f"배당 원본 표의 첫 열이 기준 기간(사업연도)이 아닙니다: {header}",
+        )
+        self.assertLess(
+            header.index("사업연도"), header.index("항목"),
+            f"기준 기간이 항목(se)보다 뒤에 렌더됩니다: {header}",
+        )
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestDividendVsIncome(unittest.TestCase):
     """SE-4f Task 4 — dividends(alotMatter)의 se 항목 중 이미 같은 백만원
     단위로 나란히 있는 "현금배당금총액"과 "당기순이익"을 사업연도·
@@ -8359,6 +9397,31 @@ class TestFundChainRenderSection(unittest.TestCase):
             "새 회사를 분석하는데 이전 회사의 공시로 힌트가 떴다",
         )
 
+    # ── SE-8 Task 8B — plan(계획)·real(보고된 집행) 불일치 강조 ──────────
+
+    def test_reported_execution_different_from_plan_is_marked(self):
+        """plan(계획)·real(보고된 집행)이 DART 원본 두 값에서 그대로 다르면
+        강조한다(MARK_RULES.fund_chain). 강조 문구는 판정이 아니라 사실이다:
+        "보고된 집행 ≠ 계획"."""
+        rows = [self._row("2021.10.26", "시설자금", 13082000000, real=5000000000)]
+        out = run_render_section('"fund_usage"', json.dumps(rows, ensure_ascii=False))
+        self.assertTrue(
+            any(m["title"] == "보고된 집행 ≠ 계획" for m in out["marked"]),
+            f"계획≠실제 강조가 렌더되지 않았습니다: {out['marked']}",
+        )
+        self.assertTrue(
+            any("보고된 집행 ≠ 계획" in legend for legend in out["legends"]),
+            f"범례가 렌더되지 않았습니다: {out['legends']}",
+        )
+
+    def test_reported_execution_equal_to_plan_is_not_marked(self):
+        """계획과 실제 집행이 같으면(기본값 — _row의 real=None이면
+        real_dtls_amount가 plan_amount와 같다) 강조가 붙지 않는다."""
+        rows = [self._row("2021.10.26", "시설자금", 13082000000)]
+        out = run_render_section('"fund_usage"', json.dumps(rows, ensure_ascii=False))
+        self.assertEqual(out["marked"], [])
+        self.assertEqual(out["legends"], [])
+
 
 # ── SE-4f Task 5: 타법인 출자 — 피투자사 정보 + 최초취득일 순 시각화 ─────
 #
@@ -8873,6 +9936,65 @@ class TestInsiderTimelineMark(unittest.TestCase):
         self.assertEqual(run_js('cellMarks(%s,"insider_timeline")' % rows), {})
 
 
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFundChainMark(unittest.TestCase):
+    """SE-8 Task 8B — fundChain(uses[])의 plan(계획)·real(보고된 집행)이
+    DART 원본 두 값(plan_amount·real_dtls_amount)에서 그대로 다르면
+    강조한다(MARK_RULES.fund_chain). markLt와 같은 결측 규약 — real이
+    결측(null)이면 강조하지 않는다."""
+
+    def test_mismatch_is_marked(self):
+        uses = ('[{"purpose":"시설자금","plan":100,"real":50},'
+                 '{"purpose":"운영자금","plan":100,"real":100}]')
+        got = run_js('cellMarks(%s, "fund_chain")' % uses)
+        self.assertEqual(got, {"0|real": "보고된 집행 ≠ 계획"})
+
+    def test_equal_plan_and_real_is_not_marked(self):
+        uses = '[{"purpose":"시설자금","plan":100,"real":100}]'
+        self.assertEqual(run_js('cellMarks(%s, "fund_chain")' % uses), {})
+
+    def test_missing_real_is_not_marked(self):
+        """real이 결측(null)이면 강조하지 않는다 — "보고 자체가 없다"와
+        "보고된 값이 다르다"는 다른 사실이다(markLt와 같은 결측 규약)."""
+        uses = '[{"purpose":"시설자금","plan":100,"real":null}]'
+        self.assertEqual(run_js('cellMarks(%s, "fund_chain")' % uses), {})
+
+    def test_zero_real_that_differs_from_plan_is_still_marked(self):
+        """real이 0이라도 있는 값이다 — null(결측)과는 다르다
+        (markNumber(0) !== null)."""
+        uses = '[{"purpose":"시설자금","plan":100,"real":0}]'
+        got = run_js('cellMarks(%s, "fund_chain")' % uses)
+        self.assertEqual(got, {"0|real": "보고된 집행 ≠ 계획"})
+
+    def test_rule_why_text_carries_no_verdict_words(self):
+        """강조 문구는 사실만 말한다 — brief 요구사항 B: "유용"·"의심" 같은
+        평가 어휘 금지."""
+        uses = '[{"purpose":"시설자금","plan":100,"real":50}]'
+        got = run_js('cellMarks(%s, "fund_chain")' % uses)
+        why = got["0|real"]
+        self.assertEqual(why, "보고된 집행 ≠ 계획")
+        for w in ("유용", "의심", "부정", "위험", "손상"):
+            self.assertNotIn(w, why)
+
+    def test_coerced_zero_plan_is_not_marked(self):
+        """SE-8 최종 리뷰 지적(Finding 2) — plan_amount가 한 번도 보고되지
+        않으면 fundChain(2099번 줄)이 plan을 0으로 채운다("모른다"의 표시값일
+        뿐 DART가 실제로 보고한 계획 금액이 아니다). 라이브 재현
+        (real_dtls_amount=5,000,000,000, plan_amount=null인 레코드)에서
+        "보고된 집행 ≠ 계획(계획 0원)"이라는, DART가 말한 적 없는 사실을
+        만들어내면 안 된다. core의 동등 판정(_detect_fund_anomaly,
+        plan_amount > 0 게이트)과 같은 기준."""
+        uses = '[{"purpose":"운영자금","plan":0,"real":5000000000}]'
+        self.assertEqual(run_js('cellMarks(%s, "fund_chain")' % uses), {})
+
+    def test_genuine_nonzero_mismatch_still_marks_after_zero_guard(self):
+        """0-guard가 진짜 불일치까지 죽이면 안 된다 — 회귀 확인
+        (test_mismatch_is_marked와 같은 픽스처)."""
+        uses = '[{"purpose":"시설자금","plan":100,"real":50}]'
+        got = run_js('cellMarks(%s, "fund_chain")' % uses)
+        self.assertEqual(got, {"0|real": "보고된 집행 ≠ 계획"})
+
+
 @unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
 class TestMarkRenderBehavior(unittest.TestCase):
     """SE-4g Task 3 리뷰 지적(Finding 2) — 이전 검증은 소스 문자열만 봤다
@@ -8960,8 +10082,15 @@ class TestMarkRenderBehavior(unittest.TestCase):
 
     @staticmethod
     def _wide_insider_row(cnt, tag):
-        """13번째 자리(=접히는 자리)에 elestock 실측 필드를 둔 넓은 행."""
-        r = {f"a{i}": f"{tag}-{i}" for i in range(1, 13)}
+        """맨 뒤(=접히는 자리)에 elestock 실측 필드를 둔 넓은 행.
+
+        a1..a13(13개) + sp_stock_lmp_irds_cnt = 본문 열 14개 —
+        MAX_VISIBLE_COLUMNS(12) 초과분이 2개(=MIN_FOLD_COUNT)라 SE-8
+        Task 2의 최소 접힘 흡수(splitVisibleFolded)가 발동하지 않는다.
+        원래는 초과분이 1개(a1..a12 12개 + 특수 필드)였는데, 그 모양이
+        바로 MIN_FOLD_COUNT가 흡수하도록 만든 "나머지 1개열" 퇴화
+        사례라 이 표(방어 경로 검증용)에는 더 이상 맞지 않는다."""
+        r = {f"a{i}": f"{tag}-{i}" for i in range(1, 14)}
         r["sp_stock_lmp_irds_cnt"] = cnt
         r["source"] = "elestock"
         return r
@@ -8973,9 +10102,10 @@ class TestMarkRenderBehavior(unittest.TestCase):
         행마다 버튼을 눌러야 보였다. 범례는 세 규칙을 다 말하는데 화면에는
         3개만 보이는 상태였다 — "눈에 띄게"의 반대다.
 
-        여기서는 13열짜리(=12열 상한 초과) 표를 만들고, 강조 규칙이 걸린
-        열을 맨 뒤(원래대로면 가장 먼저 접히는 자리)에 둔다. 강조는 접힌
-        열 상세(span)가 아니라 **본문 셀(td)**로 나와야 한다."""
+        여기서는 14열짜리(=12열 상한을 2열 초과, SE-8 Task 2의 최소 접힘
+        흡수가 발동하지 않는 폭) 표를 만들고, 강조 규칙이 걸린 열을 맨
+        뒤(원래대로면 가장 먼저 접히는 자리)에 둔다. 강조는 접힌 열
+        상세(span)가 아니라 **본문 셀(td)**로 나와야 한다."""
         records = [self._wide_insider_row("-32124", "r0"),
                    self._wide_insider_row("100", "r1")]
         got = run_render_section('"insider_timeline"', json.dumps(records, ensure_ascii=False))
@@ -9464,10 +10594,14 @@ class TestIndicatorBlocks(unittest.TestCase):
         간접적으로 잡았다 — 그 테스트는 부채비율 하나만 보므로 다른
         21개 노트가 같은 방식으로 바뀌면 여전히 못 잡는다.
 
-        진짜 방어는 22개 전체를 스냅샷으로 고정해, 노트가 바뀔 때마다
-        사람이 명시적인 diff를 보고 "의도한 변경인가"를 판단하게 하는
-        것이다 — assertEqual(dict, dict)은 실패 시 바뀐 키·값을 그대로
-        보여준다."""
+        진짜 방어는 전체를 스냅샷으로 고정해, 노트가 바뀔 때마다 사람이
+        명시적인 diff를 보고 "의도한 변경인가"를 판단하게 하는 것이다 —
+        assertEqual(dict, dict)은 실패 시 바뀐 키·값을 그대로 보여준다.
+
+        SE-8 Task 5: 22개(SE-4h)에서 65개로 확대(66개 지표 중
+        "유보액대비율" 1개만 제외 — 자본유보율과 분자·분모가 겹치는지
+        신뢰할 수 있는 출처로 확인하지 못해 지어내지 않고 비워 뒀다,
+        app.js INDICATOR_NOTES 선언부 주석 참고)."""
         got = run_js("INDICATOR_NOTES")
         expected = {
             "순이익률": "매출액 대비 당기순이익의 비율",
@@ -9475,29 +10609,72 @@ class TestIndicatorBlocks(unittest.TestCase):
             "매출원가율": "매출액 대비 매출원가의 비율",
             "ROE": "자기자본 대비 당기순이익의 비율",
             "판관비율": "매출액 대비 판매비와관리비의 비율",
+            "세전계속사업이익률": "매출액 대비 법인세비용 차감 전 계속사업이익의 비율",
+            "총포괄이익률": "매출액 대비 총포괄이익(당기순이익에 기타포괄손익을 더한 금액)의 비율",
+            "총자산영업이익률": "총자산 대비 영업이익의 비율",
+            "총자산세전계속사업이익률": "총자산 대비 세전계속사업이익의 비율",
+            "자기자본영업이익률": "자기자본 대비 영업이익의 비율",
+            "자기자본세전계속사업이익률": "자기자본 대비 세전계속사업이익의 비율",
+            "자본금영업이익률": "자본금 대비 영업이익의 비율",
+            "자본금세전계속사업이익률": "자본금 대비 세전계속사업이익의 비율",
+            "납입자본이익률": "납입자본금 대비 당기순이익의 비율",
+            "영업수익경비율": "영업수익(매출액) 대비 영업비용의 비율",
             "부채비율": "자기자본 대비 부채총계의 비율 — 빌린 돈이 자기 돈의 몇 %인가",
             "자기자본비율": "총자산 대비 자기자본의 비율",
             "유동비율": "1년 안에 갚을 유동부채 대비, 1년 안에 현금화할 수 있는 유동자산의 비율",
             "당좌비율": "유동자산에서 재고자산을 뺀 당좌자산이 유동부채의 몇 %인가",
             "이자보상배율": "영업이익이 이자비용의 몇 배인가 — 값은 DART가 준 그대로 %로 표시된다",
+            "순이자보상배율": "영업이익이 이자비용에서 이자수익을 뺀 순이자비용의 몇 배인가 — 값은 DART가 준 그대로 %로 표시된다",
+            "유동부채비율": "자기자본 대비 유동부채의 비율",
+            "비유동부채비율": "자기자본 대비 비유동부채의 비율",
+            "비유동비율": "자기자본 대비 비유동자산의 비율",
+            "금융비용부담률": "매출액 대비 금융비용(이자비용 등)의 비율",
             "자본유보율": "자본잉여금과 이익잉여금을 더한 유보액이 자본금의 몇 %인가",
+            "재무레버리지": "자기자본 대비 총자산의 비율 — 값은 DART가 준 그대로 %로 표시된다",
+            "비유동적합률": "비유동자산이 자기자본과 비유동부채를 합한 금액의 몇 %인가",
+            "비유동자산구성비율": "총자산 중 비유동자산이 차지하는 비율",
+            "유형자산구성비율": "총자산 중 유형자산이 차지하는 비율",
+            "유동자산구성비율": "총자산 중 유동자산이 차지하는 비율",
+            "재고자산구성비율": "총자산 중 재고자산이 차지하는 비율",
+            "유동자산/비유동자산비율": "비유동자산 대비 유동자산의 비율",
+            "재고자산/유동자산비율": "유동자산 대비 재고자산의 비율",
+            "매출채권/매입채무비율": "매입채무 대비 매출채권의 비율",
+            "매입채무/재고자산비율": "재고자산 대비 매입채무의 비율",
             "매출액증가율(YoY)": "전년 매출액 대비 이번 사업연도 매출액의 변화율",
+            "매출총이익증가율(YoY)": "전년 매출총이익 대비 이번 사업연도 매출총이익의 변화율",
             "영업이익증가율(YoY)": "전년 영업이익 대비 이번 사업연도 영업이익의 변화율",
+            "세전계속사업이익증가율(YoY)": "전년 세전계속사업이익 대비 이번 사업연도 세전계속사업이익의 변화율",
             "순이익증가율(YoY)": "전년 당기순이익 대비 이번 사업연도 당기순이익의 변화율",
+            "총포괄이익증가율(YoY)": "전년 총포괄이익 대비 이번 사업연도 총포괄이익의 변화율",
             "총자산증가율": "전년 총자산 대비 이번 사업연도 총자산의 변화율",
-            "자기자본증가율": "전년 자기자본 대비 이번 사업연도 자기자본의 변화율",
+            "비유동자산증가율": "전년 비유동자산 대비 이번 사업연도 비유동자산의 변화율",
+            "유형자산증가율": "전년 유형자산 대비 이번 사업연도 유형자산의 변화율",
             "부채총계증가율": "전년 부채총계 대비 이번 사업연도 부채총계의 변화율",
+            "총차입금증가율": "전년 총차입금 대비 이번 사업연도 총차입금의 변화율",
+            "자기자본증가율": "전년 자기자본 대비 이번 사업연도 자기자본의 변화율",
+            "유동자산증가율": "전년 유동자산 대비 이번 사업연도 유동자산의 변화율",
+            "매출채권증가율": "전년 매출채권 대비 이번 사업연도 매출채권의 변화율",
+            "재고자산증가율": "전년 재고자산 대비 이번 사업연도 재고자산의 변화율",
+            "유동부채증가율": "전년 유동부채 대비 이번 사업연도 유동부채의 변화율",
+            "매입채무증가율": "전년 매입채무 대비 이번 사업연도 매입채무의 변화율",
+            "비유동부채증가율": "전년 비유동부채 대비 이번 사업연도 비유동부채의 변화율",
             "총자산회전율": "총자산 대비 매출액의 비율",
             "매출채권회전율": "매출채권 대비 매출액의 비율",
             "재고자산회전율": "재고자산 대비 매출액의 비율",
+            "매출원가/재고자산": "재고자산 대비 매출원가의 비율",
             # 화면 문구 자체에 추정임을 적는다 — 4사 실측 모두 DART가 null을
             # 주어 산술 검증을 할 수 없었다(리뷰 지적 ③).
             "매입채무회전율": "매입채무 대비 매출액의 비율 (추정 — DART 값이 없어 산술로 확인하지 못했습니다)",
+            "비유동자산회전율": "비유동자산 대비 매출액의 비율",
+            "유형자산회전율": "유형자산 대비 매출액의 비율",
+            "타인자본회전율": "타인자본(부채총계) 대비 매출액의 비율",
+            "자기자본회전율": "자기자본 대비 매출액의 비율",
+            "자본금회전율": "자본금 대비 매출액의 비율",
             "배당성향(%)": "당기순이익 중 현금배당금총액이 차지하는 비율",
         }
         self.assertEqual(
             set(got.keys()), set(expected.keys()),
-            "INDICATOR_NOTES의 키(22개 지표) 목록이 스냅샷과 다릅니다 — "
+            "INDICATOR_NOTES의 키 목록이 스냅샷과 다릅니다 — "
             "지표가 추가/삭제됐다면 아래 expected 딕셔너리도 함께 갱신하세요",
         )
         for name in expected:
@@ -9508,6 +10685,85 @@ class TestIndicatorBlocks(unittest.TestCase):
                 f"  스냅샷: {expected[name]!r}\n"
                 f"  실제값: {got[name]!r}",
             )
+
+    # SE-8 Task 5 — SE-4h 계획 문서("66개 지표 전체 이름" 절)의 정적
+    # 분류표 그대로. 카테고리별 커버리지를 실측이 아니라 이 목록 대비
+    # 계산으로 검증한다(재계산이 아니라 정적 문자열 목록 대조라 API
+    # 실측과 무관하다).
+    _ALL_66_BY_CATEGORY = {
+        "수익성": [
+            "세전계속사업이익률", "순이익률", "총포괄이익률", "매출총이익률",
+            "매출원가율", "ROE", "판관비율", "총자산영업이익률",
+            "총자산세전계속사업이익률", "자기자본영업이익률",
+            "자기자본세전계속사업이익률", "자본금영업이익률",
+            "자본금세전계속사업이익률", "납입자본이익률", "영업수익경비율",
+        ],
+        "안정성": [
+            "자기자본비율", "부채비율", "유동비율", "당좌비율", "유동부채비율",
+            "비유동부채비율", "이자보상배율", "순이자보상배율", "비유동비율",
+            "금융비용부담률", "자본유보율", "유보액대비율", "재무레버리지",
+            "비유동적합률", "비유동자산구성비율", "유형자산구성비율",
+            "유동자산구성비율", "재고자산구성비율", "유동자산/비유동자산비율",
+            "재고자산/유동자산비율", "매출채권/매입채무비율", "매입채무/재고자산비율",
+        ],
+        "성장성": [
+            "매출액증가율(YoY)", "매출총이익증가율(YoY)", "영업이익증가율(YoY)",
+            "세전계속사업이익증가율(YoY)", "순이익증가율(YoY)", "총포괄이익증가율(YoY)",
+            "총자산증가율", "비유동자산증가율", "유형자산증가율", "부채총계증가율",
+            "총차입금증가율", "자기자본증가율", "유동자산증가율", "매출채권증가율",
+            "재고자산증가율", "유동부채증가율", "매입채무증가율", "비유동부채증가율",
+        ],
+        "활동성": [
+            "총자산회전율", "매출채권회전율", "재고자산회전율", "매출원가/재고자산",
+            "매입채무회전율", "비유동자산회전율", "유형자산회전율", "타인자본회전율",
+            "자기자본회전율", "자본금회전율", "배당성향(%)",
+        ],
+    }
+
+    def test_at_least_43_of_44_additional_indicators_have_notes(self):
+        """브리프 Step 1 요구사항 ①: 44개 추가 지표 중 최소 N개가
+        INDICATOR_NOTES에 있다. SE-4h가 이미 채운 22개를 뺀 44개 중
+        43개(유보액대비율 1개 제외)를 이번 태스크에서 채웠다."""
+        existing_22 = {
+            "순이익률", "매출총이익률", "매출원가율", "ROE", "판관비율",
+            "부채비율", "자기자본비율", "유동비율", "당좌비율", "이자보상배율",
+            "자본유보율", "매출액증가율(YoY)", "영업이익증가율(YoY)",
+            "순이익증가율(YoY)", "총자산증가율", "자기자본증가율", "부채총계증가율",
+            "총자산회전율", "매출채권회전율", "재고자산회전율", "매입채무회전율",
+            "배당성향(%)",
+        }
+        all_66 = {n for names in self._ALL_66_BY_CATEGORY.values() for n in names}
+        additional_44 = all_66 - existing_22
+        self.assertEqual(len(additional_44), 44)
+        got = run_js("INDICATOR_NOTES")
+        filled = additional_44 & set(got.keys())
+        self.assertGreaterEqual(
+            len(filled), 43,
+            f"추가 44개 중 뜻이 채워진 것이 {len(filled)}개뿐입니다: {sorted(additional_44 - filled)}",
+        )
+
+    def test_profit_growth_activity_categories_fully_covered(self):
+        """SE-8 Task 5 최소 성공 기준 — 사용자가 실제로 연 지표(재무비율
+        카테고리)에 뜻이 붙어야 한다. 수익성·성장성·활동성 3개 카테고리는
+        66개 지표 전체 이름 목록 대비 빠짐없이 뜻이 붙는다(0개 누락)."""
+        got = run_js("INDICATOR_NOTES")
+        for category in ("수익성", "성장성", "활동성"):
+            names = self._ALL_66_BY_CATEGORY[category]
+            missing = [n for n in names if n not in got]
+            self.assertEqual(
+                missing, [],
+                f"{category} 카테고리에 뜻이 없는 지표가 있습니다: {missing}",
+            )
+
+    def test_stability_category_covered_except_documented_gap(self):
+        """안정성(22개)은 "유보액대비율" 1개만 의도적으로 비워 뒀다 —
+        자본유보율과 분자·분모가 겹치는지 신뢰할 수 있는 출처로 확인하지
+        못해 지어내지 않았다(task-5-report.md 참고). 그 외 21개는
+        빠짐없이 뜻이 붙는다."""
+        got = run_js("INDICATOR_NOTES")
+        names = self._ALL_66_BY_CATEGORY["안정성"]
+        missing = [n for n in names if n not in got]
+        self.assertEqual(missing, ["유보액대비율"])
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
@@ -9575,28 +10831,37 @@ class TestIndicatorSectionRender(unittest.TestCase):
         self.assertIn("나머지 1개 지표", got["buttons"])
         self.assertIn("납입자본이익률", got["cells"])
 
-    def test_rest_fold_table_has_no_note_column(self):
-        """SE-4h Task 2 리뷰 지적(Finding 3) — indicatorRestFold(ui.js)가
-        indicatorTableEl(restEntries, true)로 바뀌면(원래 false) rest
-        (접힌) 표에도 "뜻" 헤더 열이 생기고, rest 항목은 app.js
-        indicatorBlocks가 애초에 .note를 안 채우므로(withNote=false로
-        빌드) 그 열은 전부 빈 문자열 44칸이 된다 — 그런데도 이 mutation을
-        적용한 채로 기존 535개 테스트를 돌리면 전부 그대로 통과했다(브리프
-        에 적힌 사고). 이 테스트가 그 변형에 실제로 반응하는지 직접 확인:
-        mutation 적용 → 이 테스트 FAIL(5) → 원복 → PASS(3).
+    def test_rest_fold_table_now_has_note_column(self):
+        """SE-8 Task 5 — 실사용자 지적(SG 실측): 일부 지표는 이름+뜻이
+        보이는데, 접힌("나머지 N개 지표") 지표는 뜻이 아예 안 보였다.
+        원인은 SE-4h Task 2가 의도적으로 만든 두 가지였다: ① rest
+        표(indicatorRestFold)가 indicatorTableEl(restEntries, false)를
+        불러 "뜻" 헤더 자체를 안 그렸고, ② app.js indicatorBlocks의
+        buildEntry가 withNote=false일 때는 entry.note를 아예 안 채웠다
+        (당시엔 66개 중 22개만 뜻이 있어 rest 열을 만들면 대부분 빈 칸이라
+        일부러 뺐다 — 렌더 함수 docstring 참고). 이번 태스크로 66개 중
+        65개(유보액대비율 제외)에 뜻이 생겨 그 전제가 사라졌으므로 둘 다
+        되돌렸다: indicatorRestFold는 이제 true를 넘기고, buildEntry는
+        primary·rest 구분 없이 항상 note를 채운다.
 
-        이 픽스처에서 "뜻" 헤더는 primary 표에만 있고, primary 표는
-        정확히 3개(수익성·안정성·활동성 각 1개 — 새분류는 primary가
-        비어 렌더되지 않는다, indicatorBlocks의 INDICATOR_PRIMARY 매핑
-        참고). rest 표(수익성 rest·새분류 rest)에 "뜻" 헤더가 새로
-        생기면 이 개수가 5로 늘어난다."""
+        이 픽스처에서 "뜻" 헤더는 이제 primary·rest 표 모두에 있다.
+        primary 표 3개(수익성·안정성·활동성 각 1개 — 새분류는 primary가
+        비어 렌더되지 않는다) + rest 표 2개(수익성 rest·새분류 rest,
+        각각 block.rest.length > 0)로 총 5개다."""
         got = run_render_section('"indicators"', _INDICATOR_ROWS_JS)
         note_header_count = got["cells"].count("뜻")
         self.assertEqual(
-            note_header_count, 3,
-            "\"뜻\" 헤더 개수가 예상(3, primary 표 3개)과 다릅니다 — "
-            "rest(접힌) 표에 뜻 열이 생겼을 수 있습니다 "
+            note_header_count, 5,
+            "\"뜻\" 헤더 개수가 예상(5, primary 표 3개 + rest 표 2개)과 다릅니다 — "
+            "rest(접힌) 표에 뜻 열이 사라졌을 수 있습니다 "
             "(ui.js indicatorRestFold의 indicatorTableEl(..., withNote) 인자 확인)",
+        )
+        # 세전계속사업이익률은 rest에 있고 값은 전부 null이지만(픽스처),
+        # 이번 태스크로 뜻은 붙었다 — rest 표에서도 그 뜻 문구가 실제로
+        # 렌더된 셀에 나와야 한다(값이 없다고 뜻까지 숨기지 않는다).
+        self.assertTrue(
+            any("법인세비용 차감 전 계속사업이익" in c for c in got["cells"]),
+            "rest 표에서 세전계속사업이익률의 뜻이 렌더되지 않았습니다",
         )
 
     def test_dart_sourced_notice_present_per_block(self):
