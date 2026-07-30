@@ -2933,31 +2933,21 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
                 f"- {yr}  {se} ({kn})  당기 {ts} / 전기 {fr}"
             )
 
-        # DIVIDEND_DRAIN 검출 — 당기 재무에서 당기순이익이 음수일 때만
-        try:
-            _fs_list = fetch_financial_statements_all(
-                info["corp_code"], _DART_API_KEY,
-                str(datetime.now().year - 1), "annual", "CFS",
-            )
-            if not _fs_list:
-                _fs_list = fetch_financial_statements_all(
-                    info["corp_code"], _DART_API_KEY,
-                    str(datetime.now().year - 1), "annual", "OFS",
-                )
-            _current_fs, _ = _fs_response_to_periods({"list": _fs_list or []})
-        except Exception:
-            _current_fs = {}
-
-        drain_flags = detect_dividend_drain(dividend_records, _current_fs)
+        # DIVIDEND_DRAIN 검출 — alotMatter 자체에 같은 (bsns_year,
+        # reprt_code) 그룹으로 bundling된 (연결)/(별도) 당기순이익을
+        # 그대로 사용한다(별도 재무제표 조회 없음, v1.6.x 재설계).
+        drain_flags = detect_dividend_drain(dividend_records)
         if drain_flags:
             lines += [
                 "",
                 "⚠ **적자 시점 배당 유출(DIVIDEND_DRAIN) 패턴 탐지**",
             ]
             for fl in drain_flags[:5]:
+                label = "연결" if fl["fs_div"] == "CFS" else "별도"
                 lines.append(
-                    f"   • {fl['bsns_year']} 사업연도  당기순이익 {fl['net_income']:,}원 "
-                    f"+ {fl['se']} {fl['dividend']:.0f}원  → 자금 유출 경로 검토 권장"
+                    f"   • {fl['bsns_year']} 사업연도 ({label}) 당기순이익 "
+                    f"{fl['net_income']:,.0f}백만원 + 현금배당금총액 "
+                    f"{fl['dividend']:,.0f}백만원  → 자금 유출 경로 검토 권장"
                 )
 
     return "\n".join(lines)

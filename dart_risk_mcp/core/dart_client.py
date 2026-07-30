@@ -3813,52 +3813,103 @@ def fetch_dividend_history(
     return records
 
 
-def detect_dividend_drain(
-    dividend_records: list[dict],
-    current_fs: dict | None,
-) -> list[dict]:
+# detect_dividend_drain이 대상으로 삼는 alotMatter se(항목) 3종.
+# 2026-07-30 두산(00117212) 실측(lookback_years=5, 315 records)으로 확정:
+# 이 3개 문자열은 전 회사·전 연도에서 정확히 이 표기로 고정돼 있고
+# (SG·두산에너빌리티·삼성전자·셀트리온·제이스코·헬릭스미스·두산 7사
+# union 확인), 같은 (bsns_year, reprt_code) 그룹 안에 stock_knd="-"로
+# 딱 한 번씩만 나온다 — "백만원" 단위로 나란히 존재해 단위 환산이
+# 필요 없다.
+#
+# 기존 Python 구현은 "현금배당금" in se 로 느슨하게 매칭했는데, 이는
+# "주당 현금배당금(원)"(단가, 원 단위, 총액과 다른 개념)도 함께
+# 걸려든다 — 실측 응답에서 "현금배당금총액(백만원)"이 항상 먼저 나와
+# 우연히 정답을 골랐을 뿐, 설계상 정확한 매칭이 아니었다. JS
+# dividendVsIncome()의 DIVIDEND_SE_FIELDS가 이미 정확한 표기를 쓰고
+# 있었다 — 이를 따른다(느슨한 매칭 폐기).
+_DIVIDEND_DRAIN_DIVIDEND_SE = "현금배당금총액(백만원)"
+_DIVIDEND_DRAIN_NI_SE = {
+    "CFS": "(연결)당기순이익(백만원)",
+    "OFS": "(별도)당기순이익(백만원)",
+}
+
+
+def _parse_dart_thstrm(raw) -> float | None:
+    """alotMatter의 thstrm 문자열("35,772"/"-"/None)을 float로.
+
+    DART가 값 없음을 "-"로 표기하는 관례(분기 보고에는 연간 배당 항목이
+    비어 있는 경우 등)를 None으로 흡수한다.
+    """
+    if raw is None:
+        return None
+    s = str(raw).replace(",", "").strip()
+    if not s or s == "-":
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def detect_dividend_drain(dividend_records: list[dict] | None) -> list[dict]:
     """적자 시점 배당 유출(DIVIDEND_DRAIN) 패턴 검출.
 
+    alotMatter(배당에 관한 사항) 응답 자체가 같은 (bsns_year, reprt_code)
+    그룹 안에 "현금배당금총액(백만원)"과 "(연결)/(별도)당기순이익(백만원)"을
+    함께 담고 있다는 사실에 기대 — 별도 재무제표 조회 없이
+    fetch_dividend_history 결과 하나만으로 연도별로 정확히 짝짓는다
+    (2026-07-30 두산 00117212 실측으로 확정, 새 DART 호출 없음).
+
+    연결(CFS)·별도(OFS)는 절대 하나로 합쳐 판정하지 않는다 — 두산
+    실측이 정확히 "한쪽만 적자"(2022 CFS만) 또는 "양쪽 다 적자"
+    (2023 CFS·OFS 둘 다) 사례라, 병합하면 놓치거나 왜곡된다.
+
     Args:
-        dividend_records: fetch_dividend_history 결과.
-        current_fs: 당기 재무 dict (`{account_nm: int}`).
-            `당기순이익`을 보고 음수일 때만 검사.
+        dividend_records: fetch_dividend_history 결과 원본 배열.
 
     Returns:
-        flag dict 리스트:
-          {"bsns_year", "se", "dividend": float, "net_income": int}
-        매 record마다 최대 1건. 적자 + 양수 배당이 동시에 만족돼야 플래그.
+        flag dict 리스트, (bsns_year, reprt_code, fs_div) 조합마다
+        최대 1건: {"bsns_year", "reprt_code", "fs_div" ("CFS"|"OFS"),
+        "dividend": float(백만원), "net_income": float(백만원)}.
+        해당 fs_div의 당기순이익이 음수이고 같은 그룹에 양수 현금배당이
+        함께 있어야 플래그. bsns_year → reprt_code → fs_div 순 정렬.
     """
-    if not dividend_records or not current_fs:
-        return []
-    ni = _pick_account(current_fs, _FS_ALIASES.get("당기순이익", ["당기순이익"]))
-    if ni is None or ni >= 0:
+    if not dividend_records:
         return []
 
-    flags: list[dict] = []
-    seen_year: set[str] = set()
+    groups: dict[tuple[str, str], dict[str, float]] = {}
+    tracked_se = {_DIVIDEND_DRAIN_DIVIDEND_SE, *_DIVIDEND_DRAIN_NI_SE.values()}
     for rec in dividend_records:
+        if not isinstance(rec, dict):
+            continue
         se = rec.get("se") or ""
-        # "주당 현금배당금(원)" 같은 항목만 대상으로 한다(주식배당·지급대상 등은 제외).
-        if "현금배당금" not in se:
-            continue
-        raw = rec.get("thstrm") or "0"
-        try:
-            div = float(str(raw).replace(",", "").strip())
-        except (TypeError, ValueError):
-            continue
-        if div <= 0:
+        if se not in tracked_se:
             continue
         year = rec.get("bsns_year") or ""
-        # 같은 연도 중복 방지(분기 4회 호출 노이즈)
-        if year and year in seen_year:
+        reprt_code = rec.get("reprt_code") or ""
+        bucket = groups.setdefault((year, reprt_code), {})
+        if se in bucket:
+            continue  # 같은 그룹 안에서는 이 3개 se가 한 번씩만 나온다(실측) — 방어적 first-wins
+        val = _parse_dart_thstrm(rec.get("thstrm"))
+        if val is not None:
+            bucket[se] = val
+
+    flags: list[dict] = []
+    for (year, reprt_code), bucket in groups.items():
+        dividend = bucket.get(_DIVIDEND_DRAIN_DIVIDEND_SE)
+        if dividend is None or dividend <= 0:
             continue
-        if year:
-            seen_year.add(year)
-        flags.append({
-            "bsns_year": year,
-            "se": se,
-            "dividend": div,
-            "net_income": ni,
-        })
+        for fs_div, ni_se in _DIVIDEND_DRAIN_NI_SE.items():
+            ni = bucket.get(ni_se)
+            if ni is None or ni >= 0:
+                continue
+            flags.append({
+                "bsns_year": year,
+                "reprt_code": reprt_code,
+                "fs_div": fs_div,
+                "dividend": dividend,
+                "net_income": ni,
+            })
+
+    flags.sort(key=lambda f: (f["bsns_year"], f["reprt_code"], f["fs_div"]))
     return flags
