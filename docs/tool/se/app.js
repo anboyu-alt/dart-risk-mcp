@@ -806,6 +806,14 @@ function isMetaOnlyRecords(records) {
   return true;
 }
 
+/** isMetaOnlyRecords가 참인 그룹에 붙일 안내문(SE-9 Task 3, 3a). "없다"는
+ *  사실만이 아니라 몇 건을 확인했는지(reportCount)도 남긴다 — 표 자체를
+ *  없애면서 "없다"만 말하면 "아예 확인을 안 한 것" 같은 인상을 줄 수
+ *  있어서다(사용자가 조회 범위·건수를 신뢰할 수 있어야 한다). */
+function metaOnlyNote(reportCount) {
+  return "해당 기간에 보고된 내역이 없습니다. (보고서 " + reportCount + "건 확인)";
+}
+
 /** 레코드 전부가 비어 있지 않은 문자열 source 필드를 가지면 true다.
  *
  *  이 조건으로만 sourceGroupedBlocks를 태운다 — "source가 없는 데이터
@@ -874,13 +882,77 @@ function sourceGroupedBlocks(records) {
     if (s === "hyslr") {
       const split = splitAggregateRows(withoutSource);
       const peopleCleaned = dropAllEmptyColumns(split.people);
-      const pt = tableLayout(peopleCleaned);
-      if (pt) {
-        const pBlock = { title: label(s), table: pt, records: peopleCleaned };
-        if (isMetaOnlyRecords(peopleCleaned)) {
-          pBlock.note = "해당 기간에 보고된 내역이 없습니다.";
+      // SE-9 Task 3(3a): peopleCleaned가 메타-only면(사람 행은 있는데
+      // 실데이터가 전부 "-") 아래 일반 분기와 같은 판정을 쓴다 — 표를
+      // 만들지 않고 안내문(건수 포함)만 남긴다. 자세한 이유는 아래
+      // 일반 분기의 3a 주석 참고(같은 판정을 여기서 다시 설명하지 않는다).
+      let peoplePushed = false;
+      if (isMetaOnlyRecords(peopleCleaned)) {
+        blocks.push({
+          title: label(s), table: null, records: null,
+          note: metaOnlyNote(peopleCleaned.length),
+        });
+        peoplePushed = true;
+      } else {
+        const pt = tableLayout(peopleCleaned);
+        if (pt) {
+          blocks.push({ title: label(s), table: pt, records: peopleCleaned });
+          peoplePushed = true;
         }
-        blocks.push(pBlock);
+      }
+      let totalsPushed = false;
+      if (split.totals.length > 0) {
+        const totalsCleaned = dropAllEmptyColumns(split.totals);
+        const tt = tableLayout(totalsCleaned);
+        if (tt) {
+          blocks.push({ title: label(s) + " · 합계", table: tt, records: totalsCleaned });
+          totalsPushed = true;
+        }
+      }
+      if (!peoplePushed && !totalsPushed) {
+        blocks.push({ title: label(s), table: null, records: null });
+      }
+      continue;
+    }
+
+    // exec_treasury(임원·주요주주 자기주식)에는 두 가지 잡음이 섞여
+    // 온다(SE-9 조사 se9-investigation.md Item 2-2 실측):
+    // ① 소계/총계 행이 상세 행 사이에 acqs_mth3 값("소계" 등)으로
+    //    섞여 온다 — hyslr의 "계"와 같은 문제이지만 검사 필드가 다르다.
+    //    isAggregateRow/splitAggregateRows를 필드 매개변수화해(3b, 기본값
+    //    nm — hyslr·major_holders 기존 호출부는 그대로) 재사용한다.
+    // ② 같은 (rcept_no, acqs_mth1~3) 조합에 "쌍둥이" 행이 있다 — SG
+    //    실측(lookback 2년) 145행 중 72그룹이 한쪽은 실데이터, 다른 한쪽은
+    //    stock_knd·5개 수량 필드·rm 전부 "-"다. 빈 쪽은 정보가 아니라
+    //    표만 두 배로 늘릴 뿐이라 생략하되(3c), 몇 건을 생략했는지는
+    //    캡션(note)에 정직하게 남긴다 — 값이 하나라도 있으면(3a와 같은
+    //    원칙) 생략하지 않는다.
+    if (s === "exec_treasury") {
+      const split = splitAggregateRows(withoutSource, "acqs_mth3");
+      const padding = splitPaddingRows(split.people, EXEC_TREASURY_PADDING_FIELDS);
+      const detailCleaned = dropAllEmptyColumns(padding.kept);
+      if (isMetaOnlyRecords(detailCleaned)) {
+        blocks.push({
+          title: label(s), table: null, records: null,
+          note: metaOnlyNote(detailCleaned.length),
+        });
+      } else {
+        const dt = tableLayout(detailCleaned);
+        if (dt) {
+          const dBlock = { title: label(s), table: dt, records: detailCleaned };
+          if (padding.omitted > 0) {
+            dBlock.note = "내용 없는 행 " + padding.omitted + "건 생략";
+          }
+          blocks.push(dBlock);
+        } else if (split.people.length > 0) {
+          // 상세 행이 있었지만(소계/총계 제외) 전부 패딩이라 표 자체가
+          // 사라졌다 — "N건 생략" 대신 3a와 같은 메타-only 안내 형식으로
+          // 수렴시킨다(브리프: 서로 다른 두 문구를 배우게 하지 않는다).
+          blocks.push({
+            title: label(s), table: null, records: null,
+            note: metaOnlyNote(split.people.length),
+          });
+        }
       }
       if (split.totals.length > 0) {
         const totalsCleaned = dropAllEmptyColumns(split.totals);
@@ -889,28 +961,37 @@ function sourceGroupedBlocks(records) {
           blocks.push({ title: label(s) + " · 합계", table: tt, records: totalsCleaned });
         }
       }
-      if (!pt && split.totals.length === 0) {
-        blocks.push({ title: label(s), table: null, records: null });
-      }
       continue;
     }
 
     const cleaned = dropAllEmptyColumns(withoutSource);
-    const t = tableLayout(cleaned);
     // records는 표가 실제로 그린 것과 같은 레코드(source 제거·빈 열 제거
     // 반영 후)를 그대로 싣는다 — 다음 태스크(차트)가 이 레코드로 그리므로
     // 표와 다른 값을 보여주면 안 된다.
+    //
+    // SE-9 Task 3(3a) — task-6(SE-4f)의 "표는 지우지 않는다(접수번호로
+    // 원문을 직접 열어 확인할 수 있어야 한다)" 결정을 뒤집는다. 그
+    // 결정으로 실제 배포본에서 나온 결과를 실사용자(SG)가 재지적했다:
+    // 안내문이 이미 "내역이 없다"고 말하는데, 그 밑에 식별자(rcept_no·
+    // stlm_dt 등)만 남은 표가 그대로 깔려 있는 게 오히려 혼란스럽다 —
+    // "없다"고 말해놓고 표를 보여주면 사용자는 표에서 뭔가를 다시
+    // 찾으려 하게 된다. 원문 접근성 문제(접수번호로 원문을 열 수 있어야
+    // 한다는 옛 근거)는 이제 다른 경로가 해결한다 — 공시 목록 탭이
+    // 접수번호·원문 링크를 이미 별도로 제공하므로, 이 표가 사라져도
+    // 원문을 못 찾게 되지 않는다. 그래서 메타-only면 표 자체를 만들지
+    // 않고 안내문만 남기되, 몇 건을 확인했는지(N)는 함께 남긴다 —
+    // "이상 없음"·"정상" 같은 판정 어휘가 아니라 "보고된 내역이 없다"는
+    // 사실과 확인 건수만 말한다(v0.8.5 원칙).
+    if (isMetaOnlyRecords(cleaned)) {
+      blocks.push({
+        title: label(s), table: null, records: null,
+        note: metaOnlyNote(cleaned.length),
+      });
+      continue;
+    }
+    const t = tableLayout(cleaned);
     if (t) {
-      const block = { title: label(s), table: t, records: cleaned };
-      // task-6: 표는 지우지 않는다(접수번호로 원문을 직접 열어 확인할 수
-      // 있어야 한다 — 우리 판단이 틀렸을 때의 검증 경로이기도 하다). 다만
-      // 남은 열이 식별자·메타뿐이면(isMetaOnlyRecords) 그 사실 자체를
-      // 문구로 알린다 — "이상 없음"·"정상" 같은 판정 어휘가 아니라
-      // "보고된 내역이 없다"는 사실만 말한다(v0.8.5 원칙).
-      if (isMetaOnlyRecords(cleaned)) {
-        block.note = "해당 기간에 보고된 내역이 없습니다.";
-      }
-      blocks.push(block);
+      blocks.push({ title: label(s), table: t, records: cleaned });
     }
   }
   return blocks;
@@ -1171,38 +1252,93 @@ function omitHiddenIds(value) {
 // 사이에 뒤섞여 읽기 힘든 게 문제이지 합계 자체가 문제가 아니다(브리프
 // 원칙: "합계를 없애라는 게 아니다"). splitAggregateRows가 같은 표 안에서
 // 사람 행과 합계 행을 분리해 각자 제자리(사람 목록 / 합계 소계)에 둔다.
-const AGGREGATE_ROW_NAMES = new Set(["계", "합계", "총계"]);
+//
+// "소계"는 SE-9 Task 3(3b)에서 추가했다 — exec_treasury(임원·주요주주
+// 자기주식)의 acqs_mth3(취득방법3) 필드가 "소계"로 부분합계 행을 표시한다
+// (se9-investigation.md Item 2-2 실측). hyslr·major_holders(nm 필드)에는
+// "소계"가 실측된 적이 없지만, 같은 집합을 공유해도 해가 없다 — "소계"도
+// 한국어로 합계류 값이고, 어떤 nm 값도 우연히 "소계"와 같아질 사람 이름이
+// 아니다(동명이인 함정과 무관).
+const AGGREGATE_ROW_NAMES = new Set(["계", "합계", "총계", "소계"]);
 
-/** 이 레코드가 합계 행("계"·"합계"·"총계")인가. nm이 아예 없거나 문자열이
- *  아니면(예상 밖 응답) 사람 행으로 본다 — 판정을 못 하면 지우지도, 다르게
- *  다루지도 않는 쪽이 안전하다.
+/** r[field]가 합계류 값("계"·"합계"·"총계"·"소계")인가. field 생략 시
+ *  기본값은 "nm"(major_holders·hyslr이 사람을 식별하는 필드) — 기존
+ *  호출부(field를 안 주는 곳)는 전부 이 기본값으로 동작이 그대로다.
+ *  field 값이 아예 없거나 문자열이 아니면(예상 밖 응답) 합계가 아닌
+ *  쪽(사람/상세 행)으로 본다 — 판정을 못 하면 지우지도, 다르게 다루지도
+ *  않는 쪽이 안전하다.
  *
  *  비교 전에 모든 공백(앞뒤·내부)을 제거한다 — DART가 "합 계"처럼 내부에
  *  공백을 넣어 보내는 경우가 있어 trim()만으로는 사람 목록에 남는다.
  *  다만 공백 "제거"이지 부분/접두 일치가 아니다 — "계상혁"처럼 실제
  *  인물명은 공백이 없어 원래 글자 그대로 남고, AGGREGATE_ROW_NAMES의
  *  어떤 항목과도 같아지지 않는다(동명이인 원칙과 같은 이유로 정확히
- *  일치할 때만 합계로 분류한다).
+ *  일치할 때만 합계로 분류한다). field를 "acqs_mth3"로 바꿔도(exec_treasury)
+ *  이 정확 일치 규칙은 그대로다 — SE-9 Task 3 3b, 필드만 매개변수화했지
+ *  판정 방식은 바꾸지 않았다.
  *
  *  splitAggregateRows(표를 사람/합계로 나누기)와 shareholders 강조 규칙
  *  (합계 행에는 강조를 붙이지 않기, 이 파일 아래쪽) 두 곳이 이 하나의
  *  판정을 공유한다 — 같은 질문을 두 군데서 각자 답하면 "계상혁 함정"도
- *  두 군데서 각자 재발한다. */
-function isAggregateRow(r) {
-  const nm = isPlainObject(r) ? r.nm : undefined;
-  return typeof nm === "string" && AGGREGATE_ROW_NAMES.has(nm.replace(/\s+/g, ""));
+ *  두 군데서 각자 재발한다. shareholders 강조 규칙은 field를 지정하지
+ *  않고 부르므로(기존 호출부) 기본값 "nm"을 그대로 쓴다. */
+function isAggregateRow(r, field) {
+  const f = field || "nm";
+  const v = isPlainObject(r) ? r[f] : undefined;
+  return typeof v === "string" && AGGREGATE_ROW_NAMES.has(v.replace(/\s+/g, ""));
 }
 
-/** records(major_holders 등, nm 필드로 사람을 식별하는 레코드 목록)를
- *  {people, totals}로 나눈다(판정은 isAggregateRow 하나에 맡긴다). */
-function splitAggregateRows(records) {
+/** records를 {people, totals}로 나눈다(판정은 isAggregateRow 하나에
+ *  맡긴다). field 생략 시 기본값 "nm"(major_holders·hyslr) — SE-9 Task 3
+ *  3b에서 exec_treasury("acqs_mth3")를 위해 매개변수화했다. */
+function splitAggregateRows(records, field) {
   const people = [];
   const totals = [];
   for (const r of records) {
-    if (isAggregateRow(r)) totals.push(r);
+    if (isAggregateRow(r, field)) totals.push(r);
     else people.push(r);
   }
   return { people: people, totals: totals };
+}
+
+// exec_treasury(임원·주요주주 자기주식)의 "쌍둥이" 빈 행 판정 필드
+// (SE-9 Task 3, 3c). se9-investigation.md Item 2-2 실측: SG lookback 2년
+// 145행 중 72그룹이 (rcept_no, acqs_mth1, acqs_mth2, acqs_mth3)로 묶었을 때
+// 한쪽은 실데이터, 다른 한쪽은 stock_knd(주식종류)·5개 수량 필드·rm(비고)
+// 전부가 리터럴 "-"다 — 이는 DART 원본 자체의 모양이다(취득방법 조합마다
+// 주식종류별로 행을 하나씩 내보내는데, 활동이 없는 주식종류에도 빈 행을
+// 낸다). acqs_mth1~3은 일부러 뺐다 — 그 필드들은 빈 쪽에도 "이 행이 어느
+// 취득방법·구분에 해당하는지"를 실제로 말해주는 값이 남아 있어(실측:
+// 빈 쪽도 acqs_mth1="배당가능이익범위 이내 취득" 등 채워져 있다), 여기
+// 넣으면 진짜 빈 행을 놓친다.
+const EXEC_TREASURY_PADDING_FIELDS = [
+  "stock_knd", "bsis_qy", "change_qy_acqs", "change_qy_dsps",
+  "change_qy_incnr", "trmend_qy", "rm",
+];
+
+/** r의 fields 전부가 리터럴 문자열 "-"일 때만 true. isNoDataMarker보다
+ *  좁다(null·빈 문자열은 여기서 패딩으로 보지 않는다) — DART 실측이 이
+ *  자리에 항상 "-"만 채워 보내는 것을 확인했고(위 isNoDataMarker 주석과
+ *  같은 근거), 값이 예상 밖 모양이면 판정을 보수적으로 포기해 행을
+ *  지우지 않는 쪽이 "값이 하나라도 있으면 표를 그대로 보여준다"(3a와
+ *  같은) 원칙에 맞는다. */
+function isPaddingRow(r, fields) {
+  if (!isPlainObject(r)) return false;
+  return fields.every(function (k) { return r[k] === "-"; });
+}
+
+/** records를 fields 기준으로 {kept, omitted}로 나눈다. omitted는 지운
+ *  레코드를 담지 않고 개수만 센다 — 브리프 3c: "캡션에 생략 건수를
+ *  정직하게 표기한다"를 위해 값은 버리되(표에 안 남긴다) 몇 건인지는
+ *  호출부가 알 수 있게 남긴다. */
+function splitPaddingRows(records, fields) {
+  const kept = [];
+  let omitted = 0;
+  for (const r of records) {
+    if (isPaddingRow(r, fields)) omitted++;
+    else kept.push(r);
+  }
+  return { kept: kept, omitted: omitted };
 }
 
 /** 섹션 값을 화면에 그릴 블록 목록 [{title, table}] 또는 [{title, text}]로
@@ -3841,7 +3977,8 @@ if (typeof module !== "undefined" && module.exports) {
     fundChainDisclosureHints,
     markNumber, MARK_RULES, cellMarks, markedColumnKeys, indicatorCellWhy,
     isAggregateRow, splitAggregateRows, splitVisibleFolded, MAX_VISIBLE_COLUMNS,
-    MIN_FOLD_COUNT,
+    MIN_FOLD_COUNT, isMetaOnlyRecords, metaOnlyNote,
+    EXEC_TREASURY_PADDING_FIELDS, isPaddingRow, splitPaddingRows,
     INDICATOR_CATEGORY_ORDER, INDICATOR_PRIMARY, INDICATOR_NOTES,
     formatIndicator, indicatorBlocks, indicatorChartRecords,
     normalizeIndicatorCategory, indicatorRows, indicatorYearNote,

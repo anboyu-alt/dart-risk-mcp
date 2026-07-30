@@ -2144,20 +2144,23 @@ class TestMetaOnlyRecordsGetNoDataNote(unittest.TestCase):
         )
         self.assertEqual(len(got), 1)
         self.assertEqual(
-            got[0].get("note"), "해당 기간에 보고된 내역이 없습니다.",
+            got[0].get("note"), "해당 기간에 보고된 내역이 없습니다. (보고서 1건 확인)",
             "식별자·메타 필드만 있고 실데이터가 전부 \"-\"인 레코드는 "
-            "해당 없음으로 표기해야 합니다",
+            "해당 없음(확인한 건수 포함)으로 표기해야 합니다 — SE-9 Task 3(3a),"
+            "확인한 보고서 건수를 문구에 남긴다",
         )
 
-    def test_enkem_empty_record_keeps_rcept_no_reachable(self):
-        """판단이 틀렸을 경우를 대비해 접수번호는 지우지 않는다 —
-        사용자가 원문을 직접 열어 확인할 수 있어야 한다."""
+    def test_enkem_empty_record_no_longer_keeps_a_table(self):
+        """SE-9 Task 3(3a) — task-6(SE-4f)의 "표는 지우지 않는다" 결정을
+        뒤집었다. 예전에는 접수번호를 표에 남겨 원문을 직접 열 수 있게
+        했지만(과거 테스트명: test_enkem_empty_record_keeps_rcept_no_reachable),
+        실사용자 재지적으로 "안내문 밑에 식별자만 있는 표"가 오히려
+        혼란을 준다는 게 확인돼 표 자체를 없앴다 — 원문 접근은 공시 목록
+        탭이 별도로 제공한다."""
         got = run_js(
             f"sectionBlocks({json.dumps(self._ENKEM_HYSLR_CHG_EMPTY, ensure_ascii=False)})"
         )
-        table = got[0]["table"]
-        present = set(table["keys"]) | {c["key"] for c in table["caption"]}
-        self.assertIn("rcept_no", present)
+        self.assertIsNone(got[0].get("table"))
 
     def test_samsung_filled_record_has_no_note(self):
         """값이 하나라도 있으면(삼성전자 자기주식 실수량) 표를 그대로
@@ -2194,14 +2197,16 @@ class TestMetaOnlyNoteRendersInDom(unittest.TestCase):
         got = run_render_section(
             '"insider_timeline"', json.dumps(records, ensure_ascii=False)
         )
-        self.assertIn("해당 기간에 보고된 내역이 없습니다.", got["notes"])
+        self.assertIn(
+            "해당 기간에 보고된 내역이 없습니다. (보고서 1건 확인)", got["notes"]
+        )
 
     def test_filled_record_does_not_render_the_note(self):
         records = TestMetaOnlyRecordsGetNoDataNote._FILLED_HYSLR_CHG
         got = run_render_section(
             '"insider_timeline"', json.dumps(records, ensure_ascii=False)
         )
-        self.assertNotIn("해당 기간에 보고된 내역이 없습니다.", got["notes"])
+        self.assertEqual(got["notes"], [])
 
 
 @unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
@@ -2327,6 +2332,439 @@ class TestHyslrAggregateRowSplitRenderWiring(unittest.TestCase):
         got = run_render_section('"insider_timeline"', json.dumps(records, ensure_ascii=False))
         self.assertIn("계상혁", got["cells"],
                        "실제 인물 '계상혁'이 실제 렌더에서 빠졌습니다")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestMetaOnlyRecordsHideTableBody(unittest.TestCase):
+    """SE-9 Task 3(3a) — task-6(SE-4f)의 "표는 지우지 않는다" 결정을
+    뒤집는다. 실사용자(SG) 재테스트 지적: 안내문이 이미 "내역이 없다"고
+    말하는데 그 밑에 식별자(결산일·접수번호·사업연도·보고서구분)만 남은
+    표가 그대로 깔려 있는 게 오히려 혼란스럽다. 원문 접근(rcept_no)은
+    공시 목록 탭이 이미 별도로 제공하므로, 이 표를 없애도 원문을 못 찾게
+    되지는 않는다.
+
+    SG 실측(se9-investigation.md Item 2-1, 2026-07-30): hyslr_chg
+    lookback_years=1 → 5건 전부 meta-only(변동 없음). 아래 픽스처는 그
+    5건의 실측 모양(corp_code=00963976, corp_name=SG)을 그대로 옮긴 것.
+    """
+
+    _SG_HYSLR_CHG_ALL_META = [
+        {
+            "source": "hyslr_chg", "rcept_no": "20260515002529",
+            "corp_cls": "K", "corp_code": "00963976", "corp_name": "SG",
+            "change_on": "-", "mxmm_shrholdr_nm": "-", "posesn_stock_co": "-",
+            "qota_rt": "-", "change_cause": "-", "rm": "-",
+            "stlm_dt": "2026-03-31", "bsns_year": "2026", "reprt_code": "11013",
+        },
+        {
+            "source": "hyslr_chg", "rcept_no": "20260316001642",
+            "corp_cls": "K", "corp_code": "00963976", "corp_name": "SG",
+            "change_on": "-", "mxmm_shrholdr_nm": "-", "posesn_stock_co": "-",
+            "qota_rt": "-", "change_cause": "-", "rm": "-",
+            "stlm_dt": "2025-12-31", "bsns_year": "2025", "reprt_code": "11011",
+        },
+        {
+            "source": "hyslr_chg", "rcept_no": "20251114000931",
+            "corp_cls": "K", "corp_code": "00963976", "corp_name": "SG",
+            "change_on": "-", "mxmm_shrholdr_nm": "-", "posesn_stock_co": "-",
+            "qota_rt": "-", "change_cause": "-", "rm": "-",
+            "stlm_dt": "2025-09-30", "bsns_year": "2025", "reprt_code": "11014",
+        },
+        {
+            "source": "hyslr_chg", "rcept_no": "20250814000722",
+            "corp_cls": "K", "corp_code": "00963976", "corp_name": "SG",
+            "change_on": "-", "mxmm_shrholdr_nm": "-", "posesn_stock_co": "-",
+            "qota_rt": "-", "change_cause": "-", "rm": "-",
+            "stlm_dt": "2025-06-30", "bsns_year": "2025", "reprt_code": "11012",
+        },
+        {
+            "source": "hyslr_chg", "rcept_no": "20250515000418",
+            "corp_cls": "K", "corp_code": "00963976", "corp_name": "SG",
+            "change_on": "-", "mxmm_shrholdr_nm": "-", "posesn_stock_co": "-",
+            "qota_rt": "-", "change_cause": "-", "rm": "-",
+            "stlm_dt": "2025-03-31", "bsns_year": "2025", "reprt_code": "11013",
+        },
+    ]
+
+    def test_meta_only_block_has_no_table(self):
+        got = run_js(
+            f"sourceGroupedBlocks({json.dumps(self._SG_HYSLR_CHG_ALL_META, ensure_ascii=False)})"
+        )
+        self.assertEqual(len(got), 1)
+        self.assertIsNone(
+            got[0].get("table"),
+            "메타-only 그룹인데 표가 남아 있습니다 — 3a는 표를 지우고 "
+            "안내문만 남겨야 합니다",
+        )
+
+    def test_meta_only_note_includes_report_count(self):
+        got = run_js(
+            f"sourceGroupedBlocks({json.dumps(self._SG_HYSLR_CHG_ALL_META, ensure_ascii=False)})"
+        )
+        self.assertEqual(
+            got[0].get("note"),
+            "해당 기간에 보고된 내역이 없습니다. (보고서 5건 확인)",
+            "안내문에 확인한 보고서 건수가 정직하게 남아야 합니다",
+        )
+
+    def test_single_meta_only_record_reports_count_of_one(self):
+        got = run_js(
+            "sourceGroupedBlocks("
+            f"{json.dumps(TestMetaOnlyRecordsGetNoDataNote._ENKEM_HYSLR_CHG_EMPTY, ensure_ascii=False)}"
+            ")"
+        )
+        self.assertEqual(
+            got[0].get("note"),
+            "해당 기간에 보고된 내역이 없습니다. (보고서 1건 확인)",
+        )
+
+    def test_filled_record_still_gets_a_table_and_no_note(self):
+        """값이 있으면(2026 1분기 17.40%처럼) 여전히 표를 그대로 보여준다
+        — 3a는 meta-only일 때만 표를 숨긴다."""
+        got = run_js(
+            "sourceGroupedBlocks("
+            f"{json.dumps(TestMetaOnlyRecordsGetNoDataNote._FILLED_HYSLR_CHG, ensure_ascii=False)}"
+            ")"
+        )
+        self.assertIsNotNone(got[0].get("table"))
+        self.assertNotIn("note", got[0])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestMetaOnlyRecordsHideTableBodyRenderWiring(unittest.TestCase):
+    """sourceGroupedBlocks 단독 검증(위)만으로는 renderSection(ui.js)
+    호출부가 실제로 표를 그리지 않는지 못 잡는다 — run_render_section으로
+    실제 DOM에 <tr>이 하나도 없는지, 안내문(건수 포함)이 실제로 붙는지
+    확인한다."""
+
+    def test_no_table_rows_render_for_meta_only_group(self):
+        got = run_render_section(
+            '"insider_timeline"',
+            json.dumps(
+                TestMetaOnlyRecordsHideTableBody._SG_HYSLR_CHG_ALL_META,
+                ensure_ascii=False,
+            ),
+        )
+        self.assertEqual(
+            got["tableRows"], [],
+            "메타-only인데 실제 DOM에 표 행(<tr>)이 남아 있습니다",
+        )
+
+    def test_note_with_count_renders_in_dom(self):
+        got = run_render_section(
+            '"insider_timeline"',
+            json.dumps(
+                TestMetaOnlyRecordsHideTableBody._SG_HYSLR_CHG_ALL_META,
+                ensure_ascii=False,
+            ),
+        )
+        self.assertIn(
+            "해당 기간에 보고된 내역이 없습니다. (보고서 5건 확인)",
+            got["notes"],
+        )
+
+    def test_no_redundant_generic_no_data_message(self):
+        """table이 null이고 note만 있는 블록에서 ui.js의 blockEl이
+        table/text 둘 다 falsy일 때 붙이는 일반 "표시할 데이터가
+        없습니다." 문구까지 함께 붙이면 같은 뜻의 안내가 두 번 나온다
+        (실제로 이 회귀가 구현 중 한 번 발생했다 — table:null인 블록이
+        note 분기와 fallback 분기를 모두 통과해서였다). note 하나만 남아야
+        한다."""
+        got = run_render_section(
+            '"insider_timeline"',
+            json.dumps(
+                TestMetaOnlyRecordsHideTableBody._SG_HYSLR_CHG_ALL_META,
+                ensure_ascii=False,
+            ),
+        )
+        self.assertEqual(
+            got["notes"],
+            ["해당 기간에 보고된 내역이 없습니다. (보고서 5건 확인)"],
+            f"안내문이 정확히 하나만 있어야 하는데 여러 개입니다: {got['notes']}",
+        )
+
+    def test_rcept_no_is_no_longer_in_the_dom_old_rationale_reversed(self):
+        """task-6의 예전 근거("접수번호로 원문을 직접 열어 확인할 수 있어야
+        한다")가 이제 성립하지 않는다는 것을 실제 렌더로 확인한다 — 표
+        자체가 없으니 rcept_no 텍스트도 셀로 나오지 않는다. 원문 접근은
+        공시 목록 탭이 별도로 제공한다(3a 요구사항 근거)."""
+        got = run_render_section(
+            '"insider_timeline"',
+            json.dumps(
+                TestMetaOnlyRecordsHideTableBody._SG_HYSLR_CHG_ALL_META,
+                ensure_ascii=False,
+            ),
+        )
+        self.assertNotIn("20260515002529", got["cells"])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestExecTreasuryAggregateRowSplit(unittest.TestCase):
+    """SE-9 Task 3(3b) — se9-investigation.md Q2f: exec_treasury의
+    소계/총계 행은 nm이 아니라 acqs_mth3 값으로 표시된다("acqs_mth3":
+    "소계") — isAggregateRow/splitAggregateRows가 nm만 봐서 이 소계 행이
+    상세 행 사이에 그대로 섞여 나온다. 검사 필드를 매개변수화(기본
+    nm)해서 hyslr과 같은 "· 합계" 분리를 exec_treasury에도 적용한다.
+
+    fixture: se9-investigation.md 138-146행 SG 실측 acqs_mth3 값 집합
+    (장내직접취득/수탁자보유물량/현물보유량/소계)을 옮긴 것 — 소계 행에는
+    실제 수량이 있다(합계는 지우는 게 아니라 제자리에 소계로 옮긴다는
+    브리프 원칙과 같다)."""
+
+    _SG_EXEC_TREASURY = [
+        {
+            "source": "exec_treasury", "rcept_no": "20260316001642",
+            "corp_cls": "K", "corp_code": "00963976", "corp_name": "SG",
+            "stock_knd": "보통주", "acqs_mth1": "배당가능이익범위 이내 취득",
+            "acqs_mth2": "신탁계약에 의한취득", "acqs_mth3": "현물보유량",
+            "bsis_qy": "6,556,782", "change_qy_acqs": "0", "change_qy_dsps": "0",
+            "change_qy_incnr": "0", "trmend_qy": "6,556,782", "rm": "-",
+            "stlm_dt": "2025-12-31", "bsns_year": "2025", "reprt_code": "11011",
+        },
+        {
+            # bsis_qy 등에 실수량을 넣어 3c(패딩 행 생략)가 이 행을 함께
+            # 지워버리지 않게 한다 — 이 테스트는 3b(소계 분리)만 단독으로
+            # 검증한다(패딩 생략은 TestExecTreasuryPaddingRowOmission이
+            # 따로 다룬다).
+            "source": "exec_treasury", "rcept_no": "20260316001642",
+            "corp_cls": "K", "corp_code": "00963976", "corp_name": "SG",
+            "stock_knd": "-", "acqs_mth1": "배당가능이익범위 이내 취득",
+            "acqs_mth2": "신탁계약에 의한취득", "acqs_mth3": "수탁자보유물량",
+            "bsis_qy": "100", "change_qy_acqs": "-", "change_qy_dsps": "-",
+            "change_qy_incnr": "-", "trmend_qy": "100", "rm": "-",
+            "stlm_dt": "2025-12-31", "bsns_year": "2025", "reprt_code": "11011",
+        },
+        {
+            "source": "exec_treasury", "rcept_no": "20260316001642",
+            "corp_cls": "K", "corp_code": "00963976", "corp_name": "SG",
+            "stock_knd": "보통주", "acqs_mth1": "배당가능이익범위 이내 취득",
+            "acqs_mth2": "신탁계약에 의한취득", "acqs_mth3": "소계",
+            "bsis_qy": "6,656,882", "change_qy_acqs": "0", "change_qy_dsps": "0",
+            "change_qy_incnr": "0", "trmend_qy": "6,656,882", "rm": "-",
+            "stlm_dt": "2025-12-31", "bsns_year": "2025", "reprt_code": "11011",
+        },
+    ]
+
+    def test_totals_block_separated_from_detail_block(self):
+        blocks = run_js(
+            f"sourceGroupedBlocks({json.dumps(self._SG_EXEC_TREASURY, ensure_ascii=False)})"
+        )
+        titles = [b["title"] for b in blocks]
+        self.assertIn("임원·주요주주 자기주식", titles)
+        self.assertIn(
+            "임원·주요주주 자기주식 · 합계", titles,
+            "exec_treasury의 acqs_mth3='소계' 행이 합계 블록으로 분리되지 않았습니다",
+        )
+
+    def test_detail_block_does_not_contain_the_subtotal_row(self):
+        blocks = run_js(
+            f"sourceGroupedBlocks({json.dumps(self._SG_EXEC_TREASURY, ensure_ascii=False)})"
+        )
+        detail = next(b for b in blocks if b["title"] == "임원·주요주주 자기주식")
+        idx = detail["table"]["keys"].index("acqs_mth3")
+        values = [row[idx] for row in detail["table"]["rows"]]
+        self.assertNotIn("소계", values)
+
+    def test_subtotal_row_value_is_not_deleted(self):
+        """합계를 없애라는 게 아니다 — hyslr과 같은 원칙(무엇을 합산했는지
+        볼 수 있어야 한다)."""
+        blocks = run_js(
+            f"sourceGroupedBlocks({json.dumps(self._SG_EXEC_TREASURY, ensure_ascii=False)})"
+        )
+        totals = next(b for b in blocks if b["title"] == "임원·주요주주 자기주식 · 합계")
+        flat = _flatten_table_cells(totals["table"])
+        self.assertIn("소계", flat, "합계 행의 '소계' 원문이 사라졌습니다")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestIsAggregateRowFieldParameterizedWithoutRegression(unittest.TestCase):
+    """isAggregateRow/splitAggregateRows에 검사 필드를 매개변수화해도
+    (기본값 nm) hyslr/major_holders 기존 호출부의 동작이 무변경이어야
+    한다 — 특히 "계상혁" 오탐 가드(SE-5b)가 필드를 명시하지 않은 기존
+    호출(isAggregateRow(r))에서 그대로 지켜지는지 직접 확인한다."""
+
+    def test_default_field_is_nm(self):
+        self.assertTrue(run_js('isAggregateRow({"nm": "계"})'))
+        self.assertTrue(run_js('isAggregateRow({"nm": "총계"})'))
+        self.assertFalse(run_js('isAggregateRow({"nm": "계상혁"})'))
+
+    def test_explicit_field_checks_that_field_instead_of_nm(self):
+        self.assertTrue(
+            run_js('isAggregateRow({"acqs_mth3": "소계"}, "acqs_mth3")')
+        )
+        self.assertFalse(
+            run_js('isAggregateRow({"nm": "계", "acqs_mth3": "장내직접취득"}, "acqs_mth3")'),
+            "field을 지정하면 nm이 아니라 그 필드만 봐야 합니다",
+        )
+
+    def test_split_aggregate_rows_default_field_unchanged(self):
+        records = [{"nm": "최순복"}, {"nm": "계"}]
+        got = run_js(f"splitAggregateRows({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(len(got["people"]), 1)
+        self.assertEqual(len(got["totals"]), 1)
+
+    def test_split_aggregate_rows_with_explicit_field(self):
+        records = [
+            {"acqs_mth3": "현물보유량"},
+            {"acqs_mth3": "소계"},
+            {"acqs_mth3": "총계"},
+        ]
+        got = run_js(
+            f'splitAggregateRows({json.dumps(records, ensure_ascii=False)}, "acqs_mth3")'
+        )
+        self.assertEqual(len(got["people"]), 1)
+        self.assertEqual(len(got["totals"]), 2)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestExecTreasuryAggregateSplitRenderWiring(unittest.TestCase):
+    def test_totals_and_detail_render_as_separate_titled_blocks(self):
+        got = run_render_section(
+            '"insider_timeline"',
+            json.dumps(TestExecTreasuryAggregateRowSplit._SG_EXEC_TREASURY, ensure_ascii=False),
+        )
+        self.assertIn("임원·주요주주 자기주식", got["titles"])
+        self.assertIn("임원·주요주주 자기주식 · 합계", got["titles"])
+
+    def test_gye_sang_hyeok_guard_still_passes_after_parameterization(self):
+        """hyslr(nm 기본값) 경로의 "계상혁" 오탐 가드가 필드 매개변수화
+        이후에도 실제 렌더에서 그대로 지켜지는지 재확인한다 — exec_treasury
+        변경이 hyslr의 기본 동작을 약화시키지 않았는지가 핵심이다."""
+        records = [
+            {"source": "hyslr", "nm": "최순복", "relate": "본인",
+             "trmend_posesn_stock_qota_rt": "12.34"},
+            {"source": "hyslr", "nm": "계상혁", "relate": "특수관계인",
+             "trmend_posesn_stock_qota_rt": "0.11"},
+            {"source": "hyslr", "nm": "계", "relate": "-",
+             "trmend_posesn_stock_qota_rt": "12.45"},
+        ]
+        got = run_render_section('"insider_timeline"', json.dumps(records, ensure_ascii=False))
+        self.assertIn("계상혁", got["cells"],
+                       "실제 인물 '계상혁'이 필드 매개변수화 이후 실제 렌더에서 빠졌습니다")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestExecTreasuryPaddingRowOmission(unittest.TestCase):
+    """SE-9 Task 3(3c) — se9-investigation.md Q2d "twin-row" 실측: SG
+    exec_treasury lookback_years=2 145행 중 72그룹이 (rcept_no,
+    acqs_mth1, acqs_mth2, acqs_mth3)로 묶었을 때 한쪽은 실데이터, 다른
+    한쪽은 stock_knd·5개 수량 필드·rm 전부 "-"인 "쌍둥이"다. 빈 쪽은
+    표만 두 배로 늘릴 뿐 정보가 아니므로 생략하되, 캡션(안내문)에 몇 건
+    생략했는지 정직하게 남긴다."""
+
+    _TWIN_FILLED = {
+        "source": "exec_treasury", "rcept_no": "20260310002820",
+        "corp_cls": "Y", "corp_code": "00126380", "corp_name": "삼성전자",
+        "stock_knd": "보통주", "acqs_mth1": "배당가능이익범위 이내 취득",
+        "acqs_mth2": "직접취득", "acqs_mth3": "장내직접취득",
+        "bsis_qy": "29,700,000", "change_qy_acqs": "118,314,495",
+        "change_qy_dsps": "6,040,880", "change_qy_incnr": "50,144,628",
+        "trmend_qy": "91,828,987", "rm": "-",
+        "stlm_dt": "2025-12-31", "bsns_year": "2025", "reprt_code": "11011",
+    }
+    _TWIN_BLANK = {
+        "source": "exec_treasury", "rcept_no": "20260310002820",
+        "corp_cls": "Y", "corp_code": "00126380", "corp_name": "삼성전자",
+        "stock_knd": "-", "acqs_mth1": "배당가능이익범위 이내 취득",
+        "acqs_mth2": "신탁계약에 의한취득", "acqs_mth3": "수탁자보유물량",
+        "bsis_qy": "-", "change_qy_acqs": "-", "change_qy_dsps": "-",
+        "change_qy_incnr": "-", "trmend_qy": "-", "rm": "-",
+        "stlm_dt": "2025-12-31", "bsns_year": "2025", "reprt_code": "11011",
+    }
+
+    def test_blank_twin_is_omitted_real_side_kept(self):
+        """table.rows는 1행만 남으면 세로(orientation="vertical")로
+        바뀌어 열 인덱스로 접근할 수 없다 — 대신 block.records(표가 실제로
+        그린 원본 레코드)로 값의 존재를 확인한다."""
+        records = [self._TWIN_FILLED, self._TWIN_BLANK]
+        blocks = run_js(f"sourceGroupedBlocks({json.dumps(records, ensure_ascii=False)})")
+        detail = next(b for b in blocks if b["title"] == "임원·주요주주 자기주식")
+        values = [r.get("acqs_mth3") for r in detail["records"]]
+        self.assertIn("장내직접취득", values, "실데이터가 있는 쪽은 남아야 합니다")
+        self.assertNotIn("수탁자보유물량", values, "전부 빈 쌍둥이 쪽이 생략되지 않았습니다")
+
+    def test_omission_count_is_captioned(self):
+        records = [self._TWIN_FILLED, self._TWIN_BLANK]
+        blocks = run_js(f"sourceGroupedBlocks({json.dumps(records, ensure_ascii=False)})")
+        detail = next(b for b in blocks if b["title"] == "임원·주요주주 자기주식")
+        self.assertEqual(detail.get("note"), "내용 없는 행 1건 생략")
+
+    def test_row_with_one_nonblank_field_is_not_omitted(self):
+        """수량 필드 중 하나라도 값이 있으면(-가 아니면) 생략하면 안
+        된다 — 값이 있으면 표를 그대로 보여준다는 원칙과 같다."""
+        almost_blank = dict(self._TWIN_BLANK)
+        almost_blank["bsis_qy"] = "1,000"  # 다섯 수량 필드 중 하나만 값이 있음
+        records = [self._TWIN_FILLED, almost_blank]
+        blocks = run_js(f"sourceGroupedBlocks({json.dumps(records, ensure_ascii=False)})")
+        detail = next(b for b in blocks if b["title"] == "임원·주요주주 자기주식")
+        idx = detail["table"]["keys"].index("acqs_mth3")
+        values = [row[idx] for row in detail["table"]["rows"]]
+        self.assertIn(
+            "수탁자보유물량", values,
+            "수량 필드 하나라도 값이 있으면 생략하면 안 되는데 생략됐습니다",
+        )
+        self.assertNotIn("note", detail)
+
+    def test_rm_alone_nonblank_is_not_omitted(self):
+        """비고(rm)만 값이 있어도(수량은 전부 "-") 생략하면 안 된다 —
+        브리프 3c: 다섯 수량 필드·stock_knd·rm 전부 "-"이어야 생략 대상."""
+        rm_filled = dict(self._TWIN_BLANK)
+        rm_filled["rm"] = "자기주식신탁계약 해지"
+        records = [self._TWIN_FILLED, rm_filled]
+        blocks = run_js(f"sourceGroupedBlocks({json.dumps(records, ensure_ascii=False)})")
+        detail = next(b for b in blocks if b["title"] == "임원·주요주주 자기주식")
+        idx = detail["table"]["keys"].index("acqs_mth3")
+        values = [row[idx] for row in detail["table"]["rows"]]
+        self.assertIn("수탁자보유물량", values)
+        self.assertNotIn("note", detail)
+
+    def test_all_rows_padding_converges_to_meta_only_note(self):
+        """전 행이 생략 대상이면(실데이터가 하나도 없는 그룹) 3a의
+        메타-only 경로로 수렴한다 — "N건 생략" 캡션 대신 3a와 같은
+        "해당 기간에 보고된 내역이 없습니다. (보고서 N건 확인)" 형식으로
+        통일한다(추측이 아니라 이 테스트로 실제 수렴 여부를 확인한다)."""
+        two_blanks = [
+            self._TWIN_BLANK,
+            dict(self._TWIN_BLANK, rcept_no="20260310002821"),
+        ]
+        blocks = run_js(f"sourceGroupedBlocks({json.dumps(two_blanks, ensure_ascii=False)})")
+        titles = [b["title"] for b in blocks]
+        self.assertIn("임원·주요주주 자기주식", titles)
+        detail = next(b for b in blocks if b["title"] == "임원·주요주주 자기주식")
+        self.assertIsNone(
+            detail.get("table"),
+            "전 행이 패딩인데도 표가 남아 있습니다 — 3a 경로로 수렴해야 합니다",
+        )
+        self.assertEqual(
+            detail.get("note"),
+            "해당 기간에 보고된 내역이 없습니다. (보고서 2건 확인)",
+            "전부 생략된 경우 3a와 같은 안내 형식('N건 확인')으로 수렴해야 합니다",
+        )
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestExecTreasuryPaddingRowOmissionRenderWiring(unittest.TestCase):
+    def test_blank_twin_row_does_not_render_and_caption_appears(self):
+        records = [
+            TestExecTreasuryPaddingRowOmission._TWIN_FILLED,
+            TestExecTreasuryPaddingRowOmission._TWIN_BLANK,
+        ]
+        got = run_render_section('"insider_timeline"', json.dumps(records, ensure_ascii=False))
+        self.assertIn("장내직접취득", got["cells"])
+        self.assertNotIn("수탁자보유물량", got["cells"])
+        self.assertIn("내용 없는 행 1건 생략", got["notes"])
+
+    def test_all_padding_group_renders_no_table_and_meta_only_note(self):
+        two_blanks = [
+            TestExecTreasuryPaddingRowOmission._TWIN_BLANK,
+            dict(TestExecTreasuryPaddingRowOmission._TWIN_BLANK, rcept_no="20260310002821"),
+        ]
+        got = run_render_section('"insider_timeline"', json.dumps(two_blanks, ensure_ascii=False))
+        self.assertEqual(got["tableRows"], [])
+        self.assertIn(
+            "해당 기간에 보고된 내역이 없습니다. (보고서 2건 확인)",
+            got["notes"],
+        )
 
 
 @unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")

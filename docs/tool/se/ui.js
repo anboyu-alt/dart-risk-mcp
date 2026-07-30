@@ -1239,11 +1239,18 @@ function blockEl(block, marks, records) {
     h3.textContent = block.title;
     wrap.appendChild(h3);
   }
-  // task-6: sectionBlocks(app.js)가 isMetaOnlyRecords로 판정한 표에 붙인
-  // 사실 고지. 표는 지우지 않는다 — note는 table/text와 배타적이지 않고
-  // 항상 먼저 보여준다(표를 읽기 전에 "왜 다 -로 보이는지"를 먼저
-  // 알아야 한다).
-  if (typeof block.note === "string" && block.note) {
+  // SE-9 Task 3(3a) — task-6(SE-4f)의 "표는 지우지 않는다" 결정을
+  // 뒤집었다(app.js의 sourceGroupedBlocks 3a 주석 참고). 예전에는 표가
+  // 항상 있었으므로 note가 있어도 table/text와 배타적이지 않게 항상
+  // 먼저 보여주면 됐지만, 이제 meta-only·전 행 패딩 그룹은 block.table이
+  // null이면서 block.note만 있는 모양으로 온다(sourceGroupedBlocks의
+  // metaOnlyNote 분기) — 이 경우 아래 표/텍스트 분기가 falsy로 떨어져
+  // "표시할 데이터가 없습니다."까지 덧붙이면 같은 뜻의 문구가 두 번
+  // 나온다(note가 이미 몇 건을 확인했는지까지 구체적으로 말하는데, 그
+  // 아래 일반 "데이터가 없다" 문구가 그 정보를 다시 뭉갠다). 그래서
+  // hasNote를 계산해 마지막 fallback 분기에서만 note 유무를 확인한다.
+  const hasNote = typeof block.note === "string" && block.note;
+  if (hasNote) {
     const note = document.createElement("p");
     note.className = "note";
     note.textContent = block.note;
@@ -1257,7 +1264,7 @@ function blockEl(block, marks, records) {
     const p = document.createElement("p");
     p.textContent = block.text;
     wrap.appendChild(p);
-  } else {
+  } else if (!hasNote) {
     const p = document.createElement("p");
     p.className = "note";
     p.textContent = "표시할 데이터가 없습니다.";
