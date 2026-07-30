@@ -3833,6 +3833,18 @@ _DIVIDEND_DRAIN_NI_SE = {
     "OFS": "(별도)당기순이익(백만원)",
 }
 
+# 최종 리뷰 지적(2026-07-30 SK하이닉스 00164779 실측 확정): fetch_dividend_history는
+# 사업연도 하나당 reprt_code 4종(11011 사업·11012 반기·11013 1분기·11014 3분기)을
+# 각각 별도 DART 호출로 채운다. 분기/반기 배당을 지급하는 회사는 4개 reprt_code
+# 모두에 "현금배당금총액(백만원)"·"(연결)/(별도)당기순이익(백만원)"이 "-"가 아닌
+# 값으로 채워지는데, 이 값들은 독립된 결과가 아니라 그 시점까지의 "누적치"다
+# (SK하이닉스 2023 실측: 11013(1분기) 206,418 → 11012(반기) 412,845(≈2×) →
+# 11014(3분기) 619,280(≈3×) → 11011(사업보고서) 825,721(≈4×), 배당·순이익 둘 다
+# 이 누적 패턴). 사업보고서(11011)만 그 사업연도의 최종 확정치이므로, 이 값만
+# 대상으로 삼는다 — 그렇지 않으면 같은 사업연도가 최대 4배로 중복 플래그된다
+# (SK하이닉스 lookback_years=3에서 8개 플래그, 전부 bsns_year=2023).
+_DIVIDEND_DRAIN_ANNUAL_REPRT_CODE = "11011"
+
 # 중요(2026-07-30 두산 00117212 실측 확정): alotMatter의
 # "(연결)당기순이익(백만원)"은 회사 전체의 연결당기순이익이 아니라
 # 지배기업소유주지분순이익(비지배지분 제외분)이다. 두산 2023 사업연도
@@ -3890,13 +3902,21 @@ def detect_dividend_drain(dividend_records: list[dict] | None) -> list[dict]:
     Args:
         dividend_records: fetch_dividend_history 결과 원본 배열.
 
+    ⚠ reprt_code="11011"(사업보고서)만 대상으로 삼는다 — 11012/11013/11014
+    (반기·분기)는 그 사업연도 최종 확정치가 아니라 시점까지의 누적치라,
+    포함하면 같은 사업연도가 최대 4배로 중복 플래그된다(SK하이닉스
+    00164779 2026-07-30 실측 확정, 위 _DIVIDEND_DRAIN_ANNUAL_REPRT_CODE
+    주석 참고). 두산(00117212) 실측처럼 반기/분기 배당·순이익 필드가
+    "-"인 회사는 애초에 이 필터 이전에도 그 그룹이 비어 있었으므로
+    영향이 없다.
+
     Returns:
-        flag dict 리스트, (bsns_year, reprt_code, fs_div) 조합마다
-        최대 1건: {"bsns_year", "reprt_code", "fs_div" ("CFS"|"OFS"),
+        flag dict 리스트, bsns_year마다 최대 2건(fs_div CFS/OFS):
+        {"bsns_year", "reprt_code" (항상 "11011"), "fs_div" ("CFS"|"OFS"),
         "dividend": float(백만원), "net_income": float(백만원)}.
         해당 fs_div의 당기순이익(CFS는 지배지분 기준, 위 참고)이 음수이고
         같은 그룹에 양수 현금배당이 함께 있어야 플래그. bsns_year →
-        reprt_code → fs_div 순 정렬.
+        fs_div 순 정렬.
     """
     if not dividend_records:
         return []
@@ -3909,8 +3929,10 @@ def detect_dividend_drain(dividend_records: list[dict] | None) -> list[dict]:
         se = rec.get("se") or ""
         if se not in tracked_se:
             continue
-        year = rec.get("bsns_year") or ""
         reprt_code = rec.get("reprt_code") or ""
+        if reprt_code != _DIVIDEND_DRAIN_ANNUAL_REPRT_CODE:
+            continue  # 반기/분기 누적치 노이즈 제외 — 사업보고서만 최종 확정치
+        year = rec.get("bsns_year") or ""
         bucket = groups.setdefault((year, reprt_code), {})
         if se in bucket:
             continue  # 같은 그룹 안에서는 이 3개 se가 한 번씩만 나온다(실측) — 방어적 first-wins

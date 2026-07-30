@@ -10606,6 +10606,44 @@ class TestDividendDrainFlags(unittest.TestCase):
         self.assertEqual(run_js("dividendDrainFlags(null)"), [])
         self.assertEqual(run_js("dividendDrainFlags({})"), [])
 
+    # SK하이닉스(corp_code=00164779) 2026-07-30 lookback_years=3 실측 —
+    # 최종 리뷰 지적(Important) 재현. 사업연도당 reprt_code 4종(11011 사업·
+    # 11012 반기·11013 1분기·11014 3분기)이 전부 값을 채우면(반기/분기
+    # 배당 지급 회사) 사업보고서(11011) 외 3개는 그 시점까지의 누적치일
+    # 뿐인데, 옛 구현은 이를 8개(같은 2023년, CFS/OFS × 4 reprt_code)로
+    # 쏟아냈다. 사업보고서(11011)만 남아야 한다 — core
+    # test_quarterly_cumulative_reports_do_not_produce_duplicate_year_flags와
+    # 같은 픽스처.
+    _SK_HYNIX_2023_QUARTERLY_NOISE = [
+        {"bsns_year": "2023", "reprt_code": "11011", "se": "현금배당금총액(백만원)", "thstrm": "825,721"},
+        {"bsns_year": "2023", "reprt_code": "11011", "se": "(연결)당기순이익(백만원)", "thstrm": "-9,112,428"},
+        {"bsns_year": "2023", "reprt_code": "11011", "se": "(별도)당기순이익(백만원)", "thstrm": "-4,836,170"},
+        {"bsns_year": "2023", "reprt_code": "11012", "se": "현금배당금총액(백만원)", "thstrm": "412,845"},
+        {"bsns_year": "2023", "reprt_code": "11012", "se": "(연결)당기순이익(백만원)", "thstrm": "-5,571,590"},
+        {"bsns_year": "2023", "reprt_code": "11012", "se": "(별도)당기순이익(백만원)", "thstrm": "-3,003,260"},
+        {"bsns_year": "2023", "reprt_code": "11013", "se": "현금배당금총액(백만원)", "thstrm": "206,418"},
+        {"bsns_year": "2023", "reprt_code": "11013", "se": "(연결)당기순이익(백만원)", "thstrm": "-2,580,409"},
+        {"bsns_year": "2023", "reprt_code": "11013", "se": "(별도)당기순이익(백만원)", "thstrm": "-1,296,209"},
+        {"bsns_year": "2023", "reprt_code": "11014", "se": "현금배당금총액(백만원)", "thstrm": "619,280"},
+        {"bsns_year": "2023", "reprt_code": "11014", "se": "(연결)당기순이익(백만원)", "thstrm": "-7,755,323"},
+        {"bsns_year": "2023", "reprt_code": "11014", "se": "(별도)당기순이익(백만원)", "thstrm": "-3,742,914"},
+    ]
+
+    def test_quarterly_cumulative_reports_do_not_produce_duplicate_year_flags(self):
+        got = run_js(
+            f"dividendDrainFlags({json.dumps(self._SK_HYNIX_2023_QUARTERLY_NOISE, ensure_ascii=False)})")
+        self.assertEqual(
+            len(got), 2,
+            f"사업보고서(11011) 외 분기 누적치까지 플래그로 새는 회귀입니다: {got}",
+        )
+        for fl in got:
+            self.assertEqual(fl["reprt_code"], "11011")
+            self.assertEqual(fl["bsns_year"], "2023")
+        by_div = {f["fs_div"]: f for f in got}
+        self.assertEqual(by_div["CFS"]["net_income"], -9112428)
+        self.assertEqual(by_div["OFS"]["net_income"], -4836170)
+        self.assertEqual(by_div["CFS"]["dividend"], 825721)
+
 
 @unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
 class TestDividendDrainRenderWiring(unittest.TestCase):

@@ -256,6 +256,44 @@ class TestDetectDividendDrain(unittest.TestCase):
         self.assertEqual(dart_client.detect_dividend_drain([]), [])
         self.assertEqual(dart_client.detect_dividend_drain(None), [])
 
+    def test_quarterly_cumulative_reports_do_not_produce_duplicate_year_flags(self):
+        # 최종 리뷰 지적(Important) 재현: SK하이닉스(corp_code=00164779)
+        # lookback_years=3 실측(2026-07-30) — alotMatter는 사업연도당
+        # reprt_code 4종(11011 사업·11012 반기·11013 1분기·11014 3분기)을
+        # 각각 별도 호출하는데, 배당·순이익을 실제로 지급/보고하는 회사는
+        # 4개 reprt_code 모두 "-"가 아닌 값을 채운다(반기/분기는 그 시점까지의
+        # 누적치). 옛 구현은 이 4건을 전부 독립된 사업연도 결과인 것처럼
+        # 8개 플래그(같은 2023년, CFS/OFS × 4 reprt_code)로 쏟아냈다 — 사업
+        # 보고서(11011)만 그 해의 진짜 연간 확정치이고 나머지 3개는 반기까지의
+        # 누적액일 뿐인데 렌더에서 구분이 안 됐다. 사업보고서(11011)만 남아야
+        # 한다.
+        dividend_records = [
+            _mk_rec("2023", "11011", "현금배당금총액(백만원)", "825,721"),
+            _mk_rec("2023", "11011", "(연결)당기순이익(백만원)", "-9,112,428"),
+            _mk_rec("2023", "11011", "(별도)당기순이익(백만원)", "-4,836,170"),
+            _mk_rec("2023", "11012", "현금배당금총액(백만원)", "412,845"),
+            _mk_rec("2023", "11012", "(연결)당기순이익(백만원)", "-5,571,590"),
+            _mk_rec("2023", "11012", "(별도)당기순이익(백만원)", "-3,003,260"),
+            _mk_rec("2023", "11013", "현금배당금총액(백만원)", "206,418"),
+            _mk_rec("2023", "11013", "(연결)당기순이익(백만원)", "-2,580,409"),
+            _mk_rec("2023", "11013", "(별도)당기순이익(백만원)", "-1,296,209"),
+            _mk_rec("2023", "11014", "현금배당금총액(백만원)", "619,280"),
+            _mk_rec("2023", "11014", "(연결)당기순이익(백만원)", "-7,755,323"),
+            _mk_rec("2023", "11014", "(별도)당기순이익(백만원)", "-3,742,914"),
+        ]
+        flags = dart_client.detect_dividend_drain(dividend_records)
+        self.assertEqual(
+            len(flags), 2,
+            f"사업보고서(11011) 외 분기 누적치까지 플래그로 새는 회귀입니다: {flags}",
+        )
+        for fl in flags:
+            self.assertEqual(fl["reprt_code"], "11011")
+            self.assertEqual(fl["bsns_year"], "2023")
+        by_div = {f["fs_div"]: f for f in flags}
+        self.assertEqual(by_div["CFS"]["net_income"], -9112428.0)
+        self.assertEqual(by_div["OFS"]["net_income"], -4836170.0)
+        self.assertEqual(by_div["CFS"]["dividend"], 825721.0)
+
 
 # ---------- TestSignalRegistration ----------
 

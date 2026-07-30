@@ -2638,10 +2638,25 @@ const DIVIDEND_DRAIN_NI_SE = {
   OFS: "(별도)당기순이익(백만원)",
 };
 
-/** dividends 원본 배열에서 "당기순이익이 음수인데 같은 사업연도·보고서
- *  구분에 현금배당이 있었다"는 사실을 CFS/OFS 별개로 뽑는다(SE-12 Task 2).
+// 최종 리뷰 지적(2026-07-30 SK하이닉스 00164779 실측 확정, core
+// dart_client.py의 _DIVIDEND_DRAIN_ANNUAL_REPRT_CODE 주석과 동일 근거):
+// alotMatter는 사업연도 하나당 reprt_code 4종(11011 사업·11012 반기·
+// 11013 1분기·11014 3분기)을 각각 별도 호출로 채우는데, 분기/반기
+// 배당 지급 회사는 4개 reprt_code 모두 "-"가 아닌 값이 채워진다 —
+// 이 값들은 그 시점까지의 누적치일 뿐, 독립된 사업연도 결과가 아니다.
+// 사업보고서(11011)만 최종 확정치이므로 이것만 대상으로 삼는다 —
+// 아니면 같은 사업연도가 최대 4배로 중복 플래그된다.
+const DIVIDEND_DRAIN_ANNUAL_REPRT_CODE = "11011";
+
+/** dividends 원본 배열에서 "당기순이익이 음수인데 같은 사업연도에
+ *  현금배당이 있었다"는 사실을 CFS/OFS 별개로 뽑는다(SE-12 Task 2).
  *  그룹핑 키((bsns_year, reprt_code))와 순회 방식은 위 dividendVsIncome을
  *  그대로 따른다 — 신규 그룹핑 로직을 새로 만들지 않는다.
+ *
+ *  reprt_code="11011"(사업보고서)만 대상으로 삼는다 — 위
+ *  DIVIDEND_DRAIN_ANNUAL_REPRT_CODE 주석 참고. 11012/11013/11014는 그
+ *  시점까지의 누적치일 뿐이라 포함하면 같은 사업연도가 중복 플래그된다
+ *  (SK하이닉스 실측 확정, core detect_dividend_drain 주석과 동일 근거).
  *
  *  연결(CFS)·별도(OFS)는 절대 하나로 합쳐 판정하지 않는다 — 두산 실측이
  *  정확히 "한쪽만 적자"(2022 CFS만) 또는 "양쪽 다 적자"(2023 CFS·OFS
@@ -2649,16 +2664,17 @@ const DIVIDEND_DRAIN_NI_SE = {
  *  주석과 동일 원칙).
  *
  *  반환: {bsns_year, reprt_code, fs_div, dividend, net_income}(둘 다
- *  백만원) 목록, bsns_year → reprt_code → fs_div 순 정렬 — core의 반환
- *  계약과 동일. */
+ *  백만원) 목록, bsns_year마다 최대 2건(fs_div CFS/OFS), reprt_code는
+ *  항상 "11011". bsns_year → fs_div 순 정렬 — core의 반환 계약과 동일. */
 function dividendDrainFlags(records) {
   if (!Array.isArray(records)) return [];
   const groups = new Map();
   const order = [];
   for (const r of records) {
     if (!r || typeof r !== "object") continue;
-    const year = r.bsns_year !== undefined && r.bsns_year !== null ? String(r.bsns_year) : "";
     const reprt = r.reprt_code !== undefined && r.reprt_code !== null ? String(r.reprt_code) : "";
+    if (reprt !== DIVIDEND_DRAIN_ANNUAL_REPRT_CODE) continue; // 반기/분기 누적치 노이즈 제외
+    const year = r.bsns_year !== undefined && r.bsns_year !== null ? String(r.bsns_year) : "";
     const key = year + " " + reprt;
     if (!groups.has(key)) {
       groups.set(key, { bsns_year: year, reprt_code: reprt, se: Object.create(null) });
