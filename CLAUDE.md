@@ -338,7 +338,7 @@ dart_risk_mcp/
 | `fetch_company_indicators(corp_code, api_key, bsns_year, reprt_code)` | 단일회사 주요 재무지표 4카테고리(수익성·안정성·성장성·활동성) 통합 → {idx_nm: float} flat dict (v0.8.8) |
 | `fetch_distress_events(corp_code, api_key, lookback_years)` | 부도·영업정지·회생절차·해산사유 4엔드포인트 통합. key=DISTRESS_EVENT + subtype 라벨 (v0.9.0) |
 | `fetch_dividend_history(corp_code, api_key, lookback_years)` | alotMatter을 분기 4코드 × N년 호출. 각 record에 bsns_year/reprt_code 부착 (v0.9.0) |
-| `detect_dividend_drain(dividend_records, current_fs)` | 적자 시점 배당 유출(DIVIDEND_DRAIN) 패턴 — 당기순이익 음수 + 현금배당 양수 시 flag (v0.9.0) |
+| `detect_dividend_drain(dividend_records)` | 적자 시점 배당 유출(DIVIDEND_DRAIN) 패턴 — alotMatter 자체가 bundling한 연도별 (연결)/(별도)당기순이익을 그 연도 현금배당과 짝지어 flag(SE-12, v0.9.0 재설계). 별도 재무제표 조회 불필요. CFS 순이익은 지배기업소유주지분순이익(비지배지분 제외)이라 총 당기순이익과 부호가 다를 수 있음(두산 2023 CFS 실측: alotMatter -3,883억 vs 총 당기순이익 +2,721억) — 출력에 "연결·지배지분 기준" 명시 |
 | `fetch_affiliate_investments(corp_code, api_key, year, report_type)` | 타법인 출자현황(otrCprInvstmntSttus) 조회 + 합계 행 제거 |
 | `scan_note_titles(rcept_no, api_key)` | 공시 ZIP 전 파일 `<TITLE>` 태그 스캔 → 주석 카테고리 제목 검출 (섹션 추출 보완 경로) |
 | `compute_beneish_variables(current, prior, dep_current, dep_prior)` | Beneish 개별 변수 최대 8종 계산(감가상각비 인자 제공 시 DEPI·TATA 포함) — 합산·판정 없음, 사실 표기 전용 |
@@ -470,7 +470,7 @@ PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설
 | `find_actor_overlap` 임원 겸직 매칭 | ✅ | 신승수군 3개사 겸직 라이브 매칭(신용규·이호영 동행 포함), 골드 `tests/fixtures/sample_outputs/actor_overlap.txt` |
 | `TREASURY_TRUST` (v0.8.7) | ⚠ | 자사주 신탁 발생 빈도 낮음 |
 | `INSIDER_PRE_DISCLOSURE` (v0.8.6) | ⚠ | 매도 ±30일 부정 공시 |
-| `DIVIDEND_DRAIN` (v0.9.0) | ⚠ | 적자 시점 배당 동시 사례 |
+| `DIVIDEND_DRAIN` (v0.9.0) | ✅ | 두산(00117212) 2022 CFS·2023 CFS·2023 OFS·2024 CFS 라이브 발화(SE-12). 6사 매트릭스(SG·두산에너빌리티·삼성전자·셀트리온·제이스코·헬릭스미스)는 여전히 0건 — 미발화가 결함이었던 게 아니라 두산류(비지배지분 큰 회사) 사례가 이 6사엔 없었을 뿐 |
 | `DISTRESS_EVENT` (v0.9.0) | ⚠ | 부도/영업정지/회생/해산 4 endpoint, 헬릭스미스조차 미발화 |
 | `get_major_decision` 12개 decision_type | ⚠ | DS005 빈도 낮음, 단위 테스트만, 6 회사 365일 0건 |
 | `CROSS_SIGNAL_PATTERNS` 9개 중 8개 (capital_churn_anomaly 제외) | ⚠ | `founder_fade`·`debt_spiral`·`reverse_split_spiral`·`related_party_hollowing`·`zombie_ma`·`audit_insider_dump`·`delisting_evasion`·`fake_new_biz` |
