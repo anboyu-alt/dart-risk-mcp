@@ -13,7 +13,11 @@ signals.py·taxonomy.py를 유일한 진실(source of truth)로 두고, 브라�
   조치·금액의 사실 서술이지 우리가 매긴 판정이 아니다 — "왜 이 패턴이
   등록됐는지"를 뒷받침하는 근거이지 기업 위험도 등급이 아니다. 9종 전체
   원문을 v0.8.5 판정 어휘 기준으로 실측 검사해 통과한 뒤 그대로(왜곡
-  없이) 반영했다.
+  없이) 반영했다. 재리뷰(2026-07-30)에서 기계적 검사망을 통과하고도
+  남은 평가적 어구 2건(debt_spiral의 "돌려막기", related_party_hollowing의
+  "경영권 방어용")이 발견돼 export 계층에서만 트리밍한다 —
+  `_FIELD_EVIDENCE_EXPORT_TRIM` 참고. core taxonomy.py 원문은 그대로 두고
+  나머지 7종은 여전히 core와 byte-for-byte 동일하다.
 - 인물 관련 데이터는 애초에 포함 대상이 아니다.
 
 사용:
@@ -55,6 +59,42 @@ CATEGORY_LABELS = {
     "7": "시장감시",  # '시장조작'은 단정적 → 감시 대상 유형이라는 중립 표현
     "8": "위기/부실",
 }
+
+# field_evidence export-layer 트리밍 (Task 2 리뷰 지적 2건, 2026-07-30).
+#
+# Task 2 게이트는 CROSS_SIGNAL_PATTERNS 9종의 field_evidence 전체를 "판정
+# 어휘 없는 사실 인용"으로 실측 검사한 뒤 내보내기로 했으나, 재리뷰에서
+# 기계적 검사망(_SCORE_GRADE_PATTERNS·_SEVERITY_EMOJI)을 통과하고도 남은
+# 평가적 표현 2건이 발견됐다:
+#   - debt_spiral: "돌려막기" — 규제기관 인용이 아닌 구어체·경멸적 뉘앙스
+#     (금융 셸게임 함의). 같은 개념의 중립적 구조 용어는 이 코드베이스가
+#     이미 쓰는 "차환"(taxonomy.py 1.5 keywords, CB_ROLLOVER 개념) — 새
+#     단어를 만들지 않고 기존 용어로 치환.
+#   - related_party_hollowing: "경영권 방어용" — 회생신청 "동기"를 단정.
+#     근거 인용 없이 의도를 읽는 서술이라 동기절만 삭제, 사실(기업명·
+#     이벤트·날짜)은 보존.
+#
+# core CROSS_SIGNAL_PATTERNS(taxonomy.py) 원문은 건드리지 않는다 — MCP
+# 도구 프로즈(find_pattern_match 등)는 이 계획의 Global Constraints상
+# 서사적 어휘 허용 범위가 더 넓어 트리밍 대상이 아니다. 이 딕셔너리는
+# **export 산출물에서만** 해당 문자열을 치환한다(정확히 일치할 때만 —
+# core 쪽 문구가 바뀌면 KeyError로 드러나도록 원문 그대로를 key로 둔다).
+_FIELD_EVIDENCE_EXPORT_TRIM: dict[str, dict[str, str]] = {
+    "debt_spiral": {
+        "위메이드: CB/EB 돌려막기 (20250903)": "위메이드: CB/EB 차환 (20250903)",
+    },
+    "related_party_hollowing": {
+        "동성제약: 경영권 방어용 회생신청 (20251014)": "동성제약: 회생신청 (20251014)",
+    },
+}
+
+
+def _export_field_evidence(slug: str, evidence: list[str]) -> list[str]:
+    """core field_evidence를 export용으로 변환 — 위 트림맵에 있는 패턴의
+    해당 문자열만 치환, 나머지는 core와 완전히 동일(list()로 복사)."""
+    trims = _FIELD_EVIDENCE_EXPORT_TRIM.get(slug, {})
+    return [trims.get(item, item) for item in evidence]
+
 
 # SE 표시 전용 — 위험 신호가 아닌 고빈도 정기 보고 (SE-7 Task 3).
 # core SIGNAL_TYPES에는 절대 넣지 않는다(계획 Global Constraints: 위험
@@ -130,7 +170,10 @@ def build_signals_data() -> dict:
             "signal_sequence": list(p["signal_sequence"]),
             "timeline_months": p["timeline_months"],
             # 사실 인용(날짜·기업명·규제기관 조치) — severity는 계속 제외.
-            "field_evidence": list(p["field_evidence"]),
+            # 2개 패턴(debt_spiral·related_party_hollowing)은 재리뷰에서
+            # 발견된 평가적 어구 2건을 export 계층에서만 트리밍한다 —
+            # _FIELD_EVIDENCE_EXPORT_TRIM 주석 참고. 나머지 7종은 원문 그대로.
+            "field_evidence": _export_field_evidence(slug, p["field_evidence"]),
         }
         for slug, p in CROSS_SIGNAL_PATTERNS.items()
     ]
