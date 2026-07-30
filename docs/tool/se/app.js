@@ -2134,18 +2134,29 @@ function dividendPeriodBlocks(records) {
 
 // financialRatios가 만드는 기간 3종과, 각 기간이 financials 레코드의 어느
 // 금액 열에서 오는지의 대응표. **당기를 마지막에 둔다** — 이 배열 순서가
-// 곧 출력 레코드의 순서이고(전전기→전기→당기), 그 순서가 그대로 두 곳에서
-// 쓰인다: ① 아래 CHART_SPECS.financial_ratios의 x축("기간")은 숫자가
-// 없는 순수 범주형이라 chartData가 정렬하지 않고 등장 순서를 그대로
-// 쓴다(위 chartData 주석 ③) — 당기가 마지막이어야 그래프가 왼쪽(과거)에서
-// 오른쪽(현재)으로 흐른다. ② 같은 (구분, 지표) 조합이 기간마다 반복
-// 나오므로, 이 조합만으로 마지막 값을 찾는 코드(예: dict 컴프리헨션)는
-// 자연히 당기 값을 얻는다 — 순서를 바꾸면 이런 코드가 조용히 옛 기간
-// 값을 돌려주게 된다.
+// 곧 out.push 호출 순서이고(전전기→전기→당기), 그 순서가 그대로 두 곳에서
+// 쓰인다: ① 아래 CHART_SPECS.financial_ratios의 x축("기간")은 SE-10부터
+// 실제 연도 문자열("2023" 등)이라 chartData가 allNumeric 분기로 오름차순
+// 정렬한다(위 chartData 주석 ①, numeric()이 "2023" 같은 순수 숫자 문자열을
+// 그대로 파싱하므로 별도 정렬 키 없이 자동으로 과거→현재가 된다 —
+// financialRatiosBaseYear가 없어(폴백) 값이 여전히 서수 문자열이면 숫자가
+// 없는 순수 범주형이라 chartData가 정렬하지 않고 이 배열의 등장 순서를
+// 그대로 쓴다, chartData 주석 ③ — 당기를 마지막에 두는 게 그 폴백 경로의
+// 안전망이다). ② 같은 (구분, 지표) 조합이 기간마다 반복 나오므로, 이
+// 조합만으로 마지막 값을 찾는 코드(예: dict 컴프리헨션)는 자연히 당기
+// 값을 얻는다 — 순서를 바꾸면 이런 코드가 조용히 옛 기간 값을 돌려주게
+// 된다.
+//
+// yearOffset: 당기(bsns_year)로부터 몇 해를 빼야 이 기간의 실제 연도가
+// 되는지(SE-10 Task 1). financialRatios가 records에서 bsns_year를 한 번
+// 계산해(financialRatiosBaseYear) `String(baseYear - yearOffset)`로 실제
+// 연도 문자열을 만든다 — 계산 불가(레코드에 bsns_year가 전혀 없거나 숫자로
+// 못 읽음)면 이 period 리터럴("전전기" 등)로 안전 폴백한다(판정 불가 시
+// 지우지 않는다 원칙, se10-investigation.md Q1b).
 const RATIO_PERIODS = [
-  { period: "전전기", field: "bfefrmtrm_amount" },
-  { period: "전기", field: "frmtrm_amount" },
-  { period: "당기", field: "thstrm_amount" },
+  { period: "전전기", field: "bfefrmtrm_amount", yearOffset: 2 },
+  { period: "전기", field: "frmtrm_amount", yearOffset: 1 },
+  { period: "당기", field: "thstrm_amount", yearOffset: 0 },
 ];
 
 // 계산 가능한 지표 4종(자본잠식률은 표기 조건이 달라 별도 처리한다,
@@ -2222,10 +2233,14 @@ function pickAccount(accounts, canonicalName) {
   return undefined;
 }
 
-/** 지표 하나(예: 영업이익률)를 한 기간에 대해 계산한다. 분자·분모 계정 중
- *  하나라도 없거나(계정 자체가 안 잡힘) 분모가 0이면 값은 null이고
- *  **왜 없는지 사유로 남긴다** — 조용히 항목을 빼지 않는다(브리프 원칙).
- *  재료는 항상 두 계정 이름을 키로 갖는 객체를 돌려준다(값이 null이어도
+/** 지표 하나(예: 영업이익률)를 한 기간에 대해 계산한다. `기간` 인자는
+ *  SE-10부터 financialRatios가 미리 계산해 넘기는 문자열이다 — 실제
+ *  연도("2024") 또는(bsns_year를 못 읽었을 때) 서수 라벨("전기") 둘 다
+ *  올 수 있다. 이 함수는 그 값을 그대로 결과 행에 싣기만 할 뿐, 어느 쪽인지
+ *  판단하지 않는다(연도 계산·폴백 판단은 호출부 financialRatios의 책임).
+ *  분자·분모 계정 중 하나라도 없거나(계정 자체가 안 잡힘) 분모가 0이면
+ *  값은 null이고 **왜 없는지 사유로 남긴다** — 조용히 항목을 빼지 않는다
+ *  (브리프 원칙). 재료는 항상 두 계정 이름을 키로 갖는 객체를 돌려준다(값이 null이어도
  *  키 자체는 있다) — 검증 가능성(계산식+재료)이 값의 유무와 무관하게
  *  항상 보장돼야 하기 때문이다. */
 function computeRatio(구분, 기간, def, accounts, field) {
@@ -2311,6 +2326,27 @@ function computeCapitalImpairment(구분, 기간, accounts, field) {
   return out;
 }
 
+/** records(원본 financials 레코드 배열, financialRatios가 받는 것과 같은
+ *  배열)에서 bsns_year를 한 번 계산한다(SE-10 Task 1, se10-investigation.md
+ *  Q1a) — se_server가 financials를 연도 파라미터 없이 단일 호출하는
+ *  구조라 배열 전체에서 bsns_year가 상수인 것이 구조적으로 보장되므로,
+ *  첫 유효값 하나만 보면 된다(모든 행을 순회해 일치를 검증하지 않는다 —
+ *  그 보장 자체가 이 함수의 전제다). 값을 못 읽으면(레코드에 필드 자체가
+ *  없거나 숫자로 파싱되지 않으면) null을 돌려줘 호출부가 기존 서수
+ *  라벨("전전기" 등)로 안전 폴백하게 한다 — 판정 불가 시 지우지 않는다
+ *  원칙(브리프). */
+function financialRatiosBaseYear(records) {
+  if (!Array.isArray(records)) return null;
+  for (const r of records) {
+    if (!r || typeof r !== "object") continue;
+    const y = r.bsns_year;
+    if (y === undefined || y === null || y === "") continue;
+    const n = Number(y);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
 /** financials(원본 재무제표 레코드 배열)에서 파생 지표 5종을 연결/별도 ×
  *  3기간(전전기/전기/당기)으로 계산한다. DART가 주는 건 한 시점 스냅샷
  *  (indicators)이지만, financials의 thstrm_amount·frmtrm_amount·
@@ -2321,22 +2357,79 @@ function computeCapitalImpairment(구분, 기간, accounts, field) {
  *  **연결과 별도를 절대 같은 계산에 섞지 않는다.** fs_div별로 완전히
  *  독립된 계정 조회 테이블(indexAccountsByDiv)을 만들어 계산하고, 결과
  *  행마다 "구분"을 그대로 남긴다 — SE-4d에서 financials 원본 차트를 뺀
- *  이유가 바로 이 혼입이었다(위 CHART_SPECS 주석 참고). */
+ *  이유가 바로 이 혼입이었다(위 CHART_SPECS 주석 참고).
+ *
+ *  **SE-10 Task 1**: 각 행의 `기간`은 서수 라벨("전전기" 등)이 아니라
+ *  records에서 한 번 계산한 실제 연도 문자열("2024")이다 —
+ *  financialRatiosBaseYear가 bsns_year를 못 읽으면(null) 이 함수 자체가
+ *  깨지지 않고 RATIO_PERIODS의 서수 라벨로 조용히 폴백한다(사용자에게는
+ *  이전 화면과 동일하게 보인다 — 회귀가 아니다). */
 function financialRatios(records) {
   if (!Array.isArray(records)) return [];
   const byDiv = indexAccountsByDiv(records);
+  const baseYear = financialRatiosBaseYear(records);
 
   const out = [];
   for (const [div, accounts] of byDiv) {
     const 구분 = FS_DIV_LABELS[div] || div;
     for (const p of RATIO_PERIODS) {
+      const 기간 = baseYear !== null ? String(baseYear - p.yearOffset) : p.period;
       for (const def of RATIO_DEFS) {
-        out.push(computeRatio(구분, p.period, def, accounts, p.field));
+        out.push(computeRatio(구분, 기간, def, accounts, p.field));
       }
-      out.push(computeCapitalImpairment(구분, p.period, accounts, p.field));
+      out.push(computeCapitalImpairment(구분, 기간, accounts, p.field));
     }
   }
   return out;
+}
+
+/** financialRatios(records)가 만든 파생 지표 행을 `기간`(실제 연도 또는
+ *  폴백 서수 라벨) 값으로 묶는다(SE-10 Task 1) — dividendPeriodBlocks
+ *  (위)와 같은 Map+groupOrder 메커니즘이지만 그룹 순서 규칙은 다르다.
+ *  dividendPeriodBlocks는 원본 레코드가 이미 최신 우선으로 오는 것을
+ *  전제로 첫 등장 순서를 그대로 쓰지만(그 함수 주석 참고), financialRatios
+ *  는 정반대로 RATIO_PERIODS 순서(전전기→전기→당기, 오래된 것부터) 그대로
+ *  행을 내보낸다(위 RATIO_PERIODS 주석) — 그래서 여기서는 연도를 **명시
+ *  내림차순(최신 먼저)** 으로 정렬한다(브리프: "기존 화면 표시 순서
+ *  유지" — 사용자가 보던 순서가 최신 항목이 위에 오는 흐름이었다).
+ *
+ *  연도 계산이 폴백된 경우(기간 값이 여전히 "전전기"/"전기"/"당기" 같은
+ *  서수 문자열)에는 숫자가 아니라 정렬 기준이 없다 — 억지로 정렬하지
+ *  않고 원래 등장 순서(전전기→전기→당기, 그 자체가 이미 시간순)를 그대로
+ *  둔다. 두 경우를 구분하는 기준은 그룹 키 전부가 순수 숫자 문자열인지
+ *  하나로 충분하다(financialRatiosBaseYear가 성공하면 모든 그룹 키가
+ *  4자리 연도이고, 실패하면 전부 서수 라벨이다 — 한 호출 안에서 섞이지
+ *  않는다, 위 financialRatios 주석).
+ *
+ *  그룹 제목으로 승격된 정보(연도)는 표를 그리는 쪽(ui.js
+ *  buildFinancialRatiosBlock)이 행에서 지운다 — 이 함수 자신은 행을
+ *  변형하지 않고 원본 그대로 묶어서만 돌려준다(원칙: 그룹 제목으로
+ *  승격된 정보는 행에서 제거 — SE-9 Task 4 dividendPeriodBlocks와 동일
+ *  패턴, 실제 제거는 표시 형태를 만드는 ui.js 쪽 책임). 그룹 안에서는
+ *  구분(연결/별도)을 또 표로 쪼개지 않는다(task-1-brief.md 결정 사항) —
+ *  이 함수는 기간으로만 묶고, 구분은 각 행에 그대로 남아 있다. */
+function financialRatiosByYear(ratios) {
+  if (!Array.isArray(ratios)) return [];
+  const order = [];
+  const groups = new Map();
+  for (const r of ratios) {
+    if (!isPlainObject(r)) continue;
+    const key = r.기간 !== undefined && r.기간 !== null ? String(r.기간) : "";
+    if (!groups.has(key)) { groups.set(key, []); order.push(key); }
+    groups.get(key).push(r);
+  }
+
+  const allYearsNumeric = order.length > 0 && order.every(function (k) { return /^\d+$/.test(k); });
+  const groupOrder = allYearsNumeric
+    ? order.slice().sort(function (a, b) { return Number(b) - Number(a); })
+    : order;
+
+  const blocks = [];
+  for (const key of groupOrder) {
+    const title = allYearsNumeric ? key + "년" : key;
+    blocks.push({ title: title, key: key, ratios: groups.get(key) });
+  }
+  return blocks;
 }
 
 /** dividends(alotMatter)의 se(항목) 중 이 태스크가 비교하는 5종.
@@ -2897,10 +2990,17 @@ const CHART_SPECS = Object.assign(Object.create(null), {
   // 나누면 연결 영업이익률과 별도 영업이익률이 같은 계열(같은 이름)에서
   // 충돌한다. compositeGroupFields로 "지표 (구분)"를 계열 이름으로 쪼갠다
   // (dividends의 se×stock_knd와 같은 방식, 위 CHART_SPECS.dividends 주석
-  // 참고). x는 "기간"("전전기"/"전기"/"당기" — 숫자가 없는 순수 범주형이라
-  // chartData가 정렬하지 않고 등장 순서를 그대로 쓴다, chartData 주석 ③) —
-  // financialRatios가 전전기→전기→당기 순으로 내보내므로 그 등장 순서가
-  // 곧 시간순이다(위 RATIO_PERIODS 주석 참고). 다섯 지표 모두 단위가 %로
+  // 참고). x는 "기간"이다 — SE-10부터 이 값은 보통 실제 연도 문자열
+  // ("2023" 등, financialRatiosBaseYear가 bsns_year를 읽었을 때)이라
+  // chartData의 allNumeric 분기(위 chartData 주석 ①)가 숫자로 오름차순
+  // 정렬한다(numeric()이 순수 숫자 문자열을 그대로 파싱하므로 "2023" <
+  // "2024" < "2025"가 사전순이 아니라 실제 크기 비교로 성립한다) — 과거→
+  // 현재 왼쪽에서 오른쪽으로 흐르는 것이 저절로 보장된다. bsns_year를
+  // 못 읽어 서수 라벨("전전기" 등)로 폴백한 경우에만 숫자가 없는 순수
+  // 범주형이 되어 chartData가 정렬하지 않고 등장 순서를 그대로 쓴다
+  // (chartData 주석 ③) — financialRatios가 그 폴백 경로에서도 전전기→
+  // 전기→당기 순으로 내보내므로(위 RATIO_PERIODS 주석) 등장 순서 자체가
+  // 이미 시간순이라 정렬이 없어도 안전하다. 다섯 지표 모두 단위가 %로
   // 같으므로(dividends처럼 원/%가 섞이는 문제가 없다) 한 y축에 같이 그려도
   // 스케일이 왜곡되지 않는다.
   financial_ratios: {
@@ -4180,7 +4280,8 @@ if (typeof module !== "undefined" && module.exports) {
     DOC_LIST_KEY, docKeyRceptNo, docListRow,
     CHART_SPECS, chartData, axisLabel, numeric, axisSortKey,
     normalizeDebtByKind, monthlyCounts, compositeXValue,
-    financialRatios, isAmendmentDisclosure, classifyDisclosureCategory, monthlyCountsByCategory,
+    financialRatios, financialRatiosBaseYear, financialRatiosByYear,
+    isAmendmentDisclosure, classifyDisclosureCategory, monthlyCountsByCategory,
     DIVIDEND_SE_FIELDS, dividendVsIncome, fundPlanChanges, fundChain, affiliateOverview,
     fundChainDisclosureHints,
     markNumber, MARK_RULES, cellMarks, markedColumnKeys, indicatorCellWhy,

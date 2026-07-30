@@ -8599,6 +8599,299 @@ class TestFinancialRatios(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFinancialRatiosRealYear(unittest.TestCase):
+    """SE-10 Task 1 — financialRatios()의 `기간`은 서수 라벨("전기" 등)
+    대신 records의 bsns_year로 계산한 실제 연도 문자열이어야 한다
+    (se10-investigation.md Q1a/Q1b: 당기=bsns_year, 전기=bsns_year-1,
+    전전기=bsns_year-2). bsns_year를 못 읽으면(필드 자체가 없거나 숫자로
+    파싱되지 않으면) 기존 서수 라벨로 안전 폴백한다 — 판정 불가 시
+    지우지 않는다 원칙(브리프)."""
+
+    _WITH_YEAR = """[
+      {fs_div:"CFS", sj_div:"IS", account_nm:"매출액", bsns_year:"2025",
+       thstrm_amount:"1000", frmtrm_amount:"900", bfefrmtrm_amount:"800"},
+      {fs_div:"CFS", sj_div:"IS", account_nm:"영업이익", bsns_year:"2025",
+       thstrm_amount:"100", frmtrm_amount:"90", bfefrmtrm_amount:"80"}
+    ]"""
+
+    def test_period_becomes_real_year_when_bsns_year_present(self):
+        got = run_js(f"financialRatios({self._WITH_YEAR})")
+        periods = {r["기간"] for r in got}
+        self.assertEqual(periods, {"2025", "2024", "2023"})
+
+    def test_current_prior_and_prior_prior_years_computed_by_subtraction(self):
+        """당기=bsns_year, 전기=bsns_year-1, 전전기=bsns_year-2 — 값 자체도
+        각 연도에 맞는 금액으로 계산됐는지(손계산 10.0%로 고정한 픽스처)
+        함께 확인한다."""
+        got = run_js(f"financialRatios({self._WITH_YEAR})")
+        margin_by_period = {r["기간"]: r["값"] for r in got if r["지표"] == "영업이익률"}
+        self.assertAlmostEqual(margin_by_period["2025"], 10.0, places=1)
+        self.assertAlmostEqual(margin_by_period["2024"], 10.0, places=1)
+        self.assertAlmostEqual(margin_by_period["2023"], 10.0, places=1)
+
+    def test_falls_back_to_ordinal_labels_when_bsns_year_field_is_missing(self):
+        """레코드에 bsns_year 필드 자체가 없으면(예상 밖 입력) 기존 서수
+        라벨로 안전 폴백한다 — 새 연도 계산이 조용히 죽거나 틀린 값을
+        만들지 않는다."""
+        got = run_js('''financialRatios([
+          {fs_div:"CFS", sj_div:"IS", account_nm:"매출액", thstrm_amount:"1000"}
+        ])''')
+        periods = {r["기간"] for r in got}
+        self.assertEqual(periods, {"전전기", "전기", "당기"})
+
+    def test_falls_back_when_bsns_year_is_unparseable(self):
+        """bsns_year가 있지만 숫자로 읽을 수 없으면(예상 밖 값) 서수
+        라벨로 물러난다 — NaN이 섞인 "2025년" 같은 가짜 연도를 만들지
+        않는다."""
+        got = run_js('''financialRatios([
+          {fs_div:"CFS", sj_div:"IS", account_nm:"매출액", bsns_year:"모름",
+           thstrm_amount:"1000"}
+        ])''')
+        periods = {r["기간"] for r in got}
+        self.assertEqual(periods, {"전전기", "전기", "당기"})
+
+    def test_falls_back_when_bsns_year_is_empty_string(self):
+        got = run_js('''financialRatios([
+          {fs_div:"CFS", sj_div:"IS", account_nm:"매출액", bsns_year:"",
+           thstrm_amount:"1000"}
+        ])''')
+        periods = {r["기간"] for r in got}
+        self.assertEqual(periods, {"전전기", "전기", "당기"})
+
+    def test_existing_fixtures_without_bsns_year_are_unaffected(self):
+        """이 클래스 위 TestFinancialRatios의 모든 픽스처는 bsns_year가
+        없다 — SE-10 이후에도 그 테스트들이 그대로 통과해야 이 변경이
+        회귀가 아니라 순수 추가라는 뜻이다(별도로 한 번 더 명시 확인)."""
+        got = run_js(f"financialRatios({TestFinancialRatios._CFS})")
+        periods = {r["기간"] for r in got}
+        self.assertEqual(periods, {"전전기", "전기", "당기"})
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFinancialRatiosByYear(unittest.TestCase):
+    """financialRatiosByYear(app.js, SE-10 Task 1 신설) — financialRatios()가
+    만든 행을 `기간`(실제 연도 또는 폴백 서수 라벨)으로 묶는다.
+    dividendPeriodBlocks와 같은 Map+groupOrder 메커니즘이지만, 연도가
+    숫자로 계산됐으면(오래된 것부터 나오는 원본 순서와 무관하게) 명시
+    내림차순(최신 먼저)으로 정렬한다는 점이 다르다(task-1-brief.md)."""
+
+    def test_groups_into_one_block_per_distinct_period_value(self):
+        got = run_js('''financialRatiosByYear([
+          {지표:"영업이익률", 값:1, 구분:"연결", 기간:"2025"},
+          {지표:"순이익률", 값:2, 구분:"연결", 기간:"2025"},
+          {지표:"영업이익률", 값:3, 구분:"연결", 기간:"2024"}
+        ])''')
+        self.assertEqual(len(got), 2)
+
+    def test_numeric_year_keys_sort_descending_most_recent_first(self):
+        got = run_js('''financialRatiosByYear([
+          {지표:"영업이익률", 값:1, 구분:"연결", 기간:"2023"},
+          {지표:"영업이익률", 값:2, 구분:"연결", 기간:"2025"},
+          {지표:"영업이익률", 값:3, 구분:"연결", 기간:"2024"}
+        ])''')
+        self.assertEqual([b["title"] for b in got], ["2025년", "2024년", "2023년"])
+
+    def test_title_has_year_suffix_for_numeric_keys(self):
+        got = run_js('''financialRatiosByYear([
+          {지표:"영업이익률", 값:1, 구분:"연결", 기간:"2025"}
+        ])''')
+        self.assertEqual(got[0]["title"], "2025년")
+
+    def test_fallback_ordinal_labels_keep_original_appearance_order_and_no_year_suffix(self):
+        """연도 계산이 폴백된 입력(기간이 서수 문자열)에서는 숫자가 아니므로
+        정렬하지 않고 원래 등장 순서(전전기→전기→당기, 이미 시간순)를
+        그대로 둔다 — 제목도 "년" 접미어 없이 그대로다."""
+        got = run_js('''financialRatiosByYear([
+          {지표:"영업이익률", 값:1, 구분:"연결", 기간:"전전기"},
+          {지표:"영업이익률", 값:2, 구분:"연결", 기간:"전기"},
+          {지표:"영업이익률", 값:3, 구분:"연결", 기간:"당기"}
+        ])''')
+        self.assertEqual([b["title"] for b in got], ["전전기", "전기", "당기"])
+
+    def test_division_stays_as_a_row_field_not_split_into_separate_tables(self):
+        """연결/별도를 표로 또 쪼개지 않는다는 결정(task-1-brief.md) — 한
+        연도 그룹 안에 연결·별도 행이 함께 있어야 한다."""
+        got = run_js('''financialRatiosByYear([
+          {지표:"영업이익률", 값:1, 구분:"연결", 기간:"2025"},
+          {지표:"영업이익률", 값:2, 구분:"별도", 기간:"2025"}
+        ])''')
+        self.assertEqual(len(got), 1)
+        divs = {r["구분"] for r in got[0]["ratios"]}
+        self.assertEqual(divs, {"연결", "별도"})
+
+    def test_empty_input_yields_no_blocks(self):
+        self.assertEqual(run_js("financialRatiosByYear([])"), [])
+
+    def test_non_array_input_yields_no_blocks(self):
+        self.assertEqual(run_js("financialRatiosByYear(null)"), [])
+
+
+# SG(corp_code=00963976) 실측 — 2026-07-30, dart_risk_mcp.core.dart_client.
+# fetch_financial_statements를 DART_API_KEY로 직접 호출(SE 백엔드가 financials
+# 섹션에 실제로 쓰는 것과 같은 함수, se_server/jobs/registry.py:60)해 받은
+# 라이브 응답에서 재무 파생 지표 계산에 필요한 계정 8종(유동자산·유동부채·
+# 부채총계·자본금·자본총계·매출액·영업이익·당기순이익(손실))만 CFS/OFS
+# 각각 추려 옮겨 적었다 — 금액은 손으로 만든 값이 아니라 API가 실제로 준
+# thstrm_amount/frmtrm_amount/bfefrmtrm_amount 그대로다(se10-investigation.md
+# Q1a가 확인한 것과 같은 라이브 응답, bsns_year="2025" 상수 포함).
+_SG_LIVE_RATIO_RECORDS = json.dumps([
+    {"fs_div": "CFS", "account_nm": "유동자산", "bsns_year": "2025",
+     "thstrm_amount": "107,418,120,726", "frmtrm_amount": "116,211,873,984",
+     "bfefrmtrm_amount": "72,974,861,922"},
+    {"fs_div": "CFS", "account_nm": "유동부채", "bsns_year": "2025",
+     "thstrm_amount": "86,205,896,601", "frmtrm_amount": "122,797,695,112",
+     "bfefrmtrm_amount": "118,139,824,157"},
+    {"fs_div": "CFS", "account_nm": "부채총계", "bsns_year": "2025",
+     "thstrm_amount": "122,215,490,678", "frmtrm_amount": "146,058,452,533",
+     "bfefrmtrm_amount": "136,805,656,860"},
+    {"fs_div": "CFS", "account_nm": "자본금", "bsns_year": "2025",
+     "thstrm_amount": "10,393,789,000", "frmtrm_amount": "9,704,337,300",
+     "bfefrmtrm_amount": "5,010,593,700"},
+    {"fs_div": "CFS", "account_nm": "자본총계", "bsns_year": "2025",
+     "thstrm_amount": "102,177,350,973", "frmtrm_amount": "86,774,282,733",
+     "bfefrmtrm_amount": "51,254,050,891"},
+    {"fs_div": "CFS", "account_nm": "매출액", "bsns_year": "2025",
+     "thstrm_amount": "102,246,199,563", "frmtrm_amount": "118,940,081,051",
+     "bfefrmtrm_amount": "80,921,130,313"},
+    {"fs_div": "CFS", "account_nm": "영업이익", "bsns_year": "2025",
+     "thstrm_amount": "752,259,599", "frmtrm_amount": "-6,068,240,269",
+     "bfefrmtrm_amount": "-13,468,746,819"},
+    {"fs_div": "CFS", "account_nm": "당기순이익(손실)", "bsns_year": "2025",
+     "thstrm_amount": "-2,454,050,880", "frmtrm_amount": "-36,241,673,706",
+     "bfefrmtrm_amount": "-32,912,462,971"},
+    {"fs_div": "OFS", "account_nm": "유동자산", "bsns_year": "2025",
+     "thstrm_amount": "68,240,213,217", "frmtrm_amount": "62,931,296,103",
+     "bfefrmtrm_amount": "35,454,929,770"},
+    {"fs_div": "OFS", "account_nm": "유동부채", "bsns_year": "2025",
+     "thstrm_amount": "59,900,190,993", "frmtrm_amount": "86,327,614,981",
+     "bfefrmtrm_amount": "91,859,200,909"},
+    {"fs_div": "OFS", "account_nm": "부채총계", "bsns_year": "2025",
+     "thstrm_amount": "86,794,197,105", "frmtrm_amount": "96,914,677,367",
+     "bfefrmtrm_amount": "107,319,474,046"},
+    {"fs_div": "OFS", "account_nm": "자본금", "bsns_year": "2025",
+     "thstrm_amount": "10,393,789,000", "frmtrm_amount": "9,704,337,300",
+     "bfefrmtrm_amount": "5,010,593,700"},
+    {"fs_div": "OFS", "account_nm": "자본총계", "bsns_year": "2025",
+     "thstrm_amount": "100,786,677,505", "frmtrm_amount": "82,959,024,100",
+     "bfefrmtrm_amount": "38,031,006,750"},
+    {"fs_div": "OFS", "account_nm": "매출액", "bsns_year": "2025",
+     "thstrm_amount": "49,445,822,622", "frmtrm_amount": "51,435,881,203",
+     "bfefrmtrm_amount": "50,689,315,548"},
+    {"fs_div": "OFS", "account_nm": "영업이익", "bsns_year": "2025",
+     "thstrm_amount": "686,206,144", "frmtrm_amount": "-3,555,720,453",
+     "bfefrmtrm_amount": "-9,302,994,359"},
+    {"fs_div": "OFS", "account_nm": "당기순이익(손실)", "bsns_year": "2025",
+     "thstrm_amount": "-83,387,528", "frmtrm_amount": "-26,778,534,185",
+     "bfefrmtrm_amount": "-39,438,581,163"},
+], ensure_ascii=False)
+
+
+def _table_segments(rendered):
+    """run_render_section 결과의 tableRows(헤더+본문이 한 목록에 섞여
+    있음)를 표 단위로 나눈다 — 헤더 행(모든 비어있지 않은 셀이 th)을
+    경계로 새 표가 시작된다고 본다. _header_rows와 같은 판정 기준이지만,
+    본문 행도 함께 표별로 묶어 돌려준다는 점이 다르다(SE-10 Task 1 —
+    연도별로 나뉜 표 안에서 구분(연결/별도) 값이 실제로 함께 있는지
+    확인하려면 헤더 인덱스 ↔ 본문 셀을 짝지어야 한다)."""
+    segments = []
+    current = None
+    for row in rendered["tableRows"]:
+        non_empty = [c for c in row if c["text"] != ""]
+        is_header = bool(non_empty) and all(c["tag"] == "th" for c in non_empty)
+        if is_header:
+            current = {"header": [c["text"] for c in row], "body": []}
+            segments.append(current)
+        elif current is not None:
+            current["body"].append([c["text"] for c in row])
+    return segments
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFinancialRatiosByYearRealRender(unittest.TestCase):
+    """SE-10 Task 1 최종 검증 — SG(corp_code=00963976) 실측 데이터(위
+    _SG_LIVE_RATIO_RECORDS)로 실제 렌더 결과를 확인한다. 연결 3년 + 별도
+    3년 = 6개 구분×기간 조합이 연도별 표 3개(6개가 아니라)로 묶이는지,
+    연도 값이 실제 2025/2024/2023과 일치하는지, 차트 x축이 여전히
+    과거→현재로 흐르는지가 핵심이다."""
+
+    def test_three_year_titled_tables_not_six(self):
+        """연결×3년 + 별도×3년을 연도로 묶으면 3개 표가 나와야 한다 —
+        구분으로 또 쪼개면(6개) 이 테스트가 실패한다(task-1-brief.md
+        결정 사항: 구분은 행에 남긴다, 표로 또 쪼개지 않는다)."""
+        got = run_render_section('"financials"', _SG_LIVE_RATIO_RECORDS)
+        year_titles = [t for t in got["titles"] if t in ("2025년", "2024년", "2023년")]
+        self.assertEqual(
+            sorted(set(year_titles)), ["2023년", "2024년", "2025년"],
+            f"연도 표 제목 3개가 모두 나오지 않습니다: {got['titles']}",
+        )
+        self.assertEqual(len(year_titles), 3, f"연도 표 제목이 3개가 아닙니다: {got['titles']}")
+
+    def test_year_titles_render_most_recent_first(self):
+        got = run_render_section('"financials"', _SG_LIVE_RATIO_RECORDS)
+        idx_2025 = got["titles"].index("2025년")
+        idx_2024 = got["titles"].index("2024년")
+        idx_2023 = got["titles"].index("2023년")
+        self.assertLess(idx_2025, idx_2024, f"2025년 표가 2024년보다 뒤에 렌더됩니다: {got['titles']}")
+        self.assertLess(idx_2024, idx_2023, f"2024년 표가 2023년보다 뒤에 렌더됩니다: {got['titles']}")
+
+    def test_period_column_no_longer_appears_in_derived_headers(self):
+        """그룹 제목으로 승격된 정보(연도)는 행에서 지운다는 결정 —
+        `기간`이 더 이상 파생 표의 열로 나오면 안 된다."""
+        got = run_render_section('"financials"', _SG_LIVE_RATIO_RECORDS)
+        derived_headers = _header_rows(got)[:3]
+        self.assertEqual(len(derived_headers), 3, f"파생 표 헤더가 3개가 아닙니다: {derived_headers}")
+        for h in derived_headers:
+            self.assertNotIn("기간", h, f"기간 열이 그룹 후에도 남아 있습니다: {h}")
+            self.assertIn("지표", h)
+            self.assertIn("구분", h)
+
+    def test_each_year_table_has_both_consolidated_and_separate_rows(self):
+        """연결/별도를 표로 또 쪼개지 않는다는 결정 — 한 연도 표 안에 구분
+        열 값으로 "연결"과 "별도"가 실제로 둘 다 있어야 한다(헤더에
+        "구분"이 있다는 것만으로는 본문에 두 값이 다 있는지 증명 못
+        한다)."""
+        got = run_render_section('"financials"', _SG_LIVE_RATIO_RECORDS)
+        segments = _table_segments(got)
+        year_segments = segments[:3]
+        self.assertEqual(len(year_segments), 3, f"연도 표가 3개가 아닙니다: {[s['header'] for s in segments]}")
+        for seg in year_segments:
+            div_idx = seg["header"].index("구분")
+            divs = {row[div_idx] for row in seg["body"]}
+            self.assertEqual(
+                divs, {"연결", "별도"},
+                f"연도 표({seg['header']})에 연결/별도가 함께 있지 않습니다: {divs}",
+            )
+
+    def test_chart_x_axis_sorts_chronologically_past_to_present(self):
+        """차트 x축이 실제 연도 문자열이 돼도 과거→현재, 왼쪽에서 오른쪽
+        으로 흐르는지 실제 chartData() 호출로 확인한다(브리프: "실렌더로
+        확인", RATIO_PERIODS·CHART_SPECS.financial_ratios 주석이 말하는
+        allNumeric 오름차순 정렬 경로)."""
+        got = run_js(
+            f"chartData(financialRatios({_SG_LIVE_RATIO_RECORDS}), "
+            f"CHART_SPECS.financial_ratios).labels"
+        )
+        self.assertEqual(got, ["2023", "2024", "2025"])
+
+    def test_marks_still_attach_to_the_correct_row_after_year_grouping(self):
+        """MARK_RULES.financial_ratios(이익률 값 < 0)가 표를 연도별로 나눈
+        뒤에도 정확한 행에 붙는지 확인한다 — marks 좌표(행번호|열키)가
+        표를 나누기 전 전체 배열 기준 인덱스로 남아 있으면 엉뚱한(다른
+        연도·다른 구분) 행에 강조가 붙거나, 아예 안 붙거나, 양수 값에
+        잘못 붙는다. 이 실측 데이터는 별도 2024·2023과 연결 2024·2023의
+        영업이익률, 그리고 연결·별도 2025의 순이익률이 실제로 음수라
+        강조가 여러 행에서 발화한다."""
+        got = run_render_section('"financials"', _SG_LIVE_RATIO_RECORDS)
+        marked = got["marked"]
+        self.assertTrue(marked, "강조가 하나도 렌더되지 않았습니다 — 실측 데이터에 음수 이익률이 있는데도")
+        for m in marked:
+            self.assertTrue(
+                m["text"].startswith("-"),
+                f"강조된 셀이 음수 값이 아닙니다(행 정렬이 어긋났을 수 있습니다): {m}",
+            )
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestFinancialRatiosKeyOrder(unittest.TestCase):
     """SE-8 Task 4 — 실사용자(SG, corp_code=00963976 실측 기반) 지적:
     "표를 구성할 때 이용자에게 어떤 정보가 유용할지 고민부터 하고 배치를
