@@ -1429,8 +1429,11 @@ function sectionBlocks(value, depth, key) {
     // 재배치한다(SE-8 Task 4, reorderFinancialsFields 주석 참고). depth 0 +
     // 부모 key로 게이트한다 — executive_roster·debt_balance.by_kind와 같은
     // 방식이라 재귀 호출(하위 어딘가의 우연한 "financials" 키)에는 적용되지
-    // 않는다.
-    if (d === 0 && key === "financials") records = reorderFinancialsFields(records);
+    // 않는다. SE-10 Task 2부터는 재배치 직후 dividends와 같은 이른 return을
+    // 탄다(financialsGroupedBlocks 주석 참고) — 원본 표가 fs_div(연결/별도)
+    // 별로 나뉜 표 + 제목을 얻는다(이전에는 title: null인 평면 표 하나였다,
+    // se10-investigation.md Q3a).
+    if (d === 0 && key === "financials") return financialsGroupedBlocks(reorderFinancialsFields(records));
     // SE-9 Task 4: dividends는 더 이상 단일 평면 표로 그리지 않는다 —
     // 같은 사업연도·결산일이 매 행마다 반복돼 어느 행이 어느 보고
     // 시점 것인지 한눈에 안 들어온다는 실사용자(SG) 지적에 따라,
@@ -1451,17 +1454,12 @@ function sectionBlocks(value, depth, key) {
     // 따로 싣는다(source가 레코드에서 빠지므로 섹션 전체 레코드를
     // 넘기는 방식은 여기서 성립하지 않는다).
     if (recordsHaveSourceField(records)) return sourceGroupedBlocks(records);
-    // SE-9 Task 2: financials는 바로 위 줄에서 이미 자기 규칙으로
-    // 재배치했다 — 여기서 또 건드리면 그 특수 순서가 tail 일반 규칙에
-    // 밀려 깨진다(dividends는 Task 4부터 이 지점에 아예 도달하지 않는다 —
-    // 위 이른 return 참고). financials를 제외한 나머지 모든 평면 배열
-    // (source 없는 원본 표)엔 tail 일반 규칙(메타 키 뒤로, 비고 맨 뒤로)만
-    // 적용한다 — jsonb가 순서를 파괴해도 최소한의 가독성은 명시 규칙으로
-    // 지킨다.
-    const isSpecialCased = d === 0 && key === "financials";
-    if (!isSpecialCased) {
-      records = records.map(function (r) { return reorderRecordFields(r, [], RECORD_TAIL_KEYS); });
-    }
+    // financials는 위 이른 return으로 이 지점에 더 이상 도달하지 않는다
+    // (SE-10 Task 2부터 dividends와 같은 처지 — 자기 그룹핑 규칙을 이미
+    // 마쳤다). 여기 남는 나머지 모든 평면 배열(source 없는 원본 표)엔 tail
+    // 일반 규칙(메타 키 뒤로, 비고 맨 뒤로)만 적용한다 — jsonb가 순서를
+    // 파괴해도 최소한의 가독성은 명시 규칙으로 지킨다.
+    records = records.map(function (r) { return reorderRecordFields(r, [], RECORD_TAIL_KEYS); });
     const t = tableLayout(records);
     return t ? [{ title: null, table: t, records: records }] : [];
   }
@@ -1847,6 +1845,107 @@ function reorderFinancialsRecord(r) {
 function reorderFinancialsFields(records) {
   if (!Array.isArray(records)) return records;
   return records.map(reorderFinancialsRecord);
+}
+
+// financials 원본 표의 thstrm_dt/frmtrm_dt/bfefrmtrm_dt(당기/전기/전전기
+// 기간)를 앞 4자리(연도)로 축약할 때 건드리는 필드 목록(SE-10 Task 2,
+// task-2-brief.md).
+const FINANCIALS_DATE_KEYS = ["thstrm_dt", "frmtrm_dt", "bfefrmtrm_dt"];
+
+/** thstrm_dt류 값 하나를 앞 4자리(연도)로 축약한다. DART 원본은
+ *  재무상태표(BS) 행이면 시점형("2025.12.31 현재"), 손익계산서(IS) 행이면
+ *  기간형("2025.01.01 ~ 2025.12.31")이라 형태가 다르지만, 둘 다 앞
+ *  4자리가 그 값이 가리키는 연도라는 사실은 같다(se10-investigation.md
+ *  Q1a 실측 — 당기 예시 두 형태 모두 "2025"). 정규식 하나(^\d{4})로 두
+ *  형태를 구분하지 않고 같은 방식으로 처리할 수 있는 이유가 이것이다.
+ *  문자열이 아니거나 앞 4자리가 숫자가 아니면(예상 밖 형태) 원본을 그대로
+ *  돌려준다 — 판정 불가 시 지우지 않는다 원칙(다른 축약·그룹핑 함수와
+ *  동일). */
+function shortenFinancialsDate(v) {
+  if (typeof v !== "string") return v;
+  const m = v.match(/^\d{4}/);
+  return m ? m[0] : v;
+}
+
+/** 레코드 하나에서 FINANCIALS_DATE_KEYS 세 필드만 shortenFinancialsDate로
+ *  축약한 사본을 돌려준다. 그 외 필드·키 순서는 손대지 않는다 —
+ *  financialsGroupedBlocks가 reorderFinancialsFields로 이미 열 순서를
+ *  정한 뒤에만 이 함수를 부르므로 순서를 다시 섞을 이유가 없다. */
+function shortenFinancialsDateFields(r) {
+  if (!r || typeof r !== "object") return r;
+  const out = Object.assign({}, r);
+  for (const k of FINANCIALS_DATE_KEYS) {
+    if (k in out) out[k] = shortenFinancialsDate(out[k]);
+  }
+  return out;
+}
+
+/** financialsGroupedBlocks의 그룹(같은 fs_div) 대표 레코드 하나로 제목을
+ *  만든다 — "{연도}년 {fs_nm}"(브리프 예시: "2025년 연결재무제표") 형태다.
+ *  연도는 financialRatiosBaseYear(SE-10 Task 1, 위 financialRatios 주석
+ *  참고)를 그대로 재사용한다 — 이 함수가 하는 일(records 배열에서
+ *  bsns_year를 한 번 읽어 상수로 쓴다)은 financials 원본 레코드에도 그대로
+ *  성립한다(financialRatios가 받는 것과 정확히 같은 배열이 이 함수의
+ *  입력이라 별도 일반화가 필요 없다). bsns_year를 못 읽으면(null, 판정
+ *  불가) 연도 없이 fs_nm만 쓴다 — 제목이 아예 없던 이전보다는 나은
+ *  폴백이다(최소한 연결/별도 구분은 여전히 보인다). fs_nm 자체가
+ *  없으면(예상 밖 응답) label("financials")로 폴백해 빈 제목을 만들지
+ *  않는다(dividendGroupTitle과 같은 방어). */
+function financialsGroupTitle(r, baseYear) {
+  const fsNm = r && r.fs_nm !== undefined && r.fs_nm !== null && r.fs_nm !== ""
+    ? String(r.fs_nm) : label("financials");
+  return baseYear !== null ? String(baseYear) + "년 " + fsNm : fsNm;
+}
+
+/** financials(원본 재무제표 레코드 배열, reorderFinancialsFields 적용 후)를
+ *  fs_div(CFS/OFS)별로 표 하나씩 나눈다(SE-10 Task 2, task-2-brief.md) —
+ *  실사용자(SG) 지적: 연결/별도가 한 표에 섞여 있어 어디서부터 별도인지
+ *  한눈에 안 보인다(se10-investigation.md Q3c — DART 응답 자체가 CFS·OFS를
+ *  같은 배열에 함께 준다, fs_div 요청 파라미터가 실제로 필터링하지
+ *  않는다). dividendPeriodBlocks와 같은 Map+groupOrder 메커니즘(그룹
+ *  순서는 첫 등장 순서 — DART가 실측상 CFS 블록을 먼저, OFS 블록을 뒤에
+ *  연속으로 준다, Q3c)이지만 그룹 키가 fs_div 하나뿐이라 더 단순하다.
+ *  별도만 있는 회사(레코드 전부가 같은 fs_div)는 자연히 그룹이 하나뿐이라
+ *  표도 하나만 나온다 — 별도 분기 없이 이 메커니즘 자체가 그 경우를
+ *  포함한다.
+ *
+ *  각 그룹 안에서는 thstrm_dt/frmtrm_dt/bfefrmtrm_dt를 앞 4자리 연도로
+ *  축약한다(shortenFinancialsDateFields) — 브리프가 예상한 부수효과:
+ *  축약 전에는 같은 그룹 안에서도 재무상태표 행("2025.12.31 현재")과
+ *  손익계산서 행("2025.01.01 ~ 2025.12.31")의 원본 문자열이 서로 달라 세
+ *  열이 tableLayout의 상수-열 캡션 승격 조건(그룹 내 모든 행에서 값이
+ *  같음)을 만족하지 못했지만, 축약 후에는 두 형태 모두 같은 연도
+ *  문자열("2025")이 되어 그룹 안 전 행에서 값이 같아지고 — 별도 메커니즘을
+ *  새로 만들지 않아도 tableLayout의 기존 캡션 승격이 그대로 세 열을 표
+ *  밖으로 옮긴다(실렌더 검증 결과는 task-2-report.md 참고).
+ *
+ *  thstrm_nm/frmtrm_nm/bfefrmtrm_nm(기수명, 예: "제 17 기")은 이 함수가
+ *  손대지 않는다 — 그룹 안에서 이미 상수라 tableLayout이 그전부터 캡션으로
+ *  승격했고, 이 함수는 그 값 자체를 바꾸지 않는다(건드리는 건 날짜 세
+ *  필드의 값뿐).
+ *
+ *  fs_div가 없는 레코드(예상 밖 응답)는 빈 문자열 키 그룹으로 묶인다 —
+ *  판정 불가 시 지우지 않는다 원칙(다른 그룹핑 함수와 동일). */
+function financialsGroupedBlocks(records) {
+  if (!Array.isArray(records)) return [];
+  const baseYear = financialRatiosBaseYear(records);
+  const order = [];
+  const groups = new Map();
+  for (const r of records) {
+    if (!isPlainObject(r)) continue;
+    const key = r.fs_div !== undefined && r.fs_div !== null ? String(r.fs_div) : "";
+    if (!groups.has(key)) { groups.set(key, []); order.push(key); }
+    groups.get(key).push(r);
+  }
+
+  const blocks = [];
+  for (const key of order) {
+    const shortened = groups.get(key).map(shortenFinancialsDateFields);
+    const title = financialsGroupTitle(shortened[0], baseYear);
+    const t = tableLayout(shortened);
+    if (t) blocks.push({ title: title, table: t, records: shortened });
+  }
+  return blocks;
 }
 
 /** record(레코드 하나)의 키를 priorityKeys(주어진 순서대로 앞으로) →
@@ -4295,6 +4394,8 @@ if (typeof module !== "undefined" && module.exports) {
     isFootnoteMarkerOnly, footnoteMarkerNote,
     FINANCIALS_META_KEYS, FINANCIALS_PRIORITY_KEYS,
     reorderFinancialsRecord, reorderFinancialsFields,
+    FINANCIALS_DATE_KEYS, shortenFinancialsDate, shortenFinancialsDateFields,
+    financialsGroupTitle, financialsGroupedBlocks,
     DIVIDENDS_PRIORITY_KEYS, reorderDividendsRecord, reorderDividendsFields,
     reorderRecordFields, RECORD_TAIL_KEYS, EXEC_TREASURY_PRIORITY_KEYS,
     HYSLR_CHG_PRIORITY_KEYS, SOURCE_PRIORITY_KEYS,
