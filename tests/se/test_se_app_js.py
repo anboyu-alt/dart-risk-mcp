@@ -10518,6 +10518,276 @@ class TestDividendVsIncomeRenderWiring(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestDividendDrainFlags(unittest.TestCase):
+    """SE-12 Task 2, 요구사항 A — core(dart_risk_mcp/core/dart_client.py의
+    detect_dividend_drain, Task 1)의 se 문자열·판정 조건을 그대로 JS로
+    옮긴 dividendDrainFlags를 검증한다. 두산(00117212) 2026-07-30 실측
+    (Task 1 report "라이브 확인" 절)을 그대로 픽스처로 쓴다 — lookback_years=5
+    조회에서 실제로 나온 4개 플래그(2022 CFS·2023 CFS·2023 OFS·2024 CFS)와
+    정확히 같은 숫자다."""
+
+    # 두산 00117212, 2026-07-30 실측(Task 1 report) — alotMatter가 같은
+    # (bsns_year, reprt_code=11011 사업보고서) 그룹 안에 담고 있던 값 그대로.
+    # 2022·2024의 (별도)당기순이익은 Task 1 라이브 확인에서 플래그가 안 났다
+    # (흑자였거나 응답에 없었다는 뜻) — 실측되지 않은 숫자를 지어내 채우지
+    # 않고 그 se 자체를 픽스처에서 뺀다(다른 se가 있어도 매칭에 영향 없다).
+    _DOOSAN_RECORDS = [
+        {"rcept_no": "R2022", "bsns_year": "2022", "reprt_code": "11011",
+         "se": "현금배당금총액(백만원)", "thstrm": "35,772"},
+        {"rcept_no": "R2022", "bsns_year": "2022", "reprt_code": "11011",
+         "se": "(연결)당기순이익(백만원)", "thstrm": "-581,169"},
+        {"rcept_no": "R2023", "bsns_year": "2023", "reprt_code": "11011",
+         "se": "현금배당금총액(백만원)", "thstrm": "35,772"},
+        {"rcept_no": "R2023", "bsns_year": "2023", "reprt_code": "11011",
+         "se": "(연결)당기순이익(백만원)", "thstrm": "-388,279"},
+        {"rcept_no": "R2023", "bsns_year": "2023", "reprt_code": "11011",
+         "se": "(별도)당기순이익(백만원)", "thstrm": "-111,873"},
+        {"rcept_no": "R2024", "bsns_year": "2024", "reprt_code": "11011",
+         "se": "현금배당금총액(백만원)", "thstrm": "35,851"},
+        {"rcept_no": "R2024", "bsns_year": "2024", "reprt_code": "11011",
+         "se": "(연결)당기순이익(백만원)", "thstrm": "-226,167"},
+    ]
+
+    def test_doosan_shaped_fixture_matches_task1_live_values(self):
+        got = run_js(f"dividendDrainFlags({json.dumps(self._DOOSAN_RECORDS, ensure_ascii=False)})")
+        self.assertEqual(len(got), 4, f"두산 실측 4건과 개수가 다릅니다: {got}")
+        by = {(f["bsns_year"], f["fs_div"]): f for f in got}
+        self.assertEqual(by[("2022", "CFS")]["net_income"], -581169)
+        self.assertEqual(by[("2022", "CFS")]["dividend"], 35772)
+        self.assertEqual(by[("2023", "CFS")]["net_income"], -388279)
+        self.assertEqual(by[("2023", "CFS")]["dividend"], 35772)
+        self.assertEqual(by[("2023", "OFS")]["net_income"], -111873)
+        self.assertEqual(by[("2023", "OFS")]["dividend"], 35772)
+        self.assertEqual(by[("2024", "CFS")]["net_income"], -226167)
+        self.assertEqual(by[("2024", "CFS")]["dividend"], 35851)
+
+    def test_sort_order_is_year_then_reprt_then_fs_div(self):
+        got = run_js(f"dividendDrainFlags({json.dumps(self._DOOSAN_RECORDS, ensure_ascii=False)})")
+        self.assertEqual(
+            [(f["bsns_year"], f["reprt_code"], f["fs_div"]) for f in got],
+            [("2022", "11011", "CFS"), ("2023", "11011", "CFS"),
+             ("2023", "11011", "OFS"), ("2024", "11011", "CFS")],
+        )
+
+    def test_per_share_dividend_is_not_mistaken_for_total(self):
+        """"주당 현금배당금(원)"(단가)은 "현금배당금총액(백만원)"과 다른
+        개념이다 — 느슨한 "현금배당금" in se 매칭이었던 옛 core 버그(Task 1
+        report)를 JS에서도 재현하지 않는지 확인한다."""
+        records = [
+            {"bsns_year": "2025", "reprt_code": "11011",
+             "se": "주당 현금배당금(원)", "thstrm": "500"},
+            {"bsns_year": "2025", "reprt_code": "11011",
+             "se": "(연결)당기순이익(백만원)", "thstrm": "-1,000"},
+        ]
+        got = run_js(f"dividendDrainFlags({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(got, [], "단가 필드를 총액으로 잘못 매칭했습니다")
+
+    def test_positive_net_income_does_not_flag(self):
+        records = [
+            {"bsns_year": "2025", "reprt_code": "11011",
+             "se": "현금배당금총액(백만원)", "thstrm": "1,000"},
+            {"bsns_year": "2025", "reprt_code": "11011",
+             "se": "(연결)당기순이익(백만원)", "thstrm": "1,000"},
+        ]
+        self.assertEqual(
+            run_js(f"dividendDrainFlags({json.dumps(records, ensure_ascii=False)})"), [])
+
+    def test_no_dividend_does_not_flag_even_if_net_income_negative(self):
+        records = [
+            {"bsns_year": "2025", "reprt_code": "11011",
+             "se": "현금배당금총액(백만원)", "thstrm": "-"},
+            {"bsns_year": "2025", "reprt_code": "11011",
+             "se": "(연결)당기순이익(백만원)", "thstrm": "-1,000"},
+        ]
+        self.assertEqual(
+            run_js(f"dividendDrainFlags({json.dumps(records, ensure_ascii=False)})"), [])
+
+    def test_not_an_array_returns_empty(self):
+        self.assertEqual(run_js("dividendDrainFlags(null)"), [])
+        self.assertEqual(run_js("dividendDrainFlags({})"), [])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestDividendDrainRenderWiring(unittest.TestCase):
+    """dividendDrainFlags가 정의만 있고 renderSection이 부르지 않는 사고를
+    막는다(TestDividendVsIncomeRenderWiring과 같은 이유) — CFS "지배지분
+    기준" 병기 문구가 실제 DOM에 그려지는지까지 확인한다."""
+
+    _RECORDS = TestDividendDrainFlags._DOOSAN_RECORDS
+
+    def test_title_and_cfs_qualifier_render(self):
+        got = run_render_section('"dividends"', json.dumps(self._RECORDS, ensure_ascii=False))
+        self.assertIn("적자 시점 배당 (사실 표기)", got["titles"])
+        cells = got["cells"]
+        self.assertIn("연결·지배지분 기준", cells,
+                       "CFS 당기순이익이 지배지분 기준이라는 병기 문구가 렌더되지 않았습니다")
+        self.assertIn("별도", cells)
+
+    def test_values_render(self):
+        got = run_render_section('"dividends"', json.dumps(self._RECORDS, ensure_ascii=False))
+        cells = got["cells"]
+        for expect in ("-581,169", "-388,279", "-111,873", "-226,167", "35,772", "35,851"):
+            self.assertIn(expect, cells, f"{expect}가 렌더되지 않았습니다: {cells}")
+
+    def test_dividend_vs_income_block_still_renders_alongside(self):
+        """dividendVsIncome(기존 블록)이 새 블록 추가로 밀려나지 않는지 —
+        무회귀 확인."""
+        got = run_render_section('"dividends"', json.dumps(self._RECORDS, ensure_ascii=False))
+        self.assertIn("배당 vs 당기순이익 (사실 비교)", got["titles"])
+        self.assertIn("적자 시점 배당 (사실 표기)", got["titles"])
+
+    def test_no_block_when_no_flags(self):
+        records = [{"bsns_year": "2025", "reprt_code": "11011",
+                    "se": "현금배당금총액(백만원)", "thstrm": "-"}]
+        got = run_render_section('"dividends"', json.dumps(records, ensure_ascii=False))
+        self.assertNotIn("적자 시점 배당 (사실 표기)", got["titles"])
+
+    def test_no_verdict_words(self):
+        got = run_render_section('"dividends"', json.dumps(self._RECORDS, ensure_ascii=False))
+        combined = json.dumps(got, ensure_ascii=False)
+        for word in ("위험", "유출", "부적절", "의심"):
+            self.assertNotIn(word, combined, f"판정/강한 어휘 '{word}'가 렌더 결과에 있습니다")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestDividendVsRetainedEarnings(unittest.TestCase):
+    """SE-12 Task 2, 요구사항 B — financials(단일 최근 사업연도)의
+    이익잉여금(CFS/OFS)과 dividends의 같은 사업연도 현금배당금총액을
+    나란히 놓는다. SG(00963976) 2024·두산(00117212) 2023 실측값을 그대로
+    쓴다(2026-07-30, fetch_financial_statements(corp_code, key, year=...)
+    직접 호출로 확인)."""
+
+    # SG 00963976, year="2024" 명시 호출 실측 — 브리프가 말한 "2024 CFS
+    # 이익잉여금 ≈ -167.4억원(-16,736,882,006원), OFS ≈ -218.8억원
+    # (-21,881,454,750원)"과 정확히 일치 확인됨. SG는 2023~2026 전 사업연도
+    # 배당(현금배당금총액) 자체가 없다(전부 "-") — 그래서 이 회사 자체가
+    # "이번 사업연도 배당 기록 없음" 사례의 실측 근거다.
+    _SG_2024_RETAINED = [
+        {"fs_div": "CFS", "sj_div": "BS", "account_nm": "이익잉여금",
+         "bsns_year": "2024", "thstrm_amount": "-16,736,882,006"},
+        {"fs_div": "OFS", "sj_div": "BS", "account_nm": "이익잉여금",
+         "bsns_year": "2024", "thstrm_amount": "-21,881,454,750"},
+    ]
+
+    # 두산 00117212, year="2023" 실측(fetch_financial_statements 직접 호출).
+    _DOOSAN_2023_RETAINED = [
+        {"fs_div": "CFS", "sj_div": "BS", "account_nm": "이익잉여금",
+         "bsns_year": "2023", "thstrm_amount": "207,969,718,905"},
+        {"fs_div": "OFS", "sj_div": "BS", "account_nm": "이익잉여금",
+         "bsns_year": "2023", "thstrm_amount": "3,232,284,656,555"},
+    ]
+    # 두산 2023 사업연도 현금배당금총액(Task 1 report 실측) — dividendVsIncome이
+    # 읽는 형태 그대로.
+    _DOOSAN_2023_DIVIDEND = [
+        {"bsns_year": "2023", "reprt_code": "11011",
+         "se": "현금배당금총액(백만원)", "thstrm": "35,772"},
+    ]
+
+    def test_doosan_2023_overlap_join(self):
+        got = run_js(
+            f"dividendVsRetainedEarnings({json.dumps(self._DOOSAN_2023_RETAINED, ensure_ascii=False)}, "
+            f"{json.dumps(self._DOOSAN_2023_DIVIDEND, ensure_ascii=False)})")
+        self.assertEqual(got["bsns_year"], "2023")
+        self.assertTrue(got["overlap"])
+        self.assertEqual(got["retained_earnings"]["CFS"], 207969718905)
+        self.assertEqual(got["retained_earnings"]["OFS"], 3232284656555)
+        self.assertEqual(got["dividend_won"], 35772 * 1e6)
+
+    def test_sg_2024_no_dividend_anywhere(self):
+        got = run_js(
+            f"dividendVsRetainedEarnings({json.dumps(self._SG_2024_RETAINED, ensure_ascii=False)}, [])")
+        self.assertEqual(got["bsns_year"], "2024")
+        self.assertFalse(got["overlap"])
+        self.assertEqual(got["retained_earnings"]["CFS"], -16736882006)
+        self.assertEqual(got["retained_earnings"]["OFS"], -21881454750)
+        self.assertIsNone(got["dividend_won"])
+
+    def test_year_mismatch_produces_honest_non_comparison(self):
+        """financials(2024)와 dividends(2023만 있음)의 사업연도가 어긋나는
+        경우를 재현한다 — SG의 실측 이익잉여금(2024)에 두산의 실측 배당
+        (2023)을 합성한 픽스처다(두 회사가 실제로 관계가 있다는 뜻이
+        아니라, "연도가 안 겹치면 억지로 조인하지 않는다" 로직만 순수하게
+        떼어 검증하려는 것 — 각 절반은 그 자체로 실측이다)."""
+        got = run_js(
+            f"dividendVsRetainedEarnings({json.dumps(self._SG_2024_RETAINED, ensure_ascii=False)}, "
+            f"{json.dumps(self._DOOSAN_2023_DIVIDEND, ensure_ascii=False)})")
+        self.assertEqual(got["bsns_year"], "2024")
+        self.assertFalse(got["overlap"], "연도가 다른데 조인됐습니다 — 억지 비교")
+        self.assertIsNone(got["dividend_won"])
+
+    def test_no_retained_earnings_account_returns_null(self):
+        financials = [{"fs_div": "CFS", "sj_div": "BS", "account_nm": "자본총계",
+                       "bsns_year": "2024", "thstrm_amount": "1000"}]
+        self.assertIsNone(run_js(f"dividendVsRetainedEarnings({json.dumps(financials)}, [])"))
+
+    def test_empty_financials_returns_null(self):
+        self.assertIsNone(run_js("dividendVsRetainedEarnings([], [])"))
+
+    def test_not_array_returns_null(self):
+        self.assertIsNone(run_js("dividendVsRetainedEarnings(null, [])"))
+        self.assertIsNone(run_js("dividendVsRetainedEarnings([], null)"))
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestDividendVsRetainedEarningsRenderWiring(unittest.TestCase):
+    """financials·dividends 두 섹션에 걸친 배선을 실렌더로 확인한다 —
+    financials가 먼저 오든(보통 경우) 늦게 오든(refreshRetainedEarningsBlock
+    경로) 비교가 채워져야 한다(refreshFundChainForDisclosures와 대칭)."""
+
+    _SG_FIN = TestDividendVsRetainedEarnings._SG_2024_RETAINED
+    _DOOSAN_FIN = TestDividendVsRetainedEarnings._DOOSAN_2023_RETAINED
+    _DOOSAN_DIV = TestDividendVsRetainedEarnings._DOOSAN_2023_DIVIDEND
+
+    def _financials_setup(self, financials):
+        return "sandbox.renderSection(\"financials\", " + json.dumps(financials, ensure_ascii=False) + ");\n"
+
+    def test_sg_live_values_render_with_no_overlap_note(self):
+        setup = self._financials_setup(self._SG_FIN)
+        got = run_render_section('"dividends"', "[]", setup)
+        self.assertIn("배당 vs 이익잉여금 (이번 사업연도)", got["titles"])
+        cells = got["cells"]
+        self.assertIn("-167.4억", cells, f"SG 2024 CFS 이익잉여금(-167.4억)이 렌더되지 않았습니다: {cells}")
+        self.assertIn("-218.8억", cells, f"SG 2024 OFS 이익잉여금(-218.8억)이 렌더되지 않았습니다: {cells}")
+        combined = " ".join(got["notes"])
+        self.assertIn("배당 기록 없음", combined)
+        # "추이" 부재 확인은 이 블록 고유 문구(제목·"이익잉여금" 언급 문단)로
+        # 좁힌다 — financials 원본 섹션에도 별개로 "추이"를 쓰는 기존
+        # 문구(financialsGroupedBlocks 등, 이 태스크 범위 밖)가 있어 페이지
+        # 전체를 보면 무관한 문구까지 걸린다.
+        my_notes = [n for n in got["notes"] if "이익잉여금" in n or "배당 기록 없음" in n]
+        everything = " ".join(my_notes) + " " + " ".join(
+            t for t in got["titles"] if "이익잉여금" in t)
+        self.assertNotIn("추이", everything, "단일 연도 비교인데 \"추이\"라는 말을 썼습니다")
+
+    def test_doosan_overlap_renders_dividend_value(self):
+        setup = self._financials_setup(self._DOOSAN_FIN)
+        got = run_render_section('"dividends"', json.dumps(self._DOOSAN_DIV, ensure_ascii=False), setup)
+        self.assertIn("배당 vs 이익잉여금 (이번 사업연도)", got["titles"])
+        cells = got["cells"]
+        self.assertIn("357.7억", cells, f"두산 2023 현금배당금총액(357.7억)이 렌더되지 않았습니다: {cells}")
+        combined = " ".join(got["notes"])
+        self.assertNotIn("배당 기록 없음", combined)
+
+    def test_no_block_before_financials_arrives(self):
+        got = run_render_section('"dividends"', json.dumps(self._DOOSAN_DIV, ensure_ascii=False))
+        self.assertNotIn("배당 vs 이익잉여금 (이번 사업연도)", got["titles"])
+
+    def test_financials_arriving_after_dividends_rerenders(self):
+        """financials가 dividends보다 늦게 도착해도(순서 보장 없음) 비교가
+        채워진다 — refreshRetainedEarningsBlock의 실제 배선 확인."""
+        setup = "sandbox.renderSection(\"dividends\", []);\n"
+        got = run_render_section('"financials"', json.dumps(self._SG_FIN, ensure_ascii=False), setup)
+        self.assertIn("배당 vs 이익잉여금 (이번 사업연도)", got["titles"])
+
+    def test_no_verdict_words(self):
+        setup = self._financials_setup(self._DOOSAN_FIN)
+        got = run_render_section('"dividends"', json.dumps(self._DOOSAN_DIV, ensure_ascii=False), setup)
+        combined = json.dumps(got, ensure_ascii=False)
+        for word in ("위험", "부족", "여력", "의심"):
+            self.assertNotIn(word, combined, f"판정/강한 어휘 '{word}'가 렌더 결과에 있습니다")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestFundPlanChanges(unittest.TestCase):
     """SE-4f Task 7 — 같은 조달 건(같은 pay_de·같은 plan_useprps)의
     계획 금액(plan_amount)이 보고 시점마다 다르게 보고된 사실을 뽑는다

@@ -81,6 +81,20 @@ let FUND_CHAIN_DISCLOSURE_STATE = null; // 조달건 블록에 **이미 반영�
                                          // 그리지 않는다 — renderFailures는
                                          // 폴링마다 불리므로 이 가드가 없으면
                                          // 매 바퀴 재렌더가 돈다.
+let FINANCIALS_DATA = null; // financials 섹션 원본 — dividendVsRetainedEarnings
+                             // (app.js, SE-12 Task 2)가 dividends 섹션을 그릴
+                             // 때 필요로 하는데, 두 섹션은 위 DISCLOSURES_DATA와
+                             // 같은 이유로 서로 다른 폴링 응답으로 도착한다.
+                             // se_server/jobs/registry.py는 financials를
+                             // dividends보다 먼저 등록해 두어 보통 먼저
+                             // 도착하지만 보장은 아니다 — dividends가 먼저 오면
+                             // 이 값 없이(이익잉여금 비교 없이) 그려진 뒤,
+                             // financials 도착 시 refreshRetainedEarningsBlock이
+                             // dividends 섹션만 다시 그린다.
+let DIVIDENDS_DATA = null; // dividends 섹션 원본 — 위 FINANCIALS_DATA와 대칭.
+                            // financials가 dividends보다 늦게 도착했을 때
+                            // 이 값으로 dividends 섹션만 다시 그리기 위해
+                            // 들고 있는다(서버에 다시 요청하지 않는다).
 
 /** 지금 조달건 블록이 기댈 수 있는 disclosures 상태. 세 값은 서로 다른
  *  사실이라 하나로 뭉치지 않는다: "ok"(목록을 받았다 — 걸린 공시가 0건일
@@ -130,6 +144,24 @@ function refreshFundChainForDisclosures() {
     }
   }
   renderSection("fund_usage", FUND_USAGE_DATA);
+}
+
+/** financials가 dividends보다 늦게 도착해도 "배당 vs 이익잉여금" 비교가
+ *  누락되지 않게 한다(위 refreshFundChainForDisclosures와 같은 이유·같은
+ *  패턴, SE-12 Task 2). registry.py는 financials를 dividends보다 먼저
+ *  등록해 두어 보통은 먼저 도착하지만 보장되지 않는다 — dividends가
+ *  financials 없이 먼저 그려졌다면, financials가 도착하는 순간 dividends
+ *  섹션만 다시 그려 비교를 채운다(원본 데이터를 다시 요청하지 않는다).
+ *
+ *  fund_usage 쪽과 달리 상태 값("ok"/"failed"/"pending")이 아니라 원본
+ *  배열 유무만 보면 된다 — financials는 disclosures처럼 "실패했다"는
+ *  별도 상태를 만들지 않고(renderFailures가 다루는 실패 섹션 목록에
+ *  financials도 포함되지만, 여기서는 dividends가 이미 그려졌는지만
+ *  중요하다) 도착 여부만 판단 기준이다. */
+function refreshRetainedEarningsBlock() {
+  if (DIVIDENDS_DATA === null) return; // dividends가 아직 안 왔다 — 도착할 때
+                                        // FINANCIALS_DATA를 이미 들고 처음부터 그려진다
+  renderSection("dividends", DIVIDENDS_DATA);
 }
 
 /** 사용자에게 그대로 보여줘도 되는 문구로만 만든 오류. 원시 오류(네트워크
@@ -665,6 +697,11 @@ function showGate(msg) {
                                // disclosures가 도착하는 순간 그 원본으로
                                // 조달건 블록이 되살아난다.
   FUND_CHAIN_DISCLOSURE_STATE = null;
+  FINANCIALS_DATA = null; // 같은 이유 — 이전 사용자가 조회한 회사의 재무제표를
+                           // 들고 있으면, 다음 사용자의 dividends 섹션이
+                           // 이전 회사의 이익잉여금과 잘못 짝지어질 수 있다.
+  DIVIDENDS_DATA = null;  // 같은 이유 — refreshRetainedEarningsBlock이 이전
+                           // 사용자의 배당 원본으로 다시 그리지 않게 한다.
   const actorBtn = document.getElementById("actor-btn");
   if (actorBtn) actorBtn.hidden = true;
   // SE-6 Task 3 — #body·#panel-body는 위에서 이미 비웠지만(실명 DOM은
@@ -854,6 +891,10 @@ function renderHeadPlaceholder(name, message) {
   FUND_USAGE_DATA = null;             // 〃 — 이전 회사의 자금사용 원본으로
   FUND_CHAIN_DISCLOSURE_STATE = null; //    새 화면에 조달건 블록이 되살아나지
                                       //    않게 한다.
+  FINANCIALS_DATA = null; // showGate()와 같은 이유 — 이전 회사의 재무제표로
+                           // 새 회사의 배당 vs 이익잉여금 비교가 되살아나지
+                           // 않게 한다.
+  DIVIDENDS_DATA = null;  // 〃
   CURRENT_COMPANY = name;
   const btn = document.getElementById("actor-btn");
   if (btn) btn.hidden = false;
@@ -1429,6 +1470,101 @@ function buildDividendVsIncomeBlock(rows) {
     return out;
   });
   const table = tableLayout(records);
+  if (table) wrap.appendChild(tableEl(table));
+
+  return { el: wrap, table: table };
+}
+
+// dividendDrainFlags(app.js)의 fs_div → 화면 라벨. CFS는 위 app.js
+// DIVIDEND_DRAIN_NI_SE 주석·core detect_dividend_drain 주석과 동일한 이유로
+// "연결·지배지분 기준"까지 명시한다(그냥 FS_DIV_LABELS.CFS="연결"을 쓰면
+// 이 값이 회사 전체 연결당기순이익이라는 오독을 유발한다) — 가운데점은
+// server.py 렌더(track_fund_usage)가 중첩 괄호를 피하려고 고른 것과 같은
+// 표기(task-1-report.md "처음엔 label = '연결(지배지분 기준)'으로 시도했으나
+// ... 가운데점으로 교체"). OFS(별도)는 이 개념이 없어 FS_DIV_LABELS와 같다.
+const DIVIDEND_DRAIN_LABELS = { CFS: "연결·지배지분 기준", OFS: "별도" };
+
+/** dividendDrainFlags(app.js)가 뽑은 "당기순이익 음수 + 현금배당 존재"
+ *  사실을 표로 그린다(SE-12 Task 2, 요구사항 A).
+ *
+ *  core MCP 도구(track_fund_usage)와 같은 사실을 담지만 어투는 다르다 —
+ *  core는 자유 텍스트 응답이라 "자금 유출 경로 검토 권장" 같은 권고 문구가
+ *  허용되지만, SE는 무판정 원칙(v0.8.5)의 표 화면이라 "위험"·"유출" 같은
+ *  해석 없이 사실만("당기순이익 음수 + 현금배당 존재") 말한다(브리프,
+ *  SE-8 "보고된 집행 ≠ 계획"과 같은 톤). */
+function buildDividendDrainBlock(flags) {
+  const wrap = document.createElement("div");
+  wrap.className = "derived";
+
+  const h3 = document.createElement("h3");
+  h3.textContent = "적자 시점 배당 (사실 표기)";
+  wrap.appendChild(h3);
+
+  const notice = document.createElement("p");
+  notice.className = "note";
+  notice.textContent = "같은 사업연도·보고서구분 안에서 당기순이익이 음수인데 현금배당이 "
+    + "있었던 사실만 나열합니다 — 연결과 별도는 따로 봅니다. 연결(CFS) 당기순이익은 "
+    + "배당 공시(alotMatter)가 원래 담고 있는 지배기업소유주지분순이익(비지배지분 제외분)이며, "
+    + "회사 전체 연결당기순이익과 다를 수 있어 \"연결·지배지분 기준\"으로 표기합니다. "
+    + "별도(OFS)는 비지배지분 개념이 없어 해당하지 않습니다.";
+  wrap.appendChild(notice);
+
+  const records = flags.map(function (f) {
+    const 구분 = DIVIDEND_DRAIN_LABELS[f.fs_div] || f.fs_div;
+    return {
+      bsns_year: f.bsns_year,
+      reprt_code: f.reprt_code,
+      "구분": 구분,
+      "당기순이익(백만원)": f.net_income.toLocaleString("ko-KR"),
+      "현금배당금총액(백만원)": f.dividend.toLocaleString("ko-KR"),
+      "사실": "이 사업연도 (" + 구분 + ") 당기순이익 음수 + 현금배당 존재",
+    };
+  });
+  const table = tableLayout(records);
+  if (table) wrap.appendChild(tableEl(table));
+
+  return { el: wrap, table: table };
+}
+
+/** dividendVsRetainedEarnings(app.js)가 뽑은 "이번 사업연도 배당 vs
+ *  이익잉여금"을 표로 그린다(SE-12 Task 2, 요구사항 B).
+ *
+ *  **단일 연도 비교임을 화면 문구에 정직하게 반영한다** — financials가
+ *  단일 최근 사업연도만 수집하는 SE의 구조적 한계를 숨기지 않는다(브리프).
+ *  "추이"라는 말은 쓰지 않는다. */
+function buildDividendVsRetainedEarningsBlock(result) {
+  const wrap = document.createElement("div");
+  wrap.className = "derived";
+
+  const h3 = document.createElement("h3");
+  h3.textContent = "배당 vs 이익잉여금 (이번 사업연도)";
+  wrap.appendChild(h3);
+
+  const notice = document.createElement("p");
+  notice.className = "note";
+  notice.textContent = "financials(재무제표) 섹션은 최근 사업연도 하나만 수집합니다 — "
+    + "그래서 이 비교는 여러 해를 이어 보는 것이 아니라 이번 사업연도 한 시점만의 "
+    + "사실 병기입니다. 연결(CFS)과 별도(OFS)는 따로 봅니다. 이익잉여금은 재무제표 "
+    + "원본 단위(원) 그대로, 현금배당금총액은 배당 공시 원본(백만원)을 원 단위로 "
+    + "환산해 나란히 놓았습니다.";
+  wrap.appendChild(notice);
+
+  if (!result.overlap) {
+    const p = document.createElement("p");
+    p.className = "note";
+    p.textContent = "이번 사업연도(" + result.bsns_year + ") 배당 기록 없음 — 배당 공시에 "
+      + "이 사업연도와 일치하는 현금배당금총액이 없어 억지로 비교하지 않습니다.";
+    wrap.appendChild(p);
+  }
+
+  const record = { bsns_year: result.bsns_year };
+  record["이익잉여금(연결, 원)"] = result.retained_earnings.CFS === null
+    ? "" : formatAmount(result.retained_earnings.CFS);
+  record["이익잉여금(별도, 원)"] = result.retained_earnings.OFS === null
+    ? "" : formatAmount(result.retained_earnings.OFS);
+  record["현금배당금총액(원)"] = result.overlap ? formatAmount(result.dividend_won) : "배당 기록 없음";
+
+  const table = tableLayout([record]);
   if (table) wrap.appendChild(tableEl(table));
 
   return { el: wrap, table: table };
@@ -2021,6 +2157,11 @@ function renderSection(key, value) {
   // 순서 참고).
   let ratioBlock = null;
   if (key === "financials") {
+    // dividendVsRetainedEarnings(app.js, SE-12 Task 2)가 dividends 섹션을
+    // 그릴 때 이 원본을 필요로 한다(위 FINANCIALS_DATA 선언 주석 참고) —
+    // dividends가 이미 이 값 없이 그려졌다면 지금 다시 그려 채운다.
+    FINANCIALS_DATA = value;
+    refreshRetainedEarningsBlock();
     const ratios = financialRatios(Array.isArray(value) ? value : []);
     if (ratios.length > 0) ratioBlock = buildFinancialRatiosBlock(ratios);
   }
@@ -2029,9 +2170,23 @@ function renderSection(key, value) {
   // 기록 자체가 없는 회사(엔켐 등)는 dividendVsIncome이 빈 배열을
   // 돌려주므로 이 블록 자체가 안 생긴다(위 dividendVsIncome 주석 참고).
   let dividendBlock = null;
+  // dividends: "적자 시점 배당"(DIVIDEND_DRAIN) 사실 표기 + "배당 vs
+  // 이익잉여금"(단일 연도) 비교(SE-12 Task 2, 요구사항 A·B) — 둘 다
+  // dividendVsIncome과 같은 자리(dividends 섹션)에 나란히 렌더한다.
+  let dividendDrainBlock = null;
+  let retainedEarningsBlock = null;
   if (key === "dividends") {
     const dvRows = dividendVsIncome(Array.isArray(value) ? value : []);
     if (dvRows.length > 0) dividendBlock = buildDividendVsIncomeBlock(dvRows);
+
+    DIVIDENDS_DATA = value; // 위 refreshRetainedEarningsBlock이 참조하는 원본
+    const drainFlags = dividendDrainFlags(Array.isArray(value) ? value : []);
+    if (drainFlags.length > 0) dividendDrainBlock = buildDividendDrainBlock(drainFlags);
+
+    const retained = dividendVsRetainedEarnings(
+      Array.isArray(FINANCIALS_DATA) ? FINANCIALS_DATA : [],
+      Array.isArray(value) ? value : []);
+    if (retained) retainedEarningsBlock = buildDividendVsRetainedEarningsBlock(retained);
   }
 
   // fund_usage: 조달건 카드 + 비례 막대(SE-5a Task 3) — fundChain(records)이
@@ -2083,7 +2238,10 @@ function renderSection(key, value) {
   // 앞 태스크에서 12열까지 보이게 넓힌 표가 2단으로 다시 좁아지는
   // 재발을 막는다. 파생 블록들의 표도 가로일 수 있어 함께 본다 — 안
   // 그러면 파생 표가 넓은데 .sec은 좁게 남는다.
-  const derivedBlocks = [ratioBlock, dividendBlock, fundChainBlock, fundChangeBlock, affiliateBlock];
+  const derivedBlocks = [
+    ratioBlock, dividendBlock, dividendDrainBlock, retainedEarningsBlock,
+    fundChainBlock, fundChangeBlock, affiliateBlock,
+  ];
   const hasWideTable = blocks.some(function (b) {
     return b.table && b.table.orientation === "horizontal";
   }) || derivedBlocks.some(function (b) {
@@ -2092,7 +2250,8 @@ function renderSection(key, value) {
   const wrap = SEC_WRAP[key];
   if (wrap) wrap.className = hasWideTable ? "sec wide" : "sec";
 
-  if (blocks.length === 0 && !ratioBlock && !dividendBlock && !fundChainBlock && !fundChangeBlock && !affiliateBlock) {
+  if (blocks.length === 0 && !ratioBlock && !dividendBlock && !dividendDrainBlock
+      && !retainedEarningsBlock && !fundChainBlock && !fundChangeBlock && !affiliateBlock) {
     const p = document.createElement("p");
     p.className = "note";
     // SE-6 Task 3 — DART가 013(자료 없음)을 주는 회사가 실제로 있다
@@ -2172,6 +2331,8 @@ function renderSection(key, value) {
   // 지우지 않는다.
   if (ratioBlock) holder.appendChild(ratioBlock.el);
   if (dividendBlock) holder.appendChild(dividendBlock.el);
+  if (dividendDrainBlock) holder.appendChild(dividendDrainBlock.el);
+  if (retainedEarningsBlock) holder.appendChild(retainedEarningsBlock.el);
   if (fundChainBlock) holder.appendChild(fundChainBlock.el);
   if (fundChangeBlock) holder.appendChild(fundChangeBlock.el);
   if (affiliateBlock) holder.appendChild(affiliateBlock.el);
