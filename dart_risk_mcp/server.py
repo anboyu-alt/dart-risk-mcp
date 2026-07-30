@@ -2943,7 +2943,13 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
                 "⚠ **적자 시점 배당 유출(DIVIDEND_DRAIN) 패턴 탐지**",
             ]
             for fl in drain_flags[:5]:
-                label = "연결" if fl["fs_div"] == "CFS" else "별도"
+                # CFS(연결)는 alotMatter 원문 자체가 지배기업소유주지분순이익
+                # (비지배지분 제외)만 담고 있어(두산 2023 실측 확정 —
+                # core/dart_client.py의 _DIVIDEND_DRAIN_NI_SE 주석 참고),
+                # "당기순이익"이라고만 쓰면 회사 전체 순이익으로 오독될 수
+                # 있다 — 라벨에 지배지분 기준임을 병기한다. OFS(별도)는
+                # 개념상 비지배지분이 없어 해당 사항 없음.
+                label = "연결·지배지분 기준" if fl["fs_div"] == "CFS" else "별도"
                 lines.append(
                     f"   • {fl['bsns_year']} 사업연도 ({label}) 당기순이익 "
                     f"{fl['net_income']:,.0f}백만원 + 현금배당금총액 "

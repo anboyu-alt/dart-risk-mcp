@@ -3833,6 +3833,20 @@ _DIVIDEND_DRAIN_NI_SE = {
     "OFS": "(별도)당기순이익(백만원)",
 }
 
+# 중요(2026-07-30 두산 00117212 실측 확정): alotMatter의
+# "(연결)당기순이익(백만원)"은 회사 전체의 연결당기순이익이 아니라
+# 지배기업소유주지분순이익(비지배지분 제외분)이다. 두산 2023 사업연도
+# alotMatter CFS 값은 -388,279백만원(음수, fnlttSinglAcntAll의
+# 지배기업소유주지분순이익과 거의 일치)인 반면, 같은 해 두산의 실제
+# 총 연결당기순이익(비지배지분 포함)은 +272,073,643,932원(양수)이었다
+# — 2023년 두산로보틱스 IPO로 비지배지분이 커지며 부호까지 갈렸다.
+# 즉 이 필드로 "적자"를 판정해도 회사 전체는 흑자였을 수 있다.
+# detect_dividend_drain의 net_income은 항상 이 지배지분 기준 값이며,
+# 별도(OFS)는 애초에 비지배지분 개념이 없어 문제되지 않는다. 이 값을
+# 그대로 "당기순이익"이라고만 표기하면 오독을 유발하므로, 이 값을
+# 사용자에게 보여줄 때는(server.py) 반드시 "(지배지분 기준)" 등으로
+# 병기해 총 당기순이익과 구분해야 한다.
+
 
 def _parse_dart_thstrm(raw) -> float | None:
     """alotMatter의 thstrm 문자열("35,772"/"-"/None)을 float로.
@@ -3864,6 +3878,15 @@ def detect_dividend_drain(dividend_records: list[dict] | None) -> list[dict]:
     실측이 정확히 "한쪽만 적자"(2022 CFS만) 또는 "양쪽 다 적자"
     (2023 CFS·OFS 둘 다) 사례라, 병합하면 놓치거나 왜곡된다.
 
+    ⚠ fs_div="CFS"일 때 net_income은 회사 전체 연결당기순이익이 아니라
+    alotMatter가 원래 담고 있는 지배기업소유주지분순이익(비지배지분
+    제외분)이다 — 두산 2023 실측(-388,279백만원, alotMatter CFS)이 같은
+    해 실제 총 연결당기순이익(+272,073,643,932원, 비지배지분 포함)과
+    부호까지 다른 것으로 확인됨(_DIVIDEND_DRAIN_NI_SE 주석 참고). 비지배
+    지분이 클수록 이 값 하나만으로 "회사가 적자인데 배당했다"고 오독할
+    수 있으므로, 이 flag를 사용자에게 노출할 때는 "지배지분 기준"임을
+    반드시 병기한다(fs_div="OFS"는 애초에 비지배지분 개념이 없어 무관).
+
     Args:
         dividend_records: fetch_dividend_history 결과 원본 배열.
 
@@ -3871,8 +3894,9 @@ def detect_dividend_drain(dividend_records: list[dict] | None) -> list[dict]:
         flag dict 리스트, (bsns_year, reprt_code, fs_div) 조합마다
         최대 1건: {"bsns_year", "reprt_code", "fs_div" ("CFS"|"OFS"),
         "dividend": float(백만원), "net_income": float(백만원)}.
-        해당 fs_div의 당기순이익이 음수이고 같은 그룹에 양수 현금배당이
-        함께 있어야 플래그. bsns_year → reprt_code → fs_div 순 정렬.
+        해당 fs_div의 당기순이익(CFS는 지배지분 기준, 위 참고)이 음수이고
+        같은 그룹에 양수 현금배당이 함께 있어야 플래그. bsns_year →
+        reprt_code → fs_div 순 정렬.
     """
     if not dividend_records:
         return []
