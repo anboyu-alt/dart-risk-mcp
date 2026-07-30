@@ -9792,6 +9792,80 @@ class TestMajorHoldersColumnOrderSurvivesJsonbReorder(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestBulkHoldersColumnOrderLeadsWithReporter(unittest.TestCase):
+    """SE-11 — 실사용자(스크린샷, SK하이닉스 5% 대량보유) 지적: 첫 열이
+    "보유주식등의 수"(주식수)라 누구의 수치인지 표 첫눈에 안 보인다.
+    shareholders.bulk_holders(majorstock.json 원본)는 major_holders와 같은
+    처지다 — source 필드가 없어 sourceGroupedBlocks도, 일반 평면 배열
+    tail-only 경로도 이 표에 "보고자를 앞으로" 규칙을 못 준다. major_holders
+    전용 분기(SE-9 Task 2 리뷰 지적 수정)와 같은 방식으로 bulk_holders 전용
+    분기를 추가하고 reorderRecordFields에 priorityKeys=["repror"]를 준다.
+
+    jsonb_sorted()로 배포본(Postgres jsonb 저장) 증상을 재현한 뒤 실렌더로
+    보고자가 첫 열임을 확인한다."""
+
+    def _records(self):
+        # DART /majorstock.json 실측 필드(LABELS 주석 §4.1 대조): rcept_no·
+        # corp_cls·corp_code·corp_name·stock_knd·report_tp·repror·stkqy·
+        # stkqy_irds·stkrt·stkrt_irds·ctr_stkqy·ctr_stkrt·report_resn·rcept_dt.
+        base = [
+            {
+                "rcept_no": "20240805002236", "corp_cls": "Y", "corp_code": "00164742",
+                "corp_name": "SK하이닉스", "stock_knd": "-", "report_tp": "약식",
+                "repror": "국민연금공단", "stkqy": "53,933,998", "stkqy_irds": "-3,589,601",
+                "stkrt": "7.41", "stkrt_irds": "-0.49",
+                "ctr_stkqy": "-", "ctr_stkrt": "-",
+                "report_resn": "일반투자목적에서 단순투자목적으로 보유목적 변경",
+                "rcept_dt": "2024.08.05",
+            },
+            {
+                "rcept_no": "20260209000019", "corp_cls": "Y", "corp_code": "00164742",
+                "corp_name": "SK하이닉스", "stock_knd": "-", "report_tp": "약식",
+                "repror": "CapitalResearchandManagementCompany",
+                "stkqy": "36,730,947", "stkqy_irds": "-13,050,757",
+                "stkrt": "5.05", "stkrt_irds": "-1.79",
+                "ctr_stkqy": "-", "ctr_stkrt": "-",
+                "report_resn": "투자자금 회수목적으로 발행회사의 주식 처분",
+                "rcept_dt": "2026.02.09",
+            },
+        ]
+        return [jsonb_sorted(r) for r in base]
+
+    def test_fixture_reproduces_jsonb_scrambled_order(self):
+        """픽스처 자체가 배포본 증상(jsonb 길이순 정렬로 첫 키가 repror가
+        아니게 됨)을 재현하는지 먼저 확인한다."""
+        records = self._records()
+        self.assertNotEqual(
+            list(records[0].keys())[0], "repror",
+            "픽스처가 jsonb 정렬(길이순) 증상을 재현하지 못합니다",
+        )
+
+    def test_bulk_holders_renders_with_reporter_first(self):
+        value = {"major_holders": [], "bulk_holders": self._records()}
+        got = run_render_section('"shareholders"', json.dumps(value, ensure_ascii=False))
+        headers = _header_rows(got)
+        self.assertTrue(headers, "5% 대량보유 표 헤더를 찾지 못했습니다")
+        header = headers[-1]
+        self.assertEqual(
+            header[0], "보고자",
+            f"보고자가 첫 열이어야 합니다(reorderRecordFields가 bulk_holders 분기에 "
+            f"priorityKeys로 배선되지 않으면 실패): {header}",
+        )
+        self.assertEqual(
+            header[-1], "접수번호",
+            f"tail 규칙(접수번호는 맨 뒤)이 여전히 적용돼야 합니다: {header}",
+        )
+
+    def test_reporter_names_and_all_values_still_render(self):
+        """열 순서만 바뀔 뿐 값이 사라지면 안 된다."""
+        value = {"major_holders": [], "bulk_holders": self._records()}
+        got = run_render_section('"shareholders"', json.dumps(value, ensure_ascii=False))
+        self.assertIn("국민연금공단", got["cells"])
+        self.assertIn("CapitalResearchandManagementCompany", got["cells"])
+        self.assertIn("53,933,998", got["cells"])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
 class TestOtherRawTablesAlreadyLeadWithTheUsefulColumn(unittest.TestCase):
     """SE-8 Task 4 브리프 3번째 요구사항 — financials 외 다른 원본 표에도
     "분류 메타가 핵심 값보다 앞에 있는" 패턴이 있는지 점검한다(추측이 아니라
