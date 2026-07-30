@@ -78,7 +78,11 @@ CATEGORY_LABELS = {
 # 도구 프로즈(find_pattern_match 등)는 이 계획의 Global Constraints상
 # 서사적 어휘 허용 범위가 더 넓어 트리밍 대상이 아니다. 이 딕셔너리는
 # **export 산출물에서만** 해당 문자열을 치환한다(정확히 일치할 때만 —
-# core 쪽 문구가 바뀌면 KeyError로 드러나도록 원문 그대로를 key로 둔다).
+# 원문 그대로를 key로 둔다). core 쪽 문구가 바뀌면 이 매핑은 조용히
+# no-op이 된다(_export_field_evidence가 dict.get(item, item) fallback을
+# 쓴다) — 예외로 드러나지 않으므로 실제 가드는
+# test_trimmed_field_evidence_removes_judgment_phrases다: core 원문이
+# 바뀌면 트리밍된 문자열이 더 이상 나오지 않아 이 테스트가 실패한다.
 _FIELD_EVIDENCE_EXPORT_TRIM: dict[str, dict[str, str]] = {
     "debt_spiral": {
         "위메이드: CB/EB 돌려막기 (20250903)": "위메이드: CB/EB 차환 (20250903)",
