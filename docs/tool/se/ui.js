@@ -1890,6 +1890,131 @@ function buildAffiliateOverviewBlock(records) {
   return { el: wrap, table: table };
 }
 
+/** matchCrossPatterns(app.js, SE-13 Task 3)가 돌려준 매칭 패턴 하나를
+ *  카드로 그린다. buildPatternMatchBlock(아래)만 부른다.
+ *
+ *  카드 구성 — task-3-brief.md "더 자세하게" 요구를 그대로 옮긴 것:
+ *  ① 패턴명·설명(공개 뷰어 patterncard와 같은 필드)
+ *  ② 이 회사에서 실제 탐지된 구성 신호 → 그 신호를 촉발한 공시 목록
+ *     (rcept_no 있으면 기존 openDocPanel 배선을 그대로 재사용해 클릭하면
+ *     원문이 열린다 — .doc 클래스·클릭 배선 모두 fundChainCardEl과 같은
+ *     재사용). taxonomy 2.7(자본 churn)처럼 개별 공시가 아니라 빈도로
+ *     판정된 항목은 aggregate_note로 그 사실 자체를 밝힌다(app.js
+ *     matchCrossPatterns 주석 참고) — 특정 공시 하나를 근거인 것처럼
+ *     보여주지 않는다.
+ *  ③ field_evidence(Task 2가 export한 금감원 등 사실 인용)
+ *  ④ 면책 문구는 카드 하나하나가 아니라 buildPatternMatchBlock이 블록
+ *     맨 위에 한 번만 붙인다(공개 뷰어 index.html:834와 같은 자리·같은
+ *     문구 — 아래 참고).
+ *
+ *  severity·점수는 patterns 객체 자체에 없다(Task 2 export 단계에서
+ *  구조적으로 제외) — 여기서도 만들어내지 않는다. */
+function patternCardEl(p) {
+  const card = document.createElement("div");
+  card.className = "pattern-card";
+
+  const h4 = document.createElement("h4");
+  h4.textContent = p.name;
+  card.appendChild(h4);
+
+  if (p.description) {
+    const desc = document.createElement("p");
+    desc.className = "note";
+    desc.textContent = p.description;
+    card.appendChild(desc);
+  }
+
+  const seqNote = document.createElement("p");
+  seqNote.className = "note";
+  seqNote.textContent = "구성 신호 taxonomy: " + p.signal_sequence.join(" + ")
+    + " · 관찰 윈도우 " + p.timeline_months + "개월";
+  card.appendChild(seqNote);
+
+  // ② 이 회사에서 실제 탐지된 구성 신호 → 공시 역추적
+  const evList = document.createElement("ul");
+  evList.className = "pattern-evidence-list";
+  let evCount = 0;
+  (p.evidence || []).forEach(function (ev) {
+    (ev.disclosures || []).forEach(function (d) {
+      const li = document.createElement("li");
+      const labels = (d.signal_labels || []).join(", ");
+      li.textContent = "[" + ev.taxonomy + "] " + labels + " — " + d.report_nm
+        + (d.rcept_dt ? " (" + d.rcept_dt + ")" : "");
+      if (d.rcept_no) {
+        li.className = "doc";
+        li.addEventListener("click", function () { openDocPanel(d.rcept_no); });
+      }
+      evList.appendChild(li);
+      evCount++;
+    });
+    if (ev.aggregate_note) {
+      const li = document.createElement("li");
+      li.textContent = "[" + ev.taxonomy + "] " + ev.aggregate_note;
+      evList.appendChild(li);
+      evCount++;
+      (ev.aggregate_disclosures || []).forEach(function (d) {
+        const sub = document.createElement("li");
+        sub.textContent = "  · " + d.report_nm + (d.rcept_dt ? " (" + d.rcept_dt + ")" : "");
+        if (d.rcept_no) {
+          sub.className = "doc";
+          sub.addEventListener("click", function () { openDocPanel(d.rcept_no); });
+        }
+        evList.appendChild(sub);
+        evCount++;
+      });
+    }
+  });
+  if (evCount > 0) card.appendChild(evList);
+
+  // ③ 사실 근거(field_evidence)
+  if (Array.isArray(p.field_evidence) && p.field_evidence.length > 0) {
+    const fh = document.createElement("p");
+    fh.className = "note";
+    fh.textContent = "실제 사례 근거(금감원 보도자료 등):";
+    card.appendChild(fh);
+    const fl = document.createElement("ul");
+    fl.className = "pattern-field-evidence";
+    p.field_evidence.forEach(function (fe) {
+      const li = document.createElement("li");
+      li.textContent = fe;
+      fl.appendChild(li);
+    });
+    card.appendChild(fl);
+  }
+
+  return card;
+}
+
+/** matchCrossPatterns(app.js) 결과 전체를 카드 목록으로 그린다(SE-13
+ *  Task 3). patterns가 비어 있으면(매칭 없음) renderSection이 아예 이
+ *  함수를 부르지 않는다 — 다른 파생 블록과 같은 "값이 없으면 안 만든다"
+ *  관례(브리프: "과시적 '이상 없음' 금지").
+ *
+ *  면책 문구는 공개 뷰어(index.html:834)와 **글자 그대로 같다** — 브리프가
+ *  "기존 문구를 재사용하고 새로 짓지 말라"고 명시했고, 같은 사실을 두
+ *  화면이 다른 말로 부르면 안 된다(Task 4가 공개 뷰어에 근거를 보강할
+ *  때도 이 문구를 그대로 쓴다). */
+function buildPatternMatchBlock(patterns) {
+  const wrap = document.createElement("div");
+  wrap.className = "derived";
+
+  const h3 = document.createElement("h3");
+  h3.textContent = "복합 패턴";
+  wrap.appendChild(h3);
+
+  const disclaimer = document.createElement("p");
+  disclaimer.className = "note";
+  disclaimer.textContent = "아래 패턴의 구성 신호가 모두 관찰됐습니다. "
+    + "패턴 \"조건 충족\"은 사실 관찰이며 판정이 아닙니다.";
+  wrap.appendChild(disclaimer);
+
+  patterns.forEach(function (p) {
+    wrap.appendChild(patternCardEl(p));
+  });
+
+  return { el: wrap };
+}
+
 /** indicators 전용 렌더(SE-4h Task 2) — indicatorBlocks(app.js)가 만든
  *  4분류(수익성·안정성·성장성·활동성, 모르는 분류는 맨 뒤) 블록을 각각
  *  그린다. renderSection이 sectionBlocks/tableLayout 경로를 아예 타지
@@ -2147,6 +2272,18 @@ function renderSection(key, value) {
     refreshFundChainForDisclosures();
   }
 
+  // 복합 패턴(CROSS_SIGNAL_PATTERNS) 매칭 — SE-13 Task 3. disclosures
+  // 섹션 자체가 SE-7 신호 분류(classifyDisclosureCategory)가 보이는
+  // 자리라 여기 derived 블록으로 얹는다(브리프 "표시 위치: 공시 목록/
+  // 신호 요약 근처"). matchCrossPatterns(app.js)가 빈 배열을 돌려주면
+  // (매칭 없음) 블록을 아예 만들지 않는다 — SE의 "과시적 이상 없음 금지"
+  // 관례(다른 파생 블록들과 동일).
+  let patternBlock = null;
+  if (key === "disclosures") {
+    const patterns = matchCrossPatterns(Array.isArray(value) ? value : [], SIGNALS_DATA);
+    if (patterns.length > 0) patternBlock = buildPatternMatchBlock(patterns);
+  }
+
   const blocks = sectionBlocks(value, 0, key);
 
   // financials는 원본 표 외에 파생 지표(계산값) 블록도 함께 그린다
@@ -2240,7 +2377,7 @@ function renderSection(key, value) {
   // 그러면 파생 표가 넓은데 .sec은 좁게 남는다.
   const derivedBlocks = [
     ratioBlock, dividendBlock, dividendDrainBlock, retainedEarningsBlock,
-    fundChainBlock, fundChangeBlock, affiliateBlock,
+    fundChainBlock, fundChangeBlock, affiliateBlock, patternBlock,
   ];
   const hasWideTable = blocks.some(function (b) {
     return b.table && b.table.orientation === "horizontal";
@@ -2251,7 +2388,8 @@ function renderSection(key, value) {
   if (wrap) wrap.className = hasWideTable ? "sec wide" : "sec";
 
   if (blocks.length === 0 && !ratioBlock && !dividendBlock && !dividendDrainBlock
-      && !retainedEarningsBlock && !fundChainBlock && !fundChangeBlock && !affiliateBlock) {
+      && !retainedEarningsBlock && !fundChainBlock && !fundChangeBlock && !affiliateBlock
+      && !patternBlock) {
     const p = document.createElement("p");
     p.className = "note";
     // SE-6 Task 3 — DART가 013(자료 없음)을 주는 회사가 실제로 있다
@@ -2329,6 +2467,7 @@ function renderSection(key, value) {
   // 얹는다"(브리프, financials·dividends·fund_usage 공통)를 DOM 순서
   // (위쪽에 먼저 나온다)로 그대로 지킨다. 원본 표(아래 for 루프)는
   // 지우지 않는다.
+  if (patternBlock) holder.appendChild(patternBlock.el);
   if (ratioBlock) holder.appendChild(ratioBlock.el);
   if (dividendBlock) holder.appendChild(dividendBlock.el);
   if (dividendDrainBlock) holder.appendChild(dividendDrainBlock.el);
