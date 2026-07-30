@@ -2168,8 +2168,24 @@ function renderSection(key, value) {
     // renderChart가 false를 돌려주고 el을 건드리지 않는다. SIGNALS_DATA
     // (SE-4f Task 3)는 disclosures에서만 실제로 쓰인다 — 다른 키는
     // chartData(app.js)가 이 인자를 무시한다.
-    renderChart(el, key, block.records, SIGNALS_DATA);
+    //
+    // SE-9 Task 4 — dividends는 이제 여러 그룹 블록(기간별)으로 온다.
+    // 이 블록 루프 안에서 block.records(그 그룹 하나의 행)로 차트를
+    // 부르면 CHART_SPECS.dividends가 그리려던 "연도·보고서구분별 추이"가
+    // 그룹마다 x축 점 하나짜리 조각 차트 여러 개로 쪼개진다 — 브리프
+    // 제약("그룹핑이 차트 입력을 바꾸지 않는다")과 충돌한다. 그래서
+    // dividends만 여기서 차트를 그리지 않고, 루프가 끝난 뒤 원본 전체
+    // (value, 그룹핑 이전)로 딱 한 번만 그린다(아래).
+    if (key !== "dividends") {
+      renderChart(el, key, block.records, SIGNALS_DATA);
+    }
     holder.appendChild(el);
+  }
+  if (key === "dividends") {
+    const chartWrap = document.createElement("div");
+    if (renderChart(chartWrap, key, Array.isArray(value) ? value : [], SIGNALS_DATA)) {
+      holder.appendChild(chartWrap);
+    }
   }
   return execEnrichPromise;
 }
