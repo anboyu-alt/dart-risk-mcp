@@ -3813,52 +3813,149 @@ def fetch_dividend_history(
     return records
 
 
-def detect_dividend_drain(
-    dividend_records: list[dict],
-    current_fs: dict | None,
-) -> list[dict]:
+# detect_dividend_drain이 대상으로 삼는 alotMatter se(항목) 3종.
+# 2026-07-30 두산(00117212) 실측(lookback_years=5, 315 records)으로 확정:
+# 이 3개 문자열은 전 회사·전 연도에서 정확히 이 표기로 고정돼 있고
+# (SG·두산에너빌리티·삼성전자·셀트리온·제이스코·헬릭스미스·두산 7사
+# union 확인), 같은 (bsns_year, reprt_code) 그룹 안에 stock_knd="-"로
+# 딱 한 번씩만 나온다 — "백만원" 단위로 나란히 존재해 단위 환산이
+# 필요 없다.
+#
+# 기존 Python 구현은 "현금배당금" in se 로 느슨하게 매칭했는데, 이는
+# "주당 현금배당금(원)"(단가, 원 단위, 총액과 다른 개념)도 함께
+# 걸려든다 — 실측 응답에서 "현금배당금총액(백만원)"이 항상 먼저 나와
+# 우연히 정답을 골랐을 뿐, 설계상 정확한 매칭이 아니었다. JS
+# dividendVsIncome()의 DIVIDEND_SE_FIELDS가 이미 정확한 표기를 쓰고
+# 있었다 — 이를 따른다(느슨한 매칭 폐기).
+_DIVIDEND_DRAIN_DIVIDEND_SE = "현금배당금총액(백만원)"
+_DIVIDEND_DRAIN_NI_SE = {
+    "CFS": "(연결)당기순이익(백만원)",
+    "OFS": "(별도)당기순이익(백만원)",
+}
+
+# 최종 리뷰 지적(2026-07-30 SK하이닉스 00164779 실측 확정): fetch_dividend_history는
+# 사업연도 하나당 reprt_code 4종(11011 사업·11012 반기·11013 1분기·11014 3분기)을
+# 각각 별도 DART 호출로 채운다. 분기/반기 배당을 지급하는 회사는 4개 reprt_code
+# 모두에 "현금배당금총액(백만원)"·"(연결)/(별도)당기순이익(백만원)"이 "-"가 아닌
+# 값으로 채워지는데, 이 값들은 독립된 결과가 아니라 그 시점까지의 "누적치"다
+# (SK하이닉스 2023 실측: 11013(1분기) 206,418 → 11012(반기) 412,845(≈2×) →
+# 11014(3분기) 619,280(≈3×) → 11011(사업보고서) 825,721(≈4×), 배당·순이익 둘 다
+# 이 누적 패턴). 사업보고서(11011)만 그 사업연도의 최종 확정치이므로, 이 값만
+# 대상으로 삼는다 — 그렇지 않으면 같은 사업연도가 최대 4배로 중복 플래그된다
+# (SK하이닉스 lookback_years=3에서 8개 플래그, 전부 bsns_year=2023).
+_DIVIDEND_DRAIN_ANNUAL_REPRT_CODE = "11011"
+
+# 중요(2026-07-30 두산 00117212 실측 확정): alotMatter의
+# "(연결)당기순이익(백만원)"은 회사 전체의 연결당기순이익이 아니라
+# 지배기업소유주지분순이익(비지배지분 제외분)이다. 두산 2023 사업연도
+# alotMatter CFS 값은 -388,279백만원(음수, fnlttSinglAcntAll의
+# 지배기업소유주지분순이익과 거의 일치)인 반면, 같은 해 두산의 실제
+# 총 연결당기순이익(비지배지분 포함)은 +272,073,643,932원(양수)이었다
+# — 2023년 두산로보틱스 IPO로 비지배지분이 커지며 부호까지 갈렸다.
+# 즉 이 필드로 "적자"를 판정해도 회사 전체는 흑자였을 수 있다.
+# detect_dividend_drain의 net_income은 항상 이 지배지분 기준 값이며,
+# 별도(OFS)는 애초에 비지배지분 개념이 없어 문제되지 않는다. 이 값을
+# 그대로 "당기순이익"이라고만 표기하면 오독을 유발하므로, 이 값을
+# 사용자에게 보여줄 때는(server.py) 반드시 "(지배지분 기준)" 등으로
+# 병기해 총 당기순이익과 구분해야 한다.
+
+
+def _parse_dart_thstrm(raw) -> float | None:
+    """alotMatter의 thstrm 문자열("35,772"/"-"/None)을 float로.
+
+    DART가 값 없음을 "-"로 표기하는 관례(분기 보고에는 연간 배당 항목이
+    비어 있는 경우 등)를 None으로 흡수한다.
+    """
+    if raw is None:
+        return None
+    s = str(raw).replace(",", "").strip()
+    if not s or s == "-":
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def detect_dividend_drain(dividend_records: list[dict] | None) -> list[dict]:
     """적자 시점 배당 유출(DIVIDEND_DRAIN) 패턴 검출.
 
+    alotMatter(배당에 관한 사항) 응답 자체가 같은 (bsns_year, reprt_code)
+    그룹 안에 "현금배당금총액(백만원)"과 "(연결)/(별도)당기순이익(백만원)"을
+    함께 담고 있다는 사실에 기대 — 별도 재무제표 조회 없이
+    fetch_dividend_history 결과 하나만으로 연도별로 정확히 짝짓는다
+    (2026-07-30 두산 00117212 실측으로 확정, 새 DART 호출 없음).
+
+    연결(CFS)·별도(OFS)는 절대 하나로 합쳐 판정하지 않는다 — 두산
+    실측이 정확히 "한쪽만 적자"(2022 CFS만) 또는 "양쪽 다 적자"
+    (2023 CFS·OFS 둘 다) 사례라, 병합하면 놓치거나 왜곡된다.
+
+    ⚠ fs_div="CFS"일 때 net_income은 회사 전체 연결당기순이익이 아니라
+    alotMatter가 원래 담고 있는 지배기업소유주지분순이익(비지배지분
+    제외분)이다 — 두산 2023 실측(-388,279백만원, alotMatter CFS)이 같은
+    해 실제 총 연결당기순이익(+272,073,643,932원, 비지배지분 포함)과
+    부호까지 다른 것으로 확인됨(_DIVIDEND_DRAIN_NI_SE 주석 참고). 비지배
+    지분이 클수록 이 값 하나만으로 "회사가 적자인데 배당했다"고 오독할
+    수 있으므로, 이 flag를 사용자에게 노출할 때는 "지배지분 기준"임을
+    반드시 병기한다(fs_div="OFS"는 애초에 비지배지분 개념이 없어 무관).
+
     Args:
-        dividend_records: fetch_dividend_history 결과.
-        current_fs: 당기 재무 dict (`{account_nm: int}`).
-            `당기순이익`을 보고 음수일 때만 검사.
+        dividend_records: fetch_dividend_history 결과 원본 배열.
+
+    ⚠ reprt_code="11011"(사업보고서)만 대상으로 삼는다 — 11012/11013/11014
+    (반기·분기)는 그 사업연도 최종 확정치가 아니라 시점까지의 누적치라,
+    포함하면 같은 사업연도가 최대 4배로 중복 플래그된다(SK하이닉스
+    00164779 2026-07-30 실측 확정, 위 _DIVIDEND_DRAIN_ANNUAL_REPRT_CODE
+    주석 참고). 두산(00117212) 실측처럼 반기/분기 배당·순이익 필드가
+    "-"인 회사는 애초에 이 필터 이전에도 그 그룹이 비어 있었으므로
+    영향이 없다.
 
     Returns:
-        flag dict 리스트:
-          {"bsns_year", "se", "dividend": float, "net_income": int}
-        매 record마다 최대 1건. 적자 + 양수 배당이 동시에 만족돼야 플래그.
+        flag dict 리스트, bsns_year마다 최대 2건(fs_div CFS/OFS):
+        {"bsns_year", "reprt_code" (항상 "11011"), "fs_div" ("CFS"|"OFS"),
+        "dividend": float(백만원), "net_income": float(백만원)}.
+        해당 fs_div의 당기순이익(CFS는 지배지분 기준, 위 참고)이 음수이고
+        같은 그룹에 양수 현금배당이 함께 있어야 플래그. bsns_year →
+        fs_div 순 정렬.
     """
-    if not dividend_records or not current_fs:
-        return []
-    ni = _pick_account(current_fs, _FS_ALIASES.get("당기순이익", ["당기순이익"]))
-    if ni is None or ni >= 0:
+    if not dividend_records:
         return []
 
-    flags: list[dict] = []
-    seen_year: set[str] = set()
+    groups: dict[tuple[str, str], dict[str, float]] = {}
+    tracked_se = {_DIVIDEND_DRAIN_DIVIDEND_SE, *_DIVIDEND_DRAIN_NI_SE.values()}
     for rec in dividend_records:
+        if not isinstance(rec, dict):
+            continue
         se = rec.get("se") or ""
-        # "주당 현금배당금(원)" 같은 항목만 대상으로 한다(주식배당·지급대상 등은 제외).
-        if "현금배당금" not in se:
+        if se not in tracked_se:
             continue
-        raw = rec.get("thstrm") or "0"
-        try:
-            div = float(str(raw).replace(",", "").strip())
-        except (TypeError, ValueError):
-            continue
-        if div <= 0:
-            continue
+        reprt_code = rec.get("reprt_code") or ""
+        if reprt_code != _DIVIDEND_DRAIN_ANNUAL_REPRT_CODE:
+            continue  # 반기/분기 누적치 노이즈 제외 — 사업보고서만 최종 확정치
         year = rec.get("bsns_year") or ""
-        # 같은 연도 중복 방지(분기 4회 호출 노이즈)
-        if year and year in seen_year:
+        bucket = groups.setdefault((year, reprt_code), {})
+        if se in bucket:
+            continue  # 같은 그룹 안에서는 이 3개 se가 한 번씩만 나온다(실측) — 방어적 first-wins
+        val = _parse_dart_thstrm(rec.get("thstrm"))
+        if val is not None:
+            bucket[se] = val
+
+    flags: list[dict] = []
+    for (year, reprt_code), bucket in groups.items():
+        dividend = bucket.get(_DIVIDEND_DRAIN_DIVIDEND_SE)
+        if dividend is None or dividend <= 0:
             continue
-        if year:
-            seen_year.add(year)
-        flags.append({
-            "bsns_year": year,
-            "se": se,
-            "dividend": div,
-            "net_income": ni,
-        })
+        for fs_div, ni_se in _DIVIDEND_DRAIN_NI_SE.items():
+            ni = bucket.get(ni_se)
+            if ni is None or ni >= 0:
+                continue
+            flags.append({
+                "bsns_year": year,
+                "reprt_code": reprt_code,
+                "fs_div": fs_div,
+                "dividend": dividend,
+                "net_income": ni,
+            })
+
+    flags.sort(key=lambda f: (f["bsns_year"], f["reprt_code"], f["fs_div"]))
     return flags

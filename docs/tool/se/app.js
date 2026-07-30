@@ -2617,6 +2617,159 @@ function dividendVsIncome(records) {
   return out;
 }
 
+// DIVIDEND_DRAIN(적자 시점 배당 유출) — se 문자열·판정 조건은
+// core(dart_risk_mcp/core/dart_client.py의 detect_dividend_drain, 2026-07-30
+// 두산 00117212 실측으로 확정)와 정확히 같다(SE-12 Task 2, task-2-brief.md).
+// 정확 일치(느슨한 "현금배당금" in se 매칭 아님)를 쓰는 이유는 위
+// DIVIDEND_SE_FIELDS 주석과 같다 — "주당 현금배당금(원)"(단가, 다른
+// 개념)까지 걸리는 걸 막는다.
+//
+// ⚠ CFS(연결) net_income은 alotMatter가 원래 담고 있는
+// 지배기업소유주지분순이익(비지배지분 제외분)이지 회사 전체 연결
+// 당기순이익이 아니다(core 주석과 동일 근거, 두산 2023 실측: alotMatter
+// CFS -388,279백만원 vs 실제 총 연결당기순이익 +272,073,643,932원 — 부호까지
+// 다름, 2023 두산로보틱스 IPO로 비지배지분 확대). OFS(별도)는 비지배지분
+// 개념이 없어 무관하다. 화면 문구(ui.js buildDividendDrainBlock)는 이
+// 사실을 "(연결·지배지분 기준)"으로 병기한다 — server.py의 track_fund_usage
+// 렌더와 같은 라벨.
+const DIVIDEND_DRAIN_DIVIDEND_SE = "현금배당금총액(백만원)";
+const DIVIDEND_DRAIN_NI_SE = {
+  CFS: "(연결)당기순이익(백만원)",
+  OFS: "(별도)당기순이익(백만원)",
+};
+
+// 최종 리뷰 지적(2026-07-30 SK하이닉스 00164779 실측 확정, core
+// dart_client.py의 _DIVIDEND_DRAIN_ANNUAL_REPRT_CODE 주석과 동일 근거):
+// alotMatter는 사업연도 하나당 reprt_code 4종(11011 사업·11012 반기·
+// 11013 1분기·11014 3분기)을 각각 별도 호출로 채우는데, 분기/반기
+// 배당 지급 회사는 4개 reprt_code 모두 "-"가 아닌 값이 채워진다 —
+// 이 값들은 그 시점까지의 누적치일 뿐, 독립된 사업연도 결과가 아니다.
+// 사업보고서(11011)만 최종 확정치이므로 이것만 대상으로 삼는다 —
+// 아니면 같은 사업연도가 최대 4배로 중복 플래그된다.
+const DIVIDEND_DRAIN_ANNUAL_REPRT_CODE = "11011";
+
+/** dividends 원본 배열에서 "당기순이익이 음수인데 같은 사업연도에
+ *  현금배당이 있었다"는 사실을 CFS/OFS 별개로 뽑는다(SE-12 Task 2).
+ *  그룹핑 키((bsns_year, reprt_code))와 순회 방식은 위 dividendVsIncome을
+ *  그대로 따른다 — 신규 그룹핑 로직을 새로 만들지 않는다.
+ *
+ *  reprt_code="11011"(사업보고서)만 대상으로 삼는다 — 위
+ *  DIVIDEND_DRAIN_ANNUAL_REPRT_CODE 주석 참고. 11012/11013/11014는 그
+ *  시점까지의 누적치일 뿐이라 포함하면 같은 사업연도가 중복 플래그된다
+ *  (SK하이닉스 실측 확정, core detect_dividend_drain 주석과 동일 근거).
+ *
+ *  연결(CFS)·별도(OFS)는 절대 하나로 합쳐 판정하지 않는다 — 두산 실측이
+ *  정확히 "한쪽만 적자"(2022 CFS만) 또는 "양쪽 다 적자"(2023 CFS·OFS
+ *  둘 다) 사례라, 병합하면 놓치거나 왜곡된다(core detect_dividend_drain
+ *  주석과 동일 원칙).
+ *
+ *  반환: {bsns_year, reprt_code, fs_div, dividend, net_income}(둘 다
+ *  백만원) 목록, bsns_year마다 최대 2건(fs_div CFS/OFS), reprt_code는
+ *  항상 "11011". bsns_year → fs_div 순 정렬 — core의 반환 계약과 동일. */
+function dividendDrainFlags(records) {
+  if (!Array.isArray(records)) return [];
+  const groups = new Map();
+  const order = [];
+  for (const r of records) {
+    if (!r || typeof r !== "object") continue;
+    const reprt = r.reprt_code !== undefined && r.reprt_code !== null ? String(r.reprt_code) : "";
+    if (reprt !== DIVIDEND_DRAIN_ANNUAL_REPRT_CODE) continue; // 반기/분기 누적치 노이즈 제외
+    const year = r.bsns_year !== undefined && r.bsns_year !== null ? String(r.bsns_year) : "";
+    const key = year + " " + reprt;
+    if (!groups.has(key)) {
+      groups.set(key, { bsns_year: year, reprt_code: reprt, se: Object.create(null) });
+      order.push(key);
+    }
+    const se = r.se;
+    if (se === DIVIDEND_DRAIN_DIVIDEND_SE || se === DIVIDEND_DRAIN_NI_SE.CFS || se === DIVIDEND_DRAIN_NI_SE.OFS) {
+      groups.get(key).se[se] = r.thstrm;
+    }
+  }
+
+  const flags = [];
+  for (const key of order) {
+    const g = groups.get(key);
+    const dividend = numeric(g.se[DIVIDEND_DRAIN_DIVIDEND_SE]);
+    if (dividend === null || dividend <= 0) continue; // 현금배당이 없으면(또는 0/음수면) 유출이라 말할 근거가 없다
+    for (const fsDiv of ["CFS", "OFS"]) {
+      const ni = numeric(g.se[DIVIDEND_DRAIN_NI_SE[fsDiv]]);
+      if (ni === null || ni >= 0) continue; // 당기순이익이 없거나 흑자면 발화하지 않는다
+      flags.push({
+        bsns_year: g.bsns_year, reprt_code: g.reprt_code, fs_div: fsDiv,
+        dividend: dividend, net_income: ni,
+      });
+    }
+  }
+  flags.sort(function (a, b) {
+    if (a.bsns_year !== b.bsns_year) return a.bsns_year < b.bsns_year ? -1 : 1;
+    if (a.reprt_code !== b.reprt_code) return a.reprt_code < b.reprt_code ? -1 : 1;
+    if (a.fs_div !== b.fs_div) return a.fs_div < b.fs_div ? -1 : 1;
+    return 0;
+  });
+  return flags;
+}
+
+/** financials(재무제표, 단일 최근 사업연도)의 이익잉여금(CFS/OFS)과
+ *  dividends(배당)의 같은 사업연도 현금배당금총액을 나란히 놓는다(SE-12
+ *  Task 2, 요구사항 B).
+ *
+ *  **단일 연도 비교다, 추이가 아니다** — financials는 se_server가 연도
+ *  파라미터 없이 단일 호출하는 구조라 항상 한 사업연도만 담는다
+ *  (financialRatiosBaseYear 주석, SE-10 Task 1 발견과 동일 구조적 한계).
+ *  이 함수도 그 단일 연도만 보고, 그 연도와 dividends의 같은 연도를
+ *  찾을 뿐 여러 해를 훑지 않는다.
+ *
+ *  **연도가 안 겹치면 억지로 비교하지 않는다** — financials의 사업연도와
+ *  일치하는 dividends 그룹이 없으면(배당 자체가 없거나 다른 연도만 있으면)
+ *  overlap:false로 그 사실만 돌려준다(호출부가 "배당 기록 없음" 안내로
+ *  표기, ui.js buildDividendVsRetainedEarningsBlock).
+ *
+ *  **단위**: financials의 이익잉여금은 원 단위 그대로(원본), dividends의
+ *  현금배당금총액은 백만원 단위라 원으로 환산해(×1,000,000) 반환한다 —
+ *  financials 원본 표(formatValue/formatAmount)가 이미 원 단위를 화면
+ *  표준으로 쓰고 있어(AMOUNT_FIELDS), 그 기존 표기 관례를 따르는 쪽이
+ *  새 표기 하나를 더 만드는 것보다 낫다.
+ *
+ *  이익잉여금 자체가 CFS·OFS 둘 다 없으면(계정이 아예 안 잡히면, 또는
+ *  financials가 아직 도착 전이면) null을 돌려준다 — 비교할 재료가 없다는
+ *  사실은 "연도가 안 겹친다"는 사실과 다르다(호출부는 null이면 블록 자체를
+ *  그리지 않는다, dividendVsIncome이 빈 배열일 때 블록이 안 생기는 것과
+ *  같은 SE 관례). */
+function dividendVsRetainedEarnings(financialsRecords, dividendRecords) {
+  if (!Array.isArray(financialsRecords) || !Array.isArray(dividendRecords)) return null;
+  const year = financialRatiosBaseYear(financialsRecords);
+  if (year === null) return null; // 사업연도를 못 읽으면 비교 자체를 시도하지 않는다
+
+  const byDiv = indexAccountsByDiv(financialsRecords);
+  function retainedFor(div) {
+    const accounts = byDiv.get(div);
+    if (!accounts) return null;
+    const row = accounts.get("이익잉여금");
+    return row ? numeric(row.thstrm_amount) : null;
+  }
+  const cfs = retainedFor("CFS");
+  const ofs = retainedFor("OFS");
+  if (cfs === null && ofs === null) return null; // 이익잉여금 계정 자체가 없다
+
+  const yearStr = String(year);
+  const dvRows = dividendVsIncome(dividendRecords); // 신규 그룹핑 로직 발명 금지 — 재사용
+  const matches = dvRows.filter(function (r) { return r.bsns_year === yearStr; });
+
+  if (matches.length === 0) {
+    return { bsns_year: yearStr, overlap: false, retained_earnings: { CFS: cfs, OFS: ofs }, dividend_won: null };
+  }
+  // 같은 사업연도에도 분기 보고서(1분기·반기·3분기·사업보고서)마다 그룹이
+  // 따로 있을 수 있다 — 사업보고서(11011, 연간 확정치)를 우선하고, 없으면
+  // (드물게 사업보고서 자체가 아직 없는 연도) 등장한 첫 그룹을 쓴다.
+  const chosen = matches.find(function (r) { return r.reprt_code === "11011"; }) || matches[0];
+  const dividendManwon = chosen[DIVIDEND_SE_FIELDS[0]]; // "현금배당금총액(백만원)" — dividendVsIncome이 null이면 애초에 행을 안 만든다
+  return {
+    bsns_year: yearStr, overlap: true,
+    retained_earnings: { CFS: cfs, OFS: ofs },
+    dividend_won: dividendManwon * 1e6,
+  };
+}
+
 /** fund_usage 레코드에서 같은 조달 건(같은 pay_de·같은 plan_useprps)의
  *  계획 금액(plan_amount)이 보고 시점마다 다르게 보고된 사실을 뽑는다
  *  (SE-4f Task 7, task-7-brief.md).
@@ -4406,6 +4559,8 @@ if (typeof module !== "undefined" && module.exports) {
     financialRatios, financialRatiosBaseYear, financialRatiosByYear,
     isAmendmentDisclosure, classifyDisclosureCategory, monthlyCountsByCategory,
     DIVIDEND_SE_FIELDS, dividendVsIncome, fundPlanChanges, fundChain, affiliateOverview,
+    DIVIDEND_DRAIN_DIVIDEND_SE, DIVIDEND_DRAIN_NI_SE, dividendDrainFlags,
+    dividendVsRetainedEarnings, indexAccountsByDiv, FS_DIV_LABELS,
     fundChainDisclosureHints,
     markNumber, MARK_RULES, cellMarks, markedColumnKeys, indicatorCellWhy,
     isAggregateRow, splitAggregateRows, splitVisibleFolded, MAX_VISIBLE_COLUMNS,
