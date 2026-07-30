@@ -743,7 +743,11 @@
     "5.3",
     "8.1"
    ],
-   "timeline_months": 18
+   "timeline_months": 18,
+   "field_evidence": [
+    "헬릭스미스: 창업자 지분 10% 이하 → 경영권 상실 (20250902)",
+    "SKAI: 강철순 지분·경영권 매각 (20250903)"
+   ]
   },
   {
    "key": "debt_spiral",
@@ -756,7 +760,11 @@
     "2.6",
     "8.2"
    ],
-   "timeline_months": 12
+   "timeline_months": 12,
+   "field_evidence": [
+    "위메이드: CB/EB 차환 (20250903)",
+    "SKAI: 연속 적자 기록 (20250903)"
+   ]
   },
   {
    "key": "reverse_split_spiral",
@@ -769,7 +777,11 @@
     "7.2",
     "8.3"
    ],
-   "timeline_months": 18
+   "timeline_months": 18,
+   "field_evidence": [
+    "셀레스트라: 15대1 감자 (20250806)",
+    "셀리버리: 상장폐지 (20250918)"
+   ]
   },
   {
    "key": "related_party_hollowing",
@@ -782,7 +794,11 @@
     "2.5",
     "8.4"
    ],
-   "timeline_months": 15
+   "timeline_months": 15,
+   "field_evidence": [
+    "파마리서차: RCPS 비대칭 구조 (20250708)",
+    "동성제약: 회생신청 (20251014)"
+   ]
   },
   {
    "key": "zombie_ma",
@@ -796,7 +812,11 @@
     "7.1",
     "2.7"
    ],
-   "timeline_months": 12
+   "timeline_months": 12,
+   "field_evidence": [
+    "2025-03-10 금감원: 사모CB·BW 허위자금조달 조직적 세력 적발 — 검찰 고발",
+    "2026-01-08 금감원: 무자본 M&A 대량보유상황보고 허위기재 적발"
+   ]
   },
   {
    "key": "audit_insider_dump",
@@ -807,7 +827,11 @@
     "7.1",
     "3.1"
    ],
-   "timeline_months": 6
+   "timeline_months": 6,
+   "field_evidence": [
+    "2025-03-24 금감원: A사 대표이사가 감사의견거절 정보를 CB 보유자에게 전달 후 매도",
+    "2026-02-27 금감원: 최근 3년 결산 불공정거래 24건 중 79%가 1~3월 발생, 84%가 내부자"
+   ]
   },
   {
    "key": "delisting_evasion",
@@ -821,7 +845,11 @@
     "2.7",
     "8.2"
    ],
-   "timeline_months": 9
+   "timeline_months": 9,
+   "field_evidence": [
+    "2024-03-25 금감원: 좀비기업 15개사 부당이득 1,694억원 — 연말 유상증자 상폐요건 면탈 패턴",
+    "2026-04-19 금감원: 상폐요건 강화 후 불법행위 급증, 허위 자기자본 확충 적발"
+   ]
   },
   {
    "key": "fake_new_biz",
@@ -833,7 +861,12 @@
     "7.2",
     "7.1"
    ],
-   "timeline_months": 6
+   "timeline_months": 6,
+   "field_evidence": [
+    "2024-01-18 금감원: 허위신사업 집중조사 — 20건 중 90%가 코스닥, 50%가 상폐·거래정지",
+    "2025-05-21 금감원: B사 해외광물 허위발표 주가 24% 상승 후 수십억 부당이득",
+    "2023-10-31 금감원: 신사업 추진실적 전무 129사 중 횡령·감사거절 22%"
+   ]
   },
   {
    "key": "capital_churn_anomaly",
@@ -843,7 +876,10 @@
     "2.7",
     "4.3"
    ],
-   "timeline_months": 12
+   "timeline_months": 12,
+   "field_evidence": [
+    "금감원 2024·2025 주가조작 적발 — 자본 이벤트 반복 + 공시의무 위반 동시 발생 공통"
+   ]
   }
  ],
  "categories": {

@@ -536,6 +536,9 @@ sandbox.openExecutivePanel = function (row) { EXEC_PANEL_CALLS.push(row); };
     buttons: collectButtons(bodyEl, []),
     fundChainCards: collectByClass(bodyEl, "fund-chain-card", []),
     fundBarSegs: collectByClass(bodyEl, "fund-bar-seg", []),
+    // SE-13 Task 3 — 복합 패턴 카드(ui.js patternCardEl). fund-chain-card와
+    // 같은 범용 수집기 재사용.
+    patternCards: collectByClass(bodyEl, "pattern-card", []),
     // SE-10 Task 2 — tableLayout의 상수-열 캡션 승격(app.js tableLayout
     // 주석 "모든 행이 같은 값인 열은 표 위 캡션으로 올린다")이 실제
     // DOM에 그려지는지 소스 문자열 추측이 아니라 렌더된 .cap div로
@@ -561,6 +564,9 @@ sandbox.openExecutivePanel = function (row) { EXEC_PANEL_CALLS.push(row); };
     // 실행으로 확인한다(이 저장소는 로그아웃 후 이전 사용자 실명·사실이
     // 남은 사고를 두 번 겪었다).
     fundChainCards: collectByClass(bodyEl, "fund-chain-card", []),
+    // SE-13 Task 3 — 로그아웃 후 이전 사용자 회사의 패턴 사실이 남는지도
+    // 다른 파생 블록과 같은 방식으로 확인한다.
+    patternCards: collectByClass(bodyEl, "pattern-card", []),
   };
 
   process.stdout.write(JSON.stringify(Object.assign({}, beforeGate, { afterGate: afterGate })));
@@ -13318,6 +13324,509 @@ class TestIndicatorCategoryNormalization(unittest.TestCase):
         self.assertEqual(got["labels"], ["2023", "2024", "2025"])
         series = next(d for d in got["datasets"] if d["label"] == "순이익률")
         self.assertEqual(series["data"], [-100.0, -152.661, -22.56])
+
+
+# ══════════════════════════════════════════════════════════════════════
+# SE-13 Task 3 — 복합 패턴(CROSS_SIGNAL_PATTERNS) 매칭 이식
+# ══════════════════════════════════════════════════════════════════════
+#
+# app.js에 새로 이식한 matchCrossPatterns가 공개 뷰어(docs/tool/index.html)
+# 의 client-side 매칭과 "같은 규칙"(부분집합, 순서 무관)을 쓰는지를,
+# index.html 안에 손으로 옮겨 적은 사본이 아니라 **그 파일에서 실제로
+# 잘라낸 코드**를 node로 실행해 대조한다(task-3-brief.md가 명시적으로
+# 허용한 경로 — "index.html 인라인 스크립트라 어려우면 매칭 함수를
+# 스크래치 파일로 추출해 node로 실행"). index.html이 나중에 이 로직을
+# 바꾸면 이 테스트가 새 코드를 대상으로 다시 돌아 자동으로 드리프트를
+# 잡는다 — 고정된 픽스처 표 하나를 양쪽이 "통과했다고 우리가 주장"하는
+# 것보다 강한 증거다.
+
+_INDEX_HTML = _ROOT / "docs" / "tool" / "index.html"
+
+
+def _extract_balanced_js_function(html: str, start_marker: str) -> str:
+    """html에서 start_marker로 시작하는 함수 선언을 중괄호 균형으로 찾아
+    그 함수 전체(선언부터 짝이 맞는 '}'까지)를 그대로 잘라 돌려준다."""
+    idx = html.index(start_marker)
+    brace_start = html.index("{", idx)
+    depth = 0
+    i = brace_start
+    while i < len(html):
+        if html[i] == "{":
+            depth += 1
+        elif html[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return html[idx:i + 1]
+        i += 1
+    raise AssertionError(f"balanced brace not found for {start_marker!r}")
+
+
+def _extract_public_pattern_match_pieces():
+    """공개 뷰어(docs/tool/index.html)에서 패턴 매칭에 쓰이는 실제 코드
+    세 조각을 파일에서 직접 잘라낸다(손으로 옮겨 적지 않는다):
+
+      1) `function matchSignals(reportNm) {...}` 전체(564-572행 부근) —
+         공시 제목 하나에 매칭되는 신호 전부를 돌려주는 키워드 매칭.
+      2) `AMEND_RE = new RegExp(DATA.amendment_pattern);` 한 줄(boot() 안,
+         445행 부근) — 정정공시 판정에 쓰는 정규식을 데이터에서 컴파일.
+      3) buildResult() 안의 매칭 스니펫 — "const events = [];"부터
+         "detectedTax.has(t)));"까지(613-628행 부근): 정정공시 제외 →
+         matchSignals 호출 → detectedTax 집합 구성 → patterns 부분집합
+         필터, 네 단계 전부.
+
+    세 조각을 조합하면 "공개 뷰어가 지금 실제로 하는 매칭"을 그대로
+    재현한 실행 가능한 함수가 된다.
+    """
+    html = _INDEX_HTML.read_text(encoding="utf-8")
+    match_signals_fn = _extract_balanced_js_function(
+        html, "function matchSignals(reportNm)")
+
+    amend_line = "AMEND_RE = new RegExp(DATA.amendment_pattern);"
+    if amend_line not in html:
+        raise AssertionError(
+            "공개 뷰어의 AMEND_RE 배정 문구를 찾지 못했습니다 — index.html이 바뀐 것 같습니다")
+
+    start_marker = "const events = [];"
+    end_marker = "detectedTax.has(t)));"
+    start = html.index(start_marker)
+    end = html.index(end_marker, start) + len(end_marker)
+    matching_snippet = html[start:end]
+
+    return match_signals_fn, amend_line, matching_snippet
+
+
+def run_public_pattern_match(signals_data: dict, items: list) -> list:
+    """공개 뷰어에서 방금 잘라낸 실제 매칭 코드를 node로 실행해, items
+    (공시 레코드 배열, report_nm/rcept_dt/rcept_no 필드)에 대해 매칭되는
+    패턴 key 목록(정렬)을 돌려준다."""
+    match_signals_fn, amend_line, matching_snippet = _extract_public_pattern_match_pieces()
+    script = (
+        '"use strict";\n'
+        + match_signals_fn + "\n\n"
+        "let DATA = null;\n"
+        "let AMEND_RE = null;\n"
+        f"DATA = {json.dumps(signals_data, ensure_ascii=False)};\n"
+        + amend_line + "\n\n"
+        "function publicPatternMatch(items) {\n"
+        + matching_snippet + "\n"
+        "  return patterns;\n"
+        "}\n\n"
+        f"const items = {json.dumps(items, ensure_ascii=False)};\n"
+        "const result = publicPatternMatch(items).map((p) => p.key).sort();\n"
+        "process.stdout.write(JSON.stringify(result));\n"
+    )
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".js", delete=False, encoding="utf-8"
+    ) as f:
+        f.write(script)
+        script_path = f.name
+    try:
+        out = subprocess.run(
+            [_NODE, script_path], capture_output=True, text=True, encoding="utf-8")
+    finally:
+        pathlib.Path(script_path).unlink(missing_ok=True)
+    if out.returncode != 0:
+        raise AssertionError(f"공개 뷰어 매칭 스크립트 실행 실패:\n{out.stderr}")
+    return json.loads(out.stdout)
+
+
+def run_se_pattern_match(signals_data: dict, items: list) -> list:
+    """app.js의 matchCrossPatterns를 실행해 매칭된 패턴 key 목록(정렬)을
+    돌려준다 — run_public_pattern_match와 같은 반환 모양이라 바로
+    비교할 수 있다."""
+    return run_js(
+        f"matchCrossPatterns({json.dumps(items, ensure_ascii=False)}, "
+        f"{json.dumps(signals_data, ensure_ascii=False)}).map((p) => p.key).sort()"
+    )
+
+
+# 모든 taxonomy가 키워드로 탐지되는(자본 churn처럼 빈도 판정이 필요
+# 없는) 최소 픽스처 — 부분집합 매칭 "규칙" 자체의 동치를 자본 churn
+# 보강 로직과 분리해서 검증하기 위해서다.
+_EQUIV_SIGNALS = {
+    "signals": [
+        {"key": "SIG_A", "label": "신호A", "keywords": ["키워드A"], "taxonomies": ["1.1"], "category": 1},
+        {"key": "SIG_B", "label": "신호B", "keywords": ["키워드B"], "taxonomies": ["1.2"], "category": 1},
+        {"key": "SIG_C", "label": "신호C", "keywords": ["키워드C"], "taxonomies": ["2.1"], "category": 2},
+        {"key": "SIG_D", "label": "신호D", "keywords": ["키워드D"], "taxonomies": ["3.1"], "category": 3},
+    ],
+    "patterns": [
+        {"key": "pattern_ab", "name": "Pattern AB", "description": "A and B",
+         "signal_sequence": ["1.1", "1.2"], "timeline_months": 6, "field_evidence": ["사례1"]},
+        {"key": "pattern_abc", "name": "Pattern ABC", "description": "A, B and C",
+         "signal_sequence": ["1.1", "1.2", "2.1"], "timeline_months": 12, "field_evidence": ["사례2"]},
+        {"key": "pattern_ad", "name": "Pattern AD", "description": "A and D",
+         "signal_sequence": ["1.1", "3.1"], "timeline_months": 9, "field_evidence": ["사례3"]},
+    ],
+    "categories": {"0": "기타", "1": "CB/채권", "2": "자본구조", "3": "경영권"},
+    "capital_event_keys": [],
+    "amendment_pattern": "^\\[(?:기재정정|첨부추가|정정)[^\\]]*\\]\\s*",
+}
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestPublicViewerPatternMatchEquivalence(unittest.TestCase):
+    """공개 뷰어(index.html)에서 실제로 잘라낸 매칭 코드 vs app.js
+    matchCrossPatterns — 같은 입력에 같은 매칭 패턴 목록을 내는지 대조."""
+
+    def test_no_disclosures_both_empty(self):
+        self.assertEqual(run_public_pattern_match(_EQUIV_SIGNALS, []), [])
+        self.assertEqual(run_se_pattern_match(_EQUIV_SIGNALS, []), [])
+
+    def test_no_matching_keywords_both_empty(self):
+        items = [{"rcept_no": "1", "rcept_dt": "20250101", "report_nm": "관련 없는 공시"}]
+        self.assertEqual(run_public_pattern_match(_EQUIV_SIGNALS, items), [])
+        self.assertEqual(run_se_pattern_match(_EQUIV_SIGNALS, items), [])
+
+    def test_partial_subset_does_not_match_either(self):
+        """A만 있고 B가 없으면 pattern_ab(부분집합 A+B 필요)는 어느 쪽도
+        매칭하지 않는다 — "부분집합" 규칙이 초과분은 허용하되 부족분은
+        허용하지 않는다는 사실을 확인한다."""
+        items = [{"rcept_no": "1", "rcept_dt": "20250101", "report_nm": "키워드A 보고서"}]
+        self.assertEqual(run_public_pattern_match(_EQUIV_SIGNALS, items), [])
+        self.assertEqual(run_se_pattern_match(_EQUIV_SIGNALS, items), [])
+
+    def test_exact_two_signal_pattern_matches_both(self):
+        items = [
+            {"rcept_no": "1", "rcept_dt": "20250101", "report_nm": "키워드A 보고서"},
+            {"rcept_no": "2", "rcept_dt": "20250102", "report_nm": "키워드B 보고서"},
+        ]
+        expected = ["pattern_ab"]
+        self.assertEqual(run_public_pattern_match(_EQUIV_SIGNALS, items), expected)
+        self.assertEqual(run_se_pattern_match(_EQUIV_SIGNALS, items), expected)
+
+    def test_superset_matches_all_qualifying_patterns_on_both_sides(self):
+        """A+B+C+D가 전부 관찰되면 세 패턴(ab, abc, ad)이 동시에 조건을
+        만족한다 — core find_pattern_match(첫 매치 하나만)와 달리, 공개
+        뷰어의 DATA.patterns.filter(...)도 app.js의 matchCrossPatterns도
+        **조건을 만족하는 패턴 전부**를 돌려준다는 사실을 확인한다."""
+        items = [
+            {"rcept_no": "1", "rcept_dt": "20250101", "report_nm": "키워드A 보고서"},
+            {"rcept_no": "2", "rcept_dt": "20250102", "report_nm": "키워드B 보고서"},
+            {"rcept_no": "3", "rcept_dt": "20250103", "report_nm": "키워드C 보고서"},
+            {"rcept_no": "4", "rcept_dt": "20250104", "report_nm": "키워드D 보고서"},
+        ]
+        expected = ["pattern_ab", "pattern_abc", "pattern_ad"]
+        self.assertEqual(run_public_pattern_match(_EQUIV_SIGNALS, items), expected)
+        self.assertEqual(run_se_pattern_match(_EQUIV_SIGNALS, items), expected)
+
+    def test_disclosure_order_does_not_affect_result_on_either_side(self):
+        """"signal_sequence"라는 이름과 달리 시간 순서를 보지 않는다(core
+        find_pattern_match와 같은 부분집합 판정, se13-investigation.md
+        놀라웠던 점 #2) — 공시를 최신순으로 뒤집어도 결과가 같아야 한다."""
+        forward = [
+            {"rcept_no": "1", "rcept_dt": "20250101", "report_nm": "키워드A 보고서"},
+            {"rcept_no": "2", "rcept_dt": "20250102", "report_nm": "키워드B 보고서"},
+        ]
+        reversed_items = list(reversed(forward))
+        expected = ["pattern_ab"]
+        self.assertEqual(run_public_pattern_match(_EQUIV_SIGNALS, forward), expected)
+        self.assertEqual(run_public_pattern_match(_EQUIV_SIGNALS, reversed_items), expected)
+        self.assertEqual(run_se_pattern_match(_EQUIV_SIGNALS, forward), expected)
+        self.assertEqual(run_se_pattern_match(_EQUIV_SIGNALS, reversed_items), expected)
+
+    def test_amendment_prefixed_disclosure_contributes_no_signal_on_either_side(self):
+        """정정공시([기재정정] 등)는 신호 탐지에서 아예 빠진다 — 공개
+        뷰어(isAmend면 matchSignals를 부르지 않고 빈 배열)와 app.js
+        (isAmendmentDisclosure면 continue)가 같은 규칙을 쓴다. A의 유일한
+        출현이 정정공시뿐이면 pattern_ab는 어느 쪽에서도 매칭되지 않는다."""
+        items = [
+            {"rcept_no": "1", "rcept_dt": "20250101", "report_nm": "[기재정정]키워드A 보고서"},
+            {"rcept_no": "2", "rcept_dt": "20250102", "report_nm": "키워드B 보고서"},
+        ]
+        self.assertEqual(run_public_pattern_match(_EQUIV_SIGNALS, items), [])
+        self.assertEqual(run_se_pattern_match(_EQUIV_SIGNALS, items), [])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestCapitalChurnTaxonomyGapIsDocumented(unittest.TestCase):
+    """taxonomy 2.7(CAPITAL_CHURN)은 signals-data.json에서 keywords가 빈
+    배열이다(개별 공시 제목이 아니라 공시 "빈도"로 판정하는 파생 신호 —
+    core detect_capital_churn). 그 결과 CROSS_SIGNAL_PATTERNS 9종 중 8종이
+    공개 뷰어의 순수 키워드 매칭만으로는 구조적으로 영원히 매칭될 수
+    없다(app.js detectCapitalChurn 주석에 실측 근거 기록) —
+    capital_churn_anomaly가 대표 사례다. 이 테스트는 그 격차가 실제로
+    존재한다는 사실 자체를 고정해 둔다(회귀로 저절로 사라지면 안 되는
+    "의도된 차이"라는 뜻 — SE가 이 격차를 메우려고 capital churn 빈도
+    계산을 추가로 이식했다는 사실과 짝을 이룬다, 아래 두 번째 테스트)."""
+
+    def test_public_viewer_keyword_matching_alone_never_reaches_capital_churn_anomaly(self):
+        import json as _json
+        signals_json_path = _ROOT / "docs" / "tool" / "signals-data.json"
+        real_signals = _json.loads(signals_json_path.read_text(encoding="utf-8"))
+        cb_kw = next(s for s in real_signals["signals"] if s["key"] == "CB_BW")["keywords"][0]
+        inquiry_kw = next(s for s in real_signals["signals"] if s["key"] == "INQUIRY")["keywords"][0]
+        items = [
+            {"rcept_no": "1", "rcept_dt": "20250101", "report_nm": f"주요사항보고서({cb_kw})"},
+            {"rcept_no": "2", "rcept_dt": "20250201", "report_nm": f"주요사항보고서({cb_kw})"},
+            {"rcept_no": "3", "rcept_dt": "20250301", "report_nm": f"주요사항보고서({cb_kw})"},
+            {"rcept_no": "4", "rcept_dt": "20250401", "report_nm": inquiry_kw},
+        ]
+        # 공개 뷰어의 실제 client-side 로직: CB_BW 3건(자본 이벤트) + INQUIRY
+        # 1건(taxonomy 4.3)이 있어도, 2.7(자본 churn)을 키워드로는 절대
+        # 얻을 수 없어 capital_churn_anomaly가 안 뜬다.
+        self.assertEqual(run_public_pattern_match(real_signals, items), [])
+
+    def test_se_closes_the_gap_with_ported_capital_churn_frequency_check(self):
+        """같은 입력을 SE의 matchCrossPatterns에 주면(12개월 슬라이딩
+        윈도우 자본 이벤트 빈도 계산을 app.js에 추가 이식했으므로)
+        capital_churn_anomaly가 매칭된다 — task-3-brief.md가 요구하는
+        제이스코홀딩스 라이브 검증이 가능해지는 근거."""
+        import json as _json
+        signals_json_path = _ROOT / "docs" / "tool" / "signals-data.json"
+        real_signals = _json.loads(signals_json_path.read_text(encoding="utf-8"))
+        cb_kw = next(s for s in real_signals["signals"] if s["key"] == "CB_BW")["keywords"][0]
+        inquiry_kw = next(s for s in real_signals["signals"] if s["key"] == "INQUIRY")["keywords"][0]
+        items = [
+            {"rcept_no": "1", "rcept_dt": "20250101", "report_nm": f"주요사항보고서({cb_kw})"},
+            {"rcept_no": "2", "rcept_dt": "20250201", "report_nm": f"주요사항보고서({cb_kw})"},
+            {"rcept_no": "3", "rcept_dt": "20250301", "report_nm": f"주요사항보고서({cb_kw})"},
+            {"rcept_no": "4", "rcept_dt": "20250401", "report_nm": inquiry_kw},
+        ]
+        self.assertEqual(run_se_pattern_match(real_signals, items), ["capital_churn_anomaly"])
+
+    def test_se_does_not_false_positive_on_treasury_only_capital_events(self):
+        """실측 회귀 고정 — 삼성전자(자사주 취득·처분만 반복, 실제로는
+        capital_churn_anomaly가 core에도 안 뜨는 회사)를 재현한 픽스처.
+        희석성/비희석성 구분 없이 "자본 이벤트 아무거나 3건"으로만
+        판정했다면 이 테스트는 실패했을 것이다(TREASURY 9건 + INQUIRY
+        1건 — SE-13 Task 3 라이브 검증 중 실제로 이 형태의 거짓 매칭을
+        발견하고 detectCapitalChurn의 희석/비희석 이중 조건으로 고쳤다)."""
+        import json as _json
+        signals_json_path = _ROOT / "docs" / "tool" / "signals-data.json"
+        real_signals = _json.loads(signals_json_path.read_text(encoding="utf-8"))
+        treasury_kw = next(s for s in real_signals["signals"] if s["key"] == "TREASURY")["keywords"][0]
+        inquiry_kw = next(s for s in real_signals["signals"] if s["key"] == "INQUIRY")["keywords"][0]
+        items = [
+            {"rcept_no": str(i), "rcept_dt": f"2025{(i % 9) + 1:02d}01",
+             "report_nm": f"주요사항보고서({treasury_kw})"}
+            for i in range(1, 10)
+        ] + [{"rcept_no": "99", "rcept_dt": "20251001", "report_nm": inquiry_kw}]
+        self.assertEqual(run_se_pattern_match(real_signals, items), [])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestDetectCapitalChurn(unittest.TestCase):
+    """core detect_capital_churn(dart_client.py)과 같은 희석성/비희석성
+    이중 조건을 app.js가 정확히 재현하는지 검증한다 — 이 구분이 없으면
+    삼성전자(자사주만 반복)가 capital_churn_anomaly에 거짓 매칭된다는
+    사실을 SE-13 Task 3 라이브 검증 중 실제로 발견했다(app.js
+    detectCapitalChurn 주석에 기록)."""
+
+    def test_no_events_not_flagged(self):
+        got = run_js("detectCapitalChurn([])")
+        self.assertFalse(got["flagged"])
+
+    def test_three_dilutive_events_within_365_days_flags(self):
+        """조건 (A): 희석성 ≥3건."""
+        events = [
+            {"rcept_dt": "20250101", "key": "CB_BW"},
+            {"rcept_dt": "20250601", "key": "CB_BW"},
+            {"rcept_dt": "20251231", "key": "3PCA"},
+        ]
+        got = run_js("detectCapitalChurn(" + json.dumps(events, ensure_ascii=False) + ")")
+        self.assertTrue(got["flagged"])
+        self.assertEqual(got["maxDilutive"], 3)
+
+    def test_nine_non_dilutive_events_alone_do_not_flag(self):
+        """삼성전자 실측 재현 — 자사주 취득·처분(TREASURY, 비희석성)만
+        9건 반복돼도 희석성 이벤트가 0건이면 조건 (A)도 (B)도 만족하지
+        않는다. 이 테스트가 실패하면 삼성전자가 다시 거짓 매칭된다."""
+        events = [{"rcept_dt": f"2025{m:02d}01", "key": "TREASURY"} for m in range(1, 10)]
+        got = run_js("detectCapitalChurn(" + json.dumps(events, ensure_ascii=False) + ")")
+        self.assertFalse(got["flagged"])
+        self.assertEqual(got["maxDilutive"], 0)
+        self.assertEqual(got["maxNonDilutive"], 9)
+
+    def test_two_dilutive_and_two_non_dilutive_flags_via_condition_b(self):
+        """조건 (B): 희석성 ≥2건 AND 비희석성 ≥2건 — 둘 다 2건씩이면
+        (A)는 못 채워도 (B)로 플래그된다."""
+        events = [
+            {"rcept_dt": "20250101", "key": "CB_BW"},
+            {"rcept_dt": "20250201", "key": "3PCA"},
+            {"rcept_dt": "20250301", "key": "TREASURY"},
+            {"rcept_dt": "20250401", "key": "CB_BUYBACK"},
+        ]
+        got = run_js("detectCapitalChurn(" + json.dumps(events, ensure_ascii=False) + ")")
+        self.assertTrue(got["flagged"])
+
+    def test_one_dilutive_and_many_non_dilutive_do_not_flag(self):
+        """희석성이 1건뿐이면 비희석성이 아무리 많아도 (A)·(B) 둘 다
+        못 채운다."""
+        events = [{"rcept_dt": "20250101", "key": "CB_BW"}] + [
+            {"rcept_dt": f"2025{m:02d}01", "key": "TREASURY"} for m in range(2, 10)
+        ]
+        got = run_js("detectCapitalChurn(" + json.dumps(events, ensure_ascii=False) + ")")
+        self.assertFalse(got["flagged"])
+
+    def test_events_spanning_more_than_365_days_do_not_combine(self):
+        events = [
+            {"rcept_dt": "20250101", "key": "CB_BW"},
+            {"rcept_dt": "20260601", "key": "CB_BW"},
+            {"rcept_dt": "20270101", "key": "3PCA"},
+        ]
+        got = run_js("detectCapitalChurn(" + json.dumps(events, ensure_ascii=False) + ")")
+        self.assertFalse(got["flagged"])
+
+    def test_malformed_dates_are_skipped_not_crashed(self):
+        events = [
+            {"rcept_dt": "20250101", "key": "CB_BW"},
+            {"rcept_dt": "-", "key": "CB_BW"},
+            {"rcept_dt": None, "key": "CB_BW"},
+            {"rcept_dt": "bad", "key": "CB_BW"},
+            {"rcept_dt": "20250201", "key": "3PCA"},
+            {"rcept_dt": "20250301", "key": "GAMJA_MERGE"},
+        ]
+        got = run_js("detectCapitalChurn(" + json.dumps(events, ensure_ascii=False) + ")")
+        self.assertTrue(got["flagged"])
+        self.assertEqual(got["maxDilutive"], 3)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestMatchSignalsForReportAndDetectSignalsByDisclosure(unittest.TestCase):
+    def test_returns_all_matching_signals_not_just_first(self):
+        """classifyDisclosureCategory(SE-7, 첫 매칭만)와 달리 이 함수는
+        한 공시명에 걸리는 신호 전부를 돌려준다 — 패턴 매칭에는 신호
+        하나가 아니라 taxonomy 전부가 필요하다."""
+        got = run_js(
+            'matchSignalsForReport("키워드A와 키워드B가 같이 있는 공시", '
+            + json.dumps(_EQUIV_SIGNALS, ensure_ascii=False) + ").map(s => s.key)"
+        )
+        self.assertEqual(sorted(got), ["SIG_A", "SIG_B"])
+
+    def test_null_signals_data_returns_empty_array_not_throw(self):
+        self.assertEqual(run_js('matchSignalsForReport("아무거나", null)'), [])
+
+    def test_amendment_disclosure_excluded_entirely(self):
+        items = [{"rcept_no": "1", "rcept_dt": "20250101", "report_nm": "[기재정정]키워드A 보고서"}]
+        got = run_js(
+            "detectSignalsByDisclosure(" + json.dumps(items, ensure_ascii=False) + ", "
+            + json.dumps(_EQUIV_SIGNALS, ensure_ascii=False) + ")"
+        )
+        self.assertEqual(got, [])
+
+    def test_disclosure_with_no_matching_signal_is_dropped(self):
+        items = [{"rcept_no": "1", "rcept_dt": "20250101", "report_nm": "관련 없는 공시"}]
+        got = run_js(
+            "detectSignalsByDisclosure(" + json.dumps(items, ensure_ascii=False) + ", "
+            + json.dumps(_EQUIV_SIGNALS, ensure_ascii=False) + ")"
+        )
+        self.assertEqual(got, [])
+
+
+# ── 실렌더 검증 — 매칭 상세 표시 + 미매칭 시 침묵 ────────────────────────
+
+_RENDER_SIGNALS_FIXTURE = {
+    "signals": [
+        {"key": "SIG_A", "label": "신호A", "keywords": ["전환사채권발행결정"],
+         "taxonomies": ["1.1"], "category": 1},
+        {"key": "SIG_B", "label": "신호B", "keywords": ["조회공시"],
+         "taxonomies": ["1.2"], "category": 1},
+    ],
+    "patterns": [
+        {"key": "pattern_ab", "name": "Pattern AB (테스트용)",
+         "description": "A and B가 같이 관찰되는 패턴",
+         "signal_sequence": ["1.1", "1.2"], "timeline_months": 6,
+         "field_evidence": ["금감원 2025-01-01: A사 사례 (테스트용 인용)"]},
+    ],
+    "categories": {"0": "기타", "1": "CB/채권"},
+    "capital_event_keys": [],
+    "amendment_pattern": "^\\[(?:기재정정|첨부추가|정정)[^\\]]*\\]\\s*",
+}
+
+
+def _pattern_render_setup():
+    signals_json = json.dumps(_RENDER_SIGNALS_FIXTURE, ensure_ascii=False)
+    return (
+        'new vm.Script("SIGNALS_DATA = " + JSON.stringify(' + signals_json + ') + ";", '
+        '{filename: "inject-signals.js"}).runInContext(sandbox);\n'
+    )
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestPatternMatchRenderWiring(unittest.TestCase):
+    """renderSection("disclosures", ...)이 실제로 복합 패턴 블록을
+    그리는지(매칭 시) / 아예 안 그리는지(미매칭 시)를 run_render_section
+    (app.js·ui.js를 같은 vm에서 실행)으로 확인한다."""
+
+    _MATCHING_ROWS = [
+        {"rcept_no": "20250101000001", "rcept_dt": "20250101",
+         "report_nm": "주요사항보고서(전환사채권발행결정)"},
+        {"rcept_no": "20250102000002", "rcept_dt": "20250102",
+         "report_nm": "조회공시요구(풍문또는보도)"},
+    ]
+
+    def test_matching_company_shows_pattern_block_with_full_detail(self):
+        out = run_render_section(
+            '"disclosures"', json.dumps(self._MATCHING_ROWS, ensure_ascii=False),
+            _pattern_render_setup(),
+        )
+        self.assertIn("복합 패턴", out["titles"])
+        cards = out["patternCards"]
+        self.assertEqual(len(cards), 1, out)
+        text = cards[0]["text"]
+        # ① 패턴명·설명
+        self.assertIn("Pattern AB (테스트용)", text)
+        self.assertIn("A and B가 같이 관찰되는 패턴", text)
+        # ② 구성 신호 → 공시 역추적 (신호 라벨 + 공시명 둘 다 보여야 한다)
+        self.assertIn("신호A", text)
+        self.assertIn("신호B", text)
+        self.assertIn("전환사채권발행결정", text)
+        self.assertIn("조회공시요구", text)
+        # ③ 사실 근거(field_evidence)
+        self.assertIn("금감원 2025-01-01: A사 사례", text)
+        # ④ 면책 문구 — 공개 뷰어(index.html:834)와 글자 그대로 같다
+        combined_notes = " ".join(out["notes"])
+        self.assertIn("패턴 \"조건 충족\"은 사실 관찰이며 판정이 아닙니다", combined_notes)
+
+    def test_matching_evidence_disclosures_are_clickable(self):
+        """근거로 나열된 공시를 클릭하면 기존 openDocPanel(rcept_no) 배선을
+        그대로 탄다 — .doc 클래스 재사용(fundChainCardEl과 같은 방식)."""
+        out = run_render_section(
+            '"disclosures"', json.dumps(self._MATCHING_ROWS, ensure_ascii=False),
+            _pattern_render_setup(),
+        )
+        self.assertIn("20250101000001", out["openedDocs"])
+        self.assertIn("20250102000002", out["openedDocs"])
+
+    def test_non_matching_company_shows_no_pattern_block_at_all(self):
+        """SE 관례 — 매칭이 없으면 블록 자체가 없다("이상 없음" 문구도
+        내지 않는다). A만 있고 B가 없어 pattern_ab는 매칭되지 않는다."""
+        rows = [self._MATCHING_ROWS[0]]  # SIG_A만
+        out = run_render_section('"disclosures"', json.dumps(rows, ensure_ascii=False),
+                                  _pattern_render_setup())
+        self.assertNotIn("복합 패턴", out["titles"])
+        self.assertEqual(out["patternCards"], [])
+        combined_notes = " ".join(out["notes"])
+        self.assertNotIn("조건 충족", combined_notes)
+
+    def test_no_signals_data_loaded_shows_no_pattern_block(self):
+        """SIGNALS_DATA 로드 실패·아직 도착 전(초기값 null)에도 disclosures
+        섹션 자체는 여전히 정상 렌더돼야 한다 — matchCrossPatterns가
+        null-safe 폴백으로 조용히 빈 배열을 돌려준다."""
+        out = run_render_section('"disclosures"', json.dumps(self._MATCHING_ROWS, ensure_ascii=False))
+        self.assertNotIn("복합 패턴", out["titles"])
+        self.assertEqual(out["patternCards"], [])
+
+    def test_pattern_cards_cleared_by_show_gate(self):
+        """로그아웃(세션 만료)이 패턴 카드도 지우는지 — 이 저장소가 이미
+        두 번 겪은 "이전 사용자 사실 잔류" 사고와 같은 확인."""
+        out = run_render_section(
+            '"disclosures"', json.dumps(self._MATCHING_ROWS, ensure_ascii=False),
+            _pattern_render_setup(),
+        )
+        self.assertEqual(len(out["patternCards"]), 1)
+        self.assertEqual(out["afterGate"]["patternCards"], [])
+
+    def test_no_verdict_words_in_pattern_block_output(self):
+        out = run_render_section(
+            '"disclosures"', json.dumps(self._MATCHING_ROWS, ensure_ascii=False),
+            _pattern_render_setup(),
+        )
+        combined = json.dumps(out, ensure_ascii=False)
+        for word in ("의심", "유용", "부정", "위험", "매우위험", "고위험",
+                     "위험도", "위험등급", "severity", "CRITICAL", "HIGH등급"):
+            self.assertNotIn(word, combined, f"판정 어휘 '{word}'")
 
 
 if __name__ == "__main__":

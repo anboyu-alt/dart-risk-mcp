@@ -3597,6 +3597,255 @@ function classifyDisclosureCategory(reportNm, signalsData) {
   return 0;
 }
 
+/* ── 복합 패턴(CROSS_SIGNAL_PATTERNS) 매칭 — SE-13 Task 3 ───────────────
+ *
+ * 공개 뷰어(docs/tool/index.html)는 최초 커밋부터 client-side로
+ * signals-data.json의 patterns 배열을 detectedTax(공시에서 탐지된 taxonomy
+ * ID 집합)에 대해 부분집합 매칭한다(matchSignals:564-572, buildResult:
+ * 627-628) — "PATTERN MATCH" 패널. SE는 이 기능이 아예 없었다(조사 문서
+ * se13-investigation.md Q3, grep 0건). 여기서는 **공개 뷰어와 같은 규칙
+ * (부분집합, 순서 무관)**을 SE로 이식하되, ①classifyDisclosureCategory
+ * (위)와 달리 공시 하나가 여러 신호에 동시에 걸릴 수 있다는 사실을 그대로
+ * 보존하고(패턴 매칭에는 "이 공시가 촉발한 taxonomy ID 전부"가 필요하다 —
+ * 한 카테고리로 뭉개면 정보가 사라진다), ②매칭된 패턴마다 "어떤 공시가
+ * 어떤 taxonomy를 촉발했는지" 역추적 정보를 함께 돌려준다(SE 쪽 "더
+ * 자세하게" 요구, task-3-brief.md ②).
+ */
+
+/** reportNm 하나에 매칭되는 신호 객체 전부를 돌려준다 — 공개 뷰어
+ *  index.html의 matchSignals(564-572행)를 그대로 이식한 것이다(새 키워드
+ *  매칭 규칙을 만들지 않는다, 브리프 "새 분류기 금지"). classifyDisclosureCategory
+ *  (위)와 다른 점: 그 함수는 SE-7의 "공시 하나는 정확히 한 카테고리"
+ *  표시 계약 때문에 첫 매칭에서 멈추지만, 여기서는 매칭되는 신호 전부를
+ *  모은다 — 패턴 매칭에는 신호 하나가 아니라 이 공시가 가리키는 taxonomy
+ *  ID 전부가 필요하다.
+ *
+ *  signalsData가 없거나 형태가 예상과 다르면 빈 배열(classifyDisclosureCategory·
+ *  isAmendmentDisclosure와 같은 폴백 계약). */
+function matchSignalsForReport(reportNm, signalsData) {
+  if (!signalsData || !Array.isArray(signalsData.signals)) return [];
+  const nm = typeof reportNm === "string" ? reportNm : "";
+  const out = [];
+  for (const s of signalsData.signals) {
+    const keywords = Array.isArray(s.keywords) ? s.keywords : [];
+    for (const kw of keywords) {
+      if (kw && nm.indexOf(kw) !== -1) { out.push(s); break; }
+    }
+  }
+  return out;
+}
+
+/** disclosures(원본 공시 레코드 배열)에서 신호 탐지 결과를 공시 단위로
+ *  모은다 — matchCrossPatterns(아래)의 입력이자, 매칭된 패턴의 "이
+ *  회사에서 실제 탐지된 구성 신호가 어느 공시에서 잡혔는지" 역추적
+ *  표시(task-3-brief.md ②)에 그대로 재사용한다.
+ *
+ *  **정정공시는 제외한다** — 공개 뷰어(index.html:618-620: `matchSignals`를
+ *  부르기 전에 `isAmend`면 빈 배열)와 core(`match_signals`)가 신호
+ *  **탐지**(집계·매칭용) 단계에서 공통으로 지키는 규칙이다. SE-7의
+ *  classifyDisclosureCategory(위)는 표시 목적이 달라(정정공시도 색을
+ *  칠해야 한다) 정정 접두어를 벗기고 계속 매칭하지만, 여기서는 패턴
+ *  매칭이 core·공개 뷰어와 동일한 신호 집합을 봐야 한다는 제약(브리프
+ *  "매칭은 공개 뷰어와 동일 규칙")이 더 우선한다 — 두 함수가 정정공시를
+ *  다르게 다루는 것은 의도된 차이이지 불일치가 아니다.
+ *
+ *  반환: [{rcept_no, rcept_dt, report_nm, signals: [신호 객체...]}] —
+ *  신호가 하나도 안 걸린 공시는 배열에서 빠진다. */
+function detectSignalsByDisclosure(disclosures, signalsData) {
+  if (!Array.isArray(disclosures) || !signalsData || !Array.isArray(signalsData.signals)) return [];
+  const out = [];
+  for (const d of disclosures) {
+    if (!d || typeof d !== "object") continue;
+    const nm = typeof d.report_nm === "string" ? d.report_nm : "";
+    if (isAmendmentDisclosure(nm, signalsData)) continue;
+    const sigs = matchSignalsForReport(nm, signalsData);
+    if (sigs.length === 0) continue;
+    out.push({
+      rcept_no: d.rcept_no !== undefined ? d.rcept_no : null,
+      rcept_dt: d.rcept_dt !== undefined ? d.rcept_dt : null,
+      report_nm: nm,
+      signals: sigs,
+    });
+  }
+  return out;
+}
+
+/** core(dart_client.py detect_capital_churn, signals.py 576-598행)의
+ *  희석성/비희석성 자본 이벤트 분류를 그대로 옮긴 것이다 — 정적인 신호
+ *  key 목록이라 값이 자주 바뀌지 않고, signals-data.json의
+ *  `capital_event_keys`는 둘을 합친 것만 export하고 있어(Task 2 export
+ *  범위 밖) 여기서는 ROUTINE_FILING_CATEGORY(위)와 같은 이유로 상수를
+ *  직접 든다 — signalsData에서 읽어오려다 실패하면 undefined가 되어
+ *  오히려 위험해진다.
+ *
+ *  **이 구분이 실제로 필요하다는 사실을 라이브 검증에서 직접 확인했다.**
+ *  처음에는 이 구분 없이 "capital_event_keys에 해당하는 신호라면 무엇
+ *  이든 12개월에 3건이면 churn"으로 단순화했는데, 삼성전자가 자사주
+ *  취득·처분(TREASURY — 정상 기업이 흔히 반복하는 주주환원, 아래
+ *  NON_DILUTIVE_CAPITAL_EVENTS)만으로 capital_churn_anomaly에 거짓
+ *  매칭됐다 — task-3-brief.md가 명시적으로 요구하는 "미매칭 회사(삼성
+ *  전자 등)에서 블록이 안 나오는 것" 확인 도중 실측으로 드러난 문제다.
+ *  같은 기간 core의 analyze_company_risk(detect_capital_churn의 원본
+ *  규칙 사용)는 삼성전자에 이 패턴을 전혀 표시하지 않는다(대조 확인
+ *  완료) — 원인은 core가 희석성 이벤트(CB·유상증자·감자 등, 주주가치
+ *  훼손 우려)와 비희석성 이벤트(자사주 등)를 구분해 비희석성만으로는
+ *  churn을 인정하지 않기 때문이다. 그 구분을 옮기지 않으면 "매칭 규칙은
+ *  core·공개 뷰어와 같아야 한다"는 제약 자체가 깨진다. */
+const DILUTIVE_CAPITAL_EVENTS = new Set([
+  "3PCA", "RIGHTS_UNDER", "GAMJA_MERGE", "REVERSE_SPLIT",
+  "CB_BW", "EB", "RCPS", "CB_ROLLOVER",
+]);
+const NON_DILUTIVE_CAPITAL_EVENTS = new Set([
+  "TREASURY", "CB_BUYBACK", "TREASURY_EB", "TREASURY_TRUST",
+]);
+
+/** taxonomy 2.7(CAPITAL_CHURN)은 개별 공시 제목이 아니라 공시 "빈도"로
+ *  판정되는 파생 신호라 signals-data.json의 CAPITAL_CHURN 신호 자체는
+ *  keywords가 빈 배열이다(core detect_capital_churn — dart_client.py
+ *  1753행). CAPITAL_IMPAIRMENT·AR_SURGE·CASH_GAP 등 다른 파생 전용 신호
+ *  키들도 마찬가지로 keywords:[]다.
+ *
+ *  **다만 이게 패턴 매칭을 막지는 않는다** — SIGNAL_KEY_TO_TAXONOMY(core
+ *  signals.py)는 같은 taxonomy ID에 여러 신호 키를 매핑하는 경우가 많고,
+ *  키워드가 빈 파생 전용 키 옆에 키워드 있는 형제 키가 같은 ID를 가리키는
+ *  사례가 대부분이다(예: 8.2는 CAPITAL_IMPAIRMENT 외에 키워드 있는
+ *  DEBT_RESTR로도 도달, 6.1은 AR_SURGE·CASH_GAP 외에 REVENUE_IRREG로도
+ *  도달, 4.2는 DECISION_RELATED_PARTY 외에 RELATED_PARTY로도 도달).
+ *  검증 결과(리뷰 재확인, 2026-07-30) taxonomy 9종의 signal_sequence
+ *  전체를 훑으면 진짜로 키워드 경로가 전혀 없는 ID는 2.7·2.8·3.6·5.6·8.5
+ *  뿐이고, 그중 이 9개 패턴이 실제로 걸치는 건 2.7 하나(zombie_ma·
+ *  delisting_evasion·capital_churn_anomaly 3종). 그 2.7을 아래
+ *  detectCapitalChurn이 core와 동일 규칙으로 메우므로, **9개 패턴
+ *  전부가 이 파일의 매칭 로직만으로 도달 가능하다** — "8종은 공개
+ *  뷰어에서 구조적으로 영원히 매칭 안 된다"는 이전 버전의 이 주석은
+ *  틀렸다(SE-13 Task 3 리뷰가 실측으로 잡음, 5개 패턴을 키워드만으로
+ *  직접 매칭 재현). 나머지 진짜 파생 전용 taxonomy(2.8·3.6·5.6·8.5)를
+ *  core처럼 별도 synthetic 신호로 주입하는 일반화된 메커니즘은 여전히
+ *  없다 — 이 9개 패턴엔 필요 없었을 뿐, 향후 새 패턴이 그 ID들을 쓰면
+ *  또 막힐 수 있다는 뜻으로 남겨둔다. */
+const CAPITAL_CHURN_TAXONOMY = "2.7";
+
+/** events(각 {rcept_dt: "YYYYMMDD", key})에서 core detect_capital_churn과
+ *  같은 365일 슬라이딩 윈도우(각 이벤트를 시작점으로 그 뒤 365일)로
+ *  희석성/비희석성 건수를 따로 세고, 판정 조건 (A) 희석성≥3 또는 (B)
+ *  희석성≥2 AND 비희석성≥2 를 만족하는 윈도우가 하나라도 있으면
+ *  {flagged, maxDilutive, maxNonDilutive}를 돌려준다 — dart_client.py
+ *  detect_capital_churn 1800-1840행과 정확히 같은 규칙이다(정렬·날짜
+ *  형식 검증도 동일하게 조용히 건너뛴다, 짐작해서 채우지 않는다). */
+function detectCapitalChurn(events) {
+  const parsed = (Array.isArray(events) ? events : [])
+    .map(function (e) {
+      const raw = e && typeof e.rcept_dt === "string" ? e.rcept_dt.slice(0, 8) : "";
+      if (!/^\d{8}$/.test(raw)) return null;
+      const d = new Date(raw.slice(0, 4) + "-" + raw.slice(4, 6) + "-" + raw.slice(6, 8));
+      if (isNaN(d.getTime())) return null;
+      return { date: d, isDilutive: DILUTIVE_CAPITAL_EVENTS.has(e.key) };
+    })
+    .filter(function (e) { return e !== null; })
+    .sort(function (a, b) { return a.date - b.date; });
+
+  let flagged = false;
+  let maxDilutive = 0;
+  let maxNonDilutive = 0;
+  for (let i = 0; i < parsed.length; i++) {
+    const start = parsed[i].date;
+    const end = new Date(start.getTime() + 365 * MS_PER_DAY);
+    let dil = 0, non = 0;
+    for (let j = i; j < parsed.length; j++) {
+      const d = parsed[j].date;
+      if (d >= start && d <= end) {
+        if (parsed[j].isDilutive) dil++; else non++;
+      }
+    }
+    maxDilutive = Math.max(maxDilutive, dil);
+    maxNonDilutive = Math.max(maxNonDilutive, non);
+    if (dil >= 3 || (dil >= 2 && non >= 2)) flagged = true;
+  }
+  return { flagged: flagged, maxDilutive: maxDilutive, maxNonDilutive: maxNonDilutive };
+}
+
+/** disclosures(공시 원본 레코드 배열)에서 매칭되는 CROSS_SIGNAL_PATTERNS를
+ *  찾는다 — 공개 뷰어(index.html:627-628)와 정확히 같은 부분집합 판정
+ *  (`signal_sequence.every(t => detectedTax.has(t))`, 순서 무관)이지만,
+ *  core `find_pattern_match`(taxonomy.py)처럼 **첫 매치 하나만** 돌려주지
+ *  않는다 — 공개 뷰어의 `DATA.patterns.filter(...)`가 이미 조건을
+ *  만족하는 패턴 전부를 돌려주고 있고, task-3-brief.md가 "공개 뷰어와
+ *  동일 규칙"이라 지목하는 대상이 이 필터 동작이다.
+ *
+ *  반환: [{...pattern, evidence: [{taxonomy, disclosures: [...]} |
+ *  {taxonomy, disclosures: [], aggregate_note, aggregate_disclosures}]}].
+ *  evidence는 pattern.signal_sequence 순서대로, 각 taxonomy ID를 실제로
+ *  촉발한 공시들을 담는다(task-3-brief.md ② "매칭의 근거를 공시 단위로
+ *  역추적"). taxonomy 2.7(자본 churn)은 개별 공시 하나의 키워드가 아니라
+ *  빈도 판정이라 aggregate_note로 별도 표시한다(위 detectCapitalChurn
+ *  주석 참고) — 없는 공시-신호 연결을 지어내지 않는다. */
+function matchCrossPatterns(disclosures, signalsData) {
+  if (!signalsData || !Array.isArray(signalsData.patterns)) return [];
+  const byDisclosure = detectSignalsByDisclosure(disclosures, signalsData);
+
+  const detectedTax = new Set();
+  for (const d of byDisclosure) {
+    for (const s of d.signals) {
+      for (const t of (s.taxonomies || [])) detectedTax.add(t);
+    }
+  }
+
+  const capitalKeys = new Set(
+    Array.isArray(signalsData.capital_event_keys) ? signalsData.capital_event_keys : []);
+  const capitalHits = byDisclosure.filter(function (d) {
+    return d.signals.some(function (s) { return capitalKeys.has(s.key); });
+  });
+  const capitalEventsForChurn = [];
+  capitalHits.forEach(function (d) {
+    d.signals.forEach(function (s) {
+      if (capitalKeys.has(s.key)) capitalEventsForChurn.push({ rcept_dt: d.rcept_dt, key: s.key });
+    });
+  });
+  const churn = capitalKeys.size > 0
+    ? detectCapitalChurn(capitalEventsForChurn)
+    : { flagged: false, maxDilutive: 0, maxNonDilutive: 0 };
+  const churnFlagged = churn.flagged;
+  if (churnFlagged) detectedTax.add(CAPITAL_CHURN_TAXONOMY);
+
+  const matched = signalsData.patterns.filter(function (p) {
+    return Array.isArray(p.signal_sequence) && p.signal_sequence.length > 0
+      && p.signal_sequence.every(function (t) { return detectedTax.has(t); });
+  });
+
+  return matched.map(function (p) {
+    const evidence = p.signal_sequence.map(function (taxId) {
+      const hits = [];
+      for (const d of byDisclosure) {
+        const hitSignals = d.signals.filter(function (s) {
+          return Array.isArray(s.taxonomies) && s.taxonomies.indexOf(taxId) !== -1;
+        });
+        if (hitSignals.length > 0) {
+          hits.push({
+            rcept_no: d.rcept_no, rcept_dt: d.rcept_dt, report_nm: d.report_nm,
+            signal_keys: hitSignals.map(function (s) { return s.key; }),
+            signal_labels: hitSignals.map(function (s) { return s.label; }),
+          });
+        }
+      }
+      if (hits.length === 0 && taxId === CAPITAL_CHURN_TAXONOMY && churnFlagged) {
+        return {
+          taxonomy: taxId,
+          disclosures: [],
+          aggregate_note: "개별 공시 하나가 아니라 자본 관련 공시 " + capitalHits.length
+            + "건(12개월 내 최대 희석성 " + churn.maxDilutive + "건·비희석성 "
+            + churn.maxNonDilutive + "건)이 판정 조건(희석성 3건 이상, 또는 희석성 "
+            + "2건 이상+비희석성 2건 이상)을 만족한 빈도 관찰입니다.",
+          aggregate_disclosures: capitalHits.map(function (d) {
+            return { rcept_no: d.rcept_no, rcept_dt: d.rcept_dt, report_nm: d.report_nm };
+          }),
+        };
+      }
+      return { taxonomy: taxId, disclosures: hits };
+    });
+    return Object.assign({}, p, { evidence: evidence });
+  });
+}
+
 /** rows(disclosures 원본 레코드)를 월(YYYYMM)×카테고리 라벨별 건수로
  *  묶는다. monthlyCounts와 같은 원칙 — **집계는 여기서 끝난다.** 어떤
  *  유형이 많았는지 순위를 매기거나 강조하지 않는다(v0.8.5).
@@ -4558,6 +4807,9 @@ if (typeof module !== "undefined" && module.exports) {
     normalizeDebtByKind, monthlyCounts, compositeXValue,
     financialRatios, financialRatiosBaseYear, financialRatiosByYear,
     isAmendmentDisclosure, classifyDisclosureCategory, monthlyCountsByCategory,
+    matchSignalsForReport, detectSignalsByDisclosure, detectCapitalChurn,
+    matchCrossPatterns, CAPITAL_CHURN_TAXONOMY,
+    DILUTIVE_CAPITAL_EVENTS, NON_DILUTIVE_CAPITAL_EVENTS,
     DIVIDEND_SE_FIELDS, dividendVsIncome, fundPlanChanges, fundChain, affiliateOverview,
     DIVIDEND_DRAIN_DIVIDEND_SE, DIVIDEND_DRAIN_NI_SE, dividendDrainFlags,
     dividendVsRetainedEarnings, indexAccountsByDiv, FS_DIV_LABELS,

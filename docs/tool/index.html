@@ -833,7 +833,10 @@ function renderDash() {
       html += `<div class="panel"><div class="slabel red">▍PATTERN MATCH</div>
         <p class="dim">아래 패턴의 구성 신호가 모두 관찰됐습니다. 패턴 "조건 충족"은 사실 관찰이며 판정이 아닙니다.</p>` +
         patterns.map((p) => `<div class="patterncard"><b>${esc(p.name)}</b>${esc(p.description)}
-          <div class="sigs">구성 신호 taxonomy: ${p.signal_sequence.join(" + ")} · 관찰 윈도우 ${p.timeline_months}개월</div></div>`).join("") +
+          <div class="sigs">구성 신호 taxonomy: ${p.signal_sequence.join(" + ")} · 관찰 윈도우 ${p.timeline_months}개월</div>` +
+          (p.field_evidence && p.field_evidence.length ? `<details style="margin-top:0.4rem;font-size:0.82rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">실제 사례 근거(금감원 보도자료 등)</summary>
+            <ul style="margin:0.3rem 0 0 1.1rem;padding:0">${p.field_evidence.map((fe) => `<li>${esc(fe)}</li>`).join("")}</ul></details>` : "") +
+          `</div>`).join("") +
         `</div>`;
     }
   }

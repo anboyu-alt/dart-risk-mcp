@@ -88,6 +88,7 @@ from .core import (
     _fs_response_to_periods,
     _parse_fs_amount,
 )
+from .core.taxonomy import CROSS_SIGNAL_PATTERNS
 
 mcp = FastMCP("dart-risk-analyzer")
 
@@ -2902,7 +2903,16 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
     if anomaly_records:
         lines.append(f"🚨 **이상 신호가 감지된 건: {len(anomaly_records)}건**")
         lines.append("")
-        excerpt = load_catalog_excerpt(["zombie_ma", "fake_new_biz"])
+        # load_catalog_excerpt는 taxonomy ID(예: "5.1")를 받는다 — 패턴 키
+        # 문자열("zombie_ma" 등)을 넘기면 TAXONOMY에 없는 키라 조용히 전부
+        # 스킵되어 빈 문자열이 반환된다(과거 버그, SE-13 Task 1). 여기서는
+        # zombie_ma·fake_new_biz 패턴의 signal_sequence(실제 taxonomy ID
+        # 목록)를 CROSS_SIGNAL_PATTERNS에서 가져와 하드코딩 중복 없이 사용한다.
+        _fund_usage_tax_ids = list(dict.fromkeys(
+            CROSS_SIGNAL_PATTERNS["zombie_ma"]["signal_sequence"]
+            + CROSS_SIGNAL_PATTERNS["fake_new_biz"]["signal_sequence"]
+        ))
+        excerpt = load_catalog_excerpt(_fund_usage_tax_ids)
         if excerpt:
             lines.append(excerpt)
     else:

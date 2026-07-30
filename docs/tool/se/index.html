@@ -154,6 +154,18 @@ td.narrow{max-width:140px}
 .fund-bar-seg:last-child{border-right:none}
 .fund-hint-list{margin:4px 0 8px;padding-left:18px;font-size:12px}
 .fund-hint-list li.doc{cursor:pointer}
+/* 복합 패턴 카드(SE-13 Task 3, ui.js buildPatternMatchBlock/patternCardEl).
+   공개 뷰어(index.html)의 .patterncard는 판정색 --red로 강조하지만,
+   SE는 이 derived 블록 전반의 규칙(위 .derived 주석 — v0.8.5, 값과
+   무관하게 항상 같은 --amber2)을 그대로 따른다 — 패턴이 severity별로
+   다른 색을 받지 않는다(애초에 severity가 데이터에 없다, Task 2 export
+   단계에서 제외). */
+.pattern-card{margin-bottom:20px}
+.pattern-card h4{font-size:13px;font-weight:normal;color:var(--dim2);
+                  font-family:var(--mono);margin:0 0 6px}
+.pattern-evidence-list{margin:4px 0 8px;padding-left:18px;font-size:12px}
+.pattern-evidence-list li.doc{cursor:pointer}
+.pattern-field-evidence{margin:4px 0 8px;padding-left:18px;font-size:12px;color:var(--dim)}
 #head{display:flex;align-items:center;gap:12px;justify-content:space-between}
 /* #theme-toggle(아래)는 position:fixed로 항상 top:10px;right:12px에
    떠 있고 #panel보다 z-index가 높다.

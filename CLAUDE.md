@@ -502,6 +502,13 @@ PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설
 }
 ```
 
+> `CROSS_SIGNAL_PATTERNS`(`name`/`description`/`signal_sequence`/`timeline_months`/`field_evidence`)를
+> 바꾼 뒤에는 `python scripts/export_tool_data.py`로 `docs/tool/signals-data.json`을 **수동
+> 재생성**해야 합니다(CI 자동 실행 없음, SE-13 Task 2 확인). `severity`는 export 대상이 아니므로
+> 재생성이 필요 없지만 나머지 필드는 두 뷰어(`docs/tool/index.html`, `docs/tool/se/`)가 그대로
+> 읽으므로 잊으면 드리프트가 생깁니다. 재생성 후 `python -m pytest tests/test_export_tool_data.py -v`로
+> 검증하세요.
+
 등록 패턴 9개 (v0.6.0 기준):
 - **기존 4개 (전통 위기 사이클)**: `founder_fade`(창업주 퇴장), `debt_spiral`(부채 악순환), `reverse_split_spiral`(무상감자 나선), `related_party_hollowing`(특수관계자 자산 공동화)
 - **v0.4.0 신규 4개 (금감원 사례 기반)**: `zombie_ma`(무자본 M&A), `audit_insider_dump`(감사의견 내부자 덤프), `delisting_evasion`(상폐 회피), `fake_new_biz`(허위 신사업 주가부양)
