@@ -809,9 +809,37 @@ function isMetaOnlyRecords(records) {
 /** isMetaOnlyRecords가 참인 그룹에 붙일 안내문(SE-9 Task 3, 3a). "없다"는
  *  사실만이 아니라 몇 건을 확인했는지(reportCount)도 남긴다 — 표 자체를
  *  없애면서 "없다"만 말하면 "아예 확인을 안 한 것" 같은 인상을 줄 수
- *  있어서다(사용자가 조회 범위·건수를 신뢰할 수 있어야 한다). */
+ *  있어서다(사용자가 조회 범위·건수를 신뢰할 수 있어야 한다).
+ *
+ *  reportCount는 **서로 다른 rcept_no(접수번호, 즉 공시 필증) 개수**여야
+ *  한다 — 행(레코드) 개수가 아니다(최종 리뷰 지적, task-4-report.md 추가
+ *  수정). "보고서 N건"이라는 문구가 이미 "N개의 공시"를 뜻하는데, 호출부
+ *  다섯 곳이 제각기 다른 것(사람 수·행 수·dedup 후 행 수)을 세어 넘기고
+ *  있었다 — 특히 dividends 메타-only 그룹은 정의상 한 그룹 = 한 공시
+ *  (rcept_no가 그룹 안에서 상수, dividendPeriodBlocks 주석 참고)인데
+ *  잔존 행 개수(7)를 넘겨 "보고서 7건"이라는 사실과 다른 문구를 냈다.
+ *  이제 모든 호출부가 distinctReportCount(records)로 같은 것을 센다. */
 function metaOnlyNote(reportCount) {
   return "해당 기간에 보고된 내역이 없습니다. (보고서 " + reportCount + "건 확인)";
+}
+
+/** records에서 서로 다른 rcept_no(접수번호) 개수를 센다 — metaOnlyNote가
+ *  "보고서 N건"이라 말할 때 N은 이 값이어야 한다(행 개수가 아니라 실제
+ *  공시 필증 개수, 최종 리뷰 지적). rcept_no가 없거나 isNoDataMarker면
+ *  (식별 불가능한 값) 세지 않는다 — 식별할 수 없는 행을 서로 다른
+ *  보고서로 잘못 부풀리지 않기 위해서다. DART 원본 응답은 list.json 계열
+ *  엔드포인트 전부가 rcept_no를 담아 보내므로(dart_client.py 각
+ *  fetch_* 참고) 실측에서 이 값이 0이 되는 경우는 예상 밖 입력뿐이다. */
+function distinctReportCount(records) {
+  if (!Array.isArray(records)) return 0;
+  const seen = new Set();
+  for (const r of records) {
+    if (!isPlainObject(r)) continue;
+    const v = r.rcept_no;
+    if (isNoDataMarker(v)) continue;
+    seen.add(String(v));
+  }
+  return seen.size;
 }
 
 /** 레코드 전부가 비어 있지 않은 문자열 source 필드를 가지면 true다.
@@ -890,7 +918,7 @@ function sourceGroupedBlocks(records) {
       if (isMetaOnlyRecords(peopleCleaned)) {
         blocks.push({
           title: label(s), table: null, records: null,
-          note: metaOnlyNote(peopleCleaned.length),
+          note: metaOnlyNote(distinctReportCount(peopleCleaned)),
         });
         peoplePushed = true;
       } else {
@@ -934,7 +962,7 @@ function sourceGroupedBlocks(records) {
       if (isMetaOnlyRecords(detailCleaned)) {
         blocks.push({
           title: label(s), table: null, records: null,
-          note: metaOnlyNote(detailCleaned.length),
+          note: metaOnlyNote(distinctReportCount(detailCleaned)),
         });
       } else {
         const dt = tableLayout(detailCleaned);
@@ -950,7 +978,7 @@ function sourceGroupedBlocks(records) {
           // 수렴시킨다(브리프: 서로 다른 두 문구를 배우게 하지 않는다).
           blocks.push({
             title: label(s), table: null, records: null,
-            note: metaOnlyNote(split.people.length),
+            note: metaOnlyNote(distinctReportCount(split.people)),
           });
         }
       }
@@ -985,7 +1013,7 @@ function sourceGroupedBlocks(records) {
     if (isMetaOnlyRecords(cleaned)) {
       blocks.push({
         title: label(s), table: null, records: null,
-        note: metaOnlyNote(cleaned.length),
+        note: metaOnlyNote(distinctReportCount(cleaned)),
       });
       continue;
     }
@@ -2080,7 +2108,7 @@ function dividendPeriodBlocks(records) {
     if (isMetaOnlyRecords(forBlankCheck)) {
       blocks.push({
         title: title, table: null, records: null,
-        note: metaOnlyNote(dedup.kept.length),
+        note: metaOnlyNote(distinctReportCount(dedup.kept)),
       });
       continue;
     }
@@ -4157,7 +4185,7 @@ if (typeof module !== "undefined" && module.exports) {
     fundChainDisclosureHints,
     markNumber, MARK_RULES, cellMarks, markedColumnKeys, indicatorCellWhy,
     isAggregateRow, splitAggregateRows, splitVisibleFolded, MAX_VISIBLE_COLUMNS,
-    MIN_FOLD_COUNT, isMetaOnlyRecords, metaOnlyNote,
+    MIN_FOLD_COUNT, isMetaOnlyRecords, metaOnlyNote, distinctReportCount,
     EXEC_TREASURY_PADDING_FIELDS, isPaddingRow, splitPaddingRows,
     INDICATOR_CATEGORY_ORDER, INDICATOR_PRIMARY, INDICATOR_NOTES,
     formatIndicator, indicatorBlocks, indicatorChartRecords,

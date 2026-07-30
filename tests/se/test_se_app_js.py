@@ -2418,6 +2418,44 @@ class TestMetaOnlyRecordsHideTableBody(unittest.TestCase):
             "해당 기간에 보고된 내역이 없습니다. (보고서 1건 확인)",
         )
 
+    def test_repeated_rcept_no_counts_as_one_report_not_per_row(self):
+        """최종 리뷰 지적: metaOnlyNote의 N은 행(레코드) 개수가 아니라
+        서로 다른 rcept_no(공시 필증) 개수여야 한다. 아래 픽스처는 행이
+        3개지만 rcept_no는 2종류뿐이다(같은 공시 안에 여러 항목 행이
+        나오는 실제 DART 응답 모양 — dividends의 "그룹 안에서는 rcept_no가
+        상수" 실측과 같은 이유로, 한 공시가 여러 행을 낼 수 있다). 행
+        개수를 세면 "3건", 정직한 값은 "2건"이다."""
+        records = [
+            {
+                "source": "hyslr_chg", "rcept_no": "20260515002529",
+                "corp_cls": "K", "corp_code": "00963976", "corp_name": "SG",
+                "change_on": "-", "mxmm_shrholdr_nm": "-", "posesn_stock_co": "-",
+                "qota_rt": "-", "change_cause": "-", "rm": "-",
+                "stlm_dt": "2026-03-31", "bsns_year": "2026", "reprt_code": "11013",
+            },
+            {
+                "source": "hyslr_chg", "rcept_no": "20260515002529",
+                "corp_cls": "K", "corp_code": "00963976", "corp_name": "SG",
+                "change_on": "-", "mxmm_shrholdr_nm": "-", "posesn_stock_co": "-",
+                "qota_rt": "-", "change_cause": "-", "rm": "-",
+                "stlm_dt": "2026-03-31", "bsns_year": "2026", "reprt_code": "11013",
+            },
+            {
+                "source": "hyslr_chg", "rcept_no": "20260316001642",
+                "corp_cls": "K", "corp_code": "00963976", "corp_name": "SG",
+                "change_on": "-", "mxmm_shrholdr_nm": "-", "posesn_stock_co": "-",
+                "qota_rt": "-", "change_cause": "-", "rm": "-",
+                "stlm_dt": "2025-12-31", "bsns_year": "2025", "reprt_code": "11011",
+            },
+        ]
+        got = run_js(f"sourceGroupedBlocks({json.dumps(records, ensure_ascii=False)})")
+        self.assertEqual(
+            got[0].get("note"),
+            "해당 기간에 보고된 내역이 없습니다. (보고서 2건 확인)",
+            "행이 3개라도 서로 다른 rcept_no는 2개뿐이므로 안내문은 "
+            "\"2건\"이어야 합니다 — 행 개수(3)를 그대로 세면 안 됩니다",
+        )
+
     def test_filled_record_still_gets_a_table_and_no_note(self):
         """값이 있으면(2026 1분기 17.40%처럼) 여전히 표를 그대로 보여준다
         — 3a는 meta-only일 때만 표를 숨긴다."""
@@ -9671,7 +9709,12 @@ class TestDividendPeriodBlocksSGShapedFixture(unittest.TestCase):
         blank = [b for b in blocks if b["table"] is None]
         self.assertEqual(len(blank), 1)
         self.assertEqual(blank[0]["title"], "2026 1분기보고서 (결산일 2026-03-31)")
-        self.assertEqual(blank[0]["note"], "해당 기간에 보고된 내역이 없습니다. (보고서 7건 확인)")
+        # 최종 리뷰 지적: 이 그룹은 잔존 행이 7개지만 rcept_no는
+        # "20260515002529" 하나뿐이다(_build_sg_shaped_dividend_fixture
+        # 참고 — 그룹 안에서는 rcept_no가 상수). "보고서 N건"은 행 개수가
+        # 아니라 서로 다른 rcept_no(공시 필증) 개수여야 정직하다 — 실제로
+        # 이 그룹은 공시 1건이다.
+        self.assertEqual(blank[0]["note"], "해당 기간에 보고된 내역이 없습니다. (보고서 1건 확인)")
 
 
 @unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
@@ -9698,8 +9741,11 @@ class TestDividendPeriodBlocksSGShapedRenderWiring(unittest.TestCase):
         got = run_render_section(
             '"dividends"', json.dumps(_build_sg_shaped_dividend_fixture(), ensure_ascii=False)
         )
+        # 이 그룹은 잔존 행 7개가 전부 같은 rcept_no("20260515002529")를
+        # 공유하는 공시 1건이다 — "보고서 N건"은 그 정직한 값(1)을 말해야
+        # 한다(최종 리뷰 지적, 위 test_exactly_one_group_is_fully_blank 참고).
         self.assertIn(
-            "해당 기간에 보고된 내역이 없습니다. (보고서 7건 확인)", got["notes"],
+            "해당 기간에 보고된 내역이 없습니다. (보고서 1건 확인)", got["notes"],
             "Task 3a와 같은 문구가 실렌더에서 나오지 않았습니다",
         )
 
