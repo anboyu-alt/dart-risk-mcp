@@ -393,8 +393,8 @@ function isFootnoteMarkerOnly(v) {
  */
 function footnoteMarkerNote(v, rceptNo) {
   if (!isFootnoteMarkerOnly(v)) return v;
-  let note = v + " (공시 원문의 각주로만 제공됩니다 — 본문은 DART 구조화 데이터에 없습니다)";
-  if (rceptNo) note += " · 접수번호 " + rceptNo + "의 원문에서 확인 가능";
+  let note = v + " (공시 원문 참고)";
+  if (rceptNo) note += " · 접수번호 " + rceptNo;
   return note;
 }
 

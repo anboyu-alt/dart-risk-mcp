@@ -1026,7 +1026,7 @@ class TestFootnoteMarkerNote(unittest.TestCase):
     def test_marker_keeps_original_marker_and_adds_honest_note(self):
         got = run_js('footnoteMarkerNote("주1)")')
         self.assertIn("주1)", got, "원문 마커가 사라졌습니다")
-        self.assertIn("각주", got, "정직한 안내 문구가 없습니다")
+        self.assertIn("원문 참고", got, "정직한 안내 문구가 없습니다")
 
     def test_prose_reason_passes_through_unchanged(self):
         """진짜 본문이 있는 사유는 지금처럼 그대로 보여준다 — 이 함수는
@@ -1059,7 +1059,7 @@ class TestFootnoteMarkerRmReuse(unittest.TestCase):
     def test_rm_footnote_marker_gets_honest_note_not_mangled_by_remark_decode(self):
         got = run_js('formatValue("rm", "주1)")')
         self.assertIn("주1)", got, "원문 마커가 사라지거나 문자 단위로 깨졌습니다")
-        self.assertIn("각주", got)
+        self.assertIn("원문 참고", got)
         self.assertNotIn("주 · 1 · )", got, "formatRemark의 문자 단위 분해로 깨졌습니다")
 
     def test_rm_disclosure_code_still_uses_remark_decode(self):
@@ -1103,7 +1103,7 @@ class TestFootnoteMarkerRenderedInFundChain(unittest.TestCase):
             "각주 마커만 있고 안내 문구가 없는 셀이 남아 있습니다 — "
             "원본 표와 파생 카드 중 한쪽만 고쳐진 것으로 보입니다",
         )
-        self.assertTrue(any("각주" in t for t in matched),
+        self.assertTrue(any("원문 참고" in t for t in matched),
                          "원문 마커 옆에 정직한 안내 문구가 실제 DOM에 없습니다")
 
     def test_prose_diff_reason_still_renders_as_is(self):
