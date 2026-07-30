@@ -23,6 +23,7 @@ from dart_risk_mcp.core.signals import (  # noqa: E402
     SIGNAL_TYPES,
     CAPITAL_EVENT_KEYS,
 )
+from dart_risk_mcp.core.taxonomy import CROSS_SIGNAL_PATTERNS  # noqa: E402
 
 
 class TestBuildSignalsData(unittest.TestCase):
@@ -36,11 +37,26 @@ class TestBuildSignalsData(unittest.TestCase):
         self.assertIn("GOING_CONCERN", keys)
 
     def test_no_internal_score_or_severity(self):
+        """v0.8.5 무점수 원칙: score(내부 정렬용)·severity(등급)는 판정으로
+        읽히므로 계속 미노출. field_evidence(사실 인용)는 SE-13 Task 2부터
+        노출 대상 — 별도 테스트(test_field_evidence_exported_matches_core)."""
         for s in self.data["signals"]:
             self.assertNotIn("score", s)
         for p in self.data["patterns"]:
             self.assertNotIn("severity", p)
-            self.assertNotIn("field_evidence", p)
+
+    def test_field_evidence_exported_matches_core(self):
+        """SE-13 Task 2: field_evidence(금감원 보도자료·사례 인용)는 사실
+        서술이라 판정(severity)과 달리 export 대상. core 원문과 완전히
+        일치해야 한다(왜곡·재구성 없이 그대로)."""
+        by_key = {p["key"]: p for p in self.data["patterns"]}
+        self.assertEqual(set(by_key), set(CROSS_SIGNAL_PATTERNS))
+        for slug, core_pattern in CROSS_SIGNAL_PATTERNS.items():
+            exported = by_key[slug]
+            self.assertIn("field_evidence", exported)
+            self.assertIsInstance(exported["field_evidence"], list)
+            self.assertEqual(exported["field_evidence"],
+                              list(core_pattern["field_evidence"]))
 
     def test_signal_fields_and_category(self):
         s = next(x for x in self.data["signals"] if x["key"] == "CB_BW")

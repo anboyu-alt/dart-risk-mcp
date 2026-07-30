@@ -5,7 +5,15 @@ signals.py·taxonomy.py를 유일한 진실(source of truth)로 두고, 브라�
 키워드 이중 관리를 방지한다.
 
 공개 아티팩트 경계 (v0.8.5 무점수 원칙의 공개 데이터 확장):
-- 신호의 내부 정렬용 score, 패턴의 severity/field_evidence는 내보내지 않는다.
+- 신호의 내부 정렬용 score, 패턴의 severity(CRITICAL/HIGH 등급)는
+  내보내지 않는다 — 등급·판정으로 읽히기 때문이다.
+- 패턴의 field_evidence(금감원 보도자료·실제 사례 인용, 예: "2025-03-10
+  금감원: 사모CB·BW 허위자금조달 조직적 세력 적발 — 검찰 고발")는
+  SE-13 Task 2부터 내보낸다. severity와 달리 이건 날짜·기업명·규제기관
+  조치·금액의 사실 서술이지 우리가 매긴 판정이 아니다 — "왜 이 패턴이
+  등록됐는지"를 뒷받침하는 근거이지 기업 위험도 등급이 아니다. 9종 전체
+  원문을 v0.8.5 판정 어휘 기준으로 실측 검사해 통과한 뒤 그대로(왜곡
+  없이) 반영했다.
 - 인물 관련 데이터는 애초에 포함 대상이 아니다.
 
 사용:
@@ -121,6 +129,8 @@ def build_signals_data() -> dict:
             "description": p["description"],
             "signal_sequence": list(p["signal_sequence"]),
             "timeline_months": p["timeline_months"],
+            # 사실 인용(날짜·기업명·규제기관 조치) — severity는 계속 제외.
+            "field_evidence": list(p["field_evidence"]),
         }
         for slug, p in CROSS_SIGNAL_PATTERNS.items()
     ]
