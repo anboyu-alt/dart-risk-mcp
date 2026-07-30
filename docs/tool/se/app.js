@@ -393,8 +393,8 @@ function isFootnoteMarkerOnly(v) {
  */
 function footnoteMarkerNote(v, rceptNo) {
   if (!isFootnoteMarkerOnly(v)) return v;
-  let note = v + " (공시 원문의 각주로만 제공됩니다 — 본문은 DART 구조화 데이터에 없습니다)";
-  if (rceptNo) note += " · 접수번호 " + rceptNo + "의 원문에서 확인 가능";
+  let note = v + " (공시 원문 참고)";
+  if (rceptNo) note += " · 접수번호 " + rceptNo;
   return note;
 }
 
@@ -806,6 +806,42 @@ function isMetaOnlyRecords(records) {
   return true;
 }
 
+/** isMetaOnlyRecords가 참인 그룹에 붙일 안내문(SE-9 Task 3, 3a). "없다"는
+ *  사실만이 아니라 몇 건을 확인했는지(reportCount)도 남긴다 — 표 자체를
+ *  없애면서 "없다"만 말하면 "아예 확인을 안 한 것" 같은 인상을 줄 수
+ *  있어서다(사용자가 조회 범위·건수를 신뢰할 수 있어야 한다).
+ *
+ *  reportCount는 **서로 다른 rcept_no(접수번호, 즉 공시 필증) 개수**여야
+ *  한다 — 행(레코드) 개수가 아니다(최종 리뷰 지적, task-4-report.md 추가
+ *  수정). "보고서 N건"이라는 문구가 이미 "N개의 공시"를 뜻하는데, 호출부
+ *  다섯 곳이 제각기 다른 것(사람 수·행 수·dedup 후 행 수)을 세어 넘기고
+ *  있었다 — 특히 dividends 메타-only 그룹은 정의상 한 그룹 = 한 공시
+ *  (rcept_no가 그룹 안에서 상수, dividendPeriodBlocks 주석 참고)인데
+ *  잔존 행 개수(7)를 넘겨 "보고서 7건"이라는 사실과 다른 문구를 냈다.
+ *  이제 모든 호출부가 distinctReportCount(records)로 같은 것을 센다. */
+function metaOnlyNote(reportCount) {
+  return "해당 기간에 보고된 내역이 없습니다. (보고서 " + reportCount + "건 확인)";
+}
+
+/** records에서 서로 다른 rcept_no(접수번호) 개수를 센다 — metaOnlyNote가
+ *  "보고서 N건"이라 말할 때 N은 이 값이어야 한다(행 개수가 아니라 실제
+ *  공시 필증 개수, 최종 리뷰 지적). rcept_no가 없거나 isNoDataMarker면
+ *  (식별 불가능한 값) 세지 않는다 — 식별할 수 없는 행을 서로 다른
+ *  보고서로 잘못 부풀리지 않기 위해서다. DART 원본 응답은 list.json 계열
+ *  엔드포인트 전부가 rcept_no를 담아 보내므로(dart_client.py 각
+ *  fetch_* 참고) 실측에서 이 값이 0이 되는 경우는 예상 밖 입력뿐이다. */
+function distinctReportCount(records) {
+  if (!Array.isArray(records)) return 0;
+  const seen = new Set();
+  for (const r of records) {
+    if (!isPlainObject(r)) continue;
+    const v = r.rcept_no;
+    if (isNoDataMarker(v)) continue;
+    seen.add(String(v));
+  }
+  return seen.size;
+}
+
 /** 레코드 전부가 비어 있지 않은 문자열 source 필드를 가지면 true다.
  *
  *  이 조건으로만 sourceGroupedBlocks를 태운다 — "source가 없는 데이터
@@ -849,10 +885,18 @@ function sourceGroupedBlocks(records) {
     // 대량보유 이력")이 이미 같은 정보를 한국어로 말하고 있다 — 같은
     // 것을 원본 키 값과 한국어 라벨 두 가지로 부르는 표기 불일치였다.
     // 숨기는 게 아니다: 값 자체는 title에 여전히 그대로 남는다.
+    //
+    // SE-9 Task 2: source를 뺀 직후 reorderRecordFields로 열 순서를
+    // 명시 규칙으로 고정한다 — jsonb가 삽입 순서를 파괴해도(위 함수
+    // 주석 참고) 이 그룹만은 배포본에서도 순서가 살아남는다.
+    // SOURCE_PRIORITY_KEYS에 없는 source(실측 안 된 우선순위)는 빈
+    // 배열로 폴백해 tail 일반 규칙만 적용한다 — 추측으로 우선순위를
+    // 만들지 않는다(brief 제약).
+    const priorityKeys = SOURCE_PRIORITY_KEYS[s] || [];
     const withoutSource = groups.get(s).map(function (r) {
       const copy = Object.assign({}, r);
       delete copy.source;
-      return copy;
+      return reorderRecordFields(copy, priorityKeys, RECORD_TAIL_KEYS);
     });
 
     // hyslr(최대주주 현황)에는 합계 행("계")이 사람 이름(nm) 자리에 섞여
@@ -866,13 +910,77 @@ function sourceGroupedBlocks(records) {
     if (s === "hyslr") {
       const split = splitAggregateRows(withoutSource);
       const peopleCleaned = dropAllEmptyColumns(split.people);
-      const pt = tableLayout(peopleCleaned);
-      if (pt) {
-        const pBlock = { title: label(s), table: pt, records: peopleCleaned };
-        if (isMetaOnlyRecords(peopleCleaned)) {
-          pBlock.note = "해당 기간에 보고된 내역이 없습니다.";
+      // SE-9 Task 3(3a): peopleCleaned가 메타-only면(사람 행은 있는데
+      // 실데이터가 전부 "-") 아래 일반 분기와 같은 판정을 쓴다 — 표를
+      // 만들지 않고 안내문(건수 포함)만 남긴다. 자세한 이유는 아래
+      // 일반 분기의 3a 주석 참고(같은 판정을 여기서 다시 설명하지 않는다).
+      let peoplePushed = false;
+      if (isMetaOnlyRecords(peopleCleaned)) {
+        blocks.push({
+          title: label(s), table: null, records: null,
+          note: metaOnlyNote(distinctReportCount(peopleCleaned)),
+        });
+        peoplePushed = true;
+      } else {
+        const pt = tableLayout(peopleCleaned);
+        if (pt) {
+          blocks.push({ title: label(s), table: pt, records: peopleCleaned });
+          peoplePushed = true;
         }
-        blocks.push(pBlock);
+      }
+      let totalsPushed = false;
+      if (split.totals.length > 0) {
+        const totalsCleaned = dropAllEmptyColumns(split.totals);
+        const tt = tableLayout(totalsCleaned);
+        if (tt) {
+          blocks.push({ title: label(s) + " · 합계", table: tt, records: totalsCleaned });
+          totalsPushed = true;
+        }
+      }
+      if (!peoplePushed && !totalsPushed) {
+        blocks.push({ title: label(s), table: null, records: null });
+      }
+      continue;
+    }
+
+    // exec_treasury(임원·주요주주 자기주식)에는 두 가지 잡음이 섞여
+    // 온다(SE-9 조사 se9-investigation.md Item 2-2 실측):
+    // ① 소계/총계 행이 상세 행 사이에 acqs_mth3 값("소계" 등)으로
+    //    섞여 온다 — hyslr의 "계"와 같은 문제이지만 검사 필드가 다르다.
+    //    isAggregateRow/splitAggregateRows를 필드 매개변수화해(3b, 기본값
+    //    nm — hyslr·major_holders 기존 호출부는 그대로) 재사용한다.
+    // ② 같은 (rcept_no, acqs_mth1~3) 조합에 "쌍둥이" 행이 있다 — SG
+    //    실측(lookback 2년) 145행 중 72그룹이 한쪽은 실데이터, 다른 한쪽은
+    //    stock_knd·5개 수량 필드·rm 전부 "-"다. 빈 쪽은 정보가 아니라
+    //    표만 두 배로 늘릴 뿐이라 생략하되(3c), 몇 건을 생략했는지는
+    //    캡션(note)에 정직하게 남긴다 — 값이 하나라도 있으면(3a와 같은
+    //    원칙) 생략하지 않는다.
+    if (s === "exec_treasury") {
+      const split = splitAggregateRows(withoutSource, "acqs_mth3");
+      const padding = splitPaddingRows(split.people, EXEC_TREASURY_PADDING_FIELDS);
+      const detailCleaned = dropAllEmptyColumns(padding.kept);
+      if (isMetaOnlyRecords(detailCleaned)) {
+        blocks.push({
+          title: label(s), table: null, records: null,
+          note: metaOnlyNote(distinctReportCount(detailCleaned)),
+        });
+      } else {
+        const dt = tableLayout(detailCleaned);
+        if (dt) {
+          const dBlock = { title: label(s), table: dt, records: detailCleaned };
+          if (padding.omitted > 0) {
+            dBlock.note = "내용 없는 행 " + padding.omitted + "건 생략";
+          }
+          blocks.push(dBlock);
+        } else if (split.people.length > 0) {
+          // 상세 행이 있었지만(소계/총계 제외) 전부 패딩이라 표 자체가
+          // 사라졌다 — "N건 생략" 대신 3a와 같은 메타-only 안내 형식으로
+          // 수렴시킨다(브리프: 서로 다른 두 문구를 배우게 하지 않는다).
+          blocks.push({
+            title: label(s), table: null, records: null,
+            note: metaOnlyNote(distinctReportCount(split.people)),
+          });
+        }
       }
       if (split.totals.length > 0) {
         const totalsCleaned = dropAllEmptyColumns(split.totals);
@@ -881,28 +989,37 @@ function sourceGroupedBlocks(records) {
           blocks.push({ title: label(s) + " · 합계", table: tt, records: totalsCleaned });
         }
       }
-      if (!pt && split.totals.length === 0) {
-        blocks.push({ title: label(s), table: null, records: null });
-      }
       continue;
     }
 
     const cleaned = dropAllEmptyColumns(withoutSource);
-    const t = tableLayout(cleaned);
     // records는 표가 실제로 그린 것과 같은 레코드(source 제거·빈 열 제거
     // 반영 후)를 그대로 싣는다 — 다음 태스크(차트)가 이 레코드로 그리므로
     // 표와 다른 값을 보여주면 안 된다.
+    //
+    // SE-9 Task 3(3a) — task-6(SE-4f)의 "표는 지우지 않는다(접수번호로
+    // 원문을 직접 열어 확인할 수 있어야 한다)" 결정을 뒤집는다. 그
+    // 결정으로 실제 배포본에서 나온 결과를 실사용자(SG)가 재지적했다:
+    // 안내문이 이미 "내역이 없다"고 말하는데, 그 밑에 식별자(rcept_no·
+    // stlm_dt 등)만 남은 표가 그대로 깔려 있는 게 오히려 혼란스럽다 —
+    // "없다"고 말해놓고 표를 보여주면 사용자는 표에서 뭔가를 다시
+    // 찾으려 하게 된다. 원문 접근성 문제(접수번호로 원문을 열 수 있어야
+    // 한다는 옛 근거)는 이제 다른 경로가 해결한다 — 공시 목록 탭이
+    // 접수번호·원문 링크를 이미 별도로 제공하므로, 이 표가 사라져도
+    // 원문을 못 찾게 되지 않는다. 그래서 메타-only면 표 자체를 만들지
+    // 않고 안내문만 남기되, 몇 건을 확인했는지(N)는 함께 남긴다 —
+    // "이상 없음"·"정상" 같은 판정 어휘가 아니라 "보고된 내역이 없다"는
+    // 사실과 확인 건수만 말한다(v0.8.5 원칙).
+    if (isMetaOnlyRecords(cleaned)) {
+      blocks.push({
+        title: label(s), table: null, records: null,
+        note: metaOnlyNote(distinctReportCount(cleaned)),
+      });
+      continue;
+    }
+    const t = tableLayout(cleaned);
     if (t) {
-      const block = { title: label(s), table: t, records: cleaned };
-      // task-6: 표는 지우지 않는다(접수번호로 원문을 직접 열어 확인할 수
-      // 있어야 한다 — 우리 판단이 틀렸을 때의 검증 경로이기도 하다). 다만
-      // 남은 열이 식별자·메타뿐이면(isMetaOnlyRecords) 그 사실 자체를
-      // 문구로 알린다 — "이상 없음"·"정상" 같은 판정 어휘가 아니라
-      // "보고된 내역이 없다"는 사실만 말한다(v0.8.5 원칙).
-      if (isMetaOnlyRecords(cleaned)) {
-        block.note = "해당 기간에 보고된 내역이 없습니다.";
-      }
-      blocks.push(block);
+      blocks.push({ title: label(s), table: t, records: cleaned });
     }
   }
   return blocks;
@@ -1163,38 +1280,93 @@ function omitHiddenIds(value) {
 // 사이에 뒤섞여 읽기 힘든 게 문제이지 합계 자체가 문제가 아니다(브리프
 // 원칙: "합계를 없애라는 게 아니다"). splitAggregateRows가 같은 표 안에서
 // 사람 행과 합계 행을 분리해 각자 제자리(사람 목록 / 합계 소계)에 둔다.
-const AGGREGATE_ROW_NAMES = new Set(["계", "합계", "총계"]);
+//
+// "소계"는 SE-9 Task 3(3b)에서 추가했다 — exec_treasury(임원·주요주주
+// 자기주식)의 acqs_mth3(취득방법3) 필드가 "소계"로 부분합계 행을 표시한다
+// (se9-investigation.md Item 2-2 실측). hyslr·major_holders(nm 필드)에는
+// "소계"가 실측된 적이 없지만, 같은 집합을 공유해도 해가 없다 — "소계"도
+// 한국어로 합계류 값이고, 어떤 nm 값도 우연히 "소계"와 같아질 사람 이름이
+// 아니다(동명이인 함정과 무관).
+const AGGREGATE_ROW_NAMES = new Set(["계", "합계", "총계", "소계"]);
 
-/** 이 레코드가 합계 행("계"·"합계"·"총계")인가. nm이 아예 없거나 문자열이
- *  아니면(예상 밖 응답) 사람 행으로 본다 — 판정을 못 하면 지우지도, 다르게
- *  다루지도 않는 쪽이 안전하다.
+/** r[field]가 합계류 값("계"·"합계"·"총계"·"소계")인가. field 생략 시
+ *  기본값은 "nm"(major_holders·hyslr이 사람을 식별하는 필드) — 기존
+ *  호출부(field를 안 주는 곳)는 전부 이 기본값으로 동작이 그대로다.
+ *  field 값이 아예 없거나 문자열이 아니면(예상 밖 응답) 합계가 아닌
+ *  쪽(사람/상세 행)으로 본다 — 판정을 못 하면 지우지도, 다르게 다루지도
+ *  않는 쪽이 안전하다.
  *
  *  비교 전에 모든 공백(앞뒤·내부)을 제거한다 — DART가 "합 계"처럼 내부에
  *  공백을 넣어 보내는 경우가 있어 trim()만으로는 사람 목록에 남는다.
  *  다만 공백 "제거"이지 부분/접두 일치가 아니다 — "계상혁"처럼 실제
  *  인물명은 공백이 없어 원래 글자 그대로 남고, AGGREGATE_ROW_NAMES의
  *  어떤 항목과도 같아지지 않는다(동명이인 원칙과 같은 이유로 정확히
- *  일치할 때만 합계로 분류한다).
+ *  일치할 때만 합계로 분류한다). field를 "acqs_mth3"로 바꿔도(exec_treasury)
+ *  이 정확 일치 규칙은 그대로다 — SE-9 Task 3 3b, 필드만 매개변수화했지
+ *  판정 방식은 바꾸지 않았다.
  *
  *  splitAggregateRows(표를 사람/합계로 나누기)와 shareholders 강조 규칙
  *  (합계 행에는 강조를 붙이지 않기, 이 파일 아래쪽) 두 곳이 이 하나의
  *  판정을 공유한다 — 같은 질문을 두 군데서 각자 답하면 "계상혁 함정"도
- *  두 군데서 각자 재발한다. */
-function isAggregateRow(r) {
-  const nm = isPlainObject(r) ? r.nm : undefined;
-  return typeof nm === "string" && AGGREGATE_ROW_NAMES.has(nm.replace(/\s+/g, ""));
+ *  두 군데서 각자 재발한다. shareholders 강조 규칙은 field를 지정하지
+ *  않고 부르므로(기존 호출부) 기본값 "nm"을 그대로 쓴다. */
+function isAggregateRow(r, field) {
+  const f = field || "nm";
+  const v = isPlainObject(r) ? r[f] : undefined;
+  return typeof v === "string" && AGGREGATE_ROW_NAMES.has(v.replace(/\s+/g, ""));
 }
 
-/** records(major_holders 등, nm 필드로 사람을 식별하는 레코드 목록)를
- *  {people, totals}로 나눈다(판정은 isAggregateRow 하나에 맡긴다). */
-function splitAggregateRows(records) {
+/** records를 {people, totals}로 나눈다(판정은 isAggregateRow 하나에
+ *  맡긴다). field 생략 시 기본값 "nm"(major_holders·hyslr) — SE-9 Task 3
+ *  3b에서 exec_treasury("acqs_mth3")를 위해 매개변수화했다. */
+function splitAggregateRows(records, field) {
   const people = [];
   const totals = [];
   for (const r of records) {
-    if (isAggregateRow(r)) totals.push(r);
+    if (isAggregateRow(r, field)) totals.push(r);
     else people.push(r);
   }
   return { people: people, totals: totals };
+}
+
+// exec_treasury(임원·주요주주 자기주식)의 "쌍둥이" 빈 행 판정 필드
+// (SE-9 Task 3, 3c). se9-investigation.md Item 2-2 실측: SG lookback 2년
+// 145행 중 72그룹이 (rcept_no, acqs_mth1, acqs_mth2, acqs_mth3)로 묶었을 때
+// 한쪽은 실데이터, 다른 한쪽은 stock_knd(주식종류)·5개 수량 필드·rm(비고)
+// 전부가 리터럴 "-"다 — 이는 DART 원본 자체의 모양이다(취득방법 조합마다
+// 주식종류별로 행을 하나씩 내보내는데, 활동이 없는 주식종류에도 빈 행을
+// 낸다). acqs_mth1~3은 일부러 뺐다 — 그 필드들은 빈 쪽에도 "이 행이 어느
+// 취득방법·구분에 해당하는지"를 실제로 말해주는 값이 남아 있어(실측:
+// 빈 쪽도 acqs_mth1="배당가능이익범위 이내 취득" 등 채워져 있다), 여기
+// 넣으면 진짜 빈 행을 놓친다.
+const EXEC_TREASURY_PADDING_FIELDS = [
+  "stock_knd", "bsis_qy", "change_qy_acqs", "change_qy_dsps",
+  "change_qy_incnr", "trmend_qy", "rm",
+];
+
+/** r의 fields 전부가 리터럴 문자열 "-"일 때만 true. isNoDataMarker보다
+ *  좁다(null·빈 문자열은 여기서 패딩으로 보지 않는다) — DART 실측이 이
+ *  자리에 항상 "-"만 채워 보내는 것을 확인했고(위 isNoDataMarker 주석과
+ *  같은 근거), 값이 예상 밖 모양이면 판정을 보수적으로 포기해 행을
+ *  지우지 않는 쪽이 "값이 하나라도 있으면 표를 그대로 보여준다"(3a와
+ *  같은) 원칙에 맞는다. */
+function isPaddingRow(r, fields) {
+  if (!isPlainObject(r)) return false;
+  return fields.every(function (k) { return r[k] === "-"; });
+}
+
+/** records를 fields 기준으로 {kept, omitted}로 나눈다. omitted는 지운
+ *  레코드를 담지 않고 개수만 센다 — 브리프 3c: "캡션에 생략 건수를
+ *  정직하게 표기한다"를 위해 값은 버리되(표에 안 남긴다) 몇 건인지는
+ *  호출부가 알 수 있게 남긴다. */
+function splitPaddingRows(records, fields) {
+  const kept = [];
+  let omitted = 0;
+  for (const r of records) {
+    if (isPaddingRow(r, fields)) omitted++;
+    else kept.push(r);
+  }
+  return { kept: kept, omitted: omitted };
 }
 
 /** 섹션 값을 화면에 그릴 블록 목록 [{title, table}] 또는 [{title, text}]로
@@ -1259,11 +1431,19 @@ function sectionBlocks(value, depth, key) {
     // 방식이라 재귀 호출(하위 어딘가의 우연한 "financials" 키)에는 적용되지
     // 않는다.
     if (d === 0 && key === "financials") records = reorderFinancialsFields(records);
-    // dividends 원본 표: 기준 기간(bsns_year/stlm_dt)이 항목(se)보다도
-    // 뒤에 오는 DART 원본 열 순서를 보기 좋게 재배치한다(SE-8 Task 8A,
-    // reorderDividendsFields 주석 참고). financials와 같은 게이트 방식
-    // (depth 0 + 부모 key)이라 재귀 호출에는 적용되지 않는다.
-    if (d === 0 && key === "dividends") records = reorderDividendsFields(records);
+    // SE-9 Task 4: dividends는 더 이상 단일 평면 표로 그리지 않는다 —
+    // 같은 사업연도·결산일이 매 행마다 반복돼 어느 행이 어느 보고
+    // 시점 것인지 한눈에 안 들어온다는 실사용자(SG) 지적에 따라,
+    // dividendPeriodBlocks가 (bsns_year, reprt_code, stlm_dt) 그룹별로
+    // 표를 나누고 그룹 안에서는 그 필드들을 지워 제목으로 승격한다(아래
+    // dividendPeriodBlocks 주석 참고). 예전에 이 자리에서 부르던
+    // reorderDividendsFields(bsns_year/stlm_dt를 앞으로 당기기만 하던
+    // 재배치)는 이제 무의미하다 — 그 필드 자체가 행에서 사라지기
+    // 때문이다. 이 분기가 아래 sourceGroupedBlocks·tail 일반 규칙보다
+    // 먼저 와야 한다(dividends는 source 필드가 없어 그 분기를 어차피
+    // 안 타지만, tail 일반 규칙에 먼저 걸리면 그룹핑 전에 필드 순서가
+    // 한 번 더 섞인다).
+    if (d === 0 && key === "dividends") return dividendPeriodBlocks(records);
     // insider_timeline처럼 레코드 전부가 source 필드를 가지면(4개
     // 엔드포인트를 합친 결과) source별로 작은 표 여러 개로 나눈다 —
     // source가 없는 다른 섹션은 이 분기를 타지 않는다(recordsHaveSourceField
@@ -1271,6 +1451,17 @@ function sectionBlocks(value, depth, key) {
     // 따로 싣는다(source가 레코드에서 빠지므로 섹션 전체 레코드를
     // 넘기는 방식은 여기서 성립하지 않는다).
     if (recordsHaveSourceField(records)) return sourceGroupedBlocks(records);
+    // SE-9 Task 2: financials는 바로 위 줄에서 이미 자기 규칙으로
+    // 재배치했다 — 여기서 또 건드리면 그 특수 순서가 tail 일반 규칙에
+    // 밀려 깨진다(dividends는 Task 4부터 이 지점에 아예 도달하지 않는다 —
+    // 위 이른 return 참고). financials를 제외한 나머지 모든 평면 배열
+    // (source 없는 원본 표)엔 tail 일반 규칙(메타 키 뒤로, 비고 맨 뒤로)만
+    // 적용한다 — jsonb가 순서를 파괴해도 최소한의 가독성은 명시 규칙으로
+    // 지킨다.
+    const isSpecialCased = d === 0 && key === "financials";
+    if (!isSpecialCased) {
+      records = records.map(function (r) { return reorderRecordFields(r, [], RECORD_TAIL_KEYS); });
+    }
     const t = tableLayout(records);
     return t ? [{ title: null, table: t, records: records }] : [];
   }
@@ -1337,12 +1528,21 @@ function sectionBlocks(value, depth, key) {
     // 사람 쪽에 남긴다.
     if (d === 0 && key === "shareholders" && k === "major_holders") {
       const arr = Array.isArray(value[k]) ? value[k] : [];
+      // splitAggregateRows는 원본 필드 순서(잡담 jsonb 순서 포함)로 사람/
+      // 합계를 나눈다 — isAggregateRow는 nm 값만 보고 열 순서와는 무관하니
+      // 분리 자체는 재배치 전에 해도 안전하다. tail 재배치는 분리된 각
+      // 레코드에 나머지 평면 배열과 같은 규칙(RECORD_TAIL_KEYS)으로 적용해
+      // 사람 표·합계 표 둘 다 jsonb 순서 파괴에서 벗어나게 한다.
       const split = splitAggregateRows(arr);
-      const peopleRecords = toRecords(split.people) || [];
+      const peopleRecords = (toRecords(split.people) || []).map(function (r) {
+        return reorderRecordFields(r, [], RECORD_TAIL_KEYS);
+      });
       const pt = tableLayout(peopleRecords);
       if (pt) blocks.push({ title: label(k), table: pt, records: peopleRecords });
       if (split.totals.length > 0) {
-        const totalRecords = toRecords(split.totals) || [];
+        const totalRecords = (toRecords(split.totals) || []).map(function (r) {
+          return reorderRecordFields(r, [], RECORD_TAIL_KEYS);
+        });
         const tt = tableLayout(totalRecords);
         if (tt) blocks.push({ title: label(k) + " · 합계", table: tt, records: totalRecords });
       }
@@ -1649,6 +1849,77 @@ function reorderFinancialsFields(records) {
   return records.map(reorderFinancialsRecord);
 }
 
+/** record(레코드 하나)의 키를 priorityKeys(주어진 순서대로 앞으로) →
+ *  나머지(원본 상대 순서 유지) → tailKeys(주어진 순서대로 뒤로) 순으로
+ *  재배치한다. 값은 하나도 바꾸지 않는다 — 순서만 바꾼다.
+ *
+ *  **왜 필요한가(SE-9 조사, docs/superpowers/plans/2026-07-30-se-9-table-
+ *  legibility.md "핵심 발견")**: se_server가 섹션 상태를 Postgres jsonb로
+ *  저장한다(se_server/jobs/schema.sql:6 `state jsonb not null`). Postgres
+ *  jsonb는 객체를 저장할 때 키를 **길이순 → 바이트순**으로 조용히
+ *  재정렬한다 — DART가 준 원 순서도, 로컬 dict(삽입 순서 보존)의 순서도
+ *  아니다. tableLayout이 레코드의 키 "등장 순서"를 그대로 헤더로 쓰는 한
+ *  (Object.keys 기반), 배포본의 모든 표는 이 jsonb 정렬로 렌더된다 —
+ *  실사용자(SG) 스크린샷의 "비고가 첫 열" 같은 기괴한 순서가 정확히
+ *  이것이었다. **명시적으로 재배치한 열만** 배포본에서 순서가 살아남는다.
+ *
+ *  reorderDividendsRecord(SE-8 Task 8A, priorityKeys만 있고 tailKeys가
+ *  없는 특수화)의 "우선 키를 앞으로" 로직을 일반화하고 "tail 키를 뒤로"를
+ *  더한 것이다.
+ *
+ *  priorityKeys·tailKeys 각각 레코드에 실제로 있는 키만, 주어진 배열
+ *  순서 그대로 앞/뒤로 옮긴다. 둘 다에 없는 키("나머지")는 원본 상대
+ *  순서를 그대로 유지한다. 한 키가 두 목록에 동시에 있으면 priorityKeys가
+ *  이긴다(뒤로 보내라는 tailKeys 쪽 지시를 무시). priorityKeys·tailKeys
+ *  둘 다 레코드에서 하나도 못 찾으면(옮길 기준점이 없다) 원본을 그대로
+ *  돌려준다 — reorderFinancialsRecord와 같은 방어(임의로 아무 열이나
+ *  앞뒤로 당기면 오히려 임의 순서가 된다). */
+function reorderRecordFields(record, priorityKeys, tailKeys) {
+  if (!record || typeof record !== "object") return record;
+  const keys = Object.keys(record);
+  const pKeys = Array.isArray(priorityKeys) ? priorityKeys : [];
+  const tKeys = Array.isArray(tailKeys) ? tailKeys : [];
+
+  const front = pKeys.filter(function (k) { return k in record; });
+  const frontSet = new Set(front);
+  const tail = tKeys.filter(function (k) { return !frontSet.has(k) && k in record; });
+  if (front.length === 0 && tail.length === 0) return record;
+
+  const tailSet = new Set(tail);
+  const middle = keys.filter(function (k) { return !frontSet.has(k) && !tailSet.has(k); });
+  const newKeys = front.concat(middle, tail);
+
+  const out = Object.create(null);
+  for (const k of newKeys) out[k] = record[k];
+  return out;
+}
+
+// 전 표 공통 tail 규칙(brief "일반 규칙"): 메타 키(stlm_dt·bsns_year·
+// reprt_code·rcept_no)는 실질 열 뒤로, 비고(rm)는 맨 뒤로 — 이 배열 순서
+// 그대로 tailKeys에 넘기면 rm이 자동으로 최후미가 된다. corp_cls·
+// corp_code·corp_name은 일부러 뺐다 — 그 셋은 값이 상수면 tableLayout의
+// 캡션 승격이 이미 표 밖(캡션)으로 뺀다. 여기 넣으면 그 승격과 뒤섞여
+// "정체를 밝힐 뿐 사건을 서술하지 않는 필드"(META_ONLY_KEYS 주석 참고)의
+// 판정 기준이 두 곳(순서용·의미용)으로 갈라진다 — META_ONLY_KEYS와
+// 이름이 겹치지만 목적은 다르다(이건 순서, META_ONLY_KEYS는 "실데이터
+// 없음" 판정).
+const RECORD_TAIL_KEYS = ["stlm_dt", "bsns_year", "reprt_code", "rcept_no", "rm"];
+
+// source별 우선순위(브리프 실측 순서 그대로 — 추측으로 만들지 않는다).
+// sourceGroupedBlocks가 그룹(source)마다 이 표로 priorityKeys를 찾는다 —
+// 목록에 없는 source는 tail 일반 규칙만 적용한다(빈 배열 폴백).
+const EXEC_TREASURY_PRIORITY_KEYS = [
+  "stock_knd", "acqs_mth1", "acqs_mth2", "acqs_mth3", "bsis_qy",
+  "change_qy_acqs", "change_qy_dsps", "change_qy_incnr", "trmend_qy",
+];
+const HYSLR_CHG_PRIORITY_KEYS = [
+  "change_on", "mxmm_shrholdr_nm", "posesn_stock_co", "qota_rt", "change_cause",
+];
+const SOURCE_PRIORITY_KEYS = {
+  exec_treasury: EXEC_TREASURY_PRIORITY_KEYS,
+  hyslr_chg: HYSLR_CHG_PRIORITY_KEYS,
+};
+
 // dividends 원본 표(alotMatter, fetch_dividend_history)의 열 순서를
 // 기준 기간 → 항목 → 당기 값 중심으로 재배치한다(SE-8 Task 8A). 실측(SG,
 // corp_code=00963976, 2026-07-30, fetch_dividend_history 직접 호출)
@@ -1667,24 +1938,16 @@ function reorderFinancialsFields(records) {
 // 우선순위 안의 상대 순서는 고정(bsns_year → stlm_dt → se → thstrm)이고,
 // 나머지 열(rcept_no·frmtrm·lwfr·reprt_code 등)은 원래 상대 순서를
 // 그대로 유지한다. 우선 열이 레코드에 하나도 없으면(예상 밖 모양) 원본을
-// 그대로 둔다 — reorderFinancialsRecord와 같은 이유(옮길 기준점이 없는데
-// 임의로 당기면 오히려 임의 순서가 된다).
+// 그대로 둔다.
+//
+// SE-9 Task 2: reorderRecordFields(일반 함수)의 특수화로 재구현했다 —
+// tailKeys를 빈 배열로 넘겨 "메타 키를 뒤로 미는" 일반 tail 규칙을 끄고
+// 기존 동작(bsns_year/stlm_dt를 오히려 맨 앞으로 당김)만 그대로 살린다.
+// 동작은 한 글자도 바뀌지 않는다(TestReorderDividendsFields 회귀 참고).
 const DIVIDENDS_PRIORITY_KEYS = ["bsns_year", "stlm_dt", "se", "thstrm"];
 
 function reorderDividendsRecord(r) {
-  if (!r || typeof r !== "object") return r;
-  const keys = Object.keys(r);
-  const hasPriority = keys.some(function (k) { return DIVIDENDS_PRIORITY_KEYS.indexOf(k) !== -1; });
-  if (!hasPriority) return r;
-
-  const prioritySet = new Set(DIVIDENDS_PRIORITY_KEYS);
-  const present = DIVIDENDS_PRIORITY_KEYS.filter(function (k) { return prioritySet.has(k) && k in r; });
-  const rest = keys.filter(function (k) { return !prioritySet.has(k); });
-  const newKeys = present.concat(rest);
-
-  const out = Object.create(null);
-  for (const k of newKeys) out[k] = r[k];
-  return out;
+  return reorderRecordFields(r, DIVIDENDS_PRIORITY_KEYS, []);
 }
 
 /** dividends(원본 배당 레코드 배열) 전체에 reorderDividendsRecord를
@@ -1696,6 +1959,177 @@ function reorderDividendsRecord(r) {
 function reorderDividendsFields(records) {
   if (!Array.isArray(records)) return records;
   return records.map(reorderDividendsRecord);
+}
+
+// SE-9 Task 4: reorderDividendsRecord/reorderDividendsFields는 더 이상
+// 렌더 경로에 배선돼 있지 않다(sectionBlocks가 dividends를
+// dividendPeriodBlocks로 바로 보낸다, 아래 참고) — bsns_year/stlm_dt를
+// "맨 앞으로 당기는" 이 함수의 역할 자체가 dividendPeriodBlocks에서
+// "그룹 안 행에서 완전히 지우고 제목으로 승격"으로 대체됐다. 지운 게
+// 아니라 순수 함수로 남겨 기존 회귀(TestReorderDividendsFields, 값 자체는
+// 안 바뀐다)를 계속 지킨다 — 호출부만 바뀌었다.
+
+// dividendPeriodBlocks가 그룹 안 행에서 지워 제목으로 승격하는 필드 —
+// "이 값이 어느 시점 보고인지"를 밝히는 메타 4종이다. 그룹 키(브리프
+// 명시) 자체는 이 넷 중 rcept_no를 뺀 세 필드(bsns_year, reprt_code,
+// stlm_dt)만 쓴다 — rcept_no는 같은 그룹(같은 보고서) 안에서는 상수라
+// (SG 실측, se9-investigation.md Item 3 — 같은 그룹의 모든 행이 같은
+// rcept_no를 공유) 그룹을 가르는 기준이 아니라 함께 지워지는 부수
+// 필드일 뿐이다.
+const DIVIDEND_GROUP_META_KEYS = ["bsns_year", "stlm_dt", "reprt_code", "rcept_no"];
+
+/** 레코드 하나에서 dividendPeriodBlocks의 그룹 키 문자열을 만든다 —
+ *  (bsns_year, reprt_code, stlm_dt) 세 필드(브리프 명시 그룹 키)를 "|"로
+ *  이어 붙인다. 값이 없는 필드는 빈 문자열로 취급한다(다른 필드와
+ *  구분자로 갈라지므로 undefined/null이 다른 실값과 같은 그룹으로
+ *  잘못 뭉치지 않는다). */
+function dividendGroupKey(r) {
+  const year = r.bsns_year !== undefined && r.bsns_year !== null ? String(r.bsns_year) : "";
+  const reprt = r.reprt_code !== undefined && r.reprt_code !== null ? String(r.reprt_code) : "";
+  const stlm = r.stlm_dt !== undefined && r.stlm_dt !== null ? String(r.stlm_dt) : "";
+  return year + "|" + reprt + "|" + stlm;
+}
+
+/** dividendGroupKey가 묶은 그룹의 대표 레코드(그 그룹의 첫 행) 하나로
+ *  화면에 보여줄 제목을 만든다 — "2025 사업보고서 (결산일 2025-12-31)"
+ *  형태(브리프 예시 그대로). reprt_code → 보고서명은 REPRT_CODE_LABELS를
+ *  그대로 재사용한다(지어내 번역하지 않는다는 그 계약과 같다) — 목록에
+ *  없는 코드(예상 밖 값)는 코드 원문을 그대로 보여준다(label()과 같은
+ *  "모르면 숨기지 않는다" 계약). bsns_year·reprt_code·stlm_dt가 전부
+ *  없으면(예상 밖 입력) label("dividends")로 폴백해 빈 제목을 만들지
+ *  않는다. */
+function dividendGroupTitle(r) {
+  const year = r.bsns_year !== undefined && r.bsns_year !== null && r.bsns_year !== ""
+    ? String(r.bsns_year) : "";
+  const reprtRaw = r.reprt_code !== undefined && r.reprt_code !== null ? String(r.reprt_code) : "";
+  const reprtLabel = Object.prototype.hasOwnProperty.call(REPRT_CODE_LABELS, reprtRaw)
+    ? REPRT_CODE_LABELS[reprtRaw] : reprtRaw;
+  const stlm = r.stlm_dt !== undefined && r.stlm_dt !== null && r.stlm_dt !== ""
+    ? String(r.stlm_dt) : "";
+  const head = [year, reprtLabel].filter(function (s) { return s; }).join(" ") || label("dividends");
+  return stlm ? head + " (결산일 " + stlm + ")" : head;
+}
+
+/** 레코드 두 개가 모든 키·값에서 완전히 같은지 판정한다(키 순서 무관) —
+ *  dividendPeriodBlocks의 완전 동일 중복 dedup(브리프 요구, SG 실측
+ *  16쌍)에 쓴다. 키 개수가 다르면 즉시 false — jsonb 재정렬로 키 "순서"
+ *  만 달라진 두 사본은 여전히 같다고 판정해야 하므로 Object.keys를 각자
+ *  정렬해 비교한다(JSON.stringify는 키 순서에 민감해 이 목적에 못 쓴다).
+ *  값 비교는 ===다 — 이 표의 모든 필드는 문자열(또는 null)이라 얕은
+ *  비교로 충분하다(중첩 객체·배열이 없다, alotMatter 응답 형태 실측
+ *  근거). 필드 하나라도 다르면(예: stock_knd가 "보통주"/"-") false다 —
+ *  브리프 제약: "필드 하나라도 다르면 남긴다"(보통주/우선주 구분 가능성
+ *  보존, 부분 매칭으로 지우지 않는다). */
+function recordsIdentical(a, b) {
+  if (!isPlainObject(a) || !isPlainObject(b)) return false;
+  const aKeys = Object.keys(a).sort();
+  const bKeys = Object.keys(b).sort();
+  if (aKeys.length !== bKeys.length) return false;
+  for (let i = 0; i < aKeys.length; i++) {
+    if (aKeys[i] !== bKeys[i]) return false;
+    if (a[aKeys[i]] !== b[bKeys[i]]) return false;
+  }
+  return true;
+}
+
+/** records(같은 dividendGroupKey 그룹) 안에서 완전 동일한 중복 사본을
+ *  1건만 남긴다 — 먼저 나온 사본을 기준으로, 그 뒤에 완전히 같은 값의
+ *  레코드가 또 나오면 생략한다(recordsIdentical). 순서는 유지(첫 등장만
+ *  남긴다). */
+function dedupIdenticalRecords(records) {
+  const kept = [];
+  let omitted = 0;
+  for (const r of records) {
+    const isDup = kept.some(function (k) { return recordsIdentical(k, r); });
+    if (isDup) { omitted++; continue; }
+    kept.push(r);
+  }
+  return { kept: kept, omitted: omitted };
+}
+
+/** dividends(alotMatter, fetch_dividend_history) 원본 레코드를
+ *  (bsns_year, reprt_code, stlm_dt) 그룹당 표 하나로 나눈다(SE-9 Task 4,
+ *  task-4-brief.md) — 실사용자(SG) 지적: 같은 사업연도·결산일이 매 행마다
+ *  반복돼 어느 행이 어느 보고 시점 것인지 한눈에 안 들어온다. 그룹 제목이
+ *  그 시점을 한 번만 말하고, 행에서는 그 세 필드(+그룹 안에서 상수인
+ *  rcept_no)를 지운다 — 반복 제거가 요구의 핵심이다.
+ *
+ *  그룹 순서는 레코드가 등장하는 순서(첫 등장 기준) 그대로 둔다 —
+ *  sourceGroupedBlocks·fundChain과 같은 이유(Map+groupOrder)로, DART가
+ *  이미 최신 우선으로 주는 순서(브리프: "그룹 순서는 최신 우선(현 표시
+ *  순서 유지)")를 임의로 재정렬하지 않는다.
+ *
+ *  그룹 안에서는 두 가지를 순서대로 한다:
+ *  ① 완전 동일 중복 dedup(SG 실측 16쌍) — dedupIdenticalRecords, 몇
+ *     건을 지웠는지는 note로 정직하게 남긴다(exec_treasury 패딩 생략과
+ *     같은 원칙: "정보 보존" 예외에는 생략 사실을 화면에 표기한다).
+ *  ② 그룹의 실질 값(항목명 se를 뺀 나머지 — stock_knd·thstrm·frmtrm·
+ *     lwfr)이 전부 isNoDataMarker면(2026 1분기 실측: 항목명은 있는데
+ *     값이 전부 "-") isMetaOnlyRecords와 같은 판정·같은 문구
+ *     (metaOnlyNote)로 표를 만들지 않고 안내문만 남긴다(Task 3a와 동일
+ *     처리 — 브리프 명시). se를 미리 빼는 이유: isMetaOnlyRecords는
+ *     META_ONLY_KEYS 밖의 키에 실값이 하나라도 있으면 false를 돌려주는데,
+ *     se(항목명, 예: "주당액면가액(원)")는 값이 전부 "-"인 그룹에서도
+ *     늘 실제 문자열이라 그대로 두면 이 판정이 절대 참이 되지 않는다 —
+ *     sourceGroupedBlocks가 source를 먼저 지우고 같은 함수를 부르는
+ *     것과 같은 이유·같은 패턴이다.
+ *
+ *  차트(CHART_SPECS.dividends)는 이 그룹핑과 무관하게 renderSection
+ *  (ui.js)이 원본 전체(value)로 따로 한 번만 그린다 — 그룹별 records를
+ *  차트에 넘기면 그룹당 x축 점이 하나뿐이라 "연도·보고서구분별 추이"
+ *  자체가 성립하지 않는다(브리프: "차트 입력을 바꾸지 않는다"). */
+function dividendPeriodBlocks(records) {
+  if (!Array.isArray(records)) return [];
+  const order = [];
+  const groups = new Map();
+  for (const r of records) {
+    if (!isPlainObject(r)) continue;
+    const key = dividendGroupKey(r);
+    if (!groups.has(key)) { groups.set(key, []); order.push(key); }
+    groups.get(key).push(r);
+  }
+
+  const blocks = [];
+  for (const key of order) {
+    const dedup = dedupIdenticalRecords(groups.get(key));
+    const title = dividendGroupTitle(dedup.kept[0]);
+
+    const withoutGroupMeta = dedup.kept.map(function (r) {
+      const copy = Object.assign({}, r);
+      for (const k of DIVIDEND_GROUP_META_KEYS) delete copy[k];
+      return copy;
+    });
+
+    const forBlankCheck = withoutGroupMeta.map(function (r) {
+      const copy = Object.assign({}, r);
+      delete copy.se;
+      return copy;
+    });
+    if (isMetaOnlyRecords(forBlankCheck)) {
+      blocks.push({
+        title: title, table: null, records: null,
+        note: metaOnlyNote(distinctReportCount(dedup.kept)),
+      });
+      continue;
+    }
+
+    // DIVIDENDS_PRIORITY_KEYS는 bsns_year/stlm_dt도 포함하지만, 이미 위
+    // withoutGroupMeta에서 지워진 뒤라 reorderRecordFields가 "record에
+    // 없는 키"로 자동 걸러(front 계산의 `k in record` 필터) 사실상
+    // se → thstrm 순서만 남는다 — 별도 상수를 새로 만들 필요가 없다.
+    const cleaned = withoutGroupMeta.map(function (r) {
+      return reorderRecordFields(r, DIVIDENDS_PRIORITY_KEYS, RECORD_TAIL_KEYS);
+    });
+    const t = tableLayout(cleaned);
+    if (t) {
+      const block = { title: title, table: t, records: cleaned };
+      if (dedup.omitted > 0) {
+        block.note = "완전 동일한 중복 행 " + dedup.omitted + "건 생략";
+      }
+      blocks.push(block);
+    }
+  }
+  return blocks;
 }
 
 // financialRatios가 만드는 기간 3종과, 각 기간이 financials 레코드의 어느
@@ -3751,7 +4185,8 @@ if (typeof module !== "undefined" && module.exports) {
     fundChainDisclosureHints,
     markNumber, MARK_RULES, cellMarks, markedColumnKeys, indicatorCellWhy,
     isAggregateRow, splitAggregateRows, splitVisibleFolded, MAX_VISIBLE_COLUMNS,
-    MIN_FOLD_COUNT,
+    MIN_FOLD_COUNT, isMetaOnlyRecords, metaOnlyNote, distinctReportCount,
+    EXEC_TREASURY_PADDING_FIELDS, isPaddingRow, splitPaddingRows,
     INDICATOR_CATEGORY_ORDER, INDICATOR_PRIMARY, INDICATOR_NOTES,
     formatIndicator, indicatorBlocks, indicatorChartRecords,
     normalizeIndicatorCategory, indicatorRows, indicatorYearNote,
@@ -3760,5 +4195,9 @@ if (typeof module !== "undefined" && module.exports) {
     FINANCIALS_META_KEYS, FINANCIALS_PRIORITY_KEYS,
     reorderFinancialsRecord, reorderFinancialsFields,
     DIVIDENDS_PRIORITY_KEYS, reorderDividendsRecord, reorderDividendsFields,
+    reorderRecordFields, RECORD_TAIL_KEYS, EXEC_TREASURY_PRIORITY_KEYS,
+    HYSLR_CHG_PRIORITY_KEYS, SOURCE_PRIORITY_KEYS,
+    DIVIDEND_GROUP_META_KEYS, dividendGroupKey, dividendGroupTitle,
+    recordsIdentical, dedupIdenticalRecords, dividendPeriodBlocks,
   };
 }
