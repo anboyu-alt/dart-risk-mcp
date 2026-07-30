@@ -3700,28 +3700,29 @@ const NON_DILUTIVE_CAPITAL_EVENTS = new Set([
 ]);
 
 /** taxonomy 2.7(CAPITAL_CHURN)은 개별 공시 제목이 아니라 공시 "빈도"로
- *  판정되는 파생 신호라 signals-data.json의 CAPITAL_CHURN 신호는
+ *  판정되는 파생 신호라 signals-data.json의 CAPITAL_CHURN 신호 자체는
  *  keywords가 빈 배열이다(core detect_capital_churn — dart_client.py
- *  1753행). 패턴 9종 중 8종이 이런 "키워드로 탐지 안 되는" taxonomy를
- *  signal_sequence에 최소 하나씩 포함한다(실측 — CAPITAL_IMPAIRMENT·
- *  AR_SURGE·CASH_GAP·FUND_DIVERSION·DECISION_RELATED_PARTY·
- *  FUND_UNREPORTED·DECISION_NO_EXTVAL·INSIDER_PRE_DISCLOSURE·
- *  TREASURY_TRUST·DISTRESS_EVENT·DIVIDEND_DRAIN도 전부 keywords:[]).
- *  즉 공개 뷰어의 client-side 키워드 매칭만으로는 9종 중
- *  audit_insider_dump(3.1·4.4·7.1 전부 키워드 탐지 가능) 딱 하나만
- *  매칭될 수 있고, capital_churn_anomaly를 포함한 나머지 8종은 공개
- *  뷰어에서 구조적으로 영원히 매칭되지 않는다 — analyze_company_risk
- *  (core)는 detect_capital_churn 결과를 별도 synthetic signal_event로
- *  주입한 뒤 find_pattern_match를 부르므로 매칭되지만, index.html의
- *  matchSignals는 이 주입을 하지 않는다.
+ *  1753행). CAPITAL_IMPAIRMENT·AR_SURGE·CASH_GAP 등 다른 파생 전용 신호
+ *  키들도 마찬가지로 keywords:[]다.
  *
- *  **여기서 taxonomy 2.7 하나만 이 격차를 메운다** — task-3-brief.md가
- *  명시적으로 요구하는 라이브 검증 대상(capital_churn_anomaly, 제이스코
- *  홀딩스)이 이 taxonomy 없이는 원천적으로 도달 불가능하기 때문이다.
- *  나머지 10종(CAPITAL_IMPAIRMENT 등)의 파생 판정기는 이 태스크 파일
- *  범위(app.js·ui.js 매칭 이식) 밖이라 옮기지 않았다 — core에 이미
- *  있는 것을 그대로 옮기는 것과, core에 있는 서로 다른 10개 탐지기를
- *  전부 새로 JS로 재구현하는 것은 다른 크기의 작업이다. */
+ *  **다만 이게 패턴 매칭을 막지는 않는다** — SIGNAL_KEY_TO_TAXONOMY(core
+ *  signals.py)는 같은 taxonomy ID에 여러 신호 키를 매핑하는 경우가 많고,
+ *  키워드가 빈 파생 전용 키 옆에 키워드 있는 형제 키가 같은 ID를 가리키는
+ *  사례가 대부분이다(예: 8.2는 CAPITAL_IMPAIRMENT 외에 키워드 있는
+ *  DEBT_RESTR로도 도달, 6.1은 AR_SURGE·CASH_GAP 외에 REVENUE_IRREG로도
+ *  도달, 4.2는 DECISION_RELATED_PARTY 외에 RELATED_PARTY로도 도달).
+ *  검증 결과(리뷰 재확인, 2026-07-30) taxonomy 9종의 signal_sequence
+ *  전체를 훑으면 진짜로 키워드 경로가 전혀 없는 ID는 2.7·2.8·3.6·5.6·8.5
+ *  뿐이고, 그중 이 9개 패턴이 실제로 걸치는 건 2.7 하나(zombie_ma·
+ *  delisting_evasion·capital_churn_anomaly 3종). 그 2.7을 아래
+ *  detectCapitalChurn이 core와 동일 규칙으로 메우므로, **9개 패턴
+ *  전부가 이 파일의 매칭 로직만으로 도달 가능하다** — "8종은 공개
+ *  뷰어에서 구조적으로 영원히 매칭 안 된다"는 이전 버전의 이 주석은
+ *  틀렸다(SE-13 Task 3 리뷰가 실측으로 잡음, 5개 패턴을 키워드만으로
+ *  직접 매칭 재현). 나머지 진짜 파생 전용 taxonomy(2.8·3.6·5.6·8.5)를
+ *  core처럼 별도 synthetic 신호로 주입하는 일반화된 메커니즘은 여전히
+ *  없다 — 이 9개 패턴엔 필요 없었을 뿐, 향후 새 패턴이 그 ID들을 쓰면
+ *  또 막힐 수 있다는 뜻으로 남겨둔다. */
 const CAPITAL_CHURN_TAXONOMY = "2.7";
 
 /** events(각 {rcept_dt: "YYYYMMDD", key})에서 core detect_capital_churn과
