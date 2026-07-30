@@ -8639,6 +8639,97 @@ class TestDividendsColumnOrderUnchangedAfterGeneralization(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestMajorHoldersColumnOrderSurvivesJsonbReorder(unittest.TestCase):
+    """SE-9 Task 2 리뷰 지적 수정 — reorderRecordFields는 sourceGroupedBlocks와
+    (source 없는) 일반 평면 배열 경로 두 곳에만 배선됐다. 그런데
+    shareholders.major_holders는 이 둘 다를 타지 않는다: nm 필드로 사람을
+    식별하는 레코드라 source 필드가 없어 recordsHaveSourceField 게이트를
+    통과하지 못하고(sourceGroupedBlocks 미진입), sectionBlocks의 전용
+    분기(key === "shareholders" && k === "major_holders")가 splitAggregateRows
+    → tableLayout으로 곧장 가는 세 번째 경로였다 — Task 2가 놓친 지점이다.
+    이 계획의 배경 절이 원래 "sourceGroupedBlocks 경로(insider_timeline·
+    shareholders 등 source 있는 전 그룹)"라고 shareholders를 명시했던 만큼
+    실제 결함이었다.
+
+    jsonb_sorted()로 배포본(Postgres jsonb 저장)과 같은 키 순서(길이순→
+    바이트순)를 만든 뒤, 전용 분기에 새로 배선한 reorderRecordFields가
+    tail 규칙(메타 키 뒤로, 비고 맨 뒤로)을 실제로 적용하는지 실렌더
+    (run_render_section)로 확인한다."""
+
+    def _records(self):
+        # DART /hyslrSttus.json 실측 필드 순서(rcept_no·corp_cls·corp_code·
+        # corp_name·nm·relate·stock_knd·... 뒤에 stlm_dt·bsns_year·
+        # reprt_code·rm)를 jsonb_sorted로 길이순 정렬해 배포본 증상을
+        # 재현한다.
+        base = [
+            {
+                "rcept_no": "20260515002529", "corp_cls": "K", "corp_code": "00963976",
+                "corp_name": "SG", "nm": "오정강", "relate": "본인",
+                "stock_knd": "보통주",
+                "bsis_posesn_stock_co": "1,234,567", "bsis_posesn_stock_qota_rt": "17.40",
+                "trmend_posesn_stock_co": "1,300,000", "trmend_posesn_stock_qota_rt": "18.10",
+                "rm": "-", "stlm_dt": "2025-12-31", "bsns_year": "2025", "reprt_code": "11011",
+            },
+            {
+                "rcept_no": "20260515002529", "corp_cls": "K", "corp_code": "00963976",
+                "corp_name": "SG", "nm": "오정섭", "relate": "특수관계인",
+                "stock_knd": "보통주",
+                "bsis_posesn_stock_co": "100,000", "bsis_posesn_stock_qota_rt": "2.10",
+                "trmend_posesn_stock_co": "90,000", "trmend_posesn_stock_qota_rt": "1.90",
+                "rm": "장내매도", "stlm_dt": "2025-12-31", "bsns_year": "2025", "reprt_code": "11011",
+            },
+        ]
+        return [jsonb_sorted(r) for r in base]
+
+    def test_fixture_reproduces_jsonb_scrambled_order(self):
+        """픽스처 자체가 배포본 증상(jsonb 길이순 정렬로 첫 키가 rcept_no가
+        아니게 됨)을 재현하는지 먼저 확인한다 — 픽스처가 틀리면 아래 렌더
+        검증이 아무것도 증명하지 못한다."""
+        records = self._records()
+        self.assertNotEqual(
+            list(records[0].keys())[0], "rcept_no",
+            "픽스처가 jsonb 정렬(길이순) 증상을 재현하지 못합니다",
+        )
+
+    def test_major_holders_renders_with_tail_rule_when_input_is_jsonb_sorted(self):
+        value = {"major_holders": self._records(), "bulk_holders": []}
+        got = run_render_section('"shareholders"', json.dumps(value, ensure_ascii=False))
+        headers = _header_rows(got)
+        self.assertTrue(headers, "최대주주 현황 표 헤더를 찾지 못했습니다")
+        header = headers[0]
+        self.assertEqual(
+            header[-1], "비고",
+            f"jsonb 정렬 입력에서도 비고가 맨 뒤여야 합니다(reorderRecordFields가 "
+            f"major_holders 분기에 배선되지 않으면 실패): {header}",
+        )
+        self.assertLess(
+            header.index("성명"), header.index("관계"),
+            f"실질 열(성명·관계)이 메타 열보다 뒤에 있습니다: {header}",
+        )
+
+    def test_gyesanghyeok_guard_still_passes_after_reorder(self):
+        """SE-8 Task 6 계상혁 가드(TestAggregateRowSplit, 순수 sectionBlocks
+        호출)가 이미 확인한 사실을, 이번에 새로 끼운 reorder 호출 이후에도
+        실렌더로 다시 확인한다 — 재배치는 키 순서만 바꿀 뿐 필드 이름을
+        바꾸지 않으므로 nm 값 기반 판정(isAggregateRow)에 영향을 주면
+        안 된다."""
+        gyesanghyeok = jsonb_sorted({
+            "rcept_no": "20260515002529", "corp_cls": "K", "corp_code": "00963976",
+            "corp_name": "SG", "nm": "계상혁", "relate": "특수관계인",
+            "stock_knd": "보통주",
+            "bsis_posesn_stock_co": "10,000", "bsis_posesn_stock_qota_rt": "0.30",
+            "trmend_posesn_stock_co": "10,000", "trmend_posesn_stock_qota_rt": "0.30",
+            "rm": "-", "stlm_dt": "2025-12-31", "bsns_year": "2025", "reprt_code": "11011",
+        })
+        value = {"major_holders": self._records() + [gyesanghyeok], "bulk_holders": []}
+        got = run_render_section('"shareholders"', json.dumps(value, ensure_ascii=False))
+        self.assertIn(
+            "계상혁", got["cells"],
+            "실제 인물 '계상혁'이 재배치 이후 사람 목록에서 빠졌습니다(합계로 오탐)",
+        )
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
 class TestOtherRawTablesAlreadyLeadWithTheUsefulColumn(unittest.TestCase):
     """SE-8 Task 4 브리프 3번째 요구사항 — financials 외 다른 원본 표에도
     "분류 메타가 핵심 값보다 앞에 있는" 패턴이 있는지 점검한다(추측이 아니라

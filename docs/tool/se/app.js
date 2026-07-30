@@ -1355,12 +1355,21 @@ function sectionBlocks(value, depth, key) {
     // 사람 쪽에 남긴다.
     if (d === 0 && key === "shareholders" && k === "major_holders") {
       const arr = Array.isArray(value[k]) ? value[k] : [];
+      // splitAggregateRows는 원본 필드 순서(잡담 jsonb 순서 포함)로 사람/
+      // 합계를 나눈다 — isAggregateRow는 nm 값만 보고 열 순서와는 무관하니
+      // 분리 자체는 재배치 전에 해도 안전하다. tail 재배치는 분리된 각
+      // 레코드에 나머지 평면 배열과 같은 규칙(RECORD_TAIL_KEYS)으로 적용해
+      // 사람 표·합계 표 둘 다 jsonb 순서 파괴에서 벗어나게 한다.
       const split = splitAggregateRows(arr);
-      const peopleRecords = toRecords(split.people) || [];
+      const peopleRecords = (toRecords(split.people) || []).map(function (r) {
+        return reorderRecordFields(r, [], RECORD_TAIL_KEYS);
+      });
       const pt = tableLayout(peopleRecords);
       if (pt) blocks.push({ title: label(k), table: pt, records: peopleRecords });
       if (split.totals.length > 0) {
-        const totalRecords = toRecords(split.totals) || [];
+        const totalRecords = (toRecords(split.totals) || []).map(function (r) {
+          return reorderRecordFields(r, [], RECORD_TAIL_KEYS);
+        });
         const tt = tableLayout(totalRecords);
         if (tt) blocks.push({ title: label(k) + " · 합계", table: tt, records: totalRecords });
       }
