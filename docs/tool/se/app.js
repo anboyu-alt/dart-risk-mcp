@@ -1578,6 +1578,25 @@ function sectionBlocks(value, depth, key) {
         : { title: label(k), table: null, records: null });
       continue;
     }
+    // shareholders.bulk_holders만 특수 처리한다(같은 게이트 방식 — depth 0 +
+    // 부모 key). major_holders와 같은 처지다: nm이 아니라 repror(보고자)로
+    // 식별하는 레코드라 source 필드가 없어 sourceGroupedBlocks도, 일반
+    // 평면 배열 tail-only 경로(위 Array.isArray 분기 마지막 줄)도 이 표에
+    // "보고자를 앞으로" 규칙을 못 준다. 실사용자 지적(SK하이닉스 5%
+    // 대량보유 스크린샷): 첫 열이 stkqy(보유주식등의 수)라 누구의
+    // 수치인지 표 첫눈에 안 보인다 — repror를 priorityKeys로 앞당긴다.
+    // tail 규칙(RECORD_TAIL_KEYS)은 그대로 둬 jsonb 순서 파괴로부터도
+    // 보호한다.
+    if (d === 0 && key === "shareholders" && k === "bulk_holders") {
+      const records = (toRecords(value[k]) || []).map(function (r) {
+        return reorderRecordFields(r, BULK_HOLDERS_PRIORITY_KEYS, RECORD_TAIL_KEYS);
+      });
+      const t = tableLayout(records);
+      blocks.push(t
+        ? { title: label(k), table: t, records: records }
+        : { title: label(k), table: null, records: null });
+      continue;
+    }
     const sub = sectionBlocks(value[k], d + 1);
     if (sub.length === 0) {
       blocks.push({ title: label(k), table: null, records: null });
@@ -2018,6 +2037,11 @@ const SOURCE_PRIORITY_KEYS = {
   exec_treasury: EXEC_TREASURY_PRIORITY_KEYS,
   hyslr_chg: HYSLR_CHG_PRIORITY_KEYS,
 };
+
+// shareholders.bulk_holders(majorstock.json 원본, source 필드 없음) 전용
+// 우선순위 — repror(보고자)를 앞으로 당긴다(SE-11, 위 sectionBlocks의
+// bulk_holders 분기 주석 참고).
+const BULK_HOLDERS_PRIORITY_KEYS = ["repror"];
 
 // dividends 원본 표(alotMatter, fetch_dividend_history)의 열 순서를
 // 기준 기간 → 항목 → 당기 값 중심으로 재배치한다(SE-8 Task 8A). 실측(SG,
