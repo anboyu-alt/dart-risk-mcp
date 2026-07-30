@@ -49,11 +49,24 @@ def load_catalog_excerpt(taxonomy_ids: list[str], max_chars: int = 1500) -> str:
     """taxonomy ID 목록에 해당하는 카탈로그 MD 발췌를 반환한다.
 
     중복 카테고리는 한 번만 로드. 파일 부재·읽기 오류 시 해당 카테고리 건너뜀.
+
+    ⚠ **함정(SE-13 Task 1에서 실사고 발생)**: 인자는 반드시 `TAXONOMY`(taxonomy.py)의
+    키인 taxonomy ID 문자열(예: `"5.1"`, `"7.1"`)이어야 한다. `CROSS_SIGNAL_PATTERNS`의
+    패턴 키(예: `"zombie_ma"`, `"fake_new_biz"`)를 넘기면 아래 `TAXONOMY.get(tid)`가
+    조용히 `None`을 반환해 전부 스킵되고, 예외 없이 **빈 문자열**만 돌아온다 — 호출은
+    정상적으로 "성공"한 것처럼 보이기 때문에 이 실수는 로그·예외로 드러나지 않는다.
+    패턴 키로 발췌를 뽑고 싶다면 `CROSS_SIGNAL_PATTERNS[key]["signal_sequence"]`
+    (taxonomy ID 목록)를 먼저 꺼내 이 함수에 넘길 것. 호출부를 추가/수정할 때는
+    "인자가 진짜 taxonomy ID인지" 를 확인하고, 회귀 테스트는 반드시 반환값이
+    비어있지 않음을 assert할 것 — 호출 여부만 확인하는 테스트는 이 버그를 잡지 못한다
+    (실제로 8번째 죽은 배선 사례가 이렇게 놓쳤다. `server.py`의 `track_fund_usage` 참고).
     """
     seen: set[str] = set()
     excerpts: list[str] = []
 
     for tid in taxonomy_ids:
+        # tid가 taxonomy ID가 아니라 다른 종류의 키(예: 패턴 키)이면 여기서
+        # 조용히 None → continue로 스킵된다. 위 docstring 경고 참고.
         signal = TAXONOMY.get(tid)
         if not signal:
             continue
