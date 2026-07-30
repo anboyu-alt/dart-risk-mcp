@@ -849,10 +849,18 @@ function sourceGroupedBlocks(records) {
     // 대량보유 이력")이 이미 같은 정보를 한국어로 말하고 있다 — 같은
     // 것을 원본 키 값과 한국어 라벨 두 가지로 부르는 표기 불일치였다.
     // 숨기는 게 아니다: 값 자체는 title에 여전히 그대로 남는다.
+    //
+    // SE-9 Task 2: source를 뺀 직후 reorderRecordFields로 열 순서를
+    // 명시 규칙으로 고정한다 — jsonb가 삽입 순서를 파괴해도(위 함수
+    // 주석 참고) 이 그룹만은 배포본에서도 순서가 살아남는다.
+    // SOURCE_PRIORITY_KEYS에 없는 source(실측 안 된 우선순위)는 빈
+    // 배열로 폴백해 tail 일반 규칙만 적용한다 — 추측으로 우선순위를
+    // 만들지 않는다(brief 제약).
+    const priorityKeys = SOURCE_PRIORITY_KEYS[s] || [];
     const withoutSource = groups.get(s).map(function (r) {
       const copy = Object.assign({}, r);
       delete copy.source;
-      return copy;
+      return reorderRecordFields(copy, priorityKeys, RECORD_TAIL_KEYS);
     });
 
     // hyslr(최대주주 현황)에는 합계 행("계")이 사람 이름(nm) 자리에 섞여
@@ -1271,6 +1279,16 @@ function sectionBlocks(value, depth, key) {
     // 따로 싣는다(source가 레코드에서 빠지므로 섹션 전체 레코드를
     // 넘기는 방식은 여기서 성립하지 않는다).
     if (recordsHaveSourceField(records)) return sourceGroupedBlocks(records);
+    // SE-9 Task 2: financials·dividends는 바로 위 두 줄에서 이미 자기
+    // 규칙으로 재배치했다 — 여기서 또 건드리면 그 특수 순서(예: 배당의
+    // bsns_year 앞당김)가 tail 일반 규칙에 밀려 깨진다. 그 둘을 제외한
+    // 나머지 모든 평면 배열(source 없는 원본 표)엔 tail 일반 규칙(메타
+    // 키 뒤로, 비고 맨 뒤로)만 적용한다 — jsonb가 순서를 파괴해도 최소한의
+    // 가독성은 명시 규칙으로 지킨다.
+    const isSpecialCased = d === 0 && (key === "financials" || key === "dividends");
+    if (!isSpecialCased) {
+      records = records.map(function (r) { return reorderRecordFields(r, [], RECORD_TAIL_KEYS); });
+    }
     const t = tableLayout(records);
     return t ? [{ title: null, table: t, records: records }] : [];
   }
@@ -1649,6 +1667,77 @@ function reorderFinancialsFields(records) {
   return records.map(reorderFinancialsRecord);
 }
 
+/** record(레코드 하나)의 키를 priorityKeys(주어진 순서대로 앞으로) →
+ *  나머지(원본 상대 순서 유지) → tailKeys(주어진 순서대로 뒤로) 순으로
+ *  재배치한다. 값은 하나도 바꾸지 않는다 — 순서만 바꾼다.
+ *
+ *  **왜 필요한가(SE-9 조사, docs/superpowers/plans/2026-07-30-se-9-table-
+ *  legibility.md "핵심 발견")**: se_server가 섹션 상태를 Postgres jsonb로
+ *  저장한다(se_server/jobs/schema.sql:6 `state jsonb not null`). Postgres
+ *  jsonb는 객체를 저장할 때 키를 **길이순 → 바이트순**으로 조용히
+ *  재정렬한다 — DART가 준 원 순서도, 로컬 dict(삽입 순서 보존)의 순서도
+ *  아니다. tableLayout이 레코드의 키 "등장 순서"를 그대로 헤더로 쓰는 한
+ *  (Object.keys 기반), 배포본의 모든 표는 이 jsonb 정렬로 렌더된다 —
+ *  실사용자(SG) 스크린샷의 "비고가 첫 열" 같은 기괴한 순서가 정확히
+ *  이것이었다. **명시적으로 재배치한 열만** 배포본에서 순서가 살아남는다.
+ *
+ *  reorderDividendsRecord(SE-8 Task 8A, priorityKeys만 있고 tailKeys가
+ *  없는 특수화)의 "우선 키를 앞으로" 로직을 일반화하고 "tail 키를 뒤로"를
+ *  더한 것이다.
+ *
+ *  priorityKeys·tailKeys 각각 레코드에 실제로 있는 키만, 주어진 배열
+ *  순서 그대로 앞/뒤로 옮긴다. 둘 다에 없는 키("나머지")는 원본 상대
+ *  순서를 그대로 유지한다. 한 키가 두 목록에 동시에 있으면 priorityKeys가
+ *  이긴다(뒤로 보내라는 tailKeys 쪽 지시를 무시). priorityKeys·tailKeys
+ *  둘 다 레코드에서 하나도 못 찾으면(옮길 기준점이 없다) 원본을 그대로
+ *  돌려준다 — reorderFinancialsRecord와 같은 방어(임의로 아무 열이나
+ *  앞뒤로 당기면 오히려 임의 순서가 된다). */
+function reorderRecordFields(record, priorityKeys, tailKeys) {
+  if (!record || typeof record !== "object") return record;
+  const keys = Object.keys(record);
+  const pKeys = Array.isArray(priorityKeys) ? priorityKeys : [];
+  const tKeys = Array.isArray(tailKeys) ? tailKeys : [];
+
+  const front = pKeys.filter(function (k) { return k in record; });
+  const frontSet = new Set(front);
+  const tail = tKeys.filter(function (k) { return !frontSet.has(k) && k in record; });
+  if (front.length === 0 && tail.length === 0) return record;
+
+  const tailSet = new Set(tail);
+  const middle = keys.filter(function (k) { return !frontSet.has(k) && !tailSet.has(k); });
+  const newKeys = front.concat(middle, tail);
+
+  const out = Object.create(null);
+  for (const k of newKeys) out[k] = record[k];
+  return out;
+}
+
+// 전 표 공통 tail 규칙(brief "일반 규칙"): 메타 키(stlm_dt·bsns_year·
+// reprt_code·rcept_no)는 실질 열 뒤로, 비고(rm)는 맨 뒤로 — 이 배열 순서
+// 그대로 tailKeys에 넘기면 rm이 자동으로 최후미가 된다. corp_cls·
+// corp_code·corp_name은 일부러 뺐다 — 그 셋은 값이 상수면 tableLayout의
+// 캡션 승격이 이미 표 밖(캡션)으로 뺀다. 여기 넣으면 그 승격과 뒤섞여
+// "정체를 밝힐 뿐 사건을 서술하지 않는 필드"(META_ONLY_KEYS 주석 참고)의
+// 판정 기준이 두 곳(순서용·의미용)으로 갈라진다 — META_ONLY_KEYS와
+// 이름이 겹치지만 목적은 다르다(이건 순서, META_ONLY_KEYS는 "실데이터
+// 없음" 판정).
+const RECORD_TAIL_KEYS = ["stlm_dt", "bsns_year", "reprt_code", "rcept_no", "rm"];
+
+// source별 우선순위(브리프 실측 순서 그대로 — 추측으로 만들지 않는다).
+// sourceGroupedBlocks가 그룹(source)마다 이 표로 priorityKeys를 찾는다 —
+// 목록에 없는 source는 tail 일반 규칙만 적용한다(빈 배열 폴백).
+const EXEC_TREASURY_PRIORITY_KEYS = [
+  "stock_knd", "acqs_mth1", "acqs_mth2", "acqs_mth3", "bsis_qy",
+  "change_qy_acqs", "change_qy_dsps", "change_qy_incnr", "trmend_qy",
+];
+const HYSLR_CHG_PRIORITY_KEYS = [
+  "change_on", "mxmm_shrholdr_nm", "posesn_stock_co", "qota_rt", "change_cause",
+];
+const SOURCE_PRIORITY_KEYS = {
+  exec_treasury: EXEC_TREASURY_PRIORITY_KEYS,
+  hyslr_chg: HYSLR_CHG_PRIORITY_KEYS,
+};
+
 // dividends 원본 표(alotMatter, fetch_dividend_history)의 열 순서를
 // 기준 기간 → 항목 → 당기 값 중심으로 재배치한다(SE-8 Task 8A). 실측(SG,
 // corp_code=00963976, 2026-07-30, fetch_dividend_history 직접 호출)
@@ -1667,24 +1756,16 @@ function reorderFinancialsFields(records) {
 // 우선순위 안의 상대 순서는 고정(bsns_year → stlm_dt → se → thstrm)이고,
 // 나머지 열(rcept_no·frmtrm·lwfr·reprt_code 등)은 원래 상대 순서를
 // 그대로 유지한다. 우선 열이 레코드에 하나도 없으면(예상 밖 모양) 원본을
-// 그대로 둔다 — reorderFinancialsRecord와 같은 이유(옮길 기준점이 없는데
-// 임의로 당기면 오히려 임의 순서가 된다).
+// 그대로 둔다.
+//
+// SE-9 Task 2: reorderRecordFields(일반 함수)의 특수화로 재구현했다 —
+// tailKeys를 빈 배열로 넘겨 "메타 키를 뒤로 미는" 일반 tail 규칙을 끄고
+// 기존 동작(bsns_year/stlm_dt를 오히려 맨 앞으로 당김)만 그대로 살린다.
+// 동작은 한 글자도 바뀌지 않는다(TestReorderDividendsFields 회귀 참고).
 const DIVIDENDS_PRIORITY_KEYS = ["bsns_year", "stlm_dt", "se", "thstrm"];
 
 function reorderDividendsRecord(r) {
-  if (!r || typeof r !== "object") return r;
-  const keys = Object.keys(r);
-  const hasPriority = keys.some(function (k) { return DIVIDENDS_PRIORITY_KEYS.indexOf(k) !== -1; });
-  if (!hasPriority) return r;
-
-  const prioritySet = new Set(DIVIDENDS_PRIORITY_KEYS);
-  const present = DIVIDENDS_PRIORITY_KEYS.filter(function (k) { return prioritySet.has(k) && k in r; });
-  const rest = keys.filter(function (k) { return !prioritySet.has(k); });
-  const newKeys = present.concat(rest);
-
-  const out = Object.create(null);
-  for (const k of newKeys) out[k] = r[k];
-  return out;
+  return reorderRecordFields(r, DIVIDENDS_PRIORITY_KEYS, []);
 }
 
 /** dividends(원본 배당 레코드 배열) 전체에 reorderDividendsRecord를
@@ -3760,5 +3841,7 @@ if (typeof module !== "undefined" && module.exports) {
     FINANCIALS_META_KEYS, FINANCIALS_PRIORITY_KEYS,
     reorderFinancialsRecord, reorderFinancialsFields,
     DIVIDENDS_PRIORITY_KEYS, reorderDividendsRecord, reorderDividendsFields,
+    reorderRecordFields, RECORD_TAIL_KEYS, EXEC_TREASURY_PRIORITY_KEYS,
+    HYSLR_CHG_PRIORITY_KEYS, SOURCE_PRIORITY_KEYS,
   };
 }

@@ -38,6 +38,29 @@ def run_js(expression: str):
     return json.loads(out.stdout)
 
 
+def jsonb_sorted(record):
+    """dict 하나의 키를 Postgres jsonb가 객체를 저장할 때 실제로 쓰는 순서 —
+    **키 길이 오름차순, 같은 길이는 바이트(사전)순** — 로 재정렬해 돌려준다.
+
+    SE-9 조사(docs/superpowers/plans/2026-07-30-se-9-table-legibility.md
+    "핵심 발견")의 근본 원인이 이거다: se_server가 섹션 상태를 Postgres
+    jsonb로 저장한다(se_server/jobs/schema.sql:6 `state jsonb not null`).
+    jsonb는 객체 키 순서를 삽입 순서로 보존하지 않고 조용히 이 순서로
+    재정렬한다 — 그래서 로컬 Python dict(삽입 순서 보존)로 만든 픽스처는
+    배포본이 실제로 렌더하는 순서를 결코 재현하지 못한다("비고가 첫 열"
+    같은 실사용자 스크린샷 증상이 로컬 트레이스에서는 재현 실패했던
+    이유). 표 열 순서를 검증하는 테스트는 자연스러운 dict 순서가 아니라
+    이 함수를 거친 순서를 입력으로 써야 배포본과 같은 조건을 검증한다.
+
+    app.js의 reorderRecordFields(SE-9 Task 2)가 바로 이 파괴를 상대로
+    "명시 규칙만이 배포본에서 살아남는다"는 전제로 설계됐다 — 이후 태스크
+    (3, 4)도 표 열 순서를 검증할 때 이 헬퍼를 재사용한다. 이름·위치를
+    바꾸지 않는다."""
+    if not isinstance(record, dict):
+        return record
+    return {k: record[k] for k in sorted(record.keys(), key=lambda k: (len(k), k))}
+
+
 # ── 공시 원문 패널 클릭 배선 재현용 가짜 DOM ────────────────────────────
 #
 # ui.js는 순수 함수가 아니다(document를 직접 만진다) — 그래서 위 run_js
@@ -8300,6 +8323,319 @@ class TestReorderDividendsFields(unittest.TestCase):
         got = run_js(f"reorderDividendsFields({json.dumps(records, ensure_ascii=False)})")
         for r in got:
             self.assertEqual(list(r.keys())[0], "bsns_year")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestReorderRecordFields(unittest.TestCase):
+    """reorderRecordFields(app.js, SE-9 Task 2) — reorderDividendsRecord의
+    "우선 키를 앞으로" 로직을 일반화하고 "tail 키를 뒤로"를 더한 범용 함수.
+    priorityKeys → 나머지(원본 상대 순서) → tailKeys 순으로 레코드의 키를
+    재배치한다. 값은 하나도 바꾸지 않는다 — 순서만 바꾼다."""
+
+    def test_priority_keys_move_to_front_in_given_order(self):
+        rec = {"c": 3, "a": 1, "rm": "-", "b": 2}
+        got = run_js(f'reorderRecordFields({json.dumps(rec)}, ["a","b"], [])')
+        self.assertEqual(list(got.keys()), ["a", "b", "c", "rm"])
+        self.assertEqual(got, rec, "값은 하나도 바뀌면 안 됩니다")
+
+    def test_tail_keys_move_to_end_in_given_order(self):
+        """메타 키(stlm_dt 등)를 실질 열 뒤로 미는 일반 규칙 — tailKeys에
+        준 순서 그대로 뒤에 붙는다(원본에서의 위치와 무관)."""
+        rec = {"bsns_year": "2025", "stock_knd": "보통주", "rcept_no": "1", "stlm_dt": "2025-12-31"}
+        got = run_js(
+            f'reorderRecordFields({json.dumps(rec)}, [], '
+            f'["stlm_dt","bsns_year","reprt_code","rcept_no","rm"])'
+        )
+        self.assertEqual(list(got.keys()), ["stock_knd", "stlm_dt", "bsns_year", "rcept_no"])
+
+    def test_rm_goes_absolute_last_when_listed_last_in_tail(self):
+        rec = {"rm": "비고 있음", "a": 1, "stlm_dt": "2025-12-31"}
+        got = run_js(
+            f'reorderRecordFields({json.dumps(rec)}, [], ["stlm_dt","rm"])'
+        )
+        self.assertEqual(list(got.keys())[-1], "rm")
+
+    def test_priority_and_tail_combine_middle_keeps_relative_order(self):
+        """exec_treasury 실측 모양 — priority(실질 값) 앞, 손대지 않은
+        나머지는 원래 상대 순서, tail(메타·비고)은 맨 뒤."""
+        rec = {
+            "rm": "-", "rcept_no": "1", "stock_knd": "보통주",
+            "middle_untouched": "x", "bsis_qy": "10", "stlm_dt": "2025-12-31",
+        }
+        got = run_js(
+            f'reorderRecordFields({json.dumps(rec)}, '
+            f'["stock_knd","bsis_qy"], ["stlm_dt","rcept_no","rm"])'
+        )
+        self.assertEqual(
+            list(got.keys()),
+            ["stock_knd", "bsis_qy", "middle_untouched", "stlm_dt", "rcept_no", "rm"],
+        )
+
+    def test_priority_wins_when_a_key_is_listed_in_both(self):
+        rec = {"rcept_no": "1", "a": "x"}
+        got = run_js(
+            f'reorderRecordFields({json.dumps(rec)}, ["rcept_no"], ["rcept_no"])'
+        )
+        self.assertEqual(list(got.keys()), ["rcept_no", "a"])
+
+    def test_record_with_neither_priority_nor_tail_keys_is_left_untouched(self):
+        """옮길 기준점이 아예 없으면(priority·tail 둘 다 레코드에 없음)
+        원본 순서를 그대로 둔다 — reorderFinancialsRecord·기존
+        reorderDividendsRecord와 같은 방어."""
+        rec = {"x": 1, "y": 2}
+        got = run_js(f'reorderRecordFields({json.dumps(rec)}, ["a"], ["b"])')
+        self.assertEqual(list(got.keys()), ["x", "y"])
+
+    def test_only_tail_keys_present_is_not_a_no_op(self):
+        """priority가 하나도 없어도 tail만 있으면(다른 source 일반 규칙
+        폴백) 재배치는 일어나야 한다."""
+        rec = {"a": 1, "rcept_no": "1"}
+        got = run_js(f'reorderRecordFields({json.dumps(rec)}, [], ["rcept_no"])')
+        self.assertEqual(list(got.keys()), ["a", "rcept_no"])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestSourceGroupedColumnOrderSurvivesJsonbReorder(unittest.TestCase):
+    """SE-9 Task 2(이번 계획의 척추) — se_server가 섹션 상태를 Postgres
+    jsonb로 저장하면서 모든 레코드의 키를 길이순→바이트순으로 재정렬한다
+    (schema.sql:6 `state jsonb not null`). 실사용자(SG) 스크린샷에서
+    "임원·주요주주 자기주식" 표의 첫 열이 비고(rm, 2자)였던 게 정확히 이
+    정렬이다 — 로컬 dict(삽입 순서 보존)로는 재현되지 않는다.
+
+    jsonb_sorted()로 배포본과 같은 키 순서를 만든 뒤 sourceGroupedBlocks가
+    (reorderRecordFields를 통해) 브리프가 명시한 실측 순서대로 되돌리는지
+    실렌더(run_render_section)로 검증한다 — 소스 grep이 아니라 화면에
+    실제로 그려진 <th> 텍스트를 확인한다."""
+
+    def _exec_treasury_records(self):
+        # 삼성전자 실측(2026-07-28, tesstkAcqsDspsSttus, TestMetaOnlyRecordsGetNoDataNote
+        # 픽스처와 같은 회사·같은 필드) 기반이되, 두 곳을 바꿨다: ① 두 번째
+        # 행의 rm을 실제 문구로 바꿨다(두 행 모두 "-"면 dropAllEmptyColumns가
+        # "실데이터 없는 열"로 통째로 지워버려 "비고가 첫 열" 증상 자체가
+        # 재현되지 않는다 — isNoDataMarker 주석 참고). ② 두 번째 행의
+        # acqs_mth1을 실측과 달리 다른 값으로 바꿨다(실측에서는 두 행
+        # 모두 "배당가능이익범위 이내 취득"으로 우연히 같다 — 그대로 두면
+        # tableLayout의 상수열 캡션 승격이 acqs_mth1을 표 밖(캡션)으로
+        # 빼서, 브리프가 명시한 9열 전체 순서를 이 표 하나로는 검증할 수
+        # 없게 된다).
+        base = [
+            {
+                "source": "exec_treasury", "rcept_no": "20260310002820",
+                "corp_cls": "Y", "corp_code": "00126380", "corp_name": "삼성전자",
+                "stock_knd": "보통주", "acqs_mth1": "배당가능이익범위 이내 취득",
+                "acqs_mth2": "직접취득", "acqs_mth3": "장내직접취득",
+                "bsis_qy": "29,700,000", "change_qy_acqs": "118,314,495",
+                "change_qy_dsps": "6,040,880", "change_qy_incnr": "50,144,628",
+                "trmend_qy": "91,828,987", "rm": "-",
+                "stlm_dt": "2025-12-31", "bsns_year": "2025", "reprt_code": "11011",
+            },
+            {
+                "source": "exec_treasury", "rcept_no": "20260310002820",
+                "corp_cls": "Y", "corp_code": "00126380", "corp_name": "삼성전자",
+                "stock_knd": "우선주", "acqs_mth1": "기타취득",
+                "acqs_mth2": "신탁계약에 의한취득", "acqs_mth3": "수탁자보유물량",
+                "bsis_qy": "-", "change_qy_acqs": "-", "change_qy_dsps": "-",
+                "change_qy_incnr": "-", "trmend_qy": "-",
+                "rm": "자기주식신탁계약 해지",
+                "stlm_dt": "2025-12-31", "bsns_year": "2025", "reprt_code": "11011",
+            },
+        ]
+        return [jsonb_sorted(r) for r in base]
+
+    def _hyslr_chg_records(self):
+        # 엔켐 실측 모양(TestMetaOnlyRecordsGetNoDataNote의 _FILLED_HYSLR_CHG와
+        # 같은 필드) — 두 행으로 늘려 priority 필드 5개(change_on·
+        # mxmm_shrholdr_nm·posesn_stock_co·qota_rt·change_cause) 전부를
+        # 다르게 해서, 그중 하나라도 우연히 같으면 상수열 캡션 승격으로
+        # 표 밖(캡션)에 빠져 브리프가 명시한 5열 전체 순서를 검증할 수
+        # 없게 되는 것을 막는다. rcept_no·corp_cls·corp_code·corp_name·
+        # stlm_dt·bsns_year·reprt_code는 실측대로 상수(캡션 승격 대상)로
+        # 남긴다.
+        base = [
+            {
+                "source": "hyslr_chg", "rcept_no": "20260415000535",
+                "corp_cls": "K", "corp_code": "01011526", "corp_name": "엔켐",
+                "change_on": "2026년 04월 12일", "mxmm_shrholdr_nm": "오정강 외 2인",
+                "posesn_stock_co": "1,234,567", "qota_rt": "17.40",
+                "change_cause": "기존 최대주주의 시간외 장외매도로 인한 변경",
+                "rm": "-", "stlm_dt": "2026-03-31", "bsns_year": "2026",
+                "reprt_code": "11013",
+            },
+            {
+                "source": "hyslr_chg", "rcept_no": "20260415000535",
+                "corp_cls": "K", "corp_code": "01011526", "corp_name": "엔켐",
+                "change_on": "2026년 05월 03일", "mxmm_shrholdr_nm": "오정강 외 3인",
+                "posesn_stock_co": "1,300,000", "qota_rt": "18.10",
+                "change_cause": "장내매수", "rm": "특별관계자 포함",
+                "stlm_dt": "2026-03-31", "bsns_year": "2026", "reprt_code": "11013",
+            },
+        ]
+        return [jsonb_sorted(r) for r in base]
+
+    def test_jsonb_sorted_exec_treasury_fixture_reproduces_the_rm_first_symptom(self):
+        """픽스처 자체가 실측 증상(비고가 길이순 정렬로 첫 키가 됨)을
+        재현하는지 먼저 확인한다 — 픽스처가 틀리면 아래 렌더 검증이
+        아무것도 증명하지 못한다."""
+        records = self._exec_treasury_records()
+        self.assertEqual(
+            list(records[0].keys())[0], "rm",
+            "픽스처가 jsonb 정렬(길이순) 증상을 재현하지 못합니다",
+        )
+
+    def test_exec_treasury_renders_with_brief_specified_column_order(self):
+        got = run_render_section(
+            '"insider_timeline"',
+            json.dumps(self._exec_treasury_records(), ensure_ascii=False),
+        )
+        headers = _header_rows(got)
+        self.assertTrue(headers, "임원·주요주주 자기주식 표 헤더를 찾지 못했습니다")
+        header = headers[0]
+        self.assertEqual(
+            header,
+            [
+                "주식 종류", "취득방법1", "취득방법2", "취득방법3",
+                "기초 수량(자기주식)", "취득 수량", "처분 수량",
+                "기타 증감 수량", "기말 수량(자기주식)", "비고",
+            ],
+            f"jsonb 정렬 입력에서도 브리프가 명시한 실측 순서로 렌더돼야 "
+            f"합니다(비고는 맨 뒤): {header}",
+        )
+
+    def test_hyslr_chg_renders_with_brief_specified_column_order(self):
+        got = run_render_section(
+            '"insider_timeline"',
+            json.dumps(self._hyslr_chg_records(), ensure_ascii=False),
+        )
+        headers = _header_rows(got)
+        self.assertTrue(headers, "최대주주 변동현황 표 헤더를 찾지 못했습니다")
+        header = headers[0]
+        self.assertEqual(
+            header,
+            ["변동일", "최대주주명", "소유 주식수", "지분율", "변동 원인", "비고"],
+            f"jsonb 정렬 입력에서도 브리프가 명시한 실측 순서로 렌더돼야 "
+            f"합니다(비고는 맨 뒤): {header}",
+        )
+
+    def test_unlisted_source_still_gets_general_tail_rule_via_jsonb_fixture(self):
+        """SOURCE_PRIORITY_KEYS에 없는 source(브리프: 추측으로 우선순위를
+        만들지 않는다)도 tail 일반 규칙(메타 키 뒤로, 비고 맨 뒤로)은
+        받아야 한다 — elestock으로 확인한다."""
+        base = [
+            {
+                "source": "elestock", "rcept_no": "1", "nm": "오정강",
+                "relate": "본인", "stlm_dt": "2025-12-31", "bsns_year": "2025",
+                "reprt_code": "11011", "rm": "-",
+            },
+            {
+                "source": "elestock", "rcept_no": "2", "nm": "이승호",
+                "relate": "특수관계인", "stlm_dt": "2025-12-31", "bsns_year": "2025",
+                "reprt_code": "11011", "rm": "장내매수",
+            },
+        ]
+        records = [jsonb_sorted(r) for r in base]
+        got = run_render_section(
+            '"insider_timeline"', json.dumps(records, ensure_ascii=False),
+        )
+        headers = _header_rows(got)
+        self.assertTrue(headers, "5% 대량보유 표 헤더를 찾지 못했습니다")
+        header = headers[0]
+        self.assertEqual(header[-1], "비고", f"비고가 맨 뒤가 아닙니다: {header}")
+        self.assertLess(
+            header.index("성명"), header.index("관계"),
+            f"실질 열(성명·관계)이 메타 열보다 뒤에 있습니다: {header}",
+        )
+
+    def test_essential_and_priority_columns_are_not_folded_before_tail_columns(self):
+        """MAX_VISIBLE_COLUMNS(12)를 넘기려면 상수 캡션 승격을 피해야 한다
+        — 9개 priority 필드 전부와 4개 메타 tail 필드(rcept_no·stlm_dt·
+        bsns_year·reprt_code)까지 두 행 모두 다른 값을 줘 캡션으로 빠지지
+        않게 만든 **합성** 픽스처다(실측이 아니라 folding 상호작용만
+        검증하려는 목적 — 값 자체에 의미는 없다). 이 조건에서 접히는
+        열이 tail(메타·비고) 쪽이어야 한다 — 실질 데이터 열(priority
+        9개)은 하나도 접히면 안 된다."""
+        rows = []
+        for i in range(2):
+            rows.append(jsonb_sorted({
+                "source": "exec_treasury",
+                "rcept_no": f"2026031000282{i}",
+                "corp_cls": "Y", "corp_code": "00126380", "corp_name": "삼성전자",
+                "stock_knd": "보통주" if i == 0 else "우선주",
+                "acqs_mth1": "배당가능이익범위 이내 취득" if i == 0 else "기타취득",
+                "acqs_mth2": "직접취득" if i == 0 else "신탁계약에 의한취득",
+                "acqs_mth3": "장내직접취득" if i == 0 else "수탁자보유물량",
+                "bsis_qy": f"{i}", "change_qy_acqs": f"{i}",
+                "change_qy_dsps": f"{i}", "change_qy_incnr": f"{i}",
+                "trmend_qy": f"{i}", "rm": "-" if i == 0 else "특이사항",
+                "stlm_dt": "2025-12-31" if i == 0 else "2026-03-31",
+                "bsns_year": "2025" if i == 0 else "2026",
+                "reprt_code": "11011" if i == 0 else "11013",
+            }))
+        got = run_js(f"sectionBlocks({json.dumps(rows, ensure_ascii=False)})")
+        self.assertEqual(len(got), 1)
+        table = got[0]["table"]
+        folded = set(table["foldedKeys"])
+        priority = set([
+            "stock_knd", "acqs_mth1", "acqs_mth2", "acqs_mth3", "bsis_qy",
+            "change_qy_acqs", "change_qy_dsps", "change_qy_incnr", "trmend_qy",
+        ])
+        leaked = priority & folded
+        self.assertEqual(
+            leaked, set(),
+            f"실질 데이터 열이 접혔습니다(접히면 안 됩니다): {leaked}. "
+            f"folded={folded}",
+        )
+        self.assertTrue(
+            folded.issubset({"stlm_dt", "bsns_year", "reprt_code", "rm"}),
+            f"접힌 열이 메타/비고 밖의 것을 포함합니다: {folded}",
+        )
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestDividendsColumnOrderUnchangedAfterGeneralization(unittest.TestCase):
+    """SE-9 Task 2 — reorderDividendsRecord/reorderDividendsFields를
+    reorderRecordFields(일반 함수)의 특수화(tailKeys=[])로 재구현했다.
+    "일반화했더니 동작이 미묘하게 달라졌다"를 잡는 하드 회귀 테스트다 —
+    자연스러운 dict 순서가 아니라 jsonb 정렬 픽스처를 넣어, 다른
+    소스(exec_treasury 등)에 적용한 tail 일반 규칙이 배당에는 새어 들어가지
+    않는지(즉 bsns_year/stlm_dt가 여전히 tail이 아니라 맨 앞으로 당겨지는지)
+    실렌더로 확인한다."""
+
+    def test_dividends_still_leads_with_base_period_when_input_is_jsonb_sorted(self):
+        # SG 실측(2026-07-30, corp_code=00963976) 2건 — TestOtherRawTablesAlreadyLeadWithTheUsefulColumn
+        # 의 _SG_DIVIDENDS와 같은 값, jsonb 정렬만 통과시켰다.
+        base = [
+            {
+                "rcept_no": "20260515002529", "corp_cls": "K", "corp_code": "00963976",
+                "corp_name": "SG", "se": "주당 액면가액(원)", "stock_knd": "-",
+                "thstrm": "500", "frmtrm": "500", "lwfr": "500",
+                "stlm_dt": "2026-03-31", "bsns_year": "2026", "reprt_code": "11013",
+            },
+            {
+                "rcept_no": "20260316001642", "corp_cls": "K", "corp_code": "00963976",
+                "corp_name": "SG", "se": "현금배당금총액(백만원)", "stock_knd": "-",
+                "thstrm": "0", "frmtrm": "0", "lwfr": "0",
+                "stlm_dt": "2025-12-31", "bsns_year": "2025", "reprt_code": "11011",
+            },
+        ]
+        records = [jsonb_sorted(r) for r in base]
+        # 픽스처가 실제로 jsonb 순서(bsns_year·stlm_dt가 앞이 아님)인지
+        # 먼저 확인 — 안 그러면 아래 통과가 아무것도 증명하지 못한다.
+        self.assertNotEqual(list(records[0].keys())[0], "bsns_year")
+
+        got = run_render_section('"dividends"', json.dumps(records, ensure_ascii=False))
+        headers = _header_rows(got)
+        self.assertTrue(headers, "배당 표 헤더를 찾지 못했습니다")
+        header = headers[0]
+        self.assertEqual(
+            header[0], "사업연도",
+            f"일반화 이후에도 배당 표는 여전히 기준 기간(사업연도)이 첫 열이어야 "
+            f"합니다 — tail 일반 규칙이 새어 들어가면 안 됩니다: {header}",
+        )
+        self.assertEqual(
+            header[:4], ["사업연도", "결산일", "항목", "당기 값"],
+            f"배당 표의 앞 4열 순서(bsns_year→stlm_dt→se→thstrm)가 "
+            f"일반화 전후로 바뀌었습니다: {header}",
+        )
 
 
 @unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
