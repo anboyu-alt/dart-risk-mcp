@@ -1118,7 +1118,7 @@ class TestFootnoteMarkerRenderedInFundChain(unittest.TestCase):
         cell_texts = got["cells"]
         self.assertIn("자금 재배분에 따른 차이", cell_texts)
         self.assertFalse(
-            any("각주" in t for t in cell_texts if "자금 재배분" in t),
+            any("원문 참고" in t for t in cell_texts if "자금 재배분" in t),
             "서술형 사유에 안내 문구가 잘못 붙었습니다",
         )
 
