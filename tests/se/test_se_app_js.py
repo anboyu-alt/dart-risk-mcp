@@ -9,6 +9,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+import tempfile
 import unittest
 
 _ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
@@ -479,8 +480,15 @@ const sandbox = {
   fetch: function () { return Promise.reject(new Error("no network in test")); },
 };
 vm.createContext(sandbox);
-new vm.Script(fs.readFileSync(process.argv[1], "utf-8"), { filename: "app.js" }).runInContext(sandbox);
-new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "ui.js" }).runInContext(sandbox);
+// run_render_section이 이 스크립트 자체를 임시 .js 파일에 써서 node로
+// 실행한다(2026-07-30, SE-10 Task 2 — 하네스에 캡션 수집기를 추가하면서
+// 배당 SG 실측 픽스처(가장 큰 fixture) 조합이 Windows CreateProcess의
+// 명령줄 길이 한도를 넘겨 WinError 206으로 죽는 회귀가 실제로 났다).
+// 파일로 실행하면 process.argv[1]이 이 스크립트 파일 자신의 경로이 되므로
+// (node가 -e로 문자열을 바로 평가할 때와 달리), app.js/ui.js 경로는 그
+// 한 칸 뒤인 argv[2]/argv[3]에서 읽는다.
+new vm.Script(fs.readFileSync(process.argv[2], "utf-8"), { filename: "app.js" }).runInContext(sandbox);
+new vm.Script(fs.readFileSync(process.argv[3], "utf-8"), { filename: "ui.js" }).runInContext(sandbox);
 
 const OPENED_DOCS = [];
 sandbox.openDocPanel = function (rceptNo) { OPENED_DOCS.push(rceptNo); };
@@ -528,6 +536,12 @@ sandbox.openExecutivePanel = function (row) { EXEC_PANEL_CALLS.push(row); };
     buttons: collectButtons(bodyEl, []),
     fundChainCards: collectByClass(bodyEl, "fund-chain-card", []),
     fundBarSegs: collectByClass(bodyEl, "fund-bar-seg", []),
+    // SE-10 Task 2 — tableLayout의 상수-열 캡션 승격(app.js tableLayout
+    // 주석 "모든 행이 같은 값인 열은 표 위 캡션으로 올린다")이 실제
+    // DOM에 그려지는지 소스 문자열 추측이 아니라 렌더된 .cap div로
+    // 직접 확인하기 위한 수집기다(collectByClass는 기존 범용 헬퍼 —
+    // fund-chain-card·fund-bar-seg와 같은 방식으로 재사용).
+    captions: collectByClass(bodyEl, "cap", []),
     openedDocs: OPENED_DOCS.slice(),
     execPanelCalls: EXEC_PANEL_CALLS.slice(),
   };
@@ -571,10 +585,25 @@ def run_render_section(key_js: str, value_js: str, setup_js: str = ""):
     도착한다).
     """
     script = _RENDER_SECTION_HARNESS % {"key": key_js, "value": value_js, "setup": setup_js}
-    out = subprocess.run(
-        [_NODE, "-e", script, str(_APP), str(_UI)],
-        capture_output=True, text=True, encoding="utf-8",
-    )
+    # script를 `node -e`의 CLI 인자로 그대로 넘기면 Windows의 CreateProcess
+    # 명령줄 길이 한도(약 32KB)에 걸릴 수 있다 — 실측: 캡션 수집기 추가(SE-10
+    # Task 2) 후 배당 SG 실측 픽스처(가장 큰 fixture) 조합에서 WinError 206
+    # ("파일 이름이나 확장자가 너무 깁니다")으로 실제로 죽었다. 임시 .js
+    # 파일에 써서 그 파일을 실행하면 이 한도와 무관해진다 — 하네스 내부의
+    # process.argv[2]/[3](위 vm.Script 주석 참고, argv[1]은 이제 이 임시
+    # 파일 자신의 경로다)만 그에 맞춰 한 칸씩 밀려 있다.
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".js", delete=False, encoding="utf-8"
+    ) as f:
+        f.write(script)
+        script_path = f.name
+    try:
+        out = subprocess.run(
+            [_NODE, script_path, str(_APP), str(_UI)],
+            capture_output=True, text=True, encoding="utf-8",
+        )
+    finally:
+        pathlib.Path(script_path).unlink(missing_ok=True)
     if out.returncode != 0:
         raise AssertionError(f"node 실행 실패:\n{out.stderr}")
     return json.loads(out.stdout)
@@ -8599,6 +8628,299 @@ class TestFinancialRatios(unittest.TestCase):
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFinancialRatiosRealYear(unittest.TestCase):
+    """SE-10 Task 1 — financialRatios()의 `기간`은 서수 라벨("전기" 등)
+    대신 records의 bsns_year로 계산한 실제 연도 문자열이어야 한다
+    (se10-investigation.md Q1a/Q1b: 당기=bsns_year, 전기=bsns_year-1,
+    전전기=bsns_year-2). bsns_year를 못 읽으면(필드 자체가 없거나 숫자로
+    파싱되지 않으면) 기존 서수 라벨로 안전 폴백한다 — 판정 불가 시
+    지우지 않는다 원칙(브리프)."""
+
+    _WITH_YEAR = """[
+      {fs_div:"CFS", sj_div:"IS", account_nm:"매출액", bsns_year:"2025",
+       thstrm_amount:"1000", frmtrm_amount:"900", bfefrmtrm_amount:"800"},
+      {fs_div:"CFS", sj_div:"IS", account_nm:"영업이익", bsns_year:"2025",
+       thstrm_amount:"100", frmtrm_amount:"90", bfefrmtrm_amount:"80"}
+    ]"""
+
+    def test_period_becomes_real_year_when_bsns_year_present(self):
+        got = run_js(f"financialRatios({self._WITH_YEAR})")
+        periods = {r["기간"] for r in got}
+        self.assertEqual(periods, {"2025", "2024", "2023"})
+
+    def test_current_prior_and_prior_prior_years_computed_by_subtraction(self):
+        """당기=bsns_year, 전기=bsns_year-1, 전전기=bsns_year-2 — 값 자체도
+        각 연도에 맞는 금액으로 계산됐는지(손계산 10.0%로 고정한 픽스처)
+        함께 확인한다."""
+        got = run_js(f"financialRatios({self._WITH_YEAR})")
+        margin_by_period = {r["기간"]: r["값"] for r in got if r["지표"] == "영업이익률"}
+        self.assertAlmostEqual(margin_by_period["2025"], 10.0, places=1)
+        self.assertAlmostEqual(margin_by_period["2024"], 10.0, places=1)
+        self.assertAlmostEqual(margin_by_period["2023"], 10.0, places=1)
+
+    def test_falls_back_to_ordinal_labels_when_bsns_year_field_is_missing(self):
+        """레코드에 bsns_year 필드 자체가 없으면(예상 밖 입력) 기존 서수
+        라벨로 안전 폴백한다 — 새 연도 계산이 조용히 죽거나 틀린 값을
+        만들지 않는다."""
+        got = run_js('''financialRatios([
+          {fs_div:"CFS", sj_div:"IS", account_nm:"매출액", thstrm_amount:"1000"}
+        ])''')
+        periods = {r["기간"] for r in got}
+        self.assertEqual(periods, {"전전기", "전기", "당기"})
+
+    def test_falls_back_when_bsns_year_is_unparseable(self):
+        """bsns_year가 있지만 숫자로 읽을 수 없으면(예상 밖 값) 서수
+        라벨로 물러난다 — NaN이 섞인 "2025년" 같은 가짜 연도를 만들지
+        않는다."""
+        got = run_js('''financialRatios([
+          {fs_div:"CFS", sj_div:"IS", account_nm:"매출액", bsns_year:"모름",
+           thstrm_amount:"1000"}
+        ])''')
+        periods = {r["기간"] for r in got}
+        self.assertEqual(periods, {"전전기", "전기", "당기"})
+
+    def test_falls_back_when_bsns_year_is_empty_string(self):
+        got = run_js('''financialRatios([
+          {fs_div:"CFS", sj_div:"IS", account_nm:"매출액", bsns_year:"",
+           thstrm_amount:"1000"}
+        ])''')
+        periods = {r["기간"] for r in got}
+        self.assertEqual(periods, {"전전기", "전기", "당기"})
+
+    def test_existing_fixtures_without_bsns_year_are_unaffected(self):
+        """이 클래스 위 TestFinancialRatios의 모든 픽스처는 bsns_year가
+        없다 — SE-10 이후에도 그 테스트들이 그대로 통과해야 이 변경이
+        회귀가 아니라 순수 추가라는 뜻이다(별도로 한 번 더 명시 확인)."""
+        got = run_js(f"financialRatios({TestFinancialRatios._CFS})")
+        periods = {r["기간"] for r in got}
+        self.assertEqual(periods, {"전전기", "전기", "당기"})
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFinancialRatiosByYear(unittest.TestCase):
+    """financialRatiosByYear(app.js, SE-10 Task 1 신설) — financialRatios()가
+    만든 행을 `기간`(실제 연도 또는 폴백 서수 라벨)으로 묶는다.
+    dividendPeriodBlocks와 같은 Map+groupOrder 메커니즘이지만, 연도가
+    숫자로 계산됐으면(오래된 것부터 나오는 원본 순서와 무관하게) 명시
+    내림차순(최신 먼저)으로 정렬한다는 점이 다르다(task-1-brief.md)."""
+
+    def test_groups_into_one_block_per_distinct_period_value(self):
+        got = run_js('''financialRatiosByYear([
+          {지표:"영업이익률", 값:1, 구분:"연결", 기간:"2025"},
+          {지표:"순이익률", 값:2, 구분:"연결", 기간:"2025"},
+          {지표:"영업이익률", 값:3, 구분:"연결", 기간:"2024"}
+        ])''')
+        self.assertEqual(len(got), 2)
+
+    def test_numeric_year_keys_sort_descending_most_recent_first(self):
+        got = run_js('''financialRatiosByYear([
+          {지표:"영업이익률", 값:1, 구분:"연결", 기간:"2023"},
+          {지표:"영업이익률", 값:2, 구분:"연결", 기간:"2025"},
+          {지표:"영업이익률", 값:3, 구분:"연결", 기간:"2024"}
+        ])''')
+        self.assertEqual([b["title"] for b in got], ["2025년", "2024년", "2023년"])
+
+    def test_title_has_year_suffix_for_numeric_keys(self):
+        got = run_js('''financialRatiosByYear([
+          {지표:"영업이익률", 값:1, 구분:"연결", 기간:"2025"}
+        ])''')
+        self.assertEqual(got[0]["title"], "2025년")
+
+    def test_fallback_ordinal_labels_keep_original_appearance_order_and_no_year_suffix(self):
+        """연도 계산이 폴백된 입력(기간이 서수 문자열)에서는 숫자가 아니므로
+        정렬하지 않고 원래 등장 순서(전전기→전기→당기, 이미 시간순)를
+        그대로 둔다 — 제목도 "년" 접미어 없이 그대로다."""
+        got = run_js('''financialRatiosByYear([
+          {지표:"영업이익률", 값:1, 구분:"연결", 기간:"전전기"},
+          {지표:"영업이익률", 값:2, 구분:"연결", 기간:"전기"},
+          {지표:"영업이익률", 값:3, 구분:"연결", 기간:"당기"}
+        ])''')
+        self.assertEqual([b["title"] for b in got], ["전전기", "전기", "당기"])
+
+    def test_division_stays_as_a_row_field_not_split_into_separate_tables(self):
+        """연결/별도를 표로 또 쪼개지 않는다는 결정(task-1-brief.md) — 한
+        연도 그룹 안에 연결·별도 행이 함께 있어야 한다."""
+        got = run_js('''financialRatiosByYear([
+          {지표:"영업이익률", 값:1, 구분:"연결", 기간:"2025"},
+          {지표:"영업이익률", 값:2, 구분:"별도", 기간:"2025"}
+        ])''')
+        self.assertEqual(len(got), 1)
+        divs = {r["구분"] for r in got[0]["ratios"]}
+        self.assertEqual(divs, {"연결", "별도"})
+
+    def test_empty_input_yields_no_blocks(self):
+        self.assertEqual(run_js("financialRatiosByYear([])"), [])
+
+    def test_non_array_input_yields_no_blocks(self):
+        self.assertEqual(run_js("financialRatiosByYear(null)"), [])
+
+
+# SG(corp_code=00963976) 실측 — 2026-07-30, dart_risk_mcp.core.dart_client.
+# fetch_financial_statements를 DART_API_KEY로 직접 호출(SE 백엔드가 financials
+# 섹션에 실제로 쓰는 것과 같은 함수, se_server/jobs/registry.py:60)해 받은
+# 라이브 응답에서 재무 파생 지표 계산에 필요한 계정 8종(유동자산·유동부채·
+# 부채총계·자본금·자본총계·매출액·영업이익·당기순이익(손실))만 CFS/OFS
+# 각각 추려 옮겨 적었다 — 금액은 손으로 만든 값이 아니라 API가 실제로 준
+# thstrm_amount/frmtrm_amount/bfefrmtrm_amount 그대로다(se10-investigation.md
+# Q1a가 확인한 것과 같은 라이브 응답, bsns_year="2025" 상수 포함).
+_SG_LIVE_RATIO_RECORDS = json.dumps([
+    {"fs_div": "CFS", "account_nm": "유동자산", "bsns_year": "2025",
+     "thstrm_amount": "107,418,120,726", "frmtrm_amount": "116,211,873,984",
+     "bfefrmtrm_amount": "72,974,861,922"},
+    {"fs_div": "CFS", "account_nm": "유동부채", "bsns_year": "2025",
+     "thstrm_amount": "86,205,896,601", "frmtrm_amount": "122,797,695,112",
+     "bfefrmtrm_amount": "118,139,824,157"},
+    {"fs_div": "CFS", "account_nm": "부채총계", "bsns_year": "2025",
+     "thstrm_amount": "122,215,490,678", "frmtrm_amount": "146,058,452,533",
+     "bfefrmtrm_amount": "136,805,656,860"},
+    {"fs_div": "CFS", "account_nm": "자본금", "bsns_year": "2025",
+     "thstrm_amount": "10,393,789,000", "frmtrm_amount": "9,704,337,300",
+     "bfefrmtrm_amount": "5,010,593,700"},
+    {"fs_div": "CFS", "account_nm": "자본총계", "bsns_year": "2025",
+     "thstrm_amount": "102,177,350,973", "frmtrm_amount": "86,774,282,733",
+     "bfefrmtrm_amount": "51,254,050,891"},
+    {"fs_div": "CFS", "account_nm": "매출액", "bsns_year": "2025",
+     "thstrm_amount": "102,246,199,563", "frmtrm_amount": "118,940,081,051",
+     "bfefrmtrm_amount": "80,921,130,313"},
+    {"fs_div": "CFS", "account_nm": "영업이익", "bsns_year": "2025",
+     "thstrm_amount": "752,259,599", "frmtrm_amount": "-6,068,240,269",
+     "bfefrmtrm_amount": "-13,468,746,819"},
+    {"fs_div": "CFS", "account_nm": "당기순이익(손실)", "bsns_year": "2025",
+     "thstrm_amount": "-2,454,050,880", "frmtrm_amount": "-36,241,673,706",
+     "bfefrmtrm_amount": "-32,912,462,971"},
+    {"fs_div": "OFS", "account_nm": "유동자산", "bsns_year": "2025",
+     "thstrm_amount": "68,240,213,217", "frmtrm_amount": "62,931,296,103",
+     "bfefrmtrm_amount": "35,454,929,770"},
+    {"fs_div": "OFS", "account_nm": "유동부채", "bsns_year": "2025",
+     "thstrm_amount": "59,900,190,993", "frmtrm_amount": "86,327,614,981",
+     "bfefrmtrm_amount": "91,859,200,909"},
+    {"fs_div": "OFS", "account_nm": "부채총계", "bsns_year": "2025",
+     "thstrm_amount": "86,794,197,105", "frmtrm_amount": "96,914,677,367",
+     "bfefrmtrm_amount": "107,319,474,046"},
+    {"fs_div": "OFS", "account_nm": "자본금", "bsns_year": "2025",
+     "thstrm_amount": "10,393,789,000", "frmtrm_amount": "9,704,337,300",
+     "bfefrmtrm_amount": "5,010,593,700"},
+    {"fs_div": "OFS", "account_nm": "자본총계", "bsns_year": "2025",
+     "thstrm_amount": "100,786,677,505", "frmtrm_amount": "82,959,024,100",
+     "bfefrmtrm_amount": "38,031,006,750"},
+    {"fs_div": "OFS", "account_nm": "매출액", "bsns_year": "2025",
+     "thstrm_amount": "49,445,822,622", "frmtrm_amount": "51,435,881,203",
+     "bfefrmtrm_amount": "50,689,315,548"},
+    {"fs_div": "OFS", "account_nm": "영업이익", "bsns_year": "2025",
+     "thstrm_amount": "686,206,144", "frmtrm_amount": "-3,555,720,453",
+     "bfefrmtrm_amount": "-9,302,994,359"},
+    {"fs_div": "OFS", "account_nm": "당기순이익(손실)", "bsns_year": "2025",
+     "thstrm_amount": "-83,387,528", "frmtrm_amount": "-26,778,534,185",
+     "bfefrmtrm_amount": "-39,438,581,163"},
+], ensure_ascii=False)
+
+
+def _table_segments(rendered):
+    """run_render_section 결과의 tableRows(헤더+본문이 한 목록에 섞여
+    있음)를 표 단위로 나눈다 — 헤더 행(모든 비어있지 않은 셀이 th)을
+    경계로 새 표가 시작된다고 본다. _header_rows와 같은 판정 기준이지만,
+    본문 행도 함께 표별로 묶어 돌려준다는 점이 다르다(SE-10 Task 1 —
+    연도별로 나뉜 표 안에서 구분(연결/별도) 값이 실제로 함께 있는지
+    확인하려면 헤더 인덱스 ↔ 본문 셀을 짝지어야 한다)."""
+    segments = []
+    current = None
+    for row in rendered["tableRows"]:
+        non_empty = [c for c in row if c["text"] != ""]
+        is_header = bool(non_empty) and all(c["tag"] == "th" for c in non_empty)
+        if is_header:
+            current = {"header": [c["text"] for c in row], "body": []}
+            segments.append(current)
+        elif current is not None:
+            current["body"].append([c["text"] for c in row])
+    return segments
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFinancialRatiosByYearRealRender(unittest.TestCase):
+    """SE-10 Task 1 최종 검증 — SG(corp_code=00963976) 실측 데이터(위
+    _SG_LIVE_RATIO_RECORDS)로 실제 렌더 결과를 확인한다. 연결 3년 + 별도
+    3년 = 6개 구분×기간 조합이 연도별 표 3개(6개가 아니라)로 묶이는지,
+    연도 값이 실제 2025/2024/2023과 일치하는지, 차트 x축이 여전히
+    과거→현재로 흐르는지가 핵심이다."""
+
+    def test_three_year_titled_tables_not_six(self):
+        """연결×3년 + 별도×3년을 연도로 묶으면 3개 표가 나와야 한다 —
+        구분으로 또 쪼개면(6개) 이 테스트가 실패한다(task-1-brief.md
+        결정 사항: 구분은 행에 남긴다, 표로 또 쪼개지 않는다)."""
+        got = run_render_section('"financials"', _SG_LIVE_RATIO_RECORDS)
+        year_titles = [t for t in got["titles"] if t in ("2025년", "2024년", "2023년")]
+        self.assertEqual(
+            sorted(set(year_titles)), ["2023년", "2024년", "2025년"],
+            f"연도 표 제목 3개가 모두 나오지 않습니다: {got['titles']}",
+        )
+        self.assertEqual(len(year_titles), 3, f"연도 표 제목이 3개가 아닙니다: {got['titles']}")
+
+    def test_year_titles_render_most_recent_first(self):
+        got = run_render_section('"financials"', _SG_LIVE_RATIO_RECORDS)
+        idx_2025 = got["titles"].index("2025년")
+        idx_2024 = got["titles"].index("2024년")
+        idx_2023 = got["titles"].index("2023년")
+        self.assertLess(idx_2025, idx_2024, f"2025년 표가 2024년보다 뒤에 렌더됩니다: {got['titles']}")
+        self.assertLess(idx_2024, idx_2023, f"2024년 표가 2023년보다 뒤에 렌더됩니다: {got['titles']}")
+
+    def test_period_column_no_longer_appears_in_derived_headers(self):
+        """그룹 제목으로 승격된 정보(연도)는 행에서 지운다는 결정 —
+        `기간`이 더 이상 파생 표의 열로 나오면 안 된다."""
+        got = run_render_section('"financials"', _SG_LIVE_RATIO_RECORDS)
+        derived_headers = _header_rows(got)[:3]
+        self.assertEqual(len(derived_headers), 3, f"파생 표 헤더가 3개가 아닙니다: {derived_headers}")
+        for h in derived_headers:
+            self.assertNotIn("기간", h, f"기간 열이 그룹 후에도 남아 있습니다: {h}")
+            self.assertIn("지표", h)
+            self.assertIn("구분", h)
+
+    def test_each_year_table_has_both_consolidated_and_separate_rows(self):
+        """연결/별도를 표로 또 쪼개지 않는다는 결정 — 한 연도 표 안에 구분
+        열 값으로 "연결"과 "별도"가 실제로 둘 다 있어야 한다(헤더에
+        "구분"이 있다는 것만으로는 본문에 두 값이 다 있는지 증명 못
+        한다)."""
+        got = run_render_section('"financials"', _SG_LIVE_RATIO_RECORDS)
+        segments = _table_segments(got)
+        year_segments = segments[:3]
+        self.assertEqual(len(year_segments), 3, f"연도 표가 3개가 아닙니다: {[s['header'] for s in segments]}")
+        for seg in year_segments:
+            div_idx = seg["header"].index("구분")
+            divs = {row[div_idx] for row in seg["body"]}
+            self.assertEqual(
+                divs, {"연결", "별도"},
+                f"연도 표({seg['header']})에 연결/별도가 함께 있지 않습니다: {divs}",
+            )
+
+    def test_chart_x_axis_sorts_chronologically_past_to_present(self):
+        """차트 x축이 실제 연도 문자열이 돼도 과거→현재, 왼쪽에서 오른쪽
+        으로 흐르는지 실제 chartData() 호출로 확인한다(브리프: "실렌더로
+        확인", RATIO_PERIODS·CHART_SPECS.financial_ratios 주석이 말하는
+        allNumeric 오름차순 정렬 경로)."""
+        got = run_js(
+            f"chartData(financialRatios({_SG_LIVE_RATIO_RECORDS}), "
+            f"CHART_SPECS.financial_ratios).labels"
+        )
+        self.assertEqual(got, ["2023", "2024", "2025"])
+
+    def test_marks_still_attach_to_the_correct_row_after_year_grouping(self):
+        """MARK_RULES.financial_ratios(이익률 값 < 0)가 표를 연도별로 나눈
+        뒤에도 정확한 행에 붙는지 확인한다 — marks 좌표(행번호|열키)가
+        표를 나누기 전 전체 배열 기준 인덱스로 남아 있으면 엉뚱한(다른
+        연도·다른 구분) 행에 강조가 붙거나, 아예 안 붙거나, 양수 값에
+        잘못 붙는다. 이 실측 데이터는 별도 2024·2023과 연결 2024·2023의
+        영업이익률, 그리고 연결·별도 2025의 순이익률이 실제로 음수라
+        강조가 여러 행에서 발화한다."""
+        got = run_render_section('"financials"', _SG_LIVE_RATIO_RECORDS)
+        marked = got["marked"]
+        self.assertTrue(marked, "강조가 하나도 렌더되지 않았습니다 — 실측 데이터에 음수 이익률이 있는데도")
+        for m in marked:
+            self.assertTrue(
+                m["text"].startswith("-"),
+                f"강조된 셀이 음수 값이 아닙니다(행 정렬이 어긋났을 수 있습니다): {m}",
+            )
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
 class TestFinancialRatiosKeyOrder(unittest.TestCase):
     """SE-8 Task 4 — 실사용자(SG, corp_code=00963976 실측 기반) 지적:
     "표를 구성할 때 이용자에게 어떤 정보가 유용할지 고민부터 하고 배치를
@@ -8731,31 +9053,42 @@ class TestFinancialsRawTableFieldOrder(unittest.TestCase):
 
     def test_account_name_renders_before_classification_meta(self):
         """브리프 검증 요구 4(실렌더 검증): 원본 재무제표 표에서 account_nm이
-        fs_div보다 먼저 오는 열 순서로 실제 DOM에 렌더된다. financials
-        섹션은 파생 지표 표(financialRatios)도 함께 그리므로, 원본 표는
-        header_rows의 마지막(가장 아래, 원본이 파생 블록보다 나중에
-        붙는다는 ui.js 배선을 이용)에서 찾는다."""
+        본문 열의 첫머리에 오는 순서로 실제 DOM에 렌더된다.
+
+        SE-10 Task 2 갱신: 원본 표는 이제 fs_div(연결/별도)별로 나뉜 표
+        여러 개(이 픽스처는 CFS 2행 + OFS 2행 → 2개)다 — financials 섹션은
+        파생 지표 표(financialRatios)도 함께 그리므로 "지표" 열이 없는
+        헤더만 원본 표로 간주해 고른다(위치 대신 내용으로 식별 — 원본
+        표 개수 자체가 이 태스크로 바뀌었기 때문에 "마지막 헤더"라는 위치
+        가정이 더 이상 유효하지 않다). fs_div는 각 그룹 안에서 상수가 돼
+        본문이 아니라 캡션으로 승격된다(financialsGroupedBlocks 주석 참고)
+        — 그래서 본문에서 사라지고 캡션에서 나타나는지를 함께 확인한다."""
         got = run_render_section('"financials"', self._SG_RAW_FIELD_ORDER)
-        headers = _header_rows(got)
-        self.assertGreaterEqual(len(headers), 2, f"표가 2개(파생+원본) 미만입니다: {headers}")
-        raw_header = headers[-1]
-        self.assertIn("계정과목", raw_header, f"원본 표 헤더에 계정과목이 없습니다: {raw_header}")
-        self.assertIn("연결/별도", raw_header, f"원본 표 헤더에 연결/별도가 없습니다: {raw_header}")
-        self.assertLess(
-            raw_header.index("계정과목"), raw_header.index("연결/별도"),
-            f"account_nm이 fs_div보다 뒤에 렌더됩니다: {raw_header}",
-        )
+        raw_headers = [h for h in _header_rows(got) if "지표" not in h]
+        self.assertEqual(len(raw_headers), 2, f"연결/별도 원본 표가 2개가 아닙니다: {raw_headers}")
+        for raw_header in raw_headers:
+            self.assertIn("계정과목", raw_header, f"원본 표 헤더에 계정과목이 없습니다: {raw_header}")
+            self.assertNotIn(
+                "연결/별도", raw_header,
+                f"fs_div가 본문 열에 남아 있습니다(그룹 내 상수라 캡션으로 승격돼야 합니다): {raw_header}",
+            )
+        cap_texts = " ".join(c["text"] for c in got["captions"])
+        self.assertIn("연결/별도", cap_texts, f"fs_div가 캡션으로 승격되지 않았습니다: {cap_texts}")
 
     def test_amount_columns_also_render_before_classification_meta(self):
         """브리프 문구: "account_nm(계정과목)·금액보다 뒤로 보낸다" —
-        금액 열도 함께 확인한다."""
+        금액 열도 함께 확인한다. SE-10 Task 2 갱신: fs_div가 캡션으로
+        빠졌으므로 "금액이 fs_div보다 앞"이 아니라 "계정과목이 금액보다
+        앞"으로 순서 자체를 확인한다(그룹핑 전 열 순서 재배치는 이
+        태스크가 건드리지 않았다 — 여전히 성립해야 한다)."""
         got = run_render_section('"financials"', self._SG_RAW_FIELD_ORDER)
-        raw_header = _header_rows(got)[-1]
-        self.assertIn("당기 금액", raw_header)
-        self.assertLess(
-            raw_header.index("당기 금액"), raw_header.index("연결/별도"),
-            f"금액 열이 fs_div보다 뒤에 렌더됩니다: {raw_header}",
-        )
+        raw_headers = [h for h in _header_rows(got) if "지표" not in h]
+        for raw_header in raw_headers:
+            self.assertIn("당기 금액", raw_header)
+            self.assertLess(
+                raw_header.index("계정과목"), raw_header.index("당기 금액"),
+                f"계정과목이 당기 금액보다 뒤에 렌더됩니다: {raw_header}",
+            )
 
     def test_derived_ratio_table_also_leads_with_indicator_name(self):
         """확장(브리프 명시 범위 밖, 같은 원칙 적용): 화면에 실제로 보이는
@@ -8772,6 +9105,190 @@ class TestFinancialsRawTableFieldOrder(unittest.TestCase):
             f"재무 파생 지표 표의 첫 열이 '지표'가 아닙니다: {derived_header}",
         )
         self.assertIn("구분", derived_header)
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestShortenFinancialsDate(unittest.TestCase):
+    """shortenFinancialsDate(app.js, SE-10 Task 2) — thstrm_dt류 값을 앞
+    4자리(연도)로 축약하는 순수 함수 자체를 검증한다. se10-investigation.md
+    Q1a 실측: 재무상태표(BS) 행은 시점형("2025.12.31 현재"), 손익계산서
+    (IS) 행은 기간형("2025.01.01 ~ 2025.12.31")이지만 둘 다 앞 4자리가
+    같은 연도를 가리킨다 — 정규식 하나(^\\d{4})가 두 형태 모두 처리해야
+    한다는 것이 브리프의 핵심 전제다."""
+
+    def test_bs_style_point_in_time_shortens_to_year(self):
+        self.assertEqual(run_js('shortenFinancialsDate("2025.12.31 현재")'), "2025")
+
+    def test_is_style_range_shortens_to_year(self):
+        self.assertEqual(run_js('shortenFinancialsDate("2025.01.01 ~ 2025.12.31")'), "2025")
+
+    def test_non_string_value_is_left_untouched(self):
+        """판정 불가 시 지우지 않는다 원칙 — 문자열이 아니면 손대지 않는다."""
+        self.assertIsNone(run_js("shortenFinancialsDate(null)"))
+        self.assertEqual(run_js("shortenFinancialsDate(2025)"), 2025)
+
+    def test_string_without_leading_year_is_left_untouched(self):
+        """앞 4자리가 숫자가 아닌 예상 밖 형태는 원본을 그대로 둔다."""
+        self.assertEqual(run_js('shortenFinancialsDate("-")'), "-")
+        self.assertEqual(run_js('shortenFinancialsDate("해당없음")'), "해당없음")
+
+
+@unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")
+class TestFinancialsGroupedBlocks(unittest.TestCase):
+    """financialsGroupedBlocks(app.js, SE-10 Task 2) — financials 원본
+    표를 fs_div(CFS/OFS)별로 표+제목 블록으로 나누는 순수 함수 자체를
+    dividendPeriodBlocks와 같은 방식(직접 호출)으로 검증한다. 값은
+    se10-investigation.md Q1a·Q1c 실측 그대로다(연결 유동자산 레코드,
+    corp_code=00963976, rcept_no=20260316001642)."""
+
+    _CFS_BS_ROW = {
+        "rcept_no": "20260316001642", "reprt_code": "11011", "bsns_year": "2025",
+        "corp_code": "00963976", "stock_code": "255220",
+        "fs_div": "CFS", "fs_nm": "연결재무제표", "sj_div": "BS", "sj_nm": "재무상태표",
+        "account_nm": "유동자산",
+        "thstrm_nm": "제 17 기", "thstrm_dt": "2025.12.31 현재", "thstrm_amount": "107,418,120,726",
+        "frmtrm_nm": "제 16 기", "frmtrm_dt": "2024.12.31 현재", "frmtrm_amount": "116,211,873,984",
+        "bfefrmtrm_nm": "제 15 기", "bfefrmtrm_dt": "2023.12.31 현재", "bfefrmtrm_amount": "72,974,861,922",
+        "ord": "1", "currency": "KRW",
+    }
+    _CFS_IS_ROW = {
+        "rcept_no": "20260316001642", "reprt_code": "11011", "bsns_year": "2025",
+        "corp_code": "00963976", "stock_code": "255220",
+        "fs_div": "CFS", "fs_nm": "연결재무제표", "sj_div": "IS", "sj_nm": "손익계산서",
+        "account_nm": "매출액",
+        "thstrm_nm": "제 17 기", "thstrm_dt": "2025.01.01 ~ 2025.12.31", "thstrm_amount": "102,246,199,563",
+        "frmtrm_nm": "제 16 기", "frmtrm_dt": "2024.01.01 ~ 2024.12.31", "frmtrm_amount": "118,940,081,051",
+        "bfefrmtrm_nm": "제 15 기", "bfefrmtrm_dt": "2023.01.01 ~ 2023.12.31", "bfefrmtrm_amount": "80,921,130,313",
+        "ord": "9", "currency": "KRW",
+    }
+    _OFS_BS_ROW = {
+        "rcept_no": "20260316001642", "reprt_code": "11011", "bsns_year": "2025",
+        "corp_code": "00963976", "stock_code": "255220",
+        "fs_div": "OFS", "fs_nm": "재무제표", "sj_div": "BS", "sj_nm": "재무상태표",
+        "account_nm": "유동자산",
+        "thstrm_nm": "제 17 기", "thstrm_dt": "2025.12.31 현재", "thstrm_amount": "68,240,213,217",
+        "frmtrm_nm": "제 16 기", "frmtrm_dt": "2024.12.31 현재", "frmtrm_amount": "62,931,296,103",
+        "bfefrmtrm_nm": "제 15 기", "bfefrmtrm_dt": "2023.12.31 현재", "bfefrmtrm_amount": "35,454,929,770",
+        "ord": "2", "currency": "KRW",
+    }
+
+    def _records(self):
+        return [self._CFS_BS_ROW, self._CFS_IS_ROW, self._OFS_BS_ROW]
+
+    def test_splits_into_two_titled_blocks_by_fs_div(self):
+        got = run_js(f"financialsGroupedBlocks({json.dumps(self._records(), ensure_ascii=False)})")
+        self.assertEqual(len(got), 2, f"블록이 2개가 아닙니다: {[b['title'] for b in got]}")
+        self.assertEqual(got[0]["title"], "2025년 연결재무제표")
+        self.assertEqual(got[1]["title"], "2025년 재무제표")
+
+    def test_group_order_follows_first_appearance_not_alphabetical(self):
+        """dividendPeriodBlocks와 같은 계약 — 그룹 순서는 등장 순서를
+        그대로 쓴다(DART가 실측상 CFS를 먼저 준다지만, 이 함수 자체가
+        그 순서에 의존하지 않고 입력 순서를 따르는지 반대로 뒤집어
+        확인한다)."""
+        reversed_records = [self._OFS_BS_ROW, self._CFS_BS_ROW]
+        got = run_js(f"financialsGroupedBlocks({json.dumps(reversed_records, ensure_ascii=False)})")
+        self.assertEqual([b["title"] for b in got], ["2025년 재무제표", "2025년 연결재무제표"])
+
+    def test_dates_are_shortened_to_year_in_group_records(self):
+        got = run_js(f"financialsGroupedBlocks({json.dumps(self._records(), ensure_ascii=False)})")
+        cfs_block = got[0]
+        for rec in cfs_block["records"]:
+            self.assertEqual(rec["thstrm_dt"], "2025")
+            self.assertEqual(rec["frmtrm_dt"], "2024")
+            self.assertEqual(rec["bfefrmtrm_dt"], "2023")
+
+    def test_term_ordinal_name_fields_are_unchanged(self):
+        """thstrm_nm/frmtrm_nm/bfefrmtrm_nm(기수명)은 이 태스크의 축약
+        대상이 아니다 — 값이 그대로 남아야 한다."""
+        got = run_js(f"financialsGroupedBlocks({json.dumps(self._records(), ensure_ascii=False)})")
+        for rec in got[0]["records"]:
+            self.assertEqual(rec["thstrm_nm"], "제 17 기")
+            self.assertEqual(rec["frmtrm_nm"], "제 16 기")
+            self.assertEqual(rec["bfefrmtrm_nm"], "제 15 기")
+
+    def test_ofs_only_company_produces_a_single_block(self):
+        """별도만 있는 회사(브리프 명시 요구) — 표가 1개만 나와야 한다."""
+        got = run_js(f"financialsGroupedBlocks({json.dumps([self._OFS_BS_ROW], ensure_ascii=False)})")
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["title"], "2025년 재무제표")
+
+    def test_missing_bsns_year_falls_back_to_title_without_year(self):
+        rec = dict(self._CFS_BS_ROW)
+        del rec["bsns_year"]
+        got = run_js(f"financialsGroupedBlocks({json.dumps([rec], ensure_ascii=False)})")
+        self.assertEqual(got[0]["title"], "연결재무제표")
+
+    def test_missing_fs_nm_falls_back_to_generic_label(self):
+        rec = dict(self._CFS_BS_ROW)
+        del rec["fs_nm"]
+        got = run_js(f"financialsGroupedBlocks({json.dumps([rec], ensure_ascii=False)})")
+        self.assertEqual(got[0]["title"], "2025년 재무제표")
+
+    def test_empty_array_returns_no_blocks(self):
+        self.assertEqual(run_js("financialsGroupedBlocks([])"), [])
+
+    def test_non_array_returns_no_blocks(self):
+        self.assertEqual(run_js("financialsGroupedBlocks(null)"), [])
+
+
+@unittest.skipUnless(_NODE, "node가 없어 ui.js의 실제 렌더 결과를 검증할 수 없습니다")
+class TestFinancialsGroupedBlocksRealRender(unittest.TestCase):
+    """SE-10 Task 2 최종 검증 — financials 섹션을 실제로 렌더해(sectionBlocks
+    단독 호출이 아니라 renderSection 전체 경로) 제목·캡션 자동 승격이 실제
+    DOM에 반영되는지 확인한다. 브리프가 명시한 검증 요구: "실렌더로
+    확인하고, 예상과 다르면 왜 다른지 보고에 남긴다"의 그 실렌더다."""
+
+    _RECORDS = json.dumps([
+        TestFinancialsGroupedBlocks._CFS_BS_ROW,
+        TestFinancialsGroupedBlocks._CFS_IS_ROW,
+        TestFinancialsGroupedBlocks._OFS_BS_ROW,
+    ], ensure_ascii=False)
+
+    def test_two_titled_blocks_appear_in_the_actual_dom(self):
+        got = run_render_section('"financials"', self._RECORDS)
+        self.assertIn("2025년 연결재무제표", got["titles"], f"연결 표 제목이 없습니다: {got['titles']}")
+        self.assertIn("2025년 재무제표", got["titles"], f"별도 표 제목이 없습니다: {got['titles']}")
+
+    def test_date_columns_are_promoted_to_caption_after_shortening(self):
+        """날짜 세 열을 연도로 축약하면 그룹 안에서 상수가 되어
+        tableLayout의 기존 캡션 승격 메커니즘이 저절로 표 밖으로 옮긴다는
+        예상을 실렌더로 확인한다 — 이 픽스처는 BS 행(시점형)과 IS 행
+        (기간형)을 한 그룹 안에 섞어, 축약 전에는 원본 문자열이 서로
+        달라 상수가 아니었을 것을 보장한다(그래야 이 승격이 축약
+        덕분이라고 말할 수 있다)."""
+        got = run_render_section('"financials"', self._RECORDS)
+        cap_texts = [c["text"] for c in got["captions"]]
+        # 캡션이 라벨:값을 이어붙인 텍스트이므로 "당기 기간: 2025"가
+        # 부분 문자열로 나와야 한다 — 원본 문자열("2025.12.31 현재")이
+        # 그대로 남아 있으면 이 부분 문자열 검사가 실패한다.
+        joined = " ".join(cap_texts)
+        self.assertIn("당기 기간: 2025", joined, f"당기 기간이 캡션에서 연도로 승격되지 않았습니다: {cap_texts}")
+        self.assertIn("전기 기간: 2024", joined, f"전기 기간이 캡션에서 연도로 승격되지 않았습니다: {cap_texts}")
+        self.assertIn("전전기 기간: 2023", joined, f"전전기 기간이 캡션에서 연도로 승격되지 않았습니다: {cap_texts}")
+        # 원본(축약 전) 날짜 문자열은 어디에도 남아 있으면 안 된다 —
+        # 캡션이든 표 본문이든.
+        all_text = " ".join(cap_texts) + " ".join(got["cells"])
+        self.assertNotIn("2025.12.31 현재", all_text)
+        self.assertNotIn("2025.01.01 ~ 2025.12.31", all_text)
+
+    def test_term_ordinal_names_remain_promoted_to_caption(self):
+        """thstrm_nm/frmtrm_nm/bfefrmtrm_nm(기수명)은 이 태스크 이전부터
+        이미 캡션에 있었다 — 무변경 확인."""
+        got = run_render_section('"financials"', self._RECORDS)
+        joined = " ".join(c["text"] for c in got["captions"])
+        self.assertIn("제 17 기", joined)
+        self.assertIn("제 16 기", joined)
+        self.assertIn("제 15 기", joined)
+
+    def test_ofs_only_data_renders_a_single_raw_block_not_a_broken_cfs_block(self):
+        """별도만 있는 회사는 표가 1개만 나와야 하고, 빈/깨진 연결 표
+        블록이 섞여 나오면 안 된다."""
+        ofs_only = json.dumps([TestFinancialsGroupedBlocks._OFS_BS_ROW], ensure_ascii=False)
+        got = run_render_section('"financials"', ofs_only)
+        self.assertNotIn("연결", " ".join(got["titles"]),
+                          f"별도만 있는데 연결 표 제목이 나타났습니다: {got['titles']}")
+        self.assertIn("2025년 재무제표", got["titles"])
 
 
 @unittest.skipUnless(_NODE, "node가 없어 app.js 순수 함수를 검증할 수 없습니다")

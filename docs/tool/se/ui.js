@@ -1295,8 +1295,9 @@ function ratioBasisText(row) {
 
 /** financials 섹션에서만 쓰는 파생 지표(계산값) 블록을 만든다.
  *  financialRatios(app.js)가 만든 구분·기간·지표·값·계산식·재료·사유
- *  레코드를 표(계산식+재료를 문장으로 풀어서)로 그리고, CHART_SPECS.
- *  financial_ratios로 3기간(전전기→전기→당기) 추이도 함께 그린다.
+ *  레코드를 연도별 표(계산식+재료를 문장으로 풀어서)로 그리고, CHART_SPECS.
+ *  financial_ratios로 3기간(전전기→전기→당기, 보통 실제 연도) 추이도
+ *  함께 그린다.
  *
  *  **공시 원본과 반드시 구분한다**(SE-4f 판정선: "공시 원본 숫자와 우리
  *  계산값이 구분되지 않으면 그것도 거짓말이다") — class="derived"로
@@ -1306,9 +1307,30 @@ function ratioBasisText(row) {
  *  값이 없는 지표도 조용히 빼지 않는다 — 값 칸에 그 행의 사유(row.사유,
  *  예: "매출액 없음"·"잠식 없음")를 그대로 보여준다.
  *
- *  차트에는 financialRatios가 돌려준 원본 레코드(ratios, 값이 숫자|null인
- *  그대로)를 넘긴다 — 표시용으로 문자열화한 records를 넘기면 chartData
- *  (app.js)가 숫자를 못 읽어 그려지지 않는다. */
+ *  **SE-10 Task 1: 표를 기간(보통 실제 연도)별로 나눈다** —
+ *  financialRatiosByYear(app.js)가 dividendPeriodBlocks와 같은
+ *  Map+groupOrder 메커니즘으로 묶어 준 그룹마다 소제목(h3, "2025년" 등)과
+ *  표를 하나씩 만든다. 그룹 제목이 이미 그 정보를 말하므로 표 안에서는
+ *  `기간` 열을 지운다(그룹 제목으로 승격된 정보는 행에서 제거하는 원칙,
+ *  SE-9 Task 4 dividendPeriodBlocks와 동일) — 그룹 안에서는 구분(연결/별도)
+ *  만 행의 첫 열로 남긴다(연결/별도를 또 표로 쪼개지 않는다는 결정,
+ *  task-1-brief.md).
+ *
+ *  **강조(marks) 좌표는 표마다 새로 계산한다.** cellMarks(app.js)가 쓰는
+ *  "행번호|열키" 좌표(app.js cellMarks 주석)의 행번호는 **그 표 안에서의**
+ *  행 순서다(tableEl이 table.rows.forEach의 rowIdx를 그대로 쓴다) — 표를
+ *  연도별로 나눈 뒤에도 원본 ratios 배열 전체 기준 인덱스를 그대로 쓰면
+ *  강조가 엉뚱한 행(다른 연도, 다른 구분)에 붙는다. 그래서 cellMarks를
+ *  yb.ratios(그 연도 그룹의 원본 부분 배열, 표시용으로 문자열화하기 전)로
+ *  매번 다시 부른다 — 그 표의 행 순서와 정확히 같은 순서이므로 좌표가
+ *  어긋나지 않는다.
+ *
+ *  차트에는 financialRatios가 돌려준 원본 레코드 전체(ratios, 값이
+ *  숫자|null인 그대로, 연도별로 나누지 않은 것)를 넘긴다 — 표시용으로
+ *  문자열화한 records를 넘기면 chartData(app.js)가 숫자를 못 읽어 그려지지
+ *  않고, 그룹별로 쪼개 넘기면 그룹당 x축 점이 하나뿐이라 "연도별 추이"
+ *  자체가 성립하지 않는다(dividendPeriodBlocks 주석과 같은 이유 — "차트
+ *  입력을 바꾸지 않는다"). */
 function buildFinancialRatiosBlock(ratios) {
   const wrap = document.createElement("div");
   wrap.className = "derived";
@@ -1323,40 +1345,48 @@ function buildFinancialRatiosBlock(ratios) {
     + "연결과 별도를 섞지 않고 계산식과 재료 값을 함께 표시합니다.";
   wrap.appendChild(notice);
 
-  // SE-8 Task 4: 열 순서는 지표→값→구분→기간→계산식·재료다 — 실사용자가
-  // 이 표를 지적했다("표를 구성할 때 이용자에게 어떤 정보가 유용할지 고민부터
-  // 하고 배치를 해야한다"). 분류 메타(구분·기간)를 값보다 먼저 보여주던
-  // 순서를 뒤집는다. tableLayout(app.js)이 각 레코드의 키 등장 순서를
-  // 그대로 표 헤더로 쓰므로(Object.keys 기반) 여기서 만드는 객체의 키
-  // 순서가 곧 화면 순서다 — app.js의 financialRatios() 자체도 같은
-  // 원칙으로 반환 키 순서를 바꿨다(computeRatio·computeCapitalImpairment
-  // 주석 참고). 구분은 지우지 않는다 — 위치만 옮길 뿐, 각 값 옆에 그대로
-  // 남아 있다(SE-4f: 연결·별도를 섞으면 거짓이 된다).
-  const records = ratios.map(function (r) {
-    return {
-      지표: r.지표,
-      값: r.값 === null ? r.사유 : (r.값.toFixed(1) + "%"),
-      구분: r.구분,
-      기간: r.기간,
-      "계산식·재료": ratioBasisText(r),
-    };
-  });
-  // cellMarks는 원본 ratios(값이 숫자|null)로 계산한다 — 위 records는
-  // 표시용으로 "%"를 붙여 문자열화해서, 거기다 markNeg를 돌리면 숫자
-  // 파싱이 깨진다(app.js markNumber는 "%"를 걷어내지 않는다). records가
-  // ratios.map(...)으로 만들어져 순서가 같으므로 행번호(rowIdx)는
-  // 그대로 맞는다 — sectionKey는 renderSection이 받는 "financials"가
-  // 아니라 이 파생 표 전용 키 "financial_ratios"다(MARK_RULES.financial_ratios
-  // 참고, 다른 어떤 호출부도 이 sectionKey로 cellMarks를 부르지 않는다).
-  // 강조가 붙은 열은 접지 않는다(app.js splitVisibleFolded 주석) — 이 표는
-  // 5열뿐이라 오늘은 접힐 일이 없지만, 열이 늘어도 강조가 버튼 뒤로 숨지
-  // 않도록 renderSection의 relayoutForMarks와 같은 계약을 여기서도 지킨다.
-  const ratioMarks = cellMarks(ratios, "financial_ratios");
-  const table = tableLayout(records, markedColumnKeys(ratioMarks));
-  if (table) wrap.appendChild(tableEl(table, ratioMarks));
+  // SE-8 Task 4: 열 순서는 지표→값→구분→계산식·재료다(기간은 SE-10부터
+  // 그룹 제목으로 승격돼 행에서 빠진다, 위 함수 주석) — 실사용자가 이
+  // 표를 지적했다("표를 구성할 때 이용자에게 어떤 정보가 유용할지 고민부터
+  // 하고 배치를 해야한다"). tableLayout(app.js)이 각 레코드의 키 등장
+  // 순서를 그대로 표 헤더로 쓰므로(Object.keys 기반) 여기서 만드는 객체의
+  // 키 순서가 곧 화면 순서다. 구분은 지우지 않는다 — 위치만 옮길 뿐, 각
+  // 값 옆에 그대로 남아 있다(SE-4f: 연결·별도를 섞으면 거짓이 된다).
+  let firstTable = null;
+  for (const yb of financialRatiosByYear(ratios)) {
+    const yh3 = document.createElement("h3");
+    yh3.textContent = yb.title;
+    wrap.appendChild(yh3);
+
+    const records = yb.ratios.map(function (r) {
+      return {
+        지표: r.지표,
+        값: r.값 === null ? r.사유 : (r.값.toFixed(1) + "%"),
+        구분: r.구분,
+        "계산식·재료": ratioBasisText(r),
+      };
+    });
+    // cellMarks는 이 연도 그룹의 원본 ratios(값이 숫자|null)로 계산한다 —
+    // 위 records는 표시용으로 "%"를 붙여 문자열화해서, 거기다 markNeg를
+    // 돌리면 숫자 파싱이 깨진다(app.js markNumber는 "%"를 걷어내지
+    // 않는다). records가 yb.ratios.map(...)으로 만들어져 순서가 같으므로
+    // 행번호(rowIdx)는 그대로 맞는다 — sectionKey는 renderSection이 받는
+    // "financials"가 아니라 이 파생 표 전용 키 "financial_ratios"다
+    // (MARK_RULES.financial_ratios 참고, 다른 어떤 호출부도 이 sectionKey로
+    // cellMarks를 부르지 않는다). 강조가 붙은 열은 접지 않는다(app.js
+    // splitVisibleFolded 주석) — 이 표는 4열뿐이라 오늘은 접힐 일이
+    // 없지만, 열이 늘어도 강조가 버튼 뒤로 숨지 않도록 renderSection의
+    // relayoutForMarks와 같은 계약을 여기서도 지킨다.
+    const yearMarks = cellMarks(yb.ratios, "financial_ratios");
+    const table = tableLayout(records, markedColumnKeys(yearMarks));
+    if (table) {
+      wrap.appendChild(tableEl(table, yearMarks));
+      if (!firstTable) firstTable = table;
+    }
+  }
 
   renderChart(wrap, "financial_ratios", ratios, SIGNALS_DATA);
-  return { el: wrap, table: table };
+  return { el: wrap, table: firstTable };
 }
 
 /** "%" 항목만 뒤에 "%"를 붙이고, 그 밖의 백만원 단위 값은 천 단위
