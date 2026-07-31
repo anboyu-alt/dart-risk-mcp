@@ -375,8 +375,8 @@ dart_risk_mcp/
 | `GET /api/hyslrChgSttus.json` | 최대주주 변동현황 (corp_code, bsns_year, reprt_code) — v0.8.6 |
 | `GET /api/tesstkAcqsDspsSttus.json` | 임원·주요주주 자기주식 취득·처분 현황 (corp_code, bsns_year, reprt_code) — v0.8.6 |
 | `GET /api/exctvSttus.json` | 임원 현황 (corp_code, bsns_year, reprt_code) — find_actor_overlap 겸직 탐지 |
-| `GET /api/prstInvstmEntrCptalUseDtls.json` | 공모 자금 사용 내역 (corp_code, 연도) |
-| `GET /api/otrCptalUseDtls.json` | 사모 자금 사용 내역 (corp_code, 연도) |
+| `GET /api/pssrpCptalUseDtls.json` | 공모 자금 사용 내역 (corp_code, 연도) — dart_client.py:447 실측 명칭 |
+| `GET /api/prvsrpCptalUseDtls.json` | 사모 자금 사용 내역 (corp_code, 연도) — dart_client.py:448 실측 명칭 |
 | `GET /api/bsnAcqsDecsn.json` / `bsnTrfDecsn.json` | 영업 양수/양도 결정 (rcept_no) |
 | `GET /api/tsstkAqDecsn.json` / `tsstkDpDecsn.json` | 자사주 취득/처분 결정 (v0.8.7 통합) |
 | `GET /api/tsstkAqTrctrCnsDecsn.json` / `tsstkAqTrctrCcDecsn.json` | 자사주 신탁계약 체결/해지 결정 (v0.8.7 통합) |
@@ -534,6 +534,15 @@ python scripts/regen_goldens.py                                       # 전체 �
 생성 후 `python -m pytest tests/test_golden_output_hygiene.py -v`로 회귀 검증.
 
 ---
+
+## 공개 리스크 뷰어 인프라 (docs/tool/)
+
+- **정적 단일 파일**: `docs/tool/index.html` (외부 JS 의존 0, 빌드 없음). 데이터는 `signals-data.json`(scripts/export_tool_data.py로 수동 재생성) + `corp-map.json` + `corp-aliases.json`.
+- **릴레이**: JS 릴레이 `api/[endpoint].js`(Vercel icn1)·`relay/worker.js`(Cloudflare 미러)·`scripts/dev_relay.py`(로컬) 3곳이 **동일 화이트리스트 9종**을 복제 유지 — list, company, fnlttSinglAcnt, accnutAdtorNmNdAdtOpinion, exctvSttus, elestock, alotMatter, pssrpCptalUseDtls, prvsrpCptalUseDtls. 하나 추가하면 3곳 모두 갱신.
+- **원문 추출**: `api/doc.py`(껍데기) + `tool_server/doc.py`(몸통, 단위 테스트 `tests/test_tool_server_doc.py`) — `GET /api/doc?rcept_no=&max_chars=` + `X-DART-Key` 헤더. `fetch_disclosure_full` 재사용, 200 응답만 CDN 캐시(s-maxage=86400, 키가 URL에 없어 캐시 키 안전). se_server와 분리 이유: SE는 Supabase 인가제라 신뢰 모델이 다름. `.vercelignore`에 `!tool_server` 필수.
+- **caution 파생 필드**: export_tool_data.py가 신호별 taxonomy severity를 2단계로 접어 `caution: bool`(CRITICAL/HIGH=true)만 내보낸다. severity·score 원값은 계속 미노출. 뷰어는 이를 '주의/참고' 관찰 우선순위 배지로 렌더(면책 동반) — **뷰어 한정 예외**이며 MCP 도구 출력·SE의 무판정 원칙은 그대로다. 패턴에는 caution을 넣지 않는다(9종 전원 CRITICAL/HIGH → 상수).
+- **기업 검색(상호변경 대응)**: `scripts/build_corp_map.py`가 corp-map.json 재생성 + corp_code 기준 diff로 옛 상호를 `corp-aliases.json`에 append-only 누적. `scripts/backfill_corp_aliases.py`는 시장 전체 "상호변경안내" 공시 원문에서 변경전/후 상호를 추출해 별칭 시드 백필. `.github/workflows/refresh-corp-map.yml` 주간 cron이 둘을 실행해 커밋. 배경: DART corpCode.xml은 상호변경 시 옛 이름을 지운다(실례: 297570 알로이스→아틀라스링크, 2026-06-12) + 동명 죽은 법인 충돌 사례(알로이스 01194892).
+- **알려진 한계(후속 과제)**: MCP `resolve_corp`는 corpCode.xml 현재명만 검색하므로 옛 상호 검색이 실패한다 — 뷰어 별칭 파일을 core에서도 참조할지는 미결정.
 
 ## 테스트 방법
 

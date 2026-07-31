@@ -152,6 +152,10 @@
     background: #c03a3a; color: #fff; border-radius: 3px; padding: 2px 7px; letter-spacing: 0.08em; }
   .sigdot { font-family: var(--mono); font-size: 10.5px; color: var(--red); }
   .nosig { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+  /* 주의(caution) 배지 — 강조 배지(MAX)와 시각적으로 구분되는 조용한 외곽선.
+     참고(caution:false) 신호에는 붙이지 않는다 — 기존 dim 표시가 그대로 참고 수준. */
+  .badge-cau { font-family: var(--mono); font-size: 10px; color: var(--amber); background: transparent;
+    border: 1px solid var(--amber); border-radius: 3px; padding: 1px 6px; letter-spacing: 0.06em; }
 
   /* KPI 스트립 */
   .kpis { display: flex; flex-wrap: wrap; margin-top: 14px; border: 1px solid var(--line);
@@ -223,6 +227,7 @@
     font-family: var(--mono); letter-spacing: 0.1em; }
   td.date { white-space: nowrap; font-family: var(--mono); font-size: 0.78rem; color: var(--dim2); }
   td a { color: var(--tx); } td a:hover { color: var(--amber); }
+  mark { background: rgba(232,163,61,0.32); color: var(--tx); border-radius: 2px; padding: 0 0.15em; }
 
   details.settings { margin-top: 0.9rem; font-size: 0.88rem; }
   details.settings summary { cursor: pointer; font-weight: 700; color: var(--amber); font-size: 0.85rem; }
@@ -334,6 +339,12 @@
         </details>
       </div>
 
+      <!-- 즐겨찾기 -->
+      <div id="favWrap" class="hidden" style="max-width:720px">
+        <div class="slabel" style="margin:26px 0 10px">▍FAVORITES</div>
+        <div class="rows" id="favRows"></div>
+      </div>
+
       <!-- 최근 스캔 -->
       <div id="recentWrap" class="hidden" style="max-width:720px">
         <div class="slabel" style="margin:26px 0 10px">▍RECENT SCANS</div>
@@ -386,6 +397,7 @@
       본 도구의 모든 표시는 DART 공시라는 공개 기록의 사실 표기이며, 특정 기업·인물에 대한
       판정·점수·등급·투자 권유가 아닙니다. 신호는 "원문을 확인해 볼 지점"의 표시일 뿐입니다.
       조회는 사용자의 API 키로 사용자가 시작하며, 이 페이지는 어떤 데이터도 서버에 저장하지 않습니다.
+      "주의" 표시는 사실 관찰의 우선순위이며 위험 판정·투자 판단 근거가 아닙니다.
       · <a href="https://github.com/anboyu-alt/dart-risk-mcp">dart-risk-mcp</a> (MIT)
     </p>
   </div>
@@ -399,9 +411,11 @@ const DEFAULT_RELAY = "https://dart-risk-mcp.vercel.app";
 function maxPages() { return LOOKBACK_DAYS <= 365 ? 10 : LOOKBACK_DAYS <= 1095 ? 20 : 30; }
 function windowLabel() { return LOOKBACK_DAYS <= 365 ? "1Y" : LOOKBACK_DAYS <= 1095 ? "3Y" : "5Y"; }
 const LS_KEY = "dart_tool_key", LS_RELAY = "dart_tool_relay", LS_RECENT = "dart_tool_recent";
+const LS_FAVS = "dart_favs";          // 즐겨찾기 — 스펙 지정 키 이름 그대로(dart_tool_* 접두 관례와 다름)
+const LS_SNAP = "dart_scan_snap";     // 재스캔 diff 스냅샷 — 기업당(corp_code) 1개, 최대 20개 LRU
 
 const $ = (id) => document.getElementById(id);
-let DATA = null, CORPS = null, AMEND_RE = null;
+let DATA = null, CORPS = null, AMEND_RE = null, ALIASES = null;
 let LOOKBACK_DAYS = 365;
 let CUR = null;          // 마지막 스캔 결과 {name, stock, corp, items, events, ...}
 let FEED_FILTER = { mode: "all", cat: null };
@@ -435,16 +449,54 @@ setInterval(() => {
   $("clock").textContent = d.toISOString().slice(0, 16).replace("T", " ");
 }, 1000);
 
+/* ── 딥링크 해시 (#c=종목코드&y=기간일수) ─────────
+   API 키는 절대 URL에 담지 않는다 — 여기 담기는 값은 종목코드·기간뿐이다. */
+function buildScanHash(stockCode, days) {
+  if (!/^\d{6}$/.test(String(stockCode || ""))) return "";
+  const y = [365, 1095, 1825].includes(+days) ? +days : 365;
+  return "c=" + stockCode + "&y=" + y;
+}
+function parseScanHash(hash) {
+  const s = String(hash || "").replace(/^#/, "");
+  if (!s) return null;
+  let params;
+  try { params = new URLSearchParams(s); } catch (e) { return null; }
+  const c = params.get("c");
+  if (!c || !/^\d{6}$/.test(c)) return null;
+  const yRaw = +params.get("y");
+  const y = [365, 1095, 1825].includes(yRaw) ? yRaw : 365;
+  return { stockCode: c, days: y };
+}
+function findNameByStock(stock) {
+  if (!CORPS) return null;
+  for (const n of Object.keys(CORPS)) if (CORPS[n][1] === stock) return n;
+  return null;
+}
+
 /* ── 초기화 ───────────────────────────────────── */
 async function boot() {
-  const [sig, corps] = await Promise.all([
+  const [sig, corps, aliases] = await Promise.all([
     fetch("signals-data.json").then((r) => r.json()),
     fetch("corp-map.json").then((r) => r.json()),
+    fetch("corp-aliases.json").then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
   ]);
-  DATA = sig; CORPS = corps;
+  DATA = sig; CORPS = corps; ALIASES = aliases || {};
   AMEND_RE = new RegExp(DATA.amendment_pattern);
-  if (localStorage.getItem(LS_KEY)) showSearch();
+  if (localStorage.getItem(LS_KEY)) {
+    showSearch();
+    // 딥링크 자동 스캔: 해시에 종목코드가 있고 키도 있으면 그 종목·기간으로 스캔한다.
+    // 키가 없을 때(이 if 밖)는 해시를 건드리지 않고 그대로 키 입력 화면을 보여준다.
+    const linked = parseScanHash(location.hash);
+    if (linked) {
+      LOOKBACK_DAYS = linked.days;
+      document.querySelectorAll("#scr-scan .chip[data-days]").forEach((x) =>
+        x.classList.toggle("on", +x.dataset.days === LOOKBACK_DAYS));
+      const nm = findNameByStock(linked.stockCode);
+      if (nm) { $("q").value = nm; analyze(nm); }
+    }
+  }
   renderRecent();
+  renderFavs();
 }
 function showSearch() {
   $("setupPanel").classList.add("hidden");
@@ -476,6 +528,11 @@ document.querySelectorAll("#scr-scan .chip[data-days]").forEach((c) => {
     LOOKBACK_DAYS = +c.dataset.days;
     document.querySelectorAll("#scr-scan .chip[data-days]").forEach((x) =>
       x.classList.toggle("on", x === c));
+    // 이미 스캔된 종목이 있으면 딥링크 해시의 기간도 갱신한다(칩 클릭만으로 재스캔은 하지 않음).
+    if (CUR && CUR.stockCode) {
+      const hash = buildScanHash(CUR.stockCode, LOOKBACK_DAYS);
+      if (hash) history.replaceState(null, "", "#" + hash);
+    }
   };
 });
 
@@ -501,34 +558,132 @@ function renderRecent() {
   });
 }
 
+/* ── 즐겨찾기 (localStorage dart_favs, 배열 [{name, code}] 최대 10개) ── */
+function loadFavs() {
+  try { return JSON.parse(localStorage.getItem(LS_FAVS) || "[]"); } catch (e) { return []; }
+}
+function saveFavs(list) {
+  try { localStorage.setItem(LS_FAVS, JSON.stringify(list)); } catch (e) { /* 저장 실패는 무시 */ }
+}
+function isFav(name) {
+  return loadFavs().some((f) => f.name === name);
+}
+// 토글 후 최신 상태(즐겨찾기 됨=true)를 반환한다 — 삭제는 이 재클릭으로만(별도 X 버튼 없음).
+function toggleFav(name, code) {
+  let list = loadFavs();
+  if (list.some((f) => f.name === name)) {
+    list = list.filter((f) => f.name !== name);
+  } else {
+    list = [{ name, code }, ...list.filter((f) => f.name !== name)].slice(0, 10);
+  }
+  saveFavs(list);
+  return list.some((f) => f.name === name);
+}
+function renderFavs() {
+  const list = loadFavs();
+  const wrap = $("favWrap");
+  if (!list.length) { wrap.classList.add("hidden"); return; }
+  wrap.classList.remove("hidden");
+  const snapStore = loadSnapStore();
+  $("favRows").innerHTML = list.map((f) => {
+    const cc = CORPS && CORPS[f.name] ? CORPS[f.name][0] : null;
+    const snap = cc ? snapStore[cc] : null;
+    let lastLine = "";
+    if (snap) {
+      // 새 신호 수는 재스캔해야 아는 값이라 여기서는 절대 미리 표시하지 않는다.
+      const daysAgo = Math.max(daysBetween(snap.date, todayKST()), 0);
+      lastLine = `<span class="dim" style="font-size:11px">마지막 스캔 ${daysAgo === 0 ? "오늘" : daysAgo + "일 전"}</span>`;
+    }
+    return `<div class="feedrow g-recent" data-n="${esc(f.name)}">
+      <span class="mm">${esc(f.code)}</span><span>${esc(f.name)}</span><span>${lastLine}</span>
+    </div>`;
+  }).join("");
+  $("favRows").querySelectorAll(".feedrow").forEach((r) => {
+    r.onclick = () => { $("q").value = r.dataset.n; analyze(r.dataset.n); };
+  });
+}
+
+/* ── 재스캔 스냅샷 (localStorage dart_scan_snap, 기업당 1개 · 최대 20개 LRU) ──
+   {<corp_code>: {date, rcepts:[신호 매칭 공시 rcept_no...], name}} */
+function loadSnapStore() {
+  try { return JSON.parse(localStorage.getItem(LS_SNAP) || "{}"); } catch (e) { return {}; }
+}
+function saveSnapStore(store) {
+  try { localStorage.setItem(LS_SNAP, JSON.stringify(store)); } catch (e) { /* 저장 실패는 무시 */ }
+}
+// date가 가장 이른(오래된) 항목부터 제거해 maxEntries 이하로 맞춘다.
+function pruneSnapStore(store, maxEntries) {
+  const keys = Object.keys(store);
+  if (keys.length <= maxEntries) return store;
+  keys.sort((a, b) => (store[a].date < store[b].date ? -1 : store[a].date > store[b].date ? 1 : 0));
+  for (const k of keys.slice(0, keys.length - maxEntries)) delete store[k];
+  return store;
+}
+function diffNewRcepts(prevRcepts, curRcepts) {
+  const prevSet = new Set(prevRcepts || []);
+  return (curRcepts || []).filter((r) => !prevSet.has(r));
+}
+function daysBetween(dateStrA, dateStrB) {
+  const a = new Date(dateStrA + "T00:00:00Z");
+  const b = new Date(dateStrB + "T00:00:00Z");
+  return Math.round((b - a) / 86400000);
+}
+function todayKST() {
+  const d = new Date(Date.now() + (9 * 60 + new Date().getTimezoneOffset()) * 60000);
+  return d.toISOString().slice(0, 10);
+}
+
 /* ── 자동완성 ─────────────────────────────────── */
+// 후보 항목 형식: { name, code, alias, current, corpCode, stockCode }
+// alias=false → corp-map 정식 종목. alias=true → 상호변경 이력(corp-aliases.json) 매칭
+// (표시: "옛상호 → 현재상호"). 같은 문자열이 정식 종목명에도 있을 수 있어(동명 별개
+// 법인 사례 실재) name 문자열이 아니라 후보 배열의 인덱스로 선택을 식별한다.
 let names = null;
+function aliasEntry(oldName) {
+  const a = ALIASES[oldName] || {};
+  return { name: oldName, code: a.stock_code || "", alias: true,
+           current: a.current || oldName, corpCode: a.corp_code || "", stockCode: a.stock_code || "" };
+}
 function suggestions(qs) {
   if (!names) names = Object.keys(CORPS);
   const q = qs.trim();
   if (!q) return [];
-  if (/^\d{6}$/.test(q)) return names.filter((n) => CORPS[n][1] === q).slice(0, 12);
-  const starts = [], incl = [];
-  for (const n of names) {
-    if (n.startsWith(q)) starts.push(n);
-    else if (n.includes(q)) incl.push(n);
-    if (starts.length >= 12) break;
+  const aliasNames = ALIASES ? Object.keys(ALIASES) : [];
+  if (/^\d{6}$/.test(q)) {
+    const out = names.filter((n) => CORPS[n][1] === q).map((n) => ({ name: n, code: CORPS[n][1], alias: false }));
+    for (const a of aliasNames) if (ALIASES[a].stock_code === q) out.push(aliasEntry(a));
+    return out.slice(0, 12);
   }
-  return starts.concat(incl).slice(0, 12);
+  const starts = [], incl = [], aliasStarts = [], aliasIncl = [];
+  for (const n of names) {
+    if (n.startsWith(q)) starts.push({ name: n, code: CORPS[n][1], alias: false });
+    else if (n.includes(q)) incl.push({ name: n, code: CORPS[n][1], alias: false });
+  }
+  for (const a of aliasNames) {
+    if (a.startsWith(q)) aliasStarts.push(aliasEntry(a));
+    else if (a.includes(q)) aliasIncl.push(aliasEntry(a));
+  }
+  return starts.concat(aliasStarts, incl, aliasIncl).slice(0, 12);
 }
 function attachAutocomplete(input, box, onPick) {
   let activeIdx = -1;
   const renderSuggest = (list) => {
     if (!list.length) { box.style.display = "none"; box.innerHTML = ""; return; }
-    box.innerHTML = list.map((n, i) =>
-      `<div data-n="${n}" class="${i === activeIdx ? "active" : ""}">` +
-      `<span>${n}</span><span class="code">${CORPS[n][1]}</span></div>`).join("");
+    box.innerHTML = list.map((e, i) => {
+      const cls = i === activeIdx ? "active" : "";
+      if (e.alias) {
+        return `<div data-i="${i}" class="${cls}">` +
+          `<span class="dim">${esc(e.name)} <span class="arrow">→</span> ${esc(e.current)}</span>` +
+          `<span class="code">${esc(e.code)}</span></div>`;
+      }
+      return `<div data-i="${i}" class="${cls}"><span>${esc(e.name)}</span><span class="code">${esc(e.code)}</span></div>`;
+    }).join("");
     box.style.display = "block";
-    box.querySelectorAll("div").forEach((el) => {
-      el.onmousedown = (e) => { e.preventDefault(); choose(el.dataset.n); };
+    box.querySelectorAll("div").forEach((el, i) => {
+      el.onmousedown = (ev) => { ev.preventDefault(); choose(list[i]); };
     });
   };
-  const choose = (name) => { box.style.display = "none"; activeIdx = -1; onPick(name); };
+  const choose = (entry) => { box.style.display = "none"; activeIdx = -1; onPick(entry); };
   input.addEventListener("input", () => { activeIdx = -1; renderSuggest(suggestions(input.value)); });
   input.addEventListener("keydown", (e) => {
     const list = suggestions(input.value);
@@ -537,6 +692,13 @@ function attachAutocomplete(input, box, onPick) {
     else if (e.key === "Enter") { const c = list[activeIdx >= 0 ? activeIdx : 0]; if (c) choose(c); }
     else if (e.key === "Escape") { box.style.display = "none"; }
   });
+}
+// 별칭 선택 해석: current가 corp-map에 있으면 그 이름으로(표시도 최신화),
+// 없으면 별칭 자체의 corp_code/stock_code를 analyze() override로 넘겨 스캔한다.
+function resolveAliasPick(entry) {
+  if (!entry.alias) return { name: entry.name, override: null };
+  if (CORPS[entry.current]) return { name: entry.current, override: null };
+  return { name: entry.current, override: { corpCode: entry.corpCode, stockCode: entry.stockCode } };
 }
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".searchwrap")) {
@@ -571,9 +733,17 @@ function matchSignals(reportNm) {
   return out;
 }
 
-async function analyze(name) {
-  if (!CORPS[name]) { $("status").className = "status err"; $("status").textContent = "⚠ 목록에 없는 종목입니다 — 자동완성에서 선택하세요"; return; }
-  const [corpCode, stockCode] = CORPS[name];
+async function analyze(name, override) {
+  let corpCode, stockCode;
+  if (override && override.corpCode) {
+    corpCode = override.corpCode; stockCode = override.stockCode || "";
+  } else if (CORPS[name]) {
+    [corpCode, stockCode] = CORPS[name];
+  } else {
+    $("status").className = "status err";
+    $("status").textContent = "⚠ 목록에 없는 종목입니다 — 자동완성에서 선택하세요";
+    return;
+  }
   const st = $("status");
   st.className = "status";
   const end = new Date(), bgn = new Date(Date.now() - LOOKBACK_DAYS * 86400e3);
@@ -637,13 +807,30 @@ function buildResult(name, stockCode, corpCode, items, bgn, end, totalCount) {
   const crisisEvents = events.filter((e) => e.signals.some((s) => s.category >= 7));
   const amendRate = items.length ? Math.round(amendCount / items.length * 100) : 0;
 
+  // ── 작업3: 재스캔 diff — 이전 스냅샷이 있으면 신호 매칭 공시 중 새로 생긴 것을 센다.
+  const snapStore = loadSnapStore();
+  const prevSnap = snapStore[corpCode] || null;
+  const curRcepts = events.map((e) => e.rcept);
+  let scanDiff = null;
+  if (prevSnap) {
+    const newRcepts = diffNewRcepts(prevSnap.rcepts, curRcepts);
+    scanDiff = { days: Math.max(daysBetween(prevSnap.date, todayKST()), 0),
+                 newCount: newRcepts.length, newSet: new Set(newRcepts) };
+  }
+  snapStore[corpCode] = { date: todayKST(), rcepts: curRcepts, name };
+  pruneSnapStore(snapStore, 20);
+  saveSnapStore(snapStore);
+
   CUR = { name, stockCode, corpCode, items, rows, events, amendCount, amendRate,
           patterns, capitalEvents, catCount, typeCount, detectedTypes, heaviest,
-          crisisEvents, bgn, end,
+          crisisEvents, bgn, end, scanDiff,
           truncated: totalCount > items.length ? totalCount : 0 };
   $("topCompany").textContent = `${name} · ${stockCode}`;
   enableNav();
   pushRecent({ n: name, s: stockCode, sig: events.length, corr: amendRate });
+  // ── 작업2: 딥링크 해시 동기화 — API 키는 절대 포함하지 않는다.
+  const scanHash = buildScanHash(stockCode, LOOKBACK_DAYS);
+  if (scanHash) history.replaceState(null, "", "#" + scanHash);
   FEED_FILTER = { mode: "all", cat: null };
   renderFeed();
   $("detailBody").innerHTML = `<p class="dim">공시 피드에서 행을 선택하면 상세가 표시됩니다.</p>`;
@@ -683,11 +870,18 @@ function renderFeed() {
   html += list.slice(0, 200).map((r, i) => {
     const s0 = r.signals[0];
     const isTop = heavyKey && r.signals.some((s) => s.key === heavyKey);
+    const hasCaution = !isTop && r.signals.some((s) => s.caution);
+    const sigCell = isTop ? `<span class="badge-max">MAX</span>`
+      : hasCaution ? `<span class="badge-cau">주의</span>`
+      : r.signals.length ? `<span class="sigdot">● 신호</span>`
+      : `<span class="nosig">—</span>`;
+    // 작업3: 지난 스캔 스냅샷 이후 새로 감지된 신호 매칭 공시에 조용한 NEW 마커.
+    const isNew = CUR.scanDiff && CUR.scanDiff.newSet && CUR.scanDiff.newSet.has(r.rcept);
     return `<div class="feedrow g-feed" data-r="${esc(r.rcept)}">
       <span class="mm">${mmdd(r.date)}.${r.date.slice(6, 8)}</span>
       <span>${esc(r.nm)}</span>
       <span class="colcat" style="font-size:12px;color:var(--dim2)">${s0 ? `<span class="cdot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--c${s0.category});margin-right:7px"></span>${esc(DATA.categories[String(s0.category)])}` : `<span class="nosig">—</span>`}</span>
-      <span>${isTop ? `<span class="badge-max">MAX</span>` : r.signals.length ? `<span class="sigdot">● 신호</span>` : `<span class="nosig">—</span>`}</span>
+      <span>${sigCell}${isNew ? ` <span class="mono" style="font-size:9.5px;color:var(--faint);letter-spacing:0.06em">NEW</span>` : ""}</span>
       <span class="colcorr mono" style="font-size:11.5px;color:${r.isAmend ? "#c0a24a" : "#3a4350"}">${r.isAmend ? "정정" : "—"}</span>
     </div>`;
   }).join("");
@@ -746,27 +940,145 @@ function renderDetail(rcept) {
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">신호 무게</span><span style="color:${isTop ? "var(--red)" : "var(--dim2)"}">${isTop ? "이 기간 최상위" : r.signals.length ? "감지됨" : "—"}</span></div>
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">정정 여부</span><span>${r.isAmend ? "정정공시" : "원공시"}</span></div>
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">체인 위치</span><span>${pos >= 0 ? `${pos + 1} / ${CUR.events.length}` : "—"}</span></div>
+          ${r.signals.some((s) => s.caution) ? `<div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">주의 표시</span><span><span class="badge-cau">주의</span> <span class="dim" style="font-size:0.78rem">— 관찰 우선순위 표시</span></span></div>` : ""}
         </div>
         <a href="${dartUrl(r.rcept)}" target="_blank" rel="noopener" style="display:block;margin-top:16px;text-align:center;background:var(--cell);border:1px solid var(--line2);border-radius:4px;padding:11px;font-family:var(--mono);font-size:12.5px">DART 원문 열기 ↗</a>
+        <button class="ghost" id="docViewBtn" style="width:100%;margin-top:8px;padding:11px;font-size:12.5px">원문 이 화면에서 보기</button>
       </div>
     </div>
     ${chain ? `<div class="panel"><div class="slabel">▍SIGNAL CHAIN — 이 공시의 위치</div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${chain}</div></div>` : ""}
+    <div class="panel hidden" id="docViewer"></div>
     <style>@media (max-width:760px){.detailgrid{grid-template-columns:1fr !important}}</style>`;
   showScreen("detail");
+  const docBtn = $("docViewBtn");
+  if (docBtn) docBtn.onclick = () => toggleDocViewer(r);
+}
+
+/* ── 공시 원문 열람 (docViewer) ───────────────────── */
+const DOC_CACHE = new Map();   // rcept_no → {rcept_no, text, char_count, truncated} | {error}
+function getDocCache(rcept) {
+  if (DOC_CACHE.has(rcept)) return DOC_CACHE.get(rcept);
+  try {
+    const raw = sessionStorage.getItem("dart_doc_" + rcept);
+    if (raw) { const parsed = JSON.parse(raw); DOC_CACHE.set(rcept, parsed); return parsed; }
+  } catch (e) { /* 저장 실패는 무시 */ }
+  return null;
+}
+function setDocCache(rcept, data) {
+  DOC_CACHE.set(rcept, data);
+  try { sessionStorage.setItem("dart_doc_" + rcept, JSON.stringify(data)); } catch (e) { /* 저장 실패는 무시 */ }
+}
+// 이 공시 제목에서 실제로 매칭된 키워드만 모은다 (matchSignals는 신호
+// 단위만 반환하므로, 어떤 키워드가 히트했는지는 여기서 다시 확인한다).
+function matchedKeywordsFor(r) {
+  const kws = new Set();
+  for (const s of r.signals) {
+    for (const kw of s.keywords) {
+      if (r.nm.includes(kw)) kws.add(kw);
+    }
+  }
+  return [...kws];
+}
+// esc()된 텍스트 안에서, esc()된 키워드만 <mark>로 감싼다 (esc 이후 치환
+// — XSS 방지). 정규식 메타문자는 이스케이프해 리터럴 매칭한다.
+function highlightKw(escapedText, kws) {
+  if (!kws || !kws.length) return escapedText;
+  const escaped = kws.map((k) => esc(k)).filter(Boolean)
+    .map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (!escaped.length) return escapedText;
+  const re = new RegExp("(" + escaped.join("|") + ")", "g");
+  return escapedText.replace(re, "<mark>$1</mark>");
+}
+function renderDocBlocks(blocks, kws) {
+  return blocks.map((b) => {
+    if (b.kind === "table") {
+      const [head, ...body] = b.rows;
+      const thead = head ? `<tr>` + head.map((c) => `<th>${highlightKw(esc(c), kws)}</th>`).join("") + `</tr>` : "";
+      const tbody = body.map((row) => `<tr>` + row.map((c) => `<td>${highlightKw(esc(c), kws)}</td>`).join("") + `</tr>`).join("");
+      return `<div style="overflow-x:auto"><table>${thead}${tbody}</table></div>`;
+    }
+    const html = highlightKw(esc(b.text), kws).replace(/\n/g, "<br>");
+    return `<p style="margin:0.5rem 0;font-size:0.9rem">${html}</p>`;
+  }).join("");
+}
+function renderDocViewer(panel, data, r) {
+  if (!data || data.error) {
+    panel.innerHTML = `<div class="slabel">▍DISCLOSURE TEXT</div>
+      <p class="dim">${esc((data && data.error) || "원문을 불러오지 못했습니다.")} — DART 원문 링크를 이용하세요.</p>`;
+    return;
+  }
+  const kws = matchedKeywordsFor(r);
+  const blocks = documentBlocks(data.text || "");
+  let html = `<div class="slabel">▍DISCLOSURE TEXT — 본문 열람</div>`;
+  if (kws.length) {
+    html += `<div class="factline">이 공시 제목에서 감지된 신호 키워드 ${kws.length}개를 본문에서 강조 표시했습니다.</div>`;
+  }
+  html += renderDocBlocks(blocks, kws);
+  if (data.truncated) {
+    html += `<p class="dim" style="font-size:0.82rem;margin-top:0.6rem">원문 ${(data.char_count || 0).toLocaleString()}자 중 일부입니다 — 전체는 DART 원문에서 확인하세요.</p>`;
+  }
+  panel.innerHTML = html;
+}
+async function toggleDocViewer(r) {
+  const panel = $("docViewer");
+  if (!panel) return;
+  const isHidden = panel.classList.contains("hidden");
+  if (!isHidden) { panel.classList.add("hidden"); return; }
+  panel.classList.remove("hidden");
+  const cached = getDocCache(r.rcept);
+  if (cached) { renderDocViewer(panel, cached, r); return; }
+  panel.innerHTML = `<div class="slabel">▍DISCLOSURE TEXT</div><span class="spinner"></span><span class="dim" style="font-size:0.88rem">원문 조회 중…</span>`;
+  try {
+    const apiKey = localStorage.getItem(LS_KEY) || "";
+    const res = await fetch(`${relayBase()}/api/doc?rcept_no=${encodeURIComponent(r.rcept)}`, {
+      headers: { "X-DART-Key": apiKey },
+    });
+    let j = {};
+    try { j = await res.json(); } catch (e) { /* 빈 본문 등 — 아래서 상태코드로 처리 */ }
+    if (!res.ok || j.error) throw new Error(j.error || `조회 실패 (HTTP ${res.status})`);
+    setDocCache(r.rcept, j);
+    renderDocViewer(panel, j, r);
+  } catch (e) {
+    panel.innerHTML = `<div class="slabel">▍DISCLOSURE TEXT</div>
+      <p class="dim">${esc(e.message)} — DART 원문 링크를 이용하세요.</p>`;
+  }
+}
+
+/* ── 작업3: 재스캔 diff factline (대시보드 최상단, KPI 위) ── */
+function scanDiffLineHTML(scanDiff) {
+  if (!scanDiff) return "";
+  const dayLabel = scanDiff.days === 0 ? "오늘" : `${scanDiff.days}일 전`;
+  if (scanDiff.newCount > 0) {
+    return `<div class="factline" style="margin-top:0.5rem">지난 스캔(${esc(dayLabel)}) 이후 새 신호 공시 ${scanDiff.newCount}건</div>`;
+  }
+  return `<div class="dim" style="font-size:0.85rem;margin-top:0.5rem">지난 스캔(${esc(dayLabel)}) 이후 새 신호 공시 없음</div>`;
+}
+
+/* ── 작업1: 공시 0건 안내 (상호변경·동명법인 가능성) ── */
+function zeroDisclosureNoticeHTML(name) {
+  let html = `<p class="dim" style="margin-top:0.8rem">최근 공시가 없습니다 — 상호변경 또는 동명의 다른 법인일 수 있습니다.</p>`;
+  const alias = ALIASES && ALIASES[name];
+  if (alias) {
+    html += `<p class="dim" style="margin-top:0.3rem">현재 상호 '${esc(alias.current)}'로 스캔 ` +
+      `<a href="#" class="rescanCurrentLink" data-name="${esc(alias.current)}" data-code="${esc(alias.corp_code || "")}" data-stock="${esc(alias.stock_code || "")}">▸</a></p>`;
+  }
+  return html;
 }
 
 /* ── 04 대시보드 ──────────────────────────────── */
 function renderDash() {
   const { name, stockCode, corpCode, items, events, amendCount, amendRate, patterns,
           capitalEvents, catCount, typeCount, detectedTypes, heaviest, crisisEvents,
-          bgn, end } = CUR;
+          bgn, end, scanDiff } = CUR;
 
   let html = `<div class="panel amber">
     <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
       <h2 style="font-size:22px;font-weight:800;margin:0;letter-spacing:-0.01em">${esc(name)}</h2>
+      <button class="ghost" id="favToggleBtn" title="즐겨찾기" style="padding:0.15rem 0.55rem;font-size:0.85rem;border-color:var(--amber);color:${isFav(name) ? "var(--amber)" : "var(--dim2)"}">${isFav(name) ? "★" : "☆"}</button>
       <span class="mm" style="letter-spacing:0.06em">${esc(stockCode)} · T-${windowLabel()} SCAN · ${fmtDate(ymd(new Date()))}</span>
     </div>
+    ${scanDiffLineHTML(scanDiff)}
     <div class="kpis">
       <div class="kpi"><div class="v">${items.length}</div><div class="k">전체 공시</div></div>
       <div class="kpi ${events.length ? "alert" : ""}"><div class="v">${events.length}</div><div class="k">신호 감지</div></div>
@@ -776,7 +1088,8 @@ function renderDash() {
     </div>
     ${CUR.truncated ? `<p class="dim" style="font-size:0.82rem;margin-top:0.7rem">※ 이 기간 전체 공시는 ${CUR.truncated}건이며, 최근 ${items.length}건까지만 수집·분석했습니다(공시 다량 기업). 더 긴 전수 분석은 MCP 대화를 이용하세요.</p>` : ""}
     ${amendRate >= 10 ? `<p class="dim" style="font-size:0.82rem;margin-top:0.7rem">※ 정정공시 비율 ${amendRate}% — 정상 기업은 대체로 5% 이내이며, 20% 초과는 최초 공시의 품질·정보 통제 의도를 따져보는 기준선으로 통용됩니다.</p>` : ""}
-    ${events.length === 0 ? `<p class="dim" style="margin-top:0.8rem">이 기간 공시 ${items.length}건에서 등록된 위험 신호 유형이 감지되지 않았습니다. 신호가 없다는 것이 "안전하다"는 판정은 아닙니다 — 본 도구는 공시 제목 기반 신호만 봅니다.</p>` : ""}
+    ${items.length === 0 ? zeroDisclosureNoticeHTML(name) :
+      events.length === 0 ? `<p class="dim" style="margin-top:0.8rem">이 기간 공시 ${items.length}건에서 등록된 위험 신호 유형이 감지되지 않았습니다. 신호가 없다는 것이 "안전하다"는 판정은 아닙니다 — 본 도구는 공시 제목 기반 신호만 봅니다.</p>` : ""}
   </div>`;
 
   if (heaviest) {
@@ -808,7 +1121,7 @@ function renderDash() {
     html += flowNotes(events);
     html += `<div class="panel"><div class="slabel">▍SIGNAL COMMENTARY — 무게순 · 사실 서술</div>
       <div class="proselist">` + detectedTypes.map((s) =>
-        `<div><span class="tag" style="background:var(--c${s.category})">${esc(s.label)}</span> <span class="mono" style="font-size:0.78rem;color:var(--dim2)">×${typeCount[s.key]}</span>
+        `<div><span class="tag" style="background:var(--c${s.category})">${esc(s.label)}</span>${s.caution ? ` <span class="badge-cau">주의</span>` : ""} <span class="mono" style="font-size:0.78rem;color:var(--dim2)">×${typeCount[s.key]}</span>
          <div class="p">${esc(s.prose || "등록된 해설이 없는 신호 유형입니다.")}</div></div>`).join("") +
       `</div></div>`;
     // 자본 리듬 — 12개월 슬라이딩 윈도우 최대 집중도 (MCP detect_capital_churn과 동일 관점)
@@ -833,7 +1146,8 @@ function renderDash() {
       html += `<div class="panel"><div class="slabel red">▍PATTERN MATCH</div>
         <p class="dim">아래 패턴의 구성 신호가 모두 관찰됐습니다. 패턴 "조건 충족"은 사실 관찰이며 판정이 아닙니다.</p>` +
         patterns.map((p) => `<div class="patterncard"><b>${esc(p.name)}</b>${esc(p.description)}
-          <div class="sigs">구성 신호 taxonomy: ${p.signal_sequence.join(" + ")} · 관찰 윈도우 ${p.timeline_months}개월</div>` +
+          <div class="sigs">관찰 윈도우 ${p.timeline_months}개월 · 구성 신호가 촉발된 공시:</div>
+          <div class="sigs">${patternEvidenceHTML(p, events)}</div>` +
           (p.field_evidence && p.field_evidence.length ? `<details style="margin-top:0.4rem;font-size:0.82rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">실제 사례 근거(금감원 보도자료 등)</summary>
             <ul style="margin:0.3rem 0 0 1.1rem;padding:0">${p.field_evidence.map((fe) => `<li>${esc(fe)}</li>`).join("")}</ul></details>` : "") +
           `</div>`).join("") +
@@ -843,12 +1157,36 @@ function renderDash() {
 
   html += `<div class="panel"><div class="slabel">▍FINANCIAL CORE — 최근 사업보고서 · 사실 표기</div>
     <div id="finCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">재무제표 조회 중…</span></div></div>`;
+  html += `<div class="panel"><div class="slabel">▍DIVIDEND — 배당과 순이익</div>
+    <div id="divCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">배당 내역 조회 중…</span></div></div>`;
+  html += `<div class="panel"><div class="slabel">▍FUND CHAIN — 조달 자금의 행방</div>
+    <div id="fundCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">자금사용 내역 조회 중…</span></div></div>`;
   html += `<div class="panel"><div class="slabel">▍5% HOLDINGS — 보고 시계열 · 사실 표기</div>
     <div id="holdCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">대량보유 보고 조회 중…</span></div></div>`;
   html += `<div class="panel"><div class="slabel">▍AUDIT OPINION — 3개년 · 사실 표기</div>
     <div id="auditCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">감사보고 조회 중…</span></div></div>`;
   html += convoPanel(name);
   $("result").innerHTML = html;
+  $("result").querySelectorAll(".patEvLink").forEach((a) => {
+    a.onclick = (e) => { e.preventDefault(); renderDetail(a.dataset.r); };
+  });
+  $("result").querySelectorAll(".rescanCurrentLink").forEach((a) => {
+    a.onclick = (e) => {
+      e.preventDefault();
+      const nm = a.dataset.name;
+      if (CORPS[nm]) analyze(nm);
+      else analyze(nm, { corpCode: a.dataset.code, stockCode: a.dataset.stock });
+    };
+  });
+  const favBtn = $("favToggleBtn");
+  if (favBtn) {
+    favBtn.onclick = () => {
+      const nowFav = toggleFav(name, stockCode);
+      favBtn.textContent = nowFav ? "★" : "☆";
+      favBtn.style.color = nowFav ? "var(--amber)" : "var(--dim2)";
+      renderFavs();
+    };
+  }
   loadDeepBlocks(corpCode);
 }
 
@@ -987,15 +1325,793 @@ function pickAmt(rows, aliases, field) {
   }
   return null;
 }
+
+/* ── SE 이식 파생 로직 (출처: docs/tool/se/app.js) ── */
+// 이 섹션은 se/app.js의 순수 함수를 그대로 옮겨온 것이다 — DOM 접근 없음,
+// 아직 어떤 렌더 함수에서도 호출하지 않는다(후속 작업에서 대시보드 블록이
+// 연결할 예정). SE의 numeric() 헬퍼(배열·비표준 쉼표 형식을 엄격히 거부)
+// 대신 뷰어 기존 parseAmt()로 대체했다 — financials/dividends 응답은
+// 배열이 오지 않으므로 이 화면 용도로는 계약이 사실상 동일하다. markNumber·
+// isNoDataMarker처럼 numeric에 의존하지 않는 헬퍼는 원본 그대로 옮겼다.
+
+// 출처: se/app.js:376 isFootnoteMarkerOnly
+function isFootnoteMarkerOnly(v) {
+  if (typeof v !== "string") return false;
+  return /^주[0-9,]*\)$/.test(v.trim());
+}
+
+// 출처: se/app.js:394 footnoteMarkerNote — 각주 마커("주1)")는 지우지 않고
+// 원문 확인 안내만 덧붙인다.
+function footnoteMarkerNote(v, rceptNo) {
+  if (!isFootnoteMarkerOnly(v)) return v;
+  let note = v + " (공시 원문 참고)";
+  if (rceptNo) note += " · 접수번호 " + rceptNo;
+  return note;
+}
+
+// 출처: se/app.js:724 isNoDataMarker — DART가 "보고할 데이터 없음"을
+// null·빈 문자열·"-"로 섞어 보내는 것을 하나의 판정으로 합친다.
+function isNoDataMarker(v) {
+  if (v === null || v === undefined) return true;
+  if (typeof v !== "string") return false;
+  const t = v.trim();
+  return t === "" || t === "-";
+}
+
+// 출처: se/app.js:4537 markNumber — "-"·null은 결측(null)으로, 그 외
+// 숫자 형태는 쉼표·공백 제거 후 파싱한다.
+function markNumber(v) {
+  if (isNoDataMarker(v)) return null;
+  if (typeof v === "number") return isFinite(v) ? v : null;
+  const n = Number(String(v).replace(/[,\s]/g, ""));
+  return isFinite(n) ? n : null;
+}
+
+// 출처: se/app.js:1722 stripMarkdownHeadingHash — dart_client의
+// _html_to_structured_text가 <h1>~<h6>를 "#"×n 마크다운으로 바꿔주는데,
+// 이 화면은 마크다운을 렌더링하지 않고 <p>로 그대로 보여주므로 기호만 벗긴다
+// (제목 내용은 그대로 — 표시 방식 변환일 뿐 판정이 아니다).
+function stripMarkdownHeadingHash(line) {
+  return line.replace(/^(\s*)#{1,6}(?=\s|$)\s*/, "$1");
+}
+
+// 출처: se/app.js:1784 documentBlocks — 공시 원문(구조 보존 텍스트)을
+// 문단/표 블록으로 분해한다. "|"가 있는 줄만 표 행으로 보고, 구분선
+// (`|---|`, 셀 전부가 "-"만인 줄)은 데이터가 아니므로 건너뛴다. 요약·선별
+// 없이 구조 복원만 한다(v0.8.5 원칙).
+function documentBlocks(text) {
+  if (!text || typeof text !== "string") return [];
+  const blocks = [];
+  let prose = [];
+  let table = [];
+
+  function flushProse() {
+    const t = prose.join("\n").trim();
+    if (t) blocks.push({ kind: "text", text: t });
+    prose = [];
+  }
+  function flushTable() {
+    if (table.length) blocks.push({ kind: "table", rows: table });
+    table = [];
+  }
+
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.indexOf("|") >= 0) {
+      const cells = line.split("|").map((c) => c.trim())
+        .filter((c, i, a) => !(c === "" && (i === 0 || i === a.length - 1)));
+      if (cells.length && cells.every((c) => /^:?-{2,}:?$/.test(c))) continue;
+      if (cells.length) { flushProse(); table.push(cells); continue; }
+    }
+    flushTable();
+    prose.push(stripMarkdownHeadingHash(raw));
+  }
+  flushTable();
+  flushProse();
+  return blocks;
+}
+
+// ── 재무 비율 파생 (출처: se/app.js:2279-2507) ──
+// 출처: se/app.js:2279 RATIO_PERIODS
+const RATIO_PERIODS = [
+  { period: "전전기", field: "bfefrmtrm_amount", yearOffset: 2 },
+  { period: "전기", field: "frmtrm_amount", yearOffset: 1 },
+  { period: "당기", field: "thstrm_amount", yearOffset: 0 },
+];
+
+// 출처: se/app.js:2294 RATIO_DEFS — 계산 가능한 지표 4종(자본잠식률은
+// 표기 조건이 달라 computeCapitalImpairment가 별도 처리).
+const RATIO_DEFS = [
+  { name: "영업이익률", num: "영업이익", den: "매출액", formula: "영업이익 ÷ 매출액" },
+  { name: "순이익률", num: "당기순이익", den: "매출액", formula: "당기순이익 ÷ 매출액" },
+  { name: "부채비율", num: "부채총계", den: "자본총계", formula: "부채총계 ÷ 자본총계" },
+  { name: "유동비율", num: "유동자산", den: "유동부채", formula: "유동자산 ÷ 유동부채" },
+];
+
+// 출처: se/app.js:2313 ACCOUNT_ALIASES — DART 제출기업마다 계정명 표기가
+// 갈리는 문제(예: "당기순이익(손실)")를 흡수한다. 다른 계정과 이름이
+// 겹치는 표기는 넣지 않는다(틀린 계정을 자신 있게 보여주는 것이 값이
+// 없는 것보다 나쁘다).
+const ACCOUNT_ALIASES = Object.create(null);
+ACCOUNT_ALIASES["매출액"] = [
+  "매출액", "영업수익", "수익(매출액)", "영업수익(매출액)", "매출",
+  "순매출액", "수입금액", "매출수익", "영업수입", "영업매출액", "수익",
+];
+ACCOUNT_ALIASES["영업이익"] = ["영업이익", "영업이익(손실)", "영업손익", "영업이익(영업손실)"];
+ACCOUNT_ALIASES["당기순이익"] = [
+  "당기순이익", "당기순이익(손실)", "당기순이익(당기순손실)",
+  "당기순손익", "분기순이익", "반기순이익", "연결당기순이익",
+];
+ACCOUNT_ALIASES["부채총계"] = ["부채총계", "부채 총계"];
+ACCOUNT_ALIASES["자본총계"] = ["자본총계", "자본 총계", "자본합계"];
+ACCOUNT_ALIASES["유동자산"] = ["유동자산"];
+ACCOUNT_ALIASES["유동부채"] = ["유동부채", "유동부채 합계"];
+ACCOUNT_ALIASES["자본금"] = ["자본금"];
+
+// 출처: se/app.js:2333 indexAccountsByDiv — fs_div(CFS/OFS)별 계정명→행 맵.
+// 연결/별도 혼합 금지 원칙의 토대: 이 맵을 나눠 만드는 것 자체가 두 구분을
+// 절대 같은 계산에 섞지 않게 하는 장치다.
+function indexAccountsByDiv(records) {
+  const byDiv = new Map();
+  for (const r of records) {
+    if (!r || typeof r !== "object") continue;
+    const div = r.fs_div;
+    if (div !== "CFS" && div !== "OFS") continue;
+    if (!byDiv.has(div)) byDiv.set(div, new Map());
+    const accounts = byDiv.get(div);
+    if (!accounts.has(r.account_nm)) accounts.set(r.account_nm, r);
+  }
+  return byDiv;
+}
+
+// 출처: se/app.js:2350 pickAccount
+function pickAccount(accounts, canonicalName) {
+  const aliases = ACCOUNT_ALIASES[canonicalName] || [canonicalName];
+  for (const alias of aliases) {
+    const row = accounts.get(alias);
+    if (row) return row;
+  }
+  return undefined;
+}
+
+// 출처: se/app.js:2369 computeRatio — numeric() 대신 뷰어 parseAmt() 사용
+// (적응). 분자·분모 중 하나라도 없거나 분모가 0이면 값은 null이고 사유를
+// 남긴다 — 조용히 항목을 빼지 않는다.
+function computeRatio(구분, 기간, def, accounts, field) {
+  const numRow = pickAccount(accounts, def.num);
+  const denRow = pickAccount(accounts, def.den);
+  const numVal = numRow ? parseAmt(numRow[field]) : null;
+  const denVal = denRow ? parseAmt(denRow[field]) : null;
+  const 재료 = Object.create(null);
+  재료[def.num] = numVal;
+  재료[def.den] = denVal;
+
+  let 값 = null;
+  let 사유 = null;
+  if (numVal === null && denVal === null) {
+    사유 = def.num + "·" + def.den + " 없음";
+  } else if (numVal === null) {
+    사유 = def.num + " 없음";
+  } else if (denVal === null) {
+    사유 = def.den + " 없음";
+  } else if (denVal === 0) {
+    사유 = def.den + " 0";
+  } else {
+    값 = (numVal / denVal) * 100;
+  }
+
+  const out = { 지표: def.name, 값: 값, 구분: 구분, 기간: 기간, 계산식: def.formula, 재료: 재료 };
+  if (값 === null) out.사유 = 사유;
+  return out;
+}
+
+// 출처: se/app.js:2414 computeCapitalImpairment — 잠식률은 양수(자본금이
+// 자본총계보다 커서 실제로 까먹은 경우)일 때만 값으로 남긴다. 정상 회사의
+// 큰 음수를 그대로 계산해 보여주면 오해를 부른다 — 표기하지 않는 것이
+// 판정이 아니라 이 지표의 정의 자체다(원본 판단 그대로 유지).
+function computeCapitalImpairment(구분, 기간, accounts, field) {
+  const capRow = pickAccount(accounts, "자본금");
+  const totalRow = pickAccount(accounts, "자본총계");
+  const capVal = capRow ? parseAmt(capRow[field]) : null;
+  const totalVal = totalRow ? parseAmt(totalRow[field]) : null;
+  const 재료 = Object.create(null);
+  재료["자본금"] = capVal;
+  재료["자본총계"] = totalVal;
+
+  let 값 = null;
+  let 사유 = null;
+  if (capVal === null && totalVal === null) {
+    사유 = "자본금·자본총계 없음";
+  } else if (capVal === null) {
+    사유 = "자본금 없음";
+  } else if (totalVal === null) {
+    사유 = "자본총계 없음";
+  } else if (capVal === 0) {
+    사유 = "자본금 0";
+  } else {
+    const ratio = ((capVal - totalVal) / capVal) * 100;
+    if (ratio > 0) { 값 = ratio; } else { 사유 = "잠식 없음"; }
+  }
+
+  const out = {
+    지표: "자본잠식률", 값: 값, 구분: 구분, 기간: 기간,
+    계산식: "(자본금 − 자본총계) ÷ 자본금", 재료: 재료,
+  };
+  if (값 === null) out.사유 = 사유;
+  return out;
+}
+
+// 출처: se/app.js:2461 financialRatiosBaseYear — records에서 bsns_year를
+// 한 번 계산한다(단일 연도 호출 구조라 배열 전체에서 상수임이 보장됨).
+function financialRatiosBaseYear(records) {
+  if (!Array.isArray(records)) return null;
+  for (const r of records) {
+    if (!r || typeof r !== "object") continue;
+    const y = r.bsns_year;
+    if (y === undefined || y === null || y === "") continue;
+    const n = Number(y);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+// 출처: se/app.js:1818 FS_DIV_LABELS
+const FS_DIV_LABELS = Object.create(null);
+FS_DIV_LABELS.CFS = "연결";
+FS_DIV_LABELS.OFS = "별도";
+
+// 출처: se/app.js:2490 financialRatios — financials(원본 재무제표 레코드
+// 배열)에서 파생 지표 5종을 연결/별도 × 3기간(전전기/전기/당기)으로
+// 계산한다. **연결과 별도를 절대 같은 계산에 섞지 않는다** — fs_div별로
+// 완전히 독립된 계정 조회 테이블을 만들어 계산하고, 결과 행마다 "구분"을
+// 그대로 남긴다.
+function financialRatios(records) {
+  if (!Array.isArray(records)) return [];
+  const byDiv = indexAccountsByDiv(records);
+  const baseYear = financialRatiosBaseYear(records);
+
+  const out = [];
+  for (const [div, accounts] of byDiv) {
+    const 구분 = FS_DIV_LABELS[div] || div;
+    for (const p of RATIO_PERIODS) {
+      const 기간 = baseYear !== null ? String(baseYear - p.yearOffset) : p.period;
+      for (const def of RATIO_DEFS) {
+        out.push(computeRatio(구분, 기간, def, accounts, p.field));
+      }
+      out.push(computeCapitalImpairment(구분, 기간, accounts, p.field));
+    }
+  }
+  return out;
+}
+
+// ── 배당 대 이익 (출처: se/app.js:2567-2710) ──
+// 출처: se/app.js:2567 DIVIDEND_SE_FIELDS
+const DIVIDEND_SE_FIELDS = [
+  "현금배당금총액(백만원)",
+  "(연결)당기순이익(백만원)",
+  "(별도)당기순이익(백만원)",
+  "주식배당금총액(백만원)",
+  "(연결)현금배당성향(%)",
+];
+
+// 출처: se/app.js:2587 dividendVsIncome — dividends(alotMatter) 레코드에서
+// "배당총액 vs 벌어들인 돈"을 사업연도·보고서구분별로 뽑는다. numeric()
+// 대신 parseAmt() 사용(적응). 현금배당이 없으면(값을 못 읽으면) 행을
+// 만들지 않는다 — 배당이 없는 회사에서 조용히 발화하지 않는 것이 맞는
+// 동작이다.
+function dividendVsIncome(records) {
+  if (!Array.isArray(records)) return [];
+  const groups = new Map();
+  const order = [];
+  for (const r of records) {
+    if (!r || typeof r !== "object") continue;
+    const year = r.bsns_year !== undefined && r.bsns_year !== null ? String(r.bsns_year) : "";
+    const reprt = r.reprt_code !== undefined && r.reprt_code !== null ? String(r.reprt_code) : "";
+    const key = year + " " + reprt;
+    if (!groups.has(key)) {
+      groups.set(key, { bsns_year: year, reprt_code: reprt, se: Object.create(null) });
+      order.push(key);
+    }
+    const se = r.se;
+    if (typeof se === "string" && DIVIDEND_SE_FIELDS.indexOf(se) !== -1) {
+      groups.get(key).se[se] = r.thstrm;
+    }
+  }
+
+  const out = [];
+  for (const key of order) {
+    const g = groups.get(key);
+    const dividend = parseAmt(g.se["현금배당금총액(백만원)"]);
+    if (dividend === null) continue;
+    const row = { bsns_year: g.bsns_year, reprt_code: g.reprt_code };
+    for (const se of DIVIDEND_SE_FIELDS) {
+      row[se] = parseAmt(g.se[se]);
+    }
+    out.push(row);
+  }
+  return out;
+}
+
+// 출처: se/app.js:2635-2649 DIVIDEND_DRAIN_* 상수 — core(dart_client.py
+// detect_dividend_drain)와 정확히 같은 se 키 문자열을 쓴다.
+const DIVIDEND_DRAIN_DIVIDEND_SE = "현금배당금총액(백만원)";
+const DIVIDEND_DRAIN_NI_SE = {
+  CFS: "(연결)당기순이익(백만원)",
+  OFS: "(별도)당기순이익(백만원)",
+};
+// alotMatter는 사업연도 하나당 reprt_code 4종(사업·반기·1분기·3분기)을
+// 각각 별도 호출로 채우는데, 분기/반기 배당 지급 회사는 그 값이 그
+// 시점까지의 누적치일 뿐이다 — 사업보고서(11011)만 최종 확정치라 이것만
+// 대상으로 삼는다(아니면 같은 사업연도가 최대 4배로 중복 플래그된다).
+const DIVIDEND_DRAIN_ANNUAL_REPRT_CODE = "11011";
+
+// 출처: se/app.js:2669 dividendDrainFlags — "당기순이익이 음수인데 같은
+// 사업연도에 현금배당이 있었다"는 사실을 CFS/OFS 별개로 뽑는다. numeric()
+// 대신 parseAmt() 사용(적응). 연결(CFS)·별도(OFS)는 절대 하나로 합쳐
+// 판정하지 않는다(원본 판단 그대로 유지).
+function dividendDrainFlags(records) {
+  if (!Array.isArray(records)) return [];
+  const groups = new Map();
+  const order = [];
+  for (const r of records) {
+    if (!r || typeof r !== "object") continue;
+    const reprt = r.reprt_code !== undefined && r.reprt_code !== null ? String(r.reprt_code) : "";
+    if (reprt !== DIVIDEND_DRAIN_ANNUAL_REPRT_CODE) continue;
+    const year = r.bsns_year !== undefined && r.bsns_year !== null ? String(r.bsns_year) : "";
+    const key = year + " " + reprt;
+    if (!groups.has(key)) {
+      groups.set(key, { bsns_year: year, reprt_code: reprt, se: Object.create(null) });
+      order.push(key);
+    }
+    const se = r.se;
+    if (se === DIVIDEND_DRAIN_DIVIDEND_SE || se === DIVIDEND_DRAIN_NI_SE.CFS || se === DIVIDEND_DRAIN_NI_SE.OFS) {
+      groups.get(key).se[se] = r.thstrm;
+    }
+  }
+
+  const flags = [];
+  for (const key of order) {
+    const g = groups.get(key);
+    const dividend = parseAmt(g.se[DIVIDEND_DRAIN_DIVIDEND_SE]);
+    if (dividend === null || dividend <= 0) continue;
+    for (const fsDiv of ["CFS", "OFS"]) {
+      const ni = parseAmt(g.se[DIVIDEND_DRAIN_NI_SE[fsDiv]]);
+      if (ni === null || ni >= 0) continue;
+      flags.push({ bsns_year: g.bsns_year, reprt_code: g.reprt_code, fs_div: fsDiv, dividend: dividend, net_income: ni });
+    }
+  }
+  flags.sort((a, b) => {
+    if (a.bsns_year !== b.bsns_year) return a.bsns_year < b.bsns_year ? -1 : 1;
+    if (a.reprt_code !== b.reprt_code) return a.reprt_code < b.reprt_code ? -1 : 1;
+    if (a.fs_div !== b.fs_div) return a.fs_div < b.fs_div ? -1 : 1;
+    return 0;
+  });
+  return flags;
+}
+
+// ── 자금사용·공시 근접 힌트 (출처: se/app.js:2854-3076) ──
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+// 출처: se/app.js:3430 axisSortKey — 문자열 안 숫자만 이어붙인 정렬키.
+// "제14회"처럼 숫자가 문자로 감싸여도 14로 정렬 기준을 뽑는다.
+function axisSortKey(v) {
+  const s = v === null || v === undefined ? "" : String(v);
+  const digits = s.replace(/[^0-9]/g, "");
+  if (digits === "") return null;
+  const n = Number(digits);
+  return Number.isFinite(n) ? n : null;
+}
+
+// 출처: se/app.js:2989 sortKeyToUTCDate — axisSortKey가 만든 YYYYMMDD
+// 정수를 실제 날짜로 되돌린다. 존재하지 않는 날짜(예: 2월 30일)는 null.
+function sortKeyToUTCDate(sortKey) {
+  if (sortKey === null || sortKey === undefined) return null;
+  const s = String(sortKey);
+  if (!/^\d{8}$/.test(s)) return null;
+  const y = Number(s.slice(0, 4));
+  const mo = Number(s.slice(4, 6));
+  const d = Number(s.slice(6, 8));
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+  return dt;
+}
+
+// 출처: se/app.js:2854 fundChain — 자금사용 내역(원본 레코드)을 납입일
+// (pay_de) × 용도별로 묶는다. markNumber·isNoDataMarker·footnoteMarkerNote
+// 사용(원본 그대로).
+function fundChain(records) {
+  if (!Array.isArray(records)) return [];
+  const groups = new Map();
+  const groupOrder = [];
+
+  for (const r of records) {
+    if (!r || typeof r !== "object") continue;
+    const payDe = isNoDataMarker(r.pay_de) ? null : String(r.pay_de);
+    if (!groups.has(payDe)) { groups.set(payDe, []); groupOrder.push(payDe); }
+    groups.get(payDe).push(r);
+  }
+
+  const out = [];
+  for (const payDe of groupOrder) {
+    const rows = groups.get(payDe);
+    const uses = new Map();
+    const useOrder = [];
+    for (const r of rows) {
+      const purpose = isNoDataMarker(r.plan_useprps) ? null : String(r.plan_useprps).replace(/\s*\n\s*/g, " ").trim();
+      if (!uses.has(purpose)) { uses.set(purpose, []); useOrder.push(purpose); }
+      uses.get(purpose).push(r);
+    }
+
+    let totalPlan = 0;
+    const useList = [];
+    for (const purpose of useOrder) {
+      const useRows = uses.get(purpose);
+      // 같은 (pay_de, purpose) 반복 보고 중 plan_amount가 가장 큰 행을 남긴다.
+      let best = useRows[0];
+      let bestAmount = markNumber(best.plan_amount);
+      for (let i = 1; i < useRows.length; i++) {
+        const amt = markNumber(useRows[i].plan_amount);
+        if (amt !== null && (bestAmount === null || amt > bestAmount)) { best = useRows[i]; bestAmount = amt; }
+      }
+      const plan = bestAmount === null ? 0 : bestAmount;
+      totalPlan += plan;
+      const diffReason = isNoDataMarker(best.dffrnc_resn) ? null
+        : footnoteMarkerNote(best.dffrnc_resn, isNoDataMarker(best.rcept_no) ? null : best.rcept_no);
+      useList.push({ purpose: purpose, plan: plan, real: markNumber(best.real_dtls_amount), diff_reason: diffReason, rows: useRows.length });
+    }
+
+    out.push({ pay_de: payDe, sort_key: payDe === null ? null : axisSortKey(payDe), total_plan: totalPlan, uses: useList, row_count: rows.length });
+  }
+
+  out.sort((a, b) => {
+    if (a.sort_key === null && b.sort_key === null) return 0;
+    if (a.sort_key === null) return 1;
+    if (b.sort_key === null) return -1;
+    return b.sort_key - a.sort_key;
+  });
+  return out;
+}
+
+// 출처: se/app.js:2945 PROCUREMENT_SIGNAL_KEYS — 조달과 무관한 신호가
+// 섞인 category(예: CB/채권 카테고리엔 CB_REPAY 등도 있음) 대신, 조달
+// 성격 키 5개만 직접 골랐다.
+const PROCUREMENT_SIGNAL_KEYS = ["CB_BW", "3PCA", "RIGHTS_UNDER", "EB", "RCPS"];
+
+// 출처: se/app.js:2958 isProcurementDisclosure — reportNm이 조달 신호
+// 키워드에 걸리는지만 본다(정정공시는 제외).
+function isProcurementDisclosure(reportNm, signalsData) {
+  const nm = typeof reportNm === "string" ? reportNm : "";
+  if (typeof signalsData.amendment_pattern === "string") {
+    try {
+      if (new RegExp(signalsData.amendment_pattern).test(nm)) return false;
+    } catch (e) { /* 정규식 실패 시 정정 판정만 건너뜀 */ }
+  }
+  for (const s of signalsData.signals) {
+    if (!s || PROCUREMENT_SIGNAL_KEYS.indexOf(s.key) === -1) continue;
+    const keywords = Array.isArray(s.keywords) ? s.keywords : [];
+    for (const kw of keywords) {
+      if (kw && nm.indexOf(kw) !== -1) return true;
+    }
+  }
+  return false;
+}
+
+// 출처: se/app.js:3039 fundChainDisclosureHints — fundChain(records) 결과
+// (조달건)와 disclosures(공시 원본)를 날짜 근접으로 병치한다. **조인이
+// 아니다** — 어느 공시가 이 조달건의 원인인지는 단정하지 않고, 납입일
+// 이전 windowDays 안에 있던 조달 신호 공시를 전부 나열할 뿐이다.
+function fundChainDisclosureHints(chain, disclosures, signalsData, windowDays) {
+  if (!signalsData || !Array.isArray(signalsData.signals)) return {};
+  if (!Array.isArray(chain) || !Array.isArray(disclosures)) return {};
+  const window = typeof windowDays === "number" && windowDays > 0 ? windowDays : 90;
+
+  const out = {};
+  for (const entry of chain) {
+    if (!entry || entry.sort_key === null || entry.sort_key === undefined) continue;
+    const payDate = sortKeyToUTCDate(entry.sort_key);
+    if (payDate === null) continue;
+
+    const hits = [];
+    for (const d of disclosures) {
+      if (!d || typeof d !== "object") continue;
+      if (!isProcurementDisclosure(d.report_nm, signalsData)) continue;
+      const discDate = sortKeyToUTCDate(axisSortKey(d.rcept_dt));
+      if (discDate === null) continue;
+      const daysBefore = Math.round((payDate.getTime() - discDate.getTime()) / MS_PER_DAY);
+      if (daysBefore <= 0 || daysBefore > window) continue;
+      hits.push({ rcept_no: d.rcept_no, rcept_dt: d.rcept_dt, report_nm: d.report_nm, days_before: daysBefore });
+    }
+
+    if (hits.length > 0) {
+      hits.sort((a, b) => a.days_before - b.days_before);
+      out[entry.sort_key] = hits;
+    }
+  }
+  return out;
+}
+/* ── /SE 이식 파생 로직 ── */
+
+/* ── 대시보드 확장 어댑터 (뷰어 자체 — SE 이식 파생 함수를 화면 문자열로 조립) ── */
+
+// ── 작업1: 재무 비율 추이 (loadFinancialCore가 이미 받아둔 rows 재사용, 추가 API 0회) ──
+// financialRatios(rows)는 연결/별도를 절대 섞지 않고 구분별로 완전히 독립 계산한다.
+// 여기서는 loadFinancialCore가 이미 고른 주 구분(div, CFS 우선)과 같은 구분만 뽑아
+// 대시보드에는 부채비율·유동비율 2줄만 보여준다(전체 5지표×구분은 details 표로).
+function ratioTrendPeriodsOf(map) {
+  const keys = [...map.keys()];
+  if (keys.every((k) => /^\d+$/.test(k))) return keys.sort();
+  return ["전전기", "전기", "당기"].filter((k) => map.has(k));
+}
+function ratioTrendLine(byMetric, metricName, unit, higherIsWorse) {
+  const m = byMetric.get(metricName);
+  if (!m) return null;
+  const periods = ratioTrendPeriodsOf(m);
+  const rows = periods.map((p) => m.get(p));
+  const known = rows.filter((r) => r.값 !== null);
+  if (known.length < 2) return null;
+  const parts = periods.map((p, i) => `${esc(p)} ${rows[i].값 === null ? "―" : rows[i].값.toFixed(0) + unit}`).join(" → ");
+  let monotoneWorse = false;
+  if (known.length === rows.length && rows.length >= 3) {
+    let up = true, down = true;
+    for (let i = 1; i < rows.length; i++) {
+      if (rows[i].값 <= rows[i - 1].값) up = false;
+      if (rows[i].값 >= rows[i - 1].값) down = false;
+    }
+    monotoneWorse = higherIsWorse ? up : down;
+  }
+  const trendNote = monotoneWorse ? (higherIsWorse ? " — 3기간 연속 상승" : " — 3기간 연속 하락") : "";
+  const latestRow = [...rows].reverse().find((r) => r.값 !== null) || null;
+  return {
+    html: `<div class="factline">· ${esc(metricName)}: ${parts}${trendNote}</div>`,
+    monotoneWorse, latest: latestRow ? latestRow.값 : null,
+  };
+}
+function ratioTrendBlock(rows, div) {
+  if (!Array.isArray(rows) || !rows.length) return "";
+  const all = financialRatios(rows);
+  if (!all.length) return "";
+  const label = div === "CFS" ? "연결" : "별도";
+  const forDiv = all.filter((r) => r.구분 === label);
+  if (!forDiv.length) return "";
+
+  const byMetric = new Map();
+  for (const r of forDiv) {
+    if (!byMetric.has(r.지표)) byMetric.set(r.지표, new Map());
+    byMetric.get(r.지표).set(r.기간, r);
+  }
+  const debt = ratioTrendLine(byMetric, "부채비율", "%", true);
+  const current = ratioTrendLine(byMetric, "유동비율", "%", false);
+
+  let html = "";
+  if (!debt && !current) {
+    return `<p class="dim" style="font-size:0.85rem;margin-top:0.4rem">비율 추이를 계산할 계정을 찾지 못했습니다.</p>`;
+  }
+  if (debt) html += debt.html;
+  if (current) html += current.html;
+
+  const warns = [];
+  if (debt && debt.monotoneWorse) warns.push("부채비율이 3기간 연속 상승했습니다.");
+  if (current && current.monotoneWorse) warns.push("유동비율이 3기간 연속 하락했습니다.");
+  if (debt && debt.latest !== null && debt.latest > 200) warns.push(`부채비율이 200%를 초과했습니다 (${debt.latest.toFixed(0)}%).`);
+  if (current && current.latest !== null && current.latest < 100) warns.push(`유동비율이 100% 미만입니다 (${current.latest.toFixed(0)}%).`);
+  const impairmentMap = byMetric.get("자본잠식률");
+  let impairmentLatest = null;
+  if (impairmentMap) {
+    for (const p of ratioTrendPeriodsOf(impairmentMap)) {
+      const v = impairmentMap.get(p);
+      if (v.값 !== null) impairmentLatest = v;
+    }
+  }
+  if (impairmentLatest) warns.push(`자본잠식이 관찰됩니다 (${impairmentLatest.기간} 잠식률 ${impairmentLatest.값.toFixed(1)}%).`);
+  if (warns.length) {
+    html += `<div class="factwarn">⚠️ ${warns.map(esc).join("<br>⚠️ ")}<br>` +
+      `<span class="dim" style="font-size:0.8rem">사실 표기입니다 — 정확한 맥락은 재무제표 주석·사업보고서 원문에서 확인하세요.</span></div>`;
+  }
+
+  html += `<details style="margin-top:0.5rem;font-size:0.85rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">계산 근거 표</summary>
+    <div style="overflow-x:auto"><table><tr><th>구분</th><th>지표</th><th>기간</th><th>값</th><th>계산식</th><th>비고</th></tr>` +
+    all.map((r) => `<tr><td>${esc(r.구분)}</td><td>${esc(r.지표)}</td><td>${esc(r.기간)}</td>` +
+      `<td>${r.값 === null ? "―" : r.값.toFixed(2) + "%"}</td><td>${esc(r.계산식)}</td><td>${r.사유 ? esc(r.사유) : "―"}</td></tr>`).join("") +
+    `</table></div></details>`;
+  return html;
+}
+
+// ── 작업2: 배당 대 이익 패널 (#divCore) ──
+function dividendPanelHTML(records) {
+  if (!Array.isArray(records) || !records.length) {
+    return `<span class="dim" style="font-size:0.88rem">배당 기록 없음 (최근 3개 사업연도)</span>`;
+  }
+  const drains = dividendDrainFlags(records);
+  const vsIncome = dividendVsIncome(records);
+  if (!drains.length && !vsIncome.length) {
+    return `<span class="dim" style="font-size:0.88rem">배당 기록 없음 (최근 3개 사업연도)</span>`;
+  }
+  let html = "";
+  if (drains.length) {
+    const lines = drains.map((f) => {
+      const basis = f.fs_div === "CFS" ? "연결·지배지분 기준" : "별도 기준";
+      return `${f.bsns_year} 사업연도: 당기순이익 ${fmtKRW(f.net_income * 1e6)}(${basis}) 적자인데 ` +
+        `현금배당 ${fmtKRW(f.dividend * 1e6)} 지급 — 이익이 아닌 유보 자본에서 나간 배당입니다`;
+    });
+    html += `<div class="factwarn">⚠️ ${lines.map(esc).join("<br>⚠️ ")}<br>` +
+      `<span class="dim" style="font-size:0.8rem">DART alotMatter(배당에 관한 사항) 사실 표기입니다 — 판정이 아닙니다.</span></div>`;
+  }
+  if (vsIncome.length) {
+    const last = vsIncome[vsIncome.length - 1];
+    const dividend = last["현금배당금총액(백만원)"];
+    const niCfs = last["(연결)당기순이익(백만원)"];
+    const niOfs = last["(별도)당기순이익(백만원)"];
+    const ni = niCfs !== null ? niCfs : niOfs;
+    const niLabel = niCfs !== null ? "연결" : "별도";
+    if (dividend !== null) {
+      html += `<div class="factline">· ${esc(last.bsns_year)} 사업연도: 현금배당 ${fmtKRW(dividend * 1e6)}` +
+        (ni !== null ? ` · 당기순이익(${niLabel}) ${fmtKRW(ni * 1e6)}` : "") + `</div>`;
+    }
+  }
+  if (!html) return `<span class="dim" style="font-size:0.88rem">배당 기록 없음 (최근 3개 사업연도)</span>`;
+  return html;
+}
+
+// ── 작업3: 자금 체인 패널 (#fundCore) ──
+// 출처: dart_client.py _normalize_fund_usage 이식 — 공모(rs_*)·사모(mtrpt_*)
+// 필드명이 갈리는 것을 통합 스키마로 흡수한다. core는 rcept_no를 정규화 결과에
+// 남기지 않지만, fundChain의 diff_reason 각주 안내(footnoteMarkerNote)가
+// 접수번호를 쓸 수 있어 뷰어 어댑터에서는 원본 그대로 붙여둔다(적응 지점).
+const FUND_USAGE_ENDPOINTS = ["pssrpCptalUseDtls.json", "prvsrpCptalUseDtls.json"];
+function normalizeFundUsageItem(item, bsnsYear) {
+  const planUseprps = item.rs_cptal_use_plan_useprps || item.mtrpt_cptal_use_plan_useprps ||
+    item.cptal_use_plan || item.on_dclrt_cptal_use_plan || "";
+  const planAmount = item.rs_cptal_use_plan_prcure_amount || item.mtrpt_cptal_use_plan_prcure_amount ||
+    item.pay_amount || null;
+  return {
+    pay_de: item.pay_de !== undefined && item.pay_de !== null ? String(item.pay_de) : "",
+    plan_useprps: String(planUseprps).trim(),
+    plan_amount: planAmount,
+    real_dtls_amount: item.real_cptal_use_dtls_amount !== undefined ? item.real_cptal_use_dtls_amount : null,
+    dffrnc_resn: (item.dffrnc_occrrnc_resn || "").trim(),
+    rcept_no: item.rcept_no || null,
+    bsns_year: bsnsYear,
+  };
+}
+function fundEntryDateLabel(entry) {
+  if (entry.sort_key === null || entry.sort_key === undefined) return "납입일 미상";
+  return fmtDate(String(entry.sort_key).padStart(8, "0"));
+}
+function fundEntryCardHTML(entry) {
+  const dateLabel = fundEntryDateLabel(entry);
+  const totalTxt = fmtKRW(entry.total_plan);
+  const useTxt = entry.uses.filter((u) => u.purpose).slice(0, 3)
+    .map((u) => `${esc(u.purpose)} ${fmtKRW(u.plan)}`).join("·");
+  const hasDiff = entry.uses.some((u) => u.diff_reason);
+  return `<div class="factline">· ${esc(dateLabel)} 납입 · 계획 총 ${totalTxt}` +
+    (useTxt ? `(${useTxt})` : "") +
+    (hasDiff ? ` · 집행 차이 사유 보고 있음` : "") + `</div>`;
+}
+function fundHintListHTML(entry, hints) {
+  if (entry.sort_key === null || entry.sort_key === undefined) return "";
+  const hits = hints[entry.sort_key];
+  if (!hits || !hits.length) return "";
+  return `<div class="dim" style="font-size:0.82rem;margin:0.1rem 0 0.6rem 1rem">근접 조달 신호 공시: ` +
+    hits.map((h) => `<a href="#" class="fundHintLink" data-r="${esc(h.rcept_no)}" style="color:var(--tx)">` +
+      `${esc(fmtDate(h.rcept_dt))} ${esc(h.report_nm)} (${h.days_before}일 전)</a>`).join(" · ") + `</div>`;
+}
+function fundChainPanelHTML(records, disclosures) {
+  const empty = `<span class="dim" style="font-size:0.88rem">자금사용 내역 기록 없음 (최근 3개 사업연도 · 공모·사모)</span>`;
+  if (!Array.isArray(records) || !records.length) return empty;
+  const chain = fundChain(records);
+  if (!chain.length) return empty;
+  const hints = fundChainDisclosureHints(chain, disclosures, DATA, 90);
+  const shown = chain.slice(0, 3);
+  const rest = chain.slice(3);
+  let html = shown.map((e) => fundEntryCardHTML(e) + fundHintListHTML(e, hints)).join("");
+  if (rest.length) {
+    html += `<details style="margin-top:0.4rem;font-size:0.85rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">그 외 조달건 ${rest.length}건 보기</summary>` +
+      rest.map((e) => fundEntryCardHTML(e) + fundHintListHTML(e, hints)).join("") + `</details>`;
+  }
+  return html;
+}
+
+// ── 작업4: PATTERN MATCH 근거 공시 역추적 ──
+// 출처: se/app.js matchCrossPatterns 이식(적응) — 뷰어는 taxonomy 2.7(자본
+// churn)을 합성 주입하지 않는다. 뷰어의 patterns(위 buildResult)는
+// `detectedTax.every(...)`로 이미 걸러졌고 detectedTax는 실제 감지된 신호의
+// taxonomies에서만 채워지므로(합성 항목 없음), 매칭된 패턴의 signal_sequence에
+// 있는 모든 taxonomy는 반드시 실제 공시로 뒷받침된다 — se처럼 "개별 공시가
+// 아니라 빈도 판정" aggregate_note 분기가 뷰어에는 필요 없다.
+function patternTaxonomyEvidence(taxId, events) {
+  const seen = new Set();
+  const hits = [];
+  for (const e of events) {
+    if (seen.has(e.rcept)) continue;
+    const hitSignals = e.signals.filter((s) => Array.isArray(s.taxonomies) && s.taxonomies.indexOf(taxId) !== -1);
+    if (hitSignals.length) {
+      seen.add(e.rcept);
+      hits.push({ rcept: e.rcept, date: e.date, nm: e.nm, label: hitSignals[0].label });
+    }
+  }
+  hits.sort((a, b) => (a.date < b.date ? 1 : -1));
+  return hits;
+}
+function patternEvidenceHTML(pattern, events) {
+  return pattern.signal_sequence.map((taxId) => {
+    const hits = patternTaxonomyEvidence(taxId, events);
+    if (!hits.length) return "";
+    const shown = hits.slice(0, 3);
+    const rest = hits.length - shown.length;
+    const items = shown.map((h) =>
+      `<a href="#" class="patEvLink" data-r="${esc(h.rcept)}" style="color:var(--tx)">${esc(fmtDate(h.date))} ${esc(h.nm)}</a>`).join(" · ");
+    return `<div style="margin-top:0.25rem">${esc(shown[0].label)} <span class="mono" style="color:var(--dim)">(${esc(taxId)})</span> — ${items}` +
+      (rest > 0 ? ` <span class="dim">외 ${rest}건</span>` : "") + `</div>`;
+  }).join("");
+}
+// ── 작업4: 연속 적자 (loss streak) ──
+// core dart_risk_mcp/core/dart_client.py의 fetch_loss_streak 이식(적응). core는
+// 연도별 개별 API 호출(최대 5회)로 5년 치를 모으지만, 이 화면은 loadFinancialCore가
+// 이미 호출한 fnlttSinglAcnt 응답 1건에 담긴 thstrm(당기)/frmtrm(전기)/bfefrmtrm
+// (전전기) 3개 기간 금액을 그대로 재사용한다 — 추가 API 호출 0회. 대신 core처럼
+// 5년을 주장하지 않고 "최대 3년 연속"까지만 정직하게 표기한다(호출량 대비 표기
+// 정직성을 택함). audit 블록이 이미 보여주는 최근 3개년 감사의견 이력과 커버
+// 범위가 같아 자연스럽게 맞물린다. 데이터 없는(null) 기간을 만나면 core와 동일하게
+// 그 지점에서 연속을 보수적으로 끊는다.
+function lossStreakFromPeriods(series) {
+  let n = 0;
+  for (const v of series) {
+    if (v !== null && v < 0) n++;
+    else break;
+  }
+  return n;
+}
+/* ── /대시보드 확장 어댑터 ── */
+
 function loadDeepBlocks(corpCode) {
-  loadFinancialCore(corpCode).catch((e) => {
+  // loadAuditOpinions가 연속 적자 factline(작업4)에 쓸 수 있도록 loadFinancialCore의
+  // 결과(3기간 영업이익·순이익 → lossStreak)를 promise로 넘긴다. finCore가 실패해도
+  // null로 흡수해 auditCore 렌더는 항상 정상 진행된다.
+  const finCorePromise = loadFinancialCore(corpCode).catch((e) => {
     $("finCore").innerHTML = `<span class="dim" style="font-size:0.88rem">조회 실패: ${esc(e.message)}</span>`;
+    return null;
+  });
+  loadDividendCore(corpCode).catch((e) => {
+    $("divCore").innerHTML = `<span class="dim" style="font-size:0.88rem">조회 실패: ${esc(e.message)}</span>`;
+  });
+  loadFundChainCore(corpCode).catch((e) => {
+    $("fundCore").innerHTML = `<span class="dim" style="font-size:0.88rem">조회 실패: ${esc(e.message)}</span>`;
   });
   loadHoldings(corpCode).catch((e) => {
     $("holdCore").innerHTML = `<span class="dim" style="font-size:0.88rem">조회 실패: ${esc(e.message)}</span>`;
   });
-  loadAuditOpinions(corpCode).catch((e) => {
+  loadAuditOpinions(corpCode, finCorePromise).catch((e) => {
     $("auditCore").innerHTML = `<span class="dim" style="font-size:0.88rem">조회 실패: ${esc(e.message)}</span>`;
+  });
+}
+
+async function loadDividendCore(corpCode) {
+  const el = $("divCore");
+  const thisYear = new Date().getFullYear();
+  const records = [];
+  for (const y of [thisYear - 1, thisYear - 2, thisYear - 3]) {
+    const j = await dartGet("alotMatter.json", { corp_code: corpCode, bsns_year: y, reprt_code: "11011" });
+    if (j.status !== "000") continue;
+    for (const item of j.list || []) records.push(Object.assign({}, item, { bsns_year: String(y), reprt_code: "11011" }));
+  }
+  el.innerHTML = dividendPanelHTML(records);
+}
+
+async function loadFundChainCore(corpCode) {
+  const el = $("fundCore");
+  const thisYear = new Date().getFullYear();
+  const records = [];
+  for (const y of [thisYear - 1, thisYear - 2, thisYear - 3]) {
+    for (const ep of FUND_USAGE_ENDPOINTS) {
+      const j = await dartGet(ep, { corp_code: corpCode, bsns_year: y, reprt_code: "11011" });
+      if (j.status !== "000") continue;
+      for (const item of j.list || []) records.push(normalizeFundUsageItem(item, String(y)));
+    }
+  }
+  el.innerHTML = fundChainPanelHTML(records, CUR.items || []);
+  el.querySelectorAll(".fundHintLink").forEach((a) => {
+    a.onclick = (e) => { e.preventDefault(); renderDetail(a.dataset.r); };
   });
 }
 
@@ -1010,14 +2126,15 @@ async function loadFinancialCore(corpCode) {
   }
   if (!rows) {
     el.innerHTML = `<span class="dim" style="font-size:0.88rem">최근 2개 연도 사업보고서 재무 데이터가 없습니다 (신규 상장·비공시 등).</span>`;
-    return;
+    return null;
   }
   const div = rows.some((r) => r.fs_div === "CFS") ? "CFS" : "OFS";
   const fs = rows.filter((r) => r.fs_div === div);
   const A = DATA.fs_aliases;
   const rev = [pickAmt(fs, A["매출"], "thstrm_amount"), pickAmt(fs, A["매출"], "frmtrm_amount")];
-  const op  = [pickAmt(fs, A["영업이익"], "thstrm_amount"), pickAmt(fs, A["영업이익"], "frmtrm_amount")];
-  const ni  = [pickAmt(fs, A["당기순이익"], "thstrm_amount"), pickAmt(fs, A["당기순이익"], "frmtrm_amount")];
+  // op/ni는 3번째 원소(bfefrmtrm_amount·전전기)까지 채워 작업4 loss streak 계산에 재사용한다.
+  const op  = [pickAmt(fs, A["영업이익"], "thstrm_amount"), pickAmt(fs, A["영업이익"], "frmtrm_amount"), pickAmt(fs, A["영업이익"], "bfefrmtrm_amount")];
+  const ni  = [pickAmt(fs, A["당기순이익"], "thstrm_amount"), pickAmt(fs, A["당기순이익"], "frmtrm_amount"), pickAmt(fs, A["당기순이익"], "bfefrmtrm_amount")];
   const eq  = pickAmt(fs, A["자본총계"], "thstrm_amount");
   const cap = pickAmt(fs, A["자본금"], "thstrm_amount");
   const re  = pickAmt(fs, A["이익잉여금"], "thstrm_amount");
@@ -1055,8 +2172,11 @@ async function loadFinancialCore(corpCode) {
   } else if (rev[0] !== null || ni[0] !== null) {
     html += `<p class="dim" style="font-size:0.85rem;margin-top:0.4rem">연속 적자·자본잠식에 해당하는 관찰 없음.</p>`;
   }
+  html += `<div class="slabel" style="margin:14px 0 6px">▍RATIO TREND — 부채비율·유동비율 3기간</div>`;
+  html += ratioTrendBlock(rows, div);
   html += `<p class="dim" style="font-size:0.8rem;margin-top:0.5rem">더 깊은 재무 이상 스캔(매출채권·재고 급증, Beneish 변수 8종, 전기 재작성 감지)은 <a href="../#start">MCP 대화</a>의 scan_financial_anomaly가 제공합니다.</p>`;
   el.innerHTML = html;
+  return { div, year, lossStreak: { op: lossStreakFromPeriods(op), ni: lossStreakFromPeriods(ni) } };
 }
 
 async function loadHoldings(corpCode) {
@@ -1107,7 +2227,7 @@ async function loadHoldings(corpCode) {
   el.innerHTML = html;
 }
 
-async function loadAuditOpinions(corpCode) {
+async function loadAuditOpinions(corpCode, finCorePromise) {
   const el = $("auditCore");
   const thisYear = new Date().getFullYear();
   const byYear = new Map();
@@ -1138,6 +2258,18 @@ async function loadAuditOpinions(corpCode) {
   }
   if (hasBad) html += `<div class="factwarn">⚠️ 적정 외 감사의견이 관찰됐습니다 — 상장폐지 사유·개선기간과 직결될 수 있는 가장 무거운 회계 신호입니다. 감사보고서 원문을 확인하세요.</div>`;
   if (changed) html += `<div class="factline dim" style="font-size:0.85rem">· 기간 중 감사인 교체가 관찰됐습니다 (표기 차이일 수 있음 — 원문 확인).</div>`;
+  // ── 작업4: 연속 적자 — loadFinancialCore가 이미 받은 3기간(당기/전기/전전기) 금액을
+  // 재사용한다(추가 API 호출 0회). 2년 이상 연속일 때만 표기하고, fs_div는 finCore가
+  // 고른 구분 하나로 고정돼 있어 연결·별도가 섞이지 않는다.
+  const finData = finCorePromise ? await finCorePromise : null;
+  if (finData && finData.lossStreak) {
+    if (finData.lossStreak.op >= 2) {
+      html += `<div class="factline">· 영업손실 ${finData.lossStreak.op}년 연속 — 관리종목 요건 관련 관찰 지점</div>`;
+    }
+    if (finData.lossStreak.ni >= 2) {
+      html += `<div class="factline">· 순손실 ${finData.lossStreak.ni}년 연속 — 관리종목 요건 관련 관찰 지점</div>`;
+    }
+  }
   el.innerHTML = html;
 }
 
@@ -1168,6 +2300,7 @@ const compareList = [];
 function addCompareCompany(name) {
   if (compareList.includes(name)) return;
   if (compareList.length >= 5) { $("cstatus").textContent = "최대 5개사까지 비교할 수 있습니다."; return; }
+  if (!CORPS[name]) { $("cstatus").className = "status err"; $("cstatus").textContent = "⚠ 목록에 없는 종목입니다 — 자동완성에서 선택하세요"; return; }
   compareList.push(name);
   renderChips();
 }
@@ -1263,8 +2396,16 @@ async function compareActors() {
 
 /* ── 부트 ─────────────────────────────────────── */
 boot().then(() => {
-  attachAutocomplete($("q"), $("suggest"), (name) => { $("q").value = name; analyze(name); });
-  attachAutocomplete($("cq"), $("csuggest"), (name) => { $("cq").value = ""; addCompareCompany(name); });
+  attachAutocomplete($("q"), $("suggest"), (entry) => {
+    const r = resolveAliasPick(entry);
+    $("q").value = r.name;
+    analyze(r.name, r.override);
+  });
+  attachAutocomplete($("cq"), $("csuggest"), (entry) => {
+    const r = resolveAliasPick(entry);
+    $("cq").value = "";
+    addCompareCompany(r.name);
+  });
 }).catch((e) => {
   $("status").className = "status err";
   $("status").textContent = "초기화 실패: " + e.message;
