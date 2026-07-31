@@ -1,0 +1,49 @@
+name: Refresh corp map
+
+# 공개 리스크 뷰어 기업 검색 맵 주간 갱신 — docs/tool/corp-map.json + corp-aliases.json.
+#
+# 1) backfill_corp_aliases.py: 최근 7일 '상호변경안내' 공시를 스캔해 옛 상호 별칭 시드
+# 2) build_corp_map.py: corpCode.xml에서 corp-map.json 재생성 + corp_code 대조로
+#    추가 별칭 병합(스냅샷 사이 개명 포착)
+#
+# 두 파일 모두 기업명·종목코드 등 공개 데이터만 담으므로 public 레포에 직접 커밋한다
+# (인물 데이터 없음 — sightings/known_actors 경로와 무관).
+
+on:
+  schedule:
+    - cron: "0 21 * * 1"   # UTC 월 21:00 = 한국 화요일 06:00
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install requests
+      - name: Backfill corp aliases (최근 7일)
+        env:
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+        run: python scripts/backfill_corp_aliases.py
+      - name: Rebuild corp-map
+        env:
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+        run: python scripts/build_corp_map.py
+      - name: Commit if changed
+        run: |
+          if [ -n "$(git status --porcelain docs/tool/corp-map.json docs/tool/corp-aliases.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add docs/tool/corp-map.json docs/tool/corp-aliases.json
+            git commit -m "chore(corp-map): 주간 기업 검색 맵·별칭 갱신"
+            git push
+          else
+            echo "corp-map/corp-aliases 변경 없음"
+          fi
