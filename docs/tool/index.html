@@ -654,14 +654,20 @@ function suggestions(qs) {
     for (const a of aliasNames) if (ALIASES[a].stock_code === q) out.push(aliasEntry(a));
     return out.slice(0, 12);
   }
+  // 공백 무시 매칭 — 공식 상호의 공백 표기("포스코 ICT", "KH 건설")와
+  // 사용자 입력("포스코ICT")이 어긋나 검색이 빠지는 문제를 흡수한다.
+  const nsp = (s) => s.replace(/\s+/g, "");
+  const nq = nsp(q);
   const starts = [], incl = [], aliasStarts = [], aliasIncl = [];
   for (const n of names) {
-    if (n.startsWith(q)) starts.push({ name: n, code: CORPS[n][1], alias: false });
-    else if (n.includes(q)) incl.push({ name: n, code: CORPS[n][1], alias: false });
+    const nn = nsp(n);
+    if (nn.startsWith(nq)) starts.push({ name: n, code: CORPS[n][1], alias: false });
+    else if (nn.includes(nq)) incl.push({ name: n, code: CORPS[n][1], alias: false });
   }
   for (const a of aliasNames) {
-    if (a.startsWith(q)) aliasStarts.push(aliasEntry(a));
-    else if (a.includes(q)) aliasIncl.push(aliasEntry(a));
+    const na = nsp(a);
+    if (na.startsWith(nq)) aliasStarts.push(aliasEntry(a));
+    else if (na.includes(nq)) aliasIncl.push(aliasEntry(a));
   }
   return starts.concat(aliasStarts, incl, aliasIncl).slice(0, 12);
 }

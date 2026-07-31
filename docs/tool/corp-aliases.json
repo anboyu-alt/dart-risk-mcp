@@ -1,38 +1,1403 @@
 {
+ "APS홀딩스": {
+  "corp_code": "00296078",
+  "current": "APS",
+  "stock_code": "054620"
+ },
+ "CNH": {
+  "corp_code": "00149266",
+  "current": "씨앤에이치",
+  "stock_code": "023460"
+ },
+ "COWON": {
+  "corp_code": "00361266",
+  "current": "코원플레이",
+  "stock_code": "056000"
+ },
+ "DB금융스팩11호": {
+  "corp_code": "01731453",
+  "current": "디비금융제11호기업인수목적",
+  "stock_code": "456440"
+ },
+ "DB금융스팩8호": {
+  "corp_code": "01505450",
+  "current": "디비금융제8호기업인수목적",
+  "stock_code": "367340"
+ },
+ "DB금융스팩9호": {
+  "corp_code": "01505469",
+  "current": "디비금융제9호기업인수목적",
+  "stock_code": "367360"
+ },
+ "DGB금융지주": {
+  "corp_code": "00878915",
+  "current": "iM금융지주",
+  "stock_code": "139130"
+ },
+ "DL건설": {
+  "corp_code": "00128971",
+  "current": "디엘건설",
+  "stock_code": "001880"
+ },
+ "DSEN": {
+  "corp_code": "00390860",
+  "current": "대산F&B",
+  "stock_code": "065150"
+ },
+ "EMW": {
+  "corp_code": "00479705",
+  "current": "케스피온",
+  "stock_code": "079190"
+ },
+ "EV수성": {
+  "corp_code": "00243979",
+  "current": "수성웹툰",
+  "stock_code": "084180"
+ },
+ "HDC아이콘트롤스": {
+  "corp_code": "00350312",
+  "current": "HDC랩스",
+  "stock_code": "039570"
+ },
+ "HDC현대산업개발": {
+  "corp_code": "01310269",
+  "current": "IPARK현대산업개발",
+  "stock_code": "294870"
+ },
+ "HLB사이언스": {
+  "corp_code": "01413371",
+  "current": "에이치엘비사이언스",
+  "stock_code": "343090"
+ },
+ "HSD엔진": {
+  "corp_code": "00361008",
+  "current": "한화엔진",
+  "stock_code": "082740"
+ },
+ "IBKS제12호스팩": {
+  "corp_code": "01405585",
+  "current": "윙스풋",
+  "stock_code": "335870"
+ },
+ "IBKS제13호스팩": {
+  "corp_code": "01440481",
+  "current": "아이비케이에스제13호기업인수목적",
+  "stock_code": "351340"
+ },
+ "IBKS제14호스팩": {
+  "corp_code": "01440153",
+  "current": "넥사다이내믹스",
+  "stock_code": "351320"
+ },
+ "IBKS제15호스팩": {
+  "corp_code": "01514698",
+  "current": "엑스플러스",
+  "stock_code": "373200"
+ },
+ "IBKS제16호스팩": {
+  "corp_code": "01569102",
+  "current": "라이콤",
+  "stock_code": "388790"
+ },
+ "IBKS제20호스팩": {
+  "corp_code": "01675421",
+  "current": "아이비케이에스제20호기업인수목적",
+  "stock_code": "439730"
+ },
  "IBKS제23호스팩": {
   "corp_code": "01785700",
   "current": "아이비케이에스제23호기업인수목적",
   "stock_code": "467930"
+ },
+ "ITX-AI": {
+  "corp_code": "00627029",
+  "current": "DGI",
+  "stock_code": "099520"
+ },
+ "KCI": {
+  "corp_code": "00265041",
+  "current": "삼양케이씨아이",
+  "stock_code": "036670"
+ },
+ "KG ETS": {
+  "corp_code": "00366137",
+  "current": "KG에코솔루션",
+  "stock_code": "151860"
+ },
+ "KG동부제철": {
+  "corp_code": "00115676",
+  "current": "KG스틸",
+  "stock_code": "016380"
+ },
+ "KG모빌리언스": {
+  "corp_code": "00405278",
+  "current": "KG파이낸셜",
+  "stock_code": "046440"
+ },
+ "KH E&T": {
+  "corp_code": "01097906",
+  "current": "케이에이치건설",
+  "stock_code": "226360"
+ },
+ "KH 건설": {
+  "corp_code": "01097906",
+  "current": "케이에이치건설",
+  "stock_code": "226360"
+ },
+ "KH 일렉트론": {
+  "corp_code": "00125965",
+  "current": "케이에이치미래물산",
+  "stock_code": "111870"
+ },
+ "KH 전자": {
+  "corp_code": "00125965",
+  "current": "케이에이치미래물산",
+  "stock_code": "111870"
+ },
+ "KH 필룩스": {
+  "corp_code": "00193009",
+  "current": "케이에이치필룩스",
+  "stock_code": "033180"
+ },
+ "KMH": {
+  "corp_code": "00657987",
+  "current": "KX",
+  "stock_code": "122450"
+ },
+ "KPX생명과학": {
+  "corp_code": "00532059",
+  "current": "그린생명과학",
+  "stock_code": "114450"
+ },
+ "KTB투자증권": {
+  "corp_code": "00156859",
+  "current": "다올투자증권",
+  "stock_code": "030210"
+ },
+ "KT서브마린": {
+  "corp_code": "00225742",
+  "current": "LS마린솔루션",
+  "stock_code": "060370"
+ },
+ "LIG넥스원": {
+  "corp_code": "00503668",
+  "current": "LIG디펜스앤에어로스페이스",
+  "stock_code": "079550"
+ },
+ "LS전선아시아": {
+  "corp_code": "01093007",
+  "current": "LS에코에너지",
+  "stock_code": "229640"
+ },
+ "MIT": {
+  "corp_code": "00215976",
+  "current": "무궁화인포메이션테크놀로지",
+  "stock_code": "038340"
+ },
+ "NHN한국사이버결제": {
+  "corp_code": "00357740",
+  "current": "NHN KCP",
+  "stock_code": "060250"
+ },
+ "OQP": {
+  "corp_code": "00230814",
+  "current": "휴림에이텍",
+  "stock_code": "078590"
+ },
+ "SBS콘텐츠허브": {
+  "corp_code": "00280688",
+  "current": "스튜디오에스",
+  "stock_code": "046140"
+ },
+ "SBW생명과학": {
+  "corp_code": "00653103",
+  "current": "퓨처코어",
+  "stock_code": "151910"
+ },
+ "SCI평가정보": {
+  "corp_code": "00260745",
+  "current": "서울평가정보",
+  "stock_code": "036120"
+ },
+ "SGA": {
+  "corp_code": "00351579",
+  "current": "비트플래닛",
+  "stock_code": "049470"
+ },
+ "SGC이테크건설": {
+  "corp_code": "00141246",
+  "current": "SGC E&C",
+  "stock_code": "016250"
+ },
+ "SK5호스팩": {
+  "corp_code": "01414361",
+  "current": "에스케이제5호기업인수목적",
+  "stock_code": "337450"
+ },
+ "SK6호스팩": {
+  "corp_code": "01414936",
+  "current": "에스케이제6호기업인수목적",
+  "stock_code": "340350"
+ },
+ "SK렌터카": {
+  "corp_code": "00201450",
+  "current": "에스케이렌터카",
+  "stock_code": "068400"
+ },
+ "SK머티리얼즈": {
+  "corp_code": "00110051",
+  "current": "에스케이머티리얼즈",
+  "stock_code": "036490"
+ },
+ "SK증권제8호스팩": {
+  "corp_code": "01671197",
+  "current": "에스케이증권제8호기업인수목적",
+  "stock_code": "435870"
+ },
+ "SNK": {
+  "corp_code": "01338724",
+  "current": "에스앤케이",
+  "stock_code": "950180"
+ },
+ "SNT중공업": {
+  "corp_code": "00134477",
+  "current": "SNT다이내믹스",
+  "stock_code": "003570"
+ },
+ "STX중공업": {
+  "corp_code": "00406046",
+  "current": "HD현대마린엔진",
+  "stock_code": "071970"
+ },
+ "THQ": {
+  "corp_code": "00623184",
+  "current": "오늘이엔엠",
+  "stock_code": "192410"
+ },
+ "TKG애강": {
+  "corp_code": "00140061",
+  "current": "티케이지애강",
+  "stock_code": "022220"
+ },
+ "TPC": {
+  "corp_code": "00108649",
+  "current": "TPC로보틱스",
+  "stock_code": "048770"
+ },
+ "UCI": {
+  "corp_code": "00215976",
+  "current": "무궁화인포메이션테크놀로지",
+  "stock_code": "038340"
+ },
+ "WI": {
+  "corp_code": "00440712",
+  "current": "리튬포어스",
+  "stock_code": "073570"
+ },
+ "가온미디어": {
+  "corp_code": "00441304",
+  "current": "가온그룹",
+  "stock_code": "078890"
+ },
+ "강원": {
+  "corp_code": "00100601",
+  "current": "강원에너지",
+  "stock_code": "114190"
+ },
+ "게임빌": {
+  "corp_code": "00535746",
+  "current": "컴투스홀딩스",
+  "stock_code": "063080"
+ },
+ "경남제약헬스케어": {
+  "corp_code": "01075126",
+  "current": "사토시홀딩스",
+  "stock_code": "223310"
+ },
+ "고려시멘트": {
+  "corp_code": "01032583",
+  "current": "강동씨앤엘",
+  "stock_code": "198440"
+ },
+ "골드퍼시픽": {
+  "corp_code": "00255105",
+  "current": "케이바이오랩스",
+  "stock_code": "038530"
+ },
+ "골든센츄리": {
+  "corp_code": "01168143",
+  "current": "케이만금세기차륜집단유한공사",
+  "stock_code": "900280"
+ },
+ "골프존뉴딘홀딩스": {
+  "corp_code": "00674498",
+  "current": "골프존홀딩스",
+  "stock_code": "121440"
+ },
+ "골프존데카": {
+  "corp_code": "00764807",
+  "current": "골프존클라우드",
+  "stock_code": "183410"
  },
  "공구우먼": {
   "corp_code": "01307335",
   "current": "나인앤컴퍼니",
   "stock_code": "366030"
  },
+ "관악산업": {
+  "corp_code": "00321204",
+  "current": "지에이이노더스",
+  "stock_code": "076340"
+ },
+ "교보10호기업인수목적": {
+  "corp_code": "01476219",
+  "current": "코스텍시스",
+  "stock_code": "355150"
+ },
+ "교보11호스팩": {
+  "corp_code": "01582228",
+  "current": "교보11호기업인수목적",
+  "stock_code": "397880"
+ },
+ "교보9호스팩": {
+  "corp_code": "01398151",
+  "current": "밸로프",
+  "stock_code": "331520"
+ },
+ "국동": {
+  "corp_code": "00168331",
+  "current": "온타이드",
+  "stock_code": "005320"
+ },
+ "국전약품": {
+  "corp_code": "01329957",
+  "current": "국전",
+  "stock_code": "307750"
+ },
+ "굿센": {
+  "corp_code": "00565215",
+  "current": "아이티센코어",
+  "stock_code": "243870"
+ },
+ "까스텔바작": {
+  "corp_code": "01181807",
+  "current": "형지글로벌",
+  "stock_code": "308100"
+ },
+ "나노브릭": {
+  "corp_code": "01136001",
+  "current": "나노실리칸첨단소재",
+  "stock_code": "286750"
+ },
+ "나노스": {
+  "corp_code": "00653103",
+  "current": "퓨처코어",
+  "stock_code": "151910"
+ },
+ "나노캠텍": {
+  "corp_code": "00542074",
+  "current": "LSK아이로봇",
+  "stock_code": "091970"
+ },
  "나무기술": {
   "corp_code": "01136348",
   "current": "나무에이엑스",
   "stock_code": "242040"
+ },
+ "나스미디어": {
+  "corp_code": "00486097",
+  "current": "KT나스미디어",
+  "stock_code": "089600"
+ },
+ "네오펙트": {
+  "corp_code": "01246034",
+  "current": "다이나믹솔루션",
+  "stock_code": "290660"
+ },
+ "네온테크": {
+  "corp_code": "01325429",
+  "current": "지아이에스",
+  "stock_code": "306620"
+ },
+ "네이블커뮤니케이션즈": {
+  "corp_code": "00842585",
+  "current": "네이블",
+  "stock_code": "153460"
+ },
+ "네추럴FNP": {
+  "corp_code": "00523176",
+  "current": "광동헬스바이오",
+  "stock_code": "086220"
+ },
+ "넥스턴바이오": {
+  "corp_code": "00416414",
+  "current": "넥스턴앤롤코리아",
+  "stock_code": "089140"
+ },
+ "넥스턴바이오사이언스": {
+  "corp_code": "00416414",
+  "current": "넥스턴앤롤코리아",
+  "stock_code": "089140"
+ },
+ "넥스트BT": {
+  "corp_code": "00384717",
+  "current": "비엘팜텍",
+  "stock_code": "065170"
+ },
+ "넥스트사이언스": {
+  "corp_code": "00169048",
+  "current": "HLB글로벌",
+  "stock_code": "003580"
+ },
+ "넷게임즈": {
+  "corp_code": "01096341",
+  "current": "넥슨게임즈",
+  "stock_code": "225570"
+ },
+ "노터스": {
+  "corp_code": "01189438",
+  "current": "HLB바이오스텝",
+  "stock_code": "278650"
+ },
+ "녹십자랩셀": {
+  "corp_code": "01010642",
+  "current": "지씨셀",
+  "stock_code": "144510"
  },
  "녹원씨엔아이": {
   "corp_code": "00393469",
   "current": "메티스",
   "stock_code": "065560"
  },
+ "농업회사법인 주식회사 농우바이오": {
+  "corp_code": "00176835",
+  "current": "NH농우바이오",
+  "stock_code": "054050"
+ },
+ "뉴로스": {
+  "corp_code": "00638539",
+  "current": "앤에스",
+  "stock_code": "126870"
+ },
+ "뉴지랩파마": {
+  "corp_code": "00820389",
+  "current": "한울비앤씨",
+  "stock_code": "214870"
+ },
+ "다나와": {
+  "corp_code": "00585608",
+  "current": "커넥트웨이브",
+  "stock_code": "119860"
+ },
+ "다믈멀티미디어": {
+  "corp_code": "00536888",
+  "current": "케이알엠",
+  "stock_code": "093640"
+ },
+ "다올인베스트먼트": {
+  "corp_code": "00682992",
+  "current": "우리벤처파트너스",
+  "stock_code": "298870"
+ },
+ "단디바이오": {
+  "corp_code": "01413371",
+  "current": "에이치엘비사이언스",
+  "stock_code": "343090"
+ },
+ "대림비앤코": {
+  "corp_code": "00109754",
+  "current": "대림바스",
+  "stock_code": "005750"
+ },
+ "대명소노시즌": {
+  "corp_code": "00104810",
+  "current": "소노스퀘어",
+  "stock_code": "007720"
+ },
+ "대성엘텍": {
+  "corp_code": "00110583",
+  "current": "DH오토웨어",
+  "stock_code": "025440"
+ },
+ "대성파인텍": {
+  "corp_code": "00442905",
+  "current": "디에스엠",
+  "stock_code": "104040"
+ },
+ "대신밸런스제9호스팩": {
+  "corp_code": "01508855",
+  "current": "블리츠웨이엔터테인먼트",
+  "stock_code": "369370"
+ },
+ "대양제지": {
+  "corp_code": "00111227",
+  "current": "대양제지공업",
+  "stock_code": "006580"
+ },
+ "대우부품": {
+  "corp_code": "00111689",
+  "current": "아진전자부품",
+  "stock_code": "009320"
+ },
+ "대우조선해양": {
+  "corp_code": "00111704",
+  "current": "한화오션",
+  "stock_code": "042660"
+ },
+ "대유에이텍": {
+  "corp_code": "00149804",
+  "current": "디와이에이",
+  "stock_code": "002880"
+ },
+ "대유에이피": {
+  "corp_code": "01182578",
+  "current": "DH오토리드",
+  "stock_code": "290120"
+ },
+ "대유플러스": {
+  "corp_code": "00126089",
+  "current": "DH오토넥스",
+  "stock_code": "000300"
+ },
+ "대한그린파워": {
+  "corp_code": "00367695",
+  "current": "에이전트AI",
+  "stock_code": "060900"
+ },
+ "더바이오메드": {
+  "corp_code": "01049167",
+  "current": "롤링스톤",
+  "stock_code": "214610"
+ },
  "더큐브앤": {
   "corp_code": "00151605",
   "current": "청보",
   "stock_code": "013720"
+ },
+ "덕신하우징": {
+  "corp_code": "00454937",
+  "current": "덕신이피씨",
+  "stock_code": "090410"
+ },
+ "덕양산업": {
+  "corp_code": "00114154",
+  "current": "디와이덕양",
+  "stock_code": "024900"
+ },
+ "데이드림엔터": {
+  "corp_code": "01343735",
+  "current": "데이드림엔터테인먼트",
+  "stock_code": "348840"
+ },
+ "도부마스크": {
+  "corp_code": "01109690",
+  "current": "도부",
+  "stock_code": "227420"
+ },
+ "동국제강": {
+  "corp_code": "00114792",
+  "current": "동국홀딩스",
+  "stock_code": "001230"
+ },
+ "동아타이어": {
+  "corp_code": "01262458",
+  "current": "동아타이어공업",
+  "stock_code": "282690"
+ },
+ "동아화성": {
+  "corp_code": "00199988",
+  "current": "SY동아",
+  "stock_code": "041930"
+ },
+ "동양철관": {
+  "corp_code": "00117629",
+  "current": "KBI동양철관",
+  "stock_code": "008970"
+ },
+ "동양피스톤": {
+  "corp_code": "00117726",
+  "current": "DYP",
+  "stock_code": "092780"
  },
  "동원금속": {
   "corp_code": "00118008",
   "current": "동원모빌리티",
   "stock_code": "018500"
  },
+ "동일철강": {
+  "corp_code": "00172945",
+  "current": "동일스틸럭스",
+  "stock_code": "023790"
+ },
+ "두산인프라코어": {
+  "corp_code": "00344287",
+  "current": "에이치디현대인프라코어",
+  "stock_code": "042670"
+ },
+ "두산중공업": {
+  "corp_code": "00159616",
+  "current": "두산에너빌리티",
+  "stock_code": "034020"
+ },
+ "디딤": {
+  "corp_code": "01068658",
+  "current": "선샤인푸드",
+  "stock_code": "217620"
+ },
+ "디딤이앤에프": {
+  "corp_code": "01068658",
+  "current": "선샤인푸드",
+  "stock_code": "217620"
+ },
+ "디바이스이엔지": {
+  "corp_code": "00624509",
+  "current": "디바이스",
+  "stock_code": "187870"
+ },
+ "디비금융스팩10호": {
+  "corp_code": "01591262",
+  "current": "디비금융제10호기업인수목적",
+  "stock_code": "404950"
+ },
+ "디스플레이테크": {
+  "corp_code": "00371740",
+  "current": "디티씨",
+  "stock_code": "066670"
+ },
+ "디스플레이텍": {
+  "corp_code": "00371740",
+  "current": "디티씨",
+  "stock_code": "066670"
+ },
+ "디아크": {
+  "corp_code": "00230814",
+  "current": "휴림에이텍",
+  "stock_code": "078590"
+ },
+ "디에스이엔": {
+  "corp_code": "00390860",
+  "current": "대산F&B",
+  "stock_code": "065150"
+ },
+ "디에이치피코리아": {
+  "corp_code": "00831428",
+  "current": "옵투스제약",
+  "stock_code": "131030"
+ },
+ "디엑스앤브이엑스": {
+  "corp_code": "00995993",
+  "current": "DXVX",
+  "stock_code": "180400"
+ },
+ "디엔에이링크": {
+  "corp_code": "00642541",
+  "current": "제이에스링크",
+  "stock_code": "127120"
+ },
+ "디이엔티": {
+  "corp_code": "00445160",
+  "current": "APS이노베이션",
+  "stock_code": "079810"
+ },
+ "디지탈옵틱": {
+  "corp_code": "00536329",
+  "current": "노블엠앤비",
+  "stock_code": "106520"
+ },
+ "디지피": {
+  "corp_code": "00367695",
+  "current": "에이전트AI",
+  "stock_code": "060900"
+ },
+ "디티알오토모티브": {
+  "corp_code": "00116949",
+  "current": "DN오토모티브",
+  "stock_code": "007340"
+ },
+ "디피씨": {
+  "corp_code": "00117498",
+  "current": "스틱인베스트먼트",
+  "stock_code": "026890"
+ },
+ "딥마인드플랫폼": {
+  "corp_code": "01075126",
+  "current": "사토시홀딩스",
+  "stock_code": "223310"
+ },
+ "라온테크": {
+  "corp_code": "00911229",
+  "current": "라온로보틱스",
+  "stock_code": "232680"
+ },
+ "라이트론": {
+  "corp_code": "00367482",
+  "current": "빛과전자",
+  "stock_code": "069540"
+ },
+ "라이프시맨틱스": {
+  "corp_code": "01336762",
+  "current": "스피어",
+  "stock_code": "347700"
+ },
+ "래몽래인": {
+  "corp_code": "00990819",
+  "current": "아티스트스튜디오",
+  "stock_code": "200350"
+ },
+ "레고켐 바이오사이언스": {
+  "corp_code": "00842619",
+  "current": "리가켐바이오",
+  "stock_code": "141080"
+ },
+ "레고켐바이오": {
+  "corp_code": "00842619",
+  "current": "리가켐바이오",
+  "stock_code": "141080"
+ },
+ "렌딩머신": {
+  "corp_code": "00978075",
+  "current": "머니무브",
+  "stock_code": "179720"
+ },
+ "로보쓰리": {
+  "corp_code": "01118643",
+  "current": "솔루믹스",
+  "stock_code": "238500"
+ },
+ "로보쓰리에이아이": {
+  "corp_code": "01118643",
+  "current": "솔루믹스",
+  "stock_code": "238500"
+ },
+ "로보쓰리에이아이앤로보틱스": {
+  "corp_code": "01118643",
+  "current": "솔루믹스",
+  "stock_code": "238500"
+ },
+ "롯데정보통신": {
+  "corp_code": "01262032",
+  "current": "롯데이노베이트",
+  "stock_code": "286940"
+ },
+ "롯데제과": {
+  "corp_code": "01258507",
+  "current": "롯데웰푸드",
+  "stock_code": "280360"
+ },
+ "룽투코리아": {
+  "corp_code": "00373571",
+  "current": "스타코링크",
+  "stock_code": "060240"
+ },
+ "리노스": {
+  "corp_code": "00369213",
+  "current": "폴라리스AI",
+  "stock_code": "039980"
+ },
+ "리더스 기술투자": {
+  "corp_code": "00110750",
+  "current": "플루토스",
+  "stock_code": "019570"
+ },
+ "리더스기술투자": {
+  "corp_code": "00110750",
+  "current": "플루토스",
+  "stock_code": "019570"
+ },
+ "릭스솔루션": {
+  "corp_code": "00186452",
+  "current": "광무",
+  "stock_code": "029480"
+ },
+ "마이더스AI": {
+  "corp_code": "01091382",
+  "current": "세토피아",
+  "stock_code": "222810"
+ },
+ "마이크로프랜드": {
+  "corp_code": "00654175",
+  "current": "피엠티",
+  "stock_code": "147760"
+ },
+ "마인즈랩": {
+  "corp_code": "01297898",
+  "current": "마음AI",
+  "stock_code": "377480"
+ },
+ "맘스터치": {
+  "corp_code": "01089855",
+  "current": "맘스터치앤컴퍼니",
+  "stock_code": "220630"
+ },
+ "매커스": {
+  "corp_code": "00255105",
+  "current": "케이바이오랩스",
+  "stock_code": "038530"
+ },
+ "맥스트": {
+  "corp_code": "01409095",
+  "current": "비트맥스",
+  "stock_code": "377030"
+ },
+ "맵스리얼티1": {
+  "corp_code": "00600013",
+  "current": "맵스리얼티",
+  "stock_code": "094800"
+ },
+ "메디프론": {
+  "corp_code": "00391197",
+  "current": "하이퍼코퍼레이션",
+  "stock_code": "065650"
+ },
+ "메디프론디비티": {
+  "corp_code": "00391197",
+  "current": "하이퍼코퍼레이션",
+  "stock_code": "065650"
+ },
+ "메리츠화재": {
+  "corp_code": "00117744",
+  "current": "메리츠화재해상보험",
+  "stock_code": "000060"
+ },
+ "명성티엔에스": {
+  "corp_code": "01144569",
+  "current": "피엔티엠에스",
+  "stock_code": "257370"
+ },
+ "모두투어리츠": {
+  "corp_code": "01035289",
+  "current": "제이케이리버스톤자기관리부동산투자회사",
+  "stock_code": "204210"
+ },
+ "모바일리더": {
+  "corp_code": "00641171",
+  "current": "인지소프트",
+  "stock_code": "100030"
+ },
+ "모코엠시스": {
+  "corp_code": "01407158",
+  "current": "이노테나",
+  "stock_code": "333050"
+ },
+ "미래에셋대우스팩 5호": {
+  "corp_code": "01450105",
+  "current": "미래에셋대우기업인수목적5호",
+  "stock_code": "353490"
+ },
+ "미래에셋대우스팩3호": {
+  "corp_code": "01390399",
+  "current": "솔트웨어",
+  "stock_code": "328380"
+ },
+ "미래에셋비전스팩1호": {
+  "corp_code": "01601286",
+  "current": "미래에셋비전기업인수목적1호",
+  "stock_code": "412930"
+ },
+ "미코바이오메드": {
+  "corp_code": "01049167",
+  "current": "롤링스톤",
+  "stock_code": "214610"
+ },
+ "미투젠": {
+  "corp_code": "01416235",
+  "current": "고스트스튜디오",
+  "stock_code": "950190"
+ },
+ "민앤지": {
+  "corp_code": "01013311",
+  "current": "헥토이노베이션",
+  "stock_code": "214180"
+ },
+ "밀리의 서재": {
+  "corp_code": "01467451",
+  "current": "KT밀리의서재",
+  "stock_code": "418470"
+ },
+ "밀리의서재": {
+  "corp_code": "01467451",
+  "current": "KT밀리의서재",
+  "stock_code": "418470"
+ },
+ "바다로19호": {
+  "corp_code": "00910947",
+  "current": "바다로19호선박투자회사",
+  "stock_code": "155900"
+ },
+ "바른손": {
+  "corp_code": "00122205",
+  "current": "졸스",
+  "stock_code": "018700"
+ },
+ "바른전자": {
+  "corp_code": "00370255",
+  "current": "테크엘",
+  "stock_code": "064520"
+ },
+ "바이오로그디바이스": {
+  "corp_code": "01047707",
+  "current": "포톤",
+  "stock_code": "208710"
+ },
+ "바이오리더스": {
+  "corp_code": "00587925",
+  "current": "모아라이프플러스",
+  "stock_code": "142760"
+ },
+ "바이옵트로": {
+  "corp_code": "01037542",
+  "current": "엔피엑스",
+  "stock_code": "222160"
+ },
+ "백광산업": {
+  "corp_code": "00122472",
+  "current": "PKC",
+  "stock_code": "001340"
+ },
+ "베노홀딩스": {
+  "corp_code": "01043853",
+  "current": "베노티앤알",
+  "stock_code": "206400"
+ },
+ "베스파": {
+  "corp_code": "01259056",
+  "current": "애닉",
+  "stock_code": "299910"
+ },
+ "베트남개발1": {
+  "corp_code": "00626710",
+  "current": "한국월드와이드베트남부동산개발특별자산1호투자회사",
+  "stock_code": "096300"
+ },
+ "보광산업": {
+  "corp_code": "00568461",
+  "current": "HC보광산업",
+  "stock_code": "225530"
+ },
+ "보령제약": {
+  "corp_code": "00123143",
+  "current": "보령",
+  "stock_code": "003850"
+ },
+ "브랜드엑스코퍼레이션": {
+  "corp_code": "01391103",
+  "current": "젝시믹스",
+  "stock_code": "337930"
+ },
+ "브릿지바이오": {
+  "corp_code": "01227039",
+  "current": "파라택시스코리아",
+  "stock_code": "288330"
+ },
+ "브릿지바이오테라퓨틱스": {
+  "corp_code": "01227039",
+  "current": "파라택시스코리아",
+  "stock_code": "288330"
+ },
+ "브이티지엠피": {
+  "corp_code": "00150165",
+  "current": "브이티",
+  "stock_code": "018290"
+ },
+ "블레이드 Ent": {
+  "corp_code": "00173449",
+  "current": "빌리언스",
+  "stock_code": "044480"
+ },
+ "블레이드엔터테인먼트": {
+  "corp_code": "00173449",
+  "current": "빌리언스",
+  "stock_code": "044480"
+ },
+ "블루베리 NFT": {
+  "corp_code": "00173449",
+  "current": "빌리언스",
+  "stock_code": "044480"
+ },
+ "블리츠웨이": {
+  "corp_code": "01508855",
+  "current": "블리츠웨이엔터테인먼트",
+  "stock_code": "369370"
+ },
+ "블리츠웨이스튜디오": {
+  "corp_code": "01508855",
+  "current": "블리츠웨이엔터테인먼트",
+  "stock_code": "369370"
+ },
+ "비엔지티": {
+  "corp_code": "00110884",
+  "current": "엠젠솔루션",
+  "stock_code": "032790"
+ },
+ "비엘": {
+  "corp_code": "00587925",
+  "current": "모아라이프플러스",
+  "stock_code": "142760"
+ },
+ "비엘헬스케어": {
+  "corp_code": "00523176",
+  "current": "광동헬스바이오",
+  "stock_code": "086220"
+ },
+ "비올": {
+  "corp_code": "01406618",
+  "current": "비올메디컬",
+  "stock_code": "335890"
+ },
+ "비투엔": {
+  "corp_code": "01326792",
+  "current": "비투엔",
+  "stock_code": "307870"
+ },
+ "비트나인": {
+  "corp_code": "01381984",
+  "current": "SKAI",
+  "stock_code": "357880"
+ },
+ "비플라이소프트": {
+  "corp_code": "00980043",
+  "current": "비큐AI",
+  "stock_code": "148780"
+ },
+ "빅텐츠": {
+  "corp_code": "00550082",
+  "current": "캔버스엔",
+  "stock_code": "210120"
+ },
+ "빅토리콘텐츠": {
+  "corp_code": "00550082",
+  "current": "캔버스엔",
+  "stock_code": "210120"
+ },
+ "뿌리깊은나무들": {
+  "corp_code": "00990396",
+  "current": "레드우즈",
+  "stock_code": "266170"
+ },
+ "사람인에이치알": {
+  "corp_code": "00857480",
+  "current": "사람인",
+  "stock_code": "143240"
+ },
+ "삼강엠앤티": {
+  "corp_code": "00480367",
+  "current": "SK오션플랜트",
+  "stock_code": "100090"
+ },
+ "삼기이브이": {
+  "corp_code": "01526806",
+  "current": "삼기에너지솔루션즈",
+  "stock_code": "419050"
+ },
+ "삼성머스트스팩5호": {
+  "corp_code": "01534522",
+  "current": "삼성머스트기업인수목적5호",
+  "stock_code": "380320"
+ },
+ "삼성스팩2호": {
+  "corp_code": "01276901",
+  "current": "엔피",
+  "stock_code": "291230"
+ },
+ "삼성스팩4호": {
+  "corp_code": "01528530",
+  "current": "삼성기업인수목적4호",
+  "stock_code": "377630"
+ },
+ "삼성스팩6호": {
+  "corp_code": "01624162",
+  "current": "삼성기업인수목적6호",
+  "stock_code": "425290"
+ },
+ "삼성스팩7호": {
+  "corp_code": "01675227",
+  "current": "삼성기업인수목적7호",
+  "stock_code": "439250"
+ },
+ "삼성스팩8호": {
+  "corp_code": "01700921",
+  "current": "삼성기업인수목적8호",
+  "stock_code": "448740"
+ },
+ "삼성엔지니어링": {
+  "corp_code": "00126308",
+  "current": "삼성E&A",
+  "stock_code": "028050"
+ },
+ "삼양옵틱스": {
+  "corp_code": "00992543",
+  "current": "LK삼양",
+  "stock_code": "225190"
+ },
+ "삼양통상": {
+  "corp_code": "00127042",
+  "current": "SYTS",
+  "stock_code": "002170"
+ },
+ "삼양통상 주식회사 (": {
+  "corp_code": "00127042",
+  "current": "SYTS",
+  "stock_code": "002170"
+ },
+ "삼영화학공업": {
+  "corp_code": "00127255",
+  "current": "삼영",
+  "stock_code": "003720"
+ },
+ "삼화페인트공업": {
+  "corp_code": "00129387",
+  "current": "SP삼화",
+  "stock_code": "000390"
+ },
+ "상상인이안1호스팩": {
+  "corp_code": "01326792",
+  "current": "비투엔",
+  "stock_code": "307870"
+ },
+ "상상인이안제2호스팩": {
+  "corp_code": "01390876",
+  "current": "상상인이안제2호기업인수목적",
+  "stock_code": "329560"
+ },
+ "상상인인더스트리": {
+  "corp_code": "00618410",
+  "current": "KS인더스트리",
+  "stock_code": "101000"
+ },
+ "상지카일룸": {
+  "corp_code": "00232007",
+  "current": "상지건설",
+  "stock_code": "042940"
+ },
+ "샘코": {
+  "corp_code": "00971090",
+  "current": "어스앤에어로스페이스",
+  "stock_code": "263540"
+ },
+ "서두인칩": {
+  "corp_code": "00255105",
+  "current": "케이바이오랩스",
+  "stock_code": "038530"
+ },
+ "서울리거": {
+  "corp_code": "00305570",
+  "current": "코스리거글로벌",
+  "stock_code": "043710"
+ },
+ "선데이토즈": {
+  "corp_code": "00815767",
+  "current": "위메이드플레이",
+  "stock_code": "123420"
+ },
+ "성보화학": {
+  "corp_code": "00132725",
+  "current": "SB성보",
+  "stock_code": "003080"
+ },
+ "성안": {
+  "corp_code": "00132868",
+  "current": "우성머티리얼스",
+  "stock_code": "011300"
+ },
+ "세아베스틸": {
+  "corp_code": "00106669",
+  "current": "세아베스틸지주",
+  "stock_code": "001430"
+ },
+ "세원": {
+  "corp_code": "00617998",
+  "current": "폴라리스세원",
+  "stock_code": "234100"
+ },
+ "세틀뱅크": {
+  "corp_code": "00763701",
+  "current": "헥토파이낸셜",
+  "stock_code": "234340"
+ },
+ "세하": {
+  "corp_code": "00133706",
+  "current": "한국제지",
+  "stock_code": "027970"
+ },
+ "센트랄모텍": {
+  "corp_code": "00450010",
+  "current": "씨티알모빌리티",
+  "stock_code": "308170"
+ },
+ "센트럴인사이트": {
+  "corp_code": "00151863",
+  "current": "청호ICT",
+  "stock_code": "012600"
+ },
+ "소니드": {
+  "corp_code": "00363510",
+  "current": "제이케이시냅스",
+  "stock_code": "060230"
+ },
  "소룩스": {
   "corp_code": "00605522",
   "current": "아리바이오홀딩스",
   "stock_code": "290690"
+ },
+ "솔고바이오": {
+  "corp_code": "00220109",
+  "current": "알파AI",
+  "stock_code": "043100"
+ },
+ "솔고바이오메디칼": {
+  "corp_code": "00220109",
+  "current": "알파AI",
+  "stock_code": "043100"
+ },
+ "솔루에타": {
+  "corp_code": "00624518",
+  "current": "다산솔루에타",
+  "stock_code": "154040"
+ },
+ "수산중공업": {
+  "corp_code": "00135111",
+  "current": "수산세보틱스",
+  "stock_code": "017550"
+ },
+ "수성샐바시온": {
+  "corp_code": "00243979",
+  "current": "수성웹툰",
+  "stock_code": "084180"
+ },
+ "수성이노베이션": {
+  "corp_code": "00243979",
+  "current": "수성웹툰",
+  "stock_code": "084180"
+ },
+ "슈펙스비앤피": {
+  "corp_code": "00353018",
+  "current": "헬스커넥트",
+  "stock_code": "058530"
+ },
+ "슈프리마아이디": {
+  "corp_code": "01231786",
+  "current": "엑스페릭스",
+  "stock_code": "317770"
+ },
+ "스카이문스테크놀로지": {
+  "corp_code": "00276083",
+  "current": "피노",
+  "stock_code": "033790"
+ },
+ "스카이이앤엠": {
+  "corp_code": "00814786",
+  "current": "티엔엔터테인먼트",
+  "stock_code": "131100"
+ },
+ "스킨앤스킨": {
+  "corp_code": "00896753",
+  "current": "에코글로우",
+  "stock_code": "159910"
+ },
+ "스타모빌리티": {
+  "corp_code": "00923899",
+  "current": "참존글로벌",
+  "stock_code": "158310"
+ },
+ "스테이지원엔터": {
+  "corp_code": "00543204",
+  "current": "아이오케이이엔엠",
+  "stock_code": "078860"
+ },
+ "스템랩": {
+  "corp_code": "01109122",
+  "current": "에스엘테라퓨틱스",
+  "stock_code": "258540"
+ },
+ "스튜디오산타클로스": {
+  "corp_code": "01046203",
+  "current": "로아앤코홀딩스",
+  "stock_code": "204630"
+ },
+ "스피어파워": {
+  "corp_code": "01036367",
+  "current": "아크솔루션스",
+  "stock_code": "203690"
+ },
+ "시그넷이브이": {
+  "corp_code": "01188730",
+  "current": "SK시그넷",
+  "stock_code": "260870"
+ },
+ "시큐센": {
+  "corp_code": "01113499",
+  "current": "아이티센피엔에스",
+  "stock_code": "232830"
+ },
+ "시티랩스": {
+  "corp_code": "00656021",
+  "current": "비에프랩스",
+  "stock_code": "139050"
+ },
+ "신영스팩5호": {
+  "corp_code": "01366000",
+  "current": "태성",
+  "stock_code": "323280"
+ },
+ "신영스팩6호": {
+  "corp_code": "01419986",
+  "current": "신영해피투모로우제6호기업인수목적",
+  "stock_code": "344050"
+ },
+ "신영스팩7호": {
+  "corp_code": "01612608",
+  "current": "신영해피투모로우제7호기업인수목적",
+  "stock_code": "419270"
+ },
+ "신영스팩8호": {
+  "corp_code": "01656374",
+  "current": "신영해피투모로우제8호기업인수목적",
+  "stock_code": "430220"
+ },
+ "신풍제지": {
+  "corp_code": "00137368",
+  "current": "신풍",
+  "stock_code": "002870"
+ },
+ "신한제6호스팩": {
+  "corp_code": "01407158",
+  "current": "이노테나",
+  "stock_code": "333050"
+ },
+ "신한제7호스팩": {
+  "corp_code": "01514528",
+  "current": "신한제7호기업인수목적",
+  "stock_code": "366330"
+ },
+ "신한제8호스팩": {
+  "corp_code": "01574760",
+  "current": "신한제8호기업인수목적",
+  "stock_code": "393360"
+ },
+ "신한제9호스팩": {
+  "corp_code": "01594764",
+  "current": "신한제9호기업인수목적",
+  "stock_code": "405640"
+ },
+ "쌍용자동차": {
+  "corp_code": "00138242",
+  "current": "KG모빌리티",
+  "stock_code": "003620"
+ },
+ "쌍용정보통신": {
+  "corp_code": "00138303",
+  "current": "아이티센엔텍",
+  "stock_code": "010280"
+ },
+ "쎌마테라퓨틱스": {
+  "corp_code": "00108065",
+  "current": "에코바이브",
+  "stock_code": "015540"
+ },
+ "씨메스": {
+  "corp_code": "01588189",
+  "current": "씨메스로보틱스",
+  "stock_code": "475400"
  },
  "씨비아이": {
   "corp_code": "00151605",
@@ -44,69 +1409,1809 @@
   "current": "SFA넥셀",
   "stock_code": "222080"
  },
+ "씨앤투스성진": {
+  "corp_code": "00875237",
+  "current": "씨앤투스",
+  "stock_code": "352700"
+ },
+ "씨어스테크놀로지": {
+  "corp_code": "01514227",
+  "current": "씨어스",
+  "stock_code": "458870"
+ },
+ "씨유박스": {
+  "corp_code": "01315042",
+  "current": "시선AI",
+  "stock_code": "340810"
+ },
+ "씨케이에이치": {
+  "corp_code": "00800084",
+  "current": "씨엑스아이",
+  "stock_code": "900120"
+ },
+ "씨케이에이치푸드앤헬스리미티드": {
+  "corp_code": "00800084",
+  "current": "씨엑스아이",
+  "stock_code": "900120"
+ },
+ "씨티프라퍼티": {
+  "corp_code": "00349811",
+  "current": "오션인더블유",
+  "stock_code": "052300"
+ },
+ "아래스": {
+  "corp_code": "00245898",
+  "current": "에스에이치엔엘",
+  "stock_code": "050320"
+ },
+ "아리온": {
+  "corp_code": "00441128",
+  "current": "아리온테크놀로지",
+  "stock_code": "058220"
+ },
+ "아모레퍼시픽그룹": {
+  "corp_code": "00154462",
+  "current": "아모레퍼시픽홀딩스",
+  "stock_code": "002790"
+ },
+ "아이씨케이": {
+  "corp_code": "00308896",
+  "current": "셀피글로벌",
+  "stock_code": "068940"
+ },
+ "아이에스이커머스": {
+  "corp_code": "00426068",
+  "current": "엑시온그룹",
+  "stock_code": "069920"
+ },
+ "아이엘사이언스": {
+  "corp_code": "01326279",
+  "current": "아이엘",
+  "stock_code": "307180"
+ },
+ "아이엘커누스": {
+  "corp_code": "01669794",
+  "current": "아이엘로보틱스",
+  "stock_code": "403810"
+ },
+ "아이오케이": {
+  "corp_code": "00543204",
+  "current": "아이오케이이엔엠",
+  "stock_code": "078860"
+ },
+ "아이오케이컴퍼니": {
+  "corp_code": "00543204",
+  "current": "아이오케이이엔엠",
+  "stock_code": "078860"
+ },
+ "아이원스": {
+  "corp_code": "00625942",
+  "current": "한솔아이원스",
+  "stock_code": "114810"
+ },
+ "아이윈플러스": {
+  "corp_code": "00615723",
+  "current": "알엔티엑스",
+  "stock_code": "123010"
+ },
+ "아이티센": {
+  "corp_code": "00620868",
+  "current": "아이티센글로벌",
+  "stock_code": "124500"
+ },
+ "아이티엑스에이아이": {
+  "corp_code": "00627029",
+  "current": "DGI",
+  "stock_code": "099520"
+ },
+ "아이피몬스터": {
+  "corp_code": "01060735",
+  "current": "로지스몬",
+  "stock_code": "223220"
+ },
+ "아티스트유나이티드": {
+  "corp_code": "01116502",
+  "current": "아티스트컴퍼니",
+  "stock_code": "321820"
+ },
+ "아프리카TV": {
+  "corp_code": "00399694",
+  "current": "SOOP",
+  "stock_code": "067160"
+ },
  "알로이스": {
   "corp_code": "01309795",
   "current": "아틀라스링크",
   "stock_code": "297570"
+ },
+ "알비케이그룹": {
+  "corp_code": "01065679",
+  "current": "이노인스트루먼트",
+  "stock_code": "215790"
+ },
+ "알톤스포츠": {
+  "corp_code": "00821607",
+  "current": "알톤",
+  "stock_code": "123750"
+ },
+ "알파녹스": {
+  "corp_code": "00220109",
+  "current": "알파AI",
+  "stock_code": "043100"
+ },
+ "알파홀딩스": {
+  "corp_code": "00605124",
+  "current": "알파칩스",
+  "stock_code": "117670"
  },
  "압타머사이언스": {
   "corp_code": "01265251",
   "current": "압타머사이언스",
   "stock_code": "291650"
  },
+ "애경유화": {
+  "corp_code": "00936787",
+  "current": "애경케미칼",
+  "stock_code": "161000"
+ },
+ "애니젠": {
+  "corp_code": "00808086",
+  "current": "HLB펩",
+  "stock_code": "196300"
+ },
+ "애드바이오텍": {
+  "corp_code": "01022902",
+  "current": "애드바이오텍",
+  "stock_code": "179530"
+ },
+ "애머릿지": {
+  "corp_code": "00781202",
+  "current": "파이온엑스",
+  "stock_code": "900100"
+ },
+ "애머릿지코퍼레이션": {
+  "corp_code": "00781202",
+  "current": "파이온엑스",
+  "stock_code": "900100"
+ },
+ "액션스퀘어": {
+  "corp_code": "01042429",
+  "current": "넥써쓰",
+  "stock_code": "205500"
+ },
+ "앱트뉴로사이언스": {
+  "corp_code": "01228515",
+  "current": "앱튼",
+  "stock_code": "270520"
+ },
+ "어반리튬": {
+  "corp_code": "00440712",
+  "current": "리튬포어스",
+  "stock_code": "073570"
+ },
+ "에스맥": {
+  "corp_code": "00562360",
+  "current": "에코볼트",
+  "stock_code": "097780"
+ },
+ "에스비더블유생명과학": {
+  "corp_code": "00653103",
+  "current": "퓨처코어",
+  "stock_code": "151910"
+ },
+ "에스씨아이평가정보": {
+  "corp_code": "00260745",
+  "current": "서울평가정보",
+  "stock_code": "036120"
+ },
+ "에스씨엠생명과학": {
+  "corp_code": "01110474",
+  "current": "풍전약품",
+  "stock_code": "298060"
+ },
+ "에스에이티": {
+  "corp_code": "01440153",
+  "current": "넥사다이내믹스",
+  "stock_code": "351320"
+ },
+ "에스에이티이엔지": {
+  "corp_code": "01440153",
+  "current": "넥사다이내믹스",
+  "stock_code": "351320"
+ },
+ "에스에프에이": {
+  "corp_code": "00358271",
+  "current": "SFA",
+  "stock_code": "056190"
+ },
+ "에스엔유": {
+  "corp_code": "00455981",
+  "current": "에스엔유프리시젼",
+  "stock_code": "080000"
+ },
+ "에스엔피제네틱스": {
+  "corp_code": "00548519",
+  "current": "큐러블",
+  "stock_code": "086460"
+ },
+ "에스엘바이오닉스": {
+  "corp_code": "00957568",
+  "current": "로아앤코",
+  "stock_code": "214310"
+ },
+ "에스엘에너지": {
+  "corp_code": "00957568",
+  "current": "로아앤코",
+  "stock_code": "214310"
+ },
+ "에스엠코어": {
+  "corp_code": "00137915",
+  "current": "엠엑스로보틱스",
+  "stock_code": "007820"
+ },
+ "에스유홀딩스": {
+  "corp_code": "00180865",
+  "current": "디에이치엑스컴퍼니",
+  "stock_code": "031860"
+ },
+ "에스지씨이테크건설": {
+  "corp_code": "00141246",
+  "current": "SGC E&C",
+  "stock_code": "016250"
+ },
+ "에스지에이": {
+  "corp_code": "00351579",
+  "current": "비트플래닛",
+  "stock_code": "049470"
+ },
+ "에스케이증권에이씨피씨제7호기업인수목적": {
+  "corp_code": "01596656",
+  "current": "메쎄이상",
+  "stock_code": "408920"
+ },
+ "에스텍파마": {
+  "corp_code": "00463342",
+  "current": "폴라리스AI파마",
+  "stock_code": "041910"
+ },
+ "에스퓨얼셀": {
+  "corp_code": "01257872",
+  "current": "에스프리즘",
+  "stock_code": "288620"
+ },
+ "에이디엠코리아": {
+  "corp_code": "01409022",
+  "current": "페니트리움바이오",
+  "stock_code": "187660"
+ },
+ "에이리츠": {
+  "corp_code": "00860730",
+  "current": "에이자기관리부동산투자회사",
+  "stock_code": "140910"
+ },
  "에이비프로바이오": {
   "corp_code": "00620558",
   "current": "루트K",
   "stock_code": "195990"
+ },
+ "에이스캠퍼": {
+  "corp_code": "01412938",
+  "current": "베른",
+  "stock_code": "322190"
+ },
+ "에이아이더뉴트리진": {
+  "corp_code": "01290132",
+  "current": "인터로이드",
+  "stock_code": "311960"
+ },
+ "에이아이비트": {
+  "corp_code": "00295370",
+  "current": "제이앤케이인더스트리",
+  "stock_code": "039230"
+ },
+ "에이원알폼": {
+  "corp_code": "00614089",
+  "current": "에이원큐브텍",
+  "stock_code": "234070"
+ },
+ "에이치앤비디자인": {
+  "corp_code": "01207761",
+  "current": "프로브잇",
+  "stock_code": "227100"
+ },
+ "에이치에스효성": {
+  "corp_code": "01854763",
+  "current": "HS효성",
+  "stock_code": "487570"
+ },
+ "에이치엔티": {
+  "corp_code": "00872452",
+  "current": "미래오토스",
+  "stock_code": "176440"
+ },
+ "에이치엘비": {
+  "corp_code": "00199252",
+  "current": "HLB",
+  "stock_code": "028300"
+ },
+ "에이치엘비생명과학": {
+  "corp_code": "00365590",
+  "current": "HLB생명과학",
+  "stock_code": "067630"
+ },
+ "에이치엘비제약": {
+  "corp_code": "00336817",
+  "current": "HLB제약",
+  "stock_code": "047920"
+ },
+ "에이치엘비파워": {
+  "corp_code": "00317487",
+  "current": "티에스넥스젠",
+  "stock_code": "043220"
+ },
+ "에이치엠씨제4호스팩": {
+  "corp_code": "01447217",
+  "current": "에이치엠씨아이비제4호기업인수목적",
+  "stock_code": "353070"
+ },
+ "에이치엠씨제5호스팩": {
+  "corp_code": "01447244",
+  "current": "에이치엠씨아이비제5호기업인수목적",
+  "stock_code": "353060"
+ },
+ "에이텍티앤": {
+  "corp_code": "01099861",
+  "current": "에이텍모빌리티",
+  "stock_code": "224110"
+ },
+ "에이트원": {
+  "corp_code": "01110076",
+  "current": "비유테크놀러지",
+  "stock_code": "230980"
+ },
+ "에이프로젠 H&G": {
+  "corp_code": "00653194",
+  "current": "앱토크롬",
+  "stock_code": "109960"
+ },
+ "에이프로젠 MED": {
+  "corp_code": "00152385",
+  "current": "에이프로젠",
+  "stock_code": "007460"
+ },
+ "에이프로젠제약": {
+  "corp_code": "00101044",
+  "current": "에이프로젠바이오로직스",
+  "stock_code": "003060"
+ },
+ "에이프로젠헬스케어앤게임즈": {
+  "corp_code": "00653194",
+  "current": "앱토크롬",
+  "stock_code": "109960"
+ },
+ "에이피에스홀딩스": {
+  "corp_code": "00296078",
+  "current": "APS",
+  "stock_code": "054620"
+ },
+ "에이피티씨": {
+  "corp_code": "00544577",
+  "current": "브이엠",
+  "stock_code": "089970"
+ },
+ "에이피헬스케어": {
+  "corp_code": "00653194",
+  "current": "앱토크롬",
+  "stock_code": "109960"
+ },
+ "에코마이스터": {
+  "corp_code": "00127699",
+  "current": "유네코",
+  "stock_code": "064510"
+ },
+ "에코바이오": {
+  "corp_code": "00287812",
+  "current": "에코심플렉스",
+  "stock_code": "038870"
+ },
+ "에코바이오홀딩스": {
+  "corp_code": "00287812",
+  "current": "에코심플렉스",
+  "stock_code": "038870"
+ },
+ "에프앤리퍼블릭": {
+  "corp_code": "00390408",
+  "current": "인크레더블버즈",
+  "stock_code": "064090"
+ },
+ "엑서지21": {
+  "corp_code": "00351454",
+  "current": "더테크놀로지",
+  "stock_code": "043090"
  },
  "엑스큐어": {
   "corp_code": "00683007",
   "current": "엑스큐어",
   "stock_code": "070300"
  },
+ "엔씨소프트": {
+  "corp_code": "00261443",
+  "current": "NC",
+  "stock_code": "036570"
+ },
+ "엔에스": {
+  "corp_code": "01020843",
+  "current": "원익피앤이",
+  "stock_code": "217820"
+ },
+ "엔에스엔": {
+  "corp_code": "00180865",
+  "current": "디에이치엑스컴퍼니",
+  "stock_code": "031860"
+ },
+ "엔에스이엔엠": {
+  "corp_code": "00543204",
+  "current": "아이오케이이엔엠",
+  "stock_code": "078860"
+ },
+ "엔에이치기업인수목적3호": {
+  "corp_code": "01032583",
+  "current": "강동씨앤엘",
+  "stock_code": "198440"
+ },
+ "엔에이치기업인수목적5호": {
+  "corp_code": "01065679",
+  "current": "이노인스트루먼트",
+  "stock_code": "215790"
+ },
+ "엔에이치스팩13호": {
+  "corp_code": "01336391",
+  "current": "엔에이치기업인수목적13호",
+  "stock_code": "310840"
+ },
+ "엔에이치스팩17호": {
+  "corp_code": "01487446",
+  "current": "씨엔알리서치",
+  "stock_code": "359090"
+ },
+ "엔에이치스팩18호": {
+  "corp_code": "01505186",
+  "current": "하이딥",
+  "stock_code": "365590"
+ },
+ "엔에이치스팩19호": {
+  "corp_code": "01535257",
+  "current": "엔에이치기업인수목적19호",
+  "stock_code": "380440"
+ },
+ "엔에이치스팩20호": {
+  "corp_code": "01573974",
+  "current": "엔에이치기업인수목적20호",
+  "stock_code": "391060"
+ },
+ "엔에이치스팩23호": {
+  "corp_code": "01619513",
+  "current": "엔에이치기업인수목적23호",
+  "stock_code": "422040"
+ },
+ "엔에이치스팩26호": {
+  "corp_code": "01675254",
+  "current": "엔에이치기업인수목적26호",
+  "stock_code": "439410"
+ },
+ "엔에이치스팩27호": {
+  "corp_code": "01677429",
+  "current": "엔에이치기업인수목적27호",
+  "stock_code": "440820"
+ },
+ "엔에이치스팩29호": {
+  "corp_code": "01712616",
+  "current": "엔에이치기업인수목적29호",
+  "stock_code": "451700"
+ },
+ "엔에이치엔": {
+  "corp_code": "00983271",
+  "current": "NHN",
+  "stock_code": "181710"
+ },
+ "엔에이치엔한국사이버결제": {
+  "corp_code": "00357740",
+  "current": "NHN KCP",
+  "stock_code": "060250"
+ },
+ "엔지스테크널러지": {
+  "corp_code": "01084364",
+  "current": "다산디엠씨",
+  "stock_code": "208860"
+ },
+ "엔케이맥스": {
+  "corp_code": "00977650",
+  "current": "엔케이젠바이오텍코리아",
+  "stock_code": "182400"
+ },
+ "엔터파트너즈": {
+  "corp_code": "00146427",
+  "current": "한주에이알티",
+  "stock_code": "058450"
+ },
  "엔피": {
   "corp_code": "01276901",
   "current": "엔피",
   "stock_code": "291230"
+ },
+ "엔피디": {
+  "corp_code": "00876643",
+  "current": "캐프",
+  "stock_code": "198080"
+ },
+ "엘비세미콘": {
+  "corp_code": "00412348",
+  "current": "LB세미콘",
+  "stock_code": "061970"
+ },
+ "엠벤처투자": {
+  "corp_code": "00136642",
+  "current": "에스유앤피",
+  "stock_code": "019590"
+ },
+ "엠젠플러스": {
+  "corp_code": "00110884",
+  "current": "엠젠솔루션",
+  "stock_code": "032790"
+ },
+ "엠투아이": {
+  "corp_code": "00670766",
+  "current": "엠엑스온",
+  "stock_code": "347890"
+ },
+ "엠투아이코퍼레이션": {
+  "corp_code": "00670766",
+  "current": "엠엑스온",
+  "stock_code": "347890"
+ },
+ "엠피대산": {
+  "corp_code": "00390860",
+  "current": "대산F&B",
+  "stock_code": "065150"
+ },
+ "연이비앤티": {
+  "corp_code": "00495554",
+  "current": "와이앤넥스트",
+  "stock_code": "090740"
+ },
+ "영신금속": {
+  "corp_code": "00140858",
+  "current": "와이엠",
+  "stock_code": "007530"
+ },
+ "영신금속공업": {
+  "corp_code": "00140858",
+  "current": "와이엠",
+  "stock_code": "007530"
+ },
+ "영창케미칼": {
+  "corp_code": "00619507",
+  "current": "와이씨켐",
+  "stock_code": "112290"
+ },
+ "영풍정밀": {
+  "corp_code": "00141389",
+  "current": "KZ정밀",
+  "stock_code": "036560"
+ },
+ "영풍제지": {
+  "corp_code": "00141404",
+  "current": "블루산업개발",
+  "stock_code": "006740"
+ },
+ "예스코홀딩스": {
+  "corp_code": "00105101",
+  "current": "INVENI",
+  "stock_code": "015360"
+ },
+ "예스피치": {
+  "corp_code": "01466832",
+  "current": "라피치",
+  "stock_code": "403360"
+ },
+ "오리온아토믹스": {
+  "corp_code": "01022902",
+  "current": "애드바이오텍",
+  "stock_code": "179530"
+ },
+ "오션브릿지": {
+  "corp_code": "01113754",
+  "current": "티이엠씨씨엔에스",
+  "stock_code": "241790"
+ },
+ "오하임아이엔티": {
+  "corp_code": "01335453",
+  "current": "조이웍스앤코",
+  "stock_code": "309930"
+ },
+ "오하임앤컴퍼니": {
+  "corp_code": "01335453",
+  "current": "조이웍스앤코",
+  "stock_code": "309930"
+ },
+ "와이더플래닛": {
+  "corp_code": "01116502",
+  "current": "아티스트컴퍼니",
+  "stock_code": "321820"
+ },
+ "와이아이케이": {
+  "corp_code": "01109539",
+  "current": "와이씨",
+  "stock_code": "232140"
+ },
+ "와이오엠": {
+  "corp_code": "00370200",
+  "current": "아이로보틱스",
+  "stock_code": "066430"
+ },
+ "와이제이엠게임즈": {
+  "corp_code": "01035678",
+  "current": "링크드",
+  "stock_code": "193250"
+ },
+ "와이팜": {
+  "corp_code": "01015160",
+  "current": "PS일렉트로닉스",
+  "stock_code": "332570"
+ },
+ "용평리조트": {
+  "corp_code": "00365989",
+  "current": "모나용평",
+  "stock_code": "070960"
+ },
+ "우리기업인수목적3호": {
+  "corp_code": "01032583",
+  "current": "강동씨앤엘",
+  "stock_code": "198440"
+ },
+ "우리들휴브레인": {
+  "corp_code": "00791209",
+  "current": "메타케어",
+  "stock_code": "118000"
+ },
+ "우리이앤엘": {
+  "corp_code": "00815095",
+  "current": "우리이앤엘하루틴",
+  "stock_code": "153490"
+ },
+ "우리조명": {
+  "corp_code": "00155692",
+  "current": "우리엔터프라이즈",
+  "stock_code": "037400"
+ },
+ "우리종금": {
+  "corp_code": "00104102",
+  "current": "우리종합금융",
+  "stock_code": "010050"
+ },
+ "우림기계": {
+  "corp_code": "00567222",
+  "current": "우림피티에스",
+  "stock_code": "101170"
+ },
+ "우성사료": {
+  "corp_code": "00142661",
+  "current": "우성",
+  "stock_code": "006980"
+ },
+ "우수AMS": {
+  "corp_code": "00301422",
+  "current": "스모트로닉",
+  "stock_code": "066590"
  },
  "우정바이오": {
   "corp_code": "01065013",
   "current": "콜마바이오텍",
   "stock_code": "215380"
  },
+ "원방테크": {
+  "corp_code": "00304076",
+  "current": "케이엔솔",
+  "stock_code": "053080"
+ },
+ "웨스트라이즈": {
+  "corp_code": "00390408",
+  "current": "인크레더블버즈",
+  "stock_code": "064090"
+ },
+ "위너스": {
+  "corp_code": "01137860",
+  "current": "위너스일렉",
+  "stock_code": "479960"
+ },
+ "위니아딤채": {
+  "corp_code": "00300557",
+  "current": "위니아",
+  "stock_code": "071460"
+ },
+ "위니아에이드": {
+  "corp_code": "01175499",
+  "current": "큐에이드",
+  "stock_code": "377460"
+ },
+ "윈스": {
+  "corp_code": "00868705",
+  "current": "윈스테크넷",
+  "stock_code": "136540"
+ },
+ "윈텍": {
+  "corp_code": "01359815",
+  "current": "한울반도체",
+  "stock_code": "320000"
+ },
+ "윌링스": {
+  "corp_code": "00863038",
+  "current": "캐리",
+  "stock_code": "313760"
+ },
+ "유니온커뮤니티": {
+  "corp_code": "00408266",
+  "current": "유니온바이오메트릭스",
+  "stock_code": "203450"
+ },
+ "유비케어": {
+  "corp_code": "00220057",
+  "current": "GC메디아이",
+  "stock_code": "032620"
+ },
+ "유씨아이": {
+  "corp_code": "00215976",
+  "current": "무궁화인포메이션테크놀로지",
+  "stock_code": "038340"
+ },
+ "유안타제12호스팩": {
+  "corp_code": "01690235",
+  "current": "유안타제12호기업인수목적",
+  "stock_code": "446150"
+ },
+ "유안타제13호스팩": {
+  "corp_code": "01701753",
+  "current": "유안타제13호기업인수목적",
+  "stock_code": "449020"
+ },
+ "유안타제4호스팩": {
+  "corp_code": "01343920",
+  "current": "유안타제4호기업인수목적",
+  "stock_code": "313750"
+ },
+ "유안타제6호스팩": {
+  "corp_code": "01416642",
+  "current": "다보링크",
+  "stock_code": "340360"
+ },
+ "유안타제7호스팩": {
+  "corp_code": "01504804",
+  "current": "유안타제7호기업인수목적",
+  "stock_code": "367460"
+ },
+ "유안타제8호스팩": {
+  "corp_code": "01504910",
+  "current": "유안타제8호기업인수목적",
+  "stock_code": "367480"
+ },
+ "유앤아이": {
+  "corp_code": "00346610",
+  "current": "시지메드텍",
+  "stock_code": "056090"
+ },
+ "유일에너테크": {
+  "corp_code": "01368637",
+  "current": "성원에너텍",
+  "stock_code": "340930"
+ },
+ "유진기업인수목적8호": {
+  "corp_code": "01601222",
+  "current": "씨피시스템",
+  "stock_code": "413630"
+ },
+ "유진스팩6호": {
+  "corp_code": "01514519",
+  "current": "유진기업인수목적6호",
+  "stock_code": "373340"
+ },
+ "유진스팩7호": {
+  "corp_code": "01569838",
+  "current": "유진기업인수목적7호",
+  "stock_code": "388800"
+ },
+ "유진스팩8호": {
+  "corp_code": "01601222",
+  "current": "씨피시스템",
+  "stock_code": "413630"
+ },
+ "유테크": {
+  "corp_code": "00923826",
+  "current": "일월지엠엘",
+  "stock_code": "178780"
+ },
+ "유투바이오": {
+  "corp_code": "01026616",
+  "current": "지구홀딩스",
+  "stock_code": "221800"
+ },
+ "율호": {
+  "corp_code": "00583026",
+  "current": "멤레이비티",
+  "stock_code": "072770"
+ },
+ "이그잭스": {
+  "corp_code": "00363510",
+  "current": "제이케이시냅스",
+  "stock_code": "060230"
+ },
+ "이노룰스": {
+  "corp_code": "01341630",
+  "current": "이노에이엑스",
+  "stock_code": "296640"
+ },
+ "이노시스": {
+  "corp_code": "00346610",
+  "current": "시지메드텍",
+  "stock_code": "056090"
+ },
+ "이노와이어리스": {
+  "corp_code": "00462121",
+  "current": "LIG아큐버",
+  "stock_code": "073490"
+ },
+ "이노와이즈": {
+  "corp_code": "00166333",
+  "current": "화신테크",
+  "stock_code": "086250"
+ },
+ "이노인스트루먼트": {
+  "corp_code": "01065679",
+  "current": "이노인스트루먼트",
+  "stock_code": "215790"
+ },
+ "이노테라피": {
+  "corp_code": "01110182",
+  "current": "SCL사이언스",
+  "stock_code": "246960"
+ },
+ "이더블유케이": {
+  "corp_code": "00961507",
+  "current": "케일럼",
+  "stock_code": "258610"
+ },
+ "이디티": {
+  "corp_code": "01063884",
+  "current": "솔디펜스",
+  "stock_code": "215090"
+ },
+ "이라이콤": {
+  "corp_code": "00137289",
+  "current": "이엘씨",
+  "stock_code": "041520"
+ },
+ "이베스트스팩5호": {
+  "corp_code": "01436336",
+  "current": "이베스트기업인수목적5호",
+  "stock_code": "349720"
+ },
+ "이베스트이안스팩1호": {
+  "corp_code": "01366365",
+  "current": "이베스트이안기업인수목적1호",
+  "stock_code": "323210"
+ },
+ "이베스트투자증권": {
+  "corp_code": "00330424",
+  "current": "LS증권",
+  "stock_code": "078020"
+ },
+ "이스트아시아홀딩스": {
+  "corp_code": "00799070",
+  "current": "딥커머스",
+  "stock_code": "900110"
+ },
+ "이스트아시아홀딩스인베스트먼트리미티드": {
+  "corp_code": "00799070",
+  "current": "딥커머스",
+  "stock_code": "900110"
+ },
+ "이에스에이": {
+  "corp_code": "00347877",
+  "current": "세영디앤씨",
+  "stock_code": "052190"
+ },
+ "이엔드디": {
+  "corp_code": "00619640",
+  "current": "에코앤드림",
+  "stock_code": "101360"
+ },
+ "이엔코퍼레이션": {
+  "corp_code": "00389998",
+  "current": "한성크린텍",
+  "stock_code": "066980"
+ },
+ "이엠코리아": {
+  "corp_code": "00526951",
+  "current": "신화프리텍",
+  "stock_code": "095190"
+ },
+ "이화전기": {
+  "corp_code": "00145738",
+  "current": "이화전기공업",
+  "stock_code": "024810"
+ },
+ "인스웨이브시스템즈": {
+  "corp_code": "01222113",
+  "current": "인스웨이브",
+  "stock_code": "450520"
+ },
+ "인스코비": {
+  "corp_code": "00122825",
+  "current": "프리티",
+  "stock_code": "006490"
+ },
+ "인터파크": {
+  "corp_code": "00244561",
+  "current": "그래디언트",
+  "stock_code": "035080"
+ },
  "인포마크": {
   "corp_code": "00861997",
   "current": "아고스",
   "stock_code": "175140"
+ },
+ "인피니티엔티": {
+  "corp_code": "00125725",
+  "current": "디모아",
+  "stock_code": "016670"
+ },
+ "일성신약": {
+  "corp_code": "00146214",
+  "current": "일성아이에스",
+  "stock_code": "003120"
+ },
+ "일야": {
+  "corp_code": "00146427",
+  "current": "한주에이알티",
+  "stock_code": "058450"
+ },
+ "일진머티리얼즈": {
+  "corp_code": "00113997",
+  "current": "롯데에너지머티리얼즈",
+  "stock_code": "020150"
+ },
+ "자안코스메틱": {
+  "corp_code": "01089378",
+  "current": "디와이디",
+  "stock_code": "219550"
+ },
+ "정산애강": {
+  "corp_code": "00140061",
+  "current": "티케이지애강",
+  "stock_code": "022220"
+ },
+ "제노포커스": {
+  "corp_code": "00983916",
+  "current": "HLB제넥스",
+  "stock_code": "187420"
+ },
+ "제닉스": {
+  "corp_code": "01293485",
+  "current": "제닉스로보틱스",
+  "stock_code": "381620"
+ },
+ "제이스텍": {
+  "corp_code": "00493185",
+  "current": "제이스로보틱스",
+  "stock_code": "090470"
+ },
+ "제이엔케이히터": {
+  "corp_code": "00442154",
+  "current": "제이엔케이글로벌",
+  "stock_code": "126880"
+ },
+ "제이준코스메틱": {
+  "corp_code": "00136776",
+  "current": "차AI헬스케어",
+  "stock_code": "025620"
+ },
+ "제이콘텐트리": {
+  "corp_code": "00203315",
+  "current": "콘텐트리중앙",
+  "stock_code": "036420"
+ },
+ "제일전기공업": {
+  "corp_code": "00148470",
+  "current": "제일일렉트릭",
+  "stock_code": "199820"
+ },
+ "제일제강": {
+  "corp_code": "00148531",
+  "current": "제이스코홀딩스",
+  "stock_code": "023440"
+ },
+ "제주맥주": {
+  "corp_code": "01230255",
+  "current": "한울앤제주",
+  "stock_code": "276730"
+ },
+ "젬백스링크": {
+  "corp_code": "00392691",
+  "current": "포니링크",
+  "stock_code": "064800"
+ },
+ "젬백스지오": {
+  "corp_code": "00297448",
+  "current": "플래스크",
+  "stock_code": "041590"
+ },
+ "조광ILI": {
+  "corp_code": "00291860",
+  "current": "조광아이엘아이",
+  "stock_code": "044060"
+ },
+ "조선내화": {
+  "corp_code": "00148984",
+  "current": "시알홀딩스",
+  "stock_code": "000480"
+ },
+ "줌인터넷": {
+  "corp_code": "01128622",
+  "current": "이스트에이드",
+  "stock_code": "239340"
+ },
+ "중앙디앤엠": {
+  "corp_code": "00347716",
+  "current": "중앙첨단소재",
+  "stock_code": "051980"
+ },
+ "지니뮤직": {
+  "corp_code": "00223762",
+  "current": "KT지니뮤직",
+  "stock_code": "043610"
+ },
+ "지앤비에스 엔지니어링": {
+  "corp_code": "00958327",
+  "current": "지앤비에스 에코",
+  "stock_code": "382800"
+ },
+ "지엔원에너지": {
+  "corp_code": "01228515",
+  "current": "앱튼",
+  "stock_code": "270520"
+ },
+ "지오릿에너지": {
+  "corp_code": "01228515",
+  "current": "앱튼",
+  "stock_code": "270520"
+ },
+ "지오씨": {
+  "corp_code": "00657756",
+  "current": "무송지오씨",
+  "stock_code": "135160"
+ },
+ "지코": {
+  "corp_code": "00147860",
+  "current": "에스엠벡셀",
+  "stock_code": "010580"
+ },
+ "지투알": {
+  "corp_code": "00140168",
+  "current": "HS애드",
+  "stock_code": "035000"
+ },
+ "지트리비앤티": {
+  "corp_code": "00552859",
+  "current": "HLB테라퓨틱스",
+  "stock_code": "115450"
+ },
+ "지티지웰니스": {
+  "corp_code": "01031229",
+  "current": "한국비티비",
+  "stock_code": "219750"
+ },
+ "차백신연구소": {
+  "corp_code": "01141599",
+  "current": "아리바이오LAB",
+  "stock_code": "261780"
+ },
+ "천랩": {
+  "corp_code": "01071041",
+  "current": "CJ 바이오사이언스",
+  "stock_code": "311690"
+ },
+ "청담러닝": {
+  "corp_code": "00525882",
+  "current": "크레버스",
+  "stock_code": "096240"
+ },
+ "초록뱀이앤엠": {
+  "corp_code": "00814786",
+  "current": "티엔엔터테인먼트",
+  "stock_code": "131100"
+ },
+ "초록뱀컴퍼니": {
+  "corp_code": "00349811",
+  "current": "오션인더블유",
+  "stock_code": "052300"
+ },
+ "카나리아바이오": {
+  "corp_code": "00164618",
+  "current": "현대사료",
+  "stock_code": "016790"
+ },
+ "캐리소프트": {
+  "corp_code": "01267222",
+  "current": "에피소드컴퍼니",
+  "stock_code": "317530"
+ },
+ "캔서롭": {
+  "corp_code": "00995993",
+  "current": "DXVX",
+  "stock_code": "180400"
+ },
+ "커머스마이너": {
+  "corp_code": "01075126",
+  "current": "사토시홀딩스",
+  "stock_code": "223310"
+ },
+ "컨버즈": {
+  "corp_code": "00753643",
+  "current": "주성코퍼레이션",
+  "stock_code": "109070"
+ },
+ "케이바이오": {
+  "corp_code": "00255105",
+  "current": "케이바이오랩스",
+  "stock_code": "038530"
+ },
+ "케이바이오컴퍼니": {
+  "corp_code": "00255105",
+  "current": "케이바이오랩스",
+  "stock_code": "038530"
+ },
+ "케이비17호스팩": {
+  "corp_code": "01351114",
+  "current": "케이비제17호기업인수목적",
+  "stock_code": "317030"
+ },
+ "케이비제18호스팩": {
+  "corp_code": "01371312",
+  "current": "케이비제18호기업인수목적",
+  "stock_code": "323940"
+ },
+ "케이비제19호스팩": {
+  "corp_code": "01393299",
+  "current": "케이비제19호기업인수목적",
+  "stock_code": "330990"
+ },
+ "케이비제20호스팩": {
+  "corp_code": "01418543",
+  "current": "케이비제20호기업인수목적",
+  "stock_code": "342550"
+ },
+ "케이비제22호스팩": {
+  "corp_code": "01672053",
+  "current": "케이비제22호기업인수목적",
+  "stock_code": "436530"
+ },
+ "케이씨아이": {
+  "corp_code": "00265041",
+  "current": "삼양케이씨아이",
+  "stock_code": "036670"
+ },
+ "케이에이치전자": {
+  "corp_code": "00125965",
+  "current": "케이에이치미래물산",
+  "stock_code": "111870"
+ },
+ "케이지이티에스": {
+  "corp_code": "00366137",
+  "current": "KG에코솔루션",
+  "stock_code": "151860"
+ },
+ "케이티서브마린": {
+  "corp_code": "00225742",
+  "current": "LS마린솔루션",
+  "stock_code": "060370"
+ },
+ "케이프이에스제4호": {
+  "corp_code": "01428249",
+  "current": "케이프이에스제4호기업인수목적",
+  "stock_code": "347140"
+ },
+ "케이피에스": {
+  "corp_code": "01037214",
+  "current": "킵스파마",
+  "stock_code": "256940"
+ },
+ "케이피엑스라이프사이언스": {
+  "corp_code": "00532059",
+  "current": "그린생명과학",
+  "stock_code": "114450"
+ },
+ "코드네이처": {
+  "corp_code": "00501970",
+  "current": "퀀타피아",
+  "stock_code": "078940"
+ },
+ "코디엠": {
+  "corp_code": "00530413",
+  "current": "더코디",
+  "stock_code": "224060"
+ },
+ "코람코에너지리츠": {
+  "corp_code": "01430475",
+  "current": "코람코라이프인프라리츠",
+  "stock_code": "357120"
+ },
+ "코리아에스이": {
+  "corp_code": "00527491",
+  "current": "하이드로리튬",
+  "stock_code": "101670"
+ },
+ "코센": {
+  "corp_code": "00116426",
+  "current": "이렘",
+  "stock_code": "009730"
+ },
+ "코스온": {
+  "corp_code": "00402989",
+  "current": "유한코스메틱",
+  "stock_code": "069110"
+ },
+ "코아스템": {
+  "corp_code": "00989664",
+  "current": "코아스템켐온",
+  "stock_code": "166480"
+ },
+ "코아시아옵틱스": {
+  "corp_code": "01031502",
+  "current": "코아시아씨엠",
+  "stock_code": "196450"
+ },
+ "코아크로스": {
+  "corp_code": "00255105",
+  "current": "케이바이오랩스",
+  "stock_code": "038530"
+ },
+ "코오롱플라스틱": {
+  "corp_code": "00241005",
+  "current": "코오롱이앤피",
+  "stock_code": "138490"
+ },
+ "코웰패션": {
+  "corp_code": "00155948",
+  "current": "로젠",
+  "stock_code": "033290"
+ },
+ "코프라": {
+  "corp_code": "00599595",
+  "current": "BGF에코머티리얼즈",
+  "stock_code": "126600"
+ },
+ "콤텍시스템": {
+  "corp_code": "00186559",
+  "current": "아이티센씨티에스",
+  "stock_code": "031820"
+ },
+ "퀀텀온": {
+  "corp_code": "01207761",
+  "current": "프로브잇",
+  "stock_code": "227100"
+ },
+ "큐로": {
+  "corp_code": "00108746",
+  "current": "DKME",
+  "stock_code": "015590"
+ },
+ "큐로컴": {
+  "corp_code": "00346407",
+  "current": "크레오에스지",
+  "stock_code": "040350"
+ },
+ "크로바하이텍": {
+  "corp_code": "00260611",
+  "current": "웰킵스하이텍",
+  "stock_code": "043590"
+ },
+ "크리스탈지노믹스": {
+  "corp_code": "00407814",
+  "current": "CG인바이츠",
+  "stock_code": "083790"
+ },
+ "클라우드에어": {
+  "corp_code": "00232821",
+  "current": "에이치엠넥스",
+  "stock_code": "036170"
+ },
+ "클리노믹스": {
+  "corp_code": "01201970",
+  "current": "셀레스트라",
+  "stock_code": "352770"
+ },
+ "키움제6호스팩": {
+  "corp_code": "01616808",
+  "current": "키움제6호기업인수목적",
+  "stock_code": "413600"
+ },
+ "키움제7호스팩": {
+  "corp_code": "01667592",
+  "current": "키움제7호기업인수목적",
+  "stock_code": "433530"
+ },
+ "키움제8호기업인수목적": {
+  "corp_code": "01693922",
+  "current": "지슨",
+  "stock_code": "446840"
+ },
+ "타조엔터테인먼트": {
+  "corp_code": "01518506",
+  "current": "타조이엔터테인먼트",
+  "stock_code": "476710"
+ },
+ "태평양물산": {
+  "corp_code": "00154329",
+  "current": "TP",
+  "stock_code": "007980"
+ },
+ "테스나": {
+  "corp_code": "00563545",
+  "current": "두산테스나",
+  "stock_code": "131970"
+ },
+ "텔레필드": {
+  "corp_code": "00560122",
+  "current": "한울소재과학",
+  "stock_code": "091440"
+ },
+ "트루윈": {
+  "corp_code": "00766106",
+  "current": "엣지파운드리",
+  "stock_code": "105550"
+ },
+ "티라유텍": {
+  "corp_code": "01309388",
+  "current": "LS티라유텍",
+  "stock_code": "322180"
+ },
+ "티웨이항공": {
+  "corp_code": "00671376",
+  "current": "트리니티항공",
+  "stock_code": "091810"
+ },
+ "티피씨메카트로닉스": {
+  "corp_code": "00108649",
+  "current": "TPC로보틱스",
+  "stock_code": "048770"
+ },
+ "파나진": {
+  "corp_code": "00172079",
+  "current": "HLB파나진",
+  "stock_code": "046210"
+ },
+ "파나케이아": {
+  "corp_code": "00353018",
+  "current": "헬스커넥트",
+  "stock_code": "058530"
+ },
+ "파수": {
+  "corp_code": "00638487",
+  "current": "파수AI",
+  "stock_code": "150900"
+ },
+ "포스코": {
+  "corp_code": "00155319",
+  "current": "POSCO홀딩스",
+  "stock_code": "005490"
+ },
+ "포스코 ICT": {
+  "corp_code": "00155212",
+  "current": "포스코DX",
+  "stock_code": "022100"
+ },
+ "포스코강판": {
+  "corp_code": "00155258",
+  "current": "포스코스틸리온",
+  "stock_code": "058430"
+ },
+ "포스코아이씨티": {
+  "corp_code": "00155212",
+  "current": "포스코DX",
+  "stock_code": "022100"
+ },
+ "포스코케미칼": {
+  "corp_code": "00155276",
+  "current": "포스코퓨처엠",
+  "stock_code": "003670"
+ },
+ "포커스에이치엔에스": {
+  "corp_code": "01393721",
+  "current": "포커스에이아이",
+  "stock_code": "331380"
+ },
+ "포티스": {
+  "corp_code": "00812362",
+  "current": "디에스앤엘",
+  "stock_code": "141020"
+ },
+ "폴라리스웍스": {
+  "corp_code": "00615723",
+  "current": "알엔티엑스",
+  "stock_code": "123010"
+ },
+ "푸른기술": {
+  "corp_code": "00537832",
+  "current": "푸른로보틱스",
+  "stock_code": "094940"
+ },
+ "푸른상호저축은행": {
+  "corp_code": "00124805",
+  "current": "푸른저축은행",
+  "stock_code": "007330"
+ },
+ "퓨쳐스트림네트웍스": {
+  "corp_code": "01061497",
+  "current": "FSN",
+  "stock_code": "214270"
+ },
+ "프로스테믹스": {
+  "corp_code": "01036367",
+  "current": "아크솔루션스",
+  "stock_code": "203690"
+ },
+ "프로테옴텍": {
+  "corp_code": "01267958",
+  "current": "프로티아",
+  "stock_code": "303360"
+ },
+ "플레이위드": {
+  "corp_code": "00138367",
+  "current": "플레이위드",
+  "stock_code": "023770"
  },
  "플루토스투자": {
   "corp_code": "00110750",
   "current": "플루토스",
   "stock_code": "019570"
  },
+ "피앤에스미캐닉스": {
+  "corp_code": "01419205",
+  "current": "피앤에스로보틱스",
+  "stock_code": "460940"
+ },
+ "피에스엠씨": {
+  "corp_code": "00155586",
+  "current": "HLB이노베이션",
+  "stock_code": "024850"
+ },
+ "피에이치씨": {
+  "corp_code": "00410739",
+  "current": "푸른소나무",
+  "stock_code": "057880"
+ },
  "피플바이오": {
   "corp_code": "01118281",
   "current": "피플바이오",
   "stock_code": "304840"
+ },
+ "피피아이": {
+  "corp_code": "00403766",
+  "current": "한국첨단소재",
+  "stock_code": "062970"
+ },
+ "하나금융14호스팩": {
+  "corp_code": "01395279",
+  "current": "하나금융14호기업인수목적",
+  "stock_code": "332710"
+ },
+ "하나금융15호스팩": {
+  "corp_code": "01416457",
+  "current": "하나금융15호기업인수목적",
+  "stock_code": "341160"
+ },
+ "하나금융16호스팩": {
+  "corp_code": "01419384",
+  "current": "하나금융16호기업인수목적",
+  "stock_code": "343510"
+ },
+ "하나금융17호스팩": {
+  "corp_code": "01493535",
+  "current": "모비데이즈",
+  "stock_code": "363260"
+ },
+ "하나금융20호스팩": {
+  "corp_code": "01583397",
+  "current": "하나금융20호기업인수목적",
+  "stock_code": "400560"
+ },
+ "하나금융21호스팩": {
+  "corp_code": "01593242",
+  "current": "하나금융21호기업인수목적",
+  "stock_code": "406760"
+ },
+ "하나금융22호스팩": {
+  "corp_code": "01613281",
+  "current": "하나금융22호기업인수목적",
+  "stock_code": "418170"
+ },
+ "하나금융23호스팩": {
+  "corp_code": "01652970",
+  "current": "하나금융23호기업인수목적",
+  "stock_code": "427950"
+ },
+ "하나금융24호스팩": {
+  "corp_code": "01658266",
+  "current": "하나금융24호기업인수목적",
+  "stock_code": "430230"
+ },
+ "하나금융25호스팩": {
+  "corp_code": "01669475",
+  "current": "하나금융25호기업인수목적",
+  "stock_code": "435620"
+ },
+ "하나머스트7호스팩": {
+  "corp_code": "01513404",
+  "current": "하나머스트7호기업인수목적",
+  "stock_code": "372290"
+ },
+ "하이골드12호": {
+  "corp_code": "00954242",
+  "current": "하이골드오션12호국제선박투자회사",
+  "stock_code": "172580"
+ },
+ "하이골드3호": {
+  "corp_code": "00905316",
+  "current": "하이골드오션3호선박투자회사",
+  "stock_code": "153360"
+ },
+ "하이소닉": {
+  "corp_code": "00542898",
+  "current": "케이이엠텍",
+  "stock_code": "106080"
+ },
+ "하이제5호스팩": {
+  "corp_code": "01414370",
+  "current": "하이제5호기업인수목적",
+  "stock_code": "340120"
+ },
+ "하이제6호스팩": {
+  "corp_code": "01526949",
+  "current": "하이제6호기업인수목적",
+  "stock_code": "377400"
+ },
+ "하이제8호스팩": {
+  "corp_code": "01705625",
+  "current": "하이제8호기업인수목적",
+  "stock_code": "450050"
+ },
+ "하인크코리아": {
+  "corp_code": "01514698",
+  "current": "엑스플러스",
+  "stock_code": "373200"
+ },
+ "한국ANKOR유전": {
+  "corp_code": "00907013",
+  "current": "한국투자ANKOR유전해외자원개발특별자산투자회사1호(지분증권)",
+  "stock_code": "152550"
+ },
+ "한국바이오젠": {
+  "corp_code": "00876166",
+  "current": "KBG",
+  "stock_code": "318000"
+ },
+ "한국전자금융": {
+  "corp_code": "00363769",
+  "current": "NICE인프라",
+  "stock_code": "063570"
+ },
+ "한국제8호스팩": {
+  "corp_code": "01336443",
+  "current": "디와이씨",
+  "stock_code": "310870"
+ },
+ "한국조선해양": {
+  "corp_code": "00164830",
+  "current": "HD한국조선해양",
+  "stock_code": "009540"
+ },
+ "한국코퍼레이션": {
+  "corp_code": "00302078",
+  "current": "엠피씨플러스",
+  "stock_code": "050540"
+ },
+ "한국콜마홀딩스": {
+  "corp_code": "00203290",
+  "current": "콜마홀딩스",
+  "stock_code": "024720"
+ },
+ "한국패러랠": {
+  "corp_code": "00960641",
+  "current": "한국투자패러랠유전해외자원개발특별자산투자회사1호(지분증권)",
+  "stock_code": "168490"
+ },
+ "한국프랜지공업": {
+  "corp_code": "00160418",
+  "current": "한국무브넥스",
+  "stock_code": "010100"
  },
  "한글과컴퓨터": {
   "corp_code": "00204262",
   "current": "한컴",
   "stock_code": "030520"
  },
+ "한라": {
+  "corp_code": "00161116",
+  "current": "HL D&I",
+  "stock_code": "014790"
+ },
+ "한라홀딩스": {
+  "corp_code": "00299002",
+  "current": "HL홀딩스",
+  "stock_code": "060980"
+ },
  "한솔시큐어": {
   "corp_code": "00683007",
   "current": "엑스큐어",
   "stock_code": "070300"
+ },
+ "한솔인티큐브": {
+  "corp_code": "00470829",
+  "current": "인티큐브",
+  "stock_code": "070590"
+ },
+ "한송네오텍": {
+  "corp_code": "01101722",
+  "current": "시스네오텍",
+  "stock_code": "226440"
+ },
+ "한일진공": {
+  "corp_code": "00809429",
+  "current": "뉴온",
+  "stock_code": "123840"
+ },
+ "한진중공업": {
+  "corp_code": "00633835",
+  "current": "HJ중공업",
+  "stock_code": "097230"
+ },
+ "한창바이오텍": {
+  "corp_code": "00351454",
+  "current": "더테크놀로지",
+  "stock_code": "043090"
+ },
+ "한컴MDS": {
+  "corp_code": "00445841",
+  "current": "MDS테크",
+  "stock_code": "086960"
+ },
+ "한화에스비아이스팩": {
+  "corp_code": "01351822",
+  "current": "한화에스비아이기업인수목적",
+  "stock_code": "317320"
+ },
+ "한화플러스제2호스팩": {
+  "corp_code": "01572489",
+  "current": "한화플러스제2호기업인수목적",
+  "stock_code": "386580"
+ },
+ "한화플러스제3호스팩": {
+  "corp_code": "01663055",
+  "current": "한화플러스제3호기업인수목적",
+  "stock_code": "430460"
+ },
+ "해성티피씨": {
+  "corp_code": "00453442",
+  "current": "해성에어로보틱스",
+  "stock_code": "059270"
  },
  "핸디소프트": {
   "corp_code": "00793155",
   "current": "핸디소프트",
   "stock_code": "220180"
  },
+ "현대건설기계": {
+  "corp_code": "01205842",
+  "current": "HD건설기계",
+  "stock_code": "267270"
+ },
+ "현대그린푸드": {
+  "corp_code": "00105280",
+  "current": "현대지에프홀딩스",
+  "stock_code": "005440"
+ },
+ "현대두산인프라코어": {
+  "corp_code": "00344287",
+  "current": "에이치디현대인프라코어",
+  "stock_code": "042670"
+ },
+ "현대미포조선": {
+  "corp_code": "00164609",
+  "current": "에이치디현대미포",
+  "stock_code": "010620"
+ },
+ "현대에너지솔루션": {
+  "corp_code": "01199550",
+  "current": "HD현대에너지솔루션",
+  "stock_code": "322000"
+ },
+ "현대에이디엠바이오": {
+  "corp_code": "01409022",
+  "current": "페니트리움바이오",
+  "stock_code": "187660"
+ },
+ "현대일렉트릭": {
+  "corp_code": "01205851",
+  "current": "HD현대일렉트릭",
+  "stock_code": "267260"
+ },
+ "현대중공업": {
+  "corp_code": "01390344",
+  "current": "HD현대중공업",
+  "stock_code": "329180"
+ },
+ "현대중공업지주": {
+  "corp_code": "01205709",
+  "current": "HD현대",
+  "stock_code": "267250"
+ },
+ "홈센타홀딩스": {
+  "corp_code": "00288495",
+  "current": "HC홈센타",
+  "stock_code": "060560"
+ },
+ "화성산업": {
+  "corp_code": "00174527",
+  "current": "HS화성",
+  "stock_code": "002460"
+ },
+ "효성첨단소재": {
+  "corp_code": "01316254",
+  "current": "HS효성첨단소재",
+  "stock_code": "298050"
+ },
+ "휘닉스소재": {
+  "corp_code": "00369569",
+  "current": "비케이홀딩스",
+  "stock_code": "050090"
+ },
+ "휠라홀딩스": {
+  "corp_code": "00195229",
+  "current": "미스토홀딩스",
+  "stock_code": "081660"
+ },
+ "휴림네트웍스": {
+  "corp_code": "00623184",
+  "current": "오늘이엔엠",
+  "stock_code": "192410"
+ },
+ "휴먼엔": {
+  "corp_code": "00205687",
+  "current": "더라미",
+  "stock_code": "032860"
+ },
  "휴먼테크놀로지": {
   "corp_code": "00861997",
   "current": "아고스",
   "stock_code": "175140"
+ },
+ "휴벡셀": {
+  "corp_code": "01085442",
+  "current": "오건에코텍",
+  "stock_code": "212310"
+ },
+ "휴센텍": {
+  "corp_code": "01063884",
+  "current": "솔디펜스",
+  "stock_code": "215090"
+ },
+ "휴온스블러썸": {
+  "corp_code": "01185566",
+  "current": "휴엠앤씨",
+  "stock_code": "263920"
+ },
+ "휴켐스": {
+  "corp_code": "00426086",
+  "current": "티케이지휴켐스",
+  "stock_code": "069260"
  }
 }

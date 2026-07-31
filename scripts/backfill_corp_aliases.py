@@ -67,6 +67,45 @@ def strip_corp_form(name: str) -> str:
     return name.strip()
 
 
+# 영문 법인 접미 토큰 — 대소문자 무관 부분 문자열 포함 검사(정규식 단어경계 아님).
+# "Co., Ltd." 같은 표기가 정규식 캡처 과잉으로 통째로 상호 필드에 들어온
+# 쓰레기 레코드를 걸러낸다(예: "Daehan Green Power Corporation").
+_CORP_SUFFIX_TOKENS = ("co.,", "co., ltd", "corp", "corporation", "inc", "ltd", "llc")
+_HANGUL_RE = re.compile(r"[가-힣]")
+
+
+def _has_corp_suffix_token(s: str) -> bool:
+    low = s.lower()
+    return any(tok in low for tok in _CORP_SUFFIX_TOKENS)
+
+
+def is_valid_alias_record(old: str, new: str) -> bool:
+    """별칭 레코드(옛 상호 old → 현재 상호 new)가 유효한지 검증 (순수 함수).
+
+    corp-aliases.json에 실제로 섞여 있던 쓰레기 5건("-", 영문 법인명 전체 캡처,
+    "상호변경안내" 문구 자체가 상호로 잘못 캡처된 경우 등)을 규칙으로 정리하기
+    위한 게이트. old/new 둘 다 통과해야 유효하다.
+    """
+    for s in (old, new):
+        s = (s or "").strip()
+        if len(s) < 2 or len(s) > 40:
+            return False
+        if re.fullmatch(r"[\s\-]+", s):
+            return False
+        if _has_corp_suffix_token(s):
+            return False
+        if "상호변경" in s or "안내" in s:
+            return False
+
+    # old가 영문 법인명 행을 통째로 캡처한 흔적: 한글이 하나도 없으면서 8자 초과.
+    # "DGP"/"E8" 같은 짧은 영문 시장 표기(실제 상호)는 8자 이하라 통과한다.
+    old_s = (old or "").strip()
+    if not _HANGUL_RE.search(old_s) and len(old_s) > 8:
+        return False
+
+    return True
+
+
 def extract_renames_from_text(txt: str, fallback_after: str = "") -> tuple[set, str]:
     """공시 원문(태그 제거된 텍스트) → (옛 상호 집합, 새 상호). 법인 표기는 제거해서 반환.
 
@@ -112,7 +151,11 @@ def collect_renames(api_key: str, start: datetime, end: datetime,
     각 레코드: {old_name, new_name, corp_code, stock_code, rcept_no, date}
     """
     records: list[dict] = []
-    stats = {"scanned": 0, "candidates": 0, "extracted": 0, "no_match": 0, "errors": 0}
+    stats = {"scanned": 0, "candidates": 0, "extracted": 0, "no_match": 0, "errors": 0,
+             "invalid": 0,
+             # 패턴 불일치 공시의 (rcept_no, 회사명, 제목) — 정규식이 못 읽는
+             # 서식 변형을 눈으로 확인해 보강하기 위한 진단 목록
+             "no_match_samples": []}
     cur = start
     while cur <= end:
         chunk_end = min(cur + timedelta(days=29), end)
@@ -138,12 +181,17 @@ def collect_renames(api_key: str, start: datetime, end: datetime,
 
             if not olds or not after:
                 stats["no_match"] += 1
+                stats["no_match_samples"].append(
+                    (rn, d.get("corp_name", ""), (d.get("report_nm") or "").strip()))
                 continue
 
             stock = d.get("stock_code", "") or ""
             rdt = d.get("rcept_dt", "") or ""
             date = f"{rdt[:4]}-{rdt[4:6]}-{rdt[6:8]}" if len(rdt) >= 8 else rdt
             for old in sorted(olds):
+                if not is_valid_alias_record(old, after):
+                    stats["invalid"] += 1
+                    continue
                 records.append({
                     "old_name": old,
                     "new_name": after,
@@ -166,11 +214,20 @@ def merge_backfill_records(existing_aliases: dict, records: list[dict]) -> dict:
 
     같은 옛 상호가 다시 등장하면(중복 스캔 등) 최신 레코드로 갱신한다.
     레코드는 호출자가 시간순으로 넘기면 그 순서를 그대로 반영한다.
+
+    is_valid_alias_record 게이트를 기존 항목·신규 레코드 양쪽에 적용한다 —
+    과거 정규식 과잉 캡처로 이미 저장된 쓰레기 항목이 있어도 이 함수를
+    다시 거치면(예: 주간 워크플로우 재실행) 자연히 정리된다.
     """
-    aliases = {name: dict(ent) for name, ent in existing_aliases.items()}
+    aliases = {
+        name: dict(ent) for name, ent in existing_aliases.items()
+        if is_valid_alias_record(name, ent.get("current", ""))
+    }
     for r in records:
         old, new = r.get("old_name", ""), r.get("new_name", "")
         if not old or not new or old == new:
+            continue
+        if not is_valid_alias_record(old, new):
             continue
         aliases[old] = {
             "corp_code": r.get("corp_code", ""),
@@ -202,6 +259,12 @@ def main():
     print(f"\n스캔: 공시 {stats['scanned']}건, 상호변경안내 후보 {stats['candidates']}건, "
           f"추출 {stats['extracted']}건, 패턴 불일치 {stats['no_match']}건, "
           f"오류 {stats['errors']}건")
+    # Windows 콘솔(cp949)에서 인코딩 불가 문자가 print를 죽이지 않도록
+    # ASCII 구분자만 쓰고, 제목의 별난 문자는 replace로 흡수한다.
+    for rn, corp, title in stats["no_match_samples"][:20]:
+        line = f"    [불일치] {rn} {corp} | {title}"
+        print(line.encode(sys.stdout.encoding or "utf-8",
+                          errors="replace").decode(sys.stdout.encoding or "utf-8"))
 
     existing = _load_json(ALIASES_PATH, {})
     merged = merge_backfill_records(existing, records)
