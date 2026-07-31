@@ -11,15 +11,22 @@
     python scripts/dev_relay.py --port 9000
 """
 import argparse
+import json
 import os
+import sys
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 import requests
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from tool_server.doc import handle_doc  # noqa: E402
+
 ALLOWED_ENDPOINTS = {"list.json", "company.json",
                      "fnlttSinglAcnt.json", "accnutAdtorNmNdAdtOpinion.json",
-                     "exctvSttus.json", "elestock.json"}
+                     "exctvSttus.json", "elestock.json",
+                     "alotMatter.json", "pssrpCptalUseDtls.json",
+                     "prvsrpCptalUseDtls.json"}
 DART_BASE = "https://opendart.fss.or.kr/api/"
 TOOL_DIR = os.path.join(os.path.dirname(__file__), "..", "docs", "tool")
 
@@ -35,8 +42,25 @@ class RelayHandler(SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         super().end_headers()
 
+    def do_OPTIONS(self):  # X-DART-Key 커스텀 헤더 preflight (api/doc.py와 동일 계약)
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-DART-Key")
+        self.end_headers()
+
     def do_GET(self):
         parts = urlsplit(self.path)
+        if parts.path == "/api/doc":
+            query = dict(parse_qsl(parts.query))
+            api_key = (self.headers.get("X-DART-Key") or "").strip()
+            status, body = handle_doc(query, api_key)
+            payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")  # 로컬은 캐시 불필요
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         if parts.path.startswith("/api/"):
             endpoint = parts.path[len("/api/"):]
             if endpoint not in ALLOWED_ENDPOINTS:
