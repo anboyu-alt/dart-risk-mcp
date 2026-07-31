@@ -35,7 +35,7 @@ from dart_risk_mcp.core.signals import (  # noqa: E402
     CAPITAL_EVENT_KEYS,
     _AMENDMENT_RE,
 )
-from dart_risk_mcp.core.taxonomy import CROSS_SIGNAL_PATTERNS  # noqa: E402
+from dart_risk_mcp.core.taxonomy import CROSS_SIGNAL_PATTERNS, TAXONOMY  # noqa: E402
 from dart_risk_mcp.core.explain import signal_to_prose  # noqa: E402
 from dart_risk_mcp.core.dart_client import _FS_ALIASES  # noqa: E402
 
@@ -130,6 +130,24 @@ ROUTINE_FILING_CATEGORY = 9
 ROUTINE_FILING_LABEL = "정기 보고"  # 사실 라벨 — 판정 어휘 아님(v0.8.5)
 
 
+# severity 2단계 접기 (뷰어 '주의/참고' 배지용) — severity 문자열 원값은
+# 계속 미노출한다. CRITICAL/HIGH → 주의(true), 그 외 → 참고(false)의
+# 불리언 하나만 내보내 "등급"으로 읽힐 표면을 없앤다. 라벨 문자열
+# ("주의"/"참고")은 뷰어 JS에만 둔다.
+#
+# 패턴(CROSS_SIGNAL_PATTERNS)에는 넣지 않는다 — 9종 전원이 CRITICAL/HIGH라
+# 불리언이 상수가 되고(정보량 0), 상수 배지는 경고 중첩 노이즈만 만든다.
+_CAUTION_SEVERITIES = frozenset({"CRITICAL", "HIGH"})
+
+
+def _caution_of(signal_key: str) -> bool:
+    """신호의 taxonomy 중 하나라도 CRITICAL/HIGH severity면 주의(true)."""
+    return any(
+        TAXONOMY.get(tax_id, {}).get("severity") in _CAUTION_SEVERITIES
+        for tax_id in _taxonomies_of(signal_key)
+    )
+
+
 def _taxonomies_of(signal_key: str) -> list[str]:
     """신호의 taxonomy ID 전체 목록 (단일 매핑도 리스트로 정규화)."""
     tax = SIGNAL_KEY_TO_TAXONOMY.get(signal_key, "")
@@ -163,6 +181,7 @@ def build_signals_data() -> dict:
             "taxonomies": _taxonomies_of(s["key"]),
             "category": _category_of(s["key"]),
             "prose": signal_to_prose(s["key"]),
+            "caution": _caution_of(s["key"]),
         }
         for s in sorted(SIGNAL_TYPES, key=lambda x: -x["score"])
     ]
