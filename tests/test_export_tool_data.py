@@ -43,8 +43,37 @@ class TestBuildSignalsData(unittest.TestCase):
         노출 대상 — 별도 테스트(test_field_evidence_exported_matches_core)."""
         for s in self.data["signals"]:
             self.assertNotIn("score", s)
+            self.assertNotIn("severity", s)
         for p in self.data["patterns"]:
             self.assertNotIn("severity", p)
+
+    def test_caution_is_boolean_on_all_signals(self):
+        """뷰어 '주의/참고' 배지용 severity 2단계 접기 — 모든 신호에 caution
+        불리언이 있고, severity 문자열·score 숫자는 여전히 없다. 패턴에는
+        caution을 넣지 않는다(9종 전원 CRITICAL/HIGH라 상수 — 정보량 0)."""
+        for s in self.data["signals"]:
+            self.assertIn("caution", s)
+            self.assertIsInstance(s["caution"], bool)
+        for p in self.data["patterns"]:
+            self.assertNotIn("caution", p)
+
+    def test_caution_matches_taxonomy_severity_spotcheck(self):
+        """접기 규칙 스팟체크: EMBEZZLE(8.1 CRITICAL)=주의,
+        MGMT(5.2 — CRITICAL/HIGH 아님)=참고. 규칙: 신호의 taxonomy 중
+        하나라도 CRITICAL/HIGH면 true."""
+        by_key = {s["key"]: s for s in self.data["signals"]}
+        self.assertTrue(by_key["EMBEZZLE"]["caution"])
+        self.assertTrue(by_key["GOING_CONCERN"]["caution"])
+        from dart_risk_mcp.core.taxonomy import TAXONOMY
+        from dart_risk_mcp.core.signals import SIGNAL_KEY_TO_TAXONOMY
+        for s in self.data["signals"]:
+            tax = SIGNAL_KEY_TO_TAXONOMY.get(s["key"], "")
+            tax_ids = tax if isinstance(tax, (list, tuple)) else [tax]
+            expect = any(
+                TAXONOMY.get(t, {}).get("severity") in ("CRITICAL", "HIGH")
+                for t in tax_ids if t
+            )
+            self.assertEqual(s["caution"], expect, msg=s["key"])
 
     def test_field_evidence_exported_matches_core(self):
         """SE-13 Task 2: field_evidence(금감원 보도자료·사례 인용)는 사실

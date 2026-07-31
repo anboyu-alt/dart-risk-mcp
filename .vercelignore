@@ -17,6 +17,9 @@
 !se_server
 !dart_risk_mcp
 
+# 공개 뷰어 원문 함수(api/doc.py)가 import하는 패키지.
+!tool_server
+
 # Python 의존성 설치 목록(requests). 없으면 import가 깨진다.
 !requirements.txt
 

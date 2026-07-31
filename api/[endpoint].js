@@ -17,6 +17,9 @@ const ALLOWED_ENDPOINTS = new Set([
   "accnutAdtorNmNdAdtOpinion.json",   // 감사인·감사의견 (뷰어 심화 블록)
   "exctvSttus.json",                  // 임원현황 (뷰어 겸직 비교 모드)
   "elestock.json",                    // 5% 대량보유 시계열 (뷰어 지분 변동 블록)
+  "alotMatter.json",                  // 배당에 관한 사항 (뷰어 배당 유출 블록)
+  "pssrpCptalUseDtls.json",           // 공모자금 사용 내역 (뷰어 자금 체인 블록)
+  "prvsrpCptalUseDtls.json",          // 사모자금 사용 내역 (뷰어 자금 체인 블록)
 ]);
 
 export default async function handler(req, res) {
