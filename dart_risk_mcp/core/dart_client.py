@@ -637,6 +637,146 @@ def fetch_document_text(rcept_no: str, api_key: str, max_chars: int = 3000) -> s
         return ""
 
 
+# ── v1.6.1: 자금유출성 거래(금전대여·채무보증·담보제공) 원문 상대방 추출 ──
+# 이 3종은 DS005 구조화 엔드포인트가 없어(major_decision 12종에 포함되지 않음)
+# fetch_document_text로 얻은 태그 제거·공백 단일화 텍스트에서 직접 정규식으로
+# 추출한다. 실측 서식(라이브 확인, 하이픈 유무 변형 포함):
+#   금전대여결정: "1. 대여 상대 <법인명> [영문 ...] [-]회사와의 관계 <관계>
+#                  2. 금전대여 내역 ... 대여금액(원) <숫자> ... 자기자본대비(%) <숫자>"
+#   타인에대한채무보증결정: "1. 채무자 <법인명> [-]회사와의 관계 <관계>
+#                  2. 채권자 ... 3. 채무(차입)금액(원) <숫자>
+#                  4. 채무보증내역 채무보증금액(원) <숫자> ... 자기자본대비(%) <숫자>"
+#   타인에대한담보제공결정: 채무보증결정과 동일 구조, "담보제공 내역 담보설정금액(원) <숫자>"
+#   금전대여결정 라벨은 "대여 상대"와 "성명(법인명)" 두 변형이 실측 확인됐다
+#   (아틀라스링크 20260120900216/20251015900139는 종속회사 대여 한도 연장
+#   공시에서 "1. 성명(법인명) <법인> (회사와의 관계) <관계>" 형식을 쓴다).
+_OUTFLOW_LOAN_COUNTERPARTY_RE = re.compile(
+    r"(?:대여\s*상대|성명\(법인명\))\s+(?P<v>.+?)\s*(?:영문|-?\s*\(?\s*회사와의\s*관계)"
+)
+_OUTFLOW_DEBTOR_COUNTERPARTY_RE = re.compile(
+    r"채무자\s+(?P<v>.+?)\s*-?\s*\(?\s*회사와의\s*관계"
+)
+# 관계값은 짧은 한글 구(계열회사·종속회사·주요주주의 특수관계인 등)이며 숫자·
+# 하이픈을 포함하지 않는다. 다음 경계 중 먼저 오는 곳에서 끝난다:
+#   "2. ..." 같은 다음 번호 섹션(숫자+마침표) / "-최근 6월..." 같은 하이픈
+#   접두 부가 항목(성명(법인명) 서식에서 관계 바로 뒤에 등장) / 문자열 끝.
+_OUTFLOW_RELATION_RE = re.compile(
+    r"회사와의\s*관계\)?\s+(?P<v>[^\d\-]{1,20}?)\s*(?=\d\.|-\S|$)"
+)
+_OUTFLOW_LOAN_AMOUNT_RE = re.compile(r"대여금액\s*\(원\)\s*([\d,]+)")
+_OUTFLOW_GUARANTEE_AMOUNT_RE = re.compile(r"채무보증금액\s*\(원\)\s*([\d,]+)")
+_OUTFLOW_COLLATERAL_AMOUNT_RE = re.compile(r"담보설정금액\s*\(원\)\s*([\d,]+)")
+_OUTFLOW_EQUITY_RATIO_RE = re.compile(r"자기자본\s*대비\s*\(%\)\s*([\d.]+)")
+
+
+def parse_outflow_detail(text: str) -> dict:
+    """금전대여·채무보증·담보제공 결정 공시 원문에서 상대방·관계·금액을 추출한다.
+
+    입력은 fetch_document_text로 태그 제거·공백 단일화된 텍스트를 가정한다.
+    법인 표기(주식회사 등)는 제거하지 않고 원문 그대로 counterparty에 담는다.
+    매칭 실패 필드는 빈 문자열/0/0.0으로 남는다(예외를 던지지 않는다).
+
+    Returns:
+        {"counterparty": str, "relation": str, "amount": int,
+         "equity_ratio": float, "kind": "loan"|"guarantee"|"collateral"|""}
+    """
+    result = {
+        "counterparty": "", "relation": "", "amount": 0,
+        "equity_ratio": 0.0, "kind": "",
+    }
+    if not text:
+        return result
+
+    if "금전대여 내역" in text or "대여금액" in text:
+        result["kind"] = "loan"
+        m = _OUTFLOW_LOAN_COUNTERPARTY_RE.search(text)
+        amount_re = _OUTFLOW_LOAN_AMOUNT_RE
+    # "채무자" 앵커 필수 — "최대주주변경을수반하는주식담보제공계약체결"(별개
+    # 서식, STAKE_PLEDGE 신호)도 "담보설정금액"이라는 같은 필드명을 쓰지만
+    # "1. 담보제공자(최대주주) 관련 사항"으로 시작해 "채무자"가 없다. 이 앵커가
+    # 없으면 두 서식을 구분할 수 없어 STAKE_PLEDGE 건이 FUND_OUTFLOW 파서로
+    # 잘못 흡수된다.
+    elif "채무자" in text and ("채무보증내역" in text or "채무보증금액" in text):
+        result["kind"] = "guarantee"
+        m = _OUTFLOW_DEBTOR_COUNTERPARTY_RE.search(text)
+        amount_re = _OUTFLOW_GUARANTEE_AMOUNT_RE
+    elif "채무자" in text and ("담보제공 내역" in text or "담보설정금액" in text):
+        result["kind"] = "collateral"
+        m = _OUTFLOW_DEBTOR_COUNTERPARTY_RE.search(text)
+        amount_re = _OUTFLOW_COLLATERAL_AMOUNT_RE
+    else:
+        return result
+
+    if m:
+        result["counterparty"] = m.group("v").strip()
+    am = amount_re.search(text)
+    if am:
+        result["amount"] = _to_int_safe(am.group(1))
+    rm = _OUTFLOW_RELATION_RE.search(text)
+    if rm:
+        result["relation"] = rm.group("v").strip()
+    rr = _OUTFLOW_EQUITY_RATIO_RE.search(text)
+    if rr:
+        try:
+            result["equity_ratio"] = float(rr.group(1))
+        except ValueError:
+            pass
+    return result
+
+
+def fetch_outflow_detail(rcept_no: str, api_key: str) -> dict:
+    """FUND_OUTFLOW(금전대여·채무보증·담보제공) 공시 원문에서 상대방 정보를 조회.
+
+    fetch_document_text(max_chars=4000) 후 parse_outflow_detail로 파싱한다.
+    실패 시 빈 dict를 반환한다(호출자는 빈 dict를 "확인 불가"로 처리).
+    """
+    if not rcept_no or not api_key:
+        return {}
+    try:
+        text = fetch_document_text(rcept_no, api_key, max_chars=4000)
+    except Exception as e:
+        log.debug("자금유출 상대방 원문 조회 실패 (%s): %s", rcept_no, e)
+        return {}
+    if not text:
+        return {}
+    try:
+        return parse_outflow_detail(text)
+    except Exception as e:
+        log.debug("자금유출 상대방 파싱 실패 (%s): %s", rcept_no, e)
+        return {}
+
+
+_OUTFLOW_SUBSIDIARY_KEYWORDS = ("종속회사", "자회사")
+# "비연결" 특수관계 — 계열사이지만 연결대상 종속회사는 아닌 관계 표기들.
+_OUTFLOW_AFFILIATED_KEYWORDS = (
+    "계열회사", "관계회사", "특수관계", "최대주주", "주요주주", "임원", "대표이사",
+)
+_OUTFLOW_EXTERNAL_VALUES = {"-", "타인", "해당없음", "해당 없음"}
+
+
+def classify_outflow_relation(relation: str) -> str:
+    """거래상대방 관계 원문 표기를 4범주로 분류한다.
+
+    - "subsidiary": 종속회사·자회사 (연결대상)
+    - "affiliated": 계열회사·관계회사·특수관계·최대주주·주요주주·임원·대표이사
+      (비연결 특수관계 — capital_backflow 게이트의 발화 조건)
+    - "external": 타인·해당없음·"-" 등 특수관계가 없다고 명시된 경우
+    - "unknown": 관계 표기 자체를 추출하지 못했거나(빈 문자열) 알려진
+      범주에 속하지 않는 표기 — 보수적으로 "확인 안 됨"으로 취급한다
+      (원문 확인 없이 경고하지 않는다는 v0.8.5 원칙과 동일한 태도).
+    """
+    r = (relation or "").strip()
+    if not r:
+        return "unknown"
+    if any(k in r for k in _OUTFLOW_SUBSIDIARY_KEYWORDS):
+        return "subsidiary"
+    if any(k in r for k in _OUTFLOW_AFFILIATED_KEYWORDS):
+        return "affiliated"
+    if r in _OUTFLOW_EXTERNAL_VALUES:
+        return "external"
+    return "unknown"
+
+
 # ── 구조 보존 HTML → 텍스트 변환 ───────────────────────────────
 
 # HTML 엔티티 디코딩 테이블

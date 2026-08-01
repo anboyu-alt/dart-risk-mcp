@@ -25,7 +25,7 @@ dart_risk_mcp/
 └── core/
     ├── __init__.py      # 공개 API export
     ├── dart_client.py   # DART API 클라이언트 (핵심)
-    ├── signals.py       # 53개 신호 유형 (8개 카테고리) + 키워드 매칭 (v0.4.0 카탈로그 기반 보강, v1.6.0 기준 53종)
+    ├── signals.py       # 54개 신호 유형 (8개 카테고리) + 키워드 매칭 (v0.4.0 카탈로그 기반 보강, v1.6.1 기준 54종)
     ├── catalog.py       # 금감원·금융위 MD 카탈로그 로더 (load_catalog_excerpt)
     ├── cb_extractor.py  # CB/BW 인수자명 추출
     ├── sector_policy.py # 업종별 유의 회계정책 정적 맵 (KSIC 조회, kreports 이식/Apache 2.0)
@@ -77,7 +77,7 @@ dart_risk_mcp/
   |---------|---------|
   | Cat 1 CB/채권 | `CB_BW`, `CB_REPAY`, `EB`, `RCPS`, `CB_ROLLOVER`, `CB_BUYBACK`, `TREASURY_EB` |
   | Cat 2 자본구조 | `REVERSE_SPLIT`, `GAMJA_MERGE`, `3PCA`, `RIGHTS_UNDER`, `TREASURY` |
-  | Cat 3 경영권 | `SHAREHOLDER`, `EXEC`, `MGMT_DISPUTE`, `CIRCULAR` |
+  | Cat 3 경영권 | `SHAREHOLDER`, `EXEC`, `MGMT_DISPUTE`, `CIRCULAR`, `STAKE_PLEDGE` |
   | Cat 4 거버넌스 | `RELATED_PARTY`, `AUDIT` |
   | Cat 5 기업활동 | `ASSET_TRANSFER`, `DEMERGER`, `MGMT`, `FUND_OUTFLOW`, `ACQ_REVIEW` |
   | Cat 6 회계/재무 | `REVENUE_IRREG`, `CONTINGENT` |
@@ -86,8 +86,21 @@ dart_risk_mcp/
 
   v1.6.0 신규: `FUND_OUTFLOW`(금전대여·채무보증·담보제공·유형자산양수 — 참고 강도, taxonomy 5.7)
   · `ACQ_REVIEW`(영업양수·타법인주식및출자증권양수 — 상대방 확인 안내, taxonomy 5.8).
+  v1.6.1 신규: `STAKE_PLEDGE`(최대주주 주식담보제공계약 체결·해제·취소 — 참고 강도, taxonomy 3.7).
+  "최대주주변경을수반하는주식담보제공계약체결"류는 최대주주 개인의 주식담보 차입이라
+  `FUND_OUTFLOW`에서 분리했다(회사 자금 유출이 아님). `FUND_OUTFLOW` 키워드도 "담보제공"
+  단독에서 "담보제공결정"·"특수관계인에대한담보제공"으로 정밀화해 이 오분류를 막았다
+  (라이브 시장 스캔에서 4개 회사 동일 제목의 "특수관계인에대한담보제공"이 "담보제공결정"
+  단독 키워드로는 누락되는 것을 실측 확인해 별도 키워드로 보강).
   경영권 변경(`SHAREHOLDER`, 3.1) 직후 `FUND_OUTFLOW`가 겹치면 복합 패턴 `capital_backflow`
-  ("자금 역류", CRITICAL)로 격상 — 아틀라스링크(01309795, 297570) 라이브 매칭.
+  ("자금 역류", CRITICAL) 후보가 되지만, v1.6.1부터는 제목 매칭만으로 바로 발화하지
+  않는다 — `analyze_company_risk`/`build_event_timeline`이 원문(금전대여·채무보증·
+  담보제공)과 DS005 구조화 데이터(유형자산양수)로 거래상대방·관계를 확인해 **계열·
+  특수관계(비연결) 관계가 1건이라도 확인될 때만** 패턴을 표시한다(`server.py`의
+  `_confirm_outflow_counterparties`/`_capital_backflow_gate`). 종속회사·외부로만
+  확인되거나 상대방을 아예 특정하지 못하면 패턴 대신 사실 블록으로 대체된다 —
+  아틀라스링크(01309795, 297570)·한농화성(011500) 라이브 매칭, 아래
+  "제목 수준 vs 내용 확인 감사표" 참고.
 
 ### 4. `build_event_timeline(company_name, lookback_years=1)` ✨
 
@@ -351,6 +364,9 @@ dart_risk_mcp/
 | `fetch_dividend_history(corp_code, api_key, lookback_years)` | alotMatter을 분기 4코드 × N년 호출. 각 record에 bsns_year/reprt_code 부착 (v0.9.0) |
 | `detect_dividend_drain(dividend_records)` | 적자 시점 배당 유출(DIVIDEND_DRAIN) 패턴 — alotMatter 자체가 bundling한 연도별 (연결)/(별도)당기순이익을 그 연도 현금배당과 짝지어 flag(SE-12, v0.9.0 재설계). 별도 재무제표 조회 불필요. CFS 순이익은 지배기업소유주지분순이익(비지배지분 제외)이라 총 당기순이익과 부호가 다를 수 있음(두산 2023 CFS 실측: alotMatter -3,883억 vs 총 당기순이익 +2,721억) — 출력에 "연결·지배지분 기준" 명시 |
 | `fetch_affiliate_investments(corp_code, api_key, year, report_type)` | 타법인 출자현황(otrCprInvstmntSttus) 조회 + 합계 행 제거 |
+| `parse_outflow_detail(text)` | 금전대여·채무보증·담보제공 결정 원문(fetch_document_text 출력)에서 상대방·관계·금액·자기자본대비를 정규식으로 추출하는 순수 파서. "대여 상대"/"성명(법인명)" 두 라벨, "-회사와의 관계"/"(회사와의 관계)" 두 괄호 변형 모두 대응 (v1.6.1) |
+| `fetch_outflow_detail(rcept_no, api_key)` | `fetch_document_text(max_chars=4000)` + `parse_outflow_detail` 래퍼. 실패 시 빈 dict (v1.6.1) |
+| `classify_outflow_relation(relation)` | 관계 원문 표기 → affiliated(계열·특수관계)/subsidiary(종속회사)/external(타인 등)/unknown(추출 실패) 4범주 분류 — `capital_backflow` 게이트의 입력 (v1.6.1) |
 | `scan_note_titles(rcept_no, api_key)` | 공시 ZIP 전 파일 `<TITLE>` 태그 스캔 → 주석 카테고리 제목 검출 (섹션 추출 보완 경로) |
 | `compute_beneish_variables(current, prior, dep_current, dep_prior)` | Beneish 개별 변수 최대 8종 계산(감가상각비 인자 제공 시 DEPI·TATA 포함) — 합산·판정 없음, 사실 표기 전용 |
 | `extract_xbrl_depreciation(corp_code, api_key, fs_div, year)` | 사업보고서 XBRL 인스턴스(fnlttXbrl.xml)에서 감가상각비 당기/전기 좁은 추출 — 연결/별도 축 매칭, 분기·세그먼트 컨텍스트 제외, 10분 캐시 |
@@ -485,12 +501,39 @@ PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설
 | `DIVIDEND_DRAIN` (v0.9.0) | ✅ | 두산(00117212) 2022 CFS·2023 CFS·2023 OFS·2024 CFS 라이브 발화(SE-12). 6사 매트릭스(SG·두산에너빌리티·삼성전자·셀트리온·제이스코·헬릭스미스)는 여전히 0건 — 미발화가 결함이었던 게 아니라 두산류(비지배지분 큰 회사) 사례가 이 6사엔 없었을 뿐 |
 | `DISTRESS_EVENT` (v0.9.0) | ⚠ | 부도/영업정지/회생/해산 4 endpoint, 헬릭스미스조차 미발화 |
 | `get_major_decision` 12개 decision_type 중 1개(`tangible_acq`) | ✅ | 아틀라스링크 20260722000373 라이브 매칭(SE-14/v1.6.0) — 거래상대방 로아앤코홀딩스·회사와의 관계 계열회사·외부평가 삼덕회계법인 적정·금액 174억·자산대비 15.47% 전부 실측 확인. 이 발화 과정에서 `_normalize_decision`의 금액·자산비율 필드명 버그(실존하지 않는 필드명 사용으로 항상 0 반환) 발견·수정 — 나머지 11개 decision_type은 여전히 미검증 |
-| `capital_backflow`(v1.6.0)/`FUND_OUTFLOW` | ✅ | 아틀라스링크(01309795, 297570) 라이브 매칭 — 최대주주변경(20260709) 후 유형자산양수(20260722)·채무보증(20260729) 연쇄로 패턴 발화, `analyze_company_risk`·`build_event_timeline` 양쪽 골드 확인 |
+| `capital_backflow`(v1.6.0)/`FUND_OUTFLOW` | ✅ | 아틀라스링크(01309795, 297570) 라이브 매칭 — 최대주주변경(20260709) 후 유형자산양수(20260722)·채무보증(20260729)·금전대여(20260120, 20251015) 연쇄로 패턴 발화, `analyze_company_risk`·`build_event_timeline` 양쪽 골드 확인. v1.6.1 게이트 도입 후에도 계속 발화(유형자산양수 상대 로아앤코홀딩스가 계열회사로 확인돼 affiliated 조건 충족) — 게이트가 발화를 막지 않았음을 확인. 한농화성(011500)도 별도로 게이트 통과 라이브 확인(금전대여 20260728800659 → 바스프한농화성솔루션스, 계열회사) |
+| `capital_backflow` 게이트(v1.6.1) — 원문 상대방 관계 실질 판정 | ✅ | `parse_outflow_detail`이 아틀라스링크 금전대여결정(20260120900216/20251015900139)에서 "성명(법인명)"·"(회사와의 관계)" 괄호형이라는 세 번째 실측 서식 변형을 발견 — 최초 구현은 이 변형에서 상대방을 못 찾아 "unknown"으로 놓쳤다가 정규식 보강 후 "주식회사 한국파일/종속회사"로 정확히 추출. subsidiary만 확인되면(계열·특수관계 없음) 패턴이 아니라 사실 블록만 표기하는 경로는 이 실사례로 간접 검증(종속회사 건 3개 중 유형자산양수 1건만 계열회사라 affiliated 통과) |
 | `fund_diversion_chain`(금감원 2019-12 무자본 M&A 합동점검 반영) | ⚠ | CB/BW 발행(1.1) + 타법인주식·영업 양수(5.8) 조합 — 코드·단위 테스트만, 라이브 매칭 사례 미발굴 |
+| `STAKE_PLEDGE`(v1.6.1, 최대주주 주식담보제공계약) | ✅ | 시장 전체 스캔 라이브 매칭(2026-07-31) — 아진산업(주식담보제공계약해제ㆍ취소등)·인카금융서비스(주식담보제공계약체결) 2건, 골드 `market_shareholder_change.txt`/`market_all_risk.txt`. `FUND_OUTFLOW`에서 분리되기 전에는 이 2건이 [최대주주변경, 자금유출성거래]로 오분류됐던 것도 같은 골드 diff로 확인 |
 | `LOAN_ADVANCE_SURGE`(대여금·선급금 급증, 금감원 2019-12 무자본 M&A 합동점검 반영) | ⚠ | "대여금·선급금 (계정 노출 시)" 사실 표기 블록 자체는 두산에너빌리티(BS 3계정 노출, 2024 전년 대비 감소)·헬릭스미스·두산(CF 전용 노출) 라이브 확인. 단 플래그 임계(2배↑·10억↑)를 충족하는 실사례는 6사+아틀라스링크 매트릭스에서 아직 미발굴 — 셀트리온·삼성전자·제이스코홀딩스·아틀라스링크는 계정 자체가 노출되지 않음(정상) |
 | `CROSS_SIGNAL_PATTERNS` 11개 중 9개 (capital_churn_anomaly·capital_backflow 제외) | ⚠ | `founder_fade`·`debt_spiral`·`reverse_split_spiral`·`related_party_hollowing`·`zombie_ma`·`audit_insider_dump`·`delisting_evasion`·`fake_new_biz`·`fund_diversion_chain` |
 
 신규 PR이 ⚠ 항목의 라이브 매칭 사례 발굴 시: (1) 사례 회사를 `scripts/regen_goldens.py`의 `COMPANIES`에 추가하거나 (2) `tests/fixtures/sample_outputs/`에 직접 골드 추가. hygiene 검증 9/9 PASS 후 ⚠ 제거.
+
+---
+
+## 제목 수준 vs 내용 확인 감사표
+
+대부분의 신호는 공시 **제목** 키워드 매칭만으로 충분하다(`match_signals`). 하지만 일부
+신호는 제목만으로 발화하면 정상적인 일상 거래(계열사 자금 지원, 정상 M&A 등)까지
+전부 걸려 신호 대 잡음비가 무너진다. 이 표는 어떤 신호에 원문·구조화 데이터 확인
+계층이 있고 어떤 신호는 제목만으로 충분한지 정직하게 정리한다 — v1.6.1에서
+`FUND_OUTFLOW`/`capital_backflow`에 확인 계층을 추가하며 이 구분이 명시적으로 필요해졌다.
+
+| 신호/패턴 | 판정 근거 | 확인 계층 | 근거 |
+|---|---|---|---|
+| `FUND_OUTFLOW` (개별 신호 표기) | 제목만 | 없음 | 대기업의 일상적 계열 지원과 구분 불가 — 참고 강도(base_score 2)로 사실 표기만 하고 판정하지 않는다 |
+| `capital_backflow` (복합 패턴 발화) | **원문/DS005 확인** | `parse_outflow_detail`(금전대여·채무보증·담보제공, 원문 정규식) + `fetch_major_decision`(유형자산양수, DS005 구조화) → `classify_outflow_relation` → `_capital_backflow_gate` | 제목만으로 발화하면 아틀라스링크류(실제 계열 유출)와 일상적 종속회사 자금 지원(예: 담보 상대가 종속회사뿐인 경우)을 구분할 수 없다. affiliated(비연결 계열·특수관계) 확인 1건 이상일 때만 패턴을 표시 |
+| `ACQ_REVIEW` | 제목만 | 없음(단, `get_major_decision` 안내는 별도로 표시) | 정상 M&A가 대다수라 사실 안내 수준. 상대방 확인은 사용자가 `get_major_decision` 호출로 직접 수행하도록 안내만 한다 — capital_backflow처럼 자동 게이트는 아님 |
+| `STAKE_PLEDGE` | 제목만 | 없음 | 오너의 정상적인 주식담보대출(주담대)이 흔해 이 신호 하나만으로는 판단 근거가 되지 않는다(MEDIUM 참고 강도). 담보설정비율·인수 직후 시점 여부는 사용자가 원문에서 직접 확인 |
+| `CB_BW` 인수자 추출 | 제목 매칭 + **인수자 실명 확인** | `extract_cb_investors`(구조화 엔드포인트 우선, HTML 폴백) | 신호 자체는 제목으로 충분하지만, "누가 받아갔는지"는 원문 확인 없이는 알 수 없어 별도 추출기를 둔다 |
+| `DECISION_RELATED_PARTY`/`DECISION_OVERSIZED`/`DECISION_NO_EXTVAL` | **DS005 구조화 확인** | `fetch_major_decision` → `_normalize_decision`(관계·금액·자산비율) → `_detect_decision_anomaly` | 특수관계 여부·자산 대비 규모·외부평가 실시 여부는 제목에 드러나지 않는다 |
+| 그 외 대다수 신호(CB/BW 발행, 감자, 3자배정, 최대주주변경 등) | 제목만 | 없음 | 공시 제목 자체가 이벤트 유형을 특정하며, 상대방·금액 확인이 신호의 의미를 바꾸지 않는다 |
+
+**설계 원칙**: 확인 계층을 추가할지는 "제목만으로 정상 거래와 이상 거래를 구분할 수
+있는가"로 판단한다. 구분 불가하면(FUND_OUTFLOW처럼) 신호 자체는 참고 강도로 유지하고,
+그 신호가 **복합 패턴으로 격상**될 때만 원문 확인을 추가한다(개별 신호 표기 자체에
+호출을 추가하면 `analyze_company_risk` 1회 실행에 API 호출이 과다해진다).
 
 ---
 
@@ -524,11 +567,11 @@ PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설
 > 읽으므로 잊으면 드리프트가 생깁니다. 재생성 후 `python -m pytest tests/test_export_tool_data.py -v`로
 > 검증하세요.
 
-등록 패턴 11개 (v1.6.0 기준):
+등록 패턴 11개 (v1.6.1 기준):
 - **기존 4개 (전통 위기 사이클)**: `founder_fade`(창업주 퇴장), `debt_spiral`(부채 악순환), `reverse_split_spiral`(무상감자 나선), `related_party_hollowing`(특수관계자 자산 공동화)
 - **v0.4.0 신규 4개 (금감원 사례 기반)**: `zombie_ma`(무자본 M&A), `audit_insider_dump`(감사의견 내부자 덤프), `delisting_evasion`(상폐 회피), `fake_new_biz`(허위 신사업 주가부양)
 - **v0.6.0 신규 1개**: `capital_churn_anomaly`(자본 이벤트 과다 반복 + 공시의무 위반)
-- **v1.6.0 신규 2개**: `capital_backflow`(자금 역류 — 최대주주변경 후 12개월 내 금전대여·채무보증·담보제공·자산 양수로 인수자 측에 자원 이전), `fund_diversion_chain`(조달-유용 체인 — CB/BW 등 사모 조달 후 비상장주식·타법인 출자로 자금 이동, 금감원 2019-12 무자본 M&A 합동점검에서 조달자금 유용의 최대 경로(비상장주식 취득 55%)로 집계)
+- **v1.6.0 신규 2개**: `capital_backflow`(자금 역류 — 최대주주변경 후 12개월 내 금전대여·채무보증·담보제공·자산 양수로 인수자 측에 자원 이전. **v1.6.1부터 내용 조건부 발화**: 제목 매칭만으로는 표시하지 않고, 원문·DS005로 확인한 상대방 관계가 계열·특수관계(비연결)로 1건 이상 나올 때만 패턴을 표시한다 — `server.py`의 `_capital_backflow_gate` 참고), `fund_diversion_chain`(조달-유용 체인 — CB/BW 등 사모 조달 후 비상장주식·타법인 출자로 자금 이동, 금감원 2019-12 무자본 M&A 합동점검에서 조달자금 유용의 최대 경로(비상장주식 취득 55%)로 집계)
 
 ### 도구 추가
 

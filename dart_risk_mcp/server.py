@@ -54,6 +54,8 @@ from .core import (
     fetch_dividend_history,
     fetch_document_content,
     fetch_document_text,
+    fetch_outflow_detail,
+    classify_outflow_relation,
     actor_status,
     add_person,
     get_person_companies,
@@ -292,6 +294,194 @@ def _registry_company_section(corp_name: str) -> list[str]:
     return lines
 
 
+# ── v1.6.1: 자금유출·양수거래 상대방 확인 + capital_backflow 게이트 ─────────
+# capital_backflow(자금 역류) 패턴은 최대주주변경(3.1) + 자금유출성거래(5.7)가
+# 둘 다 탐지되면 무조건 발화했다. 하지만 자금유출성거래는 제목만으로 매칭되므로
+# 계열사 지원이 일상인 회사도 걸린다. 여기서 원문 상대방·관계를 확인해, 실제로
+# 계열·특수관계(비연결)에 자금이 흘렀을 때만 패턴을 발화시킨다.
+
+_OUTFLOW_CLASS_LABEL = {
+    "affiliated": "계열·특수관계",
+    "subsidiary": "종속회사",
+    "external": "외부",
+    "unknown": "미확인",
+}
+
+# DS005로 커버되는 결정 유형 중 "처분(양도)" 3종 — work item 4: 기존에는 이
+# 확인 흐름이 신호 매칭(양수 키워드)에만 걸려 있어 양도 결정이 통째로 빠졌다.
+_OUTFLOW_DIV_DECISION_TYPES = ("tangible_div", "business_div", "stock_div")
+
+
+def _outflow_review_candidates(
+    signal_events: list[dict], disclosures: list[dict]
+) -> list[tuple[str, str, str]]:
+    """상대방 확인 후보를 (rcept_dt, report_nm, rcept_no) 최신순으로 모은다.
+
+    FUND_OUTFLOW/ACQ_REVIEW 신호가 매칭된 공시 + 신호 매칭 여부와 무관하게
+    제목만으로 판별되는 처분(양도) 결정을 합쳐 중복 제거한다.
+    """
+    items: dict[str, tuple[str, str]] = {}
+    for e in signal_events:
+        if e["key"] not in ("FUND_OUTFLOW", "ACQ_REVIEW") or e["is_amendment"]:
+            continue
+        rcept = e.get("rcept_no", "")
+        if not rcept:
+            continue
+        items.setdefault(rcept, (e["rcept_dt"], e["report_nm"]))
+    for d in disclosures:
+        if resolve_decision_type(d.get("report_nm", "")) not in _OUTFLOW_DIV_DECISION_TYPES:
+            continue
+        rcept = d.get("rcept_no", "")
+        if not rcept:
+            continue
+        items.setdefault(rcept, (d.get("rcept_dt", "")[:10], d.get("report_nm", "")))
+    return sorted(
+        ((rcept, dt, nm) for rcept, (dt, nm) in items.items()),
+        key=lambda t: t[1], reverse=True,
+    )
+
+
+def _outflow_row(
+    rcept_dt: str, report_nm: str, rcept_no: str,
+    counterparty: str, relation: str, classification: str, amount: int,
+) -> dict:
+    return {
+        "rcept_dt": rcept_dt, "report_nm": report_nm, "rcept_no": rcept_no,
+        "counterparty": counterparty, "relation": relation,
+        "classification": classification, "amount": amount,
+    }
+
+
+def _confirm_outflow_counterparties(
+    signal_events: list[dict],
+    disclosures: list[dict],
+    corp_code: str,
+    decisions_by_rcept: "dict[str, dict] | None" = None,
+) -> list[dict]:
+    """자금유출·양수거래(+처분) 공시 최근 최대 4건의 상대방·관계를 확인한다.
+
+    - 금전대여·채무보증·담보제공(DS005에 없음): fetch_outflow_detail로 원문 직접 확인.
+    - 유형자산·영업·타법인 주식 양수/양도(DS005): 이미 fetch된 decisions_by_rcept를
+      재사용해 추가 호출 없이 채운다. 없으면(캐시 밖) 최대 2건까지만 보충 조회한다.
+    """
+    decisions_by_rcept = decisions_by_rcept or {}
+    candidates = _outflow_review_candidates(signal_events, disclosures)[:4]
+
+    out: list[dict] = []
+    extra_fetches = 0
+    for rcept, rcept_dt, report_nm in candidates:
+        dtype = resolve_decision_type(report_nm)
+        if dtype:
+            r = decisions_by_rcept.get(rcept)
+            if r is None and extra_fetches < 2:
+                extra_fetches += 1
+                try:
+                    _r = fetch_major_decision(rcept, _DART_API_KEY, dtype, corp_code)
+                    r = _r if "error" not in _r else None
+                except Exception:
+                    r = None
+            if r is None:
+                out.append(_outflow_row(rcept_dt, report_nm, rcept, "", "", "unknown", 0))
+                continue
+            relation = r.get("relation_text") or ""
+            cls = (
+                classify_outflow_relation(relation) if relation
+                else ("affiliated" if r.get("related_party") else "unknown")
+            )
+            out.append(_outflow_row(
+                rcept_dt, report_nm, rcept,
+                r.get("counterparty") or "", relation, cls, r.get("amount", 0),
+            ))
+        else:
+            try:
+                detail = fetch_outflow_detail(rcept, _DART_API_KEY)
+            except Exception:
+                detail = {}
+            if not detail or not detail.get("kind"):
+                out.append(_outflow_row(rcept_dt, report_nm, rcept, "", "", "unknown", 0))
+                continue
+            cls = classify_outflow_relation(detail.get("relation", ""))
+            out.append(_outflow_row(
+                rcept_dt, report_nm, rcept,
+                detail.get("counterparty", ""), detail.get("relation", ""),
+                cls, detail.get("amount", 0),
+            ))
+    return out
+
+
+def _render_outflow_confirmations(confirmations: list[dict]) -> list[str]:
+    """확인된 상대방 목록을 출력 줄로 렌더링한다."""
+    lines: list[str] = []
+    for c in confirmations:
+        cp = c["counterparty"] or "(미확인)"
+        cls_label = _OUTFLOW_CLASS_LABEL.get(c["classification"], "미확인")
+        lines.append(f"- [{c['rcept_dt']}] {_clean_report_name(c['report_nm'])}")
+        rel_txt = f" ({c['relation']})" if c["relation"] else ""
+        amt_txt = f" — {_format_amount(str(c['amount']))}" if c.get("amount") else ""
+        lines.append(f"  → 거래상대방: {cp} · 관계: {cls_label}{rel_txt}{amt_txt}")
+    return lines
+
+
+# 실질 경영권 변경 제목 — SHAREHOLDER 신호 키워드에는 일상적 5% 보고
+# ("주식등의대량보유상황보고서")도 포함되어 taxonomy 3.1이 흔하게 켜진다.
+# 한농화성 실측(2026-08): 대량보유보고 2건 + 계열사 대여만으로 패턴이
+# 발화하는 오탐이 확인돼, 패턴 게이트는 제목 수준의 실질 경영권 변경
+# (최대주주변경·경영권)을 별도로 요구한다.
+_CONTROL_CHANGE_TITLE_RE = re.compile(r"최대주주\s*변경|경영권")
+
+
+def _has_control_change_title(disclosures: list[dict]) -> bool:
+    """조회 창 내에 실질 경영권 변경 계열 제목의 공시가 있는지."""
+    return any(
+        _CONTROL_CHANGE_TITLE_RE.search(d.get("report_nm") or "") for d in disclosures
+    )
+
+
+def _capital_backflow_gate(
+    confirmations: list[dict], has_control_change: bool = True
+) -> dict:
+    """capital_backflow 발화 여부를 확인된 상대방 관계로 판정한다(순수 함수).
+
+    발화 조건: ① 창 내 실질 경영권 변경 제목 존재(has_control_change) AND
+    ② classification == "affiliated" 항목이 1건 이상.
+    미충족 시 대체 사실 블록 라인을 만들어 반환한다(원문 확인 없이 경고하지
+    않는다는 v0.8.5 원칙 — 관계가 전부 미확인이면 패턴은커녕 사실 블록도
+    '확인 필요' 안내로 그친다).
+    """
+    if not confirmations:
+        return {"pass": False, "affiliated": [], "fact_lines": []}
+
+    affiliated = [c for c in confirmations if c["classification"] == "affiliated"]
+
+    if not has_control_change:
+        # 유출 상대는 확인됐어도 경영권 변경이라는 전제 자체가 없다 —
+        # 패턴 미적용, 확인된 사실만 나열 (일상적 계열 지원과 구분).
+        lines = [
+            "자금유출성 공시 상대방 확인 — 조회 창 내 실질 경영권 변경"
+            "(최대주주변경 등) 공시는 없어 자금 역류 패턴은 적용하지 않음",
+        ]
+        lines += _render_outflow_confirmations(confirmations)
+        return {"pass": False, "affiliated": affiliated, "fact_lines": lines}
+    if affiliated:
+        return {"pass": True, "affiliated": affiliated, "fact_lines": []}
+
+    known = [c for c in confirmations if c["classification"] != "unknown"]
+    if known:
+        labels = sorted({_OUTFLOW_CLASS_LABEL[c["classification"]] for c in known})
+        lines = [
+            f"자금유출성 공시 {len(confirmations)}건 — 확인된 상대방은 "
+            f"{'/'.join(labels)}(각 실명·관계 표기), 특수관계 유출은 미확인",
+        ]
+        lines += _render_outflow_confirmations(confirmations)
+        return {"pass": False, "affiliated": [], "fact_lines": lines}
+
+    rcepts = ", ".join(c["rcept_no"] for c in confirmations if c["rcept_no"])
+    return {
+        "pass": False, "affiliated": [],
+        "fact_lines": [f"상대방 미확인 — 원문 확인 필요 (rcept: {rcepts})"],
+    }
+
+
 # ── 도구 1: 기업 종합 위험 분석 ────────────────────────────────────────────
 
 
@@ -477,6 +667,26 @@ def analyze_company_risk(
     tax_ids_all = list({tid for k in sig_keys for tid in _SKT.get(k, [])})
     pattern = find_pattern_match(tax_ids_all)
 
+    # v1.6.1: 자금유출·양수거래(+처분) 상대방 확인 — decisions는 이미 위에서
+    # fetch됐으므로 재사용(추가 호출 없음). capital_backflow 게이트에도 쓰인다.
+    outflow_confirmations: list[dict] = []
+    capital_backflow_fact_lines: list[str] = []
+    try:
+        _decisions_by_rcept = {d["rcept_no"]: r for d, r in decisions}
+        outflow_confirmations = _confirm_outflow_counterparties(
+            signal_events, disclosures, corp_code, _decisions_by_rcept
+        )
+    except Exception:
+        outflow_confirmations = []
+
+    if pattern and pattern.get("pattern_id") == "capital_backflow":
+        _gate = _capital_backflow_gate(
+            outflow_confirmations, _has_control_change_title(disclosures)
+        )
+        if not _gate["pass"]:
+            pattern = None
+            capital_backflow_fact_lines = _gate["fact_lines"]
+
     # 6. 타임라인 (내부 랭킹 점수 기준 — 출력에는 노출되지 않음)
     top_signal = max(
         (e for e in signal_events if not e["is_amendment"]),
@@ -506,51 +716,6 @@ def analyze_company_risk(
             if inv["name"] not in seen_investors:
                 seen_investors.add(inv["name"])
                 cb_investors.append(inv)
-
-    # v1.6.0: 자금유출·양수거래 상대방 자동 확인 — FUND_OUTFLOW/ACQ_REVIEW
-    # 신호가 매칭된 공시 중 resolve_decision_type이 결정 유형을 판별하는
-    # 것(유형자산양수/영업양수/타법인주식및출자증권양수)만 최근 최대 2건
-    # fetch_major_decision으로 거래상대방·회사와의 관계·외부평가를 사실로
-    # 확인한다. 실패해도 이 블록만 조용히 생략 — 기존 리포트에는 무영향.
-    outflow_decision_lines: list[str] = []
-    try:
-        _outflow_events = [
-            e for e in signal_events
-            if e["key"] in ("FUND_OUTFLOW", "ACQ_REVIEW")
-            and not e["is_amendment"]
-            and e.get("rcept_no")
-            and resolve_decision_type(e["report_nm"])
-        ]
-        _outflow_events.sort(key=lambda e: e["rcept_dt"], reverse=True)
-        _seen_outflow_rcept: set[str] = set()
-        for _e in _outflow_events:
-            if _e["rcept_no"] in _seen_outflow_rcept:
-                continue
-            if len(_seen_outflow_rcept) >= 2:
-                break
-            _seen_outflow_rcept.add(_e["rcept_no"])
-            _dtype2 = resolve_decision_type(_e["report_nm"])
-            _r2 = fetch_major_decision(_e["rcept_no"], _DART_API_KEY, _dtype2, corp_code)
-            if "error" in _r2:
-                continue
-            _block = [f"- [{_e['rcept_dt']}] {_clean_report_name(_e['report_nm'])}"]
-            _block.append(f"  → 거래상대방: {_r2.get('counterparty') or '(미기재)'}")
-            if _r2.get("relation_text"):
-                _block.append(f"  → 회사와의 관계: {_r2['relation_text']}")
-            _ext_txt = "실시" if _r2.get("external_eval") else "미실시"
-            if _r2.get("ext_eval_name"):
-                _ext_txt += f" ({_r2['ext_eval_name']}"
-                if _r2.get("ext_eval_opinion"):
-                    _ext_txt += f", 의견: {_r2['ext_eval_opinion']}"
-                _ext_txt += ")"
-            _block.append(f"  → 외부평가: {_ext_txt}")
-            if "DECISION_RELATED_PARTY" in _r2.get("flags", []):
-                _rp_title, _ = flag_to_prose("DECISION_RELATED_PARTY")
-                if _rp_title:
-                    _block.append(f"    • **주목할 이유:** {_rp_title}")
-            outflow_decision_lines.append("\n".join(_block))
-    except Exception:
-        outflow_decision_lines = []
 
     # ── 리포트 조립 ──
 
@@ -633,6 +798,22 @@ def analyze_company_risk(
             lines.append(pattern_body)
         elif pattern.get("description"):
             lines.append(f"  → {pattern['description']}")
+        if pattern_key == "capital_backflow":
+            _affiliated = _capital_backflow_gate(outflow_confirmations)["affiliated"]
+            if _affiliated:
+                lines.append("")
+                lines.append("확인된 특수관계 유출:")
+                for _c in _affiliated:
+                    _amt = _format_amount(str(_c["amount"])) if _c.get("amount") else ""
+                    _amt_txt = f", {_amt}" if _amt else ""
+                    lines.append(
+                        f"  • {_c['counterparty'] or '(미확인)'}"
+                        f"({_c['relation'] or '계열·특수관계'}"
+                        f"{_amt_txt})"
+                    )
+    elif capital_backflow_fact_lines:
+        lines += ["", "━━ 자금유출 상대방 확인 ━━"]
+        lines += capital_backflow_fact_lines
 
     if cb_investors:
         lines += [
@@ -674,20 +855,20 @@ def analyze_company_risk(
         if failed_decisions:
             lines.append(f"  (추가 {failed_decisions}건 구조화 조회 실패)")
 
-    # v1.6.0: 자금유출·양수거래 상대방 자동 확인 섹션 -----------
-    if outflow_decision_lines:
+    # v1.6.1: 자금유출·양수거래(+처분) 상대방 확인 섹션 -----------
+    # capital_backflow 게이트가 이미 이 내용을 사실 블록으로 표기한 경우
+    # (capital_backflow_fact_lines) 중복 출력하지 않는다.
+    if outflow_confirmations and not capital_backflow_fact_lines:
         lines += [
             "",
-            "🔍 **자금유출·양수거래 상대방 확인** (최근 최대 2건)",
-            "금전대여·채무보증·담보제공·유형자산양수·영업양수·"
-            "타법인주식및출자증권양수로 매칭된 공시 중 구조화 데이터가 "
-            "있는 결정 공시의 거래상대방·회사와의 관계·외부평가를 "
-            "확인합니다.",
+            f"🔍 **자금유출·양수거래 상대방 확인** (최근 최대 {len(outflow_confirmations)}건)",
+            "금전대여·채무보증·담보제공·유형자산양수/양도·영업양수/양도·"
+            "타법인주식및출자증권양수/양도로 매칭된 공시의 거래상대방·관계를 "
+            "확인합니다. 관계는 계열·특수관계/종속회사/외부/미확인 4범주로 "
+            "분류하며, 판정이 아닌 사실 표기입니다.",
             "",
         ]
-        for _block in outflow_decision_lines:
-            lines.append(_block)
-            lines.append("")
+        lines += _render_outflow_confirmations(outflow_confirmations)
 
     # v0.6.0 자본 변동 타임라인 (최근 12개월 요약)
     if churn.get("events"):
@@ -1075,6 +1256,33 @@ def build_event_timeline(
     # 패턴 매칭
     pattern = find_pattern_match(list(all_tax_ids))
 
+    # v1.6.1: capital_backflow 게이트 — analyze_company_risk와 동일한 확인 로직.
+    # events 튜플(rcept_dt, phase, key, label, report_nm, rcept_no)을
+    # _confirm_outflow_counterparties가 기대하는 dict 형태로 변환한다.
+    _outflow_signal_events = [
+        {
+            "key": evt[2], "report_nm": evt[4], "rcept_dt": evt[0],
+            "rcept_no": evt[5] if len(evt) > 5 else "", "is_amendment": False,
+        }
+        for evt in events
+        if evt[2] in ("FUND_OUTFLOW", "ACQ_REVIEW")
+    ]
+    outflow_confirmations: list[dict] = []
+    capital_backflow_fact_lines: list[str] = []
+    try:
+        outflow_confirmations = _confirm_outflow_counterparties(
+            _outflow_signal_events, disclosures, corp_code
+        )
+    except Exception:
+        outflow_confirmations = []
+    if pattern and pattern.get("pattern_id") == "capital_backflow":
+        _gate = _capital_backflow_gate(
+            outflow_confirmations, _has_control_change_title(disclosures)
+        )
+        if not _gate["pass"]:
+            pattern = None
+            capital_backflow_fact_lines = _gate["fact_lines"]
+
     # 타임라인 출력
     first_date = events[0][0]
     last_date = events[-1][0]
@@ -1158,6 +1366,35 @@ def build_event_timeline(
             lines.append(
                 f"과거 유사 사례에서는 위기가 본격화되기까지 평균 약 {months}개월이 걸린 것으로 집계됩니다."
             )
+        if pattern_id == "capital_backflow":
+            _affiliated = _capital_backflow_gate(outflow_confirmations)["affiliated"]
+            if _affiliated:
+                lines.append("")
+                lines.append("확인된 특수관계 유출:")
+                for _c in _affiliated:
+                    _amt = _format_amount(str(_c["amount"])) if _c.get("amount") else ""
+                    _amt_txt = f", {_amt}" if _amt else ""
+                    lines.append(
+                        f"  • {_c['counterparty'] or '(미확인)'}"
+                        f"({_c['relation'] or '계열·특수관계'}{_amt_txt})"
+                    )
+        lines.append("")
+    elif capital_backflow_fact_lines:
+        lines += ["", "━━ 자금유출 상대방 확인 ━━"]
+        lines += capital_backflow_fact_lines
+        lines.append("")
+
+    # v1.6.1: 자금유출·양수거래(+처분) 상대방 확인 상세 — capital_backflow
+    # 게이트가 이미 사실 블록으로 표기한 경우 중복 출력하지 않는다.
+    if outflow_confirmations and not capital_backflow_fact_lines:
+        lines += [
+            "━━ 자금유출·양수거래 상대방 확인 ━━",
+            "금전대여·채무보증·담보제공·유형자산양수/양도·영업양수/양도·"
+            "타법인주식및출자증권양수/양도로 매칭된 공시의 거래상대방·관계를 "
+            "확인합니다. 판정이 아닌 사실 표기입니다.",
+            "",
+        ]
+        lines += _render_outflow_confirmations(outflow_confirmations)
         lines.append("")
 
     # CB 인수자 (있으면) — match_signals는 이미 정정공시 제외 처리
