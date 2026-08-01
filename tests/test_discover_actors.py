@@ -576,11 +576,16 @@ class TestDiscoverMainRegistryWriteNote(unittest.TestCase):
     def _patches(self, da, write_ok, creds_ok):
         registry = {"actors": {"홍길동": [{"source": "y", "status": "auto_matched"}]}}
         stats = {"scanned": 0, "funding": 0, "extracted": 0}
+        outflow_stats = {"scanned": 0, "outflow": 0, "extracted": 0}
+        control_stats = {"scanned": 0, "control": 0, "extracted": 0}
         return [
             patch.object(da, "_api_key", return_value="k"),
             patch.object(da, "_load", return_value={"version": 1, "sightings": {}}),
             patch.object(da, "load_known_actors", return_value=registry),
             patch.object(da, "collect_funding_sightings", return_value=([], stats)),
+            patch.object(da, "collect_outflow_sightings", return_value=([], outflow_stats)),
+            patch.object(da, "collect_control_change_sightings",
+                        return_value=([], control_stats)),
             patch.object(da, "merge_sightings", return_value=False),
             patch.object(da, "reconcile_corp_renames", return_value=False),
             patch.object(da, "_corp_name_index", return_value={}),
