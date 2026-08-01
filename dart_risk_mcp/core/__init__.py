@@ -42,6 +42,9 @@ from .dart_client import (
     fetch_distress_events,
     fetch_dividend_history,
     detect_dividend_drain,
+    parse_outflow_detail,
+    fetch_outflow_detail,
+    classify_outflow_relation,
 )
 from .signals import (
     match_signals, is_amendment_disclosure,
@@ -148,6 +151,9 @@ __all__ = [
     "fetch_distress_events",
     "fetch_dividend_history",
     "detect_dividend_drain",
+    "parse_outflow_detail",
+    "fetch_outflow_detail",
+    "classify_outflow_relation",
     "load_watchlist",
     "save_watchlist",
     "add_person",

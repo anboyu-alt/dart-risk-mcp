@@ -575,6 +575,39 @@ TAXONOMY = {
         "field_evidence": [],
         "investor_implication": "Possible information advantage trading; pre-disclosure selling pattern",
     },
+    "3.7": {
+        "id": "3.7",
+        "category": "Ownership & Control",
+        "name": "Controlling Shareholder Stock Pledge Agreement",
+        "description": (
+            "최대주주가 보유 주식을 담보로 제공하는 계약(체결·해제·취소)입니다. "
+            "금감원 무자본 M&A 합동점검에서는 인수 단계①에서 인수주식을 담보로 "
+            "잡힌 대출이 5% 대량보유보고에 미기재된 채 적발된 사례가 있습니다. "
+            "다만 오너의 정상적인 주식담보대출(주담대)도 시장에서 흔한 자금 조달 "
+            "방식이라 이 신호 하나만으로는 판단 근거가 되지 않아 참고 수준(MEDIUM)"
+            "으로 다룹니다."
+        ),
+        "base_score": 2,
+        "severity": "MEDIUM",
+        "crisis_timeline_months": 12,
+        "keywords": [
+            "주식담보제공계약",
+        ],
+        "red_flags": [
+            "인수 직후(단기간 내) 인수주식 자체를 담보로 제공",
+            "담보설정비율이 보유 지분 대비 과도하게 높음",
+            "5% 대량보유보고·임원 소유보고에 담보 사실 미기재",
+            "담보권 실행(반대매매) 시 최대주주 지분 급락",
+        ],
+        "field_evidence": [
+            "2019-12-19 금감원 무자본 M&A 합동점검: 인수 단계에서 인수주식을 "
+            "담보로 잡힌 대출을 5% 대량보유보고에 기재하지 않은 사례 적발",
+        ],
+        "investor_implication": (
+            "Not itself a determination — owner stock-secured loans are common; "
+            "watch for post-acquisition timing and disclosure omissions"
+        ),
+    },
 
     # CATEGORY 4: Governance & Disclosure (4 signals)
     "4.1": {

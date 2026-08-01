@@ -983,6 +983,10 @@ function matchedKeywordsFor(r) {
     for (const kw of s.keywords) {
       if (r.nm.includes(kw)) kws.add(kw);
     }
+    // SE-14: FUND_OUTFLOW(금전대여·채무보증·담보제공·유형자산양수) 공시는
+    // 제목이 아니라 원문의 "회사와의 관계"에 실제 상대방 관계가 적힌다 —
+    // 제목 매칭 키워드는 아니지만 원문 열람 시 이 문구도 강조해 관계 확인을 돕는다.
+    if (s.key === "FUND_OUTFLOW") kws.add("회사와의 관계");
   }
   return [...kws];
 }
@@ -1026,6 +1030,26 @@ function renderDocViewer(panel, data, r) {
   }
   panel.innerHTML = html;
 }
+// SE-14: capital_backflow 게이트(원문 상대방 확인)도 이 fetch를 그대로 쓴다.
+// 캐시(getDocCache/setDocCache, sessionStorage dart_doc_<rcept>) 경로를
+// 그대로 타므로 사용자가 이미 열람한 공시면 네트워크 호출이 없다.
+async function fetchDisclosureText(rcept) {
+  const cached = getDocCache(rcept);
+  if (cached) return cached;
+  try {
+    const apiKey = localStorage.getItem(LS_KEY) || "";
+    const res = await fetch(`${relayBase()}/api/doc?rcept_no=${encodeURIComponent(rcept)}`, {
+      headers: { "X-DART-Key": apiKey },
+    });
+    let j = {};
+    try { j = await res.json(); } catch (e) { /* 빈 본문 등 — 아래서 상태코드로 처리 */ }
+    if (!res.ok || j.error) throw new Error(j.error || `조회 실패 (HTTP ${res.status})`);
+    setDocCache(rcept, j);
+    return j;
+  } catch (e) {
+    return { error: e.message };
+  }
+}
 async function toggleDocViewer(r) {
   const panel = $("docViewer");
   if (!panel) return;
@@ -1035,20 +1059,13 @@ async function toggleDocViewer(r) {
   const cached = getDocCache(r.rcept);
   if (cached) { renderDocViewer(panel, cached, r); return; }
   panel.innerHTML = `<div class="slabel">▍DISCLOSURE TEXT</div><span class="spinner"></span><span class="dim" style="font-size:0.88rem">원문 조회 중…</span>`;
-  try {
-    const apiKey = localStorage.getItem(LS_KEY) || "";
-    const res = await fetch(`${relayBase()}/api/doc?rcept_no=${encodeURIComponent(r.rcept)}`, {
-      headers: { "X-DART-Key": apiKey },
-    });
-    let j = {};
-    try { j = await res.json(); } catch (e) { /* 빈 본문 등 — 아래서 상태코드로 처리 */ }
-    if (!res.ok || j.error) throw new Error(j.error || `조회 실패 (HTTP ${res.status})`);
-    setDocCache(r.rcept, j);
-    renderDocViewer(panel, j, r);
-  } catch (e) {
+  const j = await fetchDisclosureText(r.rcept);
+  if (j && j.error) {
     panel.innerHTML = `<div class="slabel">▍DISCLOSURE TEXT</div>
-      <p class="dim">${esc(e.message)} — DART 원문 링크를 이용하세요.</p>`;
+      <p class="dim">${esc(j.error)} — DART 원문 링크를 이용하세요.</p>`;
+    return;
   }
+  renderDocViewer(panel, j, r);
 }
 
 /* ── 작업3: 재스캔 diff factline (대시보드 최상단, KPI 위) ── */
@@ -1151,12 +1168,28 @@ function renderDash() {
     if (patterns.length) {
       html += `<div class="panel"><div class="slabel red">▍PATTERN MATCH</div>
         <p class="dim">아래 패턴의 구성 신호가 모두 관찰됐습니다. 패턴 "조건 충족"은 사실 관찰이며 판정이 아닙니다.</p>` +
-        patterns.map((p) => `<div class="patterncard"><b>${esc(p.name)}</b>${esc(p.description)}
-          <div class="sigs">관찰 윈도우 ${p.timeline_months}개월 · 구성 신호가 촉발된 공시:</div>
-          <div class="sigs">${patternEvidenceHTML(p, events)}</div>` +
-          (p.field_evidence && p.field_evidence.length ? `<details style="margin-top:0.4rem;font-size:0.82rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">실제 사례 근거(금감원 보도자료 등)</summary>
-            <ul style="margin:0.3rem 0 0 1.1rem;padding:0">${p.field_evidence.map((fe) => `<li>${esc(fe)}</li>`).join("")}</ul></details>` : "") +
-          `</div>`).join("") +
+        patterns.map((p) => {
+          // SE-14: capital_backflow(자금 역류)는 제목 조합(3.1 경영권변경 +
+          // 5.7 자금유출성거래)만으로 확정하지 않는다 — 계열사 지원이 일상인
+          // 회사도 제목만으로는 전부 걸리기 때문. 원문 "회사와의 관계"를
+          // 비동기로 확인할 때까지 스피너 플레이스홀더를 두고, 완료 후
+          // loadCapitalBackflowGate가 실제 판정 HTML로 치환한다(아래 참조).
+          if (p.key === "capital_backflow") {
+            return `<div class="patterncard" id="pat-${esc(p.key)}"><b>${esc(p.name)}</b>${esc(p.description)}
+              <div class="sigs">관찰 윈도우 ${p.timeline_months}개월 · 구성 신호가 촉발된 공시:</div>
+              <div class="sigs">${patternEvidenceHTML(p, events)}</div>
+              <div class="dim" style="margin-top:0.5rem"><span class="spinner"></span> 원문에서 상대방 관계 확인 중…</div>
+              ${(p.field_evidence && p.field_evidence.length ? `<details style="margin-top:0.4rem;font-size:0.82rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">실제 사례 근거(금감원 보도자료 등)</summary>
+                <ul style="margin:0.3rem 0 0 1.1rem;padding:0">${p.field_evidence.map((fe) => `<li>${esc(fe)}</li>`).join("")}</ul></details>` : "")}
+              </div>`;
+          }
+          return `<div class="patterncard"><b>${esc(p.name)}</b>${esc(p.description)}
+            <div class="sigs">관찰 윈도우 ${p.timeline_months}개월 · 구성 신호가 촉발된 공시:</div>
+            <div class="sigs">${patternEvidenceHTML(p, events)}</div>` +
+            (p.field_evidence && p.field_evidence.length ? `<details style="margin-top:0.4rem;font-size:0.82rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">실제 사례 근거(금감원 보도자료 등)</summary>
+              <ul style="margin:0.3rem 0 0 1.1rem;padding:0">${p.field_evidence.map((fe) => `<li>${esc(fe)}</li>`).join("")}</ul></details>` : "") +
+            `</div>`;
+        }).join("") +
         `</div>`;
     }
   }
@@ -1176,6 +1209,8 @@ function renderDash() {
   $("result").querySelectorAll(".patEvLink").forEach((a) => {
     a.onclick = (e) => { e.preventDefault(); renderDetail(a.dataset.r); };
   });
+  // SE-14: capital_backflow만 비동기 원문 확인 게이트를 태운다 (다른 패턴은 그대로).
+  patterns.filter((p) => p.key === "capital_backflow").forEach((p) => loadCapitalBackflowGate(p, events));
   $("result").querySelectorAll(".rescanCurrentLink").forEach((a) => {
     a.onclick = (e) => {
       e.preventDefault();
@@ -2051,6 +2086,156 @@ function patternEvidenceHTML(pattern, events) {
       (rest > 0 ? ` <span class="dim">외 ${rest}건</span>` : "") + `</div>`;
   }).join("");
 }
+// ── SE-14: capital_backflow 원문 상대방 관계 확인 게이트 ──
+// 제목 조합(3.1 경영권변경 + 5.7 자금유출성거래)만으로는 계열사 지원이
+// 일상인 회사도 전부 걸린다. patternTaxonomyEvidence("5.7", events)로 뽑은
+// 근거 공시 원문을 실제로 읽어 "회사와의 관계"가 계열/특수관계로 확인될
+// 때만 패턴 카드를 그대로 유지한다.
+
+// 원문(태그 제거·공백 단일화된 data.text)에서 금전대여·담보제공·채무보증·
+// 유형자산양수 4서식 공통으로 상대방/관계/금액을 뽑는다. 순수 함수 —
+// 실패한 필드는 빈 문자열을 돌려준다(예외를 던지지 않음).
+function parseOutflowDetail(text) {
+  const empty = { counterparty: "", relation: "", amount: "" };
+  if (!text || typeof text !== "string") return empty;
+  const flat = text.replace(/[|\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!flat) return empty;
+
+  const cpPatterns = [
+    /대여\s*상대\s+(.+?)(?=\s*영문|\s*-?\s*회사와의\s*관계|\s*\d+\.\s|$)/,
+    /채무자\s+(.+?)(?=\s*영문|\s*-?\s*회사와의\s*관계|\s*\d+\.\s|$)/,
+    /거래상대방\s*회사명\(성명\)\s+(.+?)(?=\s*영문|\s*-?\s*회사와의\s*관계|\s*\d+\.\s|$)/,
+  ];
+  let counterparty = "";
+  for (const re of cpPatterns) {
+    const m = flat.match(re);
+    if (m && m[1] && m[1].trim()) { counterparty = m[1].trim(); break; }
+  }
+
+  // "-회사와의 관계"(하이픈 붙임) / "- 회사와의 관계"(하이픈+공백) 둘 다 허용.
+  const relMatch = flat.match(/-?\s*회사와의\s*관계\s+(.+?)(?=\s*\d+\.\s|$)/);
+  const relation = relMatch ? relMatch[1].trim() : "";
+
+  const amtPatterns = [
+    /대여금액\(원\)\s*([0-9,]+)/,
+    /담보설정금액\(원\)\s*([0-9,]+)/,
+    /채무보증금액\(원\)\s*([0-9,]+)/,
+    /거래대금[^\d]{0,10}([0-9,]+)/,
+  ];
+  let amount = "";
+  for (const re of amtPatterns) {
+    const m = flat.match(re);
+    if (m && m[1]) { amount = m[1]; break; }
+  }
+  return { counterparty, relation, amount };
+}
+
+// "회사와의 관계" 원문 값 → 4분류. 순수 함수, 사실 분류이며 위험 판정이 아니다.
+function classifyOutflowRelation(relation) {
+  const r = (relation || "").trim();
+  if (!r) return "unknown";
+  const affiliatedKw = ["계열", "관계회사", "특수관계", "최대주주", "주요주주", "임원", "대표이사"];
+  if (affiliatedKw.some((k) => r.indexOf(k) !== -1)) return "affiliated";
+  const subsidiaryKw = ["종속회사", "자회사"];
+  if (subsidiaryKw.some((k) => r.indexOf(k) !== -1)) return "subsidiary";
+  return "external";
+}
+
+// FUND_OUTFLOW(taxonomy 5.7) 근거 공시 중 최근 최대 4건의 원문을 병렬
+// fetch해 분류한다. fetchDisclosureText는 기존 원문 캐시(dart_doc_<rcept>)를
+// 그대로 재사용하므로 사용자가 이미 docViewer에서 열람한 공시는 추가
+// 네트워크 호출이 없다. 실패(원문 조회 실패 등)는 조용히 "unknown"으로 흡수.
+async function classifyOutflowEvidence(hits) {
+  return Promise.all(hits.map(async (h) => {
+    const data = await fetchDisclosureText(h.rcept);
+    if (!data || data.error || !data.text) {
+      return { rcept: h.rcept, date: h.date, nm: h.nm, counterparty: "", relation: "", amount: "", cls: "unknown" };
+    }
+    const detail = parseOutflowDetail(data.text);
+    return { rcept: h.rcept, date: h.date, nm: h.nm, counterparty: detail.counterparty,
+              relation: detail.relation, amount: detail.amount, cls: classifyOutflowRelation(detail.relation) };
+  }));
+}
+
+// 순수 함수 — 이미 분류된 results 배열만으로 카드/사실블록 HTML을 만든다.
+// fetch 등 부수효과가 없어 가짜 results로 3분기를 그대로 테스트할 수 있다.
+// totalCount: 원문 확인 대상 전체 건수(hits 슬라이스 전) — results.length보다
+// 클 수 있어 "최근 N건만 확인했다"는 사실을 숨기지 않기 위해 별도로 받는다.
+function capitalBackflowCardHTML(pattern, events, results, totalCount) {
+  const total = typeof totalCount === "number" ? totalCount : results.length;
+  const evidenceBlock = `<div class="sigs">관찰 윈도우 ${pattern.timeline_months}개월 · 구성 신호가 촉발된 공시:</div>
+    <div class="sigs">${patternEvidenceHTML(pattern, events)}</div>`;
+  const fieldEvidenceBlock = (pattern.field_evidence && pattern.field_evidence.length)
+    ? `<details style="margin-top:0.4rem;font-size:0.82rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">실제 사례 근거(금감원 보도자료 등)</summary>
+       <ul style="margin:0.3rem 0 0 1.1rem;padding:0">${pattern.field_evidence.map((fe) => `<li>${esc(fe)}</li>`).join("")}</ul></details>`
+    : "";
+  const affiliated = results.filter((r) => r.cls === "affiliated");
+  const others = results.filter((r) => r.cls === "subsidiary" || r.cls === "external");
+
+  if (affiliated.length) {
+    const lines = affiliated.map((r) => {
+      const label = r.counterparty || r.nm;
+      return `<a href="#" class="patEvLink" data-r="${esc(r.rcept)}" style="color:var(--tx)">${esc(fmtDate(r.date))} ${esc(label)}</a>` +
+        (r.relation ? ` (${esc(r.relation)})` : "");
+    }).join(" · ");
+    return `<div class="patterncard"><b>${esc(pattern.name)}</b>${esc(pattern.description)}
+      ${evidenceBlock}
+      <div class="factline">확인된 특수관계 유출: ${lines}</div>
+      ${fieldEvidenceBlock}</div>`;
+  }
+
+  if (others.length) {
+    const lines = others.map((r) => {
+      const label = r.counterparty || r.nm;
+      const tag = r.cls === "subsidiary" ? "종속회사" : (r.relation || "실명 확인");
+      return `${esc(label)}(${esc(tag)})`;
+    }).join(", ");
+    const scopeNote = total > results.length ? ` (최근 ${results.length}건 원문 확인 · 전체 ${total}건 중)` : "";
+    return `<div class="dim" style="font-size:0.9rem;margin-top:0.7rem;padding:0.6rem 0">자금유출성 공시 ${total}건${scopeNote} — 확인된 상대방: ${lines} 외. 특수관계 대상 유출은 확인되지 않았습니다.</div>`;
+  }
+
+  // 전부 unknown — 원문 조회 실패 또는 "회사와의 관계" 필드 미검출. 경고 톤을
+  // 빼고(패턴 카드를 지우지 않되 외곽선을 낮춰) 원문 확인을 안내한다 — 신호
+  // 조합 자체는 실재하므로 존재를 숨기지는 않는다.
+  const links = results.map((r) =>
+    `<a href="#" class="patEvLink" data-r="${esc(r.rcept)}" style="color:var(--tx)">${esc(fmtDate(r.date))} ${esc(r.nm)}</a>`).join(" · ");
+  const scopeNote = total > results.length ? ` (전체 ${total}건 중 최근 ${results.length}건 확인 시도)` : "";
+  return `<div class="patterncard" style="border-color:var(--line2);background:var(--panel)">
+    <b>${esc(pattern.name)} <span class="dim" style="font-weight:400">— 상대방 미확인</span></b>${esc(pattern.description)}
+    ${evidenceBlock}
+    <div class="dim" style="margin-top:0.4rem">원문에서 상대방을 확인하세요${scopeNote}: ${links || "해당 없음"}</div>
+    ${fieldEvidenceBlock}</div>`;
+}
+
+// 비동기 오케스트레이션 — 스피너 플레이스홀더(#pat-capital_backflow)를 실제
+// 분류 결과로 치환한다. 다른 패턴 카드는 건드리지 않는다(기존 그대로).
+async function loadCapitalBackflowGate(pattern, events) {
+  const el = document.getElementById("pat-" + pattern.key);
+  if (!el) return;
+  // 실질 경영권 변경 제목 요구 — SHAREHOLDER 신호 키워드에는 일상적 5%
+  // 대량보유보고도 포함돼 taxonomy 3.1이 흔하게 켜진다(한농화성 실측:
+  // 대량보유보고 + 계열사 대여만으로 발화하는 오탐). core
+  // _has_control_change_title과 동일 규칙.
+  const hasCtrl = (CUR.items || []).some((d) => /최대주주\s*변경|경영권/.test(d.report_nm || ""));
+  if (!hasCtrl) {
+    el.outerHTML = `<div class="dim" style="margin-top:0.5rem">자금유출성 공시는 있으나 조회 창 내 실질 경영권 변경(최대주주변경 등) 공시가 없어 '${esc(pattern.name)}' 패턴은 적용하지 않습니다.</div>`;
+    return;
+  }
+  const allHits = patternTaxonomyEvidence("5.7", events);
+  const hits = allHits.slice(0, 4);
+  if (!hits.length) return;
+  try {
+    const results = await classifyOutflowEvidence(hits);
+    el.outerHTML = capitalBackflowCardHTML(pattern, events, results, allHits.length);
+    $("result").querySelectorAll(".patEvLink").forEach((a) => {
+      a.onclick = (e) => { e.preventDefault(); renderDetail(a.dataset.r); };
+    });
+  } catch (e) {
+    el.innerHTML = `<b>${esc(pattern.name)}</b>${esc(pattern.description)}
+      <div class="dim" style="margin-top:0.4rem">원문 상대방 확인 중 오류: ${esc(e.message)} — DART 원문에서 직접 확인하세요.</div>`;
+  }
+}
+
 // ── 작업4: 연속 적자 (loss streak) ──
 // core dart_risk_mcp/core/dart_client.py의 fetch_loss_streak 이식(적응). core는
 // 연도별 개별 API 호출(최대 5회)로 5년 치를 모으지만, 이 화면은 loadFinancialCore가
