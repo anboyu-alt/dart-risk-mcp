@@ -1,10 +1,16 @@
-"""자금조달 공시 기반 행위자 자동 발굴.
+"""공시 기반 행위자 자동 발굴.
 
-매일 시장 자금조달 공시(CB/BW·EB·유상증자, 정정 포함)의 개인 인수자를
-sightings로 무조건 누적(private repo, 12개월 윈도우)한다. 문제 회사 필터는
-수집 시점이 아니라 등재(promote) 시점에 평가한다 — 작전 시퀀스에서 인물
-투입(자금조달)이 불안정 신호(최대주주변경·감사의견 등)보다 먼저 오는 경우,
-수집 시점 필터로는 그 인물을 영영 놓치기 때문이다.
+매일 시장 공시에서 세 가지 sighting 수집원을 무조건 누적(private repo,
+12개월 윈도우)한다:
+  1. 자금조달(CB/BW·EB·유상증자, 정정 포함)의 개인·조합·법인 인수자
+  2. 자금유출성 거래(금전대여·채무보증·담보제공·유형자산양수)의 affiliated/
+     external 상대방 (v1.8.0, subsidiary·제도권 금융기관 제외)
+  3. 최대주주변경(정정 제외)의 신규 최대주주 (v1.8.0, "외 N인" 접미 제거 후
+     제도권 금융기관 제외)
+
+문제 회사 필터는 수집 시점이 아니라 등재(promote) 시점에 평가한다 — 작전
+시퀀스에서 인물 투입(자금조달·자금유출·최대주주변경)이 불안정 신호(감사의견
+등)보다 먼저 오는 경우, 수집 시점 필터로는 그 인물을 영영 놓치기 때문이다.
 
 등재 기준: 서로 다른 '문제 회사'(자금조달+불안정 신호 동반) N=2곳+ 에
 반복 등장하는 개인·조합·법인을 레지스트리(비공개 Notion DB)에 auto_matched로
@@ -18,10 +24,20 @@ sightings로 무조건 누적(private repo, 12개월 윈도우)한다. 문제 �
 """
 import json
 import os
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from dart_risk_mcp.core.dart_client import fetch_market_disclosures, fetch_company_disclosures
+from dart_risk_mcp.core.dart_client import (
+    fetch_market_disclosures,
+    fetch_company_disclosures,
+    fetch_outflow_detail,
+    classify_outflow_relation,
+    fetch_control_change_detail,
+    strip_holder_suffix,
+    resolve_decision_type,
+    fetch_major_decision,
+)
 from dart_risk_mcp.core.cb_extractor import extract_cb_investors, extract_fund_backers
 from dart_risk_mcp.core.investor_extractor import extract_rights_offering_investors
 from dart_risk_mcp.core.signals import (
@@ -61,6 +77,43 @@ _DEFAULT_SIGHTINGS = Path(__file__).resolve().parents[1] / "tmp" / "sightings.js
 
 # 추적 대상 분류 (classify_actor 결과 기준) — 제도권 기관·노이즈 제외
 _TRACKED_KINDS = ("person", "fund", "corp")
+
+# sighting 레코드의 출처("src" 필드, 없으면 "funding" 기본 취급) → evidence
+# 표시 라벨. 순서 고정(등재 evidence에서 항상 이 순서로 나열) — "kind"라는
+# 이름은 이미 각 레코드의 person/fund/corp 분류 필드로 쓰이고 있어(merge_
+# sightings·backfill_exits.py가 그 의미로 읽는다) 충돌을 피하려 별도 필드명
+# "src"를 쓴다.
+SRC_LABELS = {"funding": "인수자", "outflow": "유출 상대방", "control": "신규 최대주주"}
+_SRC_ORDER = ("funding", "outflow", "control")
+
+# outflow·control 수집원 전용 제외어 — classify_actor의 institution 패턴에는
+# '신탁'(부동산신탁 등 단독 표기)이 없어 별도로 게이트한다.
+_EXTRA_INSTITUTION_KW = ("신탁",)
+
+
+def classify_tracked_entity(name: str) -> "str | None":
+    """자금유출 상대방·신규 최대주주 전용 분류 — 노이즈·제도권 금융기관 제외.
+
+    funding 경로(collect_funding_sightings_range)는 should_store를 써서
+    자산운용·보험 등 '기타기관'을 보존한다(정상적인 자금조달 투자자일 수
+    있어서). 반면 이 두 수집원(자금유출 상대방·신규 최대주주)은 은행·증권·
+    캐피탈·저축은행·금고·보험·신탁 등 제도권 금융기관을 전부 제외한다 —
+    대여·담보·최대주주 자리에 금융기관이 오는 건 정상적인 대주·수탁 관계일
+    뿐 추적 대상 '행위자'가 아니다(classify_actor의 institution 판정 +
+    '신탁' 확장). person/fund/corp는 모두 반환한다 — 무자본 M&A 세력은
+    SPC·조합·법인 명의가 핵심이므로 법인도 추적 대상이다.
+
+    Returns: classify_actor 결과("person"|"fund"|"corp") 또는 제외 시 None.
+    """
+    n = (name or "").strip()
+    if not n:
+        return None
+    kind = classify_actor(n)
+    if kind in ("noise", "institution"):
+        return None
+    if any(kw in n for kw in _EXTRA_INSTITUTION_KW):
+        return None
+    return kind
 
 
 def company_signal_keys(corp_code: str, api_key: str, lookback_days: int = 180) -> set:
@@ -185,6 +238,209 @@ def collect_funding_sightings(api_key, window_days=WINDOW_DAYS, max_pages=MAX_PA
         api_key, start.strftime("%Y%m%d"), end.strftime("%Y%m%d"), max_pages=max_pages)
 
 
+# ── 자금유출 상대방 수집 (v1.8.0) ────────────────────────────────────
+# 금감원 무자본 M&A 합동점검 사례(아틀라스링크→로아앤코홀딩스 등)처럼, 인수
+# 세력은 CB·유상증자로 회사를 장악한 뒤 회사 자금을 대여·담보·자산양수 형태로
+# 자신의 다른 SPC로 빼돌린다. 이 상대방도 CB 인수자와 동일한 고정점이다.
+#
+# 실측(2026-08, 최근 30일 시장 스캔): 금전대여결정·채무보증결정·담보제공결정은
+# 거래소공시(pblntf_ty='I')에 실린다. 채무보증·담보제공은 코스피 상장사가
+# 주요사항보고서(pblntf_ty='B')에도 병행 공시하는 사례가 실측 확인돼(코스피
+# 의무공시 요건) 두 유형 모두 스캔한다. 유형자산양수결정은 DS005 주요사항
+# 보고서(B) 전용으로, 거래소공시(I)에서는 0건이었다.
+_OUTFLOW_TANGIBLE_KW = ("유형자산양수",)
+
+
+def _fetch_outflow_row(rn: str, base_nm: str, api_key: str, corp_code: str) -> tuple[str, str]:
+    """자금유출 공시 1건에서 (상대방, 관계 분류)를 조회한다.
+
+    유형자산양수결정은 DS005(fetch_major_decision)로, 나머지(금전대여·
+    채무보증·담보제공)는 원문 직접 파싱(fetch_outflow_detail)으로 조회한다
+    — server.py의 _confirm_outflow_counterparties와 동일한 두 경로 분기.
+    """
+    if any(kw in base_nm for kw in _OUTFLOW_TANGIBLE_KW):
+        dtype = resolve_decision_type(base_nm)
+        r = {}
+        if dtype:
+            try:
+                r = fetch_major_decision(rn, api_key, dtype, corp_code) or {}
+            except Exception:
+                r = {}
+        if "error" in r:
+            r = {}
+        relation = r.get("relation_text") or ""
+        cls = (classify_outflow_relation(relation) if relation
+               else ("affiliated" if r.get("related_party") else "unknown"))
+        return r.get("counterparty") or "", cls
+    try:
+        detail = fetch_outflow_detail(rn, api_key) or {}
+    except Exception:
+        detail = {}
+    return detail.get("counterparty", ""), classify_outflow_relation(detail.get("relation", ""))
+
+
+def collect_outflow_sightings_range(api_key, bgn_de, end_de,
+                                    max_pages=MAX_PAGES, pace_sec=0.0):
+    """지정 구간(YYYYMMDD)의 자금유출성 거래 공시에서 상대방 sighting 수집.
+
+    금전대여·채무보증·담보제공·유형자산양수 4계열(FUND_OUTFLOW 신호) 중
+    classify_outflow_relation이 "affiliated"|"external"로 판정한 건만
+    수집한다 — subsidiary(종속회사·자회사, 세력 추적 대상 아님)와 unknown
+    (관계 확인 불가)은 설계상 제외한다. 상대방이 공시 회사 자신과 같은
+    이름이거나(파싱 오류 방어) 제도권 금융기관이면 제외한다.
+
+    Returns:
+        (sightings, stats) — stats: {"scanned", "outflow", "extracted", "truncated"}
+    """
+    import time as _time
+    discs_i = fetch_market_disclosures(
+        api_key, bgn_de, end_de, pblntf_ty="I", max_pages=max_pages) or []
+    discs_b = fetch_market_disclosures(
+        api_key, bgn_de, end_de, pblntf_ty="B", max_pages=max_pages) or []
+
+    sightings = []
+    seen_rcept: set = set()
+    n_outflow = 0
+    for d in discs_i + discs_b:
+        rn = d.get("rcept_no", "")
+        rnm = d.get("report_nm", "")
+        corp = d.get("corp_name", "")
+        cc = d.get("corp_code", "")
+        if not rn or rn in seen_rcept:
+            continue
+        base_nm = strip_amendment_prefix(rnm)
+        keys = {s["key"] for s in (match_signals(base_nm) or [])}
+        if "FUND_OUTFLOW" not in keys:
+            continue
+        seen_rcept.add(rn)
+        n_outflow += 1
+
+        counterparty, cls = _fetch_outflow_row(rn, base_nm, api_key, cc)
+        if pace_sec:
+            _time.sleep(pace_sec)
+
+        nm = (counterparty or "").strip()
+        if not nm or cls not in ("affiliated", "external"):
+            continue
+        if fold_name(nm) == fold_name(corp):
+            continue  # 공시 회사 자신과 동일 명칭 (파싱 오류 방어)
+        kind = classify_tracked_entity(nm)
+        if kind is None:
+            continue
+
+        rdt = d.get("rcept_dt", "") or ""
+        date = f"{rdt[:4]}-{rdt[4:6]}" if len(rdt) >= 6 else ""
+        cls_tag = (d.get("corp_cls") or "").strip()
+        sightings.append({
+            "name": nm, "corp": corp, "corp_code": cc, "corp_cls": cls_tag,
+            "date": date, "rcept_no": rn, "kind": kind, "src": "outflow",
+            "signals": ["FUND_OUTFLOW"],
+        })
+
+    stats = {
+        "scanned": len(discs_i) + len(discs_b),
+        "outflow": n_outflow,
+        "extracted": len(sightings),
+        "truncated": len(discs_i) >= max_pages * 100 or len(discs_b) >= max_pages * 100,
+    }
+    return sightings, stats
+
+
+def collect_outflow_sightings(api_key, window_days=WINDOW_DAYS, max_pages=MAX_PAGES):
+    """최근 window_days 자금유출성 거래 공시의 상대방 sighting 수집 (일일 크론용)."""
+    end = datetime.now()
+    start = end - timedelta(days=max(1, window_days))
+    return collect_outflow_sightings_range(
+        api_key, start.strftime("%Y%m%d"), end.strftime("%Y%m%d"), max_pages=max_pages)
+
+
+# ── 신규 최대주주 수집 (v1.8.0) ──────────────────────────────────────
+# 금감원 무자본 M&A 합동점검(2019-12-19): 적발 24사의 신규 최대주주 82%가
+# 비외감법인·투자조합이었다. 신규 최대주주 명의 자체가 CB 인수자·자금유출
+# 상대방과 나란한 고정점이다.
+#
+# 실측(2026-08, 최근 30일 시장 스캔): 최대주주변경 공시는 거래소공시
+# (pblntf_ty='I')에서만 확인됐다(B·D·E·A·C는 0건).
+_CONTROL_CHANGE_TITLE_RE = re.compile(r"최대주주\s*변경")
+# 예고성 공시("최대주주 변경을 수반하는 주식양수도 계약 체결/해제")는
+# "1. 변경내용" 구조 자체가 없어 fetch_control_change_detail이 빈 dict를
+# 반환한다(server.py의 _CONTROL_CHANGE_PRECURSOR_RE와 동일한 관찰) — 원문
+# 조회 낭비를 줄이려 제목 단계에서 미리 걸러낸다.
+_CONTROL_CHANGE_PRECURSOR_RE = re.compile(r"계약")
+
+
+def collect_control_change_sightings_range(api_key, bgn_de, end_de,
+                                           max_pages=MAX_PAGES, pace_sec=0.0):
+    """지정 구간(YYYYMMDD)의 최대주주변경 공시(정정 제외)에서 신규 최대주주 수집.
+
+    "외 N인"/"외N명" 접미는 strip_holder_suffix로 제거한 대표 명의만
+    저장한다. 신규 최대주주 미기재("-")·제도권 금융기관은 제외한다.
+
+    Returns:
+        (sightings, stats) — stats: {"scanned", "control", "extracted", "truncated"}
+    """
+    import time as _time
+    discs = fetch_market_disclosures(
+        api_key, bgn_de, end_de, pblntf_ty="I", max_pages=max_pages) or []
+
+    sightings = []
+    n_control = 0
+    for d in discs:
+        rn = d.get("rcept_no", "")
+        rnm = d.get("report_nm", "") or ""
+        corp = d.get("corp_name", "")
+        cc = d.get("corp_code", "")
+        if not rn:
+            continue
+        if is_amendment_disclosure(rnm):
+            continue
+        if not _CONTROL_CHANGE_TITLE_RE.search(rnm) or _CONTROL_CHANGE_PRECURSOR_RE.search(rnm):
+            continue
+        n_control += 1
+
+        try:
+            detail = fetch_control_change_detail(rn, api_key) or {}
+        except Exception:
+            detail = {}
+        if pace_sec:
+            _time.sleep(pace_sec)
+
+        new_holder = strip_holder_suffix(detail.get("new_holder", ""))
+        nm = (new_holder or "").strip()
+        if not nm or set(nm) <= {"-"}:
+            continue
+        if fold_name(nm) == fold_name(corp):
+            continue
+        kind = classify_tracked_entity(nm)
+        if kind is None:
+            continue
+
+        rdt = d.get("rcept_dt", "") or ""
+        date = f"{rdt[:4]}-{rdt[4:6]}" if len(rdt) >= 6 else ""
+        cls_tag = (d.get("corp_cls") or "").strip()
+        sightings.append({
+            "name": nm, "corp": corp, "corp_code": cc, "corp_cls": cls_tag,
+            "date": date, "rcept_no": rn, "kind": kind, "src": "control",
+            "signals": ["SHAREHOLDER"],
+        })
+
+    stats = {
+        "scanned": len(discs),
+        "control": n_control,
+        "extracted": len(sightings),
+        "truncated": len(discs) >= max_pages * 100,
+    }
+    return sightings, stats
+
+
+def collect_control_change_sightings(api_key, window_days=WINDOW_DAYS, max_pages=MAX_PAGES):
+    """최근 window_days 최대주주변경 공시의 신규 최대주주 sighting 수집 (일일 크론용)."""
+    end = datetime.now()
+    start = end - timedelta(days=max(1, window_days))
+    return collect_control_change_sightings_range(
+        api_key, start.strftime("%Y%m%d"), end.strftime("%Y%m%d"), max_pages=max_pages)
+
+
 def _is_dup(lst, rec):
     """같은 접수·회사·이벤트 유형이면 중복(진입/이탈은 event로 구분)."""
     return any(e.get("rcept_no") == rec.get("rcept_no") and
@@ -198,7 +454,7 @@ def merge_sightings(data: dict, new: list, window_months: int = WINDOW_MONTHS) -
     aliases = data.get("aliases") or {}   # {정규화 별칭: 정규화 정본} — 같은 인물 합치기
     changed = False
     _FIELDS = ("corp", "corp_code", "corp_cls", "date", "rcept_no",
-               "signals", "kind", "via", "event", "event_type", "pct")
+               "signals", "kind", "via", "event", "event_type", "pct", "src")
 
     # 기존 키 정규화 재키잉(1회) — normalize_name 강화(역할 괄호 제거)로
     # '증권사 (…신탁업자 지위에서)'처럼 이미 저장된 괄호 키가 기저 실체 키로
@@ -463,10 +719,16 @@ def promote_repeat_actors(sightings_data: dict, known_data: dict,
         vias = sorted({r["via"] for r in recs if r.get("via")})
         if vias:
             tags.append("조합 배후 인물")
+        # 문제 회사 등장 기록의 출처(src) 혼합을 evidence에 반영 — 인수자·
+        # 유출 상대방·신규 최대주주 중 실제 등장한 것만, 고정 순서로 나열.
+        present_srcs = {r.get("src") or "funding" for r in recs
+                        if r.get("corp_code") in problem_codes}
+        src_label = "·".join(SRC_LABELS[s] for s in _SRC_ORDER if s in present_srcs) \
+            or SRC_LABELS["funding"]
         actors.setdefault(nm, []).append({
             "source": "자동 발굴",
             "status": "auto_matched",
-            "evidence": f"문제 회사 {len(problem_codes)}곳 인수자 반복 등장: {'·'.join(corp_names[:5])}",
+            "evidence": f"문제 회사 {len(problem_codes)}곳 등장({src_label}): {'·'.join(corp_names[:5])}",
             "url": disclosure_url(rep_rcept) or "https://dart.fss.or.kr",
             "date": "",
             "tags": tags,
@@ -479,12 +741,16 @@ def promote_repeat_actors(sightings_data: dict, known_data: dict,
 
 
 def build_daily_report(sdata: dict, kdata: dict, s_changed: bool, promoted: list,
-                       stats: dict | None = None, watch: list | None = None) -> str:
+                       stats: dict | None = None, watch: list | None = None,
+                       outflow_stats: dict | None = None,
+                       control_stats: dict | None = None) -> str:
     """매일 발송하는 heartbeat 요약(변경 없어도 작동 확인용).
 
     stats가 있으면 수집 규모를 함께 표기한다 — '신규 등재 0명'이 정상
     (수집은 됐지만 반복 인물이 없음)인지 이상(수집 자체가 죽음)인지
-    리포트만 보고 판별할 수 있게 한다.
+    리포트만 보고 판별할 수 있게 한다. outflow_stats·control_stats는
+    v1.8.0에서 추가된 두 수집원(자금유출 상대방·신규 최대주주)의 통계로,
+    없으면(기존 호출자) 해당 줄을 생략한다(하위 호환).
     """
     counts = {"verified": 0, "maintainer_seed": 0, "auto_matched": 0}
     for recs in kdata.get("actors", {}).values():
@@ -508,6 +774,22 @@ def build_daily_report(sdata: dict, kdata: dict, s_changed: bool, promoted: list
         )
         if stats.get("truncated"):
             lines.append("· ⚠️ 수집 페이지 상한 도달 — 공시 일부 누락 가능")
+    if outflow_stats:
+        lines.append(
+            f"· 수집(자금유출 상대방): 공시 {outflow_stats.get('scanned', 0)}건 스캔 · "
+            f"자금유출성거래 {outflow_stats.get('outflow', 0)}건 · "
+            f"상대방 {outflow_stats.get('extracted', 0)}건 추출"
+        )
+        if outflow_stats.get("truncated"):
+            lines.append("· ⚠️ 자금유출 수집 페이지 상한 도달 — 공시 일부 누락 가능")
+    if control_stats:
+        lines.append(
+            f"· 수집(신규 최대주주): 공시 {control_stats.get('scanned', 0)}건 스캔 · "
+            f"최대주주변경 {control_stats.get('control', 0)}건 · "
+            f"신규 최대주주 {control_stats.get('extracted', 0)}건 추출"
+        )
+        if control_stats.get("truncated"):
+            lines.append("· ⚠️ 최대주주변경 수집 페이지 상한 도달 — 공시 일부 누락 가능")
     lines += [
         f"· sightings: {'갱신' if s_changed else '무변경'} "
         f"(추적 인물 {len(sdata.get('sightings', {}))}명)",
@@ -542,6 +824,17 @@ def main():
 
     new, stats = collect_funding_sightings(key)
     s_changed = merge_sightings(sdata, new)
+
+    # v1.8.0: 자금유출 상대방 + 신규 최대주주 — 기존 funding과 같은 윈도우로
+    # 수집해 sightings에 합류. 문제 회사 필터는 여기서도 적용하지 않는다
+    # (등재 시점 지연 평가는 아래 promote_repeat_actors가 공통 수행).
+    outflow_new, outflow_stats = collect_outflow_sightings(key)
+    if merge_sightings(sdata, outflow_new):
+        s_changed = True
+    control_new, control_stats = collect_control_change_sightings(key)
+    if merge_sightings(sdata, control_new):
+        s_changed = True
+
     # 법인 행위자 개명 추적 — corpCode 명부(24h 캐시) + 상호변경 백필 맵
     # (corp_renames, backfill_renames.py) 기반. 추가 API 호출 없음
     if reconcile_corp_renames(sdata, _corp_name_index(key),
@@ -588,7 +881,8 @@ def main():
 
     # 변경 여부와 무관하게 매일 heartbeat 리포트 발송 (작동 확인용)
     report = build_daily_report(sdata, kdata, s_changed, promoted, stats=stats,
-                                watch=watch)
+                                watch=watch, outflow_stats=outflow_stats,
+                                control_stats=control_stats)
     if promoted:
         if written == len(promoted):
             note = ""
@@ -607,6 +901,8 @@ def main():
     sent = send_mail("[known_actors] 일일 자동 발굴 리포트", report)
 
     print(f"공시 {stats['scanned']}건 · 자금조달 {stats['funding']}건 · sighting {stats['extracted']}건"
+          f" · 자금유출 {outflow_stats['outflow']}건(상대방 {outflow_stats['extracted']}건)"
+          f" · 최대주주변경 {control_stats['control']}건(신규주주 {control_stats['extracted']}건)"
           f" · sightings {'갱신' if s_changed else '무변경'} · 신규 등재 {len(promoted)}건"
           + (" · 리포트 발송" if sent else " · 리포트 스킵(자격증명 없음)"))
 
