@@ -41,6 +41,7 @@ elif not os.environ.get("DART_API_KEY"):
 from dart_risk_mcp.core.dart_client import (  # noqa: E402
     fetch_company_disclosures,
     resolve_corp,
+    resolve_decision_type,
 )
 from dart_risk_mcp.core.signals import is_amendment_disclosure  # noqa: E402
 from dart_risk_mcp.server import (  # noqa: E402
@@ -82,6 +83,7 @@ COMPANIES = [
     {"name": "삼성전자",       "stock": "005930", "category": "대형주표준(대용량)"},
     {"name": "헬릭스미스",     "stock": "084990", "category": "관리종목·부실사례"},
     {"name": "두산",           "stock": "000150", "category": "지주사"},
+    {"name": "아틀라스링크",   "stock": "297570", "category": "무자본M&A실증(자금역류)"},
 ]
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -122,12 +124,13 @@ MULTI_TOOLS: list[tuple[str, Callable[[list[dict]], str]]] = [
     ("compare_fs",    lambda cs: compare_financials([c["name"] for c in cs], "2024")),
 ]
 
-# DS005 자동 탐지용 키워드 (analyze 출력에서 검색)
+# DS005 자동 탐지용 키워드 — 실제 report_nm에서 검색(공백 없는 실제 표기
+# 기준. resolve_decision_type의 _DECISION_NAME_MAP과 동일 표기).
 DS005_KEYWORDS = [
-    "타법인주식 양수", "타법인주식 양도",
+    "타법인주식및출자증권양수", "타법인주식및출자증권양도",
     "합병결정", "분할결정", "분할합병결정",
     "영업양수", "영업양도", "주식교환", "주식이전",
-    "유형자산 양수", "유형자산 양도",
+    "유형자산양수", "유형자산양도",
 ]
 
 # E. 회사 무관 프리셋 도구
@@ -141,6 +144,7 @@ MARKET_PRESETS = [
     "cb_issue", "treasury", "going_concern", "all_risk",  # v1.0.0~v1.0.2 검증
     "reverse_split", "3pca", "shareholder_change", "exec_change",
     "audit_issue", "asset_transfer", "embezzle", "inquiry",  # v1.0.3 신규 검증 8개
+    "fund_outflow",  # v1.6.0 신규
 ]
 
 
@@ -176,8 +180,14 @@ def _resolve_first_normal_rcept(company: dict, api_key: str) -> str | None:
     return None
 
 
-def _detect_ds005_rcept(company: dict, api_key: str) -> str | None:
-    """analyze 출력에는 rcept가 없으므로 fetch_company_disclosures에서 직접 키워드 매칭."""
+def _detect_ds005_rcept(company: dict, api_key: str) -> tuple[str, str, str] | None:
+    """analyze 출력에는 rcept가 없으므로 fetch_company_disclosures에서 직접 키워드 매칭.
+
+    (rcept_no, report_nm, corp_code)를 반환한다 — report_nm은 호출부에서
+    resolve_decision_type으로 decision_type을 결정하는 데 쓰인다
+    (이전에는 get_major_decision을 decision_type="" 고정으로 호출해
+    골드가 항상 "미지정" 에러 메시지였다 — v1.6.0에서 수정).
+    """
     corp = resolve_corp(company["name"], api_key)
     if not corp or not corp[1]:
         return None
@@ -192,7 +202,7 @@ def _detect_ds005_rcept(company: dict, api_key: str) -> str | None:
         if any(kw in nm for kw in DS005_KEYWORDS):
             rcept = d.get("rcept_no", "").strip()
             if rcept:
-                return rcept
+                return rcept, nm, corp_code
     return None
 
 
@@ -270,15 +280,17 @@ def build_call_matrix(
     # D-2. DS005 자동 탐지
     if not tool_filter or "decision" in tool_filter:
         for c in companies:
-            rcept = _detect_ds005_rcept(c, api_key)
-            if not rcept:
+            found = _detect_ds005_rcept(c, api_key)
+            if not found:
                 sys.stderr.write(f"  SKIP DS005: {c['name']} 주요결정 공시 미발견\n")
                 continue
+            rcept, report_nm, corp_code = found
+            dtype = resolve_decision_type(report_nm)
             label = f"{c['name']} decision_{rcept}"
             path = GOLDEN / f"{c['name']}_decision_{rcept}.txt"
             calls.append((
                 label,
-                (lambda r=rcept: get_major_decision(r, "", "")),
+                (lambda r=rcept, dt=dtype, cc=corp_code: get_major_decision(r, dt, cc)),
                 path,
             ))
 
@@ -381,10 +393,11 @@ def main() -> int:
     if helix_analyze.exists():
         text = helix_analyze.read_text(encoding="utf-8")
         markers = [m for m in ("GOING_CONCERN", "8.4", "부실 단계", "회생절차", "감사범위제한") if m in text]
+        # cp949 콘솔 크래시 전례(CLAUDE.md) — 비ASCII 구분자(—·이모지) 금지
         if markers:
-            print(f"  ✓ 헬릭스미스 부실 흔적: {markers}")
+            print(f"  [OK] 헬릭스미스 부실 흔적: {markers}")
         else:
-            print("  ! 헬릭스미스 analyze에 부실 흔적 없음 — 검수 필요")
+            print("  [WARN] 헬릭스미스 analyze에 부실 흔적 없음 - 검수 필요")
 
     return 0 if failed == 0 else 1
 
