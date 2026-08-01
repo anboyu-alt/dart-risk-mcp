@@ -819,14 +819,21 @@ def _strip_tags(text: str) -> str:
 
 
 def _table_to_markdown(table_html: str) -> str:
-    """HTML 테이블을 마크다운 테이블 형식으로 변환."""
+    """HTML 테이블을 마크다운 테이블 형식으로 변환.
+
+    셀 태그는 표준 <td>/<th>에 더해 DART 전용 <TE>(입력값 셀)·<TU>(단위 셀)를
+    포함한다. 주요사항보고서류 원문 XML은 라벨을 <TD>, 제출인이 기재한 값을
+    <TE>에 담는데(아틀라스링크 20260722000373 실측), TE를 빼면 값이 전부
+    누락된 라벨 골격만 남는다 — 뷰어 원문 열람과 자금유출 상대방 파싱이
+    이 누락 때문에 깨졌던 실사고(2026-08-02)의 근본 원인.
+    """
     rows = re.findall(r"<tr[^>]*>(.*?)</tr>", table_html, re.DOTALL | re.IGNORECASE)
     if not rows:
         return _strip_tags(table_html)
 
     md_rows = []
     for i, row in enumerate(rows):
-        cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, re.DOTALL | re.IGNORECASE)
+        cells = re.findall(r"<t[dheu][^>]*>(.*?)</t[dheu]>", row, re.DOTALL | re.IGNORECASE)
         cell_texts = [re.sub(r"\s+", " ", _strip_tags(c)).strip() for c in cells]
         if not any(cell_texts):
             continue
