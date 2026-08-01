@@ -33,6 +33,18 @@
 
 ## [Unreleased]
 
+**금감원 2019-12-19 무자본 M&A 합동점검 반영.** 조달자금 유용 경로(비상장주식 취득 55%·관계회사 대여/선급금 29%)를 패턴·플래그로 도구화.
+
+### Added
+
+- 복합 패턴 `fund_diversion_chain`(조달-유용 체인, HIGH) — CB/BW 발행(1.1) + 타법인주식·영업 양수(5.8) 조합. 정상 신사업 M&A와 구분되지 않는 관찰 포인트라 CRITICAL이 아닌 HIGH로 설계.
+- `scan_financial_anomaly` 이상 플래그 8→9종: `LOAN_ADVANCE_SURGE`(재무상태표 대여금·선급금 합계가 전기 대비 2배↑·10억원↑) + "대여금·선급금 (계정 노출 시)" 사실 표기 블록. `core.extract_loan_advance()`가 fnlttSinglAcntAll rows에서 BS(잔액)/CF(증감)를 구분 추출 — CF 전용 노출은 사실 표기만 하고 판정하지 않는다. 라이브: 두산에너빌리티(BS 3계정)·헬릭스미스·두산(CF 전용) 노출 확인, 플래그 임계 충족 사례는 미발굴.
+
+### Changed
+
+- `capital_backflow` field_evidence에서 아틀라스링크 실명 인용을 제거하고 금감원 합동점검 인용(24사 위법행위 적발, 대여·선급금 유용 3,799억)으로 교체 — 특정 기업 낙인 문제 해소, 패턴 자체(신호 조합·CRITICAL)는 변경 없음.
+- taxonomy 5.7(Cash Outflow to Acquirer Side) description·red_flags에 동 합동점검 출처 서술 보강.
+
 ## [1.6.0] — 2026-07-07
 
 **kreports 이식 시리즈.** [capitalparser/kreports-dart-mcp](https://github.com/capitalparser/kreports-dart-mcp)(Apache 2.0)의 회계 이상 탐지 로직을 본 도구의 원칙(점수·등급 없음, 로컬 DB 없음, 외부 라이브러리 없음)에 맞게 재설계해 이식했다. 이식 항목·수정 내용은 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 참조.

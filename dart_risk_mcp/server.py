@@ -35,6 +35,7 @@ from .core import (
     estimate_crisis_timeline,
     extract_cb_investors,
     extract_cfs_ofs_ni,
+    extract_loan_advance,
     fetch_affiliate_investments,
     NOTE_CATEGORIES,
     classify_note_title,
@@ -3123,6 +3124,7 @@ _METRIC_TO_FLAG: dict[str, str] = {
     "순이익 vs 영업현금흐름": "CASH_GAP",
     "자본총계/자본금": "CAPITAL_IMPAIRMENT",
     "연결/별도 당기순이익": "CFS_OFS_REVERSAL",
+    "대여금·선급금(재무상태표)": "LOAN_ADVANCE_SURGE",
 }
 
 
@@ -3189,10 +3191,15 @@ def scan_financial_anomaly(
         if _prior_year else {}
     )
 
+    # 대여금·선급금 (금감원 2019-12 무자본 M&A 합동점검 유의사항 ③) — fs_list는
+    # 이미 당기/전기 금액을 함께 담고 있어 추가 API 호출 없이 추출 가능.
+    _loan_advance = extract_loan_advance(fs_list)
+
     flags, metrics = detect_financial_anomaly(
         current, prior,
         current_indx=_current_indx, prior_indx=_prior_indx,
         cfs_ni=_cfs_ni, ofs_ni=_ofs_ni,
+        loan_advance=_loan_advance,
     )
 
     # 영업이익 vs 순이익 부호 괴리 (kreports op_net_divergence 이식·확장)
@@ -3275,6 +3282,10 @@ def scan_financial_anomaly(
             cur = f"{len(_det)}개 계정 불일치"
             pri = "-"
             delta = f"최대 {_tp:+.1f}%" if _tp is not None else "-"
+        elif name == "대여금·선급금(재무상태표)":
+            cur = f"{m['current']:,}원"
+            pri = f"{m['prior']:,}원"
+            delta = f"{m['current'] / m['prior']:.1f}배" if m["prior"] else "신규"
         elif "current" in m and "prior" in m:
             cur = f"{m['current']:.1f}{m.get('unit','')}"
             pri = f"{m['prior']:.1f}{m.get('unit','')}"
@@ -3354,6 +3365,32 @@ def scan_financial_anomaly(
                 else:
                     lines.append("- 당기 비중은 과거와 유사한 수준입니다.")
             lines.append("  ※ 산정 기준(정부보조금 차감 여부 등)이 회사마다 달라 원문 표 확인이 필요합니다.")
+
+    # 대여금·선급금 (계정 노출 시) — 금감원 2019-12 무자본 M&A 합동점검
+    # 유의사항 ③(자금조달 이후 관계회사 대여·선급금 확인) 도구화. 계정 자체가
+    # 재무제표에 노출되지 않는 회사가 흔해(실측: 아틀라스링크 2025 CFS 159행
+    # 중 0건) 노출된 회사에서만 표기한다 — 미발화가 정상.
+    _la_bs = _loan_advance.get("bs_items") or []
+    _la_cf = _loan_advance.get("cf_items") or []
+    if _la_bs or _la_cf:
+        lines.append("")
+        lines.append("### 대여금·선급금 (계정 노출 시)")
+        if _la_bs:
+            lines.append("**재무상태표(잔액)**")
+            for _it in _la_bs:
+                _cur_s = f"{_it['current']:,}원" if _it["current"] is not None else "-"
+                _pri_s = f"{_it['prior']:,}원" if _it["prior"] is not None else "-"
+                lines.append(f"- {_it['account_nm']}: 당기 {_cur_s} / 전기 {_pri_s}")
+        if _la_cf:
+            lines.append("**현금흐름표(증감)**")
+            for _it in _la_cf:
+                _cur_s = f"{_it['current']:,}원" if _it["current"] is not None else "-"
+                _pri_s = f"{_it['prior']:,}원" if _it["prior"] is not None else "-"
+                lines.append(f"- {_it['account_nm']}: 당기 {_cur_s} / 전기 {_pri_s}")
+        lines.append(
+            "  ※ 금감원 무자본 M&A 합동점검(2019-12)이 관계회사 대여·선급금을 "
+            "유용 경로로 지목했습니다 — 상세는 재무제표 주석을 확인하세요."
+        )
 
     lines.append("")
     if flagged_metrics:

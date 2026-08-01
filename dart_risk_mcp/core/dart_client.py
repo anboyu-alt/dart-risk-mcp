@@ -1924,6 +1924,7 @@ def detect_financial_anomaly(
     prior_indx: dict | None = None,
     cfs_ni: int | None = None,
     ofs_ni: int | None = None,
+    loan_advance: dict | None = None,
 ) -> tuple[list[str], list[dict]]:
     """
     당기·전기 재무 dict를 받아 4개 이상 지표 판정.
@@ -1938,11 +1939,15 @@ def detect_financial_anomaly(
             추가하고, 별도>연결 역전(종속회사 합산 손실)이 뚜렷하면
             CFS_OFS_REVERSAL 플래그를 세운다. 미지정 시 종전 동작과 동일.
         ofs_ni: 별도 당기순이익.
+        loan_advance: extract_loan_advance() 결과. BS(재무상태표) 노출 계정의
+            당기 합계가 전기 대비 2배 이상 & 10억원 이상이면 LOAN_ADVANCE_SURGE
+            플래그를 세운다. CF(현금흐름표) 전용 노출은 판정 대상이 아니다
+            (server.py가 별도 사실 표기 블록으로 다룬다).
 
     Returns:
         (flags, metrics)
         flags: ["AR_SURGE", "INVENTORY_SURGE", "CASH_GAP", "CAPITAL_IMPAIRMENT",
-                "CFS_OFS_REVERSAL"] 부분집합
+                "CFS_OFS_REVERSAL", "LOAN_ADVANCE_SURGE"] 부분집합
         metrics: [{"name", "current", "prior", "delta", "unit", "flagged"} ...]
                  v0.8.8: indx 기반 항목은 source="indx", delta_pct(float|None) 키를 가짐.
                  발생액 비율 항목은 사실 표기 전용(flagged 항상 False).
@@ -2058,6 +2063,24 @@ def detect_financial_anomaly(
                 "unit": unit,
                 "flagged": False,
             })
+
+    # LOAN_ADVANCE_SURGE (금감원 2019-12 무자본 M&A 합동점검 유의사항 ③ 도구화)
+    # BS(재무상태표) 노출만 판정 대상 — CF(현금흐름표) 전용 노출은 잔액이 아닌
+    # 증감 흐름이라 같은 임계를 적용할 수 없어 사실 표기만 한다(v0.8.5 원칙).
+    if loan_advance and loan_advance.get("bs_current_total") is not None:
+        la_cur = loan_advance["bs_current_total"]
+        la_pri = loan_advance.get("bs_prior_total") or 0
+        m = {
+            "name": "대여금·선급금(재무상태표)",
+            "current": la_cur,
+            "prior": la_pri,
+            "unit": "원",
+            "flagged": False,
+        }
+        if la_cur >= 1_000_000_000 and la_cur >= la_pri * 2:
+            flags.append("LOAN_ADVANCE_SURGE")
+            m["flagged"] = True
+        metrics.append(m)
 
     return flags, metrics
 
@@ -2656,6 +2679,67 @@ def extract_cfs_ofs_ni(fs_rows: list[dict]) -> tuple[int | None, int | None]:
         if v is not None:
             result[fs_div] = v
     return result.get("CFS"), result.get("OFS")
+
+
+def extract_loan_advance(rows: list[dict]) -> dict:
+    """fnlttSinglAcntAll rows에서 대여금·선급금 계정을 추출.
+
+    금감원 2019-12-19 무자본 M&A 합동점검 투자자 유의사항 ③(자금조달 이후
+    관계회사 대여·선급금 확인)을 도구화한 추출기. "대여금" 또는 "선급금"을
+    포함하는 계정명을 수집하되 성격이 다른 "선급비용"은 제외한다. sj_div로
+    재무상태표(BS, 잔액)와 현금흐름표(CF, 증감 흐름)를 구분해 각각 리스트로
+    반환한다.
+
+    실측(2026-08): 계정 자체가 재무제표에 노출되지 않는 회사가 흔하다
+    (아틀라스링크 2025 CFS 159행 중 0건, 셀트리온·삼성전자·제이스코홀딩스도
+    2023·2024 annual 전체 0건). BS 라인 없이 CF 라인("단기대여금의 증가/감소"
+    등)으로만 잡히는 회사도 있다(헬릭스미스·두산 2024 CFS) — 이 경우 잔액
+    판정(bs_current_total) 대상이 아니라 사실 표기만 한다. 두산에너빌리티
+    2024 CFS는 BS 잔액(단기대여금·선급금·장기대여금)이 모두 노출되는 예다.
+
+    Returns:
+        {"bs_items": [{"account_nm", "current", "prior"}, ...],
+         "cf_items": [{"account_nm", "current", "prior"}, ...],
+         "bs_current_total": int|None,  # BS 노출 계정이 하나도 없으면 None
+         "bs_prior_total": int|None}
+    """
+    bs_items: list[dict] = []
+    cf_items: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for row in rows or []:
+        name = (row.get("account_nm") or "").strip()
+        if not name or "선급비용" in name:
+            continue
+        if "대여금" not in name and "선급금" not in name:
+            continue
+        sj_div = (row.get("sj_div") or "").strip().upper()
+        if sj_div not in ("BS", "CF"):
+            continue
+        key = (sj_div, name)
+        if key in seen:
+            continue
+        seen.add(key)
+        cur = _parse_fs_amount(row.get("thstrm_amount"))
+        pri = _parse_fs_amount(row.get("frmtrm_amount"))
+        if cur is None and pri is None:
+            continue
+        item = {"account_nm": name, "current": cur, "prior": pri}
+        (bs_items if sj_div == "BS" else cf_items).append(item)
+
+    bs_current_total = (
+        sum(i["current"] for i in bs_items if i["current"] is not None)
+        if bs_items else None
+    )
+    bs_prior_total = (
+        sum(i["prior"] for i in bs_items if i["prior"] is not None)
+        if bs_items else None
+    )
+    return {
+        "bs_items": bs_items,
+        "cf_items": cf_items,
+        "bs_current_total": bs_current_total,
+        "bs_prior_total": bs_prior_total,
+    }
 
 
 def _fs_response_to_periods(fs_data: dict) -> tuple[dict, dict]:
