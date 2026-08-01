@@ -506,6 +506,51 @@ def analyze_company_risk(
                 seen_investors.add(inv["name"])
                 cb_investors.append(inv)
 
+    # v1.6.0: 자금유출·양수거래 상대방 자동 확인 — FUND_OUTFLOW/ACQ_REVIEW
+    # 신호가 매칭된 공시 중 resolve_decision_type이 결정 유형을 판별하는
+    # 것(유형자산양수/영업양수/타법인주식및출자증권양수)만 최근 최대 2건
+    # fetch_major_decision으로 거래상대방·회사와의 관계·외부평가를 사실로
+    # 확인한다. 실패해도 이 블록만 조용히 생략 — 기존 리포트에는 무영향.
+    outflow_decision_lines: list[str] = []
+    try:
+        _outflow_events = [
+            e for e in signal_events
+            if e["key"] in ("FUND_OUTFLOW", "ACQ_REVIEW")
+            and not e["is_amendment"]
+            and e.get("rcept_no")
+            and resolve_decision_type(e["report_nm"])
+        ]
+        _outflow_events.sort(key=lambda e: e["rcept_dt"], reverse=True)
+        _seen_outflow_rcept: set[str] = set()
+        for _e in _outflow_events:
+            if _e["rcept_no"] in _seen_outflow_rcept:
+                continue
+            if len(_seen_outflow_rcept) >= 2:
+                break
+            _seen_outflow_rcept.add(_e["rcept_no"])
+            _dtype2 = resolve_decision_type(_e["report_nm"])
+            _r2 = fetch_major_decision(_e["rcept_no"], _DART_API_KEY, _dtype2, corp_code)
+            if "error" in _r2:
+                continue
+            _block = [f"- [{_e['rcept_dt']}] {_clean_report_name(_e['report_nm'])}"]
+            _block.append(f"  → 거래상대방: {_r2.get('counterparty') or '(미기재)'}")
+            if _r2.get("relation_text"):
+                _block.append(f"  → 회사와의 관계: {_r2['relation_text']}")
+            _ext_txt = "실시" if _r2.get("external_eval") else "미실시"
+            if _r2.get("ext_eval_name"):
+                _ext_txt += f" ({_r2['ext_eval_name']}"
+                if _r2.get("ext_eval_opinion"):
+                    _ext_txt += f", 의견: {_r2['ext_eval_opinion']}"
+                _ext_txt += ")"
+            _block.append(f"  → 외부평가: {_ext_txt}")
+            if "DECISION_RELATED_PARTY" in _r2.get("flags", []):
+                _rp_title, _ = flag_to_prose("DECISION_RELATED_PARTY")
+                if _rp_title:
+                    _block.append(f"    • **주목할 이유:** {_rp_title}")
+            outflow_decision_lines.append("\n".join(_block))
+    except Exception:
+        outflow_decision_lines = []
+
     # ── 리포트 조립 ──
 
     # 🎯 3문장 요약 — 맨 위에 독립적으로 읽히는 단락
@@ -627,6 +672,21 @@ def analyze_company_risk(
                     lines.append(f"    • **주목할 이유:** {title}")
         if failed_decisions:
             lines.append(f"  (추가 {failed_decisions}건 구조화 조회 실패)")
+
+    # v1.6.0: 자금유출·양수거래 상대방 자동 확인 섹션 -----------
+    if outflow_decision_lines:
+        lines += [
+            "",
+            "🔍 **자금유출·양수거래 상대방 확인** (최근 최대 2건)",
+            "금전대여·채무보증·담보제공·유형자산양수·영업양수·"
+            "타법인주식및출자증권양수로 매칭된 공시 중 구조화 데이터가 "
+            "있는 결정 공시의 거래상대방·회사와의 관계·외부평가를 "
+            "확인합니다.",
+            "",
+        ]
+        for _block in outflow_decision_lines:
+            lines.append(_block)
+            lines.append("")
 
     # v0.6.0 자본 변동 타임라인 (최근 12개월 요약)
     if churn.get("events"):
@@ -1995,6 +2055,7 @@ _PRESET_TO_SIGNALS: dict[str, list[str]] = {
     "going_concern":      ["GOING_CONCERN", "INSOLVENCY", "DEBT_RESTR"],
     "embezzle":           ["EMBEZZLE"],
     "inquiry":            ["INQUIRY"],
+    "fund_outflow":       ["FUND_OUTFLOW", "ACQ_REVIEW"],
     "all_risk":           [],  # 모든 신호
 }
 
@@ -2111,7 +2172,7 @@ def search_market_disclosures(preset: str, days: int = 7, max_results: int = 50)
     Args:
         preset: 신호 프리셋 — cb_issue / treasury / reverse_split / 3pca /
                 shareholder_change / exec_change / audit_issue / asset_transfer /
-                going_concern / embezzle / inquiry / all_risk
+                going_concern / embezzle / inquiry / fund_outflow / all_risk
         days: 조회 기간 (기본 7일, 최대 90일)
         max_results: 최대 반환 건수 (기본 50, 최대 200)
     """

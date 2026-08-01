@@ -822,6 +822,62 @@ TAXONOMY = {
         "field_evidence": [],
         "investor_implication": "Cash outflow path to related parties despite operating losses",
     },
+    "5.7": {
+        "id": "5.7",
+        "category": "Corporate Action Manipulation",
+        "name": "Cash Outflow to Acquirer Side (Loans, Guarantees, Asset Purchases)",
+        "description": (
+            "금전대여·채무보증·담보제공·유형자산양수처럼 회사 자금·신용이 밖으로 "
+            "나가는 거래. 대기업의 일상적 계열 지원과 단독으로는 구분되지 않아 "
+            "참고 수준으로 다룬다. 다만 경영권 변경(최대주주변경) 직후 발생하면, "
+            "인수 측이 인수자금을 회수하거나 인수 주체를 지원하는 구조로 쓰인 "
+            "사례가 있어 시점을 함께 살펴볼 관찰 포인트가 된다."
+        ),
+        "base_score": 2,
+        "severity": "MEDIUM",
+        "crisis_timeline_months": 12,
+        "keywords": [
+            "금전대여",
+            "자금대여",
+            "채무보증",
+            "담보제공",
+            "유형자산양수",
+        ],
+        "red_flags": [
+            "최대주주변경 이후 12개월 내 발생",
+            "거래 상대방이 특수관계자·계열회사",
+            "동일 상대방 대상 반복 거래",
+        ],
+        "field_evidence": [
+            "아틀라스링크(구 알로이스): 최대주주변경 주식양수도(20260608) 후 "
+            "계열회사 유형자산 현금 양수 60억(20260722)·타인에대한채무보증(20260729) 연쇄",
+        ],
+        "investor_implication": "Observation point on fund direction after a control change; not itself a determination",
+    },
+    "5.8": {
+        "id": "5.8",
+        "category": "Corporate Action Manipulation",
+        "name": "Acquisition Requiring Counterparty Review",
+        "description": (
+            "영업양수·타법인주식및출자증권양수 결정. 정상적인 사업 확장 M&A가 "
+            "대다수이므로 그 자체는 판단 근거가 아니며, 거래 상대방·가액·외부평가 "
+            "여부를 원문에서 직접 확인해야 성격을 알 수 있는 사실 안내 신호다."
+        ),
+        "base_score": 0,
+        "severity": "OBSERVATION",
+        "crisis_timeline_months": 12,
+        "keywords": [
+            "영업양수",
+            "타법인주식및출자증권양수",
+        ],
+        "red_flags": [
+            "거래 상대방이 특수관계자",
+            "외부평가 미실시",
+            "자산총액 대비 거래규모 과대",
+        ],
+        "field_evidence": [],
+        "investor_implication": "Counterparty and valuation confirmation needed; not itself a determination",
+    },
 
     # CATEGORY 6: Accounting & Financial Reporting (3 signals)
     "6.1": {
@@ -1196,6 +1252,22 @@ CROSS_SIGNAL_PATTERNS = {
         "severity": "HIGH",
         "field_evidence": [
             "금감원 2024·2025 주가조작 적발 — 자본 이벤트 반복 + 공시의무 위반 동시 발생 공통",
+        ],
+    },
+    "capital_backflow": {
+        "name": "자금 역류",
+        "description": (
+            "경영권 변경(최대주주변경) 후 12개월 내 피인수회사가 금전대여·"
+            "채무보증·담보제공·자산 양수로 인수자 측(계열·특수관계)에 자원을 "
+            "이전하는 흐름 — 무자본 M&A에서 인수자금 회수 수단으로 쓰인 사례가 "
+            "있는 조합"
+        ),
+        "signal_sequence": ["3.1", "5.7"],
+        "timeline_months": 12,
+        "severity": "CRITICAL",
+        "field_evidence": [
+            "아틀라스링크(구 알로이스): 최대주주변경 주식양수도(20260608) 후 "
+            "계열회사 유형자산 현금 양수 60억(20260722)·타인에대한채무보증(20260729) 연쇄",
         ],
     },
 }

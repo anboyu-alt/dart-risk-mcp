@@ -88,6 +88,8 @@ _FIRST_LINE_PATTERNS: dict[str, str] = {
     "compare_fs":    r"^📊 \*\*재무 비교\*\* \(\d+개 기업\)$",
     "precedents":    r"^📚 \*\*신호별 해석 — 왜 주목해야 하는지\*\*$",
     "market":        r"^🔍 \*\*시장 공시 스캔\*\* \(preset=[a-z_0-9]+, 최근 \d+일\)$",
+    # DS005 주요결정 (자동 탐지, v1.6.0부터 decision_type 정상 해석 — 첫 골드)
+    "decision":      r"^📑 \*\*주요사항 결정 공시\*\* \(rcept_no=\d+\)$",
     # 기존 단일 disclosure (v0.7.x 골드 — risk_check 이전 명명 잔존)
     "disclosure":    r"^📋 \*\*공시 리스크 분석\*\*$",
 }
@@ -114,7 +116,7 @@ _ALLOWED_PAREN_ABBREVS = {
     # 정부·기관
     "MFDS", "FSC", "FSS", "SEC", "NICE", "KFTC", "KRX",
     # 회계 표준 지표
-    "ROE", "ROA", "EPS", "EBITDA", "EBIT", "EV",
+    "ROE", "ROA", "EPS", "EBITDA", "EBIT", "EV", "FCF",
     # 기타 산업 표준
     "OECD", "IFRS", "GAAP", "ESG",
 }

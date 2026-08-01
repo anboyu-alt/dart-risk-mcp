@@ -25,14 +25,14 @@ dart_risk_mcp/
 └── core/
     ├── __init__.py      # 공개 API export
     ├── dart_client.py   # DART API 클라이언트 (핵심)
-    ├── signals.py       # 37개 신호 유형 (8개 카테고리) + 키워드 매칭 (v0.4.0 카탈로그 기반 보강)
+    ├── signals.py       # 53개 신호 유형 (8개 카테고리) + 키워드 매칭 (v0.4.0 카탈로그 기반 보강, v1.6.0 기준 53종)
     ├── catalog.py       # 금감원·금융위 MD 카탈로그 로더 (load_catalog_excerpt)
     ├── cb_extractor.py  # CB/BW 인수자명 추출
     ├── sector_policy.py # 업종별 유의 회계정책 정적 맵 (KSIC 조회, kreports 이식/Apache 2.0)
     ├── notes.py         # 재무제표 주석 카테고리 분류 (제목 키워드 10종, kreports 이식/Apache 2.0)
     ├── watchlist.py     # 인물↔회사군 영속 워치리스트 (순수 파일 I/O)
     ├── known_actors.py  # 공개기록 행위자 레지스트리 로드/조회, 회사명 역방향 조회 포함 (비공개 Notion opt-in)
-    └── taxonomy.py      # 27개 신호 분류 + 위험 점수 + 패턴
+    └── taxonomy.py      # 44개 신호 분류(v1.6.0 기준) + 위험 점수 + 패턴 10종
 ```
 
 > 동봉 데이터: `dart_risk_mcp/data/known_actors.json`(빈 스켈레톤 — v1.5.0부터 인물 데이터 미포함). 레지스트리 원본은 제작자 비공개 Notion DB. DB 셋업: `scripts/setup_known_actors_db.py`(+`setup-known-actors-db.yml`, 1회성).
@@ -52,6 +52,11 @@ dart_risk_mcp/
 - 반환: 위험 등급, 탐지 신호 목록, 복합 패턴, CB 인수자, 위기 타임라인
 - `lookback_years` 범위 1~5, 기본 1년. 다년(>1년) 조회 시 결과 하단에 예상 출력 규모(문자·토큰 추정) 푸터 표기.
 - 공개기록 레지스트리(opt-in) 설정 시, 이 회사가 등재 행위자의 관련기업으로 태깅돼 있으면 리포트 말미에 "📎 공개기록 참고" 섹션 자동 표면화 (`lookup_actors_by_company` 역방향 조회 — 사실 표기, 판정 없음)
+- v1.6.0: `FUND_OUTFLOW`/`ACQ_REVIEW` 신호가 매칭된 공시 중 `resolve_decision_type`이 결정
+  유형(유형자산양수/영업양수/타법인주식및출자증권양수)을 판별하는 것만 최근 최대 2건
+  `fetch_major_decision`으로 추가 조회해 "🔍 자금유출·양수거래 상대방 확인" 섹션에
+  거래상대방·회사와의 관계·외부평가를 사실로 표기(`DECISION_RELATED_PARTY` 있으면 함께
+  표면화). 실패해도 이 블록만 조용히 생략 — 기존 리포트 무영향, 점수 가산 없음.
 
 ### 2. `check_disclosure_risk(rcept_no="", report_name="")`
 
@@ -65,8 +70,8 @@ dart_risk_mcp/
 신호 유형 목록을 받아 각 신호의 의미, 위기 타임라인, 복합 패턴을 반환합니다.
 
 - 실제 과거 공시 검색은 하지 않음 (taxonomy 정적 데이터 조회)
-- `SIGNAL_KEY_TO_TAXONOMY`로 신호 키 → taxonomy ID(1.1~8.4) 매핑 후 조회
-- 사용 가능한 신호 키 (28개, 8개 카테고리):
+- `SIGNAL_KEY_TO_TAXONOMY`로 신호 키 → taxonomy ID(1.1~8.5) 매핑 후 조회
+- 사용 가능한 신호 키 (30개, 8개 카테고리):
 
   | 카테고리 | 키 목록 |
   |---------|---------|
@@ -74,10 +79,15 @@ dart_risk_mcp/
   | Cat 2 자본구조 | `REVERSE_SPLIT`, `GAMJA_MERGE`, `3PCA`, `RIGHTS_UNDER`, `TREASURY` |
   | Cat 3 경영권 | `SHAREHOLDER`, `EXEC`, `MGMT_DISPUTE`, `CIRCULAR` |
   | Cat 4 거버넌스 | `RELATED_PARTY`, `AUDIT` |
-  | Cat 5 기업활동 | `ASSET_TRANSFER`, `DEMERGER`, `MGMT` |
+  | Cat 5 기업활동 | `ASSET_TRANSFER`, `DEMERGER`, `MGMT`, `FUND_OUTFLOW`, `ACQ_REVIEW` |
   | Cat 6 회계/재무 | `REVENUE_IRREG`, `CONTINGENT` |
   | Cat 7 시장조작 | `INQUIRY`, `EMBEZZLE` |
   | Cat 8 위기/부실 | `INSOLVENCY`, `DEBT_RESTR`, `GOING_CONCERN` |
+
+  v1.6.0 신규: `FUND_OUTFLOW`(금전대여·채무보증·담보제공·유형자산양수 — 참고 강도, taxonomy 5.7)
+  · `ACQ_REVIEW`(영업양수·타법인주식및출자증권양수 — 상대방 확인 안내, taxonomy 5.8).
+  경영권 변경(`SHAREHOLDER`, 3.1) 직후 `FUND_OUTFLOW`가 겹치면 복합 패턴 `capital_backflow`
+  ("자금 역류", CRITICAL)로 격상 — 아틀라스링크(01309795, 297570) 라이브 매칭.
 
 ### 4. `build_event_timeline(company_name, lookback_years=1)` ✨
 
@@ -177,7 +187,7 @@ dart_risk_mcp/
 
 시장 전체 공시를 preset 기반으로 배치 스캔합니다.
 
-- `preset` 허용값: `cb_issue`, `treasury`, `reverse_split`, `3pca`, `shareholder_change`, `exec_change`, `audit_issue`, `asset_transfer`, `going_concern`, `embezzle`, `inquiry`, `all_risk`
+- `preset` 허용값: `cb_issue`, `treasury`, `reverse_split`, `3pca`, `shareholder_change`, `exec_change`, `audit_issue`, `asset_transfer`, `going_concern`, `embezzle`, `inquiry`, `fund_outflow`(v1.6.0 신규 — `FUND_OUTFLOW`/`ACQ_REVIEW`), `all_risk`
 - `days` 범위: 1~90일, `max_results` 범위: 1~200건
 - 내부 흐름: `fetch_market_disclosures` (corp_code 없이 `/list.json`) → `match_signals` 필터
 - 반환: 날짜|기업|공시명|신호|접수번호 한 줄씩
@@ -459,7 +469,7 @@ PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설
 | 항목 | 라이브 검증 | 비고 |
 |---|:---:|---|
 | 회사명 단순 13개 도구 + 종목/접수번호/재무/감사/채무 도구 | ✅ | 6 회사 매트릭스 골드 (셀트리온·제이스코·두산에너빌리티·삼성전자·헬릭스미스·두산) |
-| `search_market_disclosures` 12개 preset | ✅ | v1.0.3에서 8개 추가, 골드 `tests/fixtures/sample_outputs/market_*.txt` 12개 |
+| `search_market_disclosures` 13개 preset | ✅ | v1.0.3에서 8개 추가, v1.6.0에서 `fund_outflow` 추가, 골드 `tests/fixtures/sample_outputs/market_*.txt` 13개 |
 | `track_capital_structure` 의 `capital_churn_anomaly` | ✅ | 제이스코홀딩스 라이브 매칭 |
 | `scan_financial_anomaly` 의 `CFS_OFS_REVERSAL` | ✅ | 셀트리온 라이브 매칭 (연결 4,189억 < 별도 1조48억, -58.3%), 골드 `셀트리온_scan_fs.txt` |
 | `get_affiliate_investments` | ✅ | 6사 골드 `*_affiliates.txt` (삼성전자 137건·제이스코 2건 등 라이브) |
@@ -472,8 +482,9 @@ PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설
 | `INSIDER_PRE_DISCLOSURE` (v0.8.6) | ⚠ | 매도 ±30일 부정 공시 |
 | `DIVIDEND_DRAIN` (v0.9.0) | ✅ | 두산(00117212) 2022 CFS·2023 CFS·2023 OFS·2024 CFS 라이브 발화(SE-12). 6사 매트릭스(SG·두산에너빌리티·삼성전자·셀트리온·제이스코·헬릭스미스)는 여전히 0건 — 미발화가 결함이었던 게 아니라 두산류(비지배지분 큰 회사) 사례가 이 6사엔 없었을 뿐 |
 | `DISTRESS_EVENT` (v0.9.0) | ⚠ | 부도/영업정지/회생/해산 4 endpoint, 헬릭스미스조차 미발화 |
-| `get_major_decision` 12개 decision_type | ⚠ | DS005 빈도 낮음, 단위 테스트만, 6 회사 365일 0건 |
-| `CROSS_SIGNAL_PATTERNS` 9개 중 8개 (capital_churn_anomaly 제외) | ⚠ | `founder_fade`·`debt_spiral`·`reverse_split_spiral`·`related_party_hollowing`·`zombie_ma`·`audit_insider_dump`·`delisting_evasion`·`fake_new_biz` |
+| `get_major_decision` 12개 decision_type 중 1개(`tangible_acq`) | ✅ | 아틀라스링크 20260722000373 라이브 매칭(SE-14/v1.6.0) — 거래상대방 로아앤코홀딩스·회사와의 관계 계열회사·외부평가 삼덕회계법인 적정·금액 174억·자산대비 15.47% 전부 실측 확인. 이 발화 과정에서 `_normalize_decision`의 금액·자산비율 필드명 버그(실존하지 않는 필드명 사용으로 항상 0 반환) 발견·수정 — 나머지 11개 decision_type은 여전히 미검증 |
+| `capital_backflow`(v1.6.0)/`FUND_OUTFLOW` | ✅ | 아틀라스링크(01309795, 297570) 라이브 매칭 — 최대주주변경(20260709) 후 유형자산양수(20260722)·채무보증(20260729) 연쇄로 패턴 발화, `analyze_company_risk`·`build_event_timeline` 양쪽 골드 확인 |
+| `CROSS_SIGNAL_PATTERNS` 10개 중 8개 (capital_churn_anomaly·capital_backflow 제외) | ⚠ | `founder_fade`·`debt_spiral`·`reverse_split_spiral`·`related_party_hollowing`·`zombie_ma`·`audit_insider_dump`·`delisting_evasion`·`fake_new_biz` |
 
 신규 PR이 ⚠ 항목의 라이브 매칭 사례 발굴 시: (1) 사례 회사를 `scripts/regen_goldens.py`의 `COMPANIES`에 추가하거나 (2) `tests/fixtures/sample_outputs/`에 직접 골드 추가. hygiene 검증 9/9 PASS 후 ⚠ 제거.
 
@@ -509,10 +520,11 @@ PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설
 > 읽으므로 잊으면 드리프트가 생깁니다. 재생성 후 `python -m pytest tests/test_export_tool_data.py -v`로
 > 검증하세요.
 
-등록 패턴 9개 (v0.6.0 기준):
+등록 패턴 10개 (v1.6.0 기준):
 - **기존 4개 (전통 위기 사이클)**: `founder_fade`(창업주 퇴장), `debt_spiral`(부채 악순환), `reverse_split_spiral`(무상감자 나선), `related_party_hollowing`(특수관계자 자산 공동화)
 - **v0.4.0 신규 4개 (금감원 사례 기반)**: `zombie_ma`(무자본 M&A), `audit_insider_dump`(감사의견 내부자 덤프), `delisting_evasion`(상폐 회피), `fake_new_biz`(허위 신사업 주가부양)
 - **v0.6.0 신규 1개**: `capital_churn_anomaly`(자본 이벤트 과다 반복 + 공시의무 위반)
+- **v1.6.0 신규 1개**: `capital_backflow`(자금 역류 — 최대주주변경 후 12개월 내 금전대여·채무보증·담보제공·자산 양수로 인수자 측에 자원 이전)
 
 ### 도구 추가
 
