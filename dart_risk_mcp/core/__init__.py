@@ -45,6 +45,10 @@ from .dart_client import (
     parse_outflow_detail,
     fetch_outflow_detail,
     classify_outflow_relation,
+    parse_control_change_detail,
+    fetch_control_change_detail,
+    classify_holder_type,
+    strip_holder_suffix,
 )
 from .signals import (
     match_signals, is_amendment_disclosure,
@@ -154,6 +158,10 @@ __all__ = [
     "parse_outflow_detail",
     "fetch_outflow_detail",
     "classify_outflow_relation",
+    "parse_control_change_detail",
+    "fetch_control_change_detail",
+    "classify_holder_type",
+    "strip_holder_suffix",
     "load_watchlist",
     "save_watchlist",
     "add_person",

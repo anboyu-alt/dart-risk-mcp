@@ -57,6 +57,15 @@ dart_risk_mcp/
   `fetch_major_decision`으로 추가 조회해 "🔍 자금유출·양수거래 상대방 확인" 섹션에
   거래상대방·회사와의 관계·외부평가를 사실로 표기(`DECISION_RELATED_PARTY` 있으면 함께
   표면화). 실패해도 이 블록만 조용히 생략 — 기존 리포트 무영향, 점수 가산 없음.
+- v1.7.0: 조회 창 내 최대주주변경(정정·"계약체결/해제"류 예고성 공시 제외) 최근 1건의
+  원문을 `fetch_control_change_detail` → `parse_control_change_detail`로 추가 확인해
+  "🔁 최대주주 변경 상세" 섹션에 변경전→변경후 명칭·비율, `classify_holder_type`
+  명칭 유형 라벨(조합/유한회사/주식회사/기타법인/법인 표기 없음), 인수자금(자기자금/
+  차입금, 차입금>0이면 차입처·담보내역까지)을 사실로 표기. 근거: 금감원 무자본 M&A
+  합동점검(2019-12-19) — 적발 24사의 신규 최대주주 82%가 비외감법인·투자조합,
+  인수자금 대부분이 주식담보대출(단계①, 차입금>0일 때만 인용문 1줄 첨부). 변경후
+  명칭(외 N인 접미 제거)을 공개기록 레지스트리와도 대조(`lookup_actor`, 미설정 시
+  조용히 생략). 원문 추출 실패 시 블록 자체 생략 — 점수 가산 없음.
 
 ### 2. `check_disclosure_risk(rcept_no="", report_name="")`
 
@@ -112,6 +121,8 @@ dart_risk_mcp/
 - 정정공시는 자동 제외
 - `lookback_years` 범위 1~5, 기본 1년. 다년(>1년) 조회 시 결과 하단에 예상 출력 규모(문자·토큰 추정) 푸터 표기.
 - 공개기록 레지스트리(opt-in) 설정 시, 이 회사가 등재 행위자의 관련기업으로 태깅돼 있으면 리포트 말미에 "📎 공개기록 참고" 섹션 자동 표면화 (`lookup_actors_by_company` 역방향 조회 — 사실 표기, 판정 없음)
+- v1.7.0: `analyze_company_risk`와 동일한 "🔁 최대주주 변경 상세" 블록(최대주주변경
+  원문에서 신규 최대주주 명칭·유형·자금조달 사실 추출)을 공개기록 참고 섹션 앞에 표시.
 
 ### 5. `find_actor_overlap(company_names, lookback_years=1, watchlist="")` ✨
 
@@ -367,6 +378,9 @@ dart_risk_mcp/
 | `parse_outflow_detail(text)` | 금전대여·채무보증·담보제공 결정 원문(fetch_document_text 출력)에서 상대방·관계·금액·자기자본대비를 정규식으로 추출하는 순수 파서. "대여 상대"/"성명(법인명)" 두 라벨, "-회사와의 관계"/"(회사와의 관계)" 두 괄호 변형 모두 대응 (v1.6.1) |
 | `fetch_outflow_detail(rcept_no, api_key)` | `fetch_document_text(max_chars=4000)` + `parse_outflow_detail` 래퍼. 실패 시 빈 dict (v1.6.1) |
 | `classify_outflow_relation(relation)` | 관계 원문 표기 → affiliated(계열·특수관계)/subsidiary(종속회사)/external(타인 등)/unknown(추출 실패) 4범주 분류 — `capital_backflow` 게이트의 입력 (v1.6.1) |
+| `parse_control_change_detail(text)` | 최대주주변경 원문(fetch_document_text 출력)에서 변경전/후 최대주주 명칭·비율·변경사유·지분인수목적·자금조달(자기자금/차입금/차입처/담보내역)을 정규식으로 추출하는 순수 파서. "외 N인"(공백 있음)/"외N명"(공백 없음)/"외 N"(단위 생략) 3변형 모두 대응 (v1.7.0) |
+| `fetch_control_change_detail(rcept_no, api_key)` | `fetch_document_text(max_chars=4000)` + `parse_control_change_detail` 래퍼. 실패 시 빈 dict (v1.7.0) |
+| `classify_holder_type(name)` / `strip_holder_suffix(name)` | 신규 최대주주 명칭 표기 기준 사실 라벨(조합/유한회사/주식회사/기타법인/법인 표기 없음) 5분류 + "외 N인/명" 접미 제거 유틸. 판정 아님 — 명칭 표기만 본다 (v1.7.0) |
 | `scan_note_titles(rcept_no, api_key)` | 공시 ZIP 전 파일 `<TITLE>` 태그 스캔 → 주석 카테고리 제목 검출 (섹션 추출 보완 경로) |
 | `compute_beneish_variables(current, prior, dep_current, dep_prior)` | Beneish 개별 변수 최대 8종 계산(감가상각비 인자 제공 시 DEPI·TATA 포함) — 합산·판정 없음, 사실 표기 전용 |
 | `extract_xbrl_depreciation(corp_code, api_key, fs_div, year)` | 사업보고서 XBRL 인스턴스(fnlttXbrl.xml)에서 감가상각비 당기/전기 좁은 추출 — 연결/별도 축 매칭, 분기·세그먼트 컨텍스트 제외, 10분 캐시 |
@@ -507,6 +521,7 @@ PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설
 | `STAKE_PLEDGE`(v1.6.1, 최대주주 주식담보제공계약) | ✅ | 시장 전체 스캔 라이브 매칭(2026-07-31) — 아진산업(주식담보제공계약해제ㆍ취소등)·인카금융서비스(주식담보제공계약체결) 2건, 골드 `market_shareholder_change.txt`/`market_all_risk.txt`. `FUND_OUTFLOW`에서 분리되기 전에는 이 2건이 [최대주주변경, 자금유출성거래]로 오분류됐던 것도 같은 골드 diff로 확인 |
 | `LOAN_ADVANCE_SURGE`(대여금·선급금 급증, 금감원 2019-12 무자본 M&A 합동점검 반영) | ⚠ | "대여금·선급금 (계정 노출 시)" 사실 표기 블록 자체는 두산에너빌리티(BS 3계정 노출, 2024 전년 대비 감소)·헬릭스미스·두산(CF 전용 노출) 라이브 확인. 단 플래그 임계(2배↑·10억↑)를 충족하는 실사례는 6사+아틀라스링크 매트릭스에서 아직 미발굴 — 셀트리온·삼성전자·제이스코홀딩스·아틀라스링크는 계정 자체가 노출되지 않음(정상) |
 | `CROSS_SIGNAL_PATTERNS` 11개 중 9개 (capital_churn_anomaly·capital_backflow 제외) | ⚠ | `founder_fade`·`debt_spiral`·`reverse_split_spiral`·`related_party_hollowing`·`zombie_ma`·`audit_insider_dump`·`delisting_evasion`·`fake_new_biz`·`fund_diversion_chain` |
+| `parse_control_change_detail`/"🔁 최대주주 변경 상세" 블록(v1.7.0) | ✅ | 4건 라이브 매칭 — 아틀라스링크 20260709900615("외 1인" 공백형)·졸스 20260728900445("외N명" 붙임형)·제이케이시냅스 20260728900521("외 N" 접미 없음, (주) 접미)·선광 20260727900769(개인명, "외 22" 단위 생략형). 골드 `아틀라스링크_analyze.txt`/`아틀라스링크_timeline.txt` 갱신. 차입금>0(주식담보대출) 경로는 6사+아틀라스링크 매트릭스에서 미발굴 — 자기자금만 있는 사례만 라이브 확인 |
 
 신규 PR이 ⚠ 항목의 라이브 매칭 사례 발굴 시: (1) 사례 회사를 `scripts/regen_goldens.py`의 `COMPANIES`에 추가하거나 (2) `tests/fixtures/sample_outputs/`에 직접 골드 추가. hygiene 검증 9/9 PASS 후 ⚠ 제거.
 
@@ -528,7 +543,8 @@ PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설
 | `STAKE_PLEDGE` | 제목만 | 없음 | 오너의 정상적인 주식담보대출(주담대)이 흔해 이 신호 하나만으로는 판단 근거가 되지 않는다(MEDIUM 참고 강도). 담보설정비율·인수 직후 시점 여부는 사용자가 원문에서 직접 확인 |
 | `CB_BW` 인수자 추출 | 제목 매칭 + **인수자 실명 확인** | `extract_cb_investors`(구조화 엔드포인트 우선, HTML 폴백) | 신호 자체는 제목으로 충분하지만, "누가 받아갔는지"는 원문 확인 없이는 알 수 없어 별도 추출기를 둔다 |
 | `DECISION_RELATED_PARTY`/`DECISION_OVERSIZED`/`DECISION_NO_EXTVAL` | **DS005 구조화 확인** | `fetch_major_decision` → `_normalize_decision`(관계·금액·자산비율) → `_detect_decision_anomaly` | 특수관계 여부·자산 대비 규모·외부평가 실시 여부는 제목에 드러나지 않는다 |
-| 그 외 대다수 신호(CB/BW 발행, 감자, 3자배정, 최대주주변경 등) | 제목만 | 없음 | 공시 제목 자체가 이벤트 유형을 특정하며, 상대방·금액 확인이 신호의 의미를 바꾸지 않는다 |
+| `SHAREHOLDER`(최대주주변경 상세, v1.7.0으로 격상) | 제목 매칭 + **원문 확인** | `fetch_control_change_detail` → `parse_control_change_detail`(변경전/후 명칭·비율·자금조달) → `classify_holder_type`(명칭 표기 5분류) + 공개기록 레지스트리 대조 | 신호 자체는 제목으로 충분하지만 "새 최대주주가 누구이고 인수자금을 어떻게 조달했는지"는 원문 확인 없이는 알 수 없다. 근거: 금감원 무자본 M&A 합동점검(2019-12-19) — 적발 24사의 신규 최대주주 82%가 비외감법인·투자조합, 인수자금 대부분이 주식담보대출(단계①) |
+| 그 외 대다수 신호(CB/BW 발행, 감자, 3자배정 등) | 제목만 | 없음 | 공시 제목 자체가 이벤트 유형을 특정하며, 상대방·금액 확인이 신호의 의미를 바꾸지 않는다 |
 
 **설계 원칙**: 확인 계층을 추가할지는 "제목만으로 정상 거래와 이상 거래를 구분할 수
 있는가"로 판단한다. 구분 불가하면(FUND_OUTFLOW처럼) 신호 자체는 참고 강도로 유지하고,

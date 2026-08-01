@@ -777,6 +777,169 @@ def classify_outflow_relation(relation: str) -> str:
     return "unknown"
 
 
+# ── 최대주주 변경 상세 (control change) ────────────────────────────────
+# 최대주주변경(DS001) 공시는 지금까지 제목만으로 SHAREHOLDER 신호를 켰다.
+# 금감원 무자본 M&A 합동점검(2019-12-19)에 따르면 적발 24사의 최대주주
+# 82%가 비외감법인·투자조합이었고 인수자금 대부분이 주식담보대출이었다
+# (단계①). 이 함수는 원문에서 신규 최대주주의 명칭·자금조달 방법을 뽑아
+# 사실로만 표기한다 — 판정 없음(v0.8.5 원칙).
+#
+# 입력은 fetch_document_text(태그 제거·공백 단일화)를 가정한다. 라이브
+# 확인(2026-07~08, 4건): "1. 변경내용 변경전 최대주주등 <명칭> 소유주식수(주)
+# <수> 소유비율(%) <수> 변경후 최대주주등 <명칭> 소유주식수(주) <수>
+# 소유비율(%) <수> 2. 변경사유 <사유> -실권주 인수로 인한 변경 여부 ...
+# 3. 지분인수목적 <목적> -인수자금 조달방법 자기자금(원) <수|-> 차입금(원)
+# <수|-> 차입처 <값|-> 차입기간 - ~ - 담보내역 <값|-> -인수후 임원
+# 선ㆍ해임 계획 ..." 순서로 고정. "변경후 최대주주등" 명칭에는 "외 N인"
+# (공백 있음, 신정관 외 1인)과 "외N명"(공백 없음, (주)지피클럽외 1명)
+# 두 변형이 확인됐고, 개인명(심충식 외 22 — 단위 생략)·법인명 단독
+# (휴림로봇(주) — "외 N" 없음) 변형도 확인됐다.
+_CTRL_PREV_HOLDER_RE = re.compile(
+    r"변경\s?전\s*최대주주등\s*(?P<name>.+?)\s*소유주식수\(주\)\s*[\d,]+\s*"
+    r"소유비율\(%\)\s*(?P<ratio>[\d.]+)"
+)
+_CTRL_NEW_HOLDER_RE = re.compile(
+    r"변경\s?후\s*최대주주등\s*(?P<name>.+?)\s*소유주식수\(주\)\s*[\d,]+\s*"
+    r"소유비율\(%\)\s*(?P<ratio>[\d.]+)"
+)
+_CTRL_REASON_RE = re.compile(r"변경사유\s+(?P<v>.+?)(?=\s-\S|\s\d+\.\s|$)")
+_CTRL_PURPOSE_RE = re.compile(r"지분인수목적\s+(?P<v>.+?)(?=\s-\S|\s\d+\.\s|$)")
+_CTRL_SELF_FUND_RE = re.compile(r"자기자금\(원\)\s*([\d,]+|-)")
+_CTRL_BORROWED_FUND_RE = re.compile(r"차입금\(원\)\s*([\d,]+|-)")
+_CTRL_LENDER_RE = re.compile(r"차입처\s+(?P<v>.+?)\s*차입기간")
+_CTRL_COLLATERAL_RE = re.compile(r"담보내역\s+(?P<v>.+?)(?=\s-\S|\s\d+\.\s|$)")
+# 명칭 끝의 "외 N인"/"외N명"/"외 N"(단위 생략) 접미 — classify 전에 제거한다.
+_CTRL_HOLDER_SUFFIX_RE = re.compile(r"\s*외\s*\d+\s*(?:인|명)?$")
+
+
+def _ctrl_amount_to_int(raw: str | None) -> int:
+    """금액 문자열 → int. "-"·빈 값은 0, 콤마는 제거. 실패 시 0."""
+    if not raw:
+        return 0
+    raw = raw.strip()
+    if not raw or raw == "-":
+        return 0
+    try:
+        return int(raw.replace(",", ""))
+    except ValueError:
+        return 0
+
+
+def _ctrl_dash_to_empty(raw: str | None) -> str:
+    """"-"만 있는 값(값 없음 표기)을 빈 문자열로 정규화."""
+    v = (raw or "").strip()
+    if not v or set(v) <= {"-"}:
+        return ""
+    return v
+
+
+def parse_control_change_detail(text: str) -> dict:
+    """최대주주변경 공시 원문에서 신규 최대주주 실체·자금조달 방법을 추출한다.
+
+    입력은 fetch_document_text로 태그 제거·공백 단일화된 텍스트를 가정한다.
+    "변경후 최대주주등" 명칭은 "외 N인/명" 접미를 보존한 그대로 담는다(공개
+    표기 그대로 — 단정 없음). 매칭 실패 필드는 빈 문자열/0으로 남는다
+    (예외를 던지지 않는다).
+
+    Returns:
+        {"prev_holder": str, "new_holder": str, "new_ratio": float,
+         "reason": str, "purpose": str, "self_fund": int,
+         "borrowed_fund": int, "lender": str, "collateral": str}
+    """
+    result = {
+        "prev_holder": "", "new_holder": "", "new_ratio": 0.0,
+        "reason": "", "purpose": "", "self_fund": 0,
+        "borrowed_fund": 0, "lender": "", "collateral": "",
+    }
+    if not text:
+        return result
+
+    pm = _CTRL_PREV_HOLDER_RE.search(text)
+    if pm:
+        result["prev_holder"] = pm.group("name").strip()
+    nm = _CTRL_NEW_HOLDER_RE.search(text)
+    if nm:
+        result["new_holder"] = nm.group("name").strip()
+        try:
+            result["new_ratio"] = float(nm.group("ratio"))
+        except ValueError:
+            pass
+    rm = _CTRL_REASON_RE.search(text)
+    if rm:
+        result["reason"] = rm.group("v").strip()
+    pu = _CTRL_PURPOSE_RE.search(text)
+    if pu:
+        result["purpose"] = pu.group("v").strip()
+    sf = _CTRL_SELF_FUND_RE.search(text)
+    if sf:
+        result["self_fund"] = _ctrl_amount_to_int(sf.group(1))
+    bf = _CTRL_BORROWED_FUND_RE.search(text)
+    if bf:
+        result["borrowed_fund"] = _ctrl_amount_to_int(bf.group(1))
+    ln = _CTRL_LENDER_RE.search(text)
+    if ln:
+        result["lender"] = _ctrl_dash_to_empty(ln.group("v"))
+    co = _CTRL_COLLATERAL_RE.search(text)
+    if co:
+        result["collateral"] = _ctrl_dash_to_empty(co.group("v"))
+    return result
+
+
+def fetch_control_change_detail(rcept_no: str, api_key: str) -> dict:
+    """최대주주변경 공시 원문에서 신규 최대주주 상세를 조회.
+
+    fetch_document_text(max_chars=4000) 후 parse_control_change_detail로
+    파싱한다. 실패 시 빈 dict를 반환한다(호출자는 빈 dict를 "확인 불가"로
+    처리한다).
+    """
+    if not rcept_no or not api_key:
+        return {}
+    try:
+        text = fetch_document_text(rcept_no, api_key, max_chars=4000)
+    except Exception as e:
+        log.debug("최대주주변경 상세 원문 조회 실패 (%s): %s", rcept_no, e)
+        return {}
+    if not text:
+        return {}
+    try:
+        detail = parse_control_change_detail(text)
+    except Exception as e:
+        log.debug("최대주주변경 상세 파싱 실패 (%s): %s", rcept_no, e)
+        return {}
+    return detail if detail.get("new_holder") else {}
+
+
+def strip_holder_suffix(name: str) -> str:
+    """최대주주 명칭 끝의 "외 N인"/"외N명"/"외 N"(단위 생략) 접미를 제거한다.
+
+    대표 명의만 남겨 명칭 유형 판별(classify_holder_type)이나 공개기록
+    레지스트리 대조(lookup_actor)에 쓴다. 접미가 없으면 원문 그대로 반환.
+    """
+    return _CTRL_HOLDER_SUFFIX_RE.sub("", (name or "").strip())
+
+
+def classify_holder_type(name: str) -> str:
+    """최대주주 명칭 표기 기준 사실 라벨 — 개인/법인 단정이 아니라 명칭 표기만 본다.
+
+    "외 N인"/"외N명"/"외 N"(단위 생략) 접미는 판별 전에 제거한다(대표
+    명의만 표기 형태 판별에 쓴다).
+
+    Returns: "조합" | "유한회사" | "주식회사" | "기타법인" | "법인 표기 없음"
+    """
+    n = strip_holder_suffix(name)
+    if not n:
+        return "법인 표기 없음"
+    if "조합" in n:
+        return "조합"
+    if "유한회사" in n or "유한책임회사" in n:
+        return "유한회사"
+    if "(주)" in n or "㈜" in n or "주식회사" in n:
+        return "주식회사"
+    if re.search(r"법인|Inc\.?|LLC|Co\.,?\s*Ltd\.?", n, re.IGNORECASE):
+        return "기타법인"
+    return "법인 표기 없음"
+
+
 # ── 구조 보존 HTML → 텍스트 변환 ───────────────────────────────
 
 # HTML 엔티티 디코딩 테이블

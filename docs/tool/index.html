@@ -1194,6 +1194,15 @@ function renderDash() {
     }
   }
 
+  // 최대주주변경(정정·예고성 제외) 공시가 있을 때만 블록 자체를 넣는다 —
+  // 없으면 스피너조차 남기지 않고 통째로 생략(findLatestControlChange가
+  // null이면 아래 loadDeepBlocks도 el이 없어 자연히 조회를 건너뛴다).
+  const ctrlChangeDisclosure = findLatestControlChange(items);
+  if (ctrlChangeDisclosure) {
+    html += `<div class="panel"><div class="slabel">▍CONTROL CHANGE — 최대주주 변경 상세</div>
+      <div id="ctrlCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">최대주주 변경 원문 확인 중…</span></div></div>`;
+  }
+
   html += `<div class="panel"><div class="slabel">▍FINANCIAL CORE — 최근 사업보고서 · 사실 표기</div>
     <div id="finCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">재무제표 조회 중…</span></div></div>`;
   html += `<div class="panel"><div class="slabel">▍DIVIDEND — 배당과 순이익</div>
@@ -2164,6 +2173,188 @@ function classifyOutflowRelation(relation) {
   return "external";
 }
 
+// ── 최대주주 변경 상세 (control change) — 후속 과제 1위 ──────────────────
+// 금감원 무자본 M&A 합동점검(2019-12-19): 적발 24사의 신규 최대주주 82%가
+// 비외감법인·투자조합, 인수자금 대부분이 주식담보대출(단계①). core
+// dart_client.py의 parse_control_change_detail과 같은 사실을 뽑되 입력
+// 형식이 다르다 — /api/doc(fetchDisclosureText)는 마크다운 표(| 셀 |)를
+// 돌려준다. parseOutflowDetail의 표 구분선 필터(`/^[-:\s]*$/`)는 단일
+// "-"까지 지워 버린다 — 그건 FUND_OUTFLOW의 "관계" 필드에선 무해하지만
+// (금액 정규식이 어차피 숫자만 받아들인다), 여기서는 "-"가 "차입금(원) 0"을
+// 뜻하는 유효한 데이터라 지우면 다음 라벨이 값으로 오캡처된다. 그래서 표
+// 구분선(2자 이상의 "-"/":")만 걸러내고 단일 "-" 데이터 셀은 남긴다.
+function _ctrlAmountToInt(raw) {
+  const v = (raw || "").trim();
+  if (!v || v === "-") return 0;
+  const n = parseInt(v.replace(/,/g, ""), 10);
+  return Number.isFinite(n) ? n : 0;
+}
+function _ctrlDashToEmpty(raw) {
+  const v = (raw || "").trim();
+  if (!v || /^-+$/.test(v)) return "";
+  return v;
+}
+function parseControlChangeDetail(text) {
+  const empty = {
+    prevHolder: "", newHolder: "", newRatio: 0, reason: "", purpose: "",
+    selfFund: 0, borrowedFund: 0, lender: "", collateral: "",
+  };
+  if (!text || typeof text !== "string") return empty;
+
+  const cells = text.split(/[|\r\n]+/).map((c) => c.trim())
+    .filter((c) => c && !/^[-:]{2,}$/.test(c));
+
+  const valueAfter = (fromIdx, pred) => {
+    for (let i = fromIdx; i < cells.length - 1; i++) {
+      if (pred(cells[i])) return { value: cells[i + 1], idx: i + 1 };
+    }
+    return null;
+  };
+  const holderBlock = (fromIdx) => {
+    const h = valueAfter(fromIdx, (c) => /^최대주주등$/.test(c));
+    if (!h) return null;
+    const r = valueAfter(h.idx, (c) => /^소유비율\(%\)$/.test(c));
+    const ratio = r ? parseFloat(r.value) : NaN;
+    return { name: h.value, ratio: Number.isFinite(ratio) ? ratio : 0, idx: r ? r.idx : h.idx };
+  };
+
+  const result = Object.assign({}, empty);
+  const prev = holderBlock(0);
+  if (prev) {
+    result.prevHolder = prev.name;
+    const cur = holderBlock(prev.idx + 1);
+    if (cur) { result.newHolder = cur.name; result.newRatio = cur.ratio; }
+  }
+
+  const reason = valueAfter(0, (c) => c.indexOf("변경사유") !== -1);
+  if (reason) result.reason = reason.value;
+  const purpose = valueAfter(0, (c) => c.indexOf("지분인수목적") !== -1);
+  if (purpose) result.purpose = purpose.value;
+  const selfFund = valueAfter(0, (c) => /^자기자금\(원\)$/.test(c));
+  if (selfFund) result.selfFund = _ctrlAmountToInt(selfFund.value);
+  const borrowedFund = valueAfter(0, (c) => /^차입금\(원\)$/.test(c));
+  if (borrowedFund) result.borrowedFund = _ctrlAmountToInt(borrowedFund.value);
+  const lender = valueAfter(0, (c) => /^차입처$/.test(c));
+  if (lender) result.lender = _ctrlDashToEmpty(lender.value);
+  const collateral = valueAfter(0, (c) => /^담보내역$/.test(c));
+  if (collateral) result.collateral = _ctrlDashToEmpty(collateral.value);
+
+  // 표가 아닌 평문 서식 폴백(fetch_document_text류 태그 제거·공백 단일화
+  // 텍스트가 들어온 경우 대비) — core dart_client.py의 정규식을 그대로 이식.
+  if (!prev) {
+    const flat = text.replace(/[|\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+    const pm = flat.match(/변경\s?전\s*최대주주등\s*(.+?)\s*소유주식수\(주\)\s*[\d,]+\s*소유비율\(%\)\s*([\d.]+)/);
+    const nm = flat.match(/변경\s?후\s*최대주주등\s*(.+?)\s*소유주식수\(주\)\s*[\d,]+\s*소유비율\(%\)\s*([\d.]+)/);
+    if (pm) result.prevHolder = pm[1].trim();
+    if (nm) { result.newHolder = nm[1].trim(); result.newRatio = parseFloat(nm[2]) || 0; }
+    if (!result.reason) {
+      const rm = flat.match(/변경사유\s+(.+?)(?=\s-\S|\s\d+\.\s|$)/);
+      if (rm) result.reason = rm[1].trim();
+    }
+    if (!result.purpose) {
+      const pu = flat.match(/지분인수목적\s+(.+?)(?=\s-\S|\s\d+\.\s|$)/);
+      if (pu) result.purpose = pu[1].trim();
+    }
+    if (!result.selfFund) {
+      const sf = flat.match(/자기자금\(원\)\s*([\d,]+|-)/);
+      if (sf) result.selfFund = _ctrlAmountToInt(sf[1]);
+    }
+    if (!result.borrowedFund) {
+      const bf = flat.match(/차입금\(원\)\s*([\d,]+|-)/);
+      if (bf) result.borrowedFund = _ctrlAmountToInt(bf[1]);
+    }
+    if (!result.lender) {
+      const ln = flat.match(/차입처\s+(.+?)\s*차입기간/);
+      if (ln) result.lender = _ctrlDashToEmpty(ln[1]);
+    }
+    if (!result.collateral) {
+      const co = flat.match(/담보내역\s+(.+?)(?=\s-\S|\s\d+\.\s|$)/);
+      if (co) result.collateral = _ctrlDashToEmpty(co[1]);
+    }
+  }
+  return result;
+}
+
+// "외 N인"/"외N명"/"외 N"(단위 생략) 접미 제거 — core strip_holder_suffix와 동일 규칙.
+function stripHolderSuffix(name) {
+  return (name || "").trim().replace(/\s*외\s*\d+\s*(?:인|명)?$/, "");
+}
+
+// 최대주주 명칭 표기 기준 사실 라벨(개인/법인 단정 아님) — core
+// classify_holder_type과 동일 5분류.
+function classifyHolderType(name) {
+  const n = stripHolderSuffix(name);
+  if (!n) return "법인 표기 없음";
+  if (n.indexOf("조합") !== -1) return "조합";
+  if (n.indexOf("유한회사") !== -1 || n.indexOf("유한책임회사") !== -1) return "유한회사";
+  if (n.indexOf("(주)") !== -1 || n.indexOf("㈜") !== -1 || n.indexOf("주식회사") !== -1) return "주식회사";
+  if (/법인|Inc\.?|LLC|Co\.,?\s*Ltd\.?/i.test(n)) return "기타법인";
+  return "법인 표기 없음";
+}
+
+// 조회 창 내 최대주주변경(정정·예고성 공시 제외) 최근 1건. server.py
+// _find_latest_control_change와 동일 규칙 — "계약체결/해제"류는 "1. 변경내용"
+// 구조 자체가 없어 파서 대상이 아니므로 제외한다.
+const CONTROL_CHANGE_RE = /최대주주\s*변경/;
+const CONTROL_CHANGE_PRECURSOR_RE = /계약/;
+function findLatestControlChange(items) {
+  const candidates = (items || []).filter((d) => {
+    const nm = d.report_nm || "";
+    return !AMEND_RE.test(nm) && CONTROL_CHANGE_RE.test(nm) && !CONTROL_CHANGE_PRECURSOR_RE.test(nm);
+  });
+  if (!candidates.length) return null;
+  return candidates.reduce((a, b) => ((a.rcept_dt || "") >= (b.rcept_dt || "") ? a : b));
+}
+
+function fmtWon(n) {
+  const s = fmtKRW(n);
+  return s.endsWith("원") ? s : s + "원";
+}
+
+// 순수 함수 — 이미 파싱된 detail만으로 카드 HTML을 만든다(테스트 용이).
+function controlChangeCardHTML(disclosure, detail) {
+  const prev = esc(detail.prevHolder || "(미기재)");
+  const cur = esc(detail.newHolder || "(미기재)");
+  const ratioTxt = detail.newRatio ? ` (${detail.newRatio.toFixed(2)}%)` : "";
+  const holderType = esc(classifyHolderType(detail.newHolder));
+  let html = `<div class="factline"><a href="#" class="patEvLink" data-r="${esc(disclosure.rcept_no)}" style="color:var(--tx)">${esc(fmtDate(disclosure.rcept_dt))} ${esc(disclosure.report_nm)}</a></div>
+    <div class="factline">변경전 → 변경후: ${prev} → ${cur}${ratioTxt}</div>
+    <div class="factline">명칭 기준: ${holderType}</div>`;
+  if (detail.reason) html += `<div class="factline">변경사유: ${esc(detail.reason)}</div>`;
+  if (detail.purpose) html += `<div class="factline">지분인수목적: ${esc(detail.purpose)}</div>`;
+  let fundLine = `인수자금: 자기자금 ${fmtWon(detail.selfFund || 0)}`;
+  if (detail.borrowedFund) fundLine += ` / 차입금 ${fmtWon(detail.borrowedFund)}`;
+  html += `<div class="factline">${esc(fundLine)}</div>`;
+  if (detail.borrowedFund > 0) {
+    if (detail.lender) html += `<div class="factline">차입처: ${esc(detail.lender)}</div>`;
+    if (detail.collateral) html += `<div class="factline">담보내역: ${esc(detail.collateral)}</div>`;
+    html += `<div class="dim" style="font-size:0.82rem;margin-top:0.3rem">※ 금감원 무자본 M&amp;A 합동점검(2019-12-19)은 주식담보 차입을 통한 인수를 무자본 M&amp;A 인수 단계로 지목했습니다(사실 인용).</div>`;
+  }
+  return html;
+}
+
+// 비동기 오케스트레이션 — #ctrlCore 플레이스홀더(스피너)를 실제 카드로 치환.
+// 원문 조회·파싱 실패 시 블록을 지우지 않고 안내 문구로 대체한다(다른
+// 심화 블록과 동일 관례 — 조회 실패를 숨기지 않는다).
+async function loadControlChangeCore(disclosure) {
+  const el = $("ctrlCore");
+  if (!el || !disclosure) return;
+  const data = await fetchDisclosureText(disclosure.rcept_no);
+  if (!data || data.error || !data.text) {
+    el.innerHTML = `<span class="dim" style="font-size:0.88rem">원문 조회 실패${data && data.error ? ": " + esc(data.error) : ""} — DART 원문에서 직접 확인하세요.</span>`;
+    return;
+  }
+  const detail = parseControlChangeDetail(data.text);
+  if (!detail.newHolder) {
+    el.innerHTML = `<span class="dim" style="font-size:0.88rem">원문에서 신규 최대주주 명칭을 확인하지 못했습니다 — DART 원문에서 직접 확인하세요.</span>`;
+    return;
+  }
+  el.innerHTML = controlChangeCardHTML(disclosure, detail);
+  $("result").querySelectorAll(".patEvLink").forEach((a) => {
+    a.onclick = (e) => { e.preventDefault(); renderDetail(a.dataset.r); };
+  });
+}
+
 // FUND_OUTFLOW(taxonomy 5.7) 근거 공시 중 최근 최대 4건의 원문을 병렬
 // fetch해 분류한다. fetchDisclosureText는 기존 원문 캐시(dart_doc_<rcept>)를
 // 그대로 재사용하므로 사용자가 이미 docViewer에서 열람한 공시는 추가
@@ -2298,6 +2489,16 @@ function loadDeepBlocks(corpCode) {
   loadAuditOpinions(corpCode, finCorePromise).catch((e) => {
     $("auditCore").innerHTML = `<span class="dim" style="font-size:0.88rem">조회 실패: ${esc(e.message)}</span>`;
   });
+  // #ctrlCore는 findLatestControlChange가 최대주주변경 공시를 찾았을 때만
+  // buildResult에서 만들어진다 — 없으면 $ 조회가 null이라 loadControlChangeCore가
+  // 자체적으로 조용히 건너뛴다.
+  const ctrlChangeDisclosure = findLatestControlChange((CUR && CUR.items) || []);
+  if (ctrlChangeDisclosure) {
+    loadControlChangeCore(ctrlChangeDisclosure).catch((e) => {
+      const el = $("ctrlCore");
+      if (el) el.innerHTML = `<span class="dim" style="font-size:0.88rem">조회 실패: ${esc(e.message)}</span>`;
+    });
+  }
 }
 
 async function loadDividendCore(corpCode) {
