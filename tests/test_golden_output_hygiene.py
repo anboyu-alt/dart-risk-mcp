@@ -31,6 +31,7 @@ _INTERNAL_CODES = [
     "DECISION_RELATED_PARTY",
     "DECISION_OVERSIZED",
     "DECISION_NO_EXTVAL",
+    "LOAN_ADVANCE_SURGE",
 ]
 # 카탈로그 MD 원본에 있는 영문 메타 라벨 (v0.7.3 _strip_taxonomy_metadata로 필터링)
 _CATALOG_META = [

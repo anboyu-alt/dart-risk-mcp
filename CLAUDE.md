@@ -257,9 +257,10 @@ dart_risk_mcp/
 
 재무제표 4개 지표(매출채권·재고자산·현금흐름·자본잠식)를 전년 대비 비교해 이상을 탐지하고, **단일회사 주요 재무지표 7종의 YoY 추세**를 별도 블록으로 표기합니다.
 
-- 내부 흐름: `resolve_corp` → `fetch_financial_statements_all` (CFS→OFS 폴백) → `_fs_response_to_periods` → **`fetch_company_indicators` × 2(당기/전기)** → `detect_financial_anomaly(current, prior, current_indx, prior_indx)`
-- 이상 플래그 8종: `AR_SURGE`, `INVENTORY_SURGE`, `CASH_GAP`, `CAPITAL_IMPAIRMENT`(절대 임계) + `CFS_OFS_REVERSAL`(별도>연결 당기순이익 역전 — 종속회사 합산 손실, 격차 ≥10%일 때만. 정상 대기업의 연결>별도 괴리는 플래그하지 않음 — 삼성전자 +46% 라이브 검증) + `OPNET_POS_NEG`(영업흑자·순손실 — 영업외 손실)·`OPNET_NEG_POS`(영업적자·순이익 흑자 — 일회성 이익 의심, 상폐 요건 회피 연관) + `RESTATEMENT`(전기 수치 재작성 — 올해 보고서의 전기값 vs 작년 보고서의 당기값을 6계정×fs_div 대조, 0.5% 허용오차. `detect_restatement`, 직전 연도 `fnlttSinglAcnt` 1회 추가 호출)
+- 내부 흐름: `resolve_corp` → `fetch_financial_statements_all` (CFS→OFS 폴백) → `_fs_response_to_periods` → **`fetch_company_indicators` × 2(당기/전기)** → `extract_loan_advance(fs_list)`(추가 API 호출 없음) → `detect_financial_anomaly(current, prior, current_indx, prior_indx, loan_advance=...)`
+- 이상 플래그 9종: `AR_SURGE`, `INVENTORY_SURGE`, `CASH_GAP`, `CAPITAL_IMPAIRMENT`(절대 임계) + `CFS_OFS_REVERSAL`(별도>연결 당기순이익 역전 — 종속회사 합산 손실, 격차 ≥10%일 때만. 정상 대기업의 연결>별도 괴리는 플래그하지 않음 — 삼성전자 +46% 라이브 검증) + `OPNET_POS_NEG`(영업흑자·순손실 — 영업외 손실)·`OPNET_NEG_POS`(영업적자·순이익 흑자 — 일회성 이익 의심, 상폐 요건 회피 연관) + `RESTATEMENT`(전기 수치 재작성 — 올해 보고서의 전기값 vs 작년 보고서의 당기값을 6계정×fs_div 대조, 0.5% 허용오차. `detect_restatement`, 직전 연도 `fnlttSinglAcnt` 1회 추가 호출) + `LOAN_ADVANCE_SURGE`(v1.6.0, 금감원 2019-12 무자본 M&A 합동점검 유의사항 ③ 도구화 — 재무상태표 대여금+선급금 합계가 전기 대비 2배↑·10억원↑이면 플래그)
 - 발생액 비율 (순이익−영업현금흐름)/|순이익| 을 당기/전기/Δ로 사실 표기(플래그 없음, kreports accrual_ratio 이식). 연결/별도 비교는 `fnlttSinglAcnt` 1회 추가 호출로 CFS/OFS 당기순이익 쌍 추출(`extract_cfs_ofs_ni`)
+- "대여금·선급금 (계정 노출 시)" 블록(`extract_loan_advance`, v1.6.0): fnlttSinglAcntAll rows에서 "대여금"·"선급금" 포함 계정("선급비용" 제외)을 sj_div로 재무상태표(BS, 잔액)/현금흐름표(CF, 증감) 구분해 당기/전기 사실 표기 + 금감원 합동점검 인용 1줄. 계정 자체가 노출되지 않는 회사가 흔해(셀트리온·삼성전자·제이스코홀딩스·아틀라스링크 0건) 미노출 시 블록 자체 생략(정상). 노출 시에도 BS(잔액) 항목이 있을 때만 표 상단 지표 행 + `LOAN_ADVANCE_SURGE` 판정 대상, CF(흐름) 전용 노출은 사실 표기만 하고 판정하지 않음
 - "이익조작 연구 변수" 블록(`compute_beneish_variables`, kreports 이식/Apache 2.0): Beneish 개별 변수 최대 8종(DSRI·GMI·AQI·SGI·SGAI·LVGI + DEPI·TATA)을 전년=1.00 기준 지수로 사실 표기(단, TATA는 당기 비율). **M-Score 합산·임계 판정 없음**(v0.8.5 원칙, 안내 문구 자동 첨부). DEPI·TATA의 감가상각비는 fnlttSinglAcntAll 미노출이라 사업보고서 XBRL 인스턴스에서 좁게 추출(`extract_xbrl_depreciation`, annual만, ZIP +1회, `_is_zip_safe` 가드) — 소형사는 XBRL 재무 태깅이 없어(기업개황 dart-gcd만) 미발화가 정상이며 이때 기존 6종만 표기. TATA는 축약식(ΔCA−Δ현금−ΔCL−감가상각비)/총자산, LVGI는 부채총계/자산총계 기준(명칭에 명시). 라이브 발화: 삼성전자·셀트리온·두산·두산에너빌리티 4/6사
 - "연구개발비 비중 (사업보고서 기재)" 블록(`extract_rd_ratio_from_report`, kreports business_insights 이식/Apache 2.0): 최근 사업보고서 원문의 "연구개발비/매출액 비율" 표에서 최근 3개 연도 값을 regex 추출해 사실 표기 (annual만, ZIP 다운로드 +1회). % 생략 변형은 인접 소수점 연속 규칙으로 흡수, 산정 기준 상이 안내 자동 첨부. 라이브 검증 5/6사(제이스코는 R&D 표 없음 — 정상 미검출)
 - v0.8.8 추가: `fnlttSinglIndx` 4카테고리(M210000 수익성·M220000 안정성·M230000 성장성·M240000 활동성)에서 핵심 7종(순이익률·자기자본비율·부채비율·유동비율·매출액증가율·매출채권회전율·재고자산회전율)을 `12.30%p → 8.10%p (전년 대비 -34.1%)` 형식으로 표기. 점수 가산 없음, 사실 표기만(v0.8.5 원칙).
@@ -359,6 +360,7 @@ dart_risk_mcp/
 | `extract_rd_ratio_from_report(corp_code, api_key)` | 최근 사업보고서 원문에서 연구개발비/매출액 비율(최근 3개 연도) regex 추출 |
 | `fetch_loss_streak(corp_code, api_key, lookback_years)` | 연도별 영업이익·순이익 부호 → 최신 연도부터 연속 적자 연수 |
 | `extract_cfs_ofs_ni(fs_rows)` | fnlttSinglAcnt rows에서 (연결, 별도) 당기순이익 쌍 추출 — CFS_OFS_REVERSAL 판정 입력 |
+| `extract_loan_advance(rows)` | fnlttSinglAcntAll rows에서 대여금·선급금 계정을 BS(잔액)/CF(증감)로 구분 추출 — LOAN_ADVANCE_SURGE 판정 입력(v1.6.0, 금감원 2019-12 무자본 M&A 합동점검 유의사항 ③) |
 | `fetch_fund_usage(corp_code, api_key, corp_cls, lookback_years)` | 공모·사모 자금사용 2개 엔드포인트 통합 + 이상 플래그 탐지 |
 | `fetch_major_decision(rcept_no, corp_cls, decision_type)` | 12개 DS005 주요결정 엔드포인트 중 decision_type에 따라 자동 선택 |
 | `resolve_decision_type(report_nm)` | 공시명 → decision_type 키 자동 추론 (`[기재정정]` 등 접두어 제거) |
@@ -484,7 +486,9 @@ PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설
 | `DISTRESS_EVENT` (v0.9.0) | ⚠ | 부도/영업정지/회생/해산 4 endpoint, 헬릭스미스조차 미발화 |
 | `get_major_decision` 12개 decision_type 중 1개(`tangible_acq`) | ✅ | 아틀라스링크 20260722000373 라이브 매칭(SE-14/v1.6.0) — 거래상대방 로아앤코홀딩스·회사와의 관계 계열회사·외부평가 삼덕회계법인 적정·금액 174억·자산대비 15.47% 전부 실측 확인. 이 발화 과정에서 `_normalize_decision`의 금액·자산비율 필드명 버그(실존하지 않는 필드명 사용으로 항상 0 반환) 발견·수정 — 나머지 11개 decision_type은 여전히 미검증 |
 | `capital_backflow`(v1.6.0)/`FUND_OUTFLOW` | ✅ | 아틀라스링크(01309795, 297570) 라이브 매칭 — 최대주주변경(20260709) 후 유형자산양수(20260722)·채무보증(20260729) 연쇄로 패턴 발화, `analyze_company_risk`·`build_event_timeline` 양쪽 골드 확인 |
-| `CROSS_SIGNAL_PATTERNS` 10개 중 8개 (capital_churn_anomaly·capital_backflow 제외) | ⚠ | `founder_fade`·`debt_spiral`·`reverse_split_spiral`·`related_party_hollowing`·`zombie_ma`·`audit_insider_dump`·`delisting_evasion`·`fake_new_biz` |
+| `fund_diversion_chain`(금감원 2019-12 무자본 M&A 합동점검 반영) | ⚠ | CB/BW 발행(1.1) + 타법인주식·영업 양수(5.8) 조합 — 코드·단위 테스트만, 라이브 매칭 사례 미발굴 |
+| `LOAN_ADVANCE_SURGE`(대여금·선급금 급증, 금감원 2019-12 무자본 M&A 합동점검 반영) | ⚠ | "대여금·선급금 (계정 노출 시)" 사실 표기 블록 자체는 두산에너빌리티(BS 3계정 노출, 2024 전년 대비 감소)·헬릭스미스·두산(CF 전용 노출) 라이브 확인. 단 플래그 임계(2배↑·10억↑)를 충족하는 실사례는 6사+아틀라스링크 매트릭스에서 아직 미발굴 — 셀트리온·삼성전자·제이스코홀딩스·아틀라스링크는 계정 자체가 노출되지 않음(정상) |
+| `CROSS_SIGNAL_PATTERNS` 11개 중 9개 (capital_churn_anomaly·capital_backflow 제외) | ⚠ | `founder_fade`·`debt_spiral`·`reverse_split_spiral`·`related_party_hollowing`·`zombie_ma`·`audit_insider_dump`·`delisting_evasion`·`fake_new_biz`·`fund_diversion_chain` |
 
 신규 PR이 ⚠ 항목의 라이브 매칭 사례 발굴 시: (1) 사례 회사를 `scripts/regen_goldens.py`의 `COMPANIES`에 추가하거나 (2) `tests/fixtures/sample_outputs/`에 직접 골드 추가. hygiene 검증 9/9 PASS 후 ⚠ 제거.
 
@@ -520,11 +524,11 @@ PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설
 > 읽으므로 잊으면 드리프트가 생깁니다. 재생성 후 `python -m pytest tests/test_export_tool_data.py -v`로
 > 검증하세요.
 
-등록 패턴 10개 (v1.6.0 기준):
+등록 패턴 11개 (v1.6.0 기준):
 - **기존 4개 (전통 위기 사이클)**: `founder_fade`(창업주 퇴장), `debt_spiral`(부채 악순환), `reverse_split_spiral`(무상감자 나선), `related_party_hollowing`(특수관계자 자산 공동화)
 - **v0.4.0 신규 4개 (금감원 사례 기반)**: `zombie_ma`(무자본 M&A), `audit_insider_dump`(감사의견 내부자 덤프), `delisting_evasion`(상폐 회피), `fake_new_biz`(허위 신사업 주가부양)
 - **v0.6.0 신규 1개**: `capital_churn_anomaly`(자본 이벤트 과다 반복 + 공시의무 위반)
-- **v1.6.0 신규 1개**: `capital_backflow`(자금 역류 — 최대주주변경 후 12개월 내 금전대여·채무보증·담보제공·자산 양수로 인수자 측에 자원 이전)
+- **v1.6.0 신규 2개**: `capital_backflow`(자금 역류 — 최대주주변경 후 12개월 내 금전대여·채무보증·담보제공·자산 양수로 인수자 측에 자원 이전), `fund_diversion_chain`(조달-유용 체인 — CB/BW 등 사모 조달 후 비상장주식·타법인 출자로 자금 이동, 금감원 2019-12 무자본 M&A 합동점검에서 조달자금 유용의 최대 경로(비상장주식 취득 55%)로 집계)
 
 ### 도구 추가
 
