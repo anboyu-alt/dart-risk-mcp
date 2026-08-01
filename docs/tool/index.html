@@ -966,14 +966,14 @@ const DOC_CACHE = new Map();   // rcept_no → {rcept_no, text, char_count, trun
 function getDocCache(rcept) {
   if (DOC_CACHE.has(rcept)) return DOC_CACHE.get(rcept);
   try {
-    const raw = sessionStorage.getItem("dart_doc_" + rcept);
+    const raw = sessionStorage.getItem("dart_doc2_" + rcept);
     if (raw) { const parsed = JSON.parse(raw); DOC_CACHE.set(rcept, parsed); return parsed; }
   } catch (e) { /* 저장 실패는 무시 */ }
   return null;
 }
 function setDocCache(rcept, data) {
   DOC_CACHE.set(rcept, data);
-  try { sessionStorage.setItem("dart_doc_" + rcept, JSON.stringify(data)); } catch (e) { /* 저장 실패는 무시 */ }
+  try { sessionStorage.setItem("dart_doc2_" + rcept, JSON.stringify(data)); } catch (e) { /* 저장 실패는 무시 */ }
 }
 // 이 공시 제목에서 실제로 매칭된 키워드만 모은다 (matchSignals는 신호
 // 단위만 반환하므로, 어떤 키워드가 히트했는지는 여기서 다시 확인한다).
@@ -1038,7 +1038,7 @@ async function fetchDisclosureText(rcept) {
   if (cached) return cached;
   try {
     const apiKey = localStorage.getItem(LS_KEY) || "";
-    const res = await fetch(`${relayBase()}/api/doc?rcept_no=${encodeURIComponent(rcept)}`, {
+    const res = await fetch(`${relayBase()}/api/doc?rcept_no=${encodeURIComponent(rcept)}&v=2`, {
       headers: { "X-DART-Key": apiKey },
     });
     let j = {};
@@ -2098,34 +2098,57 @@ function patternEvidenceHTML(pattern, events) {
 function parseOutflowDetail(text) {
   const empty = { counterparty: "", relation: "", amount: "" };
   if (!text || typeof text !== "string") return empty;
-  const flat = text.replace(/[|\r\n]+/g, " ").replace(/\s+/g, " ").trim();
-  if (!flat) return empty;
 
-  const cpPatterns = [
-    /대여\s*상대\s+(.+?)(?=\s*영문|\s*-?\s*회사와의\s*관계|\s*\d+\.\s|$)/,
-    /채무자\s+(.+?)(?=\s*영문|\s*-?\s*회사와의\s*관계|\s*\d+\.\s|$)/,
-    /거래상대방\s*회사명\(성명\)\s+(.+?)(?=\s*영문|\s*-?\s*회사와의\s*관계|\s*\d+\.\s|$)/,
-  ];
-  let counterparty = "";
-  for (const re of cpPatterns) {
-    const m = flat.match(re);
-    if (m && m[1] && m[1].trim()) { counterparty = m[1].trim(); break; }
+  // /api/doc 텍스트는 마크다운 표(| 셀 |) — 셀 단위 "라벨 → 다음 셀이 값"
+  // 규칙으로 읽는다. 이전의 평문 정규식 방식은 값 셀이 비었을 때 옆 라벨
+  // ("7. 거래대금지급")을 관계로 오캡처해 external로 오분류했다(아틀라스
+  // 링크 실사고, 2026-08-02). 값 검증에 실패하면 빈 값(→ unknown)으로
+  // 남긴다 — 쓰레기를 external로 승격하지 않는 것이 게이트의 보수 원칙.
+  const cells = text.split(/[|\r\n]+/).map((c) => c.trim())
+    .filter((c) => c && !/^[-:\s]*$/.test(c));
+  const norm = (c) => c.replace(/\s+/g, "").replace(/^-/, "").replace(/^\d+\.?/, "");
+  const isRelLabel = (c) => /^\(?회사와의관계\)?$/.test(norm(c));
+  const isCpLabel = (c) => /^(대여상대|채무자|성명\(법인명\)|회사명\(성명\))$/.test(norm(c));
+  const validRel = (v) => !!v && v.length <= 20 && !/\d/.test(v) && !/관계|금액|채권자|여부|내역/.test(norm(v));
+  const validCp = (v) => !!v && v.length <= 40 && !isRelLabel(v) && !/^(영문|자본금|주요사업)/.test(norm(v)) && !/^\d+\./.test(v);
+
+  let counterparty = "", relation = "", amount = "";
+  for (let i = 0; i < cells.length - 1; i++) {
+    if (!counterparty && isCpLabel(cells[i]) && validCp(cells[i + 1])) counterparty = cells[i + 1];
+    if (!relation && isRelLabel(cells[i]) && validRel(cells[i + 1])) relation = cells[i + 1];
+    if (!amount && /^(대여금액|담보설정금액|채무보증금액)\(원\)$/.test(norm(cells[i]))
+        && /^[0-9,]+$/.test(cells[i + 1])) amount = cells[i + 1];
   }
 
-  // "-회사와의 관계"(하이픈 붙임) / "- 회사와의 관계"(하이픈+공백) 둘 다 허용.
-  const relMatch = flat.match(/-?\s*회사와의\s*관계\s+(.+?)(?=\s*\d+\.\s|$)/);
-  const relation = relMatch ? relMatch[1].trim() : "";
-
-  const amtPatterns = [
-    /대여금액\(원\)\s*([0-9,]+)/,
-    /담보설정금액\(원\)\s*([0-9,]+)/,
-    /채무보증금액\(원\)\s*([0-9,]+)/,
-    /거래대금[^\d]{0,10}([0-9,]+)/,
-  ];
-  let amount = "";
-  for (const re of amtPatterns) {
-    const m = flat.match(re);
-    if (m && m[1]) { amount = m[1]; break; }
+  // 표가 아닌 평문 서식 폴백 (검증 동반 — 라벨 오캡처는 버린다)
+  if (!relation || !counterparty) {
+    const flat = text.replace(/[|\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+    if (!counterparty) {
+      const cpPatterns = [
+        /대여\s*상대\s+(.+?)(?=\s*영문|\s*-?\s*회사와의\s*관계|\s*\d+\.\s|$)/,
+        /채무자\s+(.+?)(?=\s*영문|\s*-?\s*회사와의\s*관계|\s*\d+\.\s|$)/,
+        /거래상대방\s*회사명\(성명\)\s+(.+?)(?=\s*영문|\s*-?\s*회사와의\s*관계|\s*\d+\.\s|$)/,
+      ];
+      for (const re of cpPatterns) {
+        const m = flat.match(re);
+        if (m && validCp((m[1] || "").trim())) { counterparty = m[1].trim(); break; }
+      }
+    }
+    if (!relation) {
+      const m = flat.match(/-?\s*\(?회사와의\s*관계\)?\s+(.+?)(?=\s*\d+\.\s|$)/);
+      if (m && validRel((m[1] || "").trim())) relation = m[1].trim();
+    }
+  }
+  if (!amount) {
+    const flat2 = text.replace(/[|\r\n]+/g, " ").replace(/\s+/g, " ");
+    const amtPatterns = [
+      /대여금액\s*\(원\)\s*([0-9,]+)/, /담보설정금액\s*\(원\)\s*([0-9,]+)/,
+      /채무보증금액\s*\(원\)\s*([0-9,]+)/, /거래대금[^\d]{0,10}([0-9,]+)/,
+    ];
+    for (const re of amtPatterns) {
+      const m = flat2.match(re);
+      if (m && m[1]) { amount = m[1]; break; }
+    }
   }
   return { counterparty, relation, amount };
 }
