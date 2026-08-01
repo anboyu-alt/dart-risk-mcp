@@ -1609,20 +1609,38 @@ def _normalize_decision(raw: dict, dtype: str, url: str) -> dict:
     """결정 공시 원본을 공통 스키마로 정규화."""
     counterparty = (
         raw.get("dlptn_cmpnm")
+        or raw.get("mgptncmp_cmpnm")
         or raw.get("dlptn_rl_cmpn")
         or raw.get("mg_ctrcmp_cmpnm")
         or raw.get("dvcmp_cmpnm")
         or ""
     )
+    # 거래금액 — tangible/stock/bond acq·div 4쌍은 {inh|trf}dtl_{inh|trf}prc가
+    # 실제 금액 필드다(opendart_api_guide.md 실측 확인, v1.6.0에서 추가 —
+    # 이전에 우선 조회하던 inh_pp/trf_pp는 "양수/양도목적" 텍스트라 숫자
+    # 변환이 항상 실패해 금액이 0으로 표시됐다). business_acq/div(영업양수·
+    # 양도)는 DART가 이 형태의 단일 금액 필드를 제공하지 않아(양수대금지급
+    # 조건은 텍스트 "inh_pym"뿐) 0으로 남는 것이 데이터 자체의 한계다.
     amount = _to_int_safe(
-        raw.get("inh_pp")
-        or raw.get("trf_pp")
-        or raw.get("trfg_pp")
+        raw.get("inhdtl_inhprc")
+        or raw.get("trfdtl_trfprc")
         or raw.get("mg_rt")
         or raw.get("dlptn_cpt")
+        or raw.get("inh_pp")
+        or raw.get("trf_pp")
+        or raw.get("trfg_pp")
     )
+    # 자산총액대비(%) — tangible/stock/bond acq·div 8개 엔드포인트는
+    # {inh|trf}dtl_tast_vs, business_acq/div(영업양수·양도)만 다른 필드명
+    # ast_rt(자산액 비중)를 쓴다(opendart_api_guide.md 실측 확인, v1.6.0에서
+    # 잘못된 필드명(inhdamount_totalast_rt 등, 실존하지 않음)을 대체 —
+    # 이전에는 이 값이 항상 0으로 계산돼 DECISION_RELATED_PARTY·
+    # DECISION_OVERSIZED가 조건을 만족해도 발화하지 못했다).
     asset_ratio_raw = (
-        raw.get("inhdamount_totalast_rt")
+        raw.get("inhdtl_tast_vs")
+        or raw.get("trfdtl_tast_vs")
+        or raw.get("ast_rt")
+        or raw.get("inhdamount_totalast_rt")
         or raw.get("trfamount_totalast_rt")
         or raw.get("totalast_rt")
         or "0"
@@ -1632,20 +1650,27 @@ def _normalize_decision(raw: dict, dtype: str, url: str) -> dict:
     except ValueError:
         asset_ratio = 0.0
 
+    # 거래상대방과 회사와의 관계(원문 그대로) — merger는 필드명이 다르다.
+    relation_text = str(
+        raw.get("dlptn_rl_cmpn") or raw.get("mgptncmp_rl_cmpn") or ""
+    ).strip()
+
     related = False
     for k in ("ftc_stt_atn", "rl_cmpn_atn", "speclt_pson_atn"):
         v = str(raw.get(k) or "").strip()
         if v in ("예", "Y", "해당", "있음"):
             related = True
             break
-    if not related:
-        rel_text = str(raw.get("dlptn_rl_cmpn") or "")
-        if any(s in rel_text for s in ("특수관계", "계열회사", "관계회사", "자회사", "최대주주")):
-            related = True
+    if not related and any(
+        s in relation_text for s in ("특수관계", "계열회사", "관계회사", "자회사", "최대주주")
+    ):
+        related = True
 
     external_eval = str(raw.get("exevl_atn") or "").strip() in (
         "예", "Y", "해당", "실시",
     )
+    ext_eval_name = str(raw.get("exevl_intn") or "").strip()
+    ext_eval_opinion = str(raw.get("exevl_op") or "").strip()
 
     return {
         "decision_type": dtype,
@@ -1654,7 +1679,10 @@ def _normalize_decision(raw: dict, dtype: str, url: str) -> dict:
         "amount": amount,
         "asset_ratio": asset_ratio,
         "related_party": related,
+        "relation_text": relation_text,
         "external_eval": external_eval,
+        "ext_eval_name": ext_eval_name,
+        "ext_eval_opinion": ext_eval_opinion,
         "bddd": str(raw.get("bddd") or raw.get("dcrdd") or "").strip(),
         "raw": raw,
     }

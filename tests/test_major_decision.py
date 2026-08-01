@@ -52,11 +52,15 @@ class TestFetchMajorDecision(unittest.TestCase):
 
     @patch("dart_risk_mcp.core.dart_client._retry")
     def test_related_party_and_oversized_flags(self, mock_retry):
+        # inhdtl_tast_vs는 DS005 양수 8개 엔드포인트의 실제 필드명
+        # (opendart_api_guide.md·실측 확인, v1.6.0에서 구 필드명
+        # inhdamount_totalast_rt를 대체 — 그 필드는 실존하지 않아
+        # asset_ratio가 항상 0으로 계산되던 버그가 있었다).
         mock_retry.return_value = _mock_resp(lst=[{
             "dlptn_cmpnm": "특수관계회사",
             "dlptn_rl_cmpn": "최대주주의 계열회사",
             "inh_pp": "50000000000",
-            "inhdamount_totalast_rt": "35.5",
+            "inhdtl_tast_vs": "35.5",
             "ftc_stt_atn": "예",
             "exevl_atn": "아니오",
             "bddd": "2024-05-10",
@@ -68,6 +72,32 @@ class TestFetchMajorDecision(unittest.TestCase):
         self.assertIn("DECISION_RELATED_PARTY", result["flags"])
         self.assertIn("DECISION_OVERSIZED", result["flags"])
         self.assertIn("DECISION_NO_EXTVAL", result["flags"])
+        self.assertEqual(result["asset_ratio"], 35.5)
+        self.assertEqual(result["relation_text"], "최대주주의 계열회사")
+
+    @patch("dart_risk_mcp.core.dart_client._retry")
+    def test_external_eval_name_and_opinion_extracted(self, mock_retry):
+        # 아틀라스링크(01309795) 20260722000373 실측 필드 기반
+        # (exevl_intn=평가기관명, exevl_op=평가의견 — 실제 DART 응답 필드명).
+        mock_retry.return_value = _mock_resp(lst=[{
+            "dlptn_cmpnm": "로아앤코홀딩스",
+            "dlptn_rl_cmpn": "계열회사",
+            "inh_pp": "6000000000",
+            "inhdtl_tast_vs": "15.47",
+            "exevl_atn": "예",
+            "exevl_intn": "삼덕회계법인",
+            "exevl_op": "적정",
+            "bddd": "2026-07-22",
+        }])
+        result = dart_client.fetch_major_decision(
+            "20260722000373", "K", decision_type="tangible_acq"
+        )
+        self.assertNotIn("error", result)
+        self.assertTrue(result["external_eval"])
+        self.assertEqual(result["ext_eval_name"], "삼덕회계법인")
+        self.assertEqual(result["ext_eval_opinion"], "적정")
+        self.assertEqual(result["relation_text"], "계열회사")
+        self.assertIn("DECISION_RELATED_PARTY", result["flags"])
 
     @patch("dart_risk_mcp.core.dart_client._retry")
     def test_network_failure(self, mock_retry):
