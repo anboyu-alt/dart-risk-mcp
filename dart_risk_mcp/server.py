@@ -56,6 +56,9 @@ from .core import (
     fetch_document_text,
     fetch_outflow_detail,
     classify_outflow_relation,
+    fetch_control_change_detail,
+    classify_holder_type,
+    strip_holder_suffix,
     actor_status,
     add_person,
     get_person_companies,
@@ -435,6 +438,107 @@ def _has_control_change_title(disclosures: list[dict]) -> bool:
     return any(
         _CONTROL_CHANGE_TITLE_RE.search(d.get("report_nm") or "") for d in disclosures
     )
+
+
+# ── v1.7.0: 최대주주변경 원문 상세 — 신규 최대주주 실체 사실 표기 ──────────
+# 금감원 무자본 M&A 합동점검(2019-12-19): 적발 24사의 신규 최대주주 82%가
+# 비외감법인·투자조합, 인수자금 대부분이 주식담보대출(단계①). 지금까지는
+# "최대주주변경" 제목만 SHAREHOLDER 신호를 켰다 — 신규 최대주주가 누구인지,
+# 자금을 어떻게 조달했는지는 원문을 열어야만 보였다. 이 블록은 조회 창 내
+# 최근 최대주주변경 공시 1건의 원문을 추가로 확인해 사실만 표기한다
+# (판정 없음, v0.8.5 원칙).
+_CONTROL_CHANGE_REPORT_RE = re.compile(r"최대주주\s*변경")
+# "최대주주 변경을 수반하는 주식양수도 계약 체결/해제"류 예고성 공시는
+# "1. 변경내용" 구조 자체가 없어(parse_control_change_detail 대상 아님)
+# 제목에 "계약"이 있으면 제외한다.
+_CONTROL_CHANGE_PRECURSOR_RE = re.compile(r"계약")
+
+
+def _find_latest_control_change(disclosures: list[dict]) -> "dict | None":
+    """조회 창 내 최대주주변경(정정·예고성 공시 제외) 최근 1건을 찾는다."""
+    candidates = [
+        d for d in disclosures
+        if not is_amendment_disclosure(d.get("report_nm") or "")
+        and _CONTROL_CHANGE_REPORT_RE.search(d.get("report_nm") or "")
+        and not _CONTROL_CHANGE_PRECURSOR_RE.search(d.get("report_nm") or "")
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda d: d.get("rcept_dt", ""))
+
+
+def _control_change_actor_lines(name: str) -> list[str]:
+    """신규 최대주주 명칭을 공개기록 레지스트리와 대조한다(사실 표기 — 판정 아님).
+
+    레지스트리 미설정 시 lookup_actor가 조용히 빈 리스트를 반환하므로
+    (load_known_actors 기본값 = 빈 스켈레톤) 여기서도 자연히 생략된다
+    (기존 graceful 비활성화 관례).
+    """
+    stripped = strip_holder_suffix(name)
+    recs = lookup_actor(stripped)
+    if not recs:
+        return []
+    lines = ["  📎 공개기록 참고 (사실 표기 — 판정 아님):"]
+    for r in recs:
+        src = r.get("source", "")
+        date = r.get("date", "")
+        ev = r.get("evidence", "")
+        tag = f"{src}({date})" if date else src
+        lines.append(f"    • {stripped} — {tag}: {ev}")
+    if any(actor_status(r) == "auto_matched" for r in recs):
+        lines.append("    ⚠ 일부는 시장 공시 자동 매칭 (동일인 여부 미확인)")
+    if any(actor_status(r) == "maintainer_seed" for r in recs):
+        lines.append("    ⚠ 일부는 제작자 모니터링 등록 (공시 자동매칭 아님, 혐의·확정 아님)")
+    lines.append("    ⚠ 원본 공시로 사실 확인 권장 · 동명이인 가능성 있음")
+    return lines
+
+
+def _control_change_detail_block(d: dict) -> list[str]:
+    """최대주주변경 공시 1건의 원문에서 뽑은 신규 최대주주 상세 블록.
+
+    원문 추출 실패(빈 dict) 시 빈 리스트를 반환해 블록 자체를 생략한다
+    (기존 심화 블록 관례 — capital_backflow 게이트와 동일 태도). 점수
+    가산 없음(v0.8.5), 판정 어휘 없음 — 명칭·유형·자금은 사실 표기만.
+    """
+    rcept_no = d.get("rcept_no", "")
+    detail = fetch_control_change_detail(rcept_no, _DART_API_KEY)
+    if not detail:
+        return []
+    prev = detail["prev_holder"] or "(미기재)"
+    new = detail["new_holder"] or "(미기재)"
+    ratio_txt = f" ({detail['new_ratio']:.2f}%)" if detail["new_ratio"] else ""
+    holder_type = classify_holder_type(detail["new_holder"])
+
+    lines = [
+        "",
+        "🔁 **최대주주 변경 상세**",
+        f"[{(d.get('rcept_dt') or '')[:10]}] {_clean_report_name(d.get('report_nm', ''))}",
+        f"  변경전 → 변경후: {prev} → {new}{ratio_txt}",
+        f"  명칭 기준: {holder_type}",
+    ]
+    if detail["reason"]:
+        lines.append(f"  변경사유: {detail['reason']}")
+    if detail["purpose"]:
+        lines.append(f"  지분인수목적: {detail['purpose']}")
+
+    self_fund_txt = _format_amount(str(detail["self_fund"])) if detail["self_fund"] else "0원"
+    fund_line = f"  인수자금: 자기자금 {self_fund_txt}"
+    if detail["borrowed_fund"]:
+        fund_line += f" / 차입금 {_format_amount(str(detail['borrowed_fund']))}"
+    lines.append(fund_line)
+
+    if detail["borrowed_fund"] > 0:
+        if detail["lender"]:
+            lines.append(f"    차입처: {detail['lender']}")
+        if detail["collateral"]:
+            lines.append(f"    담보내역: {detail['collateral']}")
+        lines.append(
+            "    ※ 금감원 무자본 M&A 합동점검(2019-12-19)은 주식담보 차입을 통한 "
+            "인수를 무자본 M&A 인수 단계로 지목했습니다(사실 인용)."
+        )
+
+    lines += _control_change_actor_lines(detail["new_holder"])
+    return lines
 
 
 def _capital_backflow_gate(
@@ -942,6 +1046,11 @@ def analyze_company_risk(
             lines.append(
                 f"   • {_de.get('rcept_dt', '-')}  [{lbl}]  {_de.get('summary', '')}"
             )
+
+    # v1.7.0: 최대주주변경 원문 상세 — 원문 추출 실패 시 블록 자체 생략
+    _latest_ctrl_change = _find_latest_control_change(disclosures)
+    if _latest_ctrl_change:
+        lines += _control_change_detail_block(_latest_ctrl_change)
 
     catalog = load_catalog_excerpt(tax_ids_all)
     if catalog:
@@ -1456,6 +1565,16 @@ def build_event_timeline(
                 lines.append("")
     except Exception:
         pass
+
+    # v1.7.0: 최대주주변경 원문 상세 — 원문 추출 실패 시 블록 자체 생략.
+    # 직전 섹션(자금유출 상대방 확인 등)이 이미 trailing 빈 줄을 남겼을 수
+    # 있어, 블록 첫 줄의 빈 줄과 겹치면 하나를 걷어내 이중 공백을 막는다.
+    _latest_ctrl_change = _find_latest_control_change(disclosures)
+    if _latest_ctrl_change:
+        _ctrl_block = _control_change_detail_block(_latest_ctrl_change)
+        if _ctrl_block and _ctrl_block[0] == "" and lines and lines[-1] == "":
+            _ctrl_block = _ctrl_block[1:]
+        lines += _ctrl_block + [""]
 
     reg_section = _registry_company_section(corp_name)
     if reg_section:
