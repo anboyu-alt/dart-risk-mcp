@@ -20,6 +20,7 @@ from urllib.parse import parse_qsl, urlsplit
 import requests
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from tool_server.corp import handle_corp  # noqa: E402
 from tool_server.doc import handle_doc  # noqa: E402
 
 ALLOWED_ENDPOINTS = {"list.json", "company.json",
@@ -54,6 +55,17 @@ class RelayHandler(SimpleHTTPRequestHandler):
             query = dict(parse_qsl(parts.query))
             api_key = (self.headers.get("X-DART-Key") or "").strip()
             status, body = handle_doc(query, api_key)
+            payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")  # 로컬은 캐시 불필요
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+        if parts.path == "/api/corp":
+            query = dict(parse_qsl(parts.query))
+            api_key = (self.headers.get("X-DART-Key") or "").strip()
+            status, body = handle_corp(query, api_key)
             payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")

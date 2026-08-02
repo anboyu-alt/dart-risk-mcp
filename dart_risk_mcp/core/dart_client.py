@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 import time
 import xml.etree.ElementTree as ET
 import zipfile
@@ -169,16 +170,88 @@ def _log_dart_status(status: str, context: str = "") -> None:
 
 _corp_cache: dict = {}
 
+# 캐시 파일 포맷 버전. 이름 충돌 정책(아래 _merge_corp_entry)이 도입되기
+# 전에 저장된 캐시는 "이름을 키로 쓰는 dict를 마지막 항목이 덮어쓰는" 단순
+# 로직으로 만들어졌다 — 동명 법인이 있으면 XML 등장 순서에 따라 어느 쪽이
+# 남을지가 우연에 맡겨진다(실측: 앤로보틱스 — 상장 00808068/종목 138360/
+# 구 협진 vs 비상장 01358296/구 나이콤, 상장 쪽이 소실되어 뷰어·resolve_corp
+# 양쪽에서 검색 불가). `_v` 필드가 없거나 버전이 다르면 무조건 재다운로드해
+# 이미 오염된 채 굳어 있던 캐시 파일을 치유한다(24h TTL 로직 자체는 그대로).
+_CORP_CACHE_VERSION = 2
+
+
+def _resolve_corp_cache_dir() -> Path:
+    """corp_codes.json을 위한 쓰기 가능한 캐시 디렉터리를 반환한다.
+
+    서버리스 환경(Vercel 등)은 `$HOME`이 매 호출마다 새로 생기는 컨테이너를
+    가리키거나 쓰기 자체가 막혀 있을 수 있다(se_server/api/handlers.py의
+    기존 관찰 — "Vercel에는 영속 $HOME이 없다"). `_CACHE_DIR` 아래 mkdir이
+    OSError로 실패하면 `tempfile.gettempdir()`(Lambda 계열이 보장하는
+    유일한 쓰기 가능 경로 `/tmp`) 산하로 폴백한다 — 그 컨테이너 수명 동안만
+    이라도 캐시가 동작하게 하기 위함이다. 폴백마저 실패하면 예외를 삼키고
+    `_CACHE_DIR`을 그대로 반환한다 — 호출부(`_load_corp_codes`)가 이미
+    캐시 실패를 조용히 흡수하는 계약이라, 여기서 예외가 새면 안 된다.
+    """
+    try:
+        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        return _CACHE_DIR
+    except OSError:
+        fallback = Path(tempfile.gettempdir()) / "dart-risk-mcp"
+        try:
+            fallback.mkdir(parents=True, exist_ok=True)
+            return fallback
+        except OSError:
+            return _CACHE_DIR
+
+
+def _merge_corp_entry(cache: dict, mdates: dict, name: str, code: str,
+                       stock: str, mdate: str) -> None:
+    """이름 충돌 정책: 상장(stock_code 보유) 우선, 동급이면 modify_date 최신 우선.
+
+    corpCode.xml에는 같은 corp_name의 서로 다른 법인이 존재할 수 있다(동명
+    법인, 실측 사례: 앤로보틱스). 이름을 키로 쓰는 dict 구조상 한쪽은 반드시
+    소실되므로, 최소한 "사용자가 실제로 찾을 가능성이 높은 쪽"(상장사)이
+    남도록 결정한다. 상장 여부가 같으면(둘 다 상장/둘 다 비상장) 더 최근에
+    기업개황이 갱신된 쪽을 남긴다 — 최신 정보일 가능성이 높다는 근사치일 뿐,
+    완벽한 판별은 아니다.
+    """
+    existing = cache.get(name)
+    if existing is None:
+        cache[name] = {"corp_code": code, "stock_code": stock}
+        mdates[name] = mdate
+        return
+    existing_listed = bool(existing.get("stock_code"))
+    new_listed = bool(stock)
+    if new_listed and not existing_listed:
+        cache[name] = {"corp_code": code, "stock_code": stock}
+        mdates[name] = mdate
+    elif new_listed == existing_listed and mdate > mdates.get(name, ""):
+        cache[name] = {"corp_code": code, "stock_code": stock}
+        mdates[name] = mdate
+    # else: 기존 항목(상장, 혹은 동급이면서 더 최신)을 유지한다.
+
 
 def _load_corp_codes(api_key: str) -> None:
-    """DART corpCode.xml에서 기업명 → corp_code 매핑 로드. 파일 캐시 24시간."""
+    """DART corpCode.xml에서 기업명 → corp_code 매핑 로드. 파일 캐시 24시간.
+
+    캐시 파일은 {"_v": _CORP_CACHE_VERSION, "data": {...}} 포맷. 버전이 없거나
+    다르면(구버전 캐시, 아래 _CORP_CACHE_VERSION 주석 참고) 무효로 보고
+    24h TTL과 무관하게 재다운로드한다.
+    """
     global _corp_cache
 
-    cache_file = _CACHE_DIR / "corp_codes.json"
+    cache_dir = _resolve_corp_cache_dir()
+    cache_file = cache_dir / "corp_codes.json"
     if cache_file.exists() and (time.time() - cache_file.stat().st_mtime) < 86400:
-        with open(cache_file, encoding="utf-8") as f:
-            _corp_cache = json.load(f)
-        return
+        try:
+            with open(cache_file, encoding="utf-8") as f:
+                payload = json.load(f)
+            if isinstance(payload, dict) and payload.get("_v") == _CORP_CACHE_VERSION:
+                _corp_cache = payload.get("data", {})
+                return
+            # 구버전/알 수 없는 포맷 — 아래로 흘러 재다운로드
+        except Exception:
+            pass  # 손상된 캐시 파일도 재다운로드로 치유
 
     if not api_key:
         return
@@ -194,16 +267,20 @@ def _load_corp_codes(api_key: str) -> None:
         zf.close()
 
         root = ET.fromstring(xml_bytes.decode("utf-8", errors="replace"))
+        new_cache: dict = {}
+        modify_dates: dict = {}
         for item in root.findall(".//list"):
             name  = (item.findtext("corp_name")  or "").strip()
             code  = (item.findtext("corp_code")   or "").strip()
             stock = (item.findtext("stock_code")  or "").strip()
+            mdate = (item.findtext("modify_date") or "").strip()
             if name and code:
-                _corp_cache[name] = {"corp_code": code, "stock_code": stock}
+                _merge_corp_entry(new_cache, modify_dates, name, code, stock, mdate)
 
-        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        _corp_cache = new_cache
+        # cache_dir은 _resolve_corp_cache_dir()에서 이미 mkdir까지 마쳤다.
         with open(cache_file, "w", encoding="utf-8") as f:
-            json.dump(_corp_cache, f, ensure_ascii=False)
+            json.dump({"_v": _CORP_CACHE_VERSION, "data": _corp_cache}, f, ensure_ascii=False)
     except Exception as e:
         log.warning("Corp code 로드 실패: %s", e)
 
