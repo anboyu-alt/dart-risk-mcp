@@ -12,8 +12,13 @@ class TestV6Taxonomy(unittest.TestCase):
         self.assertEqual(entry["severity"], "HIGH")
 
     def test_capital_churn_pattern_registered(self):
-        names = {p["name"] for p in CROSS_SIGNAL_PATTERNS.values()}
-        self.assertIn("capital_churn_anomaly", names)
+        # SE-14 후속: 패턴 name이 영문 슬러그에서 한국어 서술("자본 이벤트
+        # 과다 반복")로 바뀌었다 — 등록 여부는 key(슬러그)로 확인한다.
+        self.assertIn("capital_churn_anomaly", CROSS_SIGNAL_PATTERNS)
+        self.assertEqual(
+            CROSS_SIGNAL_PATTERNS["capital_churn_anomaly"]["name"],
+            "자본 이벤트 과다 반복",
+        )
 
 
 class TestV61PatternExtensions(unittest.TestCase):

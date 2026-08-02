@@ -87,6 +87,7 @@ from .core import (
     load_catalog_excerpt,
     match_signals,
     pattern_to_prose,
+    pattern_checkpoints,
     resolve_corp,
     resolve_decision_type,
     signal_to_prose,
@@ -982,6 +983,12 @@ def analyze_company_risk(
             lines.append(pattern_body)
         elif pattern.get("description"):
             lines.append(f"  → {pattern['description']}")
+        _checkpoints = pattern_checkpoints(pattern_key) if pattern_key else []
+        if _checkpoints:
+            lines.append("")
+            lines.append("확인 포인트:")
+            for _cp in _checkpoints:
+                lines.append(f"  • {_cp}")
         if pattern_key == "capital_backflow":
             _affiliated = _capital_backflow_gate(outflow_confirmations)["affiliated"]
             if _affiliated:
@@ -1327,6 +1334,12 @@ def find_risk_precedents(signal_types: list[str], lookback_days: int = 90) -> st
             ]
             prose_body = pattern_to_prose(pattern.get("pattern_id", ""))
             lines.append(prose_body or pattern.get("description", ""))
+            _checkpoints = pattern_checkpoints(pattern.get("pattern_id", ""))
+            if _checkpoints:
+                lines.append("")
+                lines.append("확인 포인트:")
+                for _cp in _checkpoints:
+                    lines.append(f"  • {_cp}")
             lines.append("")
 
     all_tax_ids = list({tid for k in valid_keys for tid in SIGNAL_KEY_TO_TAXONOMY.get(k, [])})
@@ -1559,6 +1572,12 @@ def build_event_timeline(
             lines.append(
                 f"과거 유사 사례에서는 위기가 본격화되기까지 평균 약 {months}개월이 걸린 것으로 집계됩니다."
             )
+        _checkpoints = pattern_checkpoints(pattern_id)
+        if _checkpoints:
+            lines.append("")
+            lines.append("확인 포인트:")
+            for _cp in _checkpoints:
+                lines.append(f"  • {_cp}")
         if pattern_id == "capital_backflow":
             _affiliated = _capital_backflow_gate(outflow_confirmations)["affiliated"]
             if _affiliated:

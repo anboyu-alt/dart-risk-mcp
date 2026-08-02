@@ -197,6 +197,48 @@ class TestBuildSignalsData(unittest.TestCase):
         self.assertIsInstance(p["signal_sequence"], list)
         self.assertGreater(p["timeline_months"], 0)
 
+    def test_patterns_have_prose_and_checkpoints(self):
+        """패턴 서술 강화(무판정 원칙 유지): 11종 패턴 전부 prose(문자열)·
+        checkpoints(불릿 리스트)를 갖는다. core/explain.py의
+        PATTERN_PROSE·PATTERN_CHECKPOINTS가 유일한 진실 — 값도 그대로
+        일치해야 한다."""
+        from dart_risk_mcp.core.explain import PATTERN_PROSE, PATTERN_CHECKPOINTS
+
+        by_key = {p["key"]: p for p in self.data["patterns"]}
+        self.assertEqual(set(by_key), set(CROSS_SIGNAL_PATTERNS))
+        for slug in CROSS_SIGNAL_PATTERNS:
+            exported = by_key[slug]
+            self.assertIn("prose", exported)
+            self.assertIsInstance(exported["prose"], str)
+            self.assertTrue(exported["prose"], f"{slug} prose가 비어 있음")
+            self.assertEqual(exported["prose"], PATTERN_PROSE.get(slug, ""))
+
+            self.assertIn("checkpoints", exported)
+            self.assertIsInstance(exported["checkpoints"], list)
+            self.assertTrue(exported["checkpoints"], f"{slug} checkpoints가 비어 있음")
+            for cp in exported["checkpoints"]:
+                self.assertIsInstance(cp, str)
+            self.assertEqual(exported["checkpoints"],
+                              list(PATTERN_CHECKPOINTS.get(slug, [])))
+
+    def test_pattern_prose_and_checkpoints_no_score_or_grade_vocabulary(self):
+        """prose·checkpoints도 v0.8.5 무판정 원칙 대상 — 등급·점수 어휘가
+        새로 들어오지 않았는지 기존 hygiene 검사기로 재확인."""
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+        from test_golden_output_hygiene import (  # noqa: E402
+            _SCORE_GRADE_PATTERNS,
+            _SEVERITY_EMOJI,
+        )
+        import re
+
+        for p in self.data["patterns"]:
+            text = p["prose"] + " " + " ".join(p["checkpoints"])
+            for pattern, desc in _SCORE_GRADE_PATTERNS:
+                self.assertIsNone(re.search(pattern, text),
+                                   f"{p['key']} prose/checkpoints에 {desc} 잔존")
+            for emoji in _SEVERITY_EMOJI:
+                self.assertNotIn(emoji, text)
+
     def test_capital_keys_and_amendment_regex(self):
         self.assertEqual(sorted(self.data["capital_event_keys"]),
                          sorted(CAPITAL_EVENT_KEYS))
