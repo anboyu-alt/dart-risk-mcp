@@ -23,6 +23,7 @@ const ALLOWED_ENDPOINTS = new Set([
   "alotMatter.json",
   "pssrpCptalUseDtls.json",
   "prvsrpCptalUseDtls.json",
+  "otrCprInvstmntSttus.json",
 ]);
 
 const CORS_HEADERS = {
