@@ -45,10 +45,27 @@ _CATEGORY_TO_FILE: dict[str, str] = {
 }
 
 
+def _taxonomy_sort_key(tid: str) -> tuple:
+    """taxonomy ID("5.1" 등)를 숫자 오름차순으로 정렬하는 키.
+
+    호출부들이 taxonomy ID 목록을 set 순회(`list({...})`)로 만들어 넘기므로,
+    여기서 정렬하지 않으면 발췌 섹션 순서가 PYTHONHASHSEED에 따라 실행마다
+    달라진다(2026-08-03 골드 재생성 중 실측). 숫자가 아닌 키(패턴 키 등)는
+    어차피 아래 루프에서 스킵되므로 맨 뒤로 보내기만 한다.
+    """
+    parts = tid.split(".")
+    try:
+        return (0, [int(p) for p in parts])
+    except ValueError:
+        return (1, [tid])
+
+
 def load_catalog_excerpt(taxonomy_ids: list[str], max_chars: int = 1500) -> str:
     """taxonomy ID 목록에 해당하는 카탈로그 MD 발췌를 반환한다.
 
     중복 카테고리는 한 번만 로드. 파일 부재·읽기 오류 시 해당 카테고리 건너뜀.
+    섹션 순서는 입력 순서와 무관하게 taxonomy ID 숫자 오름차순(카테고리 1~8 순)
+    으로 고정된다 — 입력이 set에서 왔더라도 출력은 결정적이다.
 
     ⚠ **함정(SE-13 Task 1에서 실사고 발생)**: 인자는 반드시 `TAXONOMY`(taxonomy.py)의
     키인 taxonomy ID 문자열(예: `"5.1"`, `"7.1"`)이어야 한다. `CROSS_SIGNAL_PATTERNS`의
@@ -64,7 +81,7 @@ def load_catalog_excerpt(taxonomy_ids: list[str], max_chars: int = 1500) -> str:
     seen: set[str] = set()
     excerpts: list[str] = []
 
-    for tid in taxonomy_ids:
+    for tid in sorted(taxonomy_ids, key=_taxonomy_sort_key):
         # tid가 taxonomy ID가 아니라 다른 종류의 키(예: 패턴 키)이면 여기서
         # 조용히 None → continue로 스킵된다. 위 docstring 경고 참고.
         signal = TAXONOMY.get(tid)
