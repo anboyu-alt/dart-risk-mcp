@@ -1,5 +1,6 @@
 from .dart_client import (
     resolve_corp,
+    load_corp_aliases,
     fetch_company_disclosures,
     fetch_market_disclosures,
     fetch_document_text,
@@ -94,6 +95,7 @@ from .explain import (
 
 __all__ = [
     "resolve_corp",
+    "load_corp_aliases",
     "fetch_company_disclosures",
     "fetch_market_disclosures",
     "fetch_document_text",

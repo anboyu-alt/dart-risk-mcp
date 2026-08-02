@@ -123,6 +123,17 @@ def _append_size_footer(text: str, lookback_years: int) -> str:
     return text + f"\n\n📊 예상 출력 규모: 약 {chars:,}자 / ~{tokens:,}토큰 (대략적 추정)"
 
 
+def _alias_note_line(corp_info: dict) -> "str | None":
+    """resolve_corp이 채운 alias_note가 있으면 안내 1줄을 반환(없으면 None).
+
+    옛 상호 입력을 현재 상호로 해석했거나(자동 전환), 동명의 다른 상장사가
+    상호변경 이력에 있다는 참고를 병기한 경우 둘 다 이 한 줄로 표면화한다.
+    판정 어휘 없이 사실만 전달하는 참고 톤.
+    """
+    note = (corp_info or {}).get("alias_note")
+    return f"ℹ️ {note}" if note else None
+
+
 def _resolve_lookback(
     lookback_years: int, lookback_days: "int | None"
 ) -> "tuple[int, int, str]":
@@ -832,8 +843,11 @@ def analyze_company_risk(
     # ============ v0.6.0 블록 끝 ============
 
     if not signal_events:
+        _alias_note = _alias_note_line(corp_info)
+        _note_block = f"{_alias_note}\n\n" if _alias_note else ""
         return (
             f"📋 **{corp_name}** ({stock_code or corp_code})\n\n"
+            f"{_note_block}"
             f"최근 {window_phrase}간 탐지된 의심 공시가 없습니다.\n"
             f"(전체 공시 {len(disclosures)}건 검토)"
         )
@@ -940,6 +954,11 @@ def analyze_company_risk(
         "",
         f"조회 기간: 최근 {window_phrase} | 전체 공시 {len(disclosures)}건 검토",
         "",
+    ]
+    _alias_note = _alias_note_line(corp_info)
+    if _alias_note:
+        lines.insert(1, _alias_note)
+    lines += [
         f"━━ 관찰된 신호 ({len(signal_events)}건) ━━",
     ]
 
@@ -1414,10 +1433,14 @@ def build_event_timeline(
     corp_code = corp_info["corp_code"]
     stock_code = corp_info.get("stock_code", "")
 
+    _alias_note = _alias_note_line(corp_info)
+    _note_block = f"{_alias_note}\n\n" if _alias_note else ""
+
     disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days, max_pages=max_pages)
     if not disclosures:
         return (
             f"📋 **{corp_name}** ({stock_code or corp_code})\n\n"
+            f"{_note_block}"
             f"최근 {window_phrase}간 공시가 없습니다."
         )
 
@@ -1443,6 +1466,7 @@ def build_event_timeline(
     if not events:
         return (
             f"📋 **{corp_name}** ({stock_code or corp_code})\n\n"
+            f"{_note_block}"
             f"최근 {window_phrase}간 위험 신호 이벤트가 없습니다.\n"
             f"(전체 공시 {len(disclosures)}건 검토)"
         )
@@ -1503,6 +1527,11 @@ def build_event_timeline(
     }
     summary_lines = [
         f"⏳ **이벤트 타임라인: {corp_name}** ({stock_code or corp_code})",
+    ]
+    _alias_note = _alias_note_line(corp_info)
+    if _alias_note:
+        summary_lines.append(_alias_note)
+    summary_lines += [
         "",
         "🎯 **한눈에 보는 요약**",
         (
@@ -2084,16 +2113,23 @@ def list_disclosures_by_stock(
 
     corp_name, corp_info = result
     corp_code = corp_info["corp_code"]
+    _alias_note = _alias_note_line(corp_info)
+    _note_block = f"{_alias_note}\n\n" if _alias_note else ""
 
     disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days, max_pages=max_pages)
     if not disclosures:
         return (
             f"📋 **{corp_name}** ({stock_code})\n\n"
+            f"{_note_block}"
             f"최근 {window_phrase}간 공시가 없습니다."
         )
 
     lines = [
         f"📋 **{corp_name}** ({stock_code}) 공시 접수번호 목록",
+    ]
+    if _alias_note:
+        lines.append(_alias_note)
+    lines += [
         f"조회 기간: 최근 {window_phrase} | 총 {len(disclosures)}건",
         "",
     ]
@@ -2310,6 +2346,11 @@ def get_company_info(company_name: str) -> str:
 
     lines = [
         f"🏢 **기업 개요: {info.get('corp_name', corp_name)}**",
+    ]
+    _alias_note = _alias_note_line(corp_info)
+    if _alias_note:
+        lines.append(_alias_note)
+    lines += [
         "",
         f"• 종목코드: {info.get('stock_code', '-')}",
         f"• 대표자: {info.get('ceo_nm', '-')}",
