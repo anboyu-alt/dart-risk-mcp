@@ -2145,6 +2145,69 @@ def _detect_decision_anomaly(result: dict) -> list[str]:
     return flags
 
 
+_rcept_corp_cache: dict = {}
+_RCEPT_CORP_CACHE_TTL = 600
+_RCEPT_CORP_CACHE_MAX = 50
+
+
+def resolve_corp_code_from_rcept_no(
+    rcept_no: str, api_key: str, max_pages: int = 3
+) -> str:
+    """접수번호 → corp_code 역해석. 실패 시 "".
+
+    DS005 결정 엔드포인트는 corp_code+bgn_de+end_de가 항상 필수라(rcept_no
+    단독 모드 없음, status=100 실측 — 2026-08-04 재감사) check_disclosure_risk처럼
+    접수번호만 아는 경로에서는 corp_code를 먼저 복원해야 한다. 접수번호 앞
+    8자리가 접수일이므로 그 하루치 주요사항보고(pblntf_ty=B) 목록에서
+    rcept_no를 대조한다. 페이지 상한(max_pages×100건)으로 호출 예산을 묶고,
+    비정상 status·네트워크 오류는 즉시 중단한다.
+    """
+    if (
+        not api_key
+        or not isinstance(rcept_no, str)
+        or len(rcept_no) != 14
+        or not rcept_no.isdigit()
+    ):
+        return ""
+
+    cached = _cache_get(_rcept_corp_cache, rcept_no, _RCEPT_CORP_CACHE_TTL)
+    if cached is not None:
+        return cached
+
+    rcpt_date = rcept_no[:8]
+    page_no = 1
+    while page_no <= max_pages:
+        params = {
+            "crtfc_key": api_key,
+            "bgn_de": rcpt_date,
+            "end_de": rcpt_date,
+            "pblntf_ty": "B",
+            "page_no": page_no,
+            "page_count": 100,
+        }
+        try:
+            data = _retry("GET", f"{DART_BASE}/list.json", params=params).json()
+        except Exception:
+            return ""
+        if data.get("status") != "000":
+            _log_dart_status(data.get("status", "?"), f"rcept→corp {rcept_no}")
+            return ""
+        for row in data.get("list", []):
+            if row.get("rcept_no") == rcept_no:
+                cc = str(row.get("corp_code") or "")
+                if cc:
+                    _cache_set(
+                        _rcept_corp_cache, rcept_no, cc, _RCEPT_CORP_CACHE_MAX
+                    )
+                return cc
+        total = int(data.get("total_count", 0))
+        if page_no * 100 >= total:
+            break
+        page_no += 1
+        time.sleep(0.25)
+    return ""
+
+
 def fetch_major_decision(
     rcept_no: str,
     api_key: str,

@@ -73,6 +73,7 @@ dart_risk_mcp/
 
 - 접수번호 또는 공시 제목 중 하나만 있어도 작동
 - CB/BW 공시면 자동으로 인수자 추출
+- DS005 결정 공시(제목으로 `resolve_decision_type` 판별)면 `resolve_corp_code_from_rcept_no`로 rcept_no→corp_code를 역해석해 "📑 주요 결정 공시" 섹션에 상대방·금액·특수관계·외부평가 표기 — DS005는 corp_code가 항상 필수라 역해석 실패 시 헛호출 없이 섹션만 생략
 
 ### 3. `find_risk_precedents(signal_types, lookback_days=90)`
 
@@ -402,6 +403,7 @@ dart_risk_mcp/
 | `extract_loan_advance(rows)` | fnlttSinglAcntAll rows에서 대여금·선급금 계정을 BS(잔액)/CF(증감)로 구분 추출 — LOAN_ADVANCE_SURGE 판정 입력(v1.6.0, 금감원 2019-12 무자본 M&A 합동점검 유의사항 ③) |
 | `fetch_fund_usage(corp_code, api_key, corp_cls, lookback_years)` | 공모·사모 자금사용 2개 엔드포인트 통합 + 이상 플래그 탐지 |
 | `fetch_major_decision(rcept_no, corp_cls, decision_type)` | 12개 DS005 주요결정 엔드포인트 중 decision_type에 따라 자동 선택 |
+| `resolve_corp_code_from_rcept_no(rcept_no, api_key, max_pages=3)` | rcept_no → corp_code 역해석 — 접수일 하루치 주요사항보고(B) 목록 대조, 최대 3페이지·매칭 즉시 종료·10분 캐시. DS005 필수 corp_code를 접수번호만 아는 경로(check_disclosure_risk)에서 복원 |
 | `resolve_decision_type(report_nm)` | 공시명 → decision_type 키 자동 추론 (`[기재정정]` 등 접두어 제거) |
 | `detect_capital_churn(events, lookback_years)` | 12개월 슬라이딩 윈도우로 CAPITAL_CHURN 판정 |
 | `detect_financial_anomaly(current, prior)` | 4개 지표 YoY 비교 → 플래그+메트릭 |
@@ -464,6 +466,7 @@ dart_risk_mcp/
 | 공시 원문 ZIP | 메모리 `_zip_cache` (최대 5건) | 10분 |
 | 자금사용 내역 | 메모리 `_fund_usage_cache` (최대 20건) | 10분 |
 | 주요결정 공시 | 메모리 `_major_decision_cache` (최대 50건) | 10분 |
+| rcept_no→corp_code 역해석 | 메모리 `_rcept_corp_cache` (최대 50건) | 10분 |
 | 감사의견 이력 | 메모리 `_audit_history_cache` (최대 20건) | 10분 |
 | 채무증권 잔액 | 메모리 `_debt_balance_cache` (최대 20건) | 10분 |
 | XBRL 감가상각비 | 메모리 `_xbrl_dep_cache` (최대 10건) | 10분 |
@@ -525,7 +528,7 @@ PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설
 | `INSIDER_PRE_DISCLOSURE` (v0.8.6) | ⚠ | 2026-08-04 재점검 — 코드 정상(매도 ±30일 창·`_NEGATIVE_DISCLOSURE_KEYS` 7종 전부 signals.py에 실존, server.py 필드 연결 확인). STX·롯데카드 등 최근 부실·제재 공시 기업에서 Δ 산출 가능한 시계열이 없어(스냅샷 1건뿐) 미발화, `audit_issue`/`embezzle` market preset도 최근 90일 0건이라 후보 자체가 희소 — 사례 미발굴(2026-08-04 재점검) |
 | `DIVIDEND_DRAIN` (v0.9.0) | ✅ | 두산(00117212) 2022 CFS·2023 CFS·2023 OFS·2024 CFS 라이브 발화(SE-12). 6사 매트릭스(SG·두산에너빌리티·삼성전자·셀트리온·제이스코·헬릭스미스)는 여전히 0건 — 미발화가 결함이었던 게 아니라 두산류(비지배지분 큰 회사) 사례가 이 6사엔 없었을 뿐 |
 | `DISTRESS_EVENT` (v0.9.0) | ✅ | 2026-08-04 ⚠ 재점검 — 롯데카드(00219051) 20260731000817(영업정지, business_susp)·STX(00138297) 20260403003189(회생절차개시신청, rehabilitation) 라이브 매칭, 골드 `STX_analyze.txt`/`STX_timeline.txt`. 이 과정에서 `_distress_summary`의 rehabilitation 서브타입 필드명 버그(실존하지 않는 "rs"/"ctrcvs_rs" 사용 — 실제 신청사유 필드는 `rq_rs`) 발견·수정. default(부도)·dissolution(해산)은 이번 라운드 미재확인(6개월 표집에 부도 사례 없음, 해산 후보 1건은 상장리츠 특수케이스로 미발화) |
-| `get_major_decision` 12개 decision_type | ✅(11/12) | 2026-08-04 재점검 — `tangible_acq`(SE-14/v1.6.0, 아틀라스링크 20260722000373)에 이어 나머지 11개 중 10개를 corp_code 기반 조회로 실측: `business_acq`(오리엔트정공 20260212001424, DECISION_RELATED_PARTY 발화 확인) · `tangible_div`(대산F&B 20260303003033) · `merger`(다산디엠씨 20250827000490, counterparty·related_party="자회사" 정상) · `stock_acq`(엔솔바이오사이언스 20260305001625) 등. 이 과정에서 `stock_exchange`(주식교환·이전결정)의 상대방·관계 필드가 `_normalize_decision` 폴백 체인에 아예 없어 counterparty/relation_text가 항상 공란이었던 필드명 버그 발견·수정(`extr_tgcmp_cmpnm`/`extr_tgcmp_rl_cmpn` 추가) — 단 `stock_exchange` 자체는 최근 365일 시장 전체에서 사례 0건이라 라이브 재확인은 못함(⚠ 유지, 정적 필드 대조로만 수정). `demerger_merger`도 상장사 1년 표집 0건(unlisted 1건만 발견, DS005 미노출)이라 미검증 유지. **부가 발견**: 12종 모두 DART 스펙상 corp_code가 항상 필수인데 `check_disclosure_risk`는 corp_code="" 로 `fetch_major_decision`을 호출해(rcept_no 단독 폴백은 DS005에서 구조적으로 항상 실패) "📑 주요 결정 공시에서 읽히는 거래 구조" 섹션이 사실상 항상 공백 — `check_disclosure_risk`가 corp_code를 모르는 상태로 설계된 도구라 이번 라운드에서는 코드 변경 없이 기록만(후속 과제 후보). **부가 발견 2**: 결정공시가 [기재정정]류 정정 공시면 DS005 corp_code+날짜 조회가 "최초접수일" 기준이라 정정 rcept_no의 날짜로는 항상 013(no data) — 이 자체는 DART 스펙(요청 인자 설명에 "시작일(최초접수일)" 명시)이지 코드 버그 아님, 정정 아닌 원본 rcept_no를 쓰면 정상 조회됨(다산디엠씨 사례로 확인) |
+| `get_major_decision` 12개 decision_type | ✅(11/12) | 2026-08-04 재점검 — `tangible_acq`(SE-14/v1.6.0, 아틀라스링크 20260722000373)에 이어 나머지 11개 중 10개를 corp_code 기반 조회로 실측: `business_acq`(오리엔트정공 20260212001424, DECISION_RELATED_PARTY 발화 확인) · `tangible_div`(대산F&B 20260303003033) · `merger`(다산디엠씨 20250827000490, counterparty·related_party="자회사" 정상) · `stock_acq`(엔솔바이오사이언스 20260305001625) 등. 이 과정에서 `stock_exchange`(주식교환·이전결정)의 상대방·관계 필드가 `_normalize_decision` 폴백 체인에 아예 없어 counterparty/relation_text가 항상 공란이었던 필드명 버그 발견·수정(`extr_tgcmp_cmpnm`/`extr_tgcmp_rl_cmpn` 추가) — 단 `stock_exchange` 자체는 최근 365일 시장 전체에서 사례 0건이라 라이브 재확인은 못함(⚠ 유지, 정적 필드 대조로만 수정). `demerger_merger`도 상장사 1년 표집 0건(unlisted 1건만 발견, DS005 미노출)이라 미검증 유지. **부가 발견**: 12종 모두 DART 스펙상 corp_code가 항상 필수인데 `check_disclosure_risk`는 corp_code="" 로 `fetch_major_decision`을 호출해(rcept_no 단독 폴백은 DS005에서 구조적으로 항상 실패) "📑 주요 결정 공시에서 읽히는 거래 구조" 섹션이 사실상 항상 공백 — **해소됨(2026-08-02 후속)**: `resolve_corp_code_from_rcept_no`(dart_client)가 접수일(rcept_no 앞 8자리) 하루치 주요사항보고(pblntf_ty=B) 목록을 최대 3페이지 스캔해 rcept_no→corp_code를 역해석(10분 캐시 `_rcept_corp_cache`, 매칭 즉시 조기 종료·비정상 status 즉시 중단으로 호출 예산 상한 3회)하고, 역해석 실패 시 `fetch_major_decision` 헛호출 없이 섹션만 생략하도록 `check_disclosure_risk`에 배선. 아틀라스링크 20260722000373 라이브 재확인 — 섹션이 실제 발화(로아앤코홀딩스·174억·자산대비 15.47%·DECISION_RELATED_PARTY). 단위 테스트 `tests/test_resolve_corp_from_rcept.py`(역해석 성공/캐시/조기종료/페이지상한/실패 시 섹션 생략 8건). **부가 발견 2**: 결정공시가 [기재정정]류 정정 공시면 DS005 corp_code+날짜 조회가 "최초접수일" 기준이라 정정 rcept_no의 날짜로는 항상 013(no data) — 이 자체는 DART 스펙(요청 인자 설명에 "시작일(최초접수일)" 명시)이지 코드 버그 아님, 정정 아닌 원본 rcept_no를 쓰면 정상 조회됨(다산디엠씨 사례로 확인) |
 | `capital_backflow`(v1.6.0)/`FUND_OUTFLOW` | ✅ | 아틀라스링크(01309795, 297570) 라이브 매칭 — 최대주주변경(20260709) 후 유형자산양수(20260722)·채무보증(20260729)·금전대여(20260120, 20251015) 연쇄로 패턴 발화, `analyze_company_risk`·`build_event_timeline` 양쪽 골드 확인. v1.6.1 게이트 도입 후에도 계속 발화(유형자산양수 상대 로아앤코홀딩스가 계열회사로 확인돼 affiliated 조건 충족) — 게이트가 발화를 막지 않았음을 확인. 한농화성(011500)도 별도로 게이트 통과 라이브 확인(금전대여 20260728800659 → 바스프한농화성솔루션스, 계열회사) |
 | `capital_backflow` 게이트(v1.6.1) — 원문 상대방 관계 실질 판정 | ✅ | `parse_outflow_detail`이 아틀라스링크 금전대여결정(20260120900216/20251015900139)에서 "성명(법인명)"·"(회사와의 관계)" 괄호형이라는 세 번째 실측 서식 변형을 발견 — 최초 구현은 이 변형에서 상대방을 못 찾아 "unknown"으로 놓쳤다가 정규식 보강 후 "주식회사 한국파일/종속회사"로 정확히 추출. subsidiary만 확인되면(계열·특수관계 없음) 패턴이 아니라 사실 블록만 표기하는 경로는 이 실사례로 간접 검증(종속회사 건 3개 중 유형자산양수 1건만 계열회사라 affiliated 통과) |
 | `fund_diversion_chain`(금감원 2019-12 무자본 M&A 합동점검 반영) | ⚠ | 2026-08-04 재점검 — `find_pattern_match`는 signal_sequence의 단순 부분집합 판정(순서·타임라인 미강제)이라 11개 패턴 중 요구 신호 개수가 2개(1.1+5.8)로 가장 낮아 원리적으로 가장 발화하기 쉬운 조합이다. 다만 90일 표집 후보(오리엔트정공·엔솔바이오사이언스 등 stock_acq/business_acq 발화 기업)에 CB_BW가 동반 관측되지 않아 이번 라운드도 라이브 매칭 사례 미발굴 |
