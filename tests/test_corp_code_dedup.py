@@ -113,20 +113,26 @@ class TestLoadCorpCodesCollision(unittest.TestCase):
 
         dc._load_corp_codes("dummy-key")
 
-        cache_file = dc._CACHE_DIR / "corp_codes.json"
+        cache_file = dc._CACHE_DIR / "corp_codes_v2.json"
         payload = json.loads(cache_file.read_text(encoding="utf-8"))
         self.assertEqual(payload["_v"], dc._CORP_CACHE_VERSION)
         self.assertEqual(payload["data"]["삼성전자"],
                           {"corp_code": "00126380", "stock_code": "005930"})
 
     @patch("dart_risk_mcp.core.dart_client._retry")
-    def test_legacy_cache_format_triggers_redownload(self, mock_retry):
-        """구버전 캐시(포맷 버전 필드 없는 평범한 dict)는 24h TTL 내여도 무시하고 재다운로드한다."""
+    def test_legacy_cache_file_is_never_touched(self, mock_retry):
+        """레거시 corp_codes.json은 구버전 설치본의 소유물 — 읽지도 쓰지도 않는다.
+
+        실사고(2026-08-05): v2 페이로드를 레거시 경로에 쓰자 같은 캐시
+        디렉터리를 쓰는 구버전 MCP가 {"_v","data"}를 평면 dict로 읽어
+        이름 조회 전멸 + "'int' object has no attribute 'get'"으로 죽었다.
+        신버전은 corp_codes_v2.json만 쓰고 레거시 파일은 그대로 둔다.
+        """
         dc._CACHE_DIR.mkdir(parents=True, exist_ok=True)
         legacy_file = dc._CACHE_DIR / "corp_codes.json"
-        legacy_file.write_text(
-            json.dumps({"오염된회사": {"corp_code": "bad", "stock_code": ""}}, ensure_ascii=False),
-            encoding="utf-8")
+        legacy_body = json.dumps(
+            {"구버전회사": {"corp_code": "old1", "stock_code": "123456"}}, ensure_ascii=False)
+        legacy_file.write_text(legacy_body, encoding="utf-8")
 
         raw = _make_corp_zip([("새회사", "c9", "999999", "20260101")])
         resp = MagicMock()
@@ -136,14 +142,19 @@ class TestLoadCorpCodesCollision(unittest.TestCase):
 
         dc._load_corp_codes("dummy-key")
 
+        # 레거시 파일은 TTL 내여도 신버전 입력이 아니다 → 재다운로드 발생
         mock_retry.assert_called_once()
-        self.assertNotIn("오염된회사", dc._corp_cache)
+        self.assertNotIn("구버전회사", dc._corp_cache)
         self.assertEqual(dc._corp_cache.get("새회사"), {"corp_code": "c9", "stock_code": "999999"})
+        # 레거시 파일 내용은 바이트 그대로 보존 (구버전 설치본이 계속 사용)
+        self.assertEqual(legacy_file.read_text(encoding="utf-8"), legacy_body)
+        # 신버전 캐시는 별도 파일로
+        self.assertTrue((dc._CACHE_DIR / "corp_codes_v2.json").exists())
 
     @patch("dart_risk_mcp.core.dart_client._retry")
     def test_current_version_cache_within_ttl_skips_network(self, mock_retry):
         dc._CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        cache_file = dc._CACHE_DIR / "corp_codes.json"
+        cache_file = dc._CACHE_DIR / "corp_codes_v2.json"
         cache_file.write_text(json.dumps({
             "_v": dc._CORP_CACHE_VERSION,
             "data": {"기존회사": {"corp_code": "c1", "stock_code": "111111"}},

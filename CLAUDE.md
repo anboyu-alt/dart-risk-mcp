@@ -220,6 +220,7 @@ dart_risk_mcp/
 
 - `preset` 허용값: `cb_issue`, `treasury`, `reverse_split`, `3pca`, `shareholder_change`, `exec_change`, `audit_issue`, `asset_transfer`, `going_concern`, `embezzle`, `inquiry`, `fund_outflow`(v1.6.0 신규 — `FUND_OUTFLOW`/`ACQ_REVIEW`), `all_risk`
 - `days` 범위: 1~90일, `max_results` 범위: 1~200건
+- v1.10.2: 시장 스캔을 **2일 청크**로 순회하고, 상한(1,000건) 도달 청크는 **1일 단위 재분할**(상한 1,500건)로 재조회 — 한 호출로 창 전체를 덮으려다 최신 1~2일만 스캔되던 조용한 절단 해소(실사고: asset_transfer 30일이 7/22 유형자산양수를 놓침). 하루가 1,500건을 넘는 극단일만 "스캔 구간 일부 절단"으로 정직 표기
 - 내부 흐름: `fetch_market_disclosures` (corp_code 없이 `/list.json`) → `match_signals` 필터
 - 반환: 날짜|기업|공시명|신호|접수번호 한 줄씩
 
@@ -463,7 +464,7 @@ dart_risk_mcp/
 
 | 캐시 | 저장 위치 | TTL |
 |------|-----------|-----|
-| 기업 코드 목록 | `~/.cache/dart-risk-mcp/corp_codes.json` | 24시간 |
+| 기업 코드 목록 | `~/.cache/dart-risk-mcp/corp_codes_v2.json` (v1.10.2 — 포맷이 바뀌면 파일명을 바꾼다. v2 페이로드를 레거시 corp_codes.json에 썼다가 같은 캐시 디렉터리를 쓰는 구버전 설치 MCP가 평면 dict로 읽어 전 도구가 죽은 실사고(2026-08-05, 'int' object has no attribute 'get'). 레거시 파일은 구버전 소유물로 읽지도 쓰지도 않음) | 24시간 |
 | 옛 상호(상호변경) 별칭 맵 | `~/.cache/dart-risk-mcp/corp_aliases.json` (env/레포 상대 파일 경로 사용 시 이 캐시는 건너뜀) | 24시간 |
 | 공시 원문 ZIP | 메모리 `_zip_cache` (최대 5건) | 10분 |
 | 자금사용 내역 | 메모리 `_fund_usage_cache` (최대 20건) | 10분 |
