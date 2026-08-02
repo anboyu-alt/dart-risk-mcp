@@ -208,23 +208,143 @@ def _load_corp_codes(api_key: str) -> None:
         log.warning("Corp code 로드 실패: %s", e)
 
 
+# ── 옛 상호(상호변경) 별칭 ────────────────────────────────────────
+# DART corpCode.xml은 상호변경 시 옛 이름을 지운다(예: 297570 알로이스→
+# 아틀라스링크, 2026-06-12). 뷰어(docs/tool/corp-aliases.json)는 이미 이
+# 별칭 맵으로 옛 상호 검색을 해석해 왔고, 여기서 core도 동일 데이터를
+# 재사용한다(별도 데이터 소스를 새로 만들지 않음).
+_ALIASES_URL_DEFAULT = "https://dart-risk-mcp.vercel.app/corp-aliases.json"
+
+
+def _repo_relative_aliases_path() -> Path:
+    """개발 체크아웃에서 docs/tool/corp-aliases.json 경로. 패키지 루트 기준."""
+    # dart_risk_mcp/core/dart_client.py → parents[1] = dart_risk_mcp, [2] = repo root
+    return Path(__file__).resolve().parents[2] / "docs" / "tool" / "corp-aliases.json"
+
+
+def load_corp_aliases() -> dict:
+    """옛 상호 → {corp_code, stock_code, current} 별칭 맵 로드.
+
+    우선순위: ① env DART_CORP_ALIASES_PATH(로컬 JSON) ② 레포 상대
+    docs/tool/corp-aliases.json(개발 체크아웃용, 존재할 때만) ③ 원격
+    (DART_CORP_ALIASES_URL 또는 기본 vercel 주소)을 24시간 파일 캐시로
+    ④ 전부 실패 시 {} — 네트워크 시도 실패가 resolve_corp을 죽이면
+    안 되므로 모든 단계가 예외를 삼키고 다음 단계로 넘어간다(known_actors의
+    graceful 비활성화 관례와 동일).
+    """
+    override = os.environ.get("DART_CORP_ALIASES_PATH")
+    if override:
+        # 오버라이드가 설정돼 있으면 그것이 결론이다 — 실패해도 다른
+        # 경로로 흘러내리지 않는다(known_actors override와 동일 계약).
+        try:
+            with open(override, encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    try:
+        repo_path = _repo_relative_aliases_path()
+        if repo_path.exists():
+            with open(repo_path, encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+
+    cache_file = _CACHE_DIR / "corp_aliases.json"
+    try:
+        if cache_file.exists() and (time.time() - cache_file.stat().st_mtime) < 86400:
+            with open(cache_file, encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+
+    url = os.environ.get("DART_CORP_ALIASES_URL", _ALIASES_URL_DEFAULT)
+    try:
+        resp = _retry("GET", url)
+        if resp.status_code == 200:
+            data = json.loads(resp.content.decode("utf-8"))
+            if isinstance(data, dict):
+                try:
+                    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                    with open(cache_file, "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False)
+                except Exception:
+                    pass
+                return data
+    except Exception as e:
+        log.warning("Corp alias 로드 실패: %s", e)
+
+    return {}
+
+
 def resolve_corp(query: str, api_key: str) -> tuple[str, dict] | None:
     """기업명 또는 종목코드(6자리) → (정식 기업명, {corp_code, stock_code}).
 
     부분 매칭 지원 — '삼성바이오' 입력 시 '삼성바이오로직스' 반환.
+
+    해석 순서: 정확 일치 → 종목코드 → 별칭 정확 일치(옛 상호) → 부분 일치.
+    옛 상호로 해석된 경우 반환 dict에 "alias_note"가 추가된다. 정확 일치와
+    별칭이 같은 이름을 두고 충돌하는 경우(예: 동명의 죽은 법인 "알로이스"와
+    상호변경 이력의 "알로이스"), 기존 정확 일치 결과는 그대로 두고
+    "alias_note"에 참고 안내만 병기한다 — 자동 전환하지 않는다.
     """
     if not _corp_cache:
         _load_corp_codes(api_key)
 
+    aliases = load_corp_aliases()
+
     # 정확히 일치
     if query in _corp_cache:
-        return query, _corp_cache[query]
+        name, info = query, dict(_corp_cache[query])
+        alias = aliases.get(query)
+        current = alias.get("current") if alias else ""
+        if current and current != query:
+            info["alias_note"] = (
+                f"참고: 같은 이름 '{query}'에서 '{current}'으로 상호를 변경한 "
+                f"다른 상장사가 있습니다 — 그 회사를 찾으셨다면 '{current}'으로 검색하세요"
+            )
+        return name, info
 
     # 종목코드 6자리
     if re.match(r"^\d{6}$", query):
         for name, info in _corp_cache.items():
             if info.get("stock_code") == query:
                 return name, info
+
+    # 별칭 정확 일치(신규) — 옛 상호 입력을 현재 상호로 해석
+    if query in aliases:
+        alias = aliases[query]
+        current = alias.get("current", "")
+        alias_code = alias.get("corp_code", "")
+        resolved_name = None
+        resolved_info = None
+        cached = _corp_cache.get(current)
+        if cached and (not alias_code or cached.get("corp_code") == alias_code):
+            resolved_name, resolved_info = current, dict(cached)
+        elif alias_code:
+            # current가 캐시에 없거나 corp_code가 불일치 — corp_code 기준으로
+            # 현재명을 역조회해 신뢰할 수 있는 결과만 쓴다.
+            for name, inf in _corp_cache.items():
+                if inf.get("corp_code") == alias_code:
+                    resolved_name, resolved_info = name, dict(inf)
+                    break
+        if resolved_name is None:
+            # 역조회도 실패 — 별칭 파일 자체 정보로 폴백 구성(현재 corp_code
+            # 미검증이므로 alias_note가 그 사실을 함께 알린다).
+            resolved_name = current or query
+            resolved_info = {
+                "corp_code": alias_code,
+                "stock_code": alias.get("stock_code", ""),
+            }
+        resolved_info["alias_note"] = (
+            f"옛 상호 '{query}' 입력을 현재 상호 '{resolved_name}'(상호변경)으로 해석했습니다"
+        )
+        return resolved_name, resolved_info
 
     # 부분 매칭
     matches = [(k, v) for k, v in _corp_cache.items() if query in k]

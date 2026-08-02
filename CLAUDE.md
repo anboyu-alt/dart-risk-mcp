@@ -358,7 +358,8 @@ dart_risk_mcp/
 |------|------|
 | `_retry(method, url, **kwargs)` | 429/5xx 지수 백오프 재시도 (최대 3회) |
 | `_load_corp_codes(api_key)` | DART corpCode.xml 다운로드 + 24시간 파일 캐시 |
-| `resolve_corp(query, api_key)` | 기업명/종목코드 → (corp_name, {corp_code, stock_code}) |
+| `load_corp_aliases()` | 옛 상호(상호변경) → {corp_code, stock_code, current} 별칭 맵 로드. 우선순위 env `DART_CORP_ALIASES_PATH` > 레포 상대 `docs/tool/corp-aliases.json`(개발 체크아웃) > 원격(`DART_CORP_ALIASES_URL`, 기본 vercel 주소) 24시간 파일 캐시 > `{}`(전부 실패 시 graceful) |
+| `resolve_corp(query, api_key)` | 기업명/종목코드 → (corp_name, {corp_code, stock_code}). 해석 순서: 정확 일치 → 종목코드 → **별칭 정확 일치(옛 상호, v1.10.0)** → 부분 일치. 별칭으로 해석되면 반환 dict에 `alias_note` 추가(자동 전환 사실 안내). 정확 일치와 별칭이 같은 이름을 두고 충돌하면(예: 동명의 죽은 법인과 상호변경 이력이 같은 이름을 공유) 기존 정확 일치를 그대로 반환하고 `alias_note`에 참고만 병기 — 자동 전환하지 않는다 |
 | `fetch_company_disclosures(corp_code, api_key, lookback_days)` | /list.json 페이지네이션 (최대 500건) |
 | `_fetch_document_zip(rcept_no, api_key)` | /document.xml ZIP 다운로드 + 인메모리 LRU 캐시 (5건, 10분 TTL) |
 | `fetch_document_text(rcept_no, api_key, max_chars=3000)` | 단순 태그 제거 텍스트 (기존 호환용) |
@@ -459,6 +460,7 @@ dart_risk_mcp/
 | 캐시 | 저장 위치 | TTL |
 |------|-----------|-----|
 | 기업 코드 목록 | `~/.cache/dart-risk-mcp/corp_codes.json` | 24시간 |
+| 옛 상호(상호변경) 별칭 맵 | `~/.cache/dart-risk-mcp/corp_aliases.json` (env/레포 상대 파일 경로 사용 시 이 캐시는 건너뜀) | 24시간 |
 | 공시 원문 ZIP | 메모리 `_zip_cache` (최대 5건) | 10분 |
 | 자금사용 내역 | 메모리 `_fund_usage_cache` (최대 20건) | 10분 |
 | 주요결정 공시 | 메모리 `_major_decision_cache` (최대 50건) | 10분 |
@@ -627,7 +629,7 @@ python scripts/regen_goldens.py                                       # 전체 �
 - **caution 파생 필드**: export_tool_data.py가 신호별 taxonomy severity를 2단계로 접어 `caution: bool`(CRITICAL/HIGH=true)만 내보낸다. severity·score 원값은 계속 미노출. 뷰어는 이를 '주의/참고' 관찰 우선순위 배지로 렌더(면책 동반) — **뷰어 한정 예외**이며 MCP 도구 출력·SE의 무판정 원칙은 그대로다. 패턴에는 caution을 넣지 않는다(9종 전원 CRITICAL/HIGH → 상수).
 - **기업 검색(상호변경 대응)**: `scripts/build_corp_map.py`가 corp-map.json 재생성 + corp_code 기준 diff로 옛 상호를 `corp-aliases.json`에 append-only 누적. `scripts/backfill_corp_aliases.py`는 시장 전체 "상호변경안내" 공시 원문에서 변경전/후 상호를 추출해 별칭 시드 백필. `.github/workflows/refresh-corp-map.yml` 주간 cron이 둘을 실행해 커밋. 배경: DART corpCode.xml은 상호변경 시 옛 이름을 지운다(실례: 297570 알로이스→아틀라스링크, 2026-06-12) + 동명 죽은 법인 충돌 사례(알로이스 01194892).
 - **종속회사 유출 사실 병기(v1.9.0)**: `capital_backflow` 게이트에서 상대방이 subsidiary(종속회사)로 확인되면, `otrCprInvstmntSttus.json`(타법인 출자현황)을 subsidiary 존재 시에만 조회(최대 2회)해 `matchAffiliateRow`/`summarizeAffiliateStake`(core `match_affiliate_row`/`summarize_affiliate_stake` 이식)로 대조한 사실을 카드에 병기한다. 뷰어는 기존 `fmtKRW`(반올림) 관례를 그대로 써 억원 표기가 core `_format_amount`(절삭)와 값이 다를 수 있다(-4,969,000,000원 → 뷰어 -50억원 vs core -49억원, 각 레이어가 기존 유틸을 재사용한 의도된 차이).
-- **알려진 한계(후속 과제)**: MCP `resolve_corp`는 corpCode.xml 현재명만 검색하므로 옛 상호 검색이 실패한다 — 뷰어 별칭 파일을 core에서도 참조할지는 미결정.
+- **알려진 한계 해소(v1.10.0)**: MCP `resolve_corp`가 corpCode.xml 현재명만 검색해 옛 상호 검색이 실패하던 한계를 core `load_corp_aliases()`로 해소했다. 뷰어와 별도 데이터를 새로 만들지 않고 동일 `corp-aliases.json`을 core도 참조한다(우선순위: env `DART_CORP_ALIASES_PATH` > 레포 상대 `docs/tool/corp-aliases.json`(개발 체크아웃) > 원격 vercel 주소 24시간 파일 캐시 > `{}`). `resolve_corp` 해석 순서는 정확 일치 → 종목코드 → 별칭 정확 일치(신규) → 부분 일치이며, 알로이스형 동명 충돌(동명의 죽은 법인과 상호변경 이력이 같은 이름을 공유)은 자동 전환하지 않고 기존 정확 일치 결과에 참고 안내만 병기한다. `analyze_company_risk`·`build_event_timeline`·`list_disclosures_by_stock`·`get_company_info` 4개 도구가 해석 결과에 `alias_note`가 있으면 리포트 상단에 안내 1줄을 표기한다.
 
 ## 테스트 방법
 
