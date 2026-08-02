@@ -2040,6 +2040,7 @@ def _normalize_decision(raw: dict, dtype: str, url: str) -> dict:
     counterparty = (
         raw.get("dlptn_cmpnm")
         or raw.get("mgptncmp_cmpnm")
+        or raw.get("extr_tgcmp_cmpnm")
         or raw.get("dlptn_rl_cmpn")
         or raw.get("mg_ctrcmp_cmpnm")
         or raw.get("dvcmp_cmpnm")
@@ -2051,10 +2052,16 @@ def _normalize_decision(raw: dict, dtype: str, url: str) -> dict:
     # 변환이 항상 실패해 금액이 0으로 표시됐다). business_acq/div(영업양수·
     # 양도)는 DART가 이 형태의 단일 금액 필드를 제공하지 않아(양수대금지급
     # 조건은 텍스트 "inh_pym"뿐) 0으로 남는 것이 데이터 자체의 한계다.
+    # merger/demerger/demerger_merger/stock_exchange 4종은 거래금액 자체를
+    # 제공하지 않는다(opendart_api_guide.md 5.33~5.36 실측 대조 — 있는 건
+    # mg_rt 같은 "비율" 텍스트뿐이라 예전엔 이를 amount 폴백에 넣었으나
+    # "1.0000000 : 0.0000000" 형식이라 항상 파싱 실패해 결과는 늘 0이었다.
+    # v1.9.0에서 의미 없는 폴백을 제거 — 동작은 그대로(0)이지만 의도를
+    # 명확히 한다. 이 4종은 DECISION_NO_EXTVAL도 amount>=50억 조건이 항상
+    # False라 구조적으로 발화하지 않는다).
     amount = _to_int_safe(
         raw.get("inhdtl_inhprc")
         or raw.get("trfdtl_trfprc")
-        or raw.get("mg_rt")
         or raw.get("dlptn_cpt")
         or raw.get("inh_pp")
         or raw.get("trf_pp")
@@ -2080,9 +2087,18 @@ def _normalize_decision(raw: dict, dtype: str, url: str) -> dict:
     except ValueError:
         asset_ratio = 0.0
 
-    # 거래상대방과 회사와의 관계(원문 그대로) — merger는 필드명이 다르다.
+    # 거래상대방과 회사와의 관계(원문 그대로) — merger/demerger_merger는
+    # mgptncmp_rl_cmpn, stock_exchange(주식교환·이전)는 extr_tgcmp_rl_cmpn을
+    # 쓴다(opendart_api_guide.md 5.36 실측 대조, v1.9.0에서 추가 — 이전에는
+    # stock_exchange의 상대방·관계 필드가 매핑되지 않아 counterparty/
+    # relation_text가 항상 공란이었다. stock_exchange는 자산총액대비(%)
+    # 필드 자체가 DART API에 없어 DECISION_RELATED_PARTY/OVERSIZED는
+    # 이 필드 보강 후에도 구조적으로 발화하지 않는다 — 데이터 자체의 한계).
     relation_text = str(
-        raw.get("dlptn_rl_cmpn") or raw.get("mgptncmp_rl_cmpn") or ""
+        raw.get("dlptn_rl_cmpn")
+        or raw.get("mgptncmp_rl_cmpn")
+        or raw.get("extr_tgcmp_rl_cmpn")
+        or ""
     ).strip()
 
     related = False
@@ -4304,7 +4320,11 @@ def _distress_summary(item: dict, subtype: str) -> str:
         cn = item.get("bsnsp_cn") or item.get("bsnsp_rs") or "영업정지"
         return cn
     if subtype == "rehabilitation":
-        return item.get("rs") or item.get("ctrcvs_rs") or "회생절차 개시신청"
+        # ctrcvsBgrq(회생절차 개시신청)의 실제 신청사유 필드는 rq_rs다
+        # (opendart_api_guide.md 5.4 실측 대조, v1.9.0 — 이전에 조회하던
+        # "rs"/"ctrcvs_rs"는 실존하지 않는 필드명이라 신청사유 텍스트가
+        # 잡혀도 항상 하드코딩된 기본 문자열로만 표시됐다).
+        return item.get("rq_rs") or "회생절차 개시신청"
     if subtype == "dissolution":
         return item.get("ds_rs") or "해산사유 발생"
     return ""

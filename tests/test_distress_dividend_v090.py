@@ -58,10 +58,13 @@ class TestFetchDistressEvents(unittest.TestCase):
                     "bsnspd": "20250619",
                 }])
             if "ctrcvsBgrq" in url:
+                # 실제 신청사유 필드는 rq_rs다(opendart_api_guide.md 5.4).
+                # "rs"는 실존하지 않는 필드명 — v1.9.0 재점검에서 발견된
+                # _distress_summary의 폴백 버그를 이 테스트가 재발 방지한다.
                 return _resp(lst=[{
                     "rcept_no": "20250720000003",
                     "rcept_dt": "20250720",
-                    "rs": "회생절차 개시신청",
+                    "rq_rs": "회생절차 개시신청 (자금악화)",
                 }])
             if "dsRsOcr" in url:
                 return _resp(lst=[{
@@ -82,6 +85,13 @@ class TestFetchDistressEvents(unittest.TestCase):
             self.assertEqual(e["key"], "DISTRESS_EVENT")
             self.assertTrue(e["rcept_dt"])
             self.assertTrue(e["summary"])
+        by_subtype = {e["subtype"]: e for e in events}
+        # rq_rs 실제 신청사유 텍스트가 하드코딩 기본값으로 대체되지 않고
+        # 그대로 노출되는지 확인 (v1.9.0 필드명 버그 회귀 방지).
+        self.assertEqual(
+            by_subtype["rehabilitation"]["summary"],
+            "회생절차 개시신청 (자금악화)",
+        )
 
     @patch("dart_risk_mcp.core.dart_client._retry")
     def test_falls_back_to_rcept_no(self, mock_retry):
