@@ -76,6 +76,7 @@ from .core import (
     fetch_fund_usage,
     fetch_insider_timeline,
     fetch_major_decision,
+    resolve_corp_code_from_rcept_no,
     fetch_multi_financial,
     fetch_shareholder_status,
     fetch_treasury_decisions,
@@ -1237,7 +1238,15 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
     # v0.5.0: DS005 결정 공시면 구조화 필드 추가 ---------------
     dtype = resolve_decision_type(report_name)
     if dtype and rcept_no and _DART_API_KEY:
-        dec = fetch_major_decision(rcept_no, _DART_API_KEY, dtype, "")
+        # DS005는 corp_code+날짜가 항상 필수(rcept_no 단독 모드 없음) —
+        # 접수일 하루치 주요사항보고 목록에서 corp_code를 역해석하고,
+        # 실패하면 헛호출 없이 섹션을 생략한다.
+        _dec_corp = resolve_corp_code_from_rcept_no(rcept_no, _DART_API_KEY)
+        dec = (
+            fetch_major_decision(rcept_no, _DART_API_KEY, dtype, _dec_corp)
+            if _dec_corp
+            else {"error": "corp_code 역해석 실패 — 섹션 생략"}
+        )
         if "error" not in dec:
             lines += ["", "📑 **주요 결정 공시에서 읽히는 거래 구조**"]
             lines.append(f"- 거래 상대방: {dec['counterparty'] or '공시에 기재되지 않았습니다'}")
