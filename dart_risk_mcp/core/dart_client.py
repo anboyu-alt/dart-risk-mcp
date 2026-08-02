@@ -241,7 +241,15 @@ def _load_corp_codes(api_key: str) -> None:
     global _corp_cache
 
     cache_dir = _resolve_corp_cache_dir()
-    cache_file = cache_dir / "corp_codes.json"
+    # 파일명이 corp_codes_v2.json인 이유(실사고, 2026-08-05): v2 페이로드
+    # ({"_v","data"})를 레거시 공유 경로(corp_codes.json)에 쓰자, 같은 캐시
+    # 디렉터리를 쓰는 구버전 설치본(패키징된 MCP 확장)이 그 파일을 평면
+    # name dict로 읽어 — 이름 조회는 조용히 전부 실패하고 종목코드 조회는
+    # "_v"의 값 2(int)에 .get()을 호출해 "'int' object has no attribute
+    # 'get'"으로 즉사했다. 포맷이 바뀌면 파일명을 바꿔 신·구 버전이 각자의
+    # 캐시를 갖게 한다. 레거시 corp_codes.json은 구버전 소유물로 두고
+    # 절대 읽지도 쓰지도 않는다.
+    cache_file = cache_dir / "corp_codes_v2.json"
     if cache_file.exists() and (time.time() - cache_file.stat().st_mtime) < 86400:
         try:
             with open(cache_file, encoding="utf-8") as f:

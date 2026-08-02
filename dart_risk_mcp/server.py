@@ -2699,10 +2699,59 @@ def search_market_disclosures(preset: str, days: int = 7, max_results: int = 50)
     max_results = max(1, min(200, max_results))
 
     now = datetime.now()
-    bgn_de = (now - timedelta(days=days)).strftime("%Y%m%d")
-    end_de = now.strftime("%Y%m%d")
 
-    raw = fetch_market_disclosures(_DART_API_KEY, bgn_de, end_de, max_pages=10)
+    # 날짜 청크 스캔 — 한 호출(max_pages=10, 1,000건)로 창 전체를 덮으려던
+    # 기존 방식은 시장 일평균 공시가 ~500건이라 2~3일이면 상한에 걸리고,
+    # DART가 최신순으로 주므로 "최근 30일" 요청이 실제로는 최근 1~2일만
+    # 스캔되는 조용한 절단이 있었다(실사고 2026-08-05: asset_transfer 30일
+    # 스캔이 7/22 아틀라스링크 유형자산양수를 놓침). 2일 청크면 청크당
+    # 상한(1,000건) 아래에 안전히 들어온다. 그래도 상한에 닿은 청크는
+    # 절단 가능으로 세어 커버리지를 정직하게 보고한다.
+    _CHUNK_DAYS = 2
+    _PAGES_PER_CHUNK = 10   # 청크당 1,000건
+    _PAGES_PER_DAY = 15     # 재분할된 하루 상한 1,500건 (7월 실측 피크일 대응)
+    raw: list[dict] = []
+    seen_rcept: set[str] = set()
+    truncated_chunks = 0
+
+    def _collect(items: list[dict]) -> None:
+        for d in items:
+            rc = d.get("rcept_no", "")
+            if rc and rc in seen_rcept:
+                continue
+            if rc:
+                seen_rcept.add(rc)
+            raw.append(d)
+
+    cur = now - timedelta(days=days)
+    while cur <= now:
+        chunk_end = min(cur + timedelta(days=_CHUNK_DAYS - 1), now)
+        chunk = fetch_market_disclosures(
+            _DART_API_KEY,
+            cur.strftime("%Y%m%d"),
+            chunk_end.strftime("%Y%m%d"),
+            max_pages=_PAGES_PER_CHUNK,
+        )
+        if len(chunk) >= _PAGES_PER_CHUNK * 100 and chunk_end > cur:
+            # 상한 도달 — 이 청크만 1일 단위로 재분할해 상향된 페이지 상한으로
+            # 다시 받는다(공시가 몰린 날 대응). 하루 단위마저 상한이면 그때만
+            # 절단 가능으로 센다.
+            day = cur
+            while day <= chunk_end:
+                day_str = day.strftime("%Y%m%d")
+                day_items = fetch_market_disclosures(
+                    _DART_API_KEY, day_str, day_str, max_pages=_PAGES_PER_DAY,
+                )
+                if len(day_items) >= _PAGES_PER_DAY * 100:
+                    truncated_chunks += 1
+                _collect(day_items)
+                day += timedelta(days=1)
+        else:
+            if len(chunk) >= _PAGES_PER_CHUNK * 100:
+                truncated_chunks += 1  # 단일일 청크가 상한 — 재분할 불가
+            _collect(chunk)
+        cur = chunk_end + timedelta(days=1)
+
     if not raw:
         return f"❌ 최근 {days}일 시장 공시를 불러올 수 없습니다."
 
@@ -2722,9 +2771,15 @@ def search_market_disclosures(preset: str, days: int = 7, max_results: int = 50)
     truncated = len(filtered) > max_results
     shown = filtered[:max_results]
 
+    coverage = f"전체 {len(raw)}건 중 신호 일치 {len(filtered)}건 (표시 {len(shown)}건)"
+    if truncated_chunks:
+        coverage += (
+            f" · 스캔 구간 일부 절단({truncated_chunks}개 청크 상한 도달"
+            " — 해당 일자 공시가 매우 많아 일부 누락 가능)"
+        )
     lines = [
         f"🔍 **시장 공시 스캔** (preset={preset}, 최근 {days}일)",
-        f"전체 {len(raw)}건 중 신호 일치 {len(filtered)}건 (표시 {len(shown)}건)",
+        coverage,
         "",
     ]
 
