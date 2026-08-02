@@ -2085,8 +2085,15 @@ function patternTaxonomyEvidence(taxId, events) {
 }
 function patternEvidenceHTML(pattern, events) {
   return pattern.signal_sequence.map((taxId) => {
-    const hits = patternTaxonomyEvidence(taxId, events);
+    let hits = patternTaxonomyEvidence(taxId, events);
     if (!hits.length) return "";
+    // 3.1(경영권 변경) 근거는 실질 경영권 변경 제목을 앞세운다 — SHAREHOLDER
+    // 키워드에 일상적 5% 대량보유보고가 포함돼 최신순만으로는 그 보고서가
+    // 앞자리를 차지한다(발화 판정은 게이트가 하므로 순수 표시 순서 문제).
+    if (taxId === "3.1") {
+      const isCtrl = (h) => /최대주주\s*변경|경영권/.test(h.nm || "");
+      hits = hits.slice().sort((a, b) => (isCtrl(b) - isCtrl(a)) || (a.date < b.date ? 1 : -1));
+    }
     const shown = hits.slice(0, 3);
     const rest = hits.length - shown.length;
     const items = shown.map((h) =>
@@ -2476,9 +2483,28 @@ function capitalBackflowCardHTML(pattern, events, results, totalCount, affiliate
       return `<a href="#" class="patEvLink" data-r="${esc(r.rcept)}" style="color:var(--tx)">${esc(fmtDate(r.date))} ${esc(label)}</a>` +
         (r.relation ? ` (${esc(r.relation)})` : "");
     }).join(" · ");
+    // 발화 카드에서도 종속회사·외부 확인 건을 사실로 병기한다 — 특히
+    // 종속회사 상대는 타법인출자현황 사실(최초취득·지분 변동·피출자사
+    // 손익)이 있으면 함께. 이전에는 미발화 분기에서만 보여 아틀라스링크
+    // 한국파일 건이 발화 카드에서 사라졌다(사용자 실측 지적, 2026-08-03).
+    let othersLine = "";
+    if (others.length) {
+      const seen = new Set();
+      const parts = [];
+      for (const r of others) {
+        const label = r.counterparty || r.nm;
+        if (seen.has(label)) continue;
+        seen.add(label);
+        const tag = r.cls === "subsidiary" ? "종속회사" : (r.relation || "실명 확인");
+        const fact = r.cls === "subsidiary" ? facts[r.counterparty] : "";
+        parts.push(`${esc(label)}(${esc(tag)}${fact ? ` — ${esc(fact)}` : ""})`);
+      }
+      othersLine = `<div class="sigs" style="margin-top:0.25rem">그 외 확인된 유출 상대: ${parts.join(", ")}</div>`;
+    }
     return `<div class="patterncard"><b>${esc(pattern.name)}</b>${esc(pattern.description)}
       ${evidenceBlock}
       <div class="factline">확인된 특수관계 유출: ${lines}</div>
+      ${othersLine}
       ${fieldEvidenceBlock}</div>`;
   }
 
