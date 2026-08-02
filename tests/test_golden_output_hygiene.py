@@ -123,16 +123,25 @@ _ALLOWED_PAREN_ABBREVS = {
 }
 
 
+# 회사명 접두어가 없는 파일명(도구가 여러 회사를 동시에 받거나 회사 무관인 경우).
+# v1.9.0 이전에는 "stem[0].isascii()"로 회사 무관 여부를 판별했는데, 이는
+# 회사명이 항상 한글이라는 잘못된 전제였다 — STX처럼 ASCII 티커명 회사가
+# 추가되자 "STX_analyze"가 "market_"/"precedents_" 접두어 검사를 모두
+# 통과해 전체 stem이 그대로 단축명으로 취급돼(미등록 단축명 오류) 회귀 검증이
+# 깨졌다. 명시적 멤버십 검사로 교체해 회사명의 문자 종류에 의존하지 않는다.
+_COMPANY_AGNOSTIC_STEMS = {"actor_overlap", "compare_fs"}
+
+
 def _short_name(fname: str) -> str:
     """파일명에서 도구 단축명을 추출."""
     stem = fname[:-4]  # remove .txt
-    if stem[0].isascii():
-        # 회사 무관 — actor_overlap, compare_fs, market_xxx, precedents_xxx
-        for prefix in ("market_", "precedents_"):
-            if stem.startswith(prefix):
-                return prefix[:-1]  # "market" or "precedents"
-        return stem  # actor_overlap, compare_fs
-    # 한글 회사명 prefix
+    # 회사 무관 — actor_overlap, compare_fs, market_xxx, precedents_xxx
+    for prefix in ("market_", "precedents_"):
+        if stem.startswith(prefix):
+            return prefix[:-1]  # "market" or "precedents"
+    if stem in _COMPANY_AGNOSTIC_STEMS:
+        return stem
+    # 회사명(한글 또는 ASCII 티커, 예: STX) prefix
     parts = stem.split("_", 1)
     if len(parts) < 2:
         return stem

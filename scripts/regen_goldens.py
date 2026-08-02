@@ -84,6 +84,8 @@ COMPANIES = [
     {"name": "헬릭스미스",     "stock": "084990", "category": "관리종목·부실사례"},
     {"name": "두산",           "stock": "000150", "category": "지주사"},
     {"name": "아틀라스링크",   "stock": "297570", "category": "무자본M&A실증(자금역류)"},
+    {"name": "STX",            "stock": "011810", "category": "회생절차실증(DISTRESS_EVENT)"},
+    {"name": "나이스정보통신", "stock": "036800", "category": "자사주신탁실증(TREASURY_TRUST)"},
 ]
 
 # ────────────────────────────────────────────────────────────────────────────
