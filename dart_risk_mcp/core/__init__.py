@@ -88,6 +88,7 @@ from .explain import (
     flag_to_prose,
     signal_to_prose,
     pattern_to_prose,
+    pattern_checkpoints,
     category_prose,
 )
 
@@ -148,6 +149,7 @@ __all__ = [
     "flag_to_prose",
     "signal_to_prose",
     "pattern_to_prose",
+    "pattern_checkpoints",
     "category_prose",
     "fetch_audit_opinion_history",
     "fetch_debt_balance",

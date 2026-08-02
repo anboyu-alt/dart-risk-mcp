@@ -36,7 +36,11 @@ from dart_risk_mcp.core.signals import (  # noqa: E402
     _AMENDMENT_RE,
 )
 from dart_risk_mcp.core.taxonomy import CROSS_SIGNAL_PATTERNS, TAXONOMY  # noqa: E402
-from dart_risk_mcp.core.explain import signal_to_prose  # noqa: E402
+from dart_risk_mcp.core.explain import (  # noqa: E402
+    signal_to_prose,
+    pattern_to_prose,
+    pattern_checkpoints,
+)
 from dart_risk_mcp.core.dart_client import _FS_ALIASES  # noqa: E402
 
 # 뷰어 심화 블록(재무 핵심)에서 쓰는 계정 별칭 부분집합
@@ -197,6 +201,12 @@ def build_signals_data() -> dict:
             # 발견된 평가적 어구 2건을 export 계층에서만 트리밍한다 —
             # _FIELD_EVIDENCE_EXPORT_TRIM 주석 참고. 나머지 7종은 원문 그대로.
             "field_evidence": _export_field_evidence(slug, p["field_evidence"]),
+            # SE-14 후속: 서술 강화 — prose(비전문가용 2~3문장 산문)와
+            # checkpoints(원문에서 확인할 지점 불릿). 둘 다 core/explain.py
+            # PATTERN_PROSE·PATTERN_CHECKPOINTS가 유일한 진실. 판정 어휘
+            # 없음(v0.8.5 원칙 그대로).
+            "prose": pattern_to_prose(slug),
+            "checkpoints": pattern_checkpoints(slug),
         }
         for slug, p in CROSS_SIGNAL_PATTERNS.items()
     ]

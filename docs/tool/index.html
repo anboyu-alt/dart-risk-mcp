@@ -1176,6 +1176,7 @@ function renderDash() {
           // loadCapitalBackflowGate가 실제 판정 HTML로 치환한다(아래 참조).
           if (p.key === "capital_backflow") {
             return `<div class="patterncard" id="pat-${esc(p.key)}"><b>${esc(p.name)}</b>${esc(p.description)}
+              ${patternProseCheckpointsHTML(p)}
               <div class="sigs">관찰 윈도우 ${p.timeline_months}개월 · 구성 신호가 촉발된 공시:</div>
               <div class="sigs">${patternEvidenceHTML(p, events)}</div>
               <div class="dim" style="margin-top:0.5rem"><span class="spinner"></span> 원문에서 상대방 관계 확인 중…</div>
@@ -1184,6 +1185,7 @@ function renderDash() {
               </div>`;
           }
           return `<div class="patterncard"><b>${esc(p.name)}</b>${esc(p.description)}
+            ${patternProseCheckpointsHTML(p)}
             <div class="sigs">관찰 윈도우 ${p.timeline_months}개월 · 구성 신호가 촉발된 공시:</div>
             <div class="sigs">${patternEvidenceHTML(p, events)}</div>` +
             (p.field_evidence && p.field_evidence.length ? `<details style="margin-top:0.4rem;font-size:0.82rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">실제 사례 근거(금감원 보도자료 등)</summary>
@@ -2102,6 +2104,22 @@ function patternEvidenceHTML(pattern, events) {
       (rest > 0 ? ` <span class="dim">외 ${rest}건</span>` : "") + `</div>`;
   }).join("");
 }
+// SE-14 후속: 패턴 서술 강화 — description 아래 prose 문단(비전문가용
+// 2~3문장) + "무엇을 확인하면 되나" 접힘(checkpoints 불릿, field_evidence
+// 접힘보다 위). 둘 다 signals-data.json의 patterns[].prose/checkpoints를
+// 그대로 렌더한다(export_tool_data.py가 core/explain.py의
+// PATTERN_PROSE·PATTERN_CHECKPOINTS를 그대로 옮긴 값 — 판정 어휘 없음).
+// 접힘 기본 닫힘 유지(카드 과밀 방지).
+function patternProseCheckpointsHTML(p) {
+  const proseBlock = p.prose
+    ? `<div style="margin-top:0.35rem;font-size:0.85rem;line-height:1.55">${esc(p.prose)}</div>`
+    : "";
+  const checkpointsBlock = (p.checkpoints && p.checkpoints.length)
+    ? `<details style="margin-top:0.4rem;font-size:0.82rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">무엇을 확인하면 되나</summary>
+       <ul style="margin:0.3rem 0 0 1.1rem;padding:0">${p.checkpoints.map((cp) => `<li>${esc(cp)}</li>`).join("")}</ul></details>`
+    : "";
+  return proseBlock + checkpointsBlock;
+}
 // ── SE-14: capital_backflow 원문 상대방 관계 확인 게이트 ──
 // 제목 조합(3.1 경영권변경 + 5.7 자금유출성거래)만으로는 계열사 지원이
 // 일상인 회사도 전부 걸린다. patternTaxonomyEvidence("5.7", events)로 뽑은
@@ -2502,6 +2520,7 @@ function capitalBackflowCardHTML(pattern, events, results, totalCount, affiliate
       othersLine = `<div class="sigs" style="margin-top:0.25rem">그 외 확인된 유출 상대: ${parts.join(", ")}</div>`;
     }
     return `<div class="patterncard"><b>${esc(pattern.name)}</b>${esc(pattern.description)}
+      ${patternProseCheckpointsHTML(pattern)}
       ${evidenceBlock}
       <div class="factline">확인된 특수관계 유출: ${lines}</div>
       ${othersLine}
@@ -2528,6 +2547,7 @@ function capitalBackflowCardHTML(pattern, events, results, totalCount, affiliate
   const scopeNote = total > results.length ? ` (전체 ${total}건 중 최근 ${results.length}건 확인 시도)` : "";
   return `<div class="patterncard" style="border-color:var(--line2);background:var(--panel)">
     <b>${esc(pattern.name)} <span class="dim" style="font-weight:400">— 상대방 미확인</span></b>${esc(pattern.description)}
+    ${patternProseCheckpointsHTML(pattern)}
     ${evidenceBlock}
     <div class="dim" style="margin-top:0.4rem">원문에서 상대방을 확인하세요${scopeNote}: ${links || "해당 없음"}</div>
     ${fieldEvidenceBlock}</div>`;

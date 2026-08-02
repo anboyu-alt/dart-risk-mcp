@@ -1192,8 +1192,8 @@ TAXONOMY = {
 
 CROSS_SIGNAL_PATTERNS = {
     "founder_fade": {
-        "name": "The Founder Fade",
-        "description": "Sequential founder ownership dilution → control loss → exit",
+        "name": "창업주 퇴장",
+        "description": "창업주·기존 대주주의 지분이 CB·제3자배정으로 희석되고 경영진이 물러나며 외부 세력이 지배권을 확보하는 흐름",
         "signal_sequence": ["3.2", "3.1", "4.1", "5.3", "8.1"],
         "timeline_months": 18,
         "severity": "CRITICAL",
@@ -1203,8 +1203,8 @@ CROSS_SIGNAL_PATTERNS = {
         ],
     },
     "debt_spiral": {
-        "name": "The Debt Spiral",
-        "description": "CB issuance → rollover cycle → refinancing crises → insolvency",
+        "name": "부채 악순환",
+        "description": "전환사채를 새 전환사채로 갚는 차환이 반복되며 부채 부담과 재조달 압박이 커지는 흐름",
         "signal_sequence": ["1.4", "1.5", "1.3", "2.6", "8.2"],
         "timeline_months": 12,
         "severity": "CRITICAL",
@@ -1214,8 +1214,8 @@ CROSS_SIGNAL_PATTERNS = {
         ],
     },
     "reverse_split_spiral": {
-        "name": "The Reverse Split Spiral",
-        "description": "Reverse split → capital reduction → distressed asset sales → delisting",
+        "name": "감자 나선",
+        "description": "주식병합·감자로 주가와 재무 요건을 맞춘 직후 희석성 발행이 반복되는 흐름",
         "signal_sequence": ["2.1", "2.2", "6.1", "7.2", "8.3"],
         "timeline_months": 18,
         "severity": "CRITICAL",
@@ -1225,8 +1225,8 @@ CROSS_SIGNAL_PATTERNS = {
         ],
     },
     "related_party_hollowing": {
-        "name": "The Related-Party Hollowing",
-        "description": "Related-party transactions → asset siphoning → insolvency → bankruptcy",
+        "name": "특수관계 자산 공동화",
+        "description": "특수관계자와의 거래로 자산·영업이 회사 밖으로 이전되며 회사 실체가 비어가는 흐름",
         "signal_sequence": ["4.2", "5.3", "3.2", "2.5", "8.4"],
         "timeline_months": 15,
         "severity": "CRITICAL",
@@ -1281,7 +1281,7 @@ CROSS_SIGNAL_PATTERNS = {
         ],
     },
     "capital_churn_anomaly": {
-        "name": "capital_churn_anomaly",
+        "name": "자본 이벤트 과다 반복",
         "description": "잦은 자본 변동과 공시 지연·위반이 겹치면 자본 투명성 훼손 우려",
         "signal_sequence": ["2.7", "4.3"],
         "timeline_months": 12,
