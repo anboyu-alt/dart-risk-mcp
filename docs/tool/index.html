@@ -137,6 +137,10 @@
 
   /* 최근 스캔 / 피드 행 */
   .rows { border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+  /* 최근 스캔 20건까지 보여주되 페이지가 과하게 길어지지 않도록 스크롤 처리 */
+  #recentRows { max-height: 460px; overflow-y: auto; }
+  .suggest .fallback-hint { padding: 0.4rem 0.9rem; font-size: 0.78rem; color: var(--dim);
+    border-bottom: 1px solid var(--line); cursor: default; }
   .feedrow { cursor: pointer; display: grid; gap: 14px; align-items: center;
     padding: 12px 18px; background: var(--panel); border-bottom: 1px solid #161c26; font-size: 13.5px; }
   .feedrow:last-child { border-bottom: 0; }
@@ -322,6 +326,7 @@
             <input type="text" id="q" placeholder="종목명 또는 종목코드 — 예: 제이스코홀딩스, 005930" autocomplete="off">
             <div class="suggest" id="suggest"></div>
           </div>
+          <button id="scanBtn" type="button">검색 ▸</button>
         </div>
         <div class="chips" style="margin-top:14px">
           <span style="color:var(--dim);align-self:center;font-size:12px">기간</span>
@@ -537,11 +542,15 @@ document.querySelectorAll("#scr-scan .chip[data-days]").forEach((c) => {
 });
 
 /* ── 최근 스캔 ────────────────────────────────── */
+// 최대 20개 보관 — 폴백(/api/corp)으로 스캔한 회사는 corp-map.json에 없을
+// 수 있어(비상장·동명 충돌 등) corp_code(c)도 함께 저장해 재클릭 시
+// CORPS 조회 없이도 override로 바로 재스캔할 수 있게 한다.
+const RECENT_MAX = 20;
 function pushRecent(entry) {
   const list = JSON.parse(localStorage.getItem(LS_RECENT) || "[]")
     .filter((x) => x.n !== entry.n);
   list.unshift(entry);
-  localStorage.setItem(LS_RECENT, JSON.stringify(list.slice(0, 6)));
+  localStorage.setItem(LS_RECENT, JSON.stringify(list.slice(0, RECENT_MAX)));
   renderRecent();
 }
 function renderRecent() {
@@ -549,12 +558,16 @@ function renderRecent() {
   if (!list.length) { $("recentRows").innerHTML =
     `<div class="feedrow g-recent" style="cursor:default"><span class="mm">—</span><span class="dim">아직 스캔 기록이 없습니다</span><span></span></div>`; return; }
   $("recentRows").innerHTML = list.map((x) =>
-    `<div class="feedrow g-recent" data-n="${esc(x.n)}">
+    `<div class="feedrow g-recent" data-n="${esc(x.n)}" data-c="${esc(x.c || "")}" data-s="${esc(x.s || "")}">
       <span class="mm">${esc(x.s)}</span><span>${esc(x.n)}</span>
       <span class="mono" style="font-size:12px;color:${x.sig > 0 ? "var(--red)" : "var(--dim2)"}">신호 ${x.sig} · 정정 ${x.corr}%</span>
     </div>`).join("");
   $("recentRows").querySelectorAll(".feedrow").forEach((r) => {
-    r.onclick = () => { $("q").value = r.dataset.n; analyze(r.dataset.n); };
+    r.onclick = () => {
+      $("q").value = r.dataset.n;
+      if (CORPS[r.dataset.n]) analyze(r.dataset.n);
+      else analyze(r.dataset.n, { corpCode: r.dataset.c, stockCode: r.dataset.s });
+    };
   });
 }
 
@@ -569,12 +582,14 @@ function isFav(name) {
   return loadFavs().some((f) => f.name === name);
 }
 // 토글 후 최신 상태(즐겨찾기 됨=true)를 반환한다 — 삭제는 이 재클릭으로만(별도 X 버튼 없음).
-function toggleFav(name, code) {
+// corpCode도 저장한다 — 폴백(/api/corp)으로 스캔한 회사는 corp-map.json에
+// 없을 수 있어(비상장·동명 충돌 등) CORPS 조회 없이도 재스캔할 수 있어야 한다.
+function toggleFav(name, code, corpCode) {
   let list = loadFavs();
   if (list.some((f) => f.name === name)) {
     list = list.filter((f) => f.name !== name);
   } else {
-    list = [{ name, code }, ...list.filter((f) => f.name !== name)].slice(0, 10);
+    list = [{ name, code, corpCode: corpCode || "" }, ...list.filter((f) => f.name !== name)].slice(0, 10);
   }
   saveFavs(list);
   return list.some((f) => f.name === name);
@@ -586,7 +601,7 @@ function renderFavs() {
   wrap.classList.remove("hidden");
   const snapStore = loadSnapStore();
   $("favRows").innerHTML = list.map((f) => {
-    const cc = CORPS && CORPS[f.name] ? CORPS[f.name][0] : null;
+    const cc = (CORPS && CORPS[f.name] ? CORPS[f.name][0] : null) || f.corpCode || null;
     const snap = cc ? snapStore[cc] : null;
     let lastLine = "";
     if (snap) {
@@ -594,12 +609,16 @@ function renderFavs() {
       const daysAgo = Math.max(daysBetween(snap.date, todayKST()), 0);
       lastLine = `<span class="dim" style="font-size:11px">마지막 스캔 ${daysAgo === 0 ? "오늘" : daysAgo + "일 전"}</span>`;
     }
-    return `<div class="feedrow g-recent" data-n="${esc(f.name)}">
+    return `<div class="feedrow g-recent" data-n="${esc(f.name)}" data-c="${esc(f.corpCode || "")}" data-s="${esc(f.code || "")}">
       <span class="mm">${esc(f.code)}</span><span>${esc(f.name)}</span><span>${lastLine}</span>
     </div>`;
   }).join("");
   $("favRows").querySelectorAll(".feedrow").forEach((r) => {
-    r.onclick = () => { $("q").value = r.dataset.n; analyze(r.dataset.n); };
+    r.onclick = () => {
+      $("q").value = r.dataset.n;
+      if (CORPS[r.dataset.n]) analyze(r.dataset.n);
+      else analyze(r.dataset.n, { corpCode: r.dataset.c, stockCode: r.dataset.s });
+    };
   });
 }
 
@@ -671,7 +690,9 @@ function suggestions(qs) {
   }
   return starts.concat(aliasStarts, incl, aliasIncl).slice(0, 12);
 }
-function attachAutocomplete(input, box, onPick) {
+// onEmptyEnter(옵션): 로컬 목록에 후보가 전혀 없는 상태에서 Enter를 눌렀을 때
+// 호출된다(예: /api/corp 폴백 검색 트리거). 지정하지 않으면 기존처럼 무시.
+function attachAutocomplete(input, box, onPick, onEmptyEnter) {
   let activeIdx = -1;
   const renderSuggest = (list) => {
     if (!list.length) { box.style.display = "none"; box.innerHTML = ""; return; }
@@ -695,7 +716,11 @@ function attachAutocomplete(input, box, onPick) {
     const list = suggestions(input.value);
     if (e.key === "ArrowDown") { activeIdx = Math.min(activeIdx + 1, list.length - 1); renderSuggest(list); e.preventDefault(); }
     else if (e.key === "ArrowUp") { activeIdx = Math.max(activeIdx - 1, 0); renderSuggest(list); e.preventDefault(); }
-    else if (e.key === "Enter") { const c = list[activeIdx >= 0 ? activeIdx : 0]; if (c) choose(c); }
+    else if (e.key === "Enter") {
+      const c = list[activeIdx >= 0 ? activeIdx : 0];
+      if (c) choose(c);
+      else if (!list.length && typeof onEmptyEnter === "function") onEmptyEnter();
+    }
     else if (e.key === "Escape") { box.style.display = "none"; }
   });
 }
@@ -711,6 +736,95 @@ document.addEventListener("click", (e) => {
     $("suggest").style.display = "none"; $("csuggest").style.display = "none";
   }
 });
+
+/* ── 기업 검색 폴백(/api/corp) — corp-map.json 로컬 목록에 자동완성이
+   빗나갔을 때(동명 충돌·상호변경 등으로 뷰어 스냅샷에서 누락된 경우)
+   서버가 DART corpCode.xml 전체(비상장 포함)에서 후보를 찾아준다.
+   sessionStorage 10분 캐시로 같은 질의 반복 호출을 피한다. ── */
+const CORP_FALLBACK_TTL_MS = 10 * 60 * 1000;
+function getCorpFallbackCache(q) {
+  try {
+    const raw = sessionStorage.getItem("dart_corp_fb_" + q);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (Date.now() - parsed.t > CORP_FALLBACK_TTL_MS) return null;
+    return parsed.candidates;
+  } catch (e) { return null; }
+}
+function setCorpFallbackCache(q, candidates) {
+  try { sessionStorage.setItem("dart_corp_fb_" + q, JSON.stringify({ t: Date.now(), candidates })); }
+  catch (e) { /* 저장 실패는 무시 */ }
+}
+async function fetchCorpFallback(q) {
+  const cached = getCorpFallbackCache(q);
+  if (cached) return cached;
+  const apiKey = localStorage.getItem(LS_KEY) || "";
+  const res = await fetch(`${relayBase()}/api/corp?q=${encodeURIComponent(q)}`, {
+    headers: { "X-DART-Key": apiKey },
+  });
+  let j = {};
+  try { j = await res.json(); } catch (e) { /* 빈 본문 등 — 아래서 상태코드로 처리 */ }
+  if (!res.ok || j.error) throw new Error(j.error || `조회 실패 (HTTP ${res.status})`);
+  const candidates = j.candidates || [];
+  setCorpFallbackCache(q, candidates);
+  return candidates;
+}
+function renderFallbackCandidates(list, box, onPick) {
+  if (!list.length) { box.style.display = "none"; box.innerHTML = ""; return; }
+  box.innerHTML = `<div class="fallback-hint">DART 전체 명부 검색 결과 — 뷰어 로컬 목록에는 없는 회사입니다</div>` +
+    list.map((c, i) => {
+      const nameHtml = c.alias_of
+        ? `<span class="dim">${esc(c.alias_of)} <span class="arrow">→</span> ${esc(c.name)}</span>`
+        : `<span>${esc(c.name)}</span>`;
+      const codeHtml = c.listed
+        ? `<span class="code">${esc(c.stock_code)}</span>`
+        : `<span class="code dim" style="font-size:0.72rem">비상장(기타법인) — 공시 이력 기준 조회</span>`;
+      return `<div data-i="${i}">${nameHtml}${codeHtml}</div>`;
+    }).join("");
+  box.style.display = "block";
+  box.querySelectorAll("div[data-i]").forEach((el, i) => {
+    el.onmousedown = (ev) => { ev.preventDefault(); box.style.display = "none"; onPick(list[i]); };
+  });
+}
+// 검색 버튼 클릭 또는 로컬 후보 0건 상태의 Enter — 자동완성이 빗나가도
+// 검색을 시도할 수 있게 하는 진입점. 로컬 목록(corp-map.json)에서 먼저
+// 찾고, 없을 때만 /api/corp를 1회 호출한다(불필요한 네트워크 호출 최소화).
+async function submitScan() {
+  const input = $("q");
+  const box = $("suggest");
+  const raw = input.value.trim();
+  if (!raw) return;
+  const local = suggestions(raw);
+  if (local.length) {
+    box.style.display = "none";
+    const r = resolveAliasPick(local[0]);
+    input.value = r.name;
+    analyze(r.name, r.override);
+    return;
+  }
+  const st = $("status");
+  st.className = "status";
+  st.innerHTML = `<span class="spinner"></span>DART 명부에서 "${esc(raw)}" 검색 중…`;
+  try {
+    const candidates = await fetchCorpFallback(raw);
+    st.textContent = "";
+    if (!candidates.length) {
+      st.className = "status err";
+      const extra = /^\d{6}$/.test(raw)
+        ? " (종목코드가 상장폐지 등으로 말소됐을 수도 있습니다)" : "";
+      st.textContent = "⚠ DART 명부에서 찾지 못했습니다 — 상호가 바뀌었거나 명부에서 제거된 법인일 수 있습니다" + extra;
+      return;
+    }
+    renderFallbackCandidates(candidates, box, (c) => {
+      input.value = c.name;
+      if (CORPS[c.name]) analyze(c.name);
+      else analyze(c.name, { corpCode: c.corp_code, stockCode: c.stock_code });
+    });
+  } catch (e) {
+    st.className = "status err";
+    st.textContent = "⚠ " + e.message;
+  }
+}
 
 /* ── DART 호출 ────────────────────────────────── */
 function ymd(d) { return d.toISOString().slice(0, 10).replace(/-/g, ""); }
@@ -833,7 +947,7 @@ function buildResult(name, stockCode, corpCode, items, bgn, end, totalCount) {
           truncated: totalCount > items.length ? totalCount : 0 };
   $("topCompany").textContent = `${name} · ${stockCode}`;
   enableNav();
-  pushRecent({ n: name, s: stockCode, sig: events.length, corr: amendRate });
+  pushRecent({ n: name, s: stockCode, c: corpCode, sig: events.length, corr: amendRate });
   // ── 작업2: 딥링크 해시 동기화 — API 키는 절대 포함하지 않는다.
   const scanHash = buildScanHash(stockCode, LOOKBACK_DAYS);
   if (scanHash) history.replaceState(null, "", "#" + scanHash);
@@ -1233,7 +1347,7 @@ function renderDash() {
   const favBtn = $("favToggleBtn");
   if (favBtn) {
     favBtn.onclick = () => {
-      const nowFav = toggleFav(name, stockCode);
+      const nowFav = toggleFav(name, stockCode, corpCode);
       favBtn.textContent = nowFav ? "★" : "☆";
       favBtn.style.color = nowFav ? "var(--amber)" : "var(--dim2)";
       renderFavs();
@@ -2951,12 +3065,13 @@ boot().then(() => {
     const r = resolveAliasPick(entry);
     $("q").value = r.name;
     analyze(r.name, r.override);
-  });
+  }, submitScan);
   attachAutocomplete($("cq"), $("csuggest"), (entry) => {
     const r = resolveAliasPick(entry);
     $("cq").value = "";
     addCompareCompany(r.name);
   });
+  $("scanBtn").onclick = submitScan;
 }).catch((e) => {
   $("status").className = "status err";
   $("status").textContent = "초기화 실패: " + e.message;
