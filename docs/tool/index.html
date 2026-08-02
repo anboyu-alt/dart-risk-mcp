@@ -1219,7 +1219,7 @@ function renderDash() {
     a.onclick = (e) => { e.preventDefault(); renderDetail(a.dataset.r); };
   });
   // SE-14: capital_backflow만 비동기 원문 확인 게이트를 태운다 (다른 패턴은 그대로).
-  patterns.filter((p) => p.key === "capital_backflow").forEach((p) => loadCapitalBackflowGate(p, events));
+  patterns.filter((p) => p.key === "capital_backflow").forEach((p) => loadCapitalBackflowGate(p, events, corpCode));
   $("result").querySelectorAll(".rescanCurrentLink").forEach((a) => {
     a.onclick = (e) => {
       e.preventDefault();
@@ -2371,11 +2371,95 @@ async function classifyOutflowEvidence(hits) {
   }));
 }
 
+// ── 후속 3위: 종속회사 경유 유출 — 타법인 출자현황 대조 (사실 병기) ────────
+// classify_outflow_relation이 "subsidiary"(종속회사·자회사)로 판정한 상대방을
+// 회사가 이미 공시한 타법인 출자현황(otrCprInvstmntSttus)과 대조해, 그
+// 종속회사의 지분 변동·최근 순이익을 사실로만 병기한다. core
+// dart_client.py의 match_affiliate_row/summarize_affiliate_stake와 동일
+// 규칙을 이식(순수 함수, DOM 접근 없음) — 판정·게이트 발화 조건은 절대
+// 바꾸지 않는다. "conduit"/"경유" 같은 구조 단정 어휘는 쓰지 않는다.
+const AFFIL_CORP_SUFFIX_RE = /(주식회사|유한회사|유한책임회사|\(주\)|㈜)/g;
+function foldCorpName(name) {
+  return (name || "").replace(AFFIL_CORP_SUFFIX_RE, "").replace(/\s+/g, "").trim().toUpperCase();
+}
+function matchAffiliateRow(rows, counterpartyName) {
+  const target = foldCorpName(counterpartyName);
+  if (!target) return null;
+  for (const row of rows || []) {
+    if (foldCorpName(row.inv_prm) === target) return row;
+  }
+  return null;
+}
+const AFFIL_DASH_VALUES = new Set(["", "-", "―", "—", "－"]);
+function affiliateInt(raw) {
+  const s = (raw === null || raw === undefined ? "" : String(raw)).trim().replace(/,/g, "");
+  if (AFFIL_DASH_VALUES.has(s)) return null;
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? Math.trunc(n) : null;
+}
+function affiliateRatio(raw) {
+  const s = (raw === null || raw === undefined ? "" : String(raw)).trim().replace(/,/g, "");
+  if (AFFIL_DASH_VALUES.has(s)) return null;
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : null;
+}
+function summarizeAffiliateStake(row) {
+  const dm = /^(\d{4})[.\-/](\d{2})/.exec(((row && row.frst_acqs_de) || "").trim());
+  return {
+    firstAcquired: dm ? `${dm[1]}-${dm[2]}` : "",
+    stakeBegin: affiliateRatio(row && row.bsis_blce_qota_rt),
+    stakeEnd: affiliateRatio(row && row.trmend_blce_qota_rt),
+    addedAmount: affiliateInt(row && row.incrs_dcrs_acqs_dsps_amount),
+    recentNetProfit: affiliateInt(row && row.recent_bsns_year_fnnr_sttus_thstrm_ntpf),
+    purpose: ((row && row.invstmnt_purps) || "").trim(),
+  };
+}
+// server.py _format_affiliate_stake_line과 동일 규칙: 지분 변동이 0.005%p
+// 미만이면 지분 구간을 생략, 순이익은 부호 그대로(fmtWon이 음수를 처리).
+function formatAffiliateStakeLine(stake) {
+  const parts = [];
+  if (stake.firstAcquired) parts.push(`최초취득 ${stake.firstAcquired}`);
+  if (stake.stakeBegin !== null && stake.stakeEnd !== null
+      && Math.abs(stake.stakeEnd - stake.stakeBegin) >= 0.005) {
+    const dir = stake.stakeEnd > stake.stakeBegin ? "확대" : "축소";
+    parts.push(`지분 ${stake.stakeBegin.toFixed(1)}→${stake.stakeEnd.toFixed(1)}% ${dir}`);
+  }
+  if (stake.recentNetProfit !== null) parts.push(`피출자사 최근 순이익 ${fmtWon(stake.recentNetProfit)}`);
+  return parts.join(" · ");
+}
+// subsidiary로 분류된 상대방이 있을 때만(없으면 호출 자체를 안 함) 타법인
+// 출자현황을 조회한다 — 직전 연도 → (실패 시) 그 전 연도 순으로 최대 2회.
+// 매칭 실패·조회 실패는 조용히 빈 dict로 흡수(기존 표기 그대로 유지).
+async function fetchSubsidiaryAffiliateFacts(results, corpCode) {
+  const subs = (results || []).filter((r) => r.cls === "subsidiary" && r.counterparty);
+  if (!subs.length || !corpCode) return {};
+  const thisYear = new Date().getFullYear();
+  let rows = [];
+  for (const y of [thisYear - 1, thisYear - 2]) {
+    try {
+      const j = await dartGet("otrCprInvstmntSttus.json", { corp_code: corpCode, bsns_year: y, reprt_code: "11011" });
+      if (j.status === "000" && (j.list || []).length) { rows = j.list; break; }
+    } catch (e) { /* 조용히 다음 연도 시도 */ }
+  }
+  if (!rows.length) return {};
+  const facts = {};
+  for (const r of subs) {
+    const row = matchAffiliateRow(rows, r.counterparty);
+    if (!row) continue;
+    const line = formatAffiliateStakeLine(summarizeAffiliateStake(row));
+    if (line) facts[r.counterparty] = line;
+  }
+  return facts;
+}
+
 // 순수 함수 — 이미 분류된 results 배열만으로 카드/사실블록 HTML을 만든다.
 // fetch 등 부수효과가 없어 가짜 results로 3분기를 그대로 테스트할 수 있다.
 // totalCount: 원문 확인 대상 전체 건수(hits 슬라이스 전) — results.length보다
 // 클 수 있어 "최근 N건만 확인했다"는 사실을 숨기지 않기 위해 별도로 받는다.
-function capitalBackflowCardHTML(pattern, events, results, totalCount) {
+// affiliateFacts: 후속 3위 — subsidiary 상대의 타법인 출자현황 사실 병기용
+// {counterparty: line} 맵. 없거나 매칭 실패면 기존 표기 그대로.
+function capitalBackflowCardHTML(pattern, events, results, totalCount, affiliateFacts) {
+  const facts = affiliateFacts || {};
   const total = typeof totalCount === "number" ? totalCount : results.length;
   const evidenceBlock = `<div class="sigs">관찰 윈도우 ${pattern.timeline_months}개월 · 구성 신호가 촉발된 공시:</div>
     <div class="sigs">${patternEvidenceHTML(pattern, events)}</div>`;
@@ -2402,7 +2486,9 @@ function capitalBackflowCardHTML(pattern, events, results, totalCount) {
     const lines = others.map((r) => {
       const label = r.counterparty || r.nm;
       const tag = r.cls === "subsidiary" ? "종속회사" : (r.relation || "실명 확인");
-      return `${esc(label)}(${esc(tag)})`;
+      const fact = r.cls === "subsidiary" ? facts[r.counterparty] : "";
+      const tagTxt = esc(tag) + (fact ? ` — ${esc(fact)}` : "");
+      return `${esc(label)}(${tagTxt})`;
     }).join(", ");
     const scopeNote = total > results.length ? ` (최근 ${results.length}건 원문 확인 · 전체 ${total}건 중)` : "";
     return `<div class="dim" style="font-size:0.9rem;margin-top:0.7rem;padding:0.6rem 0">자금유출성 공시 ${total}건${scopeNote} — 확인된 상대방: ${lines} 외. 특수관계 대상 유출은 확인되지 않았습니다.</div>`;
@@ -2423,7 +2509,7 @@ function capitalBackflowCardHTML(pattern, events, results, totalCount) {
 
 // 비동기 오케스트레이션 — 스피너 플레이스홀더(#pat-capital_backflow)를 실제
 // 분류 결과로 치환한다. 다른 패턴 카드는 건드리지 않는다(기존 그대로).
-async function loadCapitalBackflowGate(pattern, events) {
+async function loadCapitalBackflowGate(pattern, events, corpCode) {
   const el = document.getElementById("pat-" + pattern.key);
   if (!el) return;
   // 실질 경영권 변경 제목 요구 — SHAREHOLDER 신호 키워드에는 일상적 5%
@@ -2440,7 +2526,11 @@ async function loadCapitalBackflowGate(pattern, events) {
   if (!hits.length) return;
   try {
     const results = await classifyOutflowEvidence(hits);
-    el.outerHTML = capitalBackflowCardHTML(pattern, events, results, allHits.length);
+    let affiliateFacts = {};
+    try {
+      affiliateFacts = await fetchSubsidiaryAffiliateFacts(results, corpCode);
+    } catch (e) { affiliateFacts = {}; }
+    el.outerHTML = capitalBackflowCardHTML(pattern, events, results, allHits.length, affiliateFacts);
     $("result").querySelectorAll(".patEvLink").forEach((a) => {
       a.onclick = (e) => { e.preventDefault(); renderDetail(a.dataset.r); };
     });

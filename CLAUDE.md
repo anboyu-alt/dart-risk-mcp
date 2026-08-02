@@ -109,7 +109,13 @@ dart_risk_mcp/
   `_confirm_outflow_counterparties`/`_capital_backflow_gate`). 종속회사·외부로만
   확인되거나 상대방을 아예 특정하지 못하면 패턴 대신 사실 블록으로 대체된다 —
   아틀라스링크(01309795, 297570)·한농화성(011500) 라이브 매칭, 아래
-  "제목 수준 vs 내용 확인 감사표" 참고.
+  "제목 수준 vs 내용 확인 감사표" 참고. v1.9.0: 상대방이 종속회사로 확인된
+  건은 타법인 출자현황(`fetch_affiliate_investments`)과 대조해 그 종속회사의
+  지분 변동·최근 순이익을 "상대방 확인" 블록 해당 줄에 사실로만 병기한다
+  (`match_affiliate_row`/`summarize_affiliate_stake` — 판정·게이트 발화
+  조건은 불변, subsidiary는 여전히 패턴 미발화 사유). 아틀라스링크 실측: "주식회사
+  한국파일 · 관계: 종속회사 — 최초취득 2023-09 · 지분 46.3→62.4% 확대 · 피출자사
+  최근 순이익 -49억원".
 
 ### 4. `build_event_timeline(company_name, lookback_years=1)` ✨
 
@@ -375,6 +381,8 @@ dart_risk_mcp/
 | `fetch_dividend_history(corp_code, api_key, lookback_years)` | alotMatter을 분기 4코드 × N년 호출. 각 record에 bsns_year/reprt_code 부착 (v0.9.0) |
 | `detect_dividend_drain(dividend_records)` | 적자 시점 배당 유출(DIVIDEND_DRAIN) 패턴 — alotMatter 자체가 bundling한 연도별 (연결)/(별도)당기순이익을 그 연도 현금배당과 짝지어 flag(SE-12, v0.9.0 재설계). 별도 재무제표 조회 불필요. CFS 순이익은 지배기업소유주지분순이익(비지배지분 제외)이라 총 당기순이익과 부호가 다를 수 있음(두산 2023 CFS 실측: alotMatter -3,883억 vs 총 당기순이익 +2,721억) — 출력에 "연결·지배지분 기준" 명시 |
 | `fetch_affiliate_investments(corp_code, api_key, year, report_type)` | 타법인 출자현황(otrCprInvstmntSttus) 조회 + 합계 행 제거 |
+| `match_affiliate_row(rows, counterparty_name)` | 타법인 출자현황 rows에서 상대방 이름과 일치하는 행을 찾는 순수 함수. 법인 표기(㈜/(주)/주식회사) 차이는 `_fold_corp_name`으로 흡수 (v1.9.0) |
+| `summarize_affiliate_stake(row, as_of=None)` | 타법인 출자현황 한 행에서 최초취득일·기초/기말 지분율·증감액·피출자사 최근 순이익을 사실로 요약하는 순수 함수. 콤마·"-"(미기재) 안전 파싱 (v1.9.0) |
 | `parse_outflow_detail(text)` | 금전대여·채무보증·담보제공 결정 원문(fetch_document_text 출력)에서 상대방·관계·금액·자기자본대비를 정규식으로 추출하는 순수 파서. "대여 상대"/"성명(법인명)" 두 라벨, "-회사와의 관계"/"(회사와의 관계)" 두 괄호 변형 모두 대응 (v1.6.1) |
 | `fetch_outflow_detail(rcept_no, api_key)` | `fetch_document_text(max_chars=4000)` + `parse_outflow_detail` 래퍼. 실패 시 빈 dict (v1.6.1) |
 | `classify_outflow_relation(relation)` | 관계 원문 표기 → affiliated(계열·특수관계)/subsidiary(종속회사)/external(타인 등)/unknown(추출 실패) 4범주 분류 — `capital_backflow` 게이트의 입력 (v1.6.1) |
@@ -522,6 +530,7 @@ PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설
 | `LOAN_ADVANCE_SURGE`(대여금·선급금 급증, 금감원 2019-12 무자본 M&A 합동점검 반영) | ⚠ | "대여금·선급금 (계정 노출 시)" 사실 표기 블록 자체는 두산에너빌리티(BS 3계정 노출, 2024 전년 대비 감소)·헬릭스미스·두산(CF 전용 노출) 라이브 확인. 단 플래그 임계(2배↑·10억↑)를 충족하는 실사례는 6사+아틀라스링크 매트릭스에서 아직 미발굴 — 셀트리온·삼성전자·제이스코홀딩스·아틀라스링크는 계정 자체가 노출되지 않음(정상) |
 | `CROSS_SIGNAL_PATTERNS` 11개 중 9개 (capital_churn_anomaly·capital_backflow 제외) | ⚠ | `founder_fade`·`debt_spiral`·`reverse_split_spiral`·`related_party_hollowing`·`zombie_ma`·`audit_insider_dump`·`delisting_evasion`·`fake_new_biz`·`fund_diversion_chain` |
 | `parse_control_change_detail`/"🔁 최대주주 변경 상세" 블록(v1.7.0) | ✅ | 4건 라이브 매칭 — 아틀라스링크 20260709900615("외 1인" 공백형)·졸스 20260728900445("외N명" 붙임형)·제이케이시냅스 20260728900521("외 N" 접미 없음, (주) 접미)·선광 20260727900769(개인명, "외 22" 단위 생략형). 골드 `아틀라스링크_analyze.txt`/`아틀라스링크_timeline.txt` 갱신. 차입금>0(주식담보대출) 경로는 6사+아틀라스링크 매트릭스에서 미발굴 — 자기자금만 있는 사례만 라이브 확인 |
+| `match_affiliate_row`/`summarize_affiliate_stake` — 종속회사 유출 사실 병기(v1.9.0) | ✅ | 아틀라스링크 실측 3건(20260729/20260120/20251015 — 상대방 전부 "주식회사 한국파일") 전부 타법인 출자현황과 매칭돼 "최초취득 2023-09 · 지분 46.3→62.4% 확대 · 피출자사 최근 순이익 -49억원" 병기 확인. 골드 `아틀라스링크_analyze.txt`/`아틀라스링크_timeline.txt` 갱신 |
 
 신규 PR이 ⚠ 항목의 라이브 매칭 사례 발굴 시: (1) 사례 회사를 `scripts/regen_goldens.py`의 `COMPANIES`에 추가하거나 (2) `tests/fixtures/sample_outputs/`에 직접 골드 추가. hygiene 검증 9/9 PASS 후 ⚠ 제거.
 
@@ -538,7 +547,7 @@ PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설
 | 신호/패턴 | 판정 근거 | 확인 계층 | 근거 |
 |---|---|---|---|
 | `FUND_OUTFLOW` (개별 신호 표기) | 제목만 | 없음 | 대기업의 일상적 계열 지원과 구분 불가 — 참고 강도(base_score 2)로 사실 표기만 하고 판정하지 않는다 |
-| `capital_backflow` (복합 패턴 발화) | **원문/DS005 확인** | `parse_outflow_detail`(금전대여·채무보증·담보제공, 원문 정규식) + `fetch_major_decision`(유형자산양수, DS005 구조화) → `classify_outflow_relation` → `_capital_backflow_gate` | 제목만으로 발화하면 아틀라스링크류(실제 계열 유출)와 일상적 종속회사 자금 지원(예: 담보 상대가 종속회사뿐인 경우)을 구분할 수 없다. affiliated(비연결 계열·특수관계) 확인 1건 이상일 때만 패턴을 표시 |
+| `capital_backflow` (복합 패턴 발화) | **원문/DS005 확인** | `parse_outflow_detail`(금전대여·채무보증·담보제공, 원문 정규식) + `fetch_major_decision`(유형자산양수, DS005 구조화) → `classify_outflow_relation` → `_capital_backflow_gate` | 제목만으로 발화하면 아틀라스링크류(실제 계열 유출)와 일상적 종속회사 자금 지원(예: 담보 상대가 종속회사뿐인 경우)을 구분할 수 없다. affiliated(비연결 계열·특수관계) 확인 1건 이상일 때만 패턴을 표시. v1.9.0: subsidiary로 확인된 상대는 발화 조건에 관여하지 않지만, "상대방 확인" 사실 블록에 타법인 출자현황(`match_affiliate_row`/`summarize_affiliate_stake`) 대조 사실을 병기해 그 종속회사의 지분·자금 실체를 읽을 수 있게 한다(판정 아님) |
 | `ACQ_REVIEW` | 제목만 | 없음(단, `get_major_decision` 안내는 별도로 표시) | 정상 M&A가 대다수라 사실 안내 수준. 상대방 확인은 사용자가 `get_major_decision` 호출로 직접 수행하도록 안내만 한다 — capital_backflow처럼 자동 게이트는 아님 |
 | `STAKE_PLEDGE` | 제목만 | 없음 | 오너의 정상적인 주식담보대출(주담대)이 흔해 이 신호 하나만으로는 판단 근거가 되지 않는다(MEDIUM 참고 강도). 담보설정비율·인수 직후 시점 여부는 사용자가 원문에서 직접 확인 |
 | `CB_BW` 인수자 추출 | 제목 매칭 + **인수자 실명 확인** | `extract_cb_investors`(구조화 엔드포인트 우선, HTML 폴백) | 신호 자체는 제목으로 충분하지만, "누가 받아갔는지"는 원문 확인 없이는 알 수 없어 별도 추출기를 둔다 |
@@ -613,10 +622,11 @@ python scripts/regen_goldens.py                                       # 전체 �
 ## 공개 리스크 뷰어 인프라 (docs/tool/)
 
 - **정적 단일 파일**: `docs/tool/index.html` (외부 JS 의존 0, 빌드 없음). 데이터는 `signals-data.json`(scripts/export_tool_data.py로 수동 재생성) + `corp-map.json` + `corp-aliases.json`.
-- **릴레이**: JS 릴레이 `api/[endpoint].js`(Vercel icn1)·`relay/worker.js`(Cloudflare 미러)·`scripts/dev_relay.py`(로컬) 3곳이 **동일 화이트리스트 9종**을 복제 유지 — list, company, fnlttSinglAcnt, accnutAdtorNmNdAdtOpinion, exctvSttus, elestock, alotMatter, pssrpCptalUseDtls, prvsrpCptalUseDtls. 하나 추가하면 3곳 모두 갱신.
+- **릴레이**: JS 릴레이 `api/[endpoint].js`(Vercel icn1)·`relay/worker.js`(Cloudflare 미러)·`scripts/dev_relay.py`(로컬) 3곳이 **동일 화이트리스트 10종**을 복제 유지 — list, company, fnlttSinglAcnt, accnutAdtorNmNdAdtOpinion, exctvSttus, elestock, alotMatter, pssrpCptalUseDtls, prvsrpCptalUseDtls, otrCprInvstmntSttus(v1.9.0 — 종속회사 유출 사실 병기). 하나 추가하면 3곳 모두 갱신.
 - **원문 추출**: `api/doc.py`(껍데기) + `tool_server/doc.py`(몸통, 단위 테스트 `tests/test_tool_server_doc.py`) — `GET /api/doc?rcept_no=&max_chars=` + `X-DART-Key` 헤더. `fetch_disclosure_full` 재사용, 200 응답만 CDN 캐시(s-maxage=86400, 키가 URL에 없어 캐시 키 안전). se_server와 분리 이유: SE는 Supabase 인가제라 신뢰 모델이 다름. `.vercelignore`에 `!tool_server` 필수.
 - **caution 파생 필드**: export_tool_data.py가 신호별 taxonomy severity를 2단계로 접어 `caution: bool`(CRITICAL/HIGH=true)만 내보낸다. severity·score 원값은 계속 미노출. 뷰어는 이를 '주의/참고' 관찰 우선순위 배지로 렌더(면책 동반) — **뷰어 한정 예외**이며 MCP 도구 출력·SE의 무판정 원칙은 그대로다. 패턴에는 caution을 넣지 않는다(9종 전원 CRITICAL/HIGH → 상수).
 - **기업 검색(상호변경 대응)**: `scripts/build_corp_map.py`가 corp-map.json 재생성 + corp_code 기준 diff로 옛 상호를 `corp-aliases.json`에 append-only 누적. `scripts/backfill_corp_aliases.py`는 시장 전체 "상호변경안내" 공시 원문에서 변경전/후 상호를 추출해 별칭 시드 백필. `.github/workflows/refresh-corp-map.yml` 주간 cron이 둘을 실행해 커밋. 배경: DART corpCode.xml은 상호변경 시 옛 이름을 지운다(실례: 297570 알로이스→아틀라스링크, 2026-06-12) + 동명 죽은 법인 충돌 사례(알로이스 01194892).
+- **종속회사 유출 사실 병기(v1.9.0)**: `capital_backflow` 게이트에서 상대방이 subsidiary(종속회사)로 확인되면, `otrCprInvstmntSttus.json`(타법인 출자현황)을 subsidiary 존재 시에만 조회(최대 2회)해 `matchAffiliateRow`/`summarizeAffiliateStake`(core `match_affiliate_row`/`summarize_affiliate_stake` 이식)로 대조한 사실을 카드에 병기한다. 뷰어는 기존 `fmtKRW`(반올림) 관례를 그대로 써 억원 표기가 core `_format_amount`(절삭)와 값이 다를 수 있다(-4,969,000,000원 → 뷰어 -50억원 vs core -49억원, 각 레이어가 기존 유틸을 재사용한 의도된 차이).
 - **알려진 한계(후속 과제)**: MCP `resolve_corp`는 corpCode.xml 현재명만 검색하므로 옛 상호 검색이 실패한다 — 뷰어 별칭 파일을 core에서도 참조할지는 미결정.
 
 ## 테스트 방법

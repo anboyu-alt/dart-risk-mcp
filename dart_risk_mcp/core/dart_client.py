@@ -3364,6 +3364,92 @@ def fetch_affiliate_investments(
         return []
 
 
+# ── 후속 3위: 종속회사 경유 유출 — 타법인 출자현황 대조 (사실 병기) ─────────
+# classify_outflow_relation이 "subsidiary"(종속회사·자회사)로 판정한 자금유출
+# 상대방을, 회사가 이미 공시한 타법인 출자현황(fetch_affiliate_investments)과
+# 대조해 그 종속회사의 지분·자금 실체를 사실로만 병기한다. 판정·게이트 발화
+# 조건은 절대 바꾸지 않는다 — subsidiary는 여전히 capital_backflow 미발화
+# 사유다. 법인 표기(㈜/(주)/주식회사) 비교는 known_actors.fold_name과 같은
+# 접사 패턴(_CORP_SUFFIX_RE)을 재사용하되, 라틴 음차·병기 파싱(인물명 전용)은
+# 법인 비교에 불필요해 제외한 축약판을 쓴다.
+_AFFIL_CORP_SUFFIX_RE = re.compile(r"(주식회사|유한회사|유한책임회사|\(주\)|㈜)")
+_AFFIL_WS_RE = re.compile(r"\s+")
+
+
+def _fold_corp_name(name: str) -> str:
+    """법인 표기 차이(접사·공백·대소문자)를 흡수하는 비교 전용 폴딩."""
+    s = _AFFIL_CORP_SUFFIX_RE.sub("", name or "")
+    s = _AFFIL_WS_RE.sub("", s)
+    return s.strip().upper()
+
+
+def match_affiliate_row(rows: list[dict], counterparty_name: str) -> "dict | None":
+    """타법인 출자현황 rows에서 상대방 이름과 일치하는 행을 찾는다 (순수 함수).
+
+    법인 표기(㈜/(주)/주식회사) 차이는 _fold_corp_name으로 흡수한다. 동일
+    폴드가 여럿이면 rows 순서상 첫 매칭을 반환(fetch_affiliate_investments가
+    특정 연도 응답을 그대로 넘기므로 그 연도 표기가 우선). 매칭 실패 시 None.
+    """
+    target = _fold_corp_name(counterparty_name)
+    if not target:
+        return None
+    for row in rows or []:
+        if _fold_corp_name(row.get("inv_prm", "")) == target:
+            return row
+    return None
+
+
+_AFFIL_DASH_VALUES = {"", "-", "―", "—", "－"}
+_AFFIL_DATE_RE = re.compile(r"^(\d{4})[.\-/](\d{2})")
+
+
+def _affiliate_int(raw: "str | None") -> "int | None":
+    """콤마·부호·'-'(DART가 미기재 값에 쓰는 표기)를 안전 처리하는 정수 파서."""
+    s = (raw or "").strip().replace(",", "")
+    if s in _AFFIL_DASH_VALUES:
+        return None
+    try:
+        return int(s)
+    except ValueError:
+        try:
+            return int(float(s))
+        except ValueError:
+            return None
+
+
+def _affiliate_ratio(raw: "str | None") -> "float | None":
+    """지분율(%) 안전 파서. '-'(미기재) 시 None."""
+    s = (raw or "").strip().replace(",", "")
+    if s in _AFFIL_DASH_VALUES:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def summarize_affiliate_stake(row: dict, as_of: "str | None" = None) -> dict:
+    """타법인 출자현황 한 행에서 지분 변동 사실을 요약한다 (순수 함수).
+
+    콤마·부호·'-'(DART 미기재 표기) 안전 파싱. as_of는 다년 대조 확장을
+    대비한 예약 파라미터로 현재는 사용하지 않는다(단일 행 요약만 수행).
+
+    Returns:
+        {"first_acquired": "YYYY-MM"|"", "stake_begin": float|None,
+         "stake_end": float|None, "added_amount": int|None,
+         "recent_net_profit": int|None, "purpose": str}
+    """
+    dm = _AFFIL_DATE_RE.match((row.get("frst_acqs_de") or "").strip())
+    return {
+        "first_acquired": f"{dm.group(1)}-{dm.group(2)}" if dm else "",
+        "stake_begin": _affiliate_ratio(row.get("bsis_blce_qota_rt")),
+        "stake_end": _affiliate_ratio(row.get("trmend_blce_qota_rt")),
+        "added_amount": _affiliate_int(row.get("incrs_dcrs_acqs_dsps_amount")),
+        "recent_net_profit": _affiliate_int(row.get("recent_bsns_year_fnnr_sttus_thstrm_ntpf")),
+        "purpose": (row.get("invstmnt_purps") or "").strip(),
+    }
+
+
 # 감사인명 별칭 → 표준명. DART adtor 필드는 "삼정"/"삼정KPMG"/"삼정회계법인" 등
 # 표기가 혼재해 그대로 비교하면 감사인 교체·연속 재직이 오탐된다.
 # capitalparser/kreports-dart-mcp audit_parser.py에서 이식 (Apache 2.0).

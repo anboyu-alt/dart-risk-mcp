@@ -37,6 +37,8 @@ from .core import (
     extract_cfs_ofs_ni,
     extract_loan_advance,
     fetch_affiliate_investments,
+    match_affiliate_row,
+    summarize_affiliate_stake,
     NOTE_CATEGORIES,
     classify_note_title,
     build_note_summary,
@@ -149,15 +151,19 @@ def _resolve_lookback(
 def _format_amount(amount: str) -> str:
     if not amount:
         return ""
-    digits = amount.replace("원", "").replace(",", "")
+    sign = ""
+    body = amount
+    if body.startswith("-"):
+        sign, body = "-", body[1:]
+    digits = body.replace("원", "").replace(",", "")
     if digits.isdigit():
         n = int(digits)
         if n >= 1_000_000_000_000:
-            return f"{n // 1_000_000_000_000}조원"
+            return f"{sign}{n // 1_000_000_000_000}조원"
         if n >= 100_000_000:
-            return f"{n // 100_000_000}억원"
+            return f"{sign}{n // 100_000_000}억원"
         if n >= 10_000:
-            return f"{n // 10_000}만원"
+            return f"{sign}{n // 10_000}만원"
     return amount
 
 
@@ -412,8 +418,67 @@ def _confirm_outflow_counterparties(
     return out
 
 
-def _render_outflow_confirmations(confirmations: list[dict]) -> list[str]:
-    """확인된 상대방 목록을 출력 줄로 렌더링한다."""
+def _format_affiliate_stake_line(stake: dict) -> str:
+    """summarize_affiliate_stake 결과를 사실 문구 한 줄로 조립한다 (순수 함수).
+
+    지분 변동이 사실상 없으면(값 없음 또는 0.005%p 미만) 지분 구간을 생략,
+    순이익은 흑자/적자 구분 없이 부호 그대로 표기한다("conduit"/"경유" 같은
+    구조 단정 어휘는 쓰지 않는다). 표기할 사실이 하나도 없으면 빈 문자열.
+    """
+    parts: list[str] = []
+    if stake.get("first_acquired"):
+        parts.append(f"최초취득 {stake['first_acquired']}")
+    sb, se = stake.get("stake_begin"), stake.get("stake_end")
+    if sb is not None and se is not None and abs(se - sb) >= 0.005:
+        direction = "확대" if se > sb else "축소"
+        parts.append(f"지분 {sb:.1f}→{se:.1f}% {direction}")
+    profit = stake.get("recent_net_profit")
+    if profit is not None:
+        parts.append(f"피출자사 최근 순이익 {_format_amount(str(profit))}")
+    return " · ".join(parts)
+
+
+def _build_affiliate_stake_facts(confirmations: list[dict], corp_code: str) -> dict[str, str]:
+    """종속회사로 확인된 상대방을 타법인 출자현황과 대조해 사실 문구를 만든다.
+
+    subsidiary 분류 확인 항목이 없으면 API 호출 없이 빈 dict를 반환한다.
+    있으면 직전 연도 → (실패 시) 그 전 연도 순으로 최대 2회만 조회한다.
+    매칭 실패·API 실패는 조용히 생략(기존 표기 그대로) — 점수 가산 없음.
+    """
+    subs = [c for c in confirmations if c["classification"] == "subsidiary" and c.get("counterparty")]
+    if not subs or not corp_code or not _DART_API_KEY:
+        return {}
+    year = datetime.now().year - 1
+    rows: list[dict] = []
+    for y in (year, year - 1):
+        try:
+            rows = fetch_affiliate_investments(corp_code, _DART_API_KEY, str(y))
+        except Exception:
+            rows = []
+        if rows:
+            break
+    if not rows:
+        return {}
+    facts: dict[str, str] = {}
+    for c in subs:
+        row = match_affiliate_row(rows, c["counterparty"])
+        if not row:
+            continue
+        line = _format_affiliate_stake_line(summarize_affiliate_stake(row))
+        if line:
+            facts[c["counterparty"]] = line
+    return facts
+
+
+def _render_outflow_confirmations(
+    confirmations: list[dict], affiliate_facts: "dict[str, str] | None" = None
+) -> list[str]:
+    """확인된 상대방 목록을 출력 줄로 렌더링한다.
+
+    affiliate_facts가 있고 상대방이 종속회사로 분류됐으면(_build_affiliate_stake_facts),
+    타법인 출자현황 대조 사실을 해당 줄에 병기한다(후속 3위 — conduit 사실 병기).
+    """
+    affiliate_facts = affiliate_facts or {}
     lines: list[str] = []
     for c in confirmations:
         cp = c["counterparty"] or "(미확인)"
@@ -422,6 +487,10 @@ def _render_outflow_confirmations(confirmations: list[dict]) -> list[str]:
         rel_txt = f" ({c['relation']})" if c["relation"] else ""
         amt_txt = f" — {_format_amount(str(c['amount']))}" if c.get("amount") else ""
         lines.append(f"  → 거래상대방: {cp} · 관계: {cls_label}{rel_txt}{amt_txt}")
+        if c["classification"] == "subsidiary":
+            fact = affiliate_facts.get(c["counterparty"])
+            if fact:
+                lines.append(f"    ↳ 타법인출자현황: {fact}")
     return lines
 
 
@@ -542,7 +611,9 @@ def _control_change_detail_block(d: dict) -> list[str]:
 
 
 def _capital_backflow_gate(
-    confirmations: list[dict], has_control_change: bool = True
+    confirmations: list[dict],
+    has_control_change: bool = True,
+    affiliate_facts: "dict[str, str] | None" = None,
 ) -> dict:
     """capital_backflow 발화 여부를 확인된 상대방 관계로 판정한다(순수 함수).
 
@@ -550,7 +621,9 @@ def _capital_backflow_gate(
     ② classification == "affiliated" 항목이 1건 이상.
     미충족 시 대체 사실 블록 라인을 만들어 반환한다(원문 확인 없이 경고하지
     않는다는 v0.8.5 원칙 — 관계가 전부 미확인이면 패턴은커녕 사실 블록도
-    '확인 필요' 안내로 그친다).
+    '확인 필요' 안내로 그친다). affiliate_facts는 판정에 관여하지 않는 순수
+    렌더링 재료다 — 종속회사 상대의 타법인 출자현황 사실을 fact_lines에
+    병기할 뿐, pass/affiliated 계산에는 영향을 주지 않는다(후속 3위).
     """
     if not confirmations:
         return {"pass": False, "affiliated": [], "fact_lines": []}
@@ -564,7 +637,7 @@ def _capital_backflow_gate(
             "자금유출성 공시 상대방 확인 — 조회 창 내 실질 경영권 변경"
             "(최대주주변경 등) 공시는 없어 자금 역류 패턴은 적용하지 않음",
         ]
-        lines += _render_outflow_confirmations(confirmations)
+        lines += _render_outflow_confirmations(confirmations, affiliate_facts)
         return {"pass": False, "affiliated": affiliated, "fact_lines": lines}
     if affiliated:
         return {"pass": True, "affiliated": affiliated, "fact_lines": []}
@@ -576,7 +649,7 @@ def _capital_backflow_gate(
             f"자금유출성 공시 {len(confirmations)}건 — 확인된 상대방은 "
             f"{'/'.join(labels)}(각 실명·관계 표기), 특수관계 유출은 미확인",
         ]
-        lines += _render_outflow_confirmations(confirmations)
+        lines += _render_outflow_confirmations(confirmations, affiliate_facts)
         return {"pass": False, "affiliated": [], "fact_lines": lines}
 
     rcepts = ", ".join(c["rcept_no"] for c in confirmations if c["rcept_no"])
@@ -783,9 +856,16 @@ def analyze_company_risk(
     except Exception:
         outflow_confirmations = []
 
+    # 후속 3위: 종속회사로 확인된 상대방을 타법인 출자현황과 대조(사실 병기).
+    # subsidiary 분류가 없으면 API 호출 없이 즉시 빈 dict.
+    try:
+        _affiliate_facts = _build_affiliate_stake_facts(outflow_confirmations, corp_code)
+    except Exception:
+        _affiliate_facts = {}
+
     if pattern and pattern.get("pattern_id") == "capital_backflow":
         _gate = _capital_backflow_gate(
-            outflow_confirmations, _has_control_change_title(disclosures)
+            outflow_confirmations, _has_control_change_title(disclosures), _affiliate_facts
         )
         if not _gate["pass"]:
             pattern = None
@@ -972,7 +1052,7 @@ def analyze_company_risk(
             "분류하며, 판정이 아닌 사실 표기입니다.",
             "",
         ]
-        lines += _render_outflow_confirmations(outflow_confirmations)
+        lines += _render_outflow_confirmations(outflow_confirmations, _affiliate_facts)
 
     # v0.6.0 자본 변동 타임라인 (최근 12개월 요약)
     if churn.get("events"):
@@ -1384,9 +1464,13 @@ def build_event_timeline(
         )
     except Exception:
         outflow_confirmations = []
+    try:
+        _affiliate_facts = _build_affiliate_stake_facts(outflow_confirmations, corp_code)
+    except Exception:
+        _affiliate_facts = {}
     if pattern and pattern.get("pattern_id") == "capital_backflow":
         _gate = _capital_backflow_gate(
-            outflow_confirmations, _has_control_change_title(disclosures)
+            outflow_confirmations, _has_control_change_title(disclosures), _affiliate_facts
         )
         if not _gate["pass"]:
             pattern = None
@@ -1503,7 +1587,7 @@ def build_event_timeline(
             "확인합니다. 판정이 아닌 사실 표기입니다.",
             "",
         ]
-        lines += _render_outflow_confirmations(outflow_confirmations)
+        lines += _render_outflow_confirmations(outflow_confirmations, _affiliate_facts)
         lines.append("")
 
     # CB 인수자 (있으면) — match_signals는 이미 정정공시 제외 처리
