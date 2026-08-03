@@ -59,7 +59,13 @@ jobs:
           SIGHTINGS_PATH: _sightings/sightings.json
           NETWORK_URL_TOKEN: ${{ secrets.NETWORK_URL_TOKEN }}
         run: |
-          TOKEN="${NETWORK_URL_TOKEN:-preview}"
+          # 실명 포함 HTML — 토큰 미설정 시 예측 가능한 경로(/preview/)로
+          # 배포돼 경로 시크릿 층이 무력화된다. 배포하지 않고 실패시킨다.
+          if [ -z "$NETWORK_URL_TOKEN" ]; then
+            echo "::error::NETWORK_URL_TOKEN 시크릿 미설정 — 실명 HTML을 예측 가능한 경로로 배포할 수 없어 중단합니다"
+            exit 1
+          fi
+          TOKEN="$NETWORK_URL_TOKEN"
           mkdir -p "dist/$TOKEN"
           python scripts/build_network_html.py --out "dist/$TOKEN/index.html"
           # 루트는 빈 페이지(디렉터리 리스팅 방지) — 토큰 경로로만 접근

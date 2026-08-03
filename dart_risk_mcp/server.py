@@ -1279,6 +1279,14 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
         text = fetch_document_text(rcept_no, _DART_API_KEY, max_chars=500)
         if text:
             lines += ["", "━━ 원문 요약 (첫 500자) ━━", text[:500]]
+        elif not report_name:
+            # 제목도 없고 원문 조회도 실패 — 아무것도 분석하지 못한 상태를
+            # "신호 없음"으로 오인하지 않도록 사실을 명시(라이브 스모크 실측:
+            # 존재하지 않는 접수번호가 유효 공시처럼 읽히던 문제)
+            lines += ["", "⚠️ 이 접수번호의 원문을 조회하지 못했습니다 — "
+                          "접수번호 오류이거나 일시적 조회 실패일 수 있습니다. "
+                          "위 결과는 제목·원문을 확인하지 못한 상태이므로 "
+                          "'신호 없음'으로 해석하지 마세요."]
 
     from .core.signals import SIGNAL_KEY_TO_TAXONOMY as _SKT
     all_tax_ids = list({tid for s in matched for tid in _SKT.get(s["key"], [])})
@@ -2591,7 +2599,7 @@ def get_affiliate_investments(company_name: str, year: str = "") -> str:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
 
     corp_info = resolve_corp(company_name, api_key)
-    if not corp_info[1]:
+    if not corp_info or not corp_info[1]:
         return f"❌ 기업 '{company_name}'을(를) 찾을 수 없습니다."
     corp_name, info = corp_info
     corp_code = info["corp_code"]
@@ -2831,7 +2839,8 @@ def get_executive_compensation(
     if not _DART_API_KEY:
         return "오류: DART_API_KEY 환경변수가 설정되지 않았습니다."
 
-    corp_name, meta = resolve_corp(company_name, _DART_API_KEY)
+    _resolved = resolve_corp(company_name, _DART_API_KEY)
+    corp_name, meta = _resolved if _resolved else ("", {})
     if not corp_name:
         return f"기업을 찾을 수 없습니다: {company_name}"
     corp_code = meta["corp_code"]
@@ -2894,7 +2903,8 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
     if not _DART_API_KEY:
         return "오류: DART_API_KEY 환경변수가 설정되지 않았습니다."
 
-    corp_name, meta = resolve_corp(company_name, _DART_API_KEY)
+    _resolved = resolve_corp(company_name, _DART_API_KEY)
+    corp_name, meta = _resolved if _resolved else ("", {})
     if not corp_name:
         return f"기업을 찾을 수 없습니다: {company_name}"
     corp_code = meta["corp_code"]
@@ -3137,7 +3147,7 @@ def get_audit_opinion_history(company_name: str, lookback_years: int = 5) -> str
         lookback_years = 5
 
     corp_info = resolve_corp(company_name, api_key)
-    if not corp_info[1]:
+    if not corp_info or not corp_info[1]:
         return f"❌ 기업 '{company_name}'을(를) 찾을 수 없습니다."
     corp_name, info = corp_info
 
@@ -3249,7 +3259,8 @@ def track_debt_balance(company_name: str, year: str = "") -> str:
     if not api_key:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
 
-    corp_name, info = resolve_corp(company_name, api_key)
+    _resolved = resolve_corp(company_name, api_key)
+    corp_name, info = _resolved if _resolved else ("", {})
     if not info:
         return f"❌ 기업 '{company_name}'을(를) 찾을 수 없습니다."
 
@@ -3315,7 +3326,8 @@ def check_disclosure_anomaly(
     if not _DART_API_KEY:
         return "오류: DART_API_KEY 환경변수가 설정되지 않았습니다."
 
-    corp_name, meta = resolve_corp(company_name, _DART_API_KEY)
+    _resolved = resolve_corp(company_name, _DART_API_KEY)
+    corp_name, meta = _resolved if _resolved else ("", {})
     if not corp_name:
         return f"기업을 찾을 수 없습니다: {company_name}"
     corp_code = meta["corp_code"]
@@ -3465,7 +3477,8 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
     if not isinstance(lookback_years, int) or not (1 <= lookback_years <= 5):
         return "❌ lookback_years는 1~5 사이 정수여야 합니다."
 
-    corp_name, info = resolve_corp(company_name, _DART_API_KEY)
+    _resolved = resolve_corp(company_name, _DART_API_KEY)
+    corp_name, info = _resolved if _resolved else ("", {})
     if not info:
         return f"❌ '{company_name}'에 해당하는 기업을 찾을 수 없습니다."
 
@@ -3716,7 +3729,7 @@ def scan_financial_anomaly(
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
 
     corp_info = resolve_corp(company_name, api_key)
-    if not corp_info[1]:
+    if not corp_info or not corp_info[1]:
         return f"❌ 기업 '{company_name}'을(를) 찾을 수 없습니다."
     corp_name, info = corp_info
     corp_code = info["corp_code"]
@@ -4027,7 +4040,7 @@ def track_capital_structure(
         lookback_years = 3
 
     corp_info = resolve_corp(company_name, api_key)
-    if not corp_info[1]:
+    if not corp_info or not corp_info[1]:
         return f"❌ 기업 '{company_name}'을(를) 찾을 수 없습니다."
     corp_name, info = corp_info
     corp_code = info["corp_code"]

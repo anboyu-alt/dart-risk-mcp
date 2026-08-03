@@ -367,6 +367,22 @@ def load_corp_aliases() -> dict:
     return {}
 
 
+def _josa_ro(word: str) -> str:
+    """'로/으로' 조사 선택 — 받침 없음·ㄹ받침이면 '로', 그 외 '으로'.
+
+    마지막 글자가 한글 음절이 아니면(숫자·라틴 등) 발음을 알 수 없어
+    '(으)로'로 병기한다. (실측: "아틀라스링크'으로" 조사 오류 — 2026-08-04
+    라이브 스모크)
+    """
+    if not word:
+        return "로"
+    code = ord(word[-1])
+    if 0xAC00 <= code <= 0xD7A3:
+        jong = (code - 0xAC00) % 28
+        return "로" if jong in (0, 8) else "으로"  # 8 = 받침 ㄹ
+    return "(으)로"
+
+
 def resolve_corp(query: str, api_key: str) -> tuple[str, dict] | None:
     """기업명 또는 종목코드(6자리) → (정식 기업명, {corp_code, stock_code}).
 
@@ -390,8 +406,8 @@ def resolve_corp(query: str, api_key: str) -> tuple[str, dict] | None:
         current = alias.get("current") if alias else ""
         if current and current != query:
             info["alias_note"] = (
-                f"참고: 같은 이름 '{query}'에서 '{current}'으로 상호를 변경한 "
-                f"다른 상장사가 있습니다 — 그 회사를 찾으셨다면 '{current}'으로 검색하세요"
+                f"참고: 같은 이름 '{query}'에서 '{current}'{_josa_ro(current)} 상호를 변경한 "
+                f"다른 상장사가 있습니다 — 그 회사를 찾으셨다면 '{current}'{_josa_ro(current)} 검색하세요"
             )
         return name, info
 
@@ -427,7 +443,8 @@ def resolve_corp(query: str, api_key: str) -> tuple[str, dict] | None:
                 "stock_code": alias.get("stock_code", ""),
             }
         resolved_info["alias_note"] = (
-            f"옛 상호 '{query}' 입력을 현재 상호 '{resolved_name}'(상호변경)으로 해석했습니다"
+            f"옛 상호 '{query}' 입력을 현재 상호 '{resolved_name}'(상호변경)"
+            f"{_josa_ro(resolved_name)} 해석했습니다"
         )
         return resolved_name, resolved_info
 
@@ -957,6 +974,10 @@ _OUTFLOW_AFFILIATED_KEYWORDS = (
     "계열회사", "관계회사", "특수관계", "최대주주", "주요주주", "임원", "대표이사",
 )
 _OUTFLOW_EXTERNAL_VALUES = {"-", "타인", "해당없음", "해당 없음"}
+# "특수관계 없음"류 부정 표기 — 키워드 부분 일치보다 먼저 검사해야
+# affiliated 오분류(capital_backflow CRITICAL 게이트 오발화)를 막는다.
+_OUTFLOW_NEGATION_MARKERS = ("없음", "없습니다", "아님", "아닙니다",
+                             "않음", "않습니다", "무관")
 
 
 def classify_outflow_relation(relation: str) -> str:
@@ -973,6 +994,9 @@ def classify_outflow_relation(relation: str) -> str:
     r = (relation or "").strip()
     if not r:
         return "unknown"
+    if any(k in r for k in _OUTFLOW_NEGATION_MARKERS):
+        # "특수관계 없음"·"최대주주 아님" 등 — 관계가 없다는 명시적 진술
+        return "external"
     if any(k in r for k in _OUTFLOW_SUBSIDIARY_KEYWORDS):
         return "subsidiary"
     if any(k in r for k in _OUTFLOW_AFFILIATED_KEYWORDS):
@@ -1161,9 +1185,14 @@ _NAMED_ENT_RE = re.compile(r"&[a-zA-Z]+;")
 def _decode_html_entities(text: str) -> str:
     """HTML 엔티티 디코딩."""
     def replace_numeric(m: re.Match) -> str:
-        if m.group(1):
-            return chr(int(m.group(1)))
-        return chr(int(m.group(2), 16))
+        # 공시 원문은 외부 입력 — chr() 범위 밖 코드포인트가 오면 예외를
+        # 전파하지 않고 엔티티 표기를 원문 그대로 남긴다.
+        try:
+            if m.group(1):
+                return chr(int(m.group(1)))
+            return chr(int(m.group(2), 16))
+        except (ValueError, OverflowError):
+            return m.group(0)
 
     text = _NUMERIC_ENT_RE.sub(replace_numeric, text)
     for ent, ch in _HTML_ENTITIES.items():
@@ -1335,6 +1364,21 @@ _HEADING_RE = re.compile(
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.DOTALL | re.IGNORECASE)
 
 
+def _valid_section_headings(content: str) -> list:
+    """섹션 id(fNsM) 대상 헤딩 목록.
+
+    list_document_sections(id 부여)와 fetch_document_content(id 해석)가
+    반드시 같은 필터(제목 있음·200자 미만)를 공유해야 한다 — 한쪽만
+    필터하면 스킵 헤딩이 있는 문서에서 section_id가 다른 섹션을 가리킨다.
+    """
+    out = []
+    for m in _HEADING_RE.finditer(content):
+        title = _strip_tags(m.group(1)).strip()
+        if title and len(title) < 200:
+            out.append(m)
+    return out
+
+
 def list_document_sections(rcept_no: str, api_key: str) -> list[dict]:
     """DART 공시 ZIP 내 파일별 섹션(목차) 구조 반환.
 
@@ -1370,16 +1414,14 @@ def list_document_sections(rcept_no: str, api_key: str) -> list[dict]:
         title_m = _TITLE_RE.search(content)
         doc_title = _strip_tags(title_m.group(1)) if title_m else filename
 
-        # 섹션 헤딩 추출
-        for m in _HEADING_RE.finditer(content):
-            title = _strip_tags(m.group(1)).strip()
-            if title and len(title) < 200:
-                sections.append({
-                    "id": f"f{file_index}s{sec_id}",
-                    "title": title,
-                    "char_offset": m.start(),
-                })
-                sec_id += 1
+        # 섹션 헤딩 추출 (fetch_document_content와 동일 필터 공유)
+        for m in _valid_section_headings(content):
+            sections.append({
+                "id": f"f{file_index}s{sec_id}",
+                "title": _strip_tags(m.group(1)).strip(),
+                "char_offset": m.start(),
+            })
+            sec_id += 1
 
         # 섹션이 없으면 파일 전체를 하나의 섹션으로
         if not sections:
@@ -1532,8 +1574,8 @@ def fetch_document_content(
         if sec_m:
             f_idx = int(sec_m.group(1))
             s_idx = int(sec_m.group(2))
-            # 해당 파일의 섹션 목록에서 offset 구하기
-            headings = list(_HEADING_RE.finditer(raw_html))
+            # 해당 파일의 섹션 목록에서 offset 구하기 (id 부여와 동일 필터)
+            headings = _valid_section_headings(raw_html)
             if s_idx < len(headings):
                 start_pos = headings[s_idx].start()
                 end_pos = headings[s_idx + 1].start() if s_idx + 1 < len(headings) else len(raw_html)
@@ -2113,7 +2155,9 @@ def resolve_decision_type(report_name: str) -> str:
     """보고서명에서 decision_type을 자동 판별. 판별 실패 시 빈 문자열."""
     import re
     nm = re.sub(r"\[[^\]]*\]", "", report_name or "")
-    nm = nm.replace(" ", "").replace("·", "").replace(",", "")
+    # "ㆍ"(U+318D)는 DART 제목의 실제 가운뎃점 표기 — "·"(U+00B7)와 별개 문자
+    nm = (nm.replace(" ", "").replace("·", "").replace("ㆍ", "")
+          .replace(",", ""))
     for keyword, dtype in _DECISION_NAME_MAP:
         if keyword in nm:
             return dtype
@@ -2131,6 +2175,9 @@ def _normalize_decision(raw: dict, dtype: str, url: str) -> dict:
         or raw.get("dvcmp_cmpnm")
         or ""
     )
+    # DART 원문 개행이 그대로 오는 필드가 있다(코오롱인더 20260507000581
+    # 실측: "코오롱글로텍 주식회사(\nKOLON GLOTECH, INC.)") — 한 줄로 정규화
+    counterparty = " ".join(str(counterparty).split())
     # 거래금액 — tangible/stock/bond acq·div 4쌍은 {inh|trf}dtl_{inh|trf}prc가
     # 실제 금액 필드다(opendart_api_guide.md 실측 확인, v1.6.0에서 추가 —
     # 이전에 우선 조회하던 inh_pp/trf_pp는 "양수/양도목적" 텍스트라 숫자
@@ -2144,10 +2191,12 @@ def _normalize_decision(raw: dict, dtype: str, url: str) -> dict:
     # v1.9.0에서 의미 없는 폴백을 제거 — 동작은 그대로(0)이지만 의도를
     # 명확히 한다. 이 4종은 DECISION_NO_EXTVAL도 amount>=50억 조건이 항상
     # False라 구조적으로 발화하지 않는다).
+    # dlptn_cpt는 "거래상대방(자본금(원))" — 거래금액이 아니라 폴백에서
+    # 제외한다(상대방 자본금이 거래금액으로 표시되고 DECISION_NO_EXTVAL이
+    # 잘못된 근거 금액으로 발화하던 오류).
     amount = _to_int_safe(
         raw.get("inhdtl_inhprc")
         or raw.get("trfdtl_trfprc")
-        or raw.get("dlptn_cpt")
         or raw.get("inh_pp")
         or raw.get("trf_pp")
         or raw.get("trfg_pp")
@@ -2930,8 +2979,11 @@ def parse_xbrl_depreciation(instance_xml: str, fs_div: str = "CFS") -> dict:
         ed = re.search(r"<(?:xbrli:)?endDate>(\d{4})-(\d{2})-(\d{2})<", body)
         if not sd or not ed:
             continue  # instant(시점) 컨텍스트
-        start = date(int(sd.group(1)), int(sd.group(2)), int(sd.group(3)))
-        end = date(int(ed.group(1)), int(ed.group(2)), int(ed.group(3)))
+        try:
+            start = date(int(sd.group(1)), int(sd.group(2)), int(sd.group(3)))
+            end = date(int(ed.group(1)), int(ed.group(2)), int(ed.group(3)))
+        except ValueError:
+            continue  # "2023-13-01"류 불량 날짜 — 해당 컨텍스트만 건너뜀
         if (end - start).days < 300:
             continue
         member: str | None = None
@@ -3800,9 +3852,12 @@ def fetch_audit_opinion_history(
     current_year = datetime.now().year
     cutoff = current_year - lookback_years
 
-    # DART 엔드포인트는 bsns_year+reprt_code 필수: 연도×엔드포인트 루프
+    # DART 엔드포인트는 bsns_year+reprt_code 필수: 연도×엔드포인트 루프.
+    # 당해연도(bsns_year=current)는 사업보고서가 아직 제출되지 않아 항상
+    # 빈 응답 — 포함하면 "최근 N년"에 실제 N-1개 제출연도만 담긴다
+    # (fetch_loss_streak와 동일하게 직전 연도부터 N개 연도를 조회).
     raw: dict[str, list] = {k: [] for k in _AUDIT_OPINION_URLS}
-    for year_int in range(cutoff + 1, current_year + 1):
+    for year_int in range(cutoff, current_year):
         for kind, url in _AUDIT_OPINION_URLS.items():
             try:
                 resp = _retry("GET", url, params={

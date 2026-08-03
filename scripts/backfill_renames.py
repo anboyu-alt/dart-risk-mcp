@@ -156,8 +156,7 @@ def main():
     if changed:
         sightings_path.parent.mkdir(parents=True, exist_ok=True)
         sdata["updated"] = datetime.now().strftime("%Y-%m-%d")
-        with open(sightings_path, "w", encoding="utf-8") as f:
-            json.dump(sdata, f, ensure_ascii=False, indent=0)
+        da._atomic_write_json(sightings_path, sdata, indent=0)
         print(f"저장: {sightings_path}")
     else:
         print("변경 없음")

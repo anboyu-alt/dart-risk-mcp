@@ -162,6 +162,17 @@ class TestClassifyOutflowRelation(unittest.TestCase):
         self.assertEqual(classify_outflow_relation(None), "unknown")
         self.assertEqual(classify_outflow_relation("알수없는표기"), "unknown")
 
+    def test_negated_relation_is_not_affiliated(self):
+        # "특수관계 없음"류 부정 표기는 키워드 부분 일치로 affiliated가 되면
+        # 안 된다 — capital_backflow(CRITICAL) 게이트의 오발화 경로.
+        for r in ("특수관계 없음", "해당사항 없음(특수관계 없음)",
+                  "특수관계 아님", "최대주주 아님", "특수관계인에 해당하지 않음",
+                  "없음", "특수관계 무관"):
+            self.assertEqual(classify_outflow_relation(r), "external", r)
+
+    def test_negated_subsidiary_is_not_subsidiary(self):
+        self.assertEqual(classify_outflow_relation("종속회사 아님"), "external")
+
 
 class TestStakePledgeSignalSeparation(unittest.TestCase):
     def _keys(self, title: str) -> set[str]:

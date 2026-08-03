@@ -30,6 +30,7 @@ from scripts.discover_actors import (
     collect_funding_sightings_range,
     merge_sightings,
     _load,
+    _atomic_write_json,
     _DEFAULT_SIGHTINGS,
 )
 from scripts.refresh_known_actors import send_mail, _api_key
@@ -91,8 +92,7 @@ def run_backfill(api_key: str, sightings_path: Path, start: datetime, end: datet
         state["done_until"] = cend.strftime("%Y%m%d")
         sdata["updated"] = datetime.now().strftime("%Y-%m-%d")
         sightings_path.parent.mkdir(parents=True, exist_ok=True)
-        sightings_path.write_text(
-            json.dumps(sdata, ensure_ascii=False, indent=1), encoding="utf-8")
+        _atomic_write_json(sightings_path, sdata, indent=1)
         total_funding += stats["funding"]
         total_extracted += stats["extracted"]
         done_chunks += 1
@@ -169,7 +169,7 @@ def main():
         if sp.exists():
             sd = _load(sp, {"version": 1, "sightings": {}})
             if sd.pop("backfill", None) is not None:
-                sp.write_text(json.dumps(sd, ensure_ascii=False, indent=1), encoding="utf-8")
+                _atomic_write_json(sp, sd, indent=1)
                 print("[RESET] backfill 진행 마커 초기화 — --start부터 재수집")
 
     end = datetime.strptime(args.end, "%Y-%m-%d") if args.end else datetime.now()
