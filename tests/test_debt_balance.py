@@ -110,6 +110,16 @@ class TestDetectDebtRollover(unittest.TestCase):
         ]
         self.assertIsNone(dart_client.detect_debt_rollover(balances, events))
 
+    def test_no_flag_when_years_not_consecutive(self):
+        # 결측 연도로 비연속(2020→2023→2024)이면 "3년 연속" 판정을 하지
+        # 않는다 — 몇 년 건너뛴 간격에 YoY 평탄 판정이 적용되던 문제(E-6)
+        balances = [(2020, 1_000_000_000), (2023, 1_020_000_000), (2024, 1_050_000_000)]
+        events = [
+            {"key": "CB_BW", "rcept_dt": "20230515"},
+            {"key": "CB_BW", "rcept_dt": "20240310"},
+        ]
+        self.assertIsNone(dart_client.detect_debt_rollover(balances, events))
+
     def test_no_flag_when_cb_events_below_2(self):
         balances = [(2022, 1_000_000_000), (2023, 1_020_000_000), (2024, 1_050_000_000)]
         events = [{"key": "CB_BW", "rcept_dt": "20230515"}]
