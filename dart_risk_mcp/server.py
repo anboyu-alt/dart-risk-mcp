@@ -1279,6 +1279,14 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
         text = fetch_document_text(rcept_no, _DART_API_KEY, max_chars=500)
         if text:
             lines += ["", "━━ 원문 요약 (첫 500자) ━━", text[:500]]
+        elif not report_name:
+            # 제목도 없고 원문 조회도 실패 — 아무것도 분석하지 못한 상태를
+            # "신호 없음"으로 오인하지 않도록 사실을 명시(라이브 스모크 실측:
+            # 존재하지 않는 접수번호가 유효 공시처럼 읽히던 문제)
+            lines += ["", "⚠️ 이 접수번호의 원문을 조회하지 못했습니다 — "
+                          "접수번호 오류이거나 일시적 조회 실패일 수 있습니다. "
+                          "위 결과는 제목·원문을 확인하지 못한 상태이므로 "
+                          "'신호 없음'으로 해석하지 마세요."]
 
     from .core.signals import SIGNAL_KEY_TO_TAXONOMY as _SKT
     all_tax_ids = list({tid for s in matched for tid in _SKT.get(s["key"], [])})
