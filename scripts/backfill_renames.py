@@ -29,6 +29,10 @@ from dart_risk_mcp.core.dart_client import (  # noqa: E402
 )
 from dart_risk_mcp.core.known_actors import fold_name  # noqa: E402
 import scripts.discover_actors as da  # noqa: E402
+from scripts.backfill_corp_aliases import (  # noqa: E402
+    is_valid_alias_record,
+    strip_corp_form,
+)
 
 # '가. 변경전 국문 엑스큐어 주식회사 영문 Xcure Corp. 나. 변경후 국문 …' 구조.
 # 국문 사명만 취하고 영문·다음 항목 표지에서 멈춘다.
@@ -51,6 +55,13 @@ def extract_renames_from_text(txt: str, fallback_after: str = "") -> tuple[set, 
     after = am.group(1).strip() if am else (fallback_after or "")
     af = fold_name(after)
     olds = {o for o in olds if o and fold_name(o) and fold_name(o) != af}
+    # 쓰레기 게이트(감사 A-4) — 공개 corp-aliases 경로와 동일한
+    # is_valid_alias_record를 적용하되, 이 경로의 옛 사명은 법인 표기가
+    # 남은 원형이라 strip_corp_form으로 벗긴 뒤 검증한다(옛 사명 단독
+    # 검증 — after 자리에도 같은 값을 넣어 old 측 규칙만 적용).
+    olds = {o for o in olds
+            if is_valid_alias_record(strip_corp_form(o) or o,
+                                     strip_corp_form(o) or o)}
     return olds, after
 
 

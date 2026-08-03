@@ -26,6 +26,15 @@ class TestNormalizeDecisionAmount(unittest.TestCase):
         d = _normalize_decision(raw, "tangible_acq", "url")
         self.assertEqual(d.get("amount"), 17_400_000_000)
 
+    def test_relation_field_not_used_as_counterparty_name(self):
+        # dlptn_rl_cmpn은 "거래상대방(회사와의 관계)" — 상대방 이름이 아니다.
+        # 이름 폴백에 섞여 있으면 이름 자리에 "계열회사"가 표시됐다(감사 A-3).
+        raw = {"dlptn_rl_cmpn": "계열회사"}
+        d = _normalize_decision(raw, "tangible_acq", "url")
+        self.assertEqual(d.get("counterparty"), "")
+        self.assertEqual(d.get("relation_text"), "계열회사")
+        self.assertTrue(d.get("related_party"))  # 관계 텍스트 기반 판정은 유지
+
     def test_counterparty_newline_normalized(self):
         # 코오롱인더 20260507000581 실측 — 원문 개행이 필드에 섞여 온다
         raw = {"extr_tgcmp_cmpnm": "코오롱글로텍 주식회사(\nKOLON GLOTECH, INC.)"}

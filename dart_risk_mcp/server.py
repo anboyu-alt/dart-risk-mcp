@@ -750,11 +750,17 @@ def analyze_company_risk(
     fund_records = fetch_fund_usage(corp_code, _DART_API_KEY, 3)
 
     # v0.9.0: 부실 후속 이벤트(부도/영업정지/회생/해산) 흡수 — 발생 시 사실 표기만 ------
+    # 연 단위 API라 올림으로 맞추고(365일→1년; 기존 +1은 기본 조회에서
+    # 2년치를 수집해 조회 기간 밖 이벤트가 섞였다 — 감사 E-3), 연 경계
+    # 잔여분은 rcept_dt 컷오프로 정확히 창을 맞춘다.
     distress_events = fetch_distress_events(
         corp_code, _DART_API_KEY,
-        max(1, (lookback_days // 365) + 1),
+        max(1, (lookback_days + 364) // 365),
     )
+    _distress_cutoff = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y%m%d")
     for _de in distress_events:
+        if (_de.get("rcept_dt") or "") and _de["rcept_dt"] < _distress_cutoff:
+            continue
         signal_events.append({
             "key": "DISTRESS_EVENT",
             "label": "부실 단계 진입",
@@ -1191,7 +1197,13 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
     lines = [f"📋 **공시 리스크 분석**", f"공시: {title}", ""]
 
     if not matched:
-        lines.append("이 공시에서 의심 신호가 탐지되지 않았습니다.")
+        if is_amendment:
+            # match_signals는 정정공시에 항상 []를 반환하므로 루프 안의
+            # amendment_note는 도달 불능이었다(감사 E-2) — 여기서 안내한다
+            lines.append("정정공시입니다 — 원공시의 번복/수정이므로 신호 관찰"
+                         " 대상에서 제외됩니다. 원공시 접수번호로 다시 조회하세요.")
+        else:
+            lines.append("이 공시에서 의심 신호가 탐지되지 않았습니다.")
     else:
         for sig in matched:
             from .core.signals import SIGNAL_KEY_TO_TAXONOMY
@@ -2731,7 +2743,9 @@ def search_market_disclosures(preset: str, days: int = 7, max_results: int = 50)
                 seen_rcept.add(rc)
             raw.append(d)
 
-    cur = now - timedelta(days=days)
+    # 양끝 포함이라 days-1을 빼야 정확히 days일 창이 된다 (기존은
+    # "최근 7일" 요청에 8일을 스캔 — 감사 E-4)
+    cur = now - timedelta(days=days - 1)
     while cur <= now:
         chunk_end = min(cur + timedelta(days=_CHUNK_DAYS - 1), now)
         chunk = fetch_market_disclosures(

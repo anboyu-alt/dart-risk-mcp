@@ -463,6 +463,31 @@ class TestMergeAndPromote(unittest.TestCase):
         kd = {"actors": {"홍길동": [{"source": "자동 발굴", "status": "auto_matched"}]}}
         self.assertEqual(da.promote_repeat_actors(sd, kd, n=2), [])  # 이미 발굴 등재
 
+    def test_promote_skips_when_registered_under_old_canon(self):
+        # 정본 드리프트(감사 A-1): 표기 A로 등재된 뒤 레코드가 쌓여 sightings
+        # 정본이 표기 B로 바뀌어도, aliases/fold 그룹 전체를 대조해 같은
+        # 실체의 재등재를 막아야 한다.
+        import scripts.discover_actors as da
+        sd = {
+            "sightings": {"주식회사 케이프투자": [
+                {"corp_code": "c1", "corp": "A", "rcept_no": "R1", "date": "2026-06"},
+                {"corp_code": "c2", "corp": "B", "rcept_no": "R2", "date": "2026-06"}]},
+            "aliases": {"케이프투자(주)": "주식회사 케이프투자"},
+        }
+        kd = {"actors": {"케이프투자(주)": [
+            {"source": "자동 발굴", "status": "auto_matched"}]}}
+        self.assertEqual(da.promote_repeat_actors(sd, kd, n=2), [])
+
+    def test_promote_skips_when_registry_key_folds_same(self):
+        # 별칭 등록이 안 됐어도 fold가 같으면(법인 표기 차이) 같은 실체
+        import scripts.discover_actors as da
+        sd = {"sightings": {"㈜한빛파트너스": [
+            {"corp_code": "c1", "corp": "A", "rcept_no": "R1", "date": "2026-06"},
+            {"corp_code": "c2", "corp": "B", "rcept_no": "R2", "date": "2026-06"}]}}
+        kd = {"actors": {"주식회사 한빛파트너스": [
+            {"source": "자동 발굴", "status": "auto_matched"}]}}
+        self.assertEqual(da.promote_repeat_actors(sd, kd, n=2), [])
+
 
 class TestDailyReport(unittest.TestCase):
     def test_build_daily_report_always_summarizes(self):

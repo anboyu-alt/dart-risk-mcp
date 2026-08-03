@@ -821,8 +821,23 @@ def promote_repeat_actors(sightings_data: dict, known_data: dict,
         corp_codes = {r.get("corp_code") for r in recs if r.get("corp_code")}
         if len(corp_codes) < n:
             continue
-        if any(r.get("source") == "자동 발굴" for r in actors.get(nm, [])):
-            continue  # 이미 발굴 등재
+        # 이미 발굴 등재 검사 — 정본 키 단독이 아니라 별칭·fold 그룹 전체로
+        # 대조한다. fold 정본은 "레코드 최다 표기"로 매 실행 재평가되므로,
+        # 표기 A로 등재된 뒤 정본이 표기 B로 바뀌면 actors.get(B) 단독
+        # 가드는 빗나가 같은 실체가 이중 등재됐다(감사 A-1).
+        _alias_map = sightings_data.get("aliases", {})
+        _group = {nm} | {k for k, v in _alias_map.items() if v == nm}
+        _group_folds = set()
+        for _g in _group:
+            _group_folds |= set(fold_variants(_g))
+        _already = False
+        for _reg_key, _rows in actors.items():
+            if _reg_key in _group or (set(fold_variants(_reg_key)) & _group_folds):
+                if any(r.get("source") == "자동 발굴" for r in _rows):
+                    _already = True
+                    break
+        if _already:
+            continue  # 이미 발굴 등재 (별칭·표기 변형 포함)
         if is_problem_fn is not None:
             problem_codes = {cc for cc in corp_codes if is_problem_fn(cc)}
         else:

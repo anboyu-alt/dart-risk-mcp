@@ -2166,13 +2166,15 @@ def resolve_decision_type(report_name: str) -> str:
 
 def _normalize_decision(raw: dict, dtype: str, url: str) -> dict:
     """결정 공시 원본을 공통 스키마로 정규화."""
+    # 상대방 이름 — 가이드 실측 기준 실존 3종만(양수도 8종 dlptn_cmpnm ·
+    # merger류 mgptncmp_cmpnm · stock_exchange extr_tgcmp_cmpnm). 관계 필드
+    # dlptn_rl_cmpn("계열회사" 등)이 이름 폴백에 섞여 이름 자리에 관계
+    # 텍스트가 표시되던 오류와, 가이드에 없는 죽은 필드 2종
+    # (mg_ctrcmp_cmpnm·dvcmp_cmpnm)을 2026-08-04 감사에서 제거.
     counterparty = (
         raw.get("dlptn_cmpnm")
         or raw.get("mgptncmp_cmpnm")
         or raw.get("extr_tgcmp_cmpnm")
-        or raw.get("dlptn_rl_cmpn")
-        or raw.get("mg_ctrcmp_cmpnm")
-        or raw.get("dvcmp_cmpnm")
         or ""
     )
     # DART 원문 개행이 그대로 오는 필드가 있다(코오롱인더 20260507000581
@@ -2199,7 +2201,6 @@ def _normalize_decision(raw: dict, dtype: str, url: str) -> dict:
         or raw.get("trfdtl_trfprc")
         or raw.get("inh_pp")
         or raw.get("trf_pp")
-        or raw.get("trfg_pp")
     )
     # 자산총액대비(%) — tangible/stock/bond acq·div 8개 엔드포인트는
     # {inh|trf}dtl_tast_vs, business_acq/div(영업양수·양도)만 다른 필드명
@@ -2211,9 +2212,6 @@ def _normalize_decision(raw: dict, dtype: str, url: str) -> dict:
         raw.get("inhdtl_tast_vs")
         or raw.get("trfdtl_tast_vs")
         or raw.get("ast_rt")
-        or raw.get("inhdamount_totalast_rt")
-        or raw.get("trfamount_totalast_rt")
-        or raw.get("totalast_rt")
         or "0"
     )
     try:
@@ -2235,12 +2233,11 @@ def _normalize_decision(raw: dict, dtype: str, url: str) -> dict:
         or ""
     ).strip()
 
-    related = False
-    for k in ("ftc_stt_atn", "rl_cmpn_atn", "speclt_pson_atn"):
-        v = str(raw.get(k) or "").strip()
-        if v in ("예", "Y", "해당", "있음"):
-            related = True
-            break
+    # 특수관계 여부 — 가이드 실존 필드는 ftc_stt_atn(공정거래위원회 신고
+    # 대상 여부, 12종 공통)뿐. rl_cmpn_atn·speclt_pson_atn은 가이드 미검출
+    # 죽은 필드라 2026-08-04 감사에서 제거.
+    related = str(raw.get("ftc_stt_atn") or "").strip() in (
+        "예", "Y", "해당", "있음")
     if not related and any(
         s in relation_text for s in ("특수관계", "계열회사", "관계회사", "자회사", "최대주주")
     ):
@@ -4102,6 +4099,12 @@ def detect_debt_rollover(
 
     asc = sorted(balances, key=lambda x: x[0])
     recent = asc[-_CB_ROLLOVER_YEARS_REQUIRED:]
+
+    # "3년 연속" 라벨 그대로 — 결측 연도로 비연속이면(총액 0인 해는 수집
+    # 제외돼 생길 수 있음) 몇 년 건너뛴 간격에 YoY 평탄 판정을 적용하게
+    # 되므로 판정하지 않는다 (감사 E-6)
+    if any(recent[i][0] != recent[i - 1][0] + 1 for i in range(1, len(recent))):
+        return None
 
     for i in range(1, len(recent)):
         prev = recent[i-1][1]
