@@ -290,3 +290,66 @@ def test_fold_collision_not_merged():
     byid = {n["id"]: n for n in g["nodes"]}
     assert byid["c:501"].get("dual") is not True
     assert byid["c:502"].get("dual") is not True
+
+
+# ── actor_corp_ids 1순위 병합 (discover self-heal 산출물 소비) ──────────
+
+def _dup_name_sightings():
+    """동명 회사 2곳(corp_code 상이) + 명부 해석된 법인 행위자 — 에이프로젠 축소판.
+
+    fold('알파')가 {201, 202} 2개 corp_code에 걸려 fold2cc로는 병합 불가.
+    actor_corp_ids가 '(주)알파'→201 해석을 제공하면 병합돼야 한다.
+    """
+    return {
+        "sightings": {
+            "(주)알파": [
+                {"corp": "베타", "corp_code": "101", "corp_cls": "Y",
+                 "rcept_no": "20260101000001", "date": "2026-01", "kind": "corp"},
+                {"corp": "감마", "corp_code": "102", "corp_cls": "K",
+                 "rcept_no": "20260201000002", "date": "2026-02", "kind": "corp"},
+            ],
+            "조합1호": [
+                {"corp": "알파", "corp_code": "201", "corp_cls": "Y",
+                 "rcept_no": "20260301000003", "date": "2026-03", "kind": "fund"},
+                {"corp": "베타", "corp_code": "101", "corp_cls": "Y",
+                 "rcept_no": "20260301000004", "date": "2026-03", "kind": "fund"},
+            ],
+            "조합2호": [
+                {"corp": "알파", "corp_code": "202", "corp_cls": "E",
+                 "rcept_no": "20260401000005", "date": "2026-04", "kind": "fund"},
+                {"corp": "감마", "corp_code": "102", "corp_cls": "K",
+                 "rcept_no": "20260401000006", "date": "2026-04", "kind": "fund"},
+            ],
+        },
+        "actor_corp_ids": {"201": "(주)알파"},
+    }
+
+
+def test_actor_corp_ids_merges_despite_fold_collision():
+    """actor_corp_ids 해석이 있으면 fold 충돌(동명 회사 2곳)에도 병합된다."""
+    g = build_graph(_dup_name_sightings(), min_companies=2)
+    ids = {n["id"] for n in g["nodes"]}
+    assert "a:(주)알파" not in ids          # 별도 행위자 노드가 사라짐
+    merged = next(n for n in g["nodes"] if n["id"] == "c:201")
+    assert merged["dual"] is True            # 회사(조합1호 투자 유치) + 투자자(베타·감마)
+    assert merged["out_deg"] == 2
+    assert "(주)알파" in merged.get("aliases", [])   # 원표기 보존
+    assert "c:202" in ids                    # 동명 별개 법인 노드는 그대로 유지
+
+
+def test_without_actor_corp_ids_fold_collision_stays_split():
+    """actor_corp_ids가 없으면 기존 모호 가드 유지 — 병합하지 않는다(회귀 고정)."""
+    data = _dup_name_sightings()
+    del data["actor_corp_ids"]
+    g = build_graph(data, min_companies=2)
+    assert "a:(주)알파" in {n["id"] for n in g["nodes"]}
+
+
+def test_actor_corp_ids_unknown_corp_ignored():
+    """해석된 corp_code가 그래프에 회사로 실존하지 않으면 무시 — 라벨이 코드
+    숫자로 남는 병합을 만들지 않는다."""
+    data = _dup_name_sightings()
+    data["actor_corp_ids"] = {"999": "(주)알파"}
+    g = build_graph(data, min_companies=2)
+    assert "a:(주)알파" in {n["id"] for n in g["nodes"]}
+    assert "c:999" not in {n["id"] for n in g["nodes"]}

@@ -89,8 +89,24 @@ def build_graph(sightings: dict, min_companies: int = 2) -> dict:
     # 한 fold가 복수 corp_code면 모호 → 자동 병합 금지(맵에서 제외)
     fold2cc = {f: next(iter(ccs)) for f, ccs in _fold_ccs.items() if len(ccs) == 1}
 
+    # actor_corp_ids(디스커버 self-heal, reconcile_corp_renames) 역맵 —
+    # 정본 행위자 키 → corp_code. 명부 해석이 끝난 법인 키는 fold 충돌
+    # (동명 회사)과 무관하게 병합한다. 회사 노드로 실존하는 corp_code만
+    # 채택 — 아니면 병합해도 라벨이 코드 숫자로 남는다. 같은 키가 복수
+    # corp_code의 정본이면(비정상 데이터) 모호로 보고 제외.
+    actor_cc: dict = {}
+    _seen_keys: set = set()
+    for cc, k in (sightings.get("actor_corp_ids") or {}).items():
+        if cc not in company_label:
+            continue
+        if k in _seen_keys:
+            actor_cc.pop(k, None)
+            continue
+        _seen_keys.add(k)
+        actor_cc[k] = cc
+
     def canon_actor_id(nm: str) -> str:
-        cc = fold2cc.get(fold_name(nm))
+        cc = actor_cc.get(nm) or fold2cc.get(fold_name(nm))
         return ("c:" + cc) if cc else ("a:" + nm)
 
     # ── Phase C: 노드 레지스트리 병합 ──
