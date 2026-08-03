@@ -1093,6 +1093,10 @@ function mtag(mkt) {
   const m = MARKET[mkt || "unlisted"];
   return `<span class="mtag mkt-${mkt || "unlisted"}">${m.ko}</span>`;
 }
+// 동명 별개 법인 감지 — 같은 라벨의 노드 수. corp_code가 달라 병합되지 않은
+// 실존 동명 실체를 상세에서 구분 안내한다(사실 표기 — 합병·계열 판정 아님).
+const labelCount = {};
+nodes.forEach(n => { labelCount[n.label] = (labelCount[n.label] || 0) + 1; });
 // 단계 탐색 — 선택 노드에서 BFS 거리 d 이내만 표시, 나머지 디밍.
 // 그래프 대부분이 한 덩어리라 전역 세력망 필터 대신, 노드 중심으로
 // 투자의 선이 몇 단계까지 번지는지 조절하며 본다.
@@ -1215,6 +1219,9 @@ function openDetail(n) {
     meta.innerHTML += `<span>접점 추적 행위자 ${n.in_deg}명</span>`;
   if ((n.aliases || []).length)
     meta.innerHTML += `<span class="aka">⚑ 다른 이름: ${n.aliases.map(esc).join(", ")}</span>`;
+  if ((labelCount[n.label] || 0) > 1)
+    meta.innerHTML += `<span class="aka">⚠ 동명 별개 법인 ${labelCount[n.label] - 1}건 — ` +
+      `이름이 같아도 corp_code가 다른 별도 실체입니다</span>`;
   // 세력망(연쇄) 지표 — 투자의 선으로 간접 연결된 덩어리 전체의 규모
   if (n.comp !== undefined) {
     const c = comps[n.comp];
@@ -1383,6 +1390,7 @@ function renderSearchResults(term) {
     const kindKo = n.dual ? "회사 · 투자자" : KIND[n.type].ko;
     row.innerHTML = `<span class="${dotCls}"${dotStyle}></span>` +
       `<span class="cname">${esc(n.label)}</span>` +
+      ((n.type === "company" || n.dual) && n.mkt ? mtag(n.mkt) : "") +
       `<span class="qr-kind">${kindKo}</span>`;
     row.onclick = () => {
       if (matchMedia("(max-width: 640px)").matches) toggleSheet(false);

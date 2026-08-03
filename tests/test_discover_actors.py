@@ -627,3 +627,24 @@ class TestDiscoverMainRegistryWriteNote(unittest.TestCase):
         self.assertNotIn("설정 확인 필요", body)
         self.assertNotIn("미설정", body)
         self.assertNotIn("자격증명은 정상", body)
+
+
+def test_corp_name_index_same_name_prefers_listed(monkeypatch):
+    """동명 상장+비상장 법인이 명부에 공존하면 _corp_cache의 상장 우선 병합
+    (_merge_corp_entry)을 이어받아 상장사 corp_code 단독으로 해석된다 —
+    에이프로젠(00152385 상장 vs 00549059 비상장) 실측 사례의 계약화.
+    이 덕에 reconcile_corp_renames가 '(주)에이프로젠'류 행위자 키를
+    모호 없이 상장사로 귀속한다(비상장 동명 법인이 실제 행위자일 가능성은
+    잔존 한계 — 설계 문서 Task 4 리스크 참고)."""
+    from dart_risk_mcp.core import dart_client as dc
+    from dart_risk_mcp.core.known_actors import fold_name
+    import scripts.discover_actors as da
+    cache, mdates = {}, {}
+    # 비상장이 먼저 등장 + modify_date도 더 최신이지만 상장이 이긴다
+    dc._merge_corp_entry(cache, mdates, "에이프로젠", "00549059", "", "20260101")
+    dc._merge_corp_entry(cache, mdates, "에이프로젠", "00152385", "007460", "20230101")
+    assert cache["에이프로젠"]["corp_code"] == "00152385"
+    monkeypatch.setattr(dc, "_load_corp_codes", lambda key: None)
+    monkeypatch.setattr(dc, "_corp_cache", cache)
+    idx = da._corp_name_index("dummy-key")
+    assert idx[fold_name("에이프로젠")] == {"00152385"}

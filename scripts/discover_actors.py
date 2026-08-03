@@ -574,6 +574,13 @@ def _corp_name_index(api_key: str) -> dict:
 
     reconcile_corp_renames의 입력. 24시간 파일 캐시(_load_corp_codes) 재사용
     — 추가 API 호출 없음(일일 첫 실행만 1회 다운로드).
+
+    동명 법인(같은 corp_name, 다른 corp_code)은 _corp_cache가 이름 키 dict라
+    _merge_corp_entry의 '상장 우선' 정책으로 한쪽만 남는다 — 즉 이 인덱스의
+    동명 해석은 암묵이 아닌 그 정책의 의도된 계승이다(에이프로젠 00152385
+    상장 vs 00549059 비상장 실측). 비상장 동명 법인이 실제 행위자인 경우의
+    오귀속 가능성은 알려진 한계로, 완전한 해소는 공시 원문의 추가 식별자
+    (주소·대표자)가 필요해 비범위.
     """
     from dart_risk_mcp.core import dart_client as _dc
     _dc._load_corp_codes(api_key)
