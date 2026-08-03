@@ -546,7 +546,7 @@ README의 "이 도구가 하지 않는 것" 직후, CLAUDE.md의 "비범위" 직
 - **CB/BW/EB·유상증자 구조화 엔드포인트 래퍼 6종** — `fetch_cb_issue_decision`(`cvbdIsDecsn`), `fetch_bw_issue_decision`(`bdwtIsDecsn`), `fetch_eb_issue_decision`(`exbdIsDecsn`), `fetch_piic_decision`(`piicDecsn`), `fetch_fric_decision`(`fricDecsn`), `fetch_pifric_decision`(`pifricDecsn`). 파라미터는 DART 규격에 맞춰 `corp_code + bgn_de + end_de`.
 - **DART ACODE 기반 HTML 테이블 파서** — `_extract_investor_table(name_acode, amount_acode)`. DART 표준 공시의 `<TE ACODE="X">` 컬럼 속성으로 인수자명·금액을 정확히 추출. CB는 `ISSU_NM/ISSU_AMT`, Rights는 `PART/ALL_CNT`.
 - 릴리스 게이트 문서 `docs/superpowers/release_gates/2026-04-23-v0.7.0-gate.md` — G1~G4 실측 결과.
-- 재무이상 임계값 재조정 근거 문서 `tmp/thresholds_v0.7_decision.md` — 25개 샘플 분포 기반.
+- 재무이상 임계값 재조정 근거 문서 `docs/superpowers/decisions/2026-04-23-v0.7.0-thresholds-decision.md` — 25개 샘플 분포 기반.
 
 ### Changed
 - **재무이상 임계값 재조정** — V.2 샘플로 측정한 실제 분포 기반:
@@ -582,7 +582,7 @@ README의 "이 도구가 하지 않는 것" 직후, CLAUDE.md의 "비범위" 직
 
 ### Infra
 - `detect_capital_churn` 반환 dict에 `max_dilutive_12m`·`max_non_dilutive_12m` 필드 추가.
-- `tmp/thresholds_decision.md` — V.2 5개 샘플 실측 분포 및 임계값 재조정 연기 근거 기록.
+- `docs/superpowers/decisions/2026-04-22-v0.6.1-thresholds-decision.md` — V.2 5개 샘플 실측 분포 및 임계값 재조정 연기 근거 기록.
 
 ### Deferred (v0.7.x로 이연)
 - 재무이상 임계값 경험적 재조정 — V.2 5개 샘플 중 2개 상폐·나머지 분포가 현재 임계값 재조정에 불충분. 10~20개 확장 샘플 필요.
