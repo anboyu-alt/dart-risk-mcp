@@ -145,7 +145,7 @@ def main():
     changed = merge_renames(sdata, renames)
     n_keys_before = len(sdata.get("sightings", {}))
     if da.reconcile_corp_renames(sdata, da._corp_name_index(key),
-                                 da._legacy_name_index(sdata)):
+                                 da._combined_legacy_index(sdata)):
         changed = True
     merged = n_keys_before - len(sdata.get("sightings", {}))
     print(f"소급 병합된 행위자 키: {merged}건")

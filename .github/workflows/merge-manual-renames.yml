@@ -1,0 +1,66 @@
+name: Merge manual renames
+
+# 수동 개명 시드(manual_renames.json, private sightings repo) 검증·병합 —
+# '상호변경안내' 백필이 못 잡는 KOSPI 개명(주총 의결 정관변경 등)의 운영자
+# 등재 경로. 시드 event의 rcept_no를 DART와 대조 검증(연결 치명·표기 경고)한
+# 뒤 corp_renames에 병합하고 옛 사명 행위자 키를 소급 병합한다.
+#
+# daily cron(discover_actors)도 같은 시드를 자동 반영하므로 이 워크플로우는
+# "지금 즉시 + 검증하며" 반영하고 싶을 때 수동 실행한다.
+# 로그에는 회사 개명 이력(공개 사실)과 건수만 출력된다 — 인물 데이터 없음.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "true면 저장 없이 검증·병합 결과만 출력"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install package
+        run: pip install -e .
+      - name: Checkout sightings (private)
+        uses: actions/checkout@v5
+        with:
+          repository: anboyu-alt/dart-risk-mcp-sightings
+          token: ${{ secrets.SIGHTINGS_REPO_TOKEN }}
+          path: _sightings
+      - name: Verify + merge manual renames
+        env:
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+          SIGHTINGS_PATH: _sightings/sightings.json
+        run: |
+          ARGS=""
+          [ "${{ inputs.dry_run }}" = "true" ] && ARGS="--dry-run"
+          python scripts/merge_manual_renames.py $ARGS
+      - name: Commit sightings (private)
+        if: always()
+        run: |
+          cd _sightings
+          if [ -z "$(git status --porcelain sightings.json)" ]; then
+            echo "sightings 변경 없음"; exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3; do
+            git add sightings.json
+            git commit -m "chore: 수동 개명 시드 병합 (manual_renames)" || true
+            if git push; then echo "push 성공 (시도 $attempt)"; exit 0; fi
+            echo "::warning::push 거부 — 원격 리베이스 후 재시도 ($attempt)"
+            git fetch origin main
+            git pull --rebase origin main || git rebase --abort
+            sleep 3
+          done
+          echo "::error::재시도 후에도 push 실패 — 워크플로우 재실행 필요"; exit 1

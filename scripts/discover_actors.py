@@ -600,6 +600,108 @@ def _legacy_name_index(data: dict) -> dict:
     return idx
 
 
+def _alias_name_index() -> dict:
+    """공개 corp-aliases.json(주간 corp-map diff) → {fold(옛 사명): set(corp_code)}.
+
+    reconcile_corp_renames의 legacy_index 보조 소스. '상호변경안내' 공시 백필은
+    사실상 코스닥 전용이라(corp_renames 610사 중 K 354 vs Y 2, 2026-08-03 실측)
+    KOSPI 개명을 못 잡는데, 명부 diff 기반 별칭 맵은 시장 무관하게 향후 개명을
+    커버한다. corp_code는 DART corpCode.xml 원본 그대로라 별도 근거가 필요 없다.
+    로드 실패 시 빈 dict (graceful — 기존 corp_renames 경로에 영향 없음).
+    """
+    try:
+        from dart_risk_mcp.core.dart_client import load_corp_aliases
+        amap = load_corp_aliases() or {}
+    except Exception:
+        return {}
+    idx: dict = {}
+    for old, info in amap.items():
+        cc = (info or {}).get("corp_code")
+        f = fold_name(old)
+        if cc and f:
+            idx.setdefault(f, set()).add(cc)
+    return idx
+
+
+def _combined_legacy_index(data: dict) -> dict:
+    """corp_renames(공시 백필+수동 시드) ∪ corp-aliases(명부 diff) 합집합.
+
+    같은 옛 사명이 두 소스에서 다른 corp_code를 가리키면 합집합으로 남긴다 —
+    reconcile의 모호 가드(len==1)가 해석을 거부하는 보수적 동작을 그대로 탄다.
+    """
+    idx = _legacy_name_index(data)
+    for f, ccs in _alias_name_index().items():
+        idx.setdefault(f, set()).update(ccs)
+    return idx
+
+
+_MANUAL_RENAMES_NAME = "manual_renames.json"
+_RCEPT_NO_RE = re.compile(r"^\d{14}$")
+_CORP_CODE_RE = re.compile(r"^\d{8}$")
+
+
+def load_manual_renames(path) -> "tuple[dict, list]":
+    """수동 개명 시드 파일 → (corp_renames 병합용 dict, 오류 목록).
+
+    '상호변경안내' 백필이 못 잡는 개명(KOSPI 주총 의결 등)을 운영자가 직접
+    등재하는 얇은 경로. 스키마는 corp_renames와 동일하며 **근거 rcept_no 없는
+    entry는 기계적으로 거부**한다(출처 없는 데이터 등재 금지 기조) —
+    rcept_no는 해당 corp_code가 옛 사명 명의로 제출했거나 개명 사실을 담은
+    공시여야 한다(merge_manual_renames.py가 DART 대조 검증).
+
+    형식: {"version": 1, "renames": {corp_code: {"names": [...], "events":
+    [{"rcept_no": 14자리, "after": 현재 사명, "date"/"before"/"src"/"note"}]}}}
+    위반 entry는 제외하고 오류만 기록한다(유효 entry는 살아남음).
+    파일이 없으면 ({}, []) — 시드는 선택 사항.
+    """
+    p = Path(path)
+    if not p.exists():
+        return {}, []
+    try:
+        doc = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        return {}, [f"JSON 파싱 실패: {e}"]
+    renames: dict = {}
+    errors: list = []
+    for cc, ent in (doc.get("renames") or {}).items():
+        if not _CORP_CODE_RE.match(str(cc)):
+            errors.append(f"{cc}: corp_code는 8자리 숫자여야 함")
+            continue
+        names = [n for n in (ent.get("names") or []) if n and str(n).strip()]
+        events = ent.get("events") or []
+        if not names:
+            errors.append(f"{cc}: names가 비어 있음")
+            continue
+        if not events:
+            errors.append(f"{cc}: 근거 events가 비어 있음 — rcept_no 필수")
+            continue
+        bad = [e for e in events
+               if not _RCEPT_NO_RE.match(str(e.get("rcept_no", "")))
+               or not str(e.get("after", "")).strip()]
+        if bad:
+            errors.append(f"{cc}: rcept_no(14자리)·after 없는 event {len(bad)}건"
+                          " — 전체 entry 거부")
+            continue
+        renames[cc] = {"names": names, "events": events}
+    return renames, errors
+
+
+def apply_manual_renames(sdata: dict, seed_path) -> bool:
+    """수동 시드를 sightings의 corp_renames에 병합 (idempotent).
+
+    daily cron(main)이 sightings.json 옆의 manual_renames.json을 자동
+    반영한다 — 운영자는 private repo에 시드만 커밋하면 된다. 병합 로직은
+    backfill_renames.merge_renames 재사용(rcept_no 기준 dedup).
+    """
+    renames, errors = load_manual_renames(seed_path)
+    for e in errors:
+        print(f"[MANUAL-RENAMES] 무시된 entry — {e}")
+    if not renames:
+        return False
+    from scripts.backfill_renames import merge_renames  # 순환 회피 지연 import
+    return merge_renames(sdata, renames)
+
+
 def reconcile_corp_renames(data: dict, corp_index: dict,
                            legacy_index: dict | None = None) -> bool:
     """corpCode 명부로 행위자 키(법인·조합)를 corp_code로 해석해 영속 추적.
@@ -835,10 +937,16 @@ def main():
     if merge_sightings(sdata, control_new):
         s_changed = True
 
+    # 수동 개명 시드(sightings 옆 manual_renames.json) 자동 반영 —
+    # KOSPI 개명 등 '상호변경안내' 백필이 못 잡는 케이스의 운영자 등재 경로
+    if apply_manual_renames(sdata, sightings_path.parent / _MANUAL_RENAMES_NAME):
+        s_changed = True
+
     # 법인 행위자 개명 추적 — corpCode 명부(24h 캐시) + 상호변경 백필 맵
-    # (corp_renames, backfill_renames.py) 기반. 추가 API 호출 없음
+    # (corp_renames, backfill_renames.py) + corp-aliases(명부 diff) 기반.
+    # 추가 API 호출 없음(corp-aliases는 레포 동봉/24h 캐시)
     if reconcile_corp_renames(sdata, _corp_name_index(key),
-                              _legacy_name_index(sdata)):
+                              _combined_legacy_index(sdata)):
         s_changed = True
 
     # 문제 회사 판정은 등재 후보에 한해 지연 평가 (실행 내 캐시)
