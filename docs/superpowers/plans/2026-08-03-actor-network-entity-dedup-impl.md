@@ -10,6 +10,10 @@
 
 **설계 근거:** `docs/superpowers/plans/2026-08-03-actor-network-entity-dedup-plan.md`
 
+> **실행 결과(2026-08-03):** Task 1·2·3·5 완료. Task 4는 Step 3(백필 재실행)이 불필요
+> 판명(corp_renames가 이미 2015~ 커버) — 나머지 스텝은 수행·검증 완료. 상세 실측은
+> 설계 문서 부록 B 참고.
+
 ## Global Constraints
 
 - 외부 라이브러리 추가 금지 (`requests`·`mcp` 외 불가)
