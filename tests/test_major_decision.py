@@ -35,6 +35,17 @@ class TestResolveDecisionType(unittest.TestCase):
     def test_unknown_returns_empty(self):
         self.assertEqual(resolve_decision_type("분기보고서"), "")
 
+    def test_hangul_middle_dot_u318d(self):
+        # DART 실제 제목 표기는 "ㆍ"(U+318D, 한글 가운뎃점) — "·"(U+00B7)만
+        # 제거하면 stock_exchange류가 영원히 리졸브 실패한다(⚠ stock_exchange
+        # 라이브 0건의 유력 원인, 2026-08-04 정적 감사).
+        self.assertEqual(resolve_decision_type("주식교환ㆍ이전결정"),
+                         "stock_exchange")
+        self.assertEqual(resolve_decision_type("[기재정정]주식교환ㆍ이전결정"),
+                         "stock_exchange")
+        self.assertEqual(resolve_decision_type("주식교환·이전결정"),
+                         "stock_exchange")
+
 
 class TestFetchMajorDecision(unittest.TestCase):
     def setUp(self):

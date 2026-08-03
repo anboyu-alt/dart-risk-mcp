@@ -182,6 +182,35 @@ class TestApplyManualRenames(_SeedFileMixin):
         self.assertFalse(da.apply_manual_renames(sdata, self.write_seed(seed)))
         self.assertNotIn("00152385", sdata.get("corp_renames", {}))
 
+    def test_api_key_triggers_dart_verification_and_drops_failures(self):
+        # cron 경로도 merge_manual_renames.yml과 같은 DART 대조 검증을
+        # 거쳐야 한다 — 검증 실패 corp_code는 병합에서 제외 (F-1).
+        sdata = {"version": 1, "sightings": {}}
+        with patch("scripts.merge_manual_renames.verify_manual_renames",
+                   return_value=(["00152385: rcept가 접수 목록에 없음"], [])) as v:
+            changed = da.apply_manual_renames(
+                sdata, self.write_seed(_valid_seed()), api_key="k")
+        v.assert_called_once()
+        self.assertFalse(changed)
+        self.assertNotIn("00152385", sdata.get("corp_renames", {}))
+
+    def test_api_key_verification_pass_merges(self):
+        sdata = {"version": 1, "sightings": {}}
+        with patch("scripts.merge_manual_renames.verify_manual_renames",
+                   return_value=([], ["00152385: 원문 표기 경고"])):
+            changed = da.apply_manual_renames(
+                sdata, self.write_seed(_valid_seed()), api_key="k")
+        self.assertTrue(changed)
+        self.assertIn("00152385", sdata["corp_renames"])
+
+    def test_no_api_key_skips_verification(self):
+        # 하위 호환: 키 없으면 기존 동작(스키마 검증만) 그대로
+        sdata = {"version": 1, "sightings": {}}
+        with patch("scripts.merge_manual_renames.verify_manual_renames") as v:
+            changed = da.apply_manual_renames(sdata, self.write_seed(_valid_seed()))
+        v.assert_not_called()
+        self.assertTrue(changed)
+
 
 class TestReconcileWithManualSeed(_SeedFileMixin):
     """종단: 수동 시드 → legacy 인덱스 → 옛 사명 행위자 키 해석·병합."""

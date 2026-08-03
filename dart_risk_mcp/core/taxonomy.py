@@ -1429,7 +1429,12 @@ def estimate_crisis_timeline(signal_id: str) -> Dict[str, int]:
         return {"months_to_impact": 999, "equity_loss_pct": 0}
 
     severity = signal["severity"]
-    severity_data = SEVERITY_LEVELS.get(severity, SEVERITY_LEVELS["MEDIUM"])
+    # OBSERVATION 등 SEVERITY_LEVELS 밖 severity는 위기 통계가 정의되지
+    # 않은 참고 강도 — MEDIUM으로 폴백하면 근거 없는 "위기 도달 N개월"
+    # 문장이 렌더되므로 미상 센티널을 반환한다(렌더 게이트 months<999).
+    severity_data = SEVERITY_LEVELS.get(severity)
+    if severity_data is None:
+        return {"months_to_impact": 999, "equity_loss_pct": 0}
 
     return {
         "months_to_impact": severity_data["max_months"],

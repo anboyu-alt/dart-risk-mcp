@@ -693,18 +693,36 @@ def load_manual_renames(path) -> "tuple[dict, list]":
     return renames, errors
 
 
-def apply_manual_renames(sdata: dict, seed_path) -> bool:
+def apply_manual_renames(sdata: dict, seed_path, api_key: str = "") -> bool:
     """수동 시드를 sightings의 corp_renames에 병합 (idempotent).
 
     daily cron(main)이 sightings.json 옆의 manual_renames.json을 자동
     반영한다 — 운영자는 private repo에 시드만 커밋하면 된다. 병합 로직은
     backfill_renames.merge_renames 재사용(rcept_no 기준 dedup).
+
+    api_key가 주어지면 merge_manual_renames.yml과 동일한 DART 대조 검증
+    (`verify_manual_renames`)을 거치고, 치명 오류가 난 corp_code entry는
+    병합에서 제외한다 — cron 경로만 검증을 우회하던 구멍을 막는다. 이미
+    corp_renames에 든 rcept_no는 검증이 건너뛰므로 반복 실행 비용 없음.
     """
     renames, errors = load_manual_renames(seed_path)
     for e in errors:
         print(f"[MANUAL-RENAMES] 무시된 entry — {e}")
     if not renames:
         return False
+    if api_key:
+        from scripts.merge_manual_renames import verify_manual_renames
+        v_errors, v_warnings = verify_manual_renames(
+            renames, api_key, existing=sdata.get("corp_renames"))
+        for w in v_warnings:
+            print(f"[MANUAL-RENAMES] 경고 — {w}")
+        if v_errors:
+            bad = {str(e).split(":", 1)[0] for e in v_errors}
+            for e in v_errors:
+                print(f"[MANUAL-RENAMES] DART 대조 실패로 제외 — {e}")
+            renames = {cc: ent for cc, ent in renames.items() if cc not in bad}
+        if not renames:
+            return False
     from scripts.backfill_renames import merge_renames  # 순환 회피 지연 import
     return merge_renames(sdata, renames)
 
@@ -917,10 +935,33 @@ def build_daily_report(sdata: dict, kdata: dict, s_changed: bool, promoted: list
 
 
 def _load(path: Path, empty: dict) -> dict:
+    """sightings 로드 — 파일 없음(신규)과 손상(중단)을 구분한다.
+
+    손상 파일을 빈 스켈레톤으로 대체하면 다음 저장에서 누적 데이터
+    전체가 소실된다(2026-08-04 감사 B-2) — 존재하는데 파싱이 실패하면
+    조용히 진행하지 않고 즉시 중단해 운영자 확인을 요구한다.
+    """
+    if not path.exists():
+        return dict(empty)
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return dict(empty)
+    except Exception as e:
+        raise SystemExit(
+            f"[SIGHTINGS] 파싱 실패 — 손상 파일을 빈 값으로 대체하지 않도록"
+            f" 중단합니다. 수동 확인 필요: {path} ({e})")
+
+
+def _atomic_write_json(path: Path, data: dict, indent: int = 1) -> None:
+    """같은 디렉터리의 임시 파일에 쓴 뒤 os.replace로 원자 교체.
+
+    직접 쓰기 도중 크래시·타임아웃 취소가 나면 절단된 JSON이 남고,
+    워크플로우 커밋 스텝(if: always())이 그것을 커밋할 수 있다
+    (2026-08-04 감사 B-1).
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=indent),
+                   encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def main():
@@ -946,7 +987,8 @@ def main():
 
     # 수동 개명 시드(sightings 옆 manual_renames.json) 자동 반영 —
     # KOSPI 개명 등 '상호변경안내' 백필이 못 잡는 케이스의 운영자 등재 경로
-    if apply_manual_renames(sdata, sightings_path.parent / _MANUAL_RENAMES_NAME):
+    if apply_manual_renames(sdata, sightings_path.parent / _MANUAL_RENAMES_NAME,
+                            api_key=key):
         s_changed = True
 
     # 법인 행위자 개명 추적 — corpCode 명부(24h 캐시) + 상호변경 백필 맵
@@ -986,7 +1028,7 @@ def main():
     if s_changed:
         sightings_path.parent.mkdir(parents=True, exist_ok=True)
         sdata["updated"] = datetime.now().strftime("%Y-%m-%d")
-        sightings_path.write_text(json.dumps(sdata, ensure_ascii=False, indent=1), encoding="utf-8")
+        _atomic_write_json(sightings_path, sdata, indent=1)
 
     # 등재는 비공개 Notion 레지스트리에 기록 — env 미설정 시 스킵(메일로만 통지)
     written = 0
