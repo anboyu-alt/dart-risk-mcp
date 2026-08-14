@@ -224,7 +224,7 @@ from dataclasses import dataclass
 
 # 본체 어미 후보. 긴 것이 먼저 매칭돼야 하므로 _tail_of가 길이순으로 검사한다.
 # 'ㆍ'(U+318D)는 DART 실제 표기라 그대로 둔다.
-_TAILS: tuple[str, ...] = (
+TAILS: tuple[str, ...] = (
     "해제ㆍ취소등", "결과보고서", "계약체결", "보고서", "결정", "해제",
     "취소", "철회", "해지", "중단", "해명", "신청", "확정", "변경",
     "발생", "요구", "취득", "매도",
@@ -255,8 +255,8 @@ class ParsedName:
 
 
 def _tail_of(text: str) -> str:
-    """text가 _TAILS 중 하나로 끝나면 그 어미를 반환. 긴 것 우선."""
-    for cand in sorted(_TAILS, key=len, reverse=True):
+    """text가 TAILS 중 하나로 끝나면 그 어미를 반환. 긴 것 우선."""
+    for cand in sorted(TAILS, key=len, reverse=True):
         if text.endswith(cand):
             return cand
     return ""
@@ -496,7 +496,13 @@ Expected: FAIL — `ImportError: cannot import name 'qualify_signals'`
 
 - [ ] **Step 3: 최소 구현**
 
-`dart_risk_mcp/core/qualifiers.py`에 추가 (파일 상단 import에 `from .dart_client import _fold_corp_name` 추가):
+`dart_risk_mcp/core/qualifiers.py`에 추가 (파일 상단 import에 `from .dart_client import _fold_corp_name` 추가).
+
+> **`dart_client`에서 import하는 것은 의도된 선택이다.** `_fold_corp_name`은 이미
+> `match_affiliate_row`가 쓰는 법인명 폴딩 유틸이고, 복제하면 두 곳이 갈라진다.
+> `dart_client`가 모듈 수준에서 `requests`를 import하지만 이는 패키지의 기존
+> 의존성이며, `qualifiers.py` 자체는 네트워크를 호출하지 않는다. 순환 참조도 없다
+> (`dart_client`는 `qualifiers`를 import하지 않는다). **폴딩 로직을 복제하지 말 것.**
 
 ```python
 from .dart_client import _fold_corp_name
@@ -513,7 +519,7 @@ THIRD_PARTY_TITLES: tuple[str, ...] = (
 )
 
 # R2 — 이미 실행됐거나 되돌린 국면. 어미가 이것이면 새 사건이 아니다.
-PHASE_TAILS: tuple[str, ...] = (
+PHASETAILS: tuple[str, ...] = (
     "결과보고서", "해제ㆍ취소등", "해제", "취소", "철회", "해지", "중단",
 )
 
@@ -595,7 +601,7 @@ def _demotion_reason(parsed: ParsedName, filing: "dict | None") -> str:
             return f"기존 공시의 정정·후속 보고입니다 ({tag})"
 
     # R2 — 사후·해제 국면
-    if parsed.tail in PHASE_TAILS:
+    if parsed.tail in PHASETAILS:
         if parsed.tail == "결과보고서":
             return "이미 실행된 건의 결과 보고입니다"
         return f"체결이 아니라 {parsed.tail}입니다"
@@ -992,11 +998,11 @@ def test_export_includes_qualifier_rules():
     data = build_signals_data()
     rules = data["qualifier_rules"]
     assert rules["third_party_titles"] == list(q.THIRD_PARTY_TITLES)
-    assert rules["phase_tails"] == list(q.PHASE_TAILS)
+    assert rules["phase_tails"] == list(q.PHASETAILS)
     assert rules["subsidiary_subtitles"] == list(q.SUBSIDIARY_SUBTITLES)
     assert rules["related_party_prefix"] == q.RELATED_PARTY_PREFIX
     assert rules["amendment_tags"] == list(q.AMENDMENT_TAGS)
-    assert rules["tails"] == list(q._TAILS)
+    assert rules["tails"] == list(q.TAILS)
 
 
 def test_export_includes_label_overrides_and_notes():
@@ -1046,11 +1052,11 @@ from dart_risk_mcp.core.signals import AMBIGUOUS_SIGNAL_KEYS  # noqa: E402
         # 문자열 목록의 이중 관리를 막는 것이 목적이다(키워드와 동일한 원칙).
         "qualifier_rules": {
             "third_party_titles": list(_q.THIRD_PARTY_TITLES),
-            "phase_tails": list(_q.PHASE_TAILS),
+            "phase_tails": list(_q.PHASETAILS),
             "subsidiary_subtitles": list(_q.SUBSIDIARY_SUBTITLES),
             "related_party_prefix": _q.RELATED_PARTY_PREFIX,
             "amendment_tags": list(_q.AMENDMENT_TAGS),
-            "tails": list(_q._TAILS),
+            "tails": list(_q.TAILS),
             "label_overrides": {
                 k: dict(v) for k, v in _q.LABEL_OVERRIDES.items()
             },
