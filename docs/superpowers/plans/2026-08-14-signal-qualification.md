@@ -871,7 +871,7 @@ def test_ambiguous_keys_are_all_real_signal_keys():
 
 def test_ambiguous_keys_contents():
     assert AMBIGUOUS_SIGNAL_KEYS == frozenset(
-        {"TREASURY", "TREASURY_TRUST", "EQUITY_SPLIT", "FUND_OUTFLOW", "ACQ_REVIEW"}
+        {"TREASURY", "TREASURY_TRUST", "FUND_OUTFLOW", "ACQ_REVIEW"}
     )
 
 
@@ -911,7 +911,15 @@ Expected: FAIL — `ImportError: cannot import name 'AMBIGUOUS_SIGNAL_KEYS'`
 
 - [ ] **Step 3: 최소 구현**
 
-`dart_risk_mcp/core/signals.py` 맨 아래(`CAPITAL_EVENT_KEYS` 정의 근처)에 추가:
+`dart_risk_mcp/core/signals.py` 맨 아래(`CAPITAL_EVENT_KEYS` 정의 근처)에 추가.
+
+> **`EQUITY_SPLIT`은 넣지 않는다** (2026-08-14, Task 5 리뷰에서 정정). 이 계획의 초안은
+> "정상 유동성 조치"라는 근거로 이 키를 포함했으나 **그 서술은 코드베이스 어디에도 없다** —
+> `explain.py`에 `EQUITY_SPLIT` 항목 자체가 없고, `taxonomy.py` 5.1은 오히려
+> `"Equity Split + Dividend Combination — Stock split + dividend announcement to inflate
+> shareholder count"`(severity MEDIUM)로 주주수 부풀리기 조합을 서술한다. 이 목록의 규칙이
+> "코드가 이미 양면성을 서술하는 신호만 담는다"이므로 근거를 지어내면 규칙 자체를 어긴다.
+> 목록은 4종이고, 테스트도 4종을 기대한다.
 
 ```python
 # 양면적 신호 — 정상 기업활동으로도 빈발해 단독으로는 헤드라인이 되지 않는다.
@@ -919,7 +927,6 @@ Expected: FAIL — `ImportError: cannot import name 'AMBIGUOUS_SIGNAL_KEYS'`
 # 새로운 판단을 만들지 않는다. 이 코드베이스가 이미 양면성을 서술하고 있는
 # 신호만 담는다:
 #   TREASURY/TREASURY_TRUST — explain.py "주주 환원으로 긍정적일 수도 있지만…"
-#   EQUITY_SPLIT            — 정상 유동성 조치
 #   FUND_OUTFLOW            — explain.py "대기업의 일상적 계열 지원과 구분 불가"
 #   ACQ_REVIEW              — explain.py "정상적인 사업 인수도 이 유형"
 #
@@ -927,7 +934,6 @@ Expected: FAIL — `ImportError: cannot import name 'AMBIGUOUS_SIGNAL_KEYS'`
 AMBIGUOUS_SIGNAL_KEYS: frozenset = frozenset({
     "TREASURY",
     "TREASURY_TRUST",
-    "EQUITY_SPLIT",
     "FUND_OUTFLOW",
     "ACQ_REVIEW",
 })

@@ -281,7 +281,7 @@ def test_ambiguous_keys_are_all_real_signal_keys():
 
 def test_ambiguous_keys_contents():
     assert AMBIGUOUS_SIGNAL_KEYS == frozenset(
-        {"TREASURY", "TREASURY_TRUST", "EQUITY_SPLIT", "FUND_OUTFLOW", "ACQ_REVIEW"}
+        {"TREASURY", "TREASURY_TRUST", "FUND_OUTFLOW", "ACQ_REVIEW"}
     )
 
 

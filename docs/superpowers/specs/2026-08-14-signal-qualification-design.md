@@ -267,9 +267,16 @@ tier를 바꾸지 않고 사실만 덧붙인다.
 |---|---|
 | `TREASURY` | explain.py: "주주 환원으로 긍정적일 수도 있지만…" |
 | `TREASURY_TRUST` | 위와 동일 계열 |
-| `EQUITY_SPLIT` | 정상 유동성 조치 |
 | `FUND_OUTFLOW` | explain.py: "대기업의 일상적 계열 지원과 이 신호…" / CLAUDE.md 참고 강도 |
 | `ACQ_REVIEW` | explain.py: "정상적인 사업 인수도…" / CLAUDE.md 참고 강도 |
+
+> **`EQUITY_SPLIT`은 넣지 않는다** (2026-08-14, Task 5 리뷰에서 정정). 초안은 "정상 유동성
+> 조치"라는 근거로 이 키를 포함했으나 **그 서술은 코드베이스 어디에도 없다** — `explain.py`에
+> `EQUITY_SPLIT` 항목 자체가 없고, `taxonomy.py` 5.1은 오히려
+> `"Equity Split + Dividend Combination — Stock split + dividend announcement to inflate
+> shareholder count"`(severity MEDIUM)로 주주수 부풀리기 조합을 서술한다. 이 목록의 규칙이
+> "코드가 이미 양면성을 서술하는 신호만 담는다"이므로, 근거를 지어내면 규칙 자체를 어긴다.
+> 나머지 4종은 인용문이 실존한다.
 
 ### 5.2 헤드라인 선정
 
@@ -389,7 +396,7 @@ observed = [q for q in qualified if q.tier == "observed"]
     "label_overrides": {"3PCA": {"missing_marker": "제3자배정", "label": "유상증자(배정방식 미상)"}},
     "direction_notes": {"CB_BW": {"tails": ["취득", "매도"], "note": "..."}}
   },
-  "ambiguous_signal_keys": ["TREASURY", "TREASURY_TRUST", "EQUITY_SPLIT", "FUND_OUTFLOW", "ACQ_REVIEW"]
+  "ambiguous_signal_keys": ["TREASURY", "TREASURY_TRUST", "FUND_OUTFLOW", "ACQ_REVIEW"]
 }
 ```
 

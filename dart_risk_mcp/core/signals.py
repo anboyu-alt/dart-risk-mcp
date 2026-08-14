@@ -653,7 +653,6 @@ CAPITAL_EVENT_KEYS = DILUTIVE_CAPITAL_EVENTS | NON_DILUTIVE_CAPITAL_EVENTS
 # 새로운 판단을 만들지 않는다. 이 코드베이스가 이미 양면성을 서술하고 있는
 # 신호만 담는다:
 #   TREASURY/TREASURY_TRUST — explain.py "주주 환원으로 긍정적일 수도 있지만…"
-#   EQUITY_SPLIT            — 정상 유동성 조치
 #   FUND_OUTFLOW            — explain.py "대기업의 일상적 계열 지원과 구분 불가"
 #   ACQ_REVIEW              — explain.py "정상적인 사업 인수도 이 유형"
 #
@@ -661,7 +660,6 @@ CAPITAL_EVENT_KEYS = DILUTIVE_CAPITAL_EVENTS | NON_DILUTIVE_CAPITAL_EVENTS
 AMBIGUOUS_SIGNAL_KEYS: frozenset = frozenset({
     "TREASURY",
     "TREASURY_TRUST",
-    "EQUITY_SPLIT",
     "FUND_OUTFLOW",
     "ACQ_REVIEW",
 })
