@@ -13361,20 +13361,60 @@ def _extract_balanced_js_function(html: str, start_marker: str) -> str:
     raise AssertionError(f"balanced brace not found for {start_marker!r}")
 
 
+def _extract_qualification_block(html: str) -> str:
+    """공개 뷰어의 신호 한정층(Task 8, matchSignals 바로 뒤 869-995행
+    부근) 전체를 파일에서 그대로 잘라낸다 — `TIER_OBSERVED`/
+    `TIER_PROCEDURAL` 상수·`isObservedSig`부터 `pickHeadline` 함수 끝까지,
+    연속된 한 구간이다. Task 9(buildResult 패턴 매칭 배선)부터 이 블록
+    전체(특히 `parseReportName`·`isFalseAmendment`·`qualifySignals`)가
+    패턴 매칭 스니펫의 의존성이 됐다 — 잘라내지 않으면
+    `ReferenceError: parseReportName is not defined`로 죽는다."""
+    start_marker = 'const TIER_OBSERVED = "observed", TIER_PROCEDURAL = "procedural";'
+    if start_marker not in html:
+        raise AssertionError(
+            "공개 뷰어의 TIER_OBSERVED 선언을 찾지 못했습니다 — index.html이 바뀐 것 같습니다")
+    start = html.index(start_marker)
+    end_fn_marker = "function pickHeadline(qualified)"
+    pick_headline_fn = _extract_balanced_js_function(html, end_fn_marker)
+    ph_start = html.index(end_fn_marker, start)
+    end = ph_start + len(pick_headline_fn)
+    return html[start:end]
+
+
+def _extract_fold_corp_name_block(html: str) -> str:
+    """신호 한정층의 `demotionReason`(R1 — 제출인≠회사 판정)이 재사용하는
+    `foldCorpName` + 그 앞의 `AFFIL_CORP_SUFFIX_RE` 상수를 잘라낸다. 이
+    함수는 파일 안에서 단 한 번만 선언되고(중복 선언 시 그림자화 버그가
+    났던 이력, foldCorpName 정의부 주석 참고) 신호 한정층 블록과는 멀리
+    떨어져 있어(타법인 출자현황 기능 근처) 별도로 추출해야 한다."""
+    suffix_re_marker = "const AFFIL_CORP_SUFFIX_RE = "
+    if suffix_re_marker not in html:
+        raise AssertionError(
+            "공개 뷰어의 AFFIL_CORP_SUFFIX_RE 선언을 찾지 못했습니다 — index.html이 바뀐 것 같습니다")
+    idx = html.index(suffix_re_marker)
+    suffix_re_line = html[idx:html.index("\n", idx)]
+    fold_fn = _extract_balanced_js_function(html, "function foldCorpName(name)")
+    return suffix_re_line + "\n" + fold_fn
+
+
 def _extract_public_pattern_match_pieces():
-    """공개 뷰어(docs/tool/index.html)에서 패턴 매칭에 쓰이는 실제 코드
-    세 조각을 파일에서 직접 잘라낸다(손으로 옮겨 적지 않는다):
+    """공개 뷰어(docs/tool/index.html)에서 패턴 매칭에 쓰이는 실제 코드를
+    파일에서 직접 잘라낸다(손으로 옮겨 적지 않는다):
 
-      1) `function matchSignals(reportNm) {...}` 전체(564-572행 부근) —
-         공시 제목 하나에 매칭되는 신호 전부를 돌려주는 키워드 매칭.
-      2) `AMEND_RE = new RegExp(DATA.amendment_pattern);` 한 줄(boot() 안,
-         445행 부근) — 정정공시 판정에 쓰는 정규식을 데이터에서 컴파일.
-      3) buildResult() 안의 매칭 스니펫 — "const events = [];"부터
-         "detectedTax.has(t)));"까지(613-628행 부근): 정정공시 제외 →
-         matchSignals 호출 → detectedTax 집합 구성 → patterns 부분집합
-         필터, 네 단계 전부.
+      1) `function matchSignals(reportNm) {...}` 전체 — 공시 제목 하나에
+         매칭되는 신호 전부를 돌려주는 키워드 매칭.
+      2) `AMEND_RE = new RegExp(DATA.amendment_pattern);` 한 줄(boot() 안)
+         — 정정공시 판정에 쓰는 정규식을 데이터에서 컴파일.
+      3) 신호 한정층 블록(Task 8/9, `_extract_qualification_block`) —
+         `qualifySignals`와 그 의존 함수 전부.
+      4) `foldCorpName` 블록(`_extract_fold_corp_name_block`) — 신호
+         한정층의 R1 판정이 재사용하는 별도 위치의 함수.
+      5) buildResult() 안의 매칭 스니펫 — "const events = [];"부터
+         "detectedTax.has(t)));"까지: 정정공시 제외 → matchSignals 호출 →
+         qualifySignals로 한정 → observed만으로 detectedTax 집합 구성 →
+         patterns 부분집합 필터, 전 단계.
 
-    세 조각을 조합하면 "공개 뷰어가 지금 실제로 하는 매칭"을 그대로
+    다섯 조각을 조합하면 "공개 뷰어가 지금 실제로 하는 매칭"을 그대로
     재현한 실행 가능한 함수가 된다.
     """
     html = _INDEX_HTML.read_text(encoding="utf-8")
@@ -13386,27 +13426,41 @@ def _extract_public_pattern_match_pieces():
         raise AssertionError(
             "공개 뷰어의 AMEND_RE 배정 문구를 찾지 못했습니다 — index.html이 바뀐 것 같습니다")
 
+    qualification_block = _extract_qualification_block(html)
+    fold_corp_name_block = _extract_fold_corp_name_block(html)
+
     start_marker = "const events = [];"
     end_marker = "detectedTax.has(t)));"
     start = html.index(start_marker)
     end = html.index(end_marker, start) + len(end_marker)
     matching_snippet = html[start:end]
 
-    return match_signals_fn, amend_line, matching_snippet
+    return (match_signals_fn, amend_line, qualification_block,
+            fold_corp_name_block, matching_snippet)
 
 
 def run_public_pattern_match(signals_data: dict, items: list) -> list:
     """공개 뷰어에서 방금 잘라낸 실제 매칭 코드를 node로 실행해, items
     (공시 레코드 배열, report_nm/rcept_dt/rcept_no 필드)에 대해 매칭되는
     패턴 key 목록(정렬)을 돌려준다."""
-    match_signals_fn, amend_line, matching_snippet = _extract_public_pattern_match_pieces()
+    (match_signals_fn, amend_line, qualification_block,
+     fold_corp_name_block, matching_snippet) = _extract_public_pattern_match_pieces()
     script = (
         '"use strict";\n'
         + match_signals_fn + "\n\n"
+        + fold_corp_name_block + "\n\n"
+        + qualification_block + "\n\n"
         "let DATA = null;\n"
         "let AMEND_RE = null;\n"
         f"DATA = {json.dumps(signals_data, ensure_ascii=False)};\n"
         + amend_line + "\n\n"
+        # buildResult(name, ...)의 name 매개변수(제출인≠회사 R1 판정에
+        # 쓰이는 회사명) — 이 하네스는 회사 정보 없이 매칭 로직만
+        # 검증하므로 빈 문자열로 둔다. 이 파일의 모든 픽스처는 items에
+        # flr_nm을 넣지 않아 filer=""로 R1이 애초에 발화하지 않으므로
+        # (qualifySignals의 demotionReason 참고) 이 값은 현재 어떤
+        # 테스트의 기대값에도 영향을 주지 않는다.
+        "let name = '';\n\n"
         "function publicPatternMatch(items) {\n"
         + matching_snippet + "\n"
         "  return patterns;\n"
