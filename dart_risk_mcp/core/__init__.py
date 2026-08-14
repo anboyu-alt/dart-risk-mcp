@@ -102,6 +102,7 @@ from .qualifiers import (
     TIER_PROCEDURAL,
     is_false_amendment,
     qualify_signals,
+    PHASE_TAILS,
 )
 
 __all__ = [
@@ -196,6 +197,7 @@ __all__ = [
     "ParsedName",
     "parse_report_name",
     "TAILS",
+    "PHASE_TAILS",
     "Qualified",
     "TIER_OBSERVED",
     "TIER_PROCEDURAL",

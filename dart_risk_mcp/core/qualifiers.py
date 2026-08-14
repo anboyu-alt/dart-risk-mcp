@@ -102,7 +102,7 @@ THIRD_PARTY_TITLES: tuple[str, ...] = (
 )
 
 # R2 — 이미 실행됐거나 되돌린 국면. 어미가 이것이면 새 사건이 아니다.
-PHASETAILS: tuple[str, ...] = (
+PHASE_TAILS: tuple[str, ...] = (
     "결과보고서", "해제ㆍ취소등", "해제", "취소", "철회", "해지", "중단",
 )
 
@@ -189,7 +189,7 @@ def _demotion_reason(parsed: ParsedName, filing: "dict | None") -> str:
             return f"기존 공시의 정정·후속 보고입니다 ({tag})"
 
     # R2 — 사후·해제 국면
-    if parsed.tail in PHASETAILS:
+    if parsed.tail in PHASE_TAILS:
         if parsed.tail == "결과보고서":
             return "이미 실행된 건의 결과 보고입니다"
         return f"체결이 아니라 {parsed.tail}입니다"
