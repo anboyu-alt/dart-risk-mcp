@@ -887,14 +887,11 @@ function parseReportName(reportNm) {
   return { tags, body, subtitles, tail, compact };
 }
 
-// core _fold_corp_name 이식 — 법인 표기(주식회사/유한회사/유한책임회사/(주)/㈜) 차이를 흡수
-function foldCorpName(name) {
-  return String(name || "")
-    .replace(/주식회사|유한회사|유한책임회사|\(주\)|㈜/g, "")
-    .replace(/\s+/g, "")
-    .trim()
-    .toUpperCase();
-}
+// foldCorpName은 여기서 새로 선언하지 않는다 — 파일 하단(v1.9.0 타법인
+// 출자현황 기능)에 이미 같은 이름의 함수가 있고, 이 파일은 단일 <script>
+// 최상위 스코프(type="module" 아님)라 같은 이름을 또 선언하면 나중 선언이
+// 앞 선언을 그림자 처리해 이쪽이 죽은 코드가 된다. AFFIL_CORP_SUFFIX_RE
+// 정의부의 주석 참고.
 
 function isAmendmentTag(tag) {
   const tags = qrules().amendment_tags || [];
@@ -2647,6 +2644,10 @@ async function classifyOutflowEvidence(hits) {
 // 규칙을 이식(순수 함수, DOM 접근 없음) — 판정·게이트 발화 조건은 절대
 // 바꾸지 않는다. "conduit"/"경유" 같은 구조 단정 어휘는 쓰지 않는다.
 const AFFIL_CORP_SUFFIX_RE = /(주식회사|유한회사|유한책임회사|\(주\)|㈜)/g;
+// 신호 한정층(qualifySignals의 demotionReason, R1 — 제출인≠회사 판정)도 이
+// 함수를 그대로 쓴다. dart_client.py의 _fold_corp_name과 동일 규칙(접사
+// 목록·공백 제거·toUpperCase)이어야 하며, 여기를 고치면 R1 판정이 서버와
+// 갈라진다 — 수정 전 core 쪽과 대조할 것.
 function foldCorpName(name) {
   return (name || "").replace(AFFIL_CORP_SUFFIX_RE, "").replace(/\s+/g, "").trim().toUpperCase();
 }
