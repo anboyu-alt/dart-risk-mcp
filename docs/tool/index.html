@@ -1153,7 +1153,9 @@ function renderFeed() {
     // 행이 헤드라인과 같은 key를 우연히 공유해도(리뷰 라운드1 Finding 1,
     // 대량보유상황보고 SHAREHOLDER 재현) MAX를 물려받지 않는다.
     const isTop = heavyKey && r.signals.some((s) => isObservedSig(s) && s.key === heavyKey);
-    const hasCaution = !isTop && r.signals.some((s) => s.caution);
+    // 주의(caution) 배지도 MAX와 같은 원칙 — 절차·사후 보고로 강등된 행에
+    // 관찰 신호와 같은 시각 언어(배지)를 씌우지 않는다(리뷰 라운드2 Finding).
+    const hasCaution = !isTop && r.signals.some((s) => isObservedSig(s) && s.caution);
     const sigCell = isTop ? `<span class="badge-max">MAX</span>`
       : hasCaution ? `<span class="badge-cau">주의</span>`
       : r.signals.length ? `<span class="sigdot">● 신호</span>`
@@ -1258,7 +1260,7 @@ function renderDetail(rcept) {
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">신호 무게</span><span style="color:${isTop ? "var(--red)" : "var(--dim2)"}">${isTop ? "이 기간 최상위" : r.signals.length ? "감지됨" : "—"}</span></div>
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">정정 여부</span><span>${r.isAmend ? "정정공시" : "원공시"}</span></div>
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">체인 위치</span><span>${pos >= 0 ? `${pos + 1} / ${CUR.observedEvents.length}` : "—"}</span></div>
-          ${r.signals.some((s) => s.caution) ? `<div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">주의 표시</span><span><span class="badge-cau">주의</span> <span class="dim" style="font-size:0.78rem">— 관찰 우선순위 표시</span></span></div>` : ""}
+          ${r.signals.some((s) => isObservedSig(s) && s.caution) ? `<div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">주의 표시</span><span><span class="badge-cau">주의</span> <span class="dim" style="font-size:0.78rem">— 관찰 우선순위 표시</span></span></div>` : ""}
         </div>
         <a href="${dartUrl(r.rcept)}" target="_blank" rel="noopener" style="display:block;margin-top:16px;text-align:center;background:var(--cell);border:1px solid var(--line2);border-radius:4px;padding:11px;font-family:var(--mono);font-size:12.5px">DART 원문 열기 ↗</a>
         <button class="ghost" id="docViewBtn" style="width:100%;margin-top:8px;padding:11px;font-size:12.5px">원문 이 화면에서 보기</button>
