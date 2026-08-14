@@ -374,16 +374,39 @@ def test_r1_keeps_when_filer_is_the_company_despite_suffix_diff():
     assert q.tier == TIER_OBSERVED
 
 
-# ── R1b: flr_nm 없을 때 제목 기반 예비 ────────────────────────
+# ── R1b: 지분 보유·변동 신고서 (filer 유무 무관) ──────────────
 def test_r1b_demotes_third_party_report_without_filer_field():
     q = _one("주식등의대량보유상황보고서(약식)", [SHAREHOLDER], None)
     assert q.tier == TIER_PROCEDURAL
-    assert "제3자" in q.reason
+    assert "지분" in q.reason
 
 
 def test_r1b_demotes_insider_holding_report():
     q = _one("임원ㆍ주요주주특정증권등소유상황보고서", [SHAREHOLDER], None)
     assert q.tier == TIER_PROCEDURAL
+
+
+def test_r1b_demotes_company_filed_ownership_report():
+    """라이브 실측 — '최대주주등소유주식변동신고서'는 회사가 직접 낸다.
+
+    flr_nm == corp_name이라 R1으로는 걸리지 않는다. 그래도 회사가 한 일이
+    아니라 지분 현황의 정례 보고이므로 R1b가 filer 유무와 무관하게 잡아야
+    한다. filer 가드를 두면 이 규칙이 실환경에서 죽는다.
+    """
+    q = _one(
+        "최대주주등소유주식변동신고서", [SHAREHOLDER],
+        {"corp_name": "삼성전자", "flr_nm": "삼성전자"},
+    )
+    assert q.tier == TIER_PROCEDURAL
+
+
+def test_r1_reason_wins_over_r1b_when_filer_differs():
+    """둘 다 해당하면 제출인을 명시하는 R1 사유가 더 구체적이라 우선한다."""
+    q = _one(
+        "주식등의대량보유상황보고서(일반)", [SHAREHOLDER],
+        {"corp_name": "삼성전자", "flr_nm": "삼성물산"},
+    )
+    assert "삼성물산" in q.reason
 
 
 # ── R2: 사후·해제 국면 ───────────────────────────────────────
@@ -589,11 +612,16 @@ def _demotion_reason(parsed: ParsedName, filing: "dict | None") -> str:
     if filer and corp and _fold_corp_name(filer) != _fold_corp_name(corp):
         return f"회사가 낸 공시가 아닙니다 (제출인: {filer})"
 
-    # R1b — flr_nm이 없을 때의 제목 기반 예비
-    if not filer:
-        for title in THIRD_PARTY_TITLES:
-            if parsed.body.startswith(title):
-                return "제3자가 회사에 대해 제출한 보고서입니다"
+    # R1b — 지분 보유·변동 신고서. filer 유무와 무관하게 평가한다.
+    #
+    # 라이브 실측(2026-08-14, 삼성전자 20260410~0425): '최대주주등소유주식변동
+    # 신고서'는 flr_nm이 회사 자신("삼성전자")이라 R1으로는 걸리지 않는다.
+    # 세 유형 모두 '회사가 한 일'이 아니라 지분 현황의 정례 보고이므로,
+    # 누가 제출했든 사건 공시가 아니다. filer 가드를 두면 flr_nm이 존재하는
+    # 실환경에서 이 규칙이 통째로 죽는다.
+    for title in THIRD_PARTY_TITLES:
+        if parsed.body.startswith(title):
+            return "지분 보유·변동 신고서입니다 (회사의 사건 공시가 아님)"
 
     # R5 — 정정·후속 꼬리표
     for tag in parsed.tags:
@@ -1816,8 +1844,31 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ## 검증 로그
 
-Task 1 실행 결과를 여기에 기록한다.
+### Task 1 — `flr_nm` 라이브 검증 (2026-08-14, 완료)
 
-```
-(Task 1 Step 3에서 채운다 — 실행 날짜, flr_nm 존재 여부, 표본 3줄)
-```
+컨트롤러가 `korean-dart` MCP의 `dart_raw(operation="list")`로 직접 조회했다.
+계획에 적힌 스파이크 스크립트는 작성하지 않았다 — 같은 엔드포인트를 같은 인자로
+호출한 결과이므로 목적을 달성했다.
+
+**결과: `flr_nm`·`rm` 둘 다 실존한다. R1을 적용한다.**
+
+응답 키: `corp_code, corp_name, stock_code, corp_cls, report_nm, rcept_no, flr_nm, rcept_dt, rm`
+
+삼성전자(`00126380`) 20260410~20260425 전 7건 실측:
+
+| report_nm | flr_nm | 판정 |
+|---|---|---|
+| 자기주식취득결과보고서 | 삼성전자 | R1 통과 → **R2 강등**(결과보고서) |
+| 주식등의대량보유상황보고서(일반) ×3 | **삼성물산** | **R1 강등** |
+| 임원ㆍ주요주주특정증권등소유상황보고서 ×2 | **임지운 / 김민우** | **R1 강등** |
+| 최대주주등소유주식변동신고서 | 삼성전자 | R1 통과 → **R1b 강등**(가드 제거 후) |
+
+**이 조회로 계획 결함 1건을 발견해 수정했다.** R1b가 `if not filer:` 가드 안에 있어
+`flr_nm`이 존재하는 실환경에서는 실행되지 않았다. `최대주주등소유주식변동신고서`는
+회사가 직접 제출하므로 R1으로 걸리지 않고, 가드 때문에 R1b도 건너뛰어 `observed`로
+남았을 것이다. 가드를 제거하고 사유 문구를 "지분 보유·변동 신고서입니다"로 바꿨다.
+
+부수 관찰(계획 변경 없음):
+- `report_nm`에 후행 공백이 실제로 붙어 온다 — `"현금ㆍ현물배당결정              "`.
+  파서가 공백을 제거하므로 영향 없다.
+- `rm` 값 실측: `"공"`(공정위) · `"유"`(유가) · `""`. 이번 범위에서 `rm`은 쓰지 않는다.
