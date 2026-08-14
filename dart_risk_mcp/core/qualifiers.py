@@ -14,6 +14,8 @@ match_signals(signals.py)는 제목에 키워드가 들어있는지만 본다. �
 import re
 from dataclasses import dataclass
 
+from .dart_client import _fold_corp_name
+
 # 본체 어미 후보. 긴 것이 먼저 매칭돼야 하므로 _tail_of가 길이순으로 검사한다.
 # 'ㆍ'(U+318D)는 DART 실제 표기라 그대로 둔다.
 TAILS: tuple[str, ...] = (
@@ -86,3 +88,144 @@ def parse_report_name(report_nm: str) -> ParsedName:
         tail=tail,
         compact=compact,
     )
+
+
+TIER_OBSERVED = "observed"
+TIER_PROCEDURAL = "procedural"
+
+# R1b — 제3자가 회사에 대해 제출하는 보고서. 본체가 이것으로 시작하면
+# 회사의 행위가 아니다(제출인은 국민연금·블랙록·개인 임원 등).
+THIRD_PARTY_TITLES: tuple[str, ...] = (
+    "주식등의대량보유상황보고서",
+    "임원ㆍ주요주주특정증권등소유상황보고서",
+    "최대주주등소유주식변동신고서",
+)
+
+# R2 — 이미 실행됐거나 되돌린 국면. 어미가 이것이면 새 사건이 아니다.
+PHASETAILS: tuple[str, ...] = (
+    "결과보고서", "해제ㆍ취소등", "해제", "취소", "철회", "해지", "중단",
+)
+
+# R3 — 공시 주체가 이 회사가 아닌 경우. 공백 제거 후 비교한다.
+SUBSIDIARY_SUBTITLES: tuple[str, ...] = (
+    "종속회사의주요경영사항",
+    "자회사의주요경영사항",
+    "관계회사의주요경영사항",
+)
+RELATED_PARTY_PREFIX = "특수관계인의"
+
+# R5 — 기존 공시의 정정·후속. '[정정명령부과]'는 규제기관 조치라 여기 없다.
+AMENDMENT_TAGS: tuple[str, ...] = (
+    "기재정정", "첨부정정", "첨부추가", "정정", "발행조건확정", "연장결정",
+)
+
+
+def _is_amendment_tag(tag: str) -> bool:
+    """R5 태그 판정 — 완전 일치 또는 '정정'으로 끝남.
+
+    '정정명령부과'는 '정정'으로 시작할 뿐 끝나지 않으므로 걸리지 않는다.
+    """
+    t = (tag or "").strip()
+    return t in AMENDMENT_TAGS or t.endswith("정정")
+
+
+def is_false_amendment(parsed: ParsedName) -> bool:
+    """_AMENDMENT_RE에는 걸리지만 실제 정정공시가 아닌 경우.
+
+    match_signals는 '[정정명령부과]증권신고서'를 정정공시로 오판해 신호를
+    통째로 삭제한다. 호출부는 이 함수가 True일 때만 접두를 벗겨 재매칭한다 —
+    진짜 정정공시([기재정정] 등)의 기존 동작은 바뀌지 않는다.
+    """
+    if not parsed.tags:
+        return False
+    return not any(_is_amendment_tag(t) for t in parsed.tags)
+
+
+@dataclass(frozen=True)
+class Qualified:
+    """한정된 신호 하나.
+
+    key/label: 표시용. label은 보정될 수 있다(Task 4).
+    tier:      TIER_OBSERVED | TIER_PROCEDURAL
+    reason:    강등 사유 (사실 문장). observed면 "".
+    note:      사실 주석 (방향 불일치 등). 없으면 "".
+    """
+
+    key: str
+    label: str
+    tier: str
+    reason: str
+    note: str
+
+
+def _demotion_reason(parsed: ParsedName, filing: "dict | None") -> str:
+    """강등 사유를 반환. 강등 대상이 아니면 빈 문자열.
+
+    평가 순서 R1 → R1b → R5 → R2 → R3 → R4, 첫 매칭에서 멈춘다.
+    R5를 앞에 두는 이유: 정정본은 내용과 무관하게 정정이다.
+    """
+    filing = filing or {}
+
+    # R1 — 제출인이 회사가 아님
+    filer = (filing.get("flr_nm") or "").strip()
+    corp = (filing.get("corp_name") or "").strip()
+    if filer and corp and _fold_corp_name(filer) != _fold_corp_name(corp):
+        return f"회사가 낸 공시가 아닙니다 (제출인: {filer})"
+
+    # R1b — 지분 보유·변동 신고서. filer 유무와 무관하게 평가한다.
+    #
+    # 라이브 실측(2026-08-14, 삼성전자 20260410~0425): '최대주주등소유주식변동
+    # 신고서'는 flr_nm이 회사 자신("삼성전자")이라 R1으로는 걸리지 않는다.
+    # 세 유형 모두 '회사가 한 일'이 아니라 지분 현황의 정례 보고이므로,
+    # 누가 제출했든 사건 공시가 아니다. filer 가드를 두면 flr_nm이 존재하는
+    # 실환경에서 이 규칙이 통째로 죽는다.
+    for title in THIRD_PARTY_TITLES:
+        if parsed.body.startswith(title):
+            return "지분 보유·변동 신고서입니다 (회사의 사건 공시가 아님)"
+
+    # R5 — 정정·후속 꼬리표
+    for tag in parsed.tags:
+        if _is_amendment_tag(tag):
+            return f"기존 공시의 정정·후속 보고입니다 ({tag})"
+
+    # R2 — 사후·해제 국면
+    if parsed.tail in PHASETAILS:
+        if parsed.tail == "결과보고서":
+            return "이미 실행된 건의 결과 보고입니다"
+        return f"체결이 아니라 {parsed.tail}입니다"
+
+    # R3 — 자회사·특수관계인 사안
+    if any(s in SUBSIDIARY_SUBTITLES for s in parsed.subtitles):
+        return "이 회사가 아니라 자회사 사안입니다"
+    if parsed.body.startswith(RELATED_PARTY_PREFIX):
+        return "회사가 아니라 특수관계인의 행위입니다"
+
+    # R4 — 해명·미확정
+    if parsed.tail == "해명" or "미확정" in parsed.subtitles:
+        return "회사가 미확정으로 답한 해명 공시입니다"
+
+    return ""
+
+
+def qualify_signals(
+    signals: list,
+    parsed: ParsedName,
+    filing: "dict | None" = None,
+) -> "list[Qualified]":
+    """match_signals 결과에 표시 계층(tier)과 사유를 붙인다.
+
+    신호를 제거하지 않는다 — tier만 붙는다. 판단 불가하면 observed(기존
+    동작)로 남긴다. 예외를 던지지 않는다.
+    """
+    reason = _demotion_reason(parsed, filing)
+    tier = TIER_PROCEDURAL if reason else TIER_OBSERVED
+    return [
+        Qualified(
+            key=sig.get("key", ""),
+            label=sig.get("label", ""),
+            tier=tier,
+            reason=reason,
+            note="",
+        )
+        for sig in (signals or [])
+    ]
