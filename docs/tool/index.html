@@ -867,6 +867,11 @@ function matchSignals(reportNm) {
    core/qualifiers.py의 1:1 이식. 규칙 문자열은 signals-data.json의
    qualifier_rules에서 읽어 이중 관리를 피한다. 로직만 여기 있다. */
 const TIER_OBSERVED = "observed", TIER_PROCEDURAL = "procedural";
+// tier 누락 시 observed로 기본 처리 — server.py:830의 e.get("tier", TIER_OBSERVED)와
+// 동일한 기본값. 뷰어 신호는 전부 qualifySignals를 거쳐 tier가 항상 채워지므로 오늘은
+// 도달 불가능하지만, 두 레이어의 기본값이 어긋나면 나중에 합성 이벤트가 섞였을 때
+// 조용히 뒤집힐 수 있어 기본값을 맞춰 둔다.
+function isObservedSig(s) { return (s.tier || TIER_OBSERVED) === TIER_OBSERVED; }
 
 function qrules() { return (DATA && DATA.qualifier_rules) || {}; }
 
@@ -1057,7 +1062,7 @@ function buildResult(name, stockCode, corpCode, items, bgn, end, totalCount) {
   rows.sort((a, b) => a.date < b.date ? 1 : -1);
 
   // 절차·사후 보고는 집계·헤드라인·패턴 매칭에서 전부 빠진다.
-  const obs = (e) => e.signals.filter((s) => s.tier === TIER_OBSERVED);
+  const obs = (e) => e.signals.filter(isObservedSig);
   const observedEvents = events.filter((e) => obs(e).length);
   const proceduralEvents = events.filter((e) => !obs(e).length);
 
@@ -1112,13 +1117,13 @@ function buildResult(name, stockCode, corpCode, items, bgn, end, totalCount) {
 
 /* ── 02 피드 ──────────────────────────────────── */
 function renderFeed() {
-  const { rows, events, name, catCount } = CUR;
-  $("feedMeta").textContent = `${CUR.items.length}건 중 신호 ${events.length}건 · T-${windowLabel()}` +
+  const { rows, events, observedEvents, name, catCount } = CUR;
+  $("feedMeta").textContent = `${CUR.items.length}건 중 신호 ${observedEvents.length}건 · T-${windowLabel()}` +
     (CUR.truncated ? ` · 전체 ${CUR.truncated}건 중 최근 ${CUR.items.length}건` : "");
 
   const cats = Object.keys(catCount).map(Number).sort((a, b) => catCount[b] - catCount[a]);
   let chips = `<span class="chip solid ${FEED_FILTER.mode === "all" ? "on" : ""}" data-m="all">전체 ${CUR.items.length}</span>`;
-  chips += `<span class="chip ${FEED_FILTER.mode === "sig" ? "on" : ""}" data-m="sig">● 신호만 ${events.length}</span>`;
+  chips += `<span class="chip ${FEED_FILTER.mode === "sig" ? "on" : ""}" data-m="sig">● 신호만 ${observedEvents.length}</span>`;
   for (const c of cats) {
     chips += `<span class="chip ${FEED_FILTER.mode === "cat" && FEED_FILTER.cat === c ? "on" : ""}" data-m="cat" data-c="${c}">` +
       `<span class="cdot" style="background:var(--c${c})"></span>${esc(DATA.categories[String(c)])} ${catCount[c]}</span>`;
@@ -1133,15 +1138,21 @@ function renderFeed() {
   });
 
   let list = CUR.rows;
-  if (FEED_FILTER.mode === "sig") list = list.filter((r) => r.signals.length);
+  // "신호만"·카테고리 칩은 observed 기준 카운트로 라벨을 붙였으니(위), 필터
+  // predicate도 observed만 매칭해야 라벨과 결과가 어긋나지 않는다(리뷰 라운드1
+  // Finding 3/4) — procedural로 강등된 신호는 여기서 걸리지 않는다.
+  if (FEED_FILTER.mode === "sig") list = list.filter((r) => r.signals.some(isObservedSig));
   else if (FEED_FILTER.mode === "amend") list = list.filter((r) => r.isAmend);
-  else if (FEED_FILTER.mode === "cat") list = list.filter((r) => r.signals.some((s) => s.category === FEED_FILTER.cat));
+  else if (FEED_FILTER.mode === "cat") list = list.filter((r) => r.signals.some((s) => isObservedSig(s) && s.category === FEED_FILTER.cat));
 
   const heavyKey = CUR.heaviest ? CUR.heaviest.key : null;
   let html = `<div class="rowhead g-feed"><span>DATE</span><span>DISCLOSURE</span><span class="colcat">CATEGORY</span><span>SIGNAL</span><span class="colcorr">정정</span></div>`;
   html += list.slice(0, 200).map((r, i) => {
     const s0 = r.signals[0];
-    const isTop = heavyKey && r.signals.some((s) => s.key === heavyKey);
+    // MAX는 이 기간 최상위 "관찰" 신호에만 붙는다 — 절차·사후 보고로 강등된
+    // 행이 헤드라인과 같은 key를 우연히 공유해도(리뷰 라운드1 Finding 1,
+    // 대량보유상황보고 SHAREHOLDER 재현) MAX를 물려받지 않는다.
+    const isTop = heavyKey && r.signals.some((s) => isObservedSig(s) && s.key === heavyKey);
     const hasCaution = !isTop && r.signals.some((s) => s.caution);
     const sigCell = isTop ? `<span class="badge-max">MAX</span>`
       : hasCaution ? `<span class="badge-cau">주의</span>`
@@ -1187,6 +1198,7 @@ function renderProcedural(proceduralEvents, totalCount) {
       <span class="mono dim">${fmtDate(e.date)}</span>
       <a href="${dartUrl(e.rcept)}" target="_blank" rel="noopener">${esc(e.nm)}</a>
       <div class="dim" style="font-size:0.8rem">→ ${esc(e.signals[0].reason)}</div>
+      ${e.signals[0].note ? `<div class="dim" style="font-size:0.78rem">※ ${esc(e.signals[0].note)}</div>` : ""}
     </div>`).join("");
   return `<details class="proc"><summary>절차·사후 보고 ${proceduralEvents.length}건</summary>
     ${summary}${rowsHtml}</details>`;
@@ -1197,11 +1209,16 @@ function renderDetail(rcept) {
   const r = CUR.rows.find((x) => x.rcept === rcept);
   if (!r) return;
   const s0 = r.signals[0] || null;
-  const isTop = CUR.heaviest && r.signals.some((s) => s.key === CUR.heaviest.key);
+  // 절차·사후 보고 행은 헤드라인과 key가 같아도(예: 대량보유상황보고가
+  // SHAREHOLDER를 헤드라인으로 물려받는 경우) TOP WEIGHT를 물려받지 않는다
+  // (리뷰 라운드1 Finding 1과 동일 원칙, 상세 화면 쪽).
+  const isTop = CUR.heaviest && r.signals.some((s) => isObservedSig(s) && s.key === CUR.heaviest.key);
   const cat = s0 ? s0.category : 0;
 
-  // 신호 체인에서의 위치 (신호 이벤트 시간순)
-  const asc = [...CUR.events].reverse();
+  // 신호 체인에서의 위치 (관찰 신호 이벤트 시간순 — 절차·사후 보고는 체인
+  // 자리를 차지하지 않는다. 대시보드 SIGNAL CHAIN과 같은 모집단·같은
+  // 분모를 써야 두 화면이 어긋나지 않는다, 리뷰 라운드1 Finding 2).
+  const asc = [...CUR.observedEvents].reverse();
   const pos = asc.findIndex((e) => e.rcept === rcept);
   let chain = "";
   if (pos >= 0) {
@@ -1240,7 +1257,7 @@ function renderDetail(rcept) {
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">카테고리</span><span>${s0 ? esc(DATA.categories[String(cat)]) : "—"}</span></div>
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">신호 무게</span><span style="color:${isTop ? "var(--red)" : "var(--dim2)"}">${isTop ? "이 기간 최상위" : r.signals.length ? "감지됨" : "—"}</span></div>
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">정정 여부</span><span>${r.isAmend ? "정정공시" : "원공시"}</span></div>
-          <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">체인 위치</span><span>${pos >= 0 ? `${pos + 1} / ${CUR.events.length}` : "—"}</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">체인 위치</span><span>${pos >= 0 ? `${pos + 1} / ${CUR.observedEvents.length}` : "—"}</span></div>
           ${r.signals.some((s) => s.caution) ? `<div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">주의 표시</span><span><span class="badge-cau">주의</span> <span class="dim" style="font-size:0.78rem">— 관찰 우선순위 표시</span></span></div>` : ""}
         </div>
         <a href="${dartUrl(r.rcept)}" target="_blank" rel="noopener" style="display:block;margin-top:16px;text-align:center;background:var(--cell);border:1px solid var(--line2);border-radius:4px;padding:11px;font-family:var(--mono);font-size:12.5px">DART 원문 열기 ↗</a>
@@ -1565,7 +1582,7 @@ function flowChain(events) {
   for (const e of asc) {
     // 방어적 필터 — 한 공시에서 observed/procedural 신호가 섞일 수는 없지만
     // (사유는 공시 단위로 결정된다), 규칙이 신호별로 갈라져도 안전하도록.
-    const s = e.signals.filter((x) => x.tier === TIER_OBSERVED)[0];
+    const s = e.signals.filter(isObservedSig)[0];
     if (!s) continue;
     const last = groups[groups.length - 1];
     if (last && last.key === s.key) { last.n++; last.to = e.date; }
@@ -1582,16 +1599,18 @@ function flowNotes(events) {
   const dayDiff = (a, b) => (new Date(b.slice(0,4)+"-"+b.slice(4,6)+"-"+b.slice(6,8)) -
                              new Date(a.slice(0,4)+"-"+a.slice(4,6)+"-"+a.slice(6,8))) / 86400e3;
   const notes = [];
-  const rs = asc.find((e) => e.signals.some((s) => ["REVERSE_SPLIT", "GAMJA_MERGE"].includes(s.key)));
+  // 방어적 필터 — flowChain(1573)과 동일 원칙. observedEvents만 들어오지만
+  // 신호별로 tier가 갈라져도 안전하도록 e.signals를 매번 observed로 좁힌다.
+  const rs = asc.find((e) => e.signals.filter(isObservedSig).some((s) => ["REVERSE_SPLIT", "GAMJA_MERGE"].includes(s.key)));
   if (rs) {
     const after = asc.filter((e) => dayDiff(rs.date, e.date) > 0 && dayDiff(rs.date, e.date) <= 120 &&
-      e.signals.some((s) => ["EXEC", "SHAREHOLDER", "MGMT", "MGMT_DISPUTE"].includes(s.key)));
+      e.signals.filter(isObservedSig).some((s) => ["EXEC", "SHAREHOLDER", "MGMT", "MGMT_DISPUTE"].includes(s.key)));
     if (after.length >= 2) {
       notes.push(`주식병합·감자(${mmdd(rs.date)}) 뒤 120일 안에 경영권 관련 이벤트가 ${after.length}건 이어지는 배열입니다. ` +
         `병합은 그 자체로 위법이 아니지만, 유통주식 수 축소와 지배지분 재편이 맞물린 구간인지는 병합 전후 지분율·상장 유지 요건을 원문에서 확인해 볼 지점입니다.`);
     }
   }
-  const shDates = asc.filter((e) => e.signals.some((s) => s.key === "SHAREHOLDER")).map((e) => e.date);
+  const shDates = asc.filter((e) => e.signals.filter(isObservedSig).some((s) => s.key === "SHAREHOLDER")).map((e) => e.date);
   let maxIn90 = 0;
   for (let i = 0; i < shDates.length; i++) {
     let c = 0;
@@ -1617,7 +1636,7 @@ function timelinePanel(events, bgn, end) {
   for (const e of events) {
     const y = +e.date.slice(0, 4), mo = +e.date.slice(4, 6) - 1;
     const bucket = months.find((x) => x.y === y && x.m === mo);
-    const obsSigs = e.signals.filter((s) => s.tier === TIER_OBSERVED);
+    const obsSigs = e.signals.filter(isObservedSig);
     if (bucket && obsSigs.length) { bucket.n++; bucket.maxCat = Math.max(bucket.maxCat, ...obsSigs.map((s) => s.category)); }
   }
   const dmax = Math.max(1, ...months.map((x) => x.n));
@@ -1629,7 +1648,7 @@ function timelinePanel(events, bgn, end) {
     months.map((x) => `<span>${longWin ? (x.m === 0 ? "'" + (x.y % 100) : "") : (x.m === 0 ? (x.y % 100) + "·1" : x.m + 1)}</span>`).join("") + `</div>`;
 
   // 레인 타임라인 (SVG)
-  const cats = [...new Set(events.flatMap((e) => e.signals.filter((s) => s.tier === TIER_OBSERVED).map((s) => s.category)))].sort();
+  const cats = [...new Set(events.flatMap((e) => e.signals.filter(isObservedSig).map((s) => s.category)))].sort();
   const W = 1000, laneH = 34, padL = 86, padT = 26, padB = 30;
   const H = padT + cats.length * laneH + padB;
   const t0 = bgn.getTime(), t1 = end.getTime();
@@ -1647,7 +1666,7 @@ function timelinePanel(events, bgn, end) {
     if (m.getMonth() % labelEvery === 0) grid += `<text x="${mx}" y="${H - 8}" text-anchor="middle" font-size="10" fill="#5e6a78">${m.getFullYear() % 100}.${String(m.getMonth() + 1).padStart(2, "0")}</text>`;
   }
   for (const e of events) {
-    for (const s of e.signals.filter((x) => x.tier === TIER_OBSERVED)) {
+    for (const s of e.signals.filter(isObservedSig)) {
       const yi = cats.indexOf(s.category);
       const y = padT + yi * laneH + laneH / 2;
       const heavy = s.category >= 7;
