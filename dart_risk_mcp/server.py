@@ -99,6 +99,15 @@ from .core import (
     _parse_fs_amount,
 )
 from .core.taxonomy import CROSS_SIGNAL_PATTERNS
+from .core.qualifiers import (
+    Qualified,
+    TIER_OBSERVED,
+    is_false_amendment,
+    parse_report_name,
+    pick_headline,
+    qualify_signals,
+)
+from .core.signals import strip_amendment_prefix
 
 mcp = FastMCP("dart-risk-analyzer")
 
@@ -714,18 +723,28 @@ def analyze_company_risk(
         rcept_no = d.get("rcept_no", "")
         rcept_dt = d.get("rcept_dt", "")[:10]
         is_amendment = is_amendment_disclosure(report_nm)
+        parsed = parse_report_name(report_nm)
         matched = match_signals(report_nm)
+        # '[정정명령부과]증권신고서'처럼 _AMENDMENT_RE에 걸리지만 실제
+        # 정정이 아닌 공시는 접두를 벗겨 재매칭한다. 진짜 정정공시의
+        # 기존 동작(신호 없음)은 바뀌지 않는다.
+        if not matched and is_amendment and is_false_amendment(parsed):
+            matched = match_signals(strip_amendment_prefix(report_nm))
+        qualified = qualify_signals(matched, parsed, d)
 
-        for sig in matched:
+        for sig, q in zip(matched, qualified):
             signal_events.append(
                 {
                     "key": sig["key"],
-                    "label": sig["label"],
+                    "label": q.label,
                     "score": 0 if is_amendment else sig["score"],
                     "report_nm": report_nm,
                     "rcept_dt": rcept_dt,
                     "rcept_no": rcept_no,
                     "is_amendment": is_amendment,
+                    "tier": q.tier,
+                    "reason": q.reason,
+                    "note": q.note,
                 }
             )
             if sig["key"] == "CB_BW" and not is_amendment and rcept_no:
@@ -849,7 +868,19 @@ def analyze_company_risk(
         pass
     # ============ v0.6.0 블록 끝 ============
 
-    if not signal_events:
+    # 한정층 — 공시에서 온 신호만 tier를 갖는다. 재무·부실 플래그(DISTRESS_EVENT·
+    # AR_SURGE 등 fs_flags·CAPITAL_CHURN·DIVIDEND_DRAIN에서 직접 append)는
+    # 제목이 없어 한정 대상이 아니므로 기본값 observed로 남긴다.
+    observed_events = [
+        e for e in signal_events
+        if e.get("tier", TIER_OBSERVED) == TIER_OBSERVED
+    ]
+    procedural_events = [
+        e for e in signal_events
+        if e.get("tier", TIER_OBSERVED) != TIER_OBSERVED
+    ]
+
+    if not observed_events:
         _alias_note = _alias_note_line(corp_info)
         _note_block = f"{_alias_note}\n\n" if _alias_note else ""
         return (
@@ -862,7 +893,7 @@ def analyze_company_risk(
     # 5. 복합 패턴
     from .core.signals import SIGNAL_KEY_TO_TAXONOMY as _SKT
 
-    sig_keys = list({e["key"] for e in signal_events if not e["is_amendment"]})
+    sig_keys = list({e["key"] for e in observed_events if not e["is_amendment"]})
     tax_ids_all = list({tid for k in sig_keys for tid in _SKT.get(k, [])})
     pattern = find_pattern_match(tax_ids_all)
 
@@ -894,11 +925,20 @@ def analyze_company_risk(
             capital_backflow_fact_lines = _gate["fact_lines"]
 
     # 6. 타임라인 (내부 랭킹 점수 기준 — 출력에는 노출되지 않음)
-    top_signal = max(
-        (e for e in signal_events if not e["is_amendment"]),
-        key=lambda e: e["score"],
-        default=None,
-    )
+    # 헤드라인 — 양면적 신호는 단독으로 후보가 되지 않는다.
+    _order = [s["key"] for s in sorted(SIGNAL_TYPES, key=lambda x: -x["score"])]
+    _cands = [
+        Qualified(key=e["key"], label=e["label"], tier=TIER_OBSERVED, reason="", note="")
+        for e in observed_events if not e["is_amendment"]
+    ]
+    _head = pick_headline(_cands, _order)
+    top_signal = None
+    if _head is not None:
+        top_signal = next(
+            (e for e in observed_events
+             if e["key"] == _head.key and not e["is_amendment"]),
+            None,
+        )
     timeline_text = ""
     if top_signal:
         from .core.signals import SIGNAL_KEY_TO_TAXONOMY
@@ -926,7 +966,7 @@ def analyze_company_risk(
     # ── 리포트 조립 ──
 
     # 🎯 3문장 요약 — 맨 위에 독립적으로 읽히는 단락
-    non_amend_events = [e for e in signal_events if not e["is_amendment"]]
+    non_amend_events = [e for e in observed_events if not e["is_amendment"]]
     top_signal_label = (
         top_signal.get("label", "") if top_signal else ""
     )
@@ -948,8 +988,20 @@ def analyze_company_risk(
     # 셋째 문장: 가장 눈에 띄는 신호
     if top_signal:
         s3 = _compose_top_signal_sentence(top_signal_label, top_signal_prose)
+    elif observed_events:
+        _types = sorted(
+            {(e["key"], e["label"]) for e in observed_events if not e["is_amendment"]}
+        )
+        _txt = " · ".join(
+            f"{label} {sum(1 for e in observed_events if e['key'] == key)}건"
+            for key, label in _types
+        )
+        s3 = f"이 기간 관찰된 유형: {_txt}"
     else:
-        s3 = "가장 주목할 만한 단일 신호는 관찰되지 않았습니다."
+        s3 = (
+            "이 기간 공시에서는 관찰 신호가 없습니다. "
+            "공시 외 지표(재무·감사의견·연속적자)는 아래 블록에서 확인하세요."
+        )
 
     summary_block = f"📋 {s1}\n\n{s2}\n\n{s3}"
 
@@ -966,13 +1018,13 @@ def analyze_company_risk(
     if _alias_note:
         lines.insert(1, _alias_note)
     lines += [
-        f"━━ 관찰된 신호 ({len(signal_events)}건) ━━",
+        f"━━ 관찰된 신호 ({len(observed_events)}건) ━━",
     ]
 
     # 같은 signal_key가 많이 반복될 때 해설(→)을 첫 3건에만 붙여 가독성을 보존한다.
-    _key_counts = Counter(e["key"] for e in signal_events)
+    _key_counts = Counter(e["key"] for e in observed_events)
     _key_seen: dict[str, int] = {}
-    for e in sorted(signal_events, key=lambda x: x["rcept_dt"], reverse=True):
+    for e in sorted(observed_events, key=lambda x: x["rcept_dt"], reverse=True):
         amend_tag = " · 정정공시(관찰 대상 제외)" if e["is_amendment"] else ""
         date = e["rcept_dt"] or "-"
         _key_seen[e["key"]] = _key_seen.get(e["key"], 0) + 1
@@ -989,6 +1041,17 @@ def analyze_company_risk(
         # 두번째 줄: 의미 해설 (반복 N회 초과 시 생략)
         if one_liner:
             lines.append(f"  → {one_liner}")
+
+    if procedural_events:
+        lines.append(f"\n━━ 절차·사후 보고 ({len(procedural_events)}건) ━━")
+        lines.append(
+            "회사가 낸 사건 자체의 공시가 아니거나, 이미 끝난 건의 사후 보고입니다."
+        )
+        for e in procedural_events[:20]:
+            lines.append(f"• {e['rcept_dt']} · {e['report_nm']}")
+            lines.append(f"  → {e.get('reason', '')}")
+        if len(procedural_events) > 20:
+            lines.append(f"… 외 {len(procedural_events) - 20}건")
 
     if pattern:
         pattern_key = None
@@ -1483,12 +1546,18 @@ def build_event_timeline(
         report_nm = d.get("report_nm", "")
         rcept_dt = d.get("rcept_dt", "")[:10]
         rcept_no = d.get("rcept_no", "")
-        if is_amendment_disclosure(report_nm):
+        parsed = parse_report_name(report_nm)
+        if is_amendment_disclosure(report_nm) and not is_false_amendment(parsed):
             continue
-        matched = match_signals(report_nm)
-        for sig in matched:
+        matched = match_signals(report_nm) or match_signals(
+            strip_amendment_prefix(report_nm)
+        )
+        qualified = qualify_signals(matched, parsed, d)
+        for sig, q in zip(matched, qualified):
+            if q.tier != TIER_OBSERVED:
+                continue
             phase = _PHASE_MAP.get(sig["key"], "심화기")
-            events.append((rcept_dt, phase, sig["key"], sig["label"], report_nm, rcept_no))
+            events.append((rcept_dt, phase, sig["key"], q.label, report_nm, rcept_no))
             tax_ids = SIGNAL_KEY_TO_TAXONOMY.get(sig["key"], [])
             all_tax_ids.update(tax_ids)
 
