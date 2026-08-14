@@ -93,6 +93,11 @@ from .explain import (
     pattern_checkpoints,
     category_prose,
 )
+from .qualifiers import (
+    ParsedName,
+    parse_report_name,
+    TAILS,
+)
 
 __all__ = [
     "resolve_corp",
@@ -183,4 +188,7 @@ __all__ = [
     "lookup_actor",
     "lookup_actors_by_company",
     "actor_status",
+    "ParsedName",
+    "parse_report_name",
+    "TAILS",
 ]
