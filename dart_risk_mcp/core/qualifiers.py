@@ -15,6 +15,7 @@ import re
 from dataclasses import dataclass
 
 from .dart_client import _fold_corp_name
+from .signals import AMBIGUOUS_SIGNAL_KEYS
 
 # 본체 어미 후보. 긴 것이 먼저 매칭돼야 하므로 _tail_of가 길이순으로 검사한다.
 # 'ㆍ'(U+318D)는 DART 실제 표기라 그대로 둔다.
@@ -267,3 +268,28 @@ def qualify_signals(
         )
         for sig in (signals or [])
     ]
+
+
+def pick_headline(
+    qualified: "list[Qualified]",
+    order: "list[str] | None" = None,
+) -> "Qualified | None":
+    """헤드라인이 될 신호를 고른다. 없으면 None.
+
+    후보 = observed 신호 중 AMBIGUOUS_SIGNAL_KEYS를 뺀 것.
+    후보가 비면 None을 반환하고, 호출부는 중립 표기로 대체한다.
+
+    ambiguous를 후보로 되돌리는 별도 조건은 두지 않는다 — non-ambiguous가
+    하나라도 있으면 그것이 헤드라인이 되고, 없으면 중립 표기이므로
+    ambiguous가 헤드라인이 되어야 할 경우가 존재하지 않는다.
+    """
+    candidates = [
+        q for q in (qualified or [])
+        if q.tier == TIER_OBSERVED and q.key not in AMBIGUOUS_SIGNAL_KEYS
+    ]
+    if not candidates:
+        return None
+    if not order:
+        return candidates[0]
+    rank = {k: i for i, k in enumerate(order)}
+    return min(candidates, key=lambda q: rank.get(q.key, len(rank)))

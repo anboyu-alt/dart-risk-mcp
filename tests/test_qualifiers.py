@@ -258,3 +258,57 @@ def test_note_added_for_bond_sale_decision():
 def test_no_note_for_plain_issuance():
     q = _one("주요사항보고서(전환사채권발행결정)", [CB_BW])
     assert q.note == ""
+
+
+from dart_risk_mcp.core.qualifiers import pick_headline  # noqa: E402
+from dart_risk_mcp.core.signals import (  # noqa: E402
+    AMBIGUOUS_SIGNAL_KEYS,
+    SIGNAL_TYPES,
+)
+
+_ORDER = [s["key"] for s in sorted(SIGNAL_TYPES, key=lambda x: -x["score"])]
+
+
+def _q(key, label, tier=TIER_OBSERVED):
+    from dart_risk_mcp.core.qualifiers import Qualified
+    return Qualified(key=key, label=label, tier=tier, reason="", note="")
+
+
+def test_ambiguous_keys_are_all_real_signal_keys():
+    known = {s["key"] for s in SIGNAL_TYPES}
+    assert AMBIGUOUS_SIGNAL_KEYS <= known
+
+
+def test_ambiguous_keys_contents():
+    assert AMBIGUOUS_SIGNAL_KEYS == frozenset(
+        {"TREASURY", "TREASURY_TRUST", "EQUITY_SPLIT", "FUND_OUTFLOW", "ACQ_REVIEW"}
+    )
+
+
+def test_headline_is_none_when_all_observed_are_ambiguous():
+    """삼성전자 케이스 — observed가 자사주뿐이면 헤드라인이 없다."""
+    qs = [_q("TREASURY", "자사주매입/처분"), _q("TREASURY", "자사주매입/처분")]
+    assert pick_headline(qs, _ORDER) is None
+
+
+def test_headline_picks_non_ambiguous_even_if_lower_priority():
+    """셀트리온 케이스 — 자사주 9건 + 경영권분쟁 1건이면 후자가 헤드라인."""
+    qs = [_q("TREASURY", "자사주매입/처분"), _q("MGMT_DISPUTE", "경영권분쟁")]
+    head = pick_headline(qs, _ORDER)
+    assert head is not None and head.key == "MGMT_DISPUTE"
+
+
+def test_headline_ignores_procedural():
+    qs = [_q("CB_BW", "CB/BW발행", tier=TIER_PROCEDURAL)]
+    assert pick_headline(qs, _ORDER) is None
+
+
+def test_headline_respects_priority_order_among_candidates():
+    qs = [_q("EXEC", "임원변동"), _q("CB_BW", "CB/BW발행")]
+    head = pick_headline(qs, _ORDER)
+    expected = min({"EXEC", "CB_BW"}, key=_ORDER.index)
+    assert head.key == expected
+
+
+def test_headline_empty_input():
+    assert pick_headline([], _ORDER) is None
