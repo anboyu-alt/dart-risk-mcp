@@ -248,6 +248,33 @@ class TestBuildSignalsData(unittest.TestCase):
     def test_json_serializable(self):
         json.dumps(self.data, ensure_ascii=False)
 
+    def test_export_includes_qualifier_rules(self):
+        from dart_risk_mcp.core import qualifiers as q
+
+        rules = self.data["qualifier_rules"]
+        self.assertEqual(rules["third_party_titles"], list(q.THIRD_PARTY_TITLES))
+        self.assertEqual(rules["phase_tails"], list(q.PHASE_TAILS))
+        self.assertEqual(rules["subsidiary_subtitles"], list(q.SUBSIDIARY_SUBTITLES))
+        self.assertEqual(rules["related_party_prefix"], q.RELATED_PARTY_PREFIX)
+        self.assertEqual(rules["amendment_tags"], list(q.AMENDMENT_TAGS))
+        self.assertEqual(rules["tails"], list(q.TAILS))
+
+    def test_export_includes_label_overrides_and_notes(self):
+        rules = self.data["qualifier_rules"]
+        self.assertEqual(rules["label_overrides"]["3PCA"]["label"], "유상증자(배정방식 미상)")
+        self.assertEqual(rules["direction_notes"]["CB_BW"]["markers"], ["사채취득", "사채매도"])
+
+    def test_export_includes_ambiguous_keys(self):
+        from dart_risk_mcp.core.signals import AMBIGUOUS_SIGNAL_KEYS
+
+        self.assertEqual(self.data["ambiguous_signal_keys"], sorted(AMBIGUOUS_SIGNAL_KEYS))
+
+    def test_export_does_not_leak_score_or_severity_in_rules(self):
+        """무점수 원칙 — 기존 경계가 유지되는지 재확인."""
+        blob = json.dumps(self.data, ensure_ascii=False)
+        self.assertNotIn('"score"', blob)
+        self.assertNotIn('"severity"', blob)
+
 
 class TestRoutineFilingCategory(unittest.TestCase):
     """SE-7 Task 3 — 고빈도 정기 보고(임원 지분 1주 변동 보고 등)는 위험
