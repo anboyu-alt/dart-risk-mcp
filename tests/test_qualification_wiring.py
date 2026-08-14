@@ -7,6 +7,15 @@
   합성 /api/list.json 형태 행에 대해 그대로 재현했을 때, observed/procedural
   분리와 pick_headline이 실측 공시 제목 기준으로 기대한 대로 동작한다는 것.
 - server.py 소스에 그 배선이 실제로 존재한다는 것(문자열 검사).
+- (fix round 1) 리뷰에서 확인된 4개 결함 각각이 재현·수정됐다는 것:
+  1) note가 관찰된 신호 목록에 실제로 렌더링된다.
+  2) observed 0건이어도 조기 반환하지 않고 절차·사후 보고 목록 + 지정된
+     문구가 나온다.
+  3) `_outflow_review_candidates`에 procedural로 강등된 FUND_OUTFLOW가
+     섞이면(원본 signal_events) 후보에 남고, observed_events만 넘기면 빠진다.
+  4) `detect_capital_churn`에 procedural 자본 이벤트가 섞이면(원본
+     signal_events) CAPITAL_CHURN이 오발화하고, observed_events만 넘기면
+     발화하지 않는다.
 
 이 테스트가 증명하지 못하는 것:
 - analyze_company_risk/build_event_timeline을 실제로 호출했을 때 이 로직이
@@ -18,15 +27,18 @@ from pathlib import Path
 
 from dart_risk_mcp.core import (
     SIGNAL_TYPES,
+    detect_capital_churn,
     match_signals,
 )
 from dart_risk_mcp.core.qualifiers import (
     Qualified,
     TIER_OBSERVED,
+    TIER_PROCEDURAL,
     parse_report_name,
     pick_headline,
     qualify_signals,
 )
+from dart_risk_mcp.server import _outflow_review_candidates
 
 _SERVER_PY = Path(__file__).resolve().parent.parent / "dart_risk_mcp" / "server.py"
 
@@ -196,7 +208,6 @@ def test_server_source_wires_observed_events():
     # 절차 섹션이 signal_events가 아니라 observed_events/procedural_events를 쓴다.
     assert "observed_events = [" in src
     assert "procedural_events = [" in src
-    assert "if not observed_events:" in src
     assert 'sig_keys = list({e["key"] for e in observed_events' in src
     assert "_head = pick_headline(_cands, _order)" in src
     assert "for e in observed_events if not e[\"is_amendment\"]" in src
@@ -205,3 +216,184 @@ def test_server_source_wires_observed_events():
 
     # build_event_timeline: tier가 TIER_OBSERVED가 아닌 신호는 건너뛴다.
     assert "if q.tier != TIER_OBSERVED:" in src
+
+
+def test_server_source_removes_dead_early_return():
+    """fix round 1, finding 2 — observed 0건 조기 반환이 삭제됐다.
+
+    조기 반환이 남아 있으면 절차·사후 보고 절과 지정 문구("이 기간 공시에서는
+    관찰 신호가 없습니다"/"공시 외 지표(재무·감사의견·연속적자)는 아래 블록에서
+    확인하세요")로 도달하는 elif/else 분기가 죽은 코드로 남는다.
+    """
+    src = _SERVER_PY.read_text(encoding="utf-8")
+    assert "탐지된 의심 공시가 없습니다" not in src
+    assert "이 기간 공시에서는 관찰 신호가 없습니다." in src
+    assert "공시 외 지표(재무·감사의견·연속적자)는 아래 블록에서 확인하세요." in src
+
+    # detect_capital_churn·_confirm_outflow_counterparties는 이제 observed_events를 받는다.
+    assert "detect_capital_churn(observed_events, lookback_years=1)" in src
+    assert (
+        "outflow_confirmations = _confirm_outflow_counterparties(\n"
+        "            observed_events, disclosures, corp_code, _decisions_by_rcept\n"
+        "        )"
+    ) in src
+
+    # note는 관찰된 신호 목록에서 tier와 무관하게(observed 루프 내부이므로
+    # 자동으로 observed만) 렌더링된다.
+    assert 'lines.append(f"  ※ {e[\'note\']}")' in src
+
+
+# ── fix round 1, finding 1: note가 관찰된 신호 목록에 실제로 렌더링되는가 ──
+
+
+def test_cb_direction_note_attached_to_observed_signal():
+    """제이스코홀딩스 실측: 자기전환사채매도결정은 CB_BW observed + 방향 주석."""
+    row = _row(
+        "주요사항보고서(자기전환사채매도결정)", "제이스코홀딩스",
+        corp_name="제이스코홀딩스",
+    )
+    events = _build_signal_events([row])
+    assert len(events) == 1
+    e = events[0]
+    assert e["key"] == "CB_BW"
+    assert e["tier"] == TIER_OBSERVED
+    assert e["note"] == "발행이 아니라 사채 취득·매도 건입니다"
+
+
+def _render_observed_note_lines(observed_events):
+    """server.py '관찰된 신호' 루프의 note 렌더링 부분만 재현한다."""
+    out = []
+    for e in observed_events:
+        if e.get("note"):
+            out.append(f"  ※ {e['note']}")
+    return out
+
+
+def test_note_line_rendered_for_observed_signal():
+    row = _row(
+        "주요사항보고서(자기전환사채매도결정)", "제이스코홀딩스",
+        corp_name="제이스코홀딩스",
+    )
+    events = _build_signal_events([row])
+    observed, _ = _split(events)
+    rendered = _render_observed_note_lines(observed)
+    assert rendered == ["  ※ 발행이 아니라 사채 취득·매도 건입니다"]
+
+
+# ── fix round 1, finding 2: observed 0건에서 지정 문구 + 절차 목록 노출 ──
+
+
+def test_zero_observed_path_wording_and_procedural_list():
+    """헬릭스미스 실측: 대량보유상황보고서 1건 → observed 0, procedural 1.
+
+    server.py의 s3 3분기(if top_signal / elif observed_events / else)를
+    그대로 재현한다 — observed_events가 비면 else 분기(지정 문구)로
+    떨어지고, procedural_events는 별도로 여전히 렌더링 대상이어야 한다.
+    """
+    row = _row(
+        "주식등의대량보유상황보고서(일반)", "국민연금공단",
+        corp_name="헬릭스미스",
+    )
+    events = _build_signal_events([row])
+    observed, procedural = _split(events)
+    assert observed == []
+    assert len(procedural) == 1
+
+    top_signal = None  # observed가 비어 있으니 pick_headline도 항상 None
+    if top_signal:
+        s3 = "unreachable"
+    elif observed:
+        s3 = "unreachable"
+    else:
+        s3 = (
+            "이 기간 공시에서는 관찰 신호가 없습니다. "
+            "공시 외 지표(재무·감사의견·연속적자)는 아래 블록에서 확인하세요."
+        )
+    assert s3 == (
+        "이 기간 공시에서는 관찰 신호가 없습니다. "
+        "공시 외 지표(재무·감사의견·연속적자)는 아래 블록에서 확인하세요."
+    )
+
+    # 절차·사후 보고 절은 observed가 0이어도 procedural_events가 있으면 나온다
+    # (이전 버그: observed가 비면 함수 전체가 조기 반환해 이 목록 자체가
+    # 사라졌다).
+    assert procedural[0]["reason"]
+
+
+# ── fix round 1, finding 3: 강등된 FUND_OUTFLOW는 자금유출 후보에서 빠져야 한다 ──
+
+
+def test_demoted_fund_outflow_excluded_from_outflow_candidates():
+    """리뷰 실측 사례: 타인에대한채무보증결정(종속회사의주요경영사항)은 R3로 강등.
+
+    _confirm_outflow_counterparties가 signal_events(분리 전)를 받으면 이
+    procedural 건이 4개 후보 슬롯 하나를 차지해 더 오래된 observed 건을
+    밀어낼 수 있다 — observed_events만 넘기면 애초에 후보에 들지 않는다.
+    """
+    rows = [
+        _row(
+            "금전대여결정", "동일산업", corp_name="동일산업",
+            rcept_dt="20260110", rcept_no="OBS001",
+        ),
+        _row(
+            "타인에대한채무보증결정(종속회사의주요경영사항)", "동일산업",
+            corp_name="동일산업", rcept_dt="20260210", rcept_no="PROC001",
+        ),
+    ]
+    events = _build_signal_events(rows)
+    assert {e["key"] for e in events} == {"FUND_OUTFLOW"}
+    observed, procedural = _split(events)
+    assert [e["rcept_no"] for e in observed] == ["OBS001"]
+    assert [e["rcept_no"] for e in procedural] == ["PROC001"]
+    assert all(e["tier"] == TIER_PROCEDURAL for e in procedural)
+
+    # 버그 재현: 분리 전 원본을 넘기면 강등된 건도 후보에 남는다.
+    raw_candidates = _outflow_review_candidates(events, [])
+    assert {c[0] for c in raw_candidates} == {"OBS001", "PROC001"}
+
+    # 수정 후 배선과 동일: observed_events만 넘기면 강등된 건이 빠진다.
+    fixed_candidates = _outflow_review_candidates(observed, [])
+    assert {c[0] for c in fixed_candidates} == {"OBS001"}
+
+
+# ── fix round 1, finding 4: procedural 자본 이벤트는 churn 집계에서 빠져야 한다 ──
+
+
+def test_procedural_capital_events_excluded_from_churn():
+    """셀트리온류 실측: 유상증자결정(종속회사의주요경영사항)은 R3로 강등되는 3PCA.
+
+    희석성 자본 이벤트(3PCA) 4건이 12개월 안에 몰리면 detect_capital_churn의
+    규칙(A) 희석성 ≥3건을 만족해 CAPITAL_CHURN이 뜬다. 그중 2건이 procedural
+    강등 건이면, observed만 셌을 때는(희석성 2건) 임계를 못 채워야 한다.
+    """
+    rows = [
+        _row(
+            "제3자배정유상증자결정", "처칠전자", corp_name="처칠전자",
+            rcept_dt="20260101", rcept_no="C1",
+        ),
+        _row(
+            "제3자배정유상증자결정", "처칠전자", corp_name="처칠전자",
+            rcept_dt="20260201", rcept_no="C2",
+        ),
+        _row(
+            "유상증자결정(종속회사의주요경영사항)", "처칠전자", corp_name="처칠전자",
+            rcept_dt="20260301", rcept_no="C3",
+        ),
+        _row(
+            "유상증자결정(종속회사의주요경영사항)", "처칠전자", corp_name="처칠전자",
+            rcept_dt="20260401", rcept_no="C4",
+        ),
+    ]
+    events = _build_signal_events(rows)
+    assert {e["key"] for e in events} == {"3PCA"}
+    observed, procedural = _split(events)
+    assert len(observed) == 2
+    assert len(procedural) == 2
+
+    # 버그 재현: 분리 전 원본으로 판정하면 희석성 4건 → CAPITAL_CHURN 오발화.
+    raw_churn = detect_capital_churn(events, lookback_years=1)
+    assert "CAPITAL_CHURN" in raw_churn["flags"]
+
+    # 수정 후 배선과 동일: observed_events만 넘기면(희석성 2건) 발화하지 않는다.
+    observed_churn = detect_capital_churn(observed, lookback_years=1)
+    assert "CAPITAL_CHURN" not in observed_churn["flags"]

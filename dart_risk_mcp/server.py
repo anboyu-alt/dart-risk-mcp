@@ -818,12 +818,29 @@ def analyze_company_risk(
                 "is_amendment": False,
             })
 
+    # 한정층 — 공시에서 온 신호만 tier를 갖는다. 재무·부실 플래그(DISTRESS_EVENT·
+    # 결정 공시 플래그·자금사용 플래그, 아래에서 append될 CAPITAL_CHURN·재무제표
+    # YoY 이상 포함)는 제목이 없어 한정 대상이 아니므로 기본값 observed로 남는다.
+    # detect_capital_churn·재무이상 스캔이 procedural(제목 기반 강등) 신호까지
+    # 세지 않도록, 이 두 탐지보다 앞에서 분리한다 — 이후 두 탐지가 신호를
+    # 추가하면 observed_events에도 함께 추가한다(둘 다 제목이 없어 태생적으로
+    # observed 취급).
+    observed_events = [
+        e for e in signal_events
+        if e.get("tier", TIER_OBSERVED) == TIER_OBSERVED
+    ]
+    procedural_events = [
+        e for e in signal_events
+        if e.get("tier", TIER_OBSERVED) != TIER_OBSERVED
+    ]
+
     # ============ v0.6.0 블록 시작 ============
-    # 자본 churn 탐지 (최근 12개월 window)
+    # 자본 churn 탐지 (최근 12개월 window) — procedural로 강등된 신호는
+    # 반복 횟수에 포함시키지 않는다(observed_events만 사용).
     try:
-        churn = detect_capital_churn(signal_events, lookback_years=1)
+        churn = detect_capital_churn(observed_events, lookback_years=1)
         if "CAPITAL_CHURN" in churn["flags"]:
-            signal_events.append({
+            _churn_event = {
                 "key": "CAPITAL_CHURN",
                 "label": "자본 이벤트 과다 반복",
                 "score": 7,
@@ -831,7 +848,9 @@ def analyze_company_risk(
                 "rcept_dt": "",
                 "rcept_no": "",
                 "is_amendment": False,
-            })
+            }
+            signal_events.append(_churn_event)
+            observed_events.append(_churn_event)
     except Exception:
         churn = {"flags": [], "events": [], "max_12m_count": 0, "total_events": 0, "by_year": {}}
 
@@ -855,7 +874,7 @@ def analyze_company_risk(
             fs_flags, fs_metrics = detect_financial_anomaly(_cur, _pri)
             for f in fs_flags:
                 label, score = _v6_labels[f]
-                signal_events.append({
+                _fs_event = {
                     "key": f,
                     "label": label,
                     "score": score,
@@ -863,32 +882,12 @@ def analyze_company_risk(
                     "rcept_dt": "",
                     "rcept_no": "",
                     "is_amendment": False,
-                })
+                }
+                signal_events.append(_fs_event)
+                observed_events.append(_fs_event)
     except Exception:
         pass
     # ============ v0.6.0 블록 끝 ============
-
-    # 한정층 — 공시에서 온 신호만 tier를 갖는다. 재무·부실 플래그(DISTRESS_EVENT·
-    # AR_SURGE 등 fs_flags·CAPITAL_CHURN·DIVIDEND_DRAIN에서 직접 append)는
-    # 제목이 없어 한정 대상이 아니므로 기본값 observed로 남긴다.
-    observed_events = [
-        e for e in signal_events
-        if e.get("tier", TIER_OBSERVED) == TIER_OBSERVED
-    ]
-    procedural_events = [
-        e for e in signal_events
-        if e.get("tier", TIER_OBSERVED) != TIER_OBSERVED
-    ]
-
-    if not observed_events:
-        _alias_note = _alias_note_line(corp_info)
-        _note_block = f"{_alias_note}\n\n" if _alias_note else ""
-        return (
-            f"📋 **{corp_name}** ({stock_code or corp_code})\n\n"
-            f"{_note_block}"
-            f"최근 {window_phrase}간 탐지된 의심 공시가 없습니다.\n"
-            f"(전체 공시 {len(disclosures)}건 검토)"
-        )
 
     # 5. 복합 패턴
     from .core.signals import SIGNAL_KEY_TO_TAXONOMY as _SKT
@@ -904,7 +903,7 @@ def analyze_company_risk(
     try:
         _decisions_by_rcept = {d["rcept_no"]: r for d, r in decisions}
         outflow_confirmations = _confirm_outflow_counterparties(
-            signal_events, disclosures, corp_code, _decisions_by_rcept
+            observed_events, disclosures, corp_code, _decisions_by_rcept
         )
     except Exception:
         outflow_confirmations = []
@@ -1041,6 +1040,9 @@ def analyze_company_risk(
         # 두번째 줄: 의미 해설 (반복 N회 초과 시 생략)
         if one_liner:
             lines.append(f"  → {one_liner}")
+        # 사실 주석 (방향 불일치 등) — tier와 무관하게, 있으면 항상 표시
+        if e.get("note"):
+            lines.append(f"  ※ {e['note']}")
 
     if procedural_events:
         lines.append(f"\n━━ 절차·사후 보고 ({len(procedural_events)}건) ━━")
