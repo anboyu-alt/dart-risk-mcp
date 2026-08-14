@@ -260,8 +260,22 @@ class TestBuildSignalsData(unittest.TestCase):
         self.assertEqual(rules["tails"], list(q.TAILS))
 
     def test_export_includes_label_overrides_and_notes(self):
+        from dart_risk_mcp.core import qualifiers as q
+
         rules = self.data["qualifier_rules"]
-        self.assertEqual(rules["label_overrides"]["3PCA"]["label"], "유상증자(배정방식 미상)")
+        exported = rules["label_overrides"]["3PCA"]
+        live = q.LABEL_OVERRIDES["3PCA"]
+        # 하드코딩 리터럴이 아니라 core 상수와 직접 비교한다 — core가 바뀌면
+        # 이 테스트도 같이 따라가고, 드리프트가 생기면 실패한다.
+        self.assertEqual(exported["label"], live["label"])
+        self.assertEqual(exported["missing_marker"], live["missing_marker"])
+        # confirm_markers(Task 10 후속) — 원문 확인 버튼이 찾는 배정방식
+        # 후보 전체. missing_marker와 달리 라벨 보정 여부에는 관여하지
+        # 않지만, 내보내기가 끊기면 뷰어가 "제3자배정"만 확인할 수 있는
+        # 소수 케이스로 조용히 퇴행한다 — 그래서 여기서 명시적으로 검증한다.
+        self.assertEqual(exported["confirm_markers"], list(live["confirm_markers"]))
+        self.assertIn("제3자배정", exported["confirm_markers"])
+        self.assertIn("주주배정", exported["confirm_markers"])
         self.assertEqual(rules["direction_notes"]["CB_BW"]["markers"], ["사채취득", "사채매도"])
 
     def test_export_includes_ambiguous_keys(self):

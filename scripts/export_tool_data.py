@@ -239,7 +239,8 @@ def build_signals_data() -> dict:
             "amendment_tags": list(_q.AMENDMENT_TAGS),
             "tails": list(_q.TAILS),
             "label_overrides": {
-                k: dict(v) for k, v in _q.LABEL_OVERRIDES.items()
+                k: {**v, "confirm_markers": list(v.get("confirm_markers", ()))}
+                for k, v in _q.LABEL_OVERRIDES.items()
             },
             "direction_notes": {
                 k: {"markers": list(v["markers"]), "note": v["note"]}

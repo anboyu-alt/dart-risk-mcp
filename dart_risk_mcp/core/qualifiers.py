@@ -211,10 +211,18 @@ def _demotion_reason(parsed: ParsedName, filing: "dict | None") -> str:
 # 라벨 보정 — 제목이 확정해주지 못하는 수식어는 라벨에서 뺀다.
 # 3PCA 키워드에 '유상증자'가 통째로 있어 일반공모·소액공모까지 '제3자배정'으로
 # 표기되던 것을 막는다(셀트리온 헤드라인 오탐의 직접 원인).
+#
+# missing_marker: 라벨 보정 여부를 가르는 유일한 기준(_adjusted_label). 바뀌면
+#   Task 4의 42개 단위 테스트가 검증하는 강등 동작이 그대로 바뀐다 — 손대지 않는다.
+# confirm_markers: 라벨이 보정된 뒤, 뷰어가 원문을 펼쳐 실제 배정 방식을
+#   확인할 때 찾는 후보 문구 전체(missing_marker 포함). 라벨을 보정할지
+#   말지에는 관여하지 않는다 — 순수하게 "원문에서 어떤 배정 방식이
+#   적혔는지" 사용자에게 보여주기 위한 확인 대상 목록이다(Task 10 후속).
 LABEL_OVERRIDES: dict = {
     "3PCA": {
         "missing_marker": "제3자배정",
         "label": "유상증자(배정방식 미상)",
+        "confirm_markers": ("제3자배정", "주주배정", "일반공모", "주주우선공모"),
     },
 }
 

@@ -1383,8 +1383,11 @@ async function fetchDisclosureText(rcept) {
    스캔 시점에는 호출 0건. 사용자가 이 버튼을 누를 때만 fetchDisclosureText로
    원문 1건을 받는다 — 기존 캐시(DOC_CACHE/sessionStorage)를 그대로 타므로
    이미 열람한 공시는 두 번째 클릭에서 네트워크 호출이 없다.
-   확인 대상 문구는 DATA.qualifier_rules.label_overrides[key].missing_marker
-   에서만 읽는다 — 한글 문자열을 여기서 새로 하드코딩하지 않는다. */
+   확인 대상 문구는 DATA.qualifier_rules.label_overrides[key].confirm_markers
+   (missing_marker 포함 전체 후보) 에서만 읽는다 — 한글 문자열을 여기서 새로
+   하드코딩하지 않는다. missing_marker는 라벨 보정 여부를 가르는 값이라
+   여기서 그 필드를 바꿔 쓰지 않는다 — confirm_markers는 라벨이 보정된
+   *이후*의 원문 확인 후보 목록일 뿐, 강등 로직(adjustedLabel)과는 무관하다. */
 function markerPattern(marker) {
   const chars = [...marker].map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   return new RegExp(chars.join("\\s*"));
@@ -1393,7 +1396,11 @@ async function confirmAllocation(rcept, key) {
   const slot = document.getElementById("alloc-" + rcept + "-" + key);
   if (!slot) return;
   const rule = (qrules().label_overrides || {})[key] || {};
-  const marker = rule.missing_marker || "";
+  // confirm_markers가 없는(구버전 데이터) 경우에만 missing_marker 하나로
+  // 폴백한다 — 폴백값도 데이터에서 온 값이지 리터럴이 아니다.
+  const markers = (rule.confirm_markers && rule.confirm_markers.length)
+    ? rule.confirm_markers
+    : (rule.missing_marker ? [rule.missing_marker] : []);
   slot.innerHTML = `<span class="spinner"></span><span class="dim">원문 조회 중…</span>`;
   const j = await fetchDisclosureText(rcept);
   if (!j || j.error) {
@@ -1401,9 +1408,13 @@ async function confirmAllocation(rcept, key) {
     return;
   }
   const txt = String(j.text || "");
-  const m = marker ? txt.match(markerPattern(marker)) : null;
-  slot.innerHTML = m
-    ? `<span>원문 확인: <b>${esc(m[0])}</b></span>`
+  let hit = "";
+  for (const marker of markers) {
+    const m = txt.match(markerPattern(marker));
+    if (m) { hit = m[0]; break; }
+  }
+  slot.innerHTML = hit
+    ? `<span>원문 확인: <b>${esc(hit)}</b></span>`
     : `<span class="dim">원문에서 배정 방식을 확인하지 못했습니다.</span>`;
 }
 async function toggleDocViewer(r) {

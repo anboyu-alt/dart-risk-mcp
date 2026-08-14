@@ -1207,7 +1207,13 @@
   "label_overrides": {
    "3PCA": {
     "missing_marker": "제3자배정",
-    "label": "유상증자(배정방식 미상)"
+    "label": "유상증자(배정방식 미상)",
+    "confirm_markers": [
+     "제3자배정",
+     "주주배정",
+     "일반공모",
+     "주주우선공모"
+    ]
    }
   },
   "direction_notes": {
