@@ -853,6 +853,135 @@ function matchSignals(reportNm) {
   return out;
 }
 
+/* ── 신호 한정층 ──────────────────────────────────
+   core/qualifiers.py의 1:1 이식. 규칙 문자열은 signals-data.json의
+   qualifier_rules에서 읽어 이중 관리를 피한다. 로직만 여기 있다. */
+const TIER_OBSERVED = "observed", TIER_PROCEDURAL = "procedural";
+
+function qrules() { return (DATA && DATA.qualifier_rules) || {}; }
+
+function tailOf(text) {
+  const tails = (qrules().tails || []).slice().sort((a, b) => b.length - a.length);
+  for (const t of tails) if (text.endsWith(t)) return t;
+  return "";
+}
+
+function parseReportName(reportNm) {
+  let rest = String(reportNm || "").trim();
+  const tags = [];
+  for (;;) {
+    const m = rest.match(/^\[([^\]]*)\]\s*/);
+    if (!m) break;
+    tags.push(m[1].trim());
+    rest = rest.slice(m[0].length);
+  }
+  const compact = rest.replace(/\s+/g, "");
+  const subtitles = [];
+  compact.replace(/\(([^()]*)\)/g, (_, s) => { if (s) subtitles.push(s); return ""; });
+  const body = compact.replace(/\([^()]*\)/g, "");
+  let tail = tailOf(body);
+  // '주요사항보고서(자기주식취득결정)'처럼 본체가 껍데기면 괄호 쪽을 본다.
+  if (tail === "보고서" && subtitles.length) {
+    tail = tailOf(subtitles[subtitles.length - 1]) || tail;
+  }
+  return { tags, body, subtitles, tail, compact };
+}
+
+// core _fold_corp_name 이식 — 법인 표기(주식회사/유한회사/유한책임회사/(주)/㈜) 차이를 흡수
+function foldCorpName(name) {
+  return String(name || "")
+    .replace(/주식회사|유한회사|유한책임회사|\(주\)|㈜/g, "")
+    .replace(/\s+/g, "")
+    .trim()
+    .toUpperCase();
+}
+
+function isAmendmentTag(tag) {
+  const tags = qrules().amendment_tags || [];
+  const t = String(tag || "").trim();
+  return tags.includes(t) || t.endsWith("정정");
+}
+
+function isFalseAmendment(parsed) {
+  if (!parsed.tags.length) return false;
+  return !parsed.tags.some(isAmendmentTag);
+}
+
+function demotionReason(parsed, filing) {
+  const r = qrules(), f = filing || {};
+  const filer = String(f.flr_nm || "").trim();
+  const corp = String(f.corp_name || "").trim();
+  // R1 — 제출인이 회사가 아님
+  if (filer && corp && foldCorpName(filer) !== foldCorpName(corp)) {
+    return `회사가 낸 공시가 아닙니다 (제출인: ${filer})`;
+  }
+  // R1b — 지분 보유·변동 신고서. filer 유무와 무관하게 평가한다(제출인이
+  // 회사 자신이어도 회사의 사건 공시가 아닌 정례 보고이기 때문 — 실측:
+  // '최대주주등소유주식변동신고서'는 flr_nm이 회사 자신이어도 여기 걸린다).
+  for (const t of (r.third_party_titles || [])) {
+    if (parsed.body.startsWith(t)) return "지분 보유·변동 신고서입니다 (회사의 사건 공시가 아님)";
+  }
+  // R5 — 정정·후속 꼬리표
+  for (const tag of parsed.tags) {
+    if (isAmendmentTag(tag)) return `기존 공시의 정정·후속 보고입니다 (${tag})`;
+  }
+  // R2 — 사후·해제 국면
+  if ((r.phase_tails || []).includes(parsed.tail)) {
+    return parsed.tail === "결과보고서"
+      ? "이미 실행된 건의 결과 보고입니다"
+      : `체결이 아니라 ${parsed.tail}입니다`;
+  }
+  // R3 — 자회사·특수관계인 사안
+  if (parsed.subtitles.some((s) => (r.subsidiary_subtitles || []).includes(s))) {
+    return "이 회사가 아니라 자회사 사안입니다";
+  }
+  if (r.related_party_prefix && parsed.body.startsWith(r.related_party_prefix)) {
+    return "회사가 아니라 특수관계인의 행위입니다";
+  }
+  // R4 — 해명·미확정
+  if (parsed.tail === "해명" || parsed.subtitles.includes("미확정")) {
+    return "회사가 미확정으로 답한 해명 공시입니다";
+  }
+  return "";
+}
+
+function adjustedLabel(sig, parsed) {
+  const rule = (qrules().label_overrides || {})[sig.key];
+  if (rule && !parsed.compact.includes(rule.missing_marker)) return rule.label;
+  return sig.label;
+}
+
+function directionNote(sig, parsed) {
+  const rule = (qrules().direction_notes || {})[sig.key];
+  if (!rule) return "";
+  return (rule.markers || []).some((m) => parsed.compact.includes(m)) ? rule.note : "";
+}
+
+function qualifySignals(sigs, parsed, filing) {
+  const reason = demotionReason(parsed, filing);
+  const tier = reason ? TIER_PROCEDURAL : TIER_OBSERVED;
+  return (sigs || []).map((s) => ({
+    key: s.key,
+    label: adjustedLabel(s, parsed),
+    category: s.category,
+    caution: s.caution,
+    taxonomies: s.taxonomies,
+    prose: s.prose,
+    tier, reason,
+    note: directionNote(s, parsed),
+  }));
+}
+
+function pickHeadline(qualified) {
+  const amb = new Set(DATA.ambiguous_signal_keys || []);
+  const order = DATA.signals.map((s) => s.key);
+  const cands = (qualified || []).filter(
+    (q) => q.tier === TIER_OBSERVED && !amb.has(q.key));
+  if (!cands.length) return null;
+  return cands.slice().sort(
+    (a, b) => order.indexOf(a.key) - order.indexOf(b.key))[0];
+}
+
 async function analyze(name, override) {
   let corpCode, stockCode;
   if (override && override.corpCode) {
