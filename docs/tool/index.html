@@ -161,6 +161,15 @@
   .badge-cau { font-family: var(--mono); font-size: 10px; color: var(--amber); background: transparent;
     border: 1px solid var(--amber); border-radius: 3px; padding: 1px 6px; letter-spacing: 0.06em; }
 
+  /* 절차·사후 보고 (접힘) — 신호 한정층 procedural 티어 */
+  .proc { margin-top: 1.2rem; border-top: 1px solid var(--line); padding-top: 0.8rem; }
+  .proc > summary { cursor: pointer; color: var(--dim); font-size: 0.9rem; padding: 0.3rem 0; }
+  .proc > summary:hover { color: var(--tx); }
+  .prow { padding: 0.45rem 0; border-bottom: 1px solid var(--line); font-size: 0.86rem; }
+  .prow:last-child { border-bottom: none; }
+  .prow a { color: var(--dim2); text-decoration: none; }
+  .prow a:hover { color: var(--tx); text-decoration: underline; }
+
   /* KPI 스트립 */
   .kpis { display: flex; flex-wrap: wrap; margin-top: 14px; border: 1px solid var(--line);
     border-radius: 4px; overflow: hidden; }
@@ -367,6 +376,7 @@
       <div class="chips" id="feedChips" style="margin-bottom:16px"></div>
       <div class="rows" id="feedTable"></div>
       <div class="mnote">// 무게 최상위 신호 행은 MAX로 표시 · 사실 관찰이며 판정 아님</div>
+      <div id="procWrap"></div>
     </section>
 
     <!-- ── 03 공시 상세 ── -->
@@ -1031,26 +1041,41 @@ function buildResult(name, stockCode, corpCode, items, bgn, end, totalCount) {
   const rows = [];   // 피드용 전체 행
   for (const it of items) {
     const nm = it.report_nm || "";
+    const parsed = parseReportName(nm);
     const isAmend = AMEND_RE.test(nm);
     if (isAmend) amendCount++;
-    const sigs = isAmend ? [] : matchSignals(nm);
-    if (sigs.length) events.push({ date: it.rcept_dt, nm, rcept: it.rcept_no, signals: sigs });
-    rows.push({ date: it.rcept_dt, nm, rcept: it.rcept_no, signals: sigs, isAmend });
+    // '[정정명령부과]'처럼 정정이 아닌 태그는 접두를 벗겨 재매칭한다.
+    let sigs = isAmend ? [] : matchSignals(nm);
+    if (!sigs.length && isAmend && isFalseAmendment(parsed)) {
+      sigs = matchSignals(nm.replace(/^(\[[^\]]*\])+/, ""));
+    }
+    const qual = qualifySignals(sigs, parsed, { ...it, corp_name: name });
+    if (qual.length) events.push({ date: it.rcept_dt, nm, rcept: it.rcept_no, signals: qual });
+    rows.push({ date: it.rcept_dt, nm, rcept: it.rcept_no, signals: qual, isAmend });
   }
   events.sort((a, b) => a.date < b.date ? 1 : -1);
   rows.sort((a, b) => a.date < b.date ? 1 : -1);
 
-  const detectedTax = new Set(events.flatMap((e) => e.signals.flatMap((s) => s.taxonomies || [])));
-  const patterns = DATA.patterns.filter((p) => p.signal_sequence.every((t) => detectedTax.has(t)));
+  // 절차·사후 보고는 집계·헤드라인·패턴 매칭에서 전부 빠진다.
+  const obs = (e) => e.signals.filter((s) => s.tier === TIER_OBSERVED);
+  const observedEvents = events.filter((e) => obs(e).length);
+  const proceduralEvents = events.filter((e) => !obs(e).length);
+
+  const detectedTax = new Set(
+    observedEvents.flatMap((e) => obs(e).flatMap((s) => s.taxonomies || [])));
+  const patterns = DATA.patterns.filter(
+    (p) => p.signal_sequence.every((t) => detectedTax.has(t)));
   const capitalKeys = new Set(DATA.capital_event_keys);
-  const capitalEvents = events.filter((e) => e.signals.some((s) => capitalKeys.has(s.key)));
+  const capitalEvents = observedEvents.filter(
+    (e) => obs(e).some((s) => capitalKeys.has(s.key)));
   const catCount = {};
-  for (const e of events) for (const s of e.signals) catCount[s.category] = (catCount[s.category] || 0) + 1;
+  for (const e of observedEvents) for (const s of obs(e)) catCount[s.category] = (catCount[s.category] || 0) + 1;
   const typeCount = {};
-  for (const e of events) for (const s of e.signals) typeCount[s.key] = (typeCount[s.key] || 0) + 1;
+  for (const e of observedEvents) for (const s of obs(e)) typeCount[s.key] = (typeCount[s.key] || 0) + 1;
   const detectedTypes = DATA.signals.filter((s) => typeCount[s.key]);
-  const heaviest = detectedTypes[0] || null;
-  const crisisEvents = events.filter((e) => e.signals.some((s) => s.category >= 7));
+  const headline = pickHeadline(observedEvents.flatMap(obs));
+  const heaviest = headline ? DATA.signals.find((s) => s.key === headline.key) || null : null;
+  const crisisEvents = observedEvents.filter((e) => obs(e).some((s) => s.category >= 7));
   const amendRate = items.length ? Math.round(amendCount / items.length * 100) : 0;
 
   // ── 작업3: 재스캔 diff — 이전 스냅샷이 있으면 신호 매칭 공시 중 새로 생긴 것을 센다.
@@ -1070,6 +1095,7 @@ function buildResult(name, stockCode, corpCode, items, bgn, end, totalCount) {
   CUR = { name, stockCode, corpCode, items, rows, events, amendCount, amendRate,
           patterns, capitalEvents, catCount, typeCount, detectedTypes, heaviest,
           crisisEvents, bgn, end, scanDiff,
+          observedEvents, proceduralEvents, headline,
           truncated: totalCount > items.length ? totalCount : 0 };
   $("topCompany").textContent = `${name} · ${stockCode}`;
   enableNav();
@@ -1129,12 +1155,41 @@ function renderFeed() {
       <span class="colcat" style="font-size:12px;color:var(--dim2)">${s0 ? `<span class="cdot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--c${s0.category});margin-right:7px"></span>${esc(DATA.categories[String(s0.category)])}` : `<span class="nosig">—</span>`}</span>
       <span>${sigCell}${isNew ? ` <span class="mono" style="font-size:9.5px;color:var(--faint);letter-spacing:0.06em">NEW</span>` : ""}</span>
       <span class="colcorr mono" style="font-size:11.5px;color:${r.isAmend ? "#c0a24a" : "#3a4350"}">${r.isAmend ? "정정" : "—"}</span>
+      ${s0 && s0.note ? `<div class="dim" style="grid-column:1/-1;font-size:0.78rem">※ ${esc(s0.note)}</div>` : ""}
     </div>`;
   }).join("");
   $("feedTable").innerHTML = html;
   $("feedTable").querySelectorAll(".feedrow").forEach((row) => {
     row.onclick = () => renderDetail(row.dataset.r);
   });
+  $("procWrap").innerHTML = renderProcedural(CUR.proceduralEvents, CUR.items.length);
+}
+
+/* ── 절차·사후 보고 (접힘) — 집계·헤드라인·패턴 매칭에서 제외된 신호를
+   사유와 함께 접힌 층으로 남긴다. 대량보유상황보고 등 정례 신고서는
+   임계값 없이 묶고 분모(전체 공시 건수)를 병기해 사용자가 직접 읽게 한다. */
+function renderProcedural(proceduralEvents, totalCount) {
+  if (!proceduralEvents.length) return "";
+  const rules = qrules().third_party_titles || [];
+  const bulk = proceduralEvents.filter(
+    (e) => rules.some((t) => parseReportName(e.nm).body.startsWith(t)));
+  let summary = "";
+  if (bulk.length) {
+    const dates = bulk.map((e) => e.date).sort();
+    // 임계값을 두지 않는다 — 건수만으로는 아틀라스링크(15/61)와
+    // 셀트리온(14/222)을 가를 수 없다. 분모를 함께 적어 사용자가 읽게 한다.
+    summary = `<div class="dim" style="margin:0.4rem 0 0.8rem">
+      대량보유상황보고 ${bulk.length}건 — 전체 공시 ${totalCount}건 중
+      (${fmtDate(dates[0])}~${fmtDate(dates[dates.length - 1])})</div>`;
+  }
+  const rowsHtml = proceduralEvents.map((e) => `
+    <div class="prow">
+      <span class="mono dim">${fmtDate(e.date)}</span>
+      <a href="${dartUrl(e.rcept)}" target="_blank" rel="noopener">${esc(e.nm)}</a>
+      <div class="dim" style="font-size:0.8rem">→ ${esc(e.signals[0].reason)}</div>
+    </div>`).join("");
+  return `<details class="proc"><summary>절차·사후 보고 ${proceduralEvents.length}건</summary>
+    ${summary}${rowsHtml}</details>`;
 }
 
 /* ── 03 상세 ──────────────────────────────────── */
@@ -1331,7 +1386,8 @@ function zeroDisclosureNoticeHTML(name) {
 
 /* ── 04 대시보드 ──────────────────────────────── */
 function renderDash() {
-  const { name, stockCode, corpCode, items, events, amendCount, amendRate, patterns,
+  const { name, stockCode, corpCode, items, events, observedEvents, proceduralEvents,
+          amendCount, amendRate, patterns,
           capitalEvents, catCount, typeCount, detectedTypes, heaviest, crisisEvents,
           bgn, end, scanDiff } = CUR;
 
@@ -1344,7 +1400,7 @@ function renderDash() {
     ${scanDiffLineHTML(scanDiff)}
     <div class="kpis">
       <div class="kpi"><div class="v">${items.length}</div><div class="k">전체 공시</div></div>
-      <div class="kpi ${events.length ? "alert" : ""}"><div class="v">${events.length}</div><div class="k">신호 감지</div></div>
+      <div class="kpi ${observedEvents.length ? "alert" : ""}"><div class="v">${observedEvents.length}</div><div class="k">신호 감지</div></div>
       <div class="kpi"><div class="v">${capitalEvents.length}</div><div class="k">자본 이벤트</div></div>
       <div class="kpi"><div class="v">${amendCount}</div><div class="k">정정공시</div></div>
       <div class="kpi ${amendRate >= 20 ? "alert" : ""}"><div class="v">${amendRate}%</div><div class="k">정정 비율</div></div>
@@ -1353,6 +1409,11 @@ function renderDash() {
     ${amendRate >= 10 ? `<p class="dim" style="font-size:0.82rem;margin-top:0.7rem">※ 정정공시 비율 ${amendRate}% — 정상 기업은 대체로 5% 이내이며, 20% 초과는 최초 공시의 품질·정보 통제 의도를 따져보는 기준선으로 통용됩니다.</p>` : ""}
     ${items.length === 0 ? zeroDisclosureNoticeHTML(name) :
       events.length === 0 ? `<p class="dim" style="margin-top:0.8rem">이 기간 공시 ${items.length}건에서 등록된 위험 신호 유형이 감지되지 않았습니다. 신호가 없다는 것이 "안전하다"는 판정은 아닙니다 — 본 도구는 공시 제목 기반 신호만 봅니다.</p>` : ""}
+  </div>`;
+
+  html += `<div class="dim" style="font-size:0.9rem;margin-bottom:0.8rem">
+    관찰 신호 <b style="color:var(--tx)">${observedEvents.length}건</b>
+    · 절차·사후 보고 <b style="color:var(--tx)">${proceduralEvents.length}건</b>
   </div>`;
 
   if (heaviest) {
@@ -1373,15 +1434,21 @@ function renderDash() {
         <div class="slabel">▍CATEGORY DISTRIBUTION</div>
         ${categoryBars(catCount)}
         <div class="slabel" style="margin:20px 0 10px">▍SIGNAL CHAIN</div>
-        ${flowChain(events)}
+        ${flowChain(observedEvents)}
       </div>
     </div>
     <style>@media (max-width:900px){.dashgrid{grid-template-columns:1fr !important}}</style>`;
+  } else if (observedEvents.length) {
+    const types = detectedTypes.map((s) => `${esc(s.label)} ${typeCount[s.key]}건`).join(" · ");
+    html += `<div class="panel"><div class="dim">이 기간 관찰된 유형: ${types}</div></div>`;
+  } else {
+    html += `<div class="panel"><div>이 기간 공시에서는 관찰 신호가 없습니다.</div>
+      <div class="dim" style="margin-top:0.4rem">공시 외 지표(재무·감사의견·연속적자)는 아래 블록에서 확인하세요.</div></div>`;
   }
 
-  if (events.length) {
-    html += timelinePanel(events, bgn, end);
-    html += flowNotes(events);
+  if (observedEvents.length) {
+    html += timelinePanel(observedEvents, bgn, end);
+    html += flowNotes(observedEvents);
     html += `<div class="panel"><div class="slabel">▍SIGNAL COMMENTARY — 무게순 · 사실 서술</div>
       <div class="proselist">` + detectedTypes.map((s) =>
         `<div><span class="tag" style="background:var(--c${s.category})">${esc(s.label)}</span>${s.caution ? ` <span class="badge-cau">주의</span>` : ""} <span class="mono" style="font-size:0.78rem;color:var(--dim2)">×${typeCount[s.key]}</span>
@@ -1418,7 +1485,7 @@ function renderDash() {
             return `<div class="patterncard" id="pat-${esc(p.key)}"><b>${esc(p.name)}</b>${esc(p.description)}
               ${patternProseCheckpointsHTML(p)}
               <div class="sigs">관찰 윈도우 ${p.timeline_months}개월 · 구성 신호가 촉발된 공시:</div>
-              <div class="sigs">${patternEvidenceHTML(p, events)}</div>
+              <div class="sigs">${patternEvidenceHTML(p, observedEvents)}</div>
               <div class="dim" style="margin-top:0.5rem"><span class="spinner"></span> 원문에서 상대방 관계 확인 중…</div>
               ${(p.field_evidence && p.field_evidence.length ? `<details style="margin-top:0.4rem;font-size:0.82rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">실제 사례 근거(금감원 보도자료 등)</summary>
                 <ul style="margin:0.3rem 0 0 1.1rem;padding:0">${p.field_evidence.map((fe) => `<li>${esc(fe)}</li>`).join("")}</ul></details>` : "")}
@@ -1427,7 +1494,7 @@ function renderDash() {
           return `<div class="patterncard"><b>${esc(p.name)}</b>${esc(p.description)}
             ${patternProseCheckpointsHTML(p)}
             <div class="sigs">관찰 윈도우 ${p.timeline_months}개월 · 구성 신호가 촉발된 공시:</div>
-            <div class="sigs">${patternEvidenceHTML(p, events)}</div>` +
+            <div class="sigs">${patternEvidenceHTML(p, observedEvents)}</div>` +
             (p.field_evidence && p.field_evidence.length ? `<details style="margin-top:0.4rem;font-size:0.82rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">실제 사례 근거(금감원 보도자료 등)</summary>
               <ul style="margin:0.3rem 0 0 1.1rem;padding:0">${p.field_evidence.map((fe) => `<li>${esc(fe)}</li>`).join("")}</ul></details>` : "") +
             `</div>`;
@@ -1461,7 +1528,7 @@ function renderDash() {
     a.onclick = (e) => { e.preventDefault(); renderDetail(a.dataset.r); };
   });
   // SE-14: capital_backflow만 비동기 원문 확인 게이트를 태운다 (다른 패턴은 그대로).
-  patterns.filter((p) => p.key === "capital_backflow").forEach((p) => loadCapitalBackflowGate(p, events, corpCode));
+  patterns.filter((p) => p.key === "capital_backflow").forEach((p) => loadCapitalBackflowGate(p, observedEvents, corpCode));
   $("result").querySelectorAll(".rescanCurrentLink").forEach((a) => {
     a.onclick = (e) => {
       e.preventDefault();
@@ -1496,7 +1563,10 @@ function flowChain(events) {
   const asc = [...events].reverse();
   const groups = [];
   for (const e of asc) {
-    const s = e.signals[0];
+    // 방어적 필터 — 한 공시에서 observed/procedural 신호가 섞일 수는 없지만
+    // (사유는 공시 단위로 결정된다), 규칙이 신호별로 갈라져도 안전하도록.
+    const s = e.signals.filter((x) => x.tier === TIER_OBSERVED)[0];
+    if (!s) continue;
     const last = groups[groups.length - 1];
     if (last && last.key === s.key) { last.n++; last.to = e.date; }
     else groups.push({ key: s.key, label: s.label, cat: s.category, from: e.date, to: e.date, n: 1 });
@@ -1547,7 +1617,8 @@ function timelinePanel(events, bgn, end) {
   for (const e of events) {
     const y = +e.date.slice(0, 4), mo = +e.date.slice(4, 6) - 1;
     const bucket = months.find((x) => x.y === y && x.m === mo);
-    if (bucket) { bucket.n++; bucket.maxCat = Math.max(bucket.maxCat, ...e.signals.map((s) => s.category)); }
+    const obsSigs = e.signals.filter((s) => s.tier === TIER_OBSERVED);
+    if (bucket && obsSigs.length) { bucket.n++; bucket.maxCat = Math.max(bucket.maxCat, ...obsSigs.map((s) => s.category)); }
   }
   const dmax = Math.max(1, ...months.map((x) => x.n));
   const longWin = months.length > 14;   // 3Y·5Y — 월 라벨은 1월(연도)만
@@ -1558,7 +1629,7 @@ function timelinePanel(events, bgn, end) {
     months.map((x) => `<span>${longWin ? (x.m === 0 ? "'" + (x.y % 100) : "") : (x.m === 0 ? (x.y % 100) + "·1" : x.m + 1)}</span>`).join("") + `</div>`;
 
   // 레인 타임라인 (SVG)
-  const cats = [...new Set(events.flatMap((e) => e.signals.map((s) => s.category)))].sort();
+  const cats = [...new Set(events.flatMap((e) => e.signals.filter((s) => s.tier === TIER_OBSERVED).map((s) => s.category)))].sort();
   const W = 1000, laneH = 34, padL = 86, padT = 26, padB = 30;
   const H = padT + cats.length * laneH + padB;
   const t0 = bgn.getTime(), t1 = end.getTime();
@@ -1576,7 +1647,7 @@ function timelinePanel(events, bgn, end) {
     if (m.getMonth() % labelEvery === 0) grid += `<text x="${mx}" y="${H - 8}" text-anchor="middle" font-size="10" fill="#5e6a78">${m.getFullYear() % 100}.${String(m.getMonth() + 1).padStart(2, "0")}</text>`;
   }
   for (const e of events) {
-    for (const s of e.signals) {
+    for (const s of e.signals.filter((x) => x.tier === TIER_OBSERVED)) {
       const yi = cats.indexOf(s.category);
       const y = padT + yi * laneH + laneH / 2;
       const heavy = s.category >= 7;
