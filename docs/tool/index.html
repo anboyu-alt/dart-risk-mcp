@@ -923,8 +923,14 @@ function demotionReason(parsed, filing) {
   const r = qrules(), f = filing || {};
   const filer = String(f.flr_nm || "").trim();
   const corp = String(f.corp_name || "").trim();
-  // R1 — 제출인이 회사가 아님
-  if (filer && corp && foldCorpName(filer) !== foldCorpName(corp)) {
+  // R1 — 제출인이 회사가 아님. 단 거래소 시장본부(코스닥/유가증권/코넥스)
+  // 제출은 예외다 — 조회공시요구·불성실공시법인지정·주권매매거래정지는
+  // flr_nm이 회사가 아니지만 관찰해야 할 사건 그 자체다(core/qualifiers.py의
+  // EXCHANGE_FILERS 주석 = 라이브 실측 근거). 목록은 signals-data.json에서
+  // 읽는다 — 한글 규칙 문자열을 여기 적지 않는다.
+  const exchangeFilers = r.exchange_filers || [];
+  const isExchangeFiler = !!filer && exchangeFilers.some((m) => filer.includes(m));
+  if (filer && corp && !isExchangeFiler && foldCorpName(filer) !== foldCorpName(corp)) {
     return `회사가 낸 공시가 아닙니다 (제출인: ${filer})`;
   }
   // R1b — 지분 보유·변동 신고서. filer 유무와 무관하게 평가한다(제출인이
@@ -1047,14 +1053,23 @@ function buildResult(name, stockCode, corpCode, items, bgn, end, totalCount) {
   for (const it of items) {
     const nm = it.report_nm || "";
     const parsed = parseReportName(nm);
-    const isAmend = AMEND_RE.test(nm);
-    if (isAmend) amendCount++;
+    let isAmend = AMEND_RE.test(nm);
     // '[정정명령부과]'처럼 정정이 아닌 태그는 접두를 벗겨 재매칭한다.
     let sigs = isAmend ? [] : matchSignals(nm);
     if (!sigs.length && isAmend && isFalseAmendment(parsed)) {
       sigs = matchSignals(nm.replace(/^(\[[^\]]*\])+/, ""));
+      // isFalseAmendment가 참 = 정정 꼬리표가 아니라는 단언이다. 서버
+      // (analyze_company_risk)도 여기서 is_amendment를 내린다 — 두 층이
+      // 같은 판정을 내야 한다(리뷰 C2). amendCount·정정 칩 라벨도 이
+      // 값으로 세야 칩 라벨과 필터 결과가 어긋나지 않는다.
+      isAmend = false;
     }
-    const qual = qualifySignals(sigs, parsed, { ...it, corp_name: name });
+    if (isAmend) amendCount++;
+    // corp_name은 DART 행이 준 값이 우선이다. buildResult의 name은
+    // corp-map.json·별칭으로 해석한 표시명이라, 주간 갱신 창 안의
+    // 상호변경·옛 상호 별칭이면 실제 제출인과 달라져 R1(제출인≠회사)이
+    // 전 행에서 오발화한다(리뷰 C3).
+    const qual = qualifySignals(sigs, parsed, { ...it, corp_name: it.corp_name || name });
     if (qual.length) events.push({ date: it.rcept_dt, nm, rcept: it.rcept_no, signals: qual });
     rows.push({ date: it.rcept_dt, nm, rcept: it.rcept_no, signals: qual, isAmend });
   }

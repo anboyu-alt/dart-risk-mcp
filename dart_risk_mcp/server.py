@@ -730,6 +730,11 @@ def analyze_company_risk(
         # 기존 동작(신호 없음)은 바뀌지 않는다.
         if not matched and is_amendment and is_false_amendment(parsed):
             matched = match_signals(strip_amendment_prefix(report_nm))
+            # is_false_amendment가 참이라는 것은 이 태그가 정정 꼬리표가
+            # 아니라는 단언이다. 플래그를 True로 남겨두면 신호를 되살려
+            # 놓고도 non_amend_events·sig_keys·헤드라인에서 다시 빼버려
+            # 헤더 건수와 본문이 어긋난다(리뷰 C2).
+            is_amendment = False
         qualified = qualify_signals(matched, parsed, d)
 
         for sig, q in zip(matched, qualified):
@@ -987,12 +992,13 @@ def analyze_company_risk(
     # 셋째 문장: 가장 눈에 띄는 신호
     if top_signal:
         s3 = _compose_top_signal_sentence(top_signal_label, top_signal_prose)
-    elif observed_events:
-        _types = sorted(
-            {(e["key"], e["label"]) for e in observed_events if not e["is_amendment"]}
-        )
+    elif non_amend_events:
+        # 유형 목록과 건수 모두 정정공시를 제외한 같은 모집단(non_amend_events)에서
+        # 센다 — 목록만 걸러내면 건수가 부풀고, 전부 정정이면 꼬리가 빈 채로
+        # "이 기간 관찰된 유형: "만 남는다(리뷰 C2 연계).
+        _types = sorted({(e["key"], e["label"]) for e in non_amend_events})
         _txt = " · ".join(
-            f"{label} {sum(1 for e in observed_events if e['key'] == key)}건"
+            f"{label} {sum(1 for e in non_amend_events if e['key'] == key)}건"
             for key, label in _types
         )
         s3 = f"이 기간 관찰된 유형: {_txt}"

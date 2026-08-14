@@ -94,6 +94,42 @@ def parse_report_name(report_nm: str) -> ParsedName:
 TIER_OBSERVED = "observed"
 TIER_PROCEDURAL = "procedural"
 
+# R1 예외 — 제출인이 거래소 시장본부인 공시.
+#
+# 거래소가 회사에 대해 내는 조치·요구(조회공시요구·불성실공시법인지정·
+# 주권매매거래정지)는 flr_nm이 회사가 아니라 시장본부라 R1(제출인≠회사)에
+# 그대로 걸린다. 그런데 이것들은 회사가 낸 해명·정정이 아니라 관찰해야 할
+# 사건 그 자체다(설계 §195-196, §445 — "거래소가 요구한 조회공시는 남는다").
+# 강등되면 INQUIRY·DISCLOSURE_VIOL이 관찰 집계·헤드라인·패턴 매칭에서
+# 통째로 빠져 탈출기 서사와 capital_churn_anomaly가 무너진다.
+#
+# 라이브 실측(2026-08-14, /list.json pblntf_ty=I, 20260701~20260814 6,341행
+# 전수 — corp_name과 다른 flr_nm을 전부 수집해 도출):
+#   코스닥시장본부   389행  예) 불성실공시법인지정(공시번복) / 스코넥 / 20260812900993
+#   유가증권시장본부  71행  예) 조회공시요구(현저한시황변동) / 금호전기 / 20260813801194
+#   코넥스시장       13행  예) 주권매매거래정지(지정자문인 선임계약 해지) / 퓨쳐메디신 / 20260812600521
+# 코넥스만 '본부'가 붙지 않는다 — '시장본부'로 거르면 코넥스 조치가 통째로
+# 사라진다. 세 값이 관측된 전부이며 '시장감시위원회'·'거래소' 표기는 없었다.
+#
+# 회사 자신이 낸 조회공시 답변('조회공시요구에대한답변(미확정)')은 flr_nm이
+# 회사라 애초에 R1 대상이 아니고, R4(미확정)가 그대로 강등한다.
+EXCHANGE_FILERS: tuple[str, ...] = (
+    "코스닥시장본부",
+    "유가증권시장본부",
+    "코넥스시장",
+)
+
+
+def is_exchange_filer(filer: str) -> bool:
+    """제출인 표기가 거래소 시장본부인지. 부분 일치로 본다.
+
+    '한국거래소 코스닥시장본부'처럼 앞에 기관명이 붙어 와도 걸리도록
+    포함 검사를 쓴다. 오판해도 방향이 안전하다 — 강등하지 않고 기존
+    동작(observed)으로 남기는 쪽이다.
+    """
+    f = (filer or "").strip()
+    return bool(f) and any(m in f for m in EXCHANGE_FILERS)
+
 # R1b — 제3자가 회사에 대해 제출하는 보고서. 본체가 이것으로 시작하면
 # 회사의 행위가 아니다(제출인은 국민연금·블랙록·개인 임원 등).
 THIRD_PARTY_TITLES: tuple[str, ...] = (
@@ -167,10 +203,15 @@ def _demotion_reason(parsed: ParsedName, filing: "dict | None") -> str:
     """
     filing = filing or {}
 
-    # R1 — 제출인이 회사가 아님
+    # R1 — 제출인이 회사가 아님. 단 거래소 시장본부 제출은 예외다
+    # (EXCHANGE_FILERS 주석 참고 — 거래소 조치는 사건 자체다).
     filer = (filing.get("flr_nm") or "").strip()
     corp = (filing.get("corp_name") or "").strip()
-    if filer and corp and _fold_corp_name(filer) != _fold_corp_name(corp):
+    if (
+        filer and corp
+        and not is_exchange_filer(filer)
+        and _fold_corp_name(filer) != _fold_corp_name(corp)
+    ):
         return f"회사가 낸 공시가 아닙니다 (제출인: {filer})"
 
     # R1b — 지분 보유·변동 신고서. filer 유무와 무관하게 평가한다.

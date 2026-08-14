@@ -33,12 +33,19 @@ from pathlib import Path
 from dart_risk_mcp.core import (
     SIGNAL_TYPES,
     detect_capital_churn,
+    find_pattern_match,
+    is_amendment_disclosure,
     match_signals,
+)
+from dart_risk_mcp.core.signals import (
+    SIGNAL_KEY_TO_TAXONOMY,
+    strip_amendment_prefix,
 )
 from dart_risk_mcp.core.qualifiers import (
     Qualified,
     TIER_OBSERVED,
     TIER_PROCEDURAL,
+    is_false_amendment,
     parse_report_name,
     pick_headline,
     qualify_signals,
@@ -66,14 +73,19 @@ def _row(report_nm, flr_nm, corp_name="테스트기업", rcept_dt="20260101", rc
 def _build_signal_events(rows):
     """analyze_company_risk의 712행대 루프를 그대로 재현한다.
 
-    (is_amendment/false-amendment 복구 분기는 합성 케이스에 정정 태그가
-    없어 실질적으로 타지 않지만, 배선과 동일한 형태를 유지하기 위해 둔다.)
+    false-amendment 복구 분기까지 그대로 옮긴다 — 복구가 발화하면
+    is_amendment를 내린다(리뷰 C2). 이 플래그를 True로 남기면 신호를
+    되살려 놓고도 non_amend_events·sig_keys·헤드라인에서 다시 빠진다.
     """
     events = []
     for d in rows:
         report_nm = d.get("report_nm", "")
         parsed = parse_report_name(report_nm)
+        is_amendment = is_amendment_disclosure(report_nm)
         matched = match_signals(report_nm)
+        if not matched and is_amendment and is_false_amendment(parsed):
+            matched = match_signals(strip_amendment_prefix(report_nm))
+            is_amendment = False
         qualified = qualify_signals(matched, parsed, d)
         for sig, q in zip(matched, qualified):
             events.append({
@@ -82,7 +94,7 @@ def _build_signal_events(rows):
                 "report_nm": report_nm,
                 "rcept_dt": d.get("rcept_dt", ""),
                 "rcept_no": d.get("rcept_no", ""),
-                "is_amendment": False,
+                "is_amendment": is_amendment,
                 "tier": q.tier,
                 "reason": q.reason,
                 "note": q.note,
@@ -487,3 +499,93 @@ def test_no_observed_header_when_observed_empty_but_procedural_section_present()
     rendered = _render_signal_block_lines(observed, procedural)
     assert not any("관찰된 신호" in line for line in rendered)
     assert any("절차·사후 보고 (1건)" in line for line in rendered)
+
+
+# ── 리뷰 C1: 거래소가 제출한 공시는 배선 수준에서도 observed로 남는다 ──
+#
+# 실측(2026-08-14, /list.json pblntf_ty=I): 거래소 원천 공시의 flr_nm은
+# 회사명이 아니라 시장본부다 — 코스닥시장본부·유가증권시장본부·코넥스시장.
+# filing=None으로만 검증하면 프로덕션 경로를 전혀 덮지 못한다.
+
+_JSCO_ROWS = [
+    _row("조회공시요구(풍문또는보도)              (감사의견 비적정설)",
+         "코스닥시장본부", corp_name="제이스코홀딩스",
+         rcept_dt="20260701", rcept_no="20260701900001"),
+    _row("불성실공시법인지정              (공시번복)",
+         "코스닥시장본부", corp_name="제이스코홀딩스",
+         rcept_dt="20260710", rcept_no="20260710900002"),
+    _row("주권매매거래정지              (조회공시 답변)",
+         "코스닥시장본부", corp_name="제이스코홀딩스",
+         rcept_dt="20260712", rcept_no="20260712900003"),
+]
+
+
+def test_exchange_filed_rows_stay_observed_through_the_wiring():
+    """합성 공시 목록의 거래소 제출 행이 observed 집계에 남는다."""
+    events = _build_signal_events(_JSCO_ROWS)
+    observed, procedural = _split(events)
+    assert procedural == [], [e["reason"] for e in procedural]
+    assert {e["key"] for e in observed} == {"INQUIRY", "DISCLOSURE_VIOL"}
+
+
+def test_exchange_filed_rows_feed_sig_keys_and_pattern_matching():
+    """observed에서 빠지면 capital_churn_anomaly(4.3 요구)와 탈출기 서사가
+    무너진다 — sig_keys·taxonomy 집합까지 실제로 흘러가는지 확인한다."""
+    events = _build_signal_events(_JSCO_ROWS)
+    observed, _ = _split(events)
+
+    sig_keys = {e["key"] for e in observed if not e["is_amendment"]}
+    assert "DISCLOSURE_VIOL" in sig_keys and "INQUIRY" in sig_keys
+
+    tax_ids = set()
+    for k in sig_keys:
+        tax_ids.update(SIGNAL_KEY_TO_TAXONOMY.get(k, []))
+    assert "4.3" in tax_ids  # 공시의무 위반 — capital_churn_anomaly의 필수 축
+
+    # 자본 이벤트(2.7)를 얹으면 실제로 패턴이 잡힌다. 거래소 행이 강등되면
+    # 4.3이 사라져 이 패턴은 영원히 매칭되지 않는다.
+    assert find_pattern_match(sorted(tax_ids | {"2.7"})) is not None
+
+
+def test_exchange_filer_exception_does_not_revive_third_party_reports():
+    """거래소 예외가 R1 전체를 무력화하지 않는다 — 제3자 제출은 그대로 강등."""
+    rows = _JSCO_ROWS + [
+        _row("주식등의대량보유상황보고서(일반)", "국민연금공단",
+             corp_name="제이스코홀딩스", rcept_dt="20260715",
+             rcept_no="20260715900004"),
+    ]
+    observed, procedural = _split(_build_signal_events(rows))
+    assert len(procedural) == 1
+    assert "국민연금공단" in procedural[0]["reason"]
+    assert {e["key"] for e in observed} == {"INQUIRY", "DISCLOSURE_VIOL"}
+
+
+# ── 리뷰 C2: false-amendment 복구가 발화하면 is_amendment도 내려간다 ──
+
+def test_false_amendment_recovery_clears_the_amendment_flag():
+    """'[정정명령부과]주요사항보고서(유상증자결정)'은 정정공시가 아니다.
+
+    플래그가 True로 남으면 헤더 건수에는 들어가면서 non_amend_events·
+    sig_keys·헤드라인에서는 빠져 두 층이 어긋난다.
+    """
+    row = _row("[정정명령부과]주요사항보고서(유상증자결정)",
+               "테스트기업", corp_name="테스트기업")
+    events = _build_signal_events([row])
+    assert events, "false-amendment 복구가 신호를 되살리지 못했습니다"
+    assert all(e["is_amendment"] is False for e in events)
+
+    observed, _ = _split(events)
+    non_amend = [e for e in observed if not e["is_amendment"]]
+    assert len(non_amend) == len(observed)
+    assert _headline(observed) is not None
+
+
+def test_real_amendment_still_keeps_the_flag_and_is_demoted():
+    """진짜 정정공시([기재정정])의 기존 동작은 바뀌지 않는다."""
+    row = _row("[기재정정]주요사항보고서(유상증자결정)",
+               "테스트기업", corp_name="테스트기업")
+    events = _build_signal_events([row])
+    # match_signals가 정정공시를 걸러 신호가 없거나, 있어도 R5로 강등된다.
+    for e in events:
+        assert e["is_amendment"] is True
+        assert e["tier"] == TIER_PROCEDURAL

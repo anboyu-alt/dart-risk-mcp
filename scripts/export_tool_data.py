@@ -232,6 +232,7 @@ def build_signals_data() -> dict:
         # 신호 한정층 규칙 — 데이터만 내보내고 로직은 뷰어 JS가 이식한다.
         # 문자열 목록의 이중 관리를 막는 것이 목적이다(키워드와 동일한 원칙).
         "qualifier_rules": {
+            "exchange_filers": list(_q.EXCHANGE_FILERS),
             "third_party_titles": list(_q.THIRD_PARTY_TITLES),
             "phase_tails": list(_q.PHASE_TAILS),
             "subsidiary_subtitles": list(_q.SUBSIDIARY_SUBTITLES),

@@ -60,6 +60,7 @@ SHAREHOLDER = {"key": "SHAREHOLDER", "label": "최대주주변경"}
 TREASURY = {"key": "TREASURY", "label": "자사주매입/처분"}
 PCA3 = {"key": "3PCA", "label": "제3자배정유상증자"}
 INQUIRY = {"key": "INQUIRY", "label": "조회공시"}
+DISCLOSURE_VIOL = {"key": "DISCLOSURE_VIOL", "label": "공시의무위반"}
 CB_BW = {"key": "CB_BW", "label": "CB/BW발행"}
 
 
@@ -159,9 +160,77 @@ def test_r4_demotes_company_denial():
 
 
 def test_r4_keeps_exchange_inquiry_request():
-    """과잉 강등 방지 — 거래소가 요구한 조회공시는 남는다."""
-    q = _one("조회공시요구(풍문또는보도)(감사의견비적정설)", [INQUIRY])
+    """과잉 강등 방지 — 거래소가 요구한 조회공시는 남는다.
+
+    filing을 반드시 함께 넘긴다. 실환경(/list.json)에서는 flr_nm이 항상
+    채워져 오고 거래소 공시면 그 값이 시장본부라, filing=None으로 두면
+    R1을 통과하는 프로덕션 경로를 전혀 검증하지 못한다(리뷰 C1).
+    실측 근거: 조회공시요구(현저한시황변동) / 금호전기 / 유가증권시장본부
+    (20260813801194).
+    """
+    q = _one(
+        "조회공시요구(풍문또는보도)(감사의견비적정설)", [INQUIRY],
+        {"corp_name": "제이스코홀딩스", "flr_nm": "코스닥시장본부"},
+    )
     assert q.tier == TIER_OBSERVED
+    assert q.reason == ""
+
+
+def test_r1_keeps_exchange_filed_disclosure_violation():
+    """불성실공시법인지정 — 실측: 스코넥 / 코스닥시장본부 (20260812900993)."""
+    q = _one(
+        "불성실공시법인지정(공시번복)", [DISCLOSURE_VIOL],
+        {"corp_name": "스코넥", "flr_nm": "코스닥시장본부"},
+    )
+    assert q.tier == TIER_OBSERVED
+
+
+def test_r1_keeps_exchange_filed_trading_halt():
+    """주권매매거래정지 — 실측: 에이비온 / 코스닥시장본부 (20260814901573)."""
+    q = _one(
+        "주권매매거래정지(조회공시답변)", [INQUIRY],
+        {"corp_name": "에이비온", "flr_nm": "코스닥시장본부"},
+    )
+    assert q.tier == TIER_OBSERVED
+
+
+def test_r1_keeps_kospi_bureau_filer():
+    """유가증권시장본부 — 실측: 금호전기 / 20260813801194."""
+    q = _one(
+        "조회공시요구(현저한시황변동)", [INQUIRY],
+        {"corp_name": "금호전기", "flr_nm": "유가증권시장본부"},
+    )
+    assert q.tier == TIER_OBSERVED
+
+
+def test_r1_keeps_konex_bureau_filer():
+    """코넥스만 '본부'가 붙지 않는다 — 실측: 퓨쳐메디신 / 코넥스시장
+    (20260812600521). '시장본부'로 거르면 이 건이 통째로 사라진다."""
+    q = _one(
+        "주권매매거래정지(지정자문인선임계약해지)", [INQUIRY],
+        {"corp_name": "퓨쳐메디신", "flr_nm": "코넥스시장"},
+    )
+    assert q.tier == TIER_OBSERVED
+
+
+def test_r1_still_demotes_non_exchange_third_party_filer():
+    """거래소 예외가 R1 자체를 무력화하지 않는다."""
+    q = _one(
+        "주식등의대량보유상황보고서(일반)", [SHAREHOLDER],
+        {"corp_name": "삼성전자", "flr_nm": "국민연금공단"},
+    )
+    assert q.tier == TIER_PROCEDURAL
+
+
+def test_exchange_filer_exception_does_not_bypass_other_rules():
+    """거래소 제출이어도 R5(정정 꼬리표)는 그대로 강등한다 — 실측:
+    '[기재정정]불성실공시법인지정예고(공시불이행)' 형태가 존재한다."""
+    q = _one(
+        "[기재정정]불성실공시법인지정예고(공시불이행)", [DISCLOSURE_VIOL],
+        {"corp_name": "스코넥", "flr_nm": "코스닥시장본부"},
+    )
+    assert q.tier == TIER_PROCEDURAL
+    assert "기재정정" in q.reason
 
 
 # ── R5: 정정·후속 꼬리표 ─────────────────────────────────────
