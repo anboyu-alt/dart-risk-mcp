@@ -223,3 +223,38 @@ def test_empty_signals_returns_empty():
 def test_missing_filing_keys_do_not_raise():
     q = _one("최대주주변경", [SHAREHOLDER], {})
     assert q.tier == TIER_OBSERVED
+
+
+# ── 라벨 보정 ───────────────────────────────────────────────
+def test_label_softened_when_allocation_method_absent():
+    """제목에 '제3자배정'이 없으면 그렇게 단정하지 않는다."""
+    q = _one("주요사항보고서(유상증자결정)", [PCA3])
+    assert q.label == "유상증자(배정방식 미상)"
+    assert q.tier == TIER_OBSERVED
+
+
+def test_label_kept_when_allocation_method_stated():
+    q = _one("증권발행결과(자율공시)(제3자배정 유상증자)", [PCA3])
+    assert q.label == "제3자배정유상증자"
+
+
+def test_label_override_only_applies_to_3pca():
+    q = _one("주요사항보고서(유상증자결정)", [CB_BW])
+    assert q.label == "CB/BW발행"
+
+
+# ── 사실 주석 ───────────────────────────────────────────────
+def test_note_added_when_direction_is_reversed():
+    q = _one("전환사채(해외전환사채포함)발행후만기전사채취득(제3회차)", [CB_BW])
+    assert "취득" in q.note
+    assert q.tier == TIER_OBSERVED   # 주석만 붙이고 강등하지 않는다
+
+
+def test_note_added_for_bond_sale_decision():
+    q = _one("주요사항보고서(자기전환사채매도결정)", [CB_BW])
+    assert q.note != ""
+
+
+def test_no_note_for_plain_issuance():
+    q = _one("주요사항보고서(전환사채권발행결정)", [CB_BW])
+    assert q.note == ""

@@ -103,6 +103,8 @@ from .qualifiers import (
     is_false_amendment,
     qualify_signals,
     PHASE_TAILS,
+    LABEL_OVERRIDES,
+    DIRECTION_NOTES,
 )
 
 __all__ = [
@@ -203,4 +205,6 @@ __all__ = [
     "TIER_PROCEDURAL",
     "is_false_amendment",
     "qualify_signals",
+    "LABEL_OVERRIDES",
+    "DIRECTION_NOTES",
 ]

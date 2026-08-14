@@ -207,6 +207,44 @@ def _demotion_reason(parsed: ParsedName, filing: "dict | None") -> str:
     return ""
 
 
+# 라벨 보정 — 제목이 확정해주지 못하는 수식어는 라벨에서 뺀다.
+# 3PCA 키워드에 '유상증자'가 통째로 있어 일반공모·소액공모까지 '제3자배정'으로
+# 표기되던 것을 막는다(셀트리온 헤드라인 오탐의 직접 원인).
+LABEL_OVERRIDES: dict = {
+    "3PCA": {
+        "missing_marker": "제3자배정",
+        "label": "유상증자(배정방식 미상)",
+    },
+}
+
+# 사실 주석 — tier는 바꾸지 않고 사실만 덧붙인다. 신호 재배정은 하지 않는다.
+DIRECTION_NOTES: dict = {
+    "CB_BW": {
+        "markers": ("사채취득", "사채매도"),
+        "note": "발행이 아니라 사채 취득·매도 건입니다",
+    },
+}
+
+
+def _adjusted_label(sig: dict, parsed: ParsedName) -> str:
+    """제목이 뒷받침하지 못하는 수식어를 뺀 표시 라벨."""
+    label = sig.get("label", "")
+    rule = LABEL_OVERRIDES.get(sig.get("key", ""))
+    if rule and rule["missing_marker"] not in parsed.compact:
+        return rule["label"]
+    return label
+
+
+def _direction_note(sig: dict, parsed: ParsedName) -> str:
+    """방향이 신호 라벨과 어긋날 때의 사실 주석."""
+    rule = DIRECTION_NOTES.get(sig.get("key", ""))
+    if not rule:
+        return ""
+    if any(m in parsed.compact for m in rule["markers"]):
+        return rule["note"]
+    return ""
+
+
 def qualify_signals(
     signals: list,
     parsed: ParsedName,
@@ -222,10 +260,10 @@ def qualify_signals(
     return [
         Qualified(
             key=sig.get("key", ""),
-            label=sig.get("label", ""),
+            label=_adjusted_label(sig, parsed),
             tier=tier,
             reason=reason,
-            note="",
+            note=_direction_note(sig, parsed),
         )
         for sig in (signals or [])
     ]
