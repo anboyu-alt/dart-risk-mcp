@@ -648,6 +648,22 @@ NON_DILUTIVE_CAPITAL_EVENTS = frozenset({
 # 하위 호환 — 전체 자본 이벤트 집합
 CAPITAL_EVENT_KEYS = DILUTIVE_CAPITAL_EVENTS | NON_DILUTIVE_CAPITAL_EVENTS
 
+# 양면적 신호 — 정상 기업활동으로도 빈발해 단독으로는 헤드라인이 되지 않는다.
+#
+# 새로운 판단을 만들지 않는다. 이 코드베이스가 이미 양면성을 서술하고 있는
+# 신호만 담는다:
+#   TREASURY/TREASURY_TRUST — explain.py "주주 환원으로 긍정적일 수도 있지만…"
+#   FUND_OUTFLOW            — explain.py "대기업의 일상적 계열 지원과 구분 불가"
+#   ACQ_REVIEW              — explain.py "정상적인 사업 인수도 이 유형"
+#
+# 목록·카테고리 집계·패턴 매칭에는 정상 참여한다. 헤드라인만 못 된다.
+AMBIGUOUS_SIGNAL_KEYS: frozenset = frozenset({
+    "TREASURY",
+    "TREASURY_TRUST",
+    "FUND_OUTFLOW",
+    "ACQ_REVIEW",
+})
+
 
 def match_signals(report_nm: str) -> list[dict]:
     """공시 제목에서 의심 신호 유형 매칭. 복수 유형 매칭 가능.

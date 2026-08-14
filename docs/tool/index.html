@@ -161,6 +161,15 @@
   .badge-cau { font-family: var(--mono); font-size: 10px; color: var(--amber); background: transparent;
     border: 1px solid var(--amber); border-radius: 3px; padding: 1px 6px; letter-spacing: 0.06em; }
 
+  /* 절차·사후 보고 (접힘) — 신호 한정층 procedural 티어 */
+  .proc { margin-top: 1.2rem; border-top: 1px solid var(--line); padding-top: 0.8rem; }
+  .proc > summary { cursor: pointer; color: var(--dim); font-size: 0.9rem; padding: 0.3rem 0; }
+  .proc > summary:hover { color: var(--tx); }
+  .prow { padding: 0.45rem 0; border-bottom: 1px solid var(--line); font-size: 0.86rem; }
+  .prow:last-child { border-bottom: none; }
+  .prow a { color: var(--dim2); text-decoration: none; }
+  .prow a:hover { color: var(--tx); text-decoration: underline; }
+
   /* KPI 스트립 */
   .kpis { display: flex; flex-wrap: wrap; margin-top: 14px; border: 1px solid var(--line);
     border-radius: 4px; overflow: hidden; }
@@ -367,6 +376,7 @@
       <div class="chips" id="feedChips" style="margin-bottom:16px"></div>
       <div class="rows" id="feedTable"></div>
       <div class="mnote">// 무게 최상위 신호 행은 MAX로 표시 · 사실 관찰이며 판정 아님</div>
+      <div id="procWrap"></div>
     </section>
 
     <!-- ── 03 공시 상세 ── -->
@@ -853,6 +863,143 @@ function matchSignals(reportNm) {
   return out;
 }
 
+/* ── 신호 한정층 ──────────────────────────────────
+   core/qualifiers.py의 1:1 이식. 규칙 문자열은 signals-data.json의
+   qualifier_rules에서 읽어 이중 관리를 피한다. 로직만 여기 있다. */
+const TIER_OBSERVED = "observed", TIER_PROCEDURAL = "procedural";
+// tier 누락 시 observed로 기본 처리 — server.py:830의 e.get("tier", TIER_OBSERVED)와
+// 동일한 기본값. 뷰어 신호는 전부 qualifySignals를 거쳐 tier가 항상 채워지므로 오늘은
+// 도달 불가능하지만, 두 레이어의 기본값이 어긋나면 나중에 합성 이벤트가 섞였을 때
+// 조용히 뒤집힐 수 있어 기본값을 맞춰 둔다.
+function isObservedSig(s) { return (s.tier || TIER_OBSERVED) === TIER_OBSERVED; }
+
+function qrules() { return (DATA && DATA.qualifier_rules) || {}; }
+
+function tailOf(text) {
+  const tails = (qrules().tails || []).slice().sort((a, b) => b.length - a.length);
+  for (const t of tails) if (text.endsWith(t)) return t;
+  return "";
+}
+
+function parseReportName(reportNm) {
+  let rest = String(reportNm || "").trim();
+  const tags = [];
+  for (;;) {
+    const m = rest.match(/^\[([^\]]*)\]\s*/);
+    if (!m) break;
+    tags.push(m[1].trim());
+    rest = rest.slice(m[0].length);
+  }
+  const compact = rest.replace(/\s+/g, "");
+  const subtitles = [];
+  compact.replace(/\(([^()]*)\)/g, (_, s) => { if (s) subtitles.push(s); return ""; });
+  const body = compact.replace(/\([^()]*\)/g, "");
+  let tail = tailOf(body);
+  // '주요사항보고서(자기주식취득결정)'처럼 본체가 껍데기면 괄호 쪽을 본다.
+  if (tail === "보고서" && subtitles.length) {
+    tail = tailOf(subtitles[subtitles.length - 1]) || tail;
+  }
+  return { tags, body, subtitles, tail, compact };
+}
+
+// foldCorpName은 여기서 새로 선언하지 않는다 — 파일 하단(v1.9.0 타법인
+// 출자현황 기능)에 이미 같은 이름의 함수가 있고, 이 파일은 단일 <script>
+// 최상위 스코프(type="module" 아님)라 같은 이름을 또 선언하면 나중 선언이
+// 앞 선언을 그림자 처리해 이쪽이 죽은 코드가 된다. AFFIL_CORP_SUFFIX_RE
+// 정의부의 주석 참고.
+
+function isAmendmentTag(tag) {
+  const tags = qrules().amendment_tags || [];
+  const t = String(tag || "").trim();
+  return tags.includes(t) || t.endsWith("정정");
+}
+
+function isFalseAmendment(parsed) {
+  if (!parsed.tags.length) return false;
+  return !parsed.tags.some(isAmendmentTag);
+}
+
+function demotionReason(parsed, filing) {
+  const r = qrules(), f = filing || {};
+  const filer = String(f.flr_nm || "").trim();
+  const corp = String(f.corp_name || "").trim();
+  // R1 — 제출인이 회사가 아님. 단 거래소 시장본부(코스닥/유가증권/코넥스)
+  // 제출은 예외다 — 조회공시요구·불성실공시법인지정·주권매매거래정지는
+  // flr_nm이 회사가 아니지만 관찰해야 할 사건 그 자체다(core/qualifiers.py의
+  // EXCHANGE_FILERS 주석 = 라이브 실측 근거). 목록은 signals-data.json에서
+  // 읽는다 — 한글 규칙 문자열을 여기 적지 않는다.
+  const exchangeFilers = r.exchange_filers || [];
+  const isExchangeFiler = !!filer && exchangeFilers.some((m) => filer.includes(m));
+  if (filer && corp && !isExchangeFiler && foldCorpName(filer) !== foldCorpName(corp)) {
+    return `회사가 낸 공시가 아닙니다 (제출인: ${filer})`;
+  }
+  // R1b — 지분 보유·변동 신고서. filer 유무와 무관하게 평가한다(제출인이
+  // 회사 자신이어도 회사의 사건 공시가 아닌 정례 보고이기 때문 — 실측:
+  // '최대주주등소유주식변동신고서'는 flr_nm이 회사 자신이어도 여기 걸린다).
+  for (const t of (r.third_party_titles || [])) {
+    if (parsed.body.startsWith(t)) return "지분 보유·변동 신고서입니다 (회사의 사건 공시가 아님)";
+  }
+  // R5 — 정정·후속 꼬리표
+  for (const tag of parsed.tags) {
+    if (isAmendmentTag(tag)) return `기존 공시의 정정·후속 보고입니다 (${tag})`;
+  }
+  // R2 — 사후·해제 국면
+  if ((r.phase_tails || []).includes(parsed.tail)) {
+    return parsed.tail === "결과보고서"
+      ? "이미 실행된 건의 결과 보고입니다"
+      : `체결이 아니라 ${parsed.tail}입니다`;
+  }
+  // R3 — 자회사·특수관계인 사안
+  if (parsed.subtitles.some((s) => (r.subsidiary_subtitles || []).includes(s))) {
+    return "이 회사가 아니라 자회사 사안입니다";
+  }
+  if (r.related_party_prefix && parsed.body.startsWith(r.related_party_prefix)) {
+    return "회사가 아니라 특수관계인의 행위입니다";
+  }
+  // R4 — 해명·미확정
+  if (parsed.tail === "해명" || parsed.subtitles.includes("미확정")) {
+    return "회사가 미확정으로 답한 해명 공시입니다";
+  }
+  return "";
+}
+
+function adjustedLabel(sig, parsed) {
+  const rule = (qrules().label_overrides || {})[sig.key];
+  if (rule && !parsed.compact.includes(rule.missing_marker)) return rule.label;
+  return sig.label;
+}
+
+function directionNote(sig, parsed) {
+  const rule = (qrules().direction_notes || {})[sig.key];
+  if (!rule) return "";
+  return (rule.markers || []).some((m) => parsed.compact.includes(m)) ? rule.note : "";
+}
+
+function qualifySignals(sigs, parsed, filing) {
+  const reason = demotionReason(parsed, filing);
+  const tier = reason ? TIER_PROCEDURAL : TIER_OBSERVED;
+  return (sigs || []).map((s) => ({
+    key: s.key,
+    label: adjustedLabel(s, parsed),
+    category: s.category,
+    caution: s.caution,
+    taxonomies: s.taxonomies,
+    prose: s.prose,
+    tier, reason,
+    note: directionNote(s, parsed),
+  }));
+}
+
+function pickHeadline(qualified) {
+  const amb = new Set(DATA.ambiguous_signal_keys || []);
+  const order = DATA.signals.map((s) => s.key);
+  const cands = (qualified || []).filter(
+    (q) => q.tier === TIER_OBSERVED && !amb.has(q.key));
+  if (!cands.length) return null;
+  return cands.slice().sort(
+    (a, b) => order.indexOf(a.key) - order.indexOf(b.key))[0];
+}
+
 async function analyze(name, override) {
   let corpCode, stockCode;
   if (override && override.corpCode) {
@@ -905,26 +1052,50 @@ function buildResult(name, stockCode, corpCode, items, bgn, end, totalCount) {
   const rows = [];   // 피드용 전체 행
   for (const it of items) {
     const nm = it.report_nm || "";
-    const isAmend = AMEND_RE.test(nm);
+    const parsed = parseReportName(nm);
+    let isAmend = AMEND_RE.test(nm);
+    // '[정정명령부과]'처럼 정정이 아닌 태그는 접두를 벗겨 재매칭한다.
+    let sigs = isAmend ? [] : matchSignals(nm);
+    if (!sigs.length && isAmend && isFalseAmendment(parsed)) {
+      sigs = matchSignals(nm.replace(/^(\[[^\]]*\])+/, ""));
+      // isFalseAmendment가 참 = 정정 꼬리표가 아니라는 단언이다. 서버
+      // (analyze_company_risk)도 여기서 is_amendment를 내린다 — 두 층이
+      // 같은 판정을 내야 한다(리뷰 C2). amendCount·정정 칩 라벨도 이
+      // 값으로 세야 칩 라벨과 필터 결과가 어긋나지 않는다.
+      isAmend = false;
+    }
     if (isAmend) amendCount++;
-    const sigs = isAmend ? [] : matchSignals(nm);
-    if (sigs.length) events.push({ date: it.rcept_dt, nm, rcept: it.rcept_no, signals: sigs });
-    rows.push({ date: it.rcept_dt, nm, rcept: it.rcept_no, signals: sigs, isAmend });
+    // corp_name은 DART 행이 준 값이 우선이다. buildResult의 name은
+    // corp-map.json·별칭으로 해석한 표시명이라, 주간 갱신 창 안의
+    // 상호변경·옛 상호 별칭이면 실제 제출인과 달라져 R1(제출인≠회사)이
+    // 전 행에서 오발화한다(리뷰 C3).
+    const qual = qualifySignals(sigs, parsed, { ...it, corp_name: it.corp_name || name });
+    if (qual.length) events.push({ date: it.rcept_dt, nm, rcept: it.rcept_no, signals: qual });
+    rows.push({ date: it.rcept_dt, nm, rcept: it.rcept_no, signals: qual, isAmend });
   }
   events.sort((a, b) => a.date < b.date ? 1 : -1);
   rows.sort((a, b) => a.date < b.date ? 1 : -1);
 
-  const detectedTax = new Set(events.flatMap((e) => e.signals.flatMap((s) => s.taxonomies || [])));
-  const patterns = DATA.patterns.filter((p) => p.signal_sequence.every((t) => detectedTax.has(t)));
+  // 절차·사후 보고는 집계·헤드라인·패턴 매칭에서 전부 빠진다.
+  const obs = (e) => e.signals.filter(isObservedSig);
+  const observedEvents = events.filter((e) => obs(e).length);
+  const proceduralEvents = events.filter((e) => !obs(e).length);
+
+  const detectedTax = new Set(
+    observedEvents.flatMap((e) => obs(e).flatMap((s) => s.taxonomies || [])));
+  const patterns = DATA.patterns.filter(
+    (p) => p.signal_sequence.every((t) => detectedTax.has(t)));
   const capitalKeys = new Set(DATA.capital_event_keys);
-  const capitalEvents = events.filter((e) => e.signals.some((s) => capitalKeys.has(s.key)));
+  const capitalEvents = observedEvents.filter(
+    (e) => obs(e).some((s) => capitalKeys.has(s.key)));
   const catCount = {};
-  for (const e of events) for (const s of e.signals) catCount[s.category] = (catCount[s.category] || 0) + 1;
+  for (const e of observedEvents) for (const s of obs(e)) catCount[s.category] = (catCount[s.category] || 0) + 1;
   const typeCount = {};
-  for (const e of events) for (const s of e.signals) typeCount[s.key] = (typeCount[s.key] || 0) + 1;
+  for (const e of observedEvents) for (const s of obs(e)) typeCount[s.key] = (typeCount[s.key] || 0) + 1;
   const detectedTypes = DATA.signals.filter((s) => typeCount[s.key]);
-  const heaviest = detectedTypes[0] || null;
-  const crisisEvents = events.filter((e) => e.signals.some((s) => s.category >= 7));
+  const headline = pickHeadline(observedEvents.flatMap(obs));
+  const heaviest = headline ? DATA.signals.find((s) => s.key === headline.key) || null : null;
+  const crisisEvents = observedEvents.filter((e) => obs(e).some((s) => s.category >= 7));
   const amendRate = items.length ? Math.round(amendCount / items.length * 100) : 0;
 
   // ── 작업3: 재스캔 diff — 이전 스냅샷이 있으면 신호 매칭 공시 중 새로 생긴 것을 센다.
@@ -944,6 +1115,7 @@ function buildResult(name, stockCode, corpCode, items, bgn, end, totalCount) {
   CUR = { name, stockCode, corpCode, items, rows, events, amendCount, amendRate,
           patterns, capitalEvents, catCount, typeCount, detectedTypes, heaviest,
           crisisEvents, bgn, end, scanDiff,
+          observedEvents, proceduralEvents, headline,
           truncated: totalCount > items.length ? totalCount : 0 };
   $("topCompany").textContent = `${name} · ${stockCode}`;
   enableNav();
@@ -960,13 +1132,13 @@ function buildResult(name, stockCode, corpCode, items, bgn, end, totalCount) {
 
 /* ── 02 피드 ──────────────────────────────────── */
 function renderFeed() {
-  const { rows, events, name, catCount } = CUR;
-  $("feedMeta").textContent = `${CUR.items.length}건 중 신호 ${events.length}건 · T-${windowLabel()}` +
+  const { rows, events, observedEvents, name, catCount } = CUR;
+  $("feedMeta").textContent = `${CUR.items.length}건 중 신호 ${observedEvents.length}건 · T-${windowLabel()}` +
     (CUR.truncated ? ` · 전체 ${CUR.truncated}건 중 최근 ${CUR.items.length}건` : "");
 
   const cats = Object.keys(catCount).map(Number).sort((a, b) => catCount[b] - catCount[a]);
   let chips = `<span class="chip solid ${FEED_FILTER.mode === "all" ? "on" : ""}" data-m="all">전체 ${CUR.items.length}</span>`;
-  chips += `<span class="chip ${FEED_FILTER.mode === "sig" ? "on" : ""}" data-m="sig">● 신호만 ${events.length}</span>`;
+  chips += `<span class="chip ${FEED_FILTER.mode === "sig" ? "on" : ""}" data-m="sig">● 신호만 ${observedEvents.length}</span>`;
   for (const c of cats) {
     chips += `<span class="chip ${FEED_FILTER.mode === "cat" && FEED_FILTER.cat === c ? "on" : ""}" data-m="cat" data-c="${c}">` +
       `<span class="cdot" style="background:var(--c${c})"></span>${esc(DATA.categories[String(c)])} ${catCount[c]}</span>`;
@@ -981,16 +1153,24 @@ function renderFeed() {
   });
 
   let list = CUR.rows;
-  if (FEED_FILTER.mode === "sig") list = list.filter((r) => r.signals.length);
+  // "신호만"·카테고리 칩은 observed 기준 카운트로 라벨을 붙였으니(위), 필터
+  // predicate도 observed만 매칭해야 라벨과 결과가 어긋나지 않는다(리뷰 라운드1
+  // Finding 3/4) — procedural로 강등된 신호는 여기서 걸리지 않는다.
+  if (FEED_FILTER.mode === "sig") list = list.filter((r) => r.signals.some(isObservedSig));
   else if (FEED_FILTER.mode === "amend") list = list.filter((r) => r.isAmend);
-  else if (FEED_FILTER.mode === "cat") list = list.filter((r) => r.signals.some((s) => s.category === FEED_FILTER.cat));
+  else if (FEED_FILTER.mode === "cat") list = list.filter((r) => r.signals.some((s) => isObservedSig(s) && s.category === FEED_FILTER.cat));
 
   const heavyKey = CUR.heaviest ? CUR.heaviest.key : null;
   let html = `<div class="rowhead g-feed"><span>DATE</span><span>DISCLOSURE</span><span class="colcat">CATEGORY</span><span>SIGNAL</span><span class="colcorr">정정</span></div>`;
   html += list.slice(0, 200).map((r, i) => {
     const s0 = r.signals[0];
-    const isTop = heavyKey && r.signals.some((s) => s.key === heavyKey);
-    const hasCaution = !isTop && r.signals.some((s) => s.caution);
+    // MAX는 이 기간 최상위 "관찰" 신호에만 붙는다 — 절차·사후 보고로 강등된
+    // 행이 헤드라인과 같은 key를 우연히 공유해도(리뷰 라운드1 Finding 1,
+    // 대량보유상황보고 SHAREHOLDER 재현) MAX를 물려받지 않는다.
+    const isTop = heavyKey && r.signals.some((s) => isObservedSig(s) && s.key === heavyKey);
+    // 주의(caution) 배지도 MAX와 같은 원칙 — 절차·사후 보고로 강등된 행에
+    // 관찰 신호와 같은 시각 언어(배지)를 씌우지 않는다(리뷰 라운드2 Finding).
+    const hasCaution = !isTop && r.signals.some((s) => isObservedSig(s) && s.caution);
     const sigCell = isTop ? `<span class="badge-max">MAX</span>`
       : hasCaution ? `<span class="badge-cau">주의</span>`
       : r.signals.length ? `<span class="sigdot">● 신호</span>`
@@ -1003,24 +1183,74 @@ function renderFeed() {
       <span class="colcat" style="font-size:12px;color:var(--dim2)">${s0 ? `<span class="cdot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--c${s0.category});margin-right:7px"></span>${esc(DATA.categories[String(s0.category)])}` : `<span class="nosig">—</span>`}</span>
       <span>${sigCell}${isNew ? ` <span class="mono" style="font-size:9.5px;color:var(--faint);letter-spacing:0.06em">NEW</span>` : ""}</span>
       <span class="colcorr mono" style="font-size:11.5px;color:${r.isAmend ? "#c0a24a" : "#3a4350"}">${r.isAmend ? "정정" : "—"}</span>
+      ${s0 && s0.note ? `<div class="dim" style="grid-column:1/-1;font-size:0.78rem">※ ${esc(s0.note)}</div>` : ""}
     </div>`;
   }).join("");
   $("feedTable").innerHTML = html;
   $("feedTable").querySelectorAll(".feedrow").forEach((row) => {
     row.onclick = () => renderDetail(row.dataset.r);
   });
+  $("procWrap").innerHTML = renderProcedural(CUR.proceduralEvents, CUR.items.length);
+}
+
+/* ── 절차·사후 보고 (접힘) — 집계·헤드라인·패턴 매칭에서 제외된 신호를
+   사유와 함께 접힌 층으로 남긴다. 대량보유상황보고 등 정례 신고서는
+   임계값 없이 묶고 분모(전체 공시 건수)를 병기해 사용자가 직접 읽게 한다. */
+function renderProcedural(proceduralEvents, totalCount) {
+  if (!proceduralEvents.length) return "";
+  const rules = qrules().third_party_titles || [];
+  const bulk = proceduralEvents.filter(
+    (e) => rules.some((t) => parseReportName(e.nm).body.startsWith(t)));
+  let summary = "";
+  if (bulk.length) {
+    const dates = bulk.map((e) => e.date).sort();
+    // 임계값을 두지 않는다 — 건수만으로는 아틀라스링크(15/61)와
+    // 셀트리온(14/222)을 가를 수 없다. 분모를 함께 적어 사용자가 읽게 한다.
+    summary = `<div class="dim" style="margin:0.4rem 0 0.8rem">
+      대량보유상황보고 ${bulk.length}건 — 전체 공시 ${totalCount}건 중
+      (${fmtDate(dates[0])}~${fmtDate(dates[dates.length - 1])})</div>`;
+  }
+  const rowsHtml = proceduralEvents.map((e) => `
+    <div class="prow">
+      <span class="mono dim">${fmtDate(e.date)}</span>
+      <a href="${dartUrl(e.rcept)}" target="_blank" rel="noopener">${esc(e.nm)}</a>
+      <div class="dim" style="font-size:0.8rem">→ ${esc(e.signals[0].reason)}</div>
+      ${e.signals[0].note ? `<div class="dim" style="font-size:0.78rem">※ ${esc(e.signals[0].note)}</div>` : ""}
+    </div>`).join("");
+  return `<details class="proc"><summary>절차·사후 보고 ${proceduralEvents.length}건</summary>
+    ${summary}${rowsHtml}</details>`;
 }
 
 /* ── 03 상세 ──────────────────────────────────── */
+// 라벨이 보정된 신호인지 판정 — DATA.signals의 원래 라벨과 비교만 한다.
+// 어느 쪽 문자열도 여기서 하드코딩하지 않는다(Task 10 지침).
+function isSoftenedSig(s) {
+  const orig = (DATA.signals.find((x) => x.key === s.key) || {}).label;
+  return !!orig && s.label !== orig;
+}
+// WHY THIS MATTERS 한 줄 + (보정된 신호면) "원문 확인" 버튼·슬롯.
+function renderWhyRow(s, rcept) {
+  const p = `<p style="font-size:0.92rem;margin-bottom:0.7rem"><b>${esc(s.label)}</b> — ${esc(s.prose || "등록된 해설이 없는 신호 유형입니다.")}</p>`;
+  if (!isSoftenedSig(s)) return p;
+  const slotId = "alloc-" + esc(rcept) + "-" + esc(s.key);
+  return p + `<div style="margin:-0.4rem 0 0.7rem">` +
+    `<button class="ghost" style="padding:0.22rem 0.65rem;font-size:0.78rem" onclick="confirmAllocation('${rcept}','${s.key}')">원문 확인 ▾</button>` +
+    ` <span id="${slotId}" class="dim" style="font-size:0.82rem;margin-left:0.4rem"></span></div>`;
+}
 function renderDetail(rcept) {
   const r = CUR.rows.find((x) => x.rcept === rcept);
   if (!r) return;
   const s0 = r.signals[0] || null;
-  const isTop = CUR.heaviest && r.signals.some((s) => s.key === CUR.heaviest.key);
+  // 절차·사후 보고 행은 헤드라인과 key가 같아도(예: 대량보유상황보고가
+  // SHAREHOLDER를 헤드라인으로 물려받는 경우) TOP WEIGHT를 물려받지 않는다
+  // (리뷰 라운드1 Finding 1과 동일 원칙, 상세 화면 쪽).
+  const isTop = CUR.heaviest && r.signals.some((s) => isObservedSig(s) && s.key === CUR.heaviest.key);
   const cat = s0 ? s0.category : 0;
 
-  // 신호 체인에서의 위치 (신호 이벤트 시간순)
-  const asc = [...CUR.events].reverse();
+  // 신호 체인에서의 위치 (관찰 신호 이벤트 시간순 — 절차·사후 보고는 체인
+  // 자리를 차지하지 않는다. 대시보드 SIGNAL CHAIN과 같은 모집단·같은
+  // 분모를 써야 두 화면이 어긋나지 않는다, 리뷰 라운드1 Finding 2).
+  const asc = [...CUR.observedEvents].reverse();
   const pos = asc.findIndex((e) => e.rcept === rcept);
   let chain = "";
   if (pos >= 0) {
@@ -1048,7 +1278,7 @@ function renderDetail(rcept) {
       <div class="panel">
         <div class="slabel amber">▍WHY THIS MATTERS</div>
         ${r.signals.length
-          ? r.signals.map((s) => `<p style="font-size:0.92rem;margin-bottom:0.7rem"><b>${esc(s.label)}</b> — ${esc(s.prose || "등록된 해설이 없는 신호 유형입니다.")}</p>`).join("")
+          ? r.signals.map((s) => renderWhyRow(s, r.rcept)).join("")
           : `<p class="dim">등록된 위험 신호 키워드와 일치하지 않는 공시입니다. 신호가 없다는 것이 "안전"을 뜻하지는 않습니다.</p>`}
         ${cat >= 7 ? `<div class="callout" style="margin-top:0.4rem">거래정지·상장폐지 심사로 이어질 수 있는 유형입니다 — 원문 확인이 필요합니다.</div>` : ""}
         <div class="mnote">// 사실 관찰이며 판정이 아닙니다</div>
@@ -1059,8 +1289,8 @@ function renderDetail(rcept) {
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">카테고리</span><span>${s0 ? esc(DATA.categories[String(cat)]) : "—"}</span></div>
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">신호 무게</span><span style="color:${isTop ? "var(--red)" : "var(--dim2)"}">${isTop ? "이 기간 최상위" : r.signals.length ? "감지됨" : "—"}</span></div>
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">정정 여부</span><span>${r.isAmend ? "정정공시" : "원공시"}</span></div>
-          <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">체인 위치</span><span>${pos >= 0 ? `${pos + 1} / ${CUR.events.length}` : "—"}</span></div>
-          ${r.signals.some((s) => s.caution) ? `<div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">주의 표시</span><span><span class="badge-cau">주의</span> <span class="dim" style="font-size:0.78rem">— 관찰 우선순위 표시</span></span></div>` : ""}
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">체인 위치</span><span>${pos >= 0 ? `${pos + 1} / ${CUR.observedEvents.length}` : "—"}</span></div>
+          ${r.signals.some((s) => isObservedSig(s) && s.caution) ? `<div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">주의 표시</span><span><span class="badge-cau">주의</span> <span class="dim" style="font-size:0.78rem">— 관찰 우선순위 표시</span></span></div>` : ""}
         </div>
         <a href="${dartUrl(r.rcept)}" target="_blank" rel="noopener" style="display:block;margin-top:16px;text-align:center;background:var(--cell);border:1px solid var(--line2);border-radius:4px;padding:11px;font-family:var(--mono);font-size:12.5px">DART 원문 열기 ↗</a>
         <button class="ghost" id="docViewBtn" style="width:100%;margin-top:8px;padding:11px;font-size:12.5px">원문 이 화면에서 보기</button>
@@ -1164,6 +1394,44 @@ async function fetchDisclosureText(rcept) {
     return { error: e.message };
   }
 }
+/* ── 좁은 T2: 배정방식 미상 행의 펼침 시 원문 확인 ──────────
+   스캔 시점에는 호출 0건. 사용자가 이 버튼을 누를 때만 fetchDisclosureText로
+   원문 1건을 받는다 — 기존 캐시(DOC_CACHE/sessionStorage)를 그대로 타므로
+   이미 열람한 공시는 두 번째 클릭에서 네트워크 호출이 없다.
+   확인 대상 문구는 DATA.qualifier_rules.label_overrides[key].confirm_markers
+   (missing_marker 포함 전체 후보) 에서만 읽는다 — 한글 문자열을 여기서 새로
+   하드코딩하지 않는다. missing_marker는 라벨 보정 여부를 가르는 값이라
+   여기서 그 필드를 바꿔 쓰지 않는다 — confirm_markers는 라벨이 보정된
+   *이후*의 원문 확인 후보 목록일 뿐, 강등 로직(adjustedLabel)과는 무관하다. */
+function markerPattern(marker) {
+  const chars = [...marker].map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(chars.join("\\s*"));
+}
+async function confirmAllocation(rcept, key) {
+  const slot = document.getElementById("alloc-" + rcept + "-" + key);
+  if (!slot) return;
+  const rule = (qrules().label_overrides || {})[key] || {};
+  // confirm_markers가 없는(구버전 데이터) 경우에만 missing_marker 하나로
+  // 폴백한다 — 폴백값도 데이터에서 온 값이지 리터럴이 아니다.
+  const markers = (rule.confirm_markers && rule.confirm_markers.length)
+    ? rule.confirm_markers
+    : (rule.missing_marker ? [rule.missing_marker] : []);
+  slot.innerHTML = `<span class="spinner"></span><span class="dim">원문 조회 중…</span>`;
+  const j = await fetchDisclosureText(rcept);
+  if (!j || j.error) {
+    slot.innerHTML = `<span class="dim">${esc((j && j.error) || "원문을 불러오지 못했습니다")} — DART 원문 링크를 이용하세요.</span>`;
+    return;
+  }
+  const txt = String(j.text || "");
+  let hit = "";
+  for (const marker of markers) {
+    const m = txt.match(markerPattern(marker));
+    if (m) { hit = m[0]; break; }
+  }
+  slot.innerHTML = hit
+    ? `<span>원문 확인: <b>${esc(hit)}</b></span>`
+    : `<span class="dim">원문에서 배정 방식을 확인하지 못했습니다.</span>`;
+}
 async function toggleDocViewer(r) {
   const panel = $("docViewer");
   if (!panel) return;
@@ -1205,7 +1473,8 @@ function zeroDisclosureNoticeHTML(name) {
 
 /* ── 04 대시보드 ──────────────────────────────── */
 function renderDash() {
-  const { name, stockCode, corpCode, items, events, amendCount, amendRate, patterns,
+  const { name, stockCode, corpCode, items, events, observedEvents, proceduralEvents,
+          amendCount, amendRate, patterns,
           capitalEvents, catCount, typeCount, detectedTypes, heaviest, crisisEvents,
           bgn, end, scanDiff } = CUR;
 
@@ -1218,7 +1487,7 @@ function renderDash() {
     ${scanDiffLineHTML(scanDiff)}
     <div class="kpis">
       <div class="kpi"><div class="v">${items.length}</div><div class="k">전체 공시</div></div>
-      <div class="kpi ${events.length ? "alert" : ""}"><div class="v">${events.length}</div><div class="k">신호 감지</div></div>
+      <div class="kpi ${observedEvents.length ? "alert" : ""}"><div class="v">${observedEvents.length}</div><div class="k">신호 감지</div></div>
       <div class="kpi"><div class="v">${capitalEvents.length}</div><div class="k">자본 이벤트</div></div>
       <div class="kpi"><div class="v">${amendCount}</div><div class="k">정정공시</div></div>
       <div class="kpi ${amendRate >= 20 ? "alert" : ""}"><div class="v">${amendRate}%</div><div class="k">정정 비율</div></div>
@@ -1227,6 +1496,11 @@ function renderDash() {
     ${amendRate >= 10 ? `<p class="dim" style="font-size:0.82rem;margin-top:0.7rem">※ 정정공시 비율 ${amendRate}% — 정상 기업은 대체로 5% 이내이며, 20% 초과는 최초 공시의 품질·정보 통제 의도를 따져보는 기준선으로 통용됩니다.</p>` : ""}
     ${items.length === 0 ? zeroDisclosureNoticeHTML(name) :
       events.length === 0 ? `<p class="dim" style="margin-top:0.8rem">이 기간 공시 ${items.length}건에서 등록된 위험 신호 유형이 감지되지 않았습니다. 신호가 없다는 것이 "안전하다"는 판정은 아닙니다 — 본 도구는 공시 제목 기반 신호만 봅니다.</p>` : ""}
+  </div>`;
+
+  html += `<div class="dim" style="font-size:0.9rem;margin-bottom:0.8rem">
+    관찰 신호 <b style="color:var(--tx)">${observedEvents.length}건</b>
+    · 절차·사후 보고 <b style="color:var(--tx)">${proceduralEvents.length}건</b>
   </div>`;
 
   if (heaviest) {
@@ -1247,15 +1521,21 @@ function renderDash() {
         <div class="slabel">▍CATEGORY DISTRIBUTION</div>
         ${categoryBars(catCount)}
         <div class="slabel" style="margin:20px 0 10px">▍SIGNAL CHAIN</div>
-        ${flowChain(events)}
+        ${flowChain(observedEvents)}
       </div>
     </div>
     <style>@media (max-width:900px){.dashgrid{grid-template-columns:1fr !important}}</style>`;
+  } else if (observedEvents.length) {
+    const types = detectedTypes.map((s) => `${esc(s.label)} ${typeCount[s.key]}건`).join(" · ");
+    html += `<div class="panel"><div class="dim">이 기간 관찰된 유형: ${types}</div></div>`;
+  } else {
+    html += `<div class="panel"><div>이 기간 공시에서는 관찰 신호가 없습니다.</div>
+      <div class="dim" style="margin-top:0.4rem">공시 외 지표(재무·감사의견·연속적자)는 아래 블록에서 확인하세요.</div></div>`;
   }
 
-  if (events.length) {
-    html += timelinePanel(events, bgn, end);
-    html += flowNotes(events);
+  if (observedEvents.length) {
+    html += timelinePanel(observedEvents, bgn, end);
+    html += flowNotes(observedEvents);
     html += `<div class="panel"><div class="slabel">▍SIGNAL COMMENTARY — 무게순 · 사실 서술</div>
       <div class="proselist">` + detectedTypes.map((s) =>
         `<div><span class="tag" style="background:var(--c${s.category})">${esc(s.label)}</span>${s.caution ? ` <span class="badge-cau">주의</span>` : ""} <span class="mono" style="font-size:0.78rem;color:var(--dim2)">×${typeCount[s.key]}</span>
@@ -1292,7 +1572,7 @@ function renderDash() {
             return `<div class="patterncard" id="pat-${esc(p.key)}"><b>${esc(p.name)}</b>${esc(p.description)}
               ${patternProseCheckpointsHTML(p)}
               <div class="sigs">관찰 윈도우 ${p.timeline_months}개월 · 구성 신호가 촉발된 공시:</div>
-              <div class="sigs">${patternEvidenceHTML(p, events)}</div>
+              <div class="sigs">${patternEvidenceHTML(p, observedEvents)}</div>
               <div class="dim" style="margin-top:0.5rem"><span class="spinner"></span> 원문에서 상대방 관계 확인 중…</div>
               ${(p.field_evidence && p.field_evidence.length ? `<details style="margin-top:0.4rem;font-size:0.82rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">실제 사례 근거(금감원 보도자료 등)</summary>
                 <ul style="margin:0.3rem 0 0 1.1rem;padding:0">${p.field_evidence.map((fe) => `<li>${esc(fe)}</li>`).join("")}</ul></details>` : "")}
@@ -1301,7 +1581,7 @@ function renderDash() {
           return `<div class="patterncard"><b>${esc(p.name)}</b>${esc(p.description)}
             ${patternProseCheckpointsHTML(p)}
             <div class="sigs">관찰 윈도우 ${p.timeline_months}개월 · 구성 신호가 촉발된 공시:</div>
-            <div class="sigs">${patternEvidenceHTML(p, events)}</div>` +
+            <div class="sigs">${patternEvidenceHTML(p, observedEvents)}</div>` +
             (p.field_evidence && p.field_evidence.length ? `<details style="margin-top:0.4rem;font-size:0.82rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">실제 사례 근거(금감원 보도자료 등)</summary>
               <ul style="margin:0.3rem 0 0 1.1rem;padding:0">${p.field_evidence.map((fe) => `<li>${esc(fe)}</li>`).join("")}</ul></details>` : "") +
             `</div>`;
@@ -1335,7 +1615,7 @@ function renderDash() {
     a.onclick = (e) => { e.preventDefault(); renderDetail(a.dataset.r); };
   });
   // SE-14: capital_backflow만 비동기 원문 확인 게이트를 태운다 (다른 패턴은 그대로).
-  patterns.filter((p) => p.key === "capital_backflow").forEach((p) => loadCapitalBackflowGate(p, events, corpCode));
+  patterns.filter((p) => p.key === "capital_backflow").forEach((p) => loadCapitalBackflowGate(p, observedEvents, corpCode));
   $("result").querySelectorAll(".rescanCurrentLink").forEach((a) => {
     a.onclick = (e) => {
       e.preventDefault();
@@ -1370,7 +1650,10 @@ function flowChain(events) {
   const asc = [...events].reverse();
   const groups = [];
   for (const e of asc) {
-    const s = e.signals[0];
+    // 방어적 필터 — 한 공시에서 observed/procedural 신호가 섞일 수는 없지만
+    // (사유는 공시 단위로 결정된다), 규칙이 신호별로 갈라져도 안전하도록.
+    const s = e.signals.filter(isObservedSig)[0];
+    if (!s) continue;
     const last = groups[groups.length - 1];
     if (last && last.key === s.key) { last.n++; last.to = e.date; }
     else groups.push({ key: s.key, label: s.label, cat: s.category, from: e.date, to: e.date, n: 1 });
@@ -1386,16 +1669,18 @@ function flowNotes(events) {
   const dayDiff = (a, b) => (new Date(b.slice(0,4)+"-"+b.slice(4,6)+"-"+b.slice(6,8)) -
                              new Date(a.slice(0,4)+"-"+a.slice(4,6)+"-"+a.slice(6,8))) / 86400e3;
   const notes = [];
-  const rs = asc.find((e) => e.signals.some((s) => ["REVERSE_SPLIT", "GAMJA_MERGE"].includes(s.key)));
+  // 방어적 필터 — flowChain(1573)과 동일 원칙. observedEvents만 들어오지만
+  // 신호별로 tier가 갈라져도 안전하도록 e.signals를 매번 observed로 좁힌다.
+  const rs = asc.find((e) => e.signals.filter(isObservedSig).some((s) => ["REVERSE_SPLIT", "GAMJA_MERGE"].includes(s.key)));
   if (rs) {
     const after = asc.filter((e) => dayDiff(rs.date, e.date) > 0 && dayDiff(rs.date, e.date) <= 120 &&
-      e.signals.some((s) => ["EXEC", "SHAREHOLDER", "MGMT", "MGMT_DISPUTE"].includes(s.key)));
+      e.signals.filter(isObservedSig).some((s) => ["EXEC", "SHAREHOLDER", "MGMT", "MGMT_DISPUTE"].includes(s.key)));
     if (after.length >= 2) {
       notes.push(`주식병합·감자(${mmdd(rs.date)}) 뒤 120일 안에 경영권 관련 이벤트가 ${after.length}건 이어지는 배열입니다. ` +
         `병합은 그 자체로 위법이 아니지만, 유통주식 수 축소와 지배지분 재편이 맞물린 구간인지는 병합 전후 지분율·상장 유지 요건을 원문에서 확인해 볼 지점입니다.`);
     }
   }
-  const shDates = asc.filter((e) => e.signals.some((s) => s.key === "SHAREHOLDER")).map((e) => e.date);
+  const shDates = asc.filter((e) => e.signals.filter(isObservedSig).some((s) => s.key === "SHAREHOLDER")).map((e) => e.date);
   let maxIn90 = 0;
   for (let i = 0; i < shDates.length; i++) {
     let c = 0;
@@ -1421,7 +1706,8 @@ function timelinePanel(events, bgn, end) {
   for (const e of events) {
     const y = +e.date.slice(0, 4), mo = +e.date.slice(4, 6) - 1;
     const bucket = months.find((x) => x.y === y && x.m === mo);
-    if (bucket) { bucket.n++; bucket.maxCat = Math.max(bucket.maxCat, ...e.signals.map((s) => s.category)); }
+    const obsSigs = e.signals.filter(isObservedSig);
+    if (bucket && obsSigs.length) { bucket.n++; bucket.maxCat = Math.max(bucket.maxCat, ...obsSigs.map((s) => s.category)); }
   }
   const dmax = Math.max(1, ...months.map((x) => x.n));
   const longWin = months.length > 14;   // 3Y·5Y — 월 라벨은 1월(연도)만
@@ -1432,7 +1718,7 @@ function timelinePanel(events, bgn, end) {
     months.map((x) => `<span>${longWin ? (x.m === 0 ? "'" + (x.y % 100) : "") : (x.m === 0 ? (x.y % 100) + "·1" : x.m + 1)}</span>`).join("") + `</div>`;
 
   // 레인 타임라인 (SVG)
-  const cats = [...new Set(events.flatMap((e) => e.signals.map((s) => s.category)))].sort();
+  const cats = [...new Set(events.flatMap((e) => e.signals.filter(isObservedSig).map((s) => s.category)))].sort();
   const W = 1000, laneH = 34, padL = 86, padT = 26, padB = 30;
   const H = padT + cats.length * laneH + padB;
   const t0 = bgn.getTime(), t1 = end.getTime();
@@ -1450,7 +1736,7 @@ function timelinePanel(events, bgn, end) {
     if (m.getMonth() % labelEvery === 0) grid += `<text x="${mx}" y="${H - 8}" text-anchor="middle" font-size="10" fill="#5e6a78">${m.getFullYear() % 100}.${String(m.getMonth() + 1).padStart(2, "0")}</text>`;
   }
   for (const e of events) {
-    for (const s of e.signals) {
+    for (const s of e.signals.filter(isObservedSig)) {
       const yi = cats.indexOf(s.category);
       const y = padT + yi * laneH + laneH / 2;
       const heavy = s.category >= 7;
@@ -2518,6 +2804,10 @@ async function classifyOutflowEvidence(hits) {
 // 규칙을 이식(순수 함수, DOM 접근 없음) — 판정·게이트 발화 조건은 절대
 // 바꾸지 않는다. "conduit"/"경유" 같은 구조 단정 어휘는 쓰지 않는다.
 const AFFIL_CORP_SUFFIX_RE = /(주식회사|유한회사|유한책임회사|\(주\)|㈜)/g;
+// 신호 한정층(qualifySignals의 demotionReason, R1 — 제출인≠회사 판정)도 이
+// 함수를 그대로 쓴다. dart_client.py의 _fold_corp_name과 동일 규칙(접사
+// 목록·공백 제거·toUpperCase)이어야 하며, 여기를 고치면 R1 판정이 서버와
+// 갈라진다 — 수정 전 core 쪽과 대조할 것.
 function foldCorpName(name) {
   return (name || "").replace(AFFIL_CORP_SUFFIX_RE, "").replace(/\s+/g, "").trim().toUpperCase();
 }

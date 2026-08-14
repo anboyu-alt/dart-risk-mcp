@@ -42,6 +42,8 @@ from dart_risk_mcp.core.explain import (  # noqa: E402
     pattern_checkpoints,
 )
 from dart_risk_mcp.core.dart_client import _FS_ALIASES  # noqa: E402
+from dart_risk_mcp.core import qualifiers as _q  # noqa: E402
+from dart_risk_mcp.core.signals import AMBIGUOUS_SIGNAL_KEYS  # noqa: E402
 
 # 뷰어 심화 블록(재무 핵심)에서 쓰는 계정 별칭 부분집합
 _FS_ALIAS_KEYS = ("매출", "영업이익", "당기순이익", "자본총계", "자본금")
@@ -227,6 +229,26 @@ def build_signals_data() -> dict:
         "routine_filing_keywords": list(ROUTINE_FILING_KEYWORDS),
         "fs_aliases": {**{k: list(_FS_ALIASES[k]) for k in _FS_ALIAS_KEYS},
                        **_VIEWER_EXTRA_ALIASES},
+        # 신호 한정층 규칙 — 데이터만 내보내고 로직은 뷰어 JS가 이식한다.
+        # 문자열 목록의 이중 관리를 막는 것이 목적이다(키워드와 동일한 원칙).
+        "qualifier_rules": {
+            "exchange_filers": list(_q.EXCHANGE_FILERS),
+            "third_party_titles": list(_q.THIRD_PARTY_TITLES),
+            "phase_tails": list(_q.PHASE_TAILS),
+            "subsidiary_subtitles": list(_q.SUBSIDIARY_SUBTITLES),
+            "related_party_prefix": _q.RELATED_PARTY_PREFIX,
+            "amendment_tags": list(_q.AMENDMENT_TAGS),
+            "tails": list(_q.TAILS),
+            "label_overrides": {
+                k: {**v, "confirm_markers": list(v.get("confirm_markers", ()))}
+                for k, v in _q.LABEL_OVERRIDES.items()
+            },
+            "direction_notes": {
+                k: {"markers": list(v["markers"]), "note": v["note"]}
+                for k, v in _q.DIRECTION_NOTES.items()
+            },
+        },
+        "ambiguous_signal_keys": sorted(AMBIGUOUS_SIGNAL_KEYS),
     }
 
 

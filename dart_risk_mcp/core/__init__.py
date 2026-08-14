@@ -58,6 +58,7 @@ from .signals import (
     match_signals, is_amendment_disclosure,
     SIGNAL_TYPES, SIGNAL_KEY_TO_TAXONOMY,
     CAPITAL_EVENT_KEYS, DILUTIVE_CAPITAL_EVENTS, NON_DILUTIVE_CAPITAL_EVENTS,
+    AMBIGUOUS_SIGNAL_KEYS,
 )
 from .watchlist import (
     load_watchlist,
@@ -92,6 +93,20 @@ from .explain import (
     pattern_to_prose,
     pattern_checkpoints,
     category_prose,
+)
+from .qualifiers import (
+    ParsedName,
+    parse_report_name,
+    TAILS,
+    Qualified,
+    TIER_OBSERVED,
+    TIER_PROCEDURAL,
+    is_false_amendment,
+    qualify_signals,
+    pick_headline,
+    PHASE_TAILS,
+    LABEL_OVERRIDES,
+    DIRECTION_NOTES,
 )
 
 __all__ = [
@@ -150,6 +165,7 @@ __all__ = [
     "CAPITAL_EVENT_KEYS",
     "DILUTIVE_CAPITAL_EVENTS",
     "NON_DILUTIVE_CAPITAL_EVENTS",
+    "AMBIGUOUS_SIGNAL_KEYS",
     "flag_to_prose",
     "signal_to_prose",
     "pattern_to_prose",
@@ -183,4 +199,16 @@ __all__ = [
     "lookup_actor",
     "lookup_actors_by_company",
     "actor_status",
+    "ParsedName",
+    "parse_report_name",
+    "TAILS",
+    "PHASE_TAILS",
+    "Qualified",
+    "TIER_OBSERVED",
+    "TIER_PROCEDURAL",
+    "is_false_amendment",
+    "qualify_signals",
+    "pick_headline",
+    "LABEL_OVERRIDES",
+    "DIRECTION_NOTES",
 ]
