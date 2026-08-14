@@ -1016,33 +1016,34 @@ def analyze_company_risk(
     _alias_note = _alias_note_line(corp_info)
     if _alias_note:
         lines.insert(1, _alias_note)
-    lines += [
-        f"━━ 관찰된 신호 ({len(observed_events)}건) ━━",
-    ]
+    if observed_events:
+        lines += [
+            f"━━ 관찰된 신호 ({len(observed_events)}건) ━━",
+        ]
 
-    # 같은 signal_key가 많이 반복될 때 해설(→)을 첫 3건에만 붙여 가독성을 보존한다.
-    _key_counts = Counter(e["key"] for e in observed_events)
-    _key_seen: dict[str, int] = {}
-    for e in sorted(observed_events, key=lambda x: x["rcept_dt"], reverse=True):
-        amend_tag = " · 정정공시(관찰 대상 제외)" if e["is_amendment"] else ""
-        date = e["rcept_dt"] or "-"
-        _key_seen[e["key"]] = _key_seen.get(e["key"], 0) + 1
-        _show_prose = (
-            _key_counts[e["key"]] <= _PROSE_REPEAT_LIMIT
-            or _key_seen[e["key"]] <= _PROSE_REPEAT_LIMIT
-        )
-        meaning = signal_to_prose(e["key"]) if _show_prose else ""
-        one_liner = meaning if meaning else (e["label"] if _show_prose else "")
-        # 첫 줄: 날짜 · 공시명
-        lines.append(
-            f"• {date} · {_clean_report_name(e['report_nm'])}{amend_tag}"
-        )
-        # 두번째 줄: 의미 해설 (반복 N회 초과 시 생략)
-        if one_liner:
-            lines.append(f"  → {one_liner}")
-        # 사실 주석 (방향 불일치 등) — tier와 무관하게, 있으면 항상 표시
-        if e.get("note"):
-            lines.append(f"  ※ {e['note']}")
+        # 같은 signal_key가 많이 반복될 때 해설(→)을 첫 3건에만 붙여 가독성을 보존한다.
+        _key_counts = Counter(e["key"] for e in observed_events)
+        _key_seen: dict[str, int] = {}
+        for e in sorted(observed_events, key=lambda x: x["rcept_dt"], reverse=True):
+            amend_tag = " · 정정공시(관찰 대상 제외)" if e["is_amendment"] else ""
+            date = e["rcept_dt"] or "-"
+            _key_seen[e["key"]] = _key_seen.get(e["key"], 0) + 1
+            _show_prose = (
+                _key_counts[e["key"]] <= _PROSE_REPEAT_LIMIT
+                or _key_seen[e["key"]] <= _PROSE_REPEAT_LIMIT
+            )
+            meaning = signal_to_prose(e["key"]) if _show_prose else ""
+            one_liner = meaning if meaning else (e["label"] if _show_prose else "")
+            # 첫 줄: 날짜 · 공시명
+            lines.append(
+                f"• {date} · {_clean_report_name(e['report_nm'])}{amend_tag}"
+            )
+            # 두번째 줄: 의미 해설 (반복 N회 초과 시 생략)
+            if one_liner:
+                lines.append(f"  → {one_liner}")
+            # 사실 주석 (방향 불일치 등) — tier와 무관하게, 있으면 항상 표시
+            if e.get("note"):
+                lines.append(f"  ※ {e['note']}")
 
     if procedural_events:
         lines.append(f"\n━━ 절차·사후 보고 ({len(procedural_events)}건) ━━")
@@ -1052,6 +1053,9 @@ def analyze_company_risk(
         for e in procedural_events[:20]:
             lines.append(f"• {e['rcept_dt']} · {e['report_nm']}")
             lines.append(f"  → {e.get('reason', '')}")
+            # 사실 주석 (방향 불일치 등) — tier와 무관하게, 있으면 항상 표시
+            if e.get("note"):
+                lines.append(f"  ※ {e['note']}")
         if len(procedural_events) > 20:
             lines.append(f"… 외 {len(procedural_events) - 20}건")
 

@@ -16,6 +16,11 @@
   4) `detect_capital_churn`에 procedural 자본 이벤트가 섞이면(원본
      signal_events) CAPITAL_CHURN이 오발화하고, observed_events만 넘기면
      발화하지 않는다.
+- (fix round 2) round 1 수정 자체에서 나온 결함 2개:
+  A) note는 tier와 무관하게 렌더링돼야 하는데 실제로는 관찰된 신호 루프
+     안에만 있었다 — procedural 루프에도 동일하게 렌더링된다.
+  B) observed_events가 비어 있을 때 "관찰된 신호 (0건)" 빈 헤더가 뜨지
+     않는다(헤더+루프 전체가 `if observed_events:`로 감싸짐).
 
 이 테스트가 증명하지 못하는 것:
 - analyze_company_risk/build_event_timeline을 실제로 호출했을 때 이 로직이
@@ -238,9 +243,14 @@ def test_server_source_removes_dead_early_return():
         "        )"
     ) in src
 
-    # note는 관찰된 신호 목록에서 tier와 무관하게(observed 루프 내부이므로
-    # 자동으로 observed만) 렌더링된다.
-    assert 'lines.append(f"  ※ {e[\'note\']}")' in src
+    # note 렌더 라인은 observed 루프와 procedural 루프 양쪽에 있어야 한다
+    # (fix round 2, finding A — round 1은 observed 루프에만 넣어 "tier와
+    # 무관하게"라는 지시를 어겼다).
+    assert src.count('lines.append(f"  ※ {e[\'note\']}")') == 2
+
+    # observed_events가 비면 "관찰된 신호" 헤더·루프 자체를 건너뛴다
+    # (fix round 2, finding B).
+    assert "if observed_events:" in src
 
 
 # ── fix round 1, finding 1: note가 관찰된 신호 목록에 실제로 렌더링되는가 ──
@@ -397,3 +407,83 @@ def test_procedural_capital_events_excluded_from_churn():
     # 수정 후 배선과 동일: observed_events만 넘기면(희석성 2건) 발화하지 않는다.
     observed_churn = detect_capital_churn(observed, lookback_years=1)
     assert "CAPITAL_CHURN" not in observed_churn["flags"]
+
+
+# ── fix round 2, finding A: note는 procedural 신호에도(tier와 무관하게) 렌더링돼야 한다 ──
+
+
+def _render_signal_block_lines(observed_events, procedural_events):
+    """server.py의 '관찰된 신호'/'절차·사후 보고' 두 블록 렌더링을 재현한다.
+
+    real 함수는 observed_events가 비면 헤더·루프 자체를 건너뛴다(fix round 2,
+    finding B) — 그 분기도 그대로 재현한다.
+    """
+    lines = []
+    if observed_events:
+        lines.append(f"━━ 관찰된 신호 ({len(observed_events)}건) ━━")
+        for e in observed_events:
+            lines.append(f"• {e['rcept_dt']} · {e['report_nm']}")
+            if e.get("note"):
+                lines.append(f"  ※ {e['note']}")
+    if procedural_events:
+        lines.append(f"━━ 절차·사후 보고 ({len(procedural_events)}건) ━━")
+        for e in procedural_events:
+            lines.append(f"• {e['rcept_dt']} · {e['report_nm']}")
+            lines.append(f"  → {e.get('reason', '')}")
+            if e.get("note"):
+                lines.append(f"  ※ {e['note']}")
+    return lines
+
+
+def test_procedural_note_is_rendered():
+    """리뷰 실측 사례: 전환사채취득결과보고서는 R2로 강등되는 CB_BW인데,
+    같은 제목이 '사채취득' 마커도 포함해 note(_direction_note)도 함께 붙는다.
+
+    demotion reason(R2)과 note(_direction_note)는 qualifiers.py에서 독립적으로
+    계산되므로 한 신호에 둘 다 있을 수 있다 — round 1은 이 note를 procedural
+    루프에서 렌더링하지 않아 조용히 버렸다.
+    """
+    row = _row(
+        "전환사채취득결과보고서", "리뷰테스트기업", corp_name="리뷰테스트기업",
+    )
+    events = _build_signal_events([row])
+    assert len(events) == 1
+    e = events[0]
+    assert e["key"] == "CB_BW"
+    assert e["tier"] == TIER_PROCEDURAL
+    assert e["reason"]  # R2(결과보고서) 강등 사유가 있어야 한다
+    assert e["note"] == "발행이 아니라 사채 취득·매도 건입니다"
+
+    observed, procedural = _split(events)
+    assert observed == []
+    assert len(procedural) == 1
+
+    rendered = _render_signal_block_lines(observed, procedural)
+    assert "  ※ 발행이 아니라 사채 취득·매도 건입니다" in rendered
+    # reason과 note가 같은 항목에 함께 나와야 한다(하나가 다른 하나를 가리면 안 됨).
+    reason_idx = rendered.index("  → " + e["reason"])
+    note_idx = rendered.index("  ※ " + e["note"])
+    assert note_idx == reason_idx + 1
+
+
+# ── fix round 2, finding B: observed 0건이면 "관찰된 신호" 헤더 자체가 없어야 한다 ──
+
+
+def test_no_observed_header_when_observed_empty_but_procedural_section_present():
+    """헬릭스미스 실측: observed 0, procedural 1.
+
+    "관찰된 신호 (0건)" 같은 빈 헤더가 뜨면 안 되고, 절차·사후 보고 절은
+    여전히 나와야 한다(fix round 1, finding 2와 겹치지 않게 유지되는지 확인).
+    """
+    row = _row(
+        "주식등의대량보유상황보고서(일반)", "국민연금공단",
+        corp_name="헬릭스미스",
+    )
+    events = _build_signal_events([row])
+    observed, procedural = _split(events)
+    assert observed == []
+    assert len(procedural) == 1
+
+    rendered = _render_signal_block_lines(observed, procedural)
+    assert not any("관찰된 신호" in line for line in rendered)
+    assert any("절차·사후 보고 (1건)" in line for line in rendered)
