@@ -40,11 +40,15 @@ class TestAnalyzeV6Integration(unittest.TestCase):
             {"account_nm": "자본금", "thstrm_amount": "100", "frmtrm_amount": "100"},
         ]
 
+    @patch("dart_risk_mcp.server.extract_cb_investors", return_value=[])
+    @patch("dart_risk_mcp.server.fetch_distress_events", return_value=[])
     @patch("dart_risk_mcp.server.fetch_fund_usage")
     @patch("dart_risk_mcp.server.fetch_financial_statements_all")
     @patch("dart_risk_mcp.server.fetch_company_disclosures")
     @patch("dart_risk_mcp.server.resolve_corp")
-    def test_includes_capital_churn_flag(self, m_resolve, m_disc, m_fs, m_fund):
+    def test_includes_capital_churn_flag(
+        self, m_resolve, m_disc, m_fs, m_fund, _distress, _cb
+    ):
         m_resolve.return_value = ("테스트기업", {"corp_code": "00000001", "stock_code": "000001"})
         m_disc.return_value = self._mock_disclosures()
         m_fs.return_value = []  # 재무 조회 실패/없음
@@ -56,11 +60,15 @@ class TestAnalyzeV6Integration(unittest.TestCase):
         self.assertIn("자본 이벤트 과다 반복", out)
         self.assertNotIn("CAPITAL_CHURN", out)
 
+    @patch("dart_risk_mcp.server.extract_cb_investors", return_value=[])
+    @patch("dart_risk_mcp.server.fetch_distress_events", return_value=[])
     @patch("dart_risk_mcp.server.fetch_fund_usage")
     @patch("dart_risk_mcp.server.fetch_financial_statements_all")
     @patch("dart_risk_mcp.server.fetch_company_disclosures")
     @patch("dart_risk_mcp.server.resolve_corp")
-    def test_includes_financial_anomaly_flag(self, m_resolve, m_disc, m_fs, m_fund):
+    def test_includes_financial_anomaly_flag(
+        self, m_resolve, m_disc, m_fs, m_fund, _distress, _cb
+    ):
         m_resolve.return_value = ("테스트기업", {"corp_code": "00000001", "stock_code": "000001"})
         m_disc.return_value = []
         m_fs.return_value = self._mock_fs()
@@ -71,11 +79,20 @@ class TestAnalyzeV6Integration(unittest.TestCase):
         self.assertIn("매출채권이 매출보다 훨씬 빠르게 늘고 있습니다", out)
         self.assertNotIn("AR_SURGE", out)
 
+    # fetch_distress_events·extract_cb_investors도 패치한다 —
+    # analyze_company_risk가 직접 호출하는데 미패치라 이 단위 테스트가 실제
+    # DART를 때렸다(dfOcr·bsnSp·ctrcvsBgrq·dsRsOcr / 인수자 추출은 구조화
+    # 3종 후 원문 ZIP 폴백). 지금도 네트워크 실패로 빈 값을 받고 있어
+    # 빈 값 반환은 기존 동작과 동일하며, 이 테스트의 단언과도 무관하다.
+    @patch("dart_risk_mcp.server.extract_cb_investors", return_value=[])
+    @patch("dart_risk_mcp.server.fetch_distress_events", return_value=[])
     @patch("dart_risk_mcp.server.fetch_fund_usage")
     @patch("dart_risk_mcp.server.fetch_financial_statements_all")
     @patch("dart_risk_mcp.server.fetch_company_disclosures")
     @patch("dart_risk_mcp.server.resolve_corp")
-    def test_financial_fetch_failure_isolated(self, m_resolve, m_disc, m_fs, m_fund):
+    def test_financial_fetch_failure_isolated(
+        self, m_resolve, m_disc, m_fs, m_fund, _distress, _cb
+    ):
         m_resolve.return_value = ("테스트기업", {"corp_code": "00000001", "stock_code": "000001"})
         m_disc.return_value = []
         m_fs.side_effect = Exception("network error")

@@ -70,6 +70,10 @@ class TestCollectSightings(unittest.TestCase):
             patch.object(da, "match_signals", side_effect=lambda n: signal_map.get(n, [])),
             patch.object(da, "extract_cb_investors", return_value=cb_invs),
             patch.object(da, "extract_rights_offering_investors", return_value=rights_invs),
+            # 조합 인수자가 있으면 collect_funding_sightings가 배후를 캐려고
+            # 원문을 내려받는다 — 미패치면 이 단위 테스트가 실제 DART를 때린다.
+            # 지금도 네트워크 실패로 빈 값을 받으므로 동작은 그대로다.
+            patch.object(da, "extract_fund_backers", return_value=[]),
         ]
 
     def test_collects_persons_funds_corps_but_not_institutions(self):
