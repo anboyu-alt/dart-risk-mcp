@@ -767,3 +767,210 @@ class TestMarketScanFilter(unittest.TestCase):
         filtered, procedural = _filter_market_rows(raw, {"FUND_OUTFLOW", "ACQ_REVIEW"})
         self.assertEqual(len(filtered), 1)
         self.assertEqual(procedural, 0)
+
+
+# ── 최종 리뷰 수정 (2026-08-16) ─────────────────────────────────────────────
+
+
+class TestProceduralWordingIsNotCategoricallyFalse(unittest.TestCase):
+    """수정 1 — 강등 덧붙임 문장이 R2~R5에서 사유와 모순되면 안 된다."""
+
+    _FALSE = "회사가 낸 사건 공시가 아닙니다"
+
+    def test_result_report_does_not_claim_company_did_not_file(self):
+        """자기주식취득결과보고서는 회사가 낸 공시다 — 단정하면 거짓이다."""
+        from dart_risk_mcp.server import check_disclosure_risk
+        out = check_disclosure_risk(report_name="자기주식취득결과보고서")
+        self.assertIn("절차·사후 보고", out)
+        self.assertNotIn(self._FALSE, out)
+        self.assertIn("이미 끝난 건의 사후 보고", out)
+
+    def test_hedged_wording_matches_analyze_company_risk(self):
+        """analyze_company_risk(server.py)와 같은 한정 표현을 쓴다."""
+        from dart_risk_mcp.server import check_disclosure_risk
+        out = check_disclosure_risk(report_name="주식등의대량보유상황보고서(일반)")
+        self.assertIn(
+            "회사가 낸 사건 자체의 공시가 아니거나 이미 끝난 건의 사후 보고입니다",
+            out,
+        )
+        self.assertNotIn(self._FALSE, out)
+
+    def test_wording_is_absent_from_server_source(self):
+        """소스에서 단정 문장이 완전히 사라졌는지 기계적으로 확인한다."""
+        src = (
+            Path(__file__).resolve().parents[1]
+            / "dart_risk_mcp" / "server.py"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn(self._FALSE, src)
+
+
+class TestCatalogExcerptFollowsTheDemotion(unittest.TestCase):
+    """수정 2 — 카탈로그 발췌는 observed 신호에만 붙는다."""
+
+    # 실제 load_catalog_excerpt는 빈 입력에 ""를 반환한다(실측) — 마커도 같은
+    # 계약을 지켜야 발췌 유무가 입력 때문임을 검증할 수 있다.
+    _CAT = staticmethod(lambda ids: "CATALOG-MARKER" if ids else "")
+
+    def test_fully_demoted_disclosure_gets_no_excerpt(self):
+        from dart_risk_mcp import server
+        with patch.object(
+            server, "load_catalog_excerpt", side_effect=self._CAT
+        ) as mock_cat:
+            out = server.check_disclosure_risk(
+                report_name="주식등의대량보유상황보고서(일반)"
+            )
+        self.assertNotIn("CATALOG-MARKER", out)
+        # 호출은 되되 입력이 비어 있어야 한다(관찰 신호 0건)
+        mock_cat.assert_called_once()
+        self.assertEqual(list(mock_cat.call_args.args[0]), [])
+
+    def test_observed_disclosure_still_gets_the_excerpt(self):
+        """과잉 축소 방지 — 관찰 신호가 남으면 발췌는 그대로 나온다."""
+        from dart_risk_mcp import server
+        with patch.object(
+            server, "load_catalog_excerpt", side_effect=self._CAT
+        ) as mock_cat:
+            out = server.check_disclosure_risk(
+                report_name="주요사항보고서(전환사채권발행결정)"
+            )
+        self.assertIn("CATALOG-MARKER", out)
+        self.assertTrue(list(mock_cat.call_args.args[0]))
+
+
+class TestRcertPlusTitleStillResolvesTheRow(unittest.TestCase):
+    """수정 3 — 접수번호+제목 동시 호출도 행을 복원해 R1이 발화한다."""
+
+    _ROW = {
+        "rcept_no": "20260731000779",
+        "corp_code": "00126380",
+        "corp_name": "테스트회사",
+        "report_nm": "주요사항보고서(전환사채권발행결정)",
+        "flr_nm": "다른제출인",
+        "rcept_dt": "20260731",
+    }
+
+    @patch("dart_risk_mcp.server._DART_API_KEY", "testkey")
+    @patch("dart_risk_mcp.server.fetch_document_text", return_value="")
+    @patch("dart_risk_mcp.server.resolve_corp_code_from_rcept_no", return_value="")
+    @patch("dart_risk_mcp.server.resolve_disclosure_row_from_rcept_no")
+    def test_row_is_resolved_and_r1_fires(self, mock_row, _cc, _doc):
+        from dart_risk_mcp.server import check_disclosure_risk
+        mock_row.return_value = dict(self._ROW)
+        out = check_disclosure_risk(
+            rcept_no="20260731000779",
+            report_name="주요사항보고서(전환사채권발행결정)",
+        )
+        mock_row.assert_called_once_with("20260731000779", "testkey")
+        self.assertIn("절차·사후 보고", out)
+        self.assertIn("다른제출인", out)
+        self.assertNotIn("🎯", out)
+
+    @patch("dart_risk_mcp.server._DART_API_KEY", "testkey")
+    @patch("dart_risk_mcp.server.fetch_document_text", return_value="")
+    @patch("dart_risk_mcp.server.resolve_corp_code_from_rcept_no", return_value="")
+    @patch("dart_risk_mcp.server.resolve_disclosure_row_from_rcept_no")
+    def test_same_rcept_no_alone_reaches_the_same_verdict(self, mock_row, _cc, _doc):
+        """같은 공시가 호출 형태에 따라 다른 판정을 받지 않는다."""
+        from dart_risk_mcp.server import check_disclosure_risk
+        mock_row.return_value = dict(self._ROW)
+        alone = check_disclosure_risk(rcept_no="20260731000779")
+        mock_row.return_value = dict(self._ROW)
+        with_title = check_disclosure_risk(
+            rcept_no="20260731000779",
+            report_name="주요사항보고서(전환사채권발행결정)",
+        )
+        for out in (alone, with_title):
+            self.assertIn("절차·사후 보고", out)
+            self.assertNotIn("🎯", out)
+
+    @patch("dart_risk_mcp.server._DART_API_KEY", "testkey")
+    @patch("dart_risk_mcp.server.fetch_document_text", return_value="")
+    @patch("dart_risk_mcp.server.resolve_corp_code_from_rcept_no", return_value="")
+    @patch("dart_risk_mcp.server.resolve_disclosure_row_from_rcept_no")
+    def test_supplied_title_wins_over_row_title(self, mock_row, _cc, _doc):
+        """제목을 직접 넘긴 호출자는 그 제목을 본다 — 표시만, 판정 입력은 행."""
+        from dart_risk_mcp.server import check_disclosure_risk
+        mock_row.return_value = dict(self._ROW)
+        out = check_disclosure_risk(
+            rcept_no="20260731000779", report_name="사용자지정제목"
+        )
+        self.assertIn("공시: 사용자지정제목", out)
+
+    @patch("dart_risk_mcp.server._DART_API_KEY", "testkey")
+    @patch("dart_risk_mcp.server.fetch_document_text", return_value="")
+    @patch("dart_risk_mcp.server.resolve_corp_code_from_rcept_no", return_value="")
+    @patch("dart_risk_mcp.server.resolve_disclosure_row_from_rcept_no",
+           return_value=None)
+    def test_filer_line_absent_when_row_unresolved(self, _row, _cc, _doc):
+        from dart_risk_mcp.server import check_disclosure_risk
+        out = check_disclosure_risk(
+            rcept_no="20260731000816",
+            report_name="주요사항보고서(전환사채권발행결정)",
+        )
+        self.assertNotIn("제출인:", out)
+        self.assertIn("공시: 주요사항보고서(전환사채권발행결정)", out)
+
+
+class TestRowLookupNegativeCache(unittest.TestCase):
+    """수정 5 — 실패도 캐시하고, 페이지 사이에 간격을 둔다."""
+
+    RC = "20260731000999"
+
+    def setUp(self):
+        from dart_risk_mcp.core import dart_client as dc
+        dc._rcept_row_cache.clear()
+
+    def tearDown(self):
+        from dart_risk_mcp.core import dart_client as dc
+        dc._rcept_row_cache.clear()
+
+    def test_miss_is_cached_so_repeat_costs_nothing(self):
+        from dart_risk_mcp.core import dart_client as dc
+
+        class _Resp:
+            @staticmethod
+            def json():
+                return {"status": "000", "list": [], "total_page": 3}
+
+        with patch.object(dc, "_retry", return_value=_Resp()) as mock_retry, \
+                patch.object(dc.time, "sleep") as mock_sleep:
+            first = dc.resolve_disclosure_row_from_rcept_no(self.RC, "k")
+            calls_after_first = mock_retry.call_count
+            second = dc.resolve_disclosure_row_from_rcept_no(self.RC, "k")
+
+        self.assertIsNone(first)
+        self.assertIsNone(second)
+        self.assertEqual(calls_after_first, 3)          # total_page까지만
+        self.assertEqual(mock_retry.call_count, 3)      # 재조회는 0회 추가
+        self.assertEqual(mock_sleep.call_count, 2)      # 페이지 사이 간격
+
+    def test_transient_failure_is_not_cached(self):
+        """네트워크 오류·비정상 status는 일시적일 수 있어 캐시하지 않는다."""
+        from dart_risk_mcp.core import dart_client as dc
+
+        with patch.object(dc, "_retry", side_effect=RuntimeError("net")) as m:
+            self.assertIsNone(dc.resolve_disclosure_row_from_rcept_no(self.RC, "k"))
+            self.assertIsNone(dc.resolve_disclosure_row_from_rcept_no(self.RC, "k"))
+        self.assertEqual(m.call_count, 2)
+
+    def test_cached_miss_does_not_shadow_a_later_hit_of_another_key(self):
+        """센티널이 다른 접수번호의 정상 조회를 오염시키지 않는다."""
+        from dart_risk_mcp.core import dart_client as dc
+        row = {"rcept_no": "20260731000001", "report_nm": "테스트"}
+
+        class _Miss:
+            @staticmethod
+            def json():
+                return {"status": "000", "list": [], "total_page": 1}
+
+        class _Hit:
+            @staticmethod
+            def json():
+                return {"status": "000", "list": [row], "total_page": 1}
+
+        with patch.object(dc, "_retry", return_value=_Miss()):
+            self.assertIsNone(dc.resolve_disclosure_row_from_rcept_no(self.RC, "k"))
+        with patch.object(dc, "_retry", return_value=_Hit()):
+            got = dc.resolve_disclosure_row_from_rcept_no("20260731000001", "k")
+        self.assertEqual(got, row)
+        self.assertIsNone(dc.resolve_disclosure_row_from_rcept_no(self.RC, "k"))

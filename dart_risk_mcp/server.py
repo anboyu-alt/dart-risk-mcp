@@ -1266,16 +1266,22 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
     if not rcept_no and not report_name:
         return "❌ rcept_no(접수번호) 또는 report_name(공시 제목) 중 하나를 입력하세요."
 
-    # rcept_no만 아는 경로에서도 실제 제목·제출인을 복원한다. 실패하면
+    # 접수번호가 있으면 제목 동반 여부와 무관하게 원본 행을 복원한다. 행이 있어야
+    # R1(제출인 ≠ 회사)이 발화하는데, 예전에는 report_name이 함께 오면 행을 아예
+    # 조회하지 않아 같은 공시가 호출 형태에 따라 다른 판정을 받았다. 실패하면
     # 기존 동작(자리표시자 제목, 무신호)으로 조용히 퇴화한다 — 회귀가 아니다.
     filing: "dict | None" = None
-    if rcept_no and not report_name and _DART_API_KEY:
+    if rcept_no and _DART_API_KEY:
         filing = resolve_disclosure_row_from_rcept_no(rcept_no, _DART_API_KEY)
 
-    if filing and filing.get("report_nm"):
+    # 제목을 직접 넘긴 호출자는 그 제목이 보이길 기대하므로 report_name이 우선한다.
+    # 판정 입력(filing)은 조회한 행을 그대로 쓴다.
+    if report_name:
+        title = report_name.strip()
+    elif filing and filing.get("report_nm"):
         title = filing["report_nm"].strip()
     else:
-        title = report_name or f"접수번호 {rcept_no}"
+        title = f"접수번호 {rcept_no}"
 
     parsed = parse_report_name(title)
     is_amendment = is_amendment_disclosure(title)
@@ -1314,9 +1320,14 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
                 # 사유만 보인다.
                 lines.append("⚪ **절차·사후 보고**")
                 lines.append(q.reason)
+                # 강등 사유는 q.reason이 이미 구체적으로 말한다. 여기 덧붙이는
+                # 문장은 R1/R1b(제출인 다름)뿐 아니라 R2(결과·해제)·R3(자회사)·
+                # R4(해명)·R5(정정)도 덮어야 하므로 analyze_company_risk와 같은
+                # 한정 표현을 쓴다 — "회사가 낸 공시가 아니다"로 단정하면 결과
+                # 보고서류에서 사유와 정면으로 모순된다.
                 lines.append(
-                    f"→ 제목에 [{q.label}] 신호가 매칭되지만, "
-                    "회사가 낸 사건 공시가 아닙니다."
+                    f"→ 제목에 [{q.label}] 신호가 매칭되지만, 회사가 낸 사건 "
+                    "자체의 공시가 아니거나 이미 끝난 건의 사후 보고입니다."
                 )
                 if q.note:
                     lines.append(f"※ {q.note}")
@@ -1414,7 +1425,14 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
                           "'신호 없음'으로 해석하지 마세요."]
 
     from .core.signals import SIGNAL_KEY_TO_TAXONOMY as _SKT
-    all_tax_ids = list({tid for s in matched for tid in _SKT.get(s["key"], [])})
+    # 발췌는 관찰 신호에만 붙인다. 강등된 신호까지 넣으면 전부 강등된 공시에서도
+    # 수 KB 카탈로그가 출력을 뒤덮어 방금 내린 강등을 시각적으로 되돌린다.
+    all_tax_ids = list({
+        tid
+        for q in qualified
+        if q.tier == TIER_OBSERVED
+        for tid in _SKT.get(q.key, [])
+    })
     catalog = load_catalog_excerpt(all_tax_ids)
     if catalog:
         lines += ["", catalog]

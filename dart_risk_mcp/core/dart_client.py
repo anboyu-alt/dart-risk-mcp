@@ -2286,6 +2286,9 @@ _RCEPT_CORP_CACHE_MAX = 50
 _rcept_row_cache: dict = {}
 _RCEPT_ROW_CACHE_TTL = 600
 _RCEPT_ROW_CACHE_MAX = 50
+# _cache_get은 미스를 None으로 알린다 — 실패(행 없음)를 그대로 None으로 캐시하면
+# 히트와 미스를 구분할 수 없어 12회 호출이 매번 반복된다. 전용 센티널을 저장한다.
+_ROW_NOT_FOUND = object()
 
 
 def resolve_corp_code_from_rcept_no(
@@ -2361,9 +2364,21 @@ def resolve_disclosure_row_from_rcept_no(
       - 필터를 풀면 하루치가 커진다(20260731 실측: 전체 1,159건 12페이지 vs
         B 54건 1페이지). 통합하면 DS005 경로의 호출 예산이 12배가 된다.
 
-    알려진 한계: rcept_no 앞 8자리가 접수일과 다른 공시가 있다(20260803 전수
-    610건 중 4건, 0.7% — 본느 20260731000816의 rcept_dt는 20260803). 그런
-    건은 찾지 못하고 None을 반환하며, 호출부는 기존 동작으로 퇴화한다.
+    알려진 한계 ①(날짜 불일치): rcept_no 앞 8자리가 접수일과 다른 공시가
+    있다(20260803 전수 610건 중 4건, 0.7% — 본느 20260731000816의 rcept_dt는
+    20260803). 그런 건은 찾지 못하고 None을 반환하며, 호출부는 기존 동작으로
+    퇴화한다.
+
+    알려진 한계 ②(페이지 상한): max_pages(기본 12) × page_count 100 = 하루
+    1,200건까지만 훑는다. 20260731 실측이 1,159건(12페이지)으로 이미 상한의
+    96%라, 이보다 무거운 날은 뒷부분 행이 스캔 범위 밖으로 밀려 None이 된다.
+    **이때의 None은 "그 접수번호가 없다"와 구분되지 않는다** — 호출부는 두
+    경우를 모두 기존 동작(자리표시자 제목·무신호)으로 퇴화 처리한다. 상한을
+    올리면 호출 예산이 그만큼 늘어나는 비용 결정이라 여기서 바꾸지 않는다.
+
+    조회 실패(행 없음)는 센티널로 캐시해 같은 접수번호의 재조회가 TTL 안에서는
+    다시 12회를 쓰지 않게 한다. 다만 네트워크 오류·비정상 status는 일시적일 수
+    있어 캐시하지 않는다.
     """
     if (
         not api_key
@@ -2375,7 +2390,14 @@ def resolve_disclosure_row_from_rcept_no(
 
     cached = _cache_get(_rcept_row_cache, rcept_no, _RCEPT_ROW_CACHE_TTL)
     if cached is not None:
-        return cached
+        return None if cached is _ROW_NOT_FOUND else cached
+
+    def _miss() -> None:
+        """행 없음을 센티널로 캐시하고 None을 반환한다."""
+        _cache_set(
+            _rcept_row_cache, rcept_no, _ROW_NOT_FOUND, _RCEPT_ROW_CACHE_MAX
+        )
+        return None
 
     rcpt_date = rcept_no[:8]
     page_no = 1
@@ -2406,9 +2428,11 @@ def resolve_disclosure_row_from_rcept_no(
         except (TypeError, ValueError):
             total_page = 1
         if page_no >= total_page:
-            return None
+            return _miss()
         page_no += 1
-    return None
+        # 다른 list.json 페이징 루프와 동일한 간격 — 이 함수가 가장 많이 페이징한다
+        time.sleep(0.25)
+    return _miss()
 
 
 def fetch_major_decision(

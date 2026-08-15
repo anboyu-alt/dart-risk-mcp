@@ -73,10 +73,10 @@ dart_risk_mcp/
 개별 공시 하나를 분석합니다. 접수번호가 있으면 원문 500자 미리보기도 포함합니다.
 
 - 접수번호 또는 공시 제목 중 하나만 있어도 작동
-- 접수번호만 있고 제목이 없으면 `resolve_disclosure_row_from_rcept_no`로 list.json 원본 행을 역해석해 실제 공시 제목·제출인(`flr_nm`)을 복원한다 — 실패 시 자리표시자 제목("접수번호 N")·무신호로 조용히 퇴화(회귀 아님)
+- 접수번호가 있으면 **제목 동반 여부와 무관하게** `resolve_disclosure_row_from_rcept_no`로 list.json 원본 행을 역해석해 제출인(`flr_nm`)·회사명을 복원하고 한정층 판정 입력(`filing`)으로 쓴다 — 행이 있어야 R1(제출인 ≠ 회사)이 발화하므로, 접수번호+제목을 함께 넘긴 호출과 접수번호만 넘긴 호출이 같은 공시에 같은 판정을 낸다. `report_name`을 넘기면 **표시 제목은 그 값이 우선**하고, `제출인:` 줄은 행 조회에 성공했을 때만 표기한다. 실패 시 자리표시자 제목("접수번호 N")·무신호로 조용히 퇴화(회귀 아님)
 - CB/BW 공시면 자동으로 인수자 추출
 - DS005 결정 공시(제목으로 `resolve_decision_type` 판별)면 `resolve_corp_code_from_rcept_no`로 rcept_no→corp_code를 역해석해 "📑 주요 결정 공시" 섹션에 상대방·금액·특수관계·외부평가 표기 — DS005는 corp_code가 항상 필수라 역해석 실패 시 헛호출 없이 섹션만 생략
-- 한정층(`qualify_signals`) 적용: 매칭 신호마다 `🎯` observed 또는 `⚪ 절차·사후 보고`(강등 사유 동반)로 단일 판정 표시. 단건 공시 도구라 `analyze_company_risk`/`build_event_timeline`의 관찰/절차 두 섹션 레이아웃은 쓰지 않는다
+- 한정층(`qualify_signals`) 적용: 매칭 신호마다 `🎯` observed 또는 `⚪ 절차·사후 보고`(강등 사유 동반)로 단일 판정 표시. 단건 공시 도구라 `analyze_company_risk`/`build_event_timeline`의 관찰/절차 두 섹션 레이아웃은 쓰지 않는다. 강등 줄에 덧붙는 문장은 `analyze_company_risk`와 같은 한정 표현("회사가 낸 사건 자체의 공시가 아니거나 이미 끝난 건의 사후 보고입니다")을 쓴다 — R1/R1b만 참인 단정 표현은 R2(결과보고서)·R3(자회사)·R4(해명)·R5(정정)에서 강등 사유와 정면 모순된다. 금감원 카탈로그 발췌(`load_catalog_excerpt`)도 **observed 신호의 taxonomy id만** 입력으로 받는다 — 전부 강등된 공시에서 수 KB 발췌가 출력을 뒤덮어 강등을 시각적으로 되돌리지 않게 하기 위함
 
 ### 3. `find_risk_precedents(signal_types, lookback_days=90)`
 
@@ -410,7 +410,7 @@ dart_risk_mcp/
 | `fetch_fund_usage(corp_code, api_key, corp_cls, lookback_years)` | 공모·사모 자금사용 2개 엔드포인트 통합 + 이상 플래그 탐지 |
 | `fetch_major_decision(rcept_no, corp_cls, decision_type)` | 12개 DS005 주요결정 엔드포인트 중 decision_type에 따라 자동 선택 |
 | `resolve_corp_code_from_rcept_no(rcept_no, api_key, max_pages=3)` | rcept_no → corp_code 역해석 — 접수일 하루치 주요사항보고(B) 목록 대조, 최대 3페이지·매칭 즉시 종료·10분 캐시. DS005 필수 corp_code를 접수번호만 아는 경로(check_disclosure_risk)에서 복원 |
-| `resolve_disclosure_row_from_rcept_no(rcept_no, api_key, max_pages=12)` | rcept_no → list.json 원본 행 전체(제목·제출인 등) 역해석. `pblntf_ty` 필터 없이 조회 — 형제 함수(`resolve_corp_code_from_rcept_no`)는 `pblntf_ty="B"`로 좁혀 지분공시·거래소공시를 못 찾는다. 매칭 즉시 종료·10분 캐시(`_rcept_row_cache`). 알려진 한계: 접수번호 앞 8자리가 접수일과 다른 공시는 `None`(실측 0.7% — 20260803 전수 610건 중 4건) |
+| `resolve_disclosure_row_from_rcept_no(rcept_no, api_key, max_pages=12)` | rcept_no → list.json 원본 행 전체(제목·제출인 등) 역해석. `pblntf_ty` 필터 없이 조회 — 형제 함수(`resolve_corp_code_from_rcept_no`)는 `pblntf_ty="B"`로 좁혀 지분공시·거래소공시를 못 찾는다. 매칭 즉시 종료·페이지 간 0.25초 대기·10분 캐시(`_rcept_row_cache`, **실패도 센티널로 캐시**해 재조회가 12회를 다시 쓰지 않게 한다. 단 네트워크 오류·비정상 status는 일시적일 수 있어 미캐시). 알려진 한계 ① 접수번호 앞 8자리가 접수일과 다른 공시는 `None`(실측 0.7% — 20260803 전수 610건 중 4건). ② **페이지 상한 `max_pages`(12)×100 = 하루 1,200행**까지만 훑는다 — 20260731 실측 1,159건(12페이지)이 이미 상한의 96%라 이보다 무거운 날은 뒷부분 행이 스캔 범위 밖으로 밀려 `None`이 되고, **이 `None`은 "그 접수번호가 존재하지 않음"과 구분되지 않는다**(호출부는 둘 다 자리표시자 제목·무신호로 퇴화). 상한 상향은 호출 예산 비용 결정이라 미적용 |
 | `resolve_decision_type(report_nm)` | 공시명 → decision_type 키 자동 추론 (`[기재정정]` 등 접두어 제거) |
 | `detect_capital_churn(events, lookback_years)` | 12개월 슬라이딩 윈도우로 CAPITAL_CHURN 판정 |
 | `detect_financial_anomaly(current, prior)` | 4개 지표 YoY 비교 → 플래그+메트릭 |
