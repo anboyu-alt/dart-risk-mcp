@@ -77,6 +77,7 @@ from .core import (
     fetch_insider_timeline,
     fetch_major_decision,
     resolve_corp_code_from_rcept_no,
+    resolve_disclosure_row_from_rcept_no,
     fetch_multi_financial,
     fetch_shareholder_status,
     fetch_treasury_decisions,
@@ -1265,11 +1266,26 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
     if not rcept_no and not report_name:
         return "❌ rcept_no(접수번호) 또는 report_name(공시 제목) 중 하나를 입력하세요."
 
-    title = report_name or f"접수번호 {rcept_no}"
+    # rcept_no만 아는 경로에서도 실제 제목·제출인을 복원한다. 실패하면
+    # 기존 동작(자리표시자 제목, 무신호)으로 조용히 퇴화한다 — 회귀가 아니다.
+    filing: "dict | None" = None
+    if rcept_no and not report_name and _DART_API_KEY:
+        filing = resolve_disclosure_row_from_rcept_no(rcept_no, _DART_API_KEY)
+
+    if filing and filing.get("report_nm"):
+        title = filing["report_nm"].strip()
+    else:
+        title = report_name or f"접수번호 {rcept_no}"
+
+    parsed = parse_report_name(title)
     is_amendment = is_amendment_disclosure(title)
     matched = match_signals(title)
+    qualified = qualify_signals(matched, parsed, filing)
 
-    lines = [f"📋 **공시 리스크 분석**", f"공시: {title}", ""]
+    lines = ["📋 **공시 리스크 분석**", f"공시: {title}"]
+    if filing and filing.get("flr_nm"):
+        lines.append(f"제출인: {filing['flr_nm']}")
+    lines.append("")
 
     if not matched:
         if is_amendment:
@@ -1280,16 +1296,32 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
         else:
             lines.append("이 공시에서 의심 신호가 탐지되지 않았습니다.")
     else:
-        for sig in matched:
+        for sig, q in zip(matched, qualified):
             from .core.signals import SIGNAL_KEY_TO_TAXONOMY
 
             tax_ids = SIGNAL_KEY_TO_TAXONOMY.get(sig["key"], [])
             prose = signal_to_prose(sig["key"])
             amendment_note = " (정정공시 — 원공시의 번복/수정이므로 관찰 대상에서 제외됩니다.)" if is_amendment else ""
-            lines.append(f"🎯 **{sig['label']}**{amendment_note}")
-            if prose:
-                lines.append(prose)
-            lines.append("")
+            if q.tier == TIER_OBSERVED:
+                lines.append(f"🎯 **{q.label}**{amendment_note}")
+                if prose:
+                    lines.append(prose)
+                if q.note:
+                    lines.append(f"※ {q.note}")
+                lines.append("")
+            else:
+                # 단건 도구라 #163의 두 층 절 구분은 과하다 — 한 건의 판정과
+                # 사유만 보인다.
+                lines.append("⚪ **절차·사후 보고**")
+                lines.append(q.reason)
+                lines.append(
+                    f"→ 제목에 [{q.label}] 신호가 매칭되지만, "
+                    "회사가 낸 사건 공시가 아닙니다."
+                )
+                if q.note:
+                    lines.append(f"※ {q.note}")
+                lines.append("")
+                continue
 
             # 타임라인
             if tax_ids and not is_amendment:
@@ -1311,7 +1343,13 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
                         ]
 
     # CB/BW면 인수자 추출 (check_disclosure_risk는 corp_code 불명 → HTML 폴백)
-    if rcept_no and any(s["key"] == "CB_BW" for s in matched) and not is_amendment:
+    if (
+        rcept_no
+        and any(
+            q.key == "CB_BW" and q.tier == TIER_OBSERVED for q in qualified
+        )
+        and not is_amendment
+    ):
         if not _DART_API_KEY:
             lines += ["", "⚠️ DART_API_KEY 미설정 — CB 인수자 조회 불가"]
         else:

@@ -28,7 +28,9 @@
   아래 test_server_source_wires_observed_events가 하는 일은 "그 변수 이름이
   그 위치에 쓰였다"는 텍스트 대조이지, 런타임 동등성의 증명이 아니다.
 """
+import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from dart_risk_mcp.core import (
     SIGNAL_TYPES,
@@ -589,3 +591,79 @@ def test_real_amendment_still_keeps_the_flag_and_is_demoted():
     for e in events:
         assert e["is_amendment"] is True
         assert e["tier"] == TIER_PROCEDURAL
+
+
+class TestCheckDisclosureRiskQualification(unittest.TestCase):
+    """check_disclosure_risk 배선 — 제목만 주는 경로는 R1b~R5만 적용된다."""
+
+    def test_ownership_report_is_demoted(self):
+        from dart_risk_mcp.server import check_disclosure_risk
+        out = check_disclosure_risk(report_name="주식등의대량보유상황보고서(일반)")
+        self.assertIn("절차·사후 보고", out)
+        self.assertIn("지분", out)
+        self.assertNotIn("🎯", out)
+
+    def test_cb_issuance_stays_observed(self):
+        """과잉 강등 방지 — 회사가 낸 실제 결정은 관찰 신호로 남는다."""
+        from dart_risk_mcp.server import check_disclosure_risk
+        out = check_disclosure_risk(
+            report_name="주요사항보고서(전환사채권발행결정)"
+        )
+        self.assertIn("🎯", out)
+        self.assertNotIn("절차·사후 보고", out)
+
+    def test_exchange_inquiry_stays_observed_without_filing(self):
+        """filing이 없으면 R1은 적용되지 않는다 — 거래소 조회공시가 남아야 한다."""
+        from dart_risk_mcp.server import check_disclosure_risk
+        out = check_disclosure_risk(
+            report_name="조회공시요구(풍문또는보도)(감사의견비적정설)"
+        )
+        self.assertIn("🎯", out)
+
+    def test_result_report_is_demoted(self):
+        from dart_risk_mcp.server import check_disclosure_risk
+        out = check_disclosure_risk(report_name="자기주식취득결과보고서")
+        self.assertIn("절차·사후 보고", out)
+
+    def test_label_softened_when_allocation_absent(self):
+        from dart_risk_mcp.server import check_disclosure_risk
+        out = check_disclosure_risk(report_name="주요사항보고서(유상증자결정)")
+        self.assertIn("배정방식 미상", out)
+
+
+class TestCheckDisclosureRiskRcertPath(unittest.TestCase):
+    """rcept_no 경로 — 행 복원 성공/실패 양쪽."""
+
+    _ROW = {
+        "rcept_no": "20260731000779",
+        "corp_code": "00126380",
+        "corp_name": "삼성전자",
+        "report_nm": "주식등의대량보유상황보고서(일반)",
+        "flr_nm": "삼성물산",
+        "rcept_dt": "20260731",
+    }
+
+    @patch("dart_risk_mcp.server._DART_API_KEY", "testkey")
+    @patch("dart_risk_mcp.server.fetch_document_text", return_value="")
+    @patch("dart_risk_mcp.server.resolve_corp_code_from_rcept_no", return_value="")
+    @patch("dart_risk_mcp.server.resolve_disclosure_row_from_rcept_no")
+    def test_row_found_uses_real_title_and_filer(self, mock_row, _cc, _doc):
+        from dart_risk_mcp.server import check_disclosure_risk
+        mock_row.return_value = dict(self._ROW)
+        out = check_disclosure_risk(rcept_no="20260731000779")
+        self.assertIn("주식등의대량보유상황보고서(일반)", out)
+        self.assertIn("삼성물산", out)
+        self.assertNotIn("공시: 접수번호", out)
+        self.assertIn("절차·사후 보고", out)
+
+    @patch("dart_risk_mcp.server._DART_API_KEY", "testkey")
+    @patch("dart_risk_mcp.server.fetch_document_text", return_value="")
+    @patch("dart_risk_mcp.server.resolve_corp_code_from_rcept_no", return_value="")
+    @patch("dart_risk_mcp.server.resolve_disclosure_row_from_rcept_no")
+    def test_row_missing_degrades_to_current_behaviour(self, mock_row, _cc, _doc):
+        """행 복원 실패는 회귀가 아니다 — 지금과 같은 출력이어야 한다."""
+        from dart_risk_mcp.server import check_disclosure_risk
+        mock_row.return_value = None
+        out = check_disclosure_risk(rcept_no="20260731000816")
+        self.assertIn("공시: 접수번호 20260731000816", out)
+        self.assertNotIn("제출인:", out)
