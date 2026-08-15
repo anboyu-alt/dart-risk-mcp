@@ -667,3 +667,59 @@ class TestCheckDisclosureRiskRcertPath(unittest.TestCase):
         out = check_disclosure_risk(rcept_no="20260731000816")
         self.assertIn("공시: 접수번호 20260731000816", out)
         self.assertNotIn("제출인:", out)
+
+
+class TestMarketScanFilter(unittest.TestCase):
+    """시장 스캔 필터 — 네트워크 없이 합성 행으로 검증한다."""
+
+    @staticmethod
+    def _row(nm, flr, corp="테스트회사", rc="20260731000001"):
+        return {
+            "rcept_no": rc, "corp_name": corp, "report_nm": nm,
+            "flr_nm": flr, "rcept_dt": "20260731", "corp_code": "00000001",
+        }
+
+    def test_third_party_rows_are_counted_not_listed(self):
+        from dart_risk_mcp.server import _filter_market_rows
+        raw = [
+            self._row("주식등의대량보유상황보고서(일반)", "국민연금공단", rc="1" * 14),
+            self._row("주식등의대량보유상황보고서(일반)", "국민연금공단", rc="2" * 14),
+            self._row("주식등의대량보유상황보고서(일반)", "국민연금공단", rc="3" * 14),
+            self._row("주요사항보고서(전환사채권발행결정)", "테스트회사", rc="4" * 14),
+            self._row("주요사항보고서(전환사채권발행결정)", "테스트회사", rc="5" * 14),
+        ]
+        filtered, procedural = _filter_market_rows(raw, set())
+        self.assertEqual(len(filtered), 2)
+        self.assertEqual(procedural, 3)
+
+    def test_preset_filter_applies_to_observed_only(self):
+        """강등된 신호가 preset을 통과시키면 제외의 의미가 없다."""
+        from dart_risk_mcp.server import _filter_market_rows
+        raw = [
+            self._row("주식등의대량보유상황보고서(일반)", "국민연금공단"),
+        ]
+        filtered, procedural = _filter_market_rows(raw, {"SHAREHOLDER"})
+        self.assertEqual(len(filtered), 0)
+        self.assertEqual(procedural, 1)
+
+    def test_observed_row_passes_matching_preset(self):
+        from dart_risk_mcp.server import _filter_market_rows
+        raw = [self._row("주요사항보고서(전환사채권발행결정)", "테스트회사")]
+        filtered, procedural = _filter_market_rows(raw, {"CB_BW"})
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(procedural, 0)
+
+    def test_no_signal_row_counts_as_neither(self):
+        from dart_risk_mcp.server import _filter_market_rows
+        raw = [self._row("사업보고서 (2025.12)", "테스트회사")]
+        filtered, procedural = _filter_market_rows(raw, set())
+        self.assertEqual(len(filtered), 0)
+        self.assertEqual(procedural, 0)
+
+    def test_filtered_elements_carry_qualified_objects(self):
+        from dart_risk_mcp.server import _filter_market_rows
+        raw = [self._row("주요사항보고서(유상증자결정)", "테스트회사")]
+        filtered, _ = _filter_market_rows(raw, set())
+        self.assertEqual(len(filtered), 1)
+        _row, quals = filtered[0]
+        self.assertEqual(quals[0].label, "유상증자(배정방식 미상)")

@@ -2810,6 +2810,37 @@ def get_affiliate_investments(company_name: str, year: str = "") -> str:
     return "\n".join(lines)
 
 
+def _filter_market_rows(
+    raw: list[dict], target_keys: set
+) -> "tuple[list[tuple[dict, list]], int]":
+    """시장 스캔 행을 한정해 관찰 신호만 남긴다.
+
+    (filtered, procedural_count)를 반환한다. filtered의 원소는
+    (list.json 행, list[Qualified])이며 Qualified는 observed만 담는다.
+
+    네트워크를 타지 않는 순수 함수로 분리해 합성 행으로 테스트할 수 있게 했다.
+    preset 필터를 observed에만 거는 것이 핵심이다 — 강등된 신호가 preset을
+    통과시키면 제외의 의미가 없다.
+    """
+    filtered: list[tuple[dict, list]] = []
+    procedural_count = 0
+    for d in raw:
+        report_nm = d.get("report_nm", "")
+        sigs = match_signals(report_nm)
+        if not sigs:
+            continue
+        parsed = parse_report_name(report_nm)
+        qual = qualify_signals(sigs, parsed, d)
+        obs = [q for q in qual if q.tier == TIER_OBSERVED]
+        if not obs:
+            procedural_count += 1
+            continue
+        if target_keys and not any(q.key in target_keys for q in obs):
+            continue
+        filtered.append((d, obs))
+    return filtered, procedural_count
+
+
 @mcp.tool()
 def search_market_disclosures(preset: str, days: int = 7, max_results: int = 50) -> str:
     """시장 전체 공시에서 preset에 해당하는 위험 신호를 일괄 스캔한다.
@@ -2902,21 +2933,18 @@ def search_market_disclosures(preset: str, days: int = 7, max_results: int = 50)
 
     target_keys = set(_PRESET_TO_SIGNALS[preset])
 
-    filtered: list[tuple[dict, list[dict]]] = []
-    for d in raw:
-        report_nm = d.get("report_nm", "")
-        sigs = match_signals(report_nm)
-        if not sigs:
-            continue
-        if target_keys and not any(s["key"] in target_keys for s in sigs):
-            continue
-        filtered.append((d, sigs))
+    filtered, procedural_count = _filter_market_rows(raw, target_keys)
 
     filtered.sort(key=lambda x: x[0].get("rcept_dt", ""), reverse=True)
     truncated = len(filtered) > max_results
     shown = filtered[:max_results]
 
-    coverage = f"전체 {len(raw)}건 중 신호 일치 {len(filtered)}건 (표시 {len(shown)}건)"
+    coverage = (
+        f"전체 {len(raw)}건 중 관찰 신호 {len(filtered)}건 "
+        f"(표시 {len(shown)}건)"
+    )
+    if procedural_count:
+        coverage += f" · 절차·사후 보고 {procedural_count}건 제외"
     if truncated_chunks:
         coverage += (
             f" · 스캔 구간 일부 절단({truncated_chunks}개 청크 상한 도달"
@@ -2938,7 +2966,7 @@ def search_market_disclosures(preset: str, days: int = 7, max_results: int = 50)
         rcept_dt = d.get("rcept_dt", "")
         rcept_no = d.get("rcept_no", "")
         report_nm = d.get("report_nm", "")
-        sig_labels = ", ".join(s["label"] for s in sigs)
+        sig_labels = ", ".join(q.label for q in sigs)
         lines.append(f"{rcept_dt} | {corp_nm}")
         lines.append(f"  📄 {report_nm}")
         lines.append(f"  🔖 [{sig_labels}] rcept_no={rcept_no}")
