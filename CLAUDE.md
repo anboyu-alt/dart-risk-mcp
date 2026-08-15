@@ -73,8 +73,10 @@ dart_risk_mcp/
 개별 공시 하나를 분석합니다. 접수번호가 있으면 원문 500자 미리보기도 포함합니다.
 
 - 접수번호 또는 공시 제목 중 하나만 있어도 작동
+- 접수번호만 있고 제목이 없으면 `resolve_disclosure_row_from_rcept_no`로 list.json 원본 행을 역해석해 실제 공시 제목·제출인(`flr_nm`)을 복원한다 — 실패 시 자리표시자 제목("접수번호 N")·무신호로 조용히 퇴화(회귀 아님)
 - CB/BW 공시면 자동으로 인수자 추출
 - DS005 결정 공시(제목으로 `resolve_decision_type` 판별)면 `resolve_corp_code_from_rcept_no`로 rcept_no→corp_code를 역해석해 "📑 주요 결정 공시" 섹션에 상대방·금액·특수관계·외부평가 표기 — DS005는 corp_code가 항상 필수라 역해석 실패 시 헛호출 없이 섹션만 생략
+- 한정층(`qualify_signals`) 적용: 매칭 신호마다 `🎯` observed 또는 `⚪ 절차·사후 보고`(강등 사유 동반)로 단일 판정 표시. 단건 공시 도구라 `analyze_company_risk`/`build_event_timeline`의 관찰/절차 두 섹션 레이아웃은 쓰지 않는다
 
 ### 3. `find_risk_precedents(signal_types, lookback_days=90)`
 
@@ -222,8 +224,8 @@ dart_risk_mcp/
 - `preset` 허용값: `cb_issue`, `treasury`, `reverse_split`, `3pca`, `shareholder_change`, `exec_change`, `audit_issue`, `asset_transfer`, `going_concern`, `embezzle`, `inquiry`, `fund_outflow`(v1.6.0 신규 — `FUND_OUTFLOW`/`ACQ_REVIEW`), `all_risk`
 - `days` 범위: 1~90일, `max_results` 범위: 1~200건
 - v1.10.2: 시장 스캔을 **2일 청크**로 순회하고, 상한(1,000건) 도달 청크는 **1일 단위 재분할**(상한 1,500건)로 재조회 — 한 호출로 창 전체를 덮으려다 최신 1~2일만 스캔되던 조용한 절단 해소(실사고: asset_transfer 30일이 7/22 유형자산양수를 놓침). 하루가 1,500건을 넘는 극단일만 "스캔 구간 일부 절단"으로 정직 표기
-- 내부 흐름: `fetch_market_disclosures` (corp_code 없이 `/list.json`) → `match_signals` 필터
-- 반환: 날짜|기업|공시명|신호|접수번호 한 줄씩
+- 내부 흐름: `fetch_market_disclosures` (corp_code 없이 `/list.json`) → `match_signals` → 한정층(`qualify_signals`)으로 관찰/절차 분리 → `_filter_market_rows`가 절차·사후 보고 행을 제외하고 관찰 신호만 preset 필터에 통과
+- 반환: 날짜|기업|공시명|신호|접수번호 한 줄씩(관찰 신호만). 헤더에 "전체 N건 중 관찰 신호 M건 (표시 K건) · 절차·사후 보고 P건 제외" 건수 표기
 
 ### 15. `check_disclosure_anomaly(company_name, lookback_years=1)` ✨
 
@@ -408,6 +410,7 @@ dart_risk_mcp/
 | `fetch_fund_usage(corp_code, api_key, corp_cls, lookback_years)` | 공모·사모 자금사용 2개 엔드포인트 통합 + 이상 플래그 탐지 |
 | `fetch_major_decision(rcept_no, corp_cls, decision_type)` | 12개 DS005 주요결정 엔드포인트 중 decision_type에 따라 자동 선택 |
 | `resolve_corp_code_from_rcept_no(rcept_no, api_key, max_pages=3)` | rcept_no → corp_code 역해석 — 접수일 하루치 주요사항보고(B) 목록 대조, 최대 3페이지·매칭 즉시 종료·10분 캐시. DS005 필수 corp_code를 접수번호만 아는 경로(check_disclosure_risk)에서 복원 |
+| `resolve_disclosure_row_from_rcept_no(rcept_no, api_key, max_pages=12)` | rcept_no → list.json 원본 행 전체(제목·제출인 등) 역해석. `pblntf_ty` 필터 없이 조회 — 형제 함수(`resolve_corp_code_from_rcept_no`)는 `pblntf_ty="B"`로 좁혀 지분공시·거래소공시를 못 찾는다. 매칭 즉시 종료·10분 캐시(`_rcept_row_cache`). 알려진 한계: 접수번호 앞 8자리가 접수일과 다른 공시는 `None`(실측 0.7% — 20260803 전수 610건 중 4건) |
 | `resolve_decision_type(report_nm)` | 공시명 → decision_type 키 자동 추론 (`[기재정정]` 등 접두어 제거) |
 | `detect_capital_churn(events, lookback_years)` | 12개월 슬라이딩 윈도우로 CAPITAL_CHURN 판정 |
 | `detect_financial_anomaly(current, prior)` | 4개 지표 YoY 비교 → 플래그+메트릭 |
@@ -471,6 +474,7 @@ dart_risk_mcp/
 | 자금사용 내역 | 메모리 `_fund_usage_cache` (최대 20건) | 10분 |
 | 주요결정 공시 | 메모리 `_major_decision_cache` (최대 50건) | 10분 |
 | rcept_no→corp_code 역해석 | 메모리 `_rcept_corp_cache` (최대 50건) | 10분 |
+| rcept_no→list.json 원본 행 역해석 | 메모리 `_rcept_row_cache` (최대 50건, `_rcept_corp_cache`와 별도 — 값 타입·조회 범위가 달라 공유 시 한쪽 미스가 다른 쪽을 오염시킨다) | 10분 |
 | 감사의견 이력 | 메모리 `_audit_history_cache` (최대 20건) | 10분 |
 | 채무증권 잔액 | 메모리 `_debt_balance_cache` (최대 20건) | 10분 |
 | XBRL 감가상각비 | 메모리 `_xbrl_dep_cache` (최대 10건) | 10분 |
@@ -575,6 +579,11 @@ PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설
 호출을 추가하면 `analyze_company_risk` 1회 실행에 API 호출이 과다해진다). 한정층은 이
 원칙과 다른 층위다 — 구조화 API 호출이 아니라 **이미 갖고 있는 제목 문자열의 구조**만
 다시 읽어 표시 방식을 정하므로 추가 호출이 없다.
+
+`check_disclosure_risk`와 `search_market_disclosures`도 한정층 적용 대상이다(2026-08-16
+후속 배선). 전자는 접수번호만 아는 경로에서 `resolve_disclosure_row_from_rcept_no`로
+실제 제목·제출인을 복원한 뒤 단건 판정을 표시하고, 후자는 `_filter_market_rows`가
+절차·사후 보고 행을 시장 스캔 목록에서 제외하고 건수만 헤더에 남긴다.
 
 **한정층과 리포트 출력**: `analyze_company_risk`·`build_event_timeline` 둘 다 매칭된
 신호를 `qualify_signals`로 나눈 뒤 "━━ 관찰된 신호 (N건) ━━"(observed, 집계·헤드라인·
