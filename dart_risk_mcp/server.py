@@ -2821,6 +2821,13 @@ def _filter_market_rows(
     네트워크를 타지 않는 순수 함수로 분리해 합성 행으로 테스트할 수 있게 했다.
     preset 필터를 observed에만 거는 것이 핵심이다 — 강등된 신호가 preset을
     통과시키면 제외의 의미가 없다.
+
+    procedural_count는 preset(target_keys) 범위로 스코프한다 — target_keys가
+    있으면 그 preset의 신호 키를 하나라도 가진(강등되기 전 qual 기준) 행만
+    센다. 전체 시장의 강등 건수를 preset과 무관하게 더하면 "관찰 신호 M건"은
+    preset 범위인데 "절차·사후 보고 K건"은 시장 전체 범위가 되어 같은 문장
+    안에서 서로 다른 모집단을 말하게 된다(fix round 1 발견). target_keys가
+    비어 있으면(all_risk) 이 구분이 없어 기존처럼 모든 강등 행을 센다.
     """
     filtered: list[tuple[dict, list]] = []
     procedural_count = 0
@@ -2833,7 +2840,8 @@ def _filter_market_rows(
         qual = qualify_signals(sigs, parsed, d)
         obs = [q for q in qual if q.tier == TIER_OBSERVED]
         if not obs:
-            procedural_count += 1
+            if not target_keys or any(q.key in target_keys for q in qual):
+                procedural_count += 1
             continue
         if target_keys and not any(q.key in target_keys for q in obs):
             continue

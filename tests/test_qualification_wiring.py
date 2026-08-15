@@ -723,3 +723,47 @@ class TestMarketScanFilter(unittest.TestCase):
         self.assertEqual(len(filtered), 1)
         _row, quals = filtered[0]
         self.assertEqual(quals[0].label, "유상증자(배정방식 미상)")
+
+    # -- fix round 1: procedural_count는 preset(target_keys) 범위로 스코프한다 --
+    # 강등된 행이라도 그 신호 키가 요청한 preset과 무관하면 세지 않는다.
+    # "관찰 신호 M건"은 preset 범위인데 "절차·사후 보고 K건"은 시장 전체
+    # 범위가 되어 한 문장 안에서 서로 다른 모집단을 말하던 버그의 재현.
+
+    def test_demoted_row_outside_preset_is_not_counted(self):
+        """강등된 행의 키가 target_keys와 무관하면 procedural에도 안 잡힌다."""
+        from dart_risk_mcp.server import _filter_market_rows
+        # 자기주식취득결과보고서 → TREASURY, R2(결과보고서)로 procedural 강등.
+        raw = [self._row("자기주식취득결과보고서", "테스트회사")]
+        filtered, procedural = _filter_market_rows(raw, {"FUND_OUTFLOW"})
+        self.assertEqual(len(filtered), 0)
+        self.assertEqual(procedural, 0)
+
+    def test_demoted_row_inside_preset_is_counted(self):
+        """강등된 행의 키가 target_keys에 있으면 procedural로 잡힌다."""
+        from dart_risk_mcp.server import _filter_market_rows
+        raw = [self._row("자기주식취득결과보고서", "테스트회사")]
+        filtered, procedural = _filter_market_rows(raw, {"TREASURY"})
+        self.assertEqual(len(filtered), 0)
+        self.assertEqual(procedural, 1)
+
+    def test_empty_target_keys_counts_every_demoted_row(self):
+        """target_keys가 비어 있으면(all_risk) 기존처럼 모든 강등 행을 센다."""
+        from dart_risk_mcp.server import _filter_market_rows
+        raw = [self._row("자기주식취득결과보고서", "테스트회사")]
+        filtered, procedural = _filter_market_rows(raw, set())
+        self.assertEqual(len(filtered), 0)
+        self.assertEqual(procedural, 1)
+
+    def test_mixed_preset_scan_only_counts_matching_demotions(self):
+        """coordinator 리포트의 재현 — asset-transfer 계열 preset 스캔에서
+        무관한 강등 건(대량보유보고·자기주식취득)은 procedural에 섞이지 않는다."""
+        from dart_risk_mcp.server import _filter_market_rows
+        raw = [
+            self._row("주식등의대량보유상황보고서(일반)", "국민연금공단", rc="1" * 14),
+            self._row("주식등의대량보유상황보고서(일반)", "국민연금공단", rc="2" * 14),
+            self._row("자기주식취득결과보고서", "테스트회사", rc="3" * 14),
+            self._row("주요사항보고서(유형자산양수결정)", "테스트회사", rc="4" * 14),
+        ]
+        filtered, procedural = _filter_market_rows(raw, {"FUND_OUTFLOW", "ACQ_REVIEW"})
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(procedural, 0)
