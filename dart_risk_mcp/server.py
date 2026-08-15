@@ -1574,10 +1574,14 @@ def build_event_timeline(
             all_tax_ids.update(tax_ids)
 
     if not events:
+        # 헤더는 정상 경로(아래 ⏳ 라인)와 같은 형식을 쓴다 — 도구가 상황에 따라
+        # 자기 이름을 다르게 대면 출력 계약이 깨진다. 한정층 도입 후 공시 신호가
+        # 전부 강등되는 회사(헬릭스미스 실측)에서 이 경로가 실제로 발화한다.
         return (
-            f"📋 **{corp_name}** ({stock_code or corp_code})\n\n"
+            f"⏳ **이벤트 타임라인: {corp_name}** ({stock_code or corp_code})\n\n"
             f"{_note_block}"
-            f"최근 {window_phrase}간 위험 신호 이벤트가 없습니다.\n"
+            f"최근 {window_phrase}간 관찰된 신호 이벤트가 없습니다.\n"
+            f"공시 외 지표(재무·감사의견·연속적자)는 analyze_company_risk에서 확인하세요.\n"
             f"(전체 공시 {len(disclosures)}건 검토)"
         )
 
@@ -3684,7 +3688,7 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
         if drain_flags:
             lines += [
                 "",
-                "⚠ **적자 시점 배당 유출(DIVIDEND_DRAIN) 패턴 탐지**",
+                "⚠ **적자 시점 배당 유출 패턴 탐지**",
             ]
             for fl in drain_flags[:5]:
                 # CFS(연결)는 alotMatter 원문 자체가 지배기업소유주지분순이익
