@@ -21,6 +21,8 @@ class TestFetchFailNotice(unittest.TestCase):
     def test_unfetchable_rcept_no_gets_notice(self):
         with patch.object(server, "_DART_API_KEY", "dummy"), \
              patch.object(server, "fetch_document_text", return_value=""), \
+             patch.object(server, "resolve_disclosure_row_from_rcept_no",
+                          return_value=None), \
              patch.object(server, "resolve_corp_code_from_rcept_no",
                           return_value=""):
             out = _fn()("00000000000000")
@@ -31,6 +33,9 @@ class TestFetchFailNotice(unittest.TestCase):
         # 제목이 있으면 제목 기반 분석은 유효 — 실패 문구를 붙이지 않는다
         with patch.object(server, "_DART_API_KEY", "dummy"), \
              patch.object(server, "fetch_document_text", return_value=""), \
+             patch.object(server, "resolve_disclosure_row_from_rcept_no",
+                          return_value=None), \
+             patch.object(server, "extract_cb_investors", return_value=[]), \
              patch.object(server, "resolve_corp_code_from_rcept_no",
                           return_value=""):
             out = _fn()("00000000000000", report_name="전환사채권발행결정")
