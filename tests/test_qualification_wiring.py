@@ -896,12 +896,15 @@ class TestRcertPlusTitleStillResolvesTheRow(unittest.TestCase):
         )
         self.assertIn("공시: 사용자지정제목", out)
 
+    # extract_cb_investors도 패치한다 — 제목이 CB_BW로 관찰 판정되면 인수자
+    # 추출이 원문 ZIP을 내려받아 이 단위 테스트가 실제 DART를 때린다.
     @patch("dart_risk_mcp.server._DART_API_KEY", "testkey")
+    @patch("dart_risk_mcp.server.extract_cb_investors", return_value=[])
     @patch("dart_risk_mcp.server.fetch_document_text", return_value="")
     @patch("dart_risk_mcp.server.resolve_corp_code_from_rcept_no", return_value="")
     @patch("dart_risk_mcp.server.resolve_disclosure_row_from_rcept_no",
            return_value=None)
-    def test_filer_line_absent_when_row_unresolved(self, _row, _cc, _doc):
+    def test_filer_line_absent_when_row_unresolved(self, _row, _cc, _doc, _cb):
         from dart_risk_mcp.server import check_disclosure_risk
         out = check_disclosure_risk(
             rcept_no="20260731000816",
