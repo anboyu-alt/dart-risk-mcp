@@ -40,9 +40,11 @@ elif not os.environ.get("DART_API_KEY"):
 
 from dart_risk_mcp.core.dart_client import (  # noqa: E402
     fetch_company_disclosures,
+    fetch_major_decision,
     resolve_corp,
     resolve_decision_type,
 )
+from dart_risk_mcp.core.qualifiers import parse_report_name  # noqa: E402
 from dart_risk_mcp.core.signals import is_amendment_disclosure  # noqa: E402
 from dart_risk_mcp.server import (  # noqa: E402
     analyze_company_risk,
@@ -187,13 +189,47 @@ def _resolve_first_normal_rcept(company: dict, api_key: str) -> str | None:
     return None
 
 
+_DS005_MAX_VERIFY_ATTEMPTS = 5
+
+
 def _detect_ds005_rcept(company: dict, api_key: str) -> tuple[str, str, str] | None:
     """analyze 출력에는 rcept가 없으므로 fetch_company_disclosures에서 직접 키워드 매칭.
 
     (rcept_no, report_nm, corp_code)를 반환한다 — report_nm은 호출부에서
-    resolve_decision_type으로 decision_type을 결정하는 데 쓰인다
-    (이전에는 get_major_decision을 decision_type="" 고정으로 호출해
-    골드가 항상 "미지정" 에러 메시지였다 — v1.6.0에서 수정).
+    resolve_decision_type으로 decision_type을 결정하는 데 쓰인다.
+
+    이전에는 키워드가 매칭된 첫 제목을 검증 없이 그대로 반환했는데, 실측으로
+    세 가지 방식으로 깨지는 게 확인됐다:
+
+      A. 부분 문자열 충돌 — DS005_KEYWORDS의 "분할결정"이 "주식분할결정"
+         (액면분할 — 회사 조직 분할이 아니고 DS005 공시도 아님)에도 걸린다.
+         나이스정보통신 실측: 이 제목이 뽑히고 resolve_decision_type()이
+         ''을 반환해 골드가 "❌ decision_type 미지정…" 에러 문자열이 됐다.
+      B. 정정 필터 공백 — is_amendment_disclosure는 "기재정정|첨부추가|정정"만
+         잡고 "[첨부정정]"을 놓친다(_AMENDMENT_RE는 신호 한정층이 별도로
+         처리하는 프로젝트 결정이라 여기서 고치지 않는다). DS005 엔드포인트는
+         최초접수일 기준으로 색인되므로, 정정본 자신의 rcept_no로는 그 사안을
+         절대 찾을 수 없다. 두산 실측: "[첨부정정]주요사항보고서(…)"가 뽑혀
+         조회가 항상 실패했다.
+      C. 무마커 재제출 — 대괄호 태그가 전혀 없는, 바이트까지 동일한 제목이
+         같은 사안을 날짜만 바꿔 두 번 접수되기도 한다(아틀라스링크
+         "주요사항보고서(유형자산양수결정)" 20260722000373 vs 20260810000747
+         실측 — 둘 다 rm=''). report_nm·rm 어느 필드로도 구분할 수 없다 —
+         실제로 조회해 봐야 어느 쪽이 최초접수일인지 알 수 있다.
+
+    수정:
+      1) resolve_decision_type(nm)이 실제로 값을 반환하는 제목만 후보로
+         인정한다(A 해결) — 키워드 사전 필터는 그대로 두되(값싼 좁히기),
+         최종 판단 권한은 resolve_decision_type에 둔다.
+      2) parse_report_name(nm).tags가 하나라도 있는 제목은 전부 건너뛴다
+         (B 해결). 재제출본은 태그 종류를 가리지 않고 원본과 다른 rcept_no를
+         가지므로, is_amendment_disclosure보다 엄격하게 넓혀야 한다 — 이
+         기준이 기존 is_amendment_disclosure 필터를 포함하므로 별도 호출은
+         제거했다(중복이라 유지할 이유가 없다).
+      3) 후보를 최신순으로 최대 _DS005_MAX_VERIFY_ATTEMPTS건까지 실제
+         fetch_major_decision으로 검증해, {"error": ...}가 아닌 첫 결과를
+         채택한다(C 해결 — 구분 필드가 없으니 시도해서 확인). 기각된 후보는
+         stderr에 사유를 남겨 다음 실행에서 재현 가능하게 한다.
     """
     corp = resolve_corp(company["name"], api_key)
     if not corp or not corp[1]:
@@ -201,15 +237,31 @@ def _detect_ds005_rcept(company: dict, api_key: str) -> tuple[str, str, str] | N
     corp_code = corp[1].get("corp_code")
     if not corp_code:
         return None
-    discs = fetch_company_disclosures(corp_code, api_key, 365)
+    discs = fetch_company_disclosures(corp_code, api_key, 365)  # 최신순
+
+    candidates: list[tuple[str, str]] = []  # (rcept_no, report_nm), 최신순 유지
     for d in discs:
         nm = d.get("report_nm", "")
-        if is_amendment_disclosure(nm):
+        if parse_report_name(nm).tags:
             continue
-        if any(kw in nm for kw in DS005_KEYWORDS):
-            rcept = d.get("rcept_no", "").strip()
-            if rcept:
-                return rcept, nm, corp_code
+        if not any(kw in nm for kw in DS005_KEYWORDS):
+            continue
+        if not resolve_decision_type(nm):
+            continue
+        rcept = d.get("rcept_no", "").strip()
+        if rcept:
+            candidates.append((rcept, nm))
+
+    for rcept, nm in candidates[:_DS005_MAX_VERIFY_ATTEMPTS]:
+        dtype = resolve_decision_type(nm)
+        result = fetch_major_decision(rcept, api_key, dtype, corp_code)
+        if isinstance(result, dict) and result.get("error"):
+            sys.stderr.write(
+                f"  DS005 후보 기각: {company['name']} {rcept} ({nm}) — {result['error']}\n"
+            )
+            continue
+        return rcept, nm, corp_code
+
     return None
 
 
