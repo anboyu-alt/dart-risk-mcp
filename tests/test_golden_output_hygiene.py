@@ -259,7 +259,12 @@ class TestGoldenOutputHygiene(unittest.TestCase):
         """
         pat = re.compile(r"\(([A-Z][A-Z_]{1,30})\)")
         for path in self._iter_fixtures():
-            if path.name.endswith("_list.txt") or "_doc_" in path.name:
+            # `_view_`도 `_doc_`과 같은 원문 passthrough다(view_disclosure는
+            # DART 원문을 페이지 단위로 그대로 옮긴다). 실측: 삼성전자 반기보고서
+            # 원문의 "Samsung Semiconductor Asia Holdings Pte. Ltd. (SSAH)".
+            if (path.name.endswith("_list.txt")
+                    or "_doc_" in path.name
+                    or "_view_" in path.name):
                 continue
             text = path.read_text(encoding="utf-8")
             for m in pat.finditer(text):

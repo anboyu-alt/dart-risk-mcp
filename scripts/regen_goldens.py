@@ -123,8 +123,12 @@ RCEPT_TOOLS: list[tuple[str, Callable[[str], str]]] = [
 
 # D. 회사 다중·DS005
 MULTI_TOOLS: list[tuple[str, Callable[[list[dict]], str]]] = [
-    ("actor_overlap", lambda cs: find_actor_overlap([c["name"] for c in cs])),
-    ("compare_fs",    lambda cs: compare_financials([c["name"] for c in cs], "2024")),
+    # find_actor_overlap은 2~5개만 받는다. COMPANIES가 10개로 늘어난 뒤
+    # (438831d 이후) 전체를 넘겨 "입력 오류"만 저장되고 있었다 — 전수
+    # 재생성을 돌리지 않아 낡은 골드가 그대로 남아 드러나지 않았다.
+    ("actor_overlap", lambda cs: find_actor_overlap([c["name"] for c in cs][:5])),
+    # compare_financials도 최대 5개 — actor_overlap과 같은 이유로 잘라 넘긴다.
+    ("compare_fs",    lambda cs: compare_financials([c["name"] for c in cs][:5], "2024")),
 ]
 
 # DS005 자동 탐지용 키워드 — 실제 report_nm에서 검색(공백 없는 실제 표기
