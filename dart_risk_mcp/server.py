@@ -77,6 +77,7 @@ from .core import (
     fetch_insider_timeline,
     fetch_major_decision,
     resolve_corp_code_from_rcept_no,
+    resolve_disclosure_row_from_rcept_no,
     fetch_multi_financial,
     fetch_shareholder_status,
     fetch_treasury_decisions,
@@ -1265,11 +1266,32 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
     if not rcept_no and not report_name:
         return "❌ rcept_no(접수번호) 또는 report_name(공시 제목) 중 하나를 입력하세요."
 
-    title = report_name or f"접수번호 {rcept_no}"
+    # 접수번호가 있으면 제목 동반 여부와 무관하게 원본 행을 복원한다. 행이 있어야
+    # R1(제출인 ≠ 회사)이 발화하는데, 예전에는 report_name이 함께 오면 행을 아예
+    # 조회하지 않아 같은 공시가 호출 형태에 따라 다른 판정을 받았다. 실패하면
+    # 기존 동작(자리표시자 제목, 무신호)으로 조용히 퇴화한다 — 회귀가 아니다.
+    filing: "dict | None" = None
+    if rcept_no and _DART_API_KEY:
+        filing = resolve_disclosure_row_from_rcept_no(rcept_no, _DART_API_KEY)
+
+    # 제목을 직접 넘긴 호출자는 그 제목이 보이길 기대하므로 report_name이 우선한다.
+    # 판정 입력(filing)은 조회한 행을 그대로 쓴다.
+    if report_name:
+        title = report_name.strip()
+    elif filing and filing.get("report_nm"):
+        title = filing["report_nm"].strip()
+    else:
+        title = f"접수번호 {rcept_no}"
+
+    parsed = parse_report_name(title)
     is_amendment = is_amendment_disclosure(title)
     matched = match_signals(title)
+    qualified = qualify_signals(matched, parsed, filing)
 
-    lines = [f"📋 **공시 리스크 분석**", f"공시: {title}", ""]
+    lines = ["📋 **공시 리스크 분석**", f"공시: {title}"]
+    if filing and filing.get("flr_nm"):
+        lines.append(f"제출인: {filing['flr_nm']}")
+    lines.append("")
 
     if not matched:
         if is_amendment:
@@ -1280,16 +1302,37 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
         else:
             lines.append("이 공시에서 의심 신호가 탐지되지 않았습니다.")
     else:
-        for sig in matched:
+        for sig, q in zip(matched, qualified):
             from .core.signals import SIGNAL_KEY_TO_TAXONOMY
 
             tax_ids = SIGNAL_KEY_TO_TAXONOMY.get(sig["key"], [])
             prose = signal_to_prose(sig["key"])
             amendment_note = " (정정공시 — 원공시의 번복/수정이므로 관찰 대상에서 제외됩니다.)" if is_amendment else ""
-            lines.append(f"🎯 **{sig['label']}**{amendment_note}")
-            if prose:
-                lines.append(prose)
-            lines.append("")
+            if q.tier == TIER_OBSERVED:
+                lines.append(f"🎯 **{q.label}**{amendment_note}")
+                if prose:
+                    lines.append(prose)
+                if q.note:
+                    lines.append(f"※ {q.note}")
+                lines.append("")
+            else:
+                # 단건 도구라 #163의 두 층 절 구분은 과하다 — 한 건의 판정과
+                # 사유만 보인다.
+                lines.append("⚪ **절차·사후 보고**")
+                lines.append(q.reason)
+                # 강등 사유는 q.reason이 이미 구체적으로 말한다. 여기 덧붙이는
+                # 문장은 R1/R1b(제출인 다름)뿐 아니라 R2(결과·해제)·R3(자회사)·
+                # R4(해명)·R5(정정)도 덮어야 하므로 analyze_company_risk와 같은
+                # 한정 표현을 쓴다 — "회사가 낸 공시가 아니다"로 단정하면 결과
+                # 보고서류에서 사유와 정면으로 모순된다.
+                lines.append(
+                    f"→ 제목에 [{q.label}] 신호가 매칭되지만, 회사가 낸 사건 "
+                    "자체의 공시가 아니거나 이미 끝난 건의 사후 보고입니다."
+                )
+                if q.note:
+                    lines.append(f"※ {q.note}")
+                lines.append("")
+                continue
 
             # 타임라인
             if tax_ids and not is_amendment:
@@ -1311,7 +1354,13 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
                         ]
 
     # CB/BW면 인수자 추출 (check_disclosure_risk는 corp_code 불명 → HTML 폴백)
-    if rcept_no and any(s["key"] == "CB_BW" for s in matched) and not is_amendment:
+    if (
+        rcept_no
+        and any(
+            q.key == "CB_BW" and q.tier == TIER_OBSERVED for q in qualified
+        )
+        and not is_amendment
+    ):
         if not _DART_API_KEY:
             lines += ["", "⚠️ DART_API_KEY 미설정 — CB 인수자 조회 불가"]
         else:
@@ -1376,7 +1425,14 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
                           "'신호 없음'으로 해석하지 마세요."]
 
     from .core.signals import SIGNAL_KEY_TO_TAXONOMY as _SKT
-    all_tax_ids = list({tid for s in matched for tid in _SKT.get(s["key"], [])})
+    # 발췌는 관찰 신호에만 붙인다. 강등된 신호까지 넣으면 전부 강등된 공시에서도
+    # 수 KB 카탈로그가 출력을 뒤덮어 방금 내린 강등을 시각적으로 되돌린다.
+    all_tax_ids = list({
+        tid
+        for q in qualified
+        if q.tier == TIER_OBSERVED
+        for tid in _SKT.get(q.key, [])
+    })
     catalog = load_catalog_excerpt(all_tax_ids)
     if catalog:
         lines += ["", catalog]
@@ -2772,6 +2828,45 @@ def get_affiliate_investments(company_name: str, year: str = "") -> str:
     return "\n".join(lines)
 
 
+def _filter_market_rows(
+    raw: list[dict], target_keys: set
+) -> "tuple[list[tuple[dict, list]], int]":
+    """시장 스캔 행을 한정해 관찰 신호만 남긴다.
+
+    (filtered, procedural_count)를 반환한다. filtered의 원소는
+    (list.json 행, list[Qualified])이며 Qualified는 observed만 담는다.
+
+    네트워크를 타지 않는 순수 함수로 분리해 합성 행으로 테스트할 수 있게 했다.
+    preset 필터를 observed에만 거는 것이 핵심이다 — 강등된 신호가 preset을
+    통과시키면 제외의 의미가 없다.
+
+    procedural_count는 preset(target_keys) 범위로 스코프한다 — target_keys가
+    있으면 그 preset의 신호 키를 하나라도 가진(강등되기 전 qual 기준) 행만
+    센다. 전체 시장의 강등 건수를 preset과 무관하게 더하면 "관찰 신호 M건"은
+    preset 범위인데 "절차·사후 보고 K건"은 시장 전체 범위가 되어 같은 문장
+    안에서 서로 다른 모집단을 말하게 된다(fix round 1 발견). target_keys가
+    비어 있으면(all_risk) 이 구분이 없어 기존처럼 모든 강등 행을 센다.
+    """
+    filtered: list[tuple[dict, list]] = []
+    procedural_count = 0
+    for d in raw:
+        report_nm = d.get("report_nm", "")
+        sigs = match_signals(report_nm)
+        if not sigs:
+            continue
+        parsed = parse_report_name(report_nm)
+        qual = qualify_signals(sigs, parsed, d)
+        obs = [q for q in qual if q.tier == TIER_OBSERVED]
+        if not obs:
+            if not target_keys or any(q.key in target_keys for q in qual):
+                procedural_count += 1
+            continue
+        if target_keys and not any(q.key in target_keys for q in obs):
+            continue
+        filtered.append((d, obs))
+    return filtered, procedural_count
+
+
 @mcp.tool()
 def search_market_disclosures(preset: str, days: int = 7, max_results: int = 50) -> str:
     """시장 전체 공시에서 preset에 해당하는 위험 신호를 일괄 스캔한다.
@@ -2864,21 +2959,18 @@ def search_market_disclosures(preset: str, days: int = 7, max_results: int = 50)
 
     target_keys = set(_PRESET_TO_SIGNALS[preset])
 
-    filtered: list[tuple[dict, list[dict]]] = []
-    for d in raw:
-        report_nm = d.get("report_nm", "")
-        sigs = match_signals(report_nm)
-        if not sigs:
-            continue
-        if target_keys and not any(s["key"] in target_keys for s in sigs):
-            continue
-        filtered.append((d, sigs))
+    filtered, procedural_count = _filter_market_rows(raw, target_keys)
 
     filtered.sort(key=lambda x: x[0].get("rcept_dt", ""), reverse=True)
     truncated = len(filtered) > max_results
     shown = filtered[:max_results]
 
-    coverage = f"전체 {len(raw)}건 중 신호 일치 {len(filtered)}건 (표시 {len(shown)}건)"
+    coverage = (
+        f"전체 {len(raw)}건 중 관찰 신호 {len(filtered)}건 "
+        f"(표시 {len(shown)}건)"
+    )
+    if procedural_count:
+        coverage += f" · 절차·사후 보고 {procedural_count}건 제외"
     if truncated_chunks:
         coverage += (
             f" · 스캔 구간 일부 절단({truncated_chunks}개 청크 상한 도달"
@@ -2900,7 +2992,7 @@ def search_market_disclosures(preset: str, days: int = 7, max_results: int = 50)
         rcept_dt = d.get("rcept_dt", "")
         rcept_no = d.get("rcept_no", "")
         report_nm = d.get("report_nm", "")
-        sig_labels = ", ".join(s["label"] for s in sigs)
+        sig_labels = ", ".join(q.label for q in sigs)
         lines.append(f"{rcept_dt} | {corp_nm}")
         lines.append(f"  📄 {report_nm}")
         lines.append(f"  🔖 [{sig_labels}] rcept_no={rcept_no}")
