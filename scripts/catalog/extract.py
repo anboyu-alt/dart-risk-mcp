@@ -40,6 +40,30 @@ _TAG = re.compile(r"<[^>]+>")
 _FILE_LINK = re.compile(r'href="([^"]*fileDown\.do\?[^"]*fileSn=(\d)[^"]*)"', re.I)
 
 
+_REPLACEMENT_CHAR = "�"
+_REPLACEMENT_RATIO_LIMIT = 0.01
+
+
+def decode_page(raw: bytes) -> tuple[str, bool]:
+    """페이지 바이트를 디코딩한다. 반환: (텍스트, 신뢰 가능 여부).
+
+    레포 관례(dart_client._decode_zip_file)대로 utf-8 → euc-kr → cp949를 차례로
+    시도한다. 셋 다 실패하면 errors="replace"로 살려내되, 대체 문자(U+FFFD)가
+    본문에 과다하면 신뢰 불가로 표시한다 — 조용히 오염된 본문이 정상 본문인 척
+    분류 단계로 흘러가는 것을 막기 위함이다.
+    """
+    if not raw:
+        return "", True
+    for enc in ("utf-8", "euc-kr", "cp949"):
+        try:
+            return raw.decode(enc), True
+        except UnicodeDecodeError:
+            continue
+    text = raw.decode("utf-8", errors="replace")
+    ratio = text.count(_REPLACEMENT_CHAR) / len(text) if text else 0.0
+    return text, ratio <= _REPLACEMENT_RATIO_LIMIT
+
+
 def _clean_html(fragment: str) -> str:
     text = _SCRIPT_STYLE.sub(" ", fragment)
     text = _TAG.sub(" ", text)
@@ -82,11 +106,13 @@ def extract_light(record: dict, fetch=None) -> dict:
     url = (record.get("url") or "").strip()
     if url:
         try:
-            page = fetch(url).decode("utf-8", errors="replace")
-            body = parse_page_body(page)
-            if body:
-                source = "page"
-                out["attachment_urls"] = parse_attachment_urls(page)
+            page, trusted = decode_page(fetch(url))
+            if trusted:
+                body = parse_page_body(page)
+                if body:
+                    source = "page"
+                    out["attachment_urls"] = parse_attachment_urls(page)
+            # trusted=False: 오염된 디코딩 결과는 쓰지 않는다 — 아래 title_only 폴백으로 낙하
         except Exception:
             # 네트워크·디코딩 실패는 폴백으로 흡수한다(파이프라인을 멈추지 않음)
             body = ""
