@@ -952,11 +952,29 @@ EOF
 
 **Interfaces:**
 - Produces:
+  - `extract.decode_page(raw: bytes) -> tuple[str, bool]` — (텍스트, 신뢰 가능 여부)
   - `extract.parse_page_body(html: str) -> str` — `bd-view` 영역 본문 텍스트
   - `extract.parse_attachment_urls(html: str) -> dict[str, str]` — `{"hwp": url, "pdf": url}` (`fileSn=1`/`fileSn=2`)
   - `extract.extract_light(record: dict, fetch=None) -> dict` — `body`/`body_source`/`body_chars` 채운 레코드
   - `extract.extract_full(record: dict, fetch=None) -> str | None` — PDF 전문. pypdf 없거나 실패 시 `None`
   - `extract.PYPDF_AVAILABLE: bool`
+
+> **추가 요구 (2026-08-16 Task 4 리뷰에서 발견, 사용자 결정 "지금 고친다")**
+>
+> 최초 코드는 `fetch(url).decode("utf-8", errors="replace")`로 UTF-8만 가정했다. 한국
+> 정부 사이트는 euc-kr/cp949를 섞어 쓰며, 이 구조는 비 UTF-8 페이지에서 **예외를 던지지
+> 않고** U+FFFD로 오염된 본문을 `body_source="page"`로 통과시킨다 — 12,000건 배치에서
+> 품질이 눈에 띄지 않게 무너진다. 이 레포에는 이미 관례가 있다:
+> `dart_client._decode_zip_file`(+`cb_extractor`·`investor_extractor`)의
+> `("utf-8", "euc-kr", "cp949")` 순차 시도.
+>
+> 따라서 `decode_page(raw) -> (text, trusted)`를 두고:
+> - 세 인코딩을 차례로 시도해 성공하면 `(text, True)`
+> - 셋 다 실패하면 `errors="replace"`로 살리되, U+FFFD 비율이 **1% 초과면 `(text, False)`**
+>   (사소한 바이트 깨짐으로 멀쩡한 본문을 버리지 않으면서, 인코딩을 통째로 잘못 읽은
+>   경우는 잡는 기준). 빈 바이트열은 `("", True)`
+> - `extract_light`는 `trusted`가 False면 그 본문을 쓰지 않고 `title_only`로 폴백하며,
+>   **첨부 URL 파싱도 하지 않는다**(오염된 HTML에서 뽑은 URL은 신뢰할 수 없다)
 
 `fetch` 인자는 테스트 주입용 콜러블(`fetch(url) -> bytes`). 기본값은 `requests` 사용.
 
@@ -1127,6 +1145,30 @@ _SCRIPT_STYLE = re.compile(r"<script[\s\S]*?</script>|<style[\s\S]*?</style>", r
 _TAG = re.compile(r"<[^>]+>")
 _FILE_LINK = re.compile(r'href="([^"]*fileDown\.do\?[^"]*fileSn=(\d)[^"]*)"', re.I)
 
+# 인코딩을 통째로 잘못 읽었는지 판별하는 대체문자 비율 임계. 바이트 몇 개가 깨진
+# 정상 페이지를 버리지 않으면서, euc-kr 페이지를 utf-8로 읽은 경우는 걸러낸다.
+_REPLACEMENT_RATIO_LIMIT = 0.01
+
+
+def decode_page(raw: bytes) -> tuple[str, bool]:
+    """페이지 바이트를 디코딩한다. 반환: (텍스트, 신뢰 가능 여부).
+
+    레포 관례(dart_client._decode_zip_file)대로 utf-8 → euc-kr → cp949를 차례로
+    시도한다. 셋 다 실패하면 errors="replace"로 살려내되, 대체 문자(U+FFFD)가
+    본문에 과다하면 신뢰 불가로 표시한다 — 조용히 오염된 본문이 정상 본문인 척
+    분류 단계로 흘러가는 것을 막기 위함이다.
+    """
+    if not raw:
+        return "", True
+    for enc in ("utf-8", "euc-kr", "cp949"):
+        try:
+            return raw.decode(enc), True
+        except UnicodeDecodeError:
+            continue
+    text = raw.decode("utf-8", errors="replace")
+    ratio = text.count("�") / len(text) if text else 0.0
+    return text, ratio <= _REPLACEMENT_RATIO_LIMIT
+
 
 def _clean_html(fragment: str) -> str:
     text = _SCRIPT_STYLE.sub(" ", fragment)
@@ -1170,11 +1212,14 @@ def extract_light(record: dict, fetch=None) -> dict:
     url = (record.get("url") or "").strip()
     if url:
         try:
-            page = fetch(url).decode("utf-8", errors="replace")
-            body = parse_page_body(page)
-            if body:
-                source = "page"
-                out["attachment_urls"] = parse_attachment_urls(page)
+            page, trusted = decode_page(fetch(url))
+            # 인코딩을 통째로 잘못 읽은 페이지는 쓰지 않는다 — 오염된 본문이 정상인 척
+            # 분류 단계로 흘러가면 카탈로그 품질이 조용히 무너진다(첨부 URL도 신뢰 불가).
+            if trusted:
+                body = parse_page_body(page)
+                if body:
+                    source = "page"
+                    out["attachment_urls"] = parse_attachment_urls(page)
         except Exception:
             # 네트워크·디코딩 실패는 폴백으로 흡수한다(파이프라인을 멈추지 않음)
             body = ""
