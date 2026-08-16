@@ -164,6 +164,27 @@ _SCREEN_SYSTEM = (
 )
 
 
+def build_screened_out_record(rec: dict) -> dict:
+    """1차 스크리닝 탈락 레코드를 --resume이 인식할 수 있는 최소 형태로 만든다.
+
+    스크리닝 탈락은 절대다수다(규칙 필터 통과 ~3,000건 중 1차 통과는 수백 건
+    추정). 예전 코드는 탈락 시 그냥 continue해 출력에 아무것도 남기지 않았고,
+    `done` 집합은 출력 JSONL의 id만 보므로 --resume이 이 탈락분을 매 실행마다
+    다시 스크리닝했다 — --limit과 조합하면 같은 상위 N건을 영원히 재처리해
+    전혀 전진하지 못하는 영구 정체가 됐다. id만 있으면 done에 잡히므로,
+    나머지 필드는 사람이 로그를 훑어볼 수 있는 최소 맥락만 남긴다.
+    taxonomy_ids를 아예 넣지 않는다 — gaps.py가 "미매핑 신종 수법"과 구분할 수
+    있도록 screened_out 플래그로만 표시한다.
+    """
+    return {
+        "id": rec.get("id", ""),
+        "date": rec.get("date", ""),
+        "title": rec.get("title", ""),
+        "url": rec.get("url", ""),
+        "screened_out": True,
+    }
+
+
 def main() -> None:
     use_utf8_stdout()
     parser = argparse.ArgumentParser(description="보도자료 2단계 분류")
@@ -194,7 +215,7 @@ def main() -> None:
         todo = todo[: args.limit]
 
     system_full = build_taxonomy_prompt(TAXONOMY)
-    kept = mapped = 0
+    kept = mapped = screened_out = 0
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("a", encoding="utf-8") as fh:
         for i, rec in enumerate(todo, 1):
@@ -208,6 +229,13 @@ def main() -> None:
                 print(f"[CLASSIFY] 스크리닝 실패 {rec.get('id')}: {type(exc).__name__}")
                 continue
             if not screen["keep"]:
+                # 탈락도 반드시 기록한다 — done에 안 잡히면 --resume이 매번
+                # 같은 건을 재스크리닝한다(--limit과 조합 시 영구 정체).
+                screened_out += 1
+                fh.write(json.dumps(build_screened_out_record(rec), ensure_ascii=False) + "\n")
+                fh.flush()
+                if i % 25 == 0:
+                    print(f"[CLASSIFY] {i}/{len(todo)} — 통과 {kept} / 탈락 {screened_out} / 매핑 {mapped}")
                 continue
             kept += 1
 
@@ -226,7 +254,9 @@ def main() -> None:
             out = {
                 "id": rec.get("id", ""),
                 "date": rec.get("date", ""),
-                "agency": "금융감독원" if rec.get("source") == "fss" else "금융위원회",
+                # 수집원이 FSS 게시판 하나뿐이라(collect.py는 항상 source="fss") 금융위
+                # 분기는 죽은 코드였다. 금융위 수집원이 생기면 그때 다시 분기한다.
+                "agency": "금융감독원",
                 "title": rec.get("title", ""),
                 "url": rec.get("url", ""),
                 "body_source": source,
@@ -237,11 +267,11 @@ def main() -> None:
             fh.write(json.dumps(out, ensure_ascii=False) + "\n")
             fh.flush()
             if i % 25 == 0:
-                print(f"[CLASSIFY] {i}/{len(todo)} — 통과 {kept} / 매핑 {mapped}")
+                print(f"[CLASSIFY] {i}/{len(todo)} — 통과 {kept} / 탈락 {screened_out} / 매핑 {mapped}")
             # 페이싱은 call_anthropic 내부에서 매 요청마다 처리한다(스크리닝
             # 탈락으로 continue하는 압도적 다수 경로까지 포함해서).
 
-    print(f"[CLASSIFY] 완료: 후보 {len(todo)} → 스크리닝 통과 {kept} → 유형 매핑 {mapped}")
+    print(f"[CLASSIFY] 완료: 후보 {len(todo)} → 스크리닝 통과 {kept} / 탈락 {screened_out} → 유형 매핑 {mapped}")
 
 
 if __name__ == "__main__":

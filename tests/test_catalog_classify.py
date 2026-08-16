@@ -72,6 +72,37 @@ class TestParseClassify(unittest.TestCase):
         self.assertEqual(got["confidence"], "low")
 
 
+class TestBuildScreenedOutRecord(unittest.TestCase):
+    """1차 스크리닝 탈락 레코드가 --resume의 done 집합에 잡히는 형태인지 검증.
+
+    회귀 배경: 예전에는 탈락 시 아무것도 쓰지 않았다. done은 출력 JSONL의 id만
+    보므로, --limit과 --resume을 같이 쓰면 매 실행이 같은 상위 N건을 영원히
+    재스크리닝해 전혀 전진하지 못하는 영구 정체가 됐다.
+    """
+
+    def test_id_survives_for_resume_tracking(self):
+        rec = {"id": "12345", "date": "2026-01-01", "title": "제목", "url": "https://x.invalid"}
+        out = classify.build_screened_out_record(rec)
+        self.assertEqual(out["id"], "12345")
+
+    def test_flags_screened_out_without_taxonomy_ids(self):
+        out = classify.build_screened_out_record({"id": "1"})
+        self.assertTrue(out["screened_out"])
+        self.assertNotIn("taxonomy_ids", out)
+
+    def test_missing_id_defaults_to_empty_string_not_exception(self):
+        out = classify.build_screened_out_record({})
+        self.assertEqual(out["id"], "")
+
+    def test_round_trips_through_resume_done_set(self):
+        # main()이 --resume에서 하는 것과 동일한 파싱(json.loads 후 "id" 추출)을
+        # 재현해, 탈락 레코드를 그대로 써도 다음 실행이 건너뛰는지 확인한다.
+        rec = {"id": "999", "date": "2026-01-01", "title": "제목", "url": "https://x.invalid"}
+        line = json.dumps(classify.build_screened_out_record(rec), ensure_ascii=False)
+        done = {str(json.loads(line).get("id", ""))}
+        self.assertIn("999", done)
+
+
 def _fake_response(status_code: int, text: str = "ok", headers: dict | None = None) -> MagicMock:
     """call_anthropic이 쓰는 requests.Response 표면(status_code/headers/json/
     raise_for_status)만 흉내 낸 더블. 실제 네트워크 호출 없음."""

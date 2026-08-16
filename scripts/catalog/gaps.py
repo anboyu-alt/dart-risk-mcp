@@ -33,14 +33,26 @@ def _clean(value: str) -> str:
 
 
 def build_gap_report(records: list[dict], generated_on: str) -> str:
-    """미매핑 레코드를 신규 유형 후보 목록으로 렌더한다."""
-    unmapped = [r for r in records if not r.get("taxonomy_ids")]
+    """미매핑 레코드를 신규 유형 후보 목록으로 렌더한다.
+
+    1차 스크리닝 탈락 레코드(classify.py의 build_screened_out_record 산출,
+    screened_out=True)는 taxonomy_ids가 없다는 점만 보면 "미매핑 신종 수법"과
+    구분되지 않는다. 하지만 탈락은 "새 유형을 못 찾았다"가 아니라 "애초에
+    정밀 분류 대상이 아니었다"는 뜻이라 리포트에서 제외한다 — 안 걸러내면
+    스크리닝 탈락 압도적 다수가 전부 "신종 수법 후보"로 뜨는, 리포트를
+    무쓸모하게 만드는 오염이 생긴다.
+    """
+    screened_out = sum(1 for r in records if r.get("screened_out"))
+    unmapped = [
+        r for r in records
+        if not r.get("taxonomy_ids") and not r.get("screened_out")
+    ]
     unmapped.sort(key=lambda r: str(r.get("date", "")), reverse=True)
 
     lines = [
         f"# 신규 신호 유형 후보 — {generated_on}",
         "",
-        f"- 전체 {len(records)}건 · **미매핑 {len(unmapped)}건**",
+        f"- 전체 {len(records)}건 (스크리닝 탈락 {screened_out}건 제외) · **미매핑 {len(unmapped)}건**",
         "- 아래는 현재 taxonomy 45개 유형 중 어디에도 매핑되지 않은 보도자료입니다.",
         "- 이 리포트는 사람 검토용이며 **`taxonomy.py`에 자동으로 반영하지 않습니다.**",
         "  신호 추가는 CLAUDE.md의 '새 신호 유형 추가' 4단계 절차를 따르세요.",
@@ -90,7 +102,7 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"gap-report-{args.date}.md"
     out_path.write_text(md, encoding="utf-8")
-    unmapped = sum(1 for r in records if not r.get("taxonomy_ids"))
+    unmapped = sum(1 for r in records if not r.get("taxonomy_ids") and not r.get("screened_out"))
     print(f"[GAPS] 전체 {len(records)}건 · 미매핑 {unmapped}건 → {out_path}")
 
 

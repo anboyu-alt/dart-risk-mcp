@@ -37,7 +37,7 @@ _BODY_BLOCK = re.compile(
 )
 _SCRIPT_STYLE = re.compile(r"<script[\s\S]*?</script>|<style[\s\S]*?</style>", re.I)
 _TAG = re.compile(r"<[^>]+>")
-_FILE_LINK = re.compile(r'href="([^"]*fileDown\.do\?[^"]*fileSn=(\d)[^"]*)"', re.I)
+_FILE_LINK = re.compile(r'href="([^"]*fileDown\.do\?[^"]*fileSn=(\d+)[^"]*)"', re.I)
 
 
 _REPLACEMENT_CHAR = "�"
@@ -78,9 +78,18 @@ def parse_page_body(page_html: str) -> str:
 
 
 def parse_attachment_urls(page_html: str) -> dict[str, str]:
-    """첨부 다운로드 URL을 fileSn 기준으로 분류한다(1=HWP, 2=PDF)."""
+    """첨부 다운로드 URL을 fileSn 기준으로 분류한다(1=HWP, 2=PDF).
+
+    fileSn은 첨부 개수만큼 두 자리 이상도 나올 수 있다(예: 10개 이상 첨부한
+    보도자료의 fileSn=10). 예전 정규식이 한 자리만 캡처해 "10"이 "1"로 잘려
+    HWP로 오분류되던 버그를 (\\d+)로 고쳤다(2026-08-17). 분류 자체도 "1"/"2"만
+    정확히 매칭한다 — fileSn=10이 실제로 무엇인지는 알 수 없으므로, 1도 2도
+    아닌 값은 (HWP로도 PDF로도 잘못 단정하지 않고) 그냥 무시한다.
+    """
     out: dict[str, str] = {}
     for href, sn in _FILE_LINK.findall(page_html):
+        if sn not in ("1", "2"):
+            continue
         url = html_mod.unescape(href)
         if not url.startswith("http"):
             url = _BASE + url

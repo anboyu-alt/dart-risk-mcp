@@ -80,7 +80,10 @@ def write_readme(records: list[dict], out_dir: Path, generated_on: str) -> Path:
         f"- **총 레코드**: {len(records)}건 (유형 매핑 {mapped}건 / 미매핑 {len(records) - mapped}건)",
         f"- **본문 확보 경로**: " + ", ".join(f"{k} {v}건" for k, v in sorted(src.items())),
         f"- **생성일**: {generated_on}",
-        "- **데이터 소스**: 금융감독원 오픈API, 공공데이터포털 정책브리핑",
+        # 오픈API는 일일 30회 한도(resultCode 033)가 실증돼 폐기했고, 공공데이터포털
+        # 정책브리핑은 이 파이프라인 범위 밖이다(collect.py 참고) — 실제 수집 방식은
+        # 금감원 보도자료 게시판 웹 파싱 하나뿐이다.
+        "- **데이터 소스**: 금융감독원(FSS) 보도자료 게시판 웹 파싱",
         "",
         "> 본문 확보 경로가 `page`·`title_only`인 레코드는 보도자료 전문이 아니라",
         "> 게시판 요약만으로 분류된 건입니다. 적발기법·인용법조의 정밀도가 낮을 수 있습니다.",

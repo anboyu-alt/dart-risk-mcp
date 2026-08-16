@@ -38,6 +38,44 @@ class TestParsePage(unittest.TestCase):
         self.assertNotIn("&amp;", urls["pdf"])
 
 
+class TestFileSnMultiDigit(unittest.TestCase):
+    """fileSn 두 자리 이상(첨부 10개 이상) 오분류 회귀 테스트.
+
+    예전 정규식(`fileSn=(\\d)`)은 fileSn을 한 자리만 캡처해 fileSn=10이 "1"로
+    잘려 HWP로 오분류됐다(2026-08-17 전체 브랜치 리뷰에서 발견). PDF는 항상
+    fileSn=2 고정이라 fileSn=10 같은 값은 HWP도 PDF도 아니므로, 정규식을
+    `fileSn=(\\d+)`로 고친 뒤에도 "1"/"2" 이외의 값은 그냥 무시해야 한다.
+    """
+
+    def test_regex_captures_full_multidigit_number(self):
+        matches = extract._FILE_LINK.findall(
+            '<a href="/x/fileDown.do?fileSn=10&bbsId=">a</a>'
+        )
+        self.assertEqual(matches[0][1], "10")
+
+    def test_two_digit_filesn_not_captured_as_hwp(self):
+        html = (
+            '<a href="/fss/cmmn/file/fileDown.do?menuNo=200218&amp;atchFileId=X'
+            '&amp;fileSn=10&amp;bbsId=">첨부10</a>'
+            '<a href="/fss/cmmn/file/fileDown.do?menuNo=200218&amp;atchFileId=X'
+            '&amp;fileSn=2&amp;bbsId=">보도자료.pdf</a>'
+        )
+        urls = extract.parse_attachment_urls(html)
+        self.assertNotIn("hwp", urls)
+        self.assertTrue(urls["pdf"].endswith("fileSn=2&bbsId="))
+
+    def test_two_digit_filesn_not_captured_as_pdf_either(self):
+        html = (
+            '<a href="/fss/cmmn/file/fileDown.do?menuNo=200218&amp;atchFileId=X'
+            '&amp;fileSn=1&amp;bbsId=">보도자료.hwp</a>'
+            '<a href="/fss/cmmn/file/fileDown.do?menuNo=200218&amp;atchFileId=X'
+            '&amp;fileSn=10&amp;bbsId=">첨부10</a>'
+        )
+        urls = extract.parse_attachment_urls(html)
+        self.assertTrue(urls["hwp"].endswith("fileSn=1&bbsId="))
+        self.assertNotIn("pdf", urls)
+
+
 class TestDecodePage(unittest.TestCase):
     """디코딩 헬퍼 회귀 테스트 (fix round 1 — 오염된 본문의 조용한 통과 방지)."""
 

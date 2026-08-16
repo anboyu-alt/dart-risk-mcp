@@ -96,5 +96,30 @@ class TestGapReportSanitization(unittest.TestCase):
         self.assertIn("기법2/파이프", tech_lines[0])
 
 
+_RECORDS_WITH_SCREENED_OUT = _RECORDS + [
+    {"id": "7", "date": "2026-07-05", "title": "탈락건", "url": "https://x.invalid/7",
+     "screened_out": True},
+]
+
+
+class TestGapReportScreenedOut(unittest.TestCase):
+    """1차 스크리닝 탈락 레코드(classify.build_screened_out_record 산출)는
+    taxonomy_ids가 없다는 점만 보면 미매핑 신종 수법과 구분되지 않는다.
+    걸러내지 않으면 압도적 다수인 탈락 건이 전부 "신종 수법 후보"로 떠서
+    리포트가 무쓸모해진다(2026-08-17 전체 브랜치 리뷰에서 발견)."""
+
+    def test_screened_out_excluded_from_listing(self):
+        md = gaps.build_gap_report(_RECORDS_WITH_SCREENED_OUT, "2026-08-16")
+        self.assertNotIn("탈락건", md)
+
+    def test_unmapped_count_excludes_screened_out(self):
+        md = gaps.build_gap_report(_RECORDS_WITH_SCREENED_OUT, "2026-08-16")
+        self.assertIn("미매핑 2건", md)  # 스크리닝 탈락 1건은 미매핑 집계에서 빠진다
+
+    def test_total_count_still_includes_screened_out(self):
+        md = gaps.build_gap_report(_RECORDS_WITH_SCREENED_OUT, "2026-08-16")
+        self.assertIn("전체 4건", md)
+
+
 if __name__ == "__main__":
     unittest.main()

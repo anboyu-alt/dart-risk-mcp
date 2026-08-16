@@ -202,5 +202,46 @@ class TestBuildMdEndToEnd(unittest.TestCase):
         self.assertEqual(sum(len(v) for v in grouped.values()), 0)
 
 
+class TestWriteReadmeDataSource(unittest.TestCase):
+    """README의 데이터 소스 문구가 실제 수집 방식과 일치해야 한다.
+
+    설계가 게시판 웹 파싱 + FSS 단일 소스로 바뀌었는데도(오픈API는 일일 30회
+    한도로 폐기, 정책브리핑은 범위 밖) README 생성 코드가 옛 문구를 그대로
+    박고 있었다(Finding 3, 2026-08-17 전체 브랜치 리뷰).
+    """
+
+    def test_readme_states_actual_collection_method(self):
+        import tempfile
+        from pathlib import Path
+
+        from scripts.catalog import build_md
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = build_md.write_readme([], Path(tmp), "2026-08-16")
+            text = path.read_text(encoding="utf-8")
+
+        self.assertIn("게시판", text)
+        self.assertNotIn("오픈API", text)
+        self.assertNotIn("정책브리핑", text)
+
+
+class TestClassifyAgencyField(unittest.TestCase):
+    """classify.py의 agency 분기가 죽은 코드가 아닌지 확인(Finding 4).
+
+    collect.py는 항상 source="fss"만 내므로 "금융위원회" 분기는 도달 불가능한
+    죽은 코드였다. 실제로 도달 가능한 값 하나로 정리했는지, README의 데이터
+    소스 정정과 일관되게 "금융감독원" 단일 값을 쓰는지 확인한다.
+    """
+
+    def test_classify_source_reads_agency_field_literally(self):
+        import inspect
+
+        from scripts.catalog import classify
+
+        src = inspect.getsource(classify.main)
+        self.assertIn('"agency": "금융감독원"', src)
+        self.assertNotIn("금융위원회", src)
+
+
 if __name__ == "__main__":
     unittest.main()
