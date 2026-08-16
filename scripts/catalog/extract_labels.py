@@ -27,13 +27,16 @@ _BLOCK_SPLIT = re.compile(r"(?=^## \d+\.\d+: )", re.M)
 _HEADER = re.compile(r"^## (\d+\.\d+):\s*(.+?)\s*$", re.M)
 _DEFINITION = re.compile(r"^### 정의\s*\n(.+?)(?=\n^###|\n^---|\Z)", re.M | re.S)
 _RED_FLAGS = re.compile(r"^### 위험 신호\s*\n(.+?)(?=\n^###|\n^---|\Z)", re.M | re.S)
+# "기존 현장 기사 인용"은 보도자료에서 파생될 수 없는 수기 자산이라 재생성 전에
+# 반드시 보존해야 한다(fix round 1, 리뷰어 지적).
+_FIELD_ARTICLES = re.compile(r"^### 기존 현장 기사 인용\s*\n(.+?)(?=\n^###|\n^---|\Z)", re.M | re.S)
 _BULLET = re.compile(r"^-\s+(.+?)\s*$", re.M)
 
 
 def parse_md_labels(md_text: str) -> dict[str, dict]:
-    """MD 한 파일에서 {tid: {title, definition, red_flags}} 를 추출한다.
+    """MD 한 파일에서 {tid: {title, definition, red_flags, field_articles}} 를 추출한다.
 
-    정의·위험 신호가 없는 블록도 빈 값으로 반환한다(호출부가 폴백을 결정).
+    정의·위험 신호·기존 현장 기사 인용이 없는 블록도 빈 값으로 반환한다(호출부가 폴백을 결정).
     """
     out: dict[str, dict] = {}
     for block in _BLOCK_SPLIT.split(md_text)[1:]:
@@ -43,10 +46,12 @@ def parse_md_labels(md_text: str) -> dict[str, dict]:
         tid, title = header.group(1), header.group(2).strip()
         dm = _DEFINITION.search(block)
         rm = _RED_FLAGS.search(block)
+        am = _FIELD_ARTICLES.search(block)
         out[tid] = {
             "title": title,
             "definition": dm.group(1).strip() if dm else "",
             "red_flags": _BULLET.findall(rm.group(1)) if rm else [],
+            "field_articles": _BULLET.findall(am.group(1)) if am else [],
         }
     return out
 
@@ -75,6 +80,7 @@ def fill_from_taxonomy(labels: dict[str, dict]) -> dict[str, dict]:
             "title": entry.get("name", tid),
             "definition": entry.get("description", ""),
             "red_flags": list(entry.get("red_flags") or []),
+            "field_articles": [],
         }
     return labels
 

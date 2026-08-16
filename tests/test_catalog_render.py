@@ -107,5 +107,58 @@ class TestAggregate(unittest.TestCase):
         self.assertEqual(len(render.aggregate_techniques(cases, top_n=5)), 5)
 
 
+class TestAggregateLaws(unittest.TestCase):
+    def test_counts_and_sorts_desc(self):
+        cases = [{"laws": ["자본시장법", "금융감독규정"]}, {"laws": ["자본시장법"]}]
+        self.assertEqual(render.aggregate_laws(cases), [("자본시장법", 2), ("금융감독규정", 1)])
+
+    def test_respects_top_n(self):
+        cases = [{"laws": [f"L{i}" for i in range(20)]}]
+        self.assertEqual(len(render.aggregate_laws(cases, top_n=5)), 5)
+
+
+class TestFixRound1Sections(unittest.TestCase):
+    """fix round 1: 실제 카탈로그 MD에 있던 '인용 법조'·'기존 현장 기사 인용' 섹션 보존."""
+
+    def _render(self, labels=None, cases_by_tid=None):
+        labels = labels if labels is not None else {
+            "1.1": {"title": "전환가액 하향조정(리픽싱)",
+                    "definition": "DART 공시 없이 전환가액을 조정하는 행위입니다.",
+                    "red_flags": ["한 번에 10% 이상의 큰 폭 하향 조정"],
+                    "field_articles": ["위메이드 800억원 CB조기상환", "리픽싱모니터"]}
+        }
+        cases_by_tid = cases_by_tid if cases_by_tid is not None else {"1.1": [_CASE]}
+        return render.render_category(
+            "Convertible Bond & Debt Manipulation", ["1.1"], cases_by_tid,
+            labels, TAXONOMY, "2026-08-16",
+        )
+
+    def test_section_order(self):
+        md = self._render()
+        order = ["### 정의", "### 탐지 키워드", "### 위험 신호",
+                  "### 금감원·금융위 적발 사례", "### 적발 기법 종합",
+                  "### 인용 법조", "### 기존 현장 기사 인용"]
+        positions = [md.index(sec) for sec in order]
+        self.assertEqual(positions, sorted(positions))
+
+    def test_laws_aggregated_with_counts(self):
+        md = self._render()
+        self.assertIn("### 인용 법조\n\n- 자본시장법 (1건)", md)
+
+    def test_field_articles_rendered_as_bullets(self):
+        md = self._render()
+        self.assertIn("### 기존 현장 기사 인용\n\n- 위메이드 800억원 CB조기상환\n- 리픽싱모니터", md)
+
+    def test_field_articles_empty_renders_em_dash(self):
+        labels = {"1.1": {"title": "전환가액 하향조정(리픽싱)", "definition": "정의", "red_flags": ["신호"]}}
+        md = self._render(labels=labels)
+        self.assertIn("### 기존 현장 기사 인용\n\n—", md)
+
+    def test_laws_empty_renders_em_dash(self):
+        labels = {"1.1": {"title": "전환가액 하향조정(리픽싱)", "definition": "정의", "red_flags": ["신호"]}}
+        md = self._render(labels=labels, cases_by_tid={})
+        self.assertIn("### 인용 법조\n\n—", md)
+
+
 if __name__ == "__main__":
     unittest.main()

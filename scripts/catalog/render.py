@@ -61,15 +61,25 @@ def render_case(case: dict) -> str:
     return "\n".join(lines)
 
 
-def aggregate_techniques(cases: list[dict], top_n: int = 10) -> list[tuple[str, int]]:
-    """사례들의 적발 기법을 빈도순으로 집계한다."""
+def _aggregate_field(cases: list[dict], field: str, top_n: int = 10) -> list[tuple[str, int]]:
+    """사례들의 지정 필드(값이 리스트인 필드)를 빈도순으로 집계한다."""
     counter: Counter = Counter()
     for case in cases:
-        for tech in case.get("techniques") or []:
-            cleaned = _cell(tech)
+        for value in case.get(field) or []:
+            cleaned = _cell(value)
             if cleaned:
                 counter[cleaned] += 1
     return counter.most_common(top_n)
+
+
+def aggregate_techniques(cases: list[dict], top_n: int = 10) -> list[tuple[str, int]]:
+    """사례들의 적발 기법을 빈도순으로 집계한다."""
+    return _aggregate_field(cases, "techniques", top_n)
+
+
+def aggregate_laws(cases: list[dict], top_n: int = 10) -> list[tuple[str, int]]:
+    """사례들의 인용 법조를 빈도순으로 집계한다."""
+    return _aggregate_field(cases, "laws", top_n)
 
 
 def render_category(
@@ -121,6 +131,18 @@ def render_category(
         agg = aggregate_techniques(cases)
         if agg:
             out += [f"- {tech} ({n}건)" for tech, n in agg]
+        else:
+            out.append("—")
+        out += ["", "### 인용 법조", ""]
+        laws = aggregate_laws(cases)
+        if laws:
+            out += [f"- {law} ({n}건)" for law, n in laws]
+        else:
+            out.append("—")
+        out += ["", "### 기존 현장 기사 인용", ""]
+        articles = lab["field_articles"]
+        if articles:
+            out += [f"- {_cell(a)}" for a in articles]
         else:
             out.append("—")
         out += ["", "---", ""]

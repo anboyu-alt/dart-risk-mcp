@@ -21,11 +21,16 @@ def load_labels(path: Path | None = None) -> dict[str, dict]:
 
 
 def label_for(tid: str, labels: dict[str, dict], taxonomy: dict[str, dict]) -> dict:
-    """유형 하나의 표시 라벨을 결정한다. 라벨 우선, 없으면 TAXONOMY 폴백."""
+    """유형 하나의 표시 라벨을 결정한다. 라벨 우선, 없으면 TAXONOMY 폴백.
+
+    field_articles(기존 현장 기사 인용)는 보도자료에서 파생될 수 없는 수기 자산이라
+    TAXONOMY에 대응 필드가 없다 — 라벨에 없으면 빈 리스트로 폴백한다(TAXONOMY 폴백 아님).
+    """
     entry = taxonomy.get(tid, {})
     lab = labels.get(tid) or {}
     return {
         "title": lab.get("title") or entry.get("name", tid),
         "definition": lab.get("definition") or entry.get("description", ""),
         "red_flags": lab.get("red_flags") or list(entry.get("red_flags") or []),
+        "field_articles": list(lab.get("field_articles") or []),
     }
