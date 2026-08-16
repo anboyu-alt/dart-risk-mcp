@@ -1,6 +1,9 @@
 """Phase C 분류 회귀 테스트. LLM은 호출하지 않고 프롬프트 구성·응답 파싱만 검증."""
 import json
 import unittest
+from unittest.mock import MagicMock, patch
+
+import requests as requests_lib
 
 from dart_risk_mcp.core.taxonomy import TAXONOMY
 from scripts.catalog import classify
@@ -67,6 +70,77 @@ class TestParseClassify(unittest.TestCase):
         got = classify.parse_classify_response("JSON 아님")
         self.assertEqual(got["taxonomy_ids"], [])
         self.assertEqual(got["confidence"], "low")
+
+
+def _fake_response(status_code: int, text: str = "ok", headers: dict | None = None) -> MagicMock:
+    """call_anthropic이 쓰는 requests.Response 표면(status_code/headers/json/
+    raise_for_status)만 흉내 낸 더블. 실제 네트워크 호출 없음."""
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.headers = headers or {}
+    if status_code >= 400:
+        resp.raise_for_status.side_effect = requests_lib.HTTPError(f"{status_code}")
+    else:
+        resp.raise_for_status.return_value = None
+    resp.json.return_value = {"content": [{"type": "text", "text": text}]}
+    return resp
+
+
+class TestCallAnthropicRetry(unittest.TestCase):
+    """call_anthropic의 429/5xx 재시도·백오프·페이싱을 검증한다.
+    requests.post와 time.sleep을 patch해 실제 네트워크·대기 없이 돈다."""
+
+    @patch("scripts.catalog.classify.time.sleep")
+    @patch("scripts.catalog.classify.requests.post")
+    def test_200_succeeds_without_retry(self, mock_post, mock_sleep):
+        mock_post.return_value = _fake_response(200, text="hello")
+        got = classify.call_anthropic("sys", "user", "key")
+        self.assertEqual(got, "hello")
+        self.assertEqual(mock_post.call_count, 1)
+
+    @patch("scripts.catalog.classify.time.sleep")
+    @patch("scripts.catalog.classify.requests.post")
+    def test_429_then_200_retries_and_succeeds(self, mock_post, mock_sleep):
+        mock_post.side_effect = [_fake_response(429), _fake_response(200, text="ok")]
+        got = classify.call_anthropic("sys", "user", "key")
+        self.assertEqual(got, "ok")
+        self.assertEqual(mock_post.call_count, 2)
+
+    @patch("scripts.catalog.classify.time.sleep")
+    @patch("scripts.catalog.classify.requests.post")
+    def test_persistent_429_raises_after_max_retries(self, mock_post, mock_sleep):
+        mock_post.return_value = _fake_response(429)
+        with self.assertRaises(requests_lib.HTTPError):
+            classify.call_anthropic("sys", "user", "key")
+        # 초기 시도 1회 + 재시도 _MAX_RETRIES회 = 상한
+        self.assertEqual(mock_post.call_count, classify._MAX_RETRIES + 1)
+
+    @patch("scripts.catalog.classify.time.sleep")
+    @patch("scripts.catalog.classify.requests.post")
+    def test_5xx_follows_same_retry_path_as_429(self, mock_post, mock_sleep):
+        mock_post.side_effect = [_fake_response(503), _fake_response(200, text="ok")]
+        got = classify.call_anthropic("sys", "user", "key")
+        self.assertEqual(got, "ok")
+        self.assertEqual(mock_post.call_count, 2)
+
+    @patch("scripts.catalog.classify.time.sleep")
+    @patch("scripts.catalog.classify.requests.post")
+    def test_retry_after_header_overrides_backoff(self, mock_post, mock_sleep):
+        mock_post.side_effect = [
+            _fake_response(429, headers={"Retry-After": "2"}),
+            _fake_response(200, text="ok"),
+        ]
+        classify.call_anthropic("sys", "user", "key")
+        waited = [c.args[0] for c in mock_sleep.call_args_list if c.args]
+        self.assertIn(2.0, waited)
+
+    @patch("scripts.catalog.classify.time.sleep")
+    @patch("scripts.catalog.classify.requests.post")
+    def test_400_is_not_retried(self, mock_post, mock_sleep):
+        mock_post.return_value = _fake_response(400)
+        with self.assertRaises(requests_lib.HTTPError):
+            classify.call_anthropic("sys", "user", "key")
+        self.assertEqual(mock_post.call_count, 1)
 
 
 if __name__ == "__main__":

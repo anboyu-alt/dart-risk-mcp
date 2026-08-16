@@ -41,6 +41,10 @@ OUT_PATH = _REPO_ROOT / "data" / "catalog" / "catalog_classified.jsonl"
 
 _JSON_BLOCK = re.compile(r"\{[\s\S]*\}")
 
+# 429/5xx 재시도 대상(레포 관례, dart_client._retry와 동일 집합)
+_RETRY_STATUSES = {429, 500, 502, 503, 504}
+_MAX_RETRIES = 3
+
 
 def build_taxonomy_prompt(taxonomy: dict[str, dict]) -> str:
     """45개 유형 정의를 시스템 프롬프트로 만든다(프롬프트 캐싱 대상)."""
@@ -63,8 +67,29 @@ def build_taxonomy_prompt(taxonomy: dict[str, dict]) -> str:
     return "\n".join(lines)
 
 
+def _retry_wait_seconds(resp: requests.Response, attempt: int) -> float:
+    """다음 재시도까지 대기할 초를 정한다. Retry-After 헤더가 있으면 그 값을
+    우선하고(정수로 파싱 안 되면 폴백), 없으면 지수 백오프(1, 2, 4초...)를 쓴다."""
+    retry_after = (resp.headers or {}).get("Retry-After")
+    if retry_after:
+        try:
+            return float(int(retry_after))
+        except (TypeError, ValueError):
+            pass  # 파싱 실패 — 지수 백오프로 폴백
+    return float(2 ** attempt)
+
+
 def call_anthropic(system: str, user: str, api_key: str, model: str = MODEL) -> str:
-    """Anthropic Messages API 호출. 시스템 프롬프트에 캐시 제어를 건다."""
+    """Anthropic Messages API 호출. 시스템 프롬프트에 캐시 제어를 건다.
+
+    429/5xx는 지수 백오프(Retry-After 헤더 우선)로 최대 _MAX_RETRIES회 재시도한다
+    (레포 관례, dart_client._retry와 동일 설계). 재시도를 다 쓰고도 실패하면
+    HTTPError를 던진다 — 호출부의 개별 except가 흡수하는 성질은 그대로 둔다.
+
+    성공·실패를 불문하고 요청 하나가 끝날 때마다 _SLEEP만큼 대기한다. 이 함수
+    안에서 대기하면 스크리닝 통과·탈락·예외 등 모든 호출 경로가 자동으로
+    페이싱되므로, 호출부(main 루프)에서 별도로 sleep을 두지 않는다.
+    """
     payload = {
         "model": model,
         "max_tokens": 1500,
@@ -76,10 +101,22 @@ def call_anthropic(system: str, user: str, api_key: str, model: str = MODEL) -> 
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
     }
-    resp = requests.post(API_URL, headers=headers, json=payload, timeout=_TIMEOUT)
-    resp.raise_for_status()
-    blocks = resp.json().get("content") or []
-    return "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+    try:
+        resp = None
+        for attempt in range(_MAX_RETRIES + 1):
+            resp = requests.post(API_URL, headers=headers, json=payload, timeout=_TIMEOUT)
+            if resp.status_code not in _RETRY_STATUSES:
+                break
+            if attempt < _MAX_RETRIES:
+                wait = _retry_wait_seconds(resp, attempt)
+                print(f"[CLASSIFY] {resp.status_code} 응답 — {wait:.0f}초 대기 후 재시도 "
+                      f"({attempt + 1}/{_MAX_RETRIES})")
+                time.sleep(wait)
+        resp.raise_for_status()
+        blocks = resp.json().get("content") or []
+        return "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+    finally:
+        time.sleep(_SLEEP)
 
 
 def _extract_json(text: str) -> dict:
@@ -201,7 +238,8 @@ def main() -> None:
             fh.flush()
             if i % 25 == 0:
                 print(f"[CLASSIFY] {i}/{len(todo)} — 통과 {kept} / 매핑 {mapped}")
-            time.sleep(_SLEEP)
+            # 페이싱은 call_anthropic 내부에서 매 요청마다 처리한다(스크리닝
+            # 탈락으로 continue하는 압도적 다수 경로까지 포함해서).
 
     print(f"[CLASSIFY] 완료: 후보 {len(todo)} → 스크리닝 통과 {kept} → 유형 매핑 {mapped}")
 
