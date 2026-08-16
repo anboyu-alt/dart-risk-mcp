@@ -31,7 +31,91 @@
 
 ---
 
-## [Unreleased]
+## [1.12.0] — 2026-08-16
+
+**공시 제목 키워드 매칭 위에 표시 계층(신호 한정층)을 얹어, 정상적으로 공시되는 내용이 위험 신호로 표기되던 문제를 해소.** `match_signals`는 `kw in report_nm` 부분일치가 전부라 부정·방향·주체·수식어를 표현할 수단이 구조적으로 없었다. 실측(골든 픽스처): 삼성전자 1년치 발화 신호 8건 전부, 셀트리온 32건 중 22건, 두산 10건 중 9건이 오탐.
+
+키워드 54종·183개와 `SIGNAL_TYPES`·`taxonomy.py`·`_AMENDMENT_RE`는 **수정하지 않았다.** 잡는 범위는 그대로 두고 잡은 뒤에 나눈다.
+
+### Output Contract Change
+
+Stability Policy의 "사용자 출력 형식 변경(첫 줄·핵심 헤더·표기 원칙)"에 해당한다. 도구 시그니처·파라미터·반환 타입은 하나도 바뀌지 않았고 도구 제거도 없다. 골드 파일은 일괄 갱신했으며 hygiene 9종은 PASS를 유지한다.
+
+- **`build_event_timeline` 첫 줄** — 관찰 신호가 0건일 때 `📋 **{회사명}** ({종목코드})` → `⏳ **이벤트 타임라인: {회사명}** ({종목코드})`. 정상 경로와 형식을 통일했다. 한정층 도입으로 공시 신호가 전부 강등되는 회사(헬릭스미스 실측)에서 이 경로가 처음 발화하며 출력 계약이 깨진 것을 발견해 수정.
+- **`analyze_company_risk`** — `━━ 절차·사후 보고 (N건) ━━` 절 신설(강등 사유를 사실 문장으로 동반). 헤드라인 문장 `가장 무게 있는 신호는 'X'입니다`는 후보가 전부 양면적 신호면 `이 기간 관찰된 유형: …`로 대체된다.
+- **`check_disclosure_risk`** — `제출인: {이름}` 줄 신설(접수번호로 행이 복원됐을 때만). 강등 판정 시 `🎯` 대신 `⚪ **절차·사후 보고**` + 사유.
+- **`search_market_disclosures`** — 커버리지 문구가 `전체 N건 중 신호 일치 M건` → `전체 N건 중 관찰 신호 M건 (표시 K건) · 절차·사후 보고 P건 제외`.
+- **`3PCA` 표시 라벨** — 제목에 `제3자배정` 마커가 없으면 `제3자배정유상증자` → `유상증자(배정방식 미상)`. 신호 키(`3PCA`)와 taxonomy ID(2.4)는 불변이므로 신호 키 카탈로그 contract는 영향 없음.
+
+### Added
+
+- `core/qualifiers.py` — 제목 구조 파서(`parse_report_name`)와 신호 한정(`qualify_signals`). 순수 함수, 네트워크 호출 없음. 신호를 삭제하지 않고 `tier`(`observed`/`procedural`)와 강등 사유만 붙인다.
+  - R1 제출인 ≠ 회사 · R1b 지분 보유·변동 신고서(대량보유·임원소유·최대주주등소유주식변동) · R2 사후·해제 국면(어미가 `결과보고서`·`해제`·`취소`·`철회`·`해지`·`중단`) · R3 자회사·특수관계인 사안 · R4 해명·미확정 · R5 정정·후속 꼬리표.
+  - **마지막 어미만 본다** — `자기주식취득신탁계약해지결정`은 `해지`를 포함해도 `결정`으로 끝나므로 관찰 신호로 남는다. 부분일치와의 결정적 차이.
+  - 거래소 제출 공시는 R1에서 제외한다. 실측(`pblntf_ty=I`, 6,341행): `코스닥시장본부` 389 · `유가증권시장본부` 71 · **`코넥스시장` 13(본부 접미 없음)**. 이 예외가 없으면 `조회공시요구`·`불성실공시법인지정`이 집계·헤드라인·패턴 매칭에서 소실되고 타임라인 탈출기가 비어버린다.
+- `signals.AMBIGUOUS_SIGNAL_KEYS` — `TREASURY`·`TREASURY_TRUST`·`FUND_OUTFLOW`·`ACQ_REVIEW`. 정상 기업활동으로도 빈발해 단독으로는 헤드라인이 되지 못한다. 목록·집계·패턴 매칭에는 정상 참여. 근거는 새로 만들지 않고 `explain.py`가 이미 쓰고 있는 양면성 서술만 사용했다.
+- `core.resolve_disclosure_row_from_rcept_no` — 접수번호로 `list.json` 행 전체를 복원. `check_disclosure_risk`가 접수번호만 아는 경로에서 실제 제목·제출인을 얻어 R1~R5를 적용한다. 전용 캐시 `_rcept_row_cache`(10분, 50건).
+- `signals-data.json`에 `qualifier_rules`·`ambiguous_signal_keys` 내보내기 — 규칙 문자열의 이중 관리를 막고 뷰어는 로직만 이식한다.
+- 공개 뷰어(`docs/tool/index.html`) — 관찰/절차 두 층 렌더, 대량보유보고 묶음 요약(임계 없이 분모 병기), 관찰 0건 안내, 배정방식 미상 행의 **펼칠 때만** 원문 확인(스캔 시점 추가 호출 0건).
+
+### Changed
+
+- `analyze_company_risk`·`build_event_timeline`·`check_disclosure_risk`·`search_market_disclosures` 4개 도구가 모두 한정층을 통과한다. `procedural`은 카테고리 집계·헤드라인·`detect_capital_churn`·`capital_backflow` 게이트·`CROSS_SIGNAL_PATTERNS` 매칭에서 제외된다.
+- `search_market_disclosures`의 preset 필터가 `observed` 신호에만 적용된다 — 강등된 신호가 preset을 통과시키면 제외의 의미가 없다. 절차 건수도 preset 범위로 집계한다.
+- 시장 스캔 실측 효과(7일, 5,820건): `shareholder_change` 240 → **13**(−94.6%), `all_risk` 527 → 240, `inquiry` 38 → 18, `treasury` 48 → 35, `fund_outflow` 62 → 53.
+
+### Fixed
+
+- `check_disclosure_risk`가 접수번호로 불릴 때 제목을 `f"접수번호 {rcept_no}"` 자리표시자로 만들어 **어떤 신호도 매칭될 수 없던** 문제. 함수 132줄에 `report_nm`이 0회 등장했다.
+- 같은 공시가 호출 형태에 따라 다른 판정을 받던 비대칭 — `rcept_no`와 `report_name`을 함께 넘기면 `filing=None`이 돼 R1이 발화하지 못했다.
+- 강등 사유 문장이 R2~R5에서 사실과 달랐던 문제(`이미 실행된 건의 결과 보고입니다` 바로 아래에서 `회사가 낸 사건 공시가 아닙니다`로 스스로를 반박).
+- 완전히 강등된 공시에도 카탈로그 발췌가 출력돼 강등을 시각적으로 되돌리던 문제.
+- `scripts/regen_goldens.py`의 DS005 후보 선별 — `분할결정` 키워드가 `주식분할결정`(액면분할)에 부분일치, `[첨부정정]` 정정본 미필터, 무마커 재제출 미검증으로 골드가 에러 문자열이 되던 3종.
+- `scripts/regen_goldens.py`가 `find_actor_overlap`·`compare_financials`에 회사 10개를 전부 넘겨(두 도구 모두 최대 5개) 골드가 "입력 오류"만 담고 있던 문제.
+- `track_fund_usage` 출력에 내부 flag 코드가 `(DIVIDEND_DRAIN)`으로 노출되던 문제.
+- 단위 테스트 9건이 실제 DART API를 호출하던 문제 — 스위트의 네트워크 의존 0.
+
+### Known limitations
+
+- `resolve_disclosure_row_from_rcept_no`는 하루치를 12페이지(1,200행)까지만 훑는다. 20260731 실측이 1,159행(상한의 96%)이라 더 몰리는 날엔 `None`을 반환하며, "존재하지 않음"과 구분되지 않는다. 호출부는 기존 동작으로 퇴화한다.
+- 접수번호 앞 8자리가 접수일과 다른 공시가 존재한다(20260803 전수 610건 중 4건, 0.7%). 그런 건은 행을 찾지 못한다. 기존 `resolve_corp_code_from_rcept_no`도 같은 전제 위에 있다.
+- SE 뷰어(`docs/tool/se/app.js`)에는 한정층이 적용되지 않았다 — 같은 회사에 대해 공개 뷰어와 SE가 다른 헤드라인을 보일 수 있다.
+
+---
+
+## [1.11.0] — 2026-08-04
+
+> 이 항목은 릴리스 당시 CHANGELOG에 기록되지 않아 [GitHub 릴리스 노트](https://github.com/anboyu-alt/dart-risk-mcp/releases/tag/v1.11.0)에서 소급 정리했다. 원문이 더 상세하다.
+
+### Added
+
+- 연결망 실체 병합(#159) — 행위자↔회사 이분 그래프의 노드 병합 우선순위(`actor_corp_ids` > 비모호 fold > 미병합). 동명 별개 법인은 병합하지 않고 시장 배지·사실 주석으로 구분.
+- KOSPI 개명 소급 경로(#160) — '상호변경안내'가 사실상 코스닥 전용인 한계를 수동 시드(`manual_renames.json`, DART 대조 검증 필수) + 공개 `corp-aliases` 보조 인덱스로 보완.
+
+### Fixed
+
+- 미존재 기업명 입력 시 9개 도구가 TypeError로 크래시하던 문제(`resolve_corp` None 가드).
+- `resolve_decision_type`이 한글 가운뎃점 `ㆍ`(U+318D)를 제거하지 않아 `주식교환ㆍ이전결정`(stock_exchange)이 영구 리졸브 실패하던 버그 — 최근 1년 실사례 77건, 코오롱인더 건으로 종단 검증.
+- `capital_backflow`(CRITICAL) 오발화 — "특수관계 없음" 등 부정 표기가 affiliated로 오분류되던 것을 external 우선 분류로 수정.
+- 참고 강도(OBSERVATION) 신호에 근거 없는 "위기 도달 N개월" 문장이 렌더되던 폴백 제거.
+- `view_disclosure` 숫자 엔티티 크래시·섹션 id off-by-N 수정.
+
+---
+
+## [1.10.3] — 2026-08-02
+
+> 이 항목도 소급 정리했다. [GitHub 릴리스 노트](https://github.com/anboyu-alt/dart-risk-mcp/releases/tag/v1.10.3) 참고.
+
+**v1.10.2 사용자는 이 버전으로 업데이트해야 한다** — v1.10.2는 설치 시점에 따라 서버가 뜨지 않을 수 있다. 기능 변경은 없다.
+
+### Fixed
+
+- `mcp<2.0.0` 상한 추가 — 의존성에 상한이 없어 설치 환경이 mcp 2.0.0을 끌어오면 2.0이 제거한 `mcp.server.fastmcp` 때문에 서버가 import 단계에서 죽었다(Claude Desktop "Server disconnected"). 로컬에는 mcp 1.x가 이미 있어 테스트로 드러나지 않던 유형.
+- 가드 테스트 3종 — 의존성 상한 존재 / `server.py` import 경로 유지 / 확장 의존성 핀 == 패키지 버전.
+
+---
+
+## [1.10.2] — 2026-08-02
 
 **금감원 2019-12-19 무자본 M&A 합동점검 반영.** 조달자금 유용 경로(비상장주식 취득 55%·관계회사 대여/선급금 29%)를 패턴·플래그로 도구화.
 
