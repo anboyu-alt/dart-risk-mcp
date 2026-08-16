@@ -22,6 +22,16 @@ IN_PATH = _REPO_ROOT / "data" / "catalog" / "catalog_classified.jsonl"
 OUT_DIR = _REPO_ROOT / "docs" / "catalog"
 
 
+def _clean(value: str) -> str:
+    """리포트에 넣을 문자열을 한 줄로 정리한다.
+
+    개행은 헤딩·리스트 구조를 깨뜨리고, 파이프와 대괄호는 마크다운 링크
+    문법을 깨뜨린다. 금감원 제목에는 '[보도자료]' 같은 대괄호 접두가 흔하다.
+    """
+    text = " ".join(str(value or "").split())
+    return text.replace("|", "/").replace("[", "(").replace("]", ")")
+
+
 def build_gap_report(records: list[dict], generated_on: str) -> str:
     """미매핑 레코드를 신규 유형 후보 목록으로 렌더한다."""
     unmapped = [r for r in records if not r.get("taxonomy_ids")]
@@ -46,14 +56,16 @@ def build_gap_report(records: list[dict], generated_on: str) -> str:
         return "\n".join(lines) + "\n"
 
     for rec in unmapped:
-        title = str(rec.get("title", "")).replace("|", "/")
+        title = _clean(rec.get("title", ""))
         url = rec.get("url", "")
         head = f"[{title}]({url})" if url else title
+        summary = _clean(rec.get("summary", ""))
+        techniques = ", ".join(_clean(t) for t in (rec.get("techniques") or [])) or "—"
         lines += [
             f"## {rec.get('date','')} — {head}",
             "",
-            f"- 요약: {rec.get('summary','')}",
-            f"- 적발 기법: {', '.join(rec.get('techniques') or []) or '—'}",
+            f"- 요약: {summary}",
+            f"- 적발 기법: {techniques}",
             f"- confidence: {rec.get('confidence','low')} · 본문 확보: {rec.get('body_source','unknown')}",
             "",
         ]

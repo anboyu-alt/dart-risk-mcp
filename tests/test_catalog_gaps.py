@@ -51,5 +51,50 @@ class TestGapReport(unittest.TestCase):
         self.assertIn("후보 없음", md)
 
 
+# Fix round 1: 제목·요약·기법에 개행·파이프·대괄호가 섞여도 마크다운 구조가
+# 깨지지 않아야 한다. 금감원 제목의 "[보도자료]" 접두가 실측 사례.
+_EDGE_RECORDS = [
+    {"id": "4", "date": "2026-04-05", "title": "[보도자료] 신종 수법 C", "url": "https://x.invalid/4",
+     "taxonomy_ids": [], "summary": "다단계 자금모집", "techniques": [],
+     "confidence": "high", "body_source": "pdf"},
+    {"id": "5", "date": "2026-05-05", "title": "신종 수법 D\n두번째 줄", "url": "https://x.invalid/5",
+     "taxonomy_ids": [], "summary": "요약 줄1\n요약 줄2", "techniques": ["기법1\n개행", "기법2|파이프"],
+     "confidence": "high", "body_source": "pdf"},
+    {"id": "6", "date": "2026-06-05", "title": "제목|파이프", "url": "https://x.invalid/6",
+     "taxonomy_ids": [], "summary": "요약", "techniques": [], "confidence": "high", "body_source": "pdf"},
+]
+
+
+class TestGapReportSanitization(unittest.TestCase):
+    def test_bracket_title_does_not_break_link(self):
+        md = gaps.build_gap_report([_EDGE_RECORDS[0]], "2026-08-16")
+        self.assertNotIn("[보도자료]", md)
+        self.assertIn("[(보도자료) 신종 수법 C](https://x.invalid/4)", md)
+
+    def test_title_newline_folds_heading_to_one_line(self):
+        md = gaps.build_gap_report([_EDGE_RECORDS[1]], "2026-08-16")
+        heading_lines = [l for l in md.splitlines() if l.startswith("## 2026-05-05")]
+        self.assertEqual(len(heading_lines), 1)
+        self.assertIn("신종 수법 D 두번째 줄", heading_lines[0])
+
+    def test_title_pipe_handled(self):
+        md = gaps.build_gap_report([_EDGE_RECORDS[2]], "2026-08-16")
+        self.assertIn("제목/파이프", md)
+        self.assertNotIn("제목|파이프", md)
+
+    def test_summary_newline_folds_to_one_line(self):
+        md = gaps.build_gap_report([_EDGE_RECORDS[1]], "2026-08-16")
+        summary_lines = [l for l in md.splitlines() if l.startswith("- 요약:")]
+        self.assertEqual(len(summary_lines), 1)
+        self.assertIn("요약 줄1 요약 줄2", summary_lines[0])
+
+    def test_techniques_newline_and_pipe_handled(self):
+        md = gaps.build_gap_report([_EDGE_RECORDS[1]], "2026-08-16")
+        tech_lines = [l for l in md.splitlines() if l.startswith("- 적발 기법:")]
+        self.assertEqual(len(tech_lines), 1)
+        self.assertIn("기법1 개행", tech_lines[0])
+        self.assertIn("기법2/파이프", tech_lines[0])
+
+
 if __name__ == "__main__":
     unittest.main()
