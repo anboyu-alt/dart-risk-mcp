@@ -367,7 +367,7 @@ Expected: `[EXTRACT] MD에서 37개 유형 라벨 추출` → `[EXTRACT] 45개 �
 - [ ] **Step 7: 테스트 실행 — 통과 확인**
 
 Run: `python -m pytest tests/test_catalog_labels.py -v`
-Expected: 5 passed
+Expected: 6 passed
 
 - [ ] **Step 8: 커밋**
 
@@ -402,6 +402,26 @@ EOF
   - `render.render_category(category: str, tids: list[str], cases_by_tid: dict[str, list[dict]], labels: dict, taxonomy: dict, generated_on: str) -> str`
   - `render.render_case(case: dict) -> str`
   - `render.aggregate_techniques(cases: list[dict], top_n: int = 10) -> list[tuple[str, int]]`
+  - `render.aggregate_laws(cases: list[dict], top_n: int = 10) -> list[tuple[str, int]]`
+
+> **추가 요구 (2026-08-16 Task 2 리뷰에서 발견, 사용자 결정 "둘 다 보존")**
+>
+> 계획 최초 작성 시 기존 MD의 섹션 2개를 누락했다. 실측하니 37개 유형 **전부**에 존재한다:
+> `### 인용 법조`(37블록/142줄)와 `### 기존 현장 기사 인용`(37블록/49줄).
+> 후자는 보도자료에서 파생될 수 없는 **수기 자산**이다(예: "위메이드 800억원 CB조기상환",
+> "리픽싱모니터"). 이 상태로 `build_md.py`가 실제 파일을 덮어쓰면 191줄이 조용히 사라진다.
+>
+> 따라서:
+> 1. `render_category`의 섹션 순서는 실제 MD와 같아야 한다 —
+>    정의 → 탐지 키워드 → 위험 신호 → 금감원·금융위 적발 사례 → 적발 기법 종합 →
+>    **인용 법조** → **기존 현장 기사 인용**
+> 2. `인용 법조`는 사례의 `laws`를 집계해 재생성한다(`aggregate_laws`). `aggregate_techniques`와
+>    동형이므로 공통 헬퍼 `_aggregate_field(cases, field, top_n)`로 묶고 둘은 그 얇은 래퍼로 둔다
+>    (리뷰 Minor 지적 반영 — 로직 블록 복제 금지)
+> 3. `기존 현장 기사 인용`은 Task 1의 한글 라벨과 같은 방식으로 보존한다 —
+>    `extract_labels.parse_md_labels`가 `field_articles: list[str]`를 추가로 추출하고,
+>    `labels.label_for`가 이를 반환하며, `labels_ko.json`을 재생성해 커밋한다.
+>    라벨에 없으면 빈 리스트이고, 이때 섹션 본문은 `—`로 렌더한다
 
 `case` 레코드 스키마(Task 6의 classify 출력과 일치):
 ```python
@@ -1305,7 +1325,45 @@ class TestNormalize(unittest.TestCase):
         self.assertNotIn("140001", [r["id"] for r in kept])
 
 
+class TestResumeState(unittest.TestCase):
+    """FSS 개인키의 일일 호출 한도 때문에 백필은 여러 날에 걸쳐 재개돼야 한다."""
+
+    def test_state_roundtrip(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "state.json"
+            self.assertEqual(collect.load_state(p), {"done_chunks": []})
+            collect.save_state(p, {"done_chunks": ["20100101-20100131"]})
+            self.assertEqual(collect.load_state(p)["done_chunks"], ["20100101-20100131"])
+
+    def test_corrupt_state_treated_as_empty(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "state.json"
+            p.write_text("{ not json", encoding="utf-8")
+            self.assertEqual(collect.load_state(p), {"done_chunks": []})
+
+    def test_chunk_key_format_matches_state_entries(self):
+        # main()이 f"{bgn}-{end}"로 키를 만든다. month_chunks 출력과 형식이 맞아야
+        # --resume이 완료 청크를 실제로 건너뛴다.
+        bgn, end = collect.month_chunks("2010-01-01", "2010-01-31")[0]
+        self.assertEqual(f"{bgn}-{end}", "20100101-20100131")
+
+
 class TestChunks(unittest.TestCase):
+    def test_month_chunks_never_exceed_31_days(self):
+        # FSS 개인 인증키는 조회기간 31일 상한이 있다고 알려져 있다. 월 청크는
+        # 최대 31일이라 정합적이다 — 이 성질이 깨지면 수집이 조용히 실패한다.
+        from datetime import datetime
+
+        for bgn, end in collect.month_chunks("2010-01-01", "2026-08-16"):
+            span = (datetime.strptime(end, "%Y%m%d") - datetime.strptime(bgn, "%Y%m%d")).days
+            self.assertLessEqual(span, 30, f"{bgn}~{end} 가 31일을 초과")
+
     def test_month_chunks_cover_range(self):
         chunks = collect.month_chunks("2024-01-01", "2024-03-15")
         self.assertEqual(chunks[0], ("20240101", "20240131"))
@@ -1364,8 +1422,15 @@ from scripts._console import use_utf8_stdout  # noqa: E402
 FSS_API_URL = "https://www.fss.or.kr/fss/kr/openApi/api/bodoInfo.jsp"
 FSS_VIEW_URL = "https://www.fss.or.kr/fss/bbs/B0000188/view.do?nttId={id}&menuNo=200218"
 OUT_PATH = _REPO_ROOT / "data" / "catalog" / "catalog_sources.jsonl"
+STATE_PATH = _REPO_ROOT / "data" / "catalog" / "collect_state.json"
 _TIMEOUT = 30
 _SLEEP = 0.3
+
+# FSS 개인 인증키에는 조회기간 상한(31일)과 일일 호출 한도가 있다고 알려져 있다
+# (사용자 제보, 2026-08-16 — 실호출로 미검증). 월 단위 청크는 31일 상한과 정합적이고,
+# 일일 한도는 한 실행의 호출 수를 제한하고 --resume으로 여러 날에 나눠 받아 흡수한다.
+# 2010~2026 백필은 약 200개 청크라 한도가 30회면 최소 7일이 걸린다.
+MAX_CALLS_PER_RUN = 25
 
 # taxonomy 45개를 겨냥한 확장 키워드. 통과 건수는 --dry-run으로 측정해 조정한다.
 KEYWORDS: list[str] = [
@@ -1430,13 +1495,34 @@ def fetch_fss(bgn: str, end: str, api_key: str) -> list[dict]:
     return [r for r in rows if isinstance(r, dict)]
 
 
+def load_state(path: Path) -> dict:
+    """수집 진행 상태(완료 청크 목록)를 읽는다. 없으면 빈 상태."""
+    if not path.exists():
+        return {"done_chunks": []}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"done_chunks": []}
+
+
+def save_state(path: Path, state: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def main() -> None:
     use_utf8_stdout()
     parser = argparse.ArgumentParser(description="보도자료 수집 → catalog_sources.jsonl")
     parser.add_argument("--start", default="2010-01-01")
     parser.add_argument("--end", default=date.today().isoformat())
     parser.add_argument("--out", default=str(OUT_PATH))
+    parser.add_argument("--state", default=str(STATE_PATH))
     parser.add_argument("--dry-run", action="store_true", help="저장 없이 통과 건수만 출력")
+    parser.add_argument("--resume", action="store_true", help="이미 수집한 청크를 건너뛴다")
+    parser.add_argument(
+        "--max-calls", type=int, default=MAX_CALLS_PER_RUN,
+        help=f"이번 실행의 API 호출 상한(기본 {MAX_CALLS_PER_RUN}). FSS 개인키 일일 한도 대비 여유를 둔다",
+    )
     args = parser.parse_args()
 
     api_key = os.environ.get("FSS_API_KEY", "").strip()
@@ -1444,36 +1530,65 @@ def main() -> None:
         raise SystemExit("FSS_API_KEY 환경변수가 필요합니다")
 
     chunks = month_chunks(args.start, args.end)
-    print(f"[COLLECT] {args.start} ~ {args.end} — {len(chunks)}개 월 청크")
+    state_path = Path(args.state)
+    state = load_state(state_path) if args.resume else {"done_chunks": []}
+    done = set(state.get("done_chunks") or [])
 
-    seen: set[str] = set()
-    kept: list[dict] = []
-    total = 0
-    for i, (bgn, end) in enumerate(chunks, 1):
-        rows = fetch_fss(bgn, end, api_key)
-        total += len(rows)
-        for raw in rows:
-            rec = normalize_fss(raw)
-            if not rec["id"] or rec["id"] in seen:
-                continue
-            seen.add(rec["id"])
-            if rec["matched_keywords"]:
-                kept.append(rec)
-        if i % 12 == 0:
-            print(f"[COLLECT] {i}/{len(chunks)} 청크 — 원본 {total}건 / 통과 {len(kept)}건")
-        time.sleep(_SLEEP)
+    todo = [c for c in chunks if f"{c[0]}-{c[1]}" not in done]
+    print(f"[COLLECT] {args.start} ~ {args.end} — 전체 {len(chunks)}개 월 청크"
+          f" / 완료 {len(done)} / 남음 {len(todo)}")
+    if args.max_calls and len(todo) > args.max_calls:
+        print(f"[COLLECT] 이번 실행은 {args.max_calls}개 청크만 처리합니다"
+              f" (남은 {len(todo) - args.max_calls}개는 다음 실행에서 --resume 으로 이어가세요)")
+        todo = todo[: args.max_calls]
 
-    rate = (len(kept) / total * 100) if total else 0.0
-    print(f"[COLLECT] 완료: 원본 {total}건 → 키워드 통과 {len(kept)}건 ({rate:.1f}%)")
-
-    if args.dry_run:
-        return
     out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w", encoding="utf-8") as fh:
-        for rec in kept:
-            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    print(f"[COLLECT] 저장 → {out_path}")
+    if not args.dry_run:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # 이미 저장된 id는 중복 저장하지 않는다(--resume 재실행 대비).
+    seen: set[str] = set()
+    if args.resume and out_path.exists():
+        for line in out_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                seen.add(str(json.loads(line).get("id", "")))
+
+    total = kept = 0
+    # 청크마다 append 저장한다 — 일일 한도·중단에도 그때까지의 수집분이 남는다.
+    fh = None if args.dry_run else out_path.open("a", encoding="utf-8")
+    try:
+        for i, (bgn, end) in enumerate(todo, 1):
+            rows = fetch_fss(bgn, end, api_key)
+            total += len(rows)
+            for raw in rows:
+                rec = normalize_fss(raw)
+                if not rec["id"] or rec["id"] in seen:
+                    continue
+                seen.add(rec["id"])
+                if rec["matched_keywords"]:
+                    kept += 1
+                    if fh:
+                        fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            if fh:
+                fh.flush()
+            done.add(f"{bgn}-{end}")
+            if not args.dry_run:
+                save_state(state_path, {"done_chunks": sorted(done)})
+            if i % 10 == 0:
+                print(f"[COLLECT] {i}/{len(todo)} 청크 — 원본 {total}건 / 통과 {kept}건")
+            time.sleep(_SLEEP)
+    finally:
+        if fh:
+            fh.close()
+
+    rate = (kept / total * 100) if total else 0.0
+    print(f"[COLLECT] 완료: 원본 {total}건 → 키워드 통과 {kept}건 ({rate:.1f}%)")
+    remaining = len(chunks) - len(done)
+    if remaining > 0:
+        print(f"[COLLECT] 남은 청크 {remaining}개 — 다음 실행: "
+              f"python scripts/catalog/collect.py --start {args.start} --resume")
+    if not args.dry_run:
+        print(f"[COLLECT] 저장 → {out_path}")
 
 
 if __name__ == "__main__":
@@ -1483,7 +1598,7 @@ if __name__ == "__main__":
 - [ ] **Step 5: 테스트 실행 — 통과 확인**
 
 Run: `python -m pytest tests/test_catalog_collect.py -v`
-Expected: 9 passed
+Expected: 13 passed
 
 - [ ] **Step 6: 라이브 확인 (FSS_API_KEY 있을 때만)**
 
