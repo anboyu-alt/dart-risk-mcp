@@ -4,7 +4,7 @@
 
 **Goal:** 금감원·금융위 보도자료를 수집·분류해 `knowledge/manipulation_catalog/*.md`를 이 레포 안에서 재생성하고, 기존 45개 유형에 매핑되지 않는 신종 수법을 신규 신호 후보로 리포트한다.
 
-**Architecture:** `scripts/catalog/` 아래 5단계 배치 파이프라인(collect → extract → classify → build_md → gaps). 중간 산출물은 `data/catalog/*.jsonl`. 분류 기준은 `dart_risk_mcp.core.taxonomy.TAXONOMY` 단일 출처. 본문은 무의존 페이지 파싱을 기본으로 하고 PDF 전문은 1차 스크리닝 통과분에만 선택적으로 받는다.
+**Architecture:** `scripts/catalog/` 아래 4단계 배치 파이프라인(collect → classify → build_md → gaps). 수집은 FSS 게시판 웹 파싱(키·한도 없음)이고, 목록의 담당부서·제목으로 규칙 필터를 건 뒤 LLM 1차 스크리닝을 제목·부서만으로 돌린다. 상세 페이지와 PDF는 1차 통과분에만 받는다 — `extract.py`는 독립 단계가 아니라 `classify.py`가 건별로 호출하는 라이브러리다. 분류 기준은 `dart_risk_mcp.core.taxonomy.TAXONOMY` 단일 출처.
 
 **Tech Stack:** Python 3.11+, `requests`(HTTP·Anthropic API 직접 호출), 표준 라이브러리(`zipfile`·`re`·`json`·`argparse`), `pypdf`(scripts 전용 optional)
 
@@ -35,8 +35,8 @@
 | `scripts/catalog/render.py` | JSONL 분류결과 + 라벨 → MD 문자열. 순수 함수, I/O 없음 |
 | `scripts/catalog/build_md.py` | Phase D CLI. render를 호출해 파일 8개 + README 기록 |
 | `scripts/catalog/collect.py` | Phase A CLI. FSS·정책브리핑 수집 + 키워드 필터 |
-| `scripts/catalog/extract.py` | Phase B. `extract_light`(무의존) / `extract_full`(pypdf) 두 진입점 |
-| `scripts/catalog/classify.py` | Phase C. 1차 스크리닝 → 2차 정밀 분류. Anthropic API를 requests로 호출 |
+| `scripts/catalog/extract.py` | Phase B **라이브러리**(CLI 없음). `extract_light`(무의존) / `extract_full`(pypdf) — `classify.py`가 1차 통과분에만 건별 호출 |
+| `scripts/catalog/classify.py` | Phase C. 1차 스크리닝(제목·부서만) → 본문 확보 → 2차 정밀 분류. Anthropic API를 requests로 호출 |
 | `scripts/catalog/gaps.py` | Phase E. 미매핑 수법 → 갭 리포트 MD |
 | `.github/workflows/refresh-catalog.yml` | 수동 트리거 + 월 1회 cron |
 | `tests/test_catalog_labels.py` | 라벨 커버리지·역추출 회귀 |
@@ -1901,8 +1901,14 @@ Expected: FAIL — `ImportError: cannot import name 'classify'`
 ```python
 """Phase C — 2단계 분류.
 
-1차 스크리닝: 제목+페이지 요약(extract_light 결과)으로 등재 가치를 판정. 값싸다.
-2차 정밀:     통과분만 extract_full로 PDF 전문을 받아 taxonomy 45개에 매핑.
+1차 스크리닝: 제목+담당부서+일자만으로 등재 가치를 판정. 네트워크를 쓰지 않는다
+              — Phase A의 게시판 목록이 이미 이 셋을 갖고 있다.
+2차 정밀:     1차 통과분만 extract_light(상세 페이지)로 요약을 받고, 이어서
+              extract_full(PDF 전문)을 시도해 taxonomy 45개에 매핑한다.
+
+상세 조회와 PDF 다운로드를 1차 통과분에만 거는 것이 이 설계의 핵심이다. 규칙 필터
+통과분은 약 3,000건이지만 1차를 통과하는 것은 수백 건이라, 순서를 바꾸는 것만으로
+네트워크 요청이 한 자릿수 배 줄어든다.
 
 anthropic SDK를 쓰지 않고 requests로 직접 호출한다 — 이 레포는 Notion API도
 같은 방식으로 다루며, 런타임/배치 모두 서드파티 의존성을 늘리지 않는 원칙이다.
@@ -1924,13 +1930,14 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from scripts._console import use_utf8_stdout  # noqa: E402
-from scripts.catalog.extract import extract_full  # noqa: E402
+from scripts.catalog.extract import extract_full, extract_light  # noqa: E402
 
 API_URL = "https://api.anthropic.com/v1/messages"
 MODEL = "claude-haiku-4-5-20251001"
 _TIMEOUT = 120
 _SLEEP = 0.2
-IN_PATH = _REPO_ROOT / "data" / "catalog" / "catalog_bodies.jsonl"
+# Phase A(collect.py)의 출력을 바로 받는다 — 중간 산출물 catalog_bodies.jsonl은 없다.
+IN_PATH = _REPO_ROOT / "data" / "catalog" / "catalog_sources.jsonl"
 OUT_PATH = _REPO_ROOT / "data" / "catalog" / "catalog_classified.jsonl"
 
 _JSON_BLOCK = re.compile(r"\{[\s\S]*\}")
@@ -2055,7 +2062,10 @@ def main() -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("a", encoding="utf-8") as fh:
         for i, rec in enumerate(todo, 1):
-            head = f"제목: {rec.get('title','')}\n요약: {rec.get('body','')[:1500]}"
+            # 1차: 목록에서 이미 확보한 제목·부서·일자만 본다. 네트워크 호출 없음.
+            head = (f"제목: {rec.get('title','')}\n"
+                    f"담당부서: {rec.get('dept','')}\n"
+                    f"일자: {rec.get('date','')}")
             try:
                 screen = parse_screen_response(call_anthropic(_SCREEN_SYSTEM, head, api_key, args.model))
             except Exception as exc:
@@ -2065,6 +2075,8 @@ def main() -> None:
                 continue
             kept += 1
 
+            # 2차: 여기서 처음 네트워크로 본문을 확보한다(상세 페이지 → PDF 순).
+            rec = extract_light(rec)
             full = extract_full(rec)
             body = full or rec.get("body", "")
             source = "pdf" if full else rec.get("body_source", "title_only")
@@ -2451,9 +2463,6 @@ jobs:
           if [ -z "$START" ]; then START=$(date -u -d '2 months ago' +%Y-%m-%d); fi
           python scripts/catalog/collect.py --start "$START"
 
-      - name: Extract bodies
-        run: python scripts/catalog/extract.py
-
       - name: Classify
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -2489,49 +2498,17 @@ jobs:
           git push
 ```
 
-- [ ] **Step 6: `extract.py`에 CLI main 추가**
+- [ ] **Step 6: (삭제됨 — `extract.py` CLI main은 불필요)**
 
-워크플로우가 `python scripts/catalog/extract.py`를 호출하므로 진입점이 필요하다. `scripts/catalog/extract.py` 파일 끝에 추가:
+이 스텝은 2026-08-17 설계 변경으로 없어졌다. Phase C 1차 스크리닝이 제목·부서만 쓰게
+바뀌면서 `extract_light`는 독립 배치 단계가 아니라 **`classify.py`가 1차 통과분에만
+건별로 호출하는 라이브러리 함수**가 됐다. 중간 산출물 `catalog_bodies.jsonl`도 사라졌다.
 
-```python
-def main() -> None:
-    import argparse
-    import json
-    import sys
-    from pathlib import Path
+따라서 `scripts/catalog/extract.py`는 CLI 진입점 없이 라이브러리로 남는다 —
+Task 4가 만든 상태 그대로 두고 아무것도 추가하지 않는다. 워크플로우(Step 5)에도
+`python scripts/catalog/extract.py` 단계가 없다.
 
-    _root = Path(__file__).resolve().parents[2]
-    if str(_root) not in sys.path:
-        sys.path.insert(0, str(_root))
-    from scripts._console import use_utf8_stdout
-
-    use_utf8_stdout()
-    parser = argparse.ArgumentParser(description="보도자료 본문 확보(light)")
-    parser.add_argument("--in", dest="in_path", default=str(_root / "data" / "catalog" / "catalog_sources.jsonl"))
-    parser.add_argument("--out", default=str(_root / "data" / "catalog" / "catalog_bodies.jsonl"))
-    args = parser.parse_args()
-
-    in_path = Path(args.in_path)
-    if not in_path.exists():
-        raise SystemExit(f"입력 없음: {in_path} — 먼저 collect를 실행하세요")
-    records = [json.loads(l) for l in in_path.read_text(encoding="utf-8").splitlines() if l.strip()]
-
-    out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    counts: dict[str, int] = {}
-    with out_path.open("w", encoding="utf-8") as fh:
-        for rec in records:
-            got = extract_light(rec)
-            counts[got["body_source"]] = counts.get(got["body_source"], 0) + 1
-            fh.write(json.dumps(got, ensure_ascii=False) + "\n")
-    print(f"[EXTRACT] {len(records)}건 → {out_path}")
-    print("[EXTRACT] 본문 확보 경로:", ", ".join(f"{k} {v}건" for k, v in sorted(counts.items())))
-    print(f"[EXTRACT] pypdf 사용 가능: {PYPDF_AVAILABLE}")
-
-
-if __name__ == "__main__":
-    main()
-```
+**이 스텝에서 할 일은 없다. 다음 스텝으로 넘어갈 것.**
 
 - [ ] **Step 7: 테스트 실행 — 통과 확인**
 
