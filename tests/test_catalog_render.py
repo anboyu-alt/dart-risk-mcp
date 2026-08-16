@@ -160,5 +160,47 @@ class TestFixRound1Sections(unittest.TestCase):
         self.assertIn("### 인용 법조\n\n—", md)
 
 
+class TestBuildMdEndToEnd(unittest.TestCase):
+    """생성된 MD로 load_catalog_excerpt가 실제 발췌를 내는지 종단 검증.
+
+    catalog.py docstring이 경고하는 '죽은 배선'(조용히 빈 문자열) 회귀 방지.
+    """
+
+    def test_writes_eight_files_and_excerpt_is_non_empty(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+
+        from scripts.catalog import build_md
+
+        fixture = Path(__file__).parent / "fixtures" / "catalog" / "classified_sample.jsonl"
+        records = [json.loads(line) for line in fixture.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            written = build_md.write_catalog(records, out, "2026-08-16")
+            self.assertEqual(len(written), 8)
+            names = sorted(p.name for p in written)
+            self.assertEqual(names, sorted(render.CATEGORY_FILES.values()))
+
+            # 생성된 MD를 카탈로그 디렉터리로 바꿔치기해 발췌가 비지 않는지 확인
+            from dart_risk_mcp.core import catalog as core_catalog
+
+            with mock.patch.object(core_catalog, "_CATALOG_DIR", out):
+                excerpt = core_catalog.load_catalog_excerpt(["1.1", "8.1"])
+            self.assertTrue(excerpt.strip(), "발췌가 비어있음 — 죽은 배선 회귀")
+            self.assertIn("카탈로그 선례", excerpt)
+            self.assertNotIn("**Severity**", excerpt)  # 런타임 제거 확인
+
+    def test_unmapped_records_excluded_from_catalog(self):
+        from scripts.catalog import build_md
+        from dart_risk_mcp.core.taxonomy import TAXONOMY
+
+        records = [{"taxonomy_ids": [], "title": "미매핑", "techniques": []}]
+        grouped = build_md.group_cases(records, TAXONOMY)
+        self.assertEqual(sum(len(v) for v in grouped.values()), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
