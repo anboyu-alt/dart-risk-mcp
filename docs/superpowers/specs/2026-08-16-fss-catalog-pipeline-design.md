@@ -177,6 +177,7 @@ Phase C의 2단계 분류가 비용 절감 효과를 내려면, **PDF를 전량 
 
 - 출력: `dart_risk_mcp/knowledge/manipulation_catalog/0{1..8}_*.md` + `README.md`
 - 카테고리 파일 매핑은 `core/catalog.py`의 `_CATEGORY_TO_FILE`과 **정확히 일치**해야 한다(불일치 시 발췌가 조용히 비어버림)
+- **한글 표시 라벨은 별도 자산으로 보존한다** (계획 수립 중 발견, 2026-08-16 실측): 기존 MD의 한글 제목·정의·위험신호는 v0.7.5 한글화 작업의 산출물로 **MD 파일에만 존재**한다. `TAXONOMY`는 `name` 45개 중 41개, `description` 37개, `red_flags` 36개가 영문이다(예: `TAXONOMY['1.1']['name']` = `'Refixing (리픽싱)'` vs MD 제목 `'전환가액 하향조정(리픽싱)'`). 따라서 MD를 그냥 재생성하면 카탈로그가 영문으로 퇴행한다. 재생성에 앞서 기존 MD 37개 유형에서 한글 라벨을 역추출해 `data/catalog/labels_ko.json`으로 고정하고, 렌더러는 이 JSON을 우선 사용하고 없을 때만 `TAXONOMY`로 폴백한다. MD에 없는 8개 유형은 정확히 신규 8개(`2.7`·`2.8`·`3.6`·`3.7`·`5.6`·`5.7`·`5.8`·`8.5`)이며, 이들은 `description`·`red_flags`가 한국어로 작성돼 있어 그대로 쓸 수 있다
 - 기존 MD 포맷 유지: `## N.M: 제목`, `### 정의`, `### 탐지 키워드`, `### 위험 신호`, `### 금감원·금융위 적발 사례`, `### 적발 기법 종합`
 - `- **Severity**` / `- **Base Score**` / `- **Crisis Timeline**` 3줄은 **MD에 그대로 포함**한다. 런타임에서 `catalog.py`의 `_strip_taxonomy_metadata`가 제거하는 현 구조를 유지 — v0.8.5 점수·등급 미노출 원칙에 영향 없음
 - README에 수집 기간·건수·`body_source` 분포를 기록해 카탈로그 품질을 정직하게 표기
