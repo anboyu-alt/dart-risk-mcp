@@ -1936,6 +1936,7 @@ API_URL = "https://api.anthropic.com/v1/messages"
 MODEL = "claude-haiku-4-5-20251001"
 _TIMEOUT = 120
 _SLEEP = 0.2
+_MAX_RETRIES = 4          # 최초 시도 + 재시도 3회
 # Phase A(collect.py)의 출력을 바로 받는다 — 중간 산출물 catalog_bodies.jsonl은 없다.
 IN_PATH = _REPO_ROOT / "data" / "catalog" / "catalog_sources.jsonl"
 OUT_PATH = _REPO_ROOT / "data" / "catalog" / "catalog_classified.jsonl"
@@ -1964,8 +1965,29 @@ def build_taxonomy_prompt(taxonomy: dict[str, dict]) -> str:
     return "\n".join(lines)
 
 
+def _retry_delay(resp, attempt: int) -> float:
+    """재시도 대기 시간. Retry-After 헤더를 우선하고, 없으면 지수 백오프."""
+    header = (resp.headers.get("Retry-After") or "").strip() if resp is not None else ""
+    if header:
+        try:
+            return float(int(header))
+        except ValueError:
+            pass                      # 날짜 형식 등은 지수 백오프로 폴백
+    return float(2 ** attempt)        # 1, 2, 4초
+
+
 def call_anthropic(system: str, user: str, api_key: str, model: str = MODEL) -> str:
-    """Anthropic Messages API 호출. 시스템 프롬프트에 캐시 제어를 건다."""
+    """Anthropic Messages API 호출. 시스템 프롬프트에 캐시 제어를 건다.
+
+    페이싱과 재시도를 여기 두는 이유: 호출부의 루프는 1차 스크리닝 탈락 시
+    `continue`로 빠져나가는데, 그 경로가 전체의 압도적 다수다(규칙 필터 통과
+    약 3,000건 중 1차 통과는 수백 건). 루프 끝에 sleep을 두면 대다수 호출이
+    무간격으로 연속 발사돼 429를 맞는다. 모든 호출 경로가 지나는 이 함수에
+    두어야 페이싱이 실제로 걸린다.
+
+    429·5xx는 최대 3회 지수 백오프로 재시도한다(dart_client._retry 관례).
+    소진 후에도 실패하면 예외를 던지고, 호출부가 그 건만 건너뛴다.
+    """
     payload = {
         "model": model,
         "max_tokens": 1500,
@@ -1977,10 +1999,23 @@ def call_anthropic(system: str, user: str, api_key: str, model: str = MODEL) -> 
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
     }
-    resp = requests.post(API_URL, headers=headers, json=payload, timeout=_TIMEOUT)
-    resp.raise_for_status()
-    blocks = resp.json().get("content") or []
-    return "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+    last_status = None
+    for attempt in range(_MAX_RETRIES):
+        resp = requests.post(API_URL, headers=headers, json=payload, timeout=_TIMEOUT)
+        last_status = resp.status_code
+        if resp.status_code == 429 or resp.status_code >= 500:
+            if attempt == _MAX_RETRIES - 1:
+                break
+            delay = _retry_delay(resp, attempt)
+            print(f"[CLASSIFY] {resp.status_code} — {delay:.0f}초 후 재시도 ({attempt + 1}/{_MAX_RETRIES - 1})")
+            time.sleep(delay)
+            continue
+        resp.raise_for_status()
+        blocks = resp.json().get("content") or []
+        text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+        time.sleep(_SLEEP)            # 모든 성공 경로가 여기를 지난다
+        return text
+    raise RuntimeError(f"Anthropic API 재시도 소진 (마지막 status={last_status})")
 
 
 def _extract_json(text: str) -> dict:
@@ -2102,7 +2137,8 @@ def main() -> None:
             fh.flush()
             if i % 25 == 0:
                 print(f"[CLASSIFY] {i}/{len(todo)} — 통과 {kept} / 매핑 {mapped}")
-            time.sleep(_SLEEP)
+            # 페이싱은 call_anthropic 안에 있다 — 여기에 두면 1차 탈락 경로(대다수)가
+            # continue로 건너뛰어 대부분의 호출이 무간격으로 나간다.
 
     print(f"[CLASSIFY] 완료: 후보 {len(todo)} → 스크리닝 통과 {kept} → 유형 매핑 {mapped}")
 
