@@ -243,5 +243,69 @@ class TestClassifyAgencyField(unittest.TestCase):
         self.assertNotIn("금융위원회", src)
 
 
+class TestWriteReadmeScreenedOutSeparation(unittest.TestCase):
+    """README 통계에서 1차 스크리닝 탈락분이 '미매핑'에 섞이면 안 된다.
+
+    회귀 배경(2026-08-17 재리뷰): Finding 2를 고치며 classify.py가 탈락 레코드도
+    catalog_classified.jsonl에 쓰게 됐다(screened_out=True, taxonomy_ids 없음).
+    gaps.py/group_cases는 이를 올바르게 걸러냈지만 write_readme만 놓쳐서,
+    탈락분이 전부 "미매핑(신규 유형 후보)"으로 집계돼 실제로는 정밀 분류조차
+    안 거친 건이 신종 수법인 것처럼 부풀려 보였다.
+    """
+
+    _RECORDS = [
+        {"date": "2026-01-01", "taxonomy_ids": ["1.1"], "body_source": "pdf"},
+        {"date": "2026-02-01", "taxonomy_ids": [], "body_source": "page"},
+        {"date": "2026-03-01", "screened_out": True, "title": "탈락1"},
+        {"date": "2026-04-01", "screened_out": True, "title": "탈락2"},
+        {"date": "2026-05-01", "screened_out": True, "title": "탈락3"},
+    ]
+
+    def _write(self):
+        import tempfile
+        from pathlib import Path
+
+        from scripts.catalog import build_md
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = build_md.write_readme(self._RECORDS, Path(tmp), "2026-08-17")
+            return path.read_text(encoding="utf-8")
+
+    def test_unmapped_count_excludes_screened_out(self):
+        text = self._write()
+        # 1건(매핑) + 1건(진짜 미매핑) + 3건(스크리닝 탈락) = 5건 총계지만,
+        # "미매핑"은 스크리닝 탈락 3건을 포함하지 않고 정확히 1건이어야 한다.
+        self.assertIn("미매핑(신규 유형 후보) 1건", text)
+
+    def test_three_categories_reported_with_exact_counts(self):
+        text = self._write()
+        self.assertIn("총 레코드**: 5건", text)
+        self.assertIn("1차 스크리닝 제외: 3건", text)
+        self.assertIn("정밀 분류 대상: 2건", text)
+        self.assertIn("유형 매핑 1건", text)
+
+    def test_body_source_excludes_screened_out_records(self):
+        # 탈락 레코드는 body_source가 아예 없다(상세 페이지를 열지 않음).
+        # 정밀 분류 대상(2건: pdf 1 + page 1)만 집계해야 한다 — 탈락분의
+        # "unknown"이 섞여 분포가 왜곡되면 안 된다.
+        text = self._write()
+        self.assertIn("본문 확보 경로**(정밀 분류 대상 2건 기준): page 1건, pdf 1건", text)
+        self.assertNotIn("unknown", text)
+
+    def test_all_screened_out_yields_zero_unmapped_not_all(self):
+        # 전부 탈락인 극단 케이스에서 "미매핑"이 5건으로 부풀지 않고 0건이어야 한다.
+        import tempfile
+        from pathlib import Path
+
+        from scripts.catalog import build_md
+
+        records = [{"date": "2026-01-01", "screened_out": True, "title": f"탈락{i}"} for i in range(5)]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = build_md.write_readme(records, Path(tmp), "2026-08-17")
+            text = path.read_text(encoding="utf-8")
+        self.assertIn("미매핑(신규 유형 후보) 0건", text)
+        self.assertIn("1차 스크리닝 제외: 5건", text)
+
+
 if __name__ == "__main__":
     unittest.main()
