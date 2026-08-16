@@ -1,0 +1,72 @@
+name: Refresh manipulation catalog
+
+on:
+  schedule:
+    - cron: "0 18 1 * *"   # 매월 1일 UTC 18:00 = 한국 익일 03:00
+  workflow_dispatch:
+    inputs:
+      year:
+        description: "수집 연도 (빈 값이면 올해)"
+        required: false
+        default: ""
+      limit:
+        description: "분류 건수 상한 (0=제한 없음). 비용 통제용 — 처음 돌릴 때는 50 권장"
+        required: false
+        default: "0"
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install package with catalog extras
+        run: pip install -e ".[catalog]"
+
+      # 게시판 웹 파싱이라 API 키가 필요 없다. 증분은 올해치만 --resume으로 훑으면
+      # 되고(이미 완료된 페이지는 건너뛴다), 전체 백필은 수동 트리거로 따로 돌린다.
+      - name: Collect press releases
+        run: |
+          YEAR="${{ github.event.inputs.year }}"
+          if [ -z "$YEAR" ]; then YEAR=$(date -u +%Y); fi
+          python scripts/catalog/collect.py --from-year "$YEAR" --to-year "$YEAR" --resume
+
+      - name: Classify
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python scripts/catalog/classify.py --resume --limit "${{ github.event.inputs.limit || 0 }}"
+
+      - name: Build catalog MD
+        run: python scripts/catalog/build_md.py
+
+      - name: Build gap report
+        run: python scripts/catalog/gaps.py
+
+      - name: Verify catalog excerpt is not empty
+        run: |
+          python -c "
+          from dart_risk_mcp.core.catalog import load_catalog_excerpt
+          e = load_catalog_excerpt(['1.1','5.7','8.1'])
+          assert e.strip(), '카탈로그 발췌가 비어있음 — 생성 실패'
+          assert '**Severity**' not in e, '점수 메타가 노출됨'
+          print('발췌 OK:', len(e), 'chars')
+          "
+
+      - name: Run catalog tests
+        run: |
+          pip install pytest
+          python -m pytest tests/test_catalog_render.py tests/test_catalog_labels.py tests/test_golden_output_hygiene.py -q
+
+      - name: Commit updated catalog
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add dart_risk_mcp/knowledge/manipulation_catalog docs/catalog
+          git diff --staged --quiet || git commit -m "chore(catalog): 보도자료 카탈로그 갱신 [skip ci]"
+          git push

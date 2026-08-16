@@ -21,6 +21,11 @@ dependencies = [
     "requests>=2.28.0",
 ]
 
+[project.optional-dependencies]
+# 카탈로그 생성 배치(scripts/catalog/) 전용. MCP 서버 런타임은 이 패키지를
+# 쓰지 않으며, 미설치 시 파이프라인이 요약 모드로 degrade한다.
+catalog = ["pypdf>=4.0.0"]
+
 [project.scripts]
 dart-risk-mcp = "dart_risk_mcp.server:main"
 
