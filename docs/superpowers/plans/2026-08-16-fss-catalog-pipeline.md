@@ -2277,6 +2277,17 @@ IN_PATH = _REPO_ROOT / "data" / "catalog" / "catalog_classified.jsonl"
 OUT_DIR = _REPO_ROOT / "docs" / "catalog"
 
 
+def _clean(value: str) -> str:
+    """리포트에 넣을 문자열을 한 줄로 정리한다.
+
+    개행은 `## ` 헤딩과 리스트 구조를 깨뜨리고, 파이프와 대괄호는 마크다운 링크
+    문법을 깨뜨린다(`[제목](url)` 안의 `]`가 링크 텍스트를 조기에 닫는다).
+    금감원 제목에는 '[보도자료]' 같은 대괄호 접두가 흔하다.
+    """
+    text = " ".join(str(value or "").split())
+    return text.replace("|", "/").replace("[", "(").replace("]", ")")
+
+
 def build_gap_report(records: list[dict], generated_on: str) -> str:
     """미매핑 레코드를 신규 유형 후보 목록으로 렌더한다."""
     unmapped = [r for r in records if not r.get("taxonomy_ids")]
@@ -2301,14 +2312,15 @@ def build_gap_report(records: list[dict], generated_on: str) -> str:
         return "\n".join(lines) + "\n"
 
     for rec in unmapped:
-        title = str(rec.get("title", "")).replace("|", "/")
-        url = rec.get("url", "")
+        title = _clean(rec.get("title", ""))
+        url = rec.get("url", "")          # URL은 정제하지 않는다 — 그대로 링크에 들어간다
         head = f"[{title}]({url})" if url else title
+        techniques = ", ".join(_clean(t) for t in (rec.get("techniques") or [])) or "—"
         lines += [
             f"## {rec.get('date','')} — {head}",
             "",
-            f"- 요약: {rec.get('summary','')}",
-            f"- 적발 기법: {', '.join(rec.get('techniques') or []) or '—'}",
+            f"- 요약: {_clean(rec.get('summary', ''))}",
+            f"- 적발 기법: {techniques}",
             f"- confidence: {rec.get('confidence','low')} · 본문 확보: {rec.get('body_source','unknown')}",
             "",
         ]
@@ -2417,8 +2429,15 @@ class TestWorkflow(unittest.TestCase):
         wf = (_ROOT / ".github" / "workflows" / "refresh-catalog.yml").read_text(encoding="utf-8")
         self.assertIn("workflow_dispatch", wf)
         self.assertIn("cron", wf)
-        for secret in ("FSS_API_KEY", "DATA_GO_KR_API_KEY", "ANTHROPIC_API_KEY"):
-            self.assertIn(secret, wf)
+        self.assertIn("ANTHROPIC_API_KEY", wf)
+
+    def test_workflow_does_not_require_collection_api_keys(self):
+        # 수집은 게시판 웹 파싱으로 전환됐다(2026-08-17). FSS 오픈API는 일일 30회
+        # 한도가 실증돼 폐기했고, 정책브리핑은 이 파이프라인 범위 밖이다.
+        # 워크플로우가 이 키들을 요구하면 없는 Secret을 기다리다 실패한다.
+        wf = (_ROOT / ".github" / "workflows" / "refresh-catalog.yml").read_text(encoding="utf-8")
+        self.assertNotIn("FSS_API_KEY", wf)
+        self.assertNotIn("DATA_GO_KR_API_KEY", wf)
 
     def test_workflow_installs_catalog_extra(self):
         wf = (_ROOT / ".github" / "workflows" / "refresh-catalog.yml").read_text(encoding="utf-8")
@@ -2466,12 +2485,12 @@ on:
     - cron: "0 18 1 * *"   # 매월 1일 UTC 18:00 = 한국 익일 03:00
   workflow_dispatch:
     inputs:
-      start:
-        description: "수집 시작일 (YYYY-MM-DD)"
+      year:
+        description: "수집 연도 (빈 값이면 올해)"
         required: false
         default: ""
       limit:
-        description: "분류 건수 상한 (0=제한 없음)"
+        description: "분류 건수 상한 (0=제한 없음). 비용 통제용 — 처음 돌릴 때는 50 권장"
         required: false
         default: "0"
 
@@ -2490,14 +2509,13 @@ jobs:
       - name: Install package with catalog extras
         run: pip install -e ".[catalog]"
 
+      # 게시판 웹 파싱이라 API 키가 필요 없다. 증분은 올해치만 --resume으로 훑으면
+      # 되고(이미 완료된 페이지는 건너뛴다), 전체 백필은 수동 트리거로 따로 돌린다.
       - name: Collect press releases
-        env:
-          FSS_API_KEY: ${{ secrets.FSS_API_KEY }}
-          DATA_GO_KR_API_KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
         run: |
-          START="${{ github.event.inputs.start }}"
-          if [ -z "$START" ]; then START=$(date -u -d '2 months ago' +%Y-%m-%d); fi
-          python scripts/catalog/collect.py --start "$START"
+          YEAR="${{ github.event.inputs.year }}"
+          if [ -z "$YEAR" ]; then YEAR=$(date -u +%Y); fi
+          python scripts/catalog/collect.py --from-year "$YEAR" --to-year "$YEAR" --resume
 
       - name: Classify
         env:
@@ -2595,7 +2613,7 @@ EOF
 
 **이 태스크는 자동 실행하지 않는다.** 기존 카탈로그를 교체하는 되돌리기 어려운 변경이라 사람이 diff를 검토한 뒤 결정한다.
 
-**선행 조건:** `FSS_API_KEY`, `DATA_GO_KR_API_KEY`, `ANTHROPIC_API_KEY` 전부 설정 + `pip install -e ".[catalog]"`
+**선행 조건:** `ANTHROPIC_API_KEY` 설정 + `pip install -e ".[catalog]"`. 수집 단계는 게시판 웹 파싱이라 키가 필요 없다(2026-08-17 설계 변경).
 
 - [ ] **Step 1: 수집 규모 실측 (저비용, LLM 미사용)**
 

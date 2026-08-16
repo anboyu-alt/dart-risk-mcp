@@ -209,24 +209,22 @@ catalog = ["pypdf>=4.0.0"]
 
 이는 CLAUDE.md 코딩 규칙("`requests`와 `mcp` 외 의존성을 추가하지 않습니다")에 대한 **배치 전용·optional 예외**다. 규칙 자체는 런타임 패키지에 대해 그대로 유지된다. 구현 시 CLAUDE.md에 이 경계를 명시한다.
 
-### 5.2 환경변수 (전부 신규 — 사용자가 직접 발급해야 함)
+### 5.2 환경변수
 
 | 변수 | 용도 | 발급처 |
 |---|---|---|
-| `FSS_API_KEY` | 금감원 보도자료 오픈API | fss.or.kr 오픈API |
-| `DATA_GO_KR_API_KEY` | 금융위 정책브리핑 | 공공데이터포털 |
 | `ANTHROPIC_API_KEY` | Phase C 분류 | console.anthropic.com |
 
-셋 다 이 개발 머신에 없음을 확인했다(User/Machine/Process 스코프 전부 부재, dart-monitor에 `.env`도 없음 — Actions Secrets로만 보유). **이것이 구현 착수의 선행 블로커다.**
+**필요한 키는 이 하나뿐이다** (2026-08-17 갱신). 최초 설계는 `FSS_API_KEY`(금감원 오픈API)와 `DATA_GO_KR_API_KEY`(금융위 정책브리핑)도 요구했으나, 수집이 게시판 웹 파싱으로 바뀌면서 둘 다 쓰이지 않는다 — §10 리스크 0 참고. 두 키를 발급해 뒀더라도 이 파이프라인은 참조하지 않는다.
 
 ---
 
 ## 6. 실행·운영
 
 - `.github/workflows/refresh-catalog.yml`
-  - `workflow_dispatch` (수동 트리거, 파라미터: `--start`/`--end`/`--phase`)
+  - `workflow_dispatch` (수동 트리거, 파라미터: `year`·`limit`)
   - `schedule`: **월 1회** cron
-- Secrets: `FSS_API_KEY`, `DATA_GO_KR_API_KEY`, `ANTHROPIC_API_KEY`
+- Secrets: **`ANTHROPIC_API_KEY` 하나뿐** — 수집 단계는 키가 필요 없다
 - 워크플로우는 `pip install -e ".[catalog]"`로 pypdf 포함 설치
 - 2010년 백필은 **수동 트리거 1회**로 수행(장시간·고비용). 이후 월간 cron은 증분만 처리
 - 중간 산출물 JSONL은 커밋하지 않는다(`.gitignore`). 커밋 대상은 생성된 MD와 갭 리포트
@@ -282,7 +280,7 @@ catalog = ["pypdf>=4.0.0"]
 
 ## 11. 성공 기준
 
-1. `FSS_API_KEY` 등 3개 키가 설정된 환경에서 `scripts/catalog/` 5단계가 종단 실행되고, `knowledge/manipulation_catalog/*.md` 8개가 재생성된다
+1. `ANTHROPIC_API_KEY`가 설정된 환경에서 `scripts/catalog/` 4단계가 종단 실행되고, `knowledge/manipulation_catalog/*.md` 8개가 재생성된다
 2. 재생성된 MD로 `load_catalog_excerpt`가 **빈 문자열이 아닌** 발췌를 반환한다(4개 도구 전부)
 3. 신규 8개 유형(`2.7`·`2.8`·`3.6`·`3.7`·`5.6`·`5.7`·`5.8`·`8.5`) 중 **최소 1개 이상**에 실제 보도자료 사례가 등재된다
 4. `docs/catalog/gap-report-*.md`가 생성되고, 미매핑 수법이 최소 1건 이상 후보로 제시된다
