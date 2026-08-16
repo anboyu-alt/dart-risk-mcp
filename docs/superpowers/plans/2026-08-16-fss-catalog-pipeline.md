@@ -2702,3 +2702,255 @@ EOF
 | 4 | 갭 리포트 생성 + 후보 1건 이상 | `python scripts/catalog/gaps.py` 출력 | 7 |
 | 5 | pypdf 미설치 시 요약 모드 완주 | `tests/test_catalog_extract.py::TestExtractFull` + Task 4 Step 6 | 4 |
 | 6 | hygiene 통과 + 런타임 의존성 불변 | `tests/test_catalog_packaging.py`, `tests/test_golden_output_hygiene.py` | 8 |
+
+---
+
+### Task 10: 오프라인 분류 경로 (1차 API / 2차 세션 분업)
+
+> **배경 (2026-08-17, 사용자 결정 "C로 가자")**
+>
+> 표본 204건 실측으로 1차 스크리닝 통과율이 **26.0%**로 확정됐다(연도별 12건씩, seed 고정).
+> 전체 3,429건 → 2차 정밀 대상 **약 892건**.
+>
+> 비용 구조가 비대칭이다 — 1차는 제목·부서만 보므로 전량 돌려도 **$1.27**이고, 2차는 본문이
+> 건당 4,000토큰이라 **$10.65**다. 그래서 **1차는 API로, 2차는 세션(서브에이전트)으로** 나눈다.
+> 절감의 87%를 가져가면서 1차 자동화(월간 cron)는 그대로 유지된다.
+>
+> 월간 증분은 계속 API 양쪽 다 쓴다(월 $0.8) — cron 자동 갱신을 포기하지 않기 위해서다.
+> 이 태스크가 만드는 오프라인 경로는 **1회성 백필 전용**이다.
+
+**Files:**
+- Modify: `scripts/catalog/classify.py` (`--screen-only` 추가)
+- Create: `scripts/catalog/export_batches.py`
+- Create: `scripts/catalog/merge_batches.py`
+- Create: `docs/catalog/CLASSIFY_BATCH.md` (배치 분류 지시서 — 서브에이전트가 읽는 문서)
+- Test: `tests/test_catalog_offline.py`
+
+**Interfaces:**
+- `classify.main()` — `--screen-only` 플래그. 1차 판정만 하고 2차·본문확보를 건너뛴다
+- `export_batches.load_screened(path) -> list[dict]`
+- `export_batches.build_batches(records, size) -> list[list[dict]]`
+- `merge_batches.validate_record(rec, taxonomy, known_ids) -> list[str]` — 오류 메시지 목록(빈 리스트면 유효)
+- `merge_batches.merge(results, screened, taxonomy) -> tuple[list[dict], list[str]]` — (병합 레코드, 오류)
+
+**데이터 흐름:**
+```
+catalog_sources.jsonl                (3,429건)
+  → classify.py --screen-only        → catalog_screened.jsonl  (전건: keep true/false)
+  → export_batches.py                → data/catalog/batches/batch-000.jsonl … (keep=true만, 본문 포함)
+  → [세션이 배치별로 분류]            → data/catalog/results/batch-000.result.jsonl …
+  → merge_batches.py                 → catalog_classified.jsonl (검증 통과분 + screened_out)
+  → build_md.py / gaps.py            (기존 그대로)
+```
+
+- [ ] **Step 1: 실패하는 테스트 작성**
+
+`tests/test_catalog_offline.py`:
+
+```python
+"""오프라인 분류 경로 회귀 테스트.
+
+1차는 API, 2차는 세션(서브에이전트)이 담당한다. 세션이 쓴 JSONL은 API 응답보다
+형식이 흔들리므로 병합 전 검증이 필수다 — 검증 없이 build_md에 넘기면
+taxonomy id 오타 하나로 그 유형의 사례가 조용히 사라진다(이 레포의 '죽은 배선' 8회 전례).
+"""
+import json
+import unittest
+from pathlib import Path
+
+from dart_risk_mcp.core.taxonomy import TAXONOMY
+from scripts.catalog import export_batches, merge_batches
+
+_SCREENED = [
+    {"id": "1", "date": "2024-01-18", "title": "불공정거래 조사결과 조치", "dept": "조사1국",
+     "url": "https://x.invalid/1", "keep": True, "category_hint": "7"},
+    {"id": "2", "date": "2024-02-01", "title": "선물회사 영업실적", "dept": "금융투자감독국",
+     "url": "https://x.invalid/2", "keep": False, "category_hint": ""},
+    {"id": "3", "date": "2024-03-05", "title": "공시위반 법인 조치", "dept": "기업공시국",
+     "url": "https://x.invalid/3", "keep": True, "category_hint": "4"},
+]
+
+
+class TestBuildBatches(unittest.TestCase):
+    def test_only_kept_records_batched(self):
+        batches = export_batches.build_batches(_SCREENED, size=10)
+        ids = [r["id"] for b in batches for r in b]
+        self.assertEqual(ids, ["1", "3"])
+
+    def test_batch_size_respected(self):
+        many = [dict(_SCREENED[0], id=str(i)) for i in range(25)]
+        batches = export_batches.build_batches(many, size=10)
+        self.assertEqual([len(b) for b in batches], [10, 10, 5])
+
+    def test_empty_input(self):
+        self.assertEqual(export_batches.build_batches([], size=10), [])
+
+
+class TestValidateRecord(unittest.TestCase):
+    def _ok(self):
+        return {"id": "1", "date": "2024-01-18", "title": "T", "url": "u",
+                "taxonomy_ids": ["7.1"], "techniques": ["가장납입"], "sanctions": [],
+                "laws": ["자본시장법"], "summary": "요약", "confidence": "high",
+                "body_source": "pdf"}
+
+    def test_valid_record_passes(self):
+        self.assertEqual(merge_batches.validate_record(self._ok(), TAXONOMY, {"1"}), [])
+
+    def test_unknown_taxonomy_id_rejected(self):
+        rec = dict(self._ok(), taxonomy_ids=["9.9"])
+        errs = merge_batches.validate_record(rec, TAXONOMY, {"1"})
+        self.assertTrue(any("9.9" in e for e in errs))
+
+    def test_unknown_id_rejected(self):
+        errs = merge_batches.validate_record(self._ok(), TAXONOMY, {"999"})
+        self.assertTrue(any("id" in e for e in errs))
+
+    def test_missing_required_field_rejected(self):
+        rec = self._ok()
+        del rec["summary"]
+        self.assertTrue(merge_batches.validate_record(rec, TAXONOMY, {"1"}))
+
+    def test_wrong_type_rejected(self):
+        rec = dict(self._ok(), taxonomy_ids="7.1")   # 리스트여야 함
+        self.assertTrue(merge_batches.validate_record(rec, TAXONOMY, {"1"}))
+
+    def test_empty_taxonomy_ids_is_valid(self):
+        # 미매핑은 오류가 아니라 갭 리포트의 입력이다
+        rec = dict(self._ok(), taxonomy_ids=[])
+        self.assertEqual(merge_batches.validate_record(rec, TAXONOMY, {"1"}), [])
+
+
+class TestMerge(unittest.TestCase):
+    def test_screened_out_records_carried_through(self):
+        results = [{"id": "1", "date": "2024-01-18", "title": "T", "url": "u",
+                    "taxonomy_ids": ["7.1"], "techniques": [], "sanctions": [], "laws": [],
+                    "summary": "s", "confidence": "high", "body_source": "pdf"}]
+        merged, errors = merge_batches.merge(results, _SCREENED, TAXONOMY)
+        self.assertEqual(errors, [])
+        by_id = {r["id"]: r for r in merged}
+        self.assertIn("2", by_id)                      # keep=False → screened_out으로 합류
+        self.assertTrue(by_id["2"].get("screened_out"))
+        self.assertEqual(by_id["1"]["taxonomy_ids"], ["7.1"])
+
+    def test_missing_result_reported(self):
+        # keep=True인데 결과가 없는 건은 오류로 보고돼야 한다(조용히 빠지면 안 됨)
+        merged, errors = merge_batches.merge([], _SCREENED, TAXONOMY)
+        self.assertTrue(any("3" in e for e in errors))
+
+    def test_invalid_record_does_not_reach_output(self):
+        bad = [{"id": "1", "taxonomy_ids": ["9.9"]}]
+        merged, errors = merge_batches.merge(bad, _SCREENED, TAXONOMY)
+        self.assertTrue(errors)
+        self.assertNotIn("1", {r["id"] for r in merged if not r.get("screened_out")})
+
+
+if __name__ == "__main__":
+    unittest.main()
+```
+
+- [ ] **Step 2: 테스트 실행 — 실패 확인**
+
+Run: `python -m pytest tests/test_catalog_offline.py -v`
+Expected: FAIL — `ImportError: cannot import name 'export_batches'`
+
+- [ ] **Step 3: `classify.py`에 `--screen-only` 추가**
+
+기존 main()에 플래그를 더한다. `--screen-only`면:
+- 1차 스크리닝만 수행하고 `extract_light`/`extract_full`/2차 호출을 하지 않는다
+- 출력 레코드는 `{"id", "date", "title", "dept", "url", "keep", "category_hint"}` — **전건**(keep=False 포함)
+- 기본 출력 경로는 `data/catalog/catalog_screened.jsonl`
+- `--resume`·`--limit`은 그대로 동작(전건을 쓰므로 done이 정상 전진)
+
+기존 전체 흐름(스크리닝→정밀)은 플래그 없이 그대로 유지한다 — 월간 증분이 그 경로를 쓴다.
+
+- [ ] **Step 4: `export_batches.py` 구현**
+
+```python
+"""1차 통과분에 본문을 붙여 배치 파일로 내보낸다 (세션 분류용).
+
+본문 확보가 여기서 일어난다 — extract_light(상세 페이지) 후 extract_full(PDF 전문)을
+시도하고, 실패하면 요약으로 degrade한다. 배치 크기가 10인 이유는 본문이 건당
+약 4,000토큰이라 그 이상 묶으면 분류하는 쪽의 컨텍스트를 압박하기 때문이다.
+"""
+```
+
+- `build_batches(records, size)` — `keep`이 참인 레코드만, `size`씩 분할(순수 함수)
+- `main()` — `--in`(기본 catalog_screened.jsonl) / `--out-dir`(기본 `data/catalog/batches`) / `--batch-size`(기본 10) / `--resume`
+  - 각 레코드에 `extract_light` → `extract_full` 순으로 본문 확보, `body`·`body_source` 부착
+  - 배치 파일명 `batch-000.jsonl` 형식(3자리 zero-pad)
+  - `--resume`이면 이미 존재하는 배치 파일을 건너뛴다
+  - 본문 확보는 네트워크 요청이므로 요청 간 `time.sleep(0.25)`
+  - 진행 로그: `[EXPORT] 배치 N/M — 본문 pdf X건 / page Y건 / title_only Z건`
+
+- [ ] **Step 5: `merge_batches.py` 구현**
+
+```python
+"""세션이 분류한 결과를 검증하고 catalog_classified.jsonl로 병합한다.
+
+검증이 이 스크립트의 존재 이유다. 세션(서브에이전트)이 쓴 JSONL은 형식이 흔들릴 수
+있고, taxonomy id 오타 하나가 그 유형의 사례를 조용히 사라지게 만든다. 오류는 모아서
+보고하고, 유효한 레코드만 출력에 넣는다.
+"""
+
+_REQUIRED = ("id", "date", "title", "url", "taxonomy_ids", "techniques",
+             "sanctions", "laws", "summary", "confidence", "body_source")
+_LIST_FIELDS = ("taxonomy_ids", "techniques", "sanctions", "laws")
+```
+
+- `validate_record(rec, taxonomy, known_ids) -> list[str]`
+  - 필수 필드 존재, 리스트 필드의 타입, `taxonomy_ids`의 각 원소가 `taxonomy`에 있는지, `id`가 `known_ids`에 있는지
+  - **빈 `taxonomy_ids`는 유효**(미매핑 = 갭 리포트 입력)
+  - 오류 메시지는 어느 레코드의 무엇이 문제인지 알 수 있게 쓴다
+- `merge(results, screened, taxonomy) -> (merged, errors)`
+  - 유효한 결과 레코드 + `keep=False`였던 건의 `screened_out` 레코드를 합친다
+  - `keep=True`인데 결과가 없는 id는 **오류로 보고**(조용히 빠지면 안 된다)
+- `main()` — `--results-dir`(기본 `data/catalog/results`) / `--screened` / `--out` / `--strict`
+  - 오류가 있으면 목록을 출력하고, `--strict`면 `exit 1`
+  - 요약: `[MERGE] 결과 N건 · 유효 M건 · 오류 K건 · screened_out P건 → 총 Q건`
+
+- [ ] **Step 6: `docs/catalog/CLASSIFY_BATCH.md` 작성**
+
+세션 분류를 수행하는 쪽(서브에이전트)이 읽을 지시서. **90배치를 일관되게 처리하려면 이 문서가 단일 기준**이 되어야 한다. 담을 것:
+
+- 입력 배치 파일의 형식과 출력 결과 파일의 정확한 스키마(위 `_REQUIRED` 필드 전부, 예시 1건 포함)
+- taxonomy 45개 전체 목록(id · 명칭 · 설명 요약) — 분류자가 이 문서만 보고 판단할 수 있어야 한다
+- 판정 규칙: **억지로 끼워 맞추지 말 것**, 확신이 없으면 `taxonomy_ids: []`와 `confidence: "low"`. 빈 배열은 실패가 아니라 신규 유형 후보다
+- `techniques`·`sanctions`·`laws`는 **본문에 실제로 있는 내용만** 적을 것(추측 금지)
+- `body_source`가 `page`/`title_only`면 전문이 아니므로 적발기법 추출이 제한된다는 점
+- 출력 파일명 규칙: `batch-NNN.jsonl` → `results/batch-NNN.result.jsonl`
+- 배치의 모든 레코드에 결과가 있어야 하며, 입력 `id`를 그대로 쓸 것
+
+- [ ] **Step 7: 테스트 실행 — 통과 확인**
+
+Run: `python -m pytest tests/test_catalog_offline.py -v`
+Expected: 13 passed
+
+- [ ] **Step 8: 전체 회귀 확인**
+
+Run: `python -m pytest tests/ -q`
+Expected: 기존 2,454개 + 신규 통과. 기존 테스트가 깨지면 회귀다.
+
+- [ ] **Step 9: 커밋**
+
+```bash
+git add scripts/catalog/export_batches.py scripts/catalog/merge_batches.py scripts/catalog/classify.py docs/catalog/CLASSIFY_BATCH.md tests/test_catalog_offline.py
+git commit -m "$(cat <<'EOF'
+feat(catalog): 오프라인 분류 경로 — 1차 API / 2차 세션 분업
+
+표본 204건 실측으로 1차 통과율 26.0%가 확정됐다(2차 대상 약 892건).
+비용이 비대칭이라(1차 $1.27 vs 2차 $10.65) 비싼 2차만 세션으로 옮긴다.
+
+classify.py --screen-only가 1차만 돌려 전건 판정을 기록하고,
+export_batches.py가 통과분에 본문을 붙여 10건씩 배치로 나누며,
+merge_batches.py가 세션이 채운 결과를 검증해 병합한다.
+
+검증기가 핵심이다 — 세션이 쓴 JSONL은 형식이 흔들릴 수 있고 taxonomy id
+오타 하나가 그 유형의 사례를 조용히 사라지게 만든다. keep=True인데 결과가
+없는 건도 오류로 보고해 누락이 묻히지 않게 했다.
+
+월간 증분은 기존 API 경로를 그대로 쓴다(cron 자동 갱신 유지).
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+EOF
+)"
+```
