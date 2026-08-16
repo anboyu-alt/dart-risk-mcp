@@ -38,6 +38,9 @@ _SLEEP = 0.2
 # Phase A(collect.py)의 출력을 바로 받는다 — 중간 산출물 catalog_bodies.jsonl은 없다.
 IN_PATH = _REPO_ROOT / "data" / "catalog" / "catalog_sources.jsonl"
 OUT_PATH = _REPO_ROOT / "data" / "catalog" / "catalog_classified.jsonl"
+# --screen-only 전용 출력. 오프라인 백필 경로(Task 10)의 1단계 산출물 — 이후
+# export_batches.py가 이 파일의 keep=true 행에 본문을 붙여 세션용 배치로 낸다.
+SCREENED_OUT_PATH = _REPO_ROOT / "data" / "catalog" / "catalog_screened.jsonl"
 
 _JSON_BLOCK = re.compile(r"\{[\s\S]*\}")
 
@@ -164,6 +167,25 @@ _SCREEN_SYSTEM = (
 )
 
 
+def build_screen_only_record(rec: dict, screen: dict) -> dict:
+    """`--screen-only` 출력 레코드. keep True/False 전건을 남긴다(오프라인
+    경로의 계약 — 뒤이은 export_batches.py가 keep=true만 골라 배치를 만든다).
+
+    build_screened_out_record와 달리 `dept`를 보존한다 — 1차 스크리닝
+    프롬프트가 제목·부서·일자만 보므로, 이 출력이 그 판정 근거를 감사할 수
+    있는 유일한 기록이다.
+    """
+    return {
+        "id": rec.get("id", ""),
+        "date": rec.get("date", ""),
+        "title": rec.get("title", ""),
+        "dept": rec.get("dept", ""),
+        "url": rec.get("url", ""),
+        "keep": bool(screen.get("keep")),
+        "category_hint": screen.get("category_hint", ""),
+    }
+
+
 def build_screened_out_record(rec: dict) -> dict:
     """1차 스크리닝 탈락 레코드를 --resume이 인식할 수 있는 최소 형태로 만든다.
 
@@ -189,20 +211,25 @@ def main() -> None:
     use_utf8_stdout()
     parser = argparse.ArgumentParser(description="보도자료 2단계 분류")
     parser.add_argument("--in", dest="in_path", default=str(IN_PATH))
-    parser.add_argument("--out", default=str(OUT_PATH))
+    parser.add_argument("--out", default=None)
     parser.add_argument("--model", default=MODEL)
     parser.add_argument("--limit", type=int, default=0, help="상위 N건만 처리(비용 통제)")
     parser.add_argument("--resume", action="store_true", help="출력에 있는 id는 건너뜀")
+    parser.add_argument(
+        "--screen-only", action="store_true",
+        help="1차 스크리닝만 수행하고 전건(keep true/false)을 기록한다. "
+             "extract_light/extract_full과 2차 정밀 호출을 건너뛴다 — 오프라인 "
+             "백필 경로(export_batches.py → 세션 분류 → merge_batches.py)의 1단계.",
+    )
     args = parser.parse_args()
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
         raise SystemExit("ANTHROPIC_API_KEY 환경변수가 필요합니다")
 
-    from dart_risk_mcp.core.taxonomy import TAXONOMY
+    out_path = Path(args.out) if args.out else (SCREENED_OUT_PATH if args.screen_only else OUT_PATH)
 
     records = [json.loads(l) for l in Path(args.in_path).read_text(encoding="utf-8").splitlines() if l.strip()]
-    out_path = Path(args.out)
     done: set[str] = set()
     if args.resume and out_path.exists():
         for line in out_path.read_text(encoding="utf-8").splitlines():
@@ -214,9 +241,36 @@ def main() -> None:
     if args.limit:
         todo = todo[: args.limit]
 
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if args.screen_only:
+        # 1차만: 네트워크는 스크리닝 API 호출 하나뿐 — extract_light/extract_full도,
+        # 2차 정밀 호출도 하지 않는다. 전건(keep true/false)을 기록해야 gaps.py류
+        # 후속 도구가 "탈락"과 "미매핑"을 구분할 수 있다(build_screen_only_record).
+        kept = 0
+        with out_path.open("a", encoding="utf-8") as fh:
+            for i, rec in enumerate(todo, 1):
+                head = (f"제목: {rec.get('title','')}\n"
+                        f"담당부서: {rec.get('dept','')}\n"
+                        f"일자: {rec.get('date','')}")
+                try:
+                    screen = parse_screen_response(call_anthropic(_SCREEN_SYSTEM, head, api_key, args.model))
+                except Exception as exc:
+                    print(f"[CLASSIFY] 스크리닝 실패 {rec.get('id')}: {type(exc).__name__}")
+                    continue
+                if screen["keep"]:
+                    kept += 1
+                fh.write(json.dumps(build_screen_only_record(rec, screen), ensure_ascii=False) + "\n")
+                fh.flush()
+                if i % 25 == 0:
+                    print(f"[CLASSIFY] (1차만) {i}/{len(todo)} — 통과 {kept} / 탈락 {i - kept}")
+        print(f"[CLASSIFY] (1차만) 완료: 후보 {len(todo)} → 통과 {kept} / 탈락 {len(todo) - kept} → {out_path}")
+        return
+
+    from dart_risk_mcp.core.taxonomy import TAXONOMY
+
     system_full = build_taxonomy_prompt(TAXONOMY)
     kept = mapped = screened_out = 0
-    out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("a", encoding="utf-8") as fh:
         for i, rec in enumerate(todo, 1):
             # 1차: 목록에서 이미 확보한 제목·부서·일자만 본다. 네트워크 호출 없음.
