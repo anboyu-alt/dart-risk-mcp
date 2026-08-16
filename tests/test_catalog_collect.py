@@ -131,5 +131,147 @@ class TestState(unittest.TestCase):
         self.assertEqual(collect.page_key(2010, 3), "2010:3")
 
 
+class TestFetchListPage(unittest.TestCase):
+    """리뷰 fix — 일시적 실패와 '연도 끝'(정상 응답, 행 없음)을 구분한다.
+
+    구 버전은 요청 실패·디코딩 신뢰불가를 전부 빈 문자열로 뭉갰다. main
+    루프가 빈 문자열을 '이 연도의 마지막 페이지'로 오인해, 네트워크가 한 번
+    흔들리면 이후 페이지 전체가 조용히 누락됐다. fetch_list_page는 이제
+    (html, ok) 튜플로 성공 여부를 명시적으로 반환한다. 네트워크 없이
+    fetch 주입만으로 검증한다.
+    """
+
+    def test_fetch_exception_returns_not_ok(self):
+        def boom(url):
+            raise ConnectionError("network down")
+
+        html, ok = collect.fetch_list_page(2024, 1, fetch=boom)
+        self.assertEqual(html, "")
+        self.assertFalse(ok)
+
+    def test_normal_bytes_return_ok(self):
+        def fake_fetch(url):
+            return _FIXTURE.read_bytes()
+
+        html, ok = collect.fetch_list_page(2024, 1, fetch=fake_fetch)
+        self.assertTrue(ok)
+        self.assertIn("자본시장", html)
+
+    def test_untrusted_decode_returns_not_ok(self):
+        # utf-8/euc-kr/cp949 모두 실패하고 대체문자(U+FFFD) 비율이 임계를
+        # 넘는 바이트열 — decode_page가 신뢰 불가로 판정하는 입력이다.
+        def garbled_fetch(url):
+            return b"\xff\xfe" * 50
+
+        html, ok = collect.fetch_list_page(2024, 1, fetch=garbled_fetch)
+        self.assertEqual(html, "")
+        self.assertFalse(ok)
+
+
+class TestShouldStopYear(unittest.TestCase):
+    """연속 실패 3회를 넘으면(사이트 장애로 간주) 그 연도를 중단하는 판정."""
+
+    def test_below_threshold_continues(self):
+        self.assertFalse(collect.should_stop_year(1))
+        self.assertFalse(collect.should_stop_year(2))
+
+    def test_at_or_above_threshold_stops(self):
+        self.assertTrue(collect.should_stop_year(3))
+        self.assertTrue(collect.should_stop_year(4))
+
+
+class TestCheckOutputConflict(unittest.TestCase):
+    """리뷰 fix — --resume 없이 재실행하면 출력이 중복 append되던 문제.
+
+    출력 파일을 항상 append 모드로 열기 때문에 플래그 없는 재실행은 막아야
+    한다. tempfile로 실제 파일 존재 여부를 검증한다(네트워크 없음).
+    """
+
+    def test_no_existing_file_is_fine(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "out.jsonl"
+            collect.check_output_conflict(out_path, resume=False, overwrite=False, dry_run=False)  # raises 없음
+
+    def test_existing_file_without_flags_raises(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "out.jsonl"
+            out_path.write_text('{"id": "1"}\n{"id": "2"}\n', encoding="utf-8")
+            with self.assertRaises(SystemExit) as ctx:
+                collect.check_output_conflict(out_path, resume=False, overwrite=False, dry_run=False)
+            self.assertIn("2건", str(ctx.exception))
+            self.assertIn("--resume", str(ctx.exception))
+            self.assertIn("--overwrite", str(ctx.exception))
+
+    def test_existing_file_with_resume_is_fine(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "out.jsonl"
+            out_path.write_text('{"id": "1"}\n', encoding="utf-8")
+            collect.check_output_conflict(out_path, resume=True, overwrite=False, dry_run=False)  # raises 없음
+
+    def test_existing_file_with_overwrite_is_fine(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "out.jsonl"
+            out_path.write_text('{"id": "1"}\n', encoding="utf-8")
+            collect.check_output_conflict(out_path, resume=False, overwrite=True, dry_run=False)  # raises 없음
+
+    def test_existing_file_with_dry_run_is_fine(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "out.jsonl"
+            out_path.write_text('{"id": "1"}\n', encoding="utf-8")
+            collect.check_output_conflict(out_path, resume=False, overwrite=False, dry_run=True)  # raises 없음
+
+
+class TestResetForOverwrite(unittest.TestCase):
+    def test_overwrite_removes_both_out_and_state(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "out.jsonl"
+            state_path = Path(tmp) / "state.json"
+            out_path.write_text('{"id": "1"}\n', encoding="utf-8")
+            state_path.write_text('{"done_pages": ["2010:1"]}', encoding="utf-8")
+
+            collect.reset_for_overwrite(out_path, state_path, overwrite=True, dry_run=False)
+
+            self.assertFalse(out_path.exists())
+            self.assertFalse(state_path.exists())
+
+    def test_overwrite_missing_files_does_not_raise(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "missing_out.jsonl"
+            state_path = Path(tmp) / "missing_state.json"
+            collect.reset_for_overwrite(out_path, state_path, overwrite=True, dry_run=False)  # raises 없음
+
+    def test_without_overwrite_flag_leaves_files_untouched(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "out.jsonl"
+            out_path.write_text('{"id": "1"}\n', encoding="utf-8")
+            collect.reset_for_overwrite(out_path, out_path, overwrite=False, dry_run=False)
+            self.assertTrue(out_path.exists())
+
+    def test_dry_run_leaves_files_untouched_even_with_overwrite(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "out.jsonl"
+            out_path.write_text('{"id": "1"}\n', encoding="utf-8")
+            collect.reset_for_overwrite(out_path, out_path, overwrite=True, dry_run=True)
+            self.assertTrue(out_path.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -36,6 +36,7 @@ _HEADERS = {"User-Agent": "dart-risk-mcp catalog builder"}
 _TIMEOUT = 30
 _SLEEP = 0.25          # 서버 예의. 1,200페이지 순회 시 약 5분의 대기가 된다.
 _MAX_PAGES = 200       # 연도당 안전 상한(실측 최대 85페이지)
+_MAX_CONSECUTIVE_FAILURES = 3  # 이 값을 넘으면 사이트 장애로 간주해 그 연도를 중단
 
 # 담당부서 — 조직 개편이 잦아(회계감독1국 → 회계감리1국 → 회계심사국) 부분일치로 잡는다.
 # '조사1국'은 '조사국'을 포함하지 않으므로 번호 붙은 조사국을 개별 등재한다.
@@ -133,6 +134,17 @@ def page_key(year: int, page: int) -> str:
     return f"{year}:{page}"
 
 
+def should_stop_year(consecutive_failures: int) -> bool:
+    """연속 실패 횟수가 임계값을 넘으면 그 연도 순회를 중단할지 판정한다.
+
+    한 페이지 실패로 연도 전체를 버리지 않기 위해, 실패는 우선 건너뛰고
+    다음 페이지로 계속한다. 다만 연속 실패가 임계값을 넘으면 일시적 흔들림이
+    아니라 사이트 장애로 보고 그 연도를 중단한다(무한정 재시도하며 시간을
+    낭비하지 않기 위함).
+    """
+    return consecutive_failures >= _MAX_CONSECUTIVE_FAILURES
+
+
 def load_state(path: Path) -> dict:
     if not path.exists():
         return {"done_pages": []}
@@ -148,25 +160,58 @@ def save_state(path: Path, state: dict) -> None:
     path.write_text(json.dumps(state, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
-def fetch_list_page(year: int, page: int, fetch=None) -> str:
-    """연도·페이지의 목록 HTML. 실패·오염 시 빈 문자열(호출부가 종료 판단)."""
+def fetch_list_page(year: int, page: int, fetch=None) -> tuple[str, bool]:
+    """연도·페이지의 목록 HTML. 반환: (html, ok).
+
+    ok=False는 요청 실패·디코딩 신뢰불가를 뜻한다. 정상 응답인데 행이 없는
+    경우(연도의 끝)와 반드시 구분해야 한다 — 둘을 같은 빈 문자열로 뭉개면
+    일시적 실패가 연도 종료로 오인돼 나머지 페이지가 조용히 누락된다.
+    """
     url = f"{LIST_URL}&sdate={year}0101&edate={year}1231&pageIndex={page}"
     try:
         raw = fetch(url) if fetch else _default_fetch(url)
     except Exception as exc:
         print(f"[COLLECT] {year} p{page} 요청 실패: {type(exc).__name__} {exc}")
-        return ""
+        return "", False
     html, trusted = decode_page(raw)
     if not trusted:
         print(f"[COLLECT] {year} p{page} 디코딩 신뢰 불가 — 건너뜀")
-        return ""
-    return html
+        return "", False
+    return html, True
 
 
 def _default_fetch(url: str) -> bytes:
     resp = requests.get(url, headers=_HEADERS, timeout=_TIMEOUT)
     resp.raise_for_status()
     return resp.content
+
+
+def check_output_conflict(out_path: Path, *, resume: bool, overwrite: bool, dry_run: bool) -> None:
+    """`--resume`·`--overwrite` 없이 기존 출력을 덮어쓰려는 실행을 막는다.
+
+    출력 파일을 항상 append 모드로 열기 때문에, 플래그 없이 두 번 실행하면
+    같은 레코드가 그대로 두 벌 쌓인다. dry-run은 아무것도 쓰지 않으므로
+    대상이 아니다. 충돌 시 SystemExit로 알린다(main()의 argparse 관례와 동일).
+    """
+    if dry_run or not out_path.exists() or resume or overwrite:
+        return
+    existing = sum(1 for line in out_path.read_text(encoding="utf-8").splitlines() if line.strip())
+    raise SystemExit(
+        f"출력 파일에 이미 {existing}건이 있습니다: {out_path}\n"
+        "  이어서 수집하려면 --resume, 처음부터 다시 만들려면 --overwrite 를 쓰세요."
+    )
+
+
+def reset_for_overwrite(out_path: Path, state_path: Path, *, overwrite: bool, dry_run: bool) -> None:
+    """`--overwrite` 지정 시 기존 출력·상태 파일을 모두 지운다.
+
+    출력만 지우고 state를 남기면 이미 끝난 페이지로 기록된 것들이 건너뛰어져
+    빈 결과가 된다 — 반드시 둘 다 지워야 처음부터 다시 수집된다.
+    """
+    if not overwrite or dry_run:
+        return
+    out_path.unlink(missing_ok=True)
+    state_path.unlink(missing_ok=True)
 
 
 def main() -> None:
@@ -177,10 +222,15 @@ def main() -> None:
     parser.add_argument("--out", default=str(OUT_PATH))
     parser.add_argument("--state", default=str(STATE_PATH))
     parser.add_argument("--resume", action="store_true", help="이미 수집한 페이지를 건너뛴다")
+    parser.add_argument("--overwrite", action="store_true", help="기존 출력·상태를 지우고 처음부터 다시 수집한다")
     parser.add_argument("--dry-run", action="store_true", help="저장 없이 통과 건수만 출력")
     args = parser.parse_args()
 
     out_path, state_path = Path(args.out), Path(args.state)
+
+    check_output_conflict(out_path, resume=args.resume, overwrite=args.overwrite, dry_run=args.dry_run)
+    reset_for_overwrite(out_path, state_path, overwrite=args.overwrite, dry_run=args.dry_run)
+
     state = load_state(state_path) if args.resume else {"done_pages": []}
     done = set(state.get("done_pages") or [])
 
@@ -196,17 +246,31 @@ def main() -> None:
     fh = None if args.dry_run else out_path.open("a", encoding="utf-8")
 
     total = kept = 0
+    failed_pages: list[str] = []
     try:
         for year in range(args.from_year, args.to_year + 1):
             year_total = year_kept = 0
+            consecutive_failures = 0
             for page in range(1, _MAX_PAGES + 1):
                 key = page_key(year, page)
                 if key in done:
                     continue
-                html = fetch_list_page(year, page)
+                html, ok = fetch_list_page(year, page)
+                if not ok:
+                    consecutive_failures += 1
+                    failed_pages.append(key)
+                    if should_stop_year(consecutive_failures):
+                        print(
+                            f"[COLLECT] {year}: 연속 {consecutive_failures}회 요청 실패 — "
+                            "사이트 장애로 간주해 이 연도 수집을 중단합니다"
+                        )
+                        break
+                    time.sleep(_SLEEP)
+                    continue                  # 이 페이지만 건너뛰고 다음 페이지로 계속(done에는 넣지 않음)
+                consecutive_failures = 0
                 rows = parse_list_rows(html)
                 if not rows:
-                    break                      # 해당 연도의 마지막 페이지
+                    break                      # 정상 응답인데 행이 없음 — 해당 연도의 마지막 페이지
                 year_total += len(rows)
                 for row in rows:
                     if row["id"] in seen or not passes_filter(row):
@@ -233,6 +297,17 @@ def main() -> None:
     print(f"[COLLECT] 완료: 원본 {total}건 → 필터 통과 {kept}건 ({rate:.1f}%)")
     if not args.dry_run:
         print(f"[COLLECT] 저장 → {out_path}")
+
+    if failed_pages:
+        shown = ", ".join(failed_pages[:20])
+        more = len(failed_pages) - 20
+        suffix = f" ... 외 {more}개" if more > 0 else ""
+        print(f"[COLLECT] ⚠ 수집 실패 페이지 {len(failed_pages)}개: {shown}{suffix}")
+        print("[COLLECT]   이 페이지들은 저장되지 않았습니다. 다음 명령으로 재시도하세요:")
+        print(
+            f"[COLLECT]   python scripts/catalog/collect.py "
+            f"--from-year {args.from_year} --to-year {args.to_year} --resume"
+        )
 
 
 if __name__ == "__main__":
