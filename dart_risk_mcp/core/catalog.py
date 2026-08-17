@@ -68,6 +68,61 @@ def _taxonomy_sort_key(tid: str) -> tuple:
 # 인용` 하위 섹션 포함).
 _ANY_HEADER_RE = re.compile(r"^## \S+: .*$", re.MULTILINE)
 
+# 사례 개수 제한(SE-13 후속, 2026-08-16 실측): 사례 목록이 발췌 예산을 다 먹어
+# 그 뒤 `### 적발 기법 종합`/`### 인용 법조`(130건 등 유형 전체를 집계한 값)가
+# 통째로 잘리는 문제를 막기 위해, `### 금감원·금융위 적발 사례` 섹션 안의 사례
+# 항목 개수를 `max_cases`로 제한한다. 사례는 `scripts/catalog/build_md.py`의
+# `group_cases`가 이미 date 내림차순으로 정렬해 두므로 여기서는 재정렬하지 않고
+# 앞에서(=최신순으로) `max_cases`개만 취한다.
+_CASES_HEADER_RE = re.compile(r"^### 금감원·금융위 적발 사례.*$", re.MULTILINE)
+_SUBSECTION_HEADER_RE = re.compile(r"^### .*$", re.MULTILINE)
+_CASE_ITEM_RE = re.compile(
+    r"^- \*\*\d{4}-\d{2}-\d{2} / .*?(?=^- \*\*\d{4}-\d{2}-\d{2} / |\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+_CASE_PLACEHOLDER_MARK = "적발 사례 없음"
+
+
+def _limit_case_entries(block: str, max_cases: int) -> str:
+    """taxonomy 블록의 `### 금감원·금융위 적발 사례` 섹션에서 사례 항목을
+    최대 `max_cases`개로 제한하고, 잘려나간 게 있으면 잔여 건수를 사실
+    한 줄로 덧붙인다.
+
+    - 사례 섹션을 못 찾으면 블록을 그대로 반환(방어적 — 정상 카탈로그 MD라면
+      항상 존재).
+    - 사례가 0건(자리표시자 문장 "적발 사례 없음 — …")이면 그대로 둔다.
+    - 사례 개수가 `max_cases` 이하면 자를 게 없으므로 그대로 둔다.
+    - 재정렬하지 않는다 — 입력이 이미 최신순이라 앞에서부터 취하면 최신 사례가
+      남는다.
+    """
+    header_match = _CASES_HEADER_RE.search(block)
+    if not header_match:
+        return block
+
+    section_start = header_match.end()
+    next_header = _SUBSECTION_HEADER_RE.search(block, section_start)
+    section_end = next_header.start() if next_header else len(block)
+    section = block[section_start:section_end]
+
+    if _CASE_PLACEHOLDER_MARK in section:
+        return block
+
+    items = _CASE_ITEM_RE.findall(section)
+    total = len(items)
+    if total <= max_cases:
+        return block
+
+    kept = items[:max_cases]
+    remaining = total - max_cases
+    note = (
+        f"- …외 {remaining}건 (이 유형의 적발 사례 총 {total}건). "
+        f"아래 '적발 기법 종합'·'인용 법조'는 {total}건 전체를 집계한 것입니다."
+    )
+    body = ("".join(kept).rstrip("\n") + "\n" + note) if kept else note
+    new_section = "\n\n" + body + "\n\n"
+
+    return block[:section_start] + new_section + block[section_end:]
+
 
 def _extract_taxonomy_block(content: str, tid: str) -> str | None:
     """content에서 `## {tid}: ...` 헤더로 시작하는 블록 하나만 뽑아 반환한다.
@@ -88,12 +143,21 @@ def _extract_taxonomy_block(content: str, tid: str) -> str | None:
     return block.strip()
 
 
-def load_catalog_excerpt(taxonomy_ids: list[str], max_chars: int = 1500) -> str:
+def load_catalog_excerpt(taxonomy_ids: list[str], max_chars: int = 2600, max_cases: int = 2) -> str:
     """taxonomy ID 목록에 해당하는 카탈로그 MD 발췌를 반환한다.
 
     중복 카테고리는 한 번만 로드. 파일 부재·읽기 오류 시 해당 카테고리 건너뜀.
     섹션 순서는 입력 순서와 무관하게 taxonomy ID 숫자 오름차순(카테고리 1~8 순)
     으로 고정된다 — 입력이 set에서 왔더라도 출력은 결정적이다.
+
+    `max_chars`=2600 / `max_cases`=2 근거(2026-08-16 전수 실측, 317건 기준):
+    사례 1건은 중앙값 506자(평균 543자, 최대 1,577자). 사례를 뺀 고정 섹션
+    (정의·탐지 키워드·위험 신호·적발 기법 종합·인용 법조·기존 기사 인용) 합계는
+    사례가 많은 유형에서 최대 약 1,573자. 즉 `max_cases=2`로 제한하면
+    `1,573 + 2×506 ≈ 2,585자`로 고정 섹션(특히 사례 전체를 집계한 '적발 기법
+    종합'·'인용 법조')이 잘리지 않고 전부 들어간다. 이전 기본값 1500자는 사례
+    목록만으로 예산을 다 써 그 뒤 섹션이 통째로 잘리는 문제가 있었다(taxonomy
+    4.3: 보유 사례 130건 중 발췌 노출 3건, 88% 절단).
 
     ⚠ **함정(SE-13 Task 1에서 실사고 발생)**: 인자는 반드시 `TAXONOMY`(taxonomy.py)의
     키인 taxonomy ID 문자열(예: `"5.1"`, `"7.1"`)이어야 한다. `CROSS_SIGNAL_PATTERNS`의
@@ -136,7 +200,14 @@ def load_catalog_excerpt(taxonomy_ids: list[str], max_chars: int = 1500) -> str:
         content = _strip_taxonomy_metadata(content)
 
         # 요청받은 id들의 블록만 모은다(같은 카테고리 여러 id면 오름차순으로 이어붙임).
-        blocks = [b for tid in ids if (b := _extract_taxonomy_block(content, tid)) is not None]
+        # 블록별로 사례 항목 개수를 max_cases로 제한(사례가 예산을 다 먹어 뒤의
+        # 집계 섹션이 통째로 잘리는 문제 방지 — 위 docstring 근거 참고).
+        blocks = []
+        for tid in ids:
+            b = _extract_taxonomy_block(content, tid)
+            if b is None:
+                continue
+            blocks.append(_limit_case_entries(b, max_cases))
 
         if blocks:
             section_body = "\n\n---\n\n".join(blocks)
