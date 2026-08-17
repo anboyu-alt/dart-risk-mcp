@@ -12,6 +12,20 @@ from scripts.catalog.labels import label_for, load_labels
 
 _MD_DIR = Path(__file__).resolve().parents[1] / "dart_risk_mcp" / "knowledge" / "manipulation_catalog"
 
+# dart-monitor에서 이식한 손수 작성 MD가 담고 있던 37종. 파이프라인 재생성이 이 중
+# 하나라도 떨어뜨리면 회귀이므로 명시적으로 고정한다.
+_NEW_8 = ["2.7", "2.8", "3.6", "3.7", "5.6", "5.7", "5.8", "8.5"]
+_LEGACY_37 = {
+    "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7",
+    "2.1", "2.2", "2.3", "2.4", "2.5", "2.6",
+    "3.1", "3.2", "3.3", "3.4", "3.5",
+    "4.1", "4.2", "4.3", "4.4",
+    "5.1", "5.2", "5.3", "5.4", "5.5",
+    "6.1", "6.2", "6.3",
+    "7.1", "7.2", "7.3",
+    "8.1", "8.2", "8.3", "8.4",
+}
+
 _SAMPLE_MD = """# 전환사채·부채 조작
 > 카테고리: Convertible Bond & Debt Manipulation
 > 생성일: 2026-04-20
@@ -89,25 +103,33 @@ class TestParseMdLabels(unittest.TestCase):
             ["위메이드 800억원 CB조기상환", "리픽싱모니터"],
         )
 
-    def test_real_catalog_yields_37_types(self):
-        # 실제 카탈로그 8개 파일에서 37개 유형이 파싱돼야 한다(실측 기준선).
+    def test_real_catalog_yields_45_types(self):
+        # 실제 카탈로그 8개 파일에서 taxonomy 45종 전부가 파싱돼야 한다.
+        # 기준선이 37이던 시절은 dart-monitor에서 이식한 손수 작성 MD를 쓰던 때이고,
+        # 2026-08-17 파이프라인 재생성으로 _LEGACY_37에 없던 8종(2.7·2.8·3.6·3.7·
+        # 5.6·5.7·5.8·8.5 — 사례 공백을 메우려던 바로 그 유형들)이 채워졌다.
         merged = {}
         for p in sorted(_MD_DIR.glob("0*.md")):
             merged.update(parse_md_labels(p.read_text(encoding="utf-8")))
-        self.assertEqual(len(merged), 37)
+        self.assertEqual(len(merged), 45)
         self.assertEqual(merged["1.1"]["title"], "전환가액 하향조정(리픽싱)")
+        self.assertEqual(sorted(set(merged) - _LEGACY_37), _NEW_8)
 
-    def test_real_catalog_field_articles_all_37_parsed(self):
-        # 리뷰어 실측: 37블록 전부에 기존 현장 기사 인용이 있어야 한다(fix round 1).
+    def test_real_catalog_field_articles_legacy_37_preserved(self):
+        # 재생성이 기존 한글 '현장 기사 인용'을 지우지 않았는지 지키는 가드다.
+        # 신규 8종은 이식 원본에 기사가 없었으므로 비어 있는 것이 정상 — 그래서
+        # "전부 있어야 한다"가 아니라 "기존 37종은 전부 있어야 한다"로 검사한다.
         merged = {}
         for p in sorted(_MD_DIR.glob("0*.md")):
             merged.update(parse_md_labels(p.read_text(encoding="utf-8")))
-        without_articles = [tid for tid, v in merged.items() if not v["field_articles"]]
+        without_articles = [t for t in sorted(_LEGACY_37) if not merged[t]["field_articles"]]
         self.assertEqual(without_articles, [])
         self.assertEqual(
             merged["1.1"]["field_articles"],
             ["위메이드 800억원 CB조기상환", "리픽싱모니터"],
         )
+        # 기사 총량도 고정한다 — 유형 수가 늘어도 인용이 새거나 중복되면 안 된다.
+        self.assertEqual(sum(len(v["field_articles"]) for v in merged.values()), 49)
 
 
 class TestLoadLabels(unittest.TestCase):

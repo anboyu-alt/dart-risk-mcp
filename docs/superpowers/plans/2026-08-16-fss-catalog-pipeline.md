@@ -4,7 +4,7 @@
 
 **Goal:** 금감원·금융위 보도자료를 수집·분류해 `knowledge/manipulation_catalog/*.md`를 이 레포 안에서 재생성하고, 기존 45개 유형에 매핑되지 않는 신종 수법을 신규 신호 후보로 리포트한다.
 
-**Architecture:** `scripts/catalog/` 아래 5단계 배치 파이프라인(collect → extract → classify → build_md → gaps). 중간 산출물은 `data/catalog/*.jsonl`. 분류 기준은 `dart_risk_mcp.core.taxonomy.TAXONOMY` 단일 출처. 본문은 무의존 페이지 파싱을 기본으로 하고 PDF 전문은 1차 스크리닝 통과분에만 선택적으로 받는다.
+**Architecture:** `scripts/catalog/` 아래 4단계 배치 파이프라인(collect → classify → build_md → gaps). 수집은 FSS 게시판 웹 파싱(키·한도 없음)이고, 목록의 담당부서·제목으로 규칙 필터를 건 뒤 LLM 1차 스크리닝을 제목·부서만으로 돌린다. 상세 페이지와 PDF는 1차 통과분에만 받는다 — `extract.py`는 독립 단계가 아니라 `classify.py`가 건별로 호출하는 라이브러리다. 분류 기준은 `dart_risk_mcp.core.taxonomy.TAXONOMY` 단일 출처.
 
 **Tech Stack:** Python 3.11+, `requests`(HTTP·Anthropic API 직접 호출), 표준 라이브러리(`zipfile`·`re`·`json`·`argparse`), `pypdf`(scripts 전용 optional)
 
@@ -35,8 +35,8 @@
 | `scripts/catalog/render.py` | JSONL 분류결과 + 라벨 → MD 문자열. 순수 함수, I/O 없음 |
 | `scripts/catalog/build_md.py` | Phase D CLI. render를 호출해 파일 8개 + README 기록 |
 | `scripts/catalog/collect.py` | Phase A CLI. FSS·정책브리핑 수집 + 키워드 필터 |
-| `scripts/catalog/extract.py` | Phase B. `extract_light`(무의존) / `extract_full`(pypdf) 두 진입점 |
-| `scripts/catalog/classify.py` | Phase C. 1차 스크리닝 → 2차 정밀 분류. Anthropic API를 requests로 호출 |
+| `scripts/catalog/extract.py` | Phase B **라이브러리**(CLI 없음). `extract_light`(무의존) / `extract_full`(pypdf) — `classify.py`가 1차 통과분에만 건별 호출 |
+| `scripts/catalog/classify.py` | Phase C. 1차 스크리닝(제목·부서만) → 본문 확보 → 2차 정밀 분류. Anthropic API를 requests로 호출 |
 | `scripts/catalog/gaps.py` | Phase E. 미매핑 수법 → 갭 리포트 MD |
 | `.github/workflows/refresh-catalog.yml` | 수동 트리거 + 월 1회 cron |
 | `tests/test_catalog_labels.py` | 라벨 커버리지·역추출 회귀 |
@@ -1281,38 +1281,95 @@ EOF
 
 ---
 
-### Task 5: Phase A — 수집 (FSS_API_KEY 필요)
+### Task 5: Phase A — 게시판 목록 수집 + 규칙 필터 (API 키 불필요)
 
-**선행 조건:** `FSS_API_KEY`, `DATA_GO_KR_API_KEY` 환경변수. 없으면 Step 6(라이브 확인)만 건너뛰고 나머지는 진행 가능.
+> **설계 변경 (2026-08-16 실측 후, 사용자 결정 "게시판 웹 파싱으로 가자")**
+>
+> 최초 계획은 FSS 오픈API로 수집했으나 **일일 30회 한도가 실증**됐다 —
+> `resultCode: "033"`, `resultMsg: "하루 조회 건수를 초과하였습니다. 하루 조회 건수는 30회 입니다."`
+> 2010~2026 백필은 약 200개 월 청크라 API로는 최소 7~8일이 걸린다. 반면 게시판
+> 웹페이지(`/fss/bbs/B0000188/list.do`)는 **키도 한도도 없고**, 목록에 이미
+> 제목·담당부서·등록일·nttId가 모두 들어 있다.
+>
+> 더 중요한 것은 **담당부서 컬럼**이다. 사용자 지적대로 금감원 보도자료는 은행·보험·
+> 서민금융·교육이 대부분이라 전부 열어보면 낭비인데, 목록 단계에서 부서로 거를 수 있다.
+> 600건 표본(2012·2016·2020·2024) 실측:
+>
+> | 필터 | 통과 |
+> |---|---|
+> | 부서만 | 165건 (27.5%) |
+> | 제목 키워드만 | 43건 (7.2%) |
+> | **(부서 OR 키워드) − 일반안내** | **147건 (24.5%)** |
+>
+> 연도별 20.0 / 20.7 / 30.7 / 26.7%로 안정적이다 — 부서명이 계속 개편되는데도
+> (회계감독1국 → 회계감리1국 → 회계심사국 → 회계조사국) 부분일치가 견딘다.
+>
+> **API는 이 태스크에서 쓰지 않는다.** 증분(월 1회 cron)도 최근 1~2페이지만 보면 되므로
+> 웹 파싱으로 충분하다. `FSS_API_KEY`는 당분간 사용처가 없다.
+>
+> **금융위 정책브리핑(`DATA_GO_KR_API_KEY`)도 이 태스크 범위 밖이다.** 기존 카탈로그 MD에
+> 남은 원문 URL 67개가 전부 `fss.or.kr`이라 금융위 기여가 실질적으로 확인되지 않았다.
+> 필요성이 확인되면 별도 태스크로 추가한다.
 
 **Files:**
 - Create: `scripts/catalog/collect.py`
-- Create: `tests/fixtures/catalog/fss_api_response.json`
+- Create: `tests/fixtures/catalog/fss_list_page.html`
 - Test: `tests/test_catalog_collect.py`
 
 **Interfaces:**
+- Consumes: `scripts.catalog.extract.decode_page` (Task 4)
 - Produces:
-  - `collect.KEYWORDS: list[str]`
-  - `collect.matches_keywords(title: str, contents: str) -> list[str]`
-  - `collect.normalize_fss(raw: dict) -> dict` — API 응답 → 표준 레코드
-  - `collect.month_chunks(start: str, end: str) -> list[tuple[str, str]]` — `("YYYYMMDD","YYYYMMDD")`
+  - `collect.DEPT_IN: list[str]` / `collect.DEPT_OUT: list[str]`
+  - `collect.TITLE_KW: list[str]` / `collect.TITLE_OUT: list[str]`
+  - `collect.parse_list_rows(html: str) -> list[dict]` — `{"id","title","dept","date"}`
+  - `collect.dept_hit(dept: str) -> bool`
+  - `collect.title_keywords(title: str) -> list[str]`
+  - `collect.is_general_notice(title: str) -> bool`
+  - `collect.passes_filter(row: dict) -> bool`
+  - `collect.to_record(row: dict) -> dict` — 표준 레코드
+  - `collect.load_state(path) -> dict` / `collect.save_state(path, state) -> None`
 
-표준 레코드 스키마(Task 4·6이 소비):
+표준 레코드 스키마(Task 4의 `extract_light`, Task 6의 `classify`가 소비):
 ```python
-{"source": "fss", "id": "133239", "title": "...", "date": "2024-01-18",
- "summary": "...", "url": "https://...", "matched_keywords": ["불공정거래"]}
+{"source": "fss", "id": "133239", "title": "...", "dept": "자본시장조사국",
+ "date": "2024-01-18", "url": "https://www.fss.or.kr/fss/bbs/B0000188/view.do?nttId=133239&menuNo=200218",
+ "matched_keywords": ["불공정거래"], "matched_dept": True}
 ```
 
 - [ ] **Step 1: fixture 작성**
 
-`tests/fixtures/catalog/fss_api_response.json`:
+`tests/fixtures/catalog/fss_list_page.html` — 실제 목록 마크업을 축약한 것(2026-08-16 실측 구조). 행 4개로 필터의 네 갈래(부서 통과 / 키워드 통과 / 일반안내 제외 / 완전 탈락)를 모두 덮는다:
 
-```json
-{"result": {"list": [
-  {"contentId": "133239", "title": "‘무늬만’ 신규사업, 불공정거래행위 집중조사", "contentKor": "상장기업의 신규사업 공시를 점검한 결과 불공정거래 혐의가 확인되었습니다.", "regDate": "2024-01-18", "atchfileUrl": "https://www.fss.or.kr/fss/cmmn/file/fileDown.do?atchFileId=A&fileSn=1", "atchfileNm": "보도자료.hwp"},
-  {"contentId": "133310", "title": "「전환사채 시장 건전성 제고 간담회」 개최", "contentKor": "전환사채 시장의 리픽싱 문제를 논의했습니다.", "regDate": "2024-01-23", "atchfileUrl": "", "atchfileNm": ""},
-  {"contentId": "140001", "title": "금융감독원 채용 공고", "contentKor": "신입직원을 채용합니다.", "regDate": "2024-02-01", "atchfileUrl": "", "atchfileNm": ""}
-]}}
+```html
+<table class="bd-list">
+<thead><tr><th class="num">번호</th><th class="title">제목</th><th>담당부서</th><th class="date">등록일</th></tr></thead>
+<tbody>
+<tr>
+  <td class="num"> 824 </td>
+  <td class="title"><a href="/fss/bbs/B0000188/view.do?nttId=12170&amp;menuNo=200218&amp;sdate=20150101">자본시장 불공정거래에 대한 조사결과 조치</a></td>
+  <td>자본시장조사2국</td>
+  <td> 2015-12-31 </td>
+</tr>
+<tr>
+  <td class="num"> 823 </td>
+  <td class="title"><a href="/fss/bbs/B0000188/view.do?nttId=12171&amp;menuNo=200218">SNS 리딩방 이용 선행매매 등 부정거래 행위 다수 적발</a></td>
+  <td>조사1국/조사3국</td>
+  <td> 2015-12-30 </td>
+</tr>
+<tr>
+  <td class="num"> 822 </td>
+  <td class="title"><a href="/fss/bbs/B0000188/view.do?nttId=12172&amp;menuNo=200218">외국인 투자자를 위한 영문 가이드북 제작ㆍ발간</a></td>
+  <td>금융투자감독국</td>
+  <td> 2015-12-29 </td>
+</tr>
+<tr>
+  <td class="num"> 821 </td>
+  <td class="title"><a href="/fss/bbs/B0000188/view.do?nttId=12173&amp;menuNo=200218">2016년도 시스템적 중요 은행·은행지주회사 선정</a></td>
+  <td>은행감독국/거시감독국</td>
+  <td> 2015-12-28 </td>
+</tr>
+</tbody>
+</table>
 ```
 
 - [ ] **Step 2: 실패하는 테스트 작성**
@@ -1320,11 +1377,11 @@ EOF
 `tests/test_catalog_collect.py`:
 
 ```python
-"""Phase A 수집·필터 회귀 테스트.
+"""Phase A 게시판 목록 수집·필터 회귀 테스트.
 
-dart-monitor 원본 키워드는 3개("불공정거래","주가조작","사모CB")뿐이라
-taxonomy 45개 중 상당수 유형이 수집되지 않았다(신규 8개 공백의 직접 원인).
-확장 키워드가 실제로 더 넓게 잡는지, 무관한 공고는 거르는지 검증한다.
+설계 근거(2026-08-16 실측, 600건 표본): 금감원 보도자료는 은행·보험·서민금융이
+대부분이라 전부 열면 낭비다. 목록의 담당부서 컬럼으로 거르면 24.5%로 좁혀지고,
+연도별 편차도 20~31%로 안정적이다(부서명이 계속 개편되는데도 부분일치가 견딤).
 """
 import json
 import unittest
@@ -1332,98 +1389,125 @@ from pathlib import Path
 
 from scripts.catalog import collect
 
-_FIXTURE = Path(__file__).parent / "fixtures" / "catalog" / "fss_api_response.json"
+_FIXTURE = Path(__file__).parent / "fixtures" / "catalog" / "fss_list_page.html"
 
 
-class TestKeywords(unittest.TestCase):
-    def test_legacy_three_keywords_still_present(self):
-        for kw in ("불공정거래", "주가조작", "사모CB"):
-            self.assertIn(kw, collect.KEYWORDS)
+class TestParseListRows(unittest.TestCase):
+    def setUp(self):
+        self.rows = collect.parse_list_rows(_FIXTURE.read_text(encoding="utf-8"))
 
-    def test_expanded_beyond_legacy(self):
-        self.assertGreater(len(collect.KEYWORDS), 3)
-        for kw in ("전환사채", "최대주주", "횡령", "상장폐지"):
-            self.assertIn(kw, collect.KEYWORDS)
+    def test_parses_all_rows(self):
+        self.assertEqual(len(self.rows), 4)
 
-    def test_matches_title_or_contents(self):
-        self.assertEqual(collect.matches_keywords("불공정거래 조사", ""), ["불공정거래"])
-        self.assertIn("전환사채", collect.matches_keywords("", "전환사채 발행"))
+    def test_extracts_fields(self):
+        r = self.rows[0]
+        self.assertEqual(r["id"], "12170")
+        self.assertEqual(r["title"], "자본시장 불공정거래에 대한 조사결과 조치")
+        self.assertEqual(r["dept"], "자본시장조사2국")
+        self.assertEqual(r["date"], "2015-12-31")
 
-    def test_unrelated_text_matches_nothing(self):
-        self.assertEqual(collect.matches_keywords("채용 공고", "신입직원을 채용합니다."), [])
+    def test_decodes_html_entities(self):
+        # 목록 href의 &amp; 와 제목의 특수문자가 정리돼야 한다
+        r = self.rows[2]
+        self.assertNotIn("&amp;", r["title"])
+        self.assertIn("가이드북", r["title"])
+
+    def test_multi_dept_preserved_raw(self):
+        self.assertEqual(self.rows[1]["dept"], "조사1국/조사3국")
+
+    def test_empty_html_yields_nothing(self):
+        self.assertEqual(collect.parse_list_rows("<html><body>없음</body></html>"), [])
 
 
-class TestNormalize(unittest.TestCase):
-    def test_maps_api_fields_to_record(self):
-        raw = json.loads(_FIXTURE.read_text(encoding="utf-8"))["result"]["list"][0]
-        rec = collect.normalize_fss(raw)
+class TestDeptFilter(unittest.TestCase):
+    def test_capital_market_depts_hit(self):
+        for d in ("자본시장조사2국", "기업공시국", "회계심사국", "금융투자감독국",
+                  "자산운용감독실", "공시심사실", "회계감리1국"):
+            self.assertTrue(collect.dept_hit(d), d)
+
+    def test_investigation_numbered_depts_hit(self):
+        # '조사1국'은 '조사국'을 부분문자열로 포함하지 않는다 — 첫 설계에서 놓쳤던 결함.
+        for d in ("조사1국", "조사3국", "조사1국/조사3국", "특별조사국", "공매도특별조사단"):
+            self.assertTrue(collect.dept_hit(d), d)
+
+    def test_unrelated_depts_miss(self):
+        for d in ("은행감독국", "보험감독국", "서민금융지원국", "금융교육국",
+                  "저축은행감독국", "거시감독국"):
+            self.assertFalse(collect.dept_hit(d), d)
+
+    def test_insurance_investigation_excluded(self):
+        # '보험조사국'은 보험사기 담당이라 '조사'류에 걸려도 제외해야 한다.
+        self.assertFalse(collect.dept_hit("보험조사국"))
+        self.assertFalse(collect.dept_hit("보험감리실"))
+
+    def test_slash_separated_any_hit(self):
+        self.assertTrue(collect.dept_hit("금융중심지지원센터/기업공시국"))
+
+
+class TestTitleFilter(unittest.TestCase):
+    def test_keywords_detected(self):
+        self.assertIn("불공정거래", collect.title_keywords("자본시장 불공정거래 조사결과"))
+        self.assertIn("전환사채", collect.title_keywords("전환사채 발행 관련 유의사항"))
+
+    def test_no_keyword(self):
+        self.assertEqual(collect.title_keywords("은행지주회사 선정"), [])
+
+    def test_general_notice_detected(self):
+        for t in ("영문 가이드북 제작ㆍ발간", "회계현안설명회 개최", "금융투자업 인가 의결",
+                  "검사 사례집 발간·배포", "홍보아이디어 공모전 수상작 발표"):
+            self.assertTrue(collect.is_general_notice(t), t)
+
+    def test_enforcement_titles_not_general_notice(self):
+        for t in ("공시위반 법인에 대한 조치", "사업보고서 및 감사보고서 등에 대한 조사·감리결과 조치",
+                  "공매도의 제한 위반행위 조치"):
+            self.assertFalse(collect.is_general_notice(t), t)
+
+
+class TestPassesFilter(unittest.TestCase):
+    def setUp(self):
+        self.rows = collect.parse_list_rows(_FIXTURE.read_text(encoding="utf-8"))
+
+    def test_four_way_split(self):
+        got = [collect.passes_filter(r) for r in self.rows]
+        # 0: 부서+키워드 통과 / 1: 부서(조사1국)+키워드 통과 / 2: 부서 맞지만 일반안내 / 3: 완전 탈락
+        self.assertEqual(got, [True, True, False, False])
+
+    def test_keyword_only_row_passes(self):
+        # 부서가 비자본시장이어도 제목 키워드가 있으면 통과해야 한다
+        row = {"id": "1", "title": "불공정거래 신고 포상금 지급", "dept": "총무국", "date": "2024-01-01"}
+        self.assertTrue(collect.passes_filter(row))
+
+    def test_general_notice_overrides_dept_and_keyword(self):
+        row = {"id": "2", "title": "전환사채 관련 설명회 개최", "dept": "기업공시국", "date": "2024-01-01"}
+        self.assertFalse(collect.passes_filter(row))
+
+
+class TestToRecord(unittest.TestCase):
+    def test_builds_standard_record(self):
+        row = {"id": "133239", "title": "불공정거래 조사결과 조치", "dept": "조사1국", "date": "2024-01-18"}
+        rec = collect.to_record(row)
         self.assertEqual(rec["source"], "fss")
         self.assertEqual(rec["id"], "133239")
-        self.assertEqual(rec["date"], "2024-01-18")
-        self.assertIn("불공정거래", rec["title"])
+        self.assertEqual(rec["dept"], "조사1국")
         self.assertTrue(rec["url"].startswith("https://www.fss.or.kr/fss/bbs/B0000188/view.do?nttId=133239"))
-
-    def test_filters_by_keyword(self):
-        rows = json.loads(_FIXTURE.read_text(encoding="utf-8"))["result"]["list"]
-        kept = [r for r in (collect.normalize_fss(x) for x in rows) if r["matched_keywords"]]
-        self.assertEqual(len(kept), 2)
-        self.assertNotIn("140001", [r["id"] for r in kept])
+        self.assertIn("불공정거래", rec["matched_keywords"])
+        self.assertTrue(rec["matched_dept"])
 
 
-class TestResumeState(unittest.TestCase):
-    """FSS 개인키의 일일 호출 한도 때문에 백필은 여러 날에 걸쳐 재개돼야 한다."""
-
-    def test_state_roundtrip(self):
+class TestState(unittest.TestCase):
+    def test_roundtrip_and_corrupt_handling(self):
         import tempfile
-        from pathlib import Path
 
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp) / "state.json"
-            self.assertEqual(collect.load_state(p), {"done_chunks": []})
-            collect.save_state(p, {"done_chunks": ["20100101-20100131"]})
-            self.assertEqual(collect.load_state(p)["done_chunks"], ["20100101-20100131"])
-
-    def test_corrupt_state_treated_as_empty(self):
-        import tempfile
-        from pathlib import Path
-
-        with tempfile.TemporaryDirectory() as tmp:
-            p = Path(tmp) / "state.json"
+            self.assertEqual(collect.load_state(p), {"done_pages": []})
+            collect.save_state(p, {"done_pages": ["2010:1"]})
+            self.assertEqual(collect.load_state(p)["done_pages"], ["2010:1"])
             p.write_text("{ not json", encoding="utf-8")
-            self.assertEqual(collect.load_state(p), {"done_chunks": []})
+            self.assertEqual(collect.load_state(p), {"done_pages": []})
 
-    def test_chunk_key_format_matches_state_entries(self):
-        # main()이 f"{bgn}-{end}"로 키를 만든다. month_chunks 출력과 형식이 맞아야
-        # --resume이 완료 청크를 실제로 건너뛴다.
-        bgn, end = collect.month_chunks("2010-01-01", "2010-01-31")[0]
-        self.assertEqual(f"{bgn}-{end}", "20100101-20100131")
-
-
-class TestChunks(unittest.TestCase):
-    def test_month_chunks_never_exceed_31_days(self):
-        # FSS 개인 인증키는 조회기간 31일 상한이 있다고 알려져 있다. 월 청크는
-        # 최대 31일이라 정합적이다 — 이 성질이 깨지면 수집이 조용히 실패한다.
-        from datetime import datetime
-
-        for bgn, end in collect.month_chunks("2010-01-01", "2026-08-16"):
-            span = (datetime.strptime(end, "%Y%m%d") - datetime.strptime(bgn, "%Y%m%d")).days
-            self.assertLessEqual(span, 30, f"{bgn}~{end} 가 31일을 초과")
-
-    def test_month_chunks_cover_range(self):
-        chunks = collect.month_chunks("2024-01-01", "2024-03-15")
-        self.assertEqual(chunks[0], ("20240101", "20240131"))
-        self.assertEqual(chunks[-1][1], "20240315")
-        self.assertEqual(len(chunks), 3)
-
-    def test_single_month(self):
-        self.assertEqual(collect.month_chunks("2024-05-03", "2024-05-20"),
-                         [("20240503", "20240520")])
-
-    def test_multi_year_range_is_chunked(self):
-        chunks = collect.month_chunks("2010-01-01", "2026-08-16")
-        self.assertGreater(len(chunks), 190)   # 16년 7개월 ≈ 200 청크
-        self.assertEqual(chunks[0][0], "20100101")
-        self.assertEqual(chunks[-1][1], "20260816")
+    def test_page_key_format(self):
+        self.assertEqual(collect.page_key(2010, 3), "2010:3")
 
 
 if __name__ == "__main__":
@@ -1433,27 +1517,32 @@ if __name__ == "__main__":
 - [ ] **Step 3: 테스트 실행 — 실패 확인**
 
 Run: `python -m pytest tests/test_catalog_collect.py -v`
-Expected: FAIL — `ImportError: cannot import name 'collect'`
+Expected: FAIL — `ImportError: cannot import name 'collect' from 'scripts.catalog'`
 
 - [ ] **Step 4: `collect.py` 구현**
 
 `scripts/catalog/collect.py`:
 
 ```python
-"""Phase A — 금감원·금융위 보도자료 수집 + 키워드 필터 → JSONL.
+"""Phase A — 금감원 보도자료 게시판 목록 수집 + 규칙 필터 → JSONL.
 
-dart-monitor 원본은 키워드가 3개("불공정거래","주가조작","사모CB")뿐이라
-2.5년치에서 84건만 통과했다. taxonomy 45개(특히 v0.8.6~v1.6.1에 추가된
-2.7·2.8·3.6·3.7·5.6·5.7·5.8·8.5)를 겨냥해 키워드를 넓힌다.
+오픈API 대신 게시판 웹페이지를 쓴다. API는 일일 30회 한도가 실증됐고
+(resultCode 033), 2010~2026 백필은 약 200청크라 7~8일이 걸린다. 게시판은
+키도 한도도 없고 목록에 제목·담당부서·등록일·nttId가 모두 들어 있다.
+
+필터 설계(600건 표본 실측, 2026-08-16): 금감원 보도자료는 은행·보험·서민금융·
+교육이 대부분이라 전부 열면 낭비다. 담당부서로 1차, 제목 키워드로 2차,
+일반안내 패턴으로 3차를 거르면 24.5%로 좁혀진다. 남은 판단(정기 통계 vs 적발
+조치)은 규칙으로 자르면 핵심 건까지 놓치므로 Phase C의 LLM 스크리닝에 맡긴다.
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
+import re
 import sys
 import time
-from datetime import date, datetime, timedelta
+from datetime import date
 from pathlib import Path
 
 import requests
@@ -1463,241 +1552,247 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from scripts._console import use_utf8_stdout  # noqa: E402
+from scripts.catalog.extract import decode_page  # noqa: E402
 
-FSS_API_URL = "https://www.fss.or.kr/fss/kr/openApi/api/bodoInfo.jsp"
-FSS_VIEW_URL = "https://www.fss.or.kr/fss/bbs/B0000188/view.do?nttId={id}&menuNo=200218"
+LIST_URL = "https://www.fss.or.kr/fss/bbs/B0000188/list.do?menuNo=200218"
+VIEW_URL = "https://www.fss.or.kr/fss/bbs/B0000188/view.do?nttId={id}&menuNo=200218"
 OUT_PATH = _REPO_ROOT / "data" / "catalog" / "catalog_sources.jsonl"
 STATE_PATH = _REPO_ROOT / "data" / "catalog" / "collect_state.json"
+_HEADERS = {"User-Agent": "dart-risk-mcp catalog builder"}
 _TIMEOUT = 30
-_SLEEP = 0.3
+_SLEEP = 0.25          # 서버 예의. 1,200페이지 순회 시 약 5분의 대기가 된다.
+_MAX_PAGES = 200       # 연도당 안전 상한(실측 최대 85페이지)
 
-# FSS 개인 인증키에는 조회기간 상한(31일)과 일일 호출 한도가 있다고 알려져 있다
-# (사용자 제보, 2026-08-16 — 실호출로 미검증). 월 단위 청크는 31일 상한과 정합적이고,
-# 일일 한도는 한 실행의 호출 수를 제한하고 --resume으로 여러 날에 나눠 받아 흡수한다.
-# 2010~2026 백필은 약 200개 청크라 한도가 30회면 최소 7일이 걸린다.
-MAX_CALLS_PER_RUN = 25
+# 담당부서 — 조직 개편이 잦아(회계감독1국 → 회계감리1국 → 회계심사국) 부분일치로 잡는다.
+# '조사1국'은 '조사국'을 포함하지 않으므로 번호 붙은 조사국을 개별 등재한다.
+DEPT_IN: list[str] = [
+    "자본시장", "공시", "회계", "금융투자", "자산운용", "감사인감리",
+    "조사1국", "조사2국", "조사3국", "조사기획", "특별조사", "공매도", "가상자산조사",
+    "불공정",
+]
+# '보험조사국'(보험사기)·'보험감리실'이 위 패턴에 딸려 오는 것을 막는다.
+DEPT_OUT: list[str] = ["보험"]
 
-# taxonomy 45개를 겨냥한 확장 키워드. 통과 건수는 --dry-run으로 측정해 조정한다.
-KEYWORDS: list[str] = [
-    "불공정거래", "주가조작", "시세조종", "미공개정보", "부정거래",
-    "사모CB", "전환사채", "신주인수권", "유상증자", "무상감자",
-    "최대주주", "무자본", "횡령", "배임", "회계처리기준", "감사의견",
-    "분식회계", "상장폐지", "증권선물위원회", "공시위반", "자기주식",
+TITLE_KW: list[str] = [
+    "불공정거래", "주가조작", "시세조종", "미공개", "부정거래", "선행매매", "리딩방",
+    "전환사채", "신주인수권", "유상증자", "무상감자", "최대주주", "무자본", "우회상장",
+    "횡령", "배임", "분식", "회계처리기준", "감사의견", "감리", "상장폐지", "관리종목",
+    "증권선물위원회", "증선위", "공시위반", "자기주식", "공매도", "테마주", "작전",
+    "코스닥", "코스피", "상장사", "상장기업", "증권신고서", "사업보고서", "주가",
+]
+# 부서·키워드가 맞아도 적발/조치 성격이 아닌 것 — 발간물·행사·인사.
+TITLE_OUT: list[str] = [
+    "가이드북", "공모전", "수상작", "설명회", "발간", "배포", "채용", "인가 의결",
+    "예비인가", "교육", "홍보", "포상금 지급실적", "우수사례", "모범사례",
+    "세미나", "워크숍", "기고", "임명", "위촉", "업무협약", "핸드북", "사례집",
 ]
 
+_ROW = re.compile(
+    r'<td class="num">\s*(\d*)\s*</td>\s*'
+    r'<td class="title"><a href="[^"]*nttId=(\d+)[^"]*">([\s\S]*?)</a></td>\s*'
+    r"<td>([\s\S]*?)</td>\s*<td>\s*(\d{4}-\d{2}-\d{2})"
+)
+_TAG = re.compile(r"<[^>]+>")
+_ENTITIES = {
+    "&amp;": "&", "&lsquo;": "'", "&rsquo;": "'", "&#39;": "'", "&middot;": "·",
+    "&quot;": '"', "&nbsp;": " ", "&lt;": "<", "&gt;": ">",
+}
 
-def matches_keywords(title: str, contents: str) -> list[str]:
-    """제목+본문에서 매칭된 키워드 목록(없으면 빈 리스트)."""
-    text = f"{title or ''} {contents or ''}"
-    return [kw for kw in KEYWORDS if kw in text]
+
+def _clean(text: str) -> str:
+    text = _TAG.sub(" ", text)
+    for entity, char in _ENTITIES.items():
+        text = text.replace(entity, char)
+    return " ".join(text.split())
 
 
-def normalize_fss(raw: dict) -> dict:
-    """FSS 오픈API 응답 한 건 → 표준 레코드."""
-    cid = str(raw.get("contentId", "")).strip()
-    title = (raw.get("title") or "").strip()
-    contents = (raw.get("contentKor") or raw.get("contentsKor") or "").strip()
+def parse_list_rows(html: str) -> list[dict]:
+    """게시판 목록 HTML에서 행을 뽑는다. 매칭 실패는 빈 리스트(호출부가 종료 판단)."""
+    return [
+        {"id": m.group(2), "title": _clean(m.group(3)),
+         "dept": _clean(m.group(4)), "date": m.group(5)}
+        for m in _ROW.finditer(html)
+    ]
+
+
+def dept_hit(dept: str) -> bool:
+    """담당부서가 자본시장 계열인가. '/' 구분 다중 부서는 하나라도 맞으면 통과."""
+    for part in (p.strip() for p in (dept or "").split("/")):
+        if not part or any(x in part for x in DEPT_OUT):
+            continue
+        if any(k in part for k in DEPT_IN):
+            return True
+    return False
+
+
+def title_keywords(title: str) -> list[str]:
+    return [k for k in TITLE_KW if k in (title or "")]
+
+
+def is_general_notice(title: str) -> bool:
+    """발간물·행사·인사 등 적발/조치가 아닌 일반 안내인가."""
+    return any(x in (title or "") for x in TITLE_OUT)
+
+
+def passes_filter(row: dict) -> bool:
+    """(부서 OR 제목 키워드) AND NOT 일반안내."""
+    if is_general_notice(row.get("title", "")):
+        return False
+    return dept_hit(row.get("dept", "")) or bool(title_keywords(row.get("title", "")))
+
+
+def to_record(row: dict) -> dict:
+    """목록 행 → 표준 레코드(Phase B·C가 소비)."""
     return {
         "source": "fss",
-        "id": cid,
-        "title": title,
-        "date": (raw.get("regDate") or "").strip()[:10],
-        "summary": contents,
-        "url": FSS_VIEW_URL.format(id=cid) if cid else "",
-        "matched_keywords": matches_keywords(title, contents),
+        "id": row["id"],
+        "title": row.get("title", ""),
+        "dept": row.get("dept", ""),
+        "date": row.get("date", ""),
+        "url": VIEW_URL.format(id=row["id"]),
+        "matched_keywords": title_keywords(row.get("title", "")),
+        "matched_dept": dept_hit(row.get("dept", "")),
     }
 
 
-def month_chunks(start: str, end: str) -> list[tuple[str, str]]:
-    """[start, end]를 월 경계로 쪼갠다. 입력 'YYYY-MM-DD' → 출력 ('YYYYMMDD','YYYYMMDD')."""
-    s = datetime.strptime(start, "%Y-%m-%d").date()
-    e = datetime.strptime(end, "%Y-%m-%d").date()
-    out: list[tuple[str, str]] = []
-    cur = s
-    while cur <= e:
-        if cur.month == 12:
-            nxt = date(cur.year + 1, 1, 1)
-        else:
-            nxt = date(cur.year, cur.month + 1, 1)
-        chunk_end = min(nxt - timedelta(days=1), e)
-        out.append((cur.strftime("%Y%m%d"), chunk_end.strftime("%Y%m%d")))
-        cur = chunk_end + timedelta(days=1)
-    return out
-
-
-def fetch_fss(bgn: str, end: str, api_key: str) -> list[dict]:
-    """FSS 보도자료 한 청크. 실패 시 빈 리스트(파이프라인을 멈추지 않음)."""
-    params = {"apiKey": api_key, "stDt": bgn, "endDt": end, "pageIndex": 1}
-    try:
-        resp = requests.get(FSS_API_URL, params=params, timeout=_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as exc:
-        print(f"[COLLECT] FSS {bgn}~{end} 실패: {type(exc).__name__} {exc}")
-        return []
-    inner = data.get("result") or data
-    rows = inner.get("list") or []
-    return [r for r in rows if isinstance(r, dict)]
+def page_key(year: int, page: int) -> str:
+    return f"{year}:{page}"
 
 
 def load_state(path: Path) -> dict:
-    """수집 진행 상태(완료 청크 목록)를 읽는다. 없으면 빈 상태."""
     if not path.exists():
-        return {"done_chunks": []}
+        return {"done_pages": []}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"done_chunks": []}
+        return {"done_pages": []}
+    return data if isinstance(data, dict) and "done_pages" in data else {"done_pages": []}
 
 
 def save_state(path: Path, state: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(state, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def fetch_list_page(year: int, page: int, fetch=None) -> str:
+    """연도·페이지의 목록 HTML. 실패·오염 시 빈 문자열(호출부가 종료 판단)."""
+    url = f"{LIST_URL}&sdate={year}0101&edate={year}1231&pageIndex={page}"
+    try:
+        raw = fetch(url) if fetch else _default_fetch(url)
+    except Exception as exc:
+        print(f"[COLLECT] {year} p{page} 요청 실패: {type(exc).__name__} {exc}")
+        return ""
+    html, trusted = decode_page(raw)
+    if not trusted:
+        print(f"[COLLECT] {year} p{page} 디코딩 신뢰 불가 — 건너뜀")
+        return ""
+    return html
+
+
+def _default_fetch(url: str) -> bytes:
+    resp = requests.get(url, headers=_HEADERS, timeout=_TIMEOUT)
+    resp.raise_for_status()
+    return resp.content
 
 
 def main() -> None:
     use_utf8_stdout()
-    parser = argparse.ArgumentParser(description="보도자료 수집 → catalog_sources.jsonl")
-    parser.add_argument("--start", default="2010-01-01")
-    parser.add_argument("--end", default=date.today().isoformat())
+    parser = argparse.ArgumentParser(description="FSS 보도자료 목록 수집 → catalog_sources.jsonl")
+    parser.add_argument("--from-year", type=int, default=2010)
+    parser.add_argument("--to-year", type=int, default=date.today().year)
     parser.add_argument("--out", default=str(OUT_PATH))
     parser.add_argument("--state", default=str(STATE_PATH))
+    parser.add_argument("--resume", action="store_true", help="이미 수집한 페이지를 건너뛴다")
     parser.add_argument("--dry-run", action="store_true", help="저장 없이 통과 건수만 출력")
-    parser.add_argument("--resume", action="store_true", help="이미 수집한 청크를 건너뛴다")
-    parser.add_argument(
-        "--max-calls", type=int, default=MAX_CALLS_PER_RUN,
-        help=f"이번 실행의 API 호출 상한(기본 {MAX_CALLS_PER_RUN}). FSS 개인키 일일 한도 대비 여유를 둔다",
-    )
     args = parser.parse_args()
 
-    api_key = os.environ.get("FSS_API_KEY", "").strip()
-    if not api_key:
-        raise SystemExit("FSS_API_KEY 환경변수가 필요합니다")
+    out_path, state_path = Path(args.out), Path(args.state)
+    state = load_state(state_path) if args.resume else {"done_pages": []}
+    done = set(state.get("done_pages") or [])
 
-    chunks = month_chunks(args.start, args.end)
-    state_path = Path(args.state)
-    state = load_state(state_path) if args.resume else {"done_chunks": []}
-    done = set(state.get("done_chunks") or [])
-
-    todo = [c for c in chunks if f"{c[0]}-{c[1]}" not in done]
-    print(f"[COLLECT] {args.start} ~ {args.end} — 전체 {len(chunks)}개 월 청크"
-          f" / 완료 {len(done)} / 남음 {len(todo)}")
-    if args.max_calls and len(todo) > args.max_calls:
-        print(f"[COLLECT] 이번 실행은 {args.max_calls}개 청크만 처리합니다"
-              f" (남은 {len(todo) - args.max_calls}개는 다음 실행에서 --resume 으로 이어가세요)")
-        todo = todo[: args.max_calls]
-
-    out_path = Path(args.out)
-    if not args.dry_run:
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # 이미 저장된 id는 중복 저장하지 않는다(--resume 재실행 대비).
     seen: set[str] = set()
     if args.resume and out_path.exists():
         for line in out_path.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 seen.add(str(json.loads(line).get("id", "")))
+        print(f"[COLLECT] resume — 기존 {len(seen)}건 / 완료 페이지 {len(done)}개")
+
+    if not args.dry_run:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+    fh = None if args.dry_run else out_path.open("a", encoding="utf-8")
 
     total = kept = 0
-    # 청크마다 append 저장한다 — 일일 한도·중단에도 그때까지의 수집분이 남는다.
-    fh = None if args.dry_run else out_path.open("a", encoding="utf-8")
     try:
-        for i, (bgn, end) in enumerate(todo, 1):
-            rows = fetch_fss(bgn, end, api_key)
-            total += len(rows)
-            for raw in rows:
-                rec = normalize_fss(raw)
-                if not rec["id"] or rec["id"] in seen:
+        for year in range(args.from_year, args.to_year + 1):
+            year_total = year_kept = 0
+            for page in range(1, _MAX_PAGES + 1):
+                key = page_key(year, page)
+                if key in done:
                     continue
-                seen.add(rec["id"])
-                if rec["matched_keywords"]:
-                    kept += 1
+                html = fetch_list_page(year, page)
+                rows = parse_list_rows(html)
+                if not rows:
+                    break                      # 해당 연도의 마지막 페이지
+                year_total += len(rows)
+                for row in rows:
+                    if row["id"] in seen or not passes_filter(row):
+                        continue
+                    seen.add(row["id"])
+                    year_kept += 1
                     if fh:
-                        fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            if fh:
-                fh.flush()
-            done.add(f"{bgn}-{end}")
-            if not args.dry_run:
-                save_state(state_path, {"done_chunks": sorted(done)})
-            if i % 10 == 0:
-                print(f"[COLLECT] {i}/{len(todo)} 청크 — 원본 {total}건 / 통과 {kept}건")
-            time.sleep(_SLEEP)
+                        fh.write(json.dumps(to_record(row), ensure_ascii=False) + "\n")
+                if fh:
+                    fh.flush()
+                done.add(key)
+                if not args.dry_run:
+                    save_state(state_path, {"done_pages": sorted(done)})
+                time.sleep(_SLEEP)
+            total += year_total
+            kept += year_kept
+            rate = (year_kept / year_total * 100) if year_total else 0.0
+            print(f"[COLLECT] {year}: 원본 {year_total}건 → 통과 {year_kept}건 ({rate:.1f}%)")
     finally:
         if fh:
             fh.close()
 
     rate = (kept / total * 100) if total else 0.0
-    print(f"[COLLECT] 완료: 원본 {total}건 → 키워드 통과 {kept}건 ({rate:.1f}%)")
-    remaining = len(chunks) - len(done)
-    if remaining > 0:
-        print(f"[COLLECT] 남은 청크 {remaining}개 — 다음 실행: "
-              f"python scripts/catalog/collect.py --start {args.start} --resume")
+    print(f"[COLLECT] 완료: 원본 {total}건 → 필터 통과 {kept}건 ({rate:.1f}%)")
     if not args.dry_run:
         print(f"[COLLECT] 저장 → {out_path}")
-
-
-if __name__ == "__main__":
-    main()
 ```
 
 - [ ] **Step 5: 테스트 실행 — 통과 확인**
 
 Run: `python -m pytest tests/test_catalog_collect.py -v`
-Expected: 13 passed
+Expected: 18 passed
 
-- [ ] **Step 6: 라이브 확인 (FSS_API_KEY 있을 때만)**
+- [ ] **Step 6: 라이브 소규모 검증 (네트워크 사용, 무료·무한도)**
 
-Run: `python scripts/catalog/collect.py --start 2024-01-01 --end 2024-03-31 --dry-run`
-Expected: `[COLLECT] 완료: 원본 N건 → 키워드 통과 M건 (X.X%)`
+Run: `python scripts/catalog/collect.py --from-year 2024 --to-year 2024 --dry-run`
+Expected: `[COLLECT] 2024: 원본 N건 → 통과 M건 (X.X%)` — 통과율이 **20~31% 범위**에 들어야 한다(600건 표본 실측 범위). 크게 벗어나면 파싱이나 필터가 틀린 것이니 멈추고 보고할 것.
 
-**이 출력의 통과율을 스펙 §2.2에 기록할 것.** 추정치(10~15%)와 크게 다르면 `KEYWORDS`를 조정한다.
-
-**반드시 확인할 두 가지:**
-
-1. **페이지네이션 필요 여부** — `fetch_fss`는 현재 `pageIndex: 1`만 요청한다. 게시판 실측으로 FSS 보도자료는 **연 620~840건(월 평균 약 60건)**이므로, API의 페이지 크기가 그보다 작으면 월 청크마다 뒷부분이 조용히 잘린다. 이 스텝에서 3개월치 원본 건수 `N`이 **150건 대비 현저히 작으면 절단을 의심**하고, `pageIndex`를 증가시키며 빈 응답까지 도는 루프를 `fetch_fss`에 추가한다:
-
-```python
-def fetch_fss(bgn: str, end: str, api_key: str, max_pages: int = 20) -> list[dict]:
-    """FSS 보도자료 한 청크(전 페이지). 실패 시 지금까지 모은 것만 반환."""
-    rows: list[dict] = []
-    for page in range(1, max_pages + 1):
-        params = {"apiKey": api_key, "stDt": bgn, "endDt": end, "pageIndex": page}
-        try:
-            resp = requests.get(FSS_API_URL, params=params, timeout=_TIMEOUT)
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as exc:
-            print(f"[COLLECT] FSS {bgn}~{end} p{page} 실패: {type(exc).__name__} {exc}")
-            break
-        inner = data.get("result") or data
-        page_rows = [r for r in (inner.get("list") or []) if isinstance(r, dict)]
-        if not page_rows:
-            break
-        rows.extend(page_rows)
-        time.sleep(_SLEEP)
-    return rows
-```
-
-2. **과거 데이터 범위** — `--start 2010-01-01`에서 2010~2015 구간이 0건이면 **스펙 §10 리스크 1이 현실화된 것**이다. 이 경우 게시판 목록 파싱 폴백이 필요하며, 별도 태스크로 분리해 계획을 갱신하고 여기서 멈춘다.
+이 명령은 API 키를 쓰지 않으며 호출 한도도 없다. 다만 2024년 한 해가 약 85페이지라 약 30초가 걸린다.
 
 - [ ] **Step 7: 커밋**
 
 ```bash
-git add scripts/catalog/collect.py tests/test_catalog_collect.py tests/fixtures/catalog/fss_api_response.json
+git add scripts/catalog/collect.py tests/test_catalog_collect.py tests/fixtures/catalog/fss_list_page.html
 git commit -m "$(cat <<'EOF'
-feat(catalog): Phase A — 보도자료 수집 + 키워드 확장
+feat(catalog): Phase A — 게시판 목록 수집 + 부서·제목 규칙 필터
 
-dart-monitor 원본 키워드 3개는 2.5년치에서 84건만 통과시켜 신규 8개 유형
-(2.7·2.8·3.6·3.7·5.6·5.7·5.8·8.5)의 사례가 비는 직접 원인이었다.
-taxonomy 45개를 겨냥해 21개로 확장하고, 통과율은 --dry-run으로 실측해
-조정한다. 월 단위 청크로 2010년까지 백필 가능.
+FSS 오픈API는 일일 30회 한도가 실증돼(resultCode 033) 2010~2026 백필에
+7~8일이 걸린다. 게시판 웹페이지는 키도 한도도 없고 목록에 제목·담당부서·
+등록일·nttId가 모두 있어 상세를 열기 전에 거를 수 있다.
+
+600건 표본 실측: 부서 27.5% / 제목 키워드 7.2% / 최종 조합 24.5% 통과.
+연도별 20~31%로 안정적 — 부서명 개편(회계감독1국→회계감리1국→회계심사국)
+에도 부분일치가 견딘다. '조사1국'은 '조사국'을 포함하지 않아 별도 등재했고,
+'보험조사국'은 보험사기라 제외했다.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 EOF
 )"
 ```
-
----
 
 ### Task 6: Phase C — 2단계 분류 (ANTHROPIC_API_KEY 필요)
 
@@ -1806,8 +1901,14 @@ Expected: FAIL — `ImportError: cannot import name 'classify'`
 ```python
 """Phase C — 2단계 분류.
 
-1차 스크리닝: 제목+페이지 요약(extract_light 결과)으로 등재 가치를 판정. 값싸다.
-2차 정밀:     통과분만 extract_full로 PDF 전문을 받아 taxonomy 45개에 매핑.
+1차 스크리닝: 제목+담당부서+일자만으로 등재 가치를 판정. 네트워크를 쓰지 않는다
+              — Phase A의 게시판 목록이 이미 이 셋을 갖고 있다.
+2차 정밀:     1차 통과분만 extract_light(상세 페이지)로 요약을 받고, 이어서
+              extract_full(PDF 전문)을 시도해 taxonomy 45개에 매핑한다.
+
+상세 조회와 PDF 다운로드를 1차 통과분에만 거는 것이 이 설계의 핵심이다. 규칙 필터
+통과분은 약 3,000건이지만 1차를 통과하는 것은 수백 건이라, 순서를 바꾸는 것만으로
+네트워크 요청이 한 자릿수 배 줄어든다.
 
 anthropic SDK를 쓰지 않고 requests로 직접 호출한다 — 이 레포는 Notion API도
 같은 방식으로 다루며, 런타임/배치 모두 서드파티 의존성을 늘리지 않는 원칙이다.
@@ -1829,13 +1930,15 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from scripts._console import use_utf8_stdout  # noqa: E402
-from scripts.catalog.extract import extract_full  # noqa: E402
+from scripts.catalog.extract import extract_full, extract_light  # noqa: E402
 
 API_URL = "https://api.anthropic.com/v1/messages"
 MODEL = "claude-haiku-4-5-20251001"
 _TIMEOUT = 120
 _SLEEP = 0.2
-IN_PATH = _REPO_ROOT / "data" / "catalog" / "catalog_bodies.jsonl"
+_MAX_RETRIES = 4          # 최초 시도 + 재시도 3회
+# Phase A(collect.py)의 출력을 바로 받는다 — 중간 산출물 catalog_bodies.jsonl은 없다.
+IN_PATH = _REPO_ROOT / "data" / "catalog" / "catalog_sources.jsonl"
 OUT_PATH = _REPO_ROOT / "data" / "catalog" / "catalog_classified.jsonl"
 
 _JSON_BLOCK = re.compile(r"\{[\s\S]*\}")
@@ -1862,8 +1965,29 @@ def build_taxonomy_prompt(taxonomy: dict[str, dict]) -> str:
     return "\n".join(lines)
 
 
+def _retry_delay(resp, attempt: int) -> float:
+    """재시도 대기 시간. Retry-After 헤더를 우선하고, 없으면 지수 백오프."""
+    header = (resp.headers.get("Retry-After") or "").strip() if resp is not None else ""
+    if header:
+        try:
+            return float(int(header))
+        except ValueError:
+            pass                      # 날짜 형식 등은 지수 백오프로 폴백
+    return float(2 ** attempt)        # 1, 2, 4초
+
+
 def call_anthropic(system: str, user: str, api_key: str, model: str = MODEL) -> str:
-    """Anthropic Messages API 호출. 시스템 프롬프트에 캐시 제어를 건다."""
+    """Anthropic Messages API 호출. 시스템 프롬프트에 캐시 제어를 건다.
+
+    페이싱과 재시도를 여기 두는 이유: 호출부의 루프는 1차 스크리닝 탈락 시
+    `continue`로 빠져나가는데, 그 경로가 전체의 압도적 다수다(규칙 필터 통과
+    약 3,000건 중 1차 통과는 수백 건). 루프 끝에 sleep을 두면 대다수 호출이
+    무간격으로 연속 발사돼 429를 맞는다. 모든 호출 경로가 지나는 이 함수에
+    두어야 페이싱이 실제로 걸린다.
+
+    429·5xx는 최대 3회 지수 백오프로 재시도한다(dart_client._retry 관례).
+    소진 후에도 실패하면 예외를 던지고, 호출부가 그 건만 건너뛴다.
+    """
     payload = {
         "model": model,
         "max_tokens": 1500,
@@ -1875,10 +1999,23 @@ def call_anthropic(system: str, user: str, api_key: str, model: str = MODEL) -> 
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
     }
-    resp = requests.post(API_URL, headers=headers, json=payload, timeout=_TIMEOUT)
-    resp.raise_for_status()
-    blocks = resp.json().get("content") or []
-    return "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+    last_status = None
+    for attempt in range(_MAX_RETRIES):
+        resp = requests.post(API_URL, headers=headers, json=payload, timeout=_TIMEOUT)
+        last_status = resp.status_code
+        if resp.status_code == 429 or resp.status_code >= 500:
+            if attempt == _MAX_RETRIES - 1:
+                break
+            delay = _retry_delay(resp, attempt)
+            print(f"[CLASSIFY] {resp.status_code} — {delay:.0f}초 후 재시도 ({attempt + 1}/{_MAX_RETRIES - 1})")
+            time.sleep(delay)
+            continue
+        resp.raise_for_status()
+        blocks = resp.json().get("content") or []
+        text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+        time.sleep(_SLEEP)            # 모든 성공 경로가 여기를 지난다
+        return text
+    raise RuntimeError(f"Anthropic API 재시도 소진 (마지막 status={last_status})")
 
 
 def _extract_json(text: str) -> dict:
@@ -1960,7 +2097,10 @@ def main() -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("a", encoding="utf-8") as fh:
         for i, rec in enumerate(todo, 1):
-            head = f"제목: {rec.get('title','')}\n요약: {rec.get('body','')[:1500]}"
+            # 1차: 목록에서 이미 확보한 제목·부서·일자만 본다. 네트워크 호출 없음.
+            head = (f"제목: {rec.get('title','')}\n"
+                    f"담당부서: {rec.get('dept','')}\n"
+                    f"일자: {rec.get('date','')}")
             try:
                 screen = parse_screen_response(call_anthropic(_SCREEN_SYSTEM, head, api_key, args.model))
             except Exception as exc:
@@ -1970,6 +2110,8 @@ def main() -> None:
                 continue
             kept += 1
 
+            # 2차: 여기서 처음 네트워크로 본문을 확보한다(상세 페이지 → PDF 순).
+            rec = extract_light(rec)
             full = extract_full(rec)
             body = full or rec.get("body", "")
             source = "pdf" if full else rec.get("body_source", "title_only")
@@ -1995,7 +2137,8 @@ def main() -> None:
             fh.flush()
             if i % 25 == 0:
                 print(f"[CLASSIFY] {i}/{len(todo)} — 통과 {kept} / 매핑 {mapped}")
-            time.sleep(_SLEEP)
+            # 페이싱은 call_anthropic 안에 있다 — 여기에 두면 1차 탈락 경로(대다수)가
+            # continue로 건너뛰어 대부분의 호출이 무간격으로 나간다.
 
     print(f"[CLASSIFY] 완료: 후보 {len(todo)} → 스크리닝 통과 {kept} → 유형 매핑 {mapped}")
 
@@ -2134,6 +2277,17 @@ IN_PATH = _REPO_ROOT / "data" / "catalog" / "catalog_classified.jsonl"
 OUT_DIR = _REPO_ROOT / "docs" / "catalog"
 
 
+def _clean(value: str) -> str:
+    """리포트에 넣을 문자열을 한 줄로 정리한다.
+
+    개행은 `## ` 헤딩과 리스트 구조를 깨뜨리고, 파이프와 대괄호는 마크다운 링크
+    문법을 깨뜨린다(`[제목](url)` 안의 `]`가 링크 텍스트를 조기에 닫는다).
+    금감원 제목에는 '[보도자료]' 같은 대괄호 접두가 흔하다.
+    """
+    text = " ".join(str(value or "").split())
+    return text.replace("|", "/").replace("[", "(").replace("]", ")")
+
+
 def build_gap_report(records: list[dict], generated_on: str) -> str:
     """미매핑 레코드를 신규 유형 후보 목록으로 렌더한다."""
     unmapped = [r for r in records if not r.get("taxonomy_ids")]
@@ -2158,14 +2312,15 @@ def build_gap_report(records: list[dict], generated_on: str) -> str:
         return "\n".join(lines) + "\n"
 
     for rec in unmapped:
-        title = str(rec.get("title", "")).replace("|", "/")
-        url = rec.get("url", "")
+        title = _clean(rec.get("title", ""))
+        url = rec.get("url", "")          # URL은 정제하지 않는다 — 그대로 링크에 들어간다
         head = f"[{title}]({url})" if url else title
+        techniques = ", ".join(_clean(t) for t in (rec.get("techniques") or [])) or "—"
         lines += [
             f"## {rec.get('date','')} — {head}",
             "",
-            f"- 요약: {rec.get('summary','')}",
-            f"- 적발 기법: {', '.join(rec.get('techniques') or []) or '—'}",
+            f"- 요약: {_clean(rec.get('summary', ''))}",
+            f"- 적발 기법: {techniques}",
             f"- confidence: {rec.get('confidence','low')} · 본문 확보: {rec.get('body_source','unknown')}",
             "",
         ]
@@ -2274,8 +2429,15 @@ class TestWorkflow(unittest.TestCase):
         wf = (_ROOT / ".github" / "workflows" / "refresh-catalog.yml").read_text(encoding="utf-8")
         self.assertIn("workflow_dispatch", wf)
         self.assertIn("cron", wf)
-        for secret in ("FSS_API_KEY", "DATA_GO_KR_API_KEY", "ANTHROPIC_API_KEY"):
-            self.assertIn(secret, wf)
+        self.assertIn("ANTHROPIC_API_KEY", wf)
+
+    def test_workflow_does_not_require_collection_api_keys(self):
+        # 수집은 게시판 웹 파싱으로 전환됐다(2026-08-17). FSS 오픈API는 일일 30회
+        # 한도가 실증돼 폐기했고, 정책브리핑은 이 파이프라인 범위 밖이다.
+        # 워크플로우가 이 키들을 요구하면 없는 Secret을 기다리다 실패한다.
+        wf = (_ROOT / ".github" / "workflows" / "refresh-catalog.yml").read_text(encoding="utf-8")
+        self.assertNotIn("FSS_API_KEY", wf)
+        self.assertNotIn("DATA_GO_KR_API_KEY", wf)
 
     def test_workflow_installs_catalog_extra(self):
         wf = (_ROOT / ".github" / "workflows" / "refresh-catalog.yml").read_text(encoding="utf-8")
@@ -2323,12 +2485,12 @@ on:
     - cron: "0 18 1 * *"   # 매월 1일 UTC 18:00 = 한국 익일 03:00
   workflow_dispatch:
     inputs:
-      start:
-        description: "수집 시작일 (YYYY-MM-DD)"
+      year:
+        description: "수집 연도 (빈 값이면 올해)"
         required: false
         default: ""
       limit:
-        description: "분류 건수 상한 (0=제한 없음)"
+        description: "분류 건수 상한 (0=제한 없음). 비용 통제용 — 처음 돌릴 때는 50 권장"
         required: false
         default: "0"
 
@@ -2347,17 +2509,13 @@ jobs:
       - name: Install package with catalog extras
         run: pip install -e ".[catalog]"
 
+      # 게시판 웹 파싱이라 API 키가 필요 없다. 증분은 올해치만 --resume으로 훑으면
+      # 되고(이미 완료된 페이지는 건너뛴다), 전체 백필은 수동 트리거로 따로 돌린다.
       - name: Collect press releases
-        env:
-          FSS_API_KEY: ${{ secrets.FSS_API_KEY }}
-          DATA_GO_KR_API_KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
         run: |
-          START="${{ github.event.inputs.start }}"
-          if [ -z "$START" ]; then START=$(date -u -d '2 months ago' +%Y-%m-%d); fi
-          python scripts/catalog/collect.py --start "$START"
-
-      - name: Extract bodies
-        run: python scripts/catalog/extract.py
+          YEAR="${{ github.event.inputs.year }}"
+          if [ -z "$YEAR" ]; then YEAR=$(date -u +%Y); fi
+          python scripts/catalog/collect.py --from-year "$YEAR" --to-year "$YEAR" --resume
 
       - name: Classify
         env:
@@ -2394,49 +2552,17 @@ jobs:
           git push
 ```
 
-- [ ] **Step 6: `extract.py`에 CLI main 추가**
+- [ ] **Step 6: (삭제됨 — `extract.py` CLI main은 불필요)**
 
-워크플로우가 `python scripts/catalog/extract.py`를 호출하므로 진입점이 필요하다. `scripts/catalog/extract.py` 파일 끝에 추가:
+이 스텝은 2026-08-17 설계 변경으로 없어졌다. Phase C 1차 스크리닝이 제목·부서만 쓰게
+바뀌면서 `extract_light`는 독립 배치 단계가 아니라 **`classify.py`가 1차 통과분에만
+건별로 호출하는 라이브러리 함수**가 됐다. 중간 산출물 `catalog_bodies.jsonl`도 사라졌다.
 
-```python
-def main() -> None:
-    import argparse
-    import json
-    import sys
-    from pathlib import Path
+따라서 `scripts/catalog/extract.py`는 CLI 진입점 없이 라이브러리로 남는다 —
+Task 4가 만든 상태 그대로 두고 아무것도 추가하지 않는다. 워크플로우(Step 5)에도
+`python scripts/catalog/extract.py` 단계가 없다.
 
-    _root = Path(__file__).resolve().parents[2]
-    if str(_root) not in sys.path:
-        sys.path.insert(0, str(_root))
-    from scripts._console import use_utf8_stdout
-
-    use_utf8_stdout()
-    parser = argparse.ArgumentParser(description="보도자료 본문 확보(light)")
-    parser.add_argument("--in", dest="in_path", default=str(_root / "data" / "catalog" / "catalog_sources.jsonl"))
-    parser.add_argument("--out", default=str(_root / "data" / "catalog" / "catalog_bodies.jsonl"))
-    args = parser.parse_args()
-
-    in_path = Path(args.in_path)
-    if not in_path.exists():
-        raise SystemExit(f"입력 없음: {in_path} — 먼저 collect를 실행하세요")
-    records = [json.loads(l) for l in in_path.read_text(encoding="utf-8").splitlines() if l.strip()]
-
-    out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    counts: dict[str, int] = {}
-    with out_path.open("w", encoding="utf-8") as fh:
-        for rec in records:
-            got = extract_light(rec)
-            counts[got["body_source"]] = counts.get(got["body_source"], 0) + 1
-            fh.write(json.dumps(got, ensure_ascii=False) + "\n")
-    print(f"[EXTRACT] {len(records)}건 → {out_path}")
-    print("[EXTRACT] 본문 확보 경로:", ", ".join(f"{k} {v}건" for k, v in sorted(counts.items())))
-    print(f"[EXTRACT] pypdf 사용 가능: {PYPDF_AVAILABLE}")
-
-
-if __name__ == "__main__":
-    main()
-```
+**이 스텝에서 할 일은 없다. 다음 스텝으로 넘어갈 것.**
 
 - [ ] **Step 7: 테스트 실행 — 통과 확인**
 
@@ -2487,7 +2613,7 @@ EOF
 
 **이 태스크는 자동 실행하지 않는다.** 기존 카탈로그를 교체하는 되돌리기 어려운 변경이라 사람이 diff를 검토한 뒤 결정한다.
 
-**선행 조건:** `FSS_API_KEY`, `DATA_GO_KR_API_KEY`, `ANTHROPIC_API_KEY` 전부 설정 + `pip install -e ".[catalog]"`
+**선행 조건:** `ANTHROPIC_API_KEY` 설정 + `pip install -e ".[catalog]"`. 수집 단계는 게시판 웹 파싱이라 키가 필요 없다(2026-08-17 설계 변경).
 
 - [ ] **Step 1: 수집 규모 실측 (저비용, LLM 미사용)**
 
@@ -2576,3 +2702,255 @@ EOF
 | 4 | 갭 리포트 생성 + 후보 1건 이상 | `python scripts/catalog/gaps.py` 출력 | 7 |
 | 5 | pypdf 미설치 시 요약 모드 완주 | `tests/test_catalog_extract.py::TestExtractFull` + Task 4 Step 6 | 4 |
 | 6 | hygiene 통과 + 런타임 의존성 불변 | `tests/test_catalog_packaging.py`, `tests/test_golden_output_hygiene.py` | 8 |
+
+---
+
+### Task 10: 오프라인 분류 경로 (1차 API / 2차 세션 분업)
+
+> **배경 (2026-08-17, 사용자 결정 "C로 가자")**
+>
+> 표본 204건 실측으로 1차 스크리닝 통과율이 **26.0%**로 확정됐다(연도별 12건씩, seed 고정).
+> 전체 3,429건 → 2차 정밀 대상 **약 892건**.
+>
+> 비용 구조가 비대칭이다 — 1차는 제목·부서만 보므로 전량 돌려도 **$1.27**이고, 2차는 본문이
+> 건당 4,000토큰이라 **$10.65**다. 그래서 **1차는 API로, 2차는 세션(서브에이전트)으로** 나눈다.
+> 절감의 87%를 가져가면서 1차 자동화(월간 cron)는 그대로 유지된다.
+>
+> 월간 증분은 계속 API 양쪽 다 쓴다(월 $0.8) — cron 자동 갱신을 포기하지 않기 위해서다.
+> 이 태스크가 만드는 오프라인 경로는 **1회성 백필 전용**이다.
+
+**Files:**
+- Modify: `scripts/catalog/classify.py` (`--screen-only` 추가)
+- Create: `scripts/catalog/export_batches.py`
+- Create: `scripts/catalog/merge_batches.py`
+- Create: `docs/catalog/CLASSIFY_BATCH.md` (배치 분류 지시서 — 서브에이전트가 읽는 문서)
+- Test: `tests/test_catalog_offline.py`
+
+**Interfaces:**
+- `classify.main()` — `--screen-only` 플래그. 1차 판정만 하고 2차·본문확보를 건너뛴다
+- `export_batches.load_screened(path) -> list[dict]`
+- `export_batches.build_batches(records, size) -> list[list[dict]]`
+- `merge_batches.validate_record(rec, taxonomy, known_ids) -> list[str]` — 오류 메시지 목록(빈 리스트면 유효)
+- `merge_batches.merge(results, screened, taxonomy) -> tuple[list[dict], list[str]]` — (병합 레코드, 오류)
+
+**데이터 흐름:**
+```
+catalog_sources.jsonl                (3,429건)
+  → classify.py --screen-only        → catalog_screened.jsonl  (전건: keep true/false)
+  → export_batches.py                → data/catalog/batches/batch-000.jsonl … (keep=true만, 본문 포함)
+  → [세션이 배치별로 분류]            → data/catalog/results/batch-000.result.jsonl …
+  → merge_batches.py                 → catalog_classified.jsonl (검증 통과분 + screened_out)
+  → build_md.py / gaps.py            (기존 그대로)
+```
+
+- [ ] **Step 1: 실패하는 테스트 작성**
+
+`tests/test_catalog_offline.py`:
+
+```python
+"""오프라인 분류 경로 회귀 테스트.
+
+1차는 API, 2차는 세션(서브에이전트)이 담당한다. 세션이 쓴 JSONL은 API 응답보다
+형식이 흔들리므로 병합 전 검증이 필수다 — 검증 없이 build_md에 넘기면
+taxonomy id 오타 하나로 그 유형의 사례가 조용히 사라진다(이 레포의 '죽은 배선' 8회 전례).
+"""
+import json
+import unittest
+from pathlib import Path
+
+from dart_risk_mcp.core.taxonomy import TAXONOMY
+from scripts.catalog import export_batches, merge_batches
+
+_SCREENED = [
+    {"id": "1", "date": "2024-01-18", "title": "불공정거래 조사결과 조치", "dept": "조사1국",
+     "url": "https://x.invalid/1", "keep": True, "category_hint": "7"},
+    {"id": "2", "date": "2024-02-01", "title": "선물회사 영업실적", "dept": "금융투자감독국",
+     "url": "https://x.invalid/2", "keep": False, "category_hint": ""},
+    {"id": "3", "date": "2024-03-05", "title": "공시위반 법인 조치", "dept": "기업공시국",
+     "url": "https://x.invalid/3", "keep": True, "category_hint": "4"},
+]
+
+
+class TestBuildBatches(unittest.TestCase):
+    def test_only_kept_records_batched(self):
+        batches = export_batches.build_batches(_SCREENED, size=10)
+        ids = [r["id"] for b in batches for r in b]
+        self.assertEqual(ids, ["1", "3"])
+
+    def test_batch_size_respected(self):
+        many = [dict(_SCREENED[0], id=str(i)) for i in range(25)]
+        batches = export_batches.build_batches(many, size=10)
+        self.assertEqual([len(b) for b in batches], [10, 10, 5])
+
+    def test_empty_input(self):
+        self.assertEqual(export_batches.build_batches([], size=10), [])
+
+
+class TestValidateRecord(unittest.TestCase):
+    def _ok(self):
+        return {"id": "1", "date": "2024-01-18", "title": "T", "url": "u",
+                "taxonomy_ids": ["7.1"], "techniques": ["가장납입"], "sanctions": [],
+                "laws": ["자본시장법"], "summary": "요약", "confidence": "high",
+                "body_source": "pdf"}
+
+    def test_valid_record_passes(self):
+        self.assertEqual(merge_batches.validate_record(self._ok(), TAXONOMY, {"1"}), [])
+
+    def test_unknown_taxonomy_id_rejected(self):
+        rec = dict(self._ok(), taxonomy_ids=["9.9"])
+        errs = merge_batches.validate_record(rec, TAXONOMY, {"1"})
+        self.assertTrue(any("9.9" in e for e in errs))
+
+    def test_unknown_id_rejected(self):
+        errs = merge_batches.validate_record(self._ok(), TAXONOMY, {"999"})
+        self.assertTrue(any("id" in e for e in errs))
+
+    def test_missing_required_field_rejected(self):
+        rec = self._ok()
+        del rec["summary"]
+        self.assertTrue(merge_batches.validate_record(rec, TAXONOMY, {"1"}))
+
+    def test_wrong_type_rejected(self):
+        rec = dict(self._ok(), taxonomy_ids="7.1")   # 리스트여야 함
+        self.assertTrue(merge_batches.validate_record(rec, TAXONOMY, {"1"}))
+
+    def test_empty_taxonomy_ids_is_valid(self):
+        # 미매핑은 오류가 아니라 갭 리포트의 입력이다
+        rec = dict(self._ok(), taxonomy_ids=[])
+        self.assertEqual(merge_batches.validate_record(rec, TAXONOMY, {"1"}), [])
+
+
+class TestMerge(unittest.TestCase):
+    def test_screened_out_records_carried_through(self):
+        results = [{"id": "1", "date": "2024-01-18", "title": "T", "url": "u",
+                    "taxonomy_ids": ["7.1"], "techniques": [], "sanctions": [], "laws": [],
+                    "summary": "s", "confidence": "high", "body_source": "pdf"}]
+        merged, errors = merge_batches.merge(results, _SCREENED, TAXONOMY)
+        self.assertEqual(errors, [])
+        by_id = {r["id"]: r for r in merged}
+        self.assertIn("2", by_id)                      # keep=False → screened_out으로 합류
+        self.assertTrue(by_id["2"].get("screened_out"))
+        self.assertEqual(by_id["1"]["taxonomy_ids"], ["7.1"])
+
+    def test_missing_result_reported(self):
+        # keep=True인데 결과가 없는 건은 오류로 보고돼야 한다(조용히 빠지면 안 됨)
+        merged, errors = merge_batches.merge([], _SCREENED, TAXONOMY)
+        self.assertTrue(any("3" in e for e in errors))
+
+    def test_invalid_record_does_not_reach_output(self):
+        bad = [{"id": "1", "taxonomy_ids": ["9.9"]}]
+        merged, errors = merge_batches.merge(bad, _SCREENED, TAXONOMY)
+        self.assertTrue(errors)
+        self.assertNotIn("1", {r["id"] for r in merged if not r.get("screened_out")})
+
+
+if __name__ == "__main__":
+    unittest.main()
+```
+
+- [ ] **Step 2: 테스트 실행 — 실패 확인**
+
+Run: `python -m pytest tests/test_catalog_offline.py -v`
+Expected: FAIL — `ImportError: cannot import name 'export_batches'`
+
+- [ ] **Step 3: `classify.py`에 `--screen-only` 추가**
+
+기존 main()에 플래그를 더한다. `--screen-only`면:
+- 1차 스크리닝만 수행하고 `extract_light`/`extract_full`/2차 호출을 하지 않는다
+- 출력 레코드는 `{"id", "date", "title", "dept", "url", "keep", "category_hint"}` — **전건**(keep=False 포함)
+- 기본 출력 경로는 `data/catalog/catalog_screened.jsonl`
+- `--resume`·`--limit`은 그대로 동작(전건을 쓰므로 done이 정상 전진)
+
+기존 전체 흐름(스크리닝→정밀)은 플래그 없이 그대로 유지한다 — 월간 증분이 그 경로를 쓴다.
+
+- [ ] **Step 4: `export_batches.py` 구현**
+
+```python
+"""1차 통과분에 본문을 붙여 배치 파일로 내보낸다 (세션 분류용).
+
+본문 확보가 여기서 일어난다 — extract_light(상세 페이지) 후 extract_full(PDF 전문)을
+시도하고, 실패하면 요약으로 degrade한다. 배치 크기가 10인 이유는 본문이 건당
+약 4,000토큰이라 그 이상 묶으면 분류하는 쪽의 컨텍스트를 압박하기 때문이다.
+"""
+```
+
+- `build_batches(records, size)` — `keep`이 참인 레코드만, `size`씩 분할(순수 함수)
+- `main()` — `--in`(기본 catalog_screened.jsonl) / `--out-dir`(기본 `data/catalog/batches`) / `--batch-size`(기본 10) / `--resume`
+  - 각 레코드에 `extract_light` → `extract_full` 순으로 본문 확보, `body`·`body_source` 부착
+  - 배치 파일명 `batch-000.jsonl` 형식(3자리 zero-pad)
+  - `--resume`이면 이미 존재하는 배치 파일을 건너뛴다
+  - 본문 확보는 네트워크 요청이므로 요청 간 `time.sleep(0.25)`
+  - 진행 로그: `[EXPORT] 배치 N/M — 본문 pdf X건 / page Y건 / title_only Z건`
+
+- [ ] **Step 5: `merge_batches.py` 구현**
+
+```python
+"""세션이 분류한 결과를 검증하고 catalog_classified.jsonl로 병합한다.
+
+검증이 이 스크립트의 존재 이유다. 세션(서브에이전트)이 쓴 JSONL은 형식이 흔들릴 수
+있고, taxonomy id 오타 하나가 그 유형의 사례를 조용히 사라지게 만든다. 오류는 모아서
+보고하고, 유효한 레코드만 출력에 넣는다.
+"""
+
+_REQUIRED = ("id", "date", "title", "url", "taxonomy_ids", "techniques",
+             "sanctions", "laws", "summary", "confidence", "body_source")
+_LIST_FIELDS = ("taxonomy_ids", "techniques", "sanctions", "laws")
+```
+
+- `validate_record(rec, taxonomy, known_ids) -> list[str]`
+  - 필수 필드 존재, 리스트 필드의 타입, `taxonomy_ids`의 각 원소가 `taxonomy`에 있는지, `id`가 `known_ids`에 있는지
+  - **빈 `taxonomy_ids`는 유효**(미매핑 = 갭 리포트 입력)
+  - 오류 메시지는 어느 레코드의 무엇이 문제인지 알 수 있게 쓴다
+- `merge(results, screened, taxonomy) -> (merged, errors)`
+  - 유효한 결과 레코드 + `keep=False`였던 건의 `screened_out` 레코드를 합친다
+  - `keep=True`인데 결과가 없는 id는 **오류로 보고**(조용히 빠지면 안 된다)
+- `main()` — `--results-dir`(기본 `data/catalog/results`) / `--screened` / `--out` / `--strict`
+  - 오류가 있으면 목록을 출력하고, `--strict`면 `exit 1`
+  - 요약: `[MERGE] 결과 N건 · 유효 M건 · 오류 K건 · screened_out P건 → 총 Q건`
+
+- [ ] **Step 6: `docs/catalog/CLASSIFY_BATCH.md` 작성**
+
+세션 분류를 수행하는 쪽(서브에이전트)이 읽을 지시서. **90배치를 일관되게 처리하려면 이 문서가 단일 기준**이 되어야 한다. 담을 것:
+
+- 입력 배치 파일의 형식과 출력 결과 파일의 정확한 스키마(위 `_REQUIRED` 필드 전부, 예시 1건 포함)
+- taxonomy 45개 전체 목록(id · 명칭 · 설명 요약) — 분류자가 이 문서만 보고 판단할 수 있어야 한다
+- 판정 규칙: **억지로 끼워 맞추지 말 것**, 확신이 없으면 `taxonomy_ids: []`와 `confidence: "low"`. 빈 배열은 실패가 아니라 신규 유형 후보다
+- `techniques`·`sanctions`·`laws`는 **본문에 실제로 있는 내용만** 적을 것(추측 금지)
+- `body_source`가 `page`/`title_only`면 전문이 아니므로 적발기법 추출이 제한된다는 점
+- 출력 파일명 규칙: `batch-NNN.jsonl` → `results/batch-NNN.result.jsonl`
+- 배치의 모든 레코드에 결과가 있어야 하며, 입력 `id`를 그대로 쓸 것
+
+- [ ] **Step 7: 테스트 실행 — 통과 확인**
+
+Run: `python -m pytest tests/test_catalog_offline.py -v`
+Expected: 13 passed
+
+- [ ] **Step 8: 전체 회귀 확인**
+
+Run: `python -m pytest tests/ -q`
+Expected: 기존 2,454개 + 신규 통과. 기존 테스트가 깨지면 회귀다.
+
+- [ ] **Step 9: 커밋**
+
+```bash
+git add scripts/catalog/export_batches.py scripts/catalog/merge_batches.py scripts/catalog/classify.py docs/catalog/CLASSIFY_BATCH.md tests/test_catalog_offline.py
+git commit -m "$(cat <<'EOF'
+feat(catalog): 오프라인 분류 경로 — 1차 API / 2차 세션 분업
+
+표본 204건 실측으로 1차 통과율 26.0%가 확정됐다(2차 대상 약 892건).
+비용이 비대칭이라(1차 $1.27 vs 2차 $10.65) 비싼 2차만 세션으로 옮긴다.
+
+classify.py --screen-only가 1차만 돌려 전건 판정을 기록하고,
+export_batches.py가 통과분에 본문을 붙여 10건씩 배치로 나누며,
+merge_batches.py가 세션이 채운 결과를 검증해 병합한다.
+
+검증기가 핵심이다 — 세션이 쓴 JSONL은 형식이 흔들릴 수 있고 taxonomy id
+오타 하나가 그 유형의 사례를 조용히 사라지게 만든다. keep=True인데 결과가
+없는 건도 오류로 보고해 누락이 묻히지 않게 했다.
+
+월간 증분은 기존 API 경로를 그대로 쓴다(cron 자동 갱신 유지).
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+EOF
+)"
+```

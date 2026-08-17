@@ -41,6 +41,26 @@ dart_risk_mcp/
 > 레지스트리 DB 스키마: 인물명(title)·status(select)·source·evidence·date·rcept_no(rich_text)·url·tags·**관련기업**(multi_select — 등장 회사명 태깅, evidence 텍스트와 분리해 회사별 필터링·추적 가능). `discover_actors.py`는 반복 등장한 문제 회사 전체를, `refresh_known_actors.py`는 해당 근거의 단일 회사를 태깅. 스키마 마이그레이션: `scripts/setup_known_actors_db.py`를 `DB_KNOWN_ACTORS` 설정된 상태로 재실행하면 신규 속성 추가 + 기존 행 소급 백필(추가만, 삭제 없음).
 > 자동 발굴: `scripts/discover_actors.py`(같은 cron)는 시장 '문제 회사'(자금조달+불안정 신호 동반)의 행위자를 **sightings로 누적**(보존 창 `WINDOW_MONTHS=140`개월 — 2015년까지의 백필 데이터가 프루닝되지 않도록 넓힘, "12개월"이던 옛 서술은 2026-08-04 감사에서 실코드와 불일치 확인·정정)하고, 서로 다른 문제 회사 2곳+(N=2)에 반복 등장하는 행위자를 레지스트리(비공개 Notion)에 `auto_matched`(자동 발굴)로 등재 + 제작자 이메일. 수집원은 3종(v1.8.0): ① CB/BW·EB·유상증자 **인수자**(`collect_funding_sightings_range`) ② 자금유출성 거래(금전대여·채무보증·담보제공·유형자산양수)의 **유출 상대방**(`collect_outflow_sightings_range` — classify_outflow_relation이 affiliated/external로 판정한 건만, **subsidiary(종속회사·자회사)는 세력 추적 대상이 아니라 제외**) ③ 최대주주변경(정정 제외)의 **신규 최대주주**(`collect_control_change_sightings_range` — "외 N인" 접미 제거 후 저장). 세 수집원 모두 상대방이 공시 회사 자신과 동일 명칭이면 제외한다. sighting 레코드의 출처는 `"src"` 필드(값 `"funding"`/`"outflow"`/`"control"`, 없으면 `"funding"` 기본 취급 — 기존 인수자 레코드와의 하위 호환)로 구분하며, 등재 evidence 문구에 혼합 출처를 "문제 회사 N곳 등장(유출 상대방·신규 최대주주): A사·B사" 형식으로 반영한다(`SRC_LABELS`/`_SRC_ORDER`). 인물 분류 필드 `"kind"`(person/fund/corp — 이미 이 의미로 쓰이던 필드라 출처 구분에는 재사용하지 않고 `"src"`를 신설)는 세 수집원 모두 동일하게 `classify_actor`로 채운다. 후자 두 수집원은 기존 `should_store`(자산운용 등 기타기관 보존)보다 넓게 제외한다 — `classify_tracked_entity`가 은행·증권·캐피탈·저축은행·금고·보험·투자신탁 등 제도권 금융기관(`classify_actor`의 institution 판정)에 더해 단독 표기 "신탁"(institution 패턴에 없음)도 게이트한다(대여·담보·최대주주 자리의 금융기관은 정상적인 대주·수탁 관계일 뿐 추적 대상이 아니라는 설계 결정). **노출 경계**: sightings(1회 포함, 미검증)는 **private repo `dart-risk-mcp-sightings`**(제작자만, `SIGHTINGS_REPO_TOKEN` PAT), 레지스트리도 **비공개 Notion**(접근은 opt-in, README 참고) — public 레포에는 어떤 인물 데이터도 커밋하지 않는다. 행위자는 `classify_actor`로 개인/조합/법인 3분류 추적(레지스트리 `구분` select) — 제도권 기관(증권사·은행·연기금 등, 반복 등장이 정상)과 임원은 제외. 베이스 백필: `scripts/backfill_sightings.py`(+`backfill-sightings.yml`). 개명 소급 병합: 행위자명은 제출 시점 사명으로 동결되므로 `scripts/backfill_renames.py`(+`backfill-renames.yml`)가 '상호변경안내' 공시를 백필해 `corp_renames`({corp_code: 옛 사명})를 sightings에 영속하고, `reconcile_corp_renames`가 옛 사명 행위자 키를 corp_code로 재해석해 별칭 병합한다. 단 '상호변경안내'는 사실상 코스닥 전용이라(610사 중 K 354 vs Y 2 실측) **KOSPI 개명(주총 정관변경, 예: 에이프로젠KIC→에이프로젠 00152385)은 수동 시드**로 소급한다 — private sightings repo의 `manual_renames.json`(스키마는 corp_renames와 동일, **근거 rcept_no 없는 entry는 기계적 거부**)을 `scripts/merge_manual_renames.py`(+`merge-manual-renames.yml`, DART 대조 검증: rcept↔corp_code 연결 치명·원문 옛 사명 표기 경고)가 검증·병합하고, daily cron(discover_actors.main)도 같은 시드를 자동 반영한다(`apply_manual_renames`). 공개 `corp-aliases.json`(주간 corp-map diff)도 `_combined_legacy_index`로 legacy 해석에 합류해 diff 도입 이후 개명은 시장 무관 자동 커버(라이브: 한국조선해양→에이치디한국조선해양 등 KOSPI 3건 소급 병합 실측). 상세: `docs/superpowers/plans/2026-08-03-kospi-rename-manual-seed.md`. 연결망 시각화: `scripts/build_network_html.py`(+`network_template.html`) — sightings에서 2사+ 추적 행위자↔회사 이분 그래프를 자체 완결형 HTML로 렌더(외부 CDN 없음). **출력 HTML은 실명 포함 → public 레포 커밋 금지**, 스크립트만 레포에 둠. 노드 병합 우선순위는 `actor_corp_ids`(reconcile_corp_renames의 명부 해석, v1.11.0) > fold2cc(비모호 fold) > 미병합 — 동명 별개 법인(실측: 에이프로젠 상장 00152385 vs 비상장 00549059)은 병합하지 않고 검색 리스트 시장 배지 + 상세 패널 "동명 별개 법인 N건" 사실 주석으로 구분한다. 유가증권(KOSPI) 상장사의 옛 상호는 '상호변경안내'가 사실상 코스닥 공시라(corp_renames 610사 중 K 354 vs Y 2 실측) 백필로 소급되지 않는 알려진 한계 — 에이프로젠KIC(2020년 KIC→MED 개명, 주총 공시로만 존재) 명의 행위자 키가 그 사례.
 
+> 카탈로그 생성 파이프라인: `scripts/catalog/`(collect → classify → build_md → gaps, 4단계).
+> `collect`는 금감원 게시판을 웹 파싱으로 목록 수집한다(FSS 오픈API는 일일 30회 한도가
+> 실증돼 폐기, API 키 불필요). `classify`는 1차 스크리닝(제목·부서) → 2차 정밀 분류
+> 2단계이며, 1차 통과분에 한해 `extract.py`(라이브러리, CLI 없음)를 건별로 호출해 원문을
+> 추출한다. `knowledge/manipulation_catalog/*.md`는 이 파이프라인의 산출물이며 손으로
+> 고치지 않는다(고치면 다음 실행에서 덮어써진다). 한글 표시 라벨은
+> `data/catalog/labels_ko.json`이 단일 출처 — `TAXONOMY`의 `name`은 45개 중 41개가
+> 영문이라 사용자 노출용으로 쓸 수 없다(2026-08-16 실측). 라벨을 고치려면 JSON을 고치고
+> `build_md.py`를 재실행한다.
+> **의존성 경계**: `pypdf`는 `[project.optional-dependencies]`의 `catalog` 그룹 전용이며
+> 런타임 패키지 `dart_risk_mcp/`는 여전히 `mcp`+`requests`만 쓴다. 미설치 환경에서는
+> `extract_full`이 `None`을 반환해 요약 모드로 degrade한다.
+> 자동 갱신: `.github/workflows/refresh-catalog.yml`(매월 1일 UTC 18:00 cron +
+> workflow_dispatch — 수집 연도·분류 건수 상한 수동 입력 가능). 필요 Secret은
+> `ANTHROPIC_API_KEY` 하나뿐(분류 단계 LLM 호출용). 카탈로그 MD·gap 리포트 생성 후
+> `load_catalog_excerpt`가 비어있지 않은지·점수 메타가 노출되지 않는지 검증하고,
+> `test_catalog_render.py`/`test_catalog_labels.py`/`test_golden_output_hygiene.py`를
+> 통과해야 커밋·푸시한다. 패키징 경계 자체는 `tests/test_catalog_packaging.py`가 고정.
+> 설계·실측 근거: `docs/superpowers/specs/2026-08-16-fss-catalog-pipeline-design.md`
+
 ---
 
 ## MCP 도구 26개

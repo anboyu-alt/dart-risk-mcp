@@ -1,0 +1,99 @@
+name: Refresh manipulation catalog
+
+on:
+  schedule:
+    - cron: "0 18 1 * *"   # 매월 1일 UTC 18:00 = 한국 익일 03:00
+  workflow_dispatch:
+    inputs:
+      year:
+        description: "수집 연도 (빈 값이면 올해)"
+        required: false
+        default: ""
+      limit:
+        description: "분류 건수 상한 (0=제한 없음). 비용 통제용 — 처음 돌릴 때는 50 권장"
+        required: false
+        default: "0"
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install package with catalog extras
+        run: pip install -e ".[catalog]"
+
+      # 게시판 웹 파싱이라 API 키가 필요 없다. 증분은 올해치만 --resume으로 훑으면
+      # 되고(이미 완료된 페이지는 건너뛴다), 전체 백필은 수동 트리거로 따로 돌린다.
+      - name: Collect press releases
+        run: |
+          YEAR="${{ github.event.inputs.year }}"
+          if [ -z "$YEAR" ]; then YEAR=$(date -u +%Y); fi
+          python scripts/catalog/collect.py --from-year "$YEAR" --to-year "$YEAR" --resume
+
+      - name: Classify
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python scripts/catalog/classify.py --resume --limit "${{ github.event.inputs.limit || 0 }}"
+
+      - name: Build catalog MD
+        run: python scripts/catalog/build_md.py
+
+      - name: Build gap report
+        run: python scripts/catalog/gaps.py
+
+      - name: Verify catalog excerpt is not empty
+        run: |
+          python -c "
+          from dart_risk_mcp.core.catalog import load_catalog_excerpt
+          e = load_catalog_excerpt(['1.1','5.7','8.1'])
+          assert e.strip(), '카탈로그 발췌가 비어있음 — 생성 실패'
+          assert '**Severity**' not in e, '점수 메타가 노출됨'
+          print('발췌 OK:', len(e), 'chars')
+          "
+
+      # 이 가드가 없으면 --resume이 이전 상태를 못 찾은 채(빈 러너, 캐시 없는
+      # data/catalog/*.jsonl 등)로 조용히 그 실행분만 수집·분류하고, build_md.py가
+      # 그 얇은 결과로 MD 8개를 덮어써 누적 사례가 전부 사라진 채 커밋되는
+      # 사고가 난다(2026-08-17 발견). 위 발췌 검증은 "유형 정의가 남아 있는지"만
+      # 보고 통과하므로 이 사고를 못 잡는다 — 실제 매핑 건수를 직접 센다.
+      - name: Verify catalog case count did not regress
+        run: |
+          python -c "
+          import json
+          from pathlib import Path
+
+          # 실측 기준(2026-08-16): 정상적인 1회 배치 분류만으로도 매핑 건수가
+          # 수십~수백 건대다. 10건 미만이면 정상적인 스크리닝 결과일 수 없고,
+          # 빈 러너에서 시작해 그 실행분만 처리했거나 분류가 조기 중단됐다는
+          # 신호다 — 이 이하로는 무조건 커밋을 막는다.
+          MIN_MAPPED_CASES = 10
+
+          path = Path('data/catalog/catalog_classified.jsonl')
+          records = [json.loads(l) for l in path.read_text(encoding='utf-8').splitlines() if l.strip()]
+          mapped = sum(1 for r in records if r.get('taxonomy_ids'))
+          print(f'분류 레코드 {len(records)}건 중 유형 매핑 {mapped}건')
+          assert mapped >= MIN_MAPPED_CASES, (
+              f'매핑 사례 급감: {mapped}건 (하한 {MIN_MAPPED_CASES}건) — '
+              '누적 자산이 사라졌을 가능성이 높아 커밋을 중단합니다'
+          )
+          "
+
+      - name: Run catalog tests
+        run: |
+          pip install pytest
+          python -m pytest tests/test_catalog_render.py tests/test_catalog_labels.py tests/test_golden_output_hygiene.py -q
+
+      - name: Commit updated catalog
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add dart_risk_mcp/knowledge/manipulation_catalog docs/catalog data/catalog
+          git diff --staged --quiet || git commit -m "chore(catalog): 보도자료 카탈로그 갱신 [skip ci]"
+          git push

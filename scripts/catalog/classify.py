@@ -1,0 +1,332 @@
+"""Phase C — 2단계 분류.
+
+1차 스크리닝: 제목+담당부서+일자만으로 등재 가치를 판정. 네트워크를 쓰지 않는다
+              — Phase A의 게시판 목록이 이미 이 셋을 갖고 있다.
+2차 정밀:     1차 통과분만 extract_light(상세 페이지)로 요약을 받고, 이어서
+              extract_full(PDF 전문)을 시도해 taxonomy 45개에 매핑한다.
+
+상세 조회와 PDF 다운로드를 1차 통과분에만 거는 것이 이 설계의 핵심이다. 규칙 필터
+통과분은 약 3,000건이지만 1차를 통과하는 것은 수백 건이라, 순서를 바꾸는 것만으로
+네트워크 요청이 한 자릿수 배 줄어든다.
+
+anthropic SDK를 쓰지 않고 requests로 직접 호출한다 — 이 레포는 Notion API도
+같은 방식으로 다루며, 런타임/배치 모두 서드파티 의존성을 늘리지 않는 원칙이다.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+import time
+from pathlib import Path
+
+import requests
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from scripts._console import use_utf8_stdout  # noqa: E402
+from scripts.catalog.extract import extract_full, extract_light  # noqa: E402
+
+API_URL = "https://api.anthropic.com/v1/messages"
+MODEL = "claude-haiku-4-5-20251001"
+_TIMEOUT = 120
+_SLEEP = 0.2
+# Phase A(collect.py)의 출력을 바로 받는다 — 중간 산출물 catalog_bodies.jsonl은 없다.
+IN_PATH = _REPO_ROOT / "data" / "catalog" / "catalog_sources.jsonl"
+OUT_PATH = _REPO_ROOT / "data" / "catalog" / "catalog_classified.jsonl"
+# --screen-only 전용 출력. 오프라인 백필 경로(Task 10)의 1단계 산출물 — 이후
+# export_batches.py가 이 파일의 keep=true 행에 본문을 붙여 세션용 배치로 낸다.
+SCREENED_OUT_PATH = _REPO_ROOT / "data" / "catalog" / "catalog_screened.jsonl"
+
+_JSON_BLOCK = re.compile(r"\{[\s\S]*\}")
+
+# 429/5xx 재시도 대상(레포 관례, dart_client._retry와 동일 집합)
+_RETRY_STATUSES = {429, 500, 502, 503, 504}
+_MAX_RETRIES = 3
+
+
+def build_taxonomy_prompt(taxonomy: dict[str, dict]) -> str:
+    """45개 유형 정의를 시스템 프롬프트로 만든다(프롬프트 캐싱 대상)."""
+    lines = [
+        "너는 한국 금융감독원·금융위원회 보도자료를 불공정거래 유형으로 분류하는 분석기다.",
+        "아래는 분류 체계다. 각 항목은 'ID | 명칭 | 설명 | 키워드' 형식이다.",
+        "",
+    ]
+    for tid in sorted(taxonomy, key=lambda t: [int(x) for x in t.split(".")]):
+        e = taxonomy[tid]
+        kws = ", ".join(e.get("keywords") or [])
+        lines.append(f"{tid} | {e.get('name','')} | {e.get('description','')} | {kws}")
+    lines += [
+        "",
+        "규칙:",
+        "- 보도자료가 위 유형 중 어디에도 해당하지 않으면 taxonomy_ids를 빈 배열로 둔다.",
+        "- 억지로 끼워 맞추지 마라. 확신이 없으면 confidence를 low로 하고 빈 배열을 낸다.",
+        "- 반드시 JSON 객체 하나만 출력한다. 설명 문장을 덧붙이지 마라.",
+    ]
+    return "\n".join(lines)
+
+
+def _retry_wait_seconds(resp: requests.Response, attempt: int) -> float:
+    """다음 재시도까지 대기할 초를 정한다. Retry-After 헤더가 있으면 그 값을
+    우선하고(정수로 파싱 안 되면 폴백), 없으면 지수 백오프(1, 2, 4초...)를 쓴다."""
+    retry_after = (resp.headers or {}).get("Retry-After")
+    if retry_after:
+        try:
+            return float(int(retry_after))
+        except (TypeError, ValueError):
+            pass  # 파싱 실패 — 지수 백오프로 폴백
+    return float(2 ** attempt)
+
+
+def call_anthropic(system: str, user: str, api_key: str, model: str = MODEL) -> str:
+    """Anthropic Messages API 호출. 시스템 프롬프트에 캐시 제어를 건다.
+
+    429/5xx는 지수 백오프(Retry-After 헤더 우선)로 최대 _MAX_RETRIES회 재시도한다
+    (레포 관례, dart_client._retry와 동일 설계). 재시도를 다 쓰고도 실패하면
+    HTTPError를 던진다 — 호출부의 개별 except가 흡수하는 성질은 그대로 둔다.
+
+    성공·실패를 불문하고 요청 하나가 끝날 때마다 _SLEEP만큼 대기한다. 이 함수
+    안에서 대기하면 스크리닝 통과·탈락·예외 등 모든 호출 경로가 자동으로
+    페이싱되므로, 호출부(main 루프)에서 별도로 sleep을 두지 않는다.
+    """
+    payload = {
+        "model": model,
+        "max_tokens": 1500,
+        "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+        "messages": [{"role": "user", "content": user}],
+    }
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    try:
+        resp = None
+        for attempt in range(_MAX_RETRIES + 1):
+            resp = requests.post(API_URL, headers=headers, json=payload, timeout=_TIMEOUT)
+            if resp.status_code not in _RETRY_STATUSES:
+                break
+            if attempt < _MAX_RETRIES:
+                wait = _retry_wait_seconds(resp, attempt)
+                print(f"[CLASSIFY] {resp.status_code} 응답 — {wait:.0f}초 대기 후 재시도 "
+                      f"({attempt + 1}/{_MAX_RETRIES})")
+                time.sleep(wait)
+        resp.raise_for_status()
+        blocks = resp.json().get("content") or []
+        return "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+    finally:
+        time.sleep(_SLEEP)
+
+
+def _extract_json(text: str) -> dict:
+    match = _JSON_BLOCK.search(text or "")
+    if not match:
+        return {}
+    try:
+        parsed = json.loads(match.group(0))
+        return parsed if isinstance(parsed, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def parse_screen_response(text: str) -> dict:
+    """1차 스크리닝 응답 파싱. 파싱 실패는 보수적으로 keep=False."""
+    data = _extract_json(text)
+    return {"keep": bool(data.get("keep")), "category_hint": str(data.get("category_hint", ""))}
+
+
+def parse_classify_response(text: str) -> dict:
+    """2차 정밀 응답 파싱. 존재하지 않는 taxonomy id는 버린다."""
+    from dart_risk_mcp.core.taxonomy import TAXONOMY
+
+    data = _extract_json(text)
+
+    def _strlist(key: str) -> list[str]:
+        vals = data.get(key)
+        return [str(v).strip() for v in vals if str(v).strip()] if isinstance(vals, list) else []
+
+    return {
+        "taxonomy_ids": [t for t in _strlist("taxonomy_ids") if t in TAXONOMY],
+        "techniques": _strlist("techniques"),
+        "sanctions": _strlist("sanctions"),
+        "laws": _strlist("laws"),
+        "summary": str(data.get("summary", "")).strip(),
+        "confidence": str(data.get("confidence", "low")).strip() or "low",
+    }
+
+
+_SCREEN_SYSTEM = (
+    "너는 한국 금융감독원 보도자료를 선별하는 분류기다. "
+    "주가조작·불공정거래·회계부정·지배구조 남용 등 상장기업 투자자 보호와 직접 관련된 "
+    "자료면 keep=true, 채용·행사·일반 정책 홍보면 keep=false로 판정한다. "
+    'JSON 객체 하나만 출력한다: {"keep": true/false, "category_hint": "1~8 중 하나 또는 빈 문자열"}'
+)
+
+
+def build_screen_only_record(rec: dict, screen: dict) -> dict:
+    """`--screen-only` 출력 레코드. keep True/False 전건을 남긴다(오프라인
+    경로의 계약 — 뒤이은 export_batches.py가 keep=true만 골라 배치를 만든다).
+
+    build_screened_out_record와 달리 `dept`를 보존한다 — 1차 스크리닝
+    프롬프트가 제목·부서·일자만 보므로, 이 출력이 그 판정 근거를 감사할 수
+    있는 유일한 기록이다.
+    """
+    return {
+        "id": rec.get("id", ""),
+        "date": rec.get("date", ""),
+        "title": rec.get("title", ""),
+        "dept": rec.get("dept", ""),
+        "url": rec.get("url", ""),
+        "keep": bool(screen.get("keep")),
+        "category_hint": screen.get("category_hint", ""),
+    }
+
+
+def build_screened_out_record(rec: dict) -> dict:
+    """1차 스크리닝 탈락 레코드를 --resume이 인식할 수 있는 최소 형태로 만든다.
+
+    스크리닝 탈락은 절대다수다(규칙 필터 통과 ~3,000건 중 1차 통과는 수백 건
+    추정). 예전 코드는 탈락 시 그냥 continue해 출력에 아무것도 남기지 않았고,
+    `done` 집합은 출력 JSONL의 id만 보므로 --resume이 이 탈락분을 매 실행마다
+    다시 스크리닝했다 — --limit과 조합하면 같은 상위 N건을 영원히 재처리해
+    전혀 전진하지 못하는 영구 정체가 됐다. id만 있으면 done에 잡히므로,
+    나머지 필드는 사람이 로그를 훑어볼 수 있는 최소 맥락만 남긴다.
+    taxonomy_ids를 아예 넣지 않는다 — gaps.py가 "미매핑 신종 수법"과 구분할 수
+    있도록 screened_out 플래그로만 표시한다.
+    """
+    return {
+        "id": rec.get("id", ""),
+        "date": rec.get("date", ""),
+        "title": rec.get("title", ""),
+        "url": rec.get("url", ""),
+        "screened_out": True,
+    }
+
+
+def main() -> None:
+    use_utf8_stdout()
+    parser = argparse.ArgumentParser(description="보도자료 2단계 분류")
+    parser.add_argument("--in", dest="in_path", default=str(IN_PATH))
+    parser.add_argument("--out", default=None)
+    parser.add_argument("--model", default=MODEL)
+    parser.add_argument("--limit", type=int, default=0, help="상위 N건만 처리(비용 통제)")
+    parser.add_argument("--resume", action="store_true", help="출력에 있는 id는 건너뜀")
+    parser.add_argument(
+        "--screen-only", action="store_true",
+        help="1차 스크리닝만 수행하고 전건(keep true/false)을 기록한다. "
+             "extract_light/extract_full과 2차 정밀 호출을 건너뛴다 — 오프라인 "
+             "백필 경로(export_batches.py → 세션 분류 → merge_batches.py)의 1단계.",
+    )
+    args = parser.parse_args()
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        raise SystemExit("ANTHROPIC_API_KEY 환경변수가 필요합니다")
+
+    out_path = Path(args.out) if args.out else (SCREENED_OUT_PATH if args.screen_only else OUT_PATH)
+
+    records = [json.loads(l) for l in Path(args.in_path).read_text(encoding="utf-8").splitlines() if l.strip()]
+    done: set[str] = set()
+    if args.resume and out_path.exists():
+        for line in out_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                done.add(str(json.loads(line).get("id", "")))
+        print(f"[CLASSIFY] resume — 완료 {len(done)}건 건너뜀")
+
+    todo = [r for r in records if str(r.get("id", "")) not in done]
+    if args.limit:
+        todo = todo[: args.limit]
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if args.screen_only:
+        # 1차만: 네트워크는 스크리닝 API 호출 하나뿐 — extract_light/extract_full도,
+        # 2차 정밀 호출도 하지 않는다. 전건(keep true/false)을 기록해야 gaps.py류
+        # 후속 도구가 "탈락"과 "미매핑"을 구분할 수 있다(build_screen_only_record).
+        kept = 0
+        with out_path.open("a", encoding="utf-8") as fh:
+            for i, rec in enumerate(todo, 1):
+                head = (f"제목: {rec.get('title','')}\n"
+                        f"담당부서: {rec.get('dept','')}\n"
+                        f"일자: {rec.get('date','')}")
+                try:
+                    screen = parse_screen_response(call_anthropic(_SCREEN_SYSTEM, head, api_key, args.model))
+                except Exception as exc:
+                    print(f"[CLASSIFY] 스크리닝 실패 {rec.get('id')}: {type(exc).__name__}")
+                    continue
+                if screen["keep"]:
+                    kept += 1
+                fh.write(json.dumps(build_screen_only_record(rec, screen), ensure_ascii=False) + "\n")
+                fh.flush()
+                if i % 25 == 0:
+                    print(f"[CLASSIFY] (1차만) {i}/{len(todo)} — 통과 {kept} / 탈락 {i - kept}")
+        print(f"[CLASSIFY] (1차만) 완료: 후보 {len(todo)} → 통과 {kept} / 탈락 {len(todo) - kept} → {out_path}")
+        return
+
+    from dart_risk_mcp.core.taxonomy import TAXONOMY
+
+    system_full = build_taxonomy_prompt(TAXONOMY)
+    kept = mapped = screened_out = 0
+    with out_path.open("a", encoding="utf-8") as fh:
+        for i, rec in enumerate(todo, 1):
+            # 1차: 목록에서 이미 확보한 제목·부서·일자만 본다. 네트워크 호출 없음.
+            head = (f"제목: {rec.get('title','')}\n"
+                    f"담당부서: {rec.get('dept','')}\n"
+                    f"일자: {rec.get('date','')}")
+            try:
+                screen = parse_screen_response(call_anthropic(_SCREEN_SYSTEM, head, api_key, args.model))
+            except Exception as exc:
+                print(f"[CLASSIFY] 스크리닝 실패 {rec.get('id')}: {type(exc).__name__}")
+                continue
+            if not screen["keep"]:
+                # 탈락도 반드시 기록한다 — done에 안 잡히면 --resume이 매번
+                # 같은 건을 재스크리닝한다(--limit과 조합 시 영구 정체).
+                screened_out += 1
+                fh.write(json.dumps(build_screened_out_record(rec), ensure_ascii=False) + "\n")
+                fh.flush()
+                if i % 25 == 0:
+                    print(f"[CLASSIFY] {i}/{len(todo)} — 통과 {kept} / 탈락 {screened_out} / 매핑 {mapped}")
+                continue
+            kept += 1
+
+            # 2차: 여기서 처음 네트워크로 본문을 확보한다(상세 페이지 → PDF 순).
+            rec = extract_light(rec)
+            full = extract_full(rec)
+            body = full or rec.get("body", "")
+            source = "pdf" if full else rec.get("body_source", "title_only")
+            user = f"제목: {rec.get('title','')}\n일자: {rec.get('date','')}\n본문:\n{body[:20000]}"
+            try:
+                result = parse_classify_response(call_anthropic(system_full, user, api_key, args.model))
+            except Exception as exc:
+                print(f"[CLASSIFY] 정밀 실패 {rec.get('id')}: {type(exc).__name__}")
+                continue
+
+            out = {
+                "id": rec.get("id", ""),
+                "date": rec.get("date", ""),
+                # 수집원이 FSS 게시판 하나뿐이라(collect.py는 항상 source="fss") 금융위
+                # 분기는 죽은 코드였다. 금융위 수집원이 생기면 그때 다시 분기한다.
+                "agency": "금융감독원",
+                "title": rec.get("title", ""),
+                "url": rec.get("url", ""),
+                "body_source": source,
+                **result,
+            }
+            if out["taxonomy_ids"]:
+                mapped += 1
+            fh.write(json.dumps(out, ensure_ascii=False) + "\n")
+            fh.flush()
+            if i % 25 == 0:
+                print(f"[CLASSIFY] {i}/{len(todo)} — 통과 {kept} / 탈락 {screened_out} / 매핑 {mapped}")
+            # 페이싱은 call_anthropic 내부에서 매 요청마다 처리한다(스크리닝
+            # 탈락으로 continue하는 압도적 다수 경로까지 포함해서).
+
+    print(f"[CLASSIFY] 완료: 후보 {len(todo)} → 스크리닝 통과 {kept} / 탈락 {screened_out} → 유형 매핑 {mapped}")
+
+
+if __name__ == "__main__":
+    main()

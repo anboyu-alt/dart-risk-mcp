@@ -45,6 +45,13 @@ dart-risk-mcp에만 존재하는 8개: `2.7`, `2.8`, `3.6`, `3.7`, `5.6`, `5.7`,
 |---|---|---|
 | 첨부 `fileSn=1` 매직바이트 | `D0CF11E0A1B11AE1` = CFBF 구형 HWP(OLE 복합문서) | **5/5** |
 | 첨부 `fileSn=2` | `255044462D312E34` = PDF 1.4, FlateDecode 스트림 + `/Font` | 매직 직접 확인 1건(131250) / `.pdf` 첨부 존재 5/5 |
+
+> **정정(2026-08-17 실측)**: 위 표본 5건은 전부 2023~2024년 자료였고, `fileSn` 번호와
+> 파일 종류의 대응은 **시대별로 뒤집힌다**. 2011~2019년 자료는 `fileSn=1`이 PDF,
+> `fileSn=2`가 HWP다(11404·13862 등 실측). 초기 구현은 최근 규칙을 전 기간에 적용해
+> 1,242건 중 692건의 전문을 놓쳤다. 현재 `extract.py`는 `fileSn`으로 종류를 추정하지
+> 않고 **모든 첨부를 받아 매직바이트(`25504446`)로 PDF를 판별**하며, PDF가 여럿이면
+> 추출 텍스트가 가장 긴 것을 쓴다. 아래 §4의 서술도 이 방식을 기준으로 읽어야 한다.
 | 게시판 페이지 본문 영역(`bd-view`) 텍스트 | **505 ~ 1,097자** (제목·등록일·조회수·첨부파일명 포함) | 5/5 |
 | 문서뷰어 `/fss/etc/docView/view.do?viewType=BODY` | JS 로더 껍데기(3,257 bytes) → 실제 렌더러는 `vod2.fss.or.kr/ctrl/viewer_ssl.aspx?...&type=jpg`. `type=html/text/txt/jpg` 전부 동일한 "Image Viewer" HTML 반환 | 1건 |
 
@@ -149,7 +156,7 @@ Phase C의 2단계 분류가 비용 절감 효과를 내려면, **PDF를 전량 
 
 **`extract_full(record)` — Phase C 1차 통과분만, `pypdf` 필요**
 
-`fileSn=2` 첨부(PDF)를 다운로드해 텍스트를 추출하고 `body_source`를 `pdf`로 **갱신**한다. Phase C 2차가 건별로 호출한다. `pypdf` 미설치 시 이 함수는 `None`을 반환하고, 호출부는 `extract_light` 결과를 그대로 써서 정밀 분류를 진행한다(품질은 낮아지되 중단되지 않음).
+상세 페이지의 **모든 첨부를 순회**하며 매직바이트로 PDF를 판별해 텍스트를 추출하고(여럿이면 가장 긴 것) `body_source`를 `pdf`로 **갱신**한다. `fileSn` 번호로 종류를 추정하지 않는다(§2.1 정정 참고). Phase C 2차가 건별로 호출한다. `pypdf` 미설치 시 이 함수는 `None`을 반환하고, 호출부는 `extract_light` 결과를 그대로 써서 정밀 분류를 진행한다(품질은 낮아지되 중단되지 않음).
 
 각 레코드에 **`body_source`**(`pdf` / `page` / `title_only`)와 `body_chars`를 기록한다. 요약 기반 분류와 전문 기반 분류를 사후에 구분할 수 있어야 카탈로그 품질을 정직하게 서술할 수 있다.
 
@@ -209,24 +216,22 @@ catalog = ["pypdf>=4.0.0"]
 
 이는 CLAUDE.md 코딩 규칙("`requests`와 `mcp` 외 의존성을 추가하지 않습니다")에 대한 **배치 전용·optional 예외**다. 규칙 자체는 런타임 패키지에 대해 그대로 유지된다. 구현 시 CLAUDE.md에 이 경계를 명시한다.
 
-### 5.2 환경변수 (전부 신규 — 사용자가 직접 발급해야 함)
+### 5.2 환경변수
 
 | 변수 | 용도 | 발급처 |
 |---|---|---|
-| `FSS_API_KEY` | 금감원 보도자료 오픈API | fss.or.kr 오픈API |
-| `DATA_GO_KR_API_KEY` | 금융위 정책브리핑 | 공공데이터포털 |
 | `ANTHROPIC_API_KEY` | Phase C 분류 | console.anthropic.com |
 
-셋 다 이 개발 머신에 없음을 확인했다(User/Machine/Process 스코프 전부 부재, dart-monitor에 `.env`도 없음 — Actions Secrets로만 보유). **이것이 구현 착수의 선행 블로커다.**
+**필요한 키는 이 하나뿐이다** (2026-08-17 갱신). 최초 설계는 `FSS_API_KEY`(금감원 오픈API)와 `DATA_GO_KR_API_KEY`(금융위 정책브리핑)도 요구했으나, 수집이 게시판 웹 파싱으로 바뀌면서 둘 다 쓰이지 않는다 — §10 리스크 0 참고. 두 키를 발급해 뒀더라도 이 파이프라인은 참조하지 않는다.
 
 ---
 
 ## 6. 실행·운영
 
 - `.github/workflows/refresh-catalog.yml`
-  - `workflow_dispatch` (수동 트리거, 파라미터: `--start`/`--end`/`--phase`)
+  - `workflow_dispatch` (수동 트리거, 파라미터: `year`·`limit`)
   - `schedule`: **월 1회** cron
-- Secrets: `FSS_API_KEY`, `DATA_GO_KR_API_KEY`, `ANTHROPIC_API_KEY`
+- Secrets: **`ANTHROPIC_API_KEY` 하나뿐** — 수집 단계는 키가 필요 없다
 - 워크플로우는 `pip install -e ".[catalog]"`로 pypdf 포함 설치
 - 2010년 백필은 **수동 트리거 1회**로 수행(장시간·고비용). 이후 월간 cron은 증분만 처리
 - 중간 산출물 JSONL은 커밋하지 않는다(`.gitignore`). 커밋 대상은 생성된 MD와 갭 리포트
@@ -282,7 +287,7 @@ catalog = ["pypdf>=4.0.0"]
 
 ## 11. 성공 기준
 
-1. `FSS_API_KEY` 등 3개 키가 설정된 환경에서 `scripts/catalog/` 5단계가 종단 실행되고, `knowledge/manipulation_catalog/*.md` 8개가 재생성된다
+1. `ANTHROPIC_API_KEY`가 설정된 환경에서 `scripts/catalog/` 4단계가 종단 실행되고, `knowledge/manipulation_catalog/*.md` 8개가 재생성된다
 2. 재생성된 MD로 `load_catalog_excerpt`가 **빈 문자열이 아닌** 발췌를 반환한다(4개 도구 전부)
 3. 신규 8개 유형(`2.7`·`2.8`·`3.6`·`3.7`·`5.6`·`5.7`·`5.8`·`8.5`) 중 **최소 1개 이상**에 실제 보도자료 사례가 등재된다
 4. `docs/catalog/gap-report-*.md`가 생성되고, 미매핑 수법이 최소 1건 이상 후보로 제시된다
