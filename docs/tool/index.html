@@ -1083,8 +1083,7 @@ function buildResult(name, stockCode, corpCode, items, bgn, end, totalCount) {
 
   const detectedTax = new Set(
     observedEvents.flatMap((e) => obs(e).flatMap((s) => s.taxonomies || [])));
-  const patterns = DATA.patterns.filter(
-    (p) => p.signal_sequence.every((t) => detectedTax.has(t)));
+  const patterns = findPatternOverlaps(DATA.patterns, detectedTax, 2);
   const capitalKeys = new Set(DATA.capital_event_keys);
   const capitalEvents = observedEvents.filter(
     (e) => obs(e).some((s) => capitalKeys.has(s.key)));
@@ -1561,16 +1560,25 @@ function renderDash() {
         12개월 내 3건 이상은 등록 패턴(capital churn)의 관찰 조건에 해당합니다 — 각 건의 원문을 확인해 보세요.</p></div>`;
     }
     if (patterns.length) {
-      html += `<div class="panel"><div class="slabel red">▍PATTERN MATCH</div>
-        <p class="dim">아래 패턴의 구성 신호가 모두 관찰됐습니다. 패턴 "조건 충족"은 사실 관찰이며 판정이 아닙니다.</p>` +
-        patterns.map((p) => {
+      const maxShowPatterns = 3;
+      const shownPatterns = patterns.slice(0, maxShowPatterns);
+      const restPatterns = patterns.length - shownPatterns.length;
+      html += `<div class="panel"><div class="slabel red">▍PATTERN WATCH</div>
+        <p class="dim">등록 패턴의 구성 신호 중 이 기간 관찰된 것과 안 보인 것을 사실로 보여줍니다. "겹침"은 사실 관찰이며 판정이 아닙니다.</p>` +
+        shownPatterns.map((p) => {
+          const headline = `<b>${esc(p.name)}</b> — 구성 신호 ${p.n_total}개 중 ${p.n_matched}개가 이 기간 공시에서 관찰됐습니다`;
+          const overlapBlock = patternOverlapLinesHTML(p);
           // SE-14: capital_backflow(자금 역류)는 제목 조합(3.1 경영권변경 +
           // 5.7 자금유출성거래)만으로 확정하지 않는다 — 계열사 지원이 일상인
           // 회사도 제목만으로는 전부 걸리기 때문. 원문 "회사와의 관계"를
           // 비동기로 확인할 때까지 스피너 플레이스홀더를 두고, 완료 후
           // loadCapitalBackflowGate가 실제 판정 HTML로 치환한다(아래 참조).
+          // signal_sequence가 2개뿐이라 min_overlap=2에서 여기 나타나는
+          // 순간 이미 전부 일치이므로, 부분 겹침으로 바뀌어도 게이트 대상
+          // 판정 자체는 예전과 동일하다.
           if (p.key === "capital_backflow") {
-            return `<div class="patterncard" id="pat-${esc(p.key)}"><b>${esc(p.name)}</b>${esc(p.description)}
+            return `<div class="patterncard" id="pat-${esc(p.key)}">${headline}${esc(p.description)}
+              ${overlapBlock}
               ${patternProseCheckpointsHTML(p)}
               <div class="sigs">관찰 윈도우 ${p.timeline_months}개월 · 구성 신호가 촉발된 공시:</div>
               <div class="sigs">${patternEvidenceHTML(p, observedEvents)}</div>
@@ -1580,7 +1588,8 @@ function renderDash() {
               ${patternCatalogCasesHTML(p)}
               </div>`;
           }
-          return `<div class="patterncard"><b>${esc(p.name)}</b>${esc(p.description)}
+          return `<div class="patterncard">${headline}${esc(p.description)}
+            ${overlapBlock}
             ${patternProseCheckpointsHTML(p)}
             <div class="sigs">관찰 윈도우 ${p.timeline_months}개월 · 구성 신호가 촉발된 공시:</div>
             <div class="sigs">${patternEvidenceHTML(p, observedEvents)}</div>` +
@@ -1589,6 +1598,7 @@ function renderDash() {
             patternCatalogCasesHTML(p) +
             `</div>`;
         }).join("") +
+        (restPatterns > 0 ? `<p class="dim" style="margin-top:0.4rem">외 ${restPatterns}개 패턴이 2개 이상 겹칩니다.</p>` : "") +
         `</div>`;
     }
   }
@@ -2467,6 +2477,43 @@ function fundChainPanelHTML(records, disclosures) {
   return html;
 }
 
+// ── 패턴 부분 겹침 조회 — core find_pattern_overlaps(taxonomy.py)의 JS 이식.
+// "전부 일치"(구 patterns.filter((p) => p.signal_sequence.every(...)))에서
+// "구성 신호 중 얼마나 관찰됐는지"로 바꿨다 — 실측(10개사·365일 창): 전부
+// 일치는 회사당 0.2개뿐이라 등록 패턴의 checkpoints가 사실상 노출되지
+// 않았다. 판정 어휘 없이 "N개 중 M개 관찰"만 사실로 반환한다(core와 동일한
+// v0.8.5 무판정 원칙 — 이 함수 자체는 "이 회사가 이 패턴이다"라고 말하지
+// 않는다). 정렬은 core와 동일: 충족률 내림차순 → n_matched 내림차순 →
+// key 오름차순(결정적).
+function tidCompare(a, b) {
+  const pa = String(a).split(".").map(Number);
+  const pb = String(b).split(".").map(Number);
+  if (pa[0] !== pb[0]) return pa[0] - pb[0];
+  return (pa[1] || 0) - (pb[1] || 0);
+}
+function findPatternOverlaps(patternsList, detectedTaxSet, minOverlap) {
+  const results = [];
+  for (const p of (patternsList || [])) {
+    const seq = p.signal_sequence || [];
+    const matched = seq.filter((t) => detectedTaxSet.has(t));
+    if (matched.length < minOverlap) continue;
+    const missing = seq.filter((t) => !detectedTaxSet.has(t));
+    results.push(Object.assign({}, p, {
+      matched: matched.slice().sort(tidCompare),
+      missing: missing.slice().sort(tidCompare),
+      n_matched: matched.length,
+      n_total: seq.length,
+    }));
+  }
+  results.sort((a, b) => {
+    const ra = a.n_matched / a.n_total, rb = b.n_matched / b.n_total;
+    if (rb !== ra) return rb - ra;
+    if (b.n_matched !== a.n_matched) return b.n_matched - a.n_matched;
+    return a.key < b.key ? -1 : (a.key > b.key ? 1 : 0);
+  });
+  return results;
+}
+
 // ── 작업4: PATTERN MATCH 근거 공시 역추적 ──
 // 출처: se/app.js matchCrossPatterns 이식(적응) — 뷰어는 taxonomy 2.7(자본
 // churn)을 합성 주입하지 않는다. 뷰어의 patterns(위 buildResult)는
@@ -2522,6 +2569,22 @@ function patternProseCheckpointsHTML(p) {
        <ul style="margin:0.3rem 0 0 1.1rem;padding:0">${p.checkpoints.map((cp) => `<li>${esc(cp)}</li>`).join("")}</ul></details>`
     : "";
   return proseBlock + checkpointsBlock;
+}
+
+// 부분 겹침 패턴 카드에 붙는 "관찰됨/안 보임" 두 줄. findPatternOverlaps가
+// 채운 p.matched/p.missing(taxonomy id, 오름차순)을 DATA.catalog.tax_labels
+// (PR #178, 45종 한글명)로 사람이 읽는 라벨로 바꾼다. 라벨이 없으면 id
+// 그대로 표시(사실 표기 우선 — 조용히 생략하지 않는다).
+function patternOverlapLinesHTML(p) {
+  const labels = (DATA.catalog && DATA.catalog.tax_labels) || {};
+  const fmt = (ids) => ids.map((t) => `${esc(labels[t] || t)}<span class="mono" style="color:var(--dim)">(${esc(t)})</span>`).join(" · ");
+  const matched = (p.matched || []);
+  const missing = (p.missing || []);
+  let html = `<div class="sigs" style="margin-top:0.3rem">관찰됨: ${fmt(matched)}</div>`;
+  if (missing.length) {
+    html += `<div class="sigs">안 보임: ${fmt(missing)}</div>`;
+  }
+  return html;
 }
 
 // ── 뷰어 배선 작업 1~3(2026-08-17): 금감원 적발 사례(signals-data.json의

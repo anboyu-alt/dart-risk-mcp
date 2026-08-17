@@ -8,6 +8,7 @@ dart-monitor의 knowledge/manipulation_catalog/*.md를 읽어
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -231,3 +232,47 @@ def load_catalog_excerpt(taxonomy_ids: list[str], max_chars: int = 2600, max_cas
             excerpts.append(f"{header}\n{truncated}")
 
     return "\n\n".join(excerpts)
+
+
+# ────────────────────────────────────────────────────────────────
+# TAXONOMY 한글 라벨 (data/catalog/labels_ko.json)
+# ────────────────────────────────────────────────────────────────
+# _CATALOG_DIR(knowledge/manipulation_catalog/*.md)과 같은 이유로 이 파일도
+# 개발 체크아웃에만 존재한다 — pyproject.toml의 `packages = ["dart_risk_mcp"]`
+# 는 레포 루트의 data/ 디렉터리를 설치 패키지에 담지 않는다. 그래서
+# load_catalog_excerpt와 동일한 graceful-degradation 패턴(파일 없으면 조용히
+# 폴백)을 따른다 — 여기서는 TAXONOMY[tid]["name"](영문)으로 폴백한다.
+
+_LABELS_KO_PATH = Path(__file__).parent.parent.parent / "data" / "catalog" / "labels_ko.json"
+
+_labels_ko_cache: dict | None = None
+
+
+def _load_labels_ko() -> dict:
+    global _labels_ko_cache
+    if _labels_ko_cache is not None:
+        return _labels_ko_cache
+    try:
+        content = _LABELS_KO_PATH.read_text(encoding="utf-8")
+        _labels_ko_cache = json.loads(content)
+    except (OSError, ValueError):
+        _labels_ko_cache = {}
+    return _labels_ko_cache
+
+
+def taxonomy_label_ko(tid: str) -> str:
+    """taxonomy ID → 한글 라벨.
+
+    `data/catalog/labels_ko.json`(개발 체크아웃 전용, 카탈로그 파이프라인의
+    단일 출처)의 `title` 필드를 우선 쓴다. 파일이 없거나(설치 패키지) 그
+    id가 라벨에 없으면 `TAXONOMY[tid]["name"]`(영문)으로 폴백하고, 그마저
+    없으면 tid 문자열 그대로 반환한다(예외를 던지지 않음).
+    """
+    labels = _load_labels_ko()
+    entry = labels.get(tid)
+    if entry and entry.get("title"):
+        return entry["title"]
+    signal = TAXONOMY.get(tid)
+    if signal and signal.get("name"):
+        return signal["name"]
+    return tid
