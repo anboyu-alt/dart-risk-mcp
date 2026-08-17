@@ -50,7 +50,7 @@ def _enrich(rec: dict) -> dict:
     out = extract_light(rec)
     full = extract_full(out)
     if full:
-        out = dict(out, body=full, body_source="pdf")
+        out = dict(out, body=full, body_source="pdf", body_chars=len(full))
     return out
 
 

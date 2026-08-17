@@ -5,6 +5,7 @@
 taxonomy id 오타 하나로 그 유형의 사례가 조용히 사라진다(이 레포의 '죽은 배선' 8회 전례).
 """
 import unittest
+from unittest import mock
 
 from dart_risk_mcp.core.taxonomy import TAXONOMY
 from scripts.catalog import export_batches, merge_batches
@@ -32,6 +33,37 @@ class TestBuildBatches(unittest.TestCase):
 
     def test_empty_input(self):
         self.assertEqual(export_batches.build_batches([], size=10), [])
+
+
+class TestEnrichBodyChars(unittest.TestCase):
+    """실측 결함(batch-002): PDF 전문 확보 후 body_chars가 상세 페이지 길이로
+    남아 있던 버그의 회귀 테스트. `_enrich`가 extract_full로 body를 덮어쓸 때
+    body_chars도 함께 갱신해야 한다 — 분류자가 읽는 문서화된 필드다.
+    """
+
+    _REC = {"id": "1", "date": "2024-01-18", "title": "T", "url": "u"}
+
+    def test_body_chars_matches_pdf_length_on_success(self):
+        page_body = "짧은 상세 페이지 본문"
+        pdf_text = "가" * 1115  # 상세 페이지 본문보다 훨씬 긴 PDF 전문
+        with mock.patch.object(
+            export_batches, "extract_light",
+            return_value=dict(self._REC, body=page_body, body_source="page", body_chars=len(page_body)),
+        ), mock.patch.object(export_batches, "extract_full", return_value=pdf_text):
+            out = export_batches._enrich(self._REC)
+        self.assertEqual(out["body_source"], "pdf")
+        self.assertEqual(out["body_chars"], len(out["body"]))
+        self.assertEqual(out["body_chars"], len(pdf_text))
+
+    def test_body_chars_unchanged_when_pdf_extraction_fails(self):
+        page_body = "상세 페이지 본문"
+        with mock.patch.object(
+            export_batches, "extract_light",
+            return_value=dict(self._REC, body=page_body, body_source="page", body_chars=len(page_body)),
+        ), mock.patch.object(export_batches, "extract_full", return_value=None):
+            out = export_batches._enrich(self._REC)
+        self.assertEqual(out["body_source"], "page")
+        self.assertEqual(out["body_chars"], len(out["body"]))
 
 
 class TestValidateRecord(unittest.TestCase):
