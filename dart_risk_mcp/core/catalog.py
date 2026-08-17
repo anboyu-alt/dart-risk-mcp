@@ -6,6 +6,8 @@ dart-monitor의 knowledge/manipulation_catalog/*.md를 읽어
 카탈로그 파일이 없어도 빈 문자열을 반환해 graceful degradation.
 """
 
+from __future__ import annotations
+
 import re
 from pathlib import Path
 
@@ -60,6 +62,32 @@ def _taxonomy_sort_key(tid: str) -> tuple:
         return (1, [tid])
 
 
+# 카탈로그 MD의 유형 헤더: `## {tid}: {한글 제목}`. 다음 헤더 직전까지가 그
+# 유형의 블록이다(`### 정의`/`### 탐지 키워드`/`### 위험 신호`/`### 금감원·
+# 금융위 적발 사례`/`### 적발 기법 종합`/`### 인용 법조`/`### 기존 현장 기사
+# 인용` 하위 섹션 포함).
+_ANY_HEADER_RE = re.compile(r"^## \S+: .*$", re.MULTILINE)
+
+
+def _extract_taxonomy_block(content: str, tid: str) -> str | None:
+    """content에서 `## {tid}: ...` 헤더로 시작하는 블록 하나만 뽑아 반환한다.
+
+    블록 범위는 그 헤더 줄부터 다음 `## ` 헤더 직전까지(파일 끝이면 끝까지).
+    헤더를 찾지 못하면 None — 호출부가 폴백(파일 앞부분 절단)을 결정한다.
+    """
+    header_re = re.compile(rf"^## {re.escape(tid)}: .*$", re.MULTILINE)
+    match = header_re.search(content)
+    if not match:
+        return None
+    start = match.start()
+    next_match = _ANY_HEADER_RE.search(content, match.end())
+    end = next_match.start() if next_match else len(content)
+    block = content[start:end]
+    # 다음 헤더 직전(또는 파일 끝)의 구분선("---")과 그 앞뒤 공백을 정리한다.
+    block = re.sub(r"\n+-{3,}\s*\Z", "", block)
+    return block.strip()
+
+
 def load_catalog_excerpt(taxonomy_ids: list[str], max_chars: int = 1500) -> str:
     """taxonomy ID 목록에 해당하는 카탈로그 MD 발췌를 반환한다.
 
@@ -78,20 +106,20 @@ def load_catalog_excerpt(taxonomy_ids: list[str], max_chars: int = 1500) -> str:
     비어있지 않음을 assert할 것 — 호출 여부만 확인하는 테스트는 이 버그를 잡지 못한다
     (실제로 8번째 죽은 배선 사례가 이렇게 놓쳤다. `server.py`의 `track_fund_usage` 참고).
     """
-    seen: set[str] = set()
-    excerpts: list[str] = []
-
+    # {category: [tid, ...]} — taxonomy ID 숫자 오름차순으로 먼저 정렬한 뒤 묶으므로,
+    # 카테고리 등장 순서(dict 삽입 순서)도 같은 오름차순을 그대로 따른다. 패턴 키 등
+    # taxonomy ID가 아닌 키는 여기서 조용히 스킵된다(위 docstring 경고 참고).
+    ids_by_category: dict[str, list[str]] = {}
     for tid in sorted(taxonomy_ids, key=_taxonomy_sort_key):
-        # tid가 taxonomy ID가 아니라 다른 종류의 키(예: 패턴 키)이면 여기서
-        # 조용히 None → continue로 스킵된다. 위 docstring 경고 참고.
         signal = TAXONOMY.get(tid)
         if not signal:
             continue
         category = signal.get("category", "")
-        if category in seen:
-            continue
-        seen.add(category)
+        ids_by_category.setdefault(category, []).append(tid)
 
+    excerpts: list[str] = []
+
+    for category, ids in ids_by_category.items():
         filename = _CATEGORY_TO_FILE.get(category)
         if not filename:
             continue
@@ -106,11 +134,22 @@ def load_catalog_excerpt(taxonomy_ids: list[str], max_chars: int = 1500) -> str:
             continue
 
         content = _strip_taxonomy_metadata(content)
-        # 연속 빈 줄 정리 (메타 블록 제거 후 공백이 과다하게 남는 것을 방지)
-        content = re.sub(r"\n{3,}", "\n\n", content).strip() + "\n"
 
-        truncated = content[:max_chars]
-        if len(content) > max_chars:
+        # 요청받은 id들의 블록만 모은다(같은 카테고리 여러 id면 오름차순으로 이어붙임).
+        blocks = [b for tid in ids if (b := _extract_taxonomy_block(content, tid)) is not None]
+
+        if blocks:
+            section_body = "\n\n---\n\n".join(blocks)
+        else:
+            # 폴백: 요청한 id의 헤더를 하나도 못 찾음 — 빈 문자열로 퇴화시키느니
+            # 기존 동작(파일 앞부분 절단)으로 최소한의 맥락이라도 남긴다.
+            section_body = content.strip()
+
+        # 연속 빈 줄 정리 (메타 블록 제거·블록 이어붙이기 후 공백이 과다하게 남는 것을 방지)
+        section_body = re.sub(r"\n{3,}", "\n\n", section_body).strip() + "\n"
+
+        truncated = section_body[:max_chars]
+        if len(section_body) > max_chars:
             truncated += "\n…(이하 생략)"
 
         header = f"━━ 카탈로그 선례: {category} ━━"
