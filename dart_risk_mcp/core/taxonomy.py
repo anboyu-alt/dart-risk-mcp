@@ -661,7 +661,7 @@ TAXONOMY = {
     "4.3": {
         "id": "4.3",
         "category": "Governance & Disclosure",
-        "name": "Disclosure Loophole Exploitation",
+        "name": "Disclosure and Reporting Obligation Violation",
         "description": "Purposeful use of DART filing loopholes; material information omitted",
         "base_score": 2,
         "severity": "MEDIUM",
@@ -672,6 +672,16 @@ TAXONOMY = {
             "공시지연",
             "분할공시",
             "공시의무위반",
+            # 2026-08-16/17 시장 전체 실측(60일, 30,765건) — DISCLOSURE_VIOL
+            # 실제 매칭 51건/16종 전부가 「불성실공시법인지정(예고)」 계열이고,
+            # 정정 제외 24,350건에서 아래 4개가 기존 키워드가 놓치던 실제
+            # 제목(사업보고서미제출·감사보고서제출지연·공시위반제재금미납 등)을
+            # 오탐 0건으로 추가 포착했다. 근거:
+            # docs/catalog/gap-triage-2026-08-17.md.
+            "불성실공시법인",
+            "보고서미제출",
+            "제출지연",
+            "공시위반",
         ],
         "red_flags": [
             "Material event not disclosed within 4 hours",
