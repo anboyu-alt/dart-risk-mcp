@@ -662,7 +662,10 @@ TAXONOMY = {
         "id": "4.3",
         "category": "Governance & Disclosure",
         "name": "Disclosure and Reporting Obligation Violation",
-        "description": "Purposeful use of DART filing loopholes; material information omitted",
+        # 옛 값은 "Purposeful use of DART filing loopholes"였다. 2026-08-17 실측에서
+        # 이 유형으로 실제 잡히는 공시가 전부 「불성실공시법인지정(예고)」 계열이고
+        # 의도("purposeful")는 도구가 관측할 수 없는 값이라 사실 서술로 바꿨다.
+        "description": "Exchange sanction for non-compliant disclosure; periodic/audit reports missing or filed late",
         "base_score": 2,
         "severity": "MEDIUM",
         "crisis_timeline_months": 9,
@@ -683,10 +686,14 @@ TAXONOMY = {
             "제출지연",
             "공시위반",
         ],
+        # 옛 값("4시간 이내 미공시", "첨부파일 깊숙이 묻힘")은 이 도구가 잴 수 없는
+        # 항목이었다. labels_ko.json의 한글 red_flags가 표시 단일 출처지만,
+        # scripts/catalog/labels.py의 폴백이 이 값을 쓸 수 있어 함께 맞춘다.
         "red_flags": [
-            "Material event not disclosed within 4 hours",
-            "Information split across multiple filings",
-            "Negative information buried in attachments",
+            "Designated (or pre-announced) as a non-compliant discloser by the exchange",
+            "Annual/periodic report not filed",
+            "Audit or half-year report filed late",
+            "Disclosure-violation penalty left unpaid",
         ],
         "field_evidence": [
             "2025-02-27 금감원: IPO 허위 매출·자기자본 과대계상으로 상장 후 급락 사례",
