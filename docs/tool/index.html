@@ -1539,7 +1539,8 @@ function renderDash() {
     html += `<div class="panel"><div class="slabel">▍SIGNAL COMMENTARY — 무게순 · 사실 서술</div>
       <div class="proselist">` + detectedTypes.map((s) =>
         `<div><span class="tag" style="background:var(--c${s.category})">${esc(s.label)}</span>${s.caution ? ` <span class="badge-cau">주의</span>` : ""} <span class="mono" style="font-size:0.78rem;color:var(--dim2)">×${typeCount[s.key]}</span>
-         <div class="p">${esc(s.prose || "등록된 해설이 없는 신호 유형입니다.")}</div></div>`).join("") +
+         <div class="p">${esc(s.prose || "등록된 해설이 없는 신호 유형입니다.")}</div>
+         ${signalCatalogCasesHTML(s)}</div>`).join("") +
       `</div></div>`;
     // 자본 리듬 — 12개월 슬라이딩 윈도우 최대 집중도 (MCP detect_capital_churn과 동일 관점)
     const capDates = [...capitalEvents].map((e) => e.date).sort();
@@ -1576,6 +1577,7 @@ function renderDash() {
               <div class="dim" style="margin-top:0.5rem"><span class="spinner"></span> 원문에서 상대방 관계 확인 중…</div>
               ${(p.field_evidence && p.field_evidence.length ? `<details style="margin-top:0.4rem;font-size:0.82rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">실제 사례 근거(금감원 보도자료 등)</summary>
                 <ul style="margin:0.3rem 0 0 1.1rem;padding:0">${p.field_evidence.map((fe) => `<li>${esc(fe)}</li>`).join("")}</ul></details>` : "")}
+              ${patternCatalogCasesHTML(p)}
               </div>`;
           }
           return `<div class="patterncard"><b>${esc(p.name)}</b>${esc(p.description)}
@@ -1584,6 +1586,7 @@ function renderDash() {
             <div class="sigs">${patternEvidenceHTML(p, observedEvents)}</div>` +
             (p.field_evidence && p.field_evidence.length ? `<details style="margin-top:0.4rem;font-size:0.82rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">실제 사례 근거(금감원 보도자료 등)</summary>
               <ul style="margin:0.3rem 0 0 1.1rem;padding:0">${p.field_evidence.map((fe) => `<li>${esc(fe)}</li>`).join("")}</ul></details>` : "") +
+            patternCatalogCasesHTML(p) +
             `</div>`;
         }).join("") +
         `</div>`;
@@ -2520,6 +2523,86 @@ function patternProseCheckpointsHTML(p) {
     : "";
   return proseBlock + checkpointsBlock;
 }
+
+// ── 뷰어 배선 작업 1~3(2026-08-17): 금감원 적발 사례(signals-data.json의
+// catalog 키) — 신호 카드 · 패턴 카드에 붙인다. catalog 날짜는 ISO
+// "YYYY-MM-DD"(fmtDate가 기대하는 rcept "YYYYMMDD"와 다른 포맷)라 별도
+// 포맷터를 둔다.
+function fmtCatDate(d) { return String(d || "").replace(/-/g, "."); }
+
+// 신호 하나가 taxonomy 여러 개에 매핑될 수 있어(예: EMBEZZLE → 5.3+8.1)
+// 관련 유형 전부를 합쳐 집계한다. tech/laws는 건수를 합산 후 재정렬,
+// recent는 합친 뒤 날짜 내림차순 재정렬 — 중복 제거는 하지 않는다(같은
+// 보도자료가 두 taxonomy에 모두 매핑됐으면 그대로 두 번 잡힌다).
+function catalogCasesForTaxonomies(taxIds) {
+  const cat = DATA && DATA.catalog;
+  if (!cat || !cat.by_taxonomy) return null;
+  const techMap = new Map();
+  const lawsMap = new Map();
+  let recentAll = [];
+  let n = 0;
+  let matched = 0;
+  for (const tid of (taxIds || [])) {
+    const b = cat.by_taxonomy[tid];
+    if (!b) continue;
+    matched++;
+    n += b.n || 0;
+    (b.tech || []).forEach(([k, v]) => techMap.set(k, (techMap.get(k) || 0) + v));
+    (b.laws || []).forEach(([k, v]) => lawsMap.set(k, (lawsMap.get(k) || 0) + v));
+    recentAll = recentAll.concat(b.recent || []);
+  }
+  if (!matched || n === 0) return null;
+  const tech = [...techMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const laws = [...lawsMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+  recentAll.sort((a, b) => (a.d < b.d ? 1 : -1));
+  return { n, tech, laws, recent: recentAll.slice(0, 3), multi: (taxIds || []).length > 1 };
+}
+
+// 작업2: SIGNAL COMMENTARY 카드에 붙는 접힘. 해당 taxonomy 조합 사례가
+// 0건이면 접힘 자체를 렌더하지 않는다(빈 상자 노출 금지).
+function signalCatalogCasesHTML(s) {
+  const agg = catalogCasesForTaxonomies(s.taxonomies);
+  if (!agg) return "";
+  const techList = agg.tech.map(([k, v]) => `<li>${esc(k)} <span class="dim">(${v}건)</span></li>`).join("");
+  const lawsList = agg.laws.map(([k, v]) => `<li>${esc(k)} <span class="dim">(${v}건)</span></li>`).join("");
+  const recentList = agg.recent.map((r) =>
+    `<li><a href="${esc(r.u)}" target="_blank" rel="noopener" style="color:var(--tx)">${esc(fmtCatDate(r.d))} ${esc(r.t)}</a></li>`).join("");
+  const basisNote = agg.multi
+    ? `<div class="dim" style="margin-top:0.25rem;font-size:0.78rem">// 이 신호가 매핑된 관련 유형(${s.taxonomies.join(", ")})의 사례를 합산한 건수입니다</div>`
+    : "";
+  return `<details style="margin-top:0.35rem;font-size:0.82rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">이 유형으로 적발된 금감원 사례 ${agg.n}건</summary>
+    ${basisNote}
+    ${techList ? `<div class="dim" style="margin-top:0.3rem">자주 나온 적발 기법</div><ul style="margin:0.2rem 0 0 1.1rem;padding:0">${techList}</ul>` : ""}
+    ${lawsList ? `<div class="dim" style="margin-top:0.3rem">인용 법조</div><ul style="margin:0.2rem 0 0 1.1rem;padding:0">${lawsList}</ul>` : ""}
+    ${recentList ? `<div class="dim" style="margin-top:0.3rem">최근 사례</div><ul style="margin:0.2rem 0 0 1.1rem;padding:0">${recentList}</ul>` : ""}
+    </details>`;
+}
+
+// 작업3: PATTERN MATCH 카드에 붙는 접힘. 카탈로그 사례 277건 중 패턴의
+// 구성 신호를 전부 충족하는 사례는 0건(실측, 사례당 taxonomy 1개가
+// 87%) — "이 패턴의 실제 사례"라고 쓰면 거짓이므로, 패턴을 이루는 각
+// 구성 신호가 개별적으로 적발된 사례만 사실로 나열한다. 판정 어휘 없음.
+function patternCatalogCasesHTML(p) {
+  const cat = DATA && DATA.catalog;
+  if (!cat || !cat.by_taxonomy) return "";
+  const labels = cat.tax_labels || {};
+  const lines = (p.signal_sequence || []).map((tid) => {
+    const label = esc(labels[tid] || tid);
+    const b = cat.by_taxonomy[tid];
+    if (!b || !b.n) {
+      return `<li>${label} <span class="mono" style="color:var(--dim)">(${esc(tid)})</span> — 사례 없음</li>`;
+    }
+    const top = (b.recent && b.recent[0]) || null;
+    const link = top
+      ? ` · <a href="${esc(top.u)}" target="_blank" rel="noopener" style="color:var(--tx)">${esc(fmtCatDate(top.d))} ${esc(top.t)}</a>`
+      : "";
+    return `<li>${label} <span class="mono" style="color:var(--dim)">(${esc(tid)})</span> — 금감원 사례 ${b.n}건${link}</li>`;
+  }).join("");
+  if (!lines) return "";
+  return `<details style="margin-top:0.4rem;font-size:0.82rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">구성 신호별 금감원 적발 사례</summary>
+    <p class="dim" style="margin:0.3rem 0">이 패턴 전체를 그대로 담은 보도자료는 없습니다. 아래는 이 패턴을 이루는 각 신호가 개별적으로 적발된 사례입니다.</p>
+    <ul style="margin:0.2rem 0 0 1.1rem;padding:0">${lines}</ul></details>`;
+}
 // ── SE-14: capital_backflow 원문 상대방 관계 확인 게이트 ──
 // 제목 조합(3.1 경영권변경 + 5.7 자금유출성거래)만으로는 계열사 지원이
 // 일상인 회사도 전부 걸린다. patternTaxonomyEvidence("5.7", events)로 뽑은
@@ -2896,6 +2979,7 @@ function capitalBackflowCardHTML(pattern, events, results, totalCount, affiliate
     ? `<details style="margin-top:0.4rem;font-size:0.82rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">실제 사례 근거(금감원 보도자료 등)</summary>
        <ul style="margin:0.3rem 0 0 1.1rem;padding:0">${pattern.field_evidence.map((fe) => `<li>${esc(fe)}</li>`).join("")}</ul></details>`
     : "";
+  const catalogCasesBlock = patternCatalogCasesHTML(pattern);
   const affiliated = results.filter((r) => r.cls === "affiliated");
   const others = results.filter((r) => r.cls === "subsidiary" || r.cls === "external");
 
@@ -2928,7 +3012,8 @@ function capitalBackflowCardHTML(pattern, events, results, totalCount, affiliate
       ${evidenceBlock}
       <div class="factline">확인된 특수관계 유출: ${lines}</div>
       ${othersLine}
-      ${fieldEvidenceBlock}</div>`;
+      ${fieldEvidenceBlock}
+      ${catalogCasesBlock}</div>`;
   }
 
   if (others.length) {
@@ -2954,7 +3039,8 @@ function capitalBackflowCardHTML(pattern, events, results, totalCount, affiliate
     ${patternProseCheckpointsHTML(pattern)}
     ${evidenceBlock}
     <div class="dim" style="margin-top:0.4rem">원문에서 상대방을 확인하세요${scopeNote}: ${links || "해당 없음"}</div>
-    ${fieldEvidenceBlock}</div>`;
+    ${fieldEvidenceBlock}
+    ${catalogCasesBlock}</div>`;
 }
 
 // 비동기 오케스트레이션 — 스피너 플레이스홀더(#pat-capital_backflow)를 실제
