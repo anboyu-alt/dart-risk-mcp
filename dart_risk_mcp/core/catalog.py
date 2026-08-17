@@ -260,14 +260,43 @@ def _load_labels_ko() -> dict:
     return _labels_ko_cache
 
 
+_MD_TITLE_RE = re.compile(r"^## (\d+\.\d+): (.+?)\s*$", re.MULTILINE)
+_md_titles_cache: dict[str, str] | None = None
+
+
+def _load_md_titles() -> dict[str, str]:
+    """동봉 카탈로그 MD에서 `## {tid}: {한글 제목}` 헤더를 긁어 온다.
+
+    `pyproject.toml`의 `packages = ["dart_risk_mcp"]` 때문에 `data/catalog/`는
+    **설치 패키지에 들어가지 않는다** — 반면 이 MD들은 `dart_risk_mcp/knowledge/`
+    안이라 동봉되고, `load_catalog_excerpt`가 이미 같은 경로를 런타임에 읽는다.
+    labels_ko.json만 보면 개발 체크아웃에서는 한글이 나오고 설치본에서는 조용히
+    영문으로 퇴화한다(2026-08-17 실측) — 그래서 동봉 MD를 1순위로 둔다.
+    MD는 labels_ko.json에서 생성되므로 두 값은 같다.
+    """
+    global _md_titles_cache
+    if _md_titles_cache is not None:
+        return _md_titles_cache
+    titles: dict[str, str] = {}
+    try:
+        for path in sorted(_CATALOG_DIR.glob("0*.md")):
+            titles.update(dict(_MD_TITLE_RE.findall(path.read_text(encoding="utf-8"))))
+    except OSError:
+        pass
+    _md_titles_cache = titles
+    return titles
+
+
 def taxonomy_label_ko(tid: str) -> str:
     """taxonomy ID → 한글 라벨.
 
-    `data/catalog/labels_ko.json`(개발 체크아웃 전용, 카탈로그 파이프라인의
-    단일 출처)의 `title` 필드를 우선 쓴다. 파일이 없거나(설치 패키지) 그
-    id가 라벨에 없으면 `TAXONOMY[tid]["name"]`(영문)으로 폴백하고, 그마저
-    없으면 tid 문자열 그대로 반환한다(예외를 던지지 않음).
+    우선순위: 동봉 카탈로그 MD(`dart_risk_mcp/knowledge/`, 설치본에도 있음) →
+    `data/catalog/labels_ko.json`(개발 체크아웃 전용) → `TAXONOMY[tid]["name"]`
+    (영문) → tid 문자열. 예외를 던지지 않는다.
     """
+    md_title = _load_md_titles().get(tid)
+    if md_title:
+        return md_title
     labels = _load_labels_ko()
     entry = labels.get(tid)
     if entry and entry.get("title"):

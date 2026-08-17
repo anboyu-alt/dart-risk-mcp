@@ -117,7 +117,11 @@ _ALLOWED_PAREN_ABBREVS = {
     # 정부·기관
     "MFDS", "FSC", "FSS", "SEC", "NICE", "KFTC", "KRX",
     # 회계 표준 지표
-    "ROE", "ROA", "EPS", "EBITDA", "EBIT", "EV", "FCF",
+    # OCI: 2026-08-17 추가. 카탈로그 발췌가 '위험 신호' 섹션까지 노출하게 되면서
+    # taxonomy 1.6의 한글 라벨 "기타포괄손익(OCI) 처리가 아니라…"가 처음 골든에
+    # 등장했다. 내부 flag 코드가 아니라 한글 용어에 병기된 표준 회계 약어라
+    # RCPS·IFRS와 같은 부류로 허용한다.
+    "ROE", "ROA", "EPS", "EBITDA", "EBIT", "EV", "FCF", "OCI",
     # 기타 산업 표준
     "OECD", "IFRS", "GAAP", "ESG",
 }

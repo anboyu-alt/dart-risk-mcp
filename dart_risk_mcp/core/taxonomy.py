@@ -1253,7 +1253,7 @@ CROSS_SIGNAL_PATTERNS = {
         ],
     },
     "zombie_ma": {
-        "name": "The Zombie M&A",
+        "name": "무자본 M&A",
         "description": "무자본 M&A 세력이 차명·투자조합으로 경영권 인수 → 사모CB 대량발행·허위자금조달 → 허위 신사업 발표 → 주가부양 후 고가매도",
         "signal_sequence": ["3.1", "2.4", "1.2", "4.3", "7.1", "2.7"],
         "timeline_months": 12,
@@ -1264,7 +1264,7 @@ CROSS_SIGNAL_PATTERNS = {
         ],
     },
     "audit_insider_dump": {
-        "name": "The Audit Insider Dump",
+        "name": "감사의견 내부자 덤프",
         "description": "감사의견거절·비적정 미공개정보를 임원·최대주주가 직무상 취득 후 공시 전 주식 전량매도",
         "signal_sequence": ["4.4", "7.1", "3.1"],
         "timeline_months": 6,
@@ -1275,7 +1275,7 @@ CROSS_SIGNAL_PATTERNS = {
         ],
     },
     "delisting_evasion": {
-        "name": "The Delisting Evasion",
+        "name": "상폐 회피",
         "description": "자본잠식·영업손실로 상장폐지 위기 → 연말 거액 유상증자(가장납입) + 재무제표 과대계상 → 요건 면탈 → 횡령",
         "signal_sequence": ["8.1", "2.4", "6.1", "4.3", "2.7", "8.2"],
         "timeline_months": 9,
@@ -1286,7 +1286,7 @@ CROSS_SIGNAL_PATTERNS = {
         ],
     },
     "fake_new_biz": {
-        "name": "The Fake New Business Pump",
+        "name": "허위 신사업 주가부양",
         "description": "주업과 무관한 테마사업(2차전지·AI·우주항공 등) 허위 발표 + 형식적 MOU·페이퍼컴퍼니 → 테마주 편승 주가급등 → 최대주주 주식 고가매도",
         "signal_sequence": ["5.4", "4.3", "7.2", "7.1"],
         "timeline_months": 6,
