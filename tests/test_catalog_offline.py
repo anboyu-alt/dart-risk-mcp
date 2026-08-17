@@ -100,5 +100,67 @@ class TestMerge(unittest.TestCase):
         self.assertNotIn("1", {r["id"] for r in merged if not r.get("screened_out")})
 
 
+class TestMergeAgencyAndScope(unittest.TestCase):
+    """Fix round 1 (2026-08-17 리뷰): agency 자동 채움 + known_ids 범위 축소.
+
+    Finding 1: render.py의 render_case가 case["agency"]를 무조건 읽는데
+    오프라인 결과 스키마엔 agency가 없어 892건 전부 " / " 빈 자리로 렌더됐다.
+    세션에게 쓰게 하지 않고 merge()가 상수로 채운다.
+
+    Finding 2: known_ids가 전체 screened(keep true+false)로 만들어져
+    keep=False였던 id에 대한 결과가 조용히 버려졌다(오류 없이). known_ids를
+    keep=true로 좁혀 명시적 오류로 잡는다.
+    """
+
+    def _results_for_1_and_3(self):
+        return [
+            {"id": "1", "date": "2024-01-18", "title": "T", "url": "u",
+             "taxonomy_ids": ["7.1"], "techniques": [], "sanctions": [], "laws": [],
+             "summary": "s", "confidence": "high", "body_source": "pdf"},
+            {"id": "3", "date": "2024-03-05", "title": "T2", "url": "u2",
+             "taxonomy_ids": [], "techniques": [], "sanctions": [], "laws": [],
+             "summary": "s2", "confidence": "low", "body_source": "pdf"},
+        ]
+
+    def test_agency_filled_on_valid_records(self):
+        merged, errors = merge_batches.merge(self._results_for_1_and_3(), _SCREENED, TAXONOMY)
+        self.assertEqual(errors, [])
+        by_id = {r["id"]: r for r in merged}
+        self.assertEqual(by_id["1"]["agency"], "금융감독원")
+        self.assertEqual(by_id["3"]["agency"], "금융감독원")
+
+    def test_agency_overwrites_whatever_session_wrote(self):
+        # 세션이 값을 넣었더라도(다른 값이든 정답이든) merge()가 상수로 통일한다
+        # — 90배치에서 표기가 흔들릴 여지를 아예 없애기 위해서다.
+        results = self._results_for_1_and_3()
+        results[0]["agency"] = "엉뚱한값"
+        merged, errors = merge_batches.merge(results, _SCREENED, TAXONOMY)
+        self.assertEqual(errors, [])
+        by_id = {r["id"]: r for r in merged}
+        self.assertEqual(by_id["1"]["agency"], "금융감독원")
+
+    def test_screened_out_records_do_not_get_agency(self):
+        # screened_out은 taxonomy_ids가 없어 build_md.py의 group_cases가
+        # 애초에 렌더 대상에서 제외한다 — 온라인 경로(build_screened_out_record)와
+        # 마찬가지로 agency를 넣지 않는 것이 의도된 동작이다.
+        merged, errors = merge_batches.merge(self._results_for_1_and_3(), _SCREENED, TAXONOMY)
+        self.assertEqual(errors, [])
+        by_id = {r["id"]: r for r in merged}
+        self.assertNotIn("agency", by_id["2"])
+
+    def test_result_for_screened_out_id_is_reported_as_error(self):
+        # id "2"는 _SCREENED에서 keep=False다. 세션이 이 id로 결과를 잘못
+        # 써 보내면 조용히 버려지지 않고 오류로 보고돼야 한다.
+        results = self._results_for_1_and_3() + [
+            {"id": "2", "date": "2024-02-01", "title": "B", "url": "u3",
+             "taxonomy_ids": [], "techniques": [], "sanctions": [], "laws": [],
+             "summary": "s3", "confidence": "low", "body_source": "pdf"},
+        ]
+        merged, errors = merge_batches.merge(results, _SCREENED, TAXONOMY)
+        self.assertTrue(any("2" in e for e in errors))
+        # 잘못 분류된 id 2가 유효 사례로 슬쩍 섞여 들어가지도 않아야 한다
+        self.assertNotIn("2", {r["id"] for r in merged if not r.get("screened_out")})
+
+
 if __name__ == "__main__":
     unittest.main()

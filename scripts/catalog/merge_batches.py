@@ -21,8 +21,15 @@ RESULTS_DIR = _REPO_ROOT / "data" / "catalog" / "results"
 SCREENED_PATH = _REPO_ROOT / "data" / "catalog" / "catalog_screened.jsonl"
 OUT_PATH = _REPO_ROOT / "data" / "catalog" / "catalog_classified.jsonl"
 
+# 수집원이 금감원 보도자료 게시판 하나뿐이라(collect.py는 항상 source="fss",
+# classify.py:313의 온라인 경로와 같은 근거) 상수로 고정한다. 세션에게 이 필드를
+# 쓰게 하면 90배치에서 표기가 흔들릴 위험만 생기고 얻는 게 없어 merge()가 채운다.
+_AGENCY = "금융감독원"
+
 _REQUIRED = ("id", "date", "title", "url", "taxonomy_ids", "techniques",
              "sanctions", "laws", "summary", "confidence", "body_source")
+# agency는 여기 넣지 않는다 — 세션이 쓰지 않는 필드를 필수로 두면 전건이 검증
+# 실패한다. merge()가 유효 레코드에 상수로 채운다(Finding 1, 2026-08-17 리뷰).
 _LIST_FIELDS = ("taxonomy_ids", "techniques", "sanctions", "laws")
 
 
@@ -33,7 +40,10 @@ def validate_record(rec: dict, taxonomy: dict, known_ids: set) -> list[str]:
     - 리스트 필드(`_LIST_FIELDS`)의 타입이 실제로 list
     - `taxonomy_ids`의 각 원소가 taxonomy에 실존(빈 배열은 유효 — 미매핑은
       갭 리포트의 정상 입력이지 오류가 아니다)
-    - `id`가 known_ids(배치 원본 id 집합)에 존재
+    - `id`가 known_ids에 존재. 호출자(`merge`)는 known_ids를 **keep=true였던
+      id로 좁혀서** 넘긴다 — keep=false(스크리닝 탈락)였던 id로 결과가 온다는
+      건 세션이 애초에 보지 말았어야 할 레코드를 분류했다는 신호라, 조용히
+      버려지지 않고 여기서 명시적 오류가 된다(Finding 2, 2026-08-17 리뷰).
 
     오류 메시지마다 `[id=...]`를 앞에 붙여, 여러 레코드의 오류가 한꺼번에
     출력돼도 어느 레코드 얘기인지 즉시 알 수 있게 한다.
@@ -58,7 +68,10 @@ def validate_record(rec: dict, taxonomy: dict, known_ids: set) -> list[str]:
             errors.append(f"[id={rid}] 존재하지 않는 taxonomy id: {', '.join(unknown)}")
 
     if rid not in known_ids:
-        errors.append(f"[id={rid}] 배치 원본(screened)에 없는 id입니다")
+        errors.append(
+            f"[id={rid}] 배치에 없는 id입니다(known_ids 불일치 — keep=false였던 id이거나 "
+            "존재하지 않는 id일 수 있습니다)"
+        )
 
     return errors
 
@@ -70,9 +83,20 @@ def merge(results: list[dict], screened: list[dict], taxonomy: dict) -> tuple[li
     - keep=true인데 결과가 없는 id는 오류로 보고한다(조용히 빠뜨리지 않는다) —
       단, id 자체가 results에 등장했지만(잘못된 형식이라) 검증에 실패한 경우는
       그 검증 오류만 보고하고 별도의 "결과 없음" 오류를 중복으로 얹지 않는다.
+    - `agency`는 상수("금융감독원")라 세션이 쓸 필요가 없다. 유효 레코드에
+      항상 이 값으로 채운다(세션이 뭔가 다른 값을 넣었더라도 신뢰하지 않고
+      덮어쓴다 — 90배치에 걸쳐 표기가 흔들릴 이유를 아예 없앤다). screened_out
+      레코드는 기존 온라인 경로(`build_screened_out_record`)와 마찬가지로
+      `agency`를 넣지 않는다 — 어차피 taxonomy_ids가 없어 build_md.py의
+      `group_cases`가 카탈로그 렌더 대상에서 제외하므로 render_case가 이
+      필드를 읽을 일이 없다.
+    - `validate_record`에 넘기는 known_ids는 **keep=true였던 id로 좁힌다**
+      (Finding 2) — keep=false였던 id로 온 결과를 known_ids 불일치 오류로
+      명시적으로 잡아, "세션이 스크리닝 탈락 건을 잘못 분류했다"는 신호가
+      묻히지 않게 한다.
     """
-    known_ids = {str(r.get("id", "")) for r in screened}
     kept_ids = {str(r.get("id", "")) for r in screened if r.get("keep")}
+    known_ids = kept_ids
     screened_out = [r for r in screened if not r.get("keep")]
 
     errors: list[str] = []
@@ -90,7 +114,13 @@ def merge(results: list[dict], screened: list[dict], taxonomy: dict) -> tuple[li
     for mid in sorted(kept_ids - seen_ids):
         errors.append(f"[id={mid}] keep=true인데 2차 분류 결과가 없습니다(세션 누락)")
 
-    merged: list[dict] = [valid_by_id[rid] for rid in sorted(kept_ids) if rid in valid_by_id]
+    merged: list[dict] = []
+    for rid in sorted(kept_ids):
+        if rid not in valid_by_id:
+            continue
+        rec = dict(valid_by_id[rid])
+        rec["agency"] = _AGENCY
+        merged.append(rec)
     for rec in screened_out:
         out = dict(rec)
         out["screened_out"] = True
