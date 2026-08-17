@@ -97,5 +97,64 @@ class TestCatalogExcerptBlockIsolation(unittest.TestCase):
         self.assertEqual(load_catalog_excerpt(["zombie_ma"]), "")
 
 
+class TestCatalogExcerptCaseSelection(unittest.TestCase):
+    """load_catalog_excerpt가 사례 목록에 예산을 다 써 그 뒤의 집계 섹션
+    (`### 적발 기법 종합`/`### 인용 법조`)이 통째로 잘리는 문제의 회귀 테스트.
+
+    회귀 배경: taxonomy 4.3(공시·보고 의무 위반)은 보유 사례 130건, MD 블록
+    53,301자인데 옛 기본값(max_chars=1500)에서는 발췌가 1,657자에서 끊겨
+    사례 3건만 보이고 130건 전체를 집계한 '적발 기법 종합'·'인용 법조'는
+    한 글자도 노출되지 않았다(2026-08-16 실측).
+    """
+
+    _CASE_ITEM_HEADER_RE = re.compile(r"^- \*\*\d{4}-\d{2}-\d{2} / ", re.MULTILINE)
+    _REMAINDER_NOTE_RE = re.compile(r"- …외 (\d+)건 \(이 유형의 적발 사례 총 (\d+)건\)")
+
+    def test_aggregate_sections_survive_for_case_heavy_taxonomy(self):
+        # 핵심 회귀 가드: 지금은 잘려서 없는 두 섹션이 발췌에 포함돼야 한다.
+        excerpt = load_catalog_excerpt(["4.3"])
+        self.assertIn("### 적발 기법 종합", excerpt)
+        self.assertIn("### 인용 법조", excerpt)
+
+    def test_case_heavy_taxonomy_limited_to_max_cases_with_remainder_note(self):
+        excerpt = load_catalog_excerpt(["4.3"])
+        case_count = len(self._CASE_ITEM_HEADER_RE.findall(excerpt))
+        self.assertEqual(case_count, 2)
+
+        note_match = self._REMAINDER_NOTE_RE.search(excerpt)
+        self.assertIsNotNone(note_match, "잔여 건수 안내 줄이 없음")
+        remaining, total = int(note_match.group(1)), int(note_match.group(2))
+        self.assertEqual(total, 130)
+        self.assertEqual(remaining, total - 2)
+
+    def test_taxonomy_with_few_cases_has_no_remainder_note(self):
+        # 사례가 max_cases(기본 2) 이하인 유형에는 잔여 건수 줄이 붙지 않는다.
+        # 2.7은 사례 정확히 2건(실측) — 자를 게 없는 경계값.
+        excerpt = load_catalog_excerpt(["2.7"])
+        self.assertNotRegex(excerpt, r"- …외 \d+건")
+
+    def test_zero_case_taxonomy_keeps_placeholder_and_no_remainder_note(self):
+        # 사례 0건인 유형(자리표시자 문장)은 그대로 유지되고 잔여 건수 줄도 없다.
+        excerpt = load_catalog_excerpt(["1.2"])
+        self.assertIn(
+            "적발 사례 없음 — 수집 범위에서 해당 유형의 보도자료가 확인되지 않았습니다.",
+            excerpt,
+        )
+        self.assertNotRegex(excerpt, r"- …외 \d+건")
+
+    def test_max_cases_zero_shows_no_case_items_but_states_total(self):
+        from dart_risk_mcp.core.catalog import load_catalog_excerpt as _lce
+
+        excerpt = _lce(["4.3"], max_cases=0)
+        case_count = len(self._CASE_ITEM_HEADER_RE.findall(excerpt))
+        self.assertEqual(case_count, 0)
+
+        note_match = self._REMAINDER_NOTE_RE.search(excerpt)
+        self.assertIsNotNone(note_match, "잔여 건수 안내 줄이 없음")
+        remaining, total = int(note_match.group(1)), int(note_match.group(2))
+        self.assertEqual(total, 130)
+        self.assertEqual(remaining, 130)
+
+
 if __name__ == "__main__":
     unittest.main()
