@@ -58,6 +58,7 @@ from .core import (
     fetch_document_text,
     fetch_outflow_detail,
     classify_outflow_relation,
+    fetch_acquisition_detail,
     fetch_control_change_detail,
     classify_holder_type,
     strip_holder_suffix,
@@ -635,6 +636,130 @@ def _control_change_detail_block(d: dict) -> list[str]:
     return lines
 
 
+def _confirm_acquisition_targets(
+    signal_events: list[dict],
+    disclosures: list[dict],
+    max_check: int = 3,
+) -> list[dict]:
+    """ACQ_REVIEW(타법인 주식·출자증권 취득/양수) 최근 건의 대상사·관계를 확인한다.
+
+    DS005를 쓰지 않고 **원문을 직접 읽는다**(2026-08-22 실측 근거):
+      · 「타법인주식및출자증권취득결정」(자율공시, 실측상 4배 흔함)은
+        `resolve_decision_type`이 빈 값을 돌려줘 DS005 조회 자체가 불가능하다.
+      · 법정 「주요사항보고서(…양수결정)」조차 DS005가 "구조화 데이터 없음"을
+        반환하는 사례가 실측됐다(KR모터스 20251001, 코아스 20250904).
+    반면 원문은 두 서식 모두 구조가 일정해 `parse_acquisition_detail`이
+    25개사 32건 표본에서 **32/32(100%)** 파싱에 성공했다.
+
+    Returns: 확인 행 목록. 각 행은 rcept_dt/report_nm/rcept_no/issuer/
+    relation/classification/amount/equity_ratio.
+    """
+    by_rcept = {d.get("rcept_no"): d for d in disclosures}
+    picked: list[dict] = []
+    seen: set[str] = set()
+    for e in sorted(signal_events, key=lambda x: x.get("rcept_dt", ""), reverse=True):
+        if e.get("key") != "ACQ_REVIEW" or e.get("is_amendment"):
+            continue
+        rcept = e.get("rcept_no") or ""
+        if not rcept or rcept in seen:
+            continue
+        seen.add(rcept)
+        picked.append(e)
+        if len(picked) >= max_check:
+            break
+
+    out: list[dict] = []
+    for e in picked:
+        rcept = e["rcept_no"]
+        d = by_rcept.get(rcept, {})
+        row = {
+            "rcept_dt": e.get("rcept_dt", "") or d.get("rcept_dt", ""),
+            "report_nm": e.get("report_nm", "") or d.get("report_nm", ""),
+            "rcept_no": rcept, "issuer": "", "relation": "",
+            "classification": "unknown", "amount": 0, "equity_ratio": 0.0,
+        }
+        try:
+            det = fetch_acquisition_detail(rcept, _DART_API_KEY)
+        except Exception:
+            det = {}
+        if det and det.get("issuer"):
+            row["issuer"] = det["issuer"]
+            row["relation"] = det.get("relation", "")
+            row["amount"] = det.get("amount", 0)
+            row["equity_ratio"] = det.get("equity_ratio", 0.0)
+            row["classification"] = classify_outflow_relation(det.get("relation", ""))
+        out.append(row)
+    return out
+
+
+def _render_acquisition_confirmations(confirmations: list[dict]) -> list[str]:
+    """확인된 취득 대상 목록을 출력 줄로 렌더링한다(사실 표기만)."""
+    lines: list[str] = []
+    for c in confirmations:
+        tgt = c["issuer"] or "(미확인)"
+        cls_label = _OUTFLOW_CLASS_LABEL.get(c["classification"], "미확인")
+        lines.append(f"- [{c['rcept_dt']}] {_clean_report_name(c['report_nm'])}")
+        rel_txt = f" ({c['relation']})" if c["relation"] else ""
+        amt_txt = f" — {_format_amount(str(c['amount']))}" if c.get("amount") else ""
+        ratio_txt = (
+            f" · 자기자본 대비 {c['equity_ratio']:.1f}%" if c.get("equity_ratio") else ""
+        )
+        lines.append(
+            f"  → 취득 대상: {tgt} · 관계: {cls_label}{rel_txt}{amt_txt}{ratio_txt}"
+        )
+    return lines
+
+
+def _fund_diversion_gate(confirmations: list[dict]) -> dict:
+    """fund_diversion_chain 발화 여부를 확인된 취득 대상 관계로 판정한다(순수 함수).
+
+    발화 조건: classification == "affiliated"(계열·특수관계·최대주주·주요주주)가
+    1건 이상. 미충족 시 대체 사실 블록 라인을 만들어 반환한다 —
+    `_capital_backflow_gate`와 같은 구조다.
+
+    **왜 관계인가 (2026-08-22 실측)**: 이 패턴은 요구 신호가 1.1+5.8 둘뿐이라
+    겹침 2개면 곧 전부 일치이고, 재현율 수정 후 1년 기준 **142개사**에서
+    발화한다 — 제목만으로는 정상적인 사업 확장 M&A와 구분되지 않는다.
+    게이트 후보를 셋 재봤다(25개사·32건 원문 전수):
+
+      · **비상장 대상 여부** — 금감원 근거("조달자금 유용의 최대 경로가
+        비상장주식 취득 55%")에 가장 충실하지만, 대상사 이름을 corpCode에서
+        찾지 못하는 건이 **23/32(72%)**라 판정 자체가 안 된다. 기각.
+      · **자기자본 대비 과대** — 중앙값 13.8%, 최대 52.1%로 100% 초과가 0건.
+        임계를 어디에 두든 거의 전부를 차단하거나 아무것도 못 거른다. 기각.
+      · **관계 표기** — 계열회사 7 · 최대주주/주요주주/관계회사 3 ·
+        종속회사 2 · 무관계("-") 19 · 미확인 1. **확인율이 높고 판별력이 있다.**
+
+    회사 단위 통과율은 25곳 중 8곳(32%)으로, 142개사 기준 약 45개사까지
+    좁혀진다 — 게이트가 실제로 작동하면서 전부 차단하지도 않는다.
+
+    종속회사(subsidiary)는 통과시키지 않는다 — 모회사가 자회사 지분을 늘리는
+    것은 정상적인 지배구조 정리라 `capital_backflow`와 같은 판단이다.
+    """
+    if not confirmations:
+        return {"pass": False, "affiliated": [], "fact_lines": []}
+
+    affiliated = [c for c in confirmations if c["classification"] == "affiliated"]
+    if affiliated:
+        return {"pass": True, "affiliated": affiliated, "fact_lines": []}
+
+    known = [c for c in confirmations if c["classification"] != "unknown"]
+    if known:
+        labels = sorted({_OUTFLOW_CLASS_LABEL[c["classification"]] for c in known})
+        lines = [
+            f"타법인 주식·출자증권 취득 {len(confirmations)}건 — 확인된 대상은 "
+            f"{'/'.join(labels)}(각 실명·관계 표기), 계열·특수관계 취득은 미확인",
+        ]
+        lines += _render_acquisition_confirmations(confirmations)
+        return {"pass": False, "affiliated": [], "fact_lines": lines}
+
+    rcepts = ", ".join(c["rcept_no"] for c in confirmations if c["rcept_no"])
+    return {
+        "pass": False, "affiliated": [],
+        "fact_lines": [f"취득 대상 미확인 — 원문 확인 필요 (rcept: {rcepts})"],
+    }
+
+
 def _capital_backflow_gate(
     confirmations: list[dict],
     has_control_change: bool = True,
@@ -721,6 +846,7 @@ def _render_pattern_watch_block(
     affiliate_facts: "dict[str, str] | None" = None,
     max_show: int = 3,
     taxonomy_dates: "dict[str, list[str]] | None" = None,
+    acq_confirmations: "list[dict] | None" = None,
 ) -> tuple[list[str], list[str], list[dict]]:
     """관찰된 taxonomy와 등록 패턴의 부분 겹침을 "무엇이 보이고 무엇이 안
     보이는지" 사실로 렌더한다(analyze_company_risk·build_event_timeline 공용).
@@ -751,6 +877,7 @@ def _render_pattern_watch_block(
 
     cb_gate: "dict | None" = None
     capital_backflow_fact_lines: list[str] = []
+    fund_diversion_fact_lines: list[str] = []
     filtered: list[dict] = []
     for ov in overlaps:
         if ov["pattern_id"] == "capital_backflow":
@@ -760,10 +887,28 @@ def _render_pattern_watch_block(
             if not cb_gate["pass"]:
                 capital_backflow_fact_lines = cb_gate["fact_lines"]
                 continue
+        elif ov["pattern_id"] == "fund_diversion_chain":
+            # capital_backflow와 같은 이유의 내용 확인 게이트 — 이 패턴도
+            # 요구 신호가 2개(1.1+5.8)뿐이라 겹침 2개면 곧 전부 일치이고,
+            # 제목만으로는 정상 사업확장 M&A와 구분되지 않는다(1년 실측
+            # 142개사 발화). 취득 대상이 계열·특수관계로 확인될 때만 표시.
+            fd_gate = _fund_diversion_gate(acq_confirmations or [])
+            if not fd_gate["pass"]:
+                fund_diversion_fact_lines = fd_gate["fact_lines"]
+                continue
         filtered.append(ov)
 
+    # 두 게이트의 대체 사실 블록은 성격이 달라 각자의 헤더를 달고 나간다
+    # (합쳐서 한 헤더 아래 두면 취득 대상이 "자금유출 상대방"으로 표시된다).
+    _fact_lines: list[str] = []
+    if capital_backflow_fact_lines:
+        _fact_lines += ["━━ 자금유출 상대방 확인 ━━"] + capital_backflow_fact_lines
+    if fund_diversion_fact_lines:
+        if _fact_lines:
+            _fact_lines.append("")
+        _fact_lines += ["━━ 타법인 취득 대상 확인 ━━"] + fund_diversion_fact_lines
     if not filtered:
-        return [], capital_backflow_fact_lines, []
+        return [], _fact_lines, []
 
     lines: list[str] = ["", "━━ 관찰된 신호가 겹치는 등록 패턴 ━━"]
     shown = filtered[:max_show]
@@ -800,7 +945,7 @@ def _render_pattern_watch_block(
         lines.append("")
         lines.append(f"외 {len(filtered) - max_show}개 패턴이 2개 이상 겹칩니다.")
 
-    return lines, capital_backflow_fact_lines, filtered
+    return lines, _fact_lines, filtered
 
 
 # ── 도구 1: 기업 종합 위험 분석 ────────────────────────────────────────────
@@ -1051,12 +1196,24 @@ def analyze_company_risk(
     except Exception:
         _affiliate_facts = {}
 
+    # v1.13.0: fund_diversion_chain 내용 확인 게이트 입력 — 5.8이 관찰되지
+    # 않았으면 원문을 열지 않는다(호출 예산 0).
+    _acq_confirmations: list[dict] = []
+    if "5.8" in tax_ids_all:
+        try:
+            _acq_confirmations = _confirm_acquisition_targets(
+                observed_events, disclosures
+            )
+        except Exception:
+            _acq_confirmations = []
+
     pattern_overlap_lines, capital_backflow_fact_lines, _pattern_overlaps = _render_pattern_watch_block(
         tax_ids_all,
         outflow_confirmations,
         _has_control_change_title(disclosures),
         _affiliate_facts,
         taxonomy_dates=tax_dates_all,
+        acq_confirmations=_acq_confirmations,
     )
 
     # 6. 타임라인 (내부 랭킹 점수 기준 — 출력에는 노출되지 않음)
@@ -1198,9 +1355,14 @@ def analyze_company_risk(
 
     if pattern_overlap_lines:
         lines += pattern_overlap_lines
-    elif capital_backflow_fact_lines:
-        lines += ["", "━━ 자금유출 상대방 확인 ━━"]
-        lines += capital_backflow_fact_lines
+    # 게이트가 막은 쪽의 **확인된 사실**은 다른 패턴 발화 여부와 무관하게
+    # 보여준다(2026-08-22). 옛 elif는 겹치는 패턴이 하나라도 있으면 이 블록을
+    # 통째로 숨겼는데, 여기 담기는 것은 패턴 주장이 아니라 원문에서 확인한
+    # 사실(상대방 실명·관계·금액)이라 감출 이유가 없다 — 코아스 실측에서
+    # 「이화전기공업, 자기자본 대비 447.3%」가 숨겨지는 것을 확인하고 고쳤다.
+    if capital_backflow_fact_lines:
+        # 헤더는 _render_pattern_watch_block이 각 블록에 이미 붙여 보낸다
+        lines += [""] + capital_backflow_fact_lines
 
     if cb_investors:
         lines += [
@@ -1771,6 +1933,22 @@ def build_event_timeline(
     except Exception:
         _affiliate_facts = {}
 
+    # v1.13.0: fund_diversion_chain 게이트 입력 — 5.8이 관찰되지 않았으면
+    # 원문을 열지 않는다(호출 예산 0).
+    _acq_confirmations: list[dict] = []
+    if "5.8" in all_tax_ids:
+        try:
+            _acq_confirmations = _confirm_acquisition_targets(
+                [
+                    {"key": evt[2], "rcept_dt": evt[0], "report_nm": evt[4],
+                     "rcept_no": evt[5], "is_amendment": False}
+                    for evt in events if evt[2] == "ACQ_REVIEW"
+                ],
+                disclosures,
+            )
+        except Exception:
+            _acq_confirmations = []
+
     # v1.6.1: capital_backflow 게이트 — analyze_company_risk와 동일한 확인
     # 로직(_render_pattern_watch_block 내부에서 재사용).
     pattern_overlap_lines, capital_backflow_fact_lines, _pattern_overlaps = _render_pattern_watch_block(
@@ -1779,6 +1957,7 @@ def build_event_timeline(
         _has_control_change_title(disclosures),
         _affiliate_facts,
         taxonomy_dates=all_tax_dates,
+        acq_confirmations=_acq_confirmations,
     )
     _top_overlap = _pattern_overlaps[0] if _pattern_overlaps else None
 
@@ -1861,9 +2040,8 @@ def build_event_timeline(
     if pattern_overlap_lines:
         lines += pattern_overlap_lines
         lines.append("")
-    elif capital_backflow_fact_lines:
-        lines += ["", "━━ 자금유출 상대방 확인 ━━"]
-        lines += capital_backflow_fact_lines
+    if capital_backflow_fact_lines:
+        lines += [""] + capital_backflow_fact_lines
         lines.append("")
 
     # v1.6.1: 자금유출·양수거래(+처분) 상대방 확인 상세 — capital_backflow
