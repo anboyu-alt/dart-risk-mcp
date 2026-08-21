@@ -190,7 +190,7 @@
 
 ---
 
-## 3.6: Insider Selling Before Adverse Disclosure
+## 3.6: 부정적 공시 직전 내부자 매도
 
 - **Severity**: OBSERVATION
 - **Base Score**: 0
@@ -339,7 +339,7 @@
 
 ---
 
-## 3.7: Controlling Shareholder Stock Pledge Agreement
+## 3.7: 최대주주 주식담보제공계약
 
 - **Severity**: MEDIUM
 - **Base Score**: 2

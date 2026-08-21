@@ -83,6 +83,7 @@ from .core import (
     fetch_treasury_decisions,
     fetch_company_indicators,
     find_pattern_match,
+    find_pattern_overlaps,
     flag_to_prose,
     is_amendment_disclosure,
     list_document_sections,
@@ -93,6 +94,7 @@ from .core import (
     resolve_corp,
     resolve_decision_type,
     signal_to_prose,
+    taxonomy_label_ko,
     CAPITAL_EVENT_KEYS,
     SIGNAL_KEY_TO_TAXONOMY,
     SIGNAL_TYPES,
@@ -682,6 +684,92 @@ def _capital_backflow_gate(
     }
 
 
+def _render_pattern_watch_block(
+    tax_ids: "list[str] | set[str]",
+    outflow_confirmations: list[dict],
+    has_control_change: bool,
+    affiliate_facts: "dict[str, str] | None" = None,
+    max_show: int = 3,
+) -> tuple[list[str], list[str], list[dict]]:
+    """관찰된 taxonomy와 등록 패턴의 부분 겹침을 "무엇이 보이고 무엇이 안
+    보이는지" 사실로 렌더한다(analyze_company_risk·build_event_timeline 공용).
+
+    "전부 일치할 때만 발화"(find_pattern_match)에서 "관찰된 만큼 보여주고
+    무엇을 확인할지 알려주기"(find_pattern_overlaps)로 바꾼 렌더러 — 실측상
+    전부 일치는 회사당 0.2개뿐이라 등록 패턴의 checkpoints가 사실상 노출되지
+    않았다. 판정 어휘(위험·의심·가능성 높음·해당됨)를 쓰지 않는다(v0.8.5
+    무판정 원칙) — "구성 신호 N개 중 M개가 관찰됐다"는 사실 서술만 한다.
+
+    capital_backflow는 v1.6.1에서 도입된 내용 확인 게이트를 그대로
+    보존한다 — 이 패턴은 signal_sequence가 2개뿐이라 min_overlap=2에서
+    겹침 목록에 나타나는 순간 이미 전부 일치이므로, 게이트가 실패하면
+    부분 관찰 표기에서도 목록에서 완전히 제외하고 기존 사실 블록
+    (capital_backflow_fact_lines)으로 대체한다 — 게이트를 우회해 "2개 중
+    2개 관찰"로 표시하면 v1.6.1이 없앤 오탐이 되살아난다.
+
+    Returns:
+        (lines, capital_backflow_fact_lines, filtered) — lines는 겹치는
+        패턴이 없으면 빈 리스트(블록 자체 생략). capital_backflow_fact_lines는
+        게이트가 실패했을 때만 채워진다(기존 elif 경로와 동일하게 호출부가
+        렌더). filtered는 게이트를 통과한 겹침 전체(표시 상한 적용 전) —
+        호출부가 요약 문장에서 최상위 겹침 하나를 참조할 때 쓴다.
+    """
+    overlaps = find_pattern_overlaps(list(tax_ids), min_overlap=2)
+
+    cb_gate: "dict | None" = None
+    capital_backflow_fact_lines: list[str] = []
+    filtered: list[dict] = []
+    for ov in overlaps:
+        if ov["pattern_id"] == "capital_backflow":
+            cb_gate = _capital_backflow_gate(
+                outflow_confirmations, has_control_change, affiliate_facts
+            )
+            if not cb_gate["pass"]:
+                capital_backflow_fact_lines = cb_gate["fact_lines"]
+                continue
+        filtered.append(ov)
+
+    if not filtered:
+        return [], capital_backflow_fact_lines, []
+
+    lines: list[str] = ["", "━━ 관찰된 신호가 겹치는 등록 패턴 ━━"]
+    shown = filtered[:max_show]
+    for ov in shown:
+        matched_labels = " · ".join(
+            f"{taxonomy_label_ko(t)}({t})" for t in ov["matched"]
+        )
+        lines.append("")
+        lines.append(
+            f"▸ {ov['name']} — 구성 신호 {ov['n_total']}개 중 "
+            f"{ov['n_matched']}개가 이 기간 공시에서 관찰됐습니다"
+        )
+        lines.append(f"   관찰됨: {matched_labels}")
+        if ov["missing"]:
+            missing_labels = " · ".join(
+                f"{taxonomy_label_ko(t)}({t})" for t in ov["missing"]
+            )
+            lines.append(f"   안 보임: {missing_labels}")
+        if ov["checkpoints"]:
+            lines.append("   확인해볼 것:")
+            for cp in ov["checkpoints"]:
+                lines.append(f"     - {cp}")
+        if ov["pattern_id"] == "capital_backflow" and cb_gate and cb_gate["affiliated"]:
+            lines.append("   확인된 특수관계 유출:")
+            for _c in cb_gate["affiliated"]:
+                _amt = _format_amount(str(_c["amount"])) if _c.get("amount") else ""
+                _amt_txt = f", {_amt}" if _amt else ""
+                lines.append(
+                    f"     - {_c['counterparty'] or '(미확인)'}"
+                    f"({_c['relation'] or '계열·특수관계'}{_amt_txt})"
+                )
+
+    if len(filtered) > max_show:
+        lines.append("")
+        lines.append(f"외 {len(filtered) - max_show}개 패턴이 2개 이상 겹칩니다.")
+
+    return lines, capital_backflow_fact_lines, filtered
+
+
 # ── 도구 1: 기업 종합 위험 분석 ────────────────────────────────────────────
 
 
@@ -895,17 +983,17 @@ def analyze_company_risk(
         pass
     # ============ v0.6.0 블록 끝 ============
 
-    # 5. 복합 패턴
+    # 5. 복합 패턴 — 부분 겹침(관찰된 만큼 보여주고 무엇을 확인할지 알려주기).
+    # find_pattern_match(전부 일치)는 find_risk_precedents 등 다른 호출부가
+    # 계속 쓰므로 그대로 둔다.
     from .core.signals import SIGNAL_KEY_TO_TAXONOMY as _SKT
 
     sig_keys = list({e["key"] for e in observed_events if not e["is_amendment"]})
     tax_ids_all = list({tid for k in sig_keys for tid in _SKT.get(k, [])})
-    pattern = find_pattern_match(tax_ids_all)
 
     # v1.6.1: 자금유출·양수거래(+처분) 상대방 확인 — decisions는 이미 위에서
     # fetch됐으므로 재사용(추가 호출 없음). capital_backflow 게이트에도 쓰인다.
     outflow_confirmations: list[dict] = []
-    capital_backflow_fact_lines: list[str] = []
     try:
         _decisions_by_rcept = {d["rcept_no"]: r for d, r in decisions}
         outflow_confirmations = _confirm_outflow_counterparties(
@@ -921,13 +1009,12 @@ def analyze_company_risk(
     except Exception:
         _affiliate_facts = {}
 
-    if pattern and pattern.get("pattern_id") == "capital_backflow":
-        _gate = _capital_backflow_gate(
-            outflow_confirmations, _has_control_change_title(disclosures), _affiliate_facts
-        )
-        if not _gate["pass"]:
-            pattern = None
-            capital_backflow_fact_lines = _gate["fact_lines"]
+    pattern_overlap_lines, capital_backflow_fact_lines, _pattern_overlaps = _render_pattern_watch_block(
+        tax_ids_all,
+        outflow_confirmations,
+        _has_control_change_title(disclosures),
+        _affiliate_facts,
+    )
 
     # 6. 타임라인 (내부 랭킹 점수 기준 — 출력에는 노출되지 않음)
     # 헤드라인 — 양면적 신호는 단독으로 후보가 되지 않는다.
@@ -1066,44 +1153,8 @@ def analyze_company_risk(
         if len(procedural_events) > 20:
             lines.append(f"… 외 {len(procedural_events) - 20}건")
 
-    if pattern:
-        pattern_key = None
-        for k, v in __import__(
-            "dart_risk_mcp.core.taxonomy", fromlist=["CROSS_SIGNAL_PATTERNS"]
-        ).CROSS_SIGNAL_PATTERNS.items():
-            if v.get("name") == pattern.get("name"):
-                pattern_key = k
-                break
-        pattern_body = pattern_to_prose(pattern_key) if pattern_key else ""
-        lines += [
-            "",
-            "━━ 복합 패턴 ━━",
-            f"⚠️ **\"{pattern['name']}\"** 패턴이 감지됐습니다.",
-        ]
-        if pattern_body:
-            lines.append("")
-            lines.append(pattern_body)
-        elif pattern.get("description"):
-            lines.append(f"  → {pattern['description']}")
-        _checkpoints = pattern_checkpoints(pattern_key) if pattern_key else []
-        if _checkpoints:
-            lines.append("")
-            lines.append("확인 포인트:")
-            for _cp in _checkpoints:
-                lines.append(f"  • {_cp}")
-        if pattern_key == "capital_backflow":
-            _affiliated = _capital_backflow_gate(outflow_confirmations)["affiliated"]
-            if _affiliated:
-                lines.append("")
-                lines.append("확인된 특수관계 유출:")
-                for _c in _affiliated:
-                    _amt = _format_amount(str(_c["amount"])) if _c.get("amount") else ""
-                    _amt_txt = f", {_amt}" if _amt else ""
-                    lines.append(
-                        f"  • {_c['counterparty'] or '(미확인)'}"
-                        f"({_c['relation'] or '계열·특수관계'}"
-                        f"{_amt_txt})"
-                    )
+    if pattern_overlap_lines:
+        lines += pattern_overlap_lines
     elif capital_backflow_fact_lines:
         lines += ["", "━━ 자금유출 상대방 확인 ━━"]
         lines += capital_backflow_fact_lines
@@ -1649,10 +1700,7 @@ def build_event_timeline(
     for evt in events:
         phases[evt[1]].append(evt)
 
-    # 패턴 매칭
-    pattern = find_pattern_match(list(all_tax_ids))
-
-    # v1.6.1: capital_backflow 게이트 — analyze_company_risk와 동일한 확인 로직.
+    # 패턴 매칭 — 부분 겹침(관찰된 만큼 보여주고 무엇을 확인할지 알려주기).
     # events 튜플(rcept_dt, phase, key, label, report_nm, rcept_no)을
     # _confirm_outflow_counterparties가 기대하는 dict 형태로 변환한다.
     _outflow_signal_events = [
@@ -1664,7 +1712,6 @@ def build_event_timeline(
         if evt[2] in ("FUND_OUTFLOW", "ACQ_REVIEW")
     ]
     outflow_confirmations: list[dict] = []
-    capital_backflow_fact_lines: list[str] = []
     try:
         outflow_confirmations = _confirm_outflow_counterparties(
             _outflow_signal_events, disclosures, corp_code
@@ -1675,13 +1722,16 @@ def build_event_timeline(
         _affiliate_facts = _build_affiliate_stake_facts(outflow_confirmations, corp_code)
     except Exception:
         _affiliate_facts = {}
-    if pattern and pattern.get("pattern_id") == "capital_backflow":
-        _gate = _capital_backflow_gate(
-            outflow_confirmations, _has_control_change_title(disclosures), _affiliate_facts
-        )
-        if not _gate["pass"]:
-            pattern = None
-            capital_backflow_fact_lines = _gate["fact_lines"]
+
+    # v1.6.1: capital_backflow 게이트 — analyze_company_risk와 동일한 확인
+    # 로직(_render_pattern_watch_block 내부에서 재사용).
+    pattern_overlap_lines, capital_backflow_fact_lines, _pattern_overlaps = _render_pattern_watch_block(
+        all_tax_ids,
+        outflow_confirmations,
+        _has_control_change_title(disclosures),
+        _affiliate_facts,
+    )
+    _top_overlap = _pattern_overlaps[0] if _pattern_overlaps else None
 
     # 타임라인 출력
     first_date = events[0][0]
@@ -1713,10 +1763,11 @@ def build_event_timeline(
             f"총 {phase_counts[busiest_phase]}건이 이 구간에 해당합니다."
         ),
     ]
-    if pattern:
+    if _top_overlap:
         summary_lines.append(
-            f"- 이 흐름은 과거 금감원 적발 사례 중 \"{pattern['name']}\" 패턴과 "
-            f"유사한 궤적을 그리고 있습니다(상세는 아래 참고)."
+            f"- 이 기간 관찰된 신호는 등록 패턴 \"{_top_overlap['name']}\"의 "
+            f"구성 신호 {_top_overlap['n_total']}개 중 {_top_overlap['n_matched']}개와 "
+            f"겹칩니다(상세는 아래 참고)."
         )
     summary_lines.append("")
 
@@ -1758,37 +1809,8 @@ def build_event_timeline(
                     )
         lines.append("")
 
-    if pattern:
-        pattern_id = pattern.get("pattern_id", "")
-        prose_body = pattern_to_prose(pattern_id)
-        lines += [
-            "━━ 과거 금감원 적발 사례와의 유사도 ━━",
-            f"⚠️ **\"{pattern['name']}\"** 패턴과 유사한 흐름입니다.",
-        ]
-        lines.append(prose_body or pattern.get("description", ""))
-        months = pattern.get("timeline_months")
-        if months:
-            lines.append(
-                f"과거 유사 사례에서는 위기가 본격화되기까지 평균 약 {months}개월이 걸린 것으로 집계됩니다."
-            )
-        _checkpoints = pattern_checkpoints(pattern_id)
-        if _checkpoints:
-            lines.append("")
-            lines.append("확인 포인트:")
-            for _cp in _checkpoints:
-                lines.append(f"  • {_cp}")
-        if pattern_id == "capital_backflow":
-            _affiliated = _capital_backflow_gate(outflow_confirmations)["affiliated"]
-            if _affiliated:
-                lines.append("")
-                lines.append("확인된 특수관계 유출:")
-                for _c in _affiliated:
-                    _amt = _format_amount(str(_c["amount"])) if _c.get("amount") else ""
-                    _amt_txt = f", {_amt}" if _amt else ""
-                    lines.append(
-                        f"  • {_c['counterparty'] or '(미확인)'}"
-                        f"({_c['relation'] or '계열·특수관계'}{_amt_txt})"
-                    )
+    if pattern_overlap_lines:
+        lines += pattern_overlap_lines
         lines.append("")
     elif capital_backflow_fact_lines:
         lines += ["", "━━ 자금유출 상대방 확인 ━━"]

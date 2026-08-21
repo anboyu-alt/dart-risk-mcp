@@ -918,7 +918,7 @@
   },
   {
    "key": "zombie_ma",
-   "name": "The Zombie M&A",
+   "name": "무자본 M&A",
    "description": "무자본 M&A 세력이 차명·투자조합으로 경영권 인수 → 사모CB 대량발행·허위자금조달 → 허위 신사업 발표 → 주가부양 후 고가매도",
    "signal_sequence": [
     "3.1",
@@ -943,7 +943,7 @@
   },
   {
    "key": "audit_insider_dump",
-   "name": "The Audit Insider Dump",
+   "name": "감사의견 내부자 덤프",
    "description": "감사의견거절·비적정 미공개정보를 임원·최대주주가 직무상 취득 후 공시 전 주식 전량매도",
    "signal_sequence": [
     "4.4",
@@ -964,7 +964,7 @@
   },
   {
    "key": "delisting_evasion",
-   "name": "The Delisting Evasion",
+   "name": "상폐 회피",
    "description": "자본잠식·영업손실로 상장폐지 위기 → 연말 거액 유상증자(가장납입) + 재무제표 과대계상 → 요건 면탈 → 횡령",
    "signal_sequence": [
     "8.1",
@@ -988,7 +988,7 @@
   },
   {
    "key": "fake_new_biz",
-   "name": "The Fake New Business Pump",
+   "name": "허위 신사업 주가부양",
    "description": "주업과 무관한 테마사업(2차전지·AI·우주항공 등) 허위 발표 + 형식적 MOU·페이퍼컴퍼니 → 테마주 편승 주가급등 → 최대주주 주식 고가매도",
    "signal_sequence": [
     "5.4",
@@ -1250,14 +1250,14 @@
    "2.5": "공모 미달(청약 미달)",
    "2.6": "자사주 매입·재발행 패턴",
    "2.7": "자본 이벤트 과다 반복",
-   "2.8": "Treasury Stock Trust Indirect Acquisition",
+   "2.8": "자기주식 신탁 우회 취득",
    "3.1": "채권 전환을 통한 최대주주 변경",
    "3.2": "지배주주 저가 엑시트",
    "3.3": "행동주의 투자자의 이사회 장악",
    "3.4": "경영권 승계 분쟁",
    "3.5": "특수관계자 순환 지분 이전",
-   "3.6": "Insider Selling Before Adverse Disclosure",
-   "3.7": "Controlling Shareholder Stock Pledge Agreement",
+   "3.6": "부정적 공시 직전 내부자 매도",
+   "3.7": "최대주주 주식담보제공계약",
    "4.1": "주주총회 절차 위반",
    "4.2": "비정상 가격의 특수관계자 거래",
    "4.3": "공시·보고 의무 위반",
@@ -1267,9 +1267,9 @@
    "5.3": "장외 자산 이전",
    "5.4": "재무 곤경기 중 M&A",
    "5.5": "비대칭 가치배분 분할",
-   "5.6": "Dividend Outflow While Loss-Making",
-   "5.7": "Cash Outflow to Acquirer Side (Loans, Guarantees, Asset Purchases)",
-   "5.8": "Acquisition Requiring Counterparty Review",
+   "5.6": "적자 중 배당 유출",
+   "5.7": "인수자 측으로의 자금 유출",
+   "5.8": "상대방 확인이 필요한 인수",
    "6.1": "수익 인식 이상",
    "6.2": "우발채무 누락",
    "6.3": "RCPS 회계 분류 조정",
@@ -1280,7 +1280,7 @@
    "8.2": "채무조정을 가장한 지분 탈취",
    "8.3": "연쇄 자산 청산",
    "8.4": "계속기업 불확실성 심화",
-   "8.5": "Distress Stage Entry"
+   "8.5": "부실 단계 진입"
   },
   "by_taxonomy": {
    "7.2": {

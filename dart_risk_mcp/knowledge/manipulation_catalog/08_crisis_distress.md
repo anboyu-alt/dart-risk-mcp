@@ -189,7 +189,7 @@
 
 ---
 
-## 8.5: Distress Stage Entry
+## 8.5: 부실 단계 진입
 
 - **Severity**: OBSERVATION
 - **Base Score**: 0

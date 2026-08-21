@@ -209,7 +209,7 @@
 
 ---
 
-## 5.6: Dividend Outflow While Loss-Making
+## 5.6: 적자 중 배당 유출
 
 - **Severity**: OBSERVATION
 - **Base Score**: 0
@@ -244,7 +244,7 @@
 
 ---
 
-## 5.7: Cash Outflow to Acquirer Side (Loans, Guarantees, Asset Purchases)
+## 5.7: 인수자 측으로의 자금 유출
 
 - **Severity**: MEDIUM
 - **Base Score**: 2
@@ -309,7 +309,7 @@
 
 ---
 
-## 5.8: Acquisition Requiring Counterparty Review
+## 5.8: 상대방 확인이 필요한 인수
 
 - **Severity**: OBSERVATION
 - **Base Score**: 0

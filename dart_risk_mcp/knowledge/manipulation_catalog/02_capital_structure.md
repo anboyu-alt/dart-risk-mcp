@@ -298,7 +298,7 @@
 
 ---
 
-## 2.8: Treasury Stock Trust Indirect Acquisition
+## 2.8: 자기주식 신탁 우회 취득
 
 - **Severity**: OBSERVATION
 - **Base Score**: 0
