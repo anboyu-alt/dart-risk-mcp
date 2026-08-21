@@ -39,8 +39,9 @@ class TestBestWindow:
         dates = {"2.4": ["20240110"], "4.3": ["20240320"], "7.1": ["20240501"]}
         matched, start, end = _best_window(seq, dates, 12)
         assert matched == seq
+        # 표기는 창의 이론적 경계가 아니라 실제 관찰 범위다
         assert start == "20240110"
-        assert end == "20250110"
+        assert end == "20240501"
 
     def test_창_밖_신호는_제외(self):
         seq = {"2.4", "4.3", "7.1"}
@@ -131,7 +132,9 @@ class TestFindPatternOverlapsGate:
         dates = {"3.1": ["20260101"], "2.4": ["20260301"]}
         r = find_pattern_overlaps(tax, 2, taxonomy_dates=dates)[0]
         assert r["window_start"] == "20260101"
-        assert r["window_end"] == _window_end("20260101", r["timeline_months"])
+        # 마지막 관찰일 — 창의 이론적 끝(start+timeline_months)이 아니다
+        assert r["window_end"] == "20260301"
+        assert r["window_end"] <= _window_end(r["window_start"], r["timeline_months"])
         assert r["timeline_months"] == CROSS_SIGNAL_PATTERNS[r["pattern_id"]]["timeline_months"]
 
     def test_matched와_missing은_항상_signal_sequence를_분할(self):
@@ -140,3 +143,34 @@ class TestFindPatternOverlapsGate:
         for r in find_pattern_overlaps(tax, 2, taxonomy_dates=dates):
             assert set(r["matched"]) | set(r["missing"]) == set(r["signal_sequence"])
             assert not (set(r["matched"]) & set(r["missing"]))
+
+
+class TestWindowLabelIsFactual:
+    """창 표기는 이론적 경계가 아니라 실제 관찰 범위여야 한다.
+
+    2026-08-22 실측(진원생명과학 audit_insider_dump): 관찰은 2026.03~08인데
+    카드에는 "창 2026.03.17~2028.12.17"로 아직 오지 않은 날짜가 찍혔다.
+    게이트 판정은 경계로 하되 표기는 사실로 좁힌다.
+    """
+
+    def test_창_끝은_마지막_관찰일이다(self):
+        dates = {"4.4": ["20260814"], "7.1": ["20260617", "20260715"], "3.1": ["20260317"]}
+        r = next(x for x in find_pattern_overlaps(list(dates), 2, taxonomy_dates=dates)
+                 if x["pattern_id"] == "audit_insider_dump")
+        assert r["window_start"] == "20260317"
+        assert r["window_end"] == "20260814", "미래 날짜가 표기됐다"
+
+    def test_창_표기가_미래를_가리키지_않는다(self):
+        """어떤 입력에서도 window_end가 마지막 관찰일을 넘지 않는다."""
+        dates = {"3.1": ["20240101"], "2.4": ["20240301", "20250601"], "4.3": ["20250602"]}
+        allobs = max(d for v in dates.values() for d in v)
+        for r in find_pattern_overlaps(list(dates), 2, taxonomy_dates=dates):
+            assert r["window_end"] <= allobs, (r["pattern_id"], r["window_end"])
+            assert r["window_start"] >= min(d for v in dates.values() for d in v)
+
+    def test_창_범위가_timeline_months를_넘지_않는다(self):
+        """표기를 좁혔다고 게이트가 느슨해지면 안 된다."""
+        dates = {"3.1": ["20200101"], "2.4": ["20200301"]}
+        for r in find_pattern_overlaps(list(dates), 2, taxonomy_dates=dates):
+            span_ok = r["window_end"] <= _window_end(r["window_start"], r["timeline_months"])
+            assert span_ok, (r["pattern_id"], r["window_start"], r["window_end"])

@@ -2799,7 +2799,11 @@ _PRESET_TO_SIGNALS: dict[str, list[str]] = {
     # 라이브 14일 스캔에서 표시 40건 중 39건이 상장폐지 절차가 되어 기존
     # GOING_CONCERN·INSOLVENCY 발화를 덮었다(실측 2026-08-22). 발화량이 크게
     # 다른 신호를 한 preset에 섞으면 적은 쪽이 보이지 않는다.
-    "delisting":          ["DELISTING_RISK"],
+    # 퇴출 트랙 두 단계를 한 preset에 둔다 — 발화량이 비슷해(90일 실측:
+    # DELISTING_RISK 177건 · WATCH_ISSUE 120건) 한쪽이 다른 쪽을 덮지 않고,
+    # 행마다 라벨이 달라 단계를 구분할 수 있다. going_concern에 합류시켰을 때
+    # 생겼던 잠식(표시 40건 중 39건)과는 상황이 다르다.
+    "delisting":          ["DELISTING_RISK", "WATCH_ISSUE"],
     "embezzle":           ["EMBEZZLE"],
     "inquiry":            ["INQUIRY"],
     "fund_outflow":       ["FUND_OUTFLOW", "ACQ_REVIEW"],

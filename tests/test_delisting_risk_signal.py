@@ -118,3 +118,50 @@ class TestEscalationException:
         """예외가 R2 전체를 무력화하지 않았는지."""
         q = self._tier("주식담보제공계약 해제ㆍ취소등")
         assert q.tier != TIER_OBSERVED
+
+
+class TestWrapperPhaseTail:
+    """R2b — 포장 제목(기타주요경영사항 등)의 부제가 사후·해제 국면인 경우.
+
+    「기타주요경영사항(제3자배정유상증자결정철회)」의 tail은 본체
+    '기타주요경영사항'에서 뽑혀 PHASE_TAILS에 걸리지 않았다. 그래서 증자를
+    **철회**한 건이 관찰 신호 '제3자배정유상증자'로 표시됐다 — 같은 사건이
+    단독 제목이면 강등되는데 포장지가 씌워지면 강등되지 않는 비일관이었다.
+    """
+
+    def _q(self, title):
+        from dart_risk_mcp.core.signals import match_signals as _ms
+        sigs = _ms(title)
+        return list(zip(sigs, qualify_signals(sigs, parse_report_name(title), {})))
+
+    @pytest.mark.parametrize("title,key", [
+        ("기타주요경영사항(제3자배정유상증자결정철회)", "3PCA"),
+        ("기타주요경영사항(소액공모제3자배정유상증자결정철회)", "3PCA"),
+        ("기타주요경영사항(제10회차전환사채권발행결정철회)", "CB_BW"),
+        ("기타주요경영사항(회사분할결정철회)", "DEMERGER"),
+    ])
+    def test_포장_제목의_철회는_강등된다(self, title, key):
+        got = {s["key"]: q for s, q in self._q(title)}
+        assert key in got, f"{key} 가 매칭되지 않았다: {title}"
+        assert got[key].tier != TIER_OBSERVED, title
+        assert "철회" in got[key].reason
+
+    def test_본체가_행위인_제목은_강등되지_않는다(self):
+        """「소송등의제기ㆍ신청(경영권분쟁소송)(주주총회결의취소)」의
+        '주주총회결의취소'는 소송의 청구 취지이지 소송 철회가 아니다."""
+        title = "소송등의제기ㆍ신청(경영권분쟁소송)(주주총회결의취소)"
+        got = {s["key"]: q for s, q in self._q(title)}
+        assert "MGMT_DISPUTE" in got
+        assert got["MGMT_DISPUTE"].tier == TIER_OBSERVED, got["MGMT_DISPUTE"].reason
+
+    def test_포장_제목이어도_사건이면_강등되지_않는다(self):
+        """부제가 phase tail로 끝나지 않으면 그대로 관찰 신호다."""
+        title = "기타경영사항(자율공시)(자기사채(제13회전환사채)소각결정의건)"
+        got = {s["key"]: q for s, q in self._q(title)}
+        assert got["CB_BW"].tier == TIER_OBSERVED
+
+    def test_포장_목록은_실측으로_고른_3종(self):
+        from dart_risk_mcp.core.qualifiers import WRAPPER_BODIES
+        assert set(WRAPPER_BODIES) == {
+            "기타주요경영사항", "기타경영사항", "투자판단관련주요경영사항",
+        }
