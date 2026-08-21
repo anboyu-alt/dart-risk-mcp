@@ -684,12 +684,43 @@ def _capital_backflow_gate(
     }
 
 
+def _taxonomy_dates(
+    events: list, key_to_tax: dict, fallback_date: str = ""
+) -> "dict[str, list[str]]":
+    """관찰 이벤트를 {taxonomy id: [YYYYMMDD, ...]}로 접는다(패턴 창 게이트 입력).
+
+    날짜 표기는 호출부마다 다르다 — list.json은 "20260616", 자금사용 레코드는
+    "2026-01-25"나 "2026-00-00"이 온다. 숫자만 남겨 앞 8자리를 쓰고, 8자리가
+    안 되면 버린다("2026-00-00"의 월·일 0은 창 비교에서 의미가 없다).
+
+    날짜가 없는 합성 이벤트(CAPITAL_CHURN·재무 YoY 플래그)는 `fallback_date`로
+    둔다 — 이들은 제목 없이 스캔 창 전체를 근거로 만들어지므로 최신일에
+    놓는 것이 의미에 맞다(CAPITAL_CHURN 자체가 "최근 12개월 집중"이다).
+    """
+    out: "dict[str, list[str]]" = {}
+    for e in events:
+        if e.get("is_amendment"):
+            continue
+        raw = "".join(ch for ch in str(e.get("rcept_dt") or "") if ch.isdigit())
+        dt = raw[:8] if len(raw) >= 8 else ""
+        if len(dt) == 8 and dt[4:6] != "00" and dt[6:8] != "00":
+            pass
+        else:
+            dt = fallback_date
+        if not dt:
+            continue
+        for tid in key_to_tax.get(e["key"], []):
+            out.setdefault(tid, []).append(dt)
+    return out
+
+
 def _render_pattern_watch_block(
     tax_ids: "list[str] | set[str]",
     outflow_confirmations: list[dict],
     has_control_change: bool,
     affiliate_facts: "dict[str, str] | None" = None,
     max_show: int = 3,
+    taxonomy_dates: "dict[str, list[str]] | None" = None,
 ) -> tuple[list[str], list[str], list[dict]]:
     """관찰된 taxonomy와 등록 패턴의 부분 겹침을 "무엇이 보이고 무엇이 안
     보이는지" 사실로 렌더한다(analyze_company_risk·build_event_timeline 공용).
@@ -714,7 +745,9 @@ def _render_pattern_watch_block(
         렌더). filtered는 게이트를 통과한 겹침 전체(표시 상한 적용 전) —
         호출부가 요약 문장에서 최상위 겹침 하나를 참조할 때 쓴다.
     """
-    overlaps = find_pattern_overlaps(list(tax_ids), min_overlap=2)
+    overlaps = find_pattern_overlaps(
+        list(tax_ids), min_overlap=2, taxonomy_dates=taxonomy_dates
+    )
 
     cb_gate: "dict | None" = None
     capital_backflow_fact_lines: list[str] = []
@@ -990,6 +1023,15 @@ def analyze_company_risk(
 
     sig_keys = list({e["key"] for e in observed_events if not e["is_amendment"]})
     tax_ids_all = list({tid for k in sig_keys for tid in _SKT.get(k, [])})
+    # 패턴 창 게이트 입력 — 날짜 없는 합성 이벤트는 조회 창의 최신 공시일에 둔다.
+    _latest_dt = max(
+        (
+            "".join(ch for ch in str(d.get("rcept_dt") or "") if ch.isdigit())[:8]
+            for d in disclosures
+        ),
+        default="",
+    )
+    tax_dates_all = _taxonomy_dates(observed_events, _SKT, _latest_dt)
 
     # v1.6.1: 자금유출·양수거래(+처분) 상대방 확인 — decisions는 이미 위에서
     # fetch됐으므로 재사용(추가 호출 없음). capital_backflow 게이트에도 쓰인다.
@@ -1014,6 +1056,7 @@ def analyze_company_risk(
         outflow_confirmations,
         _has_control_change_title(disclosures),
         _affiliate_facts,
+        taxonomy_dates=tax_dates_all,
     )
 
     # 6. 타임라인 (내부 랭킹 점수 기준 — 출력에는 노출되지 않음)
@@ -1658,6 +1701,7 @@ def build_event_timeline(
     # 이벤트 수집: (날짜, 단계, 신호키, 신호라벨, 공시명)
     events: list[tuple[str, str, str, str, str]] = []
     all_tax_ids: set[str] = set()
+    all_tax_dates: dict[str, list[str]] = {}
 
     from .core.signals import SIGNAL_KEY_TO_TAXONOMY
 
@@ -1679,6 +1723,10 @@ def build_event_timeline(
             events.append((rcept_dt, phase, sig["key"], q.label, report_nm, rcept_no))
             tax_ids = SIGNAL_KEY_TO_TAXONOMY.get(sig["key"], [])
             all_tax_ids.update(tax_ids)
+            _dt = "".join(ch for ch in rcept_dt if ch.isdigit())[:8]
+            if len(_dt) == 8:
+                for _tid in tax_ids:
+                    all_tax_dates.setdefault(_tid, []).append(_dt)
 
     if not events:
         # 헤더는 정상 경로(아래 ⏳ 라인)와 같은 형식을 쓴다 — 도구가 상황에 따라
@@ -1730,6 +1778,7 @@ def build_event_timeline(
         outflow_confirmations,
         _has_control_change_title(disclosures),
         _affiliate_facts,
+        taxonomy_dates=all_tax_dates,
     )
     _top_overlap = _pattern_overlaps[0] if _pattern_overlaps else None
 

@@ -37,6 +37,9 @@ class TestCapitalBackflowEvidenceReplaced(unittest.TestCase):
         pattern = CROSS_SIGNAL_PATTERNS["capital_backflow"]
         self.assertEqual(pattern["signal_sequence"], ["3.1", "5.7"])
         self.assertEqual(pattern["severity"], "CRITICAL")
+        # 12는 2026-08-21 재보정에서 **의도적으로 유지**한 값이다 — "최대주주변경 후
+        # 12개월 내 자원 이전"이 이 패턴의 정의 자체라, p90(36)에 맞춰 늘리면 다른
+        # 패턴이 된다. 근거: specs/2026-08-21-pattern-window-recalibration.md
         self.assertEqual(pattern["timeline_months"], 12)
 
     def test_taxonomy_5_7_mentions_fss_investigation(self):
@@ -50,7 +53,10 @@ class TestFundDiversionChainPattern(unittest.TestCase):
         self.assertIn("fund_diversion_chain", CROSS_SIGNAL_PATTERNS)
         pattern = CROSS_SIGNAL_PATTERNS["fund_diversion_chain"]
         self.assertEqual(pattern["signal_sequence"], ["1.1", "5.8"])
-        self.assertEqual(pattern["timeline_months"], 12)
+        # 12 → 21 (2026-08-21 재보정, 250개사×5년·관측 363건의 패턴별 p90).
+        # 단 이 패턴은 관측 11건뿐이라 재보정값의 근거가 다른 패턴보다 약하다 —
+        # 스펙의 「이 측정이 못 답한 것」에 그대로 적어 뒀다.
+        self.assertEqual(pattern["timeline_months"], 21)
         self.assertEqual(pattern["severity"], "HIGH")
 
     def test_evidence_cites_fss_investigation_no_judgment_words(self):

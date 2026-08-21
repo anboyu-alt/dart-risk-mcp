@@ -1209,8 +1209,12 @@ TAXONOMY = {
 #
 # ⚠ `signal_sequence`는 이름과 달리 **순서로 쓰이지 않는다.** 매칭은
 # `find_pattern_match`(부분집합)와 `find_pattern_overlaps`(교집합 크기)
-# 둘 다 순서를 보지 않는다. `timeline_months`도 **어디에서도 매칭에 쓰이지
-# 않는다**(`capital_backflow`·`capital_churn_anomaly`만 별도 게이트 보유).
+# 둘 다 순서를 보지 않는다.
+#
+# `timeline_months`는 **2026-08-21부터 `find_pattern_overlaps`의 관찰 윈도우
+# 게이트에 쓰인다**(`taxonomy_dates`를 넘긴 호출부에 한해). 아래 순서 축
+# 실측 직후 같은 날 재측정으로 바뀐 부분이라 순서를 밝혀 둔다 —
+# `find_pattern_match`는 여전히 날짜를 보지 않는다.
 #
 # 이는 미구현이 아니라 실측에 근거한 결정이다(2026-08-21, 12개사×3년,
 # 관측 37건):
@@ -1219,11 +1223,29 @@ TAXONOMY = {
 #   · timeline_months 안에 들어온 관측 18/37 = 49% — 동전 던지기.
 #     실제 기간은 중앙값 9개월·최대 35개월(예: 제이스코홀딩스 founder_fade
 #     32개월 vs 설정 18개월, STX delisting_evasion 27개월 vs 설정 9개월).
+#
+# **간격 축은 그 뒤 재측정으로 도입했다**(2026-08-21 후속, 250개사×5년·관측
+# 363건 — 위 측정이 스스로 지목한 "표본이 작다, 수백 개 회사가 필요하다"를
+# 메운 표본). 위 49%가 옳았다는 것이 더 큰 표본에서도 확인됐다: 옛 설정값으로
+# 게이트를 걸면 관측의 31.4%가 영향을 받았다(20.9% 패턴 자체 탈락 + 10.5%
+# 축소). 결론은 "간격을 쓰지 말자"가 아니라 **"설정값이 틀렸다"**였다 —
+# 패턴별 필요 개월의 p90으로 재보정(zombie_ma 12→30, fake_new_biz 6→30,
+# audit_insider_dump 6→33, delisting_evasion 9→27, debt_spiral 12→21,
+# fund_diversion_chain 12→21, related_party_hollowing 15→18)하니 영향이
+# 31.4% → 8.0%로 떨어졌다. capital_backflow(12)는 "최대주주변경 후 12개월 내"가
+# 패턴의 정의 자체이고 v1.6.1 내용 확인 게이트를 따로 갖고 있어 유지했다.
+# founder_fade(18)·reverse_split_spiral(18)은 이미 p90보다 넉넉해 그대로 뒀다.
+#
+# ⚠ 재보정값은 **in-sample calibration이지 validation이 아니다** — p90은 정의상
+# 그 표본의 90%를 담는다. 다른 기간·다른 회사군에서 같은 8%가 나온다는 보장은
+# 없다. 값을 좁히는 방향으로 바꾸려면 out-of-sample로 다시 재야 한다.
+# 근거: docs/superpowers/specs/2026-08-21-pattern-window-recalibration.md
 # 원인(판단): 이 도구가 보는 것은 사건 발생 순서가 아니라 **공시 접수일**이라,
 # 정기보고서·감사의견·거래소 제재처럼 공시 유형별 시차가 순서를 흐트러뜨린다.
 #
-# 따라서 두 필드는 **서사 설명·표시용 메타**로만 읽어야 한다. 순서·간격을
-# 매칭 조건으로 승격하려면 먼저 더 큰 표본으로 다시 재야 한다.
+# 따라서 `signal_sequence`의 **순서**는 여전히 서사 설명·표시용 메타다(64%로는
+# 근거 부족 — 순서 축은 도입하지 않았다). 순서를 매칭 조건으로 승격하려면
+# 먼저 더 큰 표본으로 다시 재야 한다.
 # 근거: docs/superpowers/specs/2026-08-21-pattern-sequence-measurement.md
 
 CROSS_SIGNAL_PATTERNS = {
@@ -1242,7 +1264,7 @@ CROSS_SIGNAL_PATTERNS = {
         "name": "부채 악순환",
         "description": "전환사채를 새 전환사채로 갚는 차환이 반복되며 부채 부담과 재조달 압박이 커지는 흐름",
         "signal_sequence": ["1.4", "1.5", "1.3", "2.6", "8.2"],
-        "timeline_months": 12,
+        "timeline_months": 21,
         "severity": "CRITICAL",
         "field_evidence": [
             "위메이드: CB/EB 돌려막기 (20250903)",
@@ -1264,7 +1286,7 @@ CROSS_SIGNAL_PATTERNS = {
         "name": "특수관계 자산 공동화",
         "description": "특수관계자와의 거래로 자산·영업이 회사 밖으로 이전되며 회사 실체가 비어가는 흐름",
         "signal_sequence": ["4.2", "5.3", "3.2", "2.5", "8.4"],
-        "timeline_months": 15,
+        "timeline_months": 18,
         "severity": "CRITICAL",
         "field_evidence": [
             "파마리서차: RCPS 비대칭 구조 (20250708)",
@@ -1275,7 +1297,7 @@ CROSS_SIGNAL_PATTERNS = {
         "name": "무자본 M&A",
         "description": "무자본 M&A 세력이 차명·투자조합으로 경영권 인수 → 사모CB 대량발행·허위자금조달 → 허위 신사업 발표 → 주가부양 후 고가매도",
         "signal_sequence": ["3.1", "2.4", "1.2", "4.3", "7.1", "2.7"],
-        "timeline_months": 12,
+        "timeline_months": 30,
         "severity": "CRITICAL",
         "field_evidence": [
             "2025-03-10 금감원: 사모CB·BW 허위자금조달 조직적 세력 적발 — 검찰 고발",
@@ -1286,7 +1308,7 @@ CROSS_SIGNAL_PATTERNS = {
         "name": "감사의견 내부자 덤프",
         "description": "감사의견거절·비적정 미공개정보를 임원·최대주주가 직무상 취득 후 공시 전 주식 전량매도",
         "signal_sequence": ["4.4", "7.1", "3.1"],
-        "timeline_months": 6,
+        "timeline_months": 33,
         "severity": "CRITICAL",
         "field_evidence": [
             "2025-03-24 금감원: A사 대표이사가 감사의견거절 정보를 CB 보유자에게 전달 후 매도",
@@ -1297,7 +1319,7 @@ CROSS_SIGNAL_PATTERNS = {
         "name": "상폐 회피",
         "description": "자본잠식·영업손실로 상장폐지 위기 → 연말 거액 유상증자(가장납입) + 재무제표 과대계상 → 요건 면탈 → 횡령",
         "signal_sequence": ["8.1", "2.4", "6.1", "4.3", "2.7", "8.2"],
-        "timeline_months": 9,
+        "timeline_months": 27,
         "severity": "CRITICAL",
         "field_evidence": [
             "2024-03-25 금감원: 좀비기업 15개사 부당이득 1,694억원 — 연말 유상증자 상폐요건 면탈 패턴",
@@ -1308,7 +1330,7 @@ CROSS_SIGNAL_PATTERNS = {
         "name": "허위 신사업 주가부양",
         "description": "주업과 무관한 테마사업(2차전지·AI·우주항공 등) 허위 발표 + 형식적 MOU·페이퍼컴퍼니 → 테마주 편승 주가급등 → 최대주주 주식 고가매도",
         "signal_sequence": ["5.4", "4.3", "7.2", "7.1"],
-        "timeline_months": 6,
+        "timeline_months": 30,
         "severity": "CRITICAL",
         "field_evidence": [
             "2024-01-18 금감원: 허위신사업 집중조사 — 20건 중 90%가 코스닥, 50%가 상폐·거래정지",
@@ -1353,7 +1375,7 @@ CROSS_SIGNAL_PATTERNS = {
             "경로도 자금 이동 구조는 같은 맥락이나 시퀀스에는 포함하지 않았다"
         ),
         "signal_sequence": ["1.1", "5.8"],
-        "timeline_months": 12,
+        "timeline_months": 21,
         "severity": "HIGH",
         "field_evidence": [
             "2019-12-19 금감원 무자본 M&A 합동점검: 조달자금 74%를 비영업용자산에 "
@@ -1468,9 +1490,61 @@ def _tid_sort_key(tid: str) -> tuple:
         return (1, [tid])
 
 
+def _window_end(start: str, months: int) -> str:
+    """YYYYMMDD 시작일에 months를 더한 창 종료일(YYYYMMDD, 경계 포함).
+
+    달력 연산만 하며 예외를 던지지 않는다 — 말일 오버플로(1/31 + 1개월)는
+    그 달의 마지막 날로 자른다(datetime 없이 순수 정수 연산).
+    """
+    y, m, d = int(start[:4]), int(start[4:6]), int(start[6:8])
+    m += months
+    y += (m - 1) // 12
+    m = (m - 1) % 12 + 1
+    if m == 2:
+        last = 29 if (y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)) else 28
+    elif m in (4, 6, 9, 11):
+        last = 30
+    else:
+        last = 31
+    return f"{y:04d}{m:02d}{min(d, last):02d}"
+
+
+def _best_window(
+    seq_set: "set[str]",
+    taxonomy_dates: "dict[str, list[str]]",
+    months: int,
+) -> "tuple[set[str], str, str]":
+    """패턴 구성 신호 중 `months` 길이의 한 창 안에 함께 관찰된 최대 집합.
+
+    각 관찰 날짜를 창 시작 후보로 삼아 [d, d+months] 안에 들어오는 taxonomy를
+    세고, 가장 많이 담기는 창을 고른다. 담기는 개수가 같으면 **늦은 창**을
+    택한다 — 이 도구는 관측용이라 같은 겹침이면 최근 것이 사용자에게 더
+    유용하고, 후보를 오름차순으로 훑으며 마지막 최대값을 남기므로 결과는
+    입력 순서와 무관하게 결정적이다. 날짜가 하나도 없으면 빈 집합을 반환한다.
+
+    Returns:
+        (관찰된 taxonomy 집합, 창 시작 YYYYMMDD, 창 종료 YYYYMMDD)
+    """
+    cands = sorted({
+        dt for tid in seq_set for dt in taxonomy_dates.get(tid, []) if dt
+    })
+    best: "set[str]" = set()
+    best_win = ("", "")
+    for start in cands:
+        end = _window_end(start, months)
+        inside = {
+            tid for tid in seq_set
+            if any(start <= dt <= end for dt in taxonomy_dates.get(tid, []) if dt)
+        }
+        if len(inside) >= len(best):
+            best, best_win = inside, (start, end)
+    return best, best_win[0], best_win[1]
+
+
 def find_pattern_overlaps(
     detected_taxonomies: List[str],
     min_overlap: int = 2,
+    taxonomy_dates: "dict[str, list[str]] | None" = None,
 ) -> List[Dict]:
     """등록된 복합 패턴과 관찰된 taxonomy 집합의 부분 겹침을 조회한다.
 
@@ -1487,6 +1561,10 @@ def find_pattern_overlaps(
     Args:
         detected_taxonomies: 관찰된 taxonomy ID 목록(중복·set 경유 허용)
         min_overlap: 겹침으로 인정할 최소 구성 신호 개수(미만이면 결과 제외)
+        taxonomy_dates: {taxonomy id: [관찰 날짜 YYYYMMDD, ...]}. 주면 패턴의
+            `timeline_months` 길이 창 안에 함께 관찰된 신호만 matched로 인정한다
+            (창 밖 신호는 missing으로 간다). 미전달(None)이면 창 게이트를 적용하지
+            않아 기존 호출부와 동작이 동일하다.
 
     Returns:
         각 항목: pattern_id, name, description, signal_sequence, checkpoints
@@ -1514,7 +1592,21 @@ def find_pattern_overlaps(
         if len(matched_set) < min_overlap:
             continue
 
-        missing_set = seq_set - detected_set
+        # 관찰 윈도우 게이트 — 날짜를 받았을 때만 적용한다(미전달 시 기존
+        # 동작 그대로). 패턴의 timeline_months는 원래 카드 문구로만 쓰이고
+        # 매칭에는 관여하지 않아, 5년 스캔에서 2~3년 떨어진 신호가 한 패턴으로
+        # 묶이면서 "관찰 윈도우 12개월"이라는 거짓 표기가 나왔다.
+        window_start = window_end = ""
+        if taxonomy_dates is not None:
+            months = pattern.get("timeline_months") or 0
+            if months > 0:
+                matched_set, window_start, window_end = _best_window(
+                    matched_set, taxonomy_dates, months
+                )
+                if len(matched_set) < min_overlap:
+                    continue
+
+        missing_set = seq_set - matched_set
         results.append({
             "pattern_id": pattern_id,
             "name": pattern["name"],
@@ -1525,6 +1617,9 @@ def find_pattern_overlaps(
             "missing": sorted(missing_set, key=_tid_sort_key),
             "n_matched": len(matched_set),
             "n_total": len(seq_set),
+            "timeline_months": pattern.get("timeline_months"),
+            "window_start": window_start,
+            "window_end": window_end,
         })
 
     results.sort(

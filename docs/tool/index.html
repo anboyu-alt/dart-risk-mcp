@@ -1085,7 +1085,17 @@ function buildResult(name, stockCode, corpCode, items, bgn, end, totalCount) {
 
   const detectedTax = new Set(
     observedEvents.flatMap((e) => obs(e).flatMap((s) => s.taxonomies || [])));
-  const patterns = findPatternOverlaps(DATA.patterns, detectedTax, 2);
+  // 패턴 창 게이트 입력 — {taxonomy id: [YYYYMMDD, ...]}. e.date는 list.json의
+  // rcept_dt(8자리)라 숫자만 남겨 쓴다.
+  const taxDates = {};
+  for (const e of observedEvents) {
+    const dt = String(e.date || "").replace(/\D/g, "").slice(0, 8);
+    if (dt.length !== 8) continue;
+    for (const sg of obs(e)) for (const t of (sg.taxonomies || [])) {
+      (taxDates[t] = taxDates[t] || []).push(dt);
+    }
+  }
+  const patterns = findPatternOverlaps(DATA.patterns, detectedTax, 2, taxDates);
   const capitalKeys = new Set(DATA.capital_event_keys);
   const capitalEvents = observedEvents.filter(
     (e) => obs(e).some((s) => capitalKeys.has(s.key)));
@@ -1582,7 +1592,7 @@ function renderDash() {
             return `<div class="patterncard" id="pat-${esc(p.key)}">${headline}${esc(p.description)}
               ${overlapBlock}
               ${patternProseCheckpointsHTML(p)}
-              <div class="sigs">관찰 윈도우 ${p.timeline_months}개월 · 구성 신호가 촉발된 공시:</div>
+              <div class="sigs">${patternWindowLabel(p)} · 구성 신호가 촉발된 공시:</div>
               <div class="sigs">${patternEvidenceHTML(p, observedEvents)}</div>
               <div class="dim" style="margin-top:0.5rem"><span class="spinner"></span> 원문에서 상대방 관계 확인 중…</div>
               ${(p.field_evidence && p.field_evidence.length ? `<details style="margin-top:0.4rem;font-size:0.82rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">실제 사례 근거(금감원 보도자료 등)</summary>
@@ -1593,7 +1603,7 @@ function renderDash() {
           return `<div class="patterncard">${headline}${esc(p.description)}
             ${overlapBlock}
             ${patternProseCheckpointsHTML(p)}
-            <div class="sigs">관찰 윈도우 ${p.timeline_months}개월 · 구성 신호가 촉발된 공시:</div>
+            <div class="sigs">${patternWindowLabel(p)} · 구성 신호가 촉발된 공시:</div>
             <div class="sigs">${patternEvidenceHTML(p, observedEvents)}</div>` +
             (p.field_evidence && p.field_evidence.length ? `<details style="margin-top:0.4rem;font-size:0.82rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">실제 사례 근거(금감원 보도자료 등)</summary>
               <ul style="margin:0.3rem 0 0 1.1rem;padding:0">${p.field_evidence.map((fe) => `<li>${esc(fe)}</li>`).join("")}</ul></details>` : "") +
@@ -2508,18 +2518,58 @@ function tidCompare(a, b) {
   if (pa[0] !== pb[0]) return pa[0] - pb[0];
   return (pa[1] || 0) - (pb[1] || 0);
 }
-function findPatternOverlaps(patternsList, detectedTaxSet, minOverlap) {
+// YYYYMMDD + months → 창 종료일(경계 포함). core taxonomy._window_end 이식.
+function windowEnd(start, months) {
+  let y = +start.slice(0, 4), m = +start.slice(4, 6) + months;
+  const d = +start.slice(6, 8);
+  y += Math.floor((m - 1) / 12); m = ((m - 1) % 12) + 1;
+  let last;
+  if (m === 2) last = (y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0)) ? 29 : 28;
+  else last = [4, 6, 9, 11].indexOf(m) !== -1 ? 30 : 31;
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${String(y).padStart(4, "0")}${pad(m)}${pad(Math.min(d, last))}`;
+}
+// 패턴 구성 신호 중 months 길이의 한 창 안에 함께 관찰된 최대 집합.
+// core taxonomy._best_window 이식 — 각 관찰일을 창 시작 후보로 훑고,
+// 동수면 늦은 창(최근 관측)을 택한다. 후보를 오름차순으로 훑으며 마지막
+// 최대값을 남기므로 결과는 결정적이다.
+function bestWindow(seq, taxDates, months) {
+  const cands = Array.from(new Set(
+    seq.flatMap((t) => (taxDates[t] || []))
+  )).filter(Boolean).sort();
+  let best = [], win = ["", ""];
+  for (const start of cands) {
+    const end = windowEnd(start, months);
+    const inside = seq.filter((t) =>
+      (taxDates[t] || []).some((dt) => dt >= start && dt <= end));
+    if (inside.length >= best.length) { best = inside; win = [start, end]; }
+  }
+  return { matched: best, start: win[0], end: win[1] };
+}
+// taxDates를 주면 패턴의 timeline_months를 실제 게이트로 적용한다(미전달 시
+// 기존 동작 유지). 이전에는 timeline_months가 카드 문구로만 쓰여, 5년 스캔에서
+// 2~3년 떨어진 신호가 한 패턴으로 묶이면서 "관찰 윈도우 12개월"이 거짓 표기였다.
+function findPatternOverlaps(patternsList, detectedTaxSet, minOverlap, taxDates) {
   const results = [];
   for (const p of (patternsList || [])) {
     const seq = p.signal_sequence || [];
-    const matched = seq.filter((t) => detectedTaxSet.has(t));
+    let matched = seq.filter((t) => detectedTaxSet.has(t));
     if (matched.length < minOverlap) continue;
-    const missing = seq.filter((t) => !detectedTaxSet.has(t));
+    let wStart = "", wEnd = "";
+    if (taxDates && p.timeline_months > 0) {
+      const w = bestWindow(matched, taxDates, p.timeline_months);
+      matched = w.matched; wStart = w.start; wEnd = w.end;
+      if (matched.length < minOverlap) continue;
+    }
+    const mset = new Set(matched);
+    const missing = seq.filter((t) => !mset.has(t));
     results.push(Object.assign({}, p, {
       matched: matched.slice().sort(tidCompare),
       missing: missing.slice().sort(tidCompare),
       n_matched: matched.length,
       n_total: seq.length,
+      window_start: wStart,
+      window_end: wEnd,
     }));
   }
   results.sort((a, b) => {
@@ -2552,9 +2602,25 @@ function patternTaxonomyEvidence(taxId, events) {
   hits.sort((a, b) => (a.date < b.date ? 1 : -1));
   return hits;
 }
+// 카드 상단 창 문구 — 게이트가 실제로 고른 창을 함께 보여준다. 창이 없으면
+// (날짜 미전달 등) 기존 문구 그대로.
+function patternWindowLabel(p) {
+  const base = `관찰 윈도우 ${p.timeline_months}개월`;
+  if (!p.window_start || !p.window_end) return base;
+  return `${base} · 이 회사에서 겹친 구간 ${fmtDate(p.window_start)}~${fmtDate(p.window_end)}`;
+}
 function patternEvidenceHTML(pattern, events) {
+  // 근거도 게이트가 고른 창 안의 공시만 남긴다 — 창 밖 공시를 근거로 보여주면
+  // "관찰 윈도우 N개월"과 목록이 어긋난다(한탑 실측: 카드는 12개월, 근거는
+  // 2024.01~2026.08에 흩어져 있었다).
+  const ws = pattern.window_start, we = pattern.window_end;
+  const inWindow = (h) => {
+    if (!ws || !we) return true;
+    const d = String(h.date || "").replace(/\D/g, "").slice(0, 8);
+    return d.length === 8 && d >= ws && d <= we;
+  };
   return pattern.signal_sequence.map((taxId) => {
-    let hits = patternTaxonomyEvidence(taxId, events);
+    let hits = patternTaxonomyEvidence(taxId, events).filter(inWindow);
     if (!hits.length) return "";
     // 3.1(경영권 변경) 근거는 실질 경영권 변경 제목을 앞세운다 — SHAREHOLDER
     // 키워드에 일상적 5% 대량보유보고가 포함돼 최신순만으로는 그 보고서가
@@ -3053,7 +3119,7 @@ async function fetchSubsidiaryAffiliateFacts(results, corpCode) {
 function capitalBackflowCardHTML(pattern, events, results, totalCount, affiliateFacts) {
   const facts = affiliateFacts || {};
   const total = typeof totalCount === "number" ? totalCount : results.length;
-  const evidenceBlock = `<div class="sigs">관찰 윈도우 ${pattern.timeline_months}개월 · 구성 신호가 촉발된 공시:</div>
+  const evidenceBlock = `<div class="sigs">${patternWindowLabel(pattern)} · 구성 신호가 촉발된 공시:</div>
     <div class="sigs">${patternEvidenceHTML(pattern, events)}</div>`;
   const fieldEvidenceBlock = (pattern.field_evidence && pattern.field_evidence.length)
     ? `<details style="margin-top:0.4rem;font-size:0.82rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">실제 사례 근거(금감원 보도자료 등)</summary>
