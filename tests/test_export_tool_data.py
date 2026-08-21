@@ -166,7 +166,9 @@ class TestBuildSignalsData(unittest.TestCase):
 
     def test_category_uses_heaviest_taxonomy(self):
         # 복수 taxonomy 매핑 신호는 무거운 쪽(높은 카테고리 번호)을 대표로.
-        # EMBEZZLE ['5.3','8.1'] → 8(위기/부실), INQUIRY ['4.3','7.1'] → 7(시장조작).
+        # EMBEZZLE ['5.3','8.1'] → 8(위기/부실), INQUIRY ['7.1'] → 7(시장조작).
+        # INQUIRY는 2026-08-21에 ['4.3','7.1'] → ['7.1']로 좁혔다(조회공시는 공시·보고
+        # 의무 위반이 아니다 — 4.3은 DISCLOSURE_VIOL 담당). 카테고리는 그대로 7이다.
         by_key = {s["key"]: s for s in self.data["signals"]}
         self.assertEqual(by_key["EMBEZZLE"]["category"], 8)
         self.assertEqual(by_key["INQUIRY"]["category"], 7)
