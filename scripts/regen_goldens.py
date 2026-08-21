@@ -154,6 +154,7 @@ MARKET_PRESETS = [
     "reverse_split", "3pca", "shareholder_change", "exec_change",
     "audit_issue", "asset_transfer", "embezzle", "inquiry",  # v1.0.3 신규 검증 8개
     "fund_outflow",  # v1.6.0 신규
+    "delisting",  # v1.12.2 신규
 ]
 
 

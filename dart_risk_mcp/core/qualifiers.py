@@ -143,6 +143,24 @@ PHASE_TAILS: tuple[str, ...] = (
     "결과보고서", "해제ㆍ취소등", "해제", "취소", "철회", "해지", "중단",
 )
 
+# R2 예외 — 어미는 '해제'지만 국면이 끝난 게 아니라 **다음 단계로 넘어간** 경우.
+# 「주권매매거래정지해제(상장폐지에 따른 정리매매 개시)」는 매매정지가 풀려 정상으로
+# 돌아왔다는 뜻이 아니라, 상장폐지가 확정돼 정리매매(상장폐지 전 마지막 매매)가
+# 시작된다는 뜻이다 — 거래소 퇴출 절차에서 가장 무거운 국면인데 어미만 보면 해소로
+# 읽힌다. 이 예외가 없으면 그 공시가 "체결이 아니라 해제입니다"로 강등돼 집계·
+# 헤드라인에서 전부 빠진다.
+#
+# 실측(2026-05-24~08-22, 90일·고유 공시 48,646건): 상장폐지 절차 계열 177건 중
+# R2가 강등한 23건을 전수 확인한 결과 두 갈래였다 —
+#   · 21건: 정리매매 개시(20)·재개(1) → **강등이 틀렸다**(국면 상승)
+#   ·  2건: 「상장폐지사유 미해당」·「상장적격성 실질심사 대상 제외 결정」
+#           → **강등이 옳다**(실제로 해소된 건)
+# 그래서 어미가 아니라 **괄호 부제**로 가른다. 부제에 아래 표현이 있으면 R2를
+# 건너뛴다. 두 해소 건은 부제가 달라 그대로 강등된다.
+ESCALATION_SUBTITLES: tuple[str, ...] = (
+    "정리매매개시", "정리매매재개",
+)
+
 # R3 — 공시 주체가 이 회사가 아닌 경우. 공백 제거 후 비교한다.
 SUBSIDIARY_SUBTITLES: tuple[str, ...] = (
     "종속회사의주요경영사항",
@@ -155,6 +173,19 @@ RELATED_PARTY_PREFIX = "특수관계인의"
 AMENDMENT_TAGS: tuple[str, ...] = (
     "기재정정", "첨부정정", "첨부추가", "정정", "발행조건확정", "연장결정",
 )
+
+
+def _is_escalation(parsed) -> bool:
+    """어미가 해제·취소류여도 국면이 다음 단계로 넘어간 제목인가.
+
+    괄호 부제에 `ESCALATION_SUBTITLES`가 하나라도 들어 있으면 참. 부제는
+    `parse_report_name`이 이미 공백을 제거해 두므로 부분 문자열로 본다.
+    """
+    return any(
+        esc in sub
+        for sub in parsed.subtitles
+        for esc in ESCALATION_SUBTITLES
+    )
 
 
 def _is_amendment_tag(tag: str) -> bool:
@@ -230,8 +261,8 @@ def _demotion_reason(parsed: ParsedName, filing: "dict | None") -> str:
         if _is_amendment_tag(tag):
             return f"기존 공시의 정정·후속 보고입니다 ({tag})"
 
-    # R2 — 사후·해제 국면
-    if parsed.tail in PHASE_TAILS:
+    # R2 — 사후·해제 국면 (단, 국면이 상승한 경우는 제외 — 위 주석 참고)
+    if parsed.tail in PHASE_TAILS and not _is_escalation(parsed):
         if parsed.tail == "결과보고서":
             return "이미 실행된 건의 결과 보고입니다"
         return f"체결이 아니라 {parsed.tail}입니다"

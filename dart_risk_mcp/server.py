@@ -2795,6 +2795,11 @@ _PRESET_TO_SIGNALS: dict[str, list[str]] = {
     "audit_issue":        ["AUDIT", "DISCLOSURE_VIOL"],
     "asset_transfer":     ["ASSET_TRANSFER", "ASSET_SPIRAL", "DEMERGER"],
     "going_concern":      ["GOING_CONCERN", "INSOLVENCY", "DEBT_RESTR"],
+    # DELISTING_RISK는 전용 preset으로 분리한다 — going_concern에 합류시켰더니
+    # 라이브 14일 스캔에서 표시 40건 중 39건이 상장폐지 절차가 되어 기존
+    # GOING_CONCERN·INSOLVENCY 발화를 덮었다(실측 2026-08-22). 발화량이 크게
+    # 다른 신호를 한 preset에 섞으면 적은 쪽이 보이지 않는다.
+    "delisting":          ["DELISTING_RISK"],
     "embezzle":           ["EMBEZZLE"],
     "inquiry":            ["INQUIRY"],
     "fund_outflow":       ["FUND_OUTFLOW", "ACQ_REVIEW"],
@@ -2953,7 +2958,8 @@ def search_market_disclosures(preset: str, days: int = 7, max_results: int = 50)
     Args:
         preset: 신호 프리셋 — cb_issue / treasury / reverse_split / 3pca /
                 shareholder_change / exec_change / audit_issue / asset_transfer /
-                going_concern / embezzle / inquiry / fund_outflow / all_risk
+                going_concern / delisting / embezzle / inquiry / fund_outflow /
+            all_risk
         days: 조회 기간 (기본 7일, 최대 90일)
         max_results: 최대 반환 건수 (기본 50, 최대 200)
     """
