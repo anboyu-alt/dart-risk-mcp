@@ -776,6 +776,22 @@
    "caution": false
   },
   {
+   "key": "DELISTING_RISK",
+   "label": "상장폐지 절차",
+   "keywords": [
+    "상장폐지",
+    "실질심사",
+    "개선기간",
+    "정리매매"
+   ],
+   "taxonomies": [
+    "8.5"
+   ],
+   "category": 8,
+   "prose": "거래소의 상장폐지 절차에서 나온 공시입니다. 상장적격성 실질심사 대상이 되거나, 개선기간을 받거나, 상장폐지가 결정돼 정리매매에 들어가는 단계에서 나옵니다. 회사가 스스로 낸 공시가 아니라 거래소가 낸 안내인 경우가 많습니다.",
+   "caution": false
+  },
+  {
    "key": "INSIDER_PRE_DISCLOSURE",
    "label": "임원·대주주 매도 후 부정 공시",
    "keywords": [],
@@ -1167,6 +1183,10 @@
    "철회",
    "해지",
    "중단"
+  ],
+  "escalation_subtitles": [
+   "정리매매개시",
+   "정리매매재개"
   ],
   "subsidiary_subtitles": [
    "종속회사의주요경영사항",
