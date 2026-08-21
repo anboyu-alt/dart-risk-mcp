@@ -945,8 +945,13 @@ function demotionReason(parsed, filing) {
   for (const tag of parsed.tags) {
     if (isAmendmentTag(tag)) return `기존 공시의 정정·후속 보고입니다 (${tag})`;
   }
-  // R2 — 사후·해제 국면
-  if ((r.phase_tails || []).includes(parsed.tail)) {
+  // R2 — 사후·해제 국면. 단, 어미가 '해제'여도 국면이 다음 단계로 넘어간
+  // 제목은 제외한다(core qualifiers._is_escalation 이식) — 「주권매매거래정지
+  // 해제(상장폐지에 따른 정리매매 개시)」는 매매정지가 풀린 게 아니라 상장폐지가
+  // 확정돼 정리매매가 시작된다는 뜻이다.
+  const escalated = parsed.subtitles.some((sub) =>
+    (r.escalation_subtitles || []).some((esc) => sub.indexOf(esc) !== -1));
+  if ((r.phase_tails || []).includes(parsed.tail) && !escalated) {
     return parsed.tail === "결과보고서"
       ? "이미 실행된 건의 결과 보고입니다"
       : `체결이 아니라 ${parsed.tail}입니다`;

@@ -122,7 +122,7 @@ dart_risk_mcp/
   | Cat 5 기업활동 | `ASSET_TRANSFER`, `DEMERGER`, `MGMT`, `FUND_OUTFLOW`, `ACQ_REVIEW` |
   | Cat 6 회계/재무 | `REVENUE_IRREG`, `CONTINGENT` |
   | Cat 7 시장조작 | `INQUIRY`, `EMBEZZLE` |
-  | Cat 8 위기/부실 | `INSOLVENCY`, `DEBT_RESTR`, `GOING_CONCERN` |
+  | Cat 8 위기/부실 | `INSOLVENCY`, `DEBT_RESTR`, `GOING_CONCERN`, `DELISTING_RISK` |
 
   v1.6.0 신규: `FUND_OUTFLOW`(금전대여·채무보증·담보제공·유형자산양수 — 참고 강도, taxonomy 5.7)
   · `ACQ_REVIEW`(영업양수·타법인주식및출자증권양수 — 상대방 확인 안내, taxonomy 5.8).
@@ -267,7 +267,7 @@ dart_risk_mcp/
 
 시장 전체 공시를 preset 기반으로 배치 스캔합니다.
 
-- `preset` 허용값: `cb_issue`, `treasury`, `reverse_split`, `3pca`, `shareholder_change`, `exec_change`, `audit_issue`, `asset_transfer`, `going_concern`, `embezzle`, `inquiry`, `fund_outflow`(v1.6.0 신규 — `FUND_OUTFLOW`/`ACQ_REVIEW`), `all_risk`
+- `preset` 허용값: `cb_issue`, `treasury`, `reverse_split`, `3pca`, `shareholder_change`, `exec_change`, `audit_issue`, `asset_transfer`, `going_concern`, `delisting`(v1.12.2 신규 — `DELISTING_RISK`), `embezzle`, `inquiry`, `fund_outflow`(v1.6.0 신규 — `FUND_OUTFLOW`/`ACQ_REVIEW`), `all_risk`
 - `days` 범위: 1~90일, `max_results` 범위: 1~200건
 - v1.10.2: 시장 스캔을 **2일 청크**로 순회하고, 상한(1,000건) 도달 청크는 **1일 단위 재분할**(상한 1,500건)로 재조회 — 한 호출로 창 전체를 덮으려다 최신 1~2일만 스캔되던 조용한 절단 해소(실사고: asset_transfer 30일이 7/22 유형자산양수를 놓침). 하루가 1,500건을 넘는 극단일만 "스캔 구간 일부 절단"으로 정직 표기
 - 내부 흐름: `fetch_market_disclosures` (corp_code 없이 `/list.json`) → `match_signals` → 한정층(`qualify_signals`)으로 관찰/절차 분리 → `_filter_market_rows`가 절차·사후 보고 행을 제외하고 관찰 신호만 preset 필터에 통과
@@ -593,6 +593,8 @@ PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설
 | `CROSS_SIGNAL_PATTERNS` 부분 겹침 표기(2026-08-17) | ✅ | 전부 일치는 회사당 0.2개(10개사 실측, 그마저 전부 2신호 패턴)라 5~6신호 패턴은 발화한 적이 없다. `find_pattern_overlaps`로 "6개 중 3개 관찰 + 안 보임 + 확인해볼 것"을 표기하도록 전환 — 부분 일치는 회사당 1.3개이고 **대조군(셀트리온·삼성전자·두산에너빌리티)은 0**이라 변별력 확인. `capital_backflow`의 v1.6.1 내용 확인 게이트는 그대로 유지(실패 시 겹침 목록에서 제외) |
 | 패턴의 **순서** 축(`signal_sequence` 순서) | ❌ 도입 안 함 | 12개사×3년 실측 — 순서 일치율 **64%**(무작위 50%). 제약으로 쓰면 진짜 사례를 떨어뜨린다. 원인은 이 도구가 사건 발생 순서가 아니라 **공시 접수일**을 보기 때문. 근거: `docs/superpowers/specs/2026-08-21-pattern-sequence-measurement.md` |
 | 패턴의 **간격** 축(`timeline_months`) | ✅ 도입(재보정 후) | 선행 측정(12개사×3년)은 "적중 49%라 쓸 수 없다"로 결론냈고, 후속 재측정(**250개사×5년·관측 363건** — 선행 측정이 스스로 지목한 "수백 개 회사가 필요" 한계를 메운 표본)이 그 경고를 재확인했다: 옛 설정값으로 게이트를 걸면 관측의 **31.4%**가 영향(20.9% 탈락 + 10.5% 축소). 결론은 "쓰지 말자"가 아니라 **"값이 틀렸다"** — 패턴별 필요 개월 p90으로 재보정(zombie_ma 12→30, fake_new_biz 6→30, audit_insider_dump 6→33, delisting_evasion 9→27, debt_spiral·fund_diversion_chain 12→21, related_party_hollowing 15→18)하니 영향이 **8.0%**로 하락. `capital_backflow`(12)는 "최대주주변경 후 12개월 내"가 정의 자체라 유지(v1.6.1 내용 게이트 별도 보유), `founder_fade`·`reverse_split_spiral`(18)은 이미 p90보다 넉넉해 유지. ⚠ 재보정값은 **in-sample calibration이지 validation이 아니다**(p90은 정의상 그 표본의 90%를 담는다) — 좁히려면 out-of-sample 재측정 필요. 근거: `docs/superpowers/specs/2026-08-21-pattern-window-recalibration.md` |
+| `DELISTING_RISK`(상장폐지 절차, v1.12.2) | ✅ | 2026-08-22 `search_market_disclosures("going_concern", 14)` 라이브 — 알에프세미·파라택시스코리아(정리매매 개시)·삼부토건·범양건영(개선기간 종료)·STX(이의신청서 제출)·듀오백·캐리(실질심사 대상결정 기한)·이오플로우·다원시스·코이즈 등 발화. 키워드 4종은 90일 시장 전체 실측(고유 공시 48,646건)에서 합집합 **177건/68개사**이고 전부 기존 신호 미포착이었다(단독 기여: 상장폐지 50·실질심사 57·개선기간 21·정리매매 11). 오탐은 「…절차 미진행」류 약 2~3건(1.7%)으로 측정 — 전부 퇴출 절차 맥락 안의 공시다. 근거: `docs/superpowers/specs/2026-08-22-delisting-risk-signal.md` |
+| 한정층 R2 국면 상승 예외(`ESCALATION_SUBTITLES`, v1.12.2) | ✅ | 「주권매매거래정지해제(상장폐지에 따른 정리매매 개시)」는 어미가 '해제'라 R2가 "체결이 아니라 해제입니다"로 강등했다 — 매매정지가 풀린 게 아니라 **상장폐지가 확정돼 정리매매가 시작**된다는 뜻이라 의미가 뒤집힌다. 90일 실측에서 R2가 강등한 23건을 전수 확인해 21건(정리매매 개시 20·재개 1)은 오강등, 2건(「상장폐지사유 미해당」·「실질심사 대상 제외 결정」)은 정당한 강등임을 확인하고 **괄호 부제**로 갈랐다. 라이브: 알에프세미 20260821900899·파라택시스코리아 20260819900696이 observed로 표면화 |
 | `parse_control_change_detail`/"🔁 최대주주 변경 상세" 블록(v1.7.0) | ✅ | 4건 라이브 매칭 — 아틀라스링크 20260709900615("외 1인" 공백형)·졸스 20260728900445("외N명" 붙임형)·제이케이시냅스 20260728900521("외 N" 접미 없음, (주) 접미)·선광 20260727900769(개인명, "외 22" 단위 생략형). 골드 `아틀라스링크_analyze.txt`/`아틀라스링크_timeline.txt` 갱신. 차입금>0(주식담보대출) 경로는 6사+아틀라스링크 매트릭스에서 미발굴 — 자기자금만 있는 사례만 라이브 확인 |
 | `match_affiliate_row`/`summarize_affiliate_stake` — 종속회사 유출 사실 병기(v1.9.0) | ✅ | 아틀라스링크 실측 3건(20260729/20260120/20251015 — 상대방 전부 "주식회사 한국파일") 전부 타법인 출자현황과 매칭돼 "최초취득 2023-09 · 지분 46.3→62.4% 확대 · 피출자사 최근 순이익 -49억원" 병기 확인. 골드 `아틀라스링크_analyze.txt`/`아틀라스링크_timeline.txt` 갱신 |
 | `track_fund_usage`의 `FUND_UNREPORTED`(실제 집행 미보고) | ✅ | 2026-08-03 — 오르비텍(00297989, 046120) `track_fund_usage(lookback_years=3)` MCP 종단 실행 라이브 매칭: 2025·2026 사모 제8~11회차(각 연도 4건, 총 8건) 전부 "받은 돈이 어디에 쓰였는지 보고되지 않고 있습니다" 발화 확인, 점수·등급 문구 없음(hygiene 9/9 PASS). 골드 `오르비텍_fund_usage.txt` 신규(`scripts/regen_goldens.py` COMPANIES에 오르비텍 추가). **오탐 모드 병기(코퍼스 실측, 15개 조달건·48레코드 표본)**: FUND_UNREPORTED의 주된 오탐 원인은 recency(신규 조달 유예 부족)가 아니라 **"다년 보고 스냅샷 미정산"**이다 — 48건 중 31건(64.6%, 8개 조달건)은 같은 조달건의 더 최신 연도 보고서에서 이미 `real_dtls_amount>0`·`real_dtls_cn` 기재로 갱신돼 도구가 더 이상 플래그하지 않는 옛 스냅샷 잔재였다(예: 48건 중 최다 기여였던 유티아이 25건이 4개 조달건 전부 100% 완전소진으로 해소). 도구의 실제 판정 로직(`_detect_fund_anomaly`, 최신연도 라인아이템 기준)으로도 여전히 발화하는 실질 미해소는 17건(7개 조달건, 4개 회사 — 링크드·HLB·오르비텍·피아이이)뿐이며, 오르비텍 4개 조달건(사모 제8~11회차)이 2026년 보고서에서도 real=0을 유지하는 가장 뚜렷한 실측 사례다. 개선 후보(코드 미변경, 기록만): 같은 조달건의 최신 연도 보고서 기준 재정산 로직 부재가 오탐의 구조적 원인 — 상세는 `docs/superpowers/plans/2026-08-02-fund-misuse-detection-verification.md` 부록 B |
