@@ -106,11 +106,24 @@ class TestFindPatternOverlapsGate:
         assert z["n_matched"] + len(z["missing"]) == z["n_total"]
 
     def test_창_경계값_포함(self):
-        """창 종료일 당일은 창 안이다(경계 포함)."""
+        """창 종료일 당일은 창 안이고, 하루만 넘어도 밖이다(경계 포함).
+
+        timeline_months 값은 실측으로 재보정되는 값이라(2026-08-21, 250개사)
+        테스트가 특정 숫자에 매달리지 않도록 패턴에서 직접 읽는다."""
         tax = ["3.1", "2.4"]
-        exact = {"3.1": ["20250101"], "2.4": ["20260101"]}  # 정확히 12개월
+        # 3.1+2.4를 함께 요구하는 패턴 중 창이 가장 짧은 것이 경계를 정한다
+        cands = [
+            p for p in CROSS_SIGNAL_PATTERNS.values()
+            if {"3.1", "2.4"} <= set(p["signal_sequence"])
+        ]
+        months = min(p["timeline_months"] for p in cands)
+        base = "20200101"
+        exact = {"3.1": [base], "2.4": [_window_end(base, months)]}
         assert find_pattern_overlaps(tax, 2, taxonomy_dates=exact)
-        over = {"3.1": ["20250101"], "2.4": ["20260102"]}   # 하루 초과
+
+        end = _window_end(base, months)
+        over_day = f"{end[:6]}{int(end[6:8]) + 1:02d}"   # 하루 초과
+        over = {"3.1": [base], "2.4": [over_day]}
         assert find_pattern_overlaps(tax, 2, taxonomy_dates=over) == []
 
     def test_결과에_창_메타가_실린다(self):
