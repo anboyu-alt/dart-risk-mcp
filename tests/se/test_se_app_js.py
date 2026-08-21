@@ -13420,9 +13420,17 @@ def _extract_pattern_overlap_functions(html: str) -> str:
     `findPatternOverlaps`는 함수 선언 순서상 `tidCompare`보다 뒤에
     있으므로, 먼저 등장하는 `tidCompare`를 앞에 잘라 붙인다."""
     tid_compare_fn = _extract_balanced_js_function(html, "function tidCompare(a, b)")
+    # 관찰 윈도우 게이트(core taxonomy._window_end/_best_window 이식) —
+    # findPatternOverlaps가 taxDates를 받으면 이 둘을 호출하므로 함께 잘라낸다.
+    window_end_fn = _extract_balanced_js_function(
+        html, "function windowEnd(start, months)")
+    best_window_fn = _extract_balanced_js_function(
+        html, "function bestWindow(seq, taxDates, months)")
     find_overlaps_fn = _extract_balanced_js_function(
-        html, "function findPatternOverlaps(patternsList, detectedTaxSet, minOverlap)")
-    return tid_compare_fn + "\n\n" + find_overlaps_fn
+        html,
+        "function findPatternOverlaps(patternsList, detectedTaxSet, minOverlap, taxDates)")
+    return chr(10).join(
+        [tid_compare_fn, window_end_fn, best_window_fn, find_overlaps_fn])
 
 
 def _extract_public_pattern_match_pieces():
@@ -13440,7 +13448,7 @@ def _extract_public_pattern_match_pieces():
       5) `tidCompare`/`findPatternOverlaps` 블록(`_extract_pattern_overlap_functions`)
          — v1.11부터 매칭 스니펫이 호출하는 부분 겹침 조회 함수.
       6) buildResult() 안의 매칭 스니펫 — "const events = [];"부터
-         "findPatternOverlaps(DATA.patterns, detectedTax, 2);"까지:
+         "findPatternOverlaps(DATA.patterns, detectedTax, 2, taxDates);"까지:
          정정공시 제외 → matchSignals 호출 → qualifySignals로 한정 →
          observed만으로 detectedTax 집합 구성 → 패턴 부분 겹침 조회, 전
          단계.
@@ -13462,7 +13470,7 @@ def _extract_public_pattern_match_pieces():
     pattern_overlap_fns = _extract_pattern_overlap_functions(html)
 
     start_marker = "const events = [];"
-    end_marker = "const patterns = findPatternOverlaps(DATA.patterns, detectedTax, 2);"
+    end_marker = "const patterns = findPatternOverlaps(DATA.patterns, detectedTax, 2, taxDates);"
     start = html.index(start_marker)
     end = html.index(end_marker, start) + len(end_marker)
     matching_snippet = html[start:end]
@@ -13653,15 +13661,16 @@ class TestCapitalChurnTaxonomyGapIsDocumented(unittest.TestCase):
         signals_json_path = _ROOT / "docs" / "tool" / "signals-data.json"
         real_signals = _json.loads(signals_json_path.read_text(encoding="utf-8"))
         cb_kw = next(s for s in real_signals["signals"] if s["key"] == "CB_BW")["keywords"][0]
-        inquiry_kw = next(s for s in real_signals["signals"] if s["key"] == "INQUIRY")["keywords"][0]
+        viol_kw = next(s for s in real_signals["signals"] if s["key"] == "DISCLOSURE_VIOL")["keywords"][0]
         items = [
             {"rcept_no": "1", "rcept_dt": "20250101", "report_nm": f"주요사항보고서({cb_kw})"},
             {"rcept_no": "2", "rcept_dt": "20250201", "report_nm": f"주요사항보고서({cb_kw})"},
             {"rcept_no": "3", "rcept_dt": "20250301", "report_nm": f"주요사항보고서({cb_kw})"},
-            {"rcept_no": "4", "rcept_dt": "20250401", "report_nm": inquiry_kw},
+            {"rcept_no": "4", "rcept_dt": "20250401", "report_nm": viol_kw},
         ]
-        # 공개 뷰어의 실제 client-side 로직: CB_BW 3건(자본 이벤트) + INQUIRY
-        # 1건(taxonomy 4.3)이 있어도, 2.7(자본 churn)을 키워드로는 절대
+        # 공개 뷰어의 실제 client-side 로직: CB_BW 3건(자본 이벤트) +
+        # DISCLOSURE_VIOL 1건(taxonomy 4.3)이 있어도, 2.7(자본 churn)을
+        # 키워드로는 절대
         # 얻을 수 없어 capital_churn_anomaly가 안 뜬다.
         self.assertEqual(run_public_pattern_match(real_signals, items), [])
 
@@ -13674,12 +13683,12 @@ class TestCapitalChurnTaxonomyGapIsDocumented(unittest.TestCase):
         signals_json_path = _ROOT / "docs" / "tool" / "signals-data.json"
         real_signals = _json.loads(signals_json_path.read_text(encoding="utf-8"))
         cb_kw = next(s for s in real_signals["signals"] if s["key"] == "CB_BW")["keywords"][0]
-        inquiry_kw = next(s for s in real_signals["signals"] if s["key"] == "INQUIRY")["keywords"][0]
+        viol_kw = next(s for s in real_signals["signals"] if s["key"] == "DISCLOSURE_VIOL")["keywords"][0]
         items = [
             {"rcept_no": "1", "rcept_dt": "20250101", "report_nm": f"주요사항보고서({cb_kw})"},
             {"rcept_no": "2", "rcept_dt": "20250201", "report_nm": f"주요사항보고서({cb_kw})"},
             {"rcept_no": "3", "rcept_dt": "20250301", "report_nm": f"주요사항보고서({cb_kw})"},
-            {"rcept_no": "4", "rcept_dt": "20250401", "report_nm": inquiry_kw},
+            {"rcept_no": "4", "rcept_dt": "20250401", "report_nm": viol_kw},
         ]
         self.assertEqual(run_se_pattern_match(real_signals, items), ["capital_churn_anomaly"])
 
@@ -13687,19 +13696,19 @@ class TestCapitalChurnTaxonomyGapIsDocumented(unittest.TestCase):
         """실측 회귀 고정 — 삼성전자(자사주 취득·처분만 반복, 실제로는
         capital_churn_anomaly가 core에도 안 뜨는 회사)를 재현한 픽스처.
         희석성/비희석성 구분 없이 "자본 이벤트 아무거나 3건"으로만
-        판정했다면 이 테스트는 실패했을 것이다(TREASURY 9건 + INQUIRY
+        판정했다면 이 테스트는 실패했을 것이다(TREASURY 9건 + DISCLOSURE_VIOL
         1건 — SE-13 Task 3 라이브 검증 중 실제로 이 형태의 거짓 매칭을
         발견하고 detectCapitalChurn의 희석/비희석 이중 조건으로 고쳤다)."""
         import json as _json
         signals_json_path = _ROOT / "docs" / "tool" / "signals-data.json"
         real_signals = _json.loads(signals_json_path.read_text(encoding="utf-8"))
         treasury_kw = next(s for s in real_signals["signals"] if s["key"] == "TREASURY")["keywords"][0]
-        inquiry_kw = next(s for s in real_signals["signals"] if s["key"] == "INQUIRY")["keywords"][0]
+        viol_kw = next(s for s in real_signals["signals"] if s["key"] == "DISCLOSURE_VIOL")["keywords"][0]
         items = [
             {"rcept_no": str(i), "rcept_dt": f"2025{(i % 9) + 1:02d}01",
              "report_nm": f"주요사항보고서({treasury_kw})"}
             for i in range(1, 10)
-        ] + [{"rcept_no": "99", "rcept_dt": "20251001", "report_nm": inquiry_kw}]
+        ] + [{"rcept_no": "99", "rcept_dt": "20251001", "report_nm": viol_kw}]
         self.assertEqual(run_se_pattern_match(real_signals, items), [])
 
 

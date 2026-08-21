@@ -1468,9 +1468,61 @@ def _tid_sort_key(tid: str) -> tuple:
         return (1, [tid])
 
 
+def _window_end(start: str, months: int) -> str:
+    """YYYYMMDD 시작일에 months를 더한 창 종료일(YYYYMMDD, 경계 포함).
+
+    달력 연산만 하며 예외를 던지지 않는다 — 말일 오버플로(1/31 + 1개월)는
+    그 달의 마지막 날로 자른다(datetime 없이 순수 정수 연산).
+    """
+    y, m, d = int(start[:4]), int(start[4:6]), int(start[6:8])
+    m += months
+    y += (m - 1) // 12
+    m = (m - 1) % 12 + 1
+    if m == 2:
+        last = 29 if (y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)) else 28
+    elif m in (4, 6, 9, 11):
+        last = 30
+    else:
+        last = 31
+    return f"{y:04d}{m:02d}{min(d, last):02d}"
+
+
+def _best_window(
+    seq_set: "set[str]",
+    taxonomy_dates: "dict[str, list[str]]",
+    months: int,
+) -> "tuple[set[str], str, str]":
+    """패턴 구성 신호 중 `months` 길이의 한 창 안에 함께 관찰된 최대 집합.
+
+    각 관찰 날짜를 창 시작 후보로 삼아 [d, d+months] 안에 들어오는 taxonomy를
+    세고, 가장 많이 담기는 창을 고른다. 담기는 개수가 같으면 **늦은 창**을
+    택한다 — 이 도구는 관측용이라 같은 겹침이면 최근 것이 사용자에게 더
+    유용하고, 후보를 오름차순으로 훑으며 마지막 최대값을 남기므로 결과는
+    입력 순서와 무관하게 결정적이다. 날짜가 하나도 없으면 빈 집합을 반환한다.
+
+    Returns:
+        (관찰된 taxonomy 집합, 창 시작 YYYYMMDD, 창 종료 YYYYMMDD)
+    """
+    cands = sorted({
+        dt for tid in seq_set for dt in taxonomy_dates.get(tid, []) if dt
+    })
+    best: "set[str]" = set()
+    best_win = ("", "")
+    for start in cands:
+        end = _window_end(start, months)
+        inside = {
+            tid for tid in seq_set
+            if any(start <= dt <= end for dt in taxonomy_dates.get(tid, []) if dt)
+        }
+        if len(inside) >= len(best):
+            best, best_win = inside, (start, end)
+    return best, best_win[0], best_win[1]
+
+
 def find_pattern_overlaps(
     detected_taxonomies: List[str],
     min_overlap: int = 2,
+    taxonomy_dates: "dict[str, list[str]] | None" = None,
 ) -> List[Dict]:
     """등록된 복합 패턴과 관찰된 taxonomy 집합의 부분 겹침을 조회한다.
 
@@ -1487,6 +1539,10 @@ def find_pattern_overlaps(
     Args:
         detected_taxonomies: 관찰된 taxonomy ID 목록(중복·set 경유 허용)
         min_overlap: 겹침으로 인정할 최소 구성 신호 개수(미만이면 결과 제외)
+        taxonomy_dates: {taxonomy id: [관찰 날짜 YYYYMMDD, ...]}. 주면 패턴의
+            `timeline_months` 길이 창 안에 함께 관찰된 신호만 matched로 인정한다
+            (창 밖 신호는 missing으로 간다). 미전달(None)이면 창 게이트를 적용하지
+            않아 기존 호출부와 동작이 동일하다.
 
     Returns:
         각 항목: pattern_id, name, description, signal_sequence, checkpoints
@@ -1514,7 +1570,21 @@ def find_pattern_overlaps(
         if len(matched_set) < min_overlap:
             continue
 
-        missing_set = seq_set - detected_set
+        # 관찰 윈도우 게이트 — 날짜를 받았을 때만 적용한다(미전달 시 기존
+        # 동작 그대로). 패턴의 timeline_months는 원래 카드 문구로만 쓰이고
+        # 매칭에는 관여하지 않아, 5년 스캔에서 2~3년 떨어진 신호가 한 패턴으로
+        # 묶이면서 "관찰 윈도우 12개월"이라는 거짓 표기가 나왔다.
+        window_start = window_end = ""
+        if taxonomy_dates is not None:
+            months = pattern.get("timeline_months") or 0
+            if months > 0:
+                matched_set, window_start, window_end = _best_window(
+                    matched_set, taxonomy_dates, months
+                )
+                if len(matched_set) < min_overlap:
+                    continue
+
+        missing_set = seq_set - matched_set
         results.append({
             "pattern_id": pattern_id,
             "name": pattern["name"],
@@ -1525,6 +1595,9 @@ def find_pattern_overlaps(
             "missing": sorted(missing_set, key=_tid_sort_key),
             "n_matched": len(matched_set),
             "n_total": len(seq_set),
+            "timeline_months": pattern.get("timeline_months"),
+            "window_start": window_start,
+            "window_end": window_end,
         })
 
     results.sort(
