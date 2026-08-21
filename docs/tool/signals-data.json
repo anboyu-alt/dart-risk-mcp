@@ -1,4 +1,7 @@
 {
+ "meta": {
+  "version": "1.12.0"
+ },
  "signals": [
   {
    "key": "CAPITAL_IMPAIRMENT",

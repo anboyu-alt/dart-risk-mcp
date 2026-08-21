@@ -9,6 +9,7 @@ import os
 import sys
 import unittest
 from collections import Counter
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
@@ -433,3 +434,35 @@ class TestCatalogData(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestViewerVersionMeta(unittest.TestCase):
+    """뷰어 하단 버전 표기의 단일 출처 고정.
+
+    버전이 세 곳(`dart_risk_mcp/__init__.py`·`pyproject.toml`·내보낸
+    `signals-data.json`)에 흩어져 있어 릴리스 때 한 곳만 올리면 뷰어가 옛
+    버전을 계속 보여준다. 세 값의 일치를 기계적으로 고정한다.
+    """
+
+    def test_meta_version_matches_package_and_pyproject(self) -> None:
+        import tomllib
+
+        from dart_risk_mcp import __version__ as pkg_version
+
+        root = Path(__file__).resolve().parents[1]
+        cfg = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+        pyproject_version = cfg["project"]["version"]
+        exported = json.loads(
+            (root / "docs" / "tool" / "signals-data.json").read_text(encoding="utf-8")
+        )
+
+        self.assertEqual(pkg_version, pyproject_version)
+        self.assertEqual(exported["meta"]["version"], pkg_version)
+
+    def test_meta_has_no_timestamp(self) -> None:
+        """재생성마다 diff가 나는 값(타임스탬프 등)을 meta에 넣지 않는다."""
+        root = Path(__file__).resolve().parents[1]
+        exported = json.loads(
+            (root / "docs" / "tool" / "signals-data.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(set(exported["meta"]), {"version"})

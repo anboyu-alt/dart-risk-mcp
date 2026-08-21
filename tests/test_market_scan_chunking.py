@@ -26,12 +26,18 @@ class TestMarketScanChunking(unittest.TestCase):
 
     def test_thirty_day_window_is_chunked_and_covers_old_dates(self):
         calls = []
+        # 창 초반(오래된 쪽)에 놓이되 경계를 넘지 않는 날짜를 오늘 기준으로
+        # 계산한다. 예전에는 "20260722"를 하드코딩했는데, 스캔 창은 오늘
+        # 기준으로 굴러가므로 그 날짜가 창 밖으로 밀려나면(2026-08-21에
+        # 실제로 발생 — 창이 20260723~20260821이 되며 하루 차이로 이탈)
+        # 제품 회귀가 없는데도 영구히 실패한다.
+        old_date = (datetime.now() - timedelta(days=25)).strftime("%Y%m%d")
 
         def fake_fetch(api_key, bgn_de, end_de, pblntf_ty="", max_pages=10):
             calls.append((bgn_de, end_de))
             # 오래된 청크에만 존재하는 공시 — 절단됐다면 이 공시를 놓친다
-            if bgn_de <= "20260722" <= end_de:
-                return [_disc("R_OLD", "20260722")]
+            if bgn_de <= old_date <= end_de:
+                return [_disc("R_OLD", old_date)]
             return []
 
         with patch.object(server, "fetch_market_disclosures", side_effect=fake_fetch):

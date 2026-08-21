@@ -30,6 +30,7 @@ from collections import Counter
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from dart_risk_mcp import __version__
 from dart_risk_mcp.core.signals import (  # noqa: E402
     SIGNAL_TYPES,
     SIGNAL_KEY_TO_TAXONOMY,
@@ -324,6 +325,11 @@ def build_signals_data() -> dict:
     categories = dict(CATEGORY_LABELS)
     categories[str(ROUTINE_FILING_CATEGORY)] = ROUTINE_FILING_LABEL
     return {
+        # 뷰어 하단에 표기되는 버전. 단일 출처는 `dart_risk_mcp/__init__.py`의
+        # `__version__`이며 pyproject.toml과 같은 값이어야 한다
+        # (tests/test_export_tool_data.py가 세 곳의 일치를 고정한다).
+        # 타임스탬프는 넣지 않는다 — 재생성마다 diff가 생겨 노이즈가 된다.
+        "meta": {"version": __version__},
         "signals": signals,
         "patterns": patterns,
         "categories": categories,
