@@ -26,6 +26,7 @@ signals.py·taxonomy.py를 유일한 진실(source of truth)로 두고, 브라�
 import json
 import os
 import sys
+from collections import Counter
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -134,6 +135,111 @@ ROUTINE_FILING_KEYWORDS = [
 # 번호를 반환한다.
 ROUTINE_FILING_CATEGORY = 9
 ROUTINE_FILING_LABEL = "정기 보고"  # 사실 라벨 — 판정 어휘 아님(v0.8.5)
+
+
+# 금감원 카탈로그(작업 1, 2026-08-17) — 보도자료 분류 결과에서 taxonomy가
+# 매핑된 사례만 뷰어에 배선한다. `confidence`(분류 신뢰도)도 severity와
+# 같은 이유로 절대 내보내지 않는다 — v0.8.5 무점수 원칙은 taxonomy
+# score/severity뿐 아니라 이 파이프라인이 매긴 신뢰도 라벨에도 동일하게
+# 적용된다(둘 다 우리가 매긴 판정 값이지 원문 사실이 아니다).
+_CATALOG_JSONL = os.path.join(os.path.dirname(__file__), "..",
+                               "data", "catalog", "catalog_classified.jsonl")
+_LABELS_KO_PATH = os.path.join(os.path.dirname(__file__), "..",
+                                "data", "catalog", "labels_ko.json")
+
+# 유형별 상한 (브리프 고정값) — 발췌 예산 문제(catalog.py의 max_cases와
+# 동일한 근거)를 뷰어에서도 반복하지 않기 위해 처음부터 좁게 자른다.
+_CATALOG_TECH_TOP_N = 5
+_CATALOG_LAWS_TOP_N = 3
+_CATALOG_RECENT_TOP_N = 3
+
+
+def _load_catalog_records() -> list[dict]:
+    """catalog_classified.jsonl을 줄 단위로 읽는다. 파일 부재·빈 파일·
+    개별 줄 파싱 실패는 모두 조용히 건너뛴다(graceful degradation —
+    카탈로그 파이프라인은 이 스크립트의 실행을 막으면 안 된다)."""
+    records: list[dict] = []
+    if not os.path.exists(_CATALOG_JSONL):
+        return records
+    try:
+        with open(_CATALOG_JSONL, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        return []
+    return records
+
+
+def _load_catalog_tax_labels() -> dict[str, str]:
+    """taxonomy id → 한글 title. labels_ko.json이 유일한 출처(45종 전부
+    보유 확인됨). 파일이 없거나 특정 id가 빠져 있으면 TAXONOMY의 name(영문
+    다수)으로 폴백 — 사례가 0건인 유형도 패턴 구성 신호 이름 표시에
+    필요하므로 45종 전부를 채운다."""
+    labels: dict[str, str] = {}
+    if os.path.exists(_LABELS_KO_PATH):
+        try:
+            with open(_LABELS_KO_PATH, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            labels = {tid: v.get("title", tid) for tid, v in raw.items()
+                       if isinstance(v, dict)}
+        except (OSError, json.JSONDecodeError):
+            labels = {}
+    for tid, entry in TAXONOMY.items():
+        labels.setdefault(tid, entry.get("name", tid))
+    return labels
+
+
+def build_catalog_data() -> dict:
+    """docs/tool/signals-data.json의 "catalog" 키 — 금감원 적발 사례를
+    taxonomy id별로 집계한 뷰어용 데이터.
+
+    입력은 catalog_classified.jsonl 중 taxonomy_ids가 비어있지 않은
+    레코드만(2026-08-17 실측 277건/22개 유형). 한 레코드가 복수 id를
+    가지면 각 id 집계에 모두 반영한다(중복 집계 — total_cases는 레코드
+    수 기준이라 taxonomy별 n의 합과 다를 수 있다).
+    """
+    tax_labels = _load_catalog_tax_labels()
+    records = _load_catalog_records()
+    tagged = [r for r in records if r.get("taxonomy_ids")]
+
+    by_taxonomy: dict[str, list[dict]] = {}
+    for rec in tagged:
+        for tid in rec.get("taxonomy_ids", []):
+            by_taxonomy.setdefault(tid, []).append(rec)
+
+    out_by_taxonomy = {}
+    for tid, recs in by_taxonomy.items():
+        tech_counter: Counter = Counter()
+        laws_counter: Counter = Counter()
+        for r in recs:
+            for t in (r.get("techniques") or []):
+                if t:
+                    tech_counter[t] += 1
+            for law in (r.get("laws") or []):
+                if law:
+                    laws_counter[law] += 1
+        recent = sorted(recs, key=lambda r: r.get("date", ""), reverse=True)[:_CATALOG_RECENT_TOP_N]
+        out_by_taxonomy[tid] = {
+            "n": len(recs),
+            "tech": [[k, v] for k, v in tech_counter.most_common(_CATALOG_TECH_TOP_N)],
+            "laws": [[k, v] for k, v in laws_counter.most_common(_CATALOG_LAWS_TOP_N)],
+            "recent": [
+                {"d": r.get("date", ""), "t": r.get("title", ""), "u": r.get("url", "")}
+                for r in recent
+            ],
+        }
+
+    return {
+        "total_cases": len(tagged),
+        "tax_labels": tax_labels,
+        "by_taxonomy": out_by_taxonomy,
+    }
 
 
 # severity 2단계 접기 (뷰어 '주의/참고' 배지용) — severity 문자열 원값은
@@ -249,6 +355,10 @@ def build_signals_data() -> dict:
             },
         },
         "ambiguous_signal_keys": sorted(AMBIGUOUS_SIGNAL_KEYS),
+        # 금감원 적발 사례(작업 1) — score/severity/confidence 미노출.
+        # 파일이 없거나 비어 있어도 빈 by_taxonomy·total_cases=0으로 항상
+        # 존재한다(뷰어가 catalog 키 자체는 항상 참조할 수 있게).
+        "catalog": build_catalog_data(),
     }
 
 

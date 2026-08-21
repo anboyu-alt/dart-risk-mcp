@@ -31,9 +31,24 @@ def run_js(expression: str):
     # 여기 섞여 있다 — pollDecision의 reason, SECTION_GROUPS의 제목 등),
     # 로케일이 다르면 UnicodeDecodeError가 나거나 운 좋게 우연히 다른 문자로
     # 잘못 디코딩될 수 있다.
-    out = subprocess.run(
-        [_NODE, "-e", script], capture_output=True, text=True, encoding="utf-8"
-    )
+    # 스크립트를 임시 파일에 써서 `node <file>`로 실행한다(`-e`에 문자열로
+    # 넘기지 않는다) — 큰 픽스처(예: 전체 signals-data.json)를 인라인하는
+    # 호출부(run_se_pattern_match)가 있어, 명령줄에 직접 실으면 Windows의
+    # 명령줄 길이 상한을 넘겨 "파일 이름이나 확장명이 너무 깁니다"
+    # (WinError 206)로 실패한다(2026-08-17 실측 — signals-data.json에
+    # catalog 키가 추가되며 38KB→68KB로 커진 뒤 처음 발현). 파일 경유는
+    # 이 상한 자체가 없어 데이터가 더 커져도 안전하다.
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".js", delete=False, encoding="utf-8"
+    ) as f:
+        f.write(script)
+        script_path = f.name
+    try:
+        out = subprocess.run(
+            [_NODE, script_path], capture_output=True, text=True, encoding="utf-8"
+        )
+    finally:
+        pathlib.Path(script_path).unlink(missing_ok=True)
     if out.returncode != 0:
         raise AssertionError(f"node 실행 실패:\n{out.stderr}")
     return json.loads(out.stdout)

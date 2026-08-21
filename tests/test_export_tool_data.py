@@ -8,11 +8,14 @@ import json
 import os
 import sys
 import unittest
+from collections import Counter
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 from export_tool_data import (  # noqa: E402
     build_signals_data,
+    build_catalog_data,
+    _load_catalog_records,
     CATEGORY_LABELS,
     ROUTINE_FILING_CATEGORY,
     ROUTINE_FILING_KEYWORDS,
@@ -24,7 +27,7 @@ from dart_risk_mcp.core.signals import (  # noqa: E402
     SIGNAL_TYPES,
     CAPITAL_EVENT_KEYS,
 )
-from dart_risk_mcp.core.taxonomy import CROSS_SIGNAL_PATTERNS  # noqa: E402
+from dart_risk_mcp.core.taxonomy import CROSS_SIGNAL_PATTERNS, TAXONOMY  # noqa: E402
 
 
 class TestBuildSignalsData(unittest.TestCase):
@@ -344,6 +347,88 @@ class TestRoutineFilingCategory(unittest.TestCase):
         """기존 위험 신호 카테고리(0~8) 라벨은 하나도 안 바뀌어야 한다."""
         for k, v in CATEGORY_LABELS.items():
             self.assertEqual(self.data["categories"][k], v)
+
+
+class TestCatalogData(unittest.TestCase):
+    """금감원 적발 사례(catalog_classified.jsonl) → signals-data.json의
+    "catalog" 키. 뷰어 배선 작업 1(2026-08-17). 점수·등급 미노출 원칙은
+    이 카탈로그 파이프라인의 confidence 필드에도 동일하게 적용된다."""
+
+    def setUp(self):
+        self.data = build_signals_data()
+        self.catalog = self.data["catalog"]
+        self.records = _load_catalog_records()
+        self.tagged = [r for r in self.records if r.get("taxonomy_ids")]
+
+    def test_total_cases_matches_tagged_record_count(self):
+        self.assertEqual(self.catalog["total_cases"], len(self.tagged))
+        # 브리프 실측값 — 회귀 시 즉시 드러나도록 고정값도 함께 확인.
+        self.assertEqual(self.catalog["total_cases"], 277)
+
+    def test_by_taxonomy_n_matches_direct_count(self):
+        expected: Counter = Counter()
+        for r in self.tagged:
+            for tid in r["taxonomy_ids"]:
+                expected[tid] += 1
+        by_tax = self.catalog["by_taxonomy"]
+        self.assertEqual(set(by_tax.keys()), set(expected.keys()))
+        for tid, n in expected.items():
+            self.assertEqual(by_tax[tid]["n"], n, msg=tid)
+
+    def test_tax_labels_cover_all_45_taxonomy_ids(self):
+        self.assertEqual(set(self.catalog["tax_labels"].keys()), set(TAXONOMY.keys()))
+        self.assertEqual(len(self.catalog["tax_labels"]), 45)
+        for tid, label in self.catalog["tax_labels"].items():
+            self.assertIsInstance(label, str)
+            self.assertTrue(label, msg=tid)
+
+    def test_recent_capped_at_3_sorted_desc_with_only_dtu_fields(self):
+        for tid, bucket in self.catalog["by_taxonomy"].items():
+            recent = bucket["recent"]
+            self.assertLessEqual(len(recent), 3, msg=tid)
+            dates = [r["d"] for r in recent]
+            self.assertEqual(dates, sorted(dates, reverse=True), msg=tid)
+            for r in recent:
+                self.assertEqual(set(r.keys()), {"d", "t", "u"}, msg=tid)
+
+    def test_tech_and_laws_capped(self):
+        for tid, bucket in self.catalog["by_taxonomy"].items():
+            self.assertLessEqual(len(bucket["tech"]), 5, msg=tid)
+            self.assertLessEqual(len(bucket["laws"]), 3, msg=tid)
+            for item in bucket["tech"]:
+                self.assertEqual(len(item), 2)
+                self.assertIsInstance(item[0], str)
+                self.assertIsInstance(item[1], int)
+            for item in bucket["laws"]:
+                self.assertEqual(len(item), 2)
+
+    def test_no_score_severity_confidence_leak_in_full_export(self):
+        """v0.8.5 무점수 원칙 — signals-data.json 전체 문자열에 판정성
+        키(severity/base_score/confidence)가 어디에도 없어야 한다."""
+        blob = json.dumps(self.data, ensure_ascii=False)
+        self.assertNotIn('"severity"', blob)
+        self.assertNotIn('"base_score"', blob)
+        self.assertNotIn('"confidence"', blob)
+
+    def test_catalog_graceful_when_jsonl_missing(self):
+        """카탈로그 파일이 없어도(경로 오타·미생성) build_catalog_data가
+        예외 없이 빈 구조를 반환해야 한다 — 뷰어가 catalog 키를 항상
+        참조할 수 있게."""
+        import export_tool_data as mod
+
+        original_path = mod._CATALOG_JSONL
+        try:
+            mod._CATALOG_JSONL = os.path.join(
+                os.path.dirname(__file__), "does_not_exist.jsonl")
+            result = mod.build_catalog_data()
+            self.assertEqual(result["total_cases"], 0)
+            self.assertEqual(result["by_taxonomy"], {})
+            self.assertEqual(len(result["tax_labels"]), 45)
+        finally:
+            mod._CATALOG_JSONL = original_path
+
+    def test_json_serializable_with_catalog(self):
+        json.dumps(self.data, ensure_ascii=False)
 
 
 if __name__ == "__main__":
