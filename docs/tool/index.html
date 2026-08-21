@@ -956,6 +956,14 @@ function demotionReason(parsed, filing) {
       ? "이미 실행된 건의 결과 보고입니다"
       : `체결이 아니라 ${parsed.tail}입니다`;
   }
+  // R2b — 포장 제목(기타주요경영사항 등)은 괄호 부제가 실제 사건이다.
+  // core qualifiers._wrapper_phase_tail 이식.
+  if ((r.wrapper_bodies || []).includes(parsed.body) && !escalated) {
+    for (const sub of parsed.subtitles) {
+      const t = (r.phase_tails || []).find((x) => sub.endsWith(x));
+      if (t) return `체결이 아니라 ${t}입니다`;
+    }
+  }
   // R3 — 자회사·특수관계인 사안
   if (parsed.subtitles.some((s) => (r.subsidiary_subtitles || []).includes(s))) {
     return "이 회사가 아니라 자회사 사안입니다";

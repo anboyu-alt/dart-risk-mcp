@@ -122,7 +122,7 @@ dart_risk_mcp/
   | Cat 5 기업활동 | `ASSET_TRANSFER`, `DEMERGER`, `MGMT`, `FUND_OUTFLOW`, `ACQ_REVIEW` |
   | Cat 6 회계/재무 | `REVENUE_IRREG`, `CONTINGENT` |
   | Cat 7 시장조작 | `INQUIRY`, `EMBEZZLE` |
-  | Cat 8 위기/부실 | `INSOLVENCY`, `DEBT_RESTR`, `GOING_CONCERN`, `DELISTING_RISK` |
+  | Cat 8 위기/부실 | `INSOLVENCY`, `DEBT_RESTR`, `GOING_CONCERN`, `DELISTING_RISK`, `WATCH_ISSUE` |
 
   v1.6.0 신규: `FUND_OUTFLOW`(금전대여·채무보증·담보제공·유형자산양수 — 참고 강도, taxonomy 5.7)
   · `ACQ_REVIEW`(영업양수·타법인주식및출자증권양수 — 상대방 확인 안내, taxonomy 5.8).
@@ -267,7 +267,7 @@ dart_risk_mcp/
 
 시장 전체 공시를 preset 기반으로 배치 스캔합니다.
 
-- `preset` 허용값: `cb_issue`, `treasury`, `reverse_split`, `3pca`, `shareholder_change`, `exec_change`, `audit_issue`, `asset_transfer`, `going_concern`, `delisting`(v1.12.2 신규 — `DELISTING_RISK`), `embezzle`, `inquiry`, `fund_outflow`(v1.6.0 신규 — `FUND_OUTFLOW`/`ACQ_REVIEW`), `all_risk`
+- `preset` 허용값: `cb_issue`, `treasury`, `reverse_split`, `3pca`, `shareholder_change`, `exec_change`, `audit_issue`, `asset_transfer`, `going_concern`, `delisting`(v1.12.2 신규 — `DELISTING_RISK`+`WATCH_ISSUE`), `embezzle`, `inquiry`, `fund_outflow`(v1.6.0 신규 — `FUND_OUTFLOW`/`ACQ_REVIEW`), `all_risk`
 - `days` 범위: 1~90일, `max_results` 범위: 1~200건
 - v1.10.2: 시장 스캔을 **2일 청크**로 순회하고, 상한(1,000건) 도달 청크는 **1일 단위 재분할**(상한 1,500건)로 재조회 — 한 호출로 창 전체를 덮으려다 최신 1~2일만 스캔되던 조용한 절단 해소(실사고: asset_transfer 30일이 7/22 유형자산양수를 놓침). 하루가 1,500건을 넘는 극단일만 "스캔 구간 일부 절단"으로 정직 표기
 - 내부 흐름: `fetch_market_disclosures` (corp_code 없이 `/list.json`) → `match_signals` → 한정층(`qualify_signals`)으로 관찰/절차 분리 → `_filter_market_rows`가 절차·사후 보고 행을 제외하고 관찰 신호만 preset 필터에 통과
@@ -595,6 +595,10 @@ PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설
 | 패턴의 **간격** 축(`timeline_months`) | ✅ 도입(재보정 후) | 선행 측정(12개사×3년)은 "적중 49%라 쓸 수 없다"로 결론냈고, 후속 재측정(**250개사×5년·관측 363건** — 선행 측정이 스스로 지목한 "수백 개 회사가 필요" 한계를 메운 표본)이 그 경고를 재확인했다: 옛 설정값으로 게이트를 걸면 관측의 **31.4%**가 영향(20.9% 탈락 + 10.5% 축소). 결론은 "쓰지 말자"가 아니라 **"값이 틀렸다"** — 패턴별 필요 개월 p90으로 재보정(zombie_ma 12→30, fake_new_biz 6→30, audit_insider_dump 6→33, delisting_evasion 9→27, debt_spiral·fund_diversion_chain 12→21, related_party_hollowing 15→18)하니 영향이 **8.0%**로 하락. `capital_backflow`(12)는 "최대주주변경 후 12개월 내"가 정의 자체라 유지(v1.6.1 내용 게이트 별도 보유), `founder_fade`·`reverse_split_spiral`(18)은 이미 p90보다 넉넉해 유지. ⚠ 재보정값은 **in-sample calibration이지 validation이 아니다**(p90은 정의상 그 표본의 90%를 담는다) — 좁히려면 out-of-sample 재측정 필요. 근거: `docs/superpowers/specs/2026-08-21-pattern-window-recalibration.md` |
 | `DELISTING_RISK`(상장폐지 절차, v1.12.2) | ✅ | 2026-08-22 `search_market_disclosures("going_concern", 14)` 라이브 — 알에프세미·파라택시스코리아(정리매매 개시)·삼부토건·범양건영(개선기간 종료)·STX(이의신청서 제출)·듀오백·캐리(실질심사 대상결정 기한)·이오플로우·다원시스·코이즈 등 발화. 키워드 4종은 90일 시장 전체 실측(고유 공시 48,646건)에서 합집합 **177건/68개사**이고 전부 기존 신호 미포착이었다(단독 기여: 상장폐지 50·실질심사 57·개선기간 21·정리매매 11). 오탐은 「…절차 미진행」류 약 2~3건(1.7%)으로 측정 — 전부 퇴출 절차 맥락 안의 공시다. 근거: `docs/superpowers/specs/2026-08-22-delisting-risk-signal.md` |
 | 한정층 R2 국면 상승 예외(`ESCALATION_SUBTITLES`, v1.12.2) | ✅ | 「주권매매거래정지해제(상장폐지에 따른 정리매매 개시)」는 어미가 '해제'라 R2가 "체결이 아니라 해제입니다"로 강등했다 — 매매정지가 풀린 게 아니라 **상장폐지가 확정돼 정리매매가 시작**된다는 뜻이라 의미가 뒤집힌다. 90일 실측에서 R2가 강등한 23건을 전수 확인해 21건(정리매매 개시 20·재개 1)은 오강등, 2건(「상장폐지사유 미해당」·「실질심사 대상 제외 결정」)은 정당한 강등임을 확인하고 **괄호 부제**로 갈랐다. 라이브: 알에프세미 20260821900899·파라택시스코리아 20260819900696이 observed로 표면화 |
+| `WATCH_ISSUE`(관리종목 지정요건, v1.12.3) | ✅ | 90일 시장 전체 실측(고유 공시 48,646건) — "관리종목" 115건/99개사(시가총액 200억 미달 49·주가 1,000원 미달 43 등)와 "매출액미달" 5건/5개사(「반기 또는 분기 매출액 미달 사실발생」)가 **전부 무신호**였던 공백을 메운다. 오탐 0건. ⚠ `"미달"` 단독은 쓸 수 없다 — 집합투자증권 펀드명의 "미달러"(미(美) 달러)가 걸린다(실측 6건). taxonomy는 `DELISTING_RISK`와 같은 8.5를 공유(패턴 미사용·무점수) |
+| 방향 안내(`DIRECTION_NOTES`) 커버율 (v1.12.3) | ✅ | `CB_BW` observed 473건 중 **196건(41%)**이 발행이 아니라 만기전취득·소각인데 "CB/BW**발행**입니다"로 표시됐다(`EB`는 18건 중 14건). 기존 마커 2종은 되사기·소각 208건 중 122건(59%)만 잡았다 — 대표 누락은 「주요사항보고서(자기전환사채만기전취득결정)」 61건('사채취득'이 아니라 '만기전취득' 표기). 마커 확장 + `EB`·`RCPS` 항목 신설로 **59%→100%**(207/208). ⚠ `RCPS`에 `"상환"` 금지(상품명이 상환전환우선주) |
+| `DEMERGER` 키워드 정밀화 (v1.12.3) | ✅ | `"분할결정"`이 「**주식**분할결정」(액면분할)을 삼켜 `DEMERGER` observed 11건 중 3건(27%)이 회사분할이 아니었다. `"회사분할결정"`으로 좁혔고 빠지는 것은 정확히 그 3건뿐 |
+| 한정층 R2b(포장 제목 부제) (v1.12.3) | ✅ | 「기타주요경영사항(제3자배정유상증자결정**철회**)」의 tail은 본체에서 뽑혀 `PHASE_TAILS`에 안 걸려, 증자를 철회한 건이 관찰 신호로 표시됐다. 단독 제목이면 강등되는데 포장지가 씌워지면 안 되는 비일관. `WRAPPER_BODIES`일 때만 부제 어미를 본다. 「소송등의제기ㆍ신청(…)(주주총회결의취소)」는 body가 행위라 제외(실측 확인) |
 | `parse_control_change_detail`/"🔁 최대주주 변경 상세" 블록(v1.7.0) | ✅ | 4건 라이브 매칭 — 아틀라스링크 20260709900615("외 1인" 공백형)·졸스 20260728900445("외N명" 붙임형)·제이케이시냅스 20260728900521("외 N" 접미 없음, (주) 접미)·선광 20260727900769(개인명, "외 22" 단위 생략형). 골드 `아틀라스링크_analyze.txt`/`아틀라스링크_timeline.txt` 갱신. 차입금>0(주식담보대출) 경로는 6사+아틀라스링크 매트릭스에서 미발굴 — 자기자금만 있는 사례만 라이브 확인 |
 | `match_affiliate_row`/`summarize_affiliate_stake` — 종속회사 유출 사실 병기(v1.9.0) | ✅ | 아틀라스링크 실측 3건(20260729/20260120/20251015 — 상대방 전부 "주식회사 한국파일") 전부 타법인 출자현황과 매칭돼 "최초취득 2023-09 · 지분 46.3→62.4% 확대 · 피출자사 최근 순이익 -49억원" 병기 확인. 골드 `아틀라스링크_analyze.txt`/`아틀라스링크_timeline.txt` 갱신 |
 | `track_fund_usage`의 `FUND_UNREPORTED`(실제 집행 미보고) | ✅ | 2026-08-03 — 오르비텍(00297989, 046120) `track_fund_usage(lookback_years=3)` MCP 종단 실행 라이브 매칭: 2025·2026 사모 제8~11회차(각 연도 4건, 총 8건) 전부 "받은 돈이 어디에 쓰였는지 보고되지 않고 있습니다" 발화 확인, 점수·등급 문구 없음(hygiene 9/9 PASS). 골드 `오르비텍_fund_usage.txt` 신규(`scripts/regen_goldens.py` COMPANIES에 오르비텍 추가). **오탐 모드 병기(코퍼스 실측, 15개 조달건·48레코드 표본)**: FUND_UNREPORTED의 주된 오탐 원인은 recency(신규 조달 유예 부족)가 아니라 **"다년 보고 스냅샷 미정산"**이다 — 48건 중 31건(64.6%, 8개 조달건)은 같은 조달건의 더 최신 연도 보고서에서 이미 `real_dtls_amount>0`·`real_dtls_cn` 기재로 갱신돼 도구가 더 이상 플래그하지 않는 옛 스냅샷 잔재였다(예: 48건 중 최다 기여였던 유티아이 25건이 4개 조달건 전부 100% 완전소진으로 해소). 도구의 실제 판정 로직(`_detect_fund_anomaly`, 최신연도 라인아이템 기준)으로도 여전히 발화하는 실질 미해소는 17건(7개 조달건, 4개 회사 — 링크드·HLB·오르비텍·피아이이)뿐이며, 오르비텍 4개 조달건(사모 제8~11회차)이 2026년 보고서에서도 real=0을 유지하는 가장 뚜렷한 실측 사례다. 개선 후보(코드 미변경, 기록만): 같은 조달건의 최신 연도 보고서 기준 재정산 로직 부재가 오탐의 구조적 원인 — 상세는 `docs/superpowers/plans/2026-08-02-fund-misuse-detection-verification.md` 부록 B |
@@ -678,6 +682,25 @@ PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설
 
 라이브 효과(5년 스캔, 재보정값 기준): 한탑 겹침 0건(카드 3개 소멸 — INQUIRY 수정 효과),
 아틀라스링크 `자금 역류` 2/2 발화 유지, 삼성전자 0건.
+
+## 신호 키워드 감사 (2026-08-22)
+
+INQUIRY의 `"거래정지"` 오탐은 우연히 발견됐다. 같은 종류의 결함이 다른 신호에
+남아 있는지를 **코퍼스 전수로 기계적으로** 찾은 결과 3건을 수정했다(방향 안내
+커버율 59%→100%, `DEMERGER` 액면분할 오탐, 한정층 R2b). 상세·한계는
+`docs/superpowers/specs/2026-08-22-signal-keyword-audit.md`.
+
+**회귀 자산**: `tests/fixtures/corpus/signal_titles_90d.json`에 신호가 붙는 고유
+제목 404종을 빈도와 함께 고정했다(전체 48,646건은 11MB라 미커밋). 갱신은
+`tmp/delisting_signal/measure.py` 재수집 후 재추출. `tests/test_corpus_invariants.py`가
+이 위에 불변식을 건다 — 고정 제목의 신호 유지 · taxonomy 매핑 존재 · 키워드 포함
+관계 허용 목록 · 강등/observed 사유 정합 · 되사기 방향 안내 전수 · 과거 실사고 3종
+재발 방지.
+
+**키워드를 고치기 전에 반드시 잴 것**: ① 그 표현이 DART 제목에 실제로 나오는가
+② 몇 건/몇 개사인가 ③ 그 키워드가 **혼자** 켜는 건수(제거 시 실제 손실)
+④ 다른 신호 키워드를 부분 문자열로 포함하는가 ⑤ 제거로 무신호가 되는 제목은 무엇인가.
+90일 창은 계절 표현(감사의견·결산)을 못 본다 — 그 판단에는 1년 코퍼스가 필요하다.
 
 ## 자주 있는 작업
 

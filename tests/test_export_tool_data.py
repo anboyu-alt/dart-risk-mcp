@@ -282,7 +282,22 @@ class TestBuildSignalsData(unittest.TestCase):
         self.assertEqual(exported["confirm_markers"], list(live["confirm_markers"]))
         self.assertIn("제3자배정", exported["confirm_markers"])
         self.assertIn("주주배정", exported["confirm_markers"])
-        self.assertEqual(rules["direction_notes"]["CB_BW"]["markers"], ["사채취득", "사채매도"])
+        # 마커 목록은 실측으로 늘어난다(2026-08-22 확장) — 값을 손으로 박아
+        # 두면 core를 고칠 때마다 여기가 깨진다. core와 일치하는지만 본다.
+        from dart_risk_mcp.core.qualifiers import DIRECTION_NOTES as _DN
+
+        for key in ("CB_BW", "EB", "RCPS"):
+            self.assertIn(key, rules["direction_notes"], f"{key} direction_note 미노출")
+            self.assertEqual(
+                rules["direction_notes"][key]["markers"], list(_DN[key]["markers"])
+            )
+            self.assertEqual(rules["direction_notes"][key]["note"], _DN[key]["note"])
+        # RCPS에 '상환'을 넣으면 상품명(상환전환우선주)에 걸려 전 건에 안내가 붙는다
+        self.assertNotIn("상환", rules["direction_notes"]["RCPS"]["markers"])
+        # 포장 제목 규칙(R2b)도 뷰어가 그대로 읽는다
+        from dart_risk_mcp.core.qualifiers import WRAPPER_BODIES as _WB
+
+        self.assertEqual(rules["wrapper_bodies"], list(_WB))
 
     def test_export_includes_ambiguous_keys(self):
         from dart_risk_mcp.core.signals import AMBIGUOUS_SIGNAL_KEYS

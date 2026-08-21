@@ -281,7 +281,7 @@ def test_cb_direction_note_attached_to_observed_signal():
     e = events[0]
     assert e["key"] == "CB_BW"
     assert e["tier"] == TIER_OBSERVED
-    assert e["note"] == "발행이 아니라 사채 취득·매도 건입니다"
+    assert e["note"] == "발행이 아니라 사채 취득·매도·소각 건입니다"
 
 
 def _render_observed_note_lines(observed_events):
@@ -301,7 +301,7 @@ def test_note_line_rendered_for_observed_signal():
     events = _build_signal_events([row])
     observed, _ = _split(events)
     rendered = _render_observed_note_lines(observed)
-    assert rendered == ["  ※ 발행이 아니라 사채 취득·매도 건입니다"]
+    assert rendered == ["  ※ 발행이 아니라 사채 취득·매도·소각 건입니다"]
 
 
 # ── fix round 1, finding 2: observed 0건에서 지정 문구 + 절차 목록 노출 ──
@@ -466,14 +466,14 @@ def test_procedural_note_is_rendered():
     assert e["key"] == "CB_BW"
     assert e["tier"] == TIER_PROCEDURAL
     assert e["reason"]  # R2(결과보고서) 강등 사유가 있어야 한다
-    assert e["note"] == "발행이 아니라 사채 취득·매도 건입니다"
+    assert e["note"] == "발행이 아니라 사채 취득·매도·소각 건입니다"
 
     observed, procedural = _split(events)
     assert observed == []
     assert len(procedural) == 1
 
     rendered = _render_signal_block_lines(observed, procedural)
-    assert "  ※ 발행이 아니라 사채 취득·매도 건입니다" in rendered
+    assert "  ※ 발행이 아니라 사채 취득·매도·소각 건입니다" in rendered
     # reason과 note가 같은 항목에 함께 나와야 한다(하나가 다른 하나를 가리면 안 됨).
     reason_idx = rendered.index("  → " + e["reason"])
     note_idx = rendered.index("  ※ " + e["note"])
