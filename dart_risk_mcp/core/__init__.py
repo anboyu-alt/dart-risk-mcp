@@ -78,8 +78,13 @@ from .known_actors import (
 )
 from .cb_extractor import extract_cb_investors
 from .investor_extractor import extract_rights_offering_investors
-from .taxonomy import calculate_risk_score, find_pattern_match, estimate_crisis_timeline
-from .catalog import load_catalog_excerpt
+from .taxonomy import (
+    calculate_risk_score,
+    find_pattern_match,
+    find_pattern_overlaps,
+    estimate_crisis_timeline,
+)
+from .catalog import load_catalog_excerpt, taxonomy_label_ko
 from .sector_policy import get_critical_items, get_induty_name
 from .notes import (
     NOTE_CATEGORIES,
@@ -136,6 +141,7 @@ __all__ = [
     "extract_rights_offering_investors",
     "calculate_risk_score",
     "find_pattern_match",
+    "find_pattern_overlaps",
     "estimate_crisis_timeline",
     "fetch_fund_usage",
     "fetch_major_decision",
@@ -143,6 +149,7 @@ __all__ = [
     "resolve_disclosure_row_from_rcept_no",
     "resolve_decision_type",
     "load_catalog_excerpt",
+    "taxonomy_label_ko",
     "get_critical_items",
     "get_induty_name",
     "NOTE_CATEGORIES",

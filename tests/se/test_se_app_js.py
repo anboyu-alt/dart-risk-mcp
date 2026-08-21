@@ -13412,6 +13412,19 @@ def _extract_fold_corp_name_block(html: str) -> str:
     return suffix_re_line + "\n" + fold_fn
 
 
+def _extract_pattern_overlap_functions(html: str) -> str:
+    """공개 뷰어의 부분 겹침 조회 함수(`tidCompare`/`findPatternOverlaps`,
+    core find_pattern_overlaps의 JS 이식)를 잘라낸다. buildResult()의 매칭
+    스니펫이 v1.11(패턴 관찰 표기, "전부 일치"에서 "관찰된 만큼 보여주고
+    무엇을 확인할지 알려주기"로 전환)부터 이 두 함수를 호출한다 —
+    `findPatternOverlaps`는 함수 선언 순서상 `tidCompare`보다 뒤에
+    있으므로, 먼저 등장하는 `tidCompare`를 앞에 잘라 붙인다."""
+    tid_compare_fn = _extract_balanced_js_function(html, "function tidCompare(a, b)")
+    find_overlaps_fn = _extract_balanced_js_function(
+        html, "function findPatternOverlaps(patternsList, detectedTaxSet, minOverlap)")
+    return tid_compare_fn + "\n\n" + find_overlaps_fn
+
+
 def _extract_public_pattern_match_pieces():
     """공개 뷰어(docs/tool/index.html)에서 패턴 매칭에 쓰이는 실제 코드를
     파일에서 직접 잘라낸다(손으로 옮겨 적지 않는다):
@@ -13424,12 +13437,15 @@ def _extract_public_pattern_match_pieces():
          `qualifySignals`와 그 의존 함수 전부.
       4) `foldCorpName` 블록(`_extract_fold_corp_name_block`) — 신호
          한정층의 R1 판정이 재사용하는 별도 위치의 함수.
-      5) buildResult() 안의 매칭 스니펫 — "const events = [];"부터
-         "detectedTax.has(t)));"까지: 정정공시 제외 → matchSignals 호출 →
-         qualifySignals로 한정 → observed만으로 detectedTax 집합 구성 →
-         patterns 부분집합 필터, 전 단계.
+      5) `tidCompare`/`findPatternOverlaps` 블록(`_extract_pattern_overlap_functions`)
+         — v1.11부터 매칭 스니펫이 호출하는 부분 겹침 조회 함수.
+      6) buildResult() 안의 매칭 스니펫 — "const events = [];"부터
+         "findPatternOverlaps(DATA.patterns, detectedTax, 2);"까지:
+         정정공시 제외 → matchSignals 호출 → qualifySignals로 한정 →
+         observed만으로 detectedTax 집합 구성 → 패턴 부분 겹침 조회, 전
+         단계.
 
-    다섯 조각을 조합하면 "공개 뷰어가 지금 실제로 하는 매칭"을 그대로
+    여섯 조각을 조합하면 "공개 뷰어가 지금 실제로 하는 매칭"을 그대로
     재현한 실행 가능한 함수가 된다.
     """
     html = _INDEX_HTML.read_text(encoding="utf-8")
@@ -13443,28 +13459,38 @@ def _extract_public_pattern_match_pieces():
 
     qualification_block = _extract_qualification_block(html)
     fold_corp_name_block = _extract_fold_corp_name_block(html)
+    pattern_overlap_fns = _extract_pattern_overlap_functions(html)
 
     start_marker = "const events = [];"
-    end_marker = "detectedTax.has(t)));"
+    end_marker = "const patterns = findPatternOverlaps(DATA.patterns, detectedTax, 2);"
     start = html.index(start_marker)
     end = html.index(end_marker, start) + len(end_marker)
     matching_snippet = html[start:end]
 
     return (match_signals_fn, amend_line, qualification_block,
-            fold_corp_name_block, matching_snippet)
+            fold_corp_name_block, pattern_overlap_fns, matching_snippet)
 
 
 def run_public_pattern_match(signals_data: dict, items: list) -> list:
     """공개 뷰어에서 방금 잘라낸 실제 매칭 코드를 node로 실행해, items
     (공시 레코드 배열, report_nm/rcept_dt/rcept_no 필드)에 대해 매칭되는
-    패턴 key 목록(정렬)을 돌려준다."""
+    패턴 key 목록(정렬)을 돌려준다.
+
+    v1.11부터 공개 뷰어의 `patterns`는 부분 겹침(구성 신호 중 일부만
+    관찰돼도 포함)을 담을 수 있다 — 이 헬퍼가 검증하는 "SE와의 동치성"은
+    여전히 **전부 일치**(`.every(...)`) 판정 하나에 대한 것이므로, 전부
+    일치 항목(n_matched === n_total)만 골라 SE의 matchCrossPatterns와
+    비교한다. 부분 겹침 자체의 검증은 tests/test_pattern_watch_points.py가
+    core find_pattern_overlaps 수준에서 맡는다."""
     (match_signals_fn, amend_line, qualification_block,
-     fold_corp_name_block, matching_snippet) = _extract_public_pattern_match_pieces()
+     fold_corp_name_block, pattern_overlap_fns,
+     matching_snippet) = _extract_public_pattern_match_pieces()
     script = (
         '"use strict";\n'
         + match_signals_fn + "\n\n"
         + fold_corp_name_block + "\n\n"
         + qualification_block + "\n\n"
+        + pattern_overlap_fns + "\n\n"
         "let DATA = null;\n"
         "let AMEND_RE = null;\n"
         f"DATA = {json.dumps(signals_data, ensure_ascii=False)};\n"
@@ -13481,7 +13507,9 @@ def run_public_pattern_match(signals_data: dict, items: list) -> list:
         "  return patterns;\n"
         "}\n\n"
         f"const items = {json.dumps(items, ensure_ascii=False)};\n"
-        "const result = publicPatternMatch(items).map((p) => p.key).sort();\n"
+        "const result = publicPatternMatch(items)\n"
+        "  .filter((p) => p.n_matched === p.n_total)\n"
+        "  .map((p) => p.key).sort();\n"
         "process.stdout.write(JSON.stringify(result));\n"
     )
     with tempfile.NamedTemporaryFile(
@@ -13567,7 +13595,8 @@ class TestPublicViewerPatternMatchEquivalence(unittest.TestCase):
     def test_superset_matches_all_qualifying_patterns_on_both_sides(self):
         """A+B+C+D가 전부 관찰되면 세 패턴(ab, abc, ad)이 동시에 조건을
         만족한다 — core find_pattern_match(첫 매치 하나만)와 달리, 공개
-        뷰어의 DATA.patterns.filter(...)도 app.js의 matchCrossPatterns도
+        뷰어의 findPatternOverlaps(전부 일치 항목만 필터, 위
+        run_public_pattern_match 참고)도 app.js의 matchCrossPatterns도
         **조건을 만족하는 패턴 전부**를 돌려준다는 사실을 확인한다."""
         items = [
             {"rcept_no": "1", "rcept_dt": "20250101", "report_nm": "키워드A 보고서"},

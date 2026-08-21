@@ -1253,7 +1253,7 @@ CROSS_SIGNAL_PATTERNS = {
         ],
     },
     "zombie_ma": {
-        "name": "The Zombie M&A",
+        "name": "무자본 M&A",
         "description": "무자본 M&A 세력이 차명·투자조합으로 경영권 인수 → 사모CB 대량발행·허위자금조달 → 허위 신사업 발표 → 주가부양 후 고가매도",
         "signal_sequence": ["3.1", "2.4", "1.2", "4.3", "7.1", "2.7"],
         "timeline_months": 12,
@@ -1264,7 +1264,7 @@ CROSS_SIGNAL_PATTERNS = {
         ],
     },
     "audit_insider_dump": {
-        "name": "The Audit Insider Dump",
+        "name": "감사의견 내부자 덤프",
         "description": "감사의견거절·비적정 미공개정보를 임원·최대주주가 직무상 취득 후 공시 전 주식 전량매도",
         "signal_sequence": ["4.4", "7.1", "3.1"],
         "timeline_months": 6,
@@ -1275,7 +1275,7 @@ CROSS_SIGNAL_PATTERNS = {
         ],
     },
     "delisting_evasion": {
-        "name": "The Delisting Evasion",
+        "name": "상폐 회피",
         "description": "자본잠식·영업손실로 상장폐지 위기 → 연말 거액 유상증자(가장납입) + 재무제표 과대계상 → 요건 면탈 → 횡령",
         "signal_sequence": ["8.1", "2.4", "6.1", "4.3", "2.7", "8.2"],
         "timeline_months": 9,
@@ -1286,7 +1286,7 @@ CROSS_SIGNAL_PATTERNS = {
         ],
     },
     "fake_new_biz": {
-        "name": "The Fake New Business Pump",
+        "name": "허위 신사업 주가부양",
         "description": "주업과 무관한 테마사업(2차전지·AI·우주항공 등) 허위 발표 + 형식적 MOU·페이퍼컴퍼니 → 테마주 편승 주가급등 → 최대주주 주식 고가매도",
         "signal_sequence": ["5.4", "4.3", "7.2", "7.1"],
         "timeline_months": 6,
@@ -1432,6 +1432,90 @@ def find_pattern_match(
             return {**pattern, "pattern_id": pattern_key}
 
     return None
+
+
+def _tid_sort_key(tid: str) -> tuple:
+    """taxonomy ID("5.1" 등)를 숫자 오름차순으로 정렬하는 키.
+
+    `find_pattern_overlaps`는 입력을 set 경유로 받을 수 있어(호출부가
+    `list({...})`로 만들어 넘기는 관례), matched/missing을 정렬하지 않으면
+    출력 순서가 PYTHONHASHSEED에 따라 실행마다 달라진다(core/catalog.py의
+    `_taxonomy_sort_key`와 같은 근거). 숫자가 아닌 값은 뒤로 보낸다.
+    """
+    parts = tid.split(".")
+    try:
+        return (0, [int(p) for p in parts])
+    except ValueError:
+        return (1, [tid])
+
+
+def find_pattern_overlaps(
+    detected_taxonomies: List[str],
+    min_overlap: int = 2,
+) -> List[Dict]:
+    """등록된 복합 패턴과 관찰된 taxonomy 집합의 부분 겹침을 조회한다.
+
+    `find_pattern_match`(패턴의 signal_sequence를 **전부** 충족해야 발화)와
+    달리, 이 함수는 "구성 신호 중 얼마나 관찰됐는지"를 사실로 반환한다.
+    실측(10개사·365일 창)으로는 전부 일치가 회사당 0.2개에 그치는 반면
+    부분 일치(≥2)는 회사당 1.3개이면서 대조군(정상 대기업 3사)에서는
+    0개였다 — 임계를 낮춰도 아무 데나 붙지 않는다는 근거.
+
+    이 함수 자체는 "이 회사가 이 패턴이다"라고 판정하지 않는다(v0.8.5
+    무판정 원칙). 반환값은 관찰/미관찰 사실의 목록이며, 렌더러가 이를
+    판정 어휘 없이 사실 문장으로만 표시해야 한다.
+
+    Args:
+        detected_taxonomies: 관찰된 taxonomy ID 목록(중복·set 경유 허용)
+        min_overlap: 겹침으로 인정할 최소 구성 신호 개수(미만이면 결과 제외)
+
+    Returns:
+        각 항목: pattern_id, name, description, signal_sequence, checkpoints
+        (`core.explain.pattern_checkpoints` — 없으면 빈 리스트), matched
+        (관찰된 id, 오름차순), missing(안 보인 id, 오름차순), n_matched,
+        n_total. 정렬은 충족률(n_matched/n_total) 내림차순 → n_matched
+        내림차순 → pattern_id 오름차순으로 고정해 입력이 set에서 와도
+        출력이 결정적이다. 존재하지 않는 taxonomy ID가 섞여 있어도 그냥
+        무시된다(예외 없음).
+    """
+    # 지연 import — core/taxonomy.py는 CROSS_SIGNAL_PATTERNS 같은 순수
+    # 데이터를 다루는 모듈이라 core/explain.py(사용자 표시용 산문 사전)에
+    # 대한 모듈 레벨 의존을 최소화한다. explain.py는 taxonomy.py를
+    # import하지 않아 순환은 없지만, 함수 내부 import로 두 모듈의 역할
+    # 경계(데이터 vs 산문)를 계속 분리해 둔다.
+    from .explain import pattern_checkpoints as _pattern_checkpoints
+
+    detected_set = set(detected_taxonomies)
+    results: List[Dict] = []
+
+    for pattern_id, pattern in CROSS_SIGNAL_PATTERNS.items():
+        seq = pattern["signal_sequence"]
+        seq_set = set(seq)
+        matched_set = seq_set & detected_set
+        if len(matched_set) < min_overlap:
+            continue
+
+        missing_set = seq_set - detected_set
+        results.append({
+            "pattern_id": pattern_id,
+            "name": pattern["name"],
+            "description": pattern["description"],
+            "signal_sequence": list(seq),
+            "checkpoints": _pattern_checkpoints(pattern_id),
+            "matched": sorted(matched_set, key=_tid_sort_key),
+            "missing": sorted(missing_set, key=_tid_sort_key),
+            "n_matched": len(matched_set),
+            "n_total": len(seq_set),
+        })
+
+    results.sort(
+        key=lambda r: (
+            -(r["n_matched"] / r["n_total"]),
+            -r["n_matched"],
+            r["pattern_id"],
+        )
+    )
+    return results
 
 
 def estimate_crisis_timeline(signal_id: str) -> Dict[str, int]:
