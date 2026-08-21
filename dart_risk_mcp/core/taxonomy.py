@@ -912,16 +912,20 @@ TAXONOMY = {
         "category": "Corporate Action Manipulation",
         "name": "Acquisition Requiring Counterparty Review",
         "description": (
-            "영업양수·타법인주식및출자증권양수 결정. 정상적인 사업 확장 M&A가 "
+            "영업양수·타법인주식및출자증권 양수(취득) 결정. 정상적인 사업 확장 M&A가 "
             "대다수이므로 그 자체는 판단 근거가 아니며, 거래 상대방·가액·외부평가 "
             "여부를 원문에서 직접 확인해야 성격을 알 수 있는 사실 안내 신호다."
         ),
         "base_score": 0,
         "severity": "OBSERVATION",
         "crisis_timeline_months": 12,
+        # 2026-08-22: DART 실제 표기가 두 가지다 — DS005 법정 「…양수결정」과
+        # 자율공시 「…취득결정」(후자가 4배 흔하다). 90일 실측 220건 중 189건이
+        # 무신호였던 재현율 갭 수정. signals.py의 ACQ_REVIEW와 짝을 맞춘다.
         "keywords": [
             "영업양수",
             "타법인주식및출자증권양수",
+            "타법인주식및출자증권취득",
         ],
         "red_flags": [
             "거래 상대방이 특수관계자",
@@ -1532,12 +1536,21 @@ def _best_window(
     best_win = ("", "")
     for start in cands:
         end = _window_end(start, months)
-        inside = {
-            tid for tid in seq_set
-            if any(start <= dt <= end for dt in taxonomy_dates.get(tid, []) if dt)
-        }
+        seen: "list[str]" = []
+        inside: "set[str]" = set()
+        for tid in seq_set:
+            hits = [dt for dt in taxonomy_dates.get(tid, []) if dt and start <= dt <= end]
+            if hits:
+                inside.add(tid)
+                seen.extend(hits)
         if len(inside) >= len(best):
-            best, best_win = inside, (start, end)
+            # 표시용 구간은 창의 이론적 경계(start ~ start+months)가 아니라
+            # **실제로 관찰된 날짜의 범위**로 돌려준다. 경계를 그대로 쓰면
+            # 관찰이 2026.03~08인데 "창 2026.03.17~2028.12.17"처럼 아직 오지도
+            # 않은 날짜가 사용자에게 표시된다(2026-08-22 실측 — 진원생명과학
+            # audit_insider_dump). 게이트 판정 자체는 경계로 하고, 표기만
+            # 사실로 좁힌다.
+            best, best_win = inside, (min(seen), max(seen)) if seen else (start, end)
     return best, best_win[0], best_win[1]
 
 

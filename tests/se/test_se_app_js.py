@@ -6908,10 +6908,15 @@ class TestClassifyDisclosureCategory(unittest.TestCase):
         self.assertEqual(got, 1, "CB_BW(category 1)로 분류돼야 합니다")
 
     def test_unclassified_report_falls_back_to_other_category_zero(self):
-        """브리프 실측 예시 — 어떤 신호 키워드에도 걸리지 않는 공시다.
-        분류되지 않는다고 사라지면 안 되고 "기타"(0)로 남아야 한다."""
+        """실측 예시 — 어떤 신호 키워드에도 걸리지 않는 공시다.
+        분류되지 않는다고 사라지면 안 되고 "기타"(0)로 남아야 한다.
+
+        2026-08-22: 원래 예시였던 「타법인주식및출자증권취득결정」이
+        `ACQ_REVIEW` 재현율 수정으로 category 5가 됐다(그게 수정의 목적이다).
+        1년 코퍼스에서 3,277건이면서 여전히 무신호인 「주주명부폐쇄기간또는
+        기준일설정」으로 교체했다 — 정기 절차 공시라 신호가 붙을 이유가 없다."""
         got = run_js_with_real_signals(
-            'classifyDisclosureCategory("타법인주식및출자증권취득결정", SIGNALS)'
+            'classifyDisclosureCategory("주주명부폐쇄기간또는기준일설정", SIGNALS)'
         )
         self.assertEqual(got, 0)
 
@@ -6960,7 +6965,7 @@ class TestClassifyDisclosureCategory(unittest.TestCase):
         )
         samples = [
             "[기재정정]주요사항보고서(자기전환사채매도결정)",
-            "타법인주식및출자증권취득결정",
+            "주주명부폐쇄기간또는기준일설정",
             "주요사항보고서(타법인주식및출자증권양도결정)",
             "주요사항보고서(전환사채권발행결정)",
             "최대주주변경",
@@ -7046,7 +7051,7 @@ class TestClassifyDisclosureCategoryAmendmentPrefixStrip(unittest.TestCase):
         것이 브리프 항목 4의 요지다. 아래 broken-regex 테스트가 "안 보고
         그냥 0"과 이 경우를 구분해 준다."""
         got = run_js_with_real_signals(
-            'classifyDisclosureCategory("[기재정정]타법인주식및출자증권취득결정", SIGNALS)'
+            'classifyDisclosureCategory("[기재정정]주주명부폐쇄기간또는기준일설정", SIGNALS)'
         )
         self.assertEqual(got, 0)
 
@@ -7135,7 +7140,7 @@ class TestClassifyDisclosureCategoryRoutineFiling(unittest.TestCase):
 
     def test_4_neither_risk_nor_routine_still_falls_back_to_other(self):
         got = run_js_with_real_signals(
-            'classifyDisclosureCategory("타법인주식및출자증권취득결정", SIGNALS)'
+            'classifyDisclosureCategory("주주명부폐쇄기간또는기준일설정", SIGNALS)'
         )
         self.assertEqual(got, 0)
 
@@ -7274,7 +7279,7 @@ class TestMonthlyCountsByCategory(unittest.TestCase):
         records = [
             {"rcept_dt": "20260110", "report_nm": "주요사항보고서(전환사채권발행결정)"},
             {"rcept_dt": "20260112", "report_nm": "최대주주변경"},
-            {"rcept_dt": "20260115", "report_nm": "타법인주식및출자증권취득결정"},
+            {"rcept_dt": "20260115", "report_nm": "주주명부폐쇄기간또는기준일설정"},
             {"rcept_dt": "20260210", "report_nm": "[기재정정]주요사항보고서(자기전환사채매도결정)"},
         ]
         got = call_js(
@@ -7322,7 +7327,7 @@ class TestMonthlyCountsByCategory(unittest.TestCase):
             {"rcept_dt": "20260110", "report_nm": "주요사항보고서(전환사채권발행결정)"},
             {"rcept_dt": "20260112", "report_nm": "임원ㆍ주요주주특정증권등소유상황보고서"},
             {"rcept_dt": "20260115", "report_nm": "[기재정정]임원ㆍ주요주주특정증권등소유상황보고서"},
-            {"rcept_dt": "20260118", "report_nm": "타법인주식및출자증권취득결정"},
+            {"rcept_dt": "20260118", "report_nm": "주주명부폐쇄기간또는기준일설정"},
             {"rcept_dt": "20260210", "report_nm": "사업보고서"},
         ]
         got = run_js_with_real_signals(
@@ -7348,7 +7353,7 @@ class TestChartDataDisclosuresByType(unittest.TestCase):
     _RECORDS = [
         {"rcept_no": 1, "rcept_dt": "20260110", "report_nm": "주요사항보고서(전환사채권발행결정)"},
         {"rcept_no": 2, "rcept_dt": "20260112", "report_nm": "최대주주변경"},
-        {"rcept_no": 3, "rcept_dt": "20260115", "report_nm": "타법인주식및출자증권취득결정"},
+        {"rcept_no": 3, "rcept_dt": "20260115", "report_nm": "주주명부폐쇄기간또는기준일설정"},
         {"rcept_no": 4, "rcept_dt": "20260210", "report_nm": "[기재정정]주요사항보고서(자기전환사채매도결정)"},
         {"rcept_no": 5, "rcept_dt": "20260212", "report_nm": "주요사항보고서(타법인주식및출자증권양도결정)"},
     ]
@@ -7807,7 +7812,7 @@ const chartCountBeforeL = CHART_CALLS.length;
 sandbox.renderSection("disclosures", [
   { rcept_no: 10, rcept_dt: "20260110", report_nm: "주요사항보고서(전환사채권발행결정)" },
   { rcept_no: 11, rcept_dt: "20260112", report_nm: "최대주주변경" },
-  { rcept_no: 12, rcept_dt: "20260115", report_nm: "타법인주식및출자증권취득결정" },
+  { rcept_no: 12, rcept_dt: "20260115", report_nm: "주주명부폐쇄기간또는기준일설정" },
   { rcept_no: 13, rcept_dt: "20260210", report_nm: "[기재정정]주요사항보고서(자기전환사채매도결정)" },
 ]);
 const chartCountAfterL = CHART_CALLS.length;

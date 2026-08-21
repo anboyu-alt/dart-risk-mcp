@@ -2553,9 +2553,19 @@ function bestWindow(seq, taxDates, months) {
   let best = [], win = ["", ""];
   for (const start of cands) {
     const end = windowEnd(start, months);
-    const inside = seq.filter((t) =>
-      (taxDates[t] || []).some((dt) => dt >= start && dt <= end));
-    if (inside.length >= best.length) { best = inside; win = [start, end]; }
+    const seen = [];
+    const inside = seq.filter((t) => {
+      const hits = (taxDates[t] || []).filter((dt) => dt >= start && dt <= end);
+      seen.push(...hits);
+      return hits.length > 0;
+    });
+    if (inside.length >= best.length) {
+      // 표시용 구간은 창의 이론적 경계가 아니라 실제 관찰된 날짜 범위다 —
+      // 경계를 쓰면 아직 오지 않은 날짜가 카드에 찍힌다(core _best_window 주석 참고).
+      best = inside;
+      win = seen.length ? [seen.slice().sort()[0], seen.slice().sort()[seen.length - 1]]
+                        : [start, end];
+    }
   }
   return { matched: best, start: win[0], end: win[1] };
 }
