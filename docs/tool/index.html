@@ -414,6 +414,7 @@
       조회는 사용자의 API 키로 사용자가 시작하며, 이 페이지는 어떤 데이터도 서버에 저장하지 않습니다.
       "주의" 표시는 사실 관찰의 우선순위이며 위험 판정·투자 판단 근거가 아닙니다.
       · <a href="https://github.com/anboyu-alt/dart-risk-mcp">dart-risk-mcp</a> (MIT)
+      <span id="verline"></span>
     </p>
   </div>
 </div>
@@ -497,6 +498,7 @@ async function boot() {
   ]);
   DATA = sig; CORPS = corps; ALIASES = aliases || {};
   AMEND_RE = new RegExp(DATA.amendment_pattern);
+  renderVersionLine();
   if (localStorage.getItem(LS_KEY)) {
     showSearch();
     // 딥링크 자동 스캔: 해시에 종목코드가 있고 키도 있으면 그 종목·기간으로 스캔한다.
@@ -1789,6 +1791,21 @@ function pickAmt(rows, aliases, field) {
     if (r) { const v = parseAmt(r[field]); if (v !== null) return v; }
   }
   return null;
+}
+
+// 뷰어 하단 버전 표기. 값은 signals-data.json의 meta.version이고 그 단일
+// 출처는 dart_risk_mcp/__init__.py의 __version__이다(pyproject.toml과 동일 —
+// tests/test_export_tool_data.py가 세 곳의 일치를 고정한다). 함께 표기하는
+// 사례 건수는 카탈로그가 얼마나 채워졌는지를 보여주는 사실 값이다.
+// meta가 없는 옛 데이터로 열려도 조용히 아무것도 표기하지 않는다.
+function renderVersionLine() {
+  const el = document.getElementById("verline");
+  if (!el || !DATA) return;
+  const ver = DATA.meta && DATA.meta.version;
+  if (!ver) return;
+  const cases = DATA.catalog && DATA.catalog.total_cases;
+  const casePart = cases ? ` · 금감원 사례 ${cases}건 수록` : "";
+  el.textContent = ` · v${ver}${casePart}`;
 }
 
 /* ── SE 이식 파생 로직 (출처: docs/tool/se/app.js) ── */
