@@ -2786,6 +2786,12 @@ _RCEPT_ROW_CACHE_MAX = 50
 # _cache_get은 미스를 None으로 알린다 — 실패(행 없음)를 그대로 None으로 캐시하면
 # 히트와 미스를 구분할 수 없어 12회 호출이 매번 반복된다. 전용 센티널을 저장한다.
 _ROW_LOOKUP_CONCURRENCY = 4
+# 바디 status로 오는 일시적 실패 — 020 분당 스로틀, 800 시스템 점검.
+# `_retry`는 HTTP 계층만 보므로 여기서 따로 재시도한다(_fetch_indx_page와
+# 같은 관례). 013(데이터 없음)·900(키 오류)은 재시도해도 같은 답이다.
+_ROW_TRANSIENT_STATUSES = frozenset({"020", "800"})
+_ROW_STATUS_RETRIES = 3           # 최초 1회 + 재시도 2회
+_ROW_STATUS_RETRY_SLEEP = 1.0     # 초. 시도마다 2배(1s, 2s)
 _ROW_NOT_FOUND = object()
 # 상한에 걸려 못 찾은 것은 "그 접수번호가 없다"와 **다르다**. 캐시에도 따로
 # 저장해, 다음 호출이 같은 판정을 재현하면서 호출부가 이유를 표시할 수 있게 한다.
@@ -2934,10 +2940,23 @@ def resolve_disclosure_row_with_status(
             "page_no": page_no,
             "page_count": 100,      # DART 상한 (200·500을 줘도 100만 온다 — 실측)
         }
-        try:
-            data = _retry("GET", f"{DART_BASE}/list.json", params=params).json()
-        except Exception:
-            return None, ROW_ERROR, 0
+        # DART는 실패를 HTTP 상태가 아니라 **바디의 status 필드**로 알린다 —
+        # HTTP는 200이고 예외도 아니라 `_retry`(예외와 429/5xx만 재시도)가
+        # 이 실패를 절대 다시 시도하지 않는다. 020은 분당 스로틀이고, 이
+        # 함수는 페이지를 **동시 4개씩 버스트로** 던지므로 정확히 그 조건을
+        # 만든다. 같은 종류의 사고가 이미 기록돼 있다 — fnlttSinglIndx의
+        # 12콜 버스트에서 한 호출이 020으로 죽어 그 해가 통째로 빠진 채
+        # "추이"가 그려졌다(SE-4h). 여기서도 같은 관례로 재시도한다.
+        data = None
+        for attempt in range(_ROW_STATUS_RETRIES):
+            try:
+                data = _retry("GET", f"{DART_BASE}/list.json", params=params).json()
+            except Exception:
+                return None, ROW_ERROR, 0
+            if data.get("status") not in _ROW_TRANSIENT_STATUSES:
+                break
+            if attempt < _ROW_STATUS_RETRIES - 1:
+                time.sleep(_ROW_STATUS_RETRY_SLEEP * (2 ** attempt))
         st = data.get("status")
         if st == "013":
             # 013 = 조회된 데이터 없음. 그 날 공시가 없다는 사실이지 오류가

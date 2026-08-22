@@ -253,3 +253,57 @@ class TestToolMessage:
         out = self._run(dc.ROW_SCAN_LIMIT, report_name="주주명부폐쇄기간또는기준일설정")
         assert "조회 범위" not in out
         assert "의심 신호가 탐지되지 않았습니다" in out
+
+
+class TestThrottleGuard:
+    """DART 분당 스로틀(status 020)은 HTTP 200으로 온다 — _retry가 못 잡는다.
+
+    이 함수는 페이지를 동시 4개씩 버스트로 던지므로 정확히 그 조건을 만든다.
+    같은 종류의 사고가 이미 기록돼 있다(SE-4h: fnlttSinglIndx 12콜 버스트에서
+    한 호출이 020으로 죽어 그 해가 통째로 빠진 채 '추이'가 그려졌다).
+    """
+
+    def test_020은_재시도해서_살린다(self):
+        seq = [_resp([], status="020"),
+               _resp([_row("20260814900829")])]
+
+        with patch.object(dc, "_retry", side_effect=seq), \
+             patch.object(dc.time, "sleep"):
+            row, st = dc.resolve_disclosure_row_with_status("20260814900829", "k")
+        assert st == dc.ROW_FOUND, "스로틀 한 번에 조회가 통째로 죽으면 안 된다"
+
+    def test_800도_재시도한다(self):
+        seq = [_resp([], status="800"),
+               _resp([_row("20260814900829")])]
+        with patch.object(dc, "_retry", side_effect=seq), \
+             patch.object(dc.time, "sleep"):
+            _, st = dc.resolve_disclosure_row_with_status("20260814900829", "k")
+        assert st == dc.ROW_FOUND
+
+    def test_재시도를_소진하면_error다(self):
+        with patch.object(dc, "_retry", return_value=_resp([], status="020")) as m, \
+             patch.object(dc.time, "sleep"):
+            _, st = dc.resolve_disclosure_row_with_status("20260814900829", "k")
+        assert st == dc.ROW_ERROR
+        assert m.call_count == dc._ROW_STATUS_RETRIES
+
+    def test_013은_재시도하지_않는다(self):
+        """'그 조건에 자료가 없다'는 확정 답변이다."""
+        with patch.object(dc, "_retry", return_value=_resp([], status="013")) as m:
+            _, st = dc.resolve_disclosure_row_with_status("20260814900829", "k")
+        assert st == dc.ROW_NOT_FOUND
+        assert m.call_count == 1
+
+    def test_900은_재시도하지_않는다(self):
+        """키 오류는 다시 물어도 같은 답이다."""
+        with patch.object(dc, "_retry", return_value=_resp([], status="900")) as m:
+            _, st = dc.resolve_disclosure_row_with_status("20260814900829", "k")
+        assert st == dc.ROW_ERROR
+        assert m.call_count == 1
+
+    def test_정상_응답은_한_번만_호출한다(self):
+        with patch.object(dc, "_retry",
+                          return_value=_resp([_row("20260814900829")])) as m:
+            _, st = dc.resolve_disclosure_row_with_status("20260814900829", "k")
+        assert st == dc.ROW_FOUND
+        assert m.call_count == 1
