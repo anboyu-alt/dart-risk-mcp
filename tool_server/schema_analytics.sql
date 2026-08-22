@@ -78,7 +78,9 @@ select visitor_id,
        max(ts) as last_seen,
        count(*) as events,
        count(*) filter (where event = 'scan') as scans,
-       max(ip::text) as last_ip,
+       -- host()로 넷마스크를 뗀다. ip::text는 inet을 CIDR(222.0.2.1/32)로 뱉어
+       -- 방문자 표에 "/32"가 그대로 노출된다(프로덕션 실측, 2026-08-22).
+       max(host(ip)) as last_ip,
        max(country) as country,
        max(city) as city,
        max(browser) as browser,
