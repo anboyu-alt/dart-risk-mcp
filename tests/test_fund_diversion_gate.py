@@ -20,18 +20,20 @@ from dart_risk_mcp.server import (
 )
 
 
-def _row(relation, classification, issuer="테스트법인", ratio=10.0):
+def _row(relation, classification, issuer="테스트법인", ratio=10.0, listing="unlisted"):
     return {
         "rcept_dt": "20260101", "report_nm": "타법인주식및출자증권취득결정",
         "rcept_no": "20260101000001", "issuer": issuer, "relation": relation,
         "classification": classification, "amount": 1_000_000_000,
-        "equity_ratio": ratio,
+        "equity_ratio": ratio, "nation": "", "listing": listing,
     }
 
 
 class TestGateDecision:
-    def test_계열_특수관계_확인시_통과(self):
-        g = _fund_diversion_gate([_row("계열회사", "affiliated")])
+    def test_계열이면서_비상장이면_통과(self):
+        """금감원 근거는 '유용 최대 경로가 비상장주식 취득(55%)' — 두 축이
+        함께 서야 이 패턴의 근거와 맞는다(2026-08-22 강화)."""
+        g = _fund_diversion_gate([_row("계열회사", "affiliated", listing="unlisted")])
         assert g["pass"] is True
         assert g["fact_lines"] == []
 
@@ -249,3 +251,103 @@ class TestTargetListing:
         row = _row("-", "external")
         row["listing"] = "unlisted"
         assert _fund_diversion_gate([row])["pass"] is False
+
+
+class TestUnlistedRequirement:
+    """2026-08-22 강화 — 계열·특수관계 **이면서 비상장**일 때만 통과.
+
+    70건 실측: 계열 확인 10건 중 8건이 비상장이었고, 빠지는 2건은 **지주회사가
+    상장 계열사 지분을 취득한 건**이었다(녹십자홀딩스→녹십자웰빙,
+    사토시홀딩스→한국첨단소재) — 정상적인 그룹 내 거래라 조준이 정확하다.
+    """
+
+    def test_계열이지만_상장사면_차단(self):
+        g = _fund_diversion_gate([_row("계열회사", "affiliated", listing="listed")])
+        assert g["pass"] is False
+        joined = "\n".join(g["fact_lines"])
+        assert "계열·특수관계 취득 1건이 확인됐으나" in joined
+        assert "상장사" in joined
+        assert "비상장주식 취득 경로와는 다릅니다" in joined
+
+    def test_계열이지만_상장여부_미확인이면_차단(self):
+        """비상장이라는 것을 확인하지 못한 것이다 — CRITICAL 카드는 확인된
+        사실 위에서만 띄운다."""
+        g = _fund_diversion_gate([_row("계열회사", "affiliated", listing="unknown")])
+        assert g["pass"] is False
+        assert "상장 여부를 원문에서 확인하지 못했습니다" in "\n".join(g["fact_lines"])
+
+    def test_한_건이라도_계열_비상장이면_통과(self):
+        g = _fund_diversion_gate([
+            _row("계열회사", "affiliated", "상장계열사", listing="listed"),
+            _row("계열회사", "affiliated", "비상장계열사", listing="unlisted"),
+        ])
+        assert g["pass"] is True
+        assert [c["issuer"] for c in g["affiliated"]] == ["비상장계열사"]
+
+    def test_비상장이어도_외부면_통과하지_않는다(self):
+        """비상장 단독은 조건이 아니다 — 정상적인 비상장 자회사 편입도
+        대부분 비상장이기 때문."""
+        g = _fund_diversion_gate([_row("-", "external", listing="unlisted")])
+        assert g["pass"] is False
+
+    def test_차단해도_확인된_사실은_남는다(self):
+        g = _fund_diversion_gate([
+            _row("계열회사", "affiliated", "녹십자웰빙", ratio=8.5, listing="listed")
+        ])
+        joined = "\n".join(g["fact_lines"])
+        assert "녹십자웰빙" in joined
+        assert "(상장)" in joined
+        assert "자기자본 대비 8.5%" in joined
+
+    def test_렌더_블록에서도_동일하게_막힌다(self):
+        lines, fact_lines, filtered = _render_pattern_watch_block(
+            ["1.1", "5.8"], [], True, {},
+            acq_confirmations=[_row("계열회사", "affiliated", "상장계열사", listing="listed")],
+        )
+        assert not any(f["pattern_id"] == "fund_diversion_chain" for f in filtered)
+        assert "조달-유용 체인" not in "\n".join(lines)
+        assert "상장사" in "\n".join(fact_lines)
+
+
+class TestNationDetection:
+    """괄호 안이 국적인지 영문 병기·부기인지 가른다 (2026-08-22).
+
+    실측 70건 중 6건이 국적이 아니었다 — 「JIANGSU QICHENG NEW MATERIALS
+    CO.,LTD.」(영문명)·「가칭」·「예정」·「Dunamu Inc.」. 이걸 국적으로 보면
+    `classify_target_listing`이 "국내가 아님 → 비상장" 지름길을 잘못 타서,
+    영문 병기가 붙은 **상장사**가 비상장으로 뒤집힐 수 있다.
+    """
+
+    def _issuer(self, tail):
+        return parse_acquisition_detail(
+            "타법인 주식 및 출자증권 취득결정 발행회사 회사명(국적) " + tail
+            + " 대표이사 X 자본금(원) 1 회사와 관계 - 발행주식총수(주) 1"
+        )
+
+    @pytest.mark.parametrize("tail,name,nation", [
+        ("주식회사 대현 (대한민국)", "주식회사 대현", "대한민국"),
+        ("VERISMO THERAPEUTICS, INC.(미국)", "VERISMO THERAPEUTICS, INC.", "미국"),
+        ("CAR TECH, LLC(USA)", "CAR TECH, LLC", "USA"),
+    ])
+    def test_진짜_국적은_국적으로_읽는다(self, tail, name, nation):
+        d = self._issuer(tail)
+        assert d["issuer"] == name
+        assert d["nation"] == nation
+
+    @pytest.mark.parametrize("tail,name", [
+        ("주식회사 라프텔 (Laftel)", "주식회사 라프텔"),
+        ("두나무(주) (Dunamu Inc.)", "두나무(주)"),
+        ("에이치엠지퓨처콤플렉스 주식회사 (예정)", "에이치엠지퓨처콤플렉스 주식회사"),
+        ("Hyundai Steel USA (가칭)", "Hyundai Steel USA"),
+    ])
+    def test_영문병기_부기는_국적이_아니다(self, tail, name):
+        d = self._issuer(tail)
+        assert d["issuer"] == name, "이름에서는 떼어낸다"
+        assert d["nation"] == "", f"국적으로 쓰면 안 된다: {d['nation']!r}"
+
+    def test_국적이_아니면_명부로_판정한다(self):
+        """영문 병기가 붙은 상장사가 해외로 오인돼 비상장이 되면 안 된다."""
+        cache = {"이화전기공업": {"corp_code": "1", "stock_code": "024810"}}
+        assert classify_target_listing("이화전기공업", "", cache) == "listed"
+        # 국적이 실제로 해외면 명부를 보지 않고 비상장
+        assert classify_target_listing("이화전기공업", "미국", cache) == "unlisted"

@@ -60,12 +60,26 @@ def _cut(html, marker):
     raise AssertionError(marker)
 
 
+def _cut_const(html, prefix):
+    """여러 줄에 걸친 const 선언을 '];'로 끝나는 줄까지 잘라낸다."""
+    lines = html.splitlines()
+    i = next(n for n, l in enumerate(lines) if l.startswith(prefix))
+    out = []
+    for l in lines[i:]:
+        out.append(l)
+        if l.rstrip().endswith("];") or l.rstrip().endswith("/i;"):
+            break
+    return "\n".join(out)
+
+
 def _viewer(texts):
     html = _HTML.read_text(encoding="utf-8")
     # parseAcquisitionDetail은 splitIssuerNation·ACQ_CORP_FORM_RE에 의존한다
-    form_re = next(l for l in html.splitlines()
-                   if l.startswith("const ACQ_CORP_FORM_RE"))
+    form_re = _cut_const(html, "const ACQ_CORP_FORM_RE")
+    nation_tokens = _cut_const(html, "const ACQ_NATION_TOKENS")
     js = (form_re + "\n"
+          + nation_tokens + "\n"
+          + _cut(html, "function looksLikeNation(text)") + "\n"
           + _cut(html, "function splitIssuerNation(raw)") + "\n"
           + _cut(html, "function parseAcquisitionDetail(text)") + "\n"
           + f"const T = {json.dumps(texts, ensure_ascii=False)};\n"

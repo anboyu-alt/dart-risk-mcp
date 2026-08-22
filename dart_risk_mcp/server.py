@@ -733,8 +733,9 @@ def _render_acquisition_confirmations(confirmations: list[dict]) -> list[str]:
 def _fund_diversion_gate(confirmations: list[dict]) -> dict:
     """fund_diversion_chain 발화 여부를 확인된 취득 대상 관계로 판정한다(순수 함수).
 
-    발화 조건: classification == "affiliated"(계열·특수관계·최대주주·주요주주)가
-    1건 이상. 미충족 시 대체 사실 블록 라인을 만들어 반환한다 —
+    발화 조건: classification == "affiliated"(계열·특수관계·최대주주·주요주주)
+    **이면서 취득 대상이 비상장(listing == "unlisted")**인 건이 1건 이상.
+    미충족 시 대체 사실 블록 라인을 만들어 반환한다 —
     `_capital_backflow_gate`와 같은 구조다.
 
     **왜 관계인가 (2026-08-22 실측)**: 이 패턴은 요구 신호가 1.1+5.8 둘뿐이라
@@ -760,8 +761,34 @@ def _fund_diversion_gate(confirmations: list[dict]) -> dict:
         return {"pass": False, "affiliated": [], "fact_lines": []}
 
     affiliated = [c for c in confirmations if c["classification"] == "affiliated"]
+    # 통과 조건은 **계열·특수관계 AND 비상장 대상**이다(2026-08-22 강화).
+    # 금감원 무자본 M&A 합동점검이 집계한 유용 경로가 "비상장주식 취득 55%"라
+    # 두 축이 함께 서야 이 패턴의 근거와 맞는다. 70건 실측에서 계열 확인 10건 중
+    # 8건이 비상장이었고, 빠지는 2건은 **지주회사가 상장 계열사 지분을 취득한
+    # 건**이었다(녹십자홀딩스→녹십자웰빙, 사토시홀딩스→한국첨단소재) — 정상적인
+    # 그룹 내 거래라 조준이 정확하다.
+    #
+    # 상장 여부가 unknown이면 통과시키지 않는다 — 비상장이라는 것을 확인하지
+    # 못했다는 뜻이고, CRITICAL 카드는 확인된 사실 위에서만 띄운다.
+    core = [c for c in affiliated if c.get("listing") == "unlisted"]
+    if core:
+        return {"pass": True, "affiliated": core, "fact_lines": []}
+
     if affiliated:
-        return {"pass": True, "affiliated": affiliated, "fact_lines": []}
+        # 계열 취득은 맞지만 대상이 상장사(또는 상장 여부 미확인)인 경우 —
+        # 금감원이 지적한 비상장주식 취득 경로와는 다르다는 사실을 남긴다.
+        listed_only = all(c.get("listing") == "listed" for c in affiliated)
+        why = (
+            "대상이 모두 상장사라 금감원이 지적한 비상장주식 취득 경로와는 다릅니다"
+            if listed_only
+            else "대상의 상장 여부를 원문에서 확인하지 못했습니다"
+        )
+        lines = [
+            f"타법인 주식·출자증권 취득 {len(confirmations)}건 — 계열·특수관계 "
+            f"취득 {len(affiliated)}건이 확인됐으나 {why}",
+        ]
+        lines += _render_acquisition_confirmations(confirmations)
+        return {"pass": False, "affiliated": affiliated, "fact_lines": lines}
 
     known = [c for c in confirmations if c["classification"] != "unknown"]
     if known:

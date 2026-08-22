@@ -922,15 +922,44 @@ _ACQ_CORP_FORM_RE = re.compile(
 _ACQ_TRAILING_PAREN_RE = re.compile(r"\s*\(([^()]{1,40})\)\s*$")
 
 
+# 괄호 안이 **국적**인지 영문 병기·부기인지 가른다. 실측(70건)에서 괄호 값의
+# 6건이 국적이 아니었다 — 「JIANGSU QICHENG NEW MATERIALS CO.,LTD.」(영문명)·
+# 「가칭」·「예정」·「Dunamu Inc.」 등. 이걸 국적으로 취급하면
+# `classify_target_listing`이 "국내가 아님 → 비상장" 지름길을 잘못 타서,
+# 영문 병기가 붙은 **상장사**가 비상장으로 뒤집힐 수 있다(이 표본에서는 6건
+# 모두 결과가 같아 실피해가 없었지만 논리적 위험은 남는다).
+_NATION_TOKENS = (
+    "대한민국", "한국", "국내", "미국", "중국", "일본", "베트남", "홍콩",
+    "싱가포르", "대만", "인도", "인도네시아", "말레이시아", "태국", "필리핀",
+    "독일", "영국", "프랑스", "네덜란드", "룩셈부르크", "폴란드", "체코",
+    "캐나다", "호주", "멕시코", "브라질", "케이맨", "버진", "아일랜드",
+    "USA", "U.S.A", "KOREA", "CHINA", "JAPAN", "VIETNAM", "HONG KONG",
+    "SINGAPORE", "GERMANY", "UNITED STATES", "CAYMAN",
+)
+
+
+def _looks_like_nation(text: str) -> bool:
+    """괄호 값이 국적 표기인가 — 알려진 국가/지역 토큰을 포함하면 참."""
+    up = (text or "").upper()
+    return any(tok.upper() in up for tok in _NATION_TOKENS)
+
+
 def _split_issuer_nation(raw: str) -> "tuple[str, str]":
-    """발행회사 표기에서 이름과 국적(또는 영문 병기)을 분리한다."""
+    """발행회사 표기에서 이름과 **국적**을 분리한다.
+
+    끝에 붙은 괄호는 법인 형태 표기가 아니면 이름에서 떼어내되, 그 값이
+    국적으로 읽히는 경우에만 nation으로 돌려준다(영문 병기·"가칭" 등은
+    이름에서만 제거하고 국적으로 쓰지 않는다).
+    """
     nation = ""
     name = raw.strip()
     while True:
         m = _ACQ_TRAILING_PAREN_RE.search(name)
         if not m or _ACQ_CORP_FORM_RE.match(m.group(1).strip()):
             break
-        nation = nation or m.group(1).strip()
+        val = m.group(1).strip()
+        if not nation and _looks_like_nation(val):
+            nation = val
         name = name[: m.start()].strip()
     return name, nation
 _ACQ_AMOUNT_RE = re.compile(r"(?:취득금액|양수금액)\(원\)(?:\(A\))?\s*([\d,]+)")
