@@ -2734,7 +2734,15 @@ def find_actor_overlap(
         corp_name, corp_info = result
         corp_code = corp_info["corp_code"]
 
-        disclosures = fetch_company_disclosures(corp_code, api_key, lookback_days=lookback_days) or []
+        # 다년 조회인데 기본 상한(10페이지=1,000건)을 써서 절단되던 자리다
+        # (2026-08-23 실측: 삼성전자 5년 3,547건 중 1,000건만 조회).
+        # _resolve_lookback의 기존 관례대로 창에 비례해 올린다 — 1년
+        # 코퍼스 기준 이 상한을 넘는 법인은 0.05%(대부분 펀드 공시를
+        # 쏟아내는 자산운용사)라 그 이상은 과하다.
+        disclosures = fetch_company_disclosures(
+            corp_code, api_key, lookback_days=lookback_days,
+            max_pages=max(10, (lookback_days // 365 + 1) * 10),
+        ) or []
 
         cb_rcepts: list[str] = []
         rights_rcepts: list[str] = []
@@ -4033,7 +4041,10 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
     # 점수 가산 없음(v0.8.5 원칙) — 사실 표기만.
     if insider_sells:
         try:
-            disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_years * 365)
+            disclosures = fetch_company_disclosures(
+                corp_code, _DART_API_KEY, lookback_years * 365,
+                max_pages=lookback_years * 10,
+            )
             signal_events: list[dict] = []
             for d in disclosures or []:
                 report_nm = d.get("report_nm", "")
@@ -4996,7 +5007,12 @@ def track_capital_structure(
     corp_name, info = corp_info
     corp_code = info["corp_code"]
 
-    disclosures = fetch_company_disclosures(corp_code, api_key, lookback_years * 365)
+    # 다년 조회 — 기본 상한(1,000건)이면 공시가 많은 회사에서 절단된다
+    # (2026-08-23 실측). 창에 비례해 올린다.
+    disclosures = fetch_company_disclosures(
+        corp_code, api_key, lookback_years * 365,
+        max_pages=lookback_years * 10,
+    )
 
     # match_signals로 신호 탐지 + 자본 이벤트만 필터는 detect_capital_churn이 처리
     signal_events: list[dict] = []

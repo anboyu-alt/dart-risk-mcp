@@ -11,7 +11,8 @@ class TestFindActorOverlapMerging(unittest.TestCase):
         def _resolve(query, api_key):
             return (query, {"corp_code": query.lower(), "stock_code": "000000"})
 
-        def _disclosures(corp_code, api_key, lookback_days):
+        # v1.18.2: 다년 조회 절단을 막으려 max_pages를 넘기게 됐다.
+        def _disclosures(corp_code, api_key, lookback_days, max_pages=10):
             # A기업: CB 공시 1건, B기업: 유상증자 공시 1건
             if corp_code == "a":
                 return [{"rcept_no": "A001", "report_nm": "전환사채권발행결정",
@@ -61,7 +62,8 @@ class TestFindActorOverlapMerging(unittest.TestCase):
         def _resolve(query, api_key):
             return (query, {"corp_code": query.lower(), "stock_code": "000000"})
 
-        def _disclosures(corp_code, api_key, lookback_days):
+        # v1.18.2: 다년 조회 절단을 막으려 max_pages를 넘기게 됐다.
+        def _disclosures(corp_code, api_key, lookback_days, max_pages=10):
             captured["lookback_days"] = lookback_days
             return []
 
@@ -143,7 +145,8 @@ class TestFindActorOverlapMerging(unittest.TestCase):
         def _resolve(query, api_key):
             return (query, {"corp_code": query.lower(), "stock_code": "000000"})
 
-        def _disclosures(corp_code, api_key, lookback_days):
+        # v1.18.2: 다년 조회 절단을 막으려 max_pages를 넘기게 됐다.
+        def _disclosures(corp_code, api_key, lookback_days, max_pages=10):
             if corp_code == "b":
                 return [{"rcept_no": "B001", "report_nm": "전환사채권발행결정",
                          "rcept_dt": "20240401"}]
