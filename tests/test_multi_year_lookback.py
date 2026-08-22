@@ -49,7 +49,12 @@ def test_append_size_footer_only_for_multiyear():
 
 
 def test_list_disclosures_passes_years_to_core(monkeypatch):
-    """lookback_years -> lookback_days(years*365), max_pages(years*10) 전달 확인."""
+    """lookback_years -> lookback_days(years*365), max_pages 전달 확인.
+
+    max_pages는 2026-08-23부터 창과 무관하게 최소 50페이지다 — 옛 공식
+    years*10은 1년 조회에 1,000건만 허용해 대형사에서 절단됐다(삼성전자
+    1년 2,891건). 근거는 tests/test_lookback_pages.py 참고.
+    """
     captured = {}
 
     monkeypatch.setattr(srv, "_DART_API_KEY", "KEY")
@@ -69,7 +74,7 @@ def test_list_disclosures_passes_years_to_core(monkeypatch):
 
     out = srv.list_disclosures_by_stock("012345", lookback_years=3)
     assert captured["lookback_days"] == 3 * 365
-    assert captured["max_pages"] == 3 * 10
+    assert captured["max_pages"] == 50
     assert (captured["bgn_de"], captured["end_de"]) == ("", "")
     assert "최근 3년" in out  # 다년 라벨
     assert "예상 출력 규모" in out  # years>1 푸터
@@ -107,8 +112,13 @@ def test_lookback_days_alias_backward_compat(monkeypatch):
 
 
 def test_resolve_lookback_years_path_parity():
-    """years 경로: years==1 → 365일 라벨(골든 패리티), max_pages=years*10."""
-    assert srv._resolve_lookback(1, None) == (365, 10, "365일")
-    assert srv._resolve_lookback(3, None) == (1095, 30, "3년")
+    """years 경로: years==1 → 365일 라벨(골든 패리티).
+
+    max_pages는 2026-08-23부터 창과 무관하게 최소 50이다 — 옛 years*10은
+    1년 조회에서 대형사를 절단했다(삼성전자 1년 2,891건 중 1,000건만).
+    일수·라벨은 그대로라 골든 패리티는 유지된다.
+    """
+    assert srv._resolve_lookback(1, None) == (365, 50, "365일")
+    assert srv._resolve_lookback(3, None) == (1095, 50, "3년")
     # 범위 클램프(1~5)
     assert srv._resolve_lookback(99, None) == (1825, 50, "5년")
