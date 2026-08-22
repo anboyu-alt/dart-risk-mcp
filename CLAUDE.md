@@ -789,6 +789,43 @@ INQUIRY의 `"거래정지"` 오탐은 우연히 발견됐다. 같은 종류의 �
 ④ 다른 신호 키워드를 부분 문자열로 포함하는가 ⑤ 제거로 무신호가 되는 제목은 무엇인가.
 90일 창은 계절 표현(감사의견·결산)을 못 본다 — 그 판단에는 1년 코퍼스가 필요하다.
 
+## 릴리스 정책 — 버전·CHANGELOG는 PR에 넣지 않는다 (2026-08-23)
+
+**PR에서 버전 번호와 CHANGELOG 항목을 건드리지 않는다.** 머지 후 별도로
+한 번에 올린다.
+
+**근거(실측)**: 2026-08-23에 PR 7개를 병렬로 열었더니 하나가 머지될 때마다
+나머지가 전부 `CONFLICTING`이 됐다. 충돌 파일은 매번 같았다 —
+`dart_risk_mcp/__init__.py` · `pyproject.toml` · `extension/manifest.json` ·
+`extension/pyproject.toml` · `CHANGELOG.md` · `docs/tool/signals-data.json`.
+**충돌의 전부가 이 여섯이고 코드 충돌은 0이었다.** squash merge라 같은 자리를
+건드린 브랜치가 서로를 밀어낸다.
+
+### PR에서 하는 것
+
+- 코드·테스트·`CLAUDE.md`(설계 근거)
+- `docs/tool/signals-data.json`은 **필요할 때만** — 신호·패턴 데이터를 바꿨다면
+  재생성해 함께 커밋한다(뷰어가 읽는 실데이터라 미루면 드리프트가 생긴다).
+  버전 메타만 바뀌는 재생성은 하지 않는다.
+
+### PR에서 하지 않는 것
+
+- `__version__`·`pyproject.toml`·`extension/*` 버전 상향
+- `CHANGELOG.md` 항목 추가
+
+### 릴리스 커밋
+
+여러 PR이 머지된 뒤 한 번에:
+
+1. 버전 4곳을 같은 값으로 올린다
+2. `CHANGELOG.md`에 그 구간의 변경을 **하나의 항목**으로 정리한다
+3. `python scripts/export_tool_data.py`로 `meta.version` 반영
+4. `python -m pytest tests/ -q`
+
+`tests/test_export_tool_data.py`·`test_mcpb_manifest.py`·
+`test_mcp_dependency_pin.py`가 네 곳의 버전 일치를 고정하므로, 릴리스
+커밋에서 한 곳을 빠뜨리면 테스트가 잡는다.
+
 ## 자주 있는 작업
 
 ### 새 신호 유형 추가
