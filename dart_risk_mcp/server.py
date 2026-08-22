@@ -61,6 +61,8 @@ from .core import (
     classify_target_listing,
     fetch_acquisition_detail,
     fetch_asset_disposal_detail,
+    fetch_related_party_detail,
+    fetch_earnings_shock_detail,
     fetch_control_change_detail,
     classify_holder_type,
     strip_holder_suffix,
@@ -634,6 +636,128 @@ def _control_change_actor_lines(name: str) -> list[str]:
     if any(actor_status(r) == "maintainer_seed" for r in recs):
         lines.append("    ⚠ 일부는 제작자 모니터링 등록 (공시 자동매칭 아님, 혐의·확정 아님)")
     lines.append("    ⚠ 원본 공시로 사실 확인 권장 · 동명이인 가능성 있음")
+    return lines
+
+
+_RP_KIND_LABEL = {
+    "borrow": "자금차입", "collateral": "담보 제공받음", "investment": "출자", "": "거래",
+}
+
+
+def _related_party_detail_block(
+    signal_events: list[dict], max_check: int = 3
+) -> list[str]:
+    """특수관계인 자금거래(들어오는 방향) 최근 건의 원문 확인 블록.
+
+    taxonomy 4.2가 요구하는 것은 "가격 괴리"인데 제목에는 없다. 원문에는
+    상대방·관계·금액과 **이자율**이 있어 조건을 눈으로 볼 수 있다
+    (2026-08-22 실측: 이자율 4.6%~8.95%로 편차가 크고, 상대가 「동일인」인
+    개인 차입도 있었다).
+
+    원문 추출에 전부 실패하면 빈 리스트를 반환해 블록 자체를 생략한다
+    (기존 심화 블록 관례). 점수 가산 없음(v0.8.5) — 판정 어휘를 쓰지 않는다.
+    """
+    picked: list[dict] = []
+    seen: set[str] = set()
+    for e in sorted(signal_events, key=lambda x: x.get("rcept_dt", ""), reverse=True):
+        if e.get("key") != "RELATED_PARTY" or e.get("is_amendment"):
+            continue
+        rcept = e.get("rcept_no") or ""
+        if not rcept or rcept in seen:
+            continue
+        seen.add(rcept)
+        picked.append(e)
+        if len(picked) >= max_check:
+            break
+    if not picked:
+        return []
+
+    rows: list[tuple[dict, dict]] = []
+    for e in picked:
+        try:
+            detail = fetch_related_party_detail(e["rcept_no"], _DART_API_KEY)
+        except Exception:
+            detail = {}
+        if detail and detail.get("counterparty"):
+            rows.append((e, detail))
+    if not rows:
+        return []
+
+    lines = [
+        "",
+        "🤝 **특수관계인 자금거래 확인**",
+        "계열사·최대주주에게서 돈이나 담보를 받아온 건입니다. 이자율과 규모가"
+        " 조건을 따져볼 지점입니다.",
+    ]
+    for e, d in rows:
+        kind = _RP_KIND_LABEL.get(d.get("kind", ""), "거래")
+        lines.append(
+            f"- [{(e.get('rcept_dt') or '')[:10]}] {_clean_report_name(e.get('report_nm', ''))}"
+        )
+        rel = f" ({d['relation']})" if d.get("relation") else ""
+        amt = f" — {_format_amount(str(d['amount']))}" if d.get("amount") else ""
+        lines.append(f"  → {kind} 상대: {d['counterparty']}{rel}{amt}")
+        extra: list[str] = []
+        if d.get("interest_rate"):
+            extra.append(f"이자율 {d['interest_rate']}%")
+        if d.get("equity_ratio"):
+            # 원문 표기 그대로 온다 — 숫자만이면 % 를 붙이고, "자본잠식" 같은
+            # 문자 표기(dart_client.parse_related_party_detail 주석 참고)면
+            # 그대로 둔다("자본잠식%"가 되지 않도록).
+            _er = str(d["equity_ratio"]).strip()
+            if re.fullmatch(r"-?[\d,]+(?:\.\d+)?", _er):
+                _er += "%"
+            extra.append(f"자기자본 대비 {_er}")
+        if extra:
+            lines.append("    " + " · ".join(extra))
+    return lines
+
+
+def _earnings_shock_block(
+    signal_events: list[dict], max_check: int = 2
+) -> list[str]:
+    """손익구조 급변 공시 최근 건의 원문 확인 블록.
+
+    제목만으로는 증가인지 감소인지 알 수 없다. 원문 표에 계정별
+    **증감비율(%)**과 **흑자적자전환여부**가 있어 방향을 사실로 표기한다.
+    """
+    picked: list[dict] = []
+    seen: set[str] = set()
+    for e in sorted(signal_events, key=lambda x: x.get("rcept_dt", ""), reverse=True):
+        if e.get("key") != "EARNINGS_SHOCK" or e.get("is_amendment"):
+            continue
+        rcept = e.get("rcept_no") or ""
+        if not rcept or rcept in seen:
+            continue
+        seen.add(rcept)
+        picked.append(e)
+        if len(picked) >= max_check:
+            break
+    if not picked:
+        return []
+
+    rows: list[tuple[dict, dict]] = []
+    for e in picked:
+        try:
+            detail = fetch_earnings_shock_detail(e["rcept_no"], _DART_API_KEY)
+        except Exception:
+            detail = {}
+        if detail and detail.get("rows"):
+            rows.append((e, detail))
+    if not rows:
+        return []
+
+    lines = ["", "📉 **손익구조 급변 내역**"]
+    for e, d in rows:
+        lines.append(
+            f"- [{(e.get('rcept_dt') or '')[:10]}] {_clean_report_name(e.get('report_nm', ''))}"
+        )
+        for r in d["rows"]:
+            pct = (
+                f"{r['change_pct']:+.1f}%" if r["change_pct"] is not None else "—"
+            )
+            turn = f" · {r['turn']}" if r["turn"] else ""
+            lines.append(f"    {r['account']}: {pct}{turn}")
     return lines
 
 
@@ -1596,6 +1720,11 @@ def analyze_company_risk(
                 f"   • {_de.get('rcept_dt', '-')}  [{lbl}]  {_de.get('summary', '')}"
             )
 
+    # v1.14.0: 특수관계인 자금거래·손익구조 급변 원문 사실 블록.
+    # 해당 신호가 관찰되지 않았으면 두 함수 모두 원문을 열지 않는다(호출 예산 0).
+    lines += _related_party_detail_block(observed_events)
+    lines += _earnings_shock_block(observed_events)
+
     # v1.7.0: 최대주주변경 원문 상세 — 원문 추출 실패 시 블록 자체 생략
     _latest_ctrl_change = _find_latest_control_change(disclosures)
     if _latest_ctrl_change:
@@ -2234,6 +2363,22 @@ def build_event_timeline(
     # v1.7.0: 최대주주변경 원문 상세 — 원문 추출 실패 시 블록 자체 생략.
     # 직전 섹션(자금유출 상대방 확인 등)이 이미 trailing 빈 줄을 남겼을 수
     # 있어, 블록 첫 줄의 빈 줄과 겹치면 하나를 걷어내 이중 공백을 막는다.
+    _detail_signal_events = [
+        {
+            "key": evt[2], "report_nm": evt[4], "rcept_dt": evt[0],
+            "rcept_no": evt[5] if len(evt) > 5 else "", "is_amendment": False,
+        }
+        for evt in events
+        if evt[2] in ("RELATED_PARTY", "EARNINGS_SHOCK")
+    ]
+    for _blk in (
+        _related_party_detail_block(_detail_signal_events),
+        _earnings_shock_block(_detail_signal_events),
+    ):
+        if _blk and _blk[0] == "" and lines and lines[-1] == "":
+            _blk = _blk[1:]
+        lines += _blk
+
     _latest_ctrl_change = _find_latest_control_change(disclosures)
     if _latest_ctrl_change:
         _ctrl_block = _control_change_detail_block(_latest_ctrl_change)

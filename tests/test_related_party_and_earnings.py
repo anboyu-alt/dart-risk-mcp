@@ -151,3 +151,23 @@ class TestEarningsShock:
     def test_산문이_있다(self):
         assert "손익" in SIGNAL_PROSE["EARNINGS_SHOCK"]
         assert "특수관계인" in SIGNAL_PROSE["RELATED_PARTY"]
+
+
+def test_related_party_amount_unit_eok():
+    """「(단위 : 억원)」 서식 — 백만원만 처리하면 1억분의 1로 오표기된다.
+
+    2026-08-22 실측: 삼성전자 20260730000505 출자금액 2,970 = 2,970억원.
+    같은 날 포승그린파워 20260812000839는 「(단위 : 백만 원)」 차입금액
+    120,000 = 1,200억원이라 두 서식이 시장에 공존한다.
+    """
+    eok = ("특수관계인에 대한 출자 (단위 : 억원) 1. 거래상대방 SVIC 83호 "
+           "회사와의 관계 출자조합 2. 출자내역 다. 출자금액 2,970 라. 출자상대방 총출자액 3,000")
+    assert parse_related_party_detail(eok)["amount"] == 297_000_000_000
+
+    mil = ("특수관계인으로부터 자금차입 (단위 : 백만 원) 1. 차입처 (주)엘엑스인터내셔널 "
+           "회사와의 관계 계열회사 라. 차입금액 120,000 - 직전사업연도말 자기자본 63,925")
+    assert parse_related_party_detail(mil)["amount"] == 120_000_000_000
+
+    bare = ("특수관계인에 대한 출자 1. 거래상대방 가나 회사와의 관계 계열회사 "
+            "다. 출자금액 13,000,000,000")
+    assert parse_related_party_detail(bare)["amount"] == 13_000_000_000

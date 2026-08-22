@@ -124,6 +124,9 @@ _ALLOWED_PAREN_ABBREVS = {
     "ROE", "ROA", "EPS", "EBITDA", "EBIT", "EV", "FCF", "OCI",
     # 기타 산업 표준
     "OECD", "IFRS", "GAAP", "ESG",
+    # MOU: 금감원 카탈로그 발췌 본문(허위 MOU 체결로 주가부양한 사례 요약)에
+    # 원문 표기 그대로 등장한다. 내부 flag 코드가 아니다.
+    "MOU",
 }
 
 
