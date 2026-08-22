@@ -14,7 +14,7 @@ HTTP 껍데기(api/track.py)와 분리된 순수 함수라 단위 테스트가 �
 from __future__ import annotations
 
 import re
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from tool_server.supa import insert_row
 
@@ -38,7 +38,15 @@ CLIENT_FIELDS = (
     "lang",
 )
 
-_BOT_RE = re.compile(r"bot|crawler|spider|crawling|slurp|bingpreview", re.I)
+# headless·자동화 클라이언트를 함께 잡는다. HeadlessChrome은 UA가 일반
+# Chrome과 거의 같아 이걸 안 넣으면 스캐너가 데스크톱 방문자로 집계된다
+# (프로덕션 실측 2026-08-22 — AWS us-west에서 HeadlessChrome/141 2건).
+_BOT_RE = re.compile(
+    r"bot|crawler|spider|crawling|slurp|bingpreview|headless|phantomjs"
+    r"|puppeteer|playwright|scrapy|curl/|wget/|python-requests|go-http-client"
+    r"|okhttp|node-fetch|axios/",
+    re.I,
+)
 
 # 순서가 곧 우선순위다. Edge·Opera·Samsung·Whale UA는 Chrome 토큰을 포함하고
 # Chrome UA는 Safari 토큰을 포함한다 — 순서를 틀리면 전부 Chrome/Safari가 된다.
@@ -121,6 +129,20 @@ def client_ip(headers: dict) -> str | None:
     return first or None
 
 
+def _geo(value, limit: int) -> str | None:
+    """Vercel geo 헤더는 퍼센트 인코딩돼 온다 — "San%20Jose", 한글 도시명 등.
+
+    그대로 저장하면 대시보드에 인코딩 문자열이 그대로 보인다(프로덕션 실측).
+    """
+    text = _trim(value, limit)
+    if text is None:
+        return None
+    try:
+        return unquote(text)
+    except Exception:  # noqa: BLE001 — 디코딩 실패 시 원문을 그대로 쓴다
+        return text
+
+
 def _trim(value, limit: int = MAX_FIELD_CHARS) -> str | None:
     if value is None:
         return None
@@ -147,9 +169,9 @@ def handle_track(body: dict, headers: dict, origin_ok: bool) -> tuple[int, dict]
         body.get("referrer") or "", headers.get("host") or ""
     )
     row["ip"] = client_ip(headers)
-    row["country"] = _trim(headers.get("x-vercel-ip-country"), 8)
-    row["region"] = _trim(headers.get("x-vercel-ip-country-region"), 32)
-    row["city"] = _trim(headers.get("x-vercel-ip-city"), 64)
+    row["country"] = _geo(headers.get("x-vercel-ip-country"), 8)
+    row["region"] = _geo(headers.get("x-vercel-ip-country-region"), 32)
+    row["city"] = _geo(headers.get("x-vercel-ip-city"), 64)
 
     # 저장 실패해도 204. 수집 문제를 뷰어 콘솔의 빨간 에러로 만들지 않는다.
     insert_row(TABLE, row)
