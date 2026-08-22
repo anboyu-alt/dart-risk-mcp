@@ -211,23 +211,6 @@
    "caution": true
   },
   {
-   "key": "ASSET_TRANSFER",
-   "label": "자산매각/유출",
-   "keywords": [
-    "자산매각",
-    "사옥매각",
-    "자회사매각",
-    "사업양도",
-    "저가매각"
-   ],
-   "taxonomies": [
-    "5.3"
-   ],
-   "category": 5,
-   "prose": "자산·영업 양수도 공시입니다. 상대방이 특수관계인인지, 외부 평가를 거쳤는지, 회사 자산 대비 금액이 과도한지가 위험 판단의 핵심입니다.",
-   "caution": true
-  },
-  {
    "key": "DEMERGER",
    "label": "회사분할",
    "keywords": [
@@ -347,11 +330,7 @@
   {
    "key": "CAPITAL_RED",
    "label": "유상감자/손실보전감자",
-   "keywords": [
-    "유상감자",
-    "손실보전감자",
-    "이익배당으로서감자"
-   ],
+   "keywords": [],
    "taxonomies": [
     "2.2"
    ],
@@ -414,11 +393,7 @@
   {
    "key": "CIRCULAR",
    "label": "순환출자",
-   "keywords": [
-    "순환출자",
-    "순환구조",
-    "지분연쇄"
-   ],
+   "keywords": [],
    "taxonomies": [
     "3.5"
    ],
@@ -545,10 +520,7 @@
   {
    "key": "ASSET_SPIRAL",
    "label": "자산연쇄처분",
-   "keywords": [
-    "연쇄매각",
-    "긴급자산처분"
-   ],
+   "keywords": [],
    "taxonomies": [
     "8.3"
    ],
@@ -623,11 +595,7 @@
   {
    "key": "RIGHTS_UNDER",
    "label": "공모미달",
-   "keywords": [
-    "유상증자미달",
-    "공모미달",
-    "청약미달"
-   ],
+   "keywords": [],
    "taxonomies": [
     "2.5"
    ],
@@ -717,6 +685,23 @@
    "category": 7,
    "prose": "정치테마주·세력 작전 대상으로 거론된 공시입니다. 핀플루언서 언급, 테마 편승 공시 등 펀더멘털과 무관한 가격 변동을 유발하는 요인이 감지된 상태입니다.",
    "caution": false
+  },
+  {
+   "key": "ASSET_TRANSFER",
+   "label": "자산 처분·양도(상대방 확인)",
+   "keywords": [
+    "유형자산처분",
+    "비유동자산처분",
+    "유형자산양도",
+    "특수관계인에대한자산양도",
+    "영업양도"
+   ],
+   "taxonomies": [
+    "5.3"
+   ],
+   "category": 5,
+   "prose": "자산·영업 양수도 공시입니다. 상대방이 특수관계인인지, 외부 평가를 거쳤는지, 회사 자산 대비 금액이 과도한지가 위험 판단의 핵심입니다.",
+   "caution": true
   },
   {
    "key": "ACQ_REVIEW",
@@ -1251,10 +1236,15 @@
   "MEETING_VIOL": "absent",
   "ACTIVIST": "absent",
   "DISTRESS_MA": "absent",
-  "GAMJA_MERGE": "absent"
+  "GAMJA_MERGE": "absent",
+  "CAPITAL_RED": "absent",
+  "RIGHTS_UNDER": "absent",
+  "ASSET_SPIRAL": "absent",
+  "CIRCULAR": "absent"
  },
  "ambiguous_signal_keys": [
   "ACQ_REVIEW",
+  "ASSET_TRANSFER",
   "FUND_OUTFLOW",
   "TREASURY",
   "TREASURY_TRUST"
