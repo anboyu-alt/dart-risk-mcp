@@ -156,10 +156,14 @@
     background: #c03a3a; color: #fff; border-radius: 3px; padding: 2px 7px; letter-spacing: 0.08em; }
   .sigdot { font-family: var(--mono); font-size: 10.5px; color: var(--red); }
   .nosig { font-family: var(--mono); font-size: 11px; color: var(--faint); }
-  /* 주의(caution) 배지 — 강조 배지(MAX)와 시각적으로 구분되는 조용한 외곽선.
-     참고(caution:false) 신호에는 붙이지 않는다 — 기존 dim 표시가 그대로 참고 수준. */
+  /* 관찰 우선순위 배지 — "무엇부터 보면 되는가"의 순서이지 위험도 등급이 아니다.
+     first(먼저)만 배지를 달고, watch는 기존 ● 신호 표시 그대로, context(참고)는
+     조용한 회색 배지로 "원문을 봐야 안다"는 사실만 알린다. 옛 caution 배지는
+     severity 파생이라 관찰 공시의 56.3%에 붙어 변별력이 없었다(90일 실측). */
   .badge-cau { font-family: var(--mono); font-size: 10px; color: var(--amber); background: transparent;
     border: 1px solid var(--amber); border-radius: 3px; padding: 1px 6px; letter-spacing: 0.06em; }
+  .badge-ctx { font-family: var(--mono); font-size: 10px; color: var(--dim); background: transparent;
+    border: 1px solid var(--line); border-radius: 3px; padding: 1px 6px; letter-spacing: 0.06em; }
 
   /* 절차·사후 보고 (접힘) — 신호 한정층 procedural 티어 */
   .proc { margin-top: 1.2rem; border-top: 1px solid var(--line); padding-top: 0.8rem; }
@@ -998,7 +1002,7 @@ function qualifySignals(sigs, parsed, filing) {
     key: s.key,
     label: adjustedLabel(s, parsed),
     category: s.category,
-    caution: s.caution,
+    priority: s.priority,
     taxonomies: s.taxonomies,
     prose: s.prose,
     tier, reason,
@@ -1194,11 +1198,17 @@ function renderFeed() {
     // 행이 헤드라인과 같은 key를 우연히 공유해도(리뷰 라운드1 Finding 1,
     // 대량보유상황보고 SHAREHOLDER 재현) MAX를 물려받지 않는다.
     const isTop = heavyKey && r.signals.some((s) => isObservedSig(s) && s.key === heavyKey);
-    // 주의(caution) 배지도 MAX와 같은 원칙 — 절차·사후 보고로 강등된 행에
+    // 우선순위 배지도 MAX와 같은 원칙 — 절차·사후 보고로 강등된 행에
     // 관찰 신호와 같은 시각 언어(배지)를 씌우지 않는다(리뷰 라운드2 Finding).
-    const hasCaution = !isTop && r.signals.some((s) => isObservedSig(s) && s.caution);
+    const obsSigs = r.signals.filter(isObservedSig);
+    const hasFirst = !isTop && obsSigs.some((s) => s.priority === "first");
+    // 관찰 신호가 전부 context일 때만 '참고'를 단다 — watch가 하나라도 있으면
+    // 그쪽이 읽을 값이므로 배지로 낮춰 보이게 하지 않는다.
+    const ctxOnly = !isTop && !hasFirst && obsSigs.length
+      && obsSigs.every((s) => s.priority === "context");
     const sigCell = isTop ? `<span class="badge-max">MAX</span>`
-      : hasCaution ? `<span class="badge-cau">주의</span>`
+      : hasFirst ? `<span class="badge-cau">먼저</span>`
+      : ctxOnly ? `<span class="badge-ctx">참고</span>`
       : r.signals.length ? `<span class="sigdot">● 신호</span>`
       : `<span class="nosig">—</span>`;
     // 작업3: 지난 스캔 스냅샷 이후 새로 감지된 신호 매칭 공시에 조용한 NEW 마커.
@@ -1316,7 +1326,8 @@ function renderDetail(rcept) {
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">신호 무게</span><span style="color:${isTop ? "var(--red)" : "var(--dim2)"}">${isTop ? "이 기간 최상위" : r.signals.length ? "감지됨" : "—"}</span></div>
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">정정 여부</span><span>${r.isAmend ? "정정공시" : "원공시"}</span></div>
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">체인 위치</span><span>${pos >= 0 ? `${pos + 1} / ${CUR.observedEvents.length}` : "—"}</span></div>
-          ${r.signals.some((s) => isObservedSig(s) && s.caution) ? `<div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">주의 표시</span><span><span class="badge-cau">주의</span> <span class="dim" style="font-size:0.78rem">— 관찰 우선순위 표시</span></span></div>` : ""}
+          ${r.signals.some((s) => isObservedSig(s) && s.priority === "first") ? `<div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">관찰 순서</span><span><span class="badge-cau">먼저</span> <span class="dim" style="font-size:0.78rem">— 회사의 존속·상장·회계 신뢰성이 걸린 사실 (위험도 등급 아님)</span></span></div>` : ""}
+          ${r.signals.some((s) => isObservedSig(s) && s.priority === "context") ? `<div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">관찰 순서</span><span><span class="badge-ctx">참고</span> <span class="dim" style="font-size:0.78rem">— 제목만으로는 정상·이상이 갈리지 않아 원문 확인이 필요</span></span></div>` : ""}
         </div>
         <a href="${dartUrl(r.rcept)}" target="_blank" rel="noopener" style="display:block;margin-top:16px;text-align:center;background:var(--cell);border:1px solid var(--line2);border-radius:4px;padding:11px;font-family:var(--mono);font-size:12.5px">DART 원문 열기 ↗</a>
         <button class="ghost" id="docViewBtn" style="width:100%;margin-top:8px;padding:11px;font-size:12.5px">원문 이 화면에서 보기</button>
@@ -1565,7 +1576,7 @@ function renderDash() {
     html += flowNotes(observedEvents);
     html += `<div class="panel"><div class="slabel">▍SIGNAL COMMENTARY — 무게순 · 사실 서술</div>
       <div class="proselist">` + detectedTypes.map((s) =>
-        `<div><span class="tag" style="background:var(--c${s.category})">${esc(s.label)}</span>${s.caution ? ` <span class="badge-cau">주의</span>` : ""} <span class="mono" style="font-size:0.78rem;color:var(--dim2)">×${typeCount[s.key]}</span>
+        `<div><span class="tag" style="background:var(--c${s.category})">${esc(s.label)}</span>${s.priority === "first" ? ` <span class="badge-cau">먼저</span>` : s.priority === "context" ? ` <span class="badge-ctx">참고</span>` : ""} <span class="mono" style="font-size:0.78rem;color:var(--dim2)">×${typeCount[s.key]}</span>
          <div class="p">${esc(s.prose || "등록된 해설이 없는 신호 유형입니다.")}</div>
          ${signalCatalogCasesHTML(s)}</div>`).join("") +
       `</div></div>`;

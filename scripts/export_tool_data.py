@@ -47,6 +47,7 @@ from dart_risk_mcp.core.dart_client import _FS_ALIASES  # noqa: E402
 from dart_risk_mcp.core import qualifiers as _q  # noqa: E402
 from dart_risk_mcp.core import signals as _sig  # noqa: E402
 from dart_risk_mcp.core.signals import AMBIGUOUS_SIGNAL_KEYS  # noqa: E402
+from dart_risk_mcp.core.signals import observation_priority  # noqa: E402
 
 # 뷰어 심화 블록(재무 핵심)에서 쓰는 계정 별칭 부분집합
 _FS_ALIAS_KEYS = ("매출", "영업이익", "당기순이익", "자본총계", "자본금")
@@ -244,57 +245,18 @@ def build_catalog_data() -> dict:
     }
 
 
-# severity 2단계 접기 (뷰어 '주의/참고' 배지용) — severity 문자열 원값은
-# 계속 미노출한다. CRITICAL/HIGH → 주의(true), 그 외 → 참고(false)의
-# 불리언 하나만 내보내 "등급"으로 읽힐 표면을 없앤다. 라벨 문자열
-# ("주의"/"참고")은 뷰어 JS에만 둔다.
+# 관찰 우선순위 (뷰어 배지용) — core `observation_priority`를 그대로 내보낸다.
 #
-# 패턴(CROSS_SIGNAL_PATTERNS)에는 넣지 않는다 — 9종 전원이 CRITICAL/HIGH라
-# 불리언이 상수가 되고(정보량 0), 상수 배지는 경고 중첩 노이즈만 만든다.
-_CAUTION_SEVERITIES = frozenset({"CRITICAL", "HIGH"})
-
-# severity 단독 파생으로는 배지가 뒤집히는 신호가 있다(2026-08-22 실측).
+# 옛 설계는 taxonomy severity를 2단계로 접어 `caution` 불리언을 만들었다.
+# 그런데 이 레포에서 severity는 "얼마나 심각한가"가 아니라 사실상 "점수를
+# 매기느냐"라서(OBSERVATION = base_score 0), 무점수로 설계된 「상장폐지
+# 결정」이 '참고'로 내려앉고 severity가 HIGH라는 이유만으로 양면적 신호에
+# 배지가 붙었다. 실측: 90일 코퍼스 관찰 공시의 **56.3%**에 배지가 붙어
+# 변별력이 없었다(새 분류로는 first가 13.0%).
 #
-# 이 레포에서 severity는 "얼마나 심각한가"가 아니라 사실상 **"점수를 매기느냐"**
-# 로 쓰여 왔다 — OBSERVATION = base_score 0 = 사실 표기 전용이라는 뜻이다.
-# 그런데 caution은 이용자의 **관찰 우선순위** 배지다. 두 의미가 달라서,
-# 무점수로 설계된 신호가 그대로 '참고'로 내려앉았다.
-#
-# 실측 결과: 90일 코퍼스(공시 48,646건) 관찰 신호 2,913건 중 「상장폐지
-# 결정·정리매매 개시」(DELISTING_RISK 175건)와 「관리종목 지정요건」
-# (WATCH_ISSUE 120건) 295건(10.1%)이 배지 없이 떴다. 같은 화면에서
-# 「조회공시 요구」(INQUIRY, 7.1 CRITICAL)는 '주의'로 떴다 — 퇴출이 확정된
-# 회사가 해명 요구를 받은 회사보다 낮은 우선순위로 보이는 뒤집힘이다.
-#
-# 이 세 신호는 taxonomy 8.5("부실 단계 진입", OBSERVATION)를 공유한다.
-# 8.5의 severity를 올리면 같은 자리에 얹힌 EARNINGS_SHOCK(방향조차 모르는
-# 손익 변동)까지 함께 올라가고, 점수·패턴 체계에도 파급된다. 그래서
-# taxonomy는 그대로 두고 **배지 파생 규칙에서만** 승격한다 — 이 목록은
-# 뷰어 표시 계층 한정이며 MCP 출력·점수·무판정 원칙(v0.8.5)에 영향이 없다.
-_CAUTION_FORCE_KEYS = frozenset({
-    # 거래소 퇴출 절차(상장폐지·실질심사·개선기간·정리매매). 이용자가 가장
-    # 먼저 봐야 하는 사실인데 무점수라 '참고'로 내려앉아 있었다.
-    "DELISTING_RISK",
-    # 관리종목 지정요건 발생(시총·주가·매출액 미달). 퇴출 절차의 전 단계.
-    "WATCH_ISSUE",
-    # 부도·영업정지·회생절차 개시신청·해산사유 발생. 8.5의 원래 정의 자체다.
-    "DISTRESS_EVENT",
-})
-
-
-def _caution_of(signal_key: str) -> bool:
-    """뷰어 '주의' 배지 — 관찰 우선순위. severity 파생 + 명시 승격 목록.
-
-    승격 목록의 근거는 위 주석 참고. `EARNINGS_SHOCK`은 같은 8.5를 쓰지만
-    승격하지 않는다 — 증가인지 감소인지조차 제목으로 알 수 없어(그래서
-    원문 확인 블록을 따로 둔다) 먼저 보라고 할 근거가 없다.
-    """
-    if signal_key in _CAUTION_FORCE_KEYS:
-        return True
-    return any(
-        TAXONOMY.get(tax_id, {}).get("severity") in _CAUTION_SEVERITIES
-        for tax_id in _taxonomies_of(signal_key)
-    )
+# 이제 severity는 배지 계산에 관여하지 않는다. severity·base_score 원값은
+# 여전히 export하지 않는다(v0.8.5) — 내보내는 것은 "무엇부터 보면 되는가"의
+# 순서이지 위험도 등급이 아니다.
 
 
 def _taxonomies_of(signal_key: str) -> list[str]:
@@ -330,7 +292,7 @@ def build_signals_data() -> dict:
             "taxonomies": _taxonomies_of(s["key"]),
             "category": _category_of(s["key"]),
             "prose": signal_to_prose(s["key"]),
-            "caution": _caution_of(s["key"]),
+            "priority": observation_priority(s["key"]),
         }
         for s in sorted(SIGNAL_TYPES, key=lambda x: -x["score"])
     ]

@@ -1,6 +1,6 @@
 {
  "meta": {
-  "version": "1.14.0"
+  "version": "1.15.0"
  },
  "signals": [
   {
@@ -12,7 +12,7 @@
    ],
    "category": 8,
    "prose": "",
-   "caution": true
+   "priority": "first"
   },
   {
    "key": "AR_SURGE",
@@ -23,7 +23,7 @@
    ],
    "category": 6,
    "prose": "",
-   "caution": true
+   "priority": "watch"
   },
   {
    "key": "CASH_GAP",
@@ -34,7 +34,7 @@
    ],
    "category": 6,
    "prose": "",
-   "caution": true
+   "priority": "watch"
   },
   {
    "key": "CAPITAL_CHURN",
@@ -45,7 +45,7 @@
    ],
    "category": 2,
    "prose": "",
-   "caution": true
+   "priority": "watch"
   },
   {
    "key": "INVENTORY_SURGE",
@@ -56,7 +56,7 @@
    ],
    "category": 6,
    "prose": "",
-   "caution": true
+   "priority": "watch"
   },
   {
    "key": "GAMJA_MERGE",
@@ -67,7 +67,7 @@
    ],
    "category": 2,
    "prose": "감자 후 증자 또는 감자를 동반한 합병 공시입니다. 기존 주주 지분율을 크게 낮춘 뒤 신규 발행으로 특정 세력에 지분을 몰아주는 구조로 이어질 수 있습니다.",
-   "caution": true
+   "priority": "watch"
   },
   {
    "key": "EMBEZZLE",
@@ -82,7 +82,7 @@
    ],
    "category": 8,
    "prose": "횡령·배임 같은 가장 무거운 신호입니다. 수사·기소·검찰 고발 단계와 맞물려 주가 충격이 확정적인 유형입니다.",
-   "caution": true
+   "priority": "first"
   },
   {
    "key": "INSOLVENCY",
@@ -100,7 +100,7 @@
    ],
    "category": 8,
    "prose": "회생·파산 절차 신청이나 관련 공시입니다. 회사 존속 자체가 법정 절차에 넘어간 상태입니다.",
-   "caution": true
+   "priority": "first"
   },
   {
    "key": "GOING_CONCERN",
@@ -116,7 +116,7 @@
    ],
    "category": 8,
    "prose": "감사보고서에 '계속기업 가정 불확실성'이 기재된 공시입니다. 감사인이 '이 회사가 1년 안에 망하지 않는다고 장담하기 어렵다'고 공식화한 것으로, 회생·파산·상장폐지의 직전 단계에서 자주 등장합니다.",
-   "caution": true
+   "priority": "first"
   },
   {
    "key": "CB_REPAY",
@@ -127,7 +127,7 @@
    ],
    "category": 1,
    "prose": "이미 발행한 전환사채를 현금으로 갚는다는 공시입니다. 상환 재원이 자회사 배당 같은 내부 자금이면 그룹 전체 현금흐름에 부담을 주는 조기 상환 패턴일 수 있습니다.",
-   "caution": true
+   "priority": "watch"
   },
   {
    "key": "EB",
@@ -145,7 +145,7 @@
    ],
    "category": 1,
    "prose": "교환사채(EB) 발행입니다. 회사가 보유한 다른 회사 주식이나 자기주식으로 나중에 교환할 수 있는 채권이라, 자사주 매각 통로로 변질될 가능성이 있습니다.",
-   "caution": true
+   "priority": "watch"
   },
   {
    "key": "RCPS",
@@ -161,7 +161,7 @@
    ],
    "category": 1,
    "prose": "상환전환우선주(RCPS) 발행입니다. 우선주처럼 배당을 받다가 보통주 전환이나 현금 상환을 선택할 수 있어, 조건에 따라 주가를 짓누르는 매도 압력이 될 수 있습니다.",
-   "caution": true
+   "priority": "watch"
   },
   {
    "key": "CB_ROLLOVER",
@@ -172,7 +172,7 @@
    ],
    "category": 1,
    "prose": "기존 전환사채를 갚지 않고 새 전환사채로 '돌려막기'하는 공시입니다. 자체 현금으로 상환하지 못하는 상태가 이어지고 있다는 신호입니다.",
-   "caution": true
+   "priority": "watch"
   },
   {
    "key": "3PCA",
@@ -189,7 +189,7 @@
    ],
    "category": 2,
    "prose": "제3자 배정 유상증자 공시입니다. 기존 주주가 아닌 특정 개인이나 법인에게만 신주를 주는 방식으로, 경영권 이전이나 특수관계자 이익 제공 경로로 반복 악용됩니다.",
-   "caution": true
+   "priority": "watch"
   },
   {
    "key": "AUDIT",
@@ -208,7 +208,7 @@
    ],
    "category": 8,
    "prose": "감사의견·감사인 관련 공시입니다. 한정·거절 의견이나 감사인 중도 교체는 코스닥에서 상장폐지로 직결될 수 있는 가장 무거운 신호 중 하나입니다.",
-   "caution": true
+   "priority": "first"
   },
   {
    "key": "DEMERGER",
@@ -223,7 +223,7 @@
    ],
    "category": 5,
    "prose": "회사 분할 공시입니다. 핵심 사업과 부실 사업을 분리하거나 상장 가치를 새로 띄우는 목적이 있어, 주주 가치에 미치는 영향을 계산해봐야 합니다.",
-   "caution": true
+   "priority": "watch"
   },
   {
    "key": "DEBT_RESTR",
@@ -239,7 +239,7 @@
    ],
    "category": 8,
    "prose": "채무 재조정·워크아웃·출자전환 공시입니다. 금융권 빚을 갚을 수 없어 구조조정에 들어간 상태를 뜻합니다.",
-   "caution": true
+   "priority": "first"
   },
   {
    "key": "FUND_DIVERSION",
@@ -251,7 +251,7 @@
    ],
    "category": 8,
    "prose": "",
-   "caution": true
+   "priority": "first"
   },
   {
    "key": "DECISION_RELATED_PARTY",
@@ -262,7 +262,7 @@
    ],
    "category": 4,
    "prose": "",
-   "caution": true
+   "priority": "watch"
   },
   {
    "key": "CB_BW",
@@ -286,7 +286,7 @@
    ],
    "category": 1,
    "prose": "전환사채·신주인수권부사채 발행입니다. 빚으로 돈을 들여오지만 나중에 주식으로 바꿀 수 있어, 누가 이 채권을 받았는지에 따라 주가 희석이나 특정 세력의 지분 취득 통로가 됩니다.",
-   "caution": true
+   "priority": "watch"
   },
   {
    "key": "CB_BUYBACK",
@@ -297,7 +297,7 @@
    ],
    "category": 1,
    "prose": "회사가 자기가 발행한 전환사채를 되사는 공시입니다. 시장가보다 낮은 가격에 매입해 사채권자와 이익을 분배하는 방식이면 소액주주 피해가 커질 수 있어 감독당국이 주시합니다.",
-   "caution": true
+   "priority": "watch"
   },
   {
    "key": "TREASURY_EB",
@@ -308,7 +308,7 @@
    ],
    "category": 1,
    "prose": "자사주를 기초로 교환사채(EB)를 발행하는 공시입니다. 자사주 직접 매각 제한을 우회해 특정 세력에 지분을 넘기는 통로가 될 수 있습니다.",
-   "caution": false
+   "priority": "context"
   },
   {
    "key": "REVERSE_SPLIT",
@@ -325,7 +325,7 @@
    ],
    "category": 2,
    "prose": "주식 병합(액면병합) 공시입니다. 여러 주를 하나로 묶어 주식 수를 줄이는 작업인데, 주가가 낮아 상장폐지 기준에 걸리는 기업이 이를 피하기 위해 꺼내드는 카드로 자주 쓰입니다.",
-   "caution": true
+   "priority": "watch"
   },
   {
    "key": "CAPITAL_RED",
@@ -336,7 +336,7 @@
    ],
    "category": 2,
    "prose": "자본금 감소(유상감자·무상감자) 공시입니다. 자본잠식 해소 목적이면 정당하지만, 대주주 자금 회수 수단으로 변질되는 사례가 반복됩니다.",
-   "caution": true
+   "priority": "watch"
   },
   {
    "key": "TREASURY",
@@ -352,7 +352,7 @@
    ],
    "category": 2,
    "prose": "자사주 취득·처분 공시입니다. 주주 환원으로 긍정적일 수도 있지만, 신탁 계약·장내매수·사모 매각이 특정 타이밍에 몰리면 주가 조작이나 경영권 방어 도구로 악용되기도 합니다.",
-   "caution": false
+   "priority": "context"
   },
   {
    "key": "SHAREHOLDER",
@@ -372,7 +372,7 @@
    ],
    "category": 3,
    "prose": "최대주주가 바뀌는 공시입니다. 회사 지배구조의 핵심 사건으로, 새 지배 세력의 의도(정상 인수인지 무자본 M&A인지)를 다른 공시들과 함께 살펴봐야 합니다.",
-   "caution": true
+   "priority": "watch"
   },
   {
    "key": "MGMT_DISPUTE",
@@ -388,7 +388,7 @@
    ],
    "category": 3,
    "prose": "경영권 분쟁이 드러난 공시입니다. 주총 의결권 경합, 임원 해임 가처분 등 소송·분쟁이 진행 중이라는 신호입니다.",
-   "caution": false
+   "priority": "watch"
   },
   {
    "key": "CIRCULAR",
@@ -399,7 +399,7 @@
    ],
    "category": 3,
    "prose": "순환출자 구조가 포함된 지분 이동 공시입니다. 계열사 간 지분을 돌려 실질 지배주주 지분을 키우는 방식으로, 공정위 규제의 주 표적입니다.",
-   "caution": false
+   "priority": "context"
   },
   {
    "key": "MEETING_VIOL",
@@ -410,7 +410,7 @@
    ],
    "category": 4,
    "prose": "",
-   "caution": false
+   "priority": "watch"
   },
   {
    "key": "DISCLOSURE_VIOL",
@@ -431,7 +431,7 @@
    ],
    "category": 4,
    "prose": "공시 의무를 어겨 거래소가 제재한 공시입니다. 공시 철회·발행 철회·불성실 공시 지정, 정기보고서·감사보고서 미제출·제출지연 등이 해당하며, 회사의 기본 거버넌스가 흔들리고 있다는 신호입니다.",
-   "caution": false
+   "priority": "watch"
   },
   {
    "key": "MGMT",
@@ -450,7 +450,7 @@
    ],
    "category": 5,
    "prose": "경영 관련 주요 결정 공시입니다. 합병·분할·사업 양수도 등 회사 구조를 크게 바꾸는 이벤트라 상대방과 가격 조건을 꼼꼼히 살펴야 합니다.",
-   "caution": false
+   "priority": "watch"
   },
   {
    "key": "REVENUE_IRREG",
@@ -461,7 +461,7 @@
    ],
    "category": 6,
    "prose": "매출 관련 이상 공시입니다. 선수금 급증, 미수금 증가, 매출 과대계상 등 장부상 숫자와 실제 현금흐름이 어긋나는 단서들을 뜻합니다.",
-   "caution": true
+   "priority": "watch"
   },
   {
    "key": "CONTINGENT",
@@ -472,7 +472,7 @@
    ],
    "category": 6,
    "prose": "우발채무·소송 관련 공시입니다. 아직 확정되지 않았지만 회사가 크게 물어낼 가능성이 있는 부담으로, 규모에 따라 재무 건전성을 뒤흔들 수 있습니다.",
-   "caution": true
+   "priority": "watch"
   },
   {
    "key": "INQUIRY",
@@ -487,7 +487,7 @@
    ],
    "category": 7,
    "prose": "거래소가 이상 징후를 감지해 회사에 해명을 요구한 '조회공시' 공시입니다. 주가·거래량 급변 뒤에 숨은 정보가 있는지 따져 묻는 절차입니다.",
-   "caution": true
+   "priority": "watch"
   },
   {
    "key": "ASSET_SPIRAL",
@@ -498,7 +498,7 @@
    ],
    "category": 8,
    "prose": "",
-   "caution": true
+   "priority": "first"
   },
   {
    "key": "FUND_UNREPORTED",
@@ -509,7 +509,7 @@
    ],
    "category": 4,
    "prose": "",
-   "caution": false
+   "priority": "context"
   },
   {
    "key": "DECISION_OVERSIZED",
@@ -520,7 +520,7 @@
    ],
    "category": 5,
    "prose": "",
-   "caution": true
+   "priority": "watch"
   },
   {
    "key": "DECISION_NO_EXTVAL",
@@ -531,7 +531,7 @@
    ],
    "category": 4,
    "prose": "",
-   "caution": false
+   "priority": "context"
   },
   {
    "key": "FUND_OUTFLOW",
@@ -549,7 +549,7 @@
    ],
    "category": 5,
    "prose": "금전대여·채무보증·담보제공·유형자산양수처럼 회사 자금이나 신용이 밖으로 나가는 거래입니다. 대기업의 일상적 계열 지원과 이 신호 하나만으로는 구분되지 않지만, 최대주주변경 등 경영권 변경 직후에 나왔다면 자금이 누구에게 흘러가는지 원문에서 확인할 가치가 있습니다 — `get_disclosure_document` 또는 `get_major_decision`으로 거래상대방·회사와의 관계를 직접 확인해 보세요.",
-   "caution": false
+   "priority": "context"
   },
   {
    "key": "STAKE_PLEDGE",
@@ -562,7 +562,7 @@
    ],
    "category": 3,
    "prose": "최대주주가 보유 주식을 담보로 제공하는 계약(체결·해제·취소)입니다. 오너의 주식담보대출(주담대)은 시장에서 흔한 자금 조달 방식이라 이 신호 하나만으로는 판단 근거가 되지 않지만, 담보권이 실행되면 증권사가 담보 주식을 반대매매로 시장에 던져 주가가 급락하는 경로로 이어질 수 있습니다. 인수 직후 인수주식 자체를 담보로 잡히거나 5% 대량보유보고에 담보 사실이 빠져 있다면 원문에서 담보설정비율과 시점을 확인해 볼 가치가 있습니다.",
-   "caution": false
+   "priority": "context"
   },
   {
    "key": "RIGHTS_UNDER",
@@ -573,7 +573,7 @@
    ],
    "category": 2,
    "prose": "주주배정 유상증자가 미달·실권으로 이어진 공시입니다. 기존 주주가 참여를 거부했다는 뜻이라, 시장 신뢰가 흔들리는 시점에 자주 나옵니다.",
-   "caution": false
+   "priority": "watch"
   },
   {
    "key": "EXEC",
@@ -591,7 +591,7 @@
    ],
    "category": 3,
    "prose": "대표이사·이사 등 핵심 임원이 바뀌는 공시입니다. 단기간에 연이은 교체는 내부 갈등·경영권 분쟁·사전 정리 작업의 전형적 패턴입니다.",
-   "caution": true
+   "priority": "watch"
   },
   {
    "key": "ACTIVIST",
@@ -602,7 +602,7 @@
    ],
    "category": 3,
    "prose": "",
-   "caution": true
+   "priority": "watch"
   },
   {
    "key": "EQUITY_SPLIT",
@@ -617,7 +617,7 @@
    ],
    "category": 5,
    "prose": "",
-   "caution": false
+   "priority": "context"
   },
   {
    "key": "BUYBACK_NEG",
@@ -628,7 +628,7 @@
    ],
    "category": 5,
    "prose": "",
-   "caution": true
+   "priority": "first"
   },
   {
    "key": "DISTRESS_MA",
@@ -639,7 +639,7 @@
    ],
    "category": 5,
    "prose": "",
-   "caution": false
+   "priority": "context"
   },
   {
    "key": "THEME_STOCK",
@@ -656,7 +656,7 @@
    ],
    "category": 7,
    "prose": "정치테마주·세력 작전 대상으로 거론된 공시입니다. 핀플루언서 언급, 테마 편승 공시 등 펀더멘털과 무관한 가격 변동을 유발하는 요인이 감지된 상태입니다.",
-   "caution": false
+   "priority": "context"
   },
   {
    "key": "RELATED_PARTY",
@@ -671,7 +671,7 @@
    ],
    "category": 4,
    "prose": "계열사·최대주주 같은 특수관계인에게서 돈이나 담보를 받아온 공시입니다. 계열사 간 자금 지원 자체는 일상이지만, 이자율이 시장과 크게 다르거나 회사 자기자본에 비해 규모가 크면 조건을 따져볼 지점이 됩니다. 반대로 회사가 특수관계인에게 돈을 빌려주거나 담보를 제공한 건은 '자금유출성거래'로 잡힙니다.",
-   "caution": true
+   "priority": "context"
   },
   {
    "key": "ASSET_TRANSFER",
@@ -688,7 +688,7 @@
    ],
    "category": 5,
    "prose": "자산·영업 양수도 공시입니다. 상대방이 특수관계인인지, 외부 평가를 거쳤는지, 회사 자산 대비 금액이 과도한지가 위험 판단의 핵심입니다.",
-   "caution": true
+   "priority": "context"
   },
   {
    "key": "ACQ_REVIEW",
@@ -703,7 +703,7 @@
    ],
    "category": 5,
    "prose": "영업양수 또는 타법인주식및출자증권양수 결정입니다. 정상적인 사업 확장 M&A가 대다수이며, 거래 상대방·가액·외부평가 실시 여부에 따라 성격이 크게 갈리므로 이 신호 자체는 사실 안내이지 판단이 아닙니다. `get_major_decision`으로 상대방과 외부평가 여부를 원문에서 확인해 보세요.",
-   "caution": false
+   "priority": "context"
   },
   {
    "key": "EARNINGS_SHOCK",
@@ -716,7 +716,7 @@
    ],
    "category": 8,
    "prose": "매출액이나 손익이 전년 대비 30%(대규모법인 15%) 이상 바뀌었다는 공시입니다. 늘어난 경우와 줄어든 경우가 모두 들어오므로 방향은 원문의 '증감비율'과 '흑자적자전환여부'에서 확인해야 합니다. 흑자에서 적자로 돌아선 해에 자본을 크게 건드리는 공시가 함께 나오는지 같이 보면 좋습니다.",
-   "caution": false
+   "priority": "context"
   },
   {
    "key": "WATCH_ISSUE",
@@ -730,7 +730,7 @@
    ],
    "category": 8,
    "prose": "관리종목 지정 요건에 걸렸거나 걸릴 우려가 있다는 공시입니다. 시가총액·주가·매출액이 거래소가 정한 최저 기준에 못 미칠 때 나옵니다. 관리종목 지정은 상장폐지로 가는 길목의 첫 단계라, 이 시점에 자본을 크게 건드리는 공시가 함께 나오는지 같이 보면 좋습니다.",
-   "caution": true
+   "priority": "first"
   },
   {
    "key": "DELISTING_RISK",
@@ -746,7 +746,7 @@
    ],
    "category": 8,
    "prose": "거래소의 상장폐지 절차에서 나온 공시입니다. 상장적격성 실질심사 대상이 되거나, 개선기간을 받거나, 상장폐지가 결정돼 정리매매에 들어가는 단계에서 나옵니다. 회사가 스스로 낸 공시가 아니라 거래소가 낸 안내인 경우가 많습니다.",
-   "caution": true
+   "priority": "first"
   },
   {
    "key": "INSIDER_PRE_DISCLOSURE",
@@ -757,7 +757,7 @@
    ],
    "category": 3,
    "prose": "",
-   "caution": false
+   "priority": "context"
   },
   {
    "key": "TREASURY_TRUST",
@@ -768,7 +768,7 @@
    ],
    "category": 2,
    "prose": "자사주 신탁계약 체결 또는 해지 공시입니다. 직접 매입과 다르게 신탁회사를 거치는 우회 경로로, 직접 매입과 같은 시기에 반복되거나 단기간 안에 체결-해지가 이어지면 자본 리듬 관리 신호로 읽을 수 있습니다.",
-   "caution": false
+   "priority": "context"
   },
   {
    "key": "DISTRESS_EVENT",
@@ -779,7 +779,7 @@
    ],
    "category": 8,
    "prose": "",
-   "caution": true
+   "priority": "first"
   },
   {
    "key": "DIVIDEND_DRAIN",
@@ -790,7 +790,7 @@
    ],
    "category": 5,
    "prose": "",
-   "caution": false
+   "priority": "context"
   }
  ],
  "patterns": [

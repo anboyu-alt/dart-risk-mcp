@@ -51,40 +51,27 @@ class TestBuildSignalsData(unittest.TestCase):
         for p in self.data["patterns"]:
             self.assertNotIn("severity", p)
 
-    def test_caution_is_boolean_on_all_signals(self):
-        """뷰어 '주의/참고' 배지용 severity 2단계 접기 — 모든 신호에 caution
-        불리언이 있고, severity 문자열·score 숫자는 여전히 없다. 패턴에는
-        caution을 넣지 않는다(9종 전원 CRITICAL/HIGH라 상수 — 정보량 0)."""
-        for s in self.data["signals"]:
-            self.assertIn("caution", s)
-            self.assertIsInstance(s["caution"], bool)
-        for p in self.data["patterns"]:
-            self.assertNotIn("caution", p)
+    def test_priority_on_all_signals(self):
+        """관찰 우선순위 — 모든 신호에 priority가 있고 세 값 중 하나다.
 
-    def test_caution_matches_taxonomy_severity_spotcheck(self):
-        """접기 규칙 스팟체크: EMBEZZLE(8.1 CRITICAL)=주의.
-
-        규칙은 두 갈래다(2026-08-22) — ① 신호의 taxonomy 중 하나라도
-        CRITICAL/HIGH면 주의 ② `_CAUTION_FORCE_KEYS`에 있으면 주의.
-        ②가 필요한 이유는 이 레포에서 severity가 '심각도'가 아니라 사실상
-        '점수를 매기느냐'로 쓰여 왔기 때문이다 — 상장폐지·관리종목은
-        무점수(8.5 OBSERVATION)라 ①만으로는 '참고'로 내려앉는다.
-        상세 근거는 tests/test_caution_badge.py 참고.
+        옛 `caution` 불리언(severity 2단계 접기)을 대체한다. severity가 이
+        레포에서 '심각도'가 아니라 '점수를 매기느냐'로 쓰여 온 탓에 배지가
+        뒤집혔다 — 근거·실측은 tests/test_observation_priority.py 참고.
+        패턴에는 넣지 않는다(9종 전원 CRITICAL/HIGH라 상수 — 정보량 0).
         """
-        by_key = {s["key"]: s for s in self.data["signals"]}
-        self.assertTrue(by_key["EMBEZZLE"]["caution"])
-        self.assertTrue(by_key["GOING_CONCERN"]["caution"])
-        from dart_risk_mcp.core.taxonomy import TAXONOMY
-        from dart_risk_mcp.core.signals import SIGNAL_KEY_TO_TAXONOMY
-        from export_tool_data import _CAUTION_FORCE_KEYS
         for s in self.data["signals"]:
-            tax = SIGNAL_KEY_TO_TAXONOMY.get(s["key"], "")
-            tax_ids = tax if isinstance(tax, (list, tuple)) else [tax]
-            expect = s["key"] in _CAUTION_FORCE_KEYS or any(
-                TAXONOMY.get(t, {}).get("severity") in ("CRITICAL", "HIGH")
-                for t in tax_ids if t
-            )
-            self.assertEqual(s["caution"], expect, msg=s["key"])
+            self.assertIn("priority", s)
+            self.assertIn(s["priority"], ("first", "watch", "context"))
+            self.assertNotIn("caution", s)
+        for p in self.data["patterns"]:
+            self.assertNotIn("priority", p)
+
+    def test_priority_matches_core(self):
+        """export는 core `observation_priority`를 그대로 옮긴다(파생 없음)."""
+        from dart_risk_mcp.core.signals import observation_priority
+        for s in self.data["signals"]:
+            self.assertEqual(s["priority"], observation_priority(s["key"]),
+                             msg=s["key"])
 
     def test_field_evidence_exported_matches_core(self):
         """SE-13 Task 2: field_evidence(금감원 보도자료·사례 인용)는 사실

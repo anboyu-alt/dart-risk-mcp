@@ -890,13 +890,114 @@ NON_TITLE_SIGNALS: dict[str, str] = {
 
 CAPITAL_EVENT_KEYS = DILUTIVE_CAPITAL_EVENTS | NON_DILUTIVE_CAPITAL_EVENTS
 
+# ── 관찰 우선순위 (2026-08-22) ────────────────────────────────────────────
+#
+# **왜 별도 축이 필요한가.** 뷰어의 '주의' 배지는 taxonomy severity에서
+# 파생됐는데, 이 레포에서 severity는 "얼마나 심각한가"가 아니라 사실상
+# **"점수를 매기느냐"**로 쓰여 왔다(OBSERVATION = base_score 0 = 사실 표기
+# 전용). 그 겸직 때문에 두 가지가 동시에 깨졌다:
+#
+#   ① 무점수로 설계된 신호가 낮은 우선순위로 내려앉았다 — 「상장폐지 결정·
+#      정리매매 개시」가 '참고'로, 「조회공시 요구」가 '주의'로 떴다.
+#   ② 반대로 severity가 HIGH라는 이유만으로 양면적 신호에 배지가 붙었다 —
+#      `RELATED_PARTY`·`ASSET_TRANSFER`는 `AMBIGUOUS_SIGNAL_KEYS`에 들어
+#      헤드라인 승격이 막혀 있는데 배지는 '주의'로 나갔다(자기모순).
+#
+# v1.14.0은 ①만 예외 목록으로 우회했다. 여기서는 축 자체를 분리한다.
+# **점수는 여전히 매기지 않는다**(v0.8.5 불변) — 이것은 "얼마나 위험한가"가
+# 아니라 **"이용자가 무엇부터 보면 되는가"**의 순서다.
+#
+# 실측 근거(90일 코퍼스, 공시 48,646건 · 관찰 신호 2,913건): severity 파생
+# 배지는 관찰 공시의 **56.3%**에 붙었다. 절반을 넘으면 배지가 아니라
+# 기본값이다. 아래 분류로는 `first`가 13.3%로 좁혀진다.
+#
+# 세 단계의 기준은 "그 공시 한 건만 보고 무엇을 알 수 있는가"다.
+#
+#   first   — 회사의 존속·상장 자격·회계 신뢰성이 걸린 사실. 공시 한 건으로
+#             의미가 확정되며, 다른 신호가 없어도 그 자체로 읽을 값이 있다.
+#   watch   — 지배구조·자본·자금 흐름의 사건. 정상 기업활동으로도 일어나지만
+#             방향이 한쪽이고(희석·이탈·변동), 조합·시계열로 의미가 커진다.
+#   context — 정상/이상이 제목만으로 갈리지 않는다. 원문에서 상대방·조건·
+#             방향을 확인하기 전에는 판단 근거가 아니다.
+#
+# `AMBIGUOUS_SIGNAL_KEYS`(헤드라인 승격 차단)는 이 표의 `context`에서
+# 파생한다 — 같은 개념을 두 곳에 적어 두면 갈라진다.
+_PRIORITY_FIRST: frozenset = frozenset({
+    # 거래소 퇴출 절차 — 이용자가 가장 먼저 봐야 하는 사실이다.
+    "DELISTING_RISK",
+    "WATCH_ISSUE",
+    # 부도·영업정지·회생절차·해산사유 — 부실 단계 진입 그 자체.
+    "DISTRESS_EVENT",
+    "INSOLVENCY",
+    "DEBT_RESTR",
+    "CAPITAL_IMPAIRMENT",
+    # 회계 신뢰성이 깨진 사실 — 다른 모든 수치의 전제가 무너진다.
+    "GOING_CONCERN",
+    "AUDIT",
+    # 자금이 회사 밖으로 빠져나갔다고 확인된 사실(혐의·적발 단계).
+    "EMBEZZLE",
+    "FUND_DIVERSION",
+    # 아래 둘은 제목으로 발화하지 않는다(NON_TITLE_SIGNALS). 발화 경로가
+    # 생기면 first가 맞다는 판단만 미리 적어 둔다 — 지금은 무영향.
+    "ASSET_SPIRAL",
+    "BUYBACK_NEG",
+})
+
+_PRIORITY_CONTEXT: frozenset = frozenset({
+    # 원문 확인 계층이 붙어 있는 신호들 — 제목만으로는 방향조차 모른다.
+    # (CLAUDE.md "제목 수준 vs 내용 확인 감사표" 참고)
+    "TREASURY",         # 주주 환원일 수도, 주가 방어일 수도
+    "TREASURY_TRUST",
+    "FUND_OUTFLOW",     # 대기업의 일상적 계열 지원과 구분 불가
+    "ACQ_REVIEW",       # 정상적인 사업 인수가 대다수
+    "ASSET_TRANSFER",   # 정상적 자산 교체·유동성 확보가 대다수
+    "RELATED_PARTY",    # 계열사 간 자금 지원은 일상 — 이자율을 봐야 안다
+    "EARNINGS_SHOCK",   # 증가인지 감소인지 제목에 없다
+    # 아래는 그 자체로 방향이 없거나(분할), 사실 안내에 가깝다.
+    "EQUITY_SPLIT",     # 액면분할 — 자본 규모가 바뀌지 않는다
+    "TREASURY_EB",
+    "DECISION_NO_EXTVAL",
+    "FUND_UNREPORTED",
+    "STAKE_PLEDGE",     # 오너의 정상적 주담대가 흔하다(v1.6.1 기록)
+    "INSIDER_PRE_DISCLOSURE",
+    "DIVIDEND_DRAIN",
+    "THEME_STOCK",
+    "CIRCULAR",
+    "DISTRESS_MA",
+})
+
+# 명시하지 않은 신호는 모두 `watch`다 — 목록을 짧게 유지해 새 신호가
+# 들어올 때 조용히 first로 승격되지 않게 한다(기본값이 가장 안전한 쪽).
+PRIORITY_FIRST = "first"
+PRIORITY_WATCH = "watch"
+PRIORITY_CONTEXT = "context"
+
+
+def observation_priority(signal_key: str) -> str:
+    """신호의 관찰 우선순위 — "무엇부터 보면 되는가"의 순서.
+
+    위험도 등급이 아니다(v0.8.5 불변). 점수를 만들지 않으며, 이 값으로
+    신호를 집계·정렬·가산하지 않는다. 표시 계층에서 순서를 정하는 데만 쓴다.
+    """
+    if signal_key in _PRIORITY_FIRST:
+        return PRIORITY_FIRST
+    if signal_key in _PRIORITY_CONTEXT:
+        return PRIORITY_CONTEXT
+    return PRIORITY_WATCH
+
+
 # 양면적 신호 — 정상 기업활동으로도 빈발해 단독으로는 헤드라인이 되지 않는다.
 #
-# 새로운 판단을 만들지 않는다. 이 코드베이스가 이미 양면성을 서술하고 있는
-# 신호만 담는다:
-#   TREASURY/TREASURY_TRUST — explain.py "주주 환원으로 긍정적일 수도 있지만…"
-#   FUND_OUTFLOW            — explain.py "대기업의 일상적 계열 지원과 구분 불가"
-#   ACQ_REVIEW              — explain.py "정상적인 사업 인수도 이 유형"
+# `_PRIORITY_CONTEXT`와 **합치지 않는다.** 두 개념은 겹치지만 같지 않다 —
+# 이쪽은 "이 신호가 리포트 첫 줄을 대표할 수 있는가"이고, 저쪽은 "이용자가
+# 어느 순서로 보면 되는가"다. 예컨대 `DIVIDEND_DRAIN`(적자 시점 배당 유출)은
+# 이미 판정을 거친 파생 플래그라 헤드라인이 되어도 이상하지 않은데, 제목
+# 하나로 정상/이상이 갈리지 않으므로 관찰 순서로는 context다. 억지로 한
+# 집합으로 만들면 헤드라인 정책이 조용히 바뀐다(실측: 7종 → 17종).
+#
+# 대신 `AMBIGUOUS_SIGNAL_KEYS ⊆ _PRIORITY_CONTEXT` 포함 관계를 불변식으로
+# 두고 테스트가 지킨다 — 헤드라인이 못 되는 신호가 관찰 순서에서 first로
+# 올라가는 모순은 막되, 반대 방향은 각자 판단한다.
 #
 # 목록·카테고리 집계·패턴 매칭에는 정상 참여한다. 헤드라인만 못 된다.
 AMBIGUOUS_SIGNAL_KEYS: frozenset = frozenset({
