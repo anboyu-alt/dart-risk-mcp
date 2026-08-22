@@ -25,7 +25,7 @@ from dart_risk_mcp.core.signals import match_signals
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
 _HTML = _ROOT / "docs" / "tool" / "index.html"
 _JSON = _ROOT / "docs" / "tool" / "signals-data.json"
-_CORPUS = _ROOT / "tests" / "fixtures" / "corpus" / "signal_titles_90d.json"
+_CORPUS = _ROOT / "tests" / "fixtures" / "corpus" / "signal_titles_365d.json"
 
 pytestmark = pytest.mark.skipif(
     shutil.which("node") is None, reason="node가 없어 뷰어 JS를 실행할 수 없다"
