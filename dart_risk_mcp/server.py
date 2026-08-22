@@ -336,6 +336,22 @@ def _registry_company_section(corp_name: str) -> list[str]:
 # 계열사 지원이 일상인 회사도 걸린다. 여기서 원문 상대방·관계를 확인해, 실제로
 # 계열·특수관계(비연결)에 자금이 흘렀을 때만 패턴을 발화시킨다.
 
+# 제목으로 발화하지 않는 신호를 조회했을 때 붙는 사실 안내(판정 아님).
+_NON_TITLE_NOTE = {
+    "structured": (
+        "※ 이 신호는 공시 제목이 아니라 구조화 데이터로 판정됩니다 — "
+        "제목 스캔(analyze_company_risk·search_market_disclosures)에서는 나타나지 않습니다."
+    ),
+    "covered": (
+        "※ 이 유형의 공시는 실제로는 다른 신호가 잡습니다 — 제목 스캔에서 이 키로는 "
+        "나타나지 않습니다(1년 실측 0건)."
+    ),
+    "absent": (
+        "※ 이 개념은 DART 공시 제목에 등장하지 않습니다 — 여러 공시의 조합·시계열로만 "
+        "성립하는 유형이라 제목 스캔에서는 나타나지 않습니다(1년 실측 0건)."
+    ),
+}
+
 _OUTFLOW_CLASS_LABEL = {
     "affiliated": "계열·특수관계",
     "subsidiary": "종속회사",
@@ -1757,7 +1773,11 @@ def find_risk_precedents(signal_types: list[str], lookback_days: int = 90) -> st
     if not signal_types:
         return "❌ signal_types 목록을 입력하세요. 예: ['CB_BW', 'SHAREHOLDER']"
 
-    from .core.signals import SIGNAL_KEY_TO_TAXONOMY, SIGNAL_TYPES
+    from .core.signals import (
+        NON_TITLE_SIGNALS,
+        SIGNAL_KEY_TO_TAXONOMY,
+        SIGNAL_TYPES,
+    )
 
     sig_map = {s["key"]: s for s in SIGNAL_TYPES}
     valid_keys = []
@@ -1785,6 +1805,12 @@ def find_risk_precedents(signal_types: list[str], lookback_days: int = 90) -> st
         lines.append(f"━━ {sig['label']} ━━")
         if prose:
             lines.append(prose)
+        # 이 신호가 공시 제목으로는 발화하지 않는다면 그 사실을 먼저 알린다 —
+        # 조회는 되는데 실제로는 한 번도 안 잡히는 신호를 설명만 보여주면
+        # "이 도구가 이걸 탐지한다"는 인상을 준다(2026-08-22 1년 실측).
+        _route = NON_TITLE_SIGNALS.get(key)
+        if _route:
+            lines.append(_NON_TITLE_NOTE[_route])
         tl_sentences: list[str] = []
         for tid in tax_ids:
             tl = estimate_crisis_timeline(tid)
@@ -3011,9 +3037,15 @@ def get_shareholder_info(company_name: str, year: str = "") -> str:
 # ── 도구 14: 시장 전체 preset 스캔 ─────────────────────────────────────────
 
 _PRESET_TO_SIGNALS: dict[str, list[str]] = {
-    "cb_issue":           ["CB_BW", "CB_REPAY", "CB_ROLLOVER", "CB_BUYBACK", "EB", "RCPS", "TREASURY_EB"],
+    # CB_REPAY·CB_ROLLOVER·CB_BUYBACK·TREASURY_EB는 제목으로 발화하지 않아
+    # (1년 실측 0건, NON_TITLE_SIGNALS 참고) preset에서 뺐다 — 남겨 두면
+    # 이 preset이 그 유형까지 훑는다는 인상을 준다. 해당 공시는 CB_BW·EB·
+    # TREASURY가 이미 잡는다.
+    "cb_issue":           ["CB_BW", "EB", "RCPS"],
     "treasury":           ["TREASURY"],
-    "reverse_split":      ["REVERSE_SPLIT", "CAPITAL_RED", "GAMJA_MERGE"],
+    # GAMJA_MERGE도 같은 이유로 제거(감자·합병 제목은 REVERSE_SPLIT·MGMT가 잡는다).
+    # CAPITAL_RED는 키워드가 살아 있으나 실측 0건 — 2차 정리 대상으로 남긴다.
+    "reverse_split":      ["REVERSE_SPLIT", "CAPITAL_RED"],
     "3pca":               ["3PCA", "RIGHTS_UNDER"],
     "shareholder_change": ["SHAREHOLDER", "MGMT_DISPUTE"],
     "exec_change":        ["EXEC"],

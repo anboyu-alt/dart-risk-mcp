@@ -77,13 +77,12 @@ class TestSignalIntegrity:
             # 의도된 계층 — 넓은 키워드가 좁은 것을 포함(같은 신호 안)
             ("3PCA", "유상증자", "3PCA", "유상증자결정"),
             ("3PCA", "유상증자", "RIGHTS_UNDER", "유상증자미달"),
-            # 아래 4건은 한쪽이 90일 코퍼스 발화 0건이라 실제 충돌이 없다.
-            # 365일 코퍼스로 계절성을 확인한 뒤 정리 대상.
-            ("CB_BW", "전환사채", "CB_REPAY", "전환사채상환"),      # CB_REPAY 0건
+            # 2026-08-22: CB_REPAY·BUYBACK_NEG의 키워드는 1년 실측 0건 확인 후
+            # 제거했다(NON_TITLE_SIGNALS). 그 두 충돌은 이제 존재하지 않는다.
+            # 아래 3건은 한쪽이 1년 발화 0건이라 실제 충돌이 없다 — 2차 정리 대상.
             ("EB", "EB배임", "EMBEZZLE", "배임"),                  # EB배임 0건
             ("3PCA", "제3자배정", "EB", "제3자배정교환채"),          # 둘 다 0건
-            ("AUDIT", "계속기업불확실성", "GOING_CONCERN", "계속기업불확실"),  # 둘 다 0건(감사 시즌)
-            ("BUYBACK_NEG", "부도직전매입", "INSOLVENCY", "부도"),   # BUYBACK_NEG 0건
+            ("AUDIT", "계속기업불확실성", "GOING_CONCERN", "계속기업불확실"),  # 둘 다 0건
         }
         unexpected = [c for c in collisions if c not in allowed]
         assert not unexpected, f"예상 밖 키워드 포함 관계: {unexpected[:8]}"
