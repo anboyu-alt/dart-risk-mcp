@@ -9,7 +9,10 @@
 """
 import pytest
 
-from dart_risk_mcp.core.dart_client import parse_acquisition_detail
+from dart_risk_mcp.core.dart_client import (
+    classify_target_listing,
+    parse_acquisition_detail,
+)
 from dart_risk_mcp.server import (
     _fund_diversion_gate,
     _render_acquisition_confirmations,
@@ -146,3 +149,103 @@ class TestParser:
     def test_렌더에_자기자본_대비가_표기된다(self):
         lines = _render_acquisition_confirmations([_row("-", "external", "대상사", 447.3)])
         assert "자기자본 대비 447.3%" in "\n".join(lines)
+
+
+class TestParserFormVariants:
+    """2026-08-22 실측 — 서식이 두 가지인데 하나만 보고 있었다.
+
+    70건 표본에서 issuer **60%**·relation **19%**가 실패했다. 원인:
+      ① 「발행회사 회사명(국적) <이름> 대표이사 …」 (37/70) — 옛 정규식이
+         바로 뒤 "(국적)"의 여는 괄호까지만 잡아 issuer가 "(" 하나가 됐다
+      ② 「회사와**의**관계」 변형 (3/70) — "회사와 관계"만 보고 있었다
+    수정 후 둘 다 실패 7%이며, 남은 7%는 발행회사 블록이 없는 「영업양수」다.
+    """
+
+    PAREN_FORM = (
+        "타법인 주식 및 출자증권 취득결정 발행회사 회사명(국적) 주식회사 대현 (대한민국) "
+        "대표이사 홍길동 자본금(원) 1,000,000 회사와 관계 계열회사 발행주식총수(주) 100 "
+        "2. 취득내역 취득금액(원) 5,000,000,000 자기자본대비(%) 12.30"
+    )
+    PLAIN_FORM = (
+        "타법인 주식 및 출자증권 취득결정 발행회사 회사명 해성옵틱스 국적 대한민국 "
+        "대표자 조철 자본금(원) 24,183,874 회사와 관계 - 발행주식총수(주) 48,367,748 "
+        "2. 취득내역 취득금액(원) 5,000,000,000 자기자본대비(%) 14.40"
+    )
+    NO_SPACE_RELATION = (
+        "타법인 주식 및 출자증권 취득결정 발행회사 회사명(국적) (주)원픽이앤씨 "
+        "대표이사 김수현 자본금(원) 150,000,000 회사와의관계 - 발행주식총수(주) 30,000"
+    )
+    FOREIGN = (
+        "타법인 주식 및 출자증권 취득결정 발행회사 회사명(국적) VERISMO THERAPEUTICS, INC.(미국) "
+        "대표이사 KIM 자본금(원) 4,645,902 회사와 관계 종속회사 발행주식총수(주) 31,753,714"
+    )
+
+    def test_괄호형_서식에서_이름과_국적을_분리한다(self):
+        d = parse_acquisition_detail(self.PAREN_FORM)
+        assert d["issuer"] == "주식회사 대현"
+        assert d["nation"] == "대한민국"
+        assert d["relation"] == "계열회사"
+
+    def test_평문형_서식도_그대로_읽는다(self):
+        d = parse_acquisition_detail(self.PLAIN_FORM)
+        assert d["issuer"] == "해성옵틱스"
+        assert d["relation"] == "-"
+
+    def test_회사와의관계_변형을_읽는다(self):
+        d = parse_acquisition_detail(self.NO_SPACE_RELATION)
+        assert d["issuer"] == "(주)원픽이앤씨"
+        assert d["relation"] == "-"
+
+    def test_법인형태_괄호는_이름에서_떼지_않는다(self):
+        """'비에스지(주)'의 '(주)'는 이름의 일부다."""
+        d = parse_acquisition_detail(
+            "타법인 주식 및 출자증권 취득결정 발행회사 회사명 비에스지(주) 국적 대한민국 "
+            "대표자 김 자본금(원) 1 회사와 관계 - 발행주식총수(주) 1"
+        )
+        assert d["issuer"] == "비에스지(주)"
+
+    def test_해외법인_국적을_읽는다(self):
+        d = parse_acquisition_detail(self.FOREIGN)
+        assert "VERISMO" in d["issuer"]
+        assert d["nation"] == "미국"
+
+
+class TestTargetListing:
+    """취득 대상의 국내 상장 여부 — 금감원 '유용 최대 경로는 비상장주식 취득(55%)' 축.
+
+    2026-08-22 실측으로 판정률을 **28% → 93%**로 올렸다. corpCode.xml은
+    상장·비상장을 모두 담은 공시대상 법인 명부(11만여 건)라, 거기서 못 찾는
+    것은 국내 상장사가 아니라는 강한 근거다.
+    """
+
+    def test_이름이_없으면_추측하지_않는다(self):
+        assert classify_target_listing("") == "unknown"
+        assert classify_target_listing("   ") == "unknown"
+
+    def test_해외법인은_국내_비상장이다(self):
+        assert classify_target_listing("VERISMO THERAPEUTICS, INC.", "미국") == "unlisted"
+        assert classify_target_listing("CAR TECH, LLC", "USA") == "unlisted"
+
+    def test_국내_표기는_명부로_판정한다(self):
+        cache = {
+            "이화전기공업": {"corp_code": "1", "stock_code": "024810"},
+            "다이나맥": {"corp_code": "2", "stock_code": ""},
+        }
+        assert classify_target_listing("이화전기공업 주식회사", "대한민국", cache) == "listed"
+        assert classify_target_listing("주식회사 다이나맥", "대한민국", cache) == "unlisted"
+
+    def test_명부에_없으면_비상장으로_본다(self):
+        """조합·펀드·SPC는 애초에 국내 상장사가 아니다."""
+        cache = {"아무회사": {"corp_code": "1", "stock_code": "000000"}}
+        assert classify_target_listing("더베스트조합", "", cache) == "unlisted"
+        assert classify_target_listing("아크조합 제1호", "", cache) == "unlisted"
+
+    def test_명부가_비면_판정하지_않는다(self):
+        assert classify_target_listing("아무회사", "", {}) == "unknown"
+
+    def test_상장_여부는_게이트_통과_조건이_아니다(self):
+        """비상장 자회사 편입도 대부분 비상장이라 통과 조건으로 쓰지 않는다 —
+        사실 표기 전용이다."""
+        row = _row("-", "external")
+        row["listing"] = "unlisted"
+        assert _fund_diversion_gate([row])["pass"] is False

@@ -900,8 +900,39 @@ _OUTFLOW_EQUITY_RATIO_RE = re.compile(r"자기자본\s*대비\s*\(%\)\s*([\d.]+)
 # 두 서식은 필드명이 다르다 — 취득결정은 "취득내역/취득금액/취득목적",
 # 양수결정은 "양수내역/양수금액(원)(A)/양수목적"이고 양수결정에만
 # "6. 거래상대방"과 "8. 외부평가에 관한 사항"이 있다. 둘 다 대응한다.
-_ACQ_ISSUER_RE = re.compile(r"발행회사\s*회사명\s*(.+?)\s*국적")
-_ACQ_RELATION_RE = re.compile(r"회사와\s*관계\s*(.+?)\s*발행주식총수")
+# 2026-08-22 실측 수정 — 70건 표본에서 issuer 60%·relation 19%가 실패했다.
+# 원인은 서식이 **두 가지**인데 하나만 보고 있었기 때문:
+#   ① 「발행회사 회사명(국적) <이름> 대표이사 …」  (37/70)
+#   ② 「발행회사 회사명 <이름> 국적 <국적> 대표자 …」 (32/70)
+# ①에서 옛 정규식 `회사명\s*(.+?)\s*국적`은 바로 뒤 "(국적)"의 여는 괄호까지만
+# 잡아 issuer가 "(" 하나가 됐다. 관계도 「회사와 관계」(58) 외에
+# 「회사와**의**관계」(3) 변형이 있어 놓쳤다. 수정 후 둘 다 실패 7%로 떨어지며,
+# 남은 7%는 발행회사 블록 자체가 없는 「영업양수」 서식이다(정상).
+_ACQ_ISSUER_RE = re.compile(
+    r"발행회사\s*회사명"
+    r"(?:\s*\(\s*국적\s*\)\s*(?P<paren>.+?)\s*(?=대표이사|대표자|자본금)"
+    r"|\s*(?P<plain>.+?)\s*국적)"
+)
+_ACQ_RELATION_RE = re.compile(r"회사와\s*의?\s*관계\s*(.+?)\s*(?:발행주식총수|주요사업)")
+# 이름 끝에 붙는 괄호가 법인 형태 표기가 아니면 국적/영문 병기로 보고 떼어낸다
+# ("비에스지(주)"의 "(주)"는 남기고, "주식회사 대현 (대한민국)"의 국적은 뗀다).
+_ACQ_CORP_FORM_RE = re.compile(
+    r"^(주|유|재|사|합|주식회사|유한회사|Inc\.?|Ltd\.?|Corp\.?|LLC|Co\.?)$", re.I
+)
+_ACQ_TRAILING_PAREN_RE = re.compile(r"\s*\(([^()]{1,40})\)\s*$")
+
+
+def _split_issuer_nation(raw: str) -> "tuple[str, str]":
+    """발행회사 표기에서 이름과 국적(또는 영문 병기)을 분리한다."""
+    nation = ""
+    name = raw.strip()
+    while True:
+        m = _ACQ_TRAILING_PAREN_RE.search(name)
+        if not m or _ACQ_CORP_FORM_RE.match(m.group(1).strip()):
+            break
+        nation = nation or m.group(1).strip()
+        name = name[: m.start()].strip()
+    return name, nation
 _ACQ_AMOUNT_RE = re.compile(r"(?:취득금액|양수금액)\(원\)(?:\(A\))?\s*([\d,]+)")
 _ACQ_EQUITY_RATIO_RE = re.compile(r"자기자본대비\(%\)(?:\(A/C\))?\s*([\d,.]+)")
 _ACQ_PURPOSE_RE = re.compile(r"(?:취득목적|양수목적)\s*(.+?)\s*(?:\d+\.\s*)?(?:취득예정일자|양수예정일자|거래상대방)")
@@ -916,7 +947,8 @@ def parse_acquisition_detail(text: str) -> dict:
     매칭 실패 필드는 빈 문자열/0으로 남는다(예외를 던지지 않는다).
 
     Returns:
-        {"issuer": str,          # 발행회사(취득 대상) 이름
+        {"issuer": str,          # 발행회사(취득 대상) 이름(국적 괄호 제거)
+         "nation": str,          # 국적 또는 영문 병기(원문에 있을 때만)
          "relation": str,        # 대상사와 우리 회사의 관계 원문 표기("-"면 무관계 표기)
          "amount": int,          # 취득·양수 금액(원)
          "equity_ratio": float,  # 자기자본 대비 %
@@ -924,8 +956,8 @@ def parse_acquisition_detail(text: str) -> dict:
          "method": str,          # 취득방법(취득결정 서식에만 있다)
          "extval": str}          # 외부평가 여부(양수결정 서식에만 있다)
     """
-    out = {"issuer": "", "relation": "", "amount": 0, "equity_ratio": 0.0,
-           "purpose": "", "method": "", "extval": ""}
+    out = {"issuer": "", "nation": "", "relation": "", "amount": 0,
+           "equity_ratio": 0.0, "purpose": "", "method": "", "extval": ""}
     if not text:
         return out
     if "타법인 주식 및 출자증권" not in text and "타법인주식및출자증권" not in text:
@@ -933,7 +965,8 @@ def parse_acquisition_detail(text: str) -> dict:
 
     m = _ACQ_ISSUER_RE.search(text)
     if m:
-        out["issuer"] = m.group(1).strip()
+        raw = (m.group("paren") or m.group("plain") or "").strip()
+        out["issuer"], out["nation"] = _split_issuer_nation(raw)
     m = _ACQ_RELATION_RE.search(text)
     if m:
         out["relation"] = m.group(1).strip()
@@ -959,6 +992,68 @@ def parse_acquisition_detail(text: str) -> dict:
     if m:
         out["extval"] = m.group(1).strip()
     return out
+
+
+# 취득 대상이 상장사인지 — fund_diversion_chain 게이트의 보조 사실.
+# 금감원 무자본 M&A 합동점검(2019-12)이 "조달자금 유용의 최대 경로는
+# 비상장주식 취득(55%)"이라고 집계한 바로 그 축이다.
+#
+# 국내 시장 상장 여부만 본다(해외 증시 상장은 판별 대상이 아니다). 조합·펀드·
+# 투자신탁·해외법인은 애초에 국내 상장사가 아니므로 "unlisted"로 본다 —
+# corpCode.xml은 상장·비상장을 모두 담은 DART 공시대상 법인 명부(11만여 건)라,
+# 여기서 못 찾는다는 것은 **국내 상장사가 아니라는 강한 근거**다.
+_NON_CORP_MARKERS = (
+    "조합", "합자회사", "투자신탁", "펀드", "사모투자", "유한책임회사",
+    "리츠", "위탁관리부동산투자회사", "특수목적법인", "SPC", "LLC", "L.P.",
+)
+_DOMESTIC_NATIONS = ("대한민국", "한국", "국내", "KOREA")
+
+
+def classify_target_listing(
+    name: str, nation: str = "", corp_cache: "dict | None" = None
+) -> str:
+    """취득 대상 이름·국적 → "listed" | "unlisted" | "unknown".
+
+    판정 순서(2026-08-22 실측으로 정한 순서):
+      ① 이름이 비면 unknown — 원문에서 못 읽은 것이라 추측하지 않는다.
+      ② 국적이 국내가 아니면 unlisted(해외법인은 국내 상장사가 아니다).
+      ③ corpCode 명부에서 원문·폴딩·옛 상호(별칭) 순으로 찾는다.
+         찾으면 stock_code 유무로 listed/unlisted.
+      ④ 못 찾았는데 조합·펀드·SPC 등 비법인 표지가 있으면 unlisted.
+      ⑤ 그 외 미발견은 unlisted — 명부가 상장·비상장을 모두 담으므로
+         없다는 것은 국내 상장사가 아니라는 뜻이다. 다만 이름 표기가
+         특이해 못 찾았을 가능성이 남아 호출부가 근거를 함께 표기한다.
+    """
+    raw = (name or "").strip()
+    if not raw:
+        return "unknown"
+    if nation and not any(d in nation.upper() for d in _DOMESTIC_NATIONS):
+        return "unlisted"
+
+    cache = corp_cache if corp_cache is not None else _corp_cache
+    if not cache:
+        return "unknown"
+
+    entry = cache.get(raw)
+    if entry is None:
+        folded = _fold_corp_name(raw)
+        for nm, e in cache.items():
+            if _fold_corp_name(nm) == folded:
+                entry = e
+                break
+    if entry is None:
+        try:
+            alias = load_corp_aliases().get(raw) or load_corp_aliases().get(
+                _fold_corp_name(raw)
+            )
+        except Exception:
+            alias = None
+        if alias:
+            return "listed" if (alias.get("stock_code") or "").strip() else "unlisted"
+    if entry is not None:
+        return "listed" if (entry.get("stock_code") or "").strip() else "unlisted"
+
+    return "unlisted"
 
 
 def fetch_acquisition_detail(rcept_no: str, api_key: str) -> dict:
