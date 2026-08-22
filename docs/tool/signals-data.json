@@ -1,6 +1,6 @@
 {
  "meta": {
-  "version": "1.12.0"
+  "version": "1.14.0"
  },
  "signals": [
   {
@@ -730,7 +730,7 @@
    ],
    "category": 8,
    "prose": "관리종목 지정 요건에 걸렸거나 걸릴 우려가 있다는 공시입니다. 시가총액·주가·매출액이 거래소가 정한 최저 기준에 못 미칠 때 나옵니다. 관리종목 지정은 상장폐지로 가는 길목의 첫 단계라, 이 시점에 자본을 크게 건드리는 공시가 함께 나오는지 같이 보면 좋습니다.",
-   "caution": false
+   "caution": true
   },
   {
    "key": "DELISTING_RISK",
@@ -746,7 +746,7 @@
    ],
    "category": 8,
    "prose": "거래소의 상장폐지 절차에서 나온 공시입니다. 상장적격성 실질심사 대상이 되거나, 개선기간을 받거나, 상장폐지가 결정돼 정리매매에 들어가는 단계에서 나옵니다. 회사가 스스로 낸 공시가 아니라 거래소가 낸 안내인 경우가 많습니다.",
-   "caution": false
+   "caution": true
   },
   {
    "key": "INSIDER_PRE_DISCLOSURE",
@@ -779,7 +779,7 @@
    ],
    "category": 8,
    "prose": "",
-   "caution": false
+   "caution": true
   },
   {
    "key": "DIVIDEND_DRAIN",

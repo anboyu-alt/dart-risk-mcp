@@ -1099,6 +1099,22 @@ def classify_target_listing(
 #                                     + 외부평가 여부
 #   「특수관계인에 대한 자산양도」(공정): 1. 거래상대방 X / 회사와의 관계 / 양도가액
 #   「영업양도 결정」                : 6. 양수법인 X / 회사와의 관계 / 양도가액
+# 제목에 정정 표시가 없는데 **원문이 정정신고**인 공시가 있다(2026-08-22 실측:
+# 포커스에이아이 20260821900279 — 제목은 「유형자산처분결정(자율공시)」이라
+# is_amendment_disclosure를 통과하는데 원문은 정정신고서다). 정정 원문은
+# 「정정전 정정후」 값이 나란히 오고 정정사유가 서술문("매수자(거래상대방)에게
+# 양도 예정함")이라, 표 서식을 전제한 정규식이 문장을 통째로 삼켜 상대방 자리에
+# 쓰레기가 들어갔고 금액도 **정정전** 값을 잡았다. 어느 값이 현재인지 파서가
+# 판단할 수 없으므로 읽지 않는다 — 제목 기준 정정공시를 제외하는 기존 정책과
+# 같은 태도이며, 추출 실패로 취급돼 블록 자체가 생략된다.
+_AMENDED_DOC_MARKERS = ("정정신고(보고)", "정정신고 (보고)", "정정일자")
+
+
+def _is_amended_document(text: str) -> bool:
+    """원문 텍스트가 정정신고서인지 — 제목이 아니라 본문 머리로 판정한다."""
+    return any(m in (text or "")[:600] for m in _AMENDED_DOC_MARKERS)
+
+
 _DISPOSAL_COUNTERPARTY_RES = (
     re.compile(r"거래상대방\s*회사명\(성명\)\s*(.+?)\s*(?:자본금|주요사업|회사와의)"),
     re.compile(r"거래상대방\s*(.+?)\s*(?:회사와의\s*관계|자본금)"),
@@ -1117,6 +1133,8 @@ _DISPOSAL_UNIT_MILLION_RE = re.compile(r"단위\s*[:：]\s*백만")
 _DISPOSAL_RATIO_RE = re.compile(r"자산총액\s*대비\s*\(%\)\s*([\d,.]+)")
 _DISPOSAL_BOOK_RE = re.compile(r"평가가액\s*\(?원\)?\s*([\d,]+)")
 _DISPOSAL_EXTVAL_RE = re.compile(r"외부평가\s*여부\s*(\S+)")
+# 관계 값에 5자리 이상 숫자(금액)가 섞이면 정규식이 표를 삼킨 것이다.
+_RELATION_LOOKS_DIRTY_RE = re.compile(r"\d[\d,]{4,}")
 
 
 def parse_asset_disposal_detail(text: str) -> dict:
@@ -1137,6 +1155,8 @@ def parse_asset_disposal_detail(text: str) -> dict:
            "asset_ratio": 0.0, "book_value": 0, "extval": ""}
     if not text:
         return out
+    if _is_amended_document(text):
+        return out
     if not any(w in text for w in ("처분결정", "양도 결정", "양도결정", "자산양도")):
         return out
 
@@ -1148,7 +1168,13 @@ def parse_asset_disposal_detail(text: str) -> dict:
             break
     m = _DISPOSAL_RELATION_RE.search(text)
     if m:
-        out["relation"] = m.group(1).strip()[:40]
+        rel = m.group(1).strip()
+        # 관계 값은 짧은 명사구다("계열회사 (편입 예정)"·"국외 계열회사" 실측).
+        # 종료 앵커를 못 만나 뒤 표 전체를 삼킨 경우 금액 자릿수가 섞여 들어오는데,
+        # 그대로 40자로 자르면 "계열회사 처분금액 (원) 264,300,0…" 같은 문자열이
+        # 화면에 남는다. 오염된 값은 관계 미기재로 취급한다(없는 사실을 적지 않는다).
+        if not _RELATION_LOOKS_DIRTY_RE.search(rel):
+            out["relation"] = rel[:40]
     m = _DISPOSAL_AMOUNT_RE.search(text)
     if m:
         try:
@@ -1228,6 +1254,8 @@ def parse_related_party_detail(text: str) -> dict:
            "interest_rate": 0.0, "equity_ratio": "", "kind": ""}
     if not text:
         return out
+    if _is_amended_document(text):
+        return out
     if "차입처" in text:
         out["kind"] = "borrow"
     elif "담보제공자" in text:
@@ -1300,6 +1328,8 @@ def parse_earnings_shock_detail(text: str) -> dict:
     """
     out: dict = {"rows": [], "turned_to_loss": False}
     if not text or "손익구조" not in text:
+        return out
+    if _is_amended_document(text):
         return out
     for m in _ES_ROW_RE.finditer(text):
         acct, cur, pri, chg, pct, turn = m.groups()

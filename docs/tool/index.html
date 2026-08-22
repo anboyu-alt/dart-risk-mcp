@@ -1653,6 +1653,21 @@ function renderDash() {
       <div id="ctrlCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">최대주주 변경 원문 확인 중…</span></div></div>`;
   }
 
+  // v1.14.0: 원문에만 있는 값(이자율·증감비율)을 내는 블록. 해당 신호가
+  // 관찰되지 않으면 컨테이너 자체를 만들지 않아 원문 조회도 일어나지 않는다.
+  if (detailBlockHits("RELATED_PARTY", 1).length) {
+    html += `<div class="panel"><div class="slabel">▍RELATED PARTY — 특수관계인 자금거래 확인</div>
+      <div id="rpCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">특수관계인 거래 원문 확인 중…</span></div></div>`;
+  }
+  if (detailBlockHits("ASSET_TRANSFER", 1).some((h) => isAssetDisposalTitle(h.nm))) {
+    html += `<div class="panel"><div class="slabel">▍ASSET TRANSFER — 자산 처분·양도 상대방 확인</div>
+      <div id="atCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">자산 처분 원문 확인 중…</span></div></div>`;
+  }
+  if (detailBlockHits("EARNINGS_SHOCK", 1).length) {
+    html += `<div class="panel"><div class="slabel">▍EARNINGS SHOCK — 손익구조 급변 내역</div>
+      <div id="esCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">손익구조 원문 확인 중…</span></div></div>`;
+  }
+
   html += `<div class="panel"><div class="slabel">▍FINANCIAL CORE — 최근 사업보고서 · 사실 표기</div>
     <div id="finCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">재무제표 조회 중…</span></div></div>`;
   html += `<div class="panel"><div class="slabel">▍DIVIDEND — 배당과 순이익</div>
@@ -2857,14 +2872,24 @@ function parseOutflowDetail(text) {
 }
 
 // "회사와의 관계" 원문 값 → 4분류. 순수 함수, 사실 분류이며 위험 판정이 아니다.
+// core dart_client.py의 classify_outflow_relation과 규칙을 맞춘다.
+const OUTFLOW_SUBSIDIARY_KEYWORDS = ["종속회사", "자회사"];
+const OUTFLOW_AFFILIATED_KEYWORDS = ["계열회사", "관계회사", "특수관계", "최대주주", "주요주주", "임원", "대표이사"];
+const OUTFLOW_EXTERNAL_VALUES = ["-", "타인", "해당없음", "해당 없음"];
+// "특수관계 없음"류 부정 표기 — 키워드 부분 일치보다 **먼저** 검사해야
+// affiliated 오분류를 막는다. core는 2026-08-04에 이 순서 버그를 고쳤는데
+// (부분 문자열 매칭이 "특수관계 없음"을 계열로 읽어 capital_backflow CRITICAL
+// 게이트를 오발화) 뷰어에는 그 수정이 없었다.
+const OUTFLOW_NEGATION_MARKERS = ["없음", "없습니다", "아님", "아닙니다", "않음", "않습니다", "무관"];
+
 function classifyOutflowRelation(relation) {
   const r = (relation || "").trim();
   if (!r) return "unknown";
-  const affiliatedKw = ["계열", "관계회사", "특수관계", "최대주주", "주요주주", "임원", "대표이사"];
-  if (affiliatedKw.some((k) => r.indexOf(k) !== -1)) return "affiliated";
-  const subsidiaryKw = ["종속회사", "자회사"];
-  if (subsidiaryKw.some((k) => r.indexOf(k) !== -1)) return "subsidiary";
-  return "external";
+  if (OUTFLOW_NEGATION_MARKERS.some((k) => r.indexOf(k) !== -1)) return "external";
+  if (OUTFLOW_SUBSIDIARY_KEYWORDS.some((k) => r.indexOf(k) !== -1)) return "subsidiary";
+  if (OUTFLOW_AFFILIATED_KEYWORDS.some((k) => r.indexOf(k) !== -1)) return "affiliated";
+  if (OUTFLOW_EXTERNAL_VALUES.indexOf(r) !== -1) return "external";
+  return "unknown";
 }
 
 // ── 최대주주 변경 상세 (control change) — 후속 과제 1위 ──────────────────
@@ -3429,6 +3454,322 @@ function lossStreakFromPeriods(series) {
 }
 /* ── /대시보드 확장 어댑터 ── */
 
+
+// ── v1.13.4/v1.14.0: 원문 확인 계층 이식 ─────────────────────────────────
+// core dart_client.py의 parse_asset_disposal_detail / parse_related_party_detail
+// / parse_earnings_shock_detail 이식. 세 신호 모두 taxonomy가 요구하는 조건
+// (공정가 괴리·가격 괴리·손익 방향)이 제목에 없어, 제목만 보여주면 이용자가
+// 판단할 근거가 없다. 원문에만 있는 값(관계·이자율·증감비율)을 사실로 낸다.
+
+// 자산 처분·양도 5개 서식(유형자산 처분결정 자율/비유동자산 처분결정 공정위/
+// 유형자산 양도 결정 법정/특수관계인에대한자산양도/영업양도결정).
+// 제목에 정정 표시가 없는데 원문이 정정신고인 공시가 있다(포커스에이아이
+// 20260821900279 실측). 정정 원문은 「정정전 정정후」 값이 나란히 오고
+// 정정사유가 서술문이라 표 서식 정규식이 문장을 삼킨다 — core
+// _is_amended_document와 같은 규칙으로 읽지 않는다.
+const AMENDED_DOC_MARKERS = ["정정신고(보고)", "정정신고 (보고)", "정정일자"];
+function isAmendedDocument(text) {
+  const head = String(text || "").slice(0, 600);
+  return AMENDED_DOC_MARKERS.some((m) => head.includes(m));
+}
+
+const DISPOSAL_COUNTERPARTY_RES = [
+  /거래상대방\s*회사명\(성명\)\s*([\s\S]+?)\s*(?:자본금|주요사업|회사와의)/,
+  /거래상대방\s*([\s\S]+?)\s*(?:회사와의\s*관계|자본금)/,
+  /양수법인\s*([\s\S]+?)\s*(?:-\s*)?회사와의\s*관계/,
+  /거래상대\s*([\s\S]+?)\s*\d+\.\s*(?:처분목적|양도목적)/,
+];
+const DISPOSAL_RELATION_RE = /회사와의\s*관계\s*([\s\S]+?)\s*(?:\d+\.|가\.|-\s|$)/;
+const DISPOSAL_AMOUNT_RE = /(?:처분금액|처분가액|양도금액|양도가액)\s*\(?원\)?\s*([\d,]+)/;
+// 「특수관계인에 대한 자산양도」(공정거래법)는 「(단위 : 백만 원)」을 달고
+// 「다. 양도가액 12,899」처럼 단위 없이 적는다 — core와 같은 별도 경로.
+const DISPOSAL_AMOUNT_BARE_RE = /양도가액\s*([\d,]+)/;
+const DISPOSAL_UNIT_MILLION_RE = /단위\s*[:：]\s*백만/;
+const DISPOSAL_RATIO_RE = /자산총액\s*대비\s*\(%\)\s*([\d,.]+)/;
+const DISPOSAL_BOOK_RE = /평가가액\s*\(?원\)?\s*([\d,]+)/;
+const DISPOSAL_EXTVAL_RE = /외부평가\s*여부\s*(\S+)/;
+const RELATION_LOOKS_DIRTY_RE = /\d[\d,]{4,}/;
+
+function parseAssetDisposalDetail(text) {
+  const out = { counterparty: "", relation: "", amount: 0, assetRatio: 0, bookValue: 0, extval: "" };
+  if (!text) return out;
+  if (isAmendedDocument(text)) return out;
+  if (!["처분결정", "양도 결정", "양도결정", "자산양도"].some((w) => text.includes(w))) return out;
+  for (const rx of DISPOSAL_COUNTERPARTY_RES) {
+    const m = rx.exec(text);
+    if (m && m[1].trim()) {
+      out.counterparty = m[1].trim().replace(/-+$/, "").trim().slice(0, 60);
+      break;
+    }
+  }
+  let m = DISPOSAL_RELATION_RE.exec(text);
+  // 관계 값에 금액 자릿수가 섞이면 정규식이 표를 삼킨 것 — core와 같이 버린다.
+  if (m && !RELATION_LOOKS_DIRTY_RE.test(m[1])) out.relation = m[1].trim().slice(0, 40);
+  m = DISPOSAL_AMOUNT_RE.exec(text);
+  if (m) out.amount = affiliateInt(m[1]) || 0;
+  if (!out.amount) {
+    m = DISPOSAL_AMOUNT_BARE_RE.exec(text);
+    if (m) {
+      let v = affiliateInt(m[1]) || 0;
+      if (v && DISPOSAL_UNIT_MILLION_RE.test(text)) v *= 1000000;
+      out.amount = v;
+    }
+  }
+  m = DISPOSAL_RATIO_RE.exec(text);
+  if (m) out.assetRatio = affiliateRatio(m[1]) || 0;
+  m = DISPOSAL_BOOK_RE.exec(text);
+  if (m) out.bookValue = affiliateInt(m[1]) || 0;
+  m = DISPOSAL_EXTVAL_RE.exec(text);
+  if (m) out.extval = m[1].trim();
+  return out;
+}
+
+// 특수관계인 자금거래(차입·받은담보·출자).
+const RP_COUNTERPARTY_RES = [
+  /차입처\s*([\s\S]+?)\s*회사와의\s*관계/,
+  /담보제공자\s*([\s\S]+?)\s*회사와의\s*관계/,
+  /거래상대방\s*([\s\S]+?)\s*회사와의\s*관계/,
+];
+// 관계 값 뒤에는 곧바로 다음 항목 기호(「2.」·「나.」)나 「단위」가 온다.
+// 종료 앵커를 좁게 주지 않으면 뒤 문장을 통째로 삼킨다(core와 같은 실측 근거).
+const RP_RELATION_RE = /회사와의\s*관계\s*(\S{1,20}?)\s*(?=\d+\.|[가-힣]\.|단위|$)/;
+const RP_AMOUNT_RE = /(?:차입금액|담보금액|출자금액)\s*([\d,]+)/;
+const RP_RATE_RE = /이자율\s*\(%\)\s*(?:연\s*)?([\d.]+)/;
+const RP_EQUITY_RE = /자기자본대비\s*\(%\)\s*(\S+)/;
+const RP_UNIT_MILLION_RE = /단위\s*[:：]\s*백만/;
+// 같은 서식인데 「(단위 : 억원)」을 다는 회사가 있다(삼성전자 20260730000505
+// 출자금액 2,970 = 2,970억원). 놓치면 실제의 1억분의 1로 표기된다.
+const RP_UNIT_EOK_RE = /단위\s*[:：]\s*억\s*원/;
+
+function parseRelatedPartyDetail(text) {
+  const out = { counterparty: "", relation: "", amount: 0, interestRate: 0, equityRatio: "", kind: "" };
+  if (!text) return out;
+  if (isAmendedDocument(text)) return out;
+  if (text.includes("차입처")) out.kind = "borrow";
+  else if (text.includes("담보제공자")) out.kind = "collateral";
+  else if (text.includes("출자금액")) out.kind = "investment";
+  else return out;
+
+  for (const rx of RP_COUNTERPARTY_RES) {
+    const m = rx.exec(text);
+    if (m && m[1].trim()) {
+      out.counterparty = m[1].trim().replace(/-+$/, "").trim().slice(0, 60);
+      break;
+    }
+  }
+  let m = RP_RELATION_RE.exec(text);
+  if (m) out.relation = m[1].trim().slice(0, 40);
+  m = RP_AMOUNT_RE.exec(text);
+  if (m) {
+    let v = affiliateInt(m[1]) || 0;
+    if (v && RP_UNIT_MILLION_RE.test(text)) v *= 1000000;
+    else if (v && RP_UNIT_EOK_RE.test(text)) v *= 100000000;
+    out.amount = v;
+  }
+  m = RP_RATE_RE.exec(text);
+  if (m) out.interestRate = affiliateRatio(m[1]) || 0;
+  m = RP_EQUITY_RE.exec(text);
+  if (m) out.equityRatio = m[1].trim().slice(0, 20);
+  return out;
+}
+
+// 손익구조 급변 — 계정별 증감비율·흑자적자전환여부.
+const ES_ROW_RE = /-\s*(매출액|영업이익|당기순이익)\s+(-?[\d,]+)\s+(-?[\d,]+)\s+(-?[\d,]+)\s+(-?[\d.]+|-)\s+(\S*)/g;
+
+function parseEarningsShockDetail(text) {
+  const out = { rows: [], turnedToLoss: false };
+  if (!text) return out;
+  if (isAmendedDocument(text)) return out;
+  ES_ROW_RE.lastIndex = 0;
+  let m;
+  while ((m = ES_ROW_RE.exec(text)) !== null) {
+    let turn = (m[6] || "").trim();
+    if (turn === "-") turn = "";
+    const pct = m[5] === "-" ? null : parseFloat(m[5]);
+    out.rows.push({
+      account: m[1], current: affiliateInt(m[2]) || 0, prior: affiliateInt(m[3]) || 0,
+      change: affiliateInt(m[4]) || 0, changePct: Number.isNaN(pct) ? null : pct, turn: turn,
+    });
+    if (turn.includes("적자전환")) out.turnedToLoss = true;
+  }
+  return out;
+}
+
+// 표시 라벨 — core server.py의 _RP_KIND_LABEL 이식.
+const RP_KIND_LABEL = { borrow: "자금차입", collateral: "담보 제공받음", investment: "출자", "": "거래" };
+
+// 자기자본대비는 원문 표기 그대로 온다 — 숫자면 %를 붙이고 "자본잠식" 같은
+// 문자 표기면 그대로 둔다(core `_related_party_detail_block`과 같은 규칙).
+function equityRatioLabel(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  return /^-?[\d,]+(?:\.\d+)?$/.test(s) ? s + "%" : s;
+}
+
+function relatedPartyCardHTML(rows) {
+  const lines = rows.map((r) => {
+    const d = r.detail;
+    const kind = RP_KIND_LABEL[d.kind] || "거래";
+    const rel = d.relation ? ` <span class="dim">(${esc(d.relation)})</span>` : "";
+    const amt = d.amount ? ` — <span class="mono">${esc(fmtKRW(d.amount))}</span>` : "";
+    const extra = [];
+    if (d.interestRate) extra.push(`이자율 ${d.interestRate}%`);
+    const er = equityRatioLabel(d.equityRatio);
+    if (er) extra.push(`자기자본 대비 ${esc(er)}`);
+    return `<div style="margin:0.4rem 0 0.55rem">
+      <div><span class="mono dim" style="font-size:0.8rem">${esc(fmtDate(r.date))}</span>
+        <a href="#" class="patEvLink" data-r="${esc(r.rcept)}">${esc(r.nm)}</a></div>
+      <div style="margin-left:0.7rem">${esc(kind)} 상대: <b>${esc(d.counterparty)}</b>${rel}${amt}</div>
+      ${extra.length ? `<div class="dim" style="margin-left:0.7rem;font-size:0.85rem">${extra.join(" · ")}</div>` : ""}
+    </div>`;
+  }).join("");
+  return `<div class="dim" style="font-size:0.86rem;margin-bottom:0.3rem">계열사·최대주주에게서 돈이나 담보를 받아온 건입니다. 이자율과 규모가 조건을 따져볼 지점입니다.</div>${lines}`;
+}
+
+function earningsShockCardHTML(rows) {
+  const blocks = rows.map((r) => {
+    const cells = r.detail.rows.map((x) => {
+      const pct = x.changePct === null ? "―" : (x.changePct > 0 ? "+" : "") + x.changePct.toFixed(1) + "%";
+      const turn = x.turn ? ` <span class="dim">· ${esc(x.turn)}</span>` : "";
+      return `<div style="margin-left:0.7rem">${esc(x.account)}: <span class="mono">${esc(pct)}</span>${turn}</div>`;
+    }).join("");
+    return `<div style="margin:0.4rem 0 0.55rem">
+      <div><span class="mono dim" style="font-size:0.8rem">${esc(fmtDate(r.date))}</span>
+        <a href="#" class="patEvLink" data-r="${esc(r.rcept)}">${esc(r.nm)}</a></div>
+      ${cells}
+    </div>`;
+  }).join("");
+  return `<div class="dim" style="font-size:0.86rem;margin-bottom:0.3rem">제목만으로는 늘었는지 줄었는지 알 수 없어, 원문 표의 증감비율과 흑자적자전환여부를 그대로 옮겼습니다.</div>${blocks}`;
+}
+
+// 해당 신호가 관찰된 공시만 골라 최근 N건의 원문을 연다. 신호가 없으면
+// 호출 예산 0 — core의 _related_party_detail_block / _earnings_shock_block과
+// 같은 태도다. 원문 캐시(dart_doc_<rcept>)를 그대로 재사용한다.
+function detailBlockHits(key, maxCheck) {
+  const seen = new Set();
+  const hits = [];
+  for (const it of (CUR && CUR.items) || []) {
+    if (isAmendmentTag(it.report_nm) && !isFalseAmendment(it.report_nm)) continue;
+    const q = qualifySignals(matchSignals(it.report_nm), parseReportName(it.report_nm),
+                             Object.assign({}, it));
+    if (!q.some((s) => s.key === key && isObservedSig(s))) continue;
+    const rc = it.rcept_no;
+    if (!rc || seen.has(rc)) continue;
+    seen.add(rc);
+    hits.push({ rcept: rc, date: it.rcept_dt, nm: it.report_nm });
+    if (hits.length >= maxCheck) break;
+  }
+  return hits;
+}
+
+async function loadRelatedPartyCore() {
+  const el = $("rpCore");
+  if (!el) return;
+  const hits = detailBlockHits("RELATED_PARTY", 3);
+  const rows = [];
+  for (const h of hits) {
+    const data = await fetchDisclosureText(h.rcept);
+    if (!data || data.error || !data.text) continue;
+    const detail = parseRelatedPartyDetail(data.text);
+    if (detail.counterparty) rows.push(Object.assign({}, h, { detail: detail }));
+  }
+  if (!rows.length) {
+    el.innerHTML = `<span class="dim" style="font-size:0.88rem">원문에서 거래 상대방을 확인하지 못했습니다 — DART 원문에서 직접 확인하세요.</span>`;
+    return;
+  }
+  el.innerHTML = relatedPartyCardHTML(rows);
+  $("result").querySelectorAll(".patEvLink").forEach((a) => {
+    a.onclick = (e) => { e.preventDefault(); renderDetail(a.dataset.r); };
+  });
+}
+
+async function loadEarningsShockCore() {
+  const el = $("esCore");
+  if (!el) return;
+  const hits = detailBlockHits("EARNINGS_SHOCK", 2);
+  const rows = [];
+  for (const h of hits) {
+    const data = await fetchDisclosureText(h.rcept);
+    if (!data || data.error || !data.text) continue;
+    const detail = parseEarningsShockDetail(data.text);
+    if (detail.rows.length) rows.push(Object.assign({}, h, { detail: detail }));
+  }
+  if (!rows.length) {
+    el.innerHTML = `<span class="dim" style="font-size:0.88rem">원문에서 계정별 증감 내역을 확인하지 못했습니다 — DART 원문에서 직접 확인하세요.</span>`;
+    return;
+  }
+  el.innerHTML = earningsShockCardHTML(rows);
+  $("result").querySelectorAll(".patEvLink").forEach((a) => {
+    a.onclick = (e) => { e.preventDefault(); renderDetail(a.dataset.r); };
+  });
+}
+
+
+// 자산 처분·양도(taxonomy 5.3) 상대방 확인 — core v1.13.4의 태도를 따른다.
+// 여기 담기는 것은 패턴 주장이 아니라 원문에서 확인한 사실이라, 경영권 변경이
+// 없어 capital_backflow 게이트가 성립하지 않는 회사에서도 낸다(core에서 흥아해운·
+// 효성투자개발 실측으로 고친 것과 같은 문제 — 뷰어는 5.7 패턴 카드 경로에만
+// 확인 결과가 실려 있어 "누구에게 팔았나"가 통째로 사라졌다).
+const ASSET_DISPOSAL_TITLE_MARKS = [
+  "유형자산처분", "비유동자산처분", "유형자산양도",
+  "특수관계인에대한자산양도", "영업양도",
+];
+function isAssetDisposalTitle(nm) {
+  const flat = String(nm || "").replace(/\s/g, "");
+  return ASSET_DISPOSAL_TITLE_MARKS.some((m) => flat.includes(m));
+}
+
+const OUTFLOW_CLS_LABEL = {
+  affiliated: "계열·특수관계", subsidiary: "종속회사",
+  external: "외부", unknown: "미확인",
+};
+
+function assetTransferCardHTML(rows) {
+  const lines = rows.map((r) => {
+    const d = r.detail;
+    const cls = classifyOutflowRelation(d.relation);
+    // 「유형자산 처분결정」 서식에는 관계 필드가 아예 없어 "-"로 온다.
+    // 분류는 core와 같이 external이지만, 표기까지 "외부"라고 단정하면
+    // 원문에 없는 사실을 말하는 게 된다 — 미기재는 미기재로 적는다.
+    const relRaw = String(d.relation || "").trim();
+    const rel = (!relRaw || relRaw === "-")
+      ? ` <span class="dim">(관계 미기재)</span>`
+      : ` <span class="dim">(${esc(relRaw)} — ${esc(OUTFLOW_CLS_LABEL[cls] || cls)})</span>`;
+    const amt = d.amount ? ` — <span class="mono">${esc(fmtKRW(d.amount))}</span>` : "";
+    const extra = [];
+    if (d.assetRatio) extra.push(`자산총액 대비 ${d.assetRatio}%`);
+    if (d.extval) extra.push(`외부평가 ${esc(d.extval)}`);
+    return `<div style="margin:0.4rem 0 0.55rem">
+      <div><span class="mono dim" style="font-size:0.8rem">${esc(fmtDate(r.date))}</span>
+        <a href="#" class="patEvLink" data-r="${esc(r.rcept)}">${esc(r.nm)}</a></div>
+      <div style="margin-left:0.7rem">상대: <b>${esc(d.counterparty)}</b>${rel}${amt}</div>
+      ${extra.length ? `<div class="dim" style="margin-left:0.7rem;font-size:0.85rem">${extra.join(" · ")}</div>` : ""}
+    </div>`;
+  }).join("");
+  return `<div class="dim" style="font-size:0.86rem;margin-bottom:0.3rem">자산을 누구에게 넘겼는지는 제목에 없어 원문에서 확인했습니다. 상대가 특수관계인인지, 외부 평가를 거쳤는지가 볼 지점입니다.</div>${lines}`;
+}
+
+async function loadAssetTransferCore() {
+  const el = $("atCore");
+  if (!el) return;
+  const hits = detailBlockHits("ASSET_TRANSFER", 4).filter((h) => isAssetDisposalTitle(h.nm));
+  const rows = [];
+  for (const h of hits) {
+    const data = await fetchDisclosureText(h.rcept);
+    if (!data || data.error || !data.text) continue;
+    const detail = parseAssetDisposalDetail(data.text);
+    if (detail.counterparty) rows.push(Object.assign({}, h, { detail: detail }));
+  }
+  if (!rows.length) {
+    el.innerHTML = `<span class="dim" style="font-size:0.88rem">원문에서 거래 상대방을 확인하지 못했습니다 — DART 원문에서 직접 확인하세요.</span>`;
+    return;
+  }
+  el.innerHTML = assetTransferCardHTML(rows);
+  $("result").querySelectorAll(".patEvLink").forEach((a) => {
+    a.onclick = (e) => { e.preventDefault(); renderDetail(a.dataset.r); };
+  });
+}
+
 function loadDeepBlocks(corpCode) {
   // loadAuditOpinions가 연속 적자 factline(작업4)에 쓸 수 있도록 loadFinancialCore의
   // 결과(3기간 영업이익·순이익 → lossStreak)를 promise로 넘긴다. finCore가 실패해도
@@ -3452,6 +3793,9 @@ function loadDeepBlocks(corpCode) {
   // #ctrlCore는 findLatestControlChange가 최대주주변경 공시를 찾았을 때만
   // buildResult에서 만들어진다 — 없으면 $ 조회가 null이라 loadControlChangeCore가
   // 자체적으로 조용히 건너뛴다.
+  loadRelatedPartyCore().catch(() => {});
+  loadEarningsShockCore().catch(() => {});
+  loadAssetTransferCore().catch(() => {});
   const ctrlChangeDisclosure = findLatestControlChange((CUR && CUR.items) || []);
   if (ctrlChangeDisclosure) {
     loadControlChangeCore(ctrlChangeDisclosure).catch((e) => {

@@ -62,18 +62,25 @@ class TestBuildSignalsData(unittest.TestCase):
             self.assertNotIn("caution", p)
 
     def test_caution_matches_taxonomy_severity_spotcheck(self):
-        """접기 규칙 스팟체크: EMBEZZLE(8.1 CRITICAL)=주의,
-        MGMT(5.2 — CRITICAL/HIGH 아님)=참고. 규칙: 신호의 taxonomy 중
-        하나라도 CRITICAL/HIGH면 true."""
+        """접기 규칙 스팟체크: EMBEZZLE(8.1 CRITICAL)=주의.
+
+        규칙은 두 갈래다(2026-08-22) — ① 신호의 taxonomy 중 하나라도
+        CRITICAL/HIGH면 주의 ② `_CAUTION_FORCE_KEYS`에 있으면 주의.
+        ②가 필요한 이유는 이 레포에서 severity가 '심각도'가 아니라 사실상
+        '점수를 매기느냐'로 쓰여 왔기 때문이다 — 상장폐지·관리종목은
+        무점수(8.5 OBSERVATION)라 ①만으로는 '참고'로 내려앉는다.
+        상세 근거는 tests/test_caution_badge.py 참고.
+        """
         by_key = {s["key"]: s for s in self.data["signals"]}
         self.assertTrue(by_key["EMBEZZLE"]["caution"])
         self.assertTrue(by_key["GOING_CONCERN"]["caution"])
         from dart_risk_mcp.core.taxonomy import TAXONOMY
         from dart_risk_mcp.core.signals import SIGNAL_KEY_TO_TAXONOMY
+        from export_tool_data import _CAUTION_FORCE_KEYS
         for s in self.data["signals"]:
             tax = SIGNAL_KEY_TO_TAXONOMY.get(s["key"], "")
             tax_ids = tax if isinstance(tax, (list, tuple)) else [tax]
-            expect = any(
+            expect = s["key"] in _CAUTION_FORCE_KEYS or any(
                 TAXONOMY.get(t, {}).get("severity") in ("CRITICAL", "HIGH")
                 for t in tax_ids if t
             )
