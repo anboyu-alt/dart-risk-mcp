@@ -1,11 +1,22 @@
 """실측 코퍼스 불변식 테스트 — 픽스처 몇 개보다 넓은 회귀 방어.
 
-`tests/fixtures/corpus/signal_titles_90d.json`은 2026-05-24~08-22 시장 전체
-공시 48,646건에서 **신호가 붙는 고유 제목 404종**을 빈도와 함께 고정한 것이다.
-개별 제목을 손으로 나열하는 대신 코퍼스 전체에 성립해야 할 성질을 건다 —
-키워드를 건드렸을 때 어디가 깨지는지 이 파일이 알려준다.
+`tests/fixtures/corpus/signal_titles_365d.json`은 2025-08-22~2026-08-21 시장
+전체 공시 **270,882건**에서 신호가 붙는 고유 제목 **945종**을 빈도와 함께
+고정한 것이다. 개별 제목을 손으로 나열하는 대신 코퍼스 전체에 성립해야 할
+성질을 건다 — 키워드를 건드렸을 때 어디가 깨지는지 이 파일이 알려준다.
 
-코퍼스를 갱신하려면 `tmp/delisting_signal/measure.py`로 다시 수집한다.
+**90일에서 1년으로 바꾼 이유**(2026-08-22): 옛 픽스처는 2026-05~08 창이라
+계절 표현을 못 봤고(감사의견·결산은 3월에 몰린다), v1.13.4~v1.14.0에서
+되살린 `ASSET_TRANSFER`·`RELATED_PARTY`·`EARNINGS_SHOCK` 추가 **이전**
+스냅샷이라 그 셋을 아예 검사하지 못했다. 새 코퍼스는 넷을 모두 커버한다
+(THEME_STOCK 포함).
+
+**수집 방법이 바뀌었다.** 직전 1년 수집(`tmp/corpus365/collect.py`)은 2일
+청크·상한 2,000건이라 183청크 중 **38개(20.8%)가 상한에 붙어 절단**됐다 —
+하필 2~3월 감사 시즌이었다. 재수집(`collect_daily.py`)은 하루 청크로 돌고
+상한 도달일을 산출물에 기록한다. 결과는 201,361건 → **270,882건(+33.8%)**,
+절단일 0. 갱신하려면 `scripts/corpus/collect_market_corpus.py` →
+`extract_signal_fixture.py`.
 """
 import json
 import pathlib
@@ -21,7 +32,7 @@ from dart_risk_mcp.core.signals import (
 )
 from dart_risk_mcp.core.taxonomy import TAXONOMY
 
-_CORPUS = pathlib.Path(__file__).parent / "fixtures" / "corpus" / "signal_titles_90d.json"
+_CORPUS = pathlib.Path(__file__).parent / "fixtures" / "corpus" / "signal_titles_365d.json"
 _DATA = json.loads(_CORPUS.read_text(encoding="utf-8"))
 _TITLES = [t["nm"] for t in _DATA["titles"]]
 _WEIGHT = {t["nm"]: t["n"] for t in _DATA["titles"]}
@@ -37,8 +48,10 @@ def _observed(title):
 
 class TestCorpusShape:
     def test_코퍼스가_비어있지_않다(self):
-        assert len(_TITLES) >= 300
-        assert _DATA["n_disclosures_scanned"] > 40_000
+        assert len(_TITLES) >= 800
+        assert _DATA["n_disclosures_scanned"] > 200_000
+        # 절단된 코퍼스를 "전수"라고 부르지 않기 위한 정직 표기
+        assert _DATA["truncated_days"] == []
 
     def test_모든_제목이_여전히_신호를_낸다(self):
         """이 파일에 담긴 제목은 수집 시점에 전부 신호가 붙던 것이다.
@@ -72,7 +85,7 @@ class TestSignalIntegrity:
                             collisions.append((a["key"], ka, b["key"], kb))
         # 알려진 포함 관계 — 각 항목에 "왜 지금은 문제가 아닌가"를 적는다.
         # 새 충돌이 생기면 이 테스트가 실패하고, 여기에 근거를 적거나
-        # 키워드를 고쳐야 한다. 2026-08-22 90일 실측 기준.
+        # 키워드를 고쳐야 한다. 2026-08-22 1년 실측 기준.
         allowed = {
             # 의도된 계층 — 넓은 키워드가 좁은 것을 포함(같은 신호 안)
             ("3PCA", "유상증자", "3PCA", "유상증자결정"),

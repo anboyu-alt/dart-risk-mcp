@@ -31,7 +31,7 @@ from dart_risk_mcp.core.qualifiers import parse_report_name, qualify_signals
 
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
 _JSON = _ROOT / "docs" / "tool" / "signals-data.json"
-_CORPUS = _ROOT / "tests" / "fixtures" / "corpus" / "signal_titles_90d.json"
+_CORPUS = _ROOT / "tests" / "fixtures" / "corpus" / "signal_titles_365d.json"
 
 _spec = importlib.util.spec_from_file_location(
     "export_tool_data", _ROOT / "scripts" / "export_tool_data.py"
