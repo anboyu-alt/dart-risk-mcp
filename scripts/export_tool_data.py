@@ -45,6 +45,7 @@ from dart_risk_mcp.core.explain import (  # noqa: E402
 )
 from dart_risk_mcp.core.dart_client import _FS_ALIASES  # noqa: E402
 from dart_risk_mcp.core import qualifiers as _q  # noqa: E402
+from dart_risk_mcp.core import signals as _sig  # noqa: E402
 from dart_risk_mcp.core.signals import AMBIGUOUS_SIGNAL_KEYS  # noqa: E402
 
 # 뷰어 심화 블록(재무 핵심)에서 쓰는 계정 별칭 부분집합
@@ -362,6 +363,9 @@ def build_signals_data() -> dict:
                 for k, v in _q.DIRECTION_NOTES.items()
             },
         },
+        # 제목으로 발화하지 않는 신호와 그 경로 — 뷰어가 "이 신호는 왜 한 번도
+        # 안 보이나"를 사실로 설명할 수 있게 내보낸다(이중 관리 방지).
+        "non_title_signals": dict(_sig.NON_TITLE_SIGNALS),
         "ambiguous_signal_keys": sorted(AMBIGUOUS_SIGNAL_KEYS),
         # 금감원 적발 사례(작업 1) — score/severity/confidence 미노출.
         # 파일이 없거나 비어 있어도 빈 by_taxonomy·total_cases=0으로 항상

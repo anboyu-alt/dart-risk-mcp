@@ -61,11 +61,7 @@
   {
    "key": "GAMJA_MERGE",
    "label": "감자병합",
-   "keywords": [
-    "감자병합",
-    "감자및병합",
-    "감자와병합"
-   ],
+   "keywords": [],
    "taxonomies": [
     "2.3"
    ],
@@ -96,7 +92,8 @@
     "부도",
     "어음부도",
     "의도적부도",
-    "사채원리금미지급"
+    "사채원리금미지급",
+    "대출원리금연체"
    ],
    "taxonomies": [
     "8.1"
@@ -124,15 +121,7 @@
   {
    "key": "CB_REPAY",
    "label": "CB조기상환",
-   "keywords": [
-    "전환사채상환",
-    "CB상환",
-    "사채상환",
-    "배당금상환",
-    "자회사배당",
-    "내부배당",
-    "배당을통한상환"
-   ],
+   "keywords": [],
    "taxonomies": [
     "1.2"
    ],
@@ -177,15 +166,7 @@
   {
    "key": "CB_ROLLOVER",
    "label": "CB돌려막기",
-   "keywords": [
-    "돌려막기",
-    "CB돌려막기",
-    "EB돌려막기",
-    "리파이낸싱",
-    "차환",
-    "연속CB발행",
-    "연속차입"
-   ],
+   "keywords": [],
    "taxonomies": [
     "1.5"
    ],
@@ -327,12 +308,7 @@
   {
    "key": "CB_BUYBACK",
    "label": "자사채매입",
-   "keywords": [
-    "자사채매입",
-    "사채매입",
-    "저가상환",
-    "조기상환"
-   ],
+   "keywords": [],
    "taxonomies": [
     "1.6"
    ],
@@ -343,12 +319,7 @@
   {
    "key": "TREASURY_EB",
    "label": "자사주EB",
-   "keywords": [
-    "자사주EB",
-    "자사주연동",
-    "자기주식EB",
-    "자기주식연동"
-   ],
+   "keywords": [],
    "taxonomies": [
     "1.7"
    ],
@@ -458,11 +429,7 @@
   {
    "key": "MEETING_VIOL",
    "label": "주총절차위반",
-   "keywords": [
-    "주총위반",
-    "소집절차위반",
-    "의결정족수미달"
-   ],
+   "keywords": [],
    "taxonomies": [
     "4.1"
    ],
@@ -689,11 +656,7 @@
   {
    "key": "ACTIVIST",
    "label": "주주행동주의",
-   "keywords": [
-    "활동주의펀드",
-    "주주행동주의",
-    "주주제안"
-   ],
+   "keywords": [],
    "taxonomies": [
     "3.3"
    ],
@@ -719,10 +682,7 @@
   {
    "key": "BUYBACK_NEG",
    "label": "재무위기중자사주매입",
-   "keywords": [
-    "부도직전매입",
-    "자금난속매입"
-   ],
+   "keywords": [],
    "taxonomies": [
     "5.2"
    ],
@@ -733,11 +693,7 @@
   {
    "key": "DISTRESS_MA",
    "label": "위기중인수합병",
-   "keywords": [
-    "위기속인수",
-    "부실기업인수",
-    "자금난속합병"
-   ],
+   "keywords": [],
    "taxonomies": [
     "5.4"
    ],
@@ -1285,6 +1241,17 @@
     "note": "발행이 아니라 소각 건입니다"
    }
   }
+ },
+ "non_title_signals": {
+  "CB_REPAY": "covered",
+  "CB_BUYBACK": "covered",
+  "TREASURY_EB": "covered",
+  "BUYBACK_NEG": "covered",
+  "CB_ROLLOVER": "structured",
+  "MEETING_VIOL": "absent",
+  "ACTIVIST": "absent",
+  "DISTRESS_MA": "absent",
+  "GAMJA_MERGE": "absent"
  },
  "ambiguous_signal_keys": [
   "ACQ_REVIEW",
