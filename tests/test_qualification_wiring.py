@@ -646,10 +646,10 @@ class TestCheckDisclosureRiskRcertPath(unittest.TestCase):
     @patch("dart_risk_mcp.server._DART_API_KEY", "testkey")
     @patch("dart_risk_mcp.server.fetch_document_text", return_value="")
     @patch("dart_risk_mcp.server.resolve_corp_code_from_rcept_no", return_value="")
-    @patch("dart_risk_mcp.server.resolve_disclosure_row_from_rcept_no")
+    @patch("dart_risk_mcp.server.resolve_disclosure_row_with_status")
     def test_row_found_uses_real_title_and_filer(self, mock_row, _cc, _doc):
         from dart_risk_mcp.server import check_disclosure_risk
-        mock_row.return_value = dict(self._ROW)
+        mock_row.return_value = (dict(self._ROW), "found")
         out = check_disclosure_risk(rcept_no="20260731000779")
         self.assertIn("주식등의대량보유상황보고서(일반)", out)
         self.assertIn("삼성물산", out)
@@ -659,11 +659,11 @@ class TestCheckDisclosureRiskRcertPath(unittest.TestCase):
     @patch("dart_risk_mcp.server._DART_API_KEY", "testkey")
     @patch("dart_risk_mcp.server.fetch_document_text", return_value="")
     @patch("dart_risk_mcp.server.resolve_corp_code_from_rcept_no", return_value="")
-    @patch("dart_risk_mcp.server.resolve_disclosure_row_from_rcept_no")
+    @patch("dart_risk_mcp.server.resolve_disclosure_row_with_status")
     def test_row_missing_degrades_to_current_behaviour(self, mock_row, _cc, _doc):
         """행 복원 실패는 회귀가 아니다 — 지금과 같은 출력이어야 한다."""
         from dart_risk_mcp.server import check_disclosure_risk
-        mock_row.return_value = None
+        mock_row.return_value = (None, "not_found")
         out = check_disclosure_risk(rcept_no="20260731000816")
         self.assertIn("공시: 접수번호 20260731000816", out)
         self.assertNotIn("제출인:", out)
@@ -852,10 +852,10 @@ class TestRcertPlusTitleStillResolvesTheRow(unittest.TestCase):
     @patch("dart_risk_mcp.server._DART_API_KEY", "testkey")
     @patch("dart_risk_mcp.server.fetch_document_text", return_value="")
     @patch("dart_risk_mcp.server.resolve_corp_code_from_rcept_no", return_value="")
-    @patch("dart_risk_mcp.server.resolve_disclosure_row_from_rcept_no")
+    @patch("dart_risk_mcp.server.resolve_disclosure_row_with_status")
     def test_row_is_resolved_and_r1_fires(self, mock_row, _cc, _doc):
         from dart_risk_mcp.server import check_disclosure_risk
-        mock_row.return_value = dict(self._ROW)
+        mock_row.return_value = (dict(self._ROW), "found")
         out = check_disclosure_risk(
             rcept_no="20260731000779",
             report_name="주요사항보고서(전환사채권발행결정)",
@@ -868,13 +868,13 @@ class TestRcertPlusTitleStillResolvesTheRow(unittest.TestCase):
     @patch("dart_risk_mcp.server._DART_API_KEY", "testkey")
     @patch("dart_risk_mcp.server.fetch_document_text", return_value="")
     @patch("dart_risk_mcp.server.resolve_corp_code_from_rcept_no", return_value="")
-    @patch("dart_risk_mcp.server.resolve_disclosure_row_from_rcept_no")
+    @patch("dart_risk_mcp.server.resolve_disclosure_row_with_status")
     def test_same_rcept_no_alone_reaches_the_same_verdict(self, mock_row, _cc, _doc):
         """같은 공시가 호출 형태에 따라 다른 판정을 받지 않는다."""
         from dart_risk_mcp.server import check_disclosure_risk
-        mock_row.return_value = dict(self._ROW)
+        mock_row.return_value = (dict(self._ROW), "found")
         alone = check_disclosure_risk(rcept_no="20260731000779")
-        mock_row.return_value = dict(self._ROW)
+        mock_row.return_value = (dict(self._ROW), "found")
         with_title = check_disclosure_risk(
             rcept_no="20260731000779",
             report_name="주요사항보고서(전환사채권발행결정)",
@@ -886,11 +886,11 @@ class TestRcertPlusTitleStillResolvesTheRow(unittest.TestCase):
     @patch("dart_risk_mcp.server._DART_API_KEY", "testkey")
     @patch("dart_risk_mcp.server.fetch_document_text", return_value="")
     @patch("dart_risk_mcp.server.resolve_corp_code_from_rcept_no", return_value="")
-    @patch("dart_risk_mcp.server.resolve_disclosure_row_from_rcept_no")
+    @patch("dart_risk_mcp.server.resolve_disclosure_row_with_status")
     def test_supplied_title_wins_over_row_title(self, mock_row, _cc, _doc):
         """제목을 직접 넘긴 호출자는 그 제목을 본다 — 표시만, 판정 입력은 행."""
         from dart_risk_mcp.server import check_disclosure_risk
-        mock_row.return_value = dict(self._ROW)
+        mock_row.return_value = (dict(self._ROW), "found")
         out = check_disclosure_risk(
             rcept_no="20260731000779", report_name="사용자지정제목"
         )
@@ -902,8 +902,8 @@ class TestRcertPlusTitleStillResolvesTheRow(unittest.TestCase):
     @patch("dart_risk_mcp.server.extract_cb_investors", return_value=[])
     @patch("dart_risk_mcp.server.fetch_document_text", return_value="")
     @patch("dart_risk_mcp.server.resolve_corp_code_from_rcept_no", return_value="")
-    @patch("dart_risk_mcp.server.resolve_disclosure_row_from_rcept_no",
-           return_value=None)
+    @patch("dart_risk_mcp.server.resolve_disclosure_row_with_status",
+           return_value=(None, "not_found"))
     def test_filer_line_absent_when_row_unresolved(self, _row, _cc, _doc, _cb):
         from dart_risk_mcp.server import check_disclosure_risk
         out = check_disclosure_risk(
@@ -945,7 +945,10 @@ class TestRowLookupNegativeCache(unittest.TestCase):
         self.assertIsNone(second)
         self.assertEqual(calls_after_first, 3)          # total_page까지만
         self.assertEqual(mock_retry.call_count, 3)      # 재조회는 0회 추가
-        self.assertEqual(mock_sleep.call_count, 2)      # 페이지 사이 간격
+        # 2026-08-22: 2페이지부터는 배치로 동시에 받는다(동시성 4). 3페이지면
+        # page 1 → 배치(2,3) 하나라 배치 사이 간격은 1회다. 옛 구현은 페이지
+        # 사이마다 쉬어 2회였다 — 호출 수는 같고 대기 시간만 줄었다.
+        self.assertEqual(mock_sleep.call_count, 1)
 
     def test_transient_failure_is_not_cached(self):
         """네트워크 오류·비정상 status는 일시적일 수 있어 캐시하지 않는다."""

@@ -110,17 +110,17 @@ class TestCheckDisclosureRiskDecisionSection(unittest.TestCase):
     def setUp(self):
         dart_client._rcept_corp_cache.clear()
 
-    # resolve_disclosure_row_from_rcept_no도 패치해야 한다 — check_disclosure_risk는
+    # resolve_disclosure_row_with_status도 패치해야 한다 — check_disclosure_risk는
     # rcept_no와 API 키가 있으면 report_name 유무와 무관하게 이 조회를 시도한다
     # (PR #166에서 "같은 공시가 호출 형태에 따라 다른 판정을 받는" 비대칭을 없애며
     # 조건이 넓어졌다). 패치하지 않으면 이 단위 테스트가 가짜 키로 실제 DART에
-    # list.json 요청을 보낸다. None을 돌려주면 행 복원 실패 경로로 흘러
+    # list.json 요청을 보낸다. (None, not_found)를 돌려주면 행 복원 실패 경로로 흘러
     # title=report_name이 되므로 이 테스트가 검증하려는 DS005 섹션 동작은 그대로다.
     @patch("dart_risk_mcp.server._DART_API_KEY", "key")
     @patch("dart_risk_mcp.server.fetch_document_text", return_value="")
     @patch("dart_risk_mcp.server.fetch_major_decision")
-    @patch("dart_risk_mcp.server.resolve_disclosure_row_from_rcept_no",
-           return_value=None)
+    @patch("dart_risk_mcp.server.resolve_disclosure_row_with_status",
+           return_value=(None, "not_found"))
     @patch("dart_risk_mcp.server.resolve_corp_code_from_rcept_no")
     def test_section_rendered_when_corp_code_resolved(
         self, mock_resolve, _mock_row, mock_fetch, _mock_doc
@@ -153,8 +153,8 @@ class TestCheckDisclosureRiskDecisionSection(unittest.TestCase):
     @patch("dart_risk_mcp.server._DART_API_KEY", "key")
     @patch("dart_risk_mcp.server.fetch_document_text", return_value="")
     @patch("dart_risk_mcp.server.fetch_major_decision")
-    @patch("dart_risk_mcp.server.resolve_disclosure_row_from_rcept_no",
-           return_value=None)
+    @patch("dart_risk_mcp.server.resolve_disclosure_row_with_status",
+           return_value=(None, "not_found"))
     @patch("dart_risk_mcp.server.resolve_corp_code_from_rcept_no")
     def test_section_omitted_when_resolution_fails(
         self, mock_resolve, _mock_row, mock_fetch, _mock_doc

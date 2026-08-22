@@ -18,6 +18,7 @@ import tempfile
 import time
 import xml.etree.ElementTree as ET
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -2784,7 +2785,17 @@ _RCEPT_ROW_CACHE_TTL = 600
 _RCEPT_ROW_CACHE_MAX = 50
 # _cache_get은 미스를 None으로 알린다 — 실패(행 없음)를 그대로 None으로 캐시하면
 # 히트와 미스를 구분할 수 없어 12회 호출이 매번 반복된다. 전용 센티널을 저장한다.
+_ROW_LOOKUP_CONCURRENCY = 4
 _ROW_NOT_FOUND = object()
+# 상한에 걸려 못 찾은 것은 "그 접수번호가 없다"와 **다르다**. 캐시에도 따로
+# 저장해, 다음 호출이 같은 판정을 재현하면서 호출부가 이유를 표시할 수 있게 한다.
+_ROW_SCAN_LIMIT = object()
+
+# 조회 결과 상태 — resolve_disclosure_row_with_status가 돌려준다.
+ROW_FOUND = "found"
+ROW_NOT_FOUND = "not_found"
+ROW_SCAN_LIMIT = "scan_limit"      # 하루 공시가 상한보다 많아 못 훑었다
+ROW_ERROR = "error"                # 네트워크·비정상 status (일시적일 수 있다)
 
 
 def resolve_corp_code_from_rcept_no(
@@ -2845,13 +2856,37 @@ def resolve_corp_code_from_rcept_no(
     return ""
 
 
-def resolve_disclosure_row_from_rcept_no(
-    rcept_no: str, api_key: str, max_pages: int = 12
-) -> "dict | None":
-    """접수번호 → list.json 행 전체. 실패 시 None.
+def resolve_disclosure_row_with_status(
+    rcept_no: str, api_key: str, max_pages: int = 50
+) -> "tuple[dict | None, str]":
+    """접수번호 → (list.json 행, 상태). 상태는 ROW_* 상수 중 하나.
 
     check_disclosure_risk가 rcept_no만 아는 경로에서 실제 report_nm·flr_nm·
     corp_name을 얻어 신호 매칭과 한정층(R1~R5)을 적용하기 위한 조회다.
+
+    **왜 상태를 함께 돌려주나.** 옛 구현은 못 찾은 이유를 구분하지 않고 전부
+    None을 돌려줬고, 호출부는 "이 공시에서 의심 신호가 탐지되지 않았습니다"로
+    퇴화했다 — **정말 신호가 없는 것과 조회 범위를 못 넘은 것이 같은 화면으로
+    보였다.** 이용자에게 리스크를 알리는 도구에서 이 둘이 섞이면 안 된다.
+
+    **상한을 12 → 50으로 올린 근거**(2026-08-22, 1년 코퍼스 270,882건 실측):
+
+    | 상한 | 커버 영업일 |
+    |---|---|
+    | 1,200건(12p) | 188/244일 (77.0%) |
+    | 5,000건(50p) | 242/244일 (99.2%) |
+
+    옛 상한은 영업일의 **23%에서 실패**했고, 하필 공시가 몰리는 결산·감사
+    시즌에 집중됐다. 상한을 올려도 대부분의 날은 비용이 늘지 않는다 —
+    하루 공시량 중앙값이 774건(8페이지)이라 `total_page`로 자연 종료하기
+    때문이다. 비용이 느는 것은 지금 **실패하고 있는** 23%뿐이다.
+
+    남은 0.8%(2일 — 3월 결산법인 사업보고서 마감일 등 6,000건 넘는 날)는
+    ROW_SCAN_LIMIT으로 알린다. 상한을 더 올리는 대신 정직하게 표기한다.
+
+    페이지 순회는 전수여야 한다 — list.json은 **접수번호 순이 아니다**
+    (20260331 실측: page 1에 …000015와 …604216이 함께 온다). 접수시각 순으로
+    보이며 rcept_no 뒷자리와 무관해, 위치를 추정해 건너뛸 수 없다.
 
     resolve_corp_code_from_rcept_no와 별개 함수인 이유:
       - 그쪽은 pblntf_ty="B"(주요사항보고)로 좁혀 조회한다. 지분공시(D)·
@@ -2860,20 +2895,12 @@ def resolve_disclosure_row_from_rcept_no(
       - 필터를 풀면 하루치가 커진다(20260731 실측: 전체 1,159건 12페이지 vs
         B 54건 1페이지). 통합하면 DS005 경로의 호출 예산이 12배가 된다.
 
-    알려진 한계 ①(날짜 불일치): rcept_no 앞 8자리가 접수일과 다른 공시가
-    있다(20260803 전수 610건 중 4건, 0.7% — 본느 20260731000816의 rcept_dt는
-    20260803). 그런 건은 찾지 못하고 None을 반환하며, 호출부는 기존 동작으로
-    퇴화한다.
+    알려진 한계(날짜 불일치): rcept_no 앞 8자리가 접수일과 다른 공시가 있다
+    (20260803 전수 610건 중 4건, 0.7% — 본느 20260731000816의 rcept_dt는
+    20260803). 그런 건은 ROW_NOT_FOUND가 된다.
 
-    알려진 한계 ②(페이지 상한): max_pages(기본 12) × page_count 100 = 하루
-    1,200건까지만 훑는다. 20260731 실측이 1,159건(12페이지)으로 이미 상한의
-    96%라, 이보다 무거운 날은 뒷부분 행이 스캔 범위 밖으로 밀려 None이 된다.
-    **이때의 None은 "그 접수번호가 없다"와 구분되지 않는다** — 호출부는 두
-    경우를 모두 기존 동작(자리표시자 제목·무신호)으로 퇴화 처리한다. 상한을
-    올리면 호출 예산이 그만큼 늘어나는 비용 결정이라 여기서 바꾸지 않는다.
-
-    조회 실패(행 없음)는 센티널로 캐시해 같은 접수번호의 재조회가 TTL 안에서는
-    다시 12회를 쓰지 않게 한다. 다만 네트워크 오류·비정상 status는 일시적일 수
+    조회 실패는 센티널로 캐시해 같은 접수번호의 재조회가 TTL 안에서는 다시
+    50회를 쓰지 않게 한다. 다만 네트워크 오류·비정상 status는 일시적일 수
     있어 캐시하지 않는다.
     """
     if (
@@ -2882,53 +2909,96 @@ def resolve_disclosure_row_from_rcept_no(
         or len(rcept_no) != 14
         or not rcept_no.isdigit()
     ):
-        return None
+        return None, ROW_NOT_FOUND
 
     cached = _cache_get(_rcept_row_cache, rcept_no, _RCEPT_ROW_CACHE_TTL)
     if cached is not None:
-        return None if cached is _ROW_NOT_FOUND else cached
+        if cached is _ROW_NOT_FOUND:
+            return None, ROW_NOT_FOUND
+        if cached is _ROW_SCAN_LIMIT:
+            return None, ROW_SCAN_LIMIT
+        return cached, ROW_FOUND
 
-    def _miss() -> None:
-        """행 없음을 센티널로 캐시하고 None을 반환한다."""
-        _cache_set(
-            _rcept_row_cache, rcept_no, _ROW_NOT_FOUND, _RCEPT_ROW_CACHE_MAX
-        )
-        return None
+    def _miss(sentinel, status):
+        _cache_set(_rcept_row_cache, rcept_no, sentinel, _RCEPT_ROW_CACHE_MAX)
+        return None, status
 
     rcpt_date = rcept_no[:8]
-    page_no = 1
-    total_page = 1
-    while page_no <= max_pages:
+
+    def _page(page_no: int):
+        """한 페이지 조회 → (행 or None, 상태, total_page)."""
         params = {
             "crtfc_key": api_key,
             "bgn_de": rcpt_date,
             "end_de": rcpt_date,
             "page_no": page_no,
-            "page_count": 100,
+            "page_count": 100,      # DART 상한 (200·500을 줘도 100만 온다 — 실측)
         }
         try:
             data = _retry("GET", f"{DART_BASE}/list.json", params=params).json()
         except Exception:
-            return None
-        if data.get("status") != "000":
-            _log_dart_status(data.get("status", "?"), f"rcept→row {rcept_no}")
-            return None
+            return None, ROW_ERROR, 0
+        st = data.get("status")
+        if st == "013":
+            # 013 = 조회된 데이터 없음. 그 날 공시가 없다는 사실이지 오류가
+            # 아니다(휴장일 등). 오류로 다루면 호출부가 "일시적일 수 있으니
+            # 다시 시도하세요"라고 잘못 안내한다.
+            return None, ROW_NOT_FOUND, 0
+        if st != "000":
+            _log_dart_status(st or "?", f"rcept→row {rcept_no}")
+            return None, ROW_ERROR, 0
+        try:
+            tp = int(data.get("total_page", 1) or 1)
+        except (TypeError, ValueError):
+            tp = 1
         for row in data.get("list", []) or []:
             if row.get("rcept_no") == rcept_no:
-                _cache_set(
-                    _rcept_row_cache, rcept_no, row, _RCEPT_ROW_CACHE_MAX
-                )
-                return row
-        try:
-            total_page = int(data.get("total_page", 1) or 1)
-        except (TypeError, ValueError):
-            total_page = 1
-        if page_no >= total_page:
-            return _miss()
-        page_no += 1
-        # 다른 list.json 페이징 루프와 동일한 간격 — 이 함수가 가장 많이 페이징한다
-        time.sleep(0.25)
-    return _miss()
+                return row, ROW_FOUND, tp
+        return None, ROW_NOT_FOUND, tp
+
+    row, status, total_page = _page(1)
+    if status == ROW_ERROR:
+        return None, ROW_ERROR
+    if row is not None:
+        _cache_set(_rcept_row_cache, rcept_no, row, _RCEPT_ROW_CACHE_MAX)
+        return row, ROW_FOUND
+    if total_page <= 1:
+        return _miss(_ROW_NOT_FOUND, ROW_NOT_FOUND)
+
+    # 2페이지부터는 배치로 동시에 받는다. 무거운 날은 46페이지가 넘는데
+    # (20260814 실측) 순차로 돌면 API 응답만 0.6초×46 ≈ 27초라 도구 호출로
+    # 쓸 수 없다. list.json이 접수번호 순이 아니라 전수를 훑어야 하므로
+    # (page 1에 …000015와 …604216이 함께 온다 — 20260331 실측) 건너뛸 수도
+    # 없다. 동시성은 4로 낮게 잡는다 — 코퍼스 수집기가 0.1초 간격(초당 10회)
+    # 으로 장시간 돌려 온 부하와 비슷한 수준이다.
+    last = min(total_page, max_pages)
+    for start in range(2, last + 1, _ROW_LOOKUP_CONCURRENCY):
+        batch = list(range(start, min(start + _ROW_LOOKUP_CONCURRENCY, last + 1)))
+        with ThreadPoolExecutor(max_workers=len(batch)) as pool:
+            results = list(pool.map(_page, batch))
+        for row, status, _ in results:
+            if row is not None:
+                _cache_set(_rcept_row_cache, rcept_no, row, _RCEPT_ROW_CACHE_MAX)
+                return row, ROW_FOUND
+        if any(st == ROW_ERROR for _, st, _ in results):
+            return None, ROW_ERROR
+        time.sleep(0.1)
+
+    if total_page > max_pages:
+        # 상한에서 멈췄다 — 뒤에 더 있는데 못 본 것이지 없는 게 아니다
+        return _miss(_ROW_SCAN_LIMIT, ROW_SCAN_LIMIT)
+    return _miss(_ROW_NOT_FOUND, ROW_NOT_FOUND)
+
+
+def resolve_disclosure_row_from_rcept_no(
+    rcept_no: str, api_key: str, max_pages: int = 50
+) -> "dict | None":
+    """접수번호 → list.json 행. 실패 시 None (하위 호환 래퍼).
+
+    실패 이유가 필요하면 `resolve_disclosure_row_with_status`를 쓴다.
+    """
+    row, _ = resolve_disclosure_row_with_status(rcept_no, api_key, max_pages)
+    return row
 
 
 def fetch_major_decision(
