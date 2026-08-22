@@ -1670,9 +1670,10 @@ function renderDash() {
     html += `<div class="panel"><div class="slabel">▍RELATED PARTY — 특수관계인 자금거래 확인</div>
       <div id="rpCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">특수관계인 거래 원문 확인 중…</span></div></div>`;
   }
-  if (detailBlockHits("ASSET_TRANSFER", 1).some((h) => isAssetDisposalTitle(h.nm))) {
-    html += `<div class="panel"><div class="slabel">▍ASSET TRANSFER — 자산 처분·양도 상대방 확인</div>
-      <div id="atCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">자산 처분 원문 확인 중…</span></div></div>`;
+  if (detailBlockHits("ASSET_TRANSFER", 1).some((h) => isAssetDisposalTitle(h.nm))
+      || detailBlockHits("FUND_OUTFLOW", 1).length) {
+    html += `<div class="panel"><div class="slabel">▍OUTFLOW — 자금유출·자산이전 상대방 확인</div>
+      <div id="atCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">원문에서 거래 상대방 확인 중…</span></div></div>`;
   }
   if (detailBlockHits("EARNINGS_SHOCK", 1).length) {
     html += `<div class="panel"><div class="slabel">▍EARNINGS SHOCK — 손익구조 급변 내역</div>
@@ -3743,9 +3744,13 @@ function assetTransferCardHTML(rows) {
     // 분류는 core와 같이 external이지만, 표기까지 "외부"라고 단정하면
     // 원문에 없는 사실을 말하는 게 된다 — 미기재는 미기재로 적는다.
     const relRaw = String(d.relation || "").trim();
+    const clsLabel = OUTFLOW_CLS_LABEL[cls] || cls;
+    // 원문 표기와 분류 라벨이 같으면 한 번만 쓴다("(종속회사 — 종속회사)" 방지).
     const rel = (!relRaw || relRaw === "-")
       ? ` <span class="dim">(관계 미기재)</span>`
-      : ` <span class="dim">(${esc(relRaw)} — ${esc(OUTFLOW_CLS_LABEL[cls] || cls)})</span>`;
+      : relRaw === clsLabel
+        ? ` <span class="dim">(${esc(relRaw)})</span>`
+        : ` <span class="dim">(${esc(relRaw)} — ${esc(clsLabel)})</span>`;
     const amt = d.amount ? ` — <span class="mono">${esc(fmtKRW(d.amount))}</span>` : "";
     const extra = [];
     if (d.assetRatio) extra.push(`자산총액 대비 ${d.assetRatio}%`);
@@ -3757,20 +3762,54 @@ function assetTransferCardHTML(rows) {
       ${extra.length ? `<div class="dim" style="margin-left:0.7rem;font-size:0.85rem">${extra.join(" · ")}</div>` : ""}
     </div>`;
   }).join("");
-  return `<div class="dim" style="font-size:0.86rem;margin-bottom:0.3rem">자산을 누구에게 넘겼는지는 제목에 없어 원문에서 확인했습니다. 상대가 특수관계인인지, 외부 평가를 거쳤는지가 볼 지점입니다.</div>${lines}`;
+  return `<div class="dim" style="font-size:0.86rem;margin-bottom:0.3rem">돈이나 자산이 누구에게 나갔는지는 제목에 없어 원문에서 확인했습니다. 상대가 특수관계인인지, 외부 평가를 거쳤는지가 볼 지점입니다.</div>${lines}`;
 }
 
+// parseOutflowDetail은 {counterparty, relation, amount(문자열)}을 돌려주고
+// parseAssetDisposalDetail은 {counterparty, relation, amount(숫자), assetRatio,
+// extval}을 돌려준다. 카드가 한 모양만 알면 되도록 여기서 맞춘다.
+function normalizeOutflowDetail(d) {
+  return {
+    counterparty: (d && d.counterparty) || "",
+    relation: (d && d.relation) || "",
+    amount: affiliateInt((d && d.amount) || "") || 0,
+    assetRatio: 0,
+    bookValue: 0,
+    extval: "",
+  };
+}
+
+// 자금이 밖으로 나간 건의 상대방을 확인한다 — 자산 처분·양도(5.3)와
+// 금전대여·채무보증·담보제공(5.7)을 함께 본다.
+//
+// core는 `_confirm_outflow_counterparties`가 두 계열을 한 번에 처리하고,
+// v1.13.4에서 **게이트와 무관하게** 결과를 렌더하도록 고쳤다 — 확인된
+// 상대방은 패턴 주장이 아니라 사실이라, 경영권 변경이 없어 capital_backflow가
+// 성립하지 않는 회사에서도 "누구에게 나갔나"는 남아야 한다.
+//
+// 뷰어는 그 수정이 절반만 이식돼 있었다. 자산 처분은 독립 블록이 됐지만
+// 금전대여·담보제공은 여전히 패턴 카드 경로(loadCapitalBackflowGate)에만
+// 실려, 경영권 변경이 없는 회사에서 통째로 사라졌다.
 async function loadAssetTransferCore() {
   const el = $("atCore");
   if (!el) return;
-  const hits = detailBlockHits("ASSET_TRANSFER", 4).filter((h) => isAssetDisposalTitle(h.nm));
+  const hits = detailBlockHits("ASSET_TRANSFER", 4).filter((h) => isAssetDisposalTitle(h.nm))
+    .concat(detailBlockHits("FUND_OUTFLOW", 4));
+  const seen = new Set();
   const rows = [];
   for (const h of hits) {
+    if (seen.has(h.rcept)) continue;
+    seen.add(h.rcept);
     const data = await fetchDisclosureText(h.rcept);
     if (!data || data.error || !data.text) continue;
-    const detail = parseAssetDisposalDetail(data.text);
+    // 서식이 다르다 — 자산 처분은 「처분금액/양도가액」, 금전대여·담보는
+    // 「대여금액/담보설정금액」. 제목으로 갈라 맞는 파서를 쓴다.
+    const detail = isAssetDisposalTitle(h.nm)
+      ? parseAssetDisposalDetail(data.text)
+      : normalizeOutflowDetail(parseOutflowDetail(data.text));
     if (detail.counterparty) rows.push(Object.assign({}, h, { detail: detail }));
   }
+  rows.sort((a, b) => (a.date < b.date ? 1 : -1));
   if (!rows.length) {
     el.innerHTML = `<span class="dim" style="font-size:0.88rem">원문에서 거래 상대방을 확인하지 못했습니다 — DART 원문에서 직접 확인하세요.</span>`;
     return;

@@ -219,3 +219,46 @@ class TestKnownRegressions:
         assert viewer["as"][3]["counterparty"] == "에이치에스효성첨단소재"  # 상대는 유지
         assert viewer["as"][2]["relation"] == "계열회사 (편입 예정)"  # 실측형은 그대로
         assert viewer["es"][2]["rows"] == []
+
+
+class TestOutflowBlockScope:
+    """자금유출 상대방 블록이 두 계열을 모두 담는지 (v1.18.3).
+
+    core는 `_confirm_outflow_counterparties`가 자산 처분(5.3)과 금전대여·
+    채무보증·담보제공(5.7)을 함께 처리하고, v1.13.4에서 **게이트와 무관하게**
+    렌더하도록 고쳤다 — 확인된 상대방은 패턴 주장이 아니라 사실이라,
+    경영권 변경이 없어 capital_backflow가 성립하지 않는 회사에서도 남아야 한다.
+
+    뷰어는 그 수정이 절반만 이식돼 있었다. 자산 처분은 독립 블록이 됐지만
+    금전대여·담보제공은 패턴 카드 경로에만 실려 통째로 사라졌다.
+    """
+
+    def _html(self):
+        return _HTML.read_text(encoding="utf-8")
+
+    def test_두_신호를_모두_후보로_삼는다(self):
+        src = _cut(self._html(), "loadAssetTransferCore")
+        assert 'detailBlockHits("ASSET_TRANSFER"' in src
+        assert 'detailBlockHits("FUND_OUTFLOW"' in src
+
+    def test_제목으로_파서를_가른다(self):
+        """자산 처분과 금전대여는 원문 서식이 다르다."""
+        src = _cut(self._html(), "loadAssetTransferCore")
+        assert "isAssetDisposalTitle" in src
+        assert "parseAssetDisposalDetail" in src
+        assert "parseOutflowDetail" in src
+
+    def test_중복_접수번호를_거른다(self):
+        src = _cut(self._html(), "loadAssetTransferCore")
+        assert "seen.has" in src or "seen.add" in src
+
+    def test_컨테이너가_두_신호_중_하나만_있어도_생긴다(self):
+        html = self._html()
+        i = html.index('id="atCore"')
+        head = html[max(0, i - 400):i]
+        assert "FUND_OUTFLOW" in head and "ASSET_TRANSFER" in head
+
+    def test_관계_표기가_중복되지_않는다(self):
+        """원문이 "종속회사"이고 분류도 "종속회사"면 한 번만 쓴다."""
+        src = _cut(self._html(), "assetTransferCardHTML")
+        assert "relRaw === clsLabel" in src
