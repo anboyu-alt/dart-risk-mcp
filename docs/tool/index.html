@@ -411,7 +411,8 @@
     <p class="disclaimer">
       본 도구의 모든 표시는 DART 공시라는 공개 기록의 사실 표기이며, 특정 기업·인물에 대한
       판정·점수·등급·투자 권유가 아닙니다. 신호는 "원문을 확인해 볼 지점"의 표시일 뿐입니다.
-      조회는 사용자의 API 키로 사용자가 시작하며, 이 페이지는 어떤 데이터도 서버에 저장하지 않습니다.
+      조회는 사용자의 API 키로 사용자가 시작하며, API 키는 서버에 저장되지 않습니다.
+      서비스 개선을 위해 접속 기록·쿠키·기기 정보를 수집합니다.
       "주의" 표시는 사실 관찰의 우선순위이며 위험 판정·투자 판단 근거가 아닙니다.
       · <a href="https://github.com/anboyu-alt/dart-risk-mcp">dart-risk-mcp</a> (MIT)
       <span id="verline"></span>
@@ -1144,6 +1145,7 @@ function buildResult(name, stockCode, corpCode, items, bgn, end, totalCount) {
   $("topCompany").textContent = `${name} · ${stockCode}`;
   enableNav();
   pushRecent({ n: name, s: stockCode, c: corpCode, sig: events.length, corr: amendRate });
+  track("scan", { corp_name: name, stock_code: stockCode });
   // ── 작업2: 딥링크 해시 동기화 — API 키는 절대 포함하지 않는다.
   const scanHash = buildScanHash(stockCode, LOOKBACK_DAYS);
   if (scanHash) history.replaceState(null, "", "#" + scanHash);
@@ -1404,6 +1406,7 @@ function renderDocViewer(panel, data, r) {
 async function fetchDisclosureText(rcept) {
   const cached = getDocCache(rcept);
   if (cached) return cached;
+  track("doc");
   try {
     const apiKey = localStorage.getItem(LS_KEY) || "";
     const res = await fetch(`${relayBase()}/api/doc?rcept_no=${encodeURIComponent(rcept)}&v=2`, {
@@ -3699,6 +3702,7 @@ async function compareActors() {
     돈을 댄 사람(CB·유상증자 인수자) 차원까지 겹쳐 보려면 <a href="../#start">MCP 대화</a>의 find_actor_overlap을 사용하세요.
     공개기록 행위자 레지스트리·연결망 시각화는 별도 운영(승인제)입니다.</p></div>`;
   $("cresult").innerHTML = html;
+  track("compare");
 }
 
 /* ── 부트 ─────────────────────────────────────── */
@@ -3718,6 +3722,46 @@ boot().then(() => {
   $("status").className = "status err";
   $("status").textContent = "초기화 실패: " + e.message;
 });
+
+/* ── 접속 분석 수집 ──────────────────────────────────────────────────────
+   전체를 try/catch로 감싼다. 수집이 죽어도 뷰어는 그대로 동작해야 한다.
+   이 블록은 뷰어 로직에 어떤 값도 되돌려주지 않는다 — 호출부는 track()의
+   반환값을 쓰지 않으며, 실패는 여기서 삼킨다.
+
+   DART API 키는 절대 보내지 않는다(서버도 화이트리스트로 거부한다). */
+var DV_ID = (function () {
+  try {
+    var m = document.cookie.match(/(?:^|;\s*)dv_id=([^;]+)/);
+    if (m) return m[1];
+    var id = (window.crypto && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : String(Date.now()) + Math.random().toString(36).slice(2);
+    document.cookie = "dv_id=" + id + ";max-age=31536000;path=/;SameSite=Lax";
+    return id;
+  } catch (e) { return ""; }
+})();
+
+function track(event, extra) {
+  try {
+    var payload = Object.assign({
+      event: event,
+      visitor_id: DV_ID,
+      referrer: document.referrer || "",
+      path: location.pathname,
+      screen: (screen.width || 0) + "x" + (screen.height || 0),
+      lang: navigator.language || "",
+    }, extra || {});
+    var blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
+    // sendBeacon은 페이지를 떠나도 전달되고 응답을 기다리지 않는다.
+    if (navigator.sendBeacon && navigator.sendBeacon("/api/track", blob)) return;
+    fetch("/api/track", {
+      method: "POST", body: blob, keepalive: true,
+      headers: { "Content-Type": "application/json" },
+    }).catch(function () {});
+  } catch (e) { /* 수집 실패는 삼킨다 */ }
+}
+
+track("pageview");
 </script>
 </body>
 </html>

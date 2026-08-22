@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<title>운영 대시보드</title>
+<style>
+  :root {
+    --bg: #070a0f; --panel: #11151d; --cell: #0d1118;
+    --line: #1e2530; --line2: #2a333f;
+    --tx: #d7dde6; --dim: #7c8797; --dim2: #9fb0c0; --faint: #4a5566;
+    --amber: #e8a33d; --red: #e0564a; --green: #4ad295; --blue: #4f8fce;
+    --mono: Consolas, "Cascadia Code", "SF Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--tx);
+    font: 14px/1.55 -apple-system, "Segoe UI", "Noto Sans KR", sans-serif;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 1.5rem 1rem 4rem; }
+  h1 { font-size: 1.05rem; margin: 0 0 0.2rem; letter-spacing: 0.02em; }
+  .sub { color: var(--faint); font-size: 0.78rem; margin: 0 0 1.2rem; }
+
+  .bar { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;
+         margin-bottom: 1rem; }
+  select, input, button {
+    background: var(--cell); color: var(--tx); border: 1px solid var(--line);
+    border-radius: 4px; padding: 0.4rem 0.6rem; font-size: 0.85rem;
+    font-family: inherit;
+  }
+  input { min-width: 200px; }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--line2); }
+
+  .tabs { display: flex; gap: 0.3rem; border-bottom: 1px solid var(--line);
+          margin-bottom: 1rem; flex-wrap: wrap; }
+  .tabs button {
+    background: none; border: none; border-bottom: 2px solid transparent;
+    border-radius: 0; color: var(--dim); padding: 0.5rem 0.8rem;
+  }
+  .tabs button.on { color: var(--amber); border-bottom-color: var(--amber); }
+
+  .cards { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  .card { background: var(--panel); border: 1px solid var(--line);
+          border-radius: 5px; padding: 0.7rem 1rem; min-width: 118px; }
+  .card b { display: block; font-size: 1.35rem; font-weight: 600;
+            font-family: var(--mono); }
+  .card span { color: var(--faint); font-size: 0.72rem; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
+  th, td { text-align: left; padding: 0.42rem 0.6rem;
+           border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--dim); font-weight: 500; font-size: 0.75rem;
+       position: sticky; top: 0; background: var(--bg); }
+  td.num, th.num { text-align: right; font-family: var(--mono); }
+  tbody tr:hover { background: var(--cell); }
+  tr.clickable { cursor: pointer; }
+  tr.sel { background: rgba(232,163,61,0.09); }
+
+  .scroll { max-height: 62vh; overflow: auto; border: 1px solid var(--line);
+            border-radius: 5px; }
+  .grid2 { display: grid;
+           grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+           gap: 1rem; }
+  h2 { font-size: 0.82rem; color: var(--dim2); margin: 0 0 0.4rem;
+       font-weight: 500; }
+  .note { color: var(--faint); font-size: 0.75rem; margin: 0.5rem 0 0; }
+  .err { color: var(--red); }
+  .hide { display: none; }
+  .gate { max-width: 420px; margin: 12vh auto; text-align: center; }
+  .gate input { width: 100%; margin: 0.8rem 0; }
+  .mono { font-family: var(--mono); font-size: 0.8rem; }
+  svg { display: block; width: 100%; height: 220px; }
+</style>
+</head>
+<body>
+
+<div id="gate" class="wrap gate">
+  <h1>운영 대시보드</h1>
+  <p class="sub">접근 토큰을 입력하세요.</p>
+  <input id="tok" type="password" placeholder="OPS_TOKEN" autocomplete="off">
+  <button id="enter">확인</button>
+  <p id="gateErr" class="note err"></p>
+</div>
+
+<div id="app" class="wrap hide">
+  <h1>운영 대시보드</h1>
+  <p class="sub">공개 뷰어 접속 분석 · 이 화면과 데이터는 외부에 공개되지 않습니다.</p>
+
+  <div class="bar">
+    <select id="days">
+      <option value="1">오늘</option>
+      <option value="7">최근 7일</option>
+      <option value="30" selected>최근 30일</option>
+      <option value="365">최근 1년</option>
+    </select>
+    <button id="reload">새로고침</button>
+    <button id="logout">토큰 해제</button>
+    <span id="status" class="note"></span>
+  </div>
+
+  <div class="tabs">
+    <button data-tab="corps" class="on">조회 회사</button>
+    <button data-tab="sources">유입·지역·기기</button>
+    <button data-tab="traffic">트래픽 추이</button>
+    <button data-tab="visitors">방문자</button>
+  </div>
+
+  <section id="tab-corps"></section>
+  <section id="tab-sources" class="hide"></section>
+  <section id="tab-traffic" class="hide"></section>
+  <section id="tab-visitors" class="hide"></section>
+</div>
+
+<script>
+"use strict";
+var LS = "ops_token";
+var TOKEN = localStorage.getItem(LS) || "";
+var TAB = "corps";
+
+function $(id) { return document.getElementById(id); }
+
+function el(tag, text, cls) {
+  var n = document.createElement(tag);
+  // textContent만 쓴다 — referrer·UA·회사명은 외부 입력이라 innerHTML은 XSS다.
+  if (text !== undefined && text !== null) n.textContent = String(text);
+  if (cls) n.className = cls;
+  return n;
+}
+function fmt(n) { return (Number(n) || 0).toLocaleString("ko-KR"); }
+function shortTs(v) {
+  if (!v) return "";
+  return String(v).replace("T", " ").replace(/\.\d+/, "")
+    .replace("Z", "").slice(0, 16);
+}
+
+/* ── API ─────────────────────────────────────────────────────────── */
+async function api(view, extra) {
+  var qs = new URLSearchParams({ view: view, days: $("days").value });
+  Object.keys(extra || {}).forEach(function (k) { qs.set(k, extra[k]); });
+  // 토큰은 헤더로만 보낸다 — 쿼리에 넣으면 URL이 로그·리퍼러에 남는다.
+  var res = await fetch("/api/stats?" + qs, {
+    headers: { "X-Ops-Token": TOKEN },
+  });
+  var body = {};
+  try { body = await res.json(); } catch (e) { /* 빈 본문 */ }
+  if (res.status === 401) {
+    lockOut("토큰이 올바르지 않습니다.");
+    throw new Error("401");
+  }
+  if (!res.ok) throw new Error(body.error || ("HTTP " + res.status));
+  return body;
+}
+
+function lockOut(msg) {
+  localStorage.removeItem(LS);
+  TOKEN = "";
+  $("app").classList.add("hide");
+  $("gate").classList.remove("hide");
+  $("gateErr").textContent = msg || "";
+}
+
+/* ── 표 렌더 ─────────────────────────────────────────────────────── */
+function table(cols, rows, opts) {
+  opts = opts || {};
+  var wrap = el("div", null, "scroll");
+  var t = el("table");
+  var thead = el("thead");
+  var htr = el("tr");
+  cols.forEach(function (c) {
+    htr.appendChild(el("th", c.label, c.num ? "num" : ""));
+  });
+  thead.appendChild(htr);
+  t.appendChild(thead);
+
+  var tb = el("tbody");
+  if (!rows.length) {
+    var tr0 = el("tr");
+    var td0 = el("td", "데이터가 없습니다.", "note");
+    td0.colSpan = cols.length;
+    tr0.appendChild(td0);
+    tb.appendChild(tr0);
+  }
+  rows.forEach(function (r, i) {
+    var tr = el("tr");
+    if (opts.onClick) {
+      tr.className = "clickable";
+      tr.onclick = function () {
+        Array.prototype.forEach.call(tb.children, function (x) {
+          x.classList.remove("sel");
+        });
+        tr.classList.add("sel");
+        opts.onClick(r);
+      };
+    }
+    cols.forEach(function (c) {
+      var v = c.get ? c.get(r, i) : r[c.key];
+      var text = c.num ? fmt(v) : (v === null || v === undefined ? "" : v);
+      tr.appendChild(el("td", text, c.num ? "num" : (c.cls || "")));
+    });
+    tb.appendChild(tr);
+  });
+  t.appendChild(tb);
+  wrap.appendChild(t);
+  return wrap;
+}
+
+function cards(items) {
+  var box = el("div", null, "cards");
+  items.forEach(function (it) {
+    var c = el("div", null, "card");
+    c.appendChild(el("b", it.v));
+    c.appendChild(el("span", it.k));
+    box.appendChild(c);
+  });
+  return box;
+}
+
+/* 여러 행을 한 키로 접어 합계를 낸다 (유입·지역·기기 탭 공용). */
+function foldBy(rows, keyFn, valKey) {
+  var m = new Map();
+  rows.forEach(function (r) {
+    var k = keyFn(r);
+    if (k === null || k === undefined || k === "") k = "(미상)";
+    m.set(k, (m.get(k) || 0) + (Number(r[valKey]) || 0));
+  });
+  return Array.from(m, function (e) { return { k: e[0], n: e[1] }; })
+    .sort(function (a, b) { return b.n - a.n; });
+}
+
+/* ── 탭 1: 조회 회사 ─────────────────────────────────────────────── */
+async function renderCorps() {
+  var d = await api("corps");
+  var host = $("tab-corps");
+  host.textContent = "";
+  var totalViews = d.rows.reduce(function (s, r) {
+    return s + (Number(r.views) || 0);
+  }, 0);
+  host.appendChild(cards([
+    { k: "조회된 회사 수", v: fmt(d.rows.length) },
+    { k: "총 스캔 수", v: fmt(totalViews) },
+  ]));
+  host.appendChild(table([
+    { label: "#", get: function (r, i) { return i + 1; }, num: true },
+    { label: "회사명", key: "corp_name" },
+    { label: "종목코드", key: "stock_code", cls: "mono" },
+    { label: "조회수", key: "views", num: true },
+    { label: "방문 연인원", key: "visitors", num: true },
+  ], d.rows));
+  host.appendChild(el("p",
+    "방문 연인원은 날짜별 순방문자를 더한 값이라 실제 순방문자보다 클 수 있습니다 "
+    + "(같은 사람이 이틀에 걸쳐 보면 2로 셉니다). 기간 필터를 유지하기 위한 "
+    + "트레이드오프입니다.", "note"));
+}
+
+/* ── 탭 2: 유입·지역·기기 ───────────────────────────────────────── */
+async function renderSources() {
+  var d = await api("sources");
+  var host = $("tab-sources");
+  host.textContent = "";
+  var rows = d.rows;
+  var grid = el("div", null, "grid2");
+
+  function block(title, folded, label, note) {
+    var b = el("div");
+    b.appendChild(el("h2", title));
+    b.appendChild(table([
+      { label: label, key: "k" },
+      { label: "건수", key: "n", num: true },
+    ], folded));
+    if (note) b.appendChild(el("p", note, "note"));
+    return b;
+  }
+
+  grid.appendChild(block("유입 경로",
+    foldBy(rows, function (r) { return r.referrer; }, "hits"), "referrer",
+    "(직접 유입)은 주소 직접 입력·북마크·앱 내 링크처럼 referrer가 비어 오는 경우입니다."));
+  grid.appendChild(block("지역",
+    foldBy(rows, function (r) {
+      return (r.country || "?") + (r.city ? " · " + r.city : "");
+    }, "hits"), "국가 · 도시"));
+  grid.appendChild(block("브라우저",
+    foldBy(rows, function (r) { return r.browser; }, "hits"), "브라우저"));
+  grid.appendChild(block("OS · 기기",
+    foldBy(rows, function (r) {
+      return (r.os || "?") + " / " + (r.device || "?");
+    }, "hits"), "OS / 기기"));
+
+  host.appendChild(grid);
+}
+
+/* ── 탭 3: 트래픽 추이 ──────────────────────────────────────────── */
+function svgEl(tag, attrs) {
+  var n = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  Object.keys(attrs || {}).forEach(function (k) { n.setAttribute(k, attrs[k]); });
+  return n;
+}
+
+/* 외부 차트 라이브러리를 쓰지 않는 프로젝트 규칙에 맞춰 polyline을 직접 계산한다. */
+function lineChart(rows, series) {
+  var W = 900, H = 220, PAD = 34;
+  var svg = svgEl("svg", {
+    viewBox: "0 0 " + W + " " + H,
+    preserveAspectRatio: "none",
+  });
+  if (!rows.length) return svg;
+
+  var max = 1;
+  rows.forEach(function (r) {
+    series.forEach(function (s) { max = Math.max(max, Number(r[s.key]) || 0); });
+  });
+  var stepX = rows.length > 1 ? (W - PAD * 2) / (rows.length - 1) : 0;
+  function y(v) { return H - PAD - ((Number(v) || 0) / max) * (H - PAD * 2); }
+
+  svg.appendChild(svgEl("line", {
+    x1: PAD, y1: H - PAD, x2: W - PAD, y2: H - PAD, stroke: "#1e2530",
+  }));
+  svg.appendChild(svgEl("line", {
+    x1: PAD, y1: PAD, x2: PAD, y2: H - PAD, stroke: "#1e2530",
+  }));
+  var maxLabel = svgEl("text", { x: 4, y: PAD + 4, fill: "#4a5566", "font-size": "11" });
+  maxLabel.textContent = fmt(max);
+  svg.appendChild(maxLabel);
+
+  series.forEach(function (s) {
+    var pts = rows.map(function (r, i) {
+      return (PAD + i * stepX).toFixed(1) + "," + y(r[s.key]).toFixed(1);
+    }).join(" ");
+    svg.appendChild(svgEl("polyline", {
+      points: pts, fill: "none", stroke: s.color, "stroke-width": "2",
+    }));
+  });
+  return svg;
+}
+
+async function renderTraffic() {
+  var d = await api("traffic");
+  var host = $("tab-traffic");
+  host.textContent = "";
+  var rows = d.rows;
+  function sum(k) {
+    return rows.reduce(function (s, r) { return s + (Number(r[k]) || 0); }, 0);
+  }
+  host.appendChild(cards([
+    { k: "페이지뷰", v: fmt(sum("pageviews")) },
+    { k: "스캔", v: fmt(sum("scans")) },
+    { k: "일별 방문자 합", v: fmt(sum("visitors")) },
+  ]));
+
+  var chartBox = el("div");
+  chartBox.appendChild(el("h2",
+    "일별 추이 — 주황: 방문자 · 파랑: 페이지뷰 · 초록: 스캔"));
+  chartBox.appendChild(lineChart(rows, [
+    { key: "visitors", color: "#e8a33d" },
+    { key: "pageviews", color: "#4f8fce" },
+    { key: "scans", color: "#4ad295" },
+  ]));
+  host.appendChild(chartBox);
+
+  host.appendChild(table([
+    { label: "날짜", key: "day", cls: "mono" },
+    { label: "방문자", key: "visitors", num: true },
+    { label: "페이지뷰", key: "pageviews", num: true },
+    { label: "스캔", key: "scans", num: true },
+  ], rows.slice().reverse()));
+}
+
+/* ── 탭 4: 방문자 ───────────────────────────────────────────────── */
+var VISITORS = [];
+
+async function renderVisitors() {
+  var d = await api("visitors");
+  VISITORS = d.rows;
+  var host = $("tab-visitors");
+  host.textContent = "";
+
+  var bar = el("div", null, "bar");
+  var q = el("input");
+  q.placeholder = "IP · 방문자ID · 지역으로 필터";
+  q.oninput = function () { drawVisitorTable(q.value); };
+  bar.appendChild(q);
+  host.appendChild(bar);
+
+  host.appendChild(cards([{ k: "방문자 수", v: fmt(VISITORS.length) }]));
+
+  var tableHost = el("div");
+  tableHost.id = "vtable";
+  host.appendChild(tableHost);
+
+  var timelineHost = el("div");
+  timelineHost.id = "vtimeline";
+  host.appendChild(timelineHost);
+
+  drawVisitorTable("");
+}
+
+function drawVisitorTable(filter) {
+  var f = (filter || "").trim().toLowerCase();
+  var rows = !f ? VISITORS : VISITORS.filter(function (r) {
+    return [r.last_ip, r.visitor_id, r.country, r.city, r.browser, r.os]
+      .some(function (v) {
+        return String(v || "").toLowerCase().indexOf(f) >= 0;
+      });
+  });
+  var host = $("vtable");
+  host.textContent = "";
+  host.appendChild(table([
+    { label: "최종 접속", get: function (r) { return shortTs(r.last_seen); },
+      cls: "mono" },
+    { label: "IP", key: "last_ip", cls: "mono" },
+    { label: "지역", get: function (r) {
+      return (r.country || "?") + (r.city ? " · " + r.city : "");
+    } },
+    { label: "브라우저", get: function (r) {
+      return (r.browser || "?") + " / " + (r.os || "?") + " / " + (r.device || "?");
+    } },
+    { label: "이벤트", key: "events", num: true },
+    { label: "스캔", key: "scans", num: true },
+    { label: "방문자ID", key: "visitor_id", cls: "mono" },
+  ], rows, { onClick: function (r) { showTimeline(r.visitor_id); } }));
+  host.appendChild(el("p",
+    "행을 클릭하면 그 방문자가 어떤 회사를 어떤 순서로 봤는지 아래에 펼쳐집니다.",
+    "note"));
+}
+
+async function showTimeline(visitorId) {
+  var host = $("vtimeline");
+  host.textContent = "";
+  if (!visitorId) return;
+  host.appendChild(el("h2", "방문자 " + visitorId + " 타임라인"));
+  try {
+    var d = await api("timeline", { visitor_id: visitorId });
+    host.appendChild(table([
+      { label: "시각", get: function (r) { return shortTs(r.ts); }, cls: "mono" },
+      { label: "이벤트", key: "event" },
+      { label: "회사", key: "corp_name" },
+      { label: "종목", key: "stock_code", cls: "mono" },
+      { label: "IP", key: "ip", cls: "mono" },
+      { label: "유입", key: "referrer" },
+    ], d.rows));
+  } catch (e) {
+    if (e.message === "401") return;
+    host.appendChild(el("p", "타임라인 조회 실패: " + e.message, "note err"));
+  }
+}
+
+/* ── 탭 전환·부트 ───────────────────────────────────────────────── */
+var RENDER = {
+  corps: renderCorps,
+  sources: renderSources,
+  traffic: renderTraffic,
+  visitors: renderVisitors,
+};
+
+async function draw() {
+  $("status").className = "note";
+  $("status").textContent = "불러오는 중…";
+  try {
+    await RENDER[TAB]();
+    $("status").textContent = "";
+  } catch (e) {
+    // 401은 lockOut이 이미 처리했다 — 잠긴 화면 뒤에 에러를 덧쓰지 않는다.
+    if (e.message === "401") return;
+    $("status").className = "note err";
+    $("status").textContent = "조회 실패: " + e.message;
+  }
+}
+
+function selectTab(name) {
+  TAB = name;
+  Array.prototype.forEach.call(
+    document.querySelectorAll(".tabs button"),
+    function (b) { b.classList.toggle("on", b.dataset.tab === name); }
+  );
+  ["corps", "sources", "traffic", "visitors"].forEach(function (t) {
+    $("tab-" + t).classList.toggle("hide", t !== name);
+  });
+  draw();
+}
+
+Array.prototype.forEach.call(
+  document.querySelectorAll(".tabs button"),
+  function (b) { b.onclick = function () { selectTab(b.dataset.tab); }; }
+);
+$("days").onchange = draw;
+$("reload").onclick = draw;
+$("logout").onclick = function () { lockOut(""); };
+$("enter").onclick = function () {
+  var v = $("tok").value.trim();
+  if (!v) { $("gateErr").textContent = "토큰을 입력하세요."; return; }
+  TOKEN = v;
+  localStorage.setItem(LS, v);
+  $("tok").value = "";
+  $("gateErr").textContent = "";
+  $("gate").classList.add("hide");
+  $("app").classList.remove("hide");
+  draw();
+};
+$("tok").addEventListener("keydown", function (e) {
+  if (e.key === "Enter") $("enter").click();
+});
+
+if (TOKEN) {
+  $("gate").classList.add("hide");
+  $("app").classList.remove("hide");
+  draw();
+}
+</script>
+</body>
+</html>

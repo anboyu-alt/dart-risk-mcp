@@ -1,0 +1,5 @@
+User-agent: *
+Disallow: /ops-762b24e0.html
+Disallow: /api/stats
+
+# 뷰어 본문은 색인해도 된다. 위 두 경로만 막는다.
