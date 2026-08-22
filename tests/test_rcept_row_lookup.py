@@ -307,3 +307,32 @@ class TestThrottleGuard:
             _, st = dc.resolve_disclosure_row_with_status("20260814900829", "k")
         assert st == dc.ROW_FOUND
         assert m.call_count == 1
+
+
+class TestConcurrencyBudget:
+    """동시성은 속도가 아니라 **대기 예산**으로 정한다.
+
+    이 도구의 허용 대기는 1분이고 순차로도 27초라 병렬화는 필수가 아니다.
+    반면 동시 요청은 DART 분당 스로틀 조건을 만든다(SE-4h 사고 유형).
+    예산에 여유가 있는데 외부 API 부하를 늘릴 이유가 없으므로 낮게 잡는다.
+
+    라이브 실측(20260814, 46페이지): 순차 27초 · 동시 2 → 13.8초 ·
+    동시 4 → 8.0초. 셋 다 예산 안이라 가장 부하가 낮은 쪽을 고른다.
+    """
+
+    def test_동시성이_낮게_유지된다(self):
+        assert dc._ROW_LOOKUP_CONCURRENCY <= 2, (
+            "동시성을 올리기 전에 대기 예산(1분)을 먼저 확인하라 — "
+            "순차로도 27초라 예산 안이고, 버스트는 스로틀 위험만 늘린다"
+        )
+
+    def test_최악의_경우도_예산_안이다(self):
+        """전 페이지 순회(못 찾는 경우)가 가장 오래 걸린다.
+
+        하루 최대 6,006건 = 61페이지. 동시성 2면 1 + 30배치이고,
+        배치당 API 0.6초 + 간격 0.1초로 약 22초다(라이브 21.9초 실측).
+        """
+        max_pages_worst = 61
+        batches = 1 + (max_pages_worst - 1 + dc._ROW_LOOKUP_CONCURRENCY - 1) // dc._ROW_LOOKUP_CONCURRENCY
+        est_seconds = batches * (0.6 + 0.1)
+        assert est_seconds < 60, f"최악 추정 {est_seconds:.0f}초 — 예산 초과"

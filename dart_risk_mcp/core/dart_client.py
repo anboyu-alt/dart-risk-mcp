@@ -2785,7 +2785,7 @@ _RCEPT_ROW_CACHE_TTL = 600
 _RCEPT_ROW_CACHE_MAX = 50
 # _cache_get은 미스를 None으로 알린다 — 실패(행 없음)를 그대로 None으로 캐시하면
 # 히트와 미스를 구분할 수 없어 12회 호출이 매번 반복된다. 전용 센티널을 저장한다.
-_ROW_LOOKUP_CONCURRENCY = 4
+_ROW_LOOKUP_CONCURRENCY = 2
 # 바디 status로 오는 일시적 실패 — 020 분당 스로틀, 800 시스템 점검.
 # `_retry`는 HTTP 계층만 보므로 여기서 따로 재시도한다(_fetch_indx_page와
 # 같은 관례). 013(데이터 없음)·900(키 오류)은 재시도해도 같은 답이다.
@@ -2984,12 +2984,17 @@ def resolve_disclosure_row_with_status(
     if total_page <= 1:
         return _miss(_ROW_NOT_FOUND, ROW_NOT_FOUND)
 
-    # 2페이지부터는 배치로 동시에 받는다. 무거운 날은 46페이지가 넘는데
-    # (20260814 실측) 순차로 돌면 API 응답만 0.6초×46 ≈ 27초라 도구 호출로
-    # 쓸 수 없다. list.json이 접수번호 순이 아니라 전수를 훑어야 하므로
-    # (page 1에 …000015와 …604216이 함께 온다 — 20260331 실측) 건너뛸 수도
-    # 없다. 동시성은 4로 낮게 잡는다 — 코퍼스 수집기가 0.1초 간격(초당 10회)
-    # 으로 장시간 돌려 온 부하와 비슷한 수준이다.
+    # 2페이지부터는 배치로 동시에 받는다. list.json이 접수번호 순이 아니라
+    # 전수를 훑어야 하므로(page 1에 …000015와 …604216이 함께 온다 —
+    # 20260331 실측) 건너뛸 수 없고, 무거운 날은 46페이지가 넘는다(20260814).
+    #
+    # **동시성 2를 고른 근거는 속도가 아니라 대기 예산이다.** 이 도구의 허용
+    # 대기는 1분이고 순차로도 27초라 예산 안에 든다 — 즉 병렬화는 필수가
+    # 아니다. 그런데 동시 요청은 DART 분당 스로틀(status 020) 조건을 만들고,
+    # 그건 이 레포가 SE-4h에서 이미 겪은 사고 유형이다. 처음엔 4로 잡아
+    # 8초까지 줄였지만, 예산 안에 여유가 있는데 외부 API 부하를 그만큼 늘릴
+    # 이유가 없다. 2면 무거운 날 ~14초로 예산의 4분의 1이면서 순간 부하는
+    # 절반이다. 스로틀 방어(_ROW_TRANSIENT_STATUSES)는 그대로 둔다.
     last = min(total_page, max_pages)
     for start in range(2, last + 1, _ROW_LOOKUP_CONCURRENCY):
         batch = list(range(start, min(start + _ROW_LOOKUP_CONCURRENCY, last + 1)))
