@@ -349,8 +349,10 @@ def test_ambiguous_keys_are_all_real_signal_keys():
 
 
 def test_ambiguous_keys_contents():
+    # ASSET_TRANSFER 추가(2026-08-22) — 자산 처분·양도도 정상적인 자산 교체가
+    # 대다수라 상대방·가액 확인 전에는 헤드라인으로 올릴 근거가 없다.
     assert AMBIGUOUS_SIGNAL_KEYS == frozenset(
-        {"TREASURY", "TREASURY_TRUST", "FUND_OUTFLOW", "ACQ_REVIEW"}
+        {"TREASURY", "TREASURY_TRUST", "FUND_OUTFLOW", "ACQ_REVIEW", "ASSET_TRANSFER"}
     )
 
 

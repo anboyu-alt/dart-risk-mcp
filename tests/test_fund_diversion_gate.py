@@ -105,9 +105,9 @@ class TestRenderedBlock:
             acq_confirmations=[_row("-", "external", "취득대상")],
         )
         joined = "\n".join(fact_lines)
-        assert "━━ 자금유출 상대방 확인 ━━" in joined
+        assert "━━ 자금유출·자산이전 상대방 확인 ━━" in joined
         assert "━━ 타법인 취득 대상 확인 ━━" in joined
-        assert joined.index("자금유출 상대방") < joined.index("타법인 취득 대상")
+        assert joined.index("자금유출·자산이전") < joined.index("타법인 취득 대상")
 
 
 class TestParser:

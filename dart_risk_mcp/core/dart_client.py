@@ -1085,6 +1085,115 @@ def classify_target_listing(
     return "unlisted"
 
 
+# ── 자산 처분·양도 결정 원문 파서 (v1.13.4) ──────────────────────────────
+# taxonomy 5.3(Off-Market Asset Transfers — 특수관계인에게 공정가 미만으로
+# 자산 이전)은 **제목만으로 판정할 수 없다.** 정상적인 자산 교체·구조조정이
+# 대다수이기 때문이다. 원문에는 거래상대·관계·가액이 구조적으로 들어 있어
+# 확인이 가능하다(2026-08-22 실측, 5개 서식 전수 확인):
+#
+#   「유형자산 처분결정」(자율)      : 3. 거래상대 X / 처분금액 / 자산총액대비(%)
+#                                     ⚠ 관계 필드가 **없다**(상대가 개인인 경우도 있다)
+#   「비유동자산 처분결정」(공정거래법): 거래상대방 X / 회사와의 관계 / 처분가액
+#                                     + **평가가액** (공정가 대비 확인 가능)
+#   「유형자산 양도 결정」(법정)      : 6. 거래상대방 회사명(성명) X / 회사와의 관계
+#                                     + 외부평가 여부
+#   「특수관계인에 대한 자산양도」(공정): 1. 거래상대방 X / 회사와의 관계 / 양도가액
+#   「영업양도 결정」                : 6. 양수법인 X / 회사와의 관계 / 양도가액
+_DISPOSAL_COUNTERPARTY_RES = (
+    re.compile(r"거래상대방\s*회사명\(성명\)\s*(.+?)\s*(?:자본금|주요사업|회사와의)"),
+    re.compile(r"거래상대방\s*(.+?)\s*(?:회사와의\s*관계|자본금)"),
+    re.compile(r"양수법인\s*(.+?)\s*(?:-\s*)?회사와의\s*관계"),
+    re.compile(r"거래상대\s*(.+?)\s*\d+\.\s*(?:처분목적|양도목적)"),
+)
+_DISPOSAL_RELATION_RE = re.compile(r"회사와의\s*관계\s*(.+?)\s*(?:\d+\.|가\.|-\s|$)")
+_DISPOSAL_AMOUNT_RE = re.compile(
+    r"(?:처분금액|처분가액|양도금액|양도가액)\s*\(?원\)?\s*([\d,]+)"
+)
+# 「특수관계인에 대한 자산양도」(공정거래법)는 「(단위 : 백만 원)」을 머리에 달고
+# 「다. 양도가액 12,899」처럼 **단위 없이** 적는다. 원 단위 정규식에 안 걸려
+# 금액이 0으로 남던 것을 2026-08-22 실측에서 확인하고 별도 경로를 뒀다.
+_DISPOSAL_AMOUNT_BARE_RE = re.compile(r"양도가액\s*([\d,]+)")
+_DISPOSAL_UNIT_MILLION_RE = re.compile(r"단위\s*[:：]\s*백만")
+_DISPOSAL_RATIO_RE = re.compile(r"자산총액\s*대비\s*\(%\)\s*([\d,.]+)")
+_DISPOSAL_BOOK_RE = re.compile(r"평가가액\s*\(?원\)?\s*([\d,]+)")
+_DISPOSAL_EXTVAL_RE = re.compile(r"외부평가\s*여부\s*(\S+)")
+
+
+def parse_asset_disposal_detail(text: str) -> dict:
+    """자산 처분·양도 결정 원문에서 상대방·관계·가액을 추출한다(순수 함수).
+
+    입력은 fetch_document_text로 태그 제거·공백 단일화된 텍스트를 가정한다.
+    매칭 실패 필드는 빈 문자열/0으로 남는다(예외를 던지지 않는다).
+
+    Returns:
+        {"counterparty": str,   # 거래상대(개인명일 수도 있다)
+         "relation": str,       # 회사와의 관계 원문 표기(서식에 따라 없을 수 있다)
+         "amount": int,         # 처분·양도 가액(원)
+         "asset_ratio": float,  # 자산총액 대비 %
+         "book_value": int,     # 장부·평가가액(비유동자산 서식에만 있다)
+         "extval": str}         # 외부평가 여부(법정 서식에만 있다)
+    """
+    out = {"counterparty": "", "relation": "", "amount": 0,
+           "asset_ratio": 0.0, "book_value": 0, "extval": ""}
+    if not text:
+        return out
+    if not any(w in text for w in ("처분결정", "양도 결정", "양도결정", "자산양도")):
+        return out
+
+    for rx in _DISPOSAL_COUNTERPARTY_RES:
+        m = rx.search(text)
+        if m and m.group(1).strip():
+            # 표 셀 구분자로 남는 꼬리 하이픈을 떼어낸다("…투자신탁15호 -").
+            out["counterparty"] = m.group(1).strip().rstrip("-").strip()[:60]
+            break
+    m = _DISPOSAL_RELATION_RE.search(text)
+    if m:
+        out["relation"] = m.group(1).strip()[:40]
+    m = _DISPOSAL_AMOUNT_RE.search(text)
+    if m:
+        try:
+            out["amount"] = int(m.group(1).replace(",", ""))
+        except ValueError:
+            pass
+    if not out["amount"]:
+        m = _DISPOSAL_AMOUNT_BARE_RE.search(text)
+        if m:
+            try:
+                val = int(m.group(1).replace(",", ""))
+            except ValueError:
+                val = 0
+            if val and _DISPOSAL_UNIT_MILLION_RE.search(text):
+                val *= 1_000_000
+            out["amount"] = val
+    m = _DISPOSAL_RATIO_RE.search(text)
+    if m:
+        try:
+            out["asset_ratio"] = float(m.group(1).replace(",", ""))
+        except ValueError:
+            pass
+    m = _DISPOSAL_BOOK_RE.search(text)
+    if m:
+        try:
+            out["book_value"] = int(m.group(1).replace(",", ""))
+        except ValueError:
+            pass
+    m = _DISPOSAL_EXTVAL_RE.search(text)
+    if m:
+        out["extval"] = m.group(1).strip()
+    return out
+
+
+def fetch_asset_disposal_detail(rcept_no: str, api_key: str) -> dict:
+    """`fetch_document_text` + `parse_asset_disposal_detail` 래퍼. 실패 시 빈 dict."""
+    try:
+        text = fetch_document_text(rcept_no, api_key, max_chars=4000)
+    except Exception:
+        return {}
+    if not text:
+        return {}
+    return parse_asset_disposal_detail(text)
+
+
 def fetch_acquisition_detail(rcept_no: str, api_key: str) -> dict:
     """`fetch_document_text` + `parse_acquisition_detail` 래퍼. 실패 시 빈 dict."""
     try:

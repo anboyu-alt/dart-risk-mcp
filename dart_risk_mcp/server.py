@@ -60,6 +60,7 @@ from .core import (
     classify_outflow_relation,
     classify_target_listing,
     fetch_acquisition_detail,
+    fetch_asset_disposal_detail,
     fetch_control_change_detail,
     classify_holder_type,
     strip_holder_suffix,
@@ -374,7 +375,10 @@ def _outflow_review_candidates(
     """
     items: dict[str, tuple[str, str]] = {}
     for e in signal_events:
-        if e["key"] not in ("FUND_OUTFLOW", "ACQ_REVIEW") or e["is_amendment"]:
+        # ASSET_TRANSFER(자산 처분·양도)도 상대방 확인 대상이다 — taxonomy 5.3이
+        # "특수관계인에게 공정가 미만으로 이전"이라 상대·관계 없이는 정상적인
+        # 자산 교체와 구분되지 않는다(2026-08-22, 1년 실측 약 200건).
+        if e["key"] not in ("FUND_OUTFLOW", "ACQ_REVIEW", "ASSET_TRANSFER") or e["is_amendment"]:
             continue
         rcept = e.get("rcept_no", "")
         if not rcept:
@@ -402,6 +406,19 @@ def _outflow_row(
         "counterparty": counterparty, "relation": relation,
         "classification": classification, "amount": amount,
     }
+
+
+# 자산 처분·양도 서식인가 — DS005(resolve_decision_type)로 읽히지 않는 제목을
+# 원문 파서로 넘기기 위한 판별. ASSET_TRANSFER 키워드와 짝을 이룬다.
+_ASSET_DISPOSAL_TITLE_MARKS = (
+    "유형자산처분", "비유동자산처분", "유형자산양도",
+    "특수관계인에대한자산양도", "영업양도",
+)
+
+
+def _is_asset_disposal_title(report_nm: str) -> bool:
+    flat = (report_nm or "").replace(" ", "")
+    return any(m in flat for m in _ASSET_DISPOSAL_TITLE_MARKS)
 
 
 def _confirm_outflow_counterparties(
@@ -443,6 +460,21 @@ def _confirm_outflow_counterparties(
             out.append(_outflow_row(
                 rcept_dt, report_nm, rcept,
                 r.get("counterparty") or "", relation, cls, r.get("amount", 0),
+            ))
+        elif _is_asset_disposal_title(report_nm):
+            # 「유형자산 처분결정」(자율공시)·「특수관계인에 대한 자산양도」(공정거래법)
+            # 등은 resolve_decision_type이 빈 값이라 DS005로 못 읽는다. 원문에는
+            # 거래상대·관계·가액이 구조적으로 있어 직접 파싱한다(실측 상대방 100%).
+            try:
+                detail = fetch_asset_disposal_detail(rcept, _DART_API_KEY)
+            except Exception:
+                detail = {}
+            rel = (detail or {}).get("relation", "")
+            out.append(_outflow_row(
+                rcept_dt, report_nm, rcept,
+                (detail or {}).get("counterparty", ""), rel,
+                classify_outflow_relation(rel) if rel else "unknown",
+                (detail or {}).get("amount", 0),
             ))
         else:
             try:
@@ -963,9 +995,18 @@ def _render_pattern_watch_block(
 
     # 두 게이트의 대체 사실 블록은 성격이 달라 각자의 헤더를 달고 나간다
     # (합쳐서 한 헤더 아래 두면 취득 대상이 "자금유출 상대방"으로 표시된다).
+    # capital_backflow 겹침이 아예 없으면 게이트가 호출되지 않아 확인 결과가
+    # 렌더되지 않았다 — 자산 처분·양도만 있는 회사(3.1이 없어 패턴 자체가 성립
+    # 안 함)에서 "누구에게 팔았나"가 통째로 사라졌다(2026-08-22 실측: 흥아해운·
+    # 효성투자개발). 확인된 상대방은 패턴 주장이 아니라 사실이므로 그대로 낸다.
+    if outflow_confirmations and cb_gate is None and not capital_backflow_fact_lines:
+        capital_backflow_fact_lines = _render_outflow_confirmations(
+            outflow_confirmations, affiliate_facts
+        )
+
     _fact_lines: list[str] = []
     if capital_backflow_fact_lines:
-        _fact_lines += ["━━ 자금유출 상대방 확인 ━━"] + capital_backflow_fact_lines
+        _fact_lines += ["━━ 자금유출·자산이전 상대방 확인 ━━"] + capital_backflow_fact_lines
     if fund_diversion_fact_lines:
         if _fact_lines:
             _fact_lines.append("")
@@ -1992,7 +2033,7 @@ def build_event_timeline(
             "rcept_no": evt[5] if len(evt) > 5 else "", "is_amendment": False,
         }
         for evt in events
-        if evt[2] in ("FUND_OUTFLOW", "ACQ_REVIEW")
+        if evt[2] in ("FUND_OUTFLOW", "ACQ_REVIEW", "ASSET_TRANSFER")
     ]
     outflow_confirmations: list[dict] = []
     try:
@@ -3043,14 +3084,20 @@ _PRESET_TO_SIGNALS: dict[str, list[str]] = {
     # TREASURY가 이미 잡는다.
     "cb_issue":           ["CB_BW", "EB", "RCPS"],
     "treasury":           ["TREASURY"],
-    # GAMJA_MERGE도 같은 이유로 제거(감자·합병 제목은 REVERSE_SPLIT·MGMT가 잡는다).
-    # CAPITAL_RED는 키워드가 살아 있으나 실측 0건 — 2차 정리 대상으로 남긴다.
-    "reverse_split":      ["REVERSE_SPLIT", "CAPITAL_RED"],
-    "3pca":               ["3PCA", "RIGHTS_UNDER"],
+    # GAMJA_MERGE·CAPITAL_RED도 같은 이유로 제거 — 감자·합병 제목은
+    # REVERSE_SPLIT·MGMT가 잡고, CAPITAL_RED의 후보였던 「주식소각결정」은
+    # 원문상 주주환원이라 의미가 반대다(2026-08-22 2차 정리).
+    "reverse_split":      ["REVERSE_SPLIT"],
+    # RIGHTS_UNDER 제거 — 후보였던 「주주배정후 실권주 일반공모」는 실권주가
+    # **일반투자자**에게 넘어간 건이라 taxonomy 2.5("특수관계인이 인수")와
+    # 조건이 정반대다(2026-08-22 원문 실측).
+    "3pca":               ["3PCA"],
     "shareholder_change": ["SHAREHOLDER", "MGMT_DISPUTE"],
     "exec_change":        ["EXEC"],
     "audit_issue":        ["AUDIT", "DISCLOSURE_VIOL"],
-    "asset_transfer":     ["ASSET_TRANSFER", "ASSET_SPIRAL", "DEMERGER"],
+    # ASSET_SPIRAL 제거(연쇄·헐값은 단건 제목으로 판정 불가). ASSET_TRANSFER는
+    # 2026-08-22 실측 표기로 되살아나 이 preset이 실제로 동작하게 됐다.
+    "asset_transfer":     ["ASSET_TRANSFER", "DEMERGER"],
     "going_concern":      ["GOING_CONCERN", "INSOLVENCY", "DEBT_RESTR"],
     # DELISTING_RISK는 전용 preset으로 분리한다 — going_concern에 합류시켰더니
     # 라이브 14일 스캔에서 표시 40건 중 39건이 상장폐지 절차가 되어 기존
