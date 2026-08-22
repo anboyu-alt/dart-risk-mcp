@@ -79,6 +79,8 @@ dart_risk_mcp/
 - 내부 흐름: `resolve_corp` → `fetch_company_disclosures` → `match_signals` × N → `calculate_risk_score` → `find_pattern_match` → `extract_cb_investors`
 - 반환: 위험 등급, 탐지 신호 목록, 복합 패턴, CB 인수자, 위기 타임라인
 - `lookback_years` 범위 1~5, 기본 1년. 다년(>1년) 조회 시 결과 하단에 예상 출력 규모(문자·토큰 추정) 푸터 표기.
+- **v1.18.0 탐색 깊이 분리**: 창이 400일을 넘으면(`_is_deep_window`) **지도 모드** — 신호·패턴·타임라인만 싣고 원문 사실 블록 3종(특수관계인 자금거래·손익구조 급변·최대주주 변경 상세)은 **생략**한다. 그전에는 창이 1년이든 5년이든 원문 확인이 최근 3건 고정이라 5년 조회에서도 3년 전 사건은 제목만 보였다 — 깊이가 창을 따라가지 않았다. 지도에는 「🔎 더 깊게 보려면」 안내가 붙어 관찰된 최근 신호의 달을 `from_date` 예시로 제시한다. ⚠ **패턴 게이트**(`capital_backflow`·`fund_diversion_chain`)의 원문 확인은 얕은 모드에서도 유지한다 — 표시용 사실이 아니라 패턴을 띄울지의 판정 입력이라 빼면 지도에서 패턴 자체가 사라진다.
+- **v1.18.0 시점 지정**: `from_date`/`to_date`(`"2024-01-01"`·`"20240101"`·`"2024.01.01"` 모두 허용, `normalize_date8`). 주면 `lookback_years`를 무시한다. 시작일만 주면 오늘까지, 종료일만 주면 그날 기준 1년. 형식 오류·역순 구간은 조용히 무시하지 않고 `❌` 안내로 반환한다. 하부 `fetch_company_disclosures`가 `bgn_de`/`end_de`를 받도록 확장됐다(옛 호출자는 그대로 "오늘 기준 N일 전부터"). 적용 도구는 `analyze_company_risk`·`build_event_timeline`·`list_disclosures_by_stock` 3개 — 나머지는 연도 단위 API라 성격이 다르다.
 - 공개기록 레지스트리(opt-in) 설정 시, 이 회사가 등재 행위자의 관련기업으로 태깅돼 있으면 리포트 말미에 "📎 공개기록 참고" 섹션 자동 표면화 (`lookup_actors_by_company` 역방향 조회 — 사실 표기, 판정 없음)
 - v1.6.0: `FUND_OUTFLOW`/`ACQ_REVIEW` 신호가 매칭된 공시 중 `resolve_decision_type`이 결정
   유형(유형자산양수/영업양수/타법인주식및출자증권양수)을 판별하는 것만 최근 최대 2건

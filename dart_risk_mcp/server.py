@@ -83,6 +83,7 @@ from .core import (
     fetch_major_decision,
     resolve_corp_code_from_rcept_no,
     resolve_disclosure_row_with_status,
+    normalize_date8,
     fetch_multi_financial,
     fetch_shareholder_status,
     fetch_treasury_decisions,
@@ -141,6 +142,32 @@ def _append_size_footer(text: str, lookback_years: int) -> str:
     return text + f"\n\n📊 예상 출력 규모: 약 {chars:,}자 / ~{tokens:,}토큰 (대략적 추정)"
 
 
+def _shallow_notice(tool_name: str, company: str, events: list) -> str:
+    """얕은 모드에서 "구간을 좁히면 더 볼 수 있다"를 안내한다.
+
+    넓은 창은 지도라 원문 사실 블록(이자율·상대방·증감률)을 싣지 않는다.
+    그 사실을 감추지 않고, 어느 구간을 좁히면 되는지까지 함께 말한다 —
+    관찰된 신호가 있으면 가장 최근 신호의 달을 그대로 예시로 쓴다.
+    """
+    dates = sorted(
+        d for d in (
+            (e.get("date") or e.get("rcept_dt") or "")[:8] for e in (events or [])
+        ) if len(d) == 8
+    )
+    if dates:
+        recent = dates[-1]
+        span = f'from_date="{recent[:4]}-{recent[4:6]}-01"'
+    else:
+        span = 'from_date="2026-01-01"'
+    return (
+        "\n🔎 **더 깊게 보려면**\n"
+        "이 조회는 넓은 창이라 지도만 그립니다 — 상대방·이자율·증감률 같은 "
+        "원문 확인 내용은 싣지 않았습니다.\n"
+        "관심 구간을 좁혀 다시 부르면 원문까지 확인합니다: "
+        f'`{tool_name}("{company}", {span})`'
+    )
+
+
 def _alias_note_line(corp_info: dict) -> "str | None":
     """resolve_corp이 채운 alias_note가 있으면 안내 1줄을 반환(없으면 None).
 
@@ -150,6 +177,64 @@ def _alias_note_line(corp_info: dict) -> "str | None":
     """
     note = (corp_info or {}).get("alias_note")
     return f"ℹ️ {note}" if note else None
+
+
+# 탐색 깊이 — 넓게 볼 땐 얕게, 좁게 볼 땐 깊게 (v1.18.0)
+#
+# 지금까지는 창이 1년이든 5년이든 원문 확인이 최근 3건으로 고정이라, 5년을
+# 조회해도 3년 전 사건은 제목만 보였다. 깊이가 창에 따라가지 않으니 넓은
+# 조회는 "많이 보는데 얕게 보는" 어정쩡한 상태였다.
+#
+# 대신 역할을 나눈다. 넓은 창은 **지도**다 — 신호·패턴·타임라인으로 "언제
+# 무슨 일이 있었나"를 보여주고, 원문 사실 블록은 싣지 않는다. 좁은 창은
+# **상세**다 — 원문까지 열어 이자율·상대방·증감률을 확인한다. 사용자는 지도에서
+# 구간을 고른 뒤 `from_date`/`to_date`로 그 구간을 깊게 본다.
+#
+# 패턴 게이트(capital_backflow·fund_diversion_chain)의 원문 확인은 **얕은
+# 모드에서도 유지한다** — 그건 표시용 사실이 아니라 패턴을 띄울지 말지의
+# 판정 입력이라, 빼면 지도에서 패턴 자체가 사라진다.
+_DEEP_WINDOW_DAYS = 400        # 1년 조회(365일)에 여유를 둔 경계
+
+
+def _is_deep_window(days: int) -> bool:
+    """이 창에서 원문 사실 블록을 실을지 — 좁은 창일 때만 깊게 본다."""
+    return days <= _DEEP_WINDOW_DAYS
+
+
+def _resolve_window(
+    lookback_years: int,
+    lookback_days: "int | None",
+    from_date: str = "",
+    to_date: str = "",
+) -> "tuple[str, str, int, int, str, str]":
+    """조회 창을 (bgn_de, end_de, days, max_pages, 표시문구, 오류) 로 해석한다.
+
+    `from_date`/`to_date`가 주어지면 그 구간이 우선하고 lookback_years는
+    무시한다. 형식이 틀리면 마지막 원소에 사용자용 오류 문구가 담긴다 —
+    조용히 무시하고 엉뚱한 창을 조회하지 않는다.
+    """
+    if from_date or to_date:
+        bgn = normalize_date8(from_date) if from_date else ""
+        end = normalize_date8(to_date) if to_date else ""
+        if from_date and not bgn:
+            return "", "", 0, 0, "", f"from_date 형식이 올바르지 않습니다: {from_date!r} (예: 2024-01-01)"
+        if to_date and not end:
+            return "", "", 0, 0, "", f"to_date 형식이 올바르지 않습니다: {to_date!r} (예: 2024-06-30)"
+        today = datetime.now().strftime("%Y%m%d")
+        end = end or today
+        # 시작일을 안 주면 종료일 기준 1년 — "그 시점까지 1년"이 자연스럽다
+        if not bgn:
+            bgn = (datetime.strptime(end, "%Y%m%d") - timedelta(days=365)).strftime("%Y%m%d")
+        if bgn > end:
+            return "", "", 0, 0, "", f"from_date({bgn})가 to_date({end})보다 뒤입니다."
+        days = (datetime.strptime(end, "%Y%m%d") - datetime.strptime(bgn, "%Y%m%d")).days + 1
+        # 페이지 상한은 창 길이에 비례 — 1년당 10페이지(1,000건)라는 기존 관례
+        max_pages = max(10, min(50, (days // 365 + 1) * 10))
+        phrase = f"{bgn[:4]}.{bgn[4:6]}.{bgn[6:]}~{end[:4]}.{end[4:6]}.{end[6:]}"
+        return bgn, end, days, max_pages, phrase, ""
+
+    days, max_pages, phrase = _resolve_lookback(lookback_years, lookback_days)
+    return "", "", days, max_pages, phrase, ""
 
 
 def _resolve_lookback(
@@ -1181,21 +1266,36 @@ def _render_pattern_watch_block(
 
 @mcp.tool()
 def analyze_company_risk(
-    company_name: str, lookback_years: int = 1, lookback_days: int | None = None
+    company_name: str,
+    lookback_years: int = 1,
+    lookback_days: int | None = None,
+    from_date: str = "",
+    to_date: str = "",
 ) -> str:
-    """기업명 또는 종목코드로 최근 공시 기반 불공정거래 위험 신호를 분석한다.
+    """기업명 또는 종목코드로 공시 기반 불공정거래 위험 신호를 분석한다.
 
     공개기록 레지스트리(opt-in)가 설정돼 있고 이 회사가 등재 행위자의
     관련기업으로 태깅된 경우, 리포트 말미에 공개기록 참고 섹션이 추가된다.
 
     Args:
         company_name: 기업명 (예: "에코프로") 또는 종목코드 6자리 (예: "086520")
-        lookback_years: 조회 기간(년). 기본 1년, 1~5년 범위.
+        lookback_years: 조회 기간(년). 기본 1년, 1~5년 범위. 1년을 넘으면
+            원문 사실 블록 없이 신호·패턴·타임라인만 담은 "지도"가 된다 —
+            특정 구간을 깊게 보려면 from_date/to_date로 좁혀 다시 조회한다.
+        from_date: 조회 시작일(선택). "2024-01-01"·"20240101" 형식. 주면
+            lookback_years는 무시된다.
+        to_date: 조회 종료일(선택). 미지정 시 오늘. from_date만 주면 그날부터
+            오늘까지, to_date만 주면 그날 기준 1년.
     """
     if not _DART_API_KEY:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
 
-    lookback_days, max_pages, window_phrase = _resolve_lookback(lookback_years, lookback_days)
+    bgn_de, end_de, lookback_days, max_pages, window_phrase, win_err = _resolve_window(
+        lookback_years, lookback_days, from_date, to_date
+    )
+    if win_err:
+        return f"❌ {win_err}"
+    deep = _is_deep_window(lookback_days)
 
     # 1. 기업 조회
     result = resolve_corp(company_name, _DART_API_KEY)
@@ -1206,7 +1306,10 @@ def analyze_company_risk(
     stock_code = corp_info.get("stock_code", "")
 
     # 2. 공시 목록 조회
-    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days, max_pages=max_pages)
+    disclosures = fetch_company_disclosures(
+        corp_code, _DART_API_KEY, lookback_days, max_pages=max_pages,
+        bgn_de=bgn_de, end_de=end_de,
+    )
     # (조기 반환 제거 — 공시가 없어도 v0.6.0 자본 churn / 재무 이상 스캔은 별도로 수행)
 
     # 3. 신호 분류 + 정정공시 필터
@@ -1722,11 +1825,12 @@ def analyze_company_risk(
 
     # v1.14.0: 특수관계인 자금거래·손익구조 급변 원문 사실 블록.
     # 해당 신호가 관찰되지 않았으면 두 함수 모두 원문을 열지 않는다(호출 예산 0).
-    lines += _related_party_detail_block(observed_events)
-    lines += _earnings_shock_block(observed_events)
+    if deep:
+        lines += _related_party_detail_block(observed_events)
+        lines += _earnings_shock_block(observed_events)
 
     # v1.7.0: 최대주주변경 원문 상세 — 원문 추출 실패 시 블록 자체 생략
-    _latest_ctrl_change = _find_latest_control_change(disclosures)
+    _latest_ctrl_change = _find_latest_control_change(disclosures) if deep else None
     if _latest_ctrl_change:
         lines += _control_change_detail_block(_latest_ctrl_change)
 
@@ -1737,6 +1841,9 @@ def analyze_company_risk(
     reg_section = _registry_company_section(corp_name)
     if reg_section:
         lines += [""] + reg_section
+
+    if not deep:
+        lines.append(_shallow_notice("analyze_company_risk", corp_name, observed_events))
 
     return _append_size_footer("\n".join(lines), lookback_years)
 
@@ -2095,7 +2202,11 @@ _PHASE_ORDER = {"진입기": 0, "심화기": 1, "탈출기": 2}
 
 @mcp.tool()
 def build_event_timeline(
-    company_name: str, lookback_years: int = 1, lookback_days: int | None = None
+    company_name: str,
+    lookback_years: int = 1,
+    lookback_days: int | None = None,
+    from_date: str = "",
+    to_date: str = "",
 ) -> str:
     """기업의 공시 이벤트를 시간순으로 정렬해 조작 흐름의 서사를 구성한다.
 
@@ -2107,12 +2218,22 @@ def build_event_timeline(
 
     Args:
         company_name: 기업명 (예: "에코프로") 또는 종목코드 6자리 (예: "086520")
-        lookback_years: 조회 기간(년). 기본 1년, 1~5년 범위.
+        lookback_years: 조회 기간(년). 기본 1년, 1~5년 범위. 1년을 넘으면
+            원문 사실 블록 없이 신호·패턴·타임라인만 담은 "지도"가 된다.
+        from_date: 조회 시작일(선택). "2024-01-01"·"20240101" 형식. 주면
+            lookback_years는 무시된다.
+        to_date: 조회 종료일(선택). 미지정 시 오늘. from_date만 주면 그날부터
+            오늘까지, to_date만 주면 그날 기준 1년.
     """
     if not _DART_API_KEY:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
 
-    lookback_days, max_pages, window_phrase = _resolve_lookback(lookback_years, lookback_days)
+    bgn_de, end_de, lookback_days, max_pages, window_phrase, win_err = _resolve_window(
+        lookback_years, lookback_days, from_date, to_date
+    )
+    if win_err:
+        return f"❌ {win_err}"
+    deep = _is_deep_window(lookback_days)
 
     result = resolve_corp(company_name, _DART_API_KEY)
     if not result:
@@ -2124,7 +2245,10 @@ def build_event_timeline(
     _alias_note = _alias_note_line(corp_info)
     _note_block = f"{_alias_note}\n\n" if _alias_note else ""
 
-    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days, max_pages=max_pages)
+    disclosures = fetch_company_disclosures(
+        corp_code, _DART_API_KEY, lookback_days, max_pages=max_pages,
+        bgn_de=bgn_de, end_de=end_de,
+    )
     if not disclosures:
         return (
             f"📋 **{corp_name}** ({stock_code or corp_code})\n\n"
@@ -2400,15 +2524,15 @@ def build_event_timeline(
         for evt in events
         if evt[2] in ("RELATED_PARTY", "EARNINGS_SHOCK")
     ]
-    for _blk in (
+    for _blk in ((
         _related_party_detail_block(_detail_signal_events),
         _earnings_shock_block(_detail_signal_events),
-    ):
+    ) if deep else ()):
         if _blk and _blk[0] == "" and lines and lines[-1] == "":
             _blk = _blk[1:]
         lines += _blk
 
-    _latest_ctrl_change = _find_latest_control_change(disclosures)
+    _latest_ctrl_change = _find_latest_control_change(disclosures) if deep else None
     if _latest_ctrl_change:
         _ctrl_block = _control_change_detail_block(_latest_ctrl_change)
         if _ctrl_block and _ctrl_block[0] == "" and lines and lines[-1] == "":
@@ -2420,6 +2544,9 @@ def build_event_timeline(
         lines += reg_section + [""]
 
     lines.append("⚠️ 이 타임라인은 공시 제목 기반 자동 분류이며, 실제 상황과 다를 수 있습니다.")
+    if not deep:
+        lines.append(_shallow_notice("build_event_timeline", corp_name, events))
+
     return _append_size_footer("\n".join(lines), lookback_years)
 
 
@@ -2793,7 +2920,11 @@ def find_actor_overlap(
 
 @mcp.tool()
 def list_disclosures_by_stock(
-    stock_code: str, lookback_years: int = 1, lookback_days: int | None = None
+    stock_code: str,
+    lookback_years: int = 1,
+    lookback_days: int | None = None,
+    from_date: str = "",
+    to_date: str = "",
 ) -> str:
     """종목코드로 최근 공시의 접수번호(rcept_no) 목록을 조회한다.
 
@@ -2812,7 +2943,11 @@ def list_disclosures_by_stock(
     if not _re.match(r"^\d{6}$", stock_code):
         return "❌ 종목코드는 6자리 숫자여야 합니다. 예: '086520'"
 
-    lookback_days, max_pages, window_phrase = _resolve_lookback(lookback_years, lookback_days)
+    bgn_de, end_de, lookback_days, max_pages, window_phrase, win_err = _resolve_window(
+        lookback_years, lookback_days, from_date, to_date
+    )
+    if win_err:
+        return f"❌ {win_err}"
 
     result = resolve_corp(stock_code, _DART_API_KEY)
     if not result:
@@ -2823,7 +2958,10 @@ def list_disclosures_by_stock(
     _alias_note = _alias_note_line(corp_info)
     _note_block = f"{_alias_note}\n\n" if _alias_note else ""
 
-    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days, max_pages=max_pages)
+    disclosures = fetch_company_disclosures(
+        corp_code, _DART_API_KEY, lookback_days, max_pages=max_pages,
+        bgn_de=bgn_de, end_de=end_de,
+    )
     if not disclosures:
         return (
             f"📋 **{corp_name}** ({stock_code})\n\n"

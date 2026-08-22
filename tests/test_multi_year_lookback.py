@@ -55,9 +55,14 @@ def test_list_disclosures_passes_years_to_core(monkeypatch):
     monkeypatch.setattr(srv, "_DART_API_KEY", "KEY")
     monkeypatch.setattr(srv, "resolve_corp", lambda q, k: ("테스트사", {"corp_code": "00000000", "stock_code": "012345"}))
 
-    def _fake_fetch(corp_code, api_key, lookback_days, max_pages=10):
+    # v1.18.0: 시점 지정(bgn_de/end_de)이 추가돼 스텁도 받아야 한다.
+    # 날짜를 안 주는 호출에서는 빈 문자열로 와야 기존 동작이 유지된다.
+    def _fake_fetch(corp_code, api_key, lookback_days, max_pages=10,
+                    bgn_de="", end_de=""):
         captured["lookback_days"] = lookback_days
         captured["max_pages"] = max_pages
+        captured["bgn_de"] = bgn_de
+        captured["end_de"] = end_de
         return [{"rcept_no": "20240101000001", "report_nm": "사업보고서", "rcept_dt": "20240101"}]
 
     monkeypatch.setattr(srv, "fetch_company_disclosures", _fake_fetch)
@@ -65,6 +70,7 @@ def test_list_disclosures_passes_years_to_core(monkeypatch):
     out = srv.list_disclosures_by_stock("012345", lookback_years=3)
     assert captured["lookback_days"] == 3 * 365
     assert captured["max_pages"] == 3 * 10
+    assert (captured["bgn_de"], captured["end_de"]) == ("", "")
     assert "최근 3년" in out  # 다년 라벨
     assert "예상 출력 규모" in out  # years>1 푸터
 
@@ -77,9 +83,14 @@ def test_lookback_days_alias_backward_compat(monkeypatch):
     monkeypatch.setattr(srv, "_DART_API_KEY", "KEY")
     monkeypatch.setattr(srv, "resolve_corp", lambda q, k: ("테스트사", {"corp_code": "00000000", "stock_code": "012345"}))
 
-    def _fake_fetch(corp_code, api_key, lookback_days, max_pages=10):
+    # v1.18.0: 시점 지정(bgn_de/end_de)이 추가돼 스텁도 받아야 한다.
+    # 날짜를 안 주는 호출에서는 빈 문자열로 와야 기존 동작이 유지된다.
+    def _fake_fetch(corp_code, api_key, lookback_days, max_pages=10,
+                    bgn_de="", end_de=""):
         captured["lookback_days"] = lookback_days
         captured["max_pages"] = max_pages
+        captured["bgn_de"] = bgn_de
+        captured["end_de"] = end_de
         return [{"rcept_no": "20240101000001", "report_nm": "사업보고서", "rcept_dt": "20240101"}]
 
     monkeypatch.setattr(srv, "fetch_company_disclosures", _fake_fetch)

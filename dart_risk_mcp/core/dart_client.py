@@ -462,17 +462,50 @@ def resolve_corp(query: str, api_key: str) -> tuple[str, dict] | None:
 
 # ── 공시 목록 ──────────────────────────────────────────────────
 
+_DATE8_RE = re.compile(r"^\d{8}$")
+
+
+def normalize_date8(value: str) -> str:
+    """'2026-03-31'·'2026.03.31'·'20260331' → '20260331'. 형식이 틀리면 빈 문자열.
+
+    사용자가 넘기는 날짜는 표기가 제각각이라 도구 계층에서 한 번 정규화한다.
+    빈 문자열을 돌려주면 호출부가 "형식 오류"로 안내한다 — 조용히 무시하고
+    엉뚱한 창을 조회하지 않는다.
+    """
+    v = (value or "").strip().replace("-", "").replace(".", "").replace("/", "")
+    if not _DATE8_RE.match(v):
+        return ""
+    try:
+        datetime.strptime(v, "%Y%m%d")
+    except ValueError:
+        return ""
+    return v
+
+
 def fetch_company_disclosures(
     corp_code: str,
     api_key: str,
     lookback_days: int = 90,
     max_pages: int = 10,
+    bgn_de: str = "",
+    end_de: str = "",
 ) -> list[dict]:
-    """특정 기업의 DART 공시 목록 조회."""
+    """특정 기업의 DART 공시 목록 조회.
+
+    `bgn_de`/`end_de`(YYYYMMDD)를 주면 그 구간을 조회하고 `lookback_days`는
+    무시한다. 옛 호출자는 그대로 "오늘 기준 N일 전부터"로 동작한다.
+
+    **왜 날짜 범위가 필요한가**: 이 함수는 지금까지 항상 오늘을 끝점으로 삼아,
+    "2024년 상반기에 무슨 일이 있었나" 같은 조회가 불가능했다. 넓은 창으로
+    지도를 그린 뒤 특정 구간만 깊게 보는 흐름(v1.18.0의 탐색 깊이 분리)이
+    성립하려면 구간을 지정할 수 있어야 한다.
+    """
     if not api_key:
         return []
 
     now = datetime.now()
+    start = bgn_de or (now - timedelta(days=lookback_days)).strftime("%Y%m%d")
+    end = end_de or now.strftime("%Y%m%d")
     results: list[dict] = []
     page_no = 1
 
@@ -480,8 +513,8 @@ def fetch_company_disclosures(
         params = {
             "crtfc_key": api_key,
             "corp_code": corp_code,
-            "bgn_de": (now - timedelta(days=lookback_days)).strftime("%Y%m%d"),
-            "end_de": now.strftime("%Y%m%d"),
+            "bgn_de": start,
+            "end_de": end,
             "page_no": page_no,
             "page_count": 100,
         }
