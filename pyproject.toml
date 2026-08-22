@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dart-risk-mcp"
-version = "1.18.4"
+version = "1.18.5"
 description = "DART 공시 기반 한국 기업 주가조작 위험 분석 MCP 서버"
 readme = "README.md"
 license = { text = "MIT" }
@@ -17,7 +17,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "mcp>=1.18.4,<2.0.0",
+    "mcp>=1.18.5,<2.0.0",
     "requests>=2.28.0",
 ]
 

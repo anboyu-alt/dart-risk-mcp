@@ -142,18 +142,22 @@ def _append_size_footer(text: str, lookback_years: int) -> str:
     return text + f"\n\n📊 예상 출력 규모: 약 {chars:,}자 / ~{tokens:,}토큰 (대략적 추정)"
 
 
-def _shallow_notice(tool_name: str, company: str, events: list) -> str:
+def _shallow_notice(tool_name: str, company: str, dates: "list[str]") -> str:
     """얕은 모드에서 "구간을 좁히면 더 볼 수 있다"를 안내한다.
 
     넓은 창은 지도라 원문 사실 블록(이자율·상대방·증감률)을 싣지 않는다.
     그 사실을 감추지 않고, 어느 구간을 좁히면 되는지까지 함께 말한다 —
     관찰된 신호가 있으면 가장 최근 신호의 달을 그대로 예시로 쓴다.
+
+    **날짜 리스트를 받는다.** 처음에는 이벤트 리스트를 받아 dict에서 날짜를
+    꺼냈는데, `analyze_company_risk`의 이벤트는 dict이고
+    `build_event_timeline`의 이벤트는 **튜플**이라 후자에서 AttributeError로
+    죽었다(2026-08-23 통합 검증에서 발견 — 두 도구가 각각 테스트를 통과했지만
+    자료구조가 다른 것은 아무도 확인하지 않았다). 호출부가 날짜만 뽑아
+    넘기면 이 함수가 자료구조를 알 필요가 없다.
     """
-    dates = sorted(
-        d for d in (
-            (e.get("date") or e.get("rcept_dt") or "")[:8] for e in (events or [])
-        ) if len(d) == 8
-    )
+    dates = sorted(d for d in (str(x or "")[:8] for x in (dates or []))
+                   if len(d) == 8)
     if dates:
         recent = dates[-1]
         span = f'from_date="{recent[:4]}-{recent[4:6]}-01"'
@@ -1843,7 +1847,10 @@ def analyze_company_risk(
         lines += [""] + reg_section
 
     if not deep:
-        lines.append(_shallow_notice("analyze_company_risk", corp_name, observed_events))
+        lines.append(_shallow_notice(
+            "analyze_company_risk", corp_name,
+            [e.get("rcept_dt") or e.get("date") or "" for e in observed_events],
+        ))
 
     return _append_size_footer("\n".join(lines), lookback_years)
 
@@ -2545,7 +2552,11 @@ def build_event_timeline(
 
     lines.append("⚠️ 이 타임라인은 공시 제목 기반 자동 분류이며, 실제 상황과 다를 수 있습니다.")
     if not deep:
-        lines.append(_shallow_notice("build_event_timeline", corp_name, events))
+        # timeline의 events는 튜플이다 — evt[0]이 접수일(rcept_dt)
+        lines.append(_shallow_notice(
+            "build_event_timeline", corp_name,
+            [evt[0] for evt in events if evt],
+        ))
 
     return _append_size_footer("\n".join(lines), lookback_years)
 

@@ -95,9 +95,17 @@ class TestDepthBoundary:
 
 
 class TestShallowNotice:
+    """⚠ 이 함수는 **날짜 리스트**를 받는다(이벤트 리스트가 아니다).
+
+    처음에는 이벤트를 받아 dict에서 날짜를 꺼냈는데, analyze_company_risk의
+    이벤트는 dict이고 build_event_timeline의 이벤트는 **튜플**이라 후자에서
+    AttributeError로 죽었다. 두 도구가 각각 테스트를 통과했지만 자료구조가
+    다르다는 것은 아무도 확인하지 않았다 — 통합 라이브 검증에서 잡혔다.
+    """
+
     def test_관찰된_신호의_달을_예시로_쓴다(self):
         out = srv._shallow_notice("analyze_company_risk", "제이스코홀딩스",
-                                  [{"date": "20260814"}, {"date": "20250102"}])
+                                  ["20260814", "20250102"])
         assert 'from_date="2026-08-01"' in out
         assert "analyze_company_risk" in out
         assert "제이스코홀딩스" in out
@@ -111,9 +119,45 @@ class TestShallowNotice:
         out = srv._shallow_notice("analyze_company_risk", "가나", [])
         assert "싣지 않았습니다" in out
 
-    def test_rcept_dt_필드도_읽는다(self):
-        out = srv._shallow_notice("t", "c", [{"rcept_dt": "20260301"}])
+    @pytest.mark.parametrize("dates", [
+        ["20260301"],
+        ["20260301", ""],
+        [None, "20260301"],
+        ["20260301120000"],      # 접수일시가 길게 와도 앞 8자리
+    ])
+    def test_지저분한_날짜_입력을_흡수한다(self, dates):
+        out = srv._shallow_notice("t", "c", dates)
         assert 'from_date="2026-03-01"' in out
+
+
+class TestShallowNoticeWiring:
+    """두 도구의 이벤트 자료구조가 달라도 안내가 나오는지 — 실사고 회귀."""
+
+    def _run(self, fn, **kw):
+        rows = [{"rcept_no": "20260814900001", "report_nm": "전환사채권발행결정",
+                 "corp_name": "테스트", "rcept_dt": "20260814", "flr_nm": "테스트"}]
+        with (
+            patch.object(srv, "_DART_API_KEY", "k"),
+            patch.object(srv, "resolve_corp",
+                         return_value=("테스트", {"corp_code": "00126380",
+                                                "stock_code": "005930"})),
+            patch.object(srv, "fetch_company_disclosures", return_value=rows),
+            patch.object(srv, "fetch_document_text", return_value=""),
+            patch.object(srv, "fetch_distress_events", return_value=[]),
+            patch.object(srv, "extract_cb_investors", return_value=[]),
+        ):
+            return fn(**kw)
+
+    def test_analyze_5년이_예외없이_안내를_낸다(self):
+        out = self._run(srv.analyze_company_risk,
+                        company_name="테스트", lookback_years=5)
+        assert "더 깊게 보려면" in out
+
+    def test_timeline_5년이_예외없이_안내를_낸다(self):
+        """events가 튜플이라 dict를 가정하면 AttributeError로 죽던 자리."""
+        out = self._run(srv.build_event_timeline,
+                        company_name="테스트", lookback_years=5)
+        assert "더 깊게 보려면" in out
 
 
 class TestToolWiring:
