@@ -1601,6 +1601,19 @@ function renderDash() {
           // signal_sequence가 2개뿐이라 min_overlap=2에서 여기 나타나는
           // 순간 이미 전부 일치이므로, 부분 겹침으로 바뀌어도 게이트 대상
           // 판정 자체는 예전과 동일하다.
+          if (p.key === "fund_diversion_chain") {
+            // capital_backflow와 같은 이유의 비동기 원문 확인 게이트.
+            return `<div class="patterncard" id="pat-${esc(p.key)}">${headline}${esc(p.description)}
+              ${overlapBlock}
+              ${patternProseCheckpointsHTML(p)}
+              <div class="sigs">${patternWindowLabel(p)} · 구성 신호가 촉발된 공시:</div>
+              <div class="sigs">${patternEvidenceHTML(p, observedEvents)}</div>
+              <div class="dim fdcSpinner" style="margin-top:0.5rem"><span class="spinner"></span> 원문에서 취득 대상 관계 확인 중…</div>
+              ${(p.field_evidence && p.field_evidence.length ? `<details style="margin-top:0.4rem;font-size:0.82rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">실제 사례 근거(금감원 보도자료 등)</summary>
+                <ul style="margin:0.3rem 0 0 1.1rem;padding:0">${p.field_evidence.map((fe) => `<li>${esc(fe)}</li>`).join("")}</ul></details>` : "")}
+              ${patternCatalogCasesHTML(p)}
+              </div>`;
+          }
           if (p.key === "capital_backflow") {
             return `<div class="patterncard" id="pat-${esc(p.key)}">${headline}${esc(p.description)}
               ${overlapBlock}
@@ -1654,6 +1667,7 @@ function renderDash() {
   });
   // SE-14: capital_backflow만 비동기 원문 확인 게이트를 태운다 (다른 패턴은 그대로).
   patterns.filter((p) => p.key === "capital_backflow").forEach((p) => loadCapitalBackflowGate(p, observedEvents, corpCode));
+  patterns.filter((p) => p.key === "fund_diversion_chain").forEach((p) => loadFundDiversionGate(p, observedEvents));
   $("result").querySelectorAll(".rescanCurrentLink").forEach((a) => {
     a.onclick = (e) => {
       e.preventDefault();
@@ -3046,6 +3060,89 @@ async function classifyOutflowEvidence(hits) {
     return { rcept: h.rcept, date: h.date, nm: h.nm, counterparty: detail.counterparty,
               relation: detail.relation, amount: detail.amount, cls: classifyOutflowRelation(detail.relation) };
   }));
+}
+
+// ── v1.13.0: fund_diversion_chain 원문 취득 대상 확인 게이트 ──────────────
+// core server.py의 _confirm_acquisition_targets / _fund_diversion_gate 이식.
+// 이 패턴도 요구 신호가 2개(1.1 CB/BW + 5.8 타법인 취득)뿐이라 겹침 2개면 곧
+// 전부 일치이고, 제목만으로는 정상 사업확장 M&A와 구분되지 않는다(1년 실측
+// 142개사 발화). 취득 대상이 계열·특수관계로 확인될 때만 카드를 유지한다.
+//
+// DS005를 쓰지 않는 이유: 「타법인주식및출자증권취득결정」(자율공시, 4배 흔함)은
+// decision_type이 없고, 법정 「…양수결정」조차 구조화 데이터가 없는 사례가
+// 실측됐다. 원문은 두 서식 모두 구조가 일정해 32/32건 파싱에 성공했다.
+function parseAcquisitionDetail(text) {
+  const empty = { issuer: "", relation: "", amount: "", ratio: "" };
+  if (!text || typeof text !== "string") return empty;
+  if (text.indexOf("출자증권") === -1) return empty;
+  const t = text.replace(/\s+/g, " ");
+  const pick = (re) => { const m = t.match(re); return m ? m[1].trim() : ""; };
+  return {
+    issuer: pick(/발행회사\s*회사명\s*(.+?)\s*국적/),
+    relation: pick(/회사와\s*관계\s*(.+?)\s*발행주식총수/),
+    amount: pick(/(?:취득금액|양수금액)\(원\)(?:\(A\))?\s*([\d,]+)/),
+    ratio: pick(/자기자본대비\(%\)(?:\(A\/C\))?\s*([\d,.]+)/),
+  };
+}
+
+async function classifyAcquisitionEvidence(hits) {
+  return Promise.all(hits.map(async (h) => {
+    const data = await fetchDisclosureText(h.rcept);
+    if (!data || data.error || !data.text) {
+      return { rcept: h.rcept, date: h.date, nm: h.nm, issuer: "", relation: "",
+               amount: "", ratio: "", cls: "unknown" };
+    }
+    const d = parseAcquisitionDetail(data.text);
+    return { rcept: h.rcept, date: h.date, nm: h.nm, issuer: d.issuer,
+             relation: d.relation, amount: d.amount, ratio: d.ratio,
+             cls: d.issuer ? classifyOutflowRelation(d.relation) : "unknown" };
+  }));
+}
+
+// 게이트가 막았을 때 보여줄 사실 블록 — 패턴 주장이 아니라 원문에서 확인한
+// 사실(대상 실명·관계·금액·자기자본 대비)이라 감추지 않는다.
+function acquisitionFactsHTML(pattern, results) {
+  const label = { affiliated: "계열·특수관계", subsidiary: "종속회사",
+                  external: "외부", unknown: "미확인" };
+  const rows = results.map((r) => {
+    const amt = r.amount ? ` — ${esc(r.amount)}원` : "";
+    const ratio = r.ratio ? ` · 자기자본 대비 ${esc(r.ratio)}%` : "";
+    const rel = r.relation ? ` (${esc(r.relation)})` : "";
+    return `<div style="margin-top:0.25rem">· <a href="#" class="patEvLink" data-r="${esc(r.rcept)}" style="color:var(--tx)">${esc(fmtDate(r.date))} ${esc(r.nm)}</a>
+      <br>&nbsp;&nbsp;→ 취득 대상: ${esc(r.issuer || "(미확인)")} · 관계: ${esc(label[r.cls] || "미확인")}${rel}${amt}${ratio}</div>`;
+  }).join("");
+  const known = results.filter((r) => r.cls !== "unknown");
+  const head = known.length
+    ? `타법인 주식·출자증권 취득 ${results.length}건 — 확인된 대상은 ${esc([...new Set(known.map((r) => label[r.cls]))].sort().join("/"))}(각 실명·관계 표기), 계열·특수관계 취득은 미확인`
+    : "취득 대상 미확인 — 원문 확인 필요";
+  return `<div class="dim" style="margin-top:0.5rem"><b>타법인 취득 대상 확인</b><br>${esc(head)}${rows}
+    <div style="margin-top:0.35rem">계열·특수관계 취득이 확인되지 않아 '${esc(pattern.name)}' 패턴은 적용하지 않습니다.</div></div>`;
+}
+
+async function loadFundDiversionGate(pattern, events) {
+  const el = document.getElementById("pat-" + pattern.key);
+  if (!el) return;
+  const allHits = patternTaxonomyEvidence("5.8", events);
+  const hits = allHits.slice(0, 3);
+  if (!hits.length) { el.outerHTML = ""; return; }
+  try {
+    const results = await classifyAcquisitionEvidence(hits);
+    if (results.some((r) => r.cls === "affiliated")) {
+      // 통과 — 스피너 줄만 확인 결과로 교체하고 카드는 유지한다.
+      const aff = results.filter((r) => r.cls === "affiliated");
+      const names = aff.map((r) => `${esc(r.issuer)}(${esc(r.relation)})`).join(" · ");
+      const sp = el.querySelector(".fdcSpinner");
+      if (sp) sp.outerHTML = `<div class="sigs" style="margin-top:0.4rem">확인된 계열·특수관계 취득: ${names}</div>`;
+      return;
+    }
+    el.outerHTML = acquisitionFactsHTML(pattern, results);
+    $("result").querySelectorAll(".patEvLink").forEach((a) => {
+      a.onclick = (e) => { e.preventDefault(); renderDetail(a.dataset.r); };
+    });
+  } catch (e) {
+    const sp = el.querySelector(".fdcSpinner");
+    if (sp) sp.outerHTML = `<div class="dim" style="margin-top:0.4rem">원문 취득 대상 확인 중 오류: ${esc(e.message)} — DART 원문에서 직접 확인하세요.</div>`;
+  }
 }
 
 // ── 후속 3위: 종속회사 경유 유출 — 타법인 출자현황 대조 (사실 병기) ────────

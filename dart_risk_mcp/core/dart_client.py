@@ -891,6 +891,87 @@ _OUTFLOW_COLLATERAL_AMOUNT_RE = re.compile(r"담보설정금액\s*\(원\)\s*([\d
 _OUTFLOW_EQUITY_RATIO_RE = re.compile(r"자기자본\s*대비\s*\(%\)\s*([\d.]+)")
 
 
+# ── 타법인 주식·출자증권 취득/양수 결정 원문 파서 (v1.13.0) ──────────────
+# DS005로는 확인할 수 없어 원문을 읽는다 — 「타법인주식및출자증권취득결정」
+# (자율공시, 실측상 4배 흔함)은 resolve_decision_type이 빈 값을 돌려주고,
+# 법정 「주요사항보고서(…양수결정)」조차 DS005가 "구조화 데이터 없음"을
+# 반환하는 사례가 실측됐다(KR모터스 20251001, 코아스 20250904).
+#
+# 두 서식은 필드명이 다르다 — 취득결정은 "취득내역/취득금액/취득목적",
+# 양수결정은 "양수내역/양수금액(원)(A)/양수목적"이고 양수결정에만
+# "6. 거래상대방"과 "8. 외부평가에 관한 사항"이 있다. 둘 다 대응한다.
+_ACQ_ISSUER_RE = re.compile(r"발행회사\s*회사명\s*(.+?)\s*국적")
+_ACQ_RELATION_RE = re.compile(r"회사와\s*관계\s*(.+?)\s*발행주식총수")
+_ACQ_AMOUNT_RE = re.compile(r"(?:취득금액|양수금액)\(원\)(?:\(A\))?\s*([\d,]+)")
+_ACQ_EQUITY_RATIO_RE = re.compile(r"자기자본대비\(%\)(?:\(A/C\))?\s*([\d,.]+)")
+_ACQ_PURPOSE_RE = re.compile(r"(?:취득목적|양수목적)\s*(.+?)\s*(?:\d+\.\s*)?(?:취득예정일자|양수예정일자|거래상대방)")
+_ACQ_EXTVAL_RE = re.compile(r"외부평가\s*여부\s*(\S+)")
+_ACQ_METHOD_RE = re.compile(r"취득방법\s*(.+?)\s*\d+\.\s*취득목적")
+
+
+def parse_acquisition_detail(text: str) -> dict:
+    """타법인 주식·출자증권 취득/양수 결정 원문에서 사실을 추출한다(순수 함수).
+
+    입력은 fetch_document_text로 태그 제거·공백 단일화된 텍스트를 가정한다.
+    매칭 실패 필드는 빈 문자열/0으로 남는다(예외를 던지지 않는다).
+
+    Returns:
+        {"issuer": str,          # 발행회사(취득 대상) 이름
+         "relation": str,        # 대상사와 우리 회사의 관계 원문 표기("-"면 무관계 표기)
+         "amount": int,          # 취득·양수 금액(원)
+         "equity_ratio": float,  # 자기자본 대비 %
+         "purpose": str,         # 취득·양수 목적 원문
+         "method": str,          # 취득방법(취득결정 서식에만 있다)
+         "extval": str}          # 외부평가 여부(양수결정 서식에만 있다)
+    """
+    out = {"issuer": "", "relation": "", "amount": 0, "equity_ratio": 0.0,
+           "purpose": "", "method": "", "extval": ""}
+    if not text:
+        return out
+    if "타법인 주식 및 출자증권" not in text and "타법인주식및출자증권" not in text:
+        return out
+
+    m = _ACQ_ISSUER_RE.search(text)
+    if m:
+        out["issuer"] = m.group(1).strip()
+    m = _ACQ_RELATION_RE.search(text)
+    if m:
+        out["relation"] = m.group(1).strip()
+    m = _ACQ_AMOUNT_RE.search(text)
+    if m:
+        try:
+            out["amount"] = int(m.group(1).replace(",", ""))
+        except ValueError:
+            pass
+    m = _ACQ_EQUITY_RATIO_RE.search(text)
+    if m:
+        try:
+            out["equity_ratio"] = float(m.group(1).replace(",", ""))
+        except ValueError:
+            pass
+    m = _ACQ_PURPOSE_RE.search(text)
+    if m:
+        out["purpose"] = m.group(1).strip()[:120]
+    m = _ACQ_METHOD_RE.search(text)
+    if m:
+        out["method"] = m.group(1).strip()[:60]
+    m = _ACQ_EXTVAL_RE.search(text)
+    if m:
+        out["extval"] = m.group(1).strip()
+    return out
+
+
+def fetch_acquisition_detail(rcept_no: str, api_key: str) -> dict:
+    """`fetch_document_text` + `parse_acquisition_detail` 래퍼. 실패 시 빈 dict."""
+    try:
+        text = fetch_document_text(rcept_no, api_key, max_chars=4000)
+    except Exception:
+        return {}
+    if not text:
+        return {}
+    return parse_acquisition_detail(text)
+
+
 def parse_outflow_detail(text: str) -> dict:
     """금전대여·채무보증·담보제공 결정 공시 원문에서 상대방·관계·금액을 추출한다.
 

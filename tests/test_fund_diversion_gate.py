@@ -1,0 +1,148 @@
+"""fund_diversion_chain 내용 확인 게이트 (v1.13.0).
+
+이 패턴은 요구 신호가 1.1(CB/BW)+5.8(타법인 취득) 둘뿐이라 겹침 2개면 곧
+전부 일치이고, ACQ_REVIEW 재현율 수정 후 1년 기준 **142개사**에서 발화한다 —
+제목만으로는 정상적인 사업 확장 M&A와 구분되지 않는다.
+
+`capital_backflow`와 같은 구조로, 취득 대상이 **계열·특수관계로 확인될 때만**
+패턴을 표시하고 그 외에는 확인된 사실만 블록으로 남긴다.
+"""
+import pytest
+
+from dart_risk_mcp.core.dart_client import parse_acquisition_detail
+from dart_risk_mcp.server import (
+    _fund_diversion_gate,
+    _render_acquisition_confirmations,
+    _render_pattern_watch_block,
+)
+
+
+def _row(relation, classification, issuer="테스트법인", ratio=10.0):
+    return {
+        "rcept_dt": "20260101", "report_nm": "타법인주식및출자증권취득결정",
+        "rcept_no": "20260101000001", "issuer": issuer, "relation": relation,
+        "classification": classification, "amount": 1_000_000_000,
+        "equity_ratio": ratio,
+    }
+
+
+class TestGateDecision:
+    def test_계열_특수관계_확인시_통과(self):
+        g = _fund_diversion_gate([_row("계열회사", "affiliated")])
+        assert g["pass"] is True
+        assert g["fact_lines"] == []
+
+    @pytest.mark.parametrize("relation,cls", [
+        ("-", "external"),
+        ("종속회사", "subsidiary"),
+    ])
+    def test_외부_종속회사만이면_차단(self, relation, cls):
+        """모회사가 자회사 지분을 늘리는 것은 정상적인 지배구조 정리다 —
+        capital_backflow와 같은 판단."""
+        g = _fund_diversion_gate([_row(relation, cls)])
+        assert g["pass"] is False
+        assert g["fact_lines"], "차단했으면 확인된 사실은 남겨야 한다"
+        assert "계열·특수관계 취득은 미확인" in "\n".join(g["fact_lines"])
+
+    def test_전부_미확인이면_원문_확인_안내(self):
+        g = _fund_diversion_gate([_row("", "unknown")])
+        assert g["pass"] is False
+        assert "원문 확인 필요" in "\n".join(g["fact_lines"])
+
+    def test_확인_자체가_없으면_사실_블록도_없다(self):
+        """5.8이 관찰되지 않아 원문을 열지 않은 경우 — 호출 예산 0."""
+        g = _fund_diversion_gate([])
+        assert g["pass"] is False
+        assert g["fact_lines"] == []
+
+    def test_한_건이라도_계열이면_통과(self):
+        g = _fund_diversion_gate([
+            _row("-", "external"), _row("계열회사", "affiliated"),
+        ])
+        assert g["pass"] is True
+
+
+class TestRenderedBlock:
+    def test_게이트가_막으면_패턴이_목록에서_빠진다(self):
+        lines, fact_lines, filtered = _render_pattern_watch_block(
+            ["1.1", "5.8"], [], True, {},
+            acq_confirmations=[_row("-", "external", "무관법인")],
+        )
+        assert not any(f["pattern_id"] == "fund_diversion_chain" for f in filtered)
+        assert "조달-유용 체인" not in "\n".join(lines)
+        assert "타법인 취득 대상 확인" in "\n".join(fact_lines)
+        assert "무관법인" in "\n".join(fact_lines)
+
+    def test_게이트를_통과하면_패턴이_표시된다(self):
+        lines, fact_lines, filtered = _render_pattern_watch_block(
+            ["1.1", "5.8"], [], True, {},
+            acq_confirmations=[_row("계열회사", "affiliated")],
+        )
+        assert any(f["pattern_id"] == "fund_diversion_chain" for f in filtered)
+        assert "조달-유용 체인" in "\n".join(lines)
+        assert fact_lines == []
+
+    def test_확인이_없으면_기존_동작_유지(self):
+        """acq_confirmations 미전달 = 하위 호환. 다만 게이트 입력이 없으므로
+        패턴은 표시되지 않는다(원문 확인 없이 CRITICAL 카드를 띄우지 않는다)."""
+        lines, _, filtered = _render_pattern_watch_block(["1.1", "5.8"], [], True, {})
+        assert not any(f["pattern_id"] == "fund_diversion_chain" for f in filtered)
+
+    def test_두_게이트의_사실_블록이_섞이지_않는다(self):
+        """자금유출 상대방과 타법인 취득 대상은 성격이 달라 각자 헤더를 단다."""
+        outflow = [{
+            "rcept_dt": "20260201", "report_nm": "타인에대한채무보증결정",
+            "rcept_no": "2", "counterparty": "유출상대", "relation": "종속회사",
+            "classification": "subsidiary", "amount": 100,
+        }]
+        _, fact_lines, _ = _render_pattern_watch_block(
+            ["3.1", "5.7", "1.1", "5.8"], outflow, True, {},
+            acq_confirmations=[_row("-", "external", "취득대상")],
+        )
+        joined = "\n".join(fact_lines)
+        assert "━━ 자금유출 상대방 확인 ━━" in joined
+        assert "━━ 타법인 취득 대상 확인 ━━" in joined
+        assert joined.index("자금유출 상대방") < joined.index("타법인 취득 대상")
+
+
+class TestParser:
+    """원문 파서 — 두 서식(취득결정 자율공시 / 양수결정 법정)을 모두 읽는다."""
+
+    ACQ = ("코아스/타법인주식및출자증권취득결정/(2026.05.06)타법인주식및출자증권취득결정 "
+           "타법인 주식 및 출자증권 취득결정 1. 발행회사 회사명 해성옵틱스 국적 대한민국 "
+           "대표자 조철 자본금(원) 24,183,874 회사와 관계 - 발행주식총수(주) 48,367,748 "
+           "주요사업 광학 렌즈모듈 2. 취득내역 취득주식수(주) 2,000,000 취득금액(원) "
+           "5,000,000,000 자기자본(원) 34,717,783,264 자기자본대비(%) 14.40 "
+           "4. 취득방법 전환사채 전환권 행사 5. 취득목적 유동성을 제고하고자 함 "
+           "6. 취득예정일자 2026-05-07")
+
+    TRF = ("타법인 주식 및 출자증권 양수결정 1. 발행회사 회사명 이화전기공업 주식회사 국적 "
+           "대한민국 대표자 백성현 자본금(원) 43,789,728,000 회사와 관계 - "
+           "발행주식총수(주) 218,948,640 주요사업 UPS 2. 양수내역 양수주식수(주) 54,142,221 "
+           "양수금액(원)(A) 10,853,546,458 총자산(원)(B) 81,110,226,850 총자산대비(%)(A/B) 13.38 "
+           "자기자본(원)(C) 2,426,341,781 자기자본대비(%)(A/C) 447.32 "
+           "4. 양수목적 대상회사에 대한 경영지배 목적 5. 양수예정일자 2025년 09월 03일 "
+           "6. 거래상대방 회사명(성명) - 8. 외부평가에 관한 사항 외부평가 여부 미해당")
+
+    def test_취득결정_서식(self):
+        d = parse_acquisition_detail(self.ACQ)
+        assert d["issuer"] == "해성옵틱스"
+        assert d["relation"] == "-"
+        assert d["amount"] == 5_000_000_000
+        assert d["equity_ratio"] == pytest.approx(14.40)
+        assert "전환사채" in d["method"]
+
+    def test_양수결정_서식(self):
+        d = parse_acquisition_detail(self.TRF)
+        assert d["issuer"] == "이화전기공업 주식회사"
+        assert d["amount"] == 10_853_546_458
+        assert d["equity_ratio"] == pytest.approx(447.32)
+        assert d["extval"] == "미해당"
+
+    def test_무관한_원문은_빈_dict(self):
+        assert parse_acquisition_detail("기업설명회(IR) 개최 1. 일시")["issuer"] == ""
+        assert parse_acquisition_detail("")["issuer"] == ""
+
+    def test_렌더에_자기자본_대비가_표기된다(self):
+        lines = _render_acquisition_confirmations([_row("-", "external", "대상사", 447.3)])
+        assert "자기자본 대비 447.3%" in "\n".join(lines)
