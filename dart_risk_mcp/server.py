@@ -82,7 +82,7 @@ from .core import (
     fetch_insider_timeline,
     fetch_major_decision,
     resolve_corp_code_from_rcept_no,
-    resolve_disclosure_row_from_rcept_no,
+    resolve_disclosure_row_with_status,
     fetch_multi_financial,
     fetch_shareholder_status,
     fetch_treasury_decisions,
@@ -1760,8 +1760,11 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
     # 조회하지 않아 같은 공시가 호출 형태에 따라 다른 판정을 받았다. 실패하면
     # 기존 동작(자리표시자 제목, 무신호)으로 조용히 퇴화한다 — 회귀가 아니다.
     filing: "dict | None" = None
+    lookup_status = ""
     if rcept_no and _DART_API_KEY:
-        filing = resolve_disclosure_row_from_rcept_no(rcept_no, _DART_API_KEY)
+        filing, lookup_status = resolve_disclosure_row_with_status(
+            rcept_no, _DART_API_KEY
+        )
 
     # 제목을 직접 넘긴 호출자는 그 제목이 보이길 기대하므로 report_name이 우선한다.
     # 판정 입력(filing)은 조회한 행을 그대로 쓴다.
@@ -1788,6 +1791,32 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
             # amendment_note는 도달 불능이었다(감사 E-2) — 여기서 안내한다
             lines.append("정정공시입니다 — 원공시의 번복/수정이므로 신호 관찰"
                          " 대상에서 제외됩니다. 원공시 접수번호로 다시 조회하세요.")
+        elif not report_name and lookup_status in ("scan_limit", "error"):
+            # 제목을 복원하지 못한 채 "신호 없음"이라고 하면, 정말 신호가 없는
+            # 공시와 조회에 실패한 공시가 같은 화면으로 보인다. 둘을 가른다.
+            if lookup_status == "scan_limit":
+                lines.append(
+                    "⚠ 이 공시의 제목을 확인하지 못했습니다 — 접수일에 공시가"
+                    " 매우 많아 조회 범위(하루 5,000건)를 넘었습니다."
+                )
+                lines.append(
+                    "**신호가 없다는 뜻이 아닙니다.** 공시 제목을 함께 넘기면"
+                    " 바로 분석할 수 있습니다:"
+                    " `check_disclosure_risk(rcept_no=\"...\", report_name=\"...\")`"
+                )
+            else:
+                lines.append(
+                    "⚠ 이 공시의 제목을 확인하지 못했습니다 — 조회 중 오류가"
+                    " 발생했습니다(일시적일 수 있습니다). **신호가 없다는 뜻이"
+                    " 아닙니다.** 잠시 후 다시 시도하거나 공시 제목을 함께"
+                    " 넘겨 주세요."
+                )
+        elif not report_name and not filing and rcept_no:
+            lines.append(
+                "이 접수번호를 찾지 못했습니다 — 접수번호가 정확한지, 접수일이"
+                " 번호 앞 8자리와 같은지 확인해 주세요(드물게 다른 공시가"
+                " 있습니다). 공시 제목을 함께 넘기면 바로 분석할 수 있습니다."
+            )
         else:
             lines.append("이 공시에서 의심 신호가 탐지되지 않았습니다.")
     else:
