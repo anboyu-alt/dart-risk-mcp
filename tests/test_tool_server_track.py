@@ -27,6 +27,10 @@ ANDROID_TABLET = (
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 BOT = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+HEADLESS = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "HeadlessChrome/141.0.7390.54 Safari/537.36"
+)
 
 
 def _capture(monkeypatch) -> dict:
@@ -80,6 +84,26 @@ def test_parse_ua_bot():
     got = parse_ua(BOT)
     assert got["device"] == "bot"
     assert got["is_mobile"] is False
+
+
+def test_parse_ua_headless_chrome_is_bot():
+    # HeadlessChrome UA는 일반 Chrome과 거의 같다. 안 잡으면 스캐너가
+    # 데스크톱 방문자로 집계된다(프로덕션 실측 2026-08-22).
+    got = parse_ua(HEADLESS)
+    assert got["device"] == "bot"
+    assert got["browser"] is None
+
+
+def test_parse_ua_automation_clients_are_bots():
+    for ua in ("curl/8.4.0", "python-requests/2.31.0", "Go-http-client/2.0",
+               "Scrapy/2.11 (+https://scrapy.org)", "node-fetch/1.0"):
+        assert parse_ua(ua)["device"] == "bot", ua
+
+
+def test_parse_ua_real_chrome_still_not_bot():
+    # 봇 패턴을 넓히면서 진짜 브라우저를 삼키지 않았는지 고정한다.
+    for ua in (CHROME_WIN, SAFARI_IOS, EDGE_WIN, WHALE, ANDROID_TABLET):
+        assert parse_ua(ua)["device"] != "bot", ua
 
 
 def test_parse_ua_empty():
@@ -184,6 +208,37 @@ def test_handle_track_stores_whitelisted_fields(monkeypatch):
     assert row["referrer"] == "https://google.com/search"
     assert "evil" not in row
     assert "crtfc_key" not in row
+
+
+def test_handle_track_decodes_percent_encoded_city(monkeypatch):
+    # Vercel geo 헤더는 퍼센트 인코딩돼 온다 — 그대로 저장하면 대시보드에
+    # "San%20Jose"가 그대로 보인다(프로덕션 실측 2026-08-22).
+    saved = _capture(monkeypatch)
+    handle_track(
+        {"event": "pageview"},
+        {"x-vercel-ip-city": "San%20Jose", "x-vercel-ip-country": "US"},
+        origin_ok=True,
+    )
+    assert saved["row"]["city"] == "San Jose"
+    assert saved["row"]["country"] == "US"
+
+
+def test_handle_track_decodes_non_ascii_city(monkeypatch):
+    saved = _capture(monkeypatch)
+    handle_track(
+        {"event": "pageview"},
+        {"x-vercel-ip-city": "%EC%84%9C%EC%9A%B8"},
+        origin_ok=True,
+    )
+    assert saved["row"]["city"] == "서울"
+
+
+def test_handle_track_leaves_plain_city_untouched(monkeypatch):
+    saved = _capture(monkeypatch)
+    handle_track(
+        {"event": "pageview"}, {"x-vercel-ip-city": "Mapo-gu"}, origin_ok=True
+    )
+    assert saved["row"]["city"] == "Mapo-gu"
 
 
 def test_handle_track_truncates_overlong_values(monkeypatch):

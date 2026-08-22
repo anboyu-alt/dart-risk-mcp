@@ -84,4 +84,10 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
   응답을 저장하지 않는 무상태 통과"가 명시된 신뢰 경계라 손대지 않았다.
   수집은 `/api/track`에서만 일어난다.
 - **봇 트래픽을 자동으로 걸러내지 않는다.** UA에서 봇으로 판별되면
-  `device = 'bot'`으로 표시만 하고 집계에는 그대로 포함된다.
+  `device = 'bot'`으로 표시만 하고 집계에는 그대로 포함된다. 판별 대상은
+  검색엔진 크롤러(`bot`·`spider`·`slurp` 등)에 더해 헤드리스 브라우저
+  (`HeadlessChrome`·`puppeteer`·`playwright`)와 자동화 클라이언트
+  (`curl`·`wget`·`python-requests`·`Go-http-client` 등)다 — 배포 첫날
+  들어온 트래픽 2건이 전부 AWS 미국 대역의 HeadlessChrome이었다.
+- **지역 값은 퍼센트 디코딩해 저장한다.** Vercel의 `x-vercel-ip-city`는
+  인코딩돼 오므로(`San%20Jose`) 저장 전에 푼다.
