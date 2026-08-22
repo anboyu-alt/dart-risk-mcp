@@ -42,10 +42,15 @@ class TestMarketScanChunking(unittest.TestCase):
 
         with patch.object(server, "fetch_market_disclosures", side_effect=fake_fetch):
             with patch.object(server, "datetime", wraps=datetime) as _:
-                out = server.search_market_disclosures("fund_outflow", days=30)
+                # v1.18.1: 30일은 대기 예산을 넘어 분기 안내가 먼저 나온다.
+                # 이 테스트가 검증하려는 것은 절단 회귀이므로 실행을 확정한다.
+                out = server.search_market_disclosures(
+                    "fund_outflow", days=30, confirm_long=True)
 
-        # 청크 다수 호출 (30일 / 2일 청크 ≈ 15~16회)
-        self.assertGreaterEqual(len(calls), 14, calls)
+        # v1.18.1: 하루 청크로 직행한다(2일 묶음의 92%가 상한에 닿아 어차피
+        # 재분할됐다 — 1년 코퍼스 실측). 30일이면 30회.
+        self.assertEqual(len(calls), 30, calls)
+        self.assertTrue(all(b == e for b, e in calls), calls)
         # 날짜 범위가 연속(구멍 없음)
         for (b1, e1), (b2, e2) in zip(calls, calls[1:]):
             next_day = (datetime.strptime(e1, "%Y%m%d") + timedelta(days=1)).strftime("%Y%m%d")

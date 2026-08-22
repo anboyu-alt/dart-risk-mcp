@@ -3563,8 +3563,34 @@ def _filter_market_rows(
     return filtered, procedural_count
 
 
+# 시장 스캔 대기 예산 (v1.18.1)
+#
+# 허용 대기는 1분이다. 시장 스캔은 창에 비례해 길어지므로 어느 창부터
+# 분기를 줄지 실측으로 정한다 — 7일 17.7초 · 14일 107.5초(2026-08-23,
+# 하루 청크 전환 전 기준). 경계는 그 사이이고, 여유를 둬 10일로 잡는다.
+_LONG_SCAN_DAYS = 10
+
+# 하루당 조회 페이지 추정 — 1년 코퍼스 실측(270,882건 / 244영업일)에서
+# 하루 중앙값 774건(8페이지)이다. 주말은 공시가 거의 없어 달력일 기준
+# 평균은 이보다 낮지만, 안내는 넉넉한 쪽으로 말한다.
+_EST_PAGES_PER_DAY = 8
+_EST_SECONDS_PER_PAGE = 0.75      # API 응답 0.6초 + 간격
+
+
+def _estimate_scan_seconds(days: int) -> int:
+    """이 창을 스캔하는 데 걸릴 대략의 초. 안내 문구 전용(정확한 값이 아니다)."""
+    return int(days * _EST_PAGES_PER_DAY * _EST_SECONDS_PER_PAGE)
+
+
 @mcp.tool()
-def search_market_disclosures(preset: str, days: int = 7, max_results: int = 50) -> str:
+def search_market_disclosures(
+    preset: str,
+    days: int = 7,
+    max_results: int = 50,
+    from_date: str = "",
+    to_date: str = "",
+    confirm_long: bool = False,
+) -> str:
     """시장 전체 공시에서 preset에 해당하는 위험 신호를 일괄 스캔한다.
 
     기업명을 지정하지 않고 전체 상장사 공시를 조회하므로, 특정 위험 신호가 시장에
@@ -3580,8 +3606,12 @@ def search_market_disclosures(preset: str, days: int = 7, max_results: int = 50)
                 shareholder_change / exec_change / audit_issue / asset_transfer /
                 going_concern / delisting / embezzle / inquiry / fund_outflow /
             all_risk
-        days: 조회 기간 (기본 7일, 최대 90일)
+        days: 조회 기간 (기본 7일, 최대 90일). from_date/to_date를 주면 무시된다.
         max_results: 최대 반환 건수 (기본 50, 최대 200)
+        from_date: 조회 시작일(선택). "2024-01-01"·"20240101" 형식.
+        to_date: 조회 종료일(선택). 미지정 시 오늘.
+        confirm_long: 창이 길어 오래 걸리는 조회를 실제로 실행할지. 미지정
+            상태로 긴 창을 요청하면 예상 소요와 함께 안내만 반환한다.
     """
     from datetime import datetime, timedelta
 
@@ -3592,10 +3622,56 @@ def search_market_disclosures(preset: str, days: int = 7, max_results: int = 50)
             f"❌ 알 수 없는 preset: {preset!r}\n"
             f"허용값: {', '.join(sorted(_PRESET_TO_SIGNALS))}"
         )
-    days = max(1, min(90, days))
     max_results = max(1, min(200, max_results))
 
     now = datetime.now()
+
+    # 시점 지정 — 주면 days를 무시한다(analyze_company_risk와 같은 계약)
+    if from_date or to_date:
+        _bgn = normalize_date8(from_date) if from_date else ""
+        _end = normalize_date8(to_date) if to_date else ""
+        if from_date and not _bgn:
+            return f"❌ from_date 형식이 올바르지 않습니다: {from_date!r} (예: 2024-01-01)"
+        if to_date and not _end:
+            return f"❌ to_date 형식이 올바르지 않습니다: {to_date!r} (예: 2024-06-30)"
+        _end = _end or now.strftime("%Y%m%d")
+        _bgn = _bgn or (datetime.strptime(_end, "%Y%m%d") - timedelta(days=6)).strftime("%Y%m%d")
+        if _bgn > _end:
+            return f"❌ from_date({_bgn})가 to_date({_end})보다 뒤입니다."
+        scan_start = datetime.strptime(_bgn, "%Y%m%d")
+        scan_end = datetime.strptime(_end, "%Y%m%d")
+        days = (scan_end - scan_start).days + 1
+        if days > 90:
+            return (
+                f"❌ 조회 구간이 {days}일입니다 — 시장 전체 스캔은 최대 90일까지"
+                " 지원합니다. 구간을 나눠 조회하세요."
+            )
+        window_label = f"{_bgn[:4]}.{_bgn[4:6]}.{_bgn[6:]}~{_end[:4]}.{_end[4:6]}.{_end[6:]}"
+    else:
+        days = max(1, min(90, days))
+        # 양끝 포함이라 days-1을 빼야 정확히 days일 창이 된다
+        scan_start = now - timedelta(days=days - 1)
+        scan_end = now
+        window_label = f"최근 {days}일"
+
+    # 대기 예산 분기 — 시장 스캔은 하루당 여러 페이지를 훑어 창에 비례해
+    # 길어진다(실측: 7일 17.7초 · 14일 107.5초 · 30일 219초 · 90일 671초).
+    # 허용 대기 1분을 넘길 창은 바로 실행하지 않고, 예상 소요와 좁히는 법을
+    # 안내한 뒤 confirm_long=True를 받아 실행한다 — 11분을 기다리게 해놓고
+    # 결과가 절단돼 있는 것보다, 무엇을 기다리는지 먼저 아는 편이 낫다.
+    if days > _LONG_SCAN_DAYS and not confirm_long:
+        est = _estimate_scan_seconds(days)
+        return (
+            f"⏳ **{window_label} 스캔은 약 {est // 60}분 {est % 60}초 걸립니다**\n"
+            "(하루 평균 8페이지를 훑고, 공시가 몰린 날은 60페이지가 넘습니다.)\n\n"
+            "그대로 진행하려면:\n"
+            f'  `search_market_disclosures("{preset}", days={days}, confirm_long=True)`\n\n'
+            "더 빨리 보려면 구간을 좁히세요:\n"
+            f'  `search_market_disclosures("{preset}", days={_LONG_SCAN_DAYS})`  '
+            f"— 약 {_estimate_scan_seconds(_LONG_SCAN_DAYS)}초\n"
+            f'  `search_market_disclosures("{preset}", from_date="2026-03-01", to_date="2026-03-31")`'
+            "  — 특정 달만"
+        )
 
     # 날짜 청크 스캔 — 한 호출(max_pages=10, 1,000건)로 창 전체를 덮으려던
     # 기존 방식은 시장 일평균 공시가 ~500건이라 2~3일이면 상한에 걸리고,
@@ -3604,9 +3680,16 @@ def search_market_disclosures(preset: str, days: int = 7, max_results: int = 50)
     # 스캔이 7/22 아틀라스링크 유형자산양수를 놓침). 2일 청크면 청크당
     # 상한(1,000건) 아래에 안전히 들어온다. 그래도 상한에 닿은 청크는
     # 절단 가능으로 세어 커버리지를 정직하게 보고한다.
-    _CHUNK_DAYS = 2
-    _PAGES_PER_CHUNK = 10   # 청크당 1,000건
-    _PAGES_PER_DAY = 15     # 재분할된 하루 상한 1,500건 (7월 실측 피크일 대응)
+    # **하루 청크로 직행한다** (v1.18.1). 옛 구현은 2일 청크로 돌다 상한에
+    # 닿으면 하루로 재분할했는데, 1년 코퍼스 실측에서 **2일 묶음의 92%가
+    # 상한에 닿았다**(122개 중 112개). 거의 항상 재분할된다면 2일 청크는
+    # 헛조회를 한 번 더 하는 것일 뿐이라, 처음부터 하루씩 도는 편이 호출이
+    # 적고 절단도 없다.
+    #
+    # 하루 상한도 15페이지(1,500건)에서 70페이지(7,000건)로 올린다. 실측
+    # 하루 분포는 중앙값 774 · p90 2,224 · **최대 6,006**건이라, 옛 상한은
+    # 영업일의 18%에서 깨졌다. 70페이지면 244영업일 전부를 덮는다.
+    _PAGES_PER_DAY = 70
     raw: list[dict] = []
     seen_rcept: set[str] = set()
     truncated_chunks = 0
@@ -3620,39 +3703,19 @@ def search_market_disclosures(preset: str, days: int = 7, max_results: int = 50)
                 seen_rcept.add(rc)
             raw.append(d)
 
-    # 양끝 포함이라 days-1을 빼야 정확히 days일 창이 된다 (기존은
-    # "최근 7일" 요청에 8일을 스캔 — 감사 E-4)
-    cur = now - timedelta(days=days - 1)
-    while cur <= now:
-        chunk_end = min(cur + timedelta(days=_CHUNK_DAYS - 1), now)
-        chunk = fetch_market_disclosures(
-            _DART_API_KEY,
-            cur.strftime("%Y%m%d"),
-            chunk_end.strftime("%Y%m%d"),
-            max_pages=_PAGES_PER_CHUNK,
+    cur = scan_start
+    while cur <= scan_end:
+        day_str = cur.strftime("%Y%m%d")
+        day_items = fetch_market_disclosures(
+            _DART_API_KEY, day_str, day_str, max_pages=_PAGES_PER_DAY,
         )
-        if len(chunk) >= _PAGES_PER_CHUNK * 100 and chunk_end > cur:
-            # 상한 도달 — 이 청크만 1일 단위로 재분할해 상향된 페이지 상한으로
-            # 다시 받는다(공시가 몰린 날 대응). 하루 단위마저 상한이면 그때만
-            # 절단 가능으로 센다.
-            day = cur
-            while day <= chunk_end:
-                day_str = day.strftime("%Y%m%d")
-                day_items = fetch_market_disclosures(
-                    _DART_API_KEY, day_str, day_str, max_pages=_PAGES_PER_DAY,
-                )
-                if len(day_items) >= _PAGES_PER_DAY * 100:
-                    truncated_chunks += 1
-                _collect(day_items)
-                day += timedelta(days=1)
-        else:
-            if len(chunk) >= _PAGES_PER_CHUNK * 100:
-                truncated_chunks += 1  # 단일일 청크가 상한 — 재분할 불가
-            _collect(chunk)
-        cur = chunk_end + timedelta(days=1)
+        if len(day_items) >= _PAGES_PER_DAY * 100:
+            truncated_chunks += 1
+        _collect(day_items)
+        cur += timedelta(days=1)
 
     if not raw:
-        return f"❌ 최근 {days}일 시장 공시를 불러올 수 없습니다."
+        return f"❌ {window_label} 시장 공시를 불러올 수 없습니다."
 
     target_keys = set(_PRESET_TO_SIGNALS[preset])
 
@@ -3670,11 +3733,11 @@ def search_market_disclosures(preset: str, days: int = 7, max_results: int = 50)
         coverage += f" · 절차·사후 보고 {procedural_count}건 제외"
     if truncated_chunks:
         coverage += (
-            f" · 스캔 구간 일부 절단({truncated_chunks}개 청크 상한 도달"
+            f" · 스캔 구간 일부 절단({truncated_chunks}일이 상한 7,000건 도달"
             " — 해당 일자 공시가 매우 많아 일부 누락 가능)"
         )
     lines = [
-        f"🔍 **시장 공시 스캔** (preset={preset}, 최근 {days}일)",
+        f"🔍 **시장 공시 스캔** (preset={preset}, {window_label})",
         coverage,
         "",
     ]
