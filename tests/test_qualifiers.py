@@ -351,8 +351,11 @@ def test_ambiguous_keys_are_all_real_signal_keys():
 def test_ambiguous_keys_contents():
     # ASSET_TRANSFER 추가(2026-08-22) — 자산 처분·양도도 정상적인 자산 교체가
     # 대다수라 상대방·가액 확인 전에는 헤드라인으로 올릴 근거가 없다.
+    # 3차(2026-08-22): RELATED_PARTY(계열사 자금 지원은 일상)·EARNINGS_SHOCK
+    # (증가일 수도 감소일 수도 있다) 추가 — 원문 확인 전에는 헤드라인 근거가 없다.
     assert AMBIGUOUS_SIGNAL_KEYS == frozenset(
-        {"TREASURY", "TREASURY_TRUST", "FUND_OUTFLOW", "ACQ_REVIEW", "ASSET_TRANSFER"}
+        {"TREASURY", "TREASURY_TRUST", "FUND_OUTFLOW", "ACQ_REVIEW",
+         "ASSET_TRANSFER", "RELATED_PARTY", "EARNINGS_SHOCK"}
     )
 
 

@@ -1183,6 +1183,152 @@ def parse_asset_disposal_detail(text: str) -> dict:
     return out
 
 
+# ── 특수관계인 자금거래 원문 파서 (v1.13.5) ──────────────────────────────
+# taxonomy 4.2(Related-Party Transactions at Non-Arm's-Length Prices)는
+# "가격 괴리"가 핵심이라 제목만으로 판정할 수 없다. 공정거래법 대규모내부거래
+# 공시 세 서식 모두 **단위가 백만 원**이고 구조가 일정하다(2026-08-22 실측):
+#
+#   「특수관계인으로부터 자금차입」: 나. 차입처 X / 회사와의 관계 / 라. 차입금액
+#                                   / 자기자본대비(%) / **마. 이자율(%)**
+#   「특수관계인으로부터 받은 담보」: 1. 담보제공자 X / 회사와의 관계 / 바. 담보금액
+#   「특수관계인에 대한 출자」     : 1. 거래상대방 X / 회사와의 관계 / 다. 출자금액
+_RP_COUNTERPARTY_RES = (
+    re.compile(r"차입처\s*(.+?)\s*회사와의\s*관계"),
+    re.compile(r"담보제공자\s*(.+?)\s*회사와의\s*관계"),
+    re.compile(r"거래상대방\s*(.+?)\s*회사와의\s*관계"),
+)
+# 관계 값 뒤에는 곧바로 다음 항목 기호(「2.」·「나.」·「가.」)나 「단위」가 온다.
+# 게으른 매칭에 종료 앵커를 좁게 주지 않으면 뒤 문장을 통째로 삼킨다
+# (실측: "계열회사 다. 차입기간 2026 라. 차입금액 1,500 …" 까지 잡혔다).
+_RP_RELATION_RE = re.compile(
+    r"회사와의\s*관계\s*([^\s]{1,20}?)\s*(?=\d+\.|[가-힣]\.|단위|$)"
+)
+_RP_AMOUNT_RE = re.compile(r"(?:차입금액|담보금액|출자금액)\s*([\d,]+)")
+_RP_RATE_RE = re.compile(r"이자율\s*\(%\)\s*(?:연\s*)?([\d.]+)")
+_RP_EQUITY_RE = re.compile(r"자기자본대비\s*\(%\)\s*(\S+)")
+_RP_UNIT_MILLION_RE = re.compile(r"단위\s*[:：]\s*백만")
+
+
+def parse_related_party_detail(text: str) -> dict:
+    """특수관계인 자금거래(차입·받은담보·출자) 원문에서 사실을 추출한다(순수 함수).
+
+    Returns:
+        {"counterparty": str,   # 차입처·담보제공자·거래상대방
+         "relation": str,       # 회사와의 관계 원문 표기
+         "amount": int,         # 차입·담보·출자 금액(원 단위로 환산)
+         "interest_rate": float,# 이자율(%) — 차입 서식에만 있다
+         "equity_ratio": str,   # 자기자본대비(%) 원문 표기("자본잠식"이 올 수 있다)
+         "kind": str}           # "borrow" | "collateral" | "investment" | ""
+    """
+    out = {"counterparty": "", "relation": "", "amount": 0,
+           "interest_rate": 0.0, "equity_ratio": "", "kind": ""}
+    if not text:
+        return out
+    if "차입처" in text:
+        out["kind"] = "borrow"
+    elif "담보제공자" in text:
+        out["kind"] = "collateral"
+    elif "출자금액" in text:
+        out["kind"] = "investment"
+    else:
+        return out
+
+    for rx in _RP_COUNTERPARTY_RES:
+        m = rx.search(text)
+        if m and m.group(1).strip():
+            out["counterparty"] = m.group(1).strip().rstrip("-").strip()[:60]
+            break
+    m = _RP_RELATION_RE.search(text)
+    if m:
+        out["relation"] = m.group(1).strip()[:40]
+    m = _RP_AMOUNT_RE.search(text)
+    if m:
+        try:
+            val = int(m.group(1).replace(",", ""))
+        except ValueError:
+            val = 0
+        # 공정거래법 대규모내부거래 공시는 「(단위 : 백만 원)」을 머리에 단다.
+        if val and _RP_UNIT_MILLION_RE.search(text):
+            val *= 1_000_000
+        out["amount"] = val
+    m = _RP_RATE_RE.search(text)
+    if m:
+        try:
+            out["interest_rate"] = float(m.group(1))
+        except ValueError:
+            pass
+    m = _RP_EQUITY_RE.search(text)
+    if m:
+        out["equity_ratio"] = m.group(1).strip()[:20]
+    return out
+
+
+def fetch_related_party_detail(rcept_no: str, api_key: str) -> dict:
+    """`fetch_document_text` + `parse_related_party_detail` 래퍼. 실패 시 빈 dict."""
+    try:
+        text = fetch_document_text(rcept_no, api_key, max_chars=4000)
+    except Exception:
+        return {}
+    if not text:
+        return {}
+    return parse_related_party_detail(text)
+
+
+# ── 손익구조 급변 원문 파서 (v1.13.5) ────────────────────────────────────
+# 「매출액 또는 손익구조 30%(대규모법인 15%) 이상 변동/변경」 원문의 표에서
+# 계정별 증감비율과 흑자적자전환여부를 읽는다. 제목만으로는 증가인지 감소인지
+# 알 수 없어 방향을 사실로 표기하기 위한 것이다(단위: 천원).
+_ES_ROW_RE = re.compile(
+    r"-\s*(매출액|영업이익|당기순이익)\s+(-?[\d,]+)\s+(-?[\d,]+)\s+(-?[\d,]+)"
+    r"\s+(-?[\d.]+|-)\s+(\S*)"
+)
+
+
+def parse_earnings_shock_detail(text: str) -> dict:
+    """손익구조 변동 공시 원문에서 계정별 증감비율·흑자적자전환을 뽑는다(순수 함수).
+
+    Returns:
+        {"rows": [{"account": str, "current": int, "prior": int,
+                   "change": int, "change_pct": float|None, "turn": str}],
+         "turned_to_loss": bool}   # 하나라도 '적자전환'이면 True
+    """
+    out: dict = {"rows": [], "turned_to_loss": False}
+    if not text or "손익구조" not in text:
+        return out
+    for m in _ES_ROW_RE.finditer(text):
+        acct, cur, pri, chg, pct, turn = m.groups()
+        def _i(v):
+            try:
+                return int(v.replace(",", ""))
+            except ValueError:
+                return 0
+        try:
+            pct_v = None if pct == "-" else float(pct)
+        except ValueError:
+            pct_v = None
+        turn = (turn or "").strip()
+        if turn == "-":
+            turn = ""
+        out["rows"].append({
+            "account": acct, "current": _i(cur), "prior": _i(pri),
+            "change": _i(chg), "change_pct": pct_v, "turn": turn,
+        })
+        if "적자전환" in turn:
+            out["turned_to_loss"] = True
+    return out
+
+
+def fetch_earnings_shock_detail(rcept_no: str, api_key: str) -> dict:
+    """`fetch_document_text` + `parse_earnings_shock_detail` 래퍼. 실패 시 빈 dict."""
+    try:
+        text = fetch_document_text(rcept_no, api_key, max_chars=4000)
+    except Exception:
+        return {}
+    if not text:
+        return {}
+    return parse_earnings_shock_detail(text)
+
+
 def fetch_asset_disposal_detail(rcept_no: str, api_key: str) -> dict:
     """`fetch_document_text` + `parse_asset_disposal_detail` 래퍼. 실패 시 빈 dict."""
     try:
