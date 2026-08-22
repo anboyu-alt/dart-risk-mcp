@@ -3074,18 +3074,48 @@ async function classifyOutflowEvidence(hits) {
 // DS005를 쓰지 않는 이유: 「타법인주식및출자증권취득결정」(자율공시, 4배 흔함)은
 // decision_type이 없고, 법정 「…양수결정」조차 구조화 데이터가 없는 사례가
 // 실측됐다. 원문은 두 서식 모두 구조가 일정해 32/32건 파싱에 성공했다.
+// 2026-08-22 실측 수정 — 서식이 두 가지인데 하나만 보고 있어 70건 표본에서
+// issuer 60%·relation 19%가 실패했다(core _ACQ_ISSUER_RE 주석 참고).
+const ACQ_CORP_FORM_RE = /^(주|유|재|사|합|주식회사|유한회사|Inc\.?|Ltd\.?|Corp\.?|LLC|Co\.?)$/i;
+function splitIssuerNation(raw) {
+  let name = (raw || "").trim(), nation = "";
+  for (;;) {
+    const m = name.match(/\s*\(([^()]{1,40})\)\s*$/);
+    if (!m || ACQ_CORP_FORM_RE.test(m[1].trim())) break;
+    if (!nation) nation = m[1].trim();
+    name = name.slice(0, m.index).trim();
+  }
+  return { name, nation };
+}
 function parseAcquisitionDetail(text) {
-  const empty = { issuer: "", relation: "", amount: "", ratio: "" };
+  const empty = { issuer: "", nation: "", relation: "", amount: "", ratio: "" };
   if (!text || typeof text !== "string") return empty;
   if (text.indexOf("출자증권") === -1) return empty;
   const t = text.replace(/\s+/g, " ");
   const pick = (re) => { const m = t.match(re); return m ? m[1].trim() : ""; };
+  const im = t.match(/발행회사\s*회사명(?:\s*\(\s*국적\s*\)\s*(.+?)\s*(?=대표이사|대표자|자본금)|\s*(.+?)\s*국적)/);
+  const split = splitIssuerNation(im ? (im[1] || im[2] || "") : "");
   return {
-    issuer: pick(/발행회사\s*회사명\s*(.+?)\s*국적/),
-    relation: pick(/회사와\s*관계\s*(.+?)\s*발행주식총수/),
+    issuer: split.name,
+    nation: split.nation,
+    relation: pick(/회사와\s*의?\s*관계\s*(.+?)\s*(?:발행주식총수|주요사업)/),
     amount: pick(/(?:취득금액|양수금액)\(원\)(?:\(A\))?\s*([\d,]+)/),
     ratio: pick(/자기자본대비\(%\)(?:\(A\/C\))?\s*([\d,.]+)/),
   };
+}
+// 국내 상장 여부 — 뷰어는 corp-map.json(상장사 스냅샷)만 가지고 있어 core의
+// corpCode 전체 명부 조회를 그대로 옮길 수 없다. 상장사 목록에 있으면 listed,
+// 국적이 국내가 아니면 unlisted, 그 외는 unknown으로 **보수적으로** 둔다
+// (core는 비상장까지 판정하지만 뷰어는 근거가 없으면 표기하지 않는다).
+function classifyTargetListing(name, nation) {
+  const raw = (name || "").trim();
+  if (!raw) return "unknown";
+  if (nation && !/대한민국|한국|국내|KOREA/i.test(nation)) return "unlisted";
+  const folded = foldCorpName(raw);
+  for (const nm of Object.keys(CORPS || {})) {
+    if (foldCorpName(nm) === folded) return "listed";
+  }
+  return "unknown";
 }
 
 async function classifyAcquisitionEvidence(hits) {
@@ -3097,7 +3127,8 @@ async function classifyAcquisitionEvidence(hits) {
     }
     const d = parseAcquisitionDetail(data.text);
     return { rcept: h.rcept, date: h.date, nm: h.nm, issuer: d.issuer,
-             relation: d.relation, amount: d.amount, ratio: d.ratio,
+             nation: d.nation, relation: d.relation, amount: d.amount, ratio: d.ratio,
+             listing: classifyTargetListing(d.issuer, d.nation),
              cls: d.issuer ? classifyOutflowRelation(d.relation) : "unknown" };
   }));
 }
@@ -3111,8 +3142,10 @@ function acquisitionFactsHTML(pattern, results) {
     const amt = r.amount ? ` — ${esc(r.amount)}원` : "";
     const ratio = r.ratio ? ` · 자기자본 대비 ${esc(r.ratio)}%` : "";
     const rel = r.relation ? ` (${esc(r.relation)})` : "";
+    const lst = { listed: "(상장)", unlisted: "(비상장)", unknown: "" }[r.listing] || "";
+    const nat = r.nation ? ` · 국적 ${esc(r.nation)}` : "";
     return `<div style="margin-top:0.25rem">· <a href="#" class="patEvLink" data-r="${esc(r.rcept)}" style="color:var(--tx)">${esc(fmtDate(r.date))} ${esc(r.nm)}</a>
-      <br>&nbsp;&nbsp;→ 취득 대상: ${esc(r.issuer || "(미확인)")} · 관계: ${esc(label[r.cls] || "미확인")}${rel}${amt}${ratio}</div>`;
+      <br>&nbsp;&nbsp;→ 취득 대상: ${esc(r.issuer || "(미확인)")}${lst}${nat} · 관계: ${esc(label[r.cls] || "미확인")}${rel}${amt}${ratio}</div>`;
   }).join("");
   const known = results.filter((r) => r.cls !== "unknown");
   const head = known.length

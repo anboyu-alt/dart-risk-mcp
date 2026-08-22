@@ -58,6 +58,7 @@ from .core import (
     fetch_document_text,
     fetch_outflow_detail,
     classify_outflow_relation,
+    classify_target_listing,
     fetch_acquisition_detail,
     fetch_control_change_detail,
     classify_holder_type,
@@ -677,6 +678,7 @@ def _confirm_acquisition_targets(
             "report_nm": e.get("report_nm", "") or d.get("report_nm", ""),
             "rcept_no": rcept, "issuer": "", "relation": "",
             "classification": "unknown", "amount": 0, "equity_ratio": 0.0,
+            "nation": "", "listing": "unknown",
         }
         try:
             det = fetch_acquisition_detail(rcept, _DART_API_KEY)
@@ -688,8 +690,23 @@ def _confirm_acquisition_targets(
             row["amount"] = det.get("amount", 0)
             row["equity_ratio"] = det.get("equity_ratio", 0.0)
             row["classification"] = classify_outflow_relation(det.get("relation", ""))
+            row["nation"] = det.get("nation", "")
+            # 금감원 무자본 M&A 합동점검(2019-12)의 "유용 최대 경로는 비상장주식
+            # 취득(55%)" 축. 판정은 사실 표기용이며 게이트 통과 조건에는 쓰지
+            # 않는다 — 정상적인 비상장 자회사 편입도 대부분 비상장이기 때문.
+            try:
+                row["listing"] = classify_target_listing(
+                    det.get("issuer", ""), det.get("nation", "")
+                )
+            except Exception:
+                row["listing"] = "unknown"
         out.append(row)
     return out
+
+
+# 취득 대상의 국내 상장 여부 표시 라벨. 미확인은 아무것도 붙이지 않는다
+# (없는 사실을 만들어 표기하지 않는다는 v0.8.5 원칙).
+_ACQ_LISTING_LABEL = {"listed": "(상장)", "unlisted": "(비상장)", "unknown": ""}
 
 
 def _render_acquisition_confirmations(confirmations: list[dict]) -> list[str]:
@@ -704,8 +721,11 @@ def _render_acquisition_confirmations(confirmations: list[dict]) -> list[str]:
         ratio_txt = (
             f" · 자기자본 대비 {c['equity_ratio']:.1f}%" if c.get("equity_ratio") else ""
         )
+        listing_txt = _ACQ_LISTING_LABEL.get(c.get("listing", "unknown"), "")
+        nation_txt = f" · 국적 {c['nation']}" if c.get("nation") else ""
         lines.append(
-            f"  → 취득 대상: {tgt} · 관계: {cls_label}{rel_txt}{amt_txt}{ratio_txt}"
+            f"  → 취득 대상: {tgt}{listing_txt}{nation_txt} · 관계: "
+            f"{cls_label}{rel_txt}{amt_txt}{ratio_txt}"
         )
     return lines
 

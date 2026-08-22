@@ -36,6 +36,15 @@ TRF = ("타법인 주식 및 출자증권 양수결정 1. 발행회사 회사명
 
 IRRELEVANT = "기업설명회(IR) 개최 1. 일시 행사일 2026-04-15"
 
+# 2026-08-22 실측으로 드러난 두 번째 서식(70건 중 37건) — 옛 파서는 여기서
+# issuer가 "(" 하나로 잘렸다. 양쪽이 같이 고쳐졌는지 확인한다.
+PAREN = ("타법인 주식 및 출자증권 취득결정 발행회사 회사명(국적) 주식회사 대현 (대한민국) "
+         "대표이사 홍길동 자본금(원) 1,000,000 회사와 관계 계열회사 발행주식총수(주) 100 "
+         "2. 취득내역 취득금액(원) 5,000,000,000 자기자본대비(%) 12.30")
+# 「회사와의관계」(의 포함) 변형
+NO_SPACE = ("타법인 주식 및 출자증권 취득결정 발행회사 회사명(국적) (주)원픽이앤씨 "
+            "대표이사 김수현 자본금(원) 150,000,000 회사와의관계 - 발행주식총수(주) 30,000")
+
 
 def _cut(html, marker):
     i = html.index(marker)
@@ -53,7 +62,12 @@ def _cut(html, marker):
 
 def _viewer(texts):
     html = _HTML.read_text(encoding="utf-8")
-    js = (_cut(html, "function parseAcquisitionDetail(text)") + "\n"
+    # parseAcquisitionDetail은 splitIssuerNation·ACQ_CORP_FORM_RE에 의존한다
+    form_re = next(l for l in html.splitlines()
+                   if l.startswith("const ACQ_CORP_FORM_RE"))
+    js = (form_re + "\n"
+          + _cut(html, "function splitIssuerNation(raw)") + "\n"
+          + _cut(html, "function parseAcquisitionDetail(text)") + "\n"
           + f"const T = {json.dumps(texts, ensure_ascii=False)};\n"
           "console.log(JSON.stringify(T.map(parseAcquisitionDetail)));\n")
     tf = tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8")
@@ -70,15 +84,30 @@ def _viewer(texts):
 
 class TestParity:
     def test_두_서식과_무관_원문에서_같은_값을_낸다(self):
-        texts = [ACQ, TRF, IRRELEVANT]
+        texts = [ACQ, TRF, IRRELEVANT, PAREN, NO_SPACE]
         js = _viewer(texts)
         for t, j in zip(texts, js):
             py = parse_acquisition_detail(t)
             assert j["issuer"] == py["issuer"], t[:40]
             assert j["relation"] == py["relation"], t[:40]
+            assert j["nation"] == py["nation"], t[:40]
             # 뷰어는 문자열, core는 숫자 — 값이 같은지만 본다
             assert (j["amount"].replace(",", "") or "0") == str(py["amount"] or 0), t[:40]
             assert (float(j["ratio"] or 0)) == pytest.approx(py["equity_ratio"]), t[:40]
+
+    def test_괄호형_서식을_양쪽_다_읽는다(self):
+        """실측 37/70이 이 서식이다 — 한쪽만 고치면 뷰어와 리포트가 갈린다."""
+        py = parse_acquisition_detail(PAREN)
+        js = _viewer([PAREN])[0]
+        assert py["issuer"] == js["issuer"] == "주식회사 대현"
+        assert py["nation"] == js["nation"] == "대한민국"
+        assert py["relation"] == js["relation"] == "계열회사"
+
+    def test_회사와의관계_변형을_양쪽_다_읽는다(self):
+        py = parse_acquisition_detail(NO_SPACE)
+        js = _viewer([NO_SPACE])[0]
+        assert py["relation"] == js["relation"] == "-"
+        assert py["issuer"] == js["issuer"] == "(주)원픽이앤씨"
 
     def test_계열회사_표기를_양쪽_다_읽는다(self):
         """게이트 통과 여부를 가르는 결정적 필드다."""
