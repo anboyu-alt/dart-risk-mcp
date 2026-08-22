@@ -489,11 +489,18 @@ def fetch_company_disclosures(
     max_pages: int = 10,
     bgn_de: str = "",
     end_de: str = "",
+    pblntf_ty: str = "",
 ) -> list[dict]:
     """특정 기업의 DART 공시 목록 조회.
 
     `bgn_de`/`end_de`(YYYYMMDD)를 주면 그 구간을 조회하고 `lookback_days`는
     무시한다. 옛 호출자는 그대로 "오늘 기준 N일 전부터"로 동작한다.
+
+    `pblntf_ty`(A=정기, B=주요사항, C=발행, D=지분, E=기타, F=외부감사,
+    I=거래소, J=공정위)를 주면 그 유형만 받는다. **특정 보고서 하나를 찾는
+    호출은 이걸 써야 한다** — 사업보고서를 찾으려고 전체를 훑으면 삼성전자
+    550일이 3,547건(36페이지)인데 정기공시로 좁히면 7건(1페이지)이다
+    (2026-08-23 실측). 옛 호출자는 빈 값이라 전체 조회 그대로다.
 
     **왜 날짜 범위가 필요한가**: 이 함수는 지금까지 항상 오늘을 끝점으로 삼아,
     "2024년 상반기에 무슨 일이 있었나" 같은 조회가 불가능했다. 넓은 창으로
@@ -518,6 +525,8 @@ def fetch_company_disclosures(
             "page_no": page_no,
             "page_count": 100,
         }
+        if pblntf_ty:
+            params["pblntf_ty"] = pblntf_ty
         try:
             data = _retry("GET", f"{DART_BASE}/list.json", params=params).json()
         except Exception:
@@ -3465,7 +3474,11 @@ def extract_rd_ratio_from_report(corp_code: str, api_key: str,
         미검출·실패 시 {}.
     """
     try:
-        discs = fetch_company_disclosures(corp_code, api_key, lookback_days=lookback_days)
+        # 사업보고서 하나만 찾으면 되는데 전체를 훑으면 공시가 많은 회사에서
+        # 절단된다(삼성전자 550일 3,547건 → 1,000건만 조회, 2026-08-23 실측).
+        # 정기공시(A)로 좁히면 7건이라 절단이 원천적으로 없어진다.
+        discs = fetch_company_disclosures(
+            corp_code, api_key, lookback_days=lookback_days, pblntf_ty="A")
         biz = next((d for d in discs
                     if d.get("report_nm", "").startswith("사업보고서")), None)
         if not biz:
