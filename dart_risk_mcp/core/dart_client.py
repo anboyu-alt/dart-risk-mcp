@@ -1207,6 +1207,10 @@ _RP_AMOUNT_RE = re.compile(r"(?:차입금액|담보금액|출자금액)\s*([\d,]
 _RP_RATE_RE = re.compile(r"이자율\s*\(%\)\s*(?:연\s*)?([\d.]+)")
 _RP_EQUITY_RE = re.compile(r"자기자본대비\s*\(%\)\s*(\S+)")
 _RP_UNIT_MILLION_RE = re.compile(r"단위\s*[:：]\s*백만")
+# 같은 서식인데 「(단위 : 억원)」을 다는 회사가 있다(2026-08-22 실측:
+# 삼성전자 20260730000505 출자금액 2,970 = 2,970억원). 억원을 놓치면
+# 원 단위로 오인해 실제의 1억분의 1로 표기된다.
+_RP_UNIT_EOK_RE = re.compile(r"단위\s*[:：]\s*억\s*원")
 
 
 def parse_related_party_detail(text: str) -> dict:
@@ -1250,6 +1254,8 @@ def parse_related_party_detail(text: str) -> dict:
         # 공정거래법 대규모내부거래 공시는 「(단위 : 백만 원)」을 머리에 단다.
         if val and _RP_UNIT_MILLION_RE.search(text):
             val *= 1_000_000
+        elif val and _RP_UNIT_EOK_RE.search(text):
+            val *= 100_000_000
         out["amount"] = val
     m = _RP_RATE_RE.search(text)
     if m:
