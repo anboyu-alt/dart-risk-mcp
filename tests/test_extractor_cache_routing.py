@@ -11,8 +11,11 @@
 (b) 4xx/5xx에서 기존 "빈 문자열 반환, 예외 전파 없음" 동작이 보존되는지,
 (c) 캐시 미설정(None) 상태에서도 정상 동작하는지를 확인한다.
 
-`se_server`는 core가 import하지 않지만(순환 금지), 테스트에서는 캐시 주입
-시임을 검증하기 위해 import한다.
+캐시는 **이 파일 안의 가짜 구현**을 쓴다. 예전에는 SE(`se_server.http_cache`)
+의 것을 빌려 썼는데, SE를 폐기하면서(2026-08-23) 테스트가 그쪽에 묶여 있으면
+같이 죽는다. 검증 대상은 어디까지나 **core의 시임**(`set_http_cache`)과
+추출기의 `_retry` 경유 여부이므로, 계약(get/put 2메서드)만 만족하는 최소
+구현으로 충분하다.
 """
 
 import io
@@ -21,8 +24,30 @@ import zipfile
 from unittest.mock import MagicMock, patch
 
 from dart_risk_mcp.core import cb_extractor, dart_client, investor_extractor
-from se_server import http_cache
-from se_server.cache.base import MemoryCache
+
+
+class FakeHttpCache:
+    """core가 요구하는 캐시 계약의 최소 구현.
+
+    계약(dart_client 주석): `get(url, params) -> (status, headers, body) | None`
+    과 `put(url, params, status, headers, body) -> None`. 키 계산은 주입 측
+    책임이고, **params dict를 변형하면 안 된다**.
+    """
+
+    def __init__(self):
+        self._store: dict = {}
+
+    @staticmethod
+    def _key(url, params):
+        # crtfc_key(사용자 키)는 키에서 뺀다 — 주입 측 책임(계약).
+        safe = {k: v for k, v in (params or {}).items() if k != "crtfc_key"}
+        return (url, tuple(sorted(safe.items())))
+
+    def get(self, url, params):
+        return self._store.get(self._key(url, params))
+
+    def put(self, url, params, status, headers, body):
+        self._store[self._key(url, params)] = (status, headers, body)
 
 
 def _make_zip_bytes(inner_name: str = "test.xml", content: str = "<XML>테스트 원문 내용</XML>") -> bytes:
@@ -62,8 +87,7 @@ class TestExtractorCacheRouting(unittest.TestCase):
     # ── 1) 캐시 연결 (핵심) ─────────────────────────────────────
 
     def test_cb_extractor_fetch_text_hits_cache_on_second_call(self):
-        cache = MemoryCache()
-        http_cache.install(cache)
+        dart_client.set_http_cache(FakeHttpCache())
         zip_bytes = _make_zip_bytes()
         mock_request = MagicMock(return_value=_fake_response(200, zip_bytes))
 
@@ -76,8 +100,7 @@ class TestExtractorCacheRouting(unittest.TestCase):
         self.assertEqual(first, second)
 
     def test_investor_extractor_fetch_rights_html_text_hits_cache_on_second_call(self):
-        cache = MemoryCache()
-        http_cache.install(cache)
+        dart_client.set_http_cache(FakeHttpCache())
         zip_bytes = _make_zip_bytes()
         mock_request = MagicMock(return_value=_fake_response(200, zip_bytes))
 

@@ -14,9 +14,7 @@
 # 개별 줄을 {% raw %} 로 감싸는 대신 디렉터리째 제외하는 이유: 계획 문서는 계속
 # 늘어나고 코드 인용을 담는 것이 본래 목적이라, 같은 패턴이 반복 유입된다.
 # 제외해 두면 재발 자체가 없다.
-# tool/se/ 는 인가 회원 전용 서비스(SE)의 화면이다. Vercel 배포에서는
 # Supabase Auth 게이트 뒤에 있지만, GitHub Pages 는 같은 디렉터리를 인증 없이
-# 그대로 서빙해 왔다 — 실측: https://anboyu-alt.github.io/dart-risk-mcp/tool/se/
 # 가 200 으로 열렸다.
 #
 # Pages 에는 /api/se/* 가 없어 화면이 아무 데이터도 못 가져오고(무해), 정적
@@ -28,4 +26,3 @@
 # tool/ 자체는 제외하지 않는다 — /tool/ 의 공개 리스크 뷰어는 무료 공개가 의도다.
 exclude:
   - superpowers/
-  - tool/se/

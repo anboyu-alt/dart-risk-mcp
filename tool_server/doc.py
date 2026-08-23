@@ -12,7 +12,7 @@ from dart_risk_mcp.core.dart_client import fetch_disclosure_full
 
 _RCEPT_RE = re.compile(r"^\d{14}$")
 
-# 실패 문구는 se_server/api/handlers.py의 _DART_FETCH_FAILED_MSG와 같은
+# 실패 문구는 옛 SE 핸들러의 _DART_FETCH_FAILED_MSG와 같은
 # 취지 — DART 쪽 실패를 우리 서버 오류(500)로 오해시키지 않는다.
 _DART_FETCH_FAILED_MSG = (
     "DART에서 공시 원문을 받지 못했습니다. 잠시 후 다시 시도하거나 "
@@ -35,8 +35,8 @@ def _clamp_max_chars(raw: str | None) -> int:
 def handle_doc(query: dict, api_key: str) -> tuple[int, dict]:
     """(status, body) 반환. query는 단일 값 dict (예: {"rcept_no": "..."}).
 
-    실패 판별은 se_server/api/handlers.py `_disclosure`에서 검증된 규칙을
-    복제한다(se_server import 금지 — 신뢰 모델 분리):
+    실패 판별은 옛 SE 핸들러 `_disclosure`에서 검증된 규칙을 복제한 것이다
+    (인가제 코드와 묶지 않기 위해 복제했고, SE 폐기 후에도 그대로 둔다):
     - core는 실패를 예외 대신 빈 결과로 삼킨다. ZIP 자체를 못 받으면
       files가 비고(→502), ZIP은 받았는데 본문이 비면 text가 빈다(→404).
     """

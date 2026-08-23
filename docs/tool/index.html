@@ -1884,7 +1884,7 @@ function renderVersionLine() {
   el.textContent = ` · v${ver}${casePart}`;
 }
 
-/* ── SE 이식 파생 로직 (출처: docs/tool/se/app.js) ── */
+/* ── 파생 로직 (옛 SE 뷰어에서 이식, SE는 2026-08-23 폐기) ── */
 // 이 섹션은 se/app.js의 순수 함수를 그대로 옮겨온 것이다 — DOM 접근 없음,
 // 아직 어떤 렌더 함수에서도 호출하지 않는다(후속 작업에서 대시보드 블록이
 // 연결할 예정). SE의 numeric() 헬퍼(배열·비표준 쉼표 형식을 엄격히 거부)

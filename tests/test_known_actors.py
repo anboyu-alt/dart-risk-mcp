@@ -887,7 +887,7 @@ class TestKnownActors(unittest.TestCase):
 
     def test_load_filters_institution_with_blank_status(self):
         # 브리프 시나리오 4: 같은 기관명 + status: "" → 제외된다
-        # (빈 값은 화이트리스트 밖 → 기계 등재로 강등, se_server _actor_status와
+        # (빈 값은 화이트리스트 밖 → 기계 등재로 강등, 옛 SE _actor_status와
         # 동일 원칙. status: "auto_matched"와 정확히 같아야만 통과하는 판정이면
         # 빈 문자열이 "사람이 넣은 것"으로 잘못 분류돼 살아남는다.)
         from dart_risk_mcp.core.known_actors import load_known_actors
@@ -1024,7 +1024,7 @@ class TestKnownActors(unittest.TestCase):
         self.assertEqual(len(data["actors"]), 3)
 
     # ── 최종 리뷰 Finding 1: actor_status 화이트리스트 판정 통합 ──────────
-    # 세 군데(se_server/api/handlers.py, known_actors._filter_institutions,
+    # 두 군데(known_actors._filter_institutions,
     # server.py 인라인 3곳)에 흩어져 있던 status 판정을 이 함수 하나로
     # 합쳤다. 빈 문자열·None·미지 값이 전부 "auto_matched"로 강등되는지를
     # 이 함수 자체에서 고정한다 — 라우팅 지점 각각의 렌더 테스트는
@@ -1093,7 +1093,7 @@ class TestKnownActors(unittest.TestCase):
 
     # ── SE-5c Task 1: 주입 레지스트리 캐시 시임 ─────────────────────────
     # dart_client.py의 _http_cache/set_http_cache/get_http_cache를 그대로
-    # 본뜬 패턴. se_server가 Notion 직전에 캐시(예: Supabase)를 주입한다.
+    # 본뜬 패턴. 외부 소비자가 Notion 직전에 캐시를 주입할 수 있다.
     #
     # 저장 시점 결정 — **필터(_filter_institutions/should_store) 적용 전**
     # 데이터를 캐시한다. 이유:

@@ -56,21 +56,3 @@ jobs:
           else
             echo "sightings 변경 없음"
           fi
-      # 캐시 예열은 **레지스트리를 바꾸는 모든 단계 뒤**에 온다.
-      # refresh_known_actors.py와 discover_actors.py는 둘 다 Notion에 행을
-      # 추가한다 — 예열이 그 앞에 있으면 같은 실행에서 발굴된 인물이 최대
-      # 24시간(캐시 TTL) 동안 사용자에게 보이지 않는다(SE-5c 최종 리뷰
-      # Finding 2).
-      #
-      # if: always() — 앞 단계가 실패해도 그 시점의 레지스트리로 캐시를
-      # 채운다. 예열을 건너뛰면 TTL 만료 후 첫 사용자가 15초 콜드 Notion
-      # 조회를 물게 되므로, 부분적으로라도 채워 두는 쪽이 낫다. 이
-      # 스크립트 자체는 항상 exit 0이라 워크플로 결과를 뒤집지 않는다.
-      - name: Warm registry cache (Supabase)
-        if: always()
-        env:
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          DB_KNOWN_ACTORS: ${{ secrets.DB_KNOWN_ACTORS }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        run: python scripts/warm_registry_cache.py

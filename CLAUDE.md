@@ -426,7 +426,7 @@ dart_risk_mcp/
 | `_retry(method, url, **kwargs)` | 429/5xx 지수 백오프 재시도 (최대 3회) |
 | `_load_corp_codes(api_key)` | DART corpCode.xml 다운로드 + 24시간 파일 캐시(포맷 `{"_v": _CORP_CACHE_VERSION, "data": {...}}`, v1.10.1). 동명 법인은 `_merge_corp_entry`로 병합(아래). 캐시 파일에 `_v` 필드가 없거나 버전이 다르면(구버전 캐시) TTL과 무관하게 재다운로드 — 실측 사례: 앤로보틱스(구 협진, 138360)가 이름을 키로 쓰는 옛 dict 로직 때문에 corp-map·resolve_corp 양쪽에서 소실됐던 것을 캐시 무효화로 치유 |
 | `_merge_corp_entry(cache, mdates, name, code, stock, mdate)` | 동명 법인 충돌 정책: 상장(`stock_code` 보유) 우선, 동급(둘 다 상장/둘 다 비상장)이면 `modify_date` 최신 우선. corpCode.xml에 같은 `corp_name`의 서로 다른 법인이 존재할 수 있어(실측: 앤로보틱스 — 상장 00808068/138360/구 협진 vs 비상장 01358296/구 나이콤) 이름을 키로 쓰는 dict 구조상 한쪽은 소실되는데, 최소한 사용자가 찾을 가능성이 높은 상장사가 남도록 결정 |
-| `_resolve_corp_cache_dir()` | corp_codes.json 캐시 쓰기 가능 디렉터리 반환. `_CACHE_DIR`(`~/.cache/dart-risk-mcp`) mkdir이 OSError면 `tempfile.gettempdir()/dart-risk-mcp`로 폴백(Vercel 등 서버리스는 `$HOME`이 매 호출 새 컨테이너를 가리키거나 쓰기가 막혀 있을 수 있음 — se_server/api/handlers.py의 기존 관찰과 동일 근거). 폴백마저 실패하면 `_CACHE_DIR`을 그대로 반환(예외를 삼킴) |
+| `_resolve_corp_cache_dir()` | corp_codes.json 캐시 쓰기 가능 디렉터리 반환. `_CACHE_DIR`(`~/.cache/dart-risk-mcp`) mkdir이 OSError면 `tempfile.gettempdir()/dart-risk-mcp`로 폴백(Vercel 등 서버리스는 `$HOME`이 매 호출 새 컨테이너를 가리키거나 쓰기가 막혀 있을 수 있음 — 2026-07 실측). 폴백마저 실패하면 `_CACHE_DIR`을 그대로 반환(예외를 삼킴) |
 | `load_corp_aliases()` | 옛 상호(상호변경) → {corp_code, stock_code, current} 별칭 맵 로드. 우선순위 env `DART_CORP_ALIASES_PATH` > 레포 상대 `docs/tool/corp-aliases.json`(개발 체크아웃) > 원격(`DART_CORP_ALIASES_URL`, 기본 vercel 주소) 24시간 파일 캐시 > `{}`(전부 실패 시 graceful) |
 | `resolve_corp(query, api_key)` | 기업명/종목코드 → (corp_name, {corp_code, stock_code}). 해석 순서: 정확 일치 → 종목코드 → **별칭 정확 일치(옛 상호, v1.10.0)** → 부분 일치. 별칭으로 해석되면 반환 dict에 `alias_note` 추가(자동 전환 사실 안내). 정확 일치와 별칭이 같은 이름을 두고 충돌하면(예: 동명의 죽은 법인과 상호변경 이력이 같은 이름을 공유) 기존 정확 일치를 그대로 반환하고 `alias_note`에 참고만 병기 — 자동 전환하지 않는다 |
 | `fetch_company_disclosures(corp_code, api_key, lookback_days)` | /list.json 페이지네이션 (최대 500건) |
@@ -545,7 +545,7 @@ dart_risk_mcp/
 | XBRL 감가상각비 | 메모리 `_xbrl_dep_cache` (최대 10건) | 10분 |
 | 워치리스트(영속, 캐시 아님) | `~/.config/dart-risk-mcp/watchlist.json` (`DART_WATCHLIST_PATH`로 오버라이드) | 영속(비휘발) |
 | 행위자 레지스트리(Notion) | `~/.cache/dart-risk-mcp/known_actors_notion.json` | 24시간 |
-| 행위자 레지스트리(주입 캐시) | `known_actors.set_registry_cache()` 시임 — SE가 Supabase를 주입. 미주입이 기본값이라 MCP·CLI는 파일 캐시만 쓴다 | 24시간 |
+| 행위자 레지스트리(주입 캐시) | `known_actors.set_registry_cache()` 시임 — 외부 소비자가 캐시를 주입할 수 있는 확장점. SE 폐기(2026-08-23) 후 주입하는 곳은 없고, MCP·CLI는 파일 캐시만 쓴다 | 24시간 |
 
 > 워치리스트는 캐시가 아니라 사용자 자산이라 `~/.cache`가 아닌 `~/.config`에 영속 저장합니다. `core/watchlist.py`의 `add_person`/`remove_person`/`get_person_companies`/`list_persons`/`load_watchlist`/`save_watchlist`가 관리합니다.
 
@@ -859,7 +859,7 @@ INQUIRY의 `"거래정지"` 오탐은 우연히 발견됐다. 같은 종류의 �
 > `CROSS_SIGNAL_PATTERNS`(`name`/`description`/`signal_sequence`/`timeline_months`/`field_evidence`)를
 > 바꾼 뒤에는 `python scripts/export_tool_data.py`로 `docs/tool/signals-data.json`을 **수동
 > 재생성**해야 합니다(CI 자동 실행 없음, SE-13 Task 2 확인). `severity`는 export 대상이 아니므로
-> 재생성이 필요 없지만 나머지 필드는 두 뷰어(`docs/tool/index.html`, `docs/tool/se/`)가 그대로
+> 재생성이 필요 없지만 나머지 필드는 뷰어(`docs/tool/index.html`)가 그대로
 > 읽으므로 잊으면 드리프트가 생깁니다. 재생성 후 `python -m pytest tests/test_export_tool_data.py -v`로
 > 검증하세요.
 
@@ -894,8 +894,8 @@ python scripts/regen_goldens.py                                       # 전체 �
 
 - **정적 단일 파일**: `docs/tool/index.html` (외부 JS 의존 0, 빌드 없음). 데이터는 `signals-data.json`(scripts/export_tool_data.py로 수동 재생성) + `corp-map.json` + `corp-aliases.json`.
 - **릴레이**: JS 릴레이 `api/[endpoint].js`(Vercel icn1)·`relay/worker.js`(Cloudflare 미러)·`scripts/dev_relay.py`(로컬) 3곳이 **동일 화이트리스트 10종**을 복제 유지 — list, company, fnlttSinglAcnt, accnutAdtorNmNdAdtOpinion, exctvSttus, elestock, alotMatter, pssrpCptalUseDtls, prvsrpCptalUseDtls, otrCprInvstmntSttus(v1.9.0 — 종속회사 유출 사실 병기). 하나 추가하면 3곳 모두 갱신.
-- **원문 추출**: `api/doc.py`(껍데기) + `tool_server/doc.py`(몸통, 단위 테스트 `tests/test_tool_server_doc.py`) — `GET /api/doc?rcept_no=&max_chars=` + `X-DART-Key` 헤더. `fetch_disclosure_full` 재사용, 200 응답만 CDN 캐시(s-maxage=86400, 키가 URL에 없어 캐시 키 안전). se_server와 분리 이유: SE는 Supabase 인가제라 신뢰 모델이 다름. `.vercelignore`에 `!tool_server` 필수.
-- **caution 파생 필드**: export_tool_data.py가 신호별 taxonomy severity를 2단계로 접어 `caution: bool`(CRITICAL/HIGH=true)만 내보낸다. severity·score 원값은 계속 미노출. 뷰어는 이를 '주의/참고' 관찰 우선순위 배지로 렌더(면책 동반) — **뷰어 한정 예외**이며 MCP 도구 출력·SE의 무판정 원칙은 그대로다. 패턴에는 caution을 넣지 않는다(9종 전원 CRITICAL/HIGH → 상수).
+- **원문 추출**: `api/doc.py`(껍데기) + `tool_server/doc.py`(몸통, 단위 테스트 `tests/test_tool_server_doc.py`) — `GET /api/doc?rcept_no=&max_chars=` + `X-DART-Key` 헤더. `fetch_disclosure_full` 재사용, 200 응답만 CDN 캐시(s-maxage=86400, 키가 URL에 없어 캐시 키 안전). `.vercelignore`에 `!tool_server` 필수(빠뜨리면 함수 번들에 안 들어가 ModuleNotFoundError).
+- **caution 파생 필드**: export_tool_data.py가 신호별 taxonomy severity를 2단계로 접어 `caution: bool`(CRITICAL/HIGH=true)만 내보낸다. severity·score 원값은 계속 미노출. 뷰어는 이를 '주의/참고' 관찰 우선순위 배지로 렌더(면책 동반) — **뷰어 한정 예외**이며 MCP 도구 출력의 무판정 원칙은 그대로다. 패턴에는 caution을 넣지 않는다(9종 전원 CRITICAL/HIGH → 상수).
 - **금감원 적발 사례 배선(2026-08-17)**: `signals-data.json`의 `catalog` 키(13.6KB — `total_cases`·`tax_labels` 45종·`by_taxonomy{n, tech 5, laws 3, recent 3}`)를 export하고, ① SIGNAL COMMENTARY의 각 신호에 "이 유형으로 적발된 금감원 사례 N건" 접힘(사례 0건이면 미렌더) ② PATTERN MATCH에 **구성 신호별** 사례를 붙인다. ⚠ 패턴 전체를 담은 보도자료는 **0건**(사례당 taxonomy id가 1개인 게 87%)이라 "이 패턴의 사례"로 표기하면 거짓 — 한정 문구를 반드시 동반한다. `severity`·`base_score`·`confidence`는 export 금지.
 - **버전 표기**: `signals-data.json`의 `meta.version`(단일 출처 `dart_risk_mcp/__init__.py`의 `__version__`, pyproject와 동일)을 면책 문구 끝에 `· v1.12.0 · 금감원 사례 277건 수록`으로 표기. **타임스탬프는 넣지 않는다**(재생성마다 diff 발생). `tests/test_export_tool_data.py`가 세 곳의 버전 일치를 고정한다.
 - **기업 검색(상호변경 대응)**: `scripts/build_corp_map.py`가 corp-map.json 재생성 + corp_code 기준 diff로 옛 상호를 `corp-aliases.json`에 append-only 누적. `scripts/backfill_corp_aliases.py`는 시장 전체 "상호변경안내" 공시 원문에서 변경전/후 상호를 추출해 별칭 시드 백필. `.github/workflows/refresh-corp-map.yml` 주간 cron이 둘을 실행해 커밋. 배경: DART corpCode.xml은 상호변경 시 옛 이름을 지운다(실례: 297570 알로이스→아틀라스링크, 2026-06-12) + 동명 죽은 법인 충돌 사례(알로이스 01194892). `build_corp_map.py`는 core `dc._load_corp_codes`/`dc._corp_cache`를 그대로 쓰므로 아래 동명 법인 충돌 정책(`_merge_corp_entry`)이 자동 적용된다.

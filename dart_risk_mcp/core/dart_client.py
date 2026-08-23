@@ -33,7 +33,8 @@ _CACHE_DIR = Path.home() / ".cache" / "dart-risk-mcp"
 
 
 # ── 선택적 HTTP 캐시 시임 ─────────────────────────────
-# se_server 등 외부 소비자가 DART 응답 캐시를 주입하는 유일한 지점.
+# 외부 소비자가 DART 응답 캐시를 주입하는 유일한 지점(확장점).
+# SE 폐기(2026-08-23) 후 주입하는 곳은 없다 — 시임과 그 계약은 남겨 둔다.
 # 기본값 None이면 캐시 없이 직접 호출한다(MCP 서버의 기존 동작).
 #
 # 주입 객체는 아래 두 메서드를 제공해야 한다:
@@ -185,8 +186,8 @@ def _resolve_corp_cache_dir() -> Path:
     """corp_codes.json을 위한 쓰기 가능한 캐시 디렉터리를 반환한다.
 
     서버리스 환경(Vercel 등)은 `$HOME`이 매 호출마다 새로 생기는 컨테이너를
-    가리키거나 쓰기 자체가 막혀 있을 수 있다(se_server/api/handlers.py의
-    기존 관찰 — "Vercel에는 영속 $HOME이 없다"). `_CACHE_DIR` 아래 mkdir이
+    가리키거나 쓰기 자체가 막혀 있을 수 있다(2026-07 실측 —
+    "Vercel에는 영속 $HOME이 없다"). `_CACHE_DIR` 아래 mkdir이
     OSError로 실패하면 `tempfile.gettempdir()`(Lambda 계열이 보장하는
     유일한 쓰기 가능 경로 `/tmp`) 산하로 폴백한다 — 그 컨테이너 수명 동안만
     이라도 캐시가 동작하게 하기 위함이다. 폴백마저 실패하면 예외를 삼키고
@@ -4519,8 +4520,7 @@ def fetch_executive_roster_detail(
     함수가 그 재료를 화면까지 보낸다.
 
     **`fetch_executive_roster`는 이 함수 추가로 손대지 않는다.**
-    `server.py`의 `find_actor_overlap`(MCP 도구)과
-    `se_server/jobs/runner.py`의 겸직 판정이 그 함수의
+    `server.py`의 `find_actor_overlap`(MCP 도구)이 그 함수의
     `dict[str, set[str]]` 반환형에 그대로 묶여 있다. SE-5c가
     `fetch_company_indicators` 옆에 `fetch_indicator_history`를 별도로
     추가한 것과 같은 방식으로, 같은 엔드포인트를 다시 호출하는 새 함수를
@@ -5251,9 +5251,9 @@ def fetch_company_indicators(
 
 
 def _previous_business_year() -> int:
-    """직전 사업연도. `se_server/jobs/registry.py`의 동명 함수와 같은 계산이다.
+    """직전 사업연도.
 
-    core는 se_server를 import할 수 없어(레이어 경계) 별도로 둔다. 이 모듈
+    이 모듈
     안에서도 같은 계산(`datetime.now().year - 1`)이 여러 곳에 인라인돼
     있으나(예: fetch_affiliate_investments), 다년 루프의 기준 연도로 재사용할
     이름 있는 지점이 없어 fetch_indicator_history 전용으로 추가한다.
