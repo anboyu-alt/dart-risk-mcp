@@ -348,7 +348,6 @@ def build_signals_data() -> dict:
             "escalation_subtitles": list(_q.ESCALATION_SUBTITLES),
             "wrapper_bodies": list(_q.WRAPPER_BODIES),
             "subsidiary_subtitles": list(_q.SUBSIDIARY_SUBTITLES),
-            "related_party_prefix": _q.RELATED_PARTY_PREFIX,
             "amendment_tags": list(_q.AMENDMENT_TAGS),
             "inquiry_demand_mark": _q.INQUIRY_DEMAND_MARK,
             "tails": list(_q.TAILS),

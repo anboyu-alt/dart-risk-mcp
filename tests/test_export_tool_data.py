@@ -255,7 +255,9 @@ class TestBuildSignalsData(unittest.TestCase):
         self.assertEqual(rules["third_party_titles"], list(q.THIRD_PARTY_TITLES))
         self.assertEqual(rules["phase_tails"], list(q.PHASE_TAILS))
         self.assertEqual(rules["subsidiary_subtitles"], list(q.SUBSIDIARY_SUBTITLES))
-        self.assertEqual(rules["related_party_prefix"], q.RELATED_PARTY_PREFIX)
+        # related_party_prefix는 뜻이 반대인 규칙이라 2026-08-23에 뺐다
+        # (core qualifiers.py의 해당 자리 주석 = 원문 실측 근거).
+        self.assertNotIn("related_party_prefix", rules)
         self.assertEqual(rules["amendment_tags"], list(q.AMENDMENT_TAGS))
         self.assertEqual(rules["tails"], list(q.TAILS))
 

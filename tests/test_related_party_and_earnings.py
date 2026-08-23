@@ -41,13 +41,28 @@ class TestRelatedPartyRevived:
         ("특수관계인에대한자금대여", "FUND_OUTFLOW"),
         ("특수관계인에대한담보제공", "FUND_OUTFLOW"),
         ("특수관계인에대한자산양도", "ASSET_TRANSFER"),
-        ("특수관계인의유상증자참여", "3PCA"),
     ])
     def test_나가는_방향은_기존_신호가_잡는다(self, title, other):
         """대칭 — 중복으로 두 번 잡히면 같은 사건이 두 줄로 나온다."""
         keys = [s["key"] for s in match_signals(title)]
         assert other in keys, title
         assert "RELATED_PARTY" not in keys, title
+
+    def test_유상증자참여는_들어오는_방향이다(self):
+        """「특수관계인의유상증자참여」는 나가는 방향이 아니다 (2026-08-23 정정).
+
+        옛 테스트는 이 제목을 '나가는 방향'(회사가 특수관계인에게 돈을
+        넣는 쪽)으로 묶어 두었다. 원문 13건 전수 확인 결과 반대였다 —
+        **이 회사가 유상증자를 했고 계열회사가 그 신주를 인수**한다.
+        돈은 회사로 들어온다.
+
+        신호는 3PCA로 둔다. taxonomy 2.5("특수관계인이 인수")의 모양과
+        맞고, 배정방식은 제목에 없어 라벨이 "유상증자(배정방식 미상)"으로
+        표기된다(원문 확인된 5건은 전부 주주배정이었다).
+        """
+        keys = [s["key"] for s in match_signals("특수관계인의유상증자참여")]
+        assert "3PCA" in keys
+        assert "RELATED_PARTY" not in keys, "같은 사건이 두 줄로 나오면 안 된다"
 
     def test_대규모내부거래는_넣지_않았다(self):
         """「동일인등출자계열회사와의 상품ㆍ용역거래」 2,330건/579개사는
