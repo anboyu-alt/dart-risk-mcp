@@ -1657,8 +1657,16 @@ def find_pattern_overlaps(
 
 
 def estimate_crisis_timeline(signal_id: str) -> Dict[str, int]:
-    """
-    Estimate time to crisis based on signal severity.
+    """severity에서 파생한 참고용 상수. **사용자 출력에 렌더하지 않는다.**
+
+    ⚠ 반환값은 측정이 아니라 `SEVERITY_LEVELS`의 4행 조회표다. taxonomy 40종이
+    단 3가지 답을 공유하며, 숫자에서 severity를 그대로 되읽을 수 있다
+    (90%⇒CRITICAL · 70%⇒HIGH · 40%⇒MEDIUM). 2026-08-24까지 세 도구가 이것을
+    "과거 사례를 모아 보면 … 평균 …이었습니다"로 렌더하고 있었다 —
+    v0.8.5(정량화·등급 노출 금지)와 비범위(가격 예측)를 동시에 어긴다.
+
+    공개 API라 시그니처는 유지하지만, 렌더 경로에 다시 넣지 말 것.
+    `tests/test_no_severity_derived_stats.py`가 이를 기계적으로 막는다.
 
     Returns:
         {"months_to_impact": int, "equity_loss_pct": int}

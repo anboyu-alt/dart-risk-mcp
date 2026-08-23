@@ -1649,20 +1649,16 @@ def analyze_company_risk(
              if e["key"] == _head.key and not e["is_amendment"]),
             None,
         )
+    # 「위기 도달까지 약 N개월, 예상 지분 손실 M%」를 여기서 렌더했었다.
+    # 그 값은 측정이 아니라 `SEVERITY_LEVELS`의 4행 조회표였다 —
+    # CRITICAL→9개월/90% · HIGH→15개월/70% · MEDIUM→12개월/40%.
+    # 세 가지 문제가 겹쳐 있었다(2026-08-24 감사).
+    #   ① 근거 없는 통계를 "사례를 모아 보면 … 평균 …이었습니다"로 제시
+    #   ② 이 도구는 **주가 데이터를 다루지 않는다**(비범위: 가격 예측)
+    #   ③ 내부 severity를 숫자로 되돌려준다 — 90%를 보면 CRITICAL임을 안다
+    #      (v0.8.5: 위험도를 정량화하거나 등급으로 노출하지 않는다)
+    # 특정 회사 리포트에서 "예상 지분 손실 70%"는 셋 중 가장 무겁다.
     timeline_text = ""
-    if top_signal:
-        from .core.signals import SIGNAL_KEY_TO_TAXONOMY
-
-        tax_ids = SIGNAL_KEY_TO_TAXONOMY.get(top_signal["key"], [])
-        if tax_ids:
-            tl = estimate_crisis_timeline(tax_ids[0])
-            if tl:
-                months = tl.get("months_to_impact")
-                loss = tl.get("equity_loss_pct")
-                if months and months < 999:
-                    timeline_text = f"• {top_signal['label']} 신호 기준: 위기 도달까지 약 {months}개월"
-                    if loss:
-                        timeline_text += f", 예상 지분 손실 {loss}%"
 
     # 7. CB 인수자 추출 (최근 3건까지)
     cb_investors: list[dict] = []
@@ -2049,24 +2045,8 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
                 lines.append("")
                 continue
 
-            # 타임라인
-            if tax_ids and not is_amendment:
-                tl = estimate_crisis_timeline(tax_ids[0])
-                if tl:
-                    tl_parts = []
-                    months = tl.get("months_to_impact")
-                    loss = tl.get("equity_loss_pct")
-                    if months and months < 999:
-                        tl_parts.append(f"위기 도달까지 평균 {months}개월이 걸린 사례가 보고돼 있습니다")
-                    if loss:
-                        tl_parts.append(f"주가·지분 손실은 평균 {loss}% 수준으로 추정됩니다")
-                    if tl_parts:
-                        lines += [
-                            "━━ 과거 유사 신호가 끝까지 간 경우의 참고 궤적 ━━",
-                            "과거 같은 유형의 신호가 확산된 사례를 모아 보면, "
-                            + ", ".join(tl_parts) + ".",
-                            "",
-                        ]
+            # 「과거 유사 신호가 끝까지 간 경우의 참고 궤적」 블록을 뺐다 —
+            # 수치가 severity 조회표 상수였다(위 analyze_company_risk 주석 참고).
 
     # CB/BW면 인수자 추출 (check_disclosure_risk는 corp_code 불명 → HTML 폴백)
     if (
@@ -2207,24 +2187,10 @@ def find_risk_precedents(signal_types: list[str], lookback_days: int = 90) -> st
         _route = NON_TITLE_SIGNALS.get(key)
         if _route:
             lines.append(_NON_TITLE_NOTE[_route])
-        tl_sentences: list[str] = []
-        for tid in tax_ids:
-            tl = estimate_crisis_timeline(tid)
-            if tl:
-                months = tl.get("months_to_impact")
-                loss = tl.get("equity_loss_pct")
-                parts = []
-                if months and months < 999:
-                    parts.append(f"위기 도달까지 평균 약 {months}개월이 걸렸습니다")
-                if loss:
-                    parts.append(f"주가·지분 손실은 평균 {loss}% 수준이었습니다")
-                if parts:
-                    tl_sentences.append(", ".join(parts))
-        if tl_sentences:
-            lines.append(
-                "과거 같은 유형의 신호가 끝까지 간 사례를 모아 보면, "
-                + "; ".join(tl_sentences) + "."
-            )
+        # 「과거 같은 유형의 신호가 끝까지 간 사례를 모아 보면, 위기 도달까지
+        # 평균 약 15개월…손실은 평균 70%…」를 렌더했었다. taxonomy가 여러 개면
+        # 같은 상수가 "; "로 반복돼 서로 다른 실증인 것처럼 보이기까지 했다
+        # (골든 실측: "…15개월…70%; …9개월…90%; …15개월…70%."). 뺐다.
         lines.append("")
 
     # 복합 패턴
