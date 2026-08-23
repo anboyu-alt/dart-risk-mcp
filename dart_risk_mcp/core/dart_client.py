@@ -1472,6 +1472,27 @@ def fetch_acquisition_detail(rcept_no: str, api_key: str) -> dict:
     return parse_acquisition_detail(text)
 
 
+# 공정거래법 제26조 대규모내부거래 공시(「특수관계인에대한자금대여」·
+# 「특수관계인에대한담보제공」 등)는 주요사항보고서와 **서식이 다르다**.
+# 「1. 거래상대방 <이름> 회사와의 관계 <관계>」로 시작하고 금액 단위가
+# 백만원이며, 옛 파서가 판별 앵커로 쓰던 「채무자」가 아예 없다.
+#
+# 그래서 이 계열이 **상대방 추출 0%**였다(2026-08-23 실측: 자금대여 0/6 ·
+# 담보제공 0/6, 대조군 채무보증 6/6 · 금전대여 6/6). 1년 기준
+# 「특수관계인에대한자금대여」705건 + 「특수관계인에대한담보제공」215건이
+# 영향받는다 — 신호 이름이 "특수관계인에대한…"인데 특수관계 판정을 못 하고
+# unknown으로 떨어져 `capital_backflow` 게이트를 통과하지 못했다.
+_OUTFLOW_FAIRTRADE_MARK = "공정거래법 제26조"
+_OUTFLOW_FT_COUNTERPARTY_RE = re.compile(
+    r"거래상대방\s*(?P<v>.+?)\s*회사와의\s*관계"
+)
+_OUTFLOW_FT_RELATION_RE = re.compile(
+    r"회사와의\s*관계\s*(?P<v>\S{1,20}?)\s*(?=\d+\.|[가-힣]\.|$)"
+)
+# 「나. 거래금액 4,900」(대여) / 「바. 담보금액 305,800」(담보) — 백만원 단위
+_OUTFLOW_FT_AMOUNT_RE = re.compile(r"(?:거래금액|담보금액|대여금액)\s*([\d,]+)")
+
+
 def parse_outflow_detail(text: str) -> dict:
     """금전대여·채무보증·담보제공 결정 공시 원문에서 상대방·관계·금액을 추출한다.
 
@@ -1488,6 +1509,33 @@ def parse_outflow_detail(text: str) -> dict:
         "equity_ratio": 0.0, "kind": "",
     }
     if not text:
+        return result
+
+    # 공정위 서식을 **먼저** 본다 — 「담보금액」 같은 필드명이 주요사항보고서
+    # 서식과 겹쳐, 뒤에 두면 앞 분기가 먼저 먹고 상대방을 못 찾는다.
+    if _OUTFLOW_FAIRTRADE_MARK in text:
+        if "담보제공" in text:
+            result["kind"] = "collateral"
+        elif "채무보증" in text:
+            result["kind"] = "guarantee"
+        else:
+            result["kind"] = "loan"
+        cm = _OUTFLOW_FT_COUNTERPARTY_RE.search(text)
+        if cm:
+            result["counterparty"] = cm.group("v").strip()[:60]
+        rm = _OUTFLOW_FT_RELATION_RE.search(text)
+        if rm:
+            result["relation"] = rm.group("v").strip()[:40]
+        am = _OUTFLOW_FT_AMOUNT_RE.search(text)
+        if am:
+            # 이 서식은 「(단위 : 백만 원)」을 머리에 단다
+            result["amount"] = _to_int_safe(am.group(1)) * 1_000_000
+        rr = _OUTFLOW_EQUITY_RATIO_RE.search(text)
+        if rr:
+            try:
+                result["equity_ratio"] = float(rr.group(1))
+            except ValueError:
+                pass
         return result
 
     if "금전대여 내역" in text or "대여금액" in text:
