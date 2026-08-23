@@ -53,10 +53,20 @@ class TestCorpusShape:
         # 절단된 코퍼스를 "전수"라고 부르지 않기 위한 정직 표기
         assert _DATA["truncated_days"] == []
 
+    # 수집 이후 **의도적으로** 키워드를 지워 신호를 잃은 제목.
+    # 넣을 때는 근거(무엇을 왜 지웠는지)를 함께 남긴다 — 이 목록이 길어지면
+    # 코퍼스를 다시 수집할 때가 된 것이다.
+    RETIRED = {
+        # THEME_STOCK absent 정리(2026-08-23) — 이 1건이 그 신호의 1년 전체
+        # 매칭이었고, 회사 사건이 아니라 **펀드 상품명**이었다.
+        "증권발행실적보고서(집합투자증권)"
+        "(AB지속가능글로벌테마주증권투자신탁(주식-재간접형))",
+    }
+
     def test_모든_제목이_여전히_신호를_낸다(self):
         """이 파일에 담긴 제목은 수집 시점에 전부 신호가 붙던 것이다.
         키워드를 좁히면 여기서 먼저 드러난다."""
-        dead = [t for t in _TITLES if not match_signals(t)]
+        dead = [t for t in _TITLES if not match_signals(t) and t not in self.RETIRED]
         assert not dead, (
             f"{len(dead)}종이 더 이상 신호를 내지 않는다 (총 "
             f"{sum(_WEIGHT[t] for t in dead)}건). 예: {dead[:5]}"

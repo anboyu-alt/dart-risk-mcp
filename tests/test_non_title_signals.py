@@ -67,19 +67,28 @@ class TestRouteClassification:
 
 
 class TestPatternImpact:
-    """**두** 패턴이 관찰 불가능한 taxonomy를 요구한다 — 구조적으로 전부 일치 불가.
+    """**다섯** 패턴이 관찰 불가능한 taxonomy를 요구한다 — 구조적으로 전부 일치 불가.
 
     1년 실측: 창업주 퇴장 겹침 284곳·전부일치 0곳 · 무자본 M&A 195곳/0곳.
     시장에 사례가 없어서가 아니라 요구 신호 하나가 관찰될 수 없기 때문이다.
 
-    `CB_ROLLOVER`(1.5)·`DISTRESS_MA`(5.4)는 **다른 신호가 같은 taxonomy를 켜므로**
-    (1.5←CB_BW, 5.4←MGMT) debt_spiral·fake_new_biz는 막혀 있지 않다 —
-    아래 두 테스트가 이 구분을 기계적으로 지킨다.
+    **2026-08-23 정정 — 둘이 아니라 다섯이다.** THEME_STOCK을 absent로 정리하면서
+    taxonomy 7.2의 소유 신호가 사라졌고, 그것을 요구하는 `reverse_split_spiral`·
+    `fake_new_biz`도 같은 처지가 됐다. 앞선 판단은 `fake_new_biz`의 5.4만 보고
+    "막혀 있지 않다"고 적었다 — **한 패턴의 모든 taxonomy를 봐야 한다**는 것이
+    이번에 얻은 교훈이다.
+
+    `CB_ROLLOVER`(1.5)·`DISTRESS_MA`(5.4)가 **다른 신호로 대체된다**는 사실
+    자체는 그대로다(1.5←CB_BW, 5.4←MGMT) — 그래서 `debt_spiral`은 여전히
+    막혀 있지 않다. 아래 테스트가 이 구분을 기계적으로 지킨다.
     """
 
     EXPECTED = {
         "zombie_ma": ("CB_REPAY", "1.2"),
         "founder_fade": ("MEETING_VIOL", "4.1"),
+        "related_party_hollowing": ("RIGHTS_UNDER", "2.5"),
+        "reverse_split_spiral": ("THEME_STOCK", "7.2"),
+        "fake_new_biz": ("THEME_STOCK", "7.2"),
     }
     # 사장 신호가 담당하지만 다른 신호가 대신 켜 주는 것 — 패턴은 살아 있다
     COVERED_ELSEWHERE = {
