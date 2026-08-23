@@ -632,13 +632,7 @@
   {
    "key": "THEME_STOCK",
    "label": "테마주/작전주",
-   "keywords": [
-    "테마주",
-    "작전주",
-    "테마편승",
-    "정치테마주",
-    "핀플루언서"
-   ],
+   "keywords": [],
    "taxonomies": [
     "7.2"
    ],
@@ -1234,6 +1228,7 @@
   "ACTIVIST": "absent",
   "DISTRESS_MA": "absent",
   "GAMJA_MERGE": "absent",
+  "THEME_STOCK": "absent",
   "CAPITAL_RED": "absent",
   "RIGHTS_UNDER": "absent",
   "ASSET_SPIRAL": "absent",

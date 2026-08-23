@@ -52,7 +52,16 @@ class TestFundProductDemoted:
 
     @pytest.mark.parametrize("nm", OBSERVED_BEFORE)
     def test_신호_자체는_지우지_않는다(self, nm):
-        """한정층은 신호를 없애지 않고 tier만 바꾼다 — 이 레포의 설계."""
+        """한정층은 신호를 없애지 않고 tier만 바꾼다 — 이 레포의 설계.
+
+        ⚠ 테마주 상품명 1건은 예외다. 한정층이 지운 게 아니라 **키워드
+        자체가 사라졌다** — THEME_STOCK은 1년 관찰 0건으로 absent 정리됐고
+        (2026-08-23), 그 1건이 이 신호의 유일한 매칭이었다. 한정층이 없어도
+        더는 안 걸린다는 뜻이라 R1c의 검증 대상에서 빠진다.
+        """
+        if "테마주" in nm:
+            assert not match_signals(nm), "THEME_STOCK 정리로 키워드가 사라졌다"
+            return
         assert match_signals(nm), nm
 
 
