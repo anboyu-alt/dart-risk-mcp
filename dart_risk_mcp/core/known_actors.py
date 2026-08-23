@@ -295,6 +295,17 @@ _ORG_PAT = re.compile(
     r"조합|투자|신탁|펀드|주식회사|\(주\)|㈜|유한|법인|파트너스|캐피탈|자산운용|"
     r"벤처|컴퍼니|코프|홀딩스|그룹|은행|공사|기금|시스템|"
     r"\b(?:co|ltd|llc|inc|corp)\b\.?|"
+    # 유럽·아시아식 법인 접미사. 없어서 외국 법인이 **개인**으로 분류됐다
+    # (2026-08-23 라이브 실측: `CS Wind Offshore A/S`·`CS Wind Portugal S.A.`
+    # — 120건 표본에서 person 4종 중 2종이 이 경우였다). docstring은 corp에
+    # "외국 법인"을 포함한다고 적어 뒀으니 의도가 아니라 구현의 공백이다.
+    # 이 값은 레지스트리 「구분」 select로 들어가므로 법인이 개인으로 적힌다.
+    #
+    # ⚠ 라틴 문자만 쓰므로 한글 인명은 걸리지 않고, 접미사가 없는 외국인
+    # 인명(예: 'LIU HUAN')도 person으로 남는다 — 테스트로 고정.
+    # `S.A.`는 마침표가 붙는 형태라 \b가 안 먹어 별도로 쓴다.
+    r"\b(?:a/s|gmbh|ag|ab|plc|pte|pty|sarl|sdn|bhd|lp|llp|oyj|kk)\b|"
+    r"\bs\.a\.s?\.?|\bb\.v\.?|\bn\.v\.?|\bs\.p\.a\.?|"
     r"limited|holdings|investment|bank|fund|trust|partners|capital|company",
     re.IGNORECASE,
 )
