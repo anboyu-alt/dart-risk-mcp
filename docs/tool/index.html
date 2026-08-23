@@ -3469,7 +3469,14 @@ async function loadCapitalBackflowGate(pattern, events, corpCode) {
   }
   const allHits = patternTaxonomyEvidence("5.7", events);
   const hits = allHits.slice(0, 4);
-  if (!hits.length) return;
+  // 자리표시자가 **스피너**라 그냥 return하면 영원히 돈다 — 사용자는
+  // "아직 불러오는 중"으로 읽고 기다린다(실패보다 나쁘다. 실패는 끝난 걸
+  // 안다). 형제 게이트(loadFundDiversionGate)와 같이 카드를 걷는다.
+  //
+  // 오늘은 도달하지 않는다: 카드는 겹침 2개(3.1+5.7)일 때만 그려지고
+  // 여기 넘어오는 events는 그 판정에 쓴 것과 같은 observedEvents라
+  // 5.7 증거가 반드시 있다. 그래도 두 형제의 처리가 달라야 할 이유가 없다.
+  if (!hits.length) { el.outerHTML = ""; return; }
   try {
     const results = await classifyOutflowEvidence(hits);
     let affiliateFacts = {};
