@@ -2794,8 +2794,53 @@ def fetch_fund_usage(
                     rec["flags"] = _detect_fund_anomaly(rec)
                     results.append(rec)
 
+    _clear_stale_unreported(results)
     _cache_set(_fund_usage_cache, cache_key, results, _FUND_CACHE_MAX)
     return results
+
+
+def _clear_stale_unreported(records: list) -> int:
+    """같은 조달건의 더 최신 보고서에 집행이 기재됐으면 옛 스냅샷의
+    FUND_UNREPORTED를 뗀다. 뗀 개수를 반환한다.
+
+    `_detect_fund_anomaly`는 레코드 하나만 보고 판정한다. 그런데 자금사용
+    내역은 **같은 조달건이 여러 연도 보고서에 반복해서 실린다** — 납입
+    직후의 보고서는 아직 집행이 없어 real=0이고, 나중 보고서에 집행이
+    채워진다. 레코드 단위 판정은 그 옛 스냅샷까지 전부 "미보고"로 세서,
+    이미 전액 집행한 회사에 경고가 무더기로 뜬다.
+
+    라이브 실측(2026-08-23, lookback 3년):
+      유티아이 — 미보고 25건 전부 옛 스냅샷. 조달건 4개의 최신 보고서에는
+                 각각 88.5억·7억·161.5억·23억 집행이 기재돼 있었다.
+                 수정 후 0건.
+      오르비텍 — 옛 스냅샷 0건, 실질 미해소 13건. 수정 후에도 13건 그대로
+                 (진짜 미보고를 지우지 않는다는 대조군).
+
+    조달건 식별은 (kind, tm, pay_de) — 공모/사모 구분·회차·납입일이다.
+    회차가 "-"로 비는 서식이 있어(유티아이 실측) 납입일을 함께 쓴다.
+    FUND_DIVERSION은 건드리지 않는다 — 용도 변경은 나중 보고서에 집행이
+    기재돼도 사라지는 사실이 아니다.
+    """
+    groups: dict = {}
+    for rec in records:
+        key = (rec.get("kind") or "", rec.get("tm") or "", rec.get("pay_de") or "")
+        groups.setdefault(key, []).append(rec)
+
+    cleared = 0
+    for rs in groups.values():
+        if len(rs) < 2:
+            continue
+        latest = max(rs, key=lambda r: str(r.get("year") or ""))
+        if not (latest.get("real_dtls_amount") or 0) > 0:
+            continue
+        for rec in rs:
+            if rec is latest:
+                continue
+            flags = rec.get("flags") or []
+            if "FUND_UNREPORTED" in flags:
+                rec["flags"] = [f for f in flags if f != "FUND_UNREPORTED"]
+                cleared += 1
+    return cleared
 
 
 def resolve_decision_type(report_name: str) -> str:
