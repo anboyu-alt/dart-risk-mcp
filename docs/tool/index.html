@@ -976,8 +976,13 @@ function demotionReason(parsed, filing) {
   if (r.related_party_prefix && parsed.body.startsWith(r.related_party_prefix)) {
     return "회사가 아니라 특수관계인의 행위입니다";
   }
-  // R4 — 해명·미확정
-  if (parsed.tail === "해명" || parsed.subtitles.includes("미확정")) {
+  // R4 — 해명·미확정. 단 제목에 「조회공시요구」가 명시된 답변은 제외한다
+  // (core qualifiers.INQUIRY_DEMAND_MARK 이식) — 거래소가 물었다는 사실은
+  // 답변의 확정 여부와 무관하게 이미 일어났고, taxonomy 7.1이 보는 것은
+  // 그 물음을 부른 시황 변동이다.
+  const demandStated = (r.inquiry_demand_mark || "")
+    && parsed.compact.indexOf(r.inquiry_demand_mark) !== -1;
+  if ((parsed.tail === "해명" || parsed.subtitles.includes("미확정")) && !demandStated) {
     return "회사가 미확정으로 답한 해명 공시입니다";
   }
   return "";
