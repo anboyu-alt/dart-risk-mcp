@@ -4320,7 +4320,9 @@ def check_disclosure_anomaly(
     disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days, max_pages=max_pages)
     total = len(disclosures)
     if total == 0:
-        return f"[{corp_name}] 최근 {window_phrase} 공시 없음 — 스코어 산출 불가."
+        # v0.8.5는 이 도구에서 점수 계산을 제거했는데 문구에 "스코어"가
+        # 남아 있었다(2026-08-23 발견). 이 도구는 건수·비율만 나열한다.
+        return f"[{corp_name}] 최근 {window_phrase} 공시가 조회되지 않아 지표를 낼 수 없습니다."
 
     # ── 지표 집계 ──────────────────────────────────────────────
     amendment_count = sum(1 for d in disclosures if is_amendment_disclosure(d.get("report_nm", "")))
@@ -4347,7 +4349,7 @@ def check_disclosure_anomaly(
         if "INQUIRY" in keys:
             inquiry_hits.append(nm)
 
-    # ── 가중 스코어 (상한 100) ─────────────────────────────────
+    # ── 지표 집계 (건수·비율만) ─────────────────────────────────
     amend_ratio = amendment_count / total
     # v0.8.5: 내부 스코어 계산을 제거. 출력에는 건수·비율·사실만 노출한다.
     # 감사의견 구조화 엔드포인트는 교체 이력·비감사용역 경고에만 사용.
@@ -4439,7 +4441,7 @@ def check_disclosure_anomaly(
     lines += [
         "",
         "─────────────────────────────────────────────",
-        "※ 본 스코어는 공시 기반 불공정거래 위험 모니터링 목적의 참고 지표이며,",
+        "※ 본 결과는 공시 기반 불공정거래 위험 모니터링 목적의 참고 자료이며,",
         "   법적 판단이나 투자 결정의 근거로 사용할 수 없습니다.",
         "💡 세부 분석: analyze_company_risk(company_name=...)",
     ]
