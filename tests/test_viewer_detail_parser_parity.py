@@ -334,3 +334,111 @@ class TestViewerFairTradeFormat:
         assert got[0]["amount"] == "5,000,000,000"
         assert got[1]["counterparty"] == "분양계약자"
         assert got[1]["amount"] == "100,000,000,000"
+
+
+class TestViewerTangibleAcquisitionFormat:
+    r"""유형자산 양수/양도 서식 — 값 자리에 **하위 라벨**이 온다.
+
+    사용자 제보(2026-08-23): 아틀라스링크 1년 조회 OUTFLOW 패널에
+    「상대: 회사명(성명) — 1원」이 떴다. 둘 다 값이 아니다.
+
+        | 6. 거래상대방 | 회사명(성명) | ㈜ 로아앤코홀딩스 |
+          ^라벨          ^하위 라벨      ^값
+        | 2. 양수내역   | 양수금액(원)  | 17,400,000,000 |
+        | 7. 거래대금지급 | 1. 지급형태 : 현금… |
+
+    원인이 둘이었고 도입 시점도 다르다.
+
+    | 증상 | 원인 | 도입 |
+    |---|---|---|
+    | 상대 「회사명(성명)」 | `isCpLabel`에 「거래상대방」을 넣어 다음 셀(=하위 라벨)을 값으로 받음 | **#218** |
+    | 금액 「1」 | `거래대금[^\d]{0,10}([0-9,]+)`이 「거래대금지급 1. 지급형태」의 **열거번호**를 잡음 | dfbc580 |
+
+    #218 이전에는 상대방이 「㈜ 로아앤코홀딩스」로 맞았다(금액은 그때도 1).
+    26건 라이브 대조에서 기존 서식 11건은 불변, 15건은 빈 값 → 실제 값으로
+    개선됐다.
+    """
+
+    TANGIBLE_ACQ = (
+        "\n| 2. 양수내역 | 양수금액(원) | 17,400,000,000 |\n|---|---|---|\n"
+        "| 자산총액(원) | 112,469,562,455 |\n| 자산총액대비(%) | 15.47 |\n"
+        "| 6. 거래상대방 | 회사명(성명) | ㈜ 로아앤코홀딩스 |\n"
+        "| 자본금(원) | 2,544,970,500 |\n| 주요사업 | 연예인 매니지먼트 |\n"
+        "| 회사와의 관계 | 계열회사 |\n"
+        "| 7. 거래대금지급 | 1. 지급형태 : 현금2. 지급조건 및 시기 : … |\n"
+    )
+    TANGIBLE_ACQ_NO_REL = (
+        "\n| 2. 양수내역 | 양수금액(원) | 21,600,000,000 |\n|---|---|---|\n"
+        "| 6. 거래상대방 | 회사명(성명) | 정은산업 주식회사 |\n"
+        "| 회사와의 관계 | - |\n"
+        "| 7. 거래대금지급 | 1. 지급형태: 현금2. 지급시기 및 조건:- 계약금 … |\n"
+    )
+    FAIRTRADE = (
+        "\n| 관련법규 | 공정거래법 제26조 |\n|---|---|\n\n| (단위 : 백만 원) |\n|---|\n\n"
+        "| 1. 거래상대방 | 아산배방개발(주) | 회사와의 관계 | 계열회사 |\n"
+        "|---|---|---|---|\n| 바. 담보금액 | 305,800 |\n"
+    )
+    LOAN = (
+        "\n| 1. 대여 상대 | (주)한국파일 |\n|---|---|\n"
+        "| 회사와의 관계 | 종속회사 |\n| 대여금액(원) | 5,000,000,000 |\n"
+    )
+
+    def _parse(self, texts):
+        html = _HTML.read_text(encoding="utf-8")
+        import re as _re
+        consts = "\n".join(
+            ln for ln in html.split("\n")
+            if ln.strip().startswith(("const AMENDED_DOC_MARKERS",
+                                      "const AFFIL_DASH_VALUES")))
+        src = consts + "\n" + "\n".join(
+            _cut(html, f) for f in
+            ("affiliateInt", "isAmendedDocument", "parseOutflowDetail"))
+        js = (src + "\nconst T=" + json.dumps(texts, ensure_ascii=False)
+              + ";\nconsole.log(JSON.stringify(T.map(parseOutflowDetail)));")
+        tf = tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
+                                         encoding="utf-8")
+        tf.write(js)
+        tf.close()
+        try:
+            r = subprocess.run([shutil.which("node"), tf.name],
+                               capture_output=True, text=True, encoding="utf-8")
+            assert r.returncode == 0, r.stderr[:600]
+            return json.loads(r.stdout)
+        finally:
+            os.unlink(tf.name)
+
+    def test_하위_라벨을_상대방으로_받지_않는다(self):
+        got = self._parse([self.TANGIBLE_ACQ, self.TANGIBLE_ACQ_NO_REL])
+        assert got[0]["counterparty"] == "㈜ 로아앤코홀딩스"
+        assert got[1]["counterparty"] == "정은산업 주식회사"
+        for g in got:
+            assert g["counterparty"] != "회사명(성명)"
+
+    def test_양수금액을_읽는다(self):
+        got = self._parse([self.TANGIBLE_ACQ, self.TANGIBLE_ACQ_NO_REL])
+        assert got[0]["amount"] == "17,400,000,000"
+        assert got[1]["amount"] == "21,600,000,000"
+
+    def test_열거번호를_금액으로_잡지_않는다(self):
+        """「7. 거래대금지급 | 1. 지급형태」의 1이 금액이 되면 안 된다."""
+        only_enum = ("\n| 6. 거래상대방 | 회사명(성명) | 가나 주식회사 |\n|---|---|---|\n"
+                     "| 7. 거래대금지급 | 1. 지급형태: 현금 |\n")
+        assert self._parse([only_enum])[0]["amount"] == ""
+
+    def test_관계는_그대로_읽는다(self):
+        got = self._parse([self.TANGIBLE_ACQ, self.TANGIBLE_ACQ_NO_REL])
+        assert got[0]["relation"] == "계열회사"
+        assert got[1]["relation"] == "-"
+
+    def test_공정위_서식이_깨지지_않는다(self):
+        """#218이 고친 것 — 이번 수정이 되돌리면 안 된다."""
+        got = self._parse([self.FAIRTRADE])[0]
+        assert got["counterparty"] == "아산배방개발(주)"
+        assert got["relation"] == "계열회사"
+        assert got["amount"] == "305800000000"
+
+    def test_기존_금전대여가_깨지지_않는다(self):
+        got = self._parse([self.LOAN])[0]
+        assert got["counterparty"] == "(주)한국파일"
+        assert got["relation"] == "종속회사"
+        assert got["amount"] == "5,000,000,000"
