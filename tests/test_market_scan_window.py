@@ -16,6 +16,19 @@ from unittest.mock import patch
 import pytest
 
 import dart_risk_mcp.server as srv
+from dart_risk_mcp.core.dart_client import FETCH_OK
+
+
+def _ok(rows):
+    """옛 스텁 반환값을 상태 반환 계약으로 감싼다.
+
+    시장 스캔은 하루 조회 **실패**를 부재로 말하지 않으려고 상태를 함께
+    받는다(2026-08-23). 여기서 재는 것은 청크·상한·창 계산이라 정상
+    상태로 감싸면 검증 내용은 그대로다.
+    """
+    if callable(rows):
+        return lambda *a, **kw: (rows(*a, **kw), FETCH_OK)
+    return lambda *a, **kw: (rows, FETCH_OK)
 
 
 class TestBudgetBranch:
@@ -23,29 +36,29 @@ class TestBudgetBranch:
 
     @patch.object(srv, "_DART_API_KEY", "k")
     def test_긴_창은_안내만_반환한다(self):
-        with patch.object(srv, "fetch_market_disclosures",
-                          side_effect=AssertionError("조회하면 안 된다")):
+        with patch.object(srv, "fetch_market_disclosures_with_status",
+                          side_effect=_ok(AssertionError)("조회하면 안 된다")):
             out = srv.search_market_disclosures("all_risk", days=30)
         assert "걸립니다" in out
         assert "confirm_long=True" in out
 
     @patch.object(srv, "_DART_API_KEY", "k")
     def test_confirm_long이면_실행한다(self):
-        with patch.object(srv, "fetch_market_disclosures", return_value=[]):
+        with patch.object(srv, "fetch_market_disclosures_with_status", side_effect=_ok([])):
             out = srv.search_market_disclosures("all_risk", days=30,
                                                 confirm_long=True)
         assert "걸립니다" not in out
 
     @patch.object(srv, "_DART_API_KEY", "k")
     def test_짧은_창은_바로_실행한다(self):
-        with patch.object(srv, "fetch_market_disclosures", return_value=[]) as m:
+        with patch.object(srv, "fetch_market_disclosures_with_status", side_effect=_ok([])) as m:
             srv.search_market_disclosures("all_risk", days=7)
         assert m.called
 
     @patch.object(srv, "_DART_API_KEY", "k")
     def test_안내가_좁히는_법을_함께_준다(self):
         """기다리라고만 하면 분기가 아니다 — 대안을 줘야 고를 수 있다."""
-        with patch.object(srv, "fetch_market_disclosures", return_value=[]):
+        with patch.object(srv, "fetch_market_disclosures_with_status", side_effect=_ok([])):
             out = srv.search_market_disclosures("cb_issue", days=90)
         assert "from_date=" in out
         assert f"days={srv._LONG_SCAN_DAYS}" in out
@@ -65,7 +78,7 @@ class TestDateRange:
             seen.append((bgn, end))
             return []
 
-        with patch.object(srv, "fetch_market_disclosures", side_effect=fake):
+        with patch.object(srv, "fetch_market_disclosures_with_status", side_effect=_ok(fake)):
             srv.search_market_disclosures("all_risk",
                                           from_date="2026-08-18",
                                           to_date="2026-08-20")
@@ -79,7 +92,7 @@ class TestDateRange:
             seen.append(bgn)
             return []
 
-        with patch.object(srv, "fetch_market_disclosures", side_effect=fake):
+        with patch.object(srv, "fetch_market_disclosures_with_status", side_effect=_ok(fake)):
             srv.search_market_disclosures("all_risk", days=90,
                                           from_date="2026-08-18",
                                           to_date="2026-08-19")
@@ -92,16 +105,16 @@ class TestDateRange:
         ({"from_date": "2026-08-20", "to_date": "2026-08-18"}, "뒤입니다"),
     ])
     def test_잘못된_구간을_알린다(self, kw, frag):
-        with patch.object(srv, "fetch_market_disclosures",
-                          side_effect=AssertionError("조회하면 안 된다")):
+        with patch.object(srv, "fetch_market_disclosures_with_status",
+                          side_effect=_ok(AssertionError)("조회하면 안 된다")):
             out = srv.search_market_disclosures("all_risk", **kw)
         assert out.startswith("❌")
         assert frag in out
 
     @patch.object(srv, "_DART_API_KEY", "k")
     def test_90일을_넘는_구간은_거절한다(self):
-        with patch.object(srv, "fetch_market_disclosures",
-                          side_effect=AssertionError("조회하면 안 된다")):
+        with patch.object(srv, "fetch_market_disclosures_with_status",
+                          side_effect=_ok(AssertionError)("조회하면 안 된다")):
             out = srv.search_market_disclosures(
                 "all_risk", from_date="2026-01-01", to_date="2026-08-01")
         assert out.startswith("❌")
@@ -109,10 +122,10 @@ class TestDateRange:
 
     @patch.object(srv, "_DART_API_KEY", "k")
     def test_헤더에_구간이_표시된다(self):
-        with patch.object(srv, "fetch_market_disclosures",
-                          return_value=[{"rcept_no": "1", "report_nm": "x",
+        with patch.object(srv, "fetch_market_disclosures_with_status",
+                          side_effect=_ok([{"rcept_no": "1", "report_nm": "x",
                                          "corp_name": "가", "rcept_dt": "20260818",
-                                         "flr_nm": "가"}]):
+                                         "flr_nm": "가"}])):
             out = srv.search_market_disclosures("all_risk",
                                                 from_date="2026-08-18",
                                                 to_date="2026-08-18")
@@ -129,7 +142,7 @@ class TestDailyChunking:
             seen.append((bgn, end))
             return []
 
-        with patch.object(srv, "fetch_market_disclosures", side_effect=fake):
+        with patch.object(srv, "fetch_market_disclosures_with_status", side_effect=_ok(fake)):
             srv.search_market_disclosures("all_risk", days=3)
         assert all(b == e for b, e in seen), "청크마다 시작일=종료일이어야 한다"
         assert len(seen) == 3
@@ -143,7 +156,7 @@ class TestDailyChunking:
             seen["max_pages"] = max_pages
             return []
 
-        with patch.object(srv, "fetch_market_disclosures", side_effect=fake):
+        with patch.object(srv, "fetch_market_disclosures_with_status", side_effect=_ok(fake)):
             srv.search_market_disclosures("all_risk", days=1)
         assert seen["max_pages"] * 100 >= 6006
 
@@ -153,7 +166,7 @@ class TestDailyChunking:
         rows = [{"rcept_no": str(i), "report_nm": "주요사항보고서(전환사채권발행결정)",
                  "corp_name": "가", "rcept_dt": "20260818", "flr_nm": "가"}
                 for i in range(7000)]
-        with patch.object(srv, "fetch_market_disclosures", return_value=rows):
+        with patch.object(srv, "fetch_market_disclosures_with_status", side_effect=_ok(rows)):
             out = srv.search_market_disclosures("cb_issue", days=1)
         assert "절단" in out
 
@@ -161,7 +174,7 @@ class TestDailyChunking:
     def test_상한_아래면_절단을_말하지_않는다(self):
         rows = [{"rcept_no": "1", "report_nm": "주요사항보고서(전환사채권발행결정)",
                  "corp_name": "가", "rcept_dt": "20260818", "flr_nm": "가"}]
-        with patch.object(srv, "fetch_market_disclosures", return_value=rows):
+        with patch.object(srv, "fetch_market_disclosures_with_status", side_effect=_ok(rows)):
             out = srv.search_market_disclosures("cb_issue", days=1)
         assert "절단" not in out
 

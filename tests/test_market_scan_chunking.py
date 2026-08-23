@@ -11,6 +11,19 @@ from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import dart_risk_mcp.server as server
+from dart_risk_mcp.core.dart_client import FETCH_OK
+
+
+def _ok(rows):
+    """옛 스텁 반환값을 상태 반환 계약으로 감싼다.
+
+    시장 스캔은 하루 조회 **실패**를 부재로 말하지 않으려고 상태를 함께
+    받는다(2026-08-23). 여기서 재는 것은 청크·상한·창 계산이라 정상
+    상태로 감싸면 검증 내용은 그대로다.
+    """
+    if callable(rows):
+        return lambda *a, **kw: (rows(*a, **kw), FETCH_OK)
+    return lambda *a, **kw: (rows, FETCH_OK)
 
 
 def _disc(rcept_no, date, name="유형자산양수결정"):
@@ -40,7 +53,7 @@ class TestMarketScanChunking(unittest.TestCase):
                 return [_disc("R_OLD", old_date)]
             return []
 
-        with patch.object(server, "fetch_market_disclosures", side_effect=fake_fetch):
+        with patch.object(server, "fetch_market_disclosures_with_status", side_effect=_ok(fake_fetch)):
             with patch.object(server, "datetime", wraps=datetime) as _:
                 # v1.18.1: 30일은 대기 예산을 넘어 분기 안내가 먼저 나온다.
                 # 이 테스트가 검증하려는 것은 절단 회귀이므로 실행을 확정한다.
@@ -62,7 +75,7 @@ class TestMarketScanChunking(unittest.TestCase):
         def fake_fetch(api_key, bgn_de, end_de, pblntf_ty="", max_pages=10):
             return [_disc("R_DUP", bgn_de)]
 
-        with patch.object(server, "fetch_market_disclosures", side_effect=fake_fetch):
+        with patch.object(server, "fetch_market_disclosures_with_status", side_effect=_ok(fake_fetch)):
             out = server.search_market_disclosures("fund_outflow", days=4)
         # 청크마다 같은 rcept가 와도 1건으로 집계
         self.assertEqual(out.count("R_DUP"), 1)
@@ -72,7 +85,7 @@ class TestMarketScanChunking(unittest.TestCase):
             # 상한(max_pages*100) 정확히 채운 청크 = 절단 가능
             return [_disc(f"R{bgn_de}{i}", bgn_de, name="일반공시") for i in range(max_pages * 100)]
 
-        with patch.object(server, "fetch_market_disclosures", side_effect=fake_fetch):
+        with patch.object(server, "fetch_market_disclosures_with_status", side_effect=_ok(fake_fetch)):
             out = server.search_market_disclosures("asset_transfer", days=2)
         self.assertIn("절단", out)
 
@@ -80,7 +93,7 @@ class TestMarketScanChunking(unittest.TestCase):
         def fake_fetch(api_key, bgn_de, end_de, pblntf_ty="", max_pages=10):
             return [_disc(f"R{bgn_de}", bgn_de, name="일반공시")]
 
-        with patch.object(server, "fetch_market_disclosures", side_effect=fake_fetch):
+        with patch.object(server, "fetch_market_disclosures_with_status", side_effect=_ok(fake_fetch)):
             out = server.search_market_disclosures("asset_transfer", days=2)
         self.assertNotIn("절단", out)
 
