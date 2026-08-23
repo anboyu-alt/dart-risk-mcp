@@ -77,7 +77,7 @@ from .core import (
     lookup_actors_by_company,
     remove_person,
     fetch_executive_compensation,
-    fetch_executive_roster,
+    fetch_executive_roster_detail,
     fetch_financial_statements,
     fetch_financial_statements_all,
     fetch_fund_usage,
@@ -225,6 +225,25 @@ def _is_deep_window(days: int) -> bool:
 def _fmt_date8(d: str) -> str:
     """YYYYMMDD → YYYY.MM.DD. 8자리가 아니면 그대로 돌려준다."""
     return f"{d[:4]}.{d[4:6]}.{d[6:]}" if len(d) == 8 else d
+
+
+def _exec_role_label(row: dict) -> str:
+    """임원현황 행에서 직위·등기 여부를 표시용 사실 라벨로 만든다.
+
+    `ofcps`(직위: 사외이사·수석부사장·대표이사 …)와 `rgist_exctv_at`
+    (등기 여부: 사내이사·사외이사·미등기 …)는 원문 표기를 그대로 쓴다 —
+    분류하거나 판정하지 않는다. 둘이 같은 값이면 한 번만 적는다
+    (실측: 헬스커넥트 「사내이사/사내이사」).
+
+    비어 있으면 빈 문자열 — 호출부가 라벨 없이 기존 형태로 렌더한다.
+    """
+    # 실측에 원문 개행이 섞여 온다(「등기\n임원」) — 한 줄로 편다.
+    pos = " ".join((row.get("ofcps") or "").split())
+    reg = " ".join((row.get("rgist_exctv_at") or "").split())
+    parts = [p for p in (pos, reg) if p]
+    if len(parts) == 2 and parts[0] == parts[1]:
+        parts = parts[:1]
+    return "/".join(parts)
 
 
 def _resolve_window(
@@ -2787,7 +2806,9 @@ def find_actor_overlap(
     # 공통 상한을 쓰면 CB 공시가 많은 기업에서 유상증자 몫을 빼앗겨 "머지"가 CB-only로 회귀함
     MAX_DOCS_PER_SOURCE = 3
 
-    # actor_map: {"actor_name": [(company, source, amount, rcept_no), ...]}
+    # actor_map: {"actor_name": [(company, source, amount, rcept_no, role), ...]}
+    # role은 임원 항목에만 채워진다(직위/등기 여부) — 동명이인을 눈으로
+    # 가릴 수 있게 하는 사실 표기이며 필터가 아니다.
     actor_map: dict[str, list[tuple]] = {}
     per_company_solo: dict[str, list[tuple]] = {}
     failed: list[str] = []
@@ -2841,20 +2862,34 @@ def find_actor_overlap(
             if not name:
                 continue
             amount = inv.get("amount", "")
-            entry = (corp_name, source, amount, rn)
+            entry = (corp_name, source, amount, rn, "")
             actor_map.setdefault(name, []).append(entry)
-            per_company_solo.setdefault(corp_name, []).append((name, source, amount, rn))
+            per_company_solo.setdefault(corp_name, []).append(
+                (name, source, amount, rn, ""))
 
         # 등기임원 겸직 수집 (조합명 비고정성 우회 — 사람 이름은 고정점)
-        roster = fetch_executive_roster(corp_code, api_key, lookback_years) or {}
-        for exec_name, years in roster.items():
-            name = (exec_name or "").strip()
+        #
+        # 직위·등기 여부를 함께 담는 `_detail`을 쓴다. 이름만 보면 **동명이인이
+        # 세력으로 보인다** — 대조군 실측(2026-08-23): 삼성전자 「이혁재」는
+        # 사외이사(등기), 셀트리온 「이혁재」는 수석부사장(미등기)인데 이름만
+        # 같아서 "2개 회사에 등장"으로 표시됐다. 반대로 진짜 사례인
+        # CG인바이츠·헬스커넥트의 신용규·이호영은 **양쪽 다 사내이사**다.
+        # 직위를 사실로 병기하면 사용자가 그 둘을 눈으로 가를 수 있다.
+        #
+        # 거르지는 않는다 — 사외이사라고 세력이 아니라는 보장이 없고, 이
+        # 레포는 판정을 하지 않는다(v0.8.5). 표기만 늘린다.
+        # 같은 엔드포인트·같은 연도 루프라 호출 예산은 그대로다.
+        for row in fetch_executive_roster_detail(
+                corp_code, api_key, lookback_years) or []:
+            name = (row.get("nm") or "").strip()
             if not name:
                 continue
-            year_label = ", ".join(sorted(years))
-            entry = (corp_name, "임원", year_label, "")
+            year_label = ", ".join(row.get("years") or [])
+            role = _exec_role_label(row)
+            entry = (corp_name, "임원", year_label, "", role)
             actor_map.setdefault(name, []).append(entry)
-            per_company_solo.setdefault(corp_name, []).append((name, "임원", year_label, ""))
+            per_company_solo.setdefault(corp_name, []).append(
+                (name, "임원", year_label, "", role))
 
     # 공통 인수자: 2개 이상 서로 다른 기업에 등장
     common = {
@@ -2925,10 +2960,16 @@ def find_actor_overlap(
         for actor, entries in sorted(common.items(), key=lambda x: -len({e[0] for e in x[1]})):
             company_set = sorted({e[0] for e in entries})
             source_set = sorted({e[1] for e in entries})
+            # 회사별 직위를 붙인다 — 「사외이사 ↔ 미등기 수석부사장」처럼
+            # 갈리면 동명이인일 가능성을 사용자가 스스로 읽을 수 있다.
+            shown = []
+            for c in company_set:
+                roles = sorted({e[4] for e in entries if e[0] == c and e[4]})
+                shown.append(f"{c}({'/'.join(roles)})" if roles else c)
             lines.append(
                 f"  ⚠️ **{actor}** — {len(company_set)}개 회사에 "
                 f"[{' · '.join(source_set)}] 경로로 등장: "
-                f"{', '.join(company_set)}"
+                f"{', '.join(shown)}"
             )
     lines.append("")
 
@@ -2936,16 +2977,23 @@ def find_actor_overlap(
     for corp_name, entries in per_company_solo.items():
         # (name, source) 단위로 묶고, 임원은 연도라벨을 합집합으로 모은다
         seen: dict[tuple, set] = {}
-        for n, s, amt, _ in entries:
-            seen.setdefault((n, s), set())
-            if s == "임원" and amt:
-                seen[(n, s)].update(amt.split(", "))
+        roles_of: dict[tuple, set] = {}
+        for n, src, amt, _rn, role in entries:
+            seen.setdefault((n, src), set())
+            roles_of.setdefault((n, src), set())
+            if src == "임원" and amt:
+                seen[(n, src)].update(amt.split(", "))
+            if role:
+                roles_of[(n, src)].add(role)
         if not seen:
             continue
         lines.append(f"  • {corp_name} — 총 {len(seen)}명:")
         for (name, source), years in sorted(seen.items())[:10]:
             if source == "임원" and years:
-                lines.append(f"      [임원] {name} ({', '.join(sorted(years))})")
+                role = "/".join(sorted(roles_of.get((name, source)) or ()))
+                suffix = f", {role}" if role else ""
+                lines.append(
+                    f"      [임원] {name} ({', '.join(sorted(years))}{suffix})")
             else:
                 lines.append(f"      [{source}] {name}")
 
