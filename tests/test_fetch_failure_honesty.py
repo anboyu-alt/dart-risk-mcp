@@ -111,7 +111,9 @@ class TestToolMessages:
     def test_조회_실패를_알린다(self, name, call):
         out = self._run(call, dc.FETCH_ERROR)
         assert "불러오지 못했습니다" in out, name
-        assert "공시가 없다는 뜻이 아닙니다" in out, name
+        # 문구는 "자료"로 통일했다 — 같은 헬퍼를 기업개요·임원보수도 쓰는데
+        # 그쪽은 공시가 아니다(#216에서 일반화).
+        assert "자료가 없다는 뜻이 아닙니다" in out, name
 
     @pytest.mark.parametrize("name,call", TOOLS)
     def test_자료_없음은_실패로_말하지_않는다(self, name, call):

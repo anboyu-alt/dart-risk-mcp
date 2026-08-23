@@ -144,22 +144,6 @@ def _append_size_footer(text: str, lookback_years: int) -> str:
     return text + f"\n\n📊 예상 출력 규모: 약 {chars:,}자 / ~{tokens:,}토큰 (대략적 추정)"
 
 
-def _fetch_failed_notice(corp_name: str, window_phrase: str) -> str:
-    """공시 조회가 **실패**했을 때의 안내 — "공시가 없다"와 구분한다.
-
-    빈 결과를 "공시 없음"으로 표시하면 API 장애·키 오류·한도 초과가 전부
-    "이 회사는 조용하다"로 보인다(2026-08-23 에러 경로 감사에서 발견 —
-    네트워크 예외·020·900 모두 같은 화면이었다). 리스크를 알리는 도구에서
-    이 둘이 섞이면 안 된다.
-    """
-    return (
-        f"⚠ **{corp_name}**의 공시를 불러오지 못했습니다 (최근 {window_phrase}).\n\n"
-        "**공시가 없다는 뜻이 아닙니다** — DART 조회가 실패했습니다. "
-        "API 키가 올바른지, 일일 호출 한도를 넘지 않았는지 확인한 뒤 다시 "
-        "시도해 주세요."
-    )
-
-
 def _shallow_notice(tool_name: str, company: str, dates: "list[str]") -> str:
     """얕은 모드에서 "구간을 좁히면 더 볼 수 있다"를 안내한다.
 
@@ -187,6 +171,21 @@ def _shallow_notice(tool_name: str, company: str, dates: "list[str]") -> str:
         "원문 확인 내용은 싣지 않았습니다.\n"
         "관심 구간을 좁혀 다시 부르면 원문까지 확인합니다: "
         f'`{tool_name}("{company}", {span})`'
+    )
+
+
+def _fetch_failed_notice(corp_name: str, window_phrase: str) -> str:
+    """조회가 **실패**했을 때의 안내 — "자료가 없다"와 구분한다.
+
+    빈 결과를 그대로 화면으로 내면 API 장애·키 오류·한도 초과가 전부
+    "이 회사는 조용하다"로 보인다(2026-08-23 에러 경로 감사에서 발견).
+    리스크를 알리는 도구에서 이 둘이 섞이면 안 된다.
+    """
+    return (
+        f"⚠ **{corp_name}**의 자료를 불러오지 못했습니다 ({window_phrase}).\n\n"
+        "**자료가 없다는 뜻이 아닙니다** — DART 조회가 실패했습니다. "
+        "API 키가 올바른지, 일일 호출 한도를 넘지 않았는지 확인한 뒤 다시 "
+        "시도해 주세요."
     )
 
 
@@ -3850,6 +3849,10 @@ def get_executive_compensation(
     corp_code = meta["corp_code"]
 
     data = fetch_executive_compensation(corp_code, _DART_API_KEY, year, report_type)
+    if data.get("fetch_failed"):
+        # 4개 엔드포인트가 모두 실패 — 「(공시 없음)」 네 줄로 보이면
+        # 보수 공시가 없는 회사와 구분되지 않는다.
+        return _fetch_failed_notice(corp_name, f"{year}년 {report_type}")
 
     import datetime as _dt
     display_year = year or str(_dt.datetime.now().year - 1)
