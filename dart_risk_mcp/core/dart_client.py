@@ -2203,7 +2203,14 @@ def fetch_company_info(corp_code: str, api_key: str) -> dict:
         )
         data = resp.json()
         if data.get("status") == "000":
-            return data
+            # status만 있고 알맹이가 없는 응답을 유효로 넘기면 호출부가 전
+            # 필드를 "-"로 채운 표를 내고, 사용자에게는 "이 회사는 정보가 없다"로
+            # 보인다(2026-08-23 에러 경로 감사에서 발견). corp_name은 정상
+            # 응답의 필수 필드다(라이브 확인) — 없으면 받은 게 아니다.
+            if data.get("corp_name"):
+                return data
+            log.debug("기업 개요 응답에 corp_name이 없음 (%s)", corp_code)
+            return {}
         _log_dart_status(data.get("status", "?"), f"기업개요 corp_code={corp_code}")
     except Exception as e:
         log.debug("기업 개요 조회 실패 (%s): %s", corp_code, e)
@@ -2505,16 +2512,27 @@ def fetch_executive_compensation(
         ("unregistered", "unrstExctvMendngSttus.json"),
         ("agm_limit", "hmvAuditIndvdlBySttus.json"),
     ]
+    # 4개 엔드포인트가 **모두** 실패하면 그건 "보수 공시가 없다"가 아니라
+    # "못 받았다"이다. 옛 구현은 둘을 구분하지 않아 API 키 오류에서도
+    # 「(공시 없음)」 네 줄이 나왔다(2026-08-23 에러 경로 감사에서 발견 —
+    # 로그에는 900이 찍히는데 사용자 화면에는 조용한 회사로 보인다).
+    ok_count = 0
     for key, ep in endpoints:
         try:
             resp = _retry("GET", f"{DART_BASE}/{ep}", params=params_base)
             data = resp.json()
-            if data.get("status") == "000":
+            status = data.get("status")
+            if status == "000":
                 result[key] = data.get("list", [])
+                ok_count += 1
             else:
-                _log_dart_status(data.get("status", "?"), f"{ep} corp_code={corp_code}")
+                # 013(자료 없음)은 정상 답변이라 실패로 세지 않는다
+                if status == "013":
+                    ok_count += 1
+                _log_dart_status(status or "?", f"{ep} corp_code={corp_code}")
         except Exception as e:
             log.debug("%s 조회 실패 (%s): %s", ep, corp_code, e)
+    result["fetch_failed"] = ok_count == 0
     return result
 
 
