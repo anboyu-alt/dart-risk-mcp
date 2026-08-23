@@ -133,7 +133,7 @@ ROUTINE_FILING_KEYWORDS = [
 
 # 위 목록에 매칭된 공시가 받는 카테고리 번호. 위험 신호(SIGNAL_TYPES)의
 # taxonomy 카테고리는 0(기타)~8(위기/부실)만 쓰므로 9는 절대 충돌하지
-# 않는다 — docs/tool/se/app.js의 classifyDisclosureCategory가 위험 신호
+# 않는다 — 뷰어의 classifyDisclosureCategory가 위험 신호
 # 키워드 매칭에 전부 실패한 뒤에만(위험 신호가 항상 먼저 이긴다) 이
 # 번호를 반환한다.
 ROUTINE_FILING_CATEGORY = 9

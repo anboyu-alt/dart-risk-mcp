@@ -5,7 +5,7 @@
 opt-in으로 조회한다. 동봉 JSON은 빈 스켈레톤이다.
 
 로드 우선순위: DART_KNOWN_ACTORS_PATH(로컬 JSON) > 신선한 파일 캐시(24h) >
-주입 캐시(se_server 등이 set_registry_cache로 주입, 선택) > Notion > 동봉.
+주입 캐시(set_registry_cache로 주입, 선택) > Notion > 동봉.
 """
 
 # PEP 604(`X | None`) 표기를 쓰므로 이 import가 없으면 Python 3.10 미만에서
@@ -31,12 +31,11 @@ _CACHE_TTL = 24 * 3600
 
 # ── 선택적 레지스트리 캐시 시임 ───────────────────────────────
 # dart_client.py:48~59의 _http_cache/set_http_cache/get_http_cache와 동일한
-# 패턴. se_server 등 외부 소비자가 Notion 레지스트리 캐시(예: Supabase)를
-# 주입하는 유일한 지점이다. 기본값 None이면 캐시 없이 지금과 완전히 동일하게
+# 패턴. 외부 소비자가 Notion 레지스트리 캐시를 주입하는 유일한 지점이다.
+# SE 폐기(2026-08-23) 후 주입하는 곳은 없다 — 시임은 남겨 둔다. 기본값 None이면 캐시 없이 지금과 완전히 동일하게
 # 동작한다(MCP 서버·CLI는 이 시임을 쓰지 않는다).
 #
-# 주입 객체는 아래 두 메서드만 제공하면 된다(CacheBackend 전체가 아니다 —
-# core가 se_server 타입을 알 필요가 없다):
+# 주입 객체는 아래 두 메서드만 제공하면 된다:
 #   get_json(key) -> dict | None
 #   put_json(key, value, ttl_seconds) -> None
 #
@@ -728,14 +727,14 @@ def actor_status(rec: dict) -> str:
 
     **이 판정의 유일한 소스** (SE-5b 리뷰). 전에는 이 로직이 세 곳에
     독립 구현돼 있었다 — `_filter_institutions`가 쓰던 이 함수의 옛 사설
-    버전(`_record_status`), `se_server/api/handlers.py::_actor_status`,
+    버전(`_record_status`),
     그리고 `server.py`의 `st == "auto_matched"` 인라인 동등비교 3곳
     (`_registry_company_section`·`lookup_known_actor`·`find_actor_overlap`).
     인라인 동등비교는 이 함수가 정확히 막으려는 결함 그 자체다 — Notion
     행에 빈 status가 오면 `== "auto_matched"`는 False가 되어 "동명이인
     미확인" 경고 없이 미검증 실명이 검증된 것처럼 렌더된다. 세 구현을
     이 함수 하나로 합치고 나머지는 여기서 import해 쓴다
-    (`se_server/api/handlers.py`, `dart_risk_mcp/server.py`).
+    (`dart_risk_mcp/server.py`).
     """
     value = (rec or {}).get("status")
     return value if isinstance(value, str) and value in _VALID_ACTOR_STATUSES \
@@ -790,7 +789,7 @@ def _filter_institutions(data: dict) -> dict:
 #              (파일이 없거나 깨져 빈 결과가 된 경우도 포함 — 그 경우에도
 #              오버라이드가 다른 경로로 넘어가지 않는다는 사실은 같다)
 #   file     : 신선한 파일 캐시(24h)
-#   cache    : 주입 캐시(se_server의 Supabase 등)
+#   cache    : 주입 캐시(set_registry_cache로 주입)
 #   notion   : Notion 원본 조회 성공
 #   bundled  : 동봉 빈 스켈레톤 — opt-in이 아니거나, opt-in인데 위 경로가
 #              전부 실패한 경우. **opt-in + bundled = 조회 실패**다.
@@ -830,7 +829,7 @@ def _load_raw_with_source() -> tuple[dict, str]:
     except Exception:
         pass
 
-    # 주입 캐시(예: se_server의 Supabase) — 파일시스템이 휘발성인 서버리스
+    # 주입 캐시 — 파일시스템이 휘발성인 서버리스
     # 환경(Vercel)에서 위 파일 캐시가 매 콜드 인보케이션마다 미스가 나
     # Notion 15회 왕복(15초)을 매번 무는 문제의 시임. 저장은 이 함수 아래
     # (필터 적용 전 원본) — 이유는 모듈 상단 주석·테스트 참고.

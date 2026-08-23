@@ -3,10 +3,9 @@
   "framework": null,
   "buildCommand": null,
   "installCommand": null,
-  "regions": ["icn1"],
+  "regions": [
+    "icn1"
+  ],
   "outputDirectory": "docs/tool",
-  "trailingSlash": false,
-  "rewrites": [
-    { "source": "/api/se/(.*)", "destination": "/api/index" }
-  ]
+  "trailingSlash": false
 }

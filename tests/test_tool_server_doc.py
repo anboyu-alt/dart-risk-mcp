@@ -1,7 +1,7 @@
 """tool_server.doc.handle_doc — 공개 뷰어 원문 추출 몸통의 단위 테스트.
 
 DART 호출(fetch_disclosure_full)은 모킹한다. 실패 분기 규칙은
-se_server `_disclosure`에서 검증된 것과 동일해야 한다:
+옛 SE `_disclosure`에서 검증된 것과 동일해야 한다:
 files 없음=502(못 받음), text 없음=404(원문 없음).
 """
 import pytest
