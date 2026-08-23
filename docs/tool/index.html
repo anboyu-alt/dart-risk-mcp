@@ -873,6 +873,27 @@ const DART_ERR = {
 };
 
 /* ── 분석 ─────────────────────────────────────── */
+// 「가장 무거운 유형」으로 다룰 신호인가.
+//
+// 옛 기준은 `category >= 7`(시장조작·위기/부실)뿐이었다. 그런데 그 카테고리에는
+// **제목만으로 정상/이상이 갈리지 않는** 신호도 들어 있다 — `EARNINGS_SHOCK`
+// (「매출액또는손익구조30% 이상 변동」)은 score 0·OBSERVATION이고 해설 자체가
+// "늘어난 경우와 줄어든 경우가 모두 들어온다"고 적는다.
+//
+// 실사고(2026-08-24 사용자 제보): 오성첨단소재(052420)에서 실적이 **개선**된
+// 공시 한 건이 "시장감시·위기/부실 카테고리 공시 1건 관찰 — 거래정지·상장폐지
+// 관련·횡령 등 가장 무거운 유형입니다"로 소개됐다.
+//
+// 1년 코퍼스 실측: 이 기준에 걸리던 4,000건 중 **2,251건(56%)이 EARNINGS_SHOCK
+// 하나**였다. 절반이 넘으면 그건 '무거운 유형' 표시가 아니라 기본값이다.
+//
+// v1.15.0이 severity와 분리해 만든 `priority` 축이 정확히 이 질문("먼저 봐야
+// 하나")을 담당한다 — `context`는 "원문을 봐야 방향을 안다"는 뜻이므로 제외한다.
+// core는 이미 `AMBIGUOUS_SIGNAL_KEYS`로 헤드라인 승격을 막고 있었다(뷰어만 샜다).
+function isHeavySignal(s) {
+  return !!s && s.category >= 7 && s.priority !== "context";
+}
+
 function matchSignals(reportNm) {
   const out = [];
   for (const s of DATA.signals) {
@@ -1146,7 +1167,7 @@ function buildResult(name, stockCode, corpCode, items, bgn, end, totalCount) {
   const detectedTypes = DATA.signals.filter((s) => typeCount[s.key]);
   const headline = pickHeadline(observedEvents.flatMap(obs));
   const heaviest = headline ? DATA.signals.find((s) => s.key === headline.key) || null : null;
-  const crisisEvents = observedEvents.filter((e) => obs(e).some((s) => s.category >= 7));
+  const crisisEvents = observedEvents.filter((e) => obs(e).some(isHeavySignal));
   const amendRate = items.length ? Math.round(amendCount / items.length * 100) : 0;
 
   // ── 작업3: 재스캔 diff — 이전 스냅샷이 있으면 신호 매칭 공시 중 새로 생긴 것을 센다.
@@ -1322,7 +1343,7 @@ function renderDetail(rcept) {
 
   $("detailBody").innerHTML = `
     <div class="mm" style="margin-bottom:12px"><a href="#" onclick="event.preventDefault();showScreen('feed')">← 공시 피드</a> / ${fmtDate(r.date)}</div>
-    <div class="panel ${s0 && cat >= 7 ? "red" : "amber"}">
+    <div class="panel ${s0 && isHeavySignal(s0) ? "red" : "amber"}">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
         ${s0 ? `<span class="tag" style="background:var(--c${cat});font-size:0.78rem;padding:0.2rem 0.7rem">${esc(DATA.categories[String(cat)])}</span>` : ""}
         ${isTop ? `<span class="mono" style="font-size:11px;color:var(--red);letter-spacing:0.16em">SIGNAL · TOP WEIGHT</span>`
@@ -1338,7 +1359,7 @@ function renderDetail(rcept) {
         ${r.signals.length
           ? r.signals.map((s) => renderWhyRow(s, r.rcept)).join("")
           : `<p class="dim">등록된 위험 신호 키워드와 일치하지 않는 공시입니다. 신호가 없다는 것이 "안전"을 뜻하지는 않습니다.</p>`}
-        ${cat >= 7 ? `<div class="callout" style="margin-top:0.4rem">거래정지·상장폐지 심사로 이어질 수 있는 유형입니다 — 원문 확인이 필요합니다.</div>` : ""}
+        ${isHeavySignal(s0) ? `<div class="callout" style="margin-top:0.4rem">거래정지·상장폐지 심사로 이어질 수 있는 유형입니다 — 원문 확인이 필요합니다.</div>` : ""}
         <div class="mnote">// 사실 관찰이며 판정이 아닙니다</div>
       </div>
       <div class="panel">
@@ -1843,7 +1864,7 @@ function timelinePanel(events, bgn, end) {
     for (const s of e.signals.filter(isObservedSig)) {
       const yi = cats.indexOf(s.category);
       const y = padT + yi * laneH + laneH / 2;
-      const heavy = s.category >= 7;
+      const heavy = isHeavySignal(s);
       dots += `<a href="${dartUrl(e.rcept)}" target="_blank" rel="noopener">` +
         `<circle ${heavy ? 'class="hv"' : ""} cx="${x(e.date).toFixed(1)}" cy="${y}" r="${heavy ? 7 : 5}" fill="var(--c${s.category})" fill-opacity="${heavy ? 1 : 0.82}">` +
         `<title>${esc(fmtDate(e.date))} · ${esc(s.label)}\n${esc(e.nm)}\n(클릭 → DART 원문)</title></circle></a>`;
