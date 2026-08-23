@@ -2702,6 +2702,28 @@ def manage_watchlist(
         companies: 회사명 목록 (add에 필요, 기존과 합집합 병합)
         note: 메모 (add 시 선택)
     """
+    # 파일이 손상돼 옆으로 치워졌으면 **먼저 알린다**. 빈 목록만 보면
+    # 사용자는 자기 목록이 사라진 줄 안다 — 실제로는 .corrupt 파일에
+    # 내용이 남아 있어 손으로 되살릴 수 있다.
+    quarantined = (load_watchlist() or {}).get("_quarantined")
+    notice = (
+        f"⚠ 워치리스트 파일을 읽을 수 없어 `{quarantined}` 로 옮겨 두고 "
+        f"새 목록으로 시작했습니다. 옮긴 파일에 이전 내용이 남아 있으니 "
+        f"필요하면 직접 확인하세요." + "\n\n"
+    ) if quarantined else ""
+    return notice + _manage_watchlist_body(action, person, companies, note)
+
+
+
+
+def _manage_watchlist_body(
+    action: str, person: str, companies: list, note: str,
+) -> str:
+    """manage_watchlist의 본체 — 손상 안내를 붙이기 위해 분리했다.
+
+    분기마다 return이 여러 곳이라, 안내를 각 return에 끼워 넣는 대신
+    본체를 감싸는 편이 읽기 쉽다.
+    """
     companies = list(companies or [])
     act = (action or "").strip().lower()
 
