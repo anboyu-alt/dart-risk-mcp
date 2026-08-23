@@ -2863,10 +2863,23 @@ def _normalize_decision(raw: dict, dtype: str, url: str) -> dict:
     # dlptn_rl_cmpn("계열회사" 등)이 이름 폴백에 섞여 이름 자리에 관계
     # 텍스트가 표시되던 오류와, 가이드에 없는 죽은 필드 2종
     # (mg_ctrcmp_cmpnm·dvcmp_cmpnm)을 2026-08-04 감사에서 제거.
+    # dvfcmp_cmpnm(분할신설회사명)은 2026-08-23에 추가했다. 2026-08-04
+    # 감사는 `dvcmp_cmpnm`을 "가이드에 없는 죽은 필드"로 제거했는데, 이름이
+    # 비슷한 **다른 필드**가 실제 응답에 있다는 것을 그때 못 찾았다. 그래서
+    # 회사분할결정은 상대방이 계속 공란이었다(라이브 3/3 실측).
+    #
+    #   현대홈쇼핑 20260805000212 (회사분할결정)
+    #     dvfcmp_cmpnm       '(주)현대홈쇼핑지주(가칭)'   ← 분할신설회사
+    #     atdv_excmp_cmpnm   '(주)현대홈쇼핑'             ← 분할존속회사(자기)
+    #
+    # 존속회사는 공시 회사 자신이라 상대방이 아니다. 체인 **끝**에 두어
+    # 다른 유형의 기존 해석을 건드리지 않는다(나머지 7종은 앞의 3개로
+    # 이미 100% 잡힌다 — 같은 감사에서 확인).
     counterparty = (
         raw.get("dlptn_cmpnm")
         or raw.get("mgptncmp_cmpnm")
         or raw.get("extr_tgcmp_cmpnm")
+        or raw.get("dvfcmp_cmpnm")
         or ""
     )
     # DART 원문 개행이 그대로 오는 필드가 있다(코오롱인더 20260507000581
