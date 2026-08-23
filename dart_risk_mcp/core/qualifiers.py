@@ -203,6 +203,28 @@ SUBSIDIARY_SUBTITLES: tuple[str, ...] = (
 # LABEL_OVERRIDES가 "유상증자(배정방식 미상)"으로 표기한다 — 실제로 원문
 # 표본의 배정방식은 주주배정이었다(확인된 5건 전부).
 
+# R1c — 집합투자증권(펀드) 서류. 회사가 낸 사건 공시가 아니라 자산운용사가
+# 내는 상품 등록·판매 서류이고, **제목에 상품명이 통째로 들어가** 회사 사건
+# 키워드와 부딪힌다.
+#
+# 이 함정은 이 레포에서 이미 두 번 우연히 발견됐다(둘 다 코드 주석에 남아 있다).
+#   `"미달"` ← 「미(美)달러」 · `"지연"` ← 「글로벌클린에너지연금증권」
+# 세 번째를 기다리는 대신 문서 종류로 가른다.
+#
+# 1년 코퍼스 실측(2026-08-23): 「집합투자증권」이 든 제목 중 신호가 붙는 것은
+# 6종 6건이고 **전부 상품명 때문**이었다.
+#   자사주매입고배당주…투자신탁      → TREASURY  (3건)
+#   글로벌4차산업전환사채증권…투자신탁 → CB_BW     (2건)
+#   지속가능글로벌테마주증권투자신탁   → THEME_STOCK(1건)
+# 본체는 일괄신고서·증권발행실적보고서·투자설명서뿐이고, 이 마커가 회사
+# 사건을 삼키는 사례는 **0건**이다.
+#
+# ⚠ 관측된 마커만 넣는다. 다른 상품 계열(파생결합증권 등)이 신호를 켜는
+# 사례는 이번 코퍼스에 없었다 — 나오면 그때 근거와 함께 넓힌다.
+FUND_PRODUCT_MARKS: tuple[str, ...] = (
+    "집합투자증권",
+)
+
 # R5 — 기존 공시의 정정·후속. '[정정명령부과]'는 규제기관 조치라 여기 없다.
 AMENDMENT_TAGS: tuple[str, ...] = (
     "기재정정", "첨부정정", "첨부추가", "정정", "발행조건확정", "연장결정",
@@ -303,7 +325,7 @@ INQUIRY_DEMAND_MARK = "조회공시요구"
 def _demotion_reason(parsed: ParsedName, filing: "dict | None") -> str:
     """강등 사유를 반환. 강등 대상이 아니면 빈 문자열.
 
-    평가 순서 R1 → R1b → R5 → R2 → R3 → R4, 첫 매칭에서 멈춘다.
+    평가 순서 R1 → R1b → R1c → R5 → R2 → R3 → R4, 첫 매칭에서 멈춘다.
     R5를 앞에 두는 이유: 정정본은 내용과 무관하게 정정이다.
     """
     filing = filing or {}
@@ -329,6 +351,11 @@ def _demotion_reason(parsed: ParsedName, filing: "dict | None") -> str:
     for title in THIRD_PARTY_TITLES:
         if parsed.body.startswith(title):
             return "지분 보유·변동 신고서입니다 (회사의 사건 공시가 아님)"
+
+    # R1c — 집합투자증권(펀드) 서류 (위 FUND_PRODUCT_MARKS 주석 참고)
+    for mark in FUND_PRODUCT_MARKS:
+        if mark in parsed.compact:
+            return "집합투자증권(펀드) 서류입니다 (회사의 사건 공시가 아님)"
 
     # R5 — 정정·후속 꼬리표
     for tag in parsed.tags:

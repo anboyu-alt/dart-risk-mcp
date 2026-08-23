@@ -349,6 +349,7 @@ def build_signals_data() -> dict:
             "wrapper_bodies": list(_q.WRAPPER_BODIES),
             "subsidiary_subtitles": list(_q.SUBSIDIARY_SUBTITLES),
             "amendment_tags": list(_q.AMENDMENT_TAGS),
+            "fund_product_marks": list(_q.FUND_PRODUCT_MARKS),
             "inquiry_demand_mark": _q.INQUIRY_DEMAND_MARK,
             "tails": list(_q.TAILS),
             "label_overrides": {

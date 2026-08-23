@@ -946,6 +946,12 @@ function demotionReason(parsed, filing) {
   for (const t of (r.third_party_titles || [])) {
     if (parsed.body.startsWith(t)) return "지분 보유·변동 신고서입니다 (회사의 사건 공시가 아님)";
   }
+  // R1c — 집합투자증권(펀드) 서류 (core qualifiers.FUND_PRODUCT_MARKS 이식).
+  // 자산운용사가 내는 상품 서류라 회사 사건이 아닌데, 제목에 상품명이
+  // 통째로 들어가 회사 사건 키워드와 부딪힌다(「자사주매입…투자신탁」 등).
+  if ((r.fund_product_marks || []).some((m) => parsed.compact.indexOf(m) !== -1)) {
+    return "집합투자증권(펀드) 서류입니다 (회사의 사건 공시가 아님)";
+  }
   // R5 — 정정·후속 꼬리표
   for (const tag of parsed.tags) {
     if (isAmendmentTag(tag)) return `기존 공시의 정정·후속 보고입니다 (${tag})`;
