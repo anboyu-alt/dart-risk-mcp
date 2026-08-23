@@ -10,6 +10,7 @@
 패턴 게이트의 원문 확인은 얕은 모드에서도 유지한다 — 표시용 사실이 아니라
 패턴을 띄울지의 판정 입력이라, 빼면 지도에서 패턴 자체가 사라진다.
 """
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import pytest
@@ -227,3 +228,47 @@ class TestFetchDateRange:
             dc.fetch_company_disclosures("00126380", "k", lookback_days=30)
         assert len(seen["bgn_de"]) == 8
         assert seen["bgn_de"] < seen["end_de"]
+
+
+class TestFutureDateGuard:
+    """미래 날짜 — "아직 오지 않은 기간"과 "조용한 기간"을 가른다 (2026-08-23).
+
+    시작일이 미래면 DART가 빈 목록을 준다. 그대로 두면 화면에 "공시 없음"이
+    떠서, 연도를 잘못 친 사용자가 그걸 "이 회사는 조용하다"로 읽는다.
+    같은 종류의 결함(아직 오지 않은 날짜를 사실처럼 표기)을 관찰 윈도우
+    표기에서 이미 한 번 고쳤다(v1.12.3).
+
+    종료일이 미래인 것은 **막지 않는다** — "2024년부터 지금까지"를 넉넉한
+    종료일로 쓰는 건 자연스럽다. 대신 실제 조회 구간으로 좁히고 그 사실을
+    문구에 남긴다.
+    """
+
+    def _tomorrow(self, n=1):
+        return (datetime.now() + timedelta(days=n)).strftime("%Y%m%d")
+
+    def test_미래_시작일은_오류로_안내한다(self):
+        _, _, _, _, _, err = srv._resolve_window(1, None, self._tomorrow(), "")
+        assert "미래입니다" in err
+        assert "오늘" in err
+
+    def test_미래_시작일은_창을_만들지_않는다(self):
+        bgn, end, days, pages, _, err = srv._resolve_window(
+            1, None, self._tomorrow(30), self._tomorrow(60))
+        assert err and (bgn, end, days, pages) == ("", "", 0, 0)
+
+    def test_오늘_시작일은_통과한다(self):
+        today = datetime.now().strftime("%Y%m%d")
+        bgn, _, _, _, _, err = srv._resolve_window(1, None, today, "")
+        assert not err and bgn == today
+
+    def test_미래_종료일은_오늘로_좁힌다(self):
+        today = datetime.now().strftime("%Y%m%d")
+        _, end, _, _, phrase, err = srv._resolve_window(
+            1, None, "2024-01-01", self._tomorrow(400))
+        assert not err
+        assert end == today, "실제로 조회하지 않은 날짜를 창 끝에 적으면 안 된다"
+        assert "좁혔습니다" in phrase
+
+    def test_좁히지_않은_창에는_안내를_붙이지_않는다(self):
+        _, _, _, _, phrase, _ = srv._resolve_window(1, None, "2024-01-01", "2024-06-30")
+        assert "좁혔" not in phrase

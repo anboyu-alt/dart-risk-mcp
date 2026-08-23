@@ -222,6 +222,11 @@ def _is_deep_window(days: int) -> bool:
     return days <= _DEEP_WINDOW_DAYS
 
 
+def _fmt_date8(d: str) -> str:
+    """YYYYMMDD → YYYY.MM.DD. 8자리가 아니면 그대로 돌려준다."""
+    return f"{d[:4]}.{d[4:6]}.{d[6:]}" if len(d) == 8 else d
+
+
 def _resolve_window(
     lookback_years: int,
     lookback_days: "int | None",
@@ -243,6 +248,23 @@ def _resolve_window(
             return "", "", 0, 0, "", f"to_date 형식이 올바르지 않습니다: {to_date!r} (예: 2024-06-30)"
         today = datetime.now().strftime("%Y%m%d")
         end = end or today
+        # 시작일이 미래면 조회할 게 없다. 그대로 두면 DART가 빈 목록을 주고
+        # 화면에는 "공시 없음"이 뜬다 — **아직 오지 않은 기간과 조용한 기간이
+        # 같은 모양**이 된다. 연도를 한 자리 잘못 친 사용자가 그걸 "이 회사는
+        # 조용하다"로 읽는다. 같은 종류의 결함을 관찰 윈도우 표기에서 이미
+        # 한 번 고쳤다(v1.12.3 — 아직 오지 않은 날짜가 창 끝에 찍히던 건).
+        if bgn and bgn > today:
+            return "", "", 0, 0, "", (
+                f"from_date({_fmt_date8(bgn)})가 미래입니다 — "
+                f"오늘({_fmt_date8(today)})까지만 조회할 수 있습니다."
+            )
+        # 종료일이 미래인 것은 막지 않는다. "2024-01-01부터 지금까지"를
+        # 넉넉한 종료일로 표현하는 건 자연스러운 의도다. 대신 **실제로 조회한
+        # 구간**을 표기하도록 오늘로 좁힌다 — 표기와 동작이 어긋나면 그것도
+        # 거짓이다.
+        clamped = end > today
+        if clamped:
+            end = today
         # 시작일을 안 주면 종료일 기준 1년 — "그 시점까지 1년"이 자연스럽다
         if not bgn:
             bgn = (datetime.strptime(end, "%Y%m%d") - timedelta(days=365)).strftime("%Y%m%d")
@@ -251,7 +273,9 @@ def _resolve_window(
         days = (datetime.strptime(end, "%Y%m%d") - datetime.strptime(bgn, "%Y%m%d")).days + 1
         # 페이지 상한은 창 길이에 비례 — 1년당 10페이지(1,000건)라는 기존 관례
         max_pages = max(10, min(50, (days // 365 + 1) * 10))
-        phrase = f"{bgn[:4]}.{bgn[4:6]}.{bgn[6:]}~{end[:4]}.{end[4:6]}.{end[6:]}"
+        phrase = f"{_fmt_date8(bgn)}~{_fmt_date8(end)}"
+        if clamped:
+            phrase += " (종료일이 미래라 오늘까지로 좁혔습니다)"
         return bgn, end, days, max_pages, phrase, ""
 
     days, max_pages, phrase = _resolve_lookback(lookback_years, lookback_days)
