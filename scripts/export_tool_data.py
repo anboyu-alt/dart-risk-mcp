@@ -350,6 +350,7 @@ def build_signals_data() -> dict:
             "subsidiary_subtitles": list(_q.SUBSIDIARY_SUBTITLES),
             "related_party_prefix": _q.RELATED_PARTY_PREFIX,
             "amendment_tags": list(_q.AMENDMENT_TAGS),
+            "inquiry_demand_mark": _q.INQUIRY_DEMAND_MARK,
             "tails": list(_q.TAILS),
             "label_overrides": {
                 k: {**v, "confirm_markers": list(v.get("confirm_markers", ()))}

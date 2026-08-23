@@ -258,6 +258,31 @@ class Qualified:
     note: str
 
 
+# R4 예외 — 거래소가 물었다는 사실은 답변의 확정 여부와 무관하다.
+#
+# R4는 "회사가 아직 정해진 게 없다고 답했다"를 근거로 강등한다. 그 논리가
+# 맞는 신호도 있지만 `INQUIRY`에는 맞지 않는다 — taxonomy 7.1은 "공시 전
+# 이상 거래(주가·거래량 급변)"이고, 거래소는 **그 이상 거래를 봤기 때문에**
+# 물었다. 답변이 미확정이라고 해서 이미 일어난 시황 변동이 사라지지 않는다.
+#
+# 1년 코퍼스 실측(2026-08-23)에서 드러난 비일관:
+#   조회공시요구(현저한시황변동)                        observed  77건
+#   조회공시요구(풍문또는보도)에대한답변(부인)             observed   6건
+#   조회공시요구(풍문또는보도)에대한답변(중요공시예정)      observed  42건
+#   조회공시요구(현저한시황변동)에대한답변(미확정)          강등     76건  ←
+# 부인(회사가 아니라고 함)은 관찰인데 미확정(확인해주지 않음)만 강등됐다.
+# 같은 요구에 대한 답변인데 판정이 갈린다.
+#
+# 「풍문또는보도에대한해명」(353건)은 **고치지 않는다** — 거래소 요구에 따른
+# 것인지 회사의 자발적 해명인지 제목만으로 알 수 없고, 판정 불가면 보수적
+# 쪽에 두는 것이 이 레포의 관례다(제목 수준 vs 내용 확인 감사표 참고).
+# 제목에 요구가 **적혀 있는** 149건만 되돌린다.
+#
+# R4가 1년 코퍼스에서 강등하는 502건은 전부 INQUIRY 단독이라, 이 예외가
+# 다른 신호의 tier를 건드리지 않는다(실측).
+INQUIRY_DEMAND_MARK = "조회공시요구"
+
+
 def _demotion_reason(parsed: ParsedName, filing: "dict | None") -> str:
     """강등 사유를 반환. 강등 대상이 아니면 빈 문자열.
 
@@ -309,8 +334,12 @@ def _demotion_reason(parsed: ParsedName, filing: "dict | None") -> str:
     if parsed.body.startswith(RELATED_PARTY_PREFIX):
         return "회사가 아니라 특수관계인의 행위입니다"
 
-    # R4 — 해명·미확정
-    if parsed.tail == "해명" or "미확정" in parsed.subtitles:
+    # R4 — 해명·미확정. 단 제목에 「조회공시요구」가 명시된 답변은 제외한다
+    # (아래 INQUIRY_DEMAND_MARK 주석 참고).
+    if (
+        (parsed.tail == "해명" or "미확정" in parsed.subtitles)
+        and INQUIRY_DEMAND_MARK not in parsed.compact
+    ):
         return "회사가 미확정으로 답한 해명 공시입니다"
 
     return ""

@@ -25,7 +25,7 @@ import collections
 import pytest
 
 from dart_risk_mcp.core.qualifiers import (
-    TIER_OBSERVED, parse_report_name, qualify_signals,
+    TIER_OBSERVED, _demotion_reason, parse_report_name, qualify_signals,
 )
 from dart_risk_mcp.core.signals import (
     SIGNAL_KEY_TO_TAXONOMY, SIGNAL_TYPES, match_signals,
@@ -181,3 +181,61 @@ class TestKnownFalsePositiveGuards:
                if "상장예비심사" in t.replace(" ", "")
                and "DELISTING_RISK" in [s["key"] for s in match_signals(t)]]
         assert not bad, bad[:5]
+
+
+class TestInquiryDemandNotDemoted:
+    """조회공시 요구가 제목에 적힌 답변은 강등하지 않는다 (2026-08-23).
+
+    R4("회사가 미확정으로 답한 해명 공시입니다")가 1년 코퍼스에서 강등하는
+    502건은 **전부 INQUIRY 단독**이다. 그런데 taxonomy 7.1은 "공시 전 이상
+    거래(주가·거래량 급변)"이고, 거래소는 그 이상 거래를 봤기 때문에 물었다.
+    답변이 미확정이라고 해서 이미 일어난 시황 변동이 사라지지 않는다.
+
+    실측으로 드러난 비일관: 같은 조회공시요구에 대해
+      답변(부인) observed · 답변(중요공시예정) observed · 답변(미확정) 강등
+
+    「풍문또는보도에대한해명」(353건)은 거래소 요구인지 자발적 해명인지
+    제목으로 알 수 없어 **강등을 유지한다** — 판정 불가면 보수적으로.
+    """
+
+    DEMAND_STATED = [
+        "조회공시요구(현저한시황변동)에대한답변(미확정)",
+        "조회공시요구(풍문또는보도)에대한답변(미확정)",
+        "조회공시요구(풍문또는보도등)에대한답변(미확정)",
+        "조회공시요구(풍문또는보도)에대한답변(미확정)              (타법인 인수설에 대한 조회공시 답변)",
+    ]
+    SELF_CLARIFICATION = [
+        "풍문또는보도에대한해명(미확정)",
+        "풍문또는보도에대한해명",
+    ]
+
+    def _reason(self, nm):
+        return _demotion_reason(parse_report_name(nm), {"flr_nm": "", "corp_name": ""})
+
+    @pytest.mark.parametrize("nm", DEMAND_STATED)
+    def test_요구가_적힌_답변은_관찰로_남는다(self, nm):
+        assert not self._reason(nm), f"강등되면 안 된다: {nm}"
+        assert any(s["key"] == "INQUIRY" for s in match_signals(nm))
+
+    @pytest.mark.parametrize("nm", SELF_CLARIFICATION)
+    def test_자발적_해명은_강등을_유지한다(self, nm):
+        assert "미확정으로 답한 해명" in (self._reason(nm) or "")
+
+    def test_자회사_사안은_여전히_먼저_걸린다(self):
+        """R3가 R4보다 앞이라 예외가 자회사 강등을 되돌리지 않는다."""
+        r = self._reason("조회공시요구(풍문또는보도)에대한답변(미확정)"
+                         "              (종속회사의 주요경영사항)")
+        assert "자회사" in (r or "")
+
+    def test_다른_신호는_영향받지_않는다(self):
+        """R4 강등 502건이 전부 INQUIRY 단독이라는 실측을 코퍼스로 고정한다."""
+        demoted = set()
+        for t in _DATA["titles"]:
+            nm = t["nm"]
+            sigs = match_signals(nm)
+            if not sigs:
+                continue
+            r = _demotion_reason(parse_report_name(nm), {"flr_nm": "", "corp_name": ""})
+            if "미확정으로 답한 해명" in (r or ""):
+                demoted |= {s["key"] for s in sigs}
+        assert demoted <= {"INQUIRY"}, f"INQUIRY 외 신호가 R4로 강등된다: {demoted}"
