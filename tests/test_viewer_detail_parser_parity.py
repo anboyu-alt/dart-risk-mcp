@@ -262,3 +262,75 @@ class TestOutflowBlockScope:
         """원문이 "종속회사"이고 분류도 "종속회사"면 한 번만 쓴다."""
         src = _cut(self._html(), "assetTransferCardHTML")
         assert "relRaw === clsLabel" in src
+
+
+class TestViewerFairTradeFormat:
+    """뷰어 `parseOutflowDetail`의 공정거래법 제26조 서식 (2026-08-23).
+
+    core와 **입력이 다르다** — core는 태그를 지운 평문을, 뷰어는 `/api/doc`가
+    만든 마크다운 표를 받는다. 그래서 구현도 다르지만, 같은 공백이 양쪽에
+    있었다: 「거래상대방」 라벨을 몰라 공정위 서식(「특수관계인에대한자금대여」·
+    「특수관계인에대한담보제공」, 1년 920건 이상)에서 상대방이 빈 값이었다.
+
+    ⚠ 금액은 이 서식만 「(단위 : 백만 원)」이고 필드명에 "(원)"이 없다.
+    그리고 뷰어의 `norm()`은 숫자 접두("2.")만 떼고 한글 항목 기호("바.")는
+    남기므로 패턴이 그걸 허용해야 한다.
+    """
+
+    FT_COLLATERAL = (
+        "\n| 관련법규 | 공정거래법 제26조 |\n|---|---|\n\n| (단위 : 백만 원) |\n|---|\n\n"
+        "| 1. 거래상대방 | 아산배방개발(주) | 회사와의 관계 | 계열회사 |\n"
+        "|---|---|---|---|\n| 바. 담보금액 | 305,800 |\n"
+    )
+    FT_LOAN = (
+        "\n| 관련법규 | 공정거래법 제26조 |\n|---|---|\n\n"
+        "| 1. 거래상대방 | 손제호 | 회사와의 관계 | 임원 |\n"
+        "|---|---|---|---|\n| 나. 거래금액 | 4,900 |\n"
+    )
+    MSR_LOAN = (
+        "\n| 1. 대여 상대 | (주)한국파일 |\n|---|---|\n"
+        "| 회사와의 관계 | 종속회사 |\n| 대여금액(원) | 5,000,000,000 |\n"
+    )
+    MSR_GUARANTEE = (
+        "\n| 1. 채무자 | 분양계약자 |\n|---|---|\n"
+        "| 회사와의 관계 | - |\n| 채무보증금액(원) | 100,000,000,000 |\n"
+    )
+
+    def _parse(self, texts):
+        html = _HTML.read_text(encoding="utf-8")
+        import re as _re
+        m = _re.search(r"^const AFFIL_DASH_VALUES\s*=\s*[\s\S]*?;\s*$", html, _re.M)
+        src = ((m.group(0) if m else "") + "\n"
+               + _cut(html, "affiliateInt") + "\n" + _cut(html, "parseOutflowDetail"))
+        js = (src + "\nconst T=" + json.dumps(texts, ensure_ascii=False)
+              + ";\nconsole.log(JSON.stringify(T.map(parseOutflowDetail)));")
+        tf = tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8")
+        tf.write(js)
+        tf.close()
+        try:
+            r = subprocess.run([shutil.which("node"), tf.name],
+                               capture_output=True, text=True, encoding="utf-8")
+            assert r.returncode == 0, r.stderr[:500]
+            return json.loads(r.stdout)
+        finally:
+            os.unlink(tf.name)
+
+    def test_공정위_서식_상대방과_관계를_읽는다(self):
+        got = self._parse([self.FT_COLLATERAL, self.FT_LOAN])
+        assert got[0]["counterparty"] == "아산배방개발(주)"
+        assert got[0]["relation"] == "계열회사"
+        assert got[1]["counterparty"] == "손제호"
+        assert got[1]["relation"] == "임원"
+
+    def test_공정위_금액을_원_단위로_환산한다(self):
+        got = self._parse([self.FT_COLLATERAL, self.FT_LOAN])
+        assert got[0]["amount"] == "305800000000"
+        assert got[1]["amount"] == "4900000000"
+
+    def test_기존_서식이_밀리지_않는다(self):
+        got = self._parse([self.MSR_LOAN, self.MSR_GUARANTEE])
+        assert got[0]["counterparty"] == "(주)한국파일"
+        assert got[0]["relation"] == "종속회사"
+        assert got[0]["amount"] == "5,000,000,000"
+        assert got[1]["counterparty"] == "분양계약자"
+        assert got[1]["amount"] == "100,000,000,000"

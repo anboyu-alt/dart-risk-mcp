@@ -2838,16 +2838,29 @@ function parseOutflowDetail(text) {
     .filter((c) => c && !/^[-:\s]*$/.test(c));
   const norm = (c) => c.replace(/\s+/g, "").replace(/^-/, "").replace(/^\d+\.?/, "");
   const isRelLabel = (c) => /^\(?회사와의관계\)?$/.test(norm(c));
-  const isCpLabel = (c) => /^(대여상대|채무자|성명\(법인명\)|회사명\(성명\))$/.test(norm(c));
+  // 「거래상대방」은 공정거래법 제26조 서식(「특수관계인에대한자금대여」·
+  // 「특수관계인에대한담보제공」)의 라벨이다. 이게 없어 그 계열이 상대방을
+  // 하나도 못 읽고 있었다 — core도 같은 공백이었다(2026-08-23 실측:
+  // 자금대여 0/6 · 담보제공 0/6, 1년 920건 이상 영향).
+  const isCpLabel = (c) => /^(대여상대|채무자|성명\(법인명\)|회사명\(성명\)|거래상대방)$/.test(norm(c));
   const validRel = (v) => !!v && v.length <= 20 && !/\d/.test(v) && !/관계|금액|채권자|여부|내역/.test(norm(v));
   const validCp = (v) => !!v && v.length <= 40 && !isRelLabel(v) && !/^(영문|자본금|주요사업)/.test(norm(v)) && !/^\d+\./.test(v);
 
+  const isFairTrade = text.includes("공정거래법 제26조");
   let counterparty = "", relation = "", amount = "";
   for (let i = 0; i < cells.length - 1; i++) {
     if (!counterparty && isCpLabel(cells[i]) && validCp(cells[i + 1])) counterparty = cells[i + 1];
     if (!relation && isRelLabel(cells[i]) && validRel(cells[i + 1])) relation = cells[i + 1];
     if (!amount && /^(대여금액|담보설정금액|채무보증금액)\(원\)$/.test(norm(cells[i]))
         && /^[0-9,]+$/.test(cells[i + 1])) amount = cells[i + 1];
+    // 공정위 서식은 「(단위 : 백만 원)」을 달고 「바. 담보금액 305,800」처럼
+    // "(원)" 없이 적는다. 원 단위로 환산해야 다른 서식과 같은 축이 된다.
+    // ⚠ norm()은 숫자 접두("2.")만 떼고 한글 항목 기호("바.")는 남긴다 —
+    // 공정위 서식은 「바. 담보금액」·「나. 거래금액」이라 앞을 허용해야 한다.
+    if (!amount && isFairTrade && /^(?:[가-힣]\.)?(담보금액|거래금액|대여금액)$/.test(norm(cells[i]))
+        && /^[0-9,]+$/.test(cells[i + 1])) {
+      amount = String((affiliateInt(cells[i + 1]) || 0) * 1000000);
+    }
   }
 
   // 표가 아닌 평문 서식 폴백 (검증 동반 — 라벨 오캡처는 버린다)
@@ -2858,6 +2871,8 @@ function parseOutflowDetail(text) {
         /대여\s*상대\s+(.+?)(?=\s*영문|\s*-?\s*회사와의\s*관계|\s*\d+\.\s|$)/,
         /채무자\s+(.+?)(?=\s*영문|\s*-?\s*회사와의\s*관계|\s*\d+\.\s|$)/,
         /거래상대방\s*회사명\(성명\)\s+(.+?)(?=\s*영문|\s*-?\s*회사와의\s*관계|\s*\d+\.\s|$)/,
+        // 공정위 서식 — 「1. 거래상대방 <이름> 회사와의 관계 <관계>」
+        /거래상대방\s+(.+?)(?=\s*회사와의\s*관계|\s*\d+\.\s|$)/,
       ];
       for (const re of cpPatterns) {
         const m = flat.match(re);
