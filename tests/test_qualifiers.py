@@ -148,9 +148,20 @@ def test_r3_demotes_subsidiary_matter():
     assert "자회사" in q.reason
 
 
-def test_r3_demotes_related_party_participation():
+def test_r3_keeps_related_party_participation():
+    """「특수관계인의유상증자참여」는 강등하지 않는다 (2026-08-23 정정).
+
+    옛 테스트는 이 제목을 R3로 강등하는 동작을 고정하고 있었다. 원문 13건을
+    전수로 열어 보니 뜻이 반대였다 — 특수관계인이 한 일이 아니라 **이 회사가
+    유상증자를 했고 그 신주를 계열회사가 인수한 건**이다(참여자 관계
+    계열회사 13/13, 공정거래법 제26조 13/13).
+
+    같은 법의 형제 공시(자금차입·자금대여·출자·받은담보·담보제공)는 전부
+    관찰이라 이것만 강등하는 것도 어긋났다.
+    """
     q = _one("특수관계인의유상증자참여", [PCA3])
-    assert q.tier == TIER_PROCEDURAL
+    assert q.tier == TIER_OBSERVED
+    assert not q.reason
 
 
 # ── R4: 해명·미확정 ─────────────────────────────────────────
