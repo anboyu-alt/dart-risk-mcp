@@ -21,7 +21,7 @@ AI 어시스턴트와 개발자를 위한 프로젝트 내부 가이드입니다
 dart_risk_mcp/
 ├── __init__.py          # 패키지 버전 (0.1.0)
 ├── __main__.py          # 진입점 → server.main() 호출
-├── server.py            # MCP 서버 + 13개 도구 정의
+├── server.py            # MCP 서버 + 26개 도구 정의
 └── core/
     ├── __init__.py      # 공개 API export
     ├── dart_client.py   # DART API 클라이언트 (핵심)
@@ -122,7 +122,7 @@ dart_risk_mcp/
 - `SIGNAL_KEY_TO_TAXONOMY`로 신호 키 → taxonomy ID(1.1~8.5) 매핑 후 조회
 - 사용 가능한 신호 키 (아래 표 33개, 8개 카테고리):
 
-  > ⚠ 아래 키 중 15종(`CB_REPAY`·`CB_BUYBACK`·`CB_ROLLOVER`·`TREASURY_EB`·`BUYBACK_NEG`·`MEETING_VIOL`·`ACTIVIST`·`DISTRESS_MA`·`GAMJA_MERGE`·`CAPITAL_RED`·`RIGHTS_UNDER`·`ASSET_SPIRAL`·`CIRCULAR`·`REVENUE_IRREG`·`CONTINGENT`)은 **공시 제목으로 발화하지 않는다**(`core/signals.py`의 `NON_TITLE_SIGNALS`). `find_risk_precedents`로 조회하면 그 사실이 함께 표시된다.
+  > ⚠ 아래 키 중 16종(`CB_REPAY`·`CB_BUYBACK`·`CB_ROLLOVER`·`TREASURY_EB`·`BUYBACK_NEG`·`MEETING_VIOL`·`ACTIVIST`·`DISTRESS_MA`·`GAMJA_MERGE`·`CAPITAL_RED`·`RIGHTS_UNDER`·`ASSET_SPIRAL`·`CIRCULAR`·`REVENUE_IRREG`·`CONTINGENT`·`THEME_STOCK`)은 **공시 제목으로 발화하지 않는다**(`core/signals.py`의 `NON_TITLE_SIGNALS`). `find_risk_precedents`로 조회하면 그 사실이 함께 표시된다.
 
   | 카테고리 | 키 목록 |
   |---------|---------|
@@ -878,7 +878,9 @@ INQUIRY의 `"거래정지"` 오탐은 우연히 발견됐다. 같은 종류의 �
 
 ### 골드 출력 재생성 (회귀 검증용)
 
-`scripts/regen_goldens.py`로 6개 회사 × 23개 도구 매트릭스를 한 번에 재생성합니다.
+`scripts/regen_goldens.py`로 6개 회사 × 24개 도구 매트릭스를 한 번에 재생성합니다.
+(전체 26개 중 `lookup_known_actor`·`manage_watchlist`는 외부 데이터·사용자 자산에
+의존해 매트릭스에서 제외됩니다.)
 API 키는 `tmp/_apikey.txt` 또는 환경변수 `DART_API_KEY`에서 자동 로드.
 
 ```bash
