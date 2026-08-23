@@ -4,8 +4,12 @@
 존재한다(TAXONOMY의 name은 45개 중 41개가 영문). MD 재생성 시 영문 퇴행을
 막으려면 이 라벨을 별도 자산으로 보존해야 한다.
 """
+import re
 import unittest
 from pathlib import Path
+
+from dart_risk_mcp.core import catalog
+from dart_risk_mcp.core.taxonomy import TAXONOMY
 
 from scripts.catalog.extract_labels import parse_md_labels
 from scripts.catalog.labels import label_for, load_labels
@@ -172,3 +176,62 @@ class TestLoadLabels(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestInstalledArtifactLabels(unittest.TestCase):
+    """설치본(휠)에서도 45종 한글 라벨이 나온다.
+
+    `catalog._LABELS_KO_PATH`는 `Path(__file__).parent.parent.parent /
+    "data" / "catalog" / "labels_ko.json"` — **패키지 밖**을 가리킨다.
+    개발 체크아웃에서는 레포 루트의 파일이 잡히지만, `pip install` 뒤에는
+    `site-packages/data/...`가 되어 **존재하지 않는다**.
+
+    2026-08-23 실측(v1.20.0 휠을 임시 디렉터리에 설치해 확인):
+
+        labels_ko 경로 존재: False
+        labels_ko 로드 결과: 0종
+        한글 라벨이 없는 id: 0종   ← 동봉 MD가 전부 덮는다
+
+    즉 지금은 무사하지만, **라벨이 `labels_ko.json`에만 있고 동봉 MD에는
+    없는 taxonomy가 하나라도 생기면 개발에서는 한글, 설치본에서는 영문**이
+    된다 — 배포본에서만 조용히 퇴화하는 종류다(CLAUDE.md가 경고하는 지점).
+
+    이 테스트는 그 상황을 흉내 낸다: labels_ko를 못 읽는 상태로 만들고
+    45종이 여전히 한글인지 본다.
+    """
+
+    def setUp(self):
+        self._orig_path = catalog._LABELS_KO_PATH
+        self._orig_cache = catalog._labels_ko_cache
+
+    def tearDown(self):
+        catalog._LABELS_KO_PATH = self._orig_path
+        catalog._labels_ko_cache = self._orig_cache
+
+    def _simulate_installed(self):
+        """labels_ko.json이 없는 환경(설치본)을 만든다."""
+        catalog._LABELS_KO_PATH = Path("존재하지-않는-경로") / "labels_ko.json"
+        catalog._labels_ko_cache = None
+
+    def test_labels_ko_없이도_45종이_한글이다(self):
+        self._simulate_installed()
+        self.assertEqual(catalog._load_labels_ko(), {},
+                         "설치본 흉내가 제대로 안 됐다")
+        eng = [t for t in TAXONOMY
+               if not re.search(r"[가-힣]", catalog.taxonomy_label_ko(t) or "")]
+        self.assertEqual(eng, [], f"설치본에서 영문으로 퇴화하는 id: {eng}")
+
+    def test_labels_ko_없이도_발췌가_나온다(self):
+        self._simulate_installed()
+        empty = [t for t in TAXONOMY
+                 if not (catalog.load_catalog_excerpt([t]) or "").strip()]
+        self.assertEqual(empty, [], f"설치본에서 발췌가 비는 id: {empty}")
+
+    def test_동봉_MD가_패키지_안에_있다(self):
+        """`_CATALOG_DIR`이 패키지 밖이면 휠에 안 실린다."""
+        pkg_root = Path(catalog.__file__).parent.parent
+        self.assertTrue(
+            str(catalog._CATALOG_DIR).startswith(str(pkg_root)),
+            f"카탈로그 디렉터리가 패키지 밖이다: {catalog._CATALOG_DIR}")
+        self.assertTrue(any(catalog._CATALOG_DIR.glob("*.md")),
+                        "동봉 MD가 없다")
