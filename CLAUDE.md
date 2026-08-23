@@ -25,7 +25,7 @@ dart_risk_mcp/
 └── core/
     ├── __init__.py      # 공개 API export
     ├── dart_client.py   # DART API 클라이언트 (핵심)
-    ├── signals.py       # 54개 신호 유형 (8개 카테고리) + 키워드 매칭 (v0.4.0 카탈로그 기반 보강, v1.6.1 기준 54종)
+    ├── signals.py       # 57개 신호 유형 (8개 카테고리) + 키워드 매칭 (v0.4.0 카탈로그 기반 보강)
     ├── catalog.py       # 금감원·금융위 MD 카탈로그 로더 (load_catalog_excerpt, taxonomy_label_ko)
     ├── cb_extractor.py  # CB/BW 인수자명 추출
     ├── sector_policy.py # 업종별 유의 회계정책 정적 맵 (KSIC 조회, kreports 이식/Apache 2.0)
@@ -33,7 +33,7 @@ dart_risk_mcp/
     ├── watchlist.py     # 인물↔회사군 영속 워치리스트 (순수 파일 I/O)
     ├── known_actors.py  # 공개기록 행위자 레지스트리 로드/조회, 회사명 역방향 조회 포함 (비공개 Notion opt-in)
     ├── qualifiers.py    # 신호 한정층 — 제목 구조 파싱(parse_report_name) + observed/procedural tier 판정(qualify_signals) + 헤드라인 선정(pick_headline). 순수 함수, 네트워크 호출 없음
-    └── taxonomy.py      # 44개 신호 분류(v1.6.0 기준) + 위험 점수 + 패턴 10종
+    └── taxonomy.py      # 45개 신호 분류 + 위험 점수 + 복합 패턴 11종
 ```
 
 > 동봉 데이터: `dart_risk_mcp/data/known_actors.json`(빈 스켈레톤 — v1.5.0부터 인물 데이터 미포함). 레지스트리 원본은 제작자 비공개 Notion DB. DB 셋업: `scripts/setup_known_actors_db.py`(+`setup-known-actors-db.yml`, 1회성).
@@ -120,7 +120,7 @@ dart_risk_mcp/
 
 - 실제 과거 공시 검색은 하지 않음 (taxonomy 정적 데이터 조회)
 - `SIGNAL_KEY_TO_TAXONOMY`로 신호 키 → taxonomy ID(1.1~8.5) 매핑 후 조회
-- 사용 가능한 신호 키 (30개, 8개 카테고리):
+- 사용 가능한 신호 키 (아래 표 33개, 8개 카테고리):
 
   > ⚠ 아래 키 중 15종(`CB_REPAY`·`CB_BUYBACK`·`CB_ROLLOVER`·`TREASURY_EB`·`BUYBACK_NEG`·`MEETING_VIOL`·`ACTIVIST`·`DISTRESS_MA`·`GAMJA_MERGE`·`CAPITAL_RED`·`RIGHTS_UNDER`·`ASSET_SPIRAL`·`CIRCULAR`·`REVENUE_IRREG`·`CONTINGENT`)은 **공시 제목으로 발화하지 않는다**(`core/signals.py`의 `NON_TITLE_SIGNALS`). `find_risk_precedents`로 조회하면 그 사실이 함께 표시된다.
 
