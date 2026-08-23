@@ -604,6 +604,9 @@ def fetch_market_disclosures(
 ) -> list[dict]:
     """DART /list.json을 corp_code 없이 호출해 시장 전체 공시 조회.
 
+    실패 이유가 필요하면 `fetch_market_disclosures_with_status`를 쓴다 —
+    빈 결과가 "그날 공시가 없다"인지 "못 받았다"인지 구분된다.
+
     Args:
         api_key: DART API 키
         bgn_de: 시작일 YYYYMMDD
@@ -611,8 +614,32 @@ def fetch_market_disclosures(
         pblntf_ty: 공시 유형 (A=정기, B=주요사항, C=발행, D=지분, E=기타, F=외부감사, I=거래소, J=공정위)
         max_pages: 최대 페이지 수 (100건/페이지)
     """
+    rows, _ = fetch_market_disclosures_with_status(
+        api_key, bgn_de, end_de, pblntf_ty=pblntf_ty, max_pages=max_pages,
+    )
+    return rows
+
+
+def fetch_market_disclosures_with_status(
+    api_key: str,
+    bgn_de: str,
+    end_de: str,
+    pblntf_ty: str = "",
+    max_pages: int = 10,
+) -> "tuple[list[dict], str]":
+    """`fetch_market_disclosures` + 조회 상태. 상태는 FETCH_* 중 하나.
+
+    **하루씩 훑는 호출부에 필요하다.** `search_market_disclosures`는 창을
+    하루 단위로 쪼개 이 함수를 반복 호출하는데, 어느 하루가 실패해도 빈
+    목록이 돌아와 그날이 조용히 빠진다 — 그러고도 화면에는 "전체 N건 중
+    관찰 신호 M건"이라 적혀 스캔이 완전했던 것처럼 보인다(2026-08-23 후속
+    감사). 절단(상한 도달)은 이미 알리면서 **실패는 안 알리고 있었다**.
+
+    휴장일·주말은 DART가 013(자료 없음)을 주므로 FETCH_EMPTY다 — 실패로
+    세면 주말마다 경고가 뜬다. 부분 성공은 형제 함수와 같이 FETCH_OK다.
+    """
     if not api_key:
-        return []
+        return [], FETCH_ERROR
 
     results: list[dict] = []
     page_no = 1
@@ -630,12 +657,15 @@ def fetch_market_disclosures(
         try:
             data = _retry("GET", f"{DART_BASE}/list.json", params=params).json()
         except Exception:
-            break
+            return results, (FETCH_OK if results else FETCH_ERROR)
 
         status = data.get("status")
         if status != "000":
             _log_dart_status(status, f"시장공시 {bgn_de}~{end_de} pblntf={pblntf_ty}")
-            break
+            if results:
+                return results, FETCH_OK
+            # 013은 "그 조건에 자료가 없다"는 확정 답변이라 오류가 아니다
+            return [], (FETCH_EMPTY if status == "013" else FETCH_ERROR)
 
         results.extend(data.get("list", []))
         total = int(data.get("total_count", 0))
@@ -647,7 +677,7 @@ def fetch_market_disclosures(
         page_no += 1
         time.sleep(0.25)
 
-    return results
+    return results, (FETCH_OK if results else FETCH_EMPTY)
 
 
 # ── 공시 원문 텍스트 ────────────────────────────────────────────

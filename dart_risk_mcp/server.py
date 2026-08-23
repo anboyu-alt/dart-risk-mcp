@@ -49,6 +49,7 @@ from .core import (
     fetch_company_disclosures_with_status,
     FETCH_ERROR,
     fetch_market_disclosures,
+    fetch_market_disclosures_with_status,
     fetch_company_info,
     get_critical_items,
     get_induty_name,
@@ -3866,12 +3867,18 @@ def search_market_disclosures(
                 seen_rcept.add(rc)
             raw.append(d)
 
+    # 하루라도 조회에 실패하면 그날 공시가 통째로 빠진다. 절단은 이미
+    # 알리면서 실패는 안 알리고 있었다(2026-08-23 후속 감사) — 스캔이
+    # 완전했던 것처럼 보이는 쪽이 더 위험하다.
+    failed_days: list[str] = []
     cur = scan_start
     while cur <= scan_end:
         day_str = cur.strftime("%Y%m%d")
-        day_items = fetch_market_disclosures(
+        day_items, day_status = fetch_market_disclosures_with_status(
             _DART_API_KEY, day_str, day_str, max_pages=_PAGES_PER_DAY,
         )
+        if day_status == FETCH_ERROR:
+            failed_days.append(day_str)
         if len(day_items) >= _PAGES_PER_DAY * 100:
             truncated_chunks += 1
         _collect(day_items)
@@ -3879,6 +3886,16 @@ def search_market_disclosures(
 
     if not raw:
         return f"❌ {window_label} 시장 공시를 불러올 수 없습니다."
+
+    if failed_days:
+        _fd = ", ".join(failed_days[:5]) + ("…" if len(failed_days) > 5 else "")
+        failed_note = (
+            f"⚠ 조회에 실패한 날: {len(failed_days)}일 ({_fd}) "
+            "— **그날 신호가 없다는 뜻이 아닙니다.** 아래 목록에서 빠져 "
+            "있습니다. 창을 좁혀 다시 시도하면 채워집니다."
+        )
+    else:
+        failed_note = ""
 
     target_keys = set(_PRESET_TO_SIGNALS[preset])
 
@@ -3894,6 +3911,8 @@ def search_market_disclosures(
     )
     if procedural_count:
         coverage += f" · 절차·사후 보고 {procedural_count}건 제외"
+    if failed_days:
+        coverage += f" · 조회 실패 {len(failed_days)}일 제외"
     if truncated_chunks:
         coverage += (
             f" · 스캔 구간 일부 절단({truncated_chunks}일이 상한 7,000건 도달"
@@ -3905,7 +3924,18 @@ def search_market_disclosures(
         "",
     ]
 
+    if failed_note:
+        lines += [failed_note, ""]
+
     if not shown:
+        # 실패한 날이 있으면 ✅로 단정하지 않는다 — 못 본 날이 있는 채로
+        # "없습니다"를 체크표시와 함께 내면 스캔이 완전했다는 뜻이 된다.
+        if failed_days:
+            lines.append(
+                f"이번 스캔에서 '{preset}' 프리셋에 해당하는 공시는 나오지 "
+                f"않았습니다. 다만 위 {len(failed_days)}일은 조회하지 못했습니다."
+            )
+            return "\n".join(lines)
         lines.append(f"✅ 해당 기간에 '{preset}' 프리셋에 해당하는 공시가 없습니다.")
         return "\n".join(lines)
 
