@@ -852,6 +852,19 @@ async function dartGet(endpoint, params) {
   if (!r.ok) throw new Error(`릴레이 오류 (HTTP ${r.status}) — 설정에서 릴레이 주소를 확인하세요`);
   return r.json();
 }
+// DART는 오류를 **HTTP 200 본문**에 담아 보낸다 — dartGet의 res.ok 검사로는
+// 안 걸린다. 013(자료 없음)만 "없다"이고 나머지 비정상 상태는 "못 받았다"다.
+// 이걸 구분하지 않으면 일일 한도 초과(020)가 "배당 기록 없음"으로 보인다
+// (2026-08-23 감사 — core가 FETCH_EMPTY/FETCH_ERROR로 가른 것과 같은 층위).
+function dartFail(j) {
+  if (!j || j.status === "000" || j.status === "013") return null;
+  return DART_ERR[j.status] || `DART 오류 (${j.status}) ${j.message || ""}`;
+}
+// 부재 문구 자리에 대신 넣는다 — "없다"가 아니라 "못 봤다"고 말한다.
+function fetchFailHTML(msg) {
+  return `<span class="dim" style="font-size:0.88rem">⚠ 조회하지 못했습니다 — ${esc(msg)}. `
+    + `<strong style="color:var(--tx)">자료가 없다는 뜻이 아닙니다.</strong></span>`;
+}
 const DART_ERR = {
   "010": "등록되지 않은 API 키입니다 — 키를 확인하세요",
   "011": "사용할 수 없는 키입니다 (발급 후 활성화까지 몇 분 걸릴 수 있음)",
@@ -3905,25 +3918,31 @@ async function loadDividendCore(corpCode) {
   const el = $("divCore");
   const thisYear = new Date().getFullYear();
   const records = [];
+  let fail = null;
   for (const y of [thisYear - 1, thisYear - 2, thisYear - 3]) {
     const j = await dartGet("alotMatter.json", { corp_code: corpCode, bsns_year: y, reprt_code: "11011" });
+    fail = fail || dartFail(j);
     if (j.status !== "000") continue;
     for (const item of j.list || []) records.push(Object.assign({}, item, { bsns_year: String(y), reprt_code: "11011" }));
   }
-  el.innerHTML = dividendPanelHTML(records);
+  // 한 해라도 못 받았는데 결과가 비었으면 "기록 없음"이라 할 수 없다.
+  el.innerHTML = (!records.length && fail) ? fetchFailHTML(fail) : dividendPanelHTML(records);
 }
 
 async function loadFundChainCore(corpCode) {
   const el = $("fundCore");
   const thisYear = new Date().getFullYear();
   const records = [];
+  let fail = null;
   for (const y of [thisYear - 1, thisYear - 2, thisYear - 3]) {
     for (const ep of FUND_USAGE_ENDPOINTS) {
       const j = await dartGet(ep, { corp_code: corpCode, bsns_year: y, reprt_code: "11011" });
+      fail = fail || dartFail(j);
       if (j.status !== "000") continue;
       for (const item of j.list || []) records.push(normalizeFundUsageItem(item, String(y)));
     }
   }
+  if (!records.length && fail) { el.innerHTML = fetchFailHTML(fail); return; }
   el.innerHTML = fundChainPanelHTML(records, CUR.items || []);
   el.querySelectorAll(".fundHintLink").forEach((a) => {
     a.onclick = (e) => { e.preventDefault(); renderDetail(a.dataset.r); };
@@ -3933,14 +3952,17 @@ async function loadFundChainCore(corpCode) {
 async function loadFinancialCore(corpCode) {
   const el = $("finCore");
   const thisYear = new Date().getFullYear();
-  let rows = null, year = null;
+  let rows = null, year = null, fail = null;
   for (const y of [thisYear - 1, thisYear - 2]) {
     const j = await dartGet("fnlttSinglAcnt.json",
       { corp_code: corpCode, bsns_year: y, reprt_code: "11011" });
+    fail = fail || dartFail(j);
     if (j.status === "000" && (j.list || []).length) { rows = j.list; year = y; break; }
   }
   if (!rows) {
-    el.innerHTML = `<span class="dim" style="font-size:0.88rem">최근 2개 연도 사업보고서 재무 데이터가 없습니다 (신규 상장·비공시 등).</span>`;
+    // 실패인데 "신규 상장·비공시 등"이라 적으면 **틀린 이유**까지 덧붙이는 셈이다.
+    el.innerHTML = fail ? fetchFailHTML(fail)
+      : `<span class="dim" style="font-size:0.88rem">최근 2개 연도 사업보고서 재무 데이터가 없습니다 (신규 상장·비공시 등).</span>`;
     return null;
   }
   const div = rows.some((r) => r.fs_div === "CFS") ? "CFS" : "OFS";
@@ -3999,7 +4021,9 @@ async function loadHoldings(corpCode) {
   const j = await dartGet("elestock.json", { corp_code: corpCode });
   const rows = j.status === "000" ? j.list || [] : [];
   if (!rows.length) {
-    el.innerHTML = `<span class="dim" style="font-size:0.88rem">5% 대량보유 보고 이력이 없습니다.</span>`;
+    const fail = dartFail(j);
+    el.innerHTML = fail ? fetchFailHTML(fail)
+      : `<span class="dim" style="font-size:0.88rem">5% 대량보유 보고 이력이 없습니다.</span>`;
     return;
   }
   const byRep = new Map();
@@ -4046,15 +4070,18 @@ async function loadAuditOpinions(corpCode, finCorePromise) {
   const el = $("auditCore");
   const thisYear = new Date().getFullYear();
   const byYear = new Map();
+  let fail = null;
   for (const y of [thisYear - 1, thisYear - 2, thisYear - 3]) {
     const j = await dartGet("accnutAdtorNmNdAdtOpinion.json",
       { corp_code: corpCode, bsns_year: y, reprt_code: "11011" });
+    fail = fail || dartFail(j);
     const rows = j.status === "000" ? j.list || [] : [];
     const r = rows.find((x) => (x.bsns_year || "").includes("당기")) || rows[0];
     if (r && !byYear.has(String(y))) byYear.set(String(y), r);
   }
   if (!byYear.size) {
-    el.innerHTML = `<span class="dim" style="font-size:0.88rem">감사의견 데이터가 없습니다.</span>`;
+    el.innerHTML = fail ? fetchFailHTML(fail)
+      : `<span class="dim" style="font-size:0.88rem">감사의견 데이터가 없습니다.</span>`;
     return;
   }
   const years = [...byYear.keys()].sort().reverse().slice(0, 3);
@@ -4135,7 +4162,11 @@ function renderChips() {
 }
 $("runCompare").onclick = () => compareActors();
 
-async function fetchRoster(corpCode, onYear) {
+// `failed`(Set)를 주면 조회에 실패한 연도를 담는다 — 명단이 비는 이유가
+// "임원이 없어서"가 아니라 "못 받아서"일 수 있고, 그 상태로 겹침 0건을
+// 내면 **읽지 못한 회사를 근거로** 없다고 말하게 된다(core find_actor_overlap
+// 과 같은 판단, 2026-08-23).
+async function fetchRoster(corpCode, onYear, failed) {
   const thisYear = new Date().getFullYear();
   const roster = new Map();
   for (let y = thisYear - 3; y <= thisYear; y++) {
@@ -4143,6 +4174,7 @@ async function fetchRoster(corpCode, onYear) {
     try {
       const j = await dartGet("exctvSttus.json",
         { corp_code: corpCode, bsns_year: y, reprt_code: "11011" });
+      if (dartFail(j) && failed) failed.add(String(y));
       if (j.status !== "000") continue;
       for (const row of j.list || []) {
         const nm = (row.nm || "").trim();
@@ -4150,7 +4182,7 @@ async function fetchRoster(corpCode, onYear) {
         if (!roster.has(nm)) roster.set(nm, new Set());
         roster.get(nm).add(String(y));
       }
-    } catch (e) { /* 연도 단위 실패는 건너뜀 */ }
+    } catch (e) { if (failed) failed.add(String(y)); }
   }
   return roster;
 }
@@ -4160,11 +4192,14 @@ async function compareActors() {
   if (compareList.length < 2) { st.textContent = "비교하려면 회사를 2개 이상 추가하세요."; return; }
   st.className = "status";
   const rosters = new Map();
+  const fetchFailed = [];
   try {
     for (const name of compareList) {
+      const failedYears = new Set();
       const roster = await fetchRoster(CORPS[name][0], (y) => {
         st.innerHTML = `<span class="spinner"></span>${esc(name)} 임원현황 수집 중… (${y})`;
-      });
+      }, failedYears);
+      if (failedYears.size) fetchFailed.push(`${name}(${[...failedYears].sort().join(", ")})`);
       rosters.set(name, roster);
     }
   } catch (e) {
@@ -4193,6 +4228,10 @@ async function compareActors() {
         [...m.entries()].map(([c, ys]) => `${esc(c)}(${ys.join(", ")})`).join(" · ") + `</li>`).join("") +
       `</ul></div>`;
   } else {
+    if (fetchFailed.length) {
+      html += `<p class="dim" style="margin-top:0.5rem">⚠ 임원현황을 불러오지 못한 연도가 있습니다 — ${esc(fetchFailed.join(" · "))}.
+      <strong style="color:var(--tx)">겹치는 인물이 없다는 뜻이 아닙니다.</strong> 잠시 후 다시 시도하세요.</p>`;
+    }
     html += `<p class="dim" style="margin-top:0.5rem">최근 4개 사업연도 임원현황에서 2개사 이상에 등장하는 인물이 없습니다.
       '겸직 없음'이 '연결 없음'을 뜻하지는 않습니다 — 인수자(CB·유상증자) 경로는 이 화면이 다루지 않습니다.</p>`;
   }
