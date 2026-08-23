@@ -1582,7 +1582,9 @@ def find_pattern_overlaps(
     Returns:
         각 항목: pattern_id, name, description, signal_sequence, checkpoints
         (`core.explain.pattern_checkpoints` — 없으면 빈 리스트), matched
-        (관찰된 id, 오름차순), missing(안 보인 id, 오름차순), n_matched,
+        (창 안에서 관찰된 id, 오름차순), missing(matched가 아닌 id, 오름차순),
+        outside_window(missing 중 **관찰은 됐지만 창 밖**인 id — 표기를 가르기
+        위한 부분집합), n_matched,
         n_total. 정렬은 충족률(n_matched/n_total) 내림차순 → n_matched
         내림차순 → pattern_id 오름차순으로 고정해 입력이 set에서 와도
         출력이 결정적이다. 존재하지 않는 taxonomy ID가 섞여 있어도 그냥
@@ -1620,6 +1622,12 @@ def find_pattern_overlaps(
                     continue
 
         missing_set = seq_set - matched_set
+        # 창 게이트가 밀어낸 것과 아예 관찰되지 않은 것은 **다른 사실**이다.
+        # 둘을 한 덩어리로 「안 보임」이라 적으면, 리포트 위쪽 「관찰된 신호」에
+        # 실려 있는 바로 그 신호를 아래 카드가 "안 보인다"고 말하게 된다
+        # (2026-08-24 실측: 7개사×5년에서 KR모터스 fake_new_biz의 4.3 — 2022-03-22
+        # 관찰인데 창 밖이라 밀렸다). 드물지만 한 화면이 서로 반대되는 말을 한다.
+        outside_set = missing_set & detected_set
         results.append({
             "pattern_id": pattern_id,
             "name": pattern["name"],
@@ -1628,6 +1636,9 @@ def find_pattern_overlaps(
             "checkpoints": _pattern_checkpoints(pattern_id),
             "matched": sorted(matched_set, key=_tid_sort_key),
             "missing": sorted(missing_set, key=_tid_sort_key),
+            # `missing`의 부분집합 — 하위 호환을 위해 missing은 그대로 두고
+            # 표기에서만 가른다(옛 소비자는 이 키를 몰라도 동작이 변하지 않는다).
+            "outside_window": sorted(outside_set, key=_tid_sort_key),
             "n_matched": len(matched_set),
             "n_total": len(seq_set),
             "timeline_months": pattern.get("timeline_months"),

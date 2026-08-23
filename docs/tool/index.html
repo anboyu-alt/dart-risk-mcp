@@ -2652,9 +2652,14 @@ function findPatternOverlaps(patternsList, detectedTaxSet, minOverlap, taxDates)
     }
     const mset = new Set(matched);
     const missing = seq.filter((t) => !mset.has(t));
+    // 창 게이트가 밀어낸 것과 아예 관찰되지 않은 것은 다른 사실이다 —
+    // 둘을 「안 보임」으로 묶으면 위쪽 SIGNAL 목록에 있는 신호를 카드가
+    // "안 보인다"고 말한다(core taxonomy.find_pattern_overlaps 이식).
+    const outside = missing.filter((t) => detectedTaxSet.has(t));
     results.push(Object.assign({}, p, {
       matched: matched.slice().sort(tidCompare),
       missing: missing.slice().sort(tidCompare),
+      outside_window: outside.slice().sort(tidCompare),
       n_matched: matched.length,
       n_total: seq.length,
       window_start: wStart,
@@ -2751,10 +2756,15 @@ function patternOverlapLinesHTML(p) {
   const labels = (DATA.catalog && DATA.catalog.tax_labels) || {};
   const fmt = (ids) => ids.map((t) => `${esc(labels[t] || t)}<span class="mono" style="color:var(--dim)">(${esc(t)})</span>`).join(" · ");
   const matched = (p.matched || []);
-  const missing = (p.missing || []);
+  const outside = (p.outside_window || []);
+  const oset = new Set(outside);
+  const unseen = (p.missing || []).filter((t) => !oset.has(t));
   let html = `<div class="sigs" style="margin-top:0.3rem">관찰됨: ${fmt(matched)}</div>`;
-  if (missing.length) {
-    html += `<div class="sigs">안 보임: ${fmt(missing)}</div>`;
+  if (unseen.length) {
+    html += `<div class="sigs">안 보임: ${fmt(unseen)}</div>`;
+  }
+  if (outside.length) {
+    html += `<div class="sigs">창 밖에서 관찰됨: ${fmt(outside)}</div>`;
   }
   return html;
 }
