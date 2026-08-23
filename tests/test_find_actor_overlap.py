@@ -1,6 +1,17 @@
 import unittest
 from unittest.mock import patch
 
+from dart_risk_mcp.core.dart_client import FETCH_OK
+
+
+def _with_status(fn):
+    """옛 스텁을 `fetch_company_disclosures_with_status` 계약으로 감싼다.
+
+    `find_actor_overlap`은 조회 **실패**를 부재로 말하지 않기 위해 상태를
+    함께 받는다(2026-08-23). 테스트가 보던 것은 목록이므로 상태만 덧붙인다.
+    """
+    return lambda *a, **kw: (fn(*a, **kw), FETCH_OK)
+
 
 class TestFindActorOverlapMerging(unittest.TestCase):
     def test_merges_cb_and_rights_investors_with_source_tags(self):
@@ -30,8 +41,8 @@ class TestFindActorOverlapMerging(unittest.TestCase):
             return []
 
         with patch("dart_risk_mcp.server.resolve_corp", side_effect=_resolve), \
-             patch("dart_risk_mcp.server.fetch_company_disclosures",
-                   side_effect=_disclosures), \
+             patch("dart_risk_mcp.server.fetch_company_disclosures_with_status",
+                   side_effect=_with_status(_disclosures)), \
              patch("dart_risk_mcp.server.match_signals", side_effect=_match_signals), \
              patch("dart_risk_mcp.server.extract_cb_investors",
                    return_value=[{"name": "공통펀드", "type": "사모", "amount": "1"}]), \
@@ -68,8 +79,8 @@ class TestFindActorOverlapMerging(unittest.TestCase):
             return []
 
         with patch("dart_risk_mcp.server.resolve_corp", side_effect=_resolve), \
-             patch("dart_risk_mcp.server.fetch_company_disclosures",
-                   side_effect=_disclosures), \
+             patch("dart_risk_mcp.server.fetch_company_disclosures_with_status",
+                   side_effect=_with_status(_disclosures)), \
              patch("dart_risk_mcp.server.fetch_executive_roster_detail", return_value=[]), \
              patch.dict("os.environ", {"DART_API_KEY": "test_key"}):
             find_actor_overlap(*call_args, **call_kwargs)
@@ -96,7 +107,8 @@ class TestFindActorOverlapMerging(unittest.TestCase):
             return (query, {"corp_code": query.lower(), "stock_code": "000000"})
 
         with patch("dart_risk_mcp.server.resolve_corp", side_effect=_resolve), \
-             patch("dart_risk_mcp.server.fetch_company_disclosures", return_value=[]), \
+             patch("dart_risk_mcp.server.fetch_company_disclosures_with_status",
+                     return_value=([], FETCH_OK)), \
              patch("dart_risk_mcp.server.fetch_executive_roster_detail", return_value=[]), \
              patch.dict("os.environ", {"DART_API_KEY": "test_key"}):
             return find_actor_overlap(*call_args, **call_kwargs)
@@ -138,7 +150,8 @@ class TestFindActorOverlapMerging(unittest.TestCase):
             return []
 
         with patch("dart_risk_mcp.server.resolve_corp", side_effect=_resolve), \
-             patch("dart_risk_mcp.server.fetch_company_disclosures", return_value=[]), \
+             patch("dart_risk_mcp.server.fetch_company_disclosures_with_status",
+                     return_value=([], FETCH_OK)), \
              patch("dart_risk_mcp.server.fetch_executive_roster_detail", side_effect=_roster), \
              patch.dict("os.environ", {"DART_API_KEY": "test_key"}):
             result = find_actor_overlap(["a", "b"], lookback_years=3)
@@ -176,7 +189,8 @@ class TestFindActorOverlapMerging(unittest.TestCase):
             return []
 
         with patch("dart_risk_mcp.server.resolve_corp", side_effect=_resolve), \
-             patch("dart_risk_mcp.server.fetch_company_disclosures", side_effect=_disclosures), \
+             patch("dart_risk_mcp.server.fetch_company_disclosures_with_status",
+                   side_effect=_with_status(_disclosures)), \
              patch("dart_risk_mcp.server.match_signals", side_effect=_match_signals), \
              patch("dart_risk_mcp.server.fetch_executive_roster_detail", side_effect=_roster), \
              patch("dart_risk_mcp.server.extract_cb_investors",
@@ -209,7 +223,8 @@ class TestFindActorOverlapMerging(unittest.TestCase):
             }):
                 add_person("신승수", ["회사가", "회사나"])
                 with patch("dart_risk_mcp.server.resolve_corp", side_effect=_resolve), \
-                     patch("dart_risk_mcp.server.fetch_company_disclosures", return_value=[]), \
+                     patch("dart_risk_mcp.server.fetch_company_disclosures_with_status",
+                     return_value=([], FETCH_OK)), \
                      patch("dart_risk_mcp.server.fetch_executive_roster_detail", return_value=[]):
                     find_actor_overlap(watchlist="신승수")
 
@@ -256,7 +271,8 @@ class TestFindActorOverlapMerging(unittest.TestCase):
                 "DART_KNOWN_ACTORS_PATH": str(ka), "DART_API_KEY": "test_key",
             }):
                 with patch("dart_risk_mcp.server.resolve_corp", side_effect=_resolve), \
-                     patch("dart_risk_mcp.server.fetch_company_disclosures", return_value=[]), \
+                     patch("dart_risk_mcp.server.fetch_company_disclosures_with_status",
+                     return_value=([], FETCH_OK)), \
                      patch("dart_risk_mcp.server.fetch_executive_roster_detail", side_effect=_roster):
                     result = find_actor_overlap(["a", "b"])
 
@@ -289,7 +305,8 @@ class TestFindActorOverlapMerging(unittest.TestCase):
                 "DART_KNOWN_ACTORS_PATH": str(ka), "DART_API_KEY": "test_key",
             }):
                 with patch("dart_risk_mcp.server.resolve_corp", side_effect=_resolve), \
-                     patch("dart_risk_mcp.server.fetch_company_disclosures", return_value=[]), \
+                     patch("dart_risk_mcp.server.fetch_company_disclosures_with_status",
+                     return_value=([], FETCH_OK)), \
                      patch("dart_risk_mcp.server.fetch_executive_roster_detail", side_effect=_roster):
                     result = find_actor_overlap(["a", "b"])
 
@@ -323,7 +340,8 @@ class TestFindActorOverlapMerging(unittest.TestCase):
                 "DART_KNOWN_ACTORS_PATH": str(ka), "DART_API_KEY": "test_key",
             }):
                 with patch("dart_risk_mcp.server.resolve_corp", side_effect=_resolve), \
-                     patch("dart_risk_mcp.server.fetch_company_disclosures", return_value=[]), \
+                     patch("dart_risk_mcp.server.fetch_company_disclosures_with_status",
+                     return_value=([], FETCH_OK)), \
                      patch("dart_risk_mcp.server.fetch_executive_roster_detail", side_effect=_roster):
                     result = find_actor_overlap(["a", "b"])
 
@@ -346,7 +364,8 @@ class TestFindActorOverlapMerging(unittest.TestCase):
                 "DART_KNOWN_ACTORS_PATH": str(ka), "DART_API_KEY": "test_key",
             }):
                 with patch("dart_risk_mcp.server.resolve_corp", side_effect=_resolve), \
-                     patch("dart_risk_mcp.server.fetch_company_disclosures", return_value=[]), \
+                     patch("dart_risk_mcp.server.fetch_company_disclosures_with_status",
+                     return_value=([], FETCH_OK)), \
                      patch("dart_risk_mcp.server.fetch_executive_roster_detail", return_value=[]):
                     result = find_actor_overlap(["a", "b"])
 
@@ -359,8 +378,8 @@ class TestFindActorOverlapMerging(unittest.TestCase):
             return (query, {"corp_code": query.lower(), "stock_code": "000000"})
 
         with patch("dart_risk_mcp.server.resolve_corp", side_effect=_resolve), \
-             patch("dart_risk_mcp.server.fetch_company_disclosures",
-                   return_value=[]), \
+             patch("dart_risk_mcp.server.fetch_company_disclosures_with_status",
+                   return_value=([], FETCH_OK)), \
              patch("dart_risk_mcp.server.fetch_executive_roster_detail", return_value=[]), \
              patch.dict("os.environ", {"DART_API_KEY": "test_key"}):
             result = find_actor_overlap(["a"])

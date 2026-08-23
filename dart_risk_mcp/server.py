@@ -2834,6 +2834,7 @@ def find_actor_overlap(
     actor_map: dict[str, list[tuple]] = {}
     per_company_solo: dict[str, list[tuple]] = {}
     failed: list[str] = []
+    fetch_failed: list[str] = []   # 회사는 찾았는데 공시를 못 받은 것
 
     for query in company_names:
         result = resolve_corp(query, api_key)
@@ -2848,10 +2849,17 @@ def find_actor_overlap(
         # _resolve_lookback의 기존 관례대로 창에 비례해 올린다 — 1년
         # 코퍼스 기준 이 상한을 넘는 법인은 0.05%(대부분 펀드 공시를
         # 쏟아내는 자산운용사)라 그 이상은 과하다.
-        disclosures = fetch_company_disclosures(
+        # 조회 실패한 회사를 "비교했다"고 세면, 아래 요약의 "동시에 등장한
+        # 인수자는 발견되지 않았습니다"가 **읽지 못한 회사를 근거로** 나온다.
+        # 못 받은 회사는 analyzed에서 빼고 따로 알린다(2026-08-23 후속 감사).
+        disclosures, fetch_status = fetch_company_disclosures_with_status(
             corp_code, api_key, lookback_days=lookback_days,
             max_pages=max(10, (lookback_days // 365 + 1) * 10),
-        ) or []
+        )
+        if fetch_status == FETCH_ERROR:
+            fetch_failed.append(query)   # analyzed 필터가 query 기준이다
+            continue
+        disclosures = disclosures or []
 
         cb_rcepts: list[str] = []
         rights_rcepts: list[str] = []
@@ -2925,7 +2933,9 @@ def find_actor_overlap(
         if len({e[0] for e in entries}) == 1
     }
 
-    analyzed = [q for q in company_names if q not in failed]
+    analyzed = [q for q in company_names if q not in failed and q not in fetch_failed]
+    if not analyzed and fetch_failed:
+        return _fetch_failed_notice(", ".join(fetch_failed), f"최근 {lookback_years}년")
 
     lines: list[str] = []
     lines.append(f"🔍 **여러 회사를 동시에 드나든 '돈을 댄 사람'(공통 행위자) 분석**")
@@ -2957,6 +2967,13 @@ def find_actor_overlap(
 
     if watchlist_note:
         lines.append(watchlist_note)
+        lines.append("")
+
+    if fetch_failed:
+        lines.append(
+            f"⚠ 공시를 불러오지 못해 비교에서 빠진 기업: {', '.join(fetch_failed)} "
+            "— **신호가 없다는 뜻이 아닙니다.** DART 조회가 실패했습니다."
+        )
         lines.append("")
 
     if failed:
@@ -5196,10 +5213,15 @@ def track_capital_structure(
 
     # 다년 조회 — 기본 상한(1,000건)이면 공시가 많은 회사에서 절단된다
     # (2026-08-23 실측). 창에 비례해 올린다.
-    disclosures = fetch_company_disclosures(
+    # 조회 실패를 "자료 없음"과 구분한다 — 아래 요약이 이벤트 0건일 때
+    # "자본 주무르기로 볼 만한 리듬은 없습니다"라고 **단정**하므로, 못 받은
+    # 것을 없는 것으로 내면 화면이 거짓을 말한다(2026-08-23 후속 감사).
+    disclosures, fetch_status = fetch_company_disclosures_with_status(
         corp_code, api_key, lookback_years * 365,
         max_pages=lookback_years * 10,
     )
+    if fetch_status == FETCH_ERROR:
+        return _fetch_failed_notice(corp_name, f"최근 {lookback_years}년")
 
     # match_signals로 신호 탐지 + 자본 이벤트만 필터는 detect_capital_churn이 처리
     signal_events: list[dict] = []

@@ -14,6 +14,7 @@
 from unittest.mock import patch
 
 import dart_risk_mcp.server as srv
+from dart_risk_mcp.core.dart_client import FETCH_OK
 
 
 def _capture_max_pages(fn, *args, **kwargs):
@@ -24,7 +25,14 @@ def _capture_max_pages(fn, *args, **kwargs):
         seen.setdefault("lookback_days", lookback_days)
         return []
 
+    def fake_ws(*a, **kw):
+        # 두 도구는 조회 실패를 부재와 구분하려고 상태를 함께 받는다(2026-08-23).
+        # 여기서 재는 것은 페이지 상한이므로 정상 상태로 감싼다.
+        return fake(*a, **kw), FETCH_OK
+
     with patch.object(srv, "fetch_company_disclosures", side_effect=fake), \
+         patch.object(srv, "fetch_company_disclosures_with_status",
+                      side_effect=fake_ws), \
          patch.object(srv, "_DART_API_KEY", "k"), \
          patch.object(srv, "resolve_corp",
                       return_value=("테스트", {"corp_code": "00126380",
