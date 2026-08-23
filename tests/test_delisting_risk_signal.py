@@ -112,7 +112,11 @@ class TestEscalationException:
         assert "해제" in (q.reason or "")
 
     def test_예외_목록은_정리매매_2종뿐(self):
-        assert set(ESCALATION_SUBTITLES) == {"정리매매개시", "정리매매재개"}
+        assert set(ESCALATION_SUBTITLES) == {
+            "정리매매개시", "정리매매재개",
+            # 2026-08-23 R2 전수 재검토로 추가 — 근거는 qualifiers.py 주석
+            "풍문등조회공시", "회생절차개시결정",
+        }
 
     def test_무관한_해제_공시는_계속_강등된다(self):
         """예외가 R2 전체를 무력화하지 않았는지."""
