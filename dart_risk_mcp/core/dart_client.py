@@ -1993,16 +1993,46 @@ _HEADING_RE = re.compile(
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.DOTALL | re.IGNORECASE)
 
 
+_SECTION_TITLE_RE = re.compile(r"<TITLE[^>]*>(.*?)</TITLE>", re.DOTALL | re.IGNORECASE)
+
+
+def _heading_title(m) -> str:
+    """헤딩 match에서 **제목만** 뽑는다.
+
+    DART 문서는 `<SECTION-N>`이 그 절의 **본문 전체**를 감싸고, 제목은 그
+    안의 첫 `<TITLE>`에 있다.
+
+        <SECTION-1 ACLASS="MANDATORY">
+          <TITLE ...>I. 회사의 개요</TITLE>
+          …수만 자의 본문…
+        </SECTION-1>
+
+    옛 구현은 `m.group(1)`(=본문 전체)을 제목으로 삼고 "200자 미만"만
+    남겼다. 그래서 본문이 있는 절은 전부 버려지고 「해당사항 없습니다」
+    같은 짧은 껍데기만 통과했다 — 아틀라스링크 사업보고서 실측:
+    `<SECTION-N>` **76개 중 11개(12%)**만 목차에 실렸고, 재무제표·주석·
+    사업의 내용은 아예 없었다.
+
+    `<h1>~<h4>`는 그 자체가 제목이므로 그대로 쓴다.
+    """
+    inner = m.group(1)
+    t = _SECTION_TITLE_RE.search(inner)
+    return _strip_tags(t.group(1) if t else inner).strip()
+
+
 def _valid_section_headings(content: str) -> list:
     """섹션 id(fNsM) 대상 헤딩 목록.
 
     list_document_sections(id 부여)와 fetch_document_content(id 해석)가
     반드시 같은 필터(제목 있음·200자 미만)를 공유해야 한다 — 한쪽만
     필터하면 스킵 헤딩이 있는 문서에서 section_id가 다른 섹션을 가리킨다.
+
+    길이 필터는 **제목**에 건다(위 `_heading_title` 주석 참고). 본문에
+    걸면 내용이 있는 절이 통째로 빠진다.
     """
     out = []
     for m in _HEADING_RE.finditer(content):
-        title = _strip_tags(m.group(1)).strip()
+        title = _heading_title(m)
         if title and len(title) < 200:
             out.append(m)
     return out
@@ -2047,7 +2077,7 @@ def list_document_sections(rcept_no: str, api_key: str) -> list[dict]:
         for m in _valid_section_headings(content):
             sections.append({
                 "id": f"f{file_index}s{sec_id}",
-                "title": _strip_tags(m.group(1)).strip(),
+                "title": _heading_title(m),
                 "char_offset": m.start(),
             })
             sec_id += 1
