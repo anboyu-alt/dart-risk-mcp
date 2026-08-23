@@ -491,7 +491,44 @@ def fetch_company_disclosures(
     end_de: str = "",
     pblntf_ty: str = "",
 ) -> list[dict]:
-    """특정 기업의 DART 공시 목록 조회.
+    """특정 기업의 DART 공시 목록 조회. 실패해도 빈 리스트를 반환한다.
+
+    실패 이유가 필요하면 `fetch_company_disclosures_with_status`를 쓴다 —
+    빈 결과가 "자료 없음"인지 "못 받았음"인지 구분해야 호출부가 "공시가
+    없습니다"라고 잘못 단정하지 않는다.
+    """
+
+    rows, _ = fetch_company_disclosures_with_status(
+        corp_code, api_key, lookback_days, max_pages, bgn_de, end_de, pblntf_ty)
+    return rows
+
+
+# 조회 결과 상태 — fetch_company_disclosures_with_status가 돌려준다.
+# resolve_disclosure_row_with_status의 ROW_* 와 같은 취지다: **빈 결과가
+# "자료가 없다"인지 "못 받았다"인지 구분되지 않으면 호출부가 "공시 없음"이라고
+# 단정하게 된다**(2026-08-23 에러 경로 감사에서 발견 — 네트워크 예외·020
+# 한도초과·900 키오류에서 모두 "공시가 없다"는 화면이 나왔다).
+FETCH_OK = "ok"
+FETCH_EMPTY = "empty"          # 정상 응답인데 자료가 없다(013 포함)
+FETCH_ERROR = "error"          # 네트워크·비정상 status — 못 받은 것이다
+
+
+def fetch_company_disclosures_with_status(
+    corp_code: str,
+    api_key: str,
+    lookback_days: int = 90,
+    max_pages: int = 10,
+    bgn_de: str = "",
+    end_de: str = "",
+    pblntf_ty: str = "",
+) -> "tuple[list[dict], str]":
+    """`fetch_company_disclosures` + 조회 상태. 상태는 FETCH_* 중 하나.
+
+    **부분 성공은 성공으로 본다.** 3페이지를 받다가 4페이지에서 끊겼다면
+    받은 3페이지는 유효하므로 FETCH_OK다 — 페이지 상한 도달과 같은 취급이고,
+    그쪽은 이미 로그 경고로 남는다. 첫 페이지부터 실패했을 때만 FETCH_ERROR다.
+
+특정 기업의 DART 공시 목록 조회.
 
     `bgn_de`/`end_de`(YYYYMMDD)를 주면 그 구간을 조회하고 `lookback_days`는
     무시한다. 옛 호출자는 그대로 "오늘 기준 N일 전부터"로 동작한다.
@@ -507,8 +544,9 @@ def fetch_company_disclosures(
     지도를 그린 뒤 특정 구간만 깊게 보는 흐름(v1.18.0의 탐색 깊이 분리)이
     성립하려면 구간을 지정할 수 있어야 한다.
     """
+
     if not api_key:
-        return []
+        return [], FETCH_ERROR
 
     now = datetime.now()
     start = bgn_de or (now - timedelta(days=lookback_days)).strftime("%Y%m%d")
@@ -530,12 +568,16 @@ def fetch_company_disclosures(
         try:
             data = _retry("GET", f"{DART_BASE}/list.json", params=params).json()
         except Exception:
-            break
+            # 첫 페이지부터 못 받았으면 "자료 없음"과 구분해야 한다
+            return results, (FETCH_OK if results else FETCH_ERROR)
 
         status = data.get("status")
         if status != "000":
             _log_dart_status(status, f"공시목록 corp_code={corp_code}")
-            break
+            if results:
+                return results, FETCH_OK
+            # 013은 "그 조건에 자료가 없다"는 확정 답변이라 오류가 아니다
+            return [], (FETCH_EMPTY if status == "013" else FETCH_ERROR)
 
         results.extend(data.get("list", []))
         total = int(data.get("total_count", 0))
@@ -547,7 +589,7 @@ def fetch_company_disclosures(
         page_no += 1
         time.sleep(0.25)
 
-    return results
+    return results, (FETCH_OK if results else FETCH_EMPTY)
 
 
 # ── 시장 전체 공시 조회 ─────────────────────────────────────────

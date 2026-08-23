@@ -46,6 +46,8 @@ from .core import (
     extract_rights_offering_investors,
     fetch_audit_opinion_history,
     fetch_company_disclosures,
+    fetch_company_disclosures_with_status,
+    FETCH_ERROR,
     fetch_market_disclosures,
     fetch_company_info,
     get_critical_items,
@@ -140,6 +142,22 @@ def _append_size_footer(text: str, lookback_years: int) -> str:
         return text
     chars, tokens = _estimate_output_size(text)
     return text + f"\n\n📊 예상 출력 규모: 약 {chars:,}자 / ~{tokens:,}토큰 (대략적 추정)"
+
+
+def _fetch_failed_notice(corp_name: str, window_phrase: str) -> str:
+    """공시 조회가 **실패**했을 때의 안내 — "공시가 없다"와 구분한다.
+
+    빈 결과를 "공시 없음"으로 표시하면 API 장애·키 오류·한도 초과가 전부
+    "이 회사는 조용하다"로 보인다(2026-08-23 에러 경로 감사에서 발견 —
+    네트워크 예외·020·900 모두 같은 화면이었다). 리스크를 알리는 도구에서
+    이 둘이 섞이면 안 된다.
+    """
+    return (
+        f"⚠ **{corp_name}**의 공시를 불러오지 못했습니다 (최근 {window_phrase}).\n\n"
+        "**공시가 없다는 뜻이 아닙니다** — DART 조회가 실패했습니다. "
+        "API 키가 올바른지, 일일 호출 한도를 넘지 않았는지 확인한 뒤 다시 "
+        "시도해 주세요."
+    )
 
 
 def _shallow_notice(tool_name: str, company: str, dates: "list[str]") -> str:
@@ -1320,10 +1338,12 @@ def analyze_company_risk(
     stock_code = corp_info.get("stock_code", "")
 
     # 2. 공시 목록 조회
-    disclosures = fetch_company_disclosures(
+    disclosures, fetch_status = fetch_company_disclosures_with_status(
         corp_code, _DART_API_KEY, lookback_days, max_pages=max_pages,
         bgn_de=bgn_de, end_de=end_de,
     )
+    if fetch_status == FETCH_ERROR:
+        return _fetch_failed_notice(corp_name, window_phrase)
     # (조기 반환 제거 — 공시가 없어도 v0.6.0 자본 churn / 재무 이상 스캔은 별도로 수행)
 
     # 3. 신호 분류 + 정정공시 필터
@@ -2262,10 +2282,12 @@ def build_event_timeline(
     _alias_note = _alias_note_line(corp_info)
     _note_block = f"{_alias_note}\n\n" if _alias_note else ""
 
-    disclosures = fetch_company_disclosures(
+    disclosures, fetch_status = fetch_company_disclosures_with_status(
         corp_code, _DART_API_KEY, lookback_days, max_pages=max_pages,
         bgn_de=bgn_de, end_de=end_de,
     )
+    if fetch_status == FETCH_ERROR:
+        return _fetch_failed_notice(corp_name, window_phrase)
     if not disclosures:
         return (
             f"📋 **{corp_name}** ({stock_code or corp_code})\n\n"
@@ -2987,10 +3009,12 @@ def list_disclosures_by_stock(
     _alias_note = _alias_note_line(corp_info)
     _note_block = f"{_alias_note}\n\n" if _alias_note else ""
 
-    disclosures = fetch_company_disclosures(
+    disclosures, fetch_status = fetch_company_disclosures_with_status(
         corp_code, _DART_API_KEY, lookback_days, max_pages=max_pages,
         bgn_de=bgn_de, end_de=end_de,
     )
+    if fetch_status == FETCH_ERROR:
+        return _fetch_failed_notice(corp_name, window_phrase)
     if not disclosures:
         return (
             f"📋 **{corp_name}** ({stock_code})\n\n"
@@ -4317,7 +4341,10 @@ def check_disclosure_anomaly(
 
     lookback_days, max_pages, window_phrase = _resolve_lookback(lookback_years, lookback_days)
 
-    disclosures = fetch_company_disclosures(corp_code, _DART_API_KEY, lookback_days, max_pages=max_pages)
+    disclosures, fetch_status = fetch_company_disclosures_with_status(
+        corp_code, _DART_API_KEY, lookback_days, max_pages=max_pages)
+    if fetch_status == FETCH_ERROR:
+        return _fetch_failed_notice(corp_name, window_phrase)
     total = len(disclosures)
     if total == 0:
         # v0.8.5는 이 도구에서 점수 계산을 제거했는데 문구에 "스코어"가

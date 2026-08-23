@@ -44,13 +44,13 @@ class TestAnalyzeV6Integration(unittest.TestCase):
     @patch("dart_risk_mcp.server.fetch_distress_events", return_value=[])
     @patch("dart_risk_mcp.server.fetch_fund_usage")
     @patch("dart_risk_mcp.server.fetch_financial_statements_all")
-    @patch("dart_risk_mcp.server.fetch_company_disclosures")
+    @patch("dart_risk_mcp.server.fetch_company_disclosures_with_status")
     @patch("dart_risk_mcp.server.resolve_corp")
     def test_includes_capital_churn_flag(
         self, m_resolve, m_disc, m_fs, m_fund, _distress, _cb
     ):
         m_resolve.return_value = ("테스트기업", {"corp_code": "00000001", "stock_code": "000001"})
-        m_disc.return_value = self._mock_disclosures()
+        m_disc.return_value = (self._mock_disclosures(), "ok")
         m_fs.return_value = []  # 재무 조회 실패/없음
         m_fund.return_value = []
         from dart_risk_mcp.server import analyze_company_risk
@@ -64,13 +64,13 @@ class TestAnalyzeV6Integration(unittest.TestCase):
     @patch("dart_risk_mcp.server.fetch_distress_events", return_value=[])
     @patch("dart_risk_mcp.server.fetch_fund_usage")
     @patch("dart_risk_mcp.server.fetch_financial_statements_all")
-    @patch("dart_risk_mcp.server.fetch_company_disclosures")
+    @patch("dart_risk_mcp.server.fetch_company_disclosures_with_status")
     @patch("dart_risk_mcp.server.resolve_corp")
     def test_includes_financial_anomaly_flag(
         self, m_resolve, m_disc, m_fs, m_fund, _distress, _cb
     ):
         m_resolve.return_value = ("테스트기업", {"corp_code": "00000001", "stock_code": "000001"})
-        m_disc.return_value = []
+        m_disc.return_value = ([], "ok")
         m_fs.return_value = self._mock_fs()
         m_fund.return_value = []
         from dart_risk_mcp.server import analyze_company_risk
@@ -88,13 +88,13 @@ class TestAnalyzeV6Integration(unittest.TestCase):
     @patch("dart_risk_mcp.server.fetch_distress_events", return_value=[])
     @patch("dart_risk_mcp.server.fetch_fund_usage")
     @patch("dart_risk_mcp.server.fetch_financial_statements_all")
-    @patch("dart_risk_mcp.server.fetch_company_disclosures")
+    @patch("dart_risk_mcp.server.fetch_company_disclosures_with_status")
     @patch("dart_risk_mcp.server.resolve_corp")
     def test_financial_fetch_failure_isolated(
         self, m_resolve, m_disc, m_fs, m_fund, _distress, _cb
     ):
         m_resolve.return_value = ("테스트기업", {"corp_code": "00000001", "stock_code": "000001"})
-        m_disc.return_value = []
+        m_disc.return_value = ([], "ok")
         m_fs.side_effect = Exception("network error")
         m_fund.return_value = []
         from dart_risk_mcp.server import analyze_company_risk

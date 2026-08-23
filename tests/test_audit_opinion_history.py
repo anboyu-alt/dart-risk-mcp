@@ -161,7 +161,7 @@ class TestCheckDisclosureAnomalyAuditBonus(unittest.TestCase):
     @patch("dart_risk_mcp.server._DART_API_KEY", "KEY")
     @patch("dart_risk_mcp.server.fetch_audit_opinion_history")
     @patch("dart_risk_mcp.server.match_signals")
-    @patch("dart_risk_mcp.server.fetch_company_disclosures")
+    @patch("dart_risk_mcp.server.fetch_company_disclosures_with_status")
     @patch("dart_risk_mcp.server.resolve_corp")
     def test_audit_bonus_from_auditor_change(
         self, mock_resolve, mock_fetch, mock_match, mock_audit_hist
@@ -169,9 +169,9 @@ class TestCheckDisclosureAnomalyAuditBonus(unittest.TestCase):
         from dart_risk_mcp import server
 
         mock_resolve.return_value = ("테스트", {"corp_code": "00000001", "stock_code": "000000"})
-        mock_fetch.return_value = [
+        mock_fetch.return_value = ([
             {"rcept_no": "1", "rcept_dt": "20260101", "report_nm": "사업보고서"},
-        ]
+        ], "ok")
         mock_match.return_value = []  # 키워드 매칭은 0건
         mock_audit_hist.return_value = {
             "opinions": [],
@@ -189,7 +189,7 @@ class TestCheckDisclosureAnomalyAuditBonus(unittest.TestCase):
     @patch("dart_risk_mcp.server._DART_API_KEY", "KEY")
     @patch("dart_risk_mcp.server.fetch_audit_opinion_history")
     @patch("dart_risk_mcp.server.match_signals")
-    @patch("dart_risk_mcp.server.fetch_company_disclosures")
+    @patch("dart_risk_mcp.server.fetch_company_disclosures_with_status")
     @patch("dart_risk_mcp.server.resolve_corp")
     def test_audit_bonus_from_non_audit_warning(
         self, mock_resolve, mock_fetch, mock_match, mock_audit_hist
@@ -197,9 +197,9 @@ class TestCheckDisclosureAnomalyAuditBonus(unittest.TestCase):
         from dart_risk_mcp import server
 
         mock_resolve.return_value = ("테스트", {"corp_code": "00000001", "stock_code": "000000"})
-        mock_fetch.return_value = [
+        mock_fetch.return_value = ([
             {"rcept_no": "1", "rcept_dt": "20260101", "report_nm": "사업보고서"},
-        ]
+        ], "ok")
         mock_match.return_value = []
         mock_audit_hist.return_value = {
             "opinions": [],

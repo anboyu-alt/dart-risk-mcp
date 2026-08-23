@@ -62,15 +62,17 @@ def test_list_disclosures_passes_years_to_core(monkeypatch):
 
     # v1.18.0: 시점 지정(bgn_de/end_de)이 추가돼 스텁도 받아야 한다.
     # 날짜를 안 주는 호출에서는 빈 문자열로 와야 기존 동작이 유지된다.
+    # v1.18.x: 도구가 fetch_company_disclosures_with_status를 쓴다 —
+    # (rows, status) 튜플을 돌려줘야 한다.
     def _fake_fetch(corp_code, api_key, lookback_days, max_pages=10,
-                    bgn_de="", end_de=""):
+                    bgn_de="", end_de="", pblntf_ty=""):
         captured["lookback_days"] = lookback_days
         captured["max_pages"] = max_pages
         captured["bgn_de"] = bgn_de
         captured["end_de"] = end_de
-        return [{"rcept_no": "20240101000001", "report_nm": "사업보고서", "rcept_dt": "20240101"}]
+        return ([{"rcept_no": "20240101000001", "report_nm": "사업보고서", "rcept_dt": "20240101"}], "ok")
 
-    monkeypatch.setattr(srv, "fetch_company_disclosures", _fake_fetch)
+    monkeypatch.setattr(srv, "fetch_company_disclosures_with_status", _fake_fetch)
 
     out = srv.list_disclosures_by_stock("012345", lookback_years=3)
     assert captured["lookback_days"] == 3 * 365
@@ -90,15 +92,17 @@ def test_lookback_days_alias_backward_compat(monkeypatch):
 
     # v1.18.0: 시점 지정(bgn_de/end_de)이 추가돼 스텁도 받아야 한다.
     # 날짜를 안 주는 호출에서는 빈 문자열로 와야 기존 동작이 유지된다.
+    # v1.18.x: 도구가 fetch_company_disclosures_with_status를 쓴다 —
+    # (rows, status) 튜플을 돌려줘야 한다.
     def _fake_fetch(corp_code, api_key, lookback_days, max_pages=10,
-                    bgn_de="", end_de=""):
+                    bgn_de="", end_de="", pblntf_ty=""):
         captured["lookback_days"] = lookback_days
         captured["max_pages"] = max_pages
         captured["bgn_de"] = bgn_de
         captured["end_de"] = end_de
-        return [{"rcept_no": "20240101000001", "report_nm": "사업보고서", "rcept_dt": "20240101"}]
+        return ([{"rcept_no": "20240101000001", "report_nm": "사업보고서", "rcept_dt": "20240101"}], "ok")
 
-    monkeypatch.setattr(srv, "fetch_company_disclosures", _fake_fetch)
+    monkeypatch.setattr(srv, "fetch_company_disclosures_with_status", _fake_fetch)
 
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
