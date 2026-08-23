@@ -90,7 +90,17 @@ class TestFetchAuditOpinionHistory(unittest.TestCase):
         self.assertEqual(r["opinions"][0]["tenure_years"], 2)
 
     @patch("dart_risk_mcp.core.dart_client._retry")
-    def test_non_audit_warning_at_30_percent(self, mock_retry):
+    def test_non_audit_ratio_no_longer_warns(self, mock_retry):
+        """비중 경고는 2026-08-23에 뺐다 — 단위가 없어 나눌 수 없다.
+
+        옛 테스트는 "30%를 넘으면 경고한다"를 고정했다. 그 계산의 전제인
+        '두 금액이 같은 단위'가 실제로는 성립하지 않는다 — DART 응답에
+        단위가 없고, 같은 회사의 연도 사이에서도 바뀐다(헬릭스미스 감사보수
+        2025 `298` vs 2023 `298,000`). 실측 12개사 중 4개사가 그 때문에
+        경고를 받았고 셀트리온은 99~100%였다.
+
+        이제는 단위와 무관한 사실(계약 건수)만 남긴다.
+        """
         mock_retry.side_effect = _make_side_effect(
             opinion=[{"bsns_year": "2025", "adtor": "삼일", "adt_opinion": "적정"}],
             audit=[{"bsns_year": "2025", "mendng": "700000000"}],
@@ -98,7 +108,8 @@ class TestFetchAuditOpinionHistory(unittest.TestCase):
                         "servc_cn": "세무", "mendng": "300000000"}],
         )
         r = dart_client.fetch_audit_opinion_history("00000001", "KEY", 5)
-        self.assertTrue(any("30%" in w for w in r["independence_warnings"]))
+        self.assertEqual(r["independence_warnings"], [])
+        self.assertEqual(r["non_audit_contracts"], {2025: 1})
 
     @patch("dart_risk_mcp.core.dart_client._retry")
     def test_non_audit_no_warning_below_30_percent(self, mock_retry):

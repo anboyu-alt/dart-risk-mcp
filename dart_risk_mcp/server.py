@@ -4271,7 +4271,7 @@ def get_audit_opinion_history(company_name: str, lookback_years: int = 5) -> str
         lookback_years: 1~10(밖이면 5로 강제).
 
     Returns:
-        감사의견 표·교체 이력·독립성 경고 텍스트.
+        감사의견 표·감사인 교체 이력·비감사용역 계약 건수 텍스트.
     """
     api_key = _DART_API_KEY
     if not api_key:
@@ -4300,7 +4300,8 @@ def get_audit_opinion_history(company_name: str, lookback_years: int = 5) -> str
         "**연도별 감사의견**",
     ]
     # DART 보수 필드는 기업별·연도별 단위(천원/백만원)가 일관되지 않아
-    # v0.8.0에서는 절대 금액 표시를 생략. 비중 경고만 '독립성 경고' 섹션에서 제공.
+    # v0.8.0에서는 절대 금액 표시를 생략했고, 2026-08-23에는 같은 이유로
+    # 비중 경고도 뺐다(단위가 없어 나눌 수 없다). 계약 건수만 사실로 적는다.
     for o in data["opinions"]:
         opinion_text = (o.get("opinion") or "").strip()
         # "적정" / "적정의견" 표기 혼용을 정규화
@@ -4325,13 +4326,19 @@ def get_audit_opinion_history(company_name: str, lookback_years: int = 5) -> str
             lines.append("  ⚠ 3년 내 2회 이상 교체는 감사 독립성 경고 신호입니다.")
         lines.append("")
 
-    if data["independence_warnings"]:
-        lines.append("**독립성 경고**")
-        for w in data["independence_warnings"]:
-            lines.append(f"- ⚠ {w}")
+    # 비감사용역은 **건수만** 사실로 적는다. 보수 비중은 내지 않는다 —
+    # DART 응답에 단위가 없고 회사·연도마다 달라 감사보수와 나눌 수 없다
+    # (core의 "독립성 경고" 주석에 실측 근거). 옛 구현은 그 비율로 경고를
+    # 띄웠고, 12개사 중 4개사가 단위 불일치 때문에 경고를 받았다.
+    _contracts = data.get("non_audit_contracts") or {}
+    if _contracts:
+        lines.append("**비감사용역 계약 (참고)**")
+        for y in sorted(_contracts, reverse=True):
+            lines.append(f"- {y}: {_contracts[y]}건")
         lines.append(
-            "  비감사용역(세무·자문 등) 보수가 감사·비감사 합계의 30% 이상이면 "
-            "외감법상 독립성 훼손 우려가 제기됩니다."
+            "  같은 감사인에게 세무·자문 등을 함께 맡긴 계약의 건수입니다. "
+            "보수 비중은 DART가 단위를 함께 제공하지 않아 산출하지 않습니다 "
+            "— 필요하면 사업보고서 원문에서 직접 확인하세요."
         )
         lines.append("")
 
@@ -4506,7 +4513,8 @@ def check_disclosure_anomaly(
     # ── 지표 집계 (건수·비율만) ─────────────────────────────────
     amend_ratio = amendment_count / total
     # v0.8.5: 내부 스코어 계산을 제거. 출력에는 건수·비율·사실만 노출한다.
-    # 감사의견 구조화 엔드포인트는 교체 이력·비감사용역 경고에만 사용.
+    # 감사의견 구조화 엔드포인트는 감사인 교체 이력에만 사용한다
+    # (비감사용역 비중 경고는 단위 문제로 2026-08-23에 제거).
     _audit_struct = fetch_audit_opinion_history(corp_code, _DART_API_KEY, 5)
     _auditor_change_count = len(_audit_struct.get("auditor_changes", []))
     _indep_warnings = _audit_struct.get("independence_warnings", [])
@@ -4555,6 +4563,8 @@ def check_disclosure_anomaly(
             f"  ⚠ 최근 5년간 감사인 교체 {_auditor_change_count}회 "
             "— 감사 독립성 훼손 가능성이 제기되는 맥락입니다."
         )
+    # 비감사용역 비중 경고는 2026-08-23에 뺐다 — 단위가 없는 금액으로
+    # 계산한 비율이라 12개사 중 4개사에 잘못 떴다(core 주석 참고).
     if _indep_warnings:
         lines.append(
             f"  ⚠ 비감사용역 비중 초과 연도: {', '.join(_indep_warnings)}."

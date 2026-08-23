@@ -4883,20 +4883,49 @@ def fetch_audit_opinion_history(
                 "to": cur_a,
             })
 
-    # 독립성 경고
+    # 독립성 경고 — 비율을 내지 않는다(2026-08-23).
+    #
+    # 두 엔드포인트의 보수 금액에는 **단위가 실려 오지 않고, 회사마다도
+    # 같은 회사의 연도 사이에서도 단위가 바뀐다.** 그래서 나눌 수 없다.
+    #
+    #   헬릭스미스   감사보수 2025 `298`   vs 2023 `298,000`
+    #   제이스코     감사보수 2025 `280`   vs 2023 `200,000`
+    #   나이스정보통신 감사보수 2025 `365`   vs 2023 `279,000`
+    #   셀트리온     감사 `2,920`(백만원=29억) vs 비감사 `130,000`(원=13만)
+    #
+    # 그대로 나누면 비중이 1,000배 이상 부풀려진다. 실측(12개사)에서 4개사가
+    # 「비감사용역 비중 30% 초과」 경고를 받았고, 셀트리온은 99~100%였다 —
+    # 전부 단위가 어긋나서 나온 값이다.
+    #
+    # v0.8.0이 **절대 금액**을 같은 이유로 뺐는데, 비율은 그 금액에서
+    # 나오므로 같은 결함을 물려받는다. 판정 불가면 표기하지 않는다는 이
+    # 레포의 관례대로 비율을 버리고, 단위와 무관한 사실(계약 건수)만 남긴다.
     warnings: list[str] = []
-    for o in opinions:
-        af = o.get("audit_fee_okwon", 0)
-        naf = o.get("non_audit_fee_okwon", 0)
-        if af + naf > 0:
-            ratio = naf / (af + naf)
-            if ratio >= _NON_AUDIT_THRESHOLD:
-                warnings.append(f"{o['year']} 비감사용역 비중 {int(ratio*100)}%")
+
+    # ⚠ 연도×엔드포인트 루프라 **같은 계약이 여러 번 실려 온다** — 한
+    # 사업보고서 응답이 당기·전기·전전기를 함께 담기 때문이다. 계약일+내용을
+    # 키로 중복을 지운다(테스트가 5배로 세는 것을 잡아냈다).
+    seen_contracts: set = set()
+    non_audit_contracts: dict[int, int] = {}
+    for item in raw.get("non_audit", []):
+        y = _safe_int_from_de(item.get("cntrct_cncls_de", ""))
+        if y is None or y < cutoff:
+            continue
+        # 내용이 '-'뿐인 행은 '계약 없음' 표기라 건수에 넣지 않는다
+        cn = " ".join(str(item.get("servc_cn") or "").split())
+        if not cn or cn == "-":
+            continue
+        key = (str(item.get("cntrct_cncls_de") or "").strip(), cn)
+        if key in seen_contracts:
+            continue
+        seen_contracts.add(key)
+        non_audit_contracts[y] = non_audit_contracts.get(y, 0) + 1
 
     result = {
         "opinions": opinions,
         "auditor_changes": auditor_changes,
         "independence_warnings": warnings,
+        "non_audit_contracts": non_audit_contracts,
     }
     _cache_set(_audit_history_cache, cache_key, result, _AUDIT_CACHE_MAX)
     return result
