@@ -4093,6 +4093,8 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
     # ── 클러스터 탐지 (30일 윈도우) ───────────────────────────
     buy_cluster: list[str] = []
     sell_cluster: list[str] = []
+    # 관측 1건·0.00%로 변동이 확인되지 않는 보고자 (위 주석 참고)
+    flat_only: list[str] = []
     insider_sells: list[dict] = []  # v0.8.6 INSIDER_PRE_DISCLOSURE 입력용
 
     import datetime as _dt
@@ -4107,6 +4109,22 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
                 continue  # 0.005%p 미만 차이는 동일 데이터로 간주
             deduped.append((ratio, date, src_lbl))
         if not deduped:
+            continue
+
+        # 관측이 1건뿐이고 비율이 0.00%면 **변동이 없다** — 이 도구가 말하는
+        # 것은 "지분 변동 시계열"인데 그런 줄은 변동을 담지 않는다. 그런데
+        # 회사가 클수록 그 줄이 출력을 뒤덮어, 정작 Δ가 붙은 줄이 묻힌다.
+        #
+        # 라이브 실측(2026-08-23, 2년 조회):
+        #   삼성전자         3,311줄 중 1,065줄이 이 형태 · Δ 있는 줄은 70줄
+        #   두산에너빌리티      283줄 중    63줄            · Δ  1줄
+        #   셀트리온           422줄 중    16줄            · Δ 71줄
+        #   소형사(제이스코 등)                0줄
+        #
+        # 지우지 않는다 — 아래에서 인원수를 사실로 남긴다. 관측이 2건 이상
+        # 이거나 비율이 0.00%를 넘으면 그대로 전부 표기한다.
+        if len(deduped) == 1 and abs(deduped[0][0]) < 0.005:
+            flat_only.append(holder)
             continue
 
         lines.append(f"▶ {holder}")
@@ -4197,13 +4215,25 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
                 )
             lines.append("")
 
+    if flat_only:
+        # 접은 것을 사실로 남긴다 — 목록에서 빠졌다는 것과 존재하지 않는다는
+        # 것이 같은 화면이 되면 안 된다.
+        lines += [
+            "",
+            f"※ 관측 1건·보유 비율 0.00%로 변동이 확인되지 않는 보고자 "
+            f"{len(flat_only)}명은 위 목록에서 접었습니다 "
+            f"(예: {', '.join(sorted(flat_only)[:3])}).",
+        ]
+
     lines += [
         "─────────────────────────────────────────────",
         "※ 공시 지연으로 실시간 내부자 거래 현황과 차이가 있을 수 있습니다.",
         "   본 정보는 공시 기반 불공정거래 위험 모니터링 목적으로만 활용하십시오.",
         "💡 임원 보수 조회: get_executive_compensation(company_name=...)",
     ]
-    return "\n".join(lines)
+    # 다년 조회 규모 푸터 — 다른 다년 도구와 같은 관례인데 이 도구에만
+    # 빠져 있었다(2026-08-23 실측: 삼성전자 2년 40,464자에 안내 없음).
+    return _append_size_footer("\n".join(lines), lookback_years)
 
 
 @mcp.tool()
