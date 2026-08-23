@@ -950,13 +950,31 @@ def build_daily_report(sdata: dict, kdata: dict, s_changed: bool, promoted: list
 
 
 def _load(path: Path, empty: dict) -> dict:
-    """sightings 로드 — 파일 없음(신규)과 손상(중단)을 구분한다.
+    """sightings 로드 — 파일 없음·손상을 구분해 데이터 소실을 막는다.
 
     손상 파일을 빈 스켈레톤으로 대체하면 다음 저장에서 누적 데이터
     전체가 소실된다(2026-08-04 감사 B-2) — 존재하는데 파싱이 실패하면
     조용히 진행하지 않고 즉시 중단해 운영자 확인을 요구한다.
+
+    **파일 없음도 같은 크기의 사고가 된다**(2026-08-23 후속 감사). 일일
+    cron은 `WINDOW_DAYS=2`, 즉 **이틀치**만 수집하는데 파일은 `WINDOW_MONTHS=140`,
+    즉 **11년치**를 담는다(2015년까지 백필). `SIGHTINGS_PATH`가 가리키는
+    자리에 파일이 없으면 빈 스켈레톤으로 시작해 이틀치를 쓰고, 워크플로의
+    커밋 스텝이 그것을 그대로 커밋한다 — 오류 하나 없이 11년이 이틀로 바뀐다.
+    체크아웃 실패는 액션이 잡지만, 파일명 변경·경로 오타는 안 잡힌다.
+
+    그래서 **경로를 명시한 호출**(`SIGHTINGS_PATH` 설정 = CI·private repo)에서
+    파일이 없으면 치명으로 본다. 진짜 최초 생성은 `SIGHTINGS_ALLOW_CREATE=1`로
+    운영자가 한 번 선언한다. 경로를 안 준 로컬 기본 경로(`tmp/sightings.json`)는
+    스크래치라 그대로 생성한다.
     """
     if not path.exists():
+        if os.environ.get("SIGHTINGS_PATH") and os.environ.get("SIGHTINGS_ALLOW_CREATE") != "1":
+            raise SystemExit(
+                f"[SIGHTINGS] 지정된 경로에 파일이 없습니다: {path}\n"
+                "  빈 값으로 시작하면 누적분이 이번 실행분으로 덮어써집니다.\n"
+                "  경로·체크아웃을 확인하세요. 정말 새로 만드는 것이라면"
+                " SIGHTINGS_ALLOW_CREATE=1 을 설정하고 다시 실행하세요.")
         return dict(empty)
     try:
         return json.loads(path.read_text(encoding="utf-8"))
