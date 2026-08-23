@@ -1310,11 +1310,21 @@ def _render_pattern_watch_block(
             f"{ov['n_matched']}개가 이 기간 공시에서 관찰됐습니다"
         )
         lines.append(f"   관찰됨: {matched_labels}")
-        if ov["missing"]:
+        # 창 밖에서 관찰된 것은 「안 보임」이 아니다 — 위쪽 관찰 신호 절에
+        # 실려 있는 신호를 여기서 "안 보인다"고 적으면 한 화면이 모순된다.
+        _outside = set(ov.get("outside_window") or ())
+        _unseen = [t for t in ov["missing"] if t not in _outside]
+        if _unseen:
             missing_labels = " · ".join(
-                f"{taxonomy_label_ko(t)}({t})" for t in ov["missing"]
+                f"{taxonomy_label_ko(t)}({t})" for t in _unseen
             )
             lines.append(f"   안 보임: {missing_labels}")
+        if _outside:
+            outside_labels = " · ".join(
+                f"{taxonomy_label_ko(t)}({t})"
+                for t in ov["outside_window"]
+            )
+            lines.append(f"   창 밖에서 관찰됨: {outside_labels}")
         if ov["checkpoints"]:
             lines.append("   확인해볼 것:")
             for cp in ov["checkpoints"]:
