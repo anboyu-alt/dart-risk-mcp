@@ -2825,17 +2825,32 @@ function bestWindow(seq, taxDates, months) {
 // taxDates를 주면 패턴의 timeline_months를 실제 게이트로 적용한다(미전달 시
 // 기존 동작 유지). 이전에는 timeline_months가 카드 문구로만 쓰여, 5년 스캔에서
 // 2~3년 떨어진 신호가 한 패턴으로 묶이면서 "관찰 윈도우 12개월"이 거짓 표기였다.
+// 카드로 세울 최소 충족 개수 — core `taxonomy.required_overlap` 이식.
+// 옛 규칙은 고정 2라 6신호 패턴도 2개(33%)면 카드가 섰다. 실사고:
+// SK하이닉스 「무자본 M&A」 2/6(유상증자 + 조회공시 — 대형주라면 어느 해에나
+// 있는 일), POSCO홀딩스·카카오 「허위 신사업 주가부양」 2/4.
+function requiredOverlap(nTotal, minOverlap) {
+  const floor = minOverlap || 2;
+  if (!nTotal || nTotal <= 0) return floor;
+  // `DATA`가 아직 없을 수 있다(테스트 하네스가 함수만 떼어 쓴다) — 던지지
+  // 않고 core 기본값으로 떨어진다.
+  const ratio = (typeof DATA !== "undefined" && DATA && DATA.pattern_min_ratio)
+    || 0.6;
+  return Math.min(nTotal, Math.max(floor, Math.ceil(nTotal * ratio)));
+}
+
 function findPatternOverlaps(patternsList, detectedTaxSet, minOverlap, taxDates) {
   const results = [];
   for (const p of (patternsList || [])) {
     const seq = p.signal_sequence || [];
+    const need = requiredOverlap(seq.length, minOverlap);
     let matched = seq.filter((t) => detectedTaxSet.has(t));
-    if (matched.length < minOverlap) continue;
+    if (matched.length < need) continue;
     let wStart = "", wEnd = "";
     if (taxDates && p.timeline_months > 0) {
       const w = bestWindow(matched, taxDates, p.timeline_months);
       matched = w.matched; wStart = w.start; wEnd = w.end;
-      if (matched.length < minOverlap) continue;
+      if (matched.length < need) continue;
     }
     const mset = new Set(matched);
     const missing = seq.filter((t) => !mset.has(t));

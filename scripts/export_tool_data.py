@@ -45,6 +45,7 @@ from dart_risk_mcp.core.signals import (  # noqa: E402
     _AMENDMENT_RE,
 )
 from dart_risk_mcp.core.taxonomy import CROSS_SIGNAL_PATTERNS, TAXONOMY  # noqa: E402
+from dart_risk_mcp.core.taxonomy import PATTERN_MIN_RATIO as _PAT_RATIO  # noqa: E402
 from dart_risk_mcp.core.explain import (  # noqa: E402
     signal_to_prose,
     pattern_to_prose,
@@ -338,6 +339,8 @@ def build_signals_data() -> dict:
         "signals": signals,
         "patterns": patterns,
         "categories": categories,
+        # 패턴 카드 최소 충족 비율 — 뷰어가 같은 계산을 하도록 내보낸다.
+        "pattern_min_ratio": _PAT_RATIO,
         "capital_event_keys": sorted(CAPITAL_EVENT_KEYS),
         # 자본 이벤트 집중 판정은 **희석성** 기준이다(v1.20.10). 뷰어가
         # 전체 카운트로 "3건 이상"이라 말하면 core와 다른 답을 낸다 —

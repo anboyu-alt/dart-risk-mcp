@@ -37,12 +37,18 @@ def test_창_안이면_둘_다_관찰됨이다():
 
 
 def test_창_밖_관찰은_안_보임이_아니라_창_밖_관찰이다():
-    a, b = SEQ[0], SEQ[1]
-    # b를 창 길이보다 훨씬 뒤에 둔다 → 한 창에 못 담긴다
-    late = f"20{28 + MONTHS // 12:02d}0601"
-    got = _ov({a: ["20200101"], b: [late]}).get(PAIR)
+    """2026-08-25: 카드 임계가 패턴 크기에 비례하게 바뀌어(60%) 2신호 패턴은
+    하나만 남으면 카드 자체가 서지 않는다. 표기 구분을 재는 것이 목적이므로
+    3신호 패턴(`audit_insider_dump`, 2개면 선다)으로 옮긴다."""
+    pid = "audit_insider_dump"
+    seq = CROSS_SIGNAL_PATTERNS[pid]["signal_sequence"]
+    months = CROSS_SIGNAL_PATTERNS[pid]["timeline_months"]
+    # seq[2]를 창 길이보다 훨씬 뒤에 둔다 → 한 창에 못 담긴다
+    late = f"20{40 + months // 12:02d}0601"
+    got = _ov({seq[0]: ["20200101"], seq[1]: ["20200301"],
+               seq[2]: [late]}).get(pid)
     assert got, "겹침 자체는 성립해야 한다"
-    assert len(got["matched"]) == 1
+    assert len(got["matched"]) == 2
     dropped = got["missing"]
     assert len(dropped) == 1
     assert got["outside_window"] == dropped, "관찰됐으므로 창 밖 관찰로 분류"
@@ -51,11 +57,13 @@ def test_창_밖_관찰은_안_보임이_아니라_창_밖_관찰이다():
 def test_관찰되지_않은_신호는_그대로_안_보임이다():
     """반대 방향 — 진짜 없는 것까지 '창 밖 관찰'로 올리면 없는 사실을 만든다."""
     seq = CROSS_SIGNAL_PATTERNS["zombie_ma"]["signal_sequence"]
-    dates = {seq[0]: ["20250101"], seq[1]: ["20250201"]}
+    # 6신호 패턴은 이제 4개가 필요하다(60% 임계) — 4개를 창 안에 둔다.
+    seen = seq[:4]
+    dates = {t: [f"2025{1 + i:02d}01"] for i, t in enumerate(seen)}
     got = _ov(dates, min_overlap=2).get("zombie_ma")
     assert got
     assert got["outside_window"] == [], "관찰된 적 없는 id가 섞이면 안 된다"
-    assert set(got["missing"]) == set(seq) - {seq[0], seq[1]}
+    assert set(got["missing"]) == set(seq) - set(seen)
 
 
 def test_outside_window는_missing의_부분집합이다():

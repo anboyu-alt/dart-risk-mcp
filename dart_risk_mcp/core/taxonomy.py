@@ -38,6 +38,7 @@ Usage:
 
 import os
 from datetime import datetime, timedelta
+import math
 from typing import Dict, List, Tuple, Optional
 
 # ────────────────────────────────────────────────────────────────
@@ -1554,6 +1555,38 @@ def _best_window(
     return best, best_win[0], best_win[1]
 
 
+# 카드로 세울 최소 충족 비율 — 패턴 구성 신호의 몇 %가 관찰돼야 하는가.
+#
+# 옛 규칙은 `min_overlap=2` **고정**이라 2신호 패턴이든 6신호 패턴이든 2개면
+# 카드가 섰다. 6개 중 2개(33%)로 「무자본 M&A」(CRITICAL)가 뜬다는 뜻이다.
+#
+# 실사고(2026-08-25 사용자 제보): SK하이닉스에 「무자본 M&A」 2/6이 떴다.
+# 근거는 「주요사항보고서(유상증자결정)」(2.4)과 「조회공시요구(풍문또는보도)」
+# (7.1) 둘뿐 — **대형주라면 어느 해에나 있는 일**이다. POSCO홀딩스·카카오도
+# 같은 이유로 「허위 신사업 주가부양」 2/4가 떴다.
+#
+# 검증셋 실측(365일 창):
+#
+#              규칙            대조군(대형주 14)   양성군(부실·문서화 사례 33)
+#     현행 (>=2 고정)          3곳 21% ⚠           26곳 79%
+#     절반 이상               2곳 14% ⚠           17곳 52%
+#     최소 3                  0곳  0%             15곳 45%
+#     **60% 이상**            **0곳  0%**         16곳 48%
+#
+# 60%를 택한 이유: 「최소 3」과 대조군 성적이 같은데(둘 다 0), 3신호 패턴에
+# 100% 일치를 요구하지 않아 패턴 크기에 따라 기준이 뒤집히지 않는다.
+# 하한 2는 유지한다 — 2신호 패턴(자금 역류·조달-유용 체인)은 2개가 곧
+# 전부 일치이고, 그 둘은 별도의 원문 확인 게이트를 이미 갖고 있다.
+PATTERN_MIN_RATIO = 0.6
+
+
+def required_overlap(n_total: int, min_overlap: int = 2) -> int:
+    """패턴 하나를 카드로 세우는 데 필요한 관찰 신호 개수."""
+    if n_total <= 0:
+        return min_overlap
+    return min(n_total, max(min_overlap, math.ceil(n_total * PATTERN_MIN_RATIO)))
+
+
 def find_pattern_overlaps(
     detected_taxonomies: List[str],
     min_overlap: int = 2,
@@ -1604,7 +1637,8 @@ def find_pattern_overlaps(
         seq = pattern["signal_sequence"]
         seq_set = set(seq)
         matched_set = seq_set & detected_set
-        if len(matched_set) < min_overlap:
+        need = required_overlap(len(seq_set), min_overlap)
+        if len(matched_set) < need:
             continue
 
         # 관찰 윈도우 게이트 — 날짜를 받았을 때만 적용한다(미전달 시 기존
@@ -1618,7 +1652,7 @@ def find_pattern_overlaps(
                 matched_set, window_start, window_end = _best_window(
                     matched_set, taxonomy_dates, months
                 )
-                if len(matched_set) < min_overlap:
+                if len(matched_set) < need:
                     continue
 
         missing_set = seq_set - matched_set

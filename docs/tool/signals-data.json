@@ -1035,6 +1035,7 @@
   "8": "위기/부실",
   "9": "정기 보고"
  },
+ "pattern_min_ratio": 0.6,
  "capital_event_keys": [
   "3PCA",
   "CB_BUYBACK",

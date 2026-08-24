@@ -3,6 +3,11 @@
 배경: `timeline_months`는 원래 카드 문구로만 쓰이고 매칭에 관여하지 않아,
 5년 스캔에서 2~3년 떨어진 신호가 한 패턴으로 묶이면서 "관찰 윈도우 12개월"이
 거짓 표기였다(한탑 002680 실측 — 근거 공시가 2024.01~2026.08에 흩어져 있었다).
+
+⚠ 2026-08-25 — 카드 임계가 **패턴 크기에 비례**하도록 바뀌어(`required_overlap`,
+60%) 6신호 패턴은 2개로 서지 않는다. 이 파일은 **창 게이트**를 재는 것이므로
+픽스처를 `audit_insider_dump`(3신호·need 2)로 옮겨 의도를 그대로 지킨다 —
+게이트 동작을 검증하는 데 어떤 패턴을 쓰는지는 본질이 아니다.
 """
 import pytest
 
@@ -85,25 +90,24 @@ class TestFindPatternOverlapsGate:
         assert [r["pattern_id"] for r in before]  # 겹침이 실제로 나온다
 
     def test_이격된_신호는_패턴에서_탈락(self):
-        """3.1과 2.4가 4년 떨어져 있으면 어떤 패턴 창에도 함께 못 들어온다."""
-        tax = ["3.1", "2.4"]
-        far = {"3.1": ["20220101"], "2.4": ["20260101"]}
+        """3.1과 7.1이 아주 멀면 어떤 패턴 창에도 함께 못 들어온다."""
+        tax = ["3.1", "7.1"]
+        far = {"3.1": ["20150101"], "7.1": ["20260101"]}
         assert find_pattern_overlaps(tax, 2, taxonomy_dates=far) == []
         # 대조군: 같은 해면 겹침이 남는다
-        near = {"3.1": ["20260101"], "2.4": ["20260301"]}
+        near = {"3.1": ["20260101"], "7.1": ["20260301"]}
         assert find_pattern_overlaps(tax, 2, taxonomy_dates=near)
 
     def test_창밖_신호는_missing으로_이동(self):
-        tax = ["3.1", "2.4", "4.3", "7.1"]
+        tax = ["4.4", "7.1", "3.1"]
         dates = {
-            "3.1": ["20260101"], "2.4": ["20260201"],
-            "4.3": ["20200101"], "7.1": ["20200101"],   # 6년 전
+            "4.4": ["20260101"], "7.1": ["20260201"],
+            "3.1": ["20150101"],   # 11년 전 — 어떤 창에도 못 들어온다
         }
         got = {r["pattern_id"]: r for r in find_pattern_overlaps(tax, 2, taxonomy_dates=dates)}
-        z = got["zombie_ma"]
-        # 2026 창(3.1+2.4)과 2020 창(4.3+7.1)이 동수 2개 → 최근 창을 택한다
-        assert set(z["matched"]) == {"3.1", "2.4"}
-        assert {"4.3", "7.1"} <= set(z["missing"])
+        z = got["audit_insider_dump"]
+        assert set(z["matched"]) == {"4.4", "7.1"}
+        assert "3.1" in set(z["missing"])
         assert z["n_matched"] + len(z["missing"]) == z["n_total"]
 
     def test_창_경계값_포함(self):
@@ -111,25 +115,26 @@ class TestFindPatternOverlapsGate:
 
         timeline_months 값은 실측으로 재보정되는 값이라(2026-08-21, 250개사)
         테스트가 특정 숫자에 매달리지 않도록 패턴에서 직접 읽는다."""
-        tax = ["3.1", "2.4"]
-        # 3.1+2.4를 함께 요구하는 패턴 중 창이 가장 짧은 것이 경계를 정한다
+        tax = ["3.1", "7.1"]
+        # 3.1+7.1을 함께 요구하는 패턴 중 창이 가장 짧은 것이 경계를 정한다
         cands = [
             p for p in CROSS_SIGNAL_PATTERNS.values()
-            if {"3.1", "2.4"} <= set(p["signal_sequence"])
+            if {"3.1", "7.1"} <= set(p["signal_sequence"])
+            and len(p["signal_sequence"]) <= 3   # 2개로 설 수 있는 패턴만
         ]
         months = min(p["timeline_months"] for p in cands)
         base = "20200101"
-        exact = {"3.1": [base], "2.4": [_window_end(base, months)]}
+        exact = {"3.1": [base], "7.1": [_window_end(base, months)]}
         assert find_pattern_overlaps(tax, 2, taxonomy_dates=exact)
 
         end = _window_end(base, months)
         over_day = f"{end[:6]}{int(end[6:8]) + 1:02d}"   # 하루 초과
-        over = {"3.1": [base], "2.4": [over_day]}
+        over = {"3.1": [base], "7.1": [over_day]}
         assert find_pattern_overlaps(tax, 2, taxonomy_dates=over) == []
 
     def test_결과에_창_메타가_실린다(self):
-        tax = ["3.1", "2.4"]
-        dates = {"3.1": ["20260101"], "2.4": ["20260301"]}
+        tax = ["3.1", "7.1"]
+        dates = {"3.1": ["20260101"], "7.1": ["20260301"]}
         r = find_pattern_overlaps(tax, 2, taxonomy_dates=dates)[0]
         assert r["window_start"] == "20260101"
         # 마지막 관찰일 — 창의 이론적 끝(start+timeline_months)이 아니다

@@ -66,8 +66,10 @@ class TestFindPatternOverlaps(unittest.TestCase):
     def test_sort_order_ratio_desc_then_n_matched_desc_then_id_asc(self):
         # zombie_ma(6/6=1.0 완전일치) vs delisting_evasion(3/6=0.5 부분일치)
         # — 충족률이 높은 쪽이 앞선다.
+        # 2026-08-25: 임계가 패턴 크기에 비례하게 바뀌어(60%) delisting_evasion은
+        # 6개 중 4개가 필요하다 — 8.1을 더해 4/6으로 만든다(정렬 검증이 목적).
         result = find_pattern_overlaps(
-            ["3.1", "2.4", "1.2", "4.3", "7.1", "2.7"], min_overlap=2
+            ["3.1", "2.4", "1.2", "4.3", "7.1", "2.7", "8.1"], min_overlap=2
         )
         ids = [r["pattern_id"] for r in result]
         self.assertIn("zombie_ma", ids)
@@ -125,8 +127,10 @@ class TestRenderPatternWatchBlock(unittest.TestCase):
 
     def test_max_show_caps_at_three_with_overflow_note(self):
         # 이 조합은 capital_backflow(게이트 실패로 제외)까지 포함해 6개 패턴이
-        # min_overlap=2를 만족하며, 5개가 게이트를 통과한다(실측 확인).
-        tax_ids = ["3.1", "5.7", "1.2", "2.4", "4.3", "7.1", "2.7"]
+        # 임계를 만족하며, 5개가 게이트를 통과한다(실측 확인).
+        # 2026-08-25: 임계가 패턴 크기에 비례하게 바뀌어 taxonomy를 보강했다.
+        tax_ids = ["3.1", "5.7", "1.2", "2.4", "4.3", "7.1", "2.7",
+                   "8.1", "4.4", "2.6", "1.5", "1.3"]
         lines, fact_lines, filtered = _render_pattern_watch_block(tax_ids, [], True, {})
         self.assertEqual(len(filtered), 5)
         joined = "\n".join(lines)
