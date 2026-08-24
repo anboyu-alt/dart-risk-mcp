@@ -1088,6 +1088,12 @@ function demotionReason(parsed, filing) {
       if (t) return `체결이 아니라 ${t}입니다`;
     }
   }
+  // R2c — 본체가 결과 보고인 제목. 어미가 '자율공시'라 R2에 안 걸린다.
+  // 실사고: SK하이닉스에서 「유상증자결정」과 「…발행결과(자율공시)」가 둘 다
+  // 관찰로 잡혀 헤드라인이 「유상증자 ×2」였다(2026-08-24 실물 확인).
+  if ((r.result_body_marks || []).some((mk) => parsed.body.indexOf(mk) !== -1)) {
+    return "이미 실행된 건의 결과 보고입니다";
+  }
   // R3 — 자회사 사안. 「특수관계인의」 접두 규칙은 뜻이 반대라 뺐다
   // (core qualifiers.py의 RELATED_PARTY_PREFIX 자리 주석 = 원문 실측 근거).
   if (parsed.subtitles.some((s) => (r.subsidiary_subtitles || []).includes(s))) {
