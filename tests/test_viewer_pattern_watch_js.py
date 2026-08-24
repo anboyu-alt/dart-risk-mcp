@@ -22,6 +22,7 @@ _FUNC_NAMES = [
     # 2026-08-25: 카드 임계가 패턴 크기에 비례하게 바뀌며 신설된 헬퍼.
     # 빠뜨리면 findPatternOverlaps가 정의되지 않은 함수를 부른다.
     "function requiredOverlap",
+    "function evidenceCount",
     "function findPatternOverlaps",
     "function patternOverlapLinesHTML",
 ]

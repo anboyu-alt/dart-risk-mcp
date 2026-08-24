@@ -1264,14 +1264,18 @@ function buildResult(name, stockCode, corpCode, items, bgn, end, totalCount) {
   // 패턴 창 게이트 입력 — {taxonomy id: [YYYYMMDD, ...]}. e.date는 list.json의
   // rcept_dt(8자리)라 숫자만 남겨 쓴다.
   const taxDates = {};
+  // 한 신호가 같은 패턴의 taxonomy를 둘 이상 켜면 카드가 부풀어 오른다
+  // (core `_evidence_count` 이식 — 창업주 퇴장 37장이 그 위에 서 있었다).
+  const taxOwners = {};
   for (const e of observedEvents) {
     const dt = String(e.date || "").replace(/\D/g, "").slice(0, 8);
     if (dt.length !== 8) continue;
     for (const sg of patSigs(e)) for (const t of (sg.taxonomies || [])) {
       (taxDates[t] = taxDates[t] || []).push(dt);
+      (taxOwners[t] = taxOwners[t] || new Set()).add(sg.key);
     }
   }
-  const patterns = findPatternOverlaps(DATA.patterns, detectedTax, 2, taxDates);
+  const patterns = findPatternOverlaps(DATA.patterns, detectedTax, 2, taxDates, taxOwners);
   const capitalKeys = new Set(DATA.capital_event_keys);
   const capitalEvents = observedEvents.filter(
     (e) => obs(e).some((s) => capitalKeys.has(s.key)));
@@ -2839,18 +2843,30 @@ function requiredOverlap(nTotal, minOverlap) {
   return Math.min(nTotal, Math.max(floor, Math.ceil(nTotal * ratio)));
 }
 
-function findPatternOverlaps(patternsList, detectedTaxSet, minOverlap, taxDates) {
+// 겹친 taxonomy를 **서로 다른 관찰 몇 건**이 뒷받침하는가. core
+// `taxonomy._evidence_count` 이식 — 「서로 다른 신호 개수」만 세면 한
+// taxonomy를 여러 신호가 켤 때 오히려 부푼다(실측 14장 증가). 두 수의
+// 최솟값을 쓴다.
+function evidenceCount(matched, taxOwners) {
+  if (!taxOwners) return matched.length;
+  const owners = new Set();
+  for (const t of matched) for (const o of (taxOwners[t] || [])) owners.add(o);
+  if (!owners.size) return matched.length;
+  return Math.min(matched.length, owners.size);
+}
+
+function findPatternOverlaps(patternsList, detectedTaxSet, minOverlap, taxDates, taxOwners) {
   const results = [];
   for (const p of (patternsList || [])) {
     const seq = p.signal_sequence || [];
     const need = requiredOverlap(seq.length, minOverlap);
     let matched = seq.filter((t) => detectedTaxSet.has(t));
-    if (matched.length < need) continue;
+    if (evidenceCount(matched, taxOwners) < need) continue;
     let wStart = "", wEnd = "";
     if (taxDates && p.timeline_months > 0) {
       const w = bestWindow(matched, taxDates, p.timeline_months);
       matched = w.matched; wStart = w.start; wEnd = w.end;
-      if (matched.length < need) continue;
+      if (evidenceCount(matched, taxOwners) < need) continue;
     }
     const mset = new Set(matched);
     const missing = seq.filter((t) => !mset.has(t));
