@@ -1646,7 +1646,12 @@ function renderDash() {
     </div>
     ${scanDiffLineHTML(scanDiff)}
     <div class="kpis">
-      <div class="kpi"><div class="v">${items.length}</div><div class="k">전체 공시</div></div>
+      <!-- 상한에 걸린 회사에서 이 숫자는 '전체'가 아니라 '수집한 만큼'이다.
+           삼성전자 1년: 카드는 「전체 공시 1000」인데 바로 아래 주석은
+           「전체 공시는 2892건」이라 **같은 패널에서 두 숫자가 어긋났다**
+           (실물 확인 2026-08-24). 숫자를 바꾸면 아래 '신호 감지'와 분모가
+           달라지므로 **라벨을 사실에 맞춘다**. -->
+      <div class="kpi"><div class="v">${items.length}</div><div class="k">${CUR.truncated ? "수집 공시" : "전체 공시"}</div></div>
       <div class="kpi ${observedEvents.length ? "alert" : ""}"><div class="v">${observedEvents.length}</div><div class="k">신호 감지</div></div>
       <div class="kpi"><div class="v">${capitalEvents.length}</div><div class="k">자본 이벤트</div></div>
       <div class="kpi"><div class="v">${amendCount}</div><div class="k">정정공시</div></div>
@@ -1655,7 +1660,7 @@ function renderDash() {
     ${CUR.truncated ? `<p class="dim" style="font-size:0.82rem;margin-top:0.7rem">※ 이 기간 전체 공시는 ${CUR.truncated}건이며, 최근 ${items.length}건까지만 수집·분석했습니다(공시 다량 기업). 더 긴 전수 분석은 MCP 대화를 이용하세요.</p>` : ""}
     ${amendRate >= AMEND_NOTE_FLOOR ? `<p class="dim" style="font-size:0.82rem;margin-top:0.7rem">※ 정정공시 비율 ${amendRate}% — 시장 실측(2026-07-10~08-22, 공시 27,780건)에서 같은 기간 공시 10건 이상인 상장사 488곳의 중앙값은 10%, 상위 25%가 23%, 상위 10%가 39%입니다. 비율만으로 이상 여부가 갈리지는 않으니 같은 사안이 반복 정정되는지 원문에서 확인하세요.</p>` : ""}
     ${items.length === 0 ? zeroDisclosureNoticeHTML(name) :
-      events.length === 0 ? `<p class="dim" style="margin-top:0.8rem">이 기간 공시 ${items.length}건에서 등록된 위험 신호 유형이 감지되지 않았습니다. 신호가 없다는 것이 "안전하다"는 판정은 아닙니다 — 본 도구는 공시 제목 기반 신호만 봅니다.</p>` : ""}
+      events.length === 0 ? `<p class="dim" style="margin-top:0.8rem">${CUR.truncated ? `수집한 최근 ${items.length}건` : `이 기간 공시 ${items.length}건`}에서 등록된 위험 신호 유형이 감지되지 않았습니다. 신호가 없다는 것이 "안전하다"는 판정은 아닙니다 — 본 도구는 공시 제목 기반 신호만 봅니다.</p>` : ""}
   </div>`;
 
   html += `<div class="dim" style="font-size:0.9rem;margin-bottom:0.8rem">
@@ -1915,19 +1920,28 @@ function timelinePanel(events, bgn, end) {
   const months = [];
   const mstart = new Date(bgn.getFullYear(), bgn.getMonth(), 1);
   for (let m = new Date(mstart); m <= end; m.setMonth(m.getMonth() + 1)) {
-    months.push({ y: m.getFullYear(), m: m.getMonth(), n: 0, maxCat: 0 });
+    months.push({ y: m.getFullYear(), m: m.getMonth(), n: 0, maxCat: 0, heavy: false });
   }
   for (const e of events) {
     const y = +e.date.slice(0, 4), mo = +e.date.slice(4, 6) - 1;
     const bucket = months.find((x) => x.y === y && x.m === mo);
     const obsSigs = e.signals.filter(isObservedSig);
-    if (bucket && obsSigs.length) { bucket.n++; bucket.maxCat = Math.max(bucket.maxCat, ...obsSigs.map((s) => s.category)); }
+    if (bucket && obsSigs.length) {
+      bucket.n++;
+      bucket.maxCat = Math.max(bucket.maxCat, ...obsSigs.map((s) => s.category));
+      // ⚠ 붉은 칠·발광은 카테고리 번호가 아니라 `isHeavySignal`로 가른다.
+      //    카테고리로 가르면 「손익구조 30% 이상 변동」 한 건이 그 달을 붉게
+      //    만든다 — 실적이 **좋아진** 공시에도 붙는다(실측 2026-08-24: 10개사
+      //    붉은 달 19개 중 9개가 이 신호 하나뿐이었고, 거기엔 삼성전자
+      //    2026.01·셀트리온 2026.02가 들어 있다).
+      if (obsSigs.some(isHeavySignal)) bucket.heavy = true;
+    }
   }
   const dmax = Math.max(1, ...months.map((x) => x.n));
   const longWin = months.length > 14;   // 3Y·5Y — 월 라벨은 1월(연도)만
   const density = `<div class="slabel" style="margin-top:4px">▍SIGNAL DENSITY</div>
     <div class="density" style="grid-template-columns:repeat(${months.length},1fr)">` +
-    months.map((x) => `<div class="dcell">${x.n ? `<span class="dfill" style="height:${Math.round(x.n / dmax * 92)}%;background:var(--c${x.maxCat >= 7 ? 7 : x.maxCat || 2});${x.maxCat >= 7 ? "box-shadow:0 0 8px rgba(224,86,74,0.6);" : ""}"></span>` : ""}</div>`).join("") +
+    months.map((x) => `<div class="dcell">${x.n ? `<span class="dfill" style="height:${Math.round(x.n / dmax * 92)}%;background:var(--c${x.heavy ? 7 : x.maxCat || 2});${x.heavy ? "box-shadow:0 0 8px rgba(224,86,74,0.6);" : ""}"></span>` : ""}</div>`).join("") +
     `</div><div class="dlabels" style="grid-template-columns:repeat(${months.length},1fr)">` +
     months.map((x) => `<span>${longWin ? (x.m === 0 ? "'" + (x.y % 100) : "") : (x.m === 0 ? (x.y % 100) + "·1" : x.m + 1)}</span>`).join("") + `</div>`;
 
@@ -1956,7 +1970,10 @@ function timelinePanel(events, bgn, end) {
       const heavy = isHeavySignal(s);
       dots += `<a href="${dartUrl(e.rcept)}" target="_blank" rel="noopener">` +
         `<circle ${heavy ? 'class="hv"' : ""} cx="${x(e.date).toFixed(1)}" cy="${y}" r="${heavy ? 7 : 5}" fill="var(--c${s.category})" fill-opacity="${heavy ? 1 : 0.82}">` +
-        `<title>${esc(fmtDate(e.date))} · ${esc(s.label)}\n${esc(e.nm)}\n(클릭 → DART 원문)</title></circle></a>`;
+        // 방향 안내를 빼면 「교환사채(EB)발행」이 되사기 건에도 그대로 뜬다
+        // (SK하이닉스 20260428 「자기교환사채만기전취득결정」 실물 확인).
+        `<title>${esc(fmtDate(e.date))} · ${esc(s.label)}` +
+        `${s.note ? " — " + esc(s.note) : ""}\n${esc(e.nm)}\n(클릭 → DART 원문)</title></circle></a>`;
     }
   }
   const legend = cats.map((c) => `<span><i style="background:var(--c${c})"></i>${esc(DATA.categories[String(c)])} ${CUR.catCount[c]}</span>`).join("");
@@ -1965,7 +1982,7 @@ function timelinePanel(events, bgn, end) {
       <div class="mm" style="font-size:11px">${fmtDate(ymd(bgn))} — ${fmtDate(ymd(end))}</div></div>
     ${density}
     <div class="chartwrap" style="margin-top:14px"><svg viewBox="0 0 ${W} ${H}" width="100%" style="min-width:640px">${grid}${lanes}${dots}</svg></div>
-    <div class="legend">${legend}<span style="margin-left:auto;color:var(--amber);font-family:var(--mono);font-size:10.5px">▍ 큰 점 = 시장감시·위기/부실 · 점 클릭 → 원문</span></div></div>`;
+    <div class="legend">${legend}<span style="margin-left:auto;color:var(--amber);font-family:var(--mono);font-size:10.5px">▍ 큰 점·붉은 막대 = 먼저 볼 공시 · 점 클릭 → 원문</span></div></div>`;
 }
 
 /* ── 심화 블록 (재무·지분·감사) ─────────────────── */
