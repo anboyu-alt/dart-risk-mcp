@@ -227,7 +227,13 @@ def test_server_source_wires_observed_events():
     # 절차 섹션이 signal_events가 아니라 observed_events/procedural_events를 쓴다.
     assert "observed_events = [" in src
     assert "procedural_events = [" in src
-    assert 'sig_keys = list({e["key"] for e in observed_events' in src
+    # 패턴 근거는 observed 중에서도 `supports_pattern`이 한 번 더 거른다 —
+    # 방향 안내가 붙은 이벤트(되사기·소각·신탁·회생 종결)는 패턴이 요구하는
+    # 방향과 반대라 taxonomy를 충족시키지 못한다(2026-08-25, SK하이닉스
+    # 「부채 악순환」 오발화). 옛 기대값은 `e["key"] for e in observed_events`
+    # 뒤에 바로 `if not e["is_amendment"]`가 오는 형태였다.
+    assert 'e["key"] for e in observed_events if _supports_pattern(e)' in src
+    assert "supports_pattern as _supports_pattern" in src
     assert "_head = pick_headline(_cands, _order)" in src
     assert "for e in observed_events if not e[\"is_amendment\"]" in src
     assert 'f"━━ 관찰된 신호 ({len(observed_events)}건) ━━"' in src

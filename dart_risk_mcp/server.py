@@ -119,6 +119,7 @@ from .core.qualifiers import (
     parse_report_name,
     pick_headline,
     qualify_signals,
+    supports_pattern as _supports_pattern,
 )
 from .core.signals import strip_amendment_prefix
 
@@ -1249,7 +1250,9 @@ def _taxonomy_dates(
     """
     out: "dict[str, list[str]]" = {}
     for e in events:
-        if e.get("is_amendment"):
+        # 창 게이트 입력도 같은 기준을 쓴다 — 근거에서 뺀 이벤트의 날짜가
+        # 창을 넓히면 걸러낸 의미가 없어진다.
+        if not _supports_pattern(e):
             continue
         raw = "".join(ch for ch in str(e.get("rcept_dt") or "") if ch.isdigit())
         dt = raw[:8] if len(raw) >= 8 else ""
@@ -1632,7 +1635,12 @@ def analyze_company_risk(
     # 계속 쓰므로 그대로 둔다.
     from .core.signals import SIGNAL_KEY_TO_TAXONOMY as _SKT
 
-    sig_keys = list({e["key"] for e in observed_events if not e["is_amendment"]})
+    # 패턴 근거는 `supports_pattern`이 거른다 — 방향 안내가 붙은 이벤트
+    # (되사기·소각·신탁·회생 종결 등)는 패턴이 요구하는 방향과 반대라
+    # taxonomy를 충족시키지 못한다. 관찰 목록·타임라인에는 그대로 남는다.
+    sig_keys = list({
+        e["key"] for e in observed_events if _supports_pattern(e)
+    })
     tax_ids_all = list({tid for k in sig_keys for tid in _SKT.get(k, [])})
     # 패턴 창 게이트 입력 — 날짜 없는 합성 이벤트는 조회 창의 최신 공시일에 둔다.
     _latest_dt = max(
@@ -2385,6 +2393,10 @@ def build_event_timeline(
                 continue
             phase = _PHASE_MAP.get(sig["key"], "심화기")
             events.append((rcept_dt, phase, sig["key"], q.label, report_nm, rcept_no))
+            # 패턴 근거는 방향 안내가 없는 이벤트만 — analyze_company_risk와
+            # 같은 기준(`supports_pattern`). 타임라인 목록에는 그대로 남는다.
+            if not _supports_pattern({"tier": q.tier, "note": q.note}):
+                continue
             tax_ids = SIGNAL_KEY_TO_TAXONOMY.get(sig["key"], [])
             all_tax_ids.update(tax_ids)
             _dt = "".join(ch for ch in rcept_dt if ch.isdigit())[:8]
