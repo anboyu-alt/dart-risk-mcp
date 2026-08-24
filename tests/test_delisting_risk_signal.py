@@ -101,15 +101,19 @@ class TestEscalationException:
         퇴출 절차에서 가장 무거운 국면이다. 실측 90일 21건."""
         assert self._tier(title).tier == TIER_OBSERVED, title
 
-    @pytest.mark.parametrize("title", [
-        "주권매매거래정지해제 (상장폐지사유 미해당)",
-        "주권매매거래정지해제 (상장적격성 실질심사 대상 제외 결정)",
+    @pytest.mark.parametrize("title,why", [
+        ("주권매매거래정지해제 (상장폐지사유 미해당)", "해제"),
+        # 2026-08-25: R6(부정 판정)가 R2보다 먼저 잡는다 — 같은 강등이지만
+        # "체결이 아니라 해제입니다"보다 무슨 일이 있었는지를 말한다.
+        # 형제 제목 「기타시장안내(…대상 제외 결정)」이 관찰로 남던 비일관도
+        # 이 규칙으로 함께 해소된다.
+        ("주권매매거래정지해제 (상장적격성 실질심사 대상 제외 결정)", "실질심사 대상이 아니"),
     ])
-    def test_실제로_해소된_건은_그대로_강등된다(self, title):
+    def test_실제로_해소된_건은_그대로_강등된다(self, title, why):
         """예외가 너무 넓으면 이 둘까지 관찰 신호로 올라온다. 실측 90일 2건."""
         q = self._tier(title)
         assert q.tier != TIER_OBSERVED, title
-        assert "해제" in (q.reason or "")
+        assert why in (q.reason or ""), q.reason
 
     def test_예외_목록은_정리매매_2종뿐(self):
         assert set(ESCALATION_SUBTITLES) == {

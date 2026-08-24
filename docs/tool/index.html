@@ -1013,9 +1013,25 @@ function parseReportName(reportNm) {
     rest = rest.slice(m[0].length);
   }
   const compact = rest.replace(/\s+/g, "");
+  // 괄호를 **중첩까지** 벗긴다. 한 번만 적용하면
+  // 「기타주요경영사항(주요사항보고서(유상증자) 철회)」의 본체에 괄호가 남아
+  // `wrapper_bodies`·`phase_tails` 어느 쪽에도 안 걸린다 — 증자를 **철회**한
+  // 건이 관찰 신호로 남는다(1년 코퍼스 실측 26건). core `_strip_parens` 이식.
   const subtitles = [];
-  compact.replace(/\(([^()]*)\)/g, (_, s) => { if (s) subtitles.push(s); return ""; });
-  const body = compact.replace(/\([^()]*\)/g, "");
+  let body = compact;
+  for (;;) {
+    const next = body.replace(/\(([^()]*)\)/g, (_, s) => { if (s) subtitles.push(s); return ""; });
+    if (next === body) break;
+    body = next;
+  }
+  // 괄호 짝이 안 맞는 원문(1년 3종, DART 표기 오류) — 남은 괄호는 뜻이 없다.
+  const op = body.indexOf("(");
+  if (op !== -1) {
+    const rest = body.slice(op + 1).replace(/[()]/g, "");
+    if (rest) subtitles.push(rest);
+    body = body.slice(0, op);
+  }
+  body = body.replace(/\)/g, "");
   let tail = tailOf(body);
   // '주요사항보고서(자기주식취득결정)'처럼 본체가 껍데기면 괄호 쪽을 본다.
   if (tail === "보고서" && subtitles.length) {
@@ -1075,6 +1091,11 @@ function demotionReason(parsed, filing) {
   // 제목은 제외한다(core qualifiers._is_escalation 이식) — 「주권매매거래정지
   // 해제(상장폐지에 따른 정리매매 개시)」는 매매정지가 풀린 게 아니라 상장폐지가
   // 확정돼 정리매매가 시작된다는 뜻이다.
+  // R6 — 절차가 회사에 유리하게 끝난 판정. 「불성실공시법인**미지정**」이
+  // 「공시의무 위반」의 근거가 되고 있었다(POSCO홀딩스 실물, 2026-08-25).
+  for (const [mk, why] of (r.negative_finding_marks || [])) {
+    if (parsed.compact.indexOf(mk) !== -1) return why;
+  }
   const escalated = parsed.subtitles.some((sub) =>
     (r.escalation_subtitles || []).some((esc) => sub.indexOf(esc) !== -1));
   if ((r.phase_tails || []).includes(parsed.tail) && !escalated) {

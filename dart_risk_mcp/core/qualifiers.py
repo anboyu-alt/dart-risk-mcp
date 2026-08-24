@@ -57,6 +57,48 @@ def _tail_of(text: str) -> str:
     return ""
 
 
+def _strip_parens(compact: str) -> "tuple[str, list[str]]":
+    """괄호를 **중첩까지** 벗겨 (본체, 괄호내용들)을 돌려준다.
+
+    `_PAREN_RE`는 중첩을 못 본다(`[^()]*`). 그래서 한 번만 적용하면
+    「기타주요경영사항(주요사항보고서(유상증자)철회)」의 본체가
+    「기타주요경영사항(주요사항보고서철회)」로 **괄호가 남은 채** 뭉개져,
+    `WRAPPER_BODIES`·`PHASE_TAILS` 어느 쪽에도 걸리지 않는다.
+
+    실측(1년 코퍼스): 중첩 괄호 제목 **112건이 전부** 이렇게 깨진다. 그중
+    **증자·매도를 철회한 12건이 관찰 신호로 남아 있었다** — v1.12.3이 R2b로
+    고쳤다고 기록한 바로 그 결함이 중첩 괄호에서는 그대로 새고 있었다.
+
+        기타주요경영사항(주요사항보고서(유상증자) 철회)          5건
+        기타주요경영사항(유상증자결정(제3자배정) 철회)           3건
+        기타주요경영사항(주요사항보고서(제3자배정 유상증자결정) 철회)  2건
+        기타주요경영사항(자기 전환사채(제3,4,5회차) 매도결정 철회)   2건
+
+    안쪽부터 벗기므로 `subtitles`는 **안→밖** 순이고, 단일 괄호 제목의
+    결과는 종전과 완전히 같다(한 번 적용 후 더 벗길 것이 없다).
+    """
+    subs: list[str] = []
+    cur = compact
+    while True:
+        nxt = _PAREN_RE.sub(lambda m: (subs.append(m.group(1)), "")[1], cur)
+        if nxt == cur:
+            break
+        cur = nxt
+    # 원문에 **괄호 짝이 안 맞는** 제목이 있다(1년 코퍼스 3종 — DART 표기 오류).
+    #   「증권발행결과(자율공시)  (제3자배정 유상증자)**)**」        닫는 괄호 하나 더
+    #   「소송등의판결ㆍ결정(경영권분쟁소송(임시주주총회소집허가신청 (항고)**)**」 하나 모자람
+    # 남은 짝 없는 괄호는 뜻을 담지 않으므로, 여는 괄호부터는 잘라 부제로
+    # 돌리고 닫는 괄호는 지운다 — 본체에 괄호가 남으면 `WRAPPER_BODIES`·
+    # `PHASE_TAILS` 비교가 조용히 빗나간다.
+    if "(" in cur:
+        cur, _, rest = cur.partition("(")
+        rest = rest.replace("(", "").replace(")", "")
+        if rest:
+            subs.append(rest)
+    cur = cur.replace(")", "")
+    return cur, [s for s in subs if s]
+
+
 def parse_report_name(report_nm: str) -> ParsedName:
     """공시 제목을 {태그, 본체, 괄호부제, 어미}로 나눈다.
 
@@ -73,8 +115,8 @@ def parse_report_name(report_nm: str) -> ParsedName:
         rest = rest[m.end():]
 
     compact = _WS_RE.sub("", rest)
-    subtitles = tuple(s for s in _PAREN_RE.findall(compact) if s)
-    body = _PAREN_RE.sub("", compact)
+    body, subs = _strip_parens(compact)
+    subtitles = tuple(subs)
 
     tail = _tail_of(body)
     # '주요사항보고서(자기주식취득결정)'처럼 본체가 껍데기면 괄호 쪽을 본다.
@@ -195,6 +237,30 @@ WRAPPER_BODIES: tuple[str, ...] = (
 # 나머지 10개사는 결정이 창 밖이라 관찰이 0이 된다 — 다만 강등은 삭제가
 # 아니라 「절차·사후 보고」 절로의 이동이므로 사실 자체는 계속 보인다.
 RESULT_BODY_MARKS: tuple[str, ...] = ("발행결과", "청약결과")
+
+# R6 — 절차가 **회사에 유리하게** 끝난 판정. 신호 이름과 뜻이 정반대다.
+#
+# 실사고(2026-08-25, 사용자 제보 추적 중 발견 — POSCO홀딩스): 「무자본 M&A」·
+# 「허위 신사업 주가부양」 카드의 4.3(공시·보고 의무 위반) 근거가
+# 「불성실공시법인**미지정**(지정유예)」이었다. **위반이 아니라고 판정된
+# 공시가 위반의 근거**였다.
+#
+# 1년 코퍼스 전수: 아래 세 마커가 잡는 제목은 **8종·60건**이고 전부 이 성격이다
+# (불성실공시법인미지정 42 · 실질심사 대상 제외 결정 16 · 실질심사 미해당 2).
+# 그중 **50건이 관찰로 남아 있었다** — 나머지 10건은 어미가 '해제'라 R2가
+# 우연히 잡던 것이라, **같은 사건이 포장지에 따라 판정이 갈리고 있었다**
+# (「주권매매거래정지해제(…대상 제외 결정)」 강등 vs
+#  「기타시장안내(…대상 제외 결정)」 관찰).
+#
+# ⚠ 「기각」은 **넣지 않았다**. 1년 45건이 전부 「상장폐지결정 효력정지
+# 가처분 신청 **기각**에 따른 정리매매절차 재개」류다 — 회사가 **진** 것이고
+# 퇴출 절차가 계속된다. 부정 표현이라고 일괄로 묶으면 뜻이 뒤집힌다.
+# 「해소」·「취하」도 혼재(정지 지속 안내가 붙는 건이 있다)라 제외했다.
+NEGATIVE_FINDING_MARKS: "tuple[tuple[str, str], ...]" = (
+    ("불성실공시법인미지정", "불성실공시법인으로 지정되지 않은 건입니다"),
+    ("실질심사대상제외", "상장적격성 실질심사 대상이 아니라는 결정입니다"),
+    ("실질심사미해당", "상장적격성 실질심사에 해당하지 않는다는 결정입니다"),
+)
 
 ESCALATION_SUBTITLES: tuple[str, ...] = (
     "정리매매개시", "정리매매재개",
@@ -442,6 +508,11 @@ def _demotion_reason(parsed: ParsedName, filing: "dict | None") -> str:
     for tag in parsed.tags:
         if _is_amendment_tag(tag):
             return f"기존 공시의 정정·후속 보고입니다 ({tag})"
+
+    # R6 — 절차가 회사에 유리하게 끝난 판정 (지정 아님·대상 아님)
+    for mark, why in NEGATIVE_FINDING_MARKS:
+        if mark in parsed.compact:
+            return why
 
     # R2 — 사후·해제 국면 (단, 국면이 상승한 경우는 제외 — 위 주석 참고)
     if parsed.tail in PHASE_TAILS and not _is_escalation(parsed):
