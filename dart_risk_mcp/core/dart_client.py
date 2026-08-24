@@ -825,6 +825,22 @@ _DECISION_NAME_MAP = [
     ("영업양도결정",                 "business_div"),
 ]
 
+# 위 목록을 **뒤집어** 쓰는 한글 라벨. 손으로 12종을 다시 적으면 둘이 갈린다.
+_DECISION_LABEL_KO = {v: k.removesuffix("결정") for k, v in _DECISION_NAME_MAP}
+
+
+def decision_type_label_ko(decision_type: str) -> str:
+    """decision_type 키 → 사람이 읽는 한글 라벨.
+
+    이 키는 DS005 엔드포인트를 고르는 **내부 식별자**다. 사용자 출력에
+    `[결정:tangible_div]`처럼 그대로 나가고 있었다(2026-08-24, 오성첨단소재
+    리포트에서 발견 — 골든 `아틀라스링크_analyze.txt`에도 `tangible_acq`가
+    남아 있었는데 hygiene의 금칙어 목록에 이 12종이 없어 통과했다).
+
+    모르는 키는 빈 문자열을 돌려준다 — 호출부가 원 제목으로 폴백한다.
+    """
+    return _DECISION_LABEL_KO.get(decision_type or "", "")
+
 
 def _to_int_safe(v) -> int:
     if v is None or v == "":

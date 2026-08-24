@@ -102,6 +102,7 @@ from .core import (
     pattern_checkpoints,
     resolve_corp,
     resolve_decision_type,
+    decision_type_label_ko,
     signal_to_prose,
     taxonomy_label_ko,
     CAPITAL_EVENT_KEYS,
@@ -412,6 +413,48 @@ def _clean_report_name(name: str) -> str:
     긴 공백이 사용자 출력에 그대로 드러나던 문제를 수정.
     """
     return re.sub(r"\s{2,}", " ", (name or "")).strip()
+
+
+def _latest_fund_snapshots(records: "list[dict]") -> "list[dict]":
+    """같은 조달건은 **가장 최근 보고서 기준 한 건**만 남긴다.
+
+    `fetch_fund_usage`는 최근 3년 정기보고서를 훑으므로, 한 조달건이 여러
+    연도 보고서에 각각 실린다. 그대로 이벤트로 펼치면 같은 줄이 두세 번
+    나오고 관찰 건수까지 부풀린다(2026-08-24 실측 — 오성첨단소재 플래그
+    9줄이 실제로는 조달건 3건, 오르비텍 13줄이 5건).
+
+    CLAUDE.md가 `FUND_UNREPORTED` 오탐의 구조적 원인으로 기록해 둔
+    "다년 보고 스냅샷 미정산"이 바로 이것이다. `track_fund_usage`의 판정은
+    이미 최신 연도 라인아이템을 보지만, `analyze_company_risk`의 이벤트
+    목록은 그러지 않았다.
+
+    ⚠ 접는 단위는 (납입일, 회차, 계획 용도)다 — 같은 조달건이라도 용도가
+    다르면 별개 줄로 남는다. 5개사 실측에서 이 접기로 **사라지는 실질
+    신호는 0건**이었다(최신 연도에서 해소됐는데 옛 스냅샷만 플래그로 남은
+    경우가 없었다).
+    """
+    newest: dict = {}
+    for rec in records or []:
+        key = (rec.get("pay_de", ""), str(rec.get("tm", "")),
+               rec.get("plan_useprps", ""))
+        cur = newest.get(key)
+        if cur is None or str(rec.get("year", "")) > str(cur.get("year", "")):
+            newest[key] = rec
+    return list(newest.values())
+
+
+def _decision_event_name(decision: dict, row: dict) -> str:
+    """DS005 결정 이벤트의 표시 이름.
+
+    `[결정:tangible_div] ㈜로아앤코홀딩스`처럼 **내부 영문 키**가 사용자
+    출력에 나가던 자리다(2026-08-24). 라벨을 모르면 원 공시 제목으로 돌아간다.
+    """
+    label = decision_type_label_ko(decision.get("decision_type", ""))
+    counterparty = (decision.get("counterparty") or "").strip()
+    title = row.get("report_nm", "")
+    if not label:
+        return title
+    return f"[{label}] {counterparty}" if counterparty else f"[{label}] {title}"
 
 
 def _compose_top_signal_sentence(label: str, prose: str) -> str:
@@ -1490,12 +1533,14 @@ def analyze_company_risk(
                 "key": _fkey,
                 "label": _meta["label"],
                 "score": _meta["score"],
-                "report_nm": f"[결정:{_r['decision_type']}] {_r.get('counterparty', '') or _d['report_nm']}",
+                # 내부 키(tangible_div 등)를 그대로 찍고 있었다 —
+                # 한글 라벨로 바꾸고, 모르는 키면 원 제목으로 폴백한다.
+                "report_nm": _decision_event_name(_r, _d),
                 "rcept_dt": _d.get("rcept_dt", "")[:10],
                 "rcept_no": _d.get("rcept_no", ""),
                 "is_amendment": False,
             })
-    for _rec in fund_records:
+    for _rec in _latest_fund_snapshots(fund_records):
         for _fkey in _rec["flags"]:
             _meta = _v5_lookup.get(_fkey, {"label": _fkey, "score": 3})
             signal_events.append({
