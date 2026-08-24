@@ -31,6 +31,13 @@ from collections import Counter
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from dart_risk_mcp import __version__
+# ⚠ 이 import는 반드시 위 `sys.path.insert` **뒤**에 와야 한다 —
+#   앞에 두면 설치본(site-packages)의 옛 모듈을 잡는다(2026-08-24 실측).
+from dart_risk_mcp.core.dart_client import (  # noqa: E402
+    CHURN_NON_DILUTIVE_MARKS,
+    CHURN_RESULT_MARKS,
+    DILUTIVE_CAPITAL_EVENTS,
+)
 from dart_risk_mcp.core.signals import (  # noqa: E402
     SIGNAL_TYPES,
     SIGNAL_KEY_TO_TAXONOMY,
@@ -332,6 +339,12 @@ def build_signals_data() -> dict:
         "patterns": patterns,
         "categories": categories,
         "capital_event_keys": sorted(CAPITAL_EVENT_KEYS),
+        # 자본 이벤트 집중 판정은 **희석성** 기준이다(v1.20.10). 뷰어가
+        # 전체 카운트로 "3건 이상"이라 말하면 core와 다른 답을 낸다 —
+        # SK하이닉스에서 실제로 그랬다(core 미발화 · 뷰어 "관찰 조건 해당").
+        "dilutive_capital_events": sorted(DILUTIVE_CAPITAL_EVENTS),
+        "churn_result_marks": list(CHURN_RESULT_MARKS),
+        "churn_non_dilutive_marks": list(CHURN_NON_DILUTIVE_MARKS),
         "amendment_pattern": _AMENDMENT_RE.pattern,
         # 위험 신호(signals)와 층위가 다른 별도 키다 — 이름에 "signal"·
         # "risk"를 넣지 않는다(브리프: 위험 신호가 아니라는 게 이 태스크의
