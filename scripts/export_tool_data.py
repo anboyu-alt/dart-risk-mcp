@@ -360,6 +360,7 @@ def build_signals_data() -> dict:
             "phase_tails": list(_q.PHASE_TAILS),
             "escalation_subtitles": list(_q.ESCALATION_SUBTITLES),
             "wrapper_bodies": list(_q.WRAPPER_BODIES),
+            "result_body_marks": list(_q.RESULT_BODY_MARKS),
             "subsidiary_subtitles": list(_q.SUBSIDIARY_SUBTITLES),
             "amendment_tags": list(_q.AMENDMENT_TAGS),
             "fund_product_marks": list(_q.FUND_PRODUCT_MARKS),

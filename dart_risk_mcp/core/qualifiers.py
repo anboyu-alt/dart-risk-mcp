@@ -174,6 +174,28 @@ WRAPPER_BODIES: tuple[str, ...] = (
     "투자판단관련주요경영사항",
 )
 
+# R2c — 본체 자체가 **결과 보고**인 제목. 어미(괄호)가 '자율공시'라 PHASE_TAILS에
+# 걸리지 않는다.
+#
+# 실사고(2026-08-24, SK하이닉스 실물): 「주요사항보고서(유상증자결정)」(20260624)과
+# 「유상증자또는주식관련사채등의발행결과(자율공시)」(20260715)가 **둘 다 관찰
+# 신호**로 잡혀 헤드라인이 「유상증자 ×2」였다. 증자는 한 번이다.
+#
+# core는 이 표기를 이미 사후 보고로 알고 있었다 — `CHURN_RESULT_MARKS`
+# (v1.20.10)가 자본 이벤트 집계에서 같은 이유로 뺀다. **두 층이 서로 다른
+# 답을 내고 있었다.**
+#
+# 1년 코퍼스 실측: 발행결과 391건(3PCA 371·RCPS 17·CB_BW 3) + 청약결과 123건
+# (전부 3PCA) = **514건이 전부 관찰**이었다(강등 0). 반면 같은 뜻의 어미
+# '결과보고서'는 946건이 이미 강등돼 있다 — **표기가 달라서 갈렸을 뿐이다**.
+#
+# body가 '결과'로 끝나는 표기는 1년 전수에서 위 셋뿐이라 오탐 여지가 없다.
+# 회사 단위 영향(90일 시장 전수, 증자·메자닌 관찰 505개사): 결과보고를 가진
+# 73개사 중 **63개사(86%)는 결정도 같은 창에 있어** 순수한 중복 제거이고,
+# 나머지 10개사는 결정이 창 밖이라 관찰이 0이 된다 — 다만 강등은 삭제가
+# 아니라 「절차·사후 보고」 절로의 이동이므로 사실 자체는 계속 보인다.
+RESULT_BODY_MARKS: tuple[str, ...] = ("발행결과", "청약결과")
+
 ESCALATION_SUBTITLES: tuple[str, ...] = (
     "정리매매개시", "정리매매재개",
     # 2026-08-23 — 1년 코퍼스로 R2 강등을 **전수**(38행 / 1,105건) 재검토해
@@ -347,7 +369,8 @@ INQUIRY_DEMAND_MARK = "조회공시요구"
 def _demotion_reason(parsed: ParsedName, filing: "dict | None") -> str:
     """강등 사유를 반환. 강등 대상이 아니면 빈 문자열.
 
-    평가 순서 R1 → R1b → R1c → R5 → R2 → R3 → R4, 첫 매칭에서 멈춘다.
+    평가 순서 R1 → R1b → R1c → R5 → R2 → R2b → R2c → R3 → R4,
+    첫 매칭에서 멈춘다.
     R5를 앞에 두는 이유: 정정본은 내용과 무관하게 정정이다.
     """
     filing = filing or {}
@@ -393,6 +416,9 @@ def _demotion_reason(parsed: ParsedName, filing: "dict | None") -> str:
     _wtail = _wrapper_phase_tail(parsed)
     if _wtail:
         return f"체결이 아니라 {_wtail}입니다"
+    # R2c — 본체가 결과 보고인 제목 (어미가 '자율공시'라 R2에 안 걸린다)
+    if any(mk in parsed.body for mk in RESULT_BODY_MARKS):
+        return "이미 실행된 건의 결과 보고입니다"
 
     # R3 — 자회사·특수관계인 사안
     if any(s in SUBSIDIARY_SUBTITLES for s in parsed.subtitles):
