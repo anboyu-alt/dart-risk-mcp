@@ -117,7 +117,7 @@ def test_뷰어와_export가_따라온다():
     root = pathlib.Path(__file__).resolve().parents[1]
     html = (root / "docs" / "tool" / "index.html").read_text(encoding="utf-8")
     assert "function requiredOverlap(" in html
-    assert "matched.length < need" in html
+    assert "evidenceCount(matched, taxOwners) < need" in html
     assert "if (matched.length < minOverlap) continue;" not in html, (
         "뷰어가 아직 고정 임계를 쓴다"
     )

@@ -1274,6 +1274,7 @@ def _render_pattern_watch_block(
     affiliate_facts: "dict[str, str] | None" = None,
     max_show: int = 3,
     taxonomy_dates: "dict[str, list[str]] | None" = None,
+    taxonomy_owners: "dict[str, set] | None" = None,
     acq_confirmations: "list[dict] | None" = None,
 ) -> tuple[list[str], list[str], list[dict]]:
     """관찰된 taxonomy와 등록 패턴의 부분 겹침을 "무엇이 보이고 무엇이 안
@@ -1300,7 +1301,8 @@ def _render_pattern_watch_block(
         호출부가 요약 문장에서 최상위 겹침 하나를 참조할 때 쓴다.
     """
     overlaps = find_pattern_overlaps(
-        list(tax_ids), min_overlap=2, taxonomy_dates=taxonomy_dates
+        list(tax_ids), min_overlap=2, taxonomy_dates=taxonomy_dates,
+        taxonomy_owners=taxonomy_owners
     )
 
     cb_gate: "dict | None" = None
@@ -1651,6 +1653,14 @@ def analyze_company_risk(
         default="",
     )
     tax_dates_all = _taxonomy_dates(observed_events, _SKT, _latest_dt)
+    # 한 신호가 같은 패턴의 taxonomy를 둘 이상 켜면 카드가 부풀어 오른다
+    # (`_evidence_count` 주석 참고 — 창업주 퇴장 37장이 그 위에 서 있었다).
+    tax_owners_all: "dict[str, set]" = {}
+    for _e in observed_events:
+        if not _supports_pattern(_e):
+            continue
+        for _tid in _SKT.get(_e["key"], []):
+            tax_owners_all.setdefault(_tid, set()).add(_e["key"])
 
     # v1.6.1: 자금유출·양수거래(+처분) 상대방 확인 — decisions는 이미 위에서
     # fetch됐으므로 재사용(추가 호출 없음). capital_backflow 게이트에도 쓰인다.
@@ -1687,6 +1697,7 @@ def analyze_company_risk(
         _has_control_change_title(disclosures),
         _affiliate_facts,
         taxonomy_dates=tax_dates_all,
+        taxonomy_owners=tax_owners_all,
         acq_confirmations=_acq_confirmations,
     )
 
@@ -2374,6 +2385,7 @@ def build_event_timeline(
     events: list[tuple[str, str, str, str, str]] = []
     all_tax_ids: set[str] = set()
     all_tax_dates: dict[str, list[str]] = {}
+    all_tax_owners: "dict[str, set]" = {}
 
     from .core.signals import SIGNAL_KEY_TO_TAXONOMY
 
@@ -2403,6 +2415,8 @@ def build_event_timeline(
             if len(_dt) == 8:
                 for _tid in tax_ids:
                     all_tax_dates.setdefault(_tid, []).append(_dt)
+            for _tid in tax_ids:
+                all_tax_owners.setdefault(_tid, set()).add(sig["key"])
 
     if not events:
         # 헤더는 정상 경로(아래 ⏳ 라인)와 같은 형식을 쓴다 — 도구가 상황에 따라
@@ -2471,6 +2485,7 @@ def build_event_timeline(
         _has_control_change_title(disclosures),
         _affiliate_facts,
         taxonomy_dates=all_tax_dates,
+        taxonomy_owners=all_tax_owners,
         acq_confirmations=_acq_confirmations,
     )
     _top_overlap = _pattern_overlaps[0] if _pattern_overlaps else None

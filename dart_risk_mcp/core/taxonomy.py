@@ -1587,10 +1587,43 @@ def required_overlap(n_total: int, min_overlap: int = 2) -> int:
     return min(n_total, max(min_overlap, math.ceil(n_total * PATTERN_MIN_RATIO)))
 
 
+def _evidence_count(
+    matched: "set", taxonomy_owners: "dict[str, set] | None"
+) -> int:
+    """겹친 taxonomy를 **서로 다른 관찰 몇 건**이 뒷받침하는가.
+
+    한 신호가 같은 패턴의 taxonomy를 **둘 이상** 켜면 카드가 부풀어 오른다.
+    실사고(2026-08-25): `SHAREHOLDER`(최대주주변경)는 3.1(출자전환에 의한
+    최대주주 변경)과 3.2(지배주주 **저가** 엑시트)를 **동시에** 켠다. 그래서
+    `founder_fade`(5개 중 3개 필요, 4.1은 absent)가 **최대주주변경 한 건 +
+    자산처분 한 건**, 즉 **공시 두 건**으로 섰다. 1년 시장 전수에서 이 패턴
+    **37장 전부**가 그 겹침 위에 있었다.
+
+    ⚠ 「서로 다른 신호 개수」만 세면 반대로 **부풀 수 있다** — 5.3처럼 한
+    taxonomy를 여러 신호가 켜는 경우(ASSET_TRANSFER·FUND_DIVERSION·
+    DECISION_OVERSIZED) 신호 수가 taxonomy 수를 넘는다. 실제로 그렇게 재 보니
+    없던 카드가 14장 생겼다(특수관계 자산 공동화 0→10 · 상폐 회피 0→4).
+    그래서 **두 수의 최솟값**을 쓴다 — taxonomy 개수를 절대 넘지 않고,
+    한 신호가 여럿을 켠 만큼만 깎인다.
+
+    실측(1년 전수): 카드 315장 → **285장**, 창업주 퇴장 37 → **7**.
+    다른 패턴은 불변이다.
+
+    `taxonomy_owners` 미전달(None)이면 기존 동작과 동일하다(하위 호환).
+    """
+    if taxonomy_owners is None:
+        return len(matched)
+    owners = {o for t in matched for o in (taxonomy_owners.get(t) or ())}
+    if not owners:
+        return len(matched)
+    return min(len(matched), len(owners))
+
+
 def find_pattern_overlaps(
     detected_taxonomies: List[str],
     min_overlap: int = 2,
     taxonomy_dates: "dict[str, list[str]] | None" = None,
+    taxonomy_owners: "dict[str, set] | None" = None,
 ) -> List[Dict]:
     """등록된 복합 패턴과 관찰된 taxonomy 집합의 부분 겹침을 조회한다.
 
@@ -1638,7 +1671,7 @@ def find_pattern_overlaps(
         seq_set = set(seq)
         matched_set = seq_set & detected_set
         need = required_overlap(len(seq_set), min_overlap)
-        if len(matched_set) < need:
+        if _evidence_count(matched_set, taxonomy_owners) < need:
             continue
 
         # 관찰 윈도우 게이트 — 날짜를 받았을 때만 적용한다(미전달 시 기존
@@ -1652,7 +1685,7 @@ def find_pattern_overlaps(
                 matched_set, window_start, window_end = _best_window(
                     matched_set, taxonomy_dates, months
                 )
-                if len(matched_set) < need:
+                if _evidence_count(matched_set, taxonomy_owners) < need:
                     continue
 
         missing_set = seq_set - matched_set

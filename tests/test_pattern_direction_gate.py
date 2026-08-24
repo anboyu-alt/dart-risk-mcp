@@ -176,3 +176,36 @@ def test_debt_spiral의_모든_요구_신호가_도달_가능하다():
     seq = CROSS_SIGNAL_PATTERNS["debt_spiral"]["signal_sequence"]
     dead = [t for t in seq if not reach[t]]
     assert len(dead) < len(seq), f"debt_spiral의 요구 신호가 전멸했다: {dead}"
+
+
+def test_합성_이벤트는_게이트를_통과한다():
+    """`detect_capital_churn`·재무 YoY 이벤트는 제목이 없어 tier·note가 없다.
+
+    `supports_pattern`이 그 부재를 강등으로 읽으면 2.7(자본 이벤트 과다 반복)이
+    패턴에서 사라져 `capital_churn_anomaly`가 조용히 죽는다. server.py가 만드는
+    dict 모양 그대로 고정한다.
+    """
+    churn = {
+        "key": "CAPITAL_CHURN",
+        "label": "자본 이벤트 과다 반복",
+        "score": 7,
+        "report_nm": "최근 12개월 내 자본 이벤트 5건 집중",
+        "rcept_dt": "",
+        "rcept_no": "",
+        "is_amendment": False,
+    }
+    assert supports_pattern(churn), "합성 이벤트가 패턴 근거에서 빠졌다"
+    fs = dict(churn, key="AR_SURGE", label="매출채권/매출 비율 급등",
+              report_nm="2025 재무제표 YoY 이상")
+    assert supports_pattern(fs)
+
+
+def test_서버의_합성_이벤트_모양이_바뀌지_않았다():
+    """위 테스트의 전제 — 실제 dict에 tier·note가 없다는 사실을 고정한다."""
+    src = (_ROOT / "dart_risk_mcp" / "server.py").read_text(encoding="utf-8")
+    i = src.index('"key": "CAPITAL_CHURN"')
+    block = src[i:i + 400]
+    assert '"is_amendment": False' in block
+    assert '"tier"' not in block and '"note"' not in block, (
+        "합성 이벤트에 tier/note가 생겼다 — supports_pattern 기대가 바뀐다"
+    )
