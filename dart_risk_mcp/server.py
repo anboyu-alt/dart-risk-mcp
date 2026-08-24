@@ -2867,6 +2867,15 @@ def find_actor_overlap(
     lookback_days = lookback_years * 365
     # 기본 1년은 기존 '최근 365일' 문구를 유지(골드 호환), N년은 정직하게 반영
     window_label = "최근 365일" if lookback_years == 1 else f"최근 {lookback_years}년"
+    # ⚠ 이 도구는 **창이 둘**이다. 공시(CB·유상증자)는 위 일수 창이지만,
+    #   임원현황은 `fetch_executive_roster_detail`이 사업연도 단위로
+    #   `range(올해-N, 올해+1)`을 훑어 **N+1개 연도**를 본다(당해년도 미제출
+    #   가능성 때문). lookback_years=1이면 공시는 365일인데 명부는 두
+    #   사업연도다 — 한 문구로 묶으면 "365일만 봤다"는 거짓이 된다
+    #   (2026-08-25 실측: CG인바이츠 신승수가 2022·2023 명부에 있다).
+    _ry_to = datetime.now().year
+    _ry_from = _ry_to - lookback_years
+    roster_label = f"{_ry_from}~{_ry_to} 사업연도"
 
     api_key = os.environ.get("DART_API_KEY") or _DART_API_KEY
     if not api_key:
@@ -3120,10 +3129,12 @@ def find_actor_overlap(
         lines.append("")
 
     lines.append(
-        f"⚠️ 이 결과는 DART 공개 API 범위 내 분석입니다. {window_label} 이내 "
-        "CB/BW/EB/유상증자 공시 인수자와 임원현황(등기임원) 겸직을 함께 대조하며, "
-        "회사당 CB 최대 3건 + 유상증자 최대 3건으로 제한됩니다. 따라서 '공통 "
-        "행위자 없음'이 '세력이 없다'는 결론으로 이어지지는 않습니다."
+        f"⚠️ 이 결과는 DART 공개 API 범위 내 분석입니다. 인수자는 {window_label} "
+        f"이내 CB/BW/EB/유상증자 공시에서, 겸직은 {roster_label} 임원현황에서 "
+        "각각 모읍니다(두 창의 길이가 다릅니다 — 임원현황은 사업보고서 기재 "
+        "항목이라 연도 단위입니다). 회사당 CB 최대 3건 + 유상증자 최대 3건으로 "
+        "제한됩니다. 따라서 '공통 행위자 없음'이 '세력이 없다'는 결론으로 "
+        "이어지지는 않습니다."
     )
     return "\n".join(lines)
 

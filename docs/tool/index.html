@@ -398,7 +398,7 @@
     <!-- ── 05 겸직 비교 ── -->
     <section class="screen" id="scr-compare">
       <h1 class="screen-title">임원 겸직 비교</h1>
-      <p class="screen-sub">2~5개사 · 최근 4개 사업연도 임원현황 교집합 — 조합명은 바뀌어도 임원 이름은 공시에 남는 고정점입니다.</p>
+      <p class="screen-sub">2~5개사 · 최근 4개 사업연도 임원현황 교집합(당해년도는 사업보고서 미제출일 수 있습니다) — 조합명은 바뀌어도 임원 이름은 공시에 남는 고정점입니다.</p>
       <div class="panel amber" id="comparePanel" style="max-width:720px">
         <div class="slabel amber">▍COMPARE INPUT</div>
         <div class="searchwrap" style="margin-top:0.2rem">
@@ -4394,10 +4394,19 @@ $("runCompare").onclick = () => compareActors();
 // "임원이 없어서"가 아니라 "못 받아서"일 수 있고, 그 상태로 겹침 0건을
 // 내면 **읽지 못한 회사를 근거로** 없다고 말하게 된다(core find_actor_overlap
 // 과 같은 판단, 2026-08-23).
+//
+// ⚠ 창 표기: 「최근 4개 사업연도」는 **당해년도를 한 해로 센다**. 사업보고서는
+//   이듬해 3월에 나오므로 그 해는 대개 비어 있다 — 커버리지를 넉넉히 보이게
+//   하는 표기다. 실제로 훑는 **연도 범위**를 그대로 적는다.
+const ROSTER_YEARS = (() => {
+  const y = new Date().getFullYear();
+  return { from: y - 3, to: y, label: `${y - 3}~${y} 사업연도` };
+})();
+
 async function fetchRoster(corpCode, onYear, failed) {
   const thisYear = new Date().getFullYear();
   const roster = new Map();
-  for (let y = thisYear - 3; y <= thisYear; y++) {
+  for (let y = ROSTER_YEARS.from; y <= ROSTER_YEARS.to; y++) {
     onYear(y);
     try {
       const j = await dartGet("exctvSttus.json",
@@ -4447,7 +4456,7 @@ async function compareActors() {
     .sort((a, b) => b[1].size - a[1].size);
 
   let html = `<div class="panel">
-    <div class="slabel">▍OVERLAP RESULT — ${compareList.map(esc).join(" · ")} · 최근 4개 사업연도</div>`;
+    <div class="slabel">▍OVERLAP RESULT — ${compareList.map(esc).join(" · ")} · ${ROSTER_YEARS.label}</div>`;
   if (overlaps.length) {
     html += `<div class="callout">⚠️ <b>2개사 이상에 등기임원으로 등장한 인물 ${overlaps.length}명</b>
       — 서로 무관해 보이는 회사들을 같은 사람이 오간 기록입니다. 아래는 DART 공시 사실이며 판정이 아닙니다.
@@ -4460,7 +4469,7 @@ async function compareActors() {
       html += `<p class="dim" style="margin-top:0.5rem">⚠ 임원현황을 불러오지 못한 연도가 있습니다 — ${esc(fetchFailed.join(" · "))}.
       <strong style="color:var(--tx)">겹치는 인물이 없다는 뜻이 아닙니다.</strong> 잠시 후 다시 시도하세요.</p>`;
     }
-    html += `<p class="dim" style="margin-top:0.5rem">최근 4개 사업연도 임원현황에서 2개사 이상에 등장하는 인물이 없습니다.
+    html += `<p class="dim" style="margin-top:0.5rem">${ROSTER_YEARS.label} 임원현황에서 2개사 이상에 등장하는 인물이 없습니다.
       '겸직 없음'이 '연결 없음'을 뜻하지는 않습니다 — 인수자(CB·유상증자) 경로는 이 화면이 다루지 않습니다.</p>`;
   }
   html += `<details style="margin-top:0.8rem;font-size:0.88rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">회사별 전체 임원 명단 보기</summary>` +
