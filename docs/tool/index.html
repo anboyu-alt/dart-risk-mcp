@@ -873,6 +873,12 @@ const DART_ERR = {
 };
 
 /* ── 분석 ─────────────────────────────────────── */
+// 정정공시 비율 주석을 띄우는 문턱. 옛 값은 10이었는데 그건 실측
+// **중앙값**이라 상장사 절반에 붙었다 — 절반에 붙는 것은 주석이 아니라
+// 기본값이다(#259의 「가장 무거운 유형」과 같은 계산). 상위 25% 언저리인
+// 25로 올린다(2026-08-24 실측: 공시 10건 이상 상장사 488곳 p75 = 23.1%).
+const AMEND_NOTE_FLOOR = 25;
+
 // 「가장 무거운 유형」으로 다룰 신호인가.
 //
 // 옛 기준은 `category >= 7`(시장조작·위기/부실)뿐이었다. 그런데 그 카테고리에는
@@ -1574,7 +1580,7 @@ function renderDash() {
       <div class="kpi ${amendRate >= 20 ? "alert" : ""}"><div class="v">${amendRate}%</div><div class="k">정정 비율</div></div>
     </div>
     ${CUR.truncated ? `<p class="dim" style="font-size:0.82rem;margin-top:0.7rem">※ 이 기간 전체 공시는 ${CUR.truncated}건이며, 최근 ${items.length}건까지만 수집·분석했습니다(공시 다량 기업). 더 긴 전수 분석은 MCP 대화를 이용하세요.</p>` : ""}
-    ${amendRate >= 10 ? `<p class="dim" style="font-size:0.82rem;margin-top:0.7rem">※ 정정공시 비율 ${amendRate}% — 정상 기업은 대체로 5% 이내이며, 20% 초과는 최초 공시의 품질·정보 통제 의도를 따져보는 기준선으로 통용됩니다.</p>` : ""}
+    ${amendRate >= AMEND_NOTE_FLOOR ? `<p class="dim" style="font-size:0.82rem;margin-top:0.7rem">※ 정정공시 비율 ${amendRate}% — 시장 실측(2026-07-10~08-22, 공시 27,780건)에서 같은 기간 공시 10건 이상인 상장사 488곳의 중앙값은 10%, 상위 25%가 23%, 상위 10%가 39%입니다. 비율만으로 이상 여부가 갈리지는 않으니 같은 사안이 반복 정정되는지 원문에서 확인하세요.</p>` : ""}
     ${items.length === 0 ? zeroDisclosureNoticeHTML(name) :
       events.length === 0 ? `<p class="dim" style="margin-top:0.8rem">이 기간 공시 ${items.length}건에서 등록된 위험 신호 유형이 감지되지 않았습니다. 신호가 없다는 것이 "안전하다"는 판정은 아닙니다 — 본 도구는 공시 제목 기반 신호만 봅니다.</p>` : ""}
   </div>`;
