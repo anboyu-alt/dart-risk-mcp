@@ -5,11 +5,11 @@
 # 실제 서버 로직은 PyPI 패키지 dart-risk-mcp가 제공합니다(버전 고정 → 재현성).
 [project]
 name = "dart-risk-mcp-extension"
-version = "1.20.4"
+version = "1.20.5"
 description = "MCPB(uv) launcher for dart-risk-mcp"
 requires-python = ">=3.11"
 dependencies = [
-    "dart-risk-mcp==1.20.4",
+    "dart-risk-mcp==1.20.5",
 ]
 
 # 이 프로젝트 자체는 패키지가 아니라 런처일 뿐 — uv가 빌드/설치를 시도하지 않도록 함.
