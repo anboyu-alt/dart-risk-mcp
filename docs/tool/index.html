@@ -1231,15 +1231,22 @@ function buildResult(name, stockCode, corpCode, items, bgn, end, totalCount) {
   const observedEvents = events.filter((e) => obs(e).length);
   const proceduralEvents = events.filter((e) => !obs(e).length);
 
+  // 패턴 근거는 관찰 신호 중에서도 **방향 안내가 없는 것**만이다.
+  // core `qualifiers.supports_pattern` 이식 — 방향 안내가 붙었다는 것은 제목이
+  // 켠 신호 이름과 실제 방향이 다르다는 뜻이고, 패턴의 signal_sequence는
+  // 이름 쪽 방향을 요구한다. 실사고: SK하이닉스에서 「자기교환사채만기전
+  // 취득결정」(되사기)이 1.3 "EB **발행**"을 충족시켜 「부채 악순환」
+  // (CRITICAL)이 떴다 — 사채를 갚은 건이 부채가 느는 패턴의 근거였다.
+  const patSigs = (e) => obs(e).filter((s) => !(s.note || "").trim());
   const detectedTax = new Set(
-    observedEvents.flatMap((e) => obs(e).flatMap((s) => s.taxonomies || [])));
+    observedEvents.flatMap((e) => patSigs(e).flatMap((s) => s.taxonomies || [])));
   // 패턴 창 게이트 입력 — {taxonomy id: [YYYYMMDD, ...]}. e.date는 list.json의
   // rcept_dt(8자리)라 숫자만 남겨 쓴다.
   const taxDates = {};
   for (const e of observedEvents) {
     const dt = String(e.date || "").replace(/\D/g, "").slice(0, 8);
     if (dt.length !== 8) continue;
-    for (const sg of obs(e)) for (const t of (sg.taxonomies || [])) {
+    for (const sg of patSigs(e)) for (const t of (sg.taxonomies || [])) {
       (taxDates[t] = taxDates[t] || []).push(dt);
     }
   }

@@ -324,6 +324,42 @@ def is_false_amendment(parsed: ParsedName) -> bool:
     return not any(_is_amendment_tag(t) for t in parsed.tags)
 
 
+def supports_pattern(event: "dict") -> bool:
+    """이 관찰 이벤트가 복합 패턴의 taxonomy 근거로 설 수 있는가.
+
+    **방향 안내가 붙은 이벤트는 설 수 없다.** `DIRECTION_NOTES`가 붙었다는 것은
+    "제목이 켠 신호 이름과 실제 방향·종류가 다르다"는 뜻이고, 패턴의
+    `signal_sequence`는 **이름 쪽 방향**을 요구한다.
+
+    실사고(2026-08-24, 사용자 제보 — SK하이닉스): 「부채 악순환」(CRITICAL)
+    카드가 떴는데 근거 1.3은 *"Exchange Bond (EB) **Issuance**"*인 반면 실제
+    공시는 「자기교환사채**만기전취득**결정」이었다. **사채를 갚은 건이
+    부채가 늘어나는 패턴의 근거로 세어졌다** — 방향이 정반대다. 한정층은
+    이미 "발행이 아니라 사채 취득·매도·소각 건입니다"라고 적고 있었고,
+    자본 이벤트 집계도 `CHURN_NON_DILUTIVE_MARKS`로 같은 판단을 한다.
+    **패턴 층만 그 판단을 버리고 있었다.**
+
+    `DIRECTION_NOTES` 7종 전부에 같은 논리가 성립한다 —
+
+        CB_BW·EB   되사기·소각  ↔ 1.1/1.3/1.5는 **발행**을 요구
+        RCPS       소각        ↔ 1.4는 **발행**
+        TREASURY   신탁 체결·해지 ↔ 2.6은 **직접 취득·재매각**
+        RELATED_PARTY  회사가 **준** 출자 ↔ 4.2는 회사로 흘러드는 거래
+        DEBT_RESTR 회사가 **해 준** 면제 ↔ 8.2는 회사가 받는 출자전환
+        GOING_CONCERN  회생 **종결**  ↔ 8.4는 개시·폐지(부실 진입)
+
+    ⚠ 신호를 지우지 않는다 — 관찰 목록·타임라인·집계에는 그대로 남고
+    **패턴 근거로만** 서지 못한다. 방향 안내는 사용자에게 계속 보인다.
+    """
+    if not isinstance(event, dict):
+        return False
+    if event.get("tier", TIER_OBSERVED) != TIER_OBSERVED:
+        return False
+    if event.get("is_amendment"):
+        return False
+    return not (event.get("note") or "").strip()
+
+
 @dataclass(frozen=True)
 class Qualified:
     """한정된 신호 하나.
