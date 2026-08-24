@@ -155,6 +155,8 @@
   .badge-max { font-family: var(--mono); font-size: 10.5px; background: var(--red)fff;
     background: #c03a3a; color: #fff; border-radius: 3px; padding: 2px 7px; letter-spacing: 0.08em; }
   .sigdot { font-family: var(--mono); font-size: 10.5px; color: var(--red); }
+  /* 매칭은 됐지만 전부 강등된 행 — '신호 없음'(—)과 구별하되 붉게 두지 않는다 */
+  .procmark { font-family: var(--mono); font-size: 10.5px; color: var(--dim2); }
   .nosig { font-family: var(--mono); font-size: 11px; color: var(--faint); }
   /* 관찰 우선순위 배지 — "무엇부터 보면 되는가"의 순서이지 위험도 등급이 아니다.
      first(먼저)만 배지를 달고, watch는 기존 ● 신호 표시 그대로, context(참고)는
@@ -1321,7 +1323,18 @@ function renderFeed() {
   const heavyKey = CUR.heaviest ? CUR.heaviest.key : null;
   let html = `<div class="rowhead g-feed"><span>DATE</span><span>DISCLOSURE</span><span class="colcat">CATEGORY</span><span>SIGNAL</span><span class="colcorr">정정</span></div>`;
   html += list.slice(0, 200).map((r, i) => {
-    const s0 = r.signals[0];
+    // 카테고리·주석·붉은 점은 **관찰 신호** 기준이다. 옛 코드는 `r.signals[0]`
+    // 과 `r.signals.length`를 그대로 써서, 강등된 행에도 붉은 「● 신호」와
+    // 카테고리 점이 찍혔다 — 앞선 세 라운드가 필터·MAX·우선순위 배지를 관찰
+    // 기준으로 옮기면서 **이 세 곳만 남겼다**(실물 확인 2026-08-25:
+    // SK하이닉스 피드에서 표시된 17건 중 11건이 강등 대상이었고, 국민연금이
+    // 낸 「주식등의대량보유상황보고서」가 이 회사의 신호로 찍혀 있었다).
+    // 1년 코퍼스: 신호가 붙는 32,427건 중 **15,706건(48.4%)**이 관찰 0이다.
+    const obsSigs0 = r.signals.filter(isObservedSig);
+    const s0 = obsSigs0[0];
+    // 매칭은 됐지만 전부 강등된 행 — '신호 없음'과 구별해 사유를 보여준다
+    // (대시보드의 「절차·사후 보고」 절과 같은 태도).
+    const procSig = !obsSigs0.length && r.signals.length ? r.signals[0] : null;
     // MAX는 이 기간 최상위 "관찰" 신호에만 붙는다 — 절차·사후 보고로 강등된
     // 행이 헤드라인과 같은 key를 우연히 공유해도(리뷰 라운드1 Finding 1,
     // 대량보유상황보고 SHAREHOLDER 재현) MAX를 물려받지 않는다.
@@ -1337,7 +1350,8 @@ function renderFeed() {
     const sigCell = isTop ? `<span class="badge-max">MAX</span>`
       : hasFirst ? `<span class="badge-cau">먼저</span>`
       : ctxOnly ? `<span class="badge-ctx">참고</span>`
-      : r.signals.length ? `<span class="sigdot">● 신호</span>`
+      : obsSigs.length ? `<span class="sigdot">● 신호</span>`
+      : procSig ? `<span class="procmark">절차·사후</span>`
       : `<span class="nosig">—</span>`;
     // 작업3: 지난 스캔 스냅샷 이후 새로 감지된 신호 매칭 공시에 조용한 NEW 마커.
     const isNew = CUR.scanDiff && CUR.scanDiff.newSet && CUR.scanDiff.newSet.has(r.rcept);
@@ -1347,7 +1361,8 @@ function renderFeed() {
       <span class="colcat" style="font-size:12px;color:var(--dim2)">${s0 ? `<span class="cdot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--c${s0.category});margin-right:7px"></span>${esc(DATA.categories[String(s0.category)])}` : `<span class="nosig">—</span>`}</span>
       <span>${sigCell}${isNew ? ` <span class="mono" style="font-size:9.5px;color:var(--faint);letter-spacing:0.06em">NEW</span>` : ""}</span>
       <span class="colcorr mono" style="font-size:11.5px;color:${r.isAmend ? "#c0a24a" : "#3a4350"}">${r.isAmend ? "정정" : "—"}</span>
-      ${s0 && s0.note ? `<div class="dim" style="grid-column:1/-1;font-size:0.78rem">※ ${esc(s0.note)}</div>` : ""}
+      ${s0 && s0.note ? `<div class="dim" style="grid-column:1/-1;font-size:0.78rem">※ ${esc(s0.note)}</div>`
+        : procSig && procSig.reason ? `<div class="dim" style="grid-column:1/-1;font-size:0.78rem">→ ${esc(procSig.reason)}</div>` : ""}
     </div>`;
   }).join("");
   $("feedTable").innerHTML = html;
@@ -1404,7 +1419,15 @@ function renderWhyRow(s, rcept) {
 function renderDetail(rcept) {
   const r = CUR.rows.find((x) => x.rcept === rcept);
   if (!r) return;
-  const s0 = r.signals[0] || null;
+  // 카테고리·헤드라인·해설은 **관찰 신호** 기준이다. 옛 코드는 원시 첫 신호를
+  // 써서, 강등된 공시에도 「SIGNAL DETECTED」와 위험 해설이 그대로 붙었다 —
+  // 실물 확인(2026-08-25): 「자기주식처분결과보고서」(R2 강등)의 상세 화면이
+  // "주가 조작이나 경영권 방어 도구로 악용되기도 합니다"를 띄웠다.
+  // 이 함수는 앞선 라운드에서 TOP WEIGHT·체인 위치·우선순위 행을 이미
+  // observed 기준으로 옮겼는데 **s0만 남아 있었다**(피드와 같은 누락).
+  const detObs = r.signals.filter(isObservedSig);
+  const s0 = detObs[0] || null;
+  const procSig = !detObs.length && r.signals.length ? r.signals[0] : null;
   // 절차·사후 보고 행은 헤드라인과 key가 같아도(예: 대량보유상황보고가
   // SHAREHOLDER를 헤드라인으로 물려받는 경우) TOP WEIGHT를 물려받지 않는다
   // (리뷰 라운드1 Finding 1과 동일 원칙, 상세 화면 쪽).
@@ -1433,6 +1456,7 @@ function renderDetail(rcept) {
         ${s0 ? `<span class="tag" style="background:var(--c${cat});font-size:0.78rem;padding:0.2rem 0.7rem">${esc(DATA.categories[String(cat)])}</span>` : ""}
         ${isTop ? `<span class="mono" style="font-size:11px;color:var(--red);letter-spacing:0.16em">SIGNAL · TOP WEIGHT</span>`
                  : s0 ? `<span class="mono" style="font-size:11px;color:var(--dim);letter-spacing:0.16em">SIGNAL DETECTED</span>`
+                 : procSig ? `<span class="mono" style="font-size:11px;color:var(--dim2);letter-spacing:0.16em">PROCEDURAL FILING</span>`
                  : `<span class="mono" style="font-size:11px;color:var(--faint);letter-spacing:0.16em">NO SIGNAL MATCH</span>`}
       </div>
       <h1 class="screen-title" style="font-size:22px;margin:0 0 4px">${esc(r.nm)}</h1>
@@ -1441,8 +1465,10 @@ function renderDetail(rcept) {
     <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:16px;align-items:start" class="detailgrid">
       <div class="panel">
         <div class="slabel amber">▍WHY THIS MATTERS</div>
-        ${r.signals.length
-          ? r.signals.map((s) => renderWhyRow(s, r.rcept)).join("")
+        ${detObs.length
+          ? detObs.map((s) => renderWhyRow(s, r.rcept)).join("")
+          : procSig
+          ? `<p><b>${esc(procSig.reason)}</b></p><p class="dim" style="font-size:0.85rem">제목이 「${esc(procSig.label)}」 키워드에 걸렸지만 위 사유로 관찰 신호에서 제외했습니다. 이 화면은 그 사실만 표시하며, 이 유형의 위험 해설은 붙이지 않습니다.</p>`
           : `<p class="dim">등록된 위험 신호 키워드와 일치하지 않는 공시입니다. 신호가 없다는 것이 "안전"을 뜻하지는 않습니다.</p>`}
         ${isHeavySignal(s0) ? `<div class="callout" style="margin-top:0.4rem">거래정지·상장폐지 심사로 이어질 수 있는 유형입니다 — 원문 확인이 필요합니다.</div>` : ""}
         <div class="mnote">// 사실 관찰이며 판정이 아닙니다</div>
@@ -1451,7 +1477,7 @@ function renderDetail(rcept) {
         <div class="slabel">▍META</div>
         <div style="display:flex;flex-direction:column;gap:10px;font-size:13px;font-family:var(--mono)">
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">카테고리</span><span>${s0 ? esc(DATA.categories[String(cat)]) : "—"}</span></div>
-          <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">신호 무게</span><span style="color:${isTop ? "var(--red)" : "var(--dim2)"}">${isTop ? "이 기간 최상위" : r.signals.length ? "감지됨" : "—"}</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">신호 무게</span><span style="color:${isTop ? "var(--red)" : "var(--dim2)"}">${isTop ? "이 기간 최상위" : detObs.length ? "감지됨" : procSig ? "절차·사후 보고" : "—"}</span></div>
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">정정 여부</span><span>${r.isAmend ? "정정공시" : "원공시"}</span></div>
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">체인 위치</span><span>${pos >= 0 ? `${pos + 1} / ${CUR.observedEvents.length}` : "—"}</span></div>
           ${r.signals.some((s) => isObservedSig(s) && s.priority === "first") ? `<div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">관찰 순서</span><span><span class="badge-cau">먼저</span> <span class="dim" style="font-size:0.78rem">— 회사의 존속·상장·회계 신뢰성이 걸린 사실 (위험도 등급 아님)</span></span></div>` : ""}
