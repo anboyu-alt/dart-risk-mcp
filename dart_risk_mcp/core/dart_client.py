@@ -3389,6 +3389,29 @@ def fetch_major_decision(
     return result
 
 
+# 자본 이벤트 집중 계산에서 빼는 '사후 보고' 표기. 결정과 결과를 각각 세면
+# 같은 증자가 두 번 잡힌다(아래 detect_capital_churn 주석 참고).
+CHURN_RESULT_MARKS: tuple[str, ...] = ("발행결과", "결과보고서")
+
+# **희석으로 세지 않는** 표기 — 회사가 사채를 되사거나 소각하는 건이라
+# 주식 수가 늘지 않는다. 자본 구조를 건드린 사건이므로 이벤트로는 세되,
+# 희석성 카운트에서만 뺀다.
+#
+# 실측(2026-08-24)에서 이 분류 오류가 두 회사를 임계로 밀어 올렸다.
+#   SK하이닉스  희석 3건 = 유상증자결정 + 발행결과(중복) + EB **만기전취득**
+#                 → 실제 희석은 1건
+#   한탑        희석 3건 = 유상증자결정 + 주식병합 + CB **만기전취득**
+#                 → 실제 희석은 1건
+#
+# ⚠ 마커는 `core.qualifiers.DIRECTION_NOTES`의 CB_BW·EB·RCPS 마커와 같은
+#   뜻이다. 그쪽을 고치면 여기도 고쳐야 한다 —
+#   `tests/test_churn_dilution.py`가 두 목록의 정합을 검사한다.
+#   (import하지 않는 이유: dart_client → qualifiers 의존을 새로 만들지 않기 위해)
+CHURN_NON_DILUTIVE_MARKS: tuple[str, ...] = (
+    "사채취득", "사채매도", "만기전취득", "소각", "재매각", "사채매입",
+)
+
+
 def detect_capital_churn(events: list[dict], lookback_years: int) -> dict:
     """
     12개월 슬라이딩 윈도우 판정:
@@ -3413,12 +3436,27 @@ def detect_capital_churn(events: list[dict], lookback_years: int) -> dict:
             "lookback_years": int,
         }
     """
-    # 1) 자본 이벤트만 필터 + 정정공시 제외
+    # 1) 자본 이벤트만 필터 + 정정공시·결과보고 제외
+    #
+    # ⚠ 「…발행결과」·「…결과보고서」는 **이미 센 결정의 사후 보고**다. 그대로
+    # 세면 같은 증자가 결정 1건 + 결과 1건으로 두 번 잡힌다 — SK하이닉스가
+    # 그 때문에 임계를 넘었다(2026-08-24 실측: 20260624 유상증자결정 +
+    # 20260715 유상증자…발행결과 → 희석성 2건으로 계수).
+    #
+    # 실측 효과(대형주 12곳 · 부실·소형 6곳):
+    #   대형주 발화 1곳 → **0곳**(SK하이닉스 해소) · 부실 5곳 **전부 유지**
+    #
+    # ⚠ 되사기·소각(방향 안내가 붙는 건)은 **빼지 않았다** — 이론상 희석이
+    #   아니지만, 빼면 한탑(라이브 검증된 진짜 사례)이 떨어진다. 자본 구조를
+    #   자주 건드리는 리듬 자체가 이 신호의 대상이라 되사기도 그 일부다.
     caps: list[dict] = []
     for e in events or []:
         if e.get("key") not in CAPITAL_EVENT_KEYS:
             continue
         if e.get("is_amendment"):
+            continue
+        _nm = (e.get("report_nm") or "").replace(" ", "")
+        if any(mark in _nm for mark in CHURN_RESULT_MARKS):
             continue
         caps.append(e)
 
@@ -3434,7 +3472,12 @@ def detect_capital_churn(events: list[dict], lookback_years: int) -> dict:
         except ValueError:
             continue
         key = e.get("key") or ""
-        parsed.append((d, key, key in DILUTIVE_CAPITAL_EVENTS))
+        # 되사기·소각은 주식 수가 늘지 않는다 — 희석으로 세지 않는다.
+        _dil = key in DILUTIVE_CAPITAL_EVENTS
+        if _dil and any(mk in (e.get("report_nm") or "").replace(" ", "")
+                        for mk in CHURN_NON_DILUTIVE_MARKS):
+            _dil = False
+        parsed.append((d, key, _dil))
 
     # 4) 365일 슬라이딩 윈도우에서 전체/희석/비희석 최대 카운트
     max_total = 0
