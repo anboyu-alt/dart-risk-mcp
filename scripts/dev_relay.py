@@ -45,9 +45,32 @@ class RelayHandler(SimpleHTTPRequestHandler):
 
     def do_OPTIONS(self):  # X-DART-Key 커스텀 헤더 preflight (api/doc.py와 동일 계약)
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, X-DART-Key")
         self.end_headers()
+
+    def do_POST(self):
+        """뷰어의 `POST /api/track`을 받아 **버린다**.
+
+        프로덕션에는 `api/track.py`가 있지만 이 로컬 릴레이에는 없어서,
+        페이지를 열 때마다 `501 Unsupported method ('POST')`가 콘솔에 붉게
+        찍혔다(2026-08-24, 뷰어를 실제로 띄워 확인). 이 파일의 역할이
+        **로컬 개발·검증용**인데 매 로드마다 나는 오류는 진짜 오류를 가린다.
+
+        본문은 읽어서 버린다 — 저장하지 않는 것이 이 릴레이의 계약이고,
+        읽지 않으면 다음 요청에서 소켓이 어긋난다.
+        """
+        length = int(self.headers.get("Content-Length") or 0)
+        if length:
+            self.rfile.read(length)
+        if urlsplit(self.path).path == "/api/track":
+            self.send_response(204)
+            self.end_headers()
+            return
+        self.send_response(404)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b'{"error":"not found"}')
 
     def do_GET(self):
         parts = urlsplit(self.path)
