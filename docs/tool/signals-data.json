@@ -1049,6 +1049,28 @@
   "TREASURY_EB",
   "TREASURY_TRUST"
  ],
+ "dilutive_capital_events": [
+  "3PCA",
+  "CB_BW",
+  "CB_ROLLOVER",
+  "EB",
+  "GAMJA_MERGE",
+  "RCPS",
+  "REVERSE_SPLIT",
+  "RIGHTS_UNDER"
+ ],
+ "churn_result_marks": [
+  "발행결과",
+  "결과보고서"
+ ],
+ "churn_non_dilutive_marks": [
+  "사채취득",
+  "사채매도",
+  "만기전취득",
+  "소각",
+  "재매각",
+  "사채매입"
+ ],
  "amendment_pattern": "^\\[(?:기재정정|첨부추가|정정)[^\\]]*\\]\\s*",
  "routine_filing_keywords": [
   "임원ㆍ주요주주특정증권등소유상황보고서",

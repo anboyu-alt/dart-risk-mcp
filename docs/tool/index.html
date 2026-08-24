@@ -872,6 +872,79 @@ const DART_ERR = {
   "800": "DART 시스템 점검 중입니다",
 };
 
+// 12개월 창에서 희석성·비희석성 최대 카운트. core `detect_capital_churn`의
+// 계산을 그대로 옮긴 것 — 규칙(희석 3건, 또는 희석 2 + 비희석 2)도 같다.
+//   · 「…발행결과」·「…결과보고서」는 이미 센 결정의 사후 보고라 세지 않는다
+//   · 되사기·소각은 주식 수가 늘지 않으므로 희석으로 세지 않는다
+// 이 스캔에서 그 신호가 **실제로 달고 나온** 라벨. `adjustedLabel`이 제목을
+// 보고 보정한 값이라(「제3자배정유상증자」→「유상증자(배정방식 미상)」),
+// 신호 유형의 기본 라벨을 그대로 쓰면 같은 화면 안에서 표기가 갈린다 —
+// SIGNAL CHAIN은 보정 라벨, HEAVIEST·COMMENTARY는 기본 라벨이었다.
+function displayLabel(key) {
+  const seen = new Set();
+  for (const e of (CUR.observedEvents || [])) {
+    for (const s of (e.signals || [])) {
+      if (s.key === key && s.label) seen.add(s.label);
+    }
+  }
+  const arr = Array.from(seen);
+  return arr.length === 1 ? arr[0] : "";   // 여러 표기면 기본 라벨로 둔다
+}
+
+// 이 스캔에서 그 신호에 **모두** 같은 방향 안내가 붙었으면 그 문장을 돌려준다.
+// 「교환사채(EB)발행」인데 실제로는 되사기 1건뿐인 경우처럼, 라벨만으로는
+// 방향이 반대로 읽힌다(SK하이닉스 실물 확인, 2026-08-24).
+// 배너에 **실제로 관찰된** 신호 이름을 적는다. 옛 문구는 카테고리의 최악
+// 사례를 나열해("거래정지·상장폐지 관련·횡령 등 가장 무거운 유형") 조회공시
+// 9건뿐인 회사에도 횡령이 적혔다(SK하이닉스 실물 확인, 2026-08-24).
+function crisisLabels(events) {
+  const seen = [];
+  for (const e of events || []) {
+    // ⚠ `obs`는 buildResult의 지역 함수라 여기서 못 쓴다(작성 중 실제로
+    //    "obs is not defined"로 화면이 죽었다). 전역 `isObservedSig`를 쓴다.
+    for (const s of (e.signals || []).filter(isObservedSig)) {
+      if (!isHeavySignal(s)) continue;
+      const lb = displayLabel(s.key) || s.label;
+      if (lb && seen.indexOf(lb) === -1) seen.push(lb);
+    }
+  }
+  if (!seen.length) return "시장감시·위기/부실";
+  return seen.slice(0, 3).join("·") + (seen.length > 3 ? ` 외 ${seen.length - 3}종` : "");
+}
+
+function commonNote(key) {
+  const notes = new Set();
+  for (const e of (CUR.observedEvents || [])) {
+    for (const sg of (e.signals || [])) {
+      if (sg.key === key) notes.add(sg.note || "");
+    }
+  }
+  const arr = Array.from(notes);
+  return arr.length === 1 && arr[0] ? arr[0] : "";
+}
+
+function churnCounts(events) {
+  const R = DATA.churn_result_marks || [];
+  const N = DATA.churn_non_dilutive_marks || [];
+  const D = new Set(DATA.dilutive_capital_events || []);
+  const rows = [];
+  for (const e of events || []) {
+    const nm = String(e.nm || "").replace(/\s+/g, "");
+    if (R.some((m) => nm.indexOf(m) !== -1)) continue;
+    let dil = (e.signals || []).some((s) => D.has(s.key));
+    if (dil && N.some((m) => nm.indexOf(m) !== -1)) dil = false;
+    rows.push({ t: Date.parse(fmtDate(e.date)), dil });
+  }
+  let best = { dil: 0, non: 0 };
+  for (const a of rows) {
+    const win = rows.filter((b) => b.t >= a.t && b.t - a.t <= 365 * 86400e3);
+    const dil = win.filter((x) => x.dil).length;
+    const non = win.length - dil;
+    if (dil > best.dil || (dil === best.dil && non > best.non)) best = { dil, non };
+  }
+  return best;
+}
+
 /* ── 분석 ─────────────────────────────────────── */
 // 정정공시 비율 주석을 띄우는 문턱. 옛 값은 10이었는데 그건 실측
 // **중앙값**이라 상장사 절반에 붙었다 — 절반에 붙는 것은 주석이 아니라
@@ -1594,11 +1667,12 @@ function renderDash() {
     html += `<div style="display:grid;grid-template-columns:1.15fr 1fr;gap:16px;align-items:start" class="dashgrid">
       <div>
         <div class="headline"><div class="slabel amber" style="margin-bottom:8px">▍HEAVIEST SIGNAL</div>
-          <div style="font-size:1.1rem;font-weight:800">${esc(heaviest.label)} <span style="color:var(--red)">×${typeCount[heaviest.key]}</span></div>
+          <div style="font-size:1.1rem;font-weight:800">${esc(displayLabel(heaviest.key) || heaviest.label)} <span style="color:var(--red)">×${typeCount[heaviest.key]}</span></div>
+          ${commonNote(heaviest.key) ? `<div class="mnote">※ ${esc(commonNote(heaviest.key))}</div>` : ""}
           <div class="dim" style="margin-top:0.4rem">${esc(heaviest.prose || "")}</div>
         </div>
         ${crisisEvents.length ? `<div class="callout"><div class="slabel red" style="margin-bottom:8px">▍WATCH</div>
-          <b>시장감시·위기/부실 카테고리 공시 ${crisisEvents.length}건 관찰</b> — 거래정지·상장폐지 관련·횡령 등 가장 무거운 유형입니다.
+          <b>먼저 볼 공시 ${crisisEvents.length}건 관찰</b> — ${esc(crisisLabels(crisisEvents))} 유형입니다. 원문을 먼저 확인해 보세요.
           <ul>` + crisisEvents.slice(0, 6).map((e) =>
             `<li><a href="${dartUrl(e.rcept)}" target="_blank" rel="noopener" style="color:var(--tx)">${esc(fmtDate(e.date))} · ${esc(e.nm)}</a></li>`).join("") +
           (crisisEvents.length > 6 ? `<li>… 외 ${crisisEvents.length - 6}건 (공시 피드)</li>` : "") +
@@ -1625,7 +1699,8 @@ function renderDash() {
     html += flowNotes(observedEvents);
     html += `<div class="panel"><div class="slabel">▍SIGNAL COMMENTARY — 무게순 · 사실 서술</div>
       <div class="proselist">` + detectedTypes.map((s) =>
-        `<div><span class="tag" style="background:var(--c${s.category})">${esc(s.label)}</span>${s.priority === "first" ? ` <span class="badge-cau">먼저</span>` : s.priority === "context" ? ` <span class="badge-ctx">참고</span>` : ""} <span class="mono" style="font-size:0.78rem;color:var(--dim2)">×${typeCount[s.key]}</span>
+        `<div><span class="tag" style="background:var(--c${s.category})">${esc(displayLabel(s.key) || s.label)}</span>${s.priority === "first" ? ` <span class="badge-cau">먼저</span>` : s.priority === "context" ? ` <span class="badge-ctx">참고</span>` : ""} <span class="mono" style="font-size:0.78rem;color:var(--dim2)">×${typeCount[s.key]}</span>
+         ${commonNote(s.key) ? `<div class="mnote">※ ${esc(commonNote(s.key))}</div>` : ""}
          <div class="p">${esc(s.prose || "등록된 해설이 없는 신호 유형입니다.")}</div>
          ${signalCatalogCasesHTML(s)}</div>`).join("") +
       `</div></div>`;
@@ -1641,11 +1716,19 @@ function renderDash() {
       }
       cap12max = Math.max(cap12max, c);
     }
-    if (cap12max >= 3) {
+    // core는 v1.20.10부터 **희석성** 기준으로 판정한다(전체 카운트가 아니다).
+    // 뷰어가 "3건 이상"이라 말하면 같은 회사가 두 화면에서 다르게 보인다 —
+    // SK하이닉스에서 실제로 그랬다(core 미발화 · 뷰어 "관찰 조건 해당").
+    const churn = churnCounts(capitalEvents);
+    if (capitalEvents.length) {
+      const fires = churn.dil >= 3 || (churn.dil >= 2 && churn.non >= 2);
       html += `<div class="panel"><div class="slabel amber">▍CAPITAL RHYTHM</div>
-        <p class="dim">이 기간 자본 관련 공시(증자·감자·자사주·CB/BW/EB/RCPS)가 총 <strong style="color:var(--tx)">${capitalEvents.length}건</strong>,
-        12개월 최대 집중도 <strong style="color:var(--tx)">${cap12max}건</strong>입니다.
-        12개월 내 3건 이상은 등록 패턴(capital churn)의 관찰 조건에 해당합니다 — 각 건의 원문을 확인해 보세요.</p></div>`;
+        <p class="dim">이 기간 자본 관련 공시(증자·감자·자사주·CB/BW/EB/RCPS)가 총 <strong style="color:var(--tx)">${capitalEvents.length}건</strong>
+        — 12개월 기준 희석성(증자·메자닌) <strong style="color:var(--tx)">${churn.dil}건</strong> ·
+        비희석성(자사주 등) <strong style="color:var(--tx)">${churn.non}건</strong>입니다.
+        ${fires
+          ? "희석성 3건 이상이거나 희석성·비희석성이 각각 2건 이상이면 등록 패턴(capital churn)의 관찰 조건에 해당합니다 — 각 건의 원문을 확인해 보세요."
+          : "자사주만 자주 사고파는 것으로는 이 조건에 해당하지 않습니다."}</p></div>`;
     }
     if (patterns.length) {
       const maxShowPatterns = 3;
