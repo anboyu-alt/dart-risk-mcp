@@ -98,3 +98,49 @@ def test_안_보임에는_켠_신호를_붙이지_않는다():
     """관찰되지 않은 것에 '켠 신호'를 적으면 없는 사실을 만든다."""
     assert 'fmt(unseen, false)' in _HTML
     assert 'fmt(matched, true)' in _HTML
+
+
+# ── 실물을 읽다 찾은 후속 결함 (2026-08-25) ─────────────────────
+#
+# #295가 넣은 「← 켠 신호」의 구분자가 **바깥 목록과 같았다**. 진원생명과학
+# 리포트 실물:
+#
+#     구성 신호 **2개** 중 2개가 이 기간 공시에서 관찰됐습니다
+#     관찰됨: 자본 이벤트 과다 반복(2.7) ← 자본 이벤트 과다 반복 ·
+#             공시·보고 의무 위반(4.3) ← 공시의무위반 · 자금사용내역 미기재
+#
+# 바깥 join도 " · "라 **셋으로 읽힌다**. 그리고 2.7은 taxonomy 라벨과 신호
+# 라벨이 같아 「X ← X」가 되어 아무것도 더하지 않았다.
+
+
+def test_안쪽_구분자가_바깥과_다르다():
+    got = _matched_label("4.3", {"4.3": {"DISCLOSURE_VIOL", "FUND_UNREPORTED"}})
+    assert "," in got, got
+    assert " · " not in got, f"바깥 목록과 같은 구분자다: {got}"
+
+
+def test_같은_이름이면_붙이지_않는다():
+    """2.7은 taxonomy 라벨과 신호 라벨이 같다 — 「X ← X」는 정보가 0이다."""
+    got = _matched_label("2.7", {"2.7": {"CAPITAL_CHURN"}})
+    assert "←" not in got, got
+
+
+def test_다른_이름은_그대로_붙는다():
+    got = _matched_label("1.1", {"1.1": {"CB_BW"}})
+    assert "←" in got and SIGNAL_LABELS["CB_BW"] in got
+
+
+def test_카드_한_줄에서_개수를_셀_수_있다():
+    """바깥 ' · ' 개수 + 1 == 관찰된 taxonomy 수여야 읽는 사람이 안 헷갈린다."""
+    from dart_risk_mcp.server import _matched_label as ml
+
+    owners = {"2.7": {"CAPITAL_CHURN"},
+              "4.3": {"DISCLOSURE_VIOL", "FUND_UNREPORTED"}}
+    line = " · ".join(ml(t, owners) for t in ("2.7", "4.3"))
+    assert line.count(" · ") == 1, line
+
+
+def test_뷰어도_같은_규칙이다():
+    html = (_ROOT / "docs" / "tool" / "index.html").read_text(encoding="utf-8")
+    assert 'names.join(", ")' in html
+    assert '.filter((n) => n !== label)' in html

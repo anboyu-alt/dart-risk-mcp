@@ -2981,8 +2981,14 @@ function patternOverlapLinesHTML(p, taxOwners) {
   const owned = (t) => {
     const keys = [...((taxOwners && taxOwners[t]) || [])].sort();
     if (!keys.length) return "";
-    const names = keys.slice(0, 2).map((k) => sigLabels[k] || k);
-    return ` <span class="dim">← ${esc(names.join(" · "))}${keys.length > 2 ? "…" : ""}</span>`;
+    // ⚠ 안쪽 구분자를 바깥 목록(" · ")과 같게 두면 **개수를 잘못 읽는다**
+    //    (core `_matched_label` 주석의 진원생명과학 실물 참고). 쉼표로 가르고,
+    //    taxonomy 라벨과 같은 이름은 「X ← X」가 되므로 붙이지 않는다.
+    const label = labels[t] || t;
+    const names = keys.slice(0, 2).map((k) => sigLabels[k] || k)
+      .filter((n) => n !== label);
+    if (!names.length) return "";
+    return ` <span class="dim">← ${esc(names.join(", "))}${keys.length > 2 ? "…" : ""}</span>`;
   };
   const fmt = (ids, withOwner) => ids.map((t) =>
     `${esc(labels[t] || t)}<span class="mono" style="color:var(--dim)">(${esc(t)})</span>` +
