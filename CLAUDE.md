@@ -72,7 +72,7 @@ dart_risk_mcp/
 
 ## MCP 도구 26개
 
-### 1. `analyze_company_risk(company_name, lookback_years=1)`
+### 1. `analyze_company_risk(company_name, lookback_years=1, lookback_days=0, from_date="", to_date="")`
 
 기업명 또는 종목코드로 최근 공시 전체를 스캔해 종합 위험 리포트를 반환합니다.
 
@@ -116,7 +116,9 @@ dart_risk_mcp/
 
 ### 3. `find_risk_precedents(signal_types, lookback_days=90)`
 
-신호 유형 목록을 받아 각 신호의 의미, 위기 타임라인, 복합 패턴을 반환합니다.
+신호 유형 목록을 받아 각 신호의 의미, 복합 패턴, 금감원 카탈로그 선례를 반환합니다.
+
+> ⚠ 2026-08-25 정정 — 「위기 타임라인」은 v0.8.5 원칙에 따라 **출력에서 제거**됐다(severity에서 파생된 '위기 N개월·손실 70%' 표기). 문서만 남아 있었다.
 
 - 실제 과거 공시 검색은 하지 않음 (taxonomy 정적 데이터 조회)
 - `SIGNAL_KEY_TO_TAXONOMY`로 신호 키 → taxonomy ID(1.1~8.5) 매핑 후 조회
@@ -180,7 +182,7 @@ dart_risk_mcp/
   한국파일 · 관계: 종속회사 — 최초취득 2023-09 · 지분 46.3→62.4% 확대 · 피출자사
   최근 순이익 -49억원".
 
-### 4. `build_event_timeline(company_name, lookback_years=1)` ✨
+### 4. `build_event_timeline(company_name, lookback_years=1, lookback_days=0, from_date="", to_date="")` ✨
 
 기업의 공시 이벤트를 시간순 서사 구조로 구성합니다.
 
@@ -208,7 +210,7 @@ dart_risk_mcp/
 - 탐지된 인물(인수자·임원)을 공개기록 레지스트리(`lookup_actor`)와 대조해 매칭 시 "📎 공개기록 참고(사실 표기 — 판정 아님)" 섹션 + 면책 표면화
 - 라이브 입증: 신승수군(이엠앤아이·제이케이시냅스·CG인바이츠·헬스커넥트·티쓰리) `lookback_years=3` → 신승수 3개사 겸직 + 신용규·이호영 동행 인물 탐지
 
-### 6. `list_disclosures_by_stock(stock_code, lookback_years=1)` ✨
+### 6. `list_disclosures_by_stock(stock_code, lookback_years=1, lookback_days=0, from_date="", to_date="")` ✨
 
 종목코드(6자리)로 최근 공시 목록과 접수번호를 반환합니다.
 
@@ -278,7 +280,7 @@ dart_risk_mcp/
 - `year` 미입력 시 직전 연도
 - DART 공시 기준이므로 최신 변동 사항이 반영되지 않을 수 있음
 
-### 14. `search_market_disclosures(preset, days=7, max_results=50)` ✨
+### 14. `search_market_disclosures(preset, days=7, max_results=50, from_date="", to_date="", confirm_long=False)` ✨
 
 시장 전체 공시를 preset 기반으로 배치 스캔합니다.
 
@@ -289,7 +291,7 @@ dart_risk_mcp/
 - 내부 흐름: `fetch_market_disclosures` (corp_code 없이 `/list.json`) → `match_signals` → 한정층(`qualify_signals`)으로 관찰/절차 분리 → `_filter_market_rows`가 절차·사후 보고 행을 제외하고 관찰 신호만 preset 필터에 통과
 - 반환: 날짜|기업|공시명|신호|접수번호 한 줄씩(관찰 신호만). 헤더에 "전체 N건 중 관찰 신호 M건 (표시 K건) · 절차·사후 보고 P건 제외" 건수 표기
 
-### 15. `check_disclosure_anomaly(company_name, lookback_years=1)` ✨
+### 15. `check_disclosure_anomaly(company_name, lookback_years=1, lookback_days=0)` ✨
 
 공시 구조 지표 5개에 해당하는 건수·비율을 나열합니다. **기업 위험도를 정량화하거나 등급을 부여하지 않습니다** (v0.8.5 원칙).
 
@@ -329,13 +331,14 @@ dart_risk_mcp/
 - `lookback_years` 범위: 1~5년
 - 반환: 납입일·계획금액·실제집행·차이사유 + 플래그 + 금감원 카탈로그(`zombie_ma`, `fake_new_biz`) 발췌
 
-### 19. `get_major_decision(rcept_no, corp_cls="K", decision_type="")` ✨
+### 19. `get_major_decision(rcept_no, decision_type="", corp_code="")` ✨
 
 타법인주식·영업·자산 양수도, 합병·분할 등 DS005 주요 결정 공시의 상대방·규모·외부평가를 조회합니다.
 
 - 내부 흐름: `resolve_decision_type`(공시명 → decision_type) → `fetch_major_decision` (12개 DS005 엔드포인트 중 자동 선택)
 - 이상 플래그: `DECISION_RELATED_PARTY`(특수관계 거래), `DECISION_OVERSIZED`(자산총액 대비 과대), `DECISION_NO_EXTVAL`(외부평가 미시행)
-- `corp_cls`: `Y`(유가증권), `K`(코스닥), `N`(코넥스), `E`(기타)
+- `corp_code`: DART 기업코드 8자리. **권장** — DS005 12종은 DART 스펙상 corp_code가 사실상 필수라, 없으면 rcept_no 단독 폴백이 빈 결과를 내는 유형이 있다(아래 라이브 검증 매트릭스의 「부가 발견」 참고). 접수번호만 알 때는 `resolve_corp_code_from_rcept_no`로 역해석한다
+  > ⚠ 2026-08-25 정정 — 이 자리에 오래 `corp_cls`(`Y`/`K`/`N`/`E`)가 적혀 있었으나 **그런 인자는 없다**. 같은 문서 604행이 "corp_code가 항상 필수"라 적고 있어 자기모순이었다. `tests/test_doc_tool_signatures.py`가 이제 기계로 대조한다
 - `decision_type` 자동 결정 가능(공시명 기반). 수동 지정 시 허용값: `stock_acq`/`stock_div`/`merger`/`demerger`/`business_acq`/`business_div`/`tangible_acq`/`tangible_div`/`bond_acq`/`bond_div`/`demerger_merger`/`stock_exchange`
 
 ### 20. `track_capital_structure(company_name, lookback_years=3)` ✨ v0.8.7
