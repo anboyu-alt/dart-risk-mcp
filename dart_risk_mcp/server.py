@@ -1756,8 +1756,6 @@ def analyze_company_risk(
     #   ③ 내부 severity를 숫자로 되돌려준다 — 90%를 보면 CRITICAL임을 안다
     #      (v0.8.5: 위험도를 정량화하거나 등급으로 노출하지 않는다)
     # 특정 회사 리포트에서 "예상 지분 손실 70%"는 셋 중 가장 무겁다.
-    timeline_text = ""
-
     # 7. CB 인수자 추출 (최근 3건까지)
     cb_investors: list[dict] = []
     seen_investors: set[str] = set()
@@ -1888,9 +1886,6 @@ def analyze_company_risk(
         for inv in cb_investors:
             amt = _format_amount(inv.get("amount", ""))
             lines.append(f"• {inv['name']}" + (f" — {amt}" if amt else ""))
-
-    if timeline_text:
-        lines += ["", "━━ 위기 타임라인 ━━", timeline_text]
 
     # v0.5.0: 주요 결정 상대방 섹션 ---------------------------
     if decisions:
