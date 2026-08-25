@@ -341,6 +341,8 @@ def build_signals_data() -> dict:
         "categories": categories,
         # 패턴 카드 최소 충족 비율 — 뷰어가 같은 계산을 하도록 내보낸다.
         "pattern_min_ratio": _PAT_RATIO,
+        # 패턴 카드가 "무엇이 이 taxonomy를 켰는지" 적을 때 쓴다.
+        "signal_labels": dict(_sig.SIGNAL_LABELS),
         "capital_event_keys": sorted(CAPITAL_EVENT_KEYS),
         # 자본 이벤트 집중 판정은 **희석성** 기준이다(v1.20.10). 뷰어가
         # 전체 카운트로 "3건 이상"이라 말하면 core와 다른 답을 낸다 —

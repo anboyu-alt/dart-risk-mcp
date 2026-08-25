@@ -1304,7 +1304,7 @@ function buildResult(name, stockCode, corpCode, items, bgn, end, totalCount) {
   saveSnapStore(snapStore);
 
   CUR = { name, stockCode, corpCode, items, rows, events, amendCount, amendRate,
-          patterns, capitalEvents, catCount, typeCount, detectedTypes, heaviest,
+          patterns, taxOwners, capitalEvents, catCount, typeCount, detectedTypes, heaviest,
           crisisEvents, bgn, end, scanDiff,
           observedEvents, proceduralEvents, headline,
           truncated: totalCount > items.length ? totalCount : 0 };
@@ -1807,7 +1807,7 @@ function renderDash() {
         <p class="dim">등록 패턴의 구성 신호 중 이 기간 관찰된 것과 안 보인 것을 사실로 보여줍니다. "겹침"은 사실 관찰이며 판정이 아닙니다.</p>` +
         shownPatterns.map((p) => {
           const headline = `<b>${esc(p.name)}</b> — 구성 신호 ${p.n_total}개 중 ${p.n_matched}개가 이 기간 공시에서 관찰됐습니다`;
-          const overlapBlock = patternOverlapLinesHTML(p);
+          const overlapBlock = patternOverlapLinesHTML(p, CUR.taxOwners);
           // SE-14: capital_backflow(자금 역류)는 제목 조합(3.1 경영권변경 +
           // 5.7 자금유출성거래)만으로 확정하지 않는다 — 계열사 지원이 일상인
           // 회사도 제목만으로는 전부 걸리기 때문. 원문 "회사와의 관계"를
@@ -1851,7 +1851,7 @@ function renderDash() {
             patternCatalogCasesHTML(p) +
             `</div>`;
         }).join("") +
-        (restPatterns > 0 ? `<p class="dim" style="margin-top:0.4rem">외 ${restPatterns}개 패턴이 2개 이상 겹칩니다.</p>` : "") +
+        (restPatterns > 0 ? `<p class="dim" style="margin-top:0.4rem">외 ${restPatterns}개 패턴이 표시 기준을 넘겨 겹칩니다.</p>` : "") +
         `</div>`;
     }
   }
@@ -2970,19 +2970,33 @@ function patternProseCheckpointsHTML(p) {
 // 채운 p.matched/p.missing(taxonomy id, 오름차순)을 DATA.catalog.tax_labels
 // (PR #178, 45종 한글명)로 사람이 읽는 라벨로 바꾼다. 라벨이 없으면 id
 // 그대로 표시(사실 표기 우선 — 조용히 생략하지 않는다).
-function patternOverlapLinesHTML(p) {
+function patternOverlapLinesHTML(p, taxOwners) {
   const labels = (DATA.catalog && DATA.catalog.tax_labels) || {};
-  const fmt = (ids) => ids.map((t) => `${esc(labels[t] || t)}<span class="mono" style="color:var(--dim)">(${esc(t)})</span>`).join(" · ");
+  const sigLabels = DATA.signal_labels || {};
+  // taxonomy 라벨만 적으면 **없던 사실을 말한다**. 1.1의 라벨은
+  // 「전환가액 하향조정(리픽싱)」인데 `CB_BW`가 켜는 제목의 다수는
+  // 「전환사채권발행결정」이다 — 1년 실측에서 조달-유용 체인이 뜬 132곳 중
+  // **67곳은 1.1 근거에 리픽싱이 없다**. 무엇이 켰는지를 함께 적는다.
+  // core `_matched_label` 이식.
+  const owned = (t) => {
+    const keys = [...((taxOwners && taxOwners[t]) || [])].sort();
+    if (!keys.length) return "";
+    const names = keys.slice(0, 2).map((k) => sigLabels[k] || k);
+    return ` <span class="dim">← ${esc(names.join(" · "))}${keys.length > 2 ? "…" : ""}</span>`;
+  };
+  const fmt = (ids, withOwner) => ids.map((t) =>
+    `${esc(labels[t] || t)}<span class="mono" style="color:var(--dim)">(${esc(t)})</span>` +
+    (withOwner ? owned(t) : "")).join(" · ");
   const matched = (p.matched || []);
   const outside = (p.outside_window || []);
   const oset = new Set(outside);
   const unseen = (p.missing || []).filter((t) => !oset.has(t));
-  let html = `<div class="sigs" style="margin-top:0.3rem">관찰됨: ${fmt(matched)}</div>`;
+  let html = `<div class="sigs" style="margin-top:0.3rem">관찰됨: ${fmt(matched, true)}</div>`;
   if (unseen.length) {
-    html += `<div class="sigs">안 보임: ${fmt(unseen)}</div>`;
+    html += `<div class="sigs">안 보임: ${fmt(unseen, false)}</div>`;
   }
   if (outside.length) {
-    html += `<div class="sigs">창 밖에서 관찰됨: ${fmt(outside)}</div>`;
+    html += `<div class="sigs">창 밖에서 관찰됨: ${fmt(outside, true)}</div>`;
   }
   return html;
 }

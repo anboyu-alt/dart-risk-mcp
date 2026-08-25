@@ -1159,3 +1159,9 @@ def strip_amendment_prefix(report_nm: str) -> str:
     접두사를 벗겨 원 제목 기준으로 유형을 판별해야 한다.
     """
     return _AMENDMENT_RE.sub("", report_nm or "")
+
+
+# 신호 키 → 표시 라벨. 패턴 카드가 "이 taxonomy를 켠 것이 무엇인지"를
+# 적을 때 쓴다(taxonomy 라벨과 실제 공시가 어긋날 수 있다 — CLAUDE.md
+# 「매핑 근거 감사」 참고).
+SIGNAL_LABELS: dict[str, str] = {s["key"]: s["label"] for s in SIGNAL_TYPES}

@@ -121,7 +121,7 @@ from .core.qualifiers import (
     qualify_signals,
     supports_pattern as _supports_pattern,
 )
-from .core.signals import strip_amendment_prefix
+from .core.signals import SIGNAL_LABELS, strip_amendment_prefix
 
 mcp = FastMCP("dart-risk-analyzer")
 
@@ -1267,6 +1267,28 @@ def _taxonomy_dates(
     return out
 
 
+def _matched_label(tid: str, owners: "dict[str, set] | None") -> str:
+    """겹친 taxonomy 하나를 「라벨(id) ← 켠 신호」로 적는다.
+
+    taxonomy 라벨과 실제로 그것을 켠 공시가 어긋날 수 있다. 대표 사례가
+    1.1 「전환가액 하향조정(리픽싱)」로, `CB_BW`가 켜는 제목의 다수는
+    「전환사채권발행결정」이다(1년 실측: `fund_diversion_chain` 132곳 중
+    **67곳은 1.1 근거에 리픽싱이 없다**). 라벨만 적으면 리픽싱이 관찰된
+    것처럼 읽힌다.
+
+    ⚠ taxonomy 매핑 자체는 건드리지 않는다 — 1.1은 `fund_diversion_chain`의
+    요구 신호라 파급이 크고, 패턴은 1.1을 "CB 조달"의 뜻으로 쓴다
+    (CLAUDE.md 「매핑 근거 감사」 참고). 여기서는 **표기만** 사실에 맞춘다.
+    """
+    base = f"{taxonomy_label_ko(tid)}({tid})"
+    keys = sorted((owners or {}).get(tid) or ())
+    if not keys:
+        return base
+    names = [SIGNAL_LABELS.get(k, k) for k in keys[:2]]
+    more = "…" if len(keys) > 2 else ""
+    return f"{base} ← {' · '.join(names)}{more}"
+
+
 def _render_pattern_watch_block(
     tax_ids: "list[str] | set[str]",
     outflow_confirmations: list[dict],
@@ -1352,8 +1374,14 @@ def _render_pattern_watch_block(
     lines: list[str] = ["", "━━ 관찰된 신호가 겹치는 등록 패턴 ━━"]
     shown = filtered[:max_show]
     for ov in shown:
+        # taxonomy 라벨만 적으면 **없던 사실을 말한다**. 1.1의 라벨은
+        # 「전환가액 하향조정(리픽싱)」인데 `CB_BW`가 켜는 제목의 대부분은
+        # 「전환사채권발행결정」이다 — 1년 실측에서 `fund_diversion_chain`이
+        # 뜬 132곳 중 **67곳은 1.1 근거에 리픽싱이 아예 없다**.
+        # 그래서 **무엇이 그 taxonomy를 켰는지**(신호 라벨)를 함께 적는다.
+        # `taxonomy_owners`(#289)로 이미 넘어오는 정보라 추가 조회가 없다.
         matched_labels = " · ".join(
-            f"{taxonomy_label_ko(t)}({t})" for t in ov["matched"]
+            _matched_label(t, taxonomy_owners) for t in ov["matched"]
         )
         lines.append("")
         lines.append(
@@ -1392,7 +1420,10 @@ def _render_pattern_watch_block(
 
     if len(filtered) > max_show:
         lines.append("")
-        lines.append(f"외 {len(filtered) - max_show}개 패턴이 2개 이상 겹칩니다.")
+        # 임계는 패턴 크기에 비례한다(v1.20.13) — "2개 이상"은 낡은 문구다.
+        lines.append(
+            f"외 {len(filtered) - max_show}개 패턴이 표시 기준을 넘겨 겹칩니다."
+        )
 
     return lines, _fact_lines, filtered
 
