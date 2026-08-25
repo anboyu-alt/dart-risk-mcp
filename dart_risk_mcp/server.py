@@ -2443,7 +2443,8 @@ def build_event_timeline(
             if q.tier != TIER_OBSERVED:
                 continue
             phase = _PHASE_MAP.get(sig["key"], "심화기")
-            events.append((rcept_dt, phase, sig["key"], q.label, report_nm, rcept_no))
+            events.append((rcept_dt, phase, sig["key"], q.label, report_nm,
+                           rcept_no, q.note))
             # 패턴 근거는 방향 안내가 없는 이벤트만 — analyze_company_risk와
             # 같은 기준(`supports_pattern`). 타임라인 목록에는 그대로 남는다.
             if not _supports_pattern({"tier": q.tier, "note": q.note}):
@@ -2587,6 +2588,15 @@ def build_event_timeline(
         seen_keys: set[str] = set()
         for evt in phase_events:
             lines.append(f"  • {evt[0]}  [{evt[3]}]  {evt[4]}")
+            # 방향 안내는 **건별**로 붙는다(해설과 달리 중복 제거하지 않는다).
+            # 없으면 진입기(자금 조달) 목록에 되사기·매도가 「CB/BW발행」이라는
+            # 라벨만 달고 섞인다 — 실물(진원생명과학 1년): 진입기 12건 중 5건이
+            # 「자기전환사채만기전취득/매도결정」인데 안내가 하나도 없었다.
+            # `analyze_company_risk`는 같은 공시에 이 줄을 붙이고 있었다
+            # (실측 ※ 5건 vs 타임라인 0건) — 두 도구가 같은 사실을 다르게 냈다.
+            _note = evt[6] if len(evt) > 6 else ""
+            if _note:
+                lines.append(f"      ※ {_note}")
             sig_key = evt[2]
             if sig_key not in seen_keys:
                 prose = signal_to_prose(sig_key)
