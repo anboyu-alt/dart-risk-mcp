@@ -10,6 +10,43 @@ from collections import Counter
 
 from .labels import label_for
 
+
+def _detecting_signals(tid: str) -> str:
+    """이 taxonomy를 실제로 켜는 신호와, 그 신호가 찾는 **DART 실제 표기**.
+
+    옛 렌더는 `TAXONOMY[tid]["keywords"]`를 「### 탐지 키워드」로 실었다.
+    그런데 `match_signals`는 그 목록을 **쓰지 않는다** — `SIGNAL_TYPES`의
+    키워드로 매칭한다. 1년 코퍼스 실측(2026-08-25): taxonomy 키워드 217개 중
+    **166개(76%)**가 신호 제목에 0건이고, **17개 taxonomy는 전멸**이다.
+    예: 1.5의 「돌려막기·리파이낸싱·차환」은 DART 제목에 없고, 실제로는
+    `CB_BW`(전환사채권발행결정 등)와 구조화 탐지 `CB_ROLLOVER`가 켠다.
+
+    이 발췌는 `load_catalog_excerpt`를 거쳐 **사용자 출력에 그대로 실린다** —
+    「탐지 키워드」라는 제목으로 검색하지도 않는 말을 보여주고 있었다.
+
+    개념어는 지우지 않는다(유형을 설명하는 값이 있다) — **제목만** 사실에
+    맞추고, 실제로 켜는 것을 위에 둔다.
+    """
+    from dart_risk_mcp.core.signals import (
+        NON_TITLE_SIGNALS, SIGNAL_KEY_TO_TAXONOMY, SIGNAL_LABELS, SIGNAL_TYPES,
+    )
+
+    kw_by_key = {s["key"]: list(s.get("keywords") or []) for s in SIGNAL_TYPES}
+    owners = [k for k, v in SIGNAL_KEY_TO_TAXONOMY.items() if tid in v]
+    if not owners:
+        return "— (제목 신호로는 발화하지 않습니다)"
+    rows = []
+    for key in sorted(owners):
+        label = SIGNAL_LABELS.get(key, key)
+        why = NON_TITLE_SIGNALS.get(key)
+        kws = kw_by_key.get(key) or []
+        if why or not kws:
+            rows.append(f"- **{label}** — 제목으로 발화하지 않습니다")
+        else:
+            shown = ", ".join(kws[:6]) + (" …" if len(kws) > 6 else "")
+            rows.append(f"- **{label}** — {shown}")
+    return chr(10).join(rows)
+
 # core/catalog.py의 _CATEGORY_TO_FILE과 동일해야 한다(테스트가 기계적으로 검증).
 CATEGORY_FILES: dict[str, str] = {
     "Convertible Bond & Debt Manipulation": "01_cb_debt.md",
@@ -116,7 +153,10 @@ def render_category(
             "### 정의",
             lab["definition"],
             "",
-            "### 탐지 키워드",
+            "### 이 유형을 켜는 신호",
+            _detecting_signals(tid),
+            "",
+            "### 개념어 (참고 — 도구가 검색하는 말이 아닙니다)",
             ", ".join(entry.get("keywords") or []),
             "",
             "### 위험 신호",
