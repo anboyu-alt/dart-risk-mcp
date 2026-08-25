@@ -30,7 +30,25 @@ SIGNAL_KEY_TO_TAXONOMY: dict[str, list[str]] = {
     # Category 3: 경영권/지배구조
     "SHAREHOLDER":   ["3.1", "3.2"],
     "ACTIVIST":      ["3.3"],
-    "EXEC":          ["3.3", "3.4"],
+    # 2026-08-25 — 3.4를 뺐다. **`MGMT_DISPUTE`가 100% 근거로 소유**한다.
+    #
+    # 3.4 = "Founder vs external investor clash over **CEO succession**"
+    #       (자체 키워드: 경영권분쟁·대표이사분쟁·경영진분쟁·경영권다툼·내홍)
+    #
+    # 1년 코퍼스: `EXEC` 관찰 486건 중 **483건이 「대표이사변경」**이고, 3.4의
+    # 자체 키워드가 나타나는 건은 **0건**이다. 대표이사가 바뀌었다는 사실만으로
+    # 「승계 분쟁」을 주장할 근거가 없다 — 정상적인 CEO 교체가 대다수다.
+    # 반면 `MGMT_DISPUTE`는 「소송등의제기ㆍ신청(경영권분쟁소송)」 388건으로
+    # **100%** 근거를 갖는다.
+    #
+    # 고아를 만들지 않는다 — 3.4는 `MGMT_DISPUTE`가 계속 소유한다.
+    # 패턴에도 쓰이지 않고 금감원 사례도 0건이라 손실이 없다.
+    #
+    # ⚠ 3.3("External investor forces board replacement")도 이 제목들이
+    #   뒷받침하지 않지만(0/486) **빼지 않았다** — 다른 소유자 `ACTIVIST`가
+    #   absent라 빼면 3.3이 고아가 되고, EXEC은 taxonomy가 없어진다.
+    #   CLAUDE.md에 측정값과 함께 기록한다.
+    "EXEC":          ["3.3"],
     "MGMT_DISPUTE":  ["3.4"],
     "CIRCULAR":      ["3.5"],
     "STAKE_PLEDGE":  ["3.7"],
@@ -120,7 +138,11 @@ SIGNAL_KEY_TO_TAXONOMY: dict[str, list[str]] = {
     "FUND_OUTFLOW": ["5.7"],
     "ACQ_REVIEW":   ["5.8"],
     # 기존 호환 키
-    "MGMT":          ["3.4", "5.4"],
+    # 2026-08-25 — 같은 이유로 3.4를 뺐다. `MGMT` 관찰 357건은
+    # 「(주요사항보고서)회사합병결정」 229 · 「최대주주변경을수반하는주식양수도
+    # 계약체결」 56 · 공개매수 서류 66이고, 3.4 자체 키워드는 **0건**이다.
+    # 합병 결정이 「경영진 승계 분쟁」은 아니다.
+    "MGMT":          ["5.4"],
 }
 
 SIGNAL_TYPES = [
