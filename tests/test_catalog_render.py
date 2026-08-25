@@ -70,7 +70,12 @@ class TestRenderCategory(unittest.TestCase):
         self.assertIn("> 카테고리: Convertible Bond & Debt Manipulation", md)
         self.assertIn("> 생성일: 2026-08-16", md)
         self.assertIn("> 포함 유형: 1.1", md)
-        for section in ("### 정의", "### 탐지 키워드", "### 위험 신호",
+        # 2026-08-25: 「탐지 키워드」는 `match_signals`가 **쓰지 않는** 목록이라
+        # 제목이 거짓이었다(1년 실측: taxonomy 키워드 217개 중 166개가 신호
+        # 제목에 0건). 실제로 켜는 신호를 위에 두고, 개념어는 그렇게 이름 붙였다.
+        for section in ("### 정의", "### 이 유형을 켜는 신호",
+                        "### 개념어 (참고 — 도구가 검색하는 말이 아닙니다)",
+                        "### 위험 신호",
                         "### 금감원·금융위 적발 사례", "### 적발 기법 종합"):
             self.assertIn(section, md)
 
@@ -135,7 +140,8 @@ class TestFixRound1Sections(unittest.TestCase):
 
     def test_section_order(self):
         md = self._render()
-        order = ["### 정의", "### 탐지 키워드", "### 위험 신호",
+        order = ["### 정의", "### 이 유형을 켜는 신호",
+                 "### 개념어 (참고 — 도구가 검색하는 말이 아닙니다)", "### 위험 신호",
                   "### 금감원·금융위 적발 사례", "### 적발 기법 종합",
                   "### 인용 법조", "### 기존 현장 기사 인용"]
         positions = [md.index(sec) for sec in order]
