@@ -135,7 +135,10 @@ class TestRenderPatternWatchBlock(unittest.TestCase):
         self.assertEqual(len(filtered), 5)
         joined = "\n".join(lines)
         self.assertEqual(joined.count("▸ "), 3)
-        self.assertIn("외 2개 패턴이 2개 이상 겹칩니다.", joined)
+        # 2026-08-25: 임계가 패턴 크기에 비례하게 바뀌어(v1.20.13)
+        # "2개 이상"은 낡은 문구다 — 기준을 숫자로 단정하지 않는다.
+        self.assertIn("외 2개 패턴이 표시 기준을 넘겨 겹칩니다.", joined)
+        self.assertNotIn("2개 이상 겹칩니다", joined)
         # capital_backflow는 confirmations가 비어 있어 게이트를 통과하지
         # 못했으므로(빈 확인 목록은 "조용히 실패" — v1.6.1 기존 동작) 목록에도
         # fact_lines에도 나타나지 않는다.
