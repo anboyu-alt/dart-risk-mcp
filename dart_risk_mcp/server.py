@@ -1280,13 +1280,26 @@ def _matched_label(tid: str, owners: "dict[str, set] | None") -> str:
     요구 신호라 파급이 크고, 패턴은 1.1을 "CB 조달"의 뜻으로 쓴다
     (CLAUDE.md 「매핑 근거 감사」 참고). 여기서는 **표기만** 사실에 맞춘다.
     """
-    base = f"{taxonomy_label_ko(tid)}({tid})"
+    label = taxonomy_label_ko(tid)
+    base = f"{label}({tid})"
     keys = sorted((owners or {}).get(tid) or ())
     if not keys:
         return base
     names = [SIGNAL_LABELS.get(k, k) for k in keys[:2]]
+    # ⚠ 구분자가 바깥 목록과 같으면 **개수를 잘못 읽는다**. 실물(진원생명과학):
+    #     구성 신호 **2개** 중 2개가 관찰됐습니다
+    #     관찰됨: 자본 이벤트 과다 반복(2.7) ← 자본 이벤트 과다 반복 ·
+    #             공시·보고 의무 위반(4.3) ← 공시의무위반 · 자금사용내역 미기재
+    #   바깥 join도 " · "라 셋으로 읽힌다. 안쪽은 쉼표로 가른다.
+    #
+    # 그리고 taxonomy 라벨과 신호 라벨이 **같으면** 「X ← X」가 되어 아무것도
+    # 더하지 않는다 — 그때는 붙이지 않는다(뷰어가 v1.18.3에서 "(종속회사 —
+    # 종속회사)"를 접은 것과 같은 판단).
+    names = [n for n in names if n != label]
+    if not names:
+        return base
     more = "…" if len(keys) > 2 else ""
-    return f"{base} ← {' · '.join(names)}{more}"
+    return f"{base} ← {', '.join(names)}{more}"
 
 
 def _render_pattern_watch_block(
