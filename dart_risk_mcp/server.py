@@ -4060,6 +4060,13 @@ def search_market_disclosures(
         lines.append(f"{rcept_dt} | {corp_nm}")
         lines.append(f"  📄 {report_nm}")
         lines.append(f"  🔖 [{sig_labels}] rcept_no={rcept_no}")
+        # 방향 안내는 라벨을 바꾸지 않고 주석만 단다 — 버리면 화면에는
+        # 「CB/BW발행」만 남는다. `cb_issue` 프리셋 골드 실측(2026-08-25):
+        # 「자기전환사채만기전취득결정」 **14건**이 전부 「CB/BW발행」으로만
+        # 표시됐다(`treasury`도 신탁계약 10건). `analyze_company_risk`·
+        # `build_event_timeline`은 같은 공시에 이 줄을 붙인다.
+        for _note in dict.fromkeys(q.note for q in sigs if q.note):
+            lines.append(f"  ※ {_note}")
 
     if truncated:
         lines += ["", f"⚠️ {len(filtered) - max_results}건 더 있음. max_results 를 늘리세요."]
