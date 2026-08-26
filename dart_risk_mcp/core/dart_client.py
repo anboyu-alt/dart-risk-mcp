@@ -831,6 +831,49 @@ _FUND_USAGE_URLS = {
     "private": f"{DART_BASE}/prvsrpCptalUseDtls.json",  # 2020017
 }
 
+# 자금 용도 4분류 — 계획과 실제가 **다른 묶음**이면 용도가 바뀐 것이다.
+#
+# `_FUND_DIVERSION_KEYWORDS`(아래)는 「목적 변경」 같은 **정형 법정 문구**만
+# 잡는다. 그래서 15개사 429건 표본에서 발화가 0이었다(2026-08-03 기록).
+# 정작 `FUND_DIVERSION`의 해설은 *"'신규 사업 투자'라 적고 '기존 차입금
+# 상환'에 썼다"*를 설명하고 있었다 — **해설이 약속한 것을 코드가 안 봤다.**
+#
+# 30개사 2,877건 실측(2026-08-26): 양쪽이 다 기재된 2,343건 중 **94%가
+# 분류되고 7.2%(157건 · 25개 사례 · 14개사)가 이탈**한다. 이탈 방향은
+#
+#     시설·자산 → 운영자금   57      운영자금 → 채무 상환    39
+#     운영자금 → 타법인 취득  26      채무 상환 → 시설·자산   11
+#
+# 로 뜻이 분명하다. CLAUDE.md가 "현재 키워드 미포착"으로 남겨 둔 실사례
+# (링크드·형지엘리트·비에스제이홀딩스)가 전부 여기서 잡힌다.
+#
+# ⚠ 1차 측정에서 드러난 **분류 인공물**을 묶음 설계로 걷어냈다 —
+# 원재료 매입·매입채무 결제는 실질이 운영자금이고(이엠앤아이), "R&D 센터
+# 인프라 투자"는 실질이 시설자금이며(피아이이), 본사 부동산 취득은 시설과
+# 같은 묶음이다. 네 묶음보다 잘게 쪼개면 정상 집행이 이탈로 잡힌다.
+_FUND_USE_CATEGORIES: "tuple[tuple[str, tuple[str, ...]], ...]" = (
+    ("타법인 취득", ("타법인", "출자증권", "지분취득", "주식취득", "출자",
+                     "영업양수", "인수자금")),
+    ("채무 상환",   ("채무상환", "차입금상환", "사채상환", "조기상환",
+                     "만기상환", "변제", "상환")),
+    ("시설·자산",   ("시설자금", "설비", "공장", "증설", "자산취득",
+                     "부동산", "토지", "건물", "인프라")),
+    ("운영자금",    ("운영자금", "운전자금", "일반운영", "원재료", "매입채무",
+                     "재료비", "인건비", "연구개발", "임상")),
+)
+
+
+def classify_fund_use(text: str) -> "set[str]":
+    """자금 용도 문구 → 묶음 이름 집합. 못 읽으면 빈 집합(판정하지 않는다).
+
+    공백·개행을 지우고 부분 문자열로 본다 — DART 기재는 「운영 자금」이나
+    줄바꿈이 낀 「운영자금(게임개발)」처럼 띄어쓰기가 제각각이다.
+    """
+    t = (text or "").replace(" ", "").replace("\n", "").replace("\r", "")
+    return {name for name, kws in _FUND_USE_CATEGORIES
+            if any(k.replace(" ", "") in t for k in kws)}
+
+
 _FUND_DIVERSION_KEYWORDS = (
     "목적 변경", "목적변경", "사용목적 변경",
     "사업 취소", "사업취소", "계획 취소", "계획취소",
@@ -926,6 +969,8 @@ def _normalize_fund_usage(item: dict, kind: str, year: int) -> dict:
         "real_dtls_cn": str(real_dtls_cn).strip(),
         "real_dtls_amount": _to_int_safe(item.get("real_cptal_use_dtls_amount")),
         "dffrnc_resn": str(item.get("dffrnc_occrrnc_resn") or "").strip(),
+        "plan_cats": sorted(classify_fund_use(plan_useprps)),
+        "real_cats": sorted(classify_fund_use(real_dtls_cn)),
     }
 
 
@@ -936,7 +981,13 @@ def _detect_fund_anomaly(rec: dict) -> list[str]:
     ):
         flags.append("FUND_UNREPORTED")
     dffrnc = rec["dffrnc_resn"]
-    if dffrnc and any(kw in dffrnc for kw in _FUND_DIVERSION_KEYWORDS):
+    diverted = bool(dffrnc) and any(kw in dffrnc for kw in _FUND_DIVERSION_KEYWORDS)
+    # 차이사유 문구가 없어도 **계획과 실제의 용도 묶음이 겹치지 않으면**
+    # 용도가 바뀐 것이다. 둘 중 하나라도 못 읽으면 판정하지 않는다.
+    pc, rc = set(rec.get("plan_cats") or ()), set(rec.get("real_cats") or ())
+    if pc and rc and not (pc & rc):
+        diverted = True
+    if diverted:
         flags.append("FUND_DIVERSION")
     return flags
 
