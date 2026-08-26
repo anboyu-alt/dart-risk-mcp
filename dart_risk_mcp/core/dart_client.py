@@ -776,6 +776,20 @@ _DEBT_BALANCE_URLS = {
     "cnd_capital":      f"{DART_BASE}/cndlCaplScritsNrdmpBlce.json",     # 조건부자본증권
 }
 
+# 엔드포인트마다 만기 구간 필드가 다르다(실측 2026-08-25).
+# 단기사채·기업어음의 `de*` 버킷은 전부 1년 이하 구간이다.
+_DEBT_UNDER_1Y_FIELDS: dict[str, tuple[str, ...]] = {
+    "corporate_bond":   ("yy1_below",),
+    "short_term_bond":  ("de10_below", "de10_excess_de30_below",
+                         "de30_excess_de90_below", "de90_excess_de180_below",
+                         "de180_excess_yy1_below"),
+    "commercial_paper": ("de10_below", "de10_excess_de30_below",
+                         "de30_excess_de90_below", "de90_excess_de180_below",
+                         "de180_excess_yy1_below"),
+    "new_capital":      ("yy1_below",),
+    "cnd_capital":      ("yy1_below",),
+}
+
 _debt_balance_cache: dict[tuple, tuple[float, dict]] = {}
 _DEBT_CACHE_MAX = 20
 _DEBT_CACHE_TTL = 600
@@ -5138,13 +5152,29 @@ def fetch_debt_balance(
         if data.get("status") != "000":
             continue
 
+        # ⚠ 실측(2026-08-25): 옛 코드는 `remndr_amount`·`remndr_within1y_amount`를
+        #   읽었는데 **다섯 엔드포인트 어디에도 그런 필드가 없다**. 그래서
+        #   `fetch_debt_balance`는 **모든 회사에서 항상 빈 결과**였고, 그 위에
+        #   서 있던 것들이 통째로 죽어 있었다 —
+        #     · `track_debt_balance` 도구가 늘 "잔액이 없거나 찾지 못했습니다"
+        #     · `track_capital_structure`의 「최근 3년 채무증권 잔액 추이」 블록
+        #     · `detect_debt_rollover`(CB_ROLLOVER 플래그)가 **발화 불가**
+        #   8개사 스윕에서 세 블록이 전부 0/8이라 드러났다.
+        #
+        #   실제 응답: 한 엔드포인트가 **3행(공모·사모·합계)**을 돌려주고
+        #   금액은 `sm`, 만기 구간은 아래 버킷들이다. 합계 행만 쓴다 —
+        #   공모+사모까지 더하면 **두 배로 센다**.
+        #
+        #   두산에너빌리티 2025 회사채: sm 808,470,000,000 ·
+        #   yy1_below 536,470,000,000 (66%가 1년 이내).
         kind_total = 0
         kind_1y = 0
         for item in data.get("list", []):
-            amt = _safe_int(item.get("remndr_amount")) or 0
-            kind_total += amt
-            within = _safe_int(item.get("remndr_within1y_amount")) or 0
-            kind_1y += within
+            if (item.get("remndr_exprtn2") or "").strip() != "합계":
+                continue
+            kind_total += _safe_int(item.get("sm")) or 0
+            for f in _DEBT_UNDER_1Y_FIELDS[kind]:
+                kind_1y += _safe_int(item.get(f)) or 0
 
         if kind_total > 0:
             by_kind[kind] = {"total": kind_total, "maturity_under_1y": kind_1y}

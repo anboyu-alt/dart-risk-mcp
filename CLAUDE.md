@@ -522,11 +522,13 @@ dart_risk_mcp/
 | `GET /api/accnutAdtorNmNdAdtOpinion.json` | 감사인 및 감사의견 (corp_code, bsns_year, reprt_code) |
 | `GET /api/adtServcCnclsSttus.json` | 감사용역 계약 체결 현황 (corp_code, bsns_year) |
 | `GET /api/accnutAdtorNonAdtServcCnclsSttus.json` | 비감사용역 계약 체결 현황 (corp_code, bsns_year) |
-| `GET /api/cprndIsDecsn.json` | 회사채 발행 잔액 (corp_code, bsns_year) |
-| `GET /api/stIsDecsn.json` | 단기사채 미상환 잔액 |
-| `GET /api/cpIsDecsn.json` | 기업어음 미상환 잔액 |
-| `GET /api/newCaptlScrtIsDecsn.json` | 신종자본증권 미상환 잔액 |
-| `GET /api/cndlCaptlScrtIsDecsn.json` | 조건부자본증권 미상환 잔액 |
+| `GET /api/cprndNrdmpBlce.json` | 회사채 미상환 잔액 (corp_code, bsns_year, reprt_code) |
+| `GET /api/srtpdPsndbtNrdmpBlce.json` | 단기사채 미상환 잔액 |
+| `GET /api/entrprsBilScritsNrdmpBlce.json` | 기업어음 미상환 잔액 |
+| `GET /api/newCaplScritsNrdmpBlce.json` | 신종자본증권 미상환 잔액 |
+| `GET /api/cndlCaplScritsNrdmpBlce.json` | 조건부자본증권 미상환 잔액 |
+
+> ⚠ 2026-08-25 정정 — 위 채무증권 5종은 오래 `…IsDecsn.json`(발행결정)으로 적혀 있었으나 **그 URL은 DART가 status 101(잘못된 URL)로 거부한다**. 코드는 처음부터 `…NrdmpBlce.json`(미상환 잔액)을 쓰고 있었고 문서만 틀렸다. 응답은 한 엔드포인트가 **3행(공모·사모·합계)**을 돌려주며 금액 필드는 `sm`, 만기 구간은 `yy1_below`·`de10_below` 계열이다 — **`remndr_amount`라는 필드는 존재하지 않는다**(그 이름을 읽던 코드가 v1.20.25에서 고쳐졌다).
 
 모든 요청에 `crtfc_key` 파라미터로 API 키 전달.
 
