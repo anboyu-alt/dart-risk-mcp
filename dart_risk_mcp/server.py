@@ -4291,9 +4291,16 @@ def get_executive_compensation(
             # 값에 개행이 섞여 온다(실측: 삼성전자 `ofcps` = 「부회장」 다음
             # 줄에 「(대표이사)」). 접지 않으면 한 행이 두 줄로 찢어진다 —
             # `report_resn`(#328)과 같은 함정이다.
-            parts = [f"{label}: {' '.join(str(item.get(key) or '-').split()) or '-'}"
-                     for key, label in cols]
-            lines.append("    • " + " | ".join(parts))
+            vals = [" ".join(str(item.get(key) or "-").split()) or "-"
+                    for key, _ in cols]
+            # DART는 해당자가 없어도 전부 「-」인 행을 하나 돌려준다(제이스코
+            # 홀딩스 실측 — 5억 이상 수령자가 없다). 그대로 그리면
+            # 「• 성명: - | 직위: - | 보수총액(원): -」이 나온다.
+            if all(v == "-" for v in vals):
+                lines.append("    (해당 없음)")
+                continue
+            lines.append("    • " + " | ".join(
+                f"{label}: {v}" for (_, label), v in zip(cols, vals)))
         return "\n".join(lines)
 
     # ⚠ 네 섹션 모두 **응답에 없는 필드**를 읽고 있었다(2026-08-26 실측).

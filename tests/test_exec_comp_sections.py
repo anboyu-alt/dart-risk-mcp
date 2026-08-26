@@ -101,3 +101,14 @@ class TestSections:
     def test_자료가_없으면_공시_없음(self):
         empty = {k: [] for k in _DATA}
         assert _render(empty).count("(공시 없음)") == 5
+
+    def test_전부_대시인_행은_해당_없음으로(self):
+        """DART는 해당자가 없어도 「-」뿐인 행을 하나 돌려준다(제이스코 실측).
+
+        그대로 그리면 「• 성명: - | 직위: - | 보수총액(원): -」이 나온다.
+        """
+        d = dict(_DATA, individual=[{"nm": "-", "ofcps": "-",
+                                     "mendng_totamt": "-"}])
+        out = _render(d)
+        assert "(해당 없음)" in out
+        assert "성명: -" not in out
