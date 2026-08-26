@@ -49,7 +49,10 @@ _ACCEPTED = {
     ("EXEC", "3.3"), ("SHAREHOLDER", "3.2"), ("ASSET_TRANSFER", "5.3"),
     ("RELATED_PARTY", "4.2"), ("AUDIT", "8.4"), ("INQUIRY", "7.1"),
     ("EMBEZZLE", "8.1"), ("DELISTING_RISK", "8.5"), ("EARNINGS_SHOCK", "8.5"),
-    ("WATCH_ISSUE", "8.5"), ("CB_BW", "1.1"), ("CB_BW", "1.5"), ("CB_BW", "1.6"),
+    # ("CB_BW", "1.1")은 2026-08-26에 **목록에서 빠졌다** — 0%였던 이유가
+    # 매핑이 아니라 개념어의 조사 하나였다(「전환가액조정」 vs 실제 표기
+    # 「전환가액**의**조정」 1년 338건). 실제 표기를 개념어에 더하니 28.7%다.
+    ("WATCH_ISSUE", "8.5"), ("CB_BW", "1.5"), ("CB_BW", "1.6"),
 }
 
 
@@ -82,6 +85,49 @@ def test_근거_0퍼센트_매핑은_전부_기록돼_있다():
         "제목이 뒷받침하지 않는 새 매핑 — 판단을 적고 _ACCEPTED에 넣으세요: "
         f"{unlisted}"
     )
+
+
+def test_리픽싱_매핑은_이제_근거가_있다():
+    """0%가 사라졌다는 사실을 **양방향으로** 고정한다.
+
+    `_ACCEPTED`는 "0%인데 목록에 없으면 실패"만 본다 — 0%가 아니게 된 항목을
+    목록에 남겨 둬도 아무도 안 잡는다. 그래서 기록이 조용히 낡는다.
+    """
+    obs = _observed_titles()
+    titles = obs["CB_BW"]
+    kws = [k.replace(" ", "") for k in TAXONOMY["1.1"]["keywords"]]
+    hit = sum(n for nm, n in titles.items() if any(k in nm for k in kws))
+    assert hit > 0, "1.1 근거가 다시 0이 됐다 — 개념어에서 실제 표기가 빠졌나?"
+    assert "전환가액의조정" in TAXONOMY["1.1"]["keywords"]
+    # 조사 없는 옛 표기도 남겨 둔다 — 다른 표기가 나타날 수 있다.
+    assert "전환가액조정" in TAXONOMY["1.1"]["keywords"]
+
+
+def test_근사_불일치는_이_한_건뿐이었다():
+    """1년 전수에서 「조사 하나 차이」 후보가 더 있는지 — 없다는 사실을 남긴다.
+
+    있으면 같은 종류의 침묵이 또 있다는 뜻이라 근거를 적고 고쳐야 한다.
+    """
+    import difflib
+
+    obs = _observed_titles()
+    near = []
+    for key, tids in SKT.items():
+        titles = obs.get(key)
+        if not titles:
+            continue
+        for tid in tids:
+            kws = [k.replace(" ", "") for k in
+                   ((TAXONOMY.get(tid) or {}).get("keywords") or [])]
+            if any(k in nm for nm in titles for k in kws):
+                continue
+            for k in kws:
+                for nm in titles:
+                    for i in range(max(1, len(nm) - len(k) - 2)):
+                        frag = nm[i:i + len(k) + 2]
+                        if difflib.SequenceMatcher(None, k, frag).ratio() >= 0.85:
+                            near.append((key, tid, k, frag))
+    assert not near, f"조사 하나 차이로 어긋난 개념어가 또 있다: {near[:5]}"
 
 
 @pytest.mark.parametrize("key", ["EXEC", "MGMT"])
