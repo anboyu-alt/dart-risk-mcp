@@ -2708,14 +2708,24 @@ def fetch_executive_compensation(
 
     Returns:
         {
-            "high_pay":     [...],  # 5억 이상 고액수령자 (/hmvAuditAllSttus.json)
-            "individual":   [...],  # 개인별 보수 현황 (/indvdlByPay.json)
+            "high_pay":     [...],  # 이사·감사 **전체** 보수 총계 (/hmvAuditAllSttus.json)
+            "individual":   [...],  # 개인별 보수 상위 5인 (/indvdlByPay.json)
             "unregistered": [...],  # 미등기임원 보수 (/unrstExctvMendngSttus.json)
-            "agm_limit":    [...],  # 주총 승인 보수한도 (/hmvAuditIndvdlBySttus.json)
+            "audit_indv":   [...],  # 이사·감사 개인별 보수 (/hmvAuditIndvdlBySttus.json)
+            "agm_limit":    [...],  # 주총 승인 보수한도
+                                    # (/drctrAdtAllMendngSttusGmtsckConfmAmount.json)
         }
+
+    ⚠ **`agm_limit`이 엉뚱한 엔드포인트를 가리키고 있었다**(2026-08-26 수정).
+    `hmvAuditIndvdlBySttus`는 주총 한도가 아니라 **이사·감사 개인별 보수**다.
+    그래서 「④ 주총 승인 보수한도」에 개인 보수액이 실렸고, 값이 「② 개인별
+    보수」와 겹쳐 보였다(삼성전자 실측: 33.46억·50.98억·52.40억…). 진짜
+    한도 엔드포인트는 `drctrAdtAllMendngSttusGmtsckConfmAmount`이고 응답이
+    `se`(등기이사/사외이사/감사위원)·`nmpr`·`gmtsck_confm_amount`다.
     """
     if not api_key:
-        return {"high_pay": [], "individual": [], "unregistered": [], "agm_limit": []}
+        return {"high_pay": [], "individual": [], "unregistered": [],
+                "audit_indv": [], "agm_limit": []}
     if not year:
         year = str(datetime.now().year - 1)
     reprt_code = _REPORT_CODES.get(report_type, "11011")
@@ -2726,14 +2736,16 @@ def fetch_executive_compensation(
         "bsns_year": year,
         "reprt_code": reprt_code,
     }
-    result: dict = {"high_pay": [], "individual": [], "unregistered": [], "agm_limit": []}
+    result: dict = {"high_pay": [], "individual": [], "unregistered": [],
+                    "audit_indv": [], "agm_limit": []}
     endpoints = [
         ("high_pay", "hmvAuditAllSttus.json"),
         ("individual", "indvdlByPay.json"),
         ("unregistered", "unrstExctvMendngSttus.json"),
-        ("agm_limit", "hmvAuditIndvdlBySttus.json"),
+        ("audit_indv", "hmvAuditIndvdlBySttus.json"),
+        ("agm_limit", "drctrAdtAllMendngSttusGmtsckConfmAmount.json"),
     ]
-    # 4개 엔드포인트가 **모두** 실패하면 그건 "보수 공시가 없다"가 아니라
+    # 다섯 엔드포인트가 **모두** 실패하면 그건 "보수 공시가 없다"가 아니라
     # "못 받았다"이다. 옛 구현은 둘을 구분하지 않아 API 키 오류에서도
     # 「(공시 없음)」 네 줄이 나왔다(2026-08-23 에러 경로 감사에서 발견 —
     # 로그에는 900이 찍히는데 사용자 화면에는 조용한 회사로 보인다).

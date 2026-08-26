@@ -306,7 +306,7 @@ dart_risk_mcp/
 임원 보수 현황을 4섹션으로 조회합니다.
 
 - 내부 흐름: `resolve_corp` → `fetch_executive_compensation`
-- 섹션: ① 5억 이상 고액수령자 ② 개인별 보수 ③ 미등기임원 보수 ④ 주총 승인 한도
+- 섹션 5개: ① 이사·감사 **전체** 보수(`hmvAuditAllSttus` — 인원·총액·1인평균, **이름 없음**) ② 개인별 보수 상위 5인(`indvdlByPay`) ③ 미등기임원(`unrstExctvMendngSttus` — 총액 필드는 `fyer_salary_totamt`) ④ 이사·감사 개인별 5억 이상(`hmvAuditIndvdlBySttus`) ⑤ 주총 승인 한도(`drctrAdtAllMendngSttusGmtsckConfmAmount`). ⚠ 2026-08-26 이전에는 **네 섹션이 전부 어긋나 있었다** — ①이 없는 `nm`/`ofcps`를 읽어 「성명: -」, ②의 스톡옵션 필드 부재, ③이 `mendng_totamt`를 읽어 삼성전자 7,054억이 「-」, ④가 주총 한도라 이름 붙은 채 실은 개인별 보수라 ②와 값이 겹쳐 보였다. `ofcps`에는 개행이 섞여 와 행이 찢어진다
 - `report_type` 허용값: `annual` | `half` | `q1` | `q3`
 
 ### 17. `track_insider_trading(company_name, lookback_years=2)` ✨ v0.8.6

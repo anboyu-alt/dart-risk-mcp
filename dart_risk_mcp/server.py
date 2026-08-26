@@ -4254,8 +4254,8 @@ def get_executive_compensation(
 ) -> str:
     """임원 보수 현황을 조회합니다 (불공정거래 탐지 참고 자료).
 
-    5억 이상 고액수령자·개인별 보수·미등기임원 보수·주총 승인 한도
-    4개 섹션을 반환합니다.
+    이사·감사 전체 보수·개인별 보수·미등기임원 보수·이사감사 개인별·
+    주총 승인 한도 5개 섹션을 반환합니다.
 
     Args:
         company_name: 기업명 또는 종목코드
@@ -4288,28 +4288,49 @@ def get_executive_compensation(
             return "    (공시 없음)"
         lines = []
         for item in items:
-            parts = [f"{label}: {item.get(key, '-')}" for key, label in cols]
+            # 값에 개행이 섞여 온다(실측: 삼성전자 `ofcps` = 「부회장」 다음
+            # 줄에 「(대표이사)」). 접지 않으면 한 행이 두 줄로 찢어진다 —
+            # `report_resn`(#328)과 같은 함정이다.
+            parts = [f"{label}: {' '.join(str(item.get(key) or '-').split()) or '-'}"
+                     for key, label in cols]
             lines.append("    • " + " | ".join(parts))
         return "\n".join(lines)
 
-    high_pay_cols = [("nm", "성명"), ("ofcps", "직위"), ("mendng_totamt", "보수총액(원)")]
-    indv_cols = [("nm", "성명"), ("ofcps", "직위"), ("mendng_totamt", "보수총액(원)"), ("stk_optn_exrcs_mny", "스톡옵션행사액")]
-    unreg_cols = [("mendng_totamt", "미등기임원 보수총액(원)"), ("nmpr", "인원수")]
-    agm_cols = [("mendng_totamt", "주총승인 보수한도(원)"), ("nmpr", "이사인원수")]
+    # ⚠ 네 섹션 모두 **응답에 없는 필드**를 읽고 있었다(2026-08-26 실측).
+    #
+    #   ① hmvAuditAllSttus 는 이사·감사 **전체 총계**다 — `nm`·`ofcps`가
+    #      아예 없어서 「성명: - | 직위: -」로 나왔다. 라벨도 「5억 이상
+    #      고액수령자」였는데 명단이 아니라 총계다.
+    #   ② indvdlByPay 에 `stk_optn_exrcs_mny` 필드가 없다 → 늘 「-」.
+    #   ③ unrstExctvMendngSttus 의 총액 필드는 `fyer_salary_totamt`다
+    #      (`mendng_totamt`가 아니다) → 삼성전자 6,533억이 「-」로 나왔다.
+    #   ④ 「주총 승인 보수한도」가 실은 이사·감사 **개인별 보수**였다 —
+    #      ②와 값이 겹쳐 보이던 이유다. 진짜 한도는 별도 엔드포인트다.
+    all_cols = [("nmpr", "인원수"), ("mendng_totamt", "보수총액(원)"),
+                ("jan_avrg_mendng_am", "1인평균(원)")]
+    indv_cols = [("nm", "성명"), ("ofcps", "직위"), ("mendng_totamt", "보수총액(원)")]
+    unreg_cols = [("se", "구분"), ("nmpr", "인원수"),
+                  ("fyer_salary_totamt", "연간급여 총액(원)"),
+                  ("jan_salary_am", "1인평균(원)")]
+    agm_cols = [("se", "구분"), ("nmpr", "인원수"),
+                ("gmtsck_confm_amount", "주총승인 금액(원)")]
 
     lines = [
         f"━━━ [{corp_name}] 임원 보수 현황 ({display_year}년 {report_type}) ━━━",
         "",
-        "① 5억 이상 고액수령자",
-        _rows(data["high_pay"], high_pay_cols),
+        "① 이사·감사 전체 보수 (5억 이상 공시 대상)",
+        _rows(data["high_pay"], all_cols),
         "",
-        "② 개인별 보수 현황",
+        "② 개인별 보수 (상위 5인)",
         _rows(data["individual"], indv_cols),
         "",
         "③ 미등기임원 보수",
         _rows(data["unregistered"], unreg_cols),
         "",
-        "④ 주총 승인 보수한도",
+        "④ 이사·감사 개인별 보수 (5억 이상)",
+        _rows(data.get("audit_indv", []), indv_cols),
+        "",
+        "⑤ 주총 승인 보수한도",
         _rows(data["agm_limit"], agm_cols),
         "",
         "─────────────────────────────────────────────",
