@@ -3641,6 +3641,21 @@ def get_company_info(company_name: str) -> str:
 # ── 도구 11: 재무제표 조회 ────────────────────────────────────────────────
 
 
+def _fs_div_label(div: str, fs_nm: str = "") -> str:
+    """연결/별도 구분 라벨. DART의 `fs_nm`을 쓰되 모호하면 우리 말로 바꾼다.
+
+    OFS의 `fs_nm`은 그냥 「재무제표」다 — 연결과 나란히 놓으면 어느 쪽이
+    별도인지 알기 어렵다. 그 한 가지만 「별도재무제표」로 바꾼다.
+    """
+    nm = (fs_nm or "").strip()
+    d = (div or "").strip().upper()
+    if d == "OFS" and nm in ("", "재무제표"):
+        return "별도재무제표"
+    if nm:
+        return nm
+    return {"CFS": "연결재무제표", "OFS": "별도재무제표"}.get(d, d or "구분 미상")
+
+
 @mcp.tool()
 def get_financial_summary(
     company_name: str, year: str = "", report_type: str = "annual"
@@ -3666,22 +3681,43 @@ def get_financial_summary(
     if not items:
         return f"❌ {corp_name}의 재무제표를 불러올 수 없습니다. 연도/보고서 유형을 확인하세요."
 
-    # 연결/개별 구분
-    fs_div = items[0].get("fs_div", "")
-    fs_label = "연결재무제표" if fs_div == "CFS" else "개별재무제표"
+    # ⚠ 응답은 **연결(CFS)과 별도(OFS)를 한 덩어리로** 준다. 옛 코드는
+    # `items[0]`의 구분 하나만 보고 머리글에 「연결재무제표」라 적은 뒤
+    # 전부를 이어 붙였다 — 삼성전자 2024 실측에서 자산총계가 514조(연결)와
+    # 324조(별도)로, 매출액이 300조와 209조로 **두 번씩** 나왔다. 뒤엣것을
+    # 연결로 믿으면 30% 틀린 값을 쓴다.
+    _by_div: dict[str, list[dict]] = {}
+    for it in items:
+        _by_div.setdefault(str(it.get("fs_div") or ""), []).append(it)
     bsns_year = items[0].get("bsns_year", year)
+    _head_label = " · ".join(
+        _fs_div_label(k, v[0].get("fs_nm")) for k, v in _by_div.items()
+    )
 
     lines = [
         f"📊 **{corp_name} 재무제표** ({stock_code or corp_code})",
-        f"사업연도: {bsns_year} | {fs_label}",
+        f"사업연도: {bsns_year} | {_head_label}",
         "",
     ]
 
-    for item in items:
-        nm = item.get("account_nm", "")
-        cur = item.get("thstrm_amount", "-")
-        prev = item.get("frmtrm_amount", "-")
-        lines.append(f"• {nm}: {cur} (전기: {prev})")
+    # ⚠ DART는 「당기순이익(손실)」을 **두 번** 준다(삼성전자 CFS/IS 실측 —
+    # 손익계산서와 포괄손익계산서에 각각 한 행). 그대로 그리면 같은 라벨이
+    # 같은 값으로 두 줄 나와 읽는 사람이 무엇이 다른지 찾게 된다.
+    for div, div_items in _by_div.items():
+        label = _fs_div_label(div, div_items[0].get("fs_nm"))
+        if len(_by_div) > 1:
+            lines.append(f"[{label}]")
+        _seen_acct: set = set()
+        for item in div_items:
+            nm = item.get("account_nm", "")
+            cur = item.get("thstrm_amount", "-")
+            prev = item.get("frmtrm_amount", "-")
+            if (nm, cur) in _seen_acct:
+                continue  # DART가 같은 계정을 ord만 다르게 두 번 준다(29·61)
+            _seen_acct.add((nm, cur))
+            lines.append(f"• {nm}: {cur} (전기: {prev})")
+        if len(_by_div) > 1:
+            lines.append("")
 
     lines += [
         "",
@@ -3730,10 +3766,16 @@ def compare_financials(company_names: list[str], year: str = "") -> str:
     if not items:
         return "❌ 재무 데이터를 불러올 수 없습니다. 연도를 확인하세요."
 
-    # 기업별 그룹핑
+    # ⚠ `fnlttMultiAcnt` 응답에는 **`corp_name`이 없다**(실측 키: account_nm·
+    # corp_code·stock_code·fs_div·fs_nm·sj_div·sj_nm·currency·ord·…).
+    # 그래서 옛 코드의 폴백이 항상 걸려 머리글이 「━━ 005930 ━━」처럼
+    # **종목코드**로만 나왔다 — 여러 회사를 나란히 보는 도구인데 이름이 없다.
+    # 이미 해석해 둔 `corp_map`으로 되돌린다.
+    _name_by_code = {cc: nm for nm, cc in corp_map}
     by_corp: dict[str, list[dict]] = {}
     for item in items:
-        cname = item.get("corp_name", item.get("stock_code", ""))
+        code = str(item.get("corp_code") or "")
+        cname = _name_by_code.get(code) or item.get("stock_code") or code
         by_corp.setdefault(cname, []).append(item)
 
     lines = [
@@ -3747,10 +3789,24 @@ def compare_financials(company_names: list[str], year: str = "") -> str:
 
     for cname, corp_items in by_corp.items():
         lines.append(f"━━ {cname} ━━")
+        # 응답은 **연결(CFS)과 별도(OFS)를 나란히** 준다. 옛 코드는 그걸
+        # 구분 없이 이어 붙여, 삼성전자 자산총계가 514조 다음 줄에 324조로
+        # 나오고 어느 쪽이 연결인지 알 수 없었다.
+        _by_div: dict[str, list[dict]] = {}
         for item in corp_items:
-            nm = item.get("account_nm", "")
-            cur = item.get("thstrm_amount", "-")
-            lines.append(f"  • {nm}: {cur}")
+            _by_div.setdefault(str(item.get("fs_div") or ""), []).append(item)
+        for div, div_items in _by_div.items():
+            label = _fs_div_label(div, div_items[0].get("fs_nm"))
+            if len(_by_div) > 1 or div:
+                lines.append(f"  [{label}]")
+            seen: set = set()
+            for item in div_items:
+                nm = item.get("account_nm", "")
+                cur = item.get("thstrm_amount", "-")
+                if (nm, cur) in seen:
+                    continue  # DART가 「당기순이익(손실)」을 두 번 준다
+                seen.add((nm, cur))
+                lines.append(f"  • {nm}: {cur}")
         lines.append("")
 
     lines.append("⚠️ 금액 단위는 원화(원)이며 DART 공시 기준입니다.")
