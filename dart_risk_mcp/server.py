@@ -4410,8 +4410,8 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
         digits = "".join(ch for ch in str(s) if ch.isdigit())
         return digits[:8] if len(digits) >= 8 else str(s)
 
-    def _extract_row(rec: dict) -> tuple[str, float, str, str] | None:
-        """레코드를 (holder, ratio_pct, date_yyyymmdd, source_label)로 정규화.
+    def _extract_row(rec: dict) -> tuple[str, float, str, str, str] | None:
+        """레코드를 (holder, ratio_pct, date_yyyymmdd, source_label, 주식종류)로 정규화.
 
         반환 None이면 시계열에 포함하지 않는다.
         - exec_treasury: 회사 자체 자기주식 활동이라 보고자별 시계열에 부적합 → None
@@ -4441,7 +4441,18 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
         if not date:
             return None
         source_label = _SOURCE_LABEL.get(src, "기타")
-        return (holder, ratio, date, source_label)
+        # ⚠ 같은 사람이 **보통주식과 종류주식(우선주)을 따로 보고**한다.
+        # 두 줄을 한 시계열에 섞으면 비율이 1.99% ↔ 0.07%로 튀고, 그
+        # 사이의 Δ가 통째로 거짓이 된다(두산 박형원·박인원 실측 —
+        # Δ±1.96%p가 열두 줄, 실제로는 아무것도 사고팔지 않았다).
+        # 거짓 Δ는 아래 매수·매도 클러스터 판정(0.5%p/30일)과
+        # `detect_insider_pre_disclosure`의 입력이기도 하다.
+        #
+        # 주식 종류를 주는 것은 `hyslrSttus`뿐이다(`elestock`·`hyslr_chg`·
+        # `majorstock` 응답에는 없다 — 실측 키 대조). 없으면 빈 문자열이라
+        # 기존 묶음이 그대로 유지된다.
+        kind = " ".join(str(rec.get("stock_knd") or "").split())
+        return (holder, ratio, date, source_label, kind)
 
     # DART가 보고자명에 **개행과 이중 공백**을 섞어 보낸다. `strip()`만 하면
     # 같은 사람이 2~3명으로 갈리고, 이 도구의 존재 이유인 Δ 시계열이 그만큼
@@ -4466,8 +4477,10 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
 
     # ── 보고자별 시계열 구성 ──────────────────────────────────
     from collections import defaultdict
-    timeline: dict[str, list[tuple[float, str, str]]] = defaultdict(list)
-    holder_names: dict[str, str] = {}   # 묶음 키 → 화면에 쓸 이름
+    # 묶음 키는 (보고자, 주식 종류)다 — 주식 종류를 섞으면 Δ가 거짓이 된다.
+    timeline: dict[tuple, list[tuple[float, str, str]]] = defaultdict(list)
+    holder_names: dict[tuple, str] = {}   # 묶음 키 → 화면에 쓸 이름
+    holder_kinds: dict[str, set] = defaultdict(set)  # 보고자 → 가진 종류들
     treasury_count = 0
     # lookback 윈도우 cutoff (hyslr_chg는 전체 이력을 반환하므로 연도 외 데이터 필터)
     cutoff_dt = datetime.now() - timedelta(days=lookback_years * 365)
@@ -4478,7 +4491,7 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
         row = _extract_row(rec)
         if row is None:
             continue
-        holder, ratio, date, src_label = row
+        holder, ratio, date, src_label, kind = row
         # 날짜 윈도우 필터 — 8자리(YYYYMMDD)는 정확 비교, 4자리(YYYY)는 연 시작으로 가정
         try:
             if len(date) >= 8:
@@ -4491,10 +4504,11 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
             rec_dt = None
         if rec_dt is not None and rec_dt < cutoff_dt:
             continue
-        _hk = _holder_key(holder)
+        _hk = (_holder_key(holder), kind)
         _disp = _holder_display(holder)
         if len(_disp) > len(holder_names.get(_hk, "")):
             holder_names[_hk] = _disp
+        holder_kinds[_holder_key(holder)].add(kind)
         timeline[_hk].append((ratio, date, src_label))
 
     lines = [
@@ -4518,7 +4532,11 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
 
     for _hk, rows in timeline.items():
         # 묶음 키는 공백을 지운 형태라 화면에는 쓰지 않는다.
-        holder = holder_names.get(_hk, _hk)
+        holder = holder_names.get(_hk, _hk[0] if isinstance(_hk, tuple) else _hk)
+        # 종류가 둘 이상인 사람만 종류를 밝힌다 — 하나뿐이면 군더더기다.
+        _kind = _hk[1] if isinstance(_hk, tuple) else ""
+        if _kind and len(holder_kinds.get(_hk[0], ())) > 1:
+            holder = f"{holder} · {_kind}"
         # rows: list[(ratio, date_yyyymmdd, source_label)]
         rows_sorted = sorted(rows, key=lambda r: r[1])
         # ── 인접 중복 dedup: 같은 ratio가 연속되면 첫 1건만 유지 (분기 4회 호출 노이즈 억제)
