@@ -116,13 +116,12 @@ from .core.taxonomy import CROSS_SIGNAL_PATTERNS
 from .core.qualifiers import (
     Qualified,
     TIER_OBSERVED,
-    is_false_amendment,
     parse_report_name,
     pick_headline,
     qualify_signals,
     supports_pattern as _supports_pattern,
 )
-from .core.signals import SIGNAL_LABELS, strip_amendment_prefix
+from .core.signals import SIGNAL_LABELS
 
 def _holder_key(v: str) -> str:
     """보고자 이름을 묶기 위한 키 — **공백을 전부 지운다**.
@@ -1568,16 +1567,10 @@ def analyze_company_risk(
         is_amendment = is_amendment_disclosure(report_nm)
         parsed = parse_report_name(report_nm)
         matched = match_signals(report_nm)
-        # '[정정명령부과]증권신고서'처럼 _AMENDMENT_RE에 걸리지만 실제
-        # 정정이 아닌 공시는 접두를 벗겨 재매칭한다. 진짜 정정공시의
-        # 기존 동작(신호 없음)은 바뀌지 않는다.
-        if not matched and is_amendment and is_false_amendment(parsed):
-            matched = match_signals(strip_amendment_prefix(report_nm))
-            # is_false_amendment가 참이라는 것은 이 태그가 정정 꼬리표가
-            # 아니라는 단언이다. 플래그를 True로 남겨두면 신호를 되살려
-            # 놓고도 non_amend_events·sig_keys·헤드라인에서 다시 빼버려
-            # 헤더 건수와 본문이 어긋난다(리뷰 C2).
-            is_amendment = False
+        # `[정정명령부과]`류 규제기관 조치를 정정공시로 오판하던 문제는
+        # 2026-08-26에 `_AMENDMENT_RE` 자체에서 고쳤다 — 여기 있던 우회
+        # (접두를 벗겨 재매칭)는 **소비처 일곱 중 둘에만** 걸려 있어
+        # 나머지에서는 여전히 신호가 사라졌다(#307과 같은 미적용).
         qualified = qualify_signals(matched, parsed, d)
 
         for sig, q in zip(matched, qualified):
@@ -2519,11 +2512,9 @@ def build_event_timeline(
         rcept_dt = d.get("rcept_dt", "")[:10]
         rcept_no = d.get("rcept_no", "")
         parsed = parse_report_name(report_nm)
-        if is_amendment_disclosure(report_nm) and not is_false_amendment(parsed):
+        if is_amendment_disclosure(report_nm):
             continue
-        matched = match_signals(report_nm) or match_signals(
-            strip_amendment_prefix(report_nm)
-        )
+        matched = match_signals(report_nm)
         qualified = qualify_signals(matched, parsed, d)
         for sig, q in zip(matched, qualified):
             if q.tier != TIER_OBSERVED:
