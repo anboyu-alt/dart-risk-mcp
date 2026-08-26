@@ -48,6 +48,7 @@ from .core import (
     fetch_company_disclosures,
     fetch_company_disclosures_with_status,
     FETCH_ERROR,
+    FETCH_TRUNCATED,
     fetch_market_disclosures,
     fetch_market_disclosures_with_status,
     fetch_company_info,
@@ -318,8 +319,7 @@ def _resolve_window(
         if bgn > end:
             return "", "", 0, 0, "", f"from_date({bgn})가 to_date({end})보다 뒤입니다."
         days = (datetime.strptime(end, "%Y%m%d") - datetime.strptime(bgn, "%Y%m%d")).days + 1
-        # 페이지 상한은 창 길이에 비례 — 1년당 10페이지(1,000건)라는 기존 관례
-        max_pages = max(10, min(50, (days // 365 + 1) * 10))
+        max_pages = _page_budget(days)
         phrase = f"{_fmt_date8(bgn)}~{_fmt_date8(end)}"
         if clamped:
             phrase += " (종료일이 미래라 오늘까지로 좁혔습니다)"
@@ -327,6 +327,52 @@ def _resolve_window(
 
     days, max_pages, phrase = _resolve_lookback(lookback_years, lookback_days)
     return "", "", days, max_pages, phrase, ""
+
+
+def _page_budget(days: int) -> int:
+    """조회 창을 덮는 데 필요한 페이지 상한(1페이지 = 공시 100건).
+
+    **단일 출처다.** 이 값을 계산하는 자리가 네 곳으로 흩어져 있었고 서로
+    달랐다(2026-08-26 실측) — `_resolve_lookback`은 `max(50, years*10)`,
+    `_resolve_window`는 `min(50, …)`, `find_actor_overlap`과
+    `track_capital_structure`는 2026-08-23에 폐기된 옛 공식 `years * 10`을
+    그대로 쓰고 있었다. 한 곳만 고친 수정이 나머지에 닿지 않았다.
+
+    실측(10개사, 2026-08-26):
+
+        삼성전자      1년 2,894 · 3년 3,930 · 5년 4,364
+        미래에셋증권   1년 1,662 · 3년 4,384 · 5년 **8,452**
+        NH투자증권    1년 1,090 · 3년 2,997 · 5년 **5,612**
+
+    옛 상한 50페이지(5,000건)는 5년 조회에서 미래에셋 3,452건을 버렸고,
+    옛 공식 `years*10`은 **1년 조회에서 삼성전자 1,894건**을 버렸다.
+    list.json은 **최신순**이라(실측: page 1 = 20260826, page 44 = 20210831)
+    잘리는 쪽은 언제나 **오래된 쪽**이다 — 5년이라 적고 최근 2년만 보여 준다.
+
+    1년당 20페이지·하한 50이면 위 실측을 모두 덮는다(5년 100페이지 =
+    10,000건 ≥ 8,452). 상한을 올려도 작은 회사는 비용이 늘지 않는다 —
+    `total_count`로 조기 종료하므로 공시가 적으면 1페이지에서 끝난다.
+    """
+    years = max(1, -(-days // 365))
+    return max(50, years * 20)
+
+
+def _truncation_notice(fetch_status: str, disclosures: list, window_phrase: str) -> str:
+    """페이지 상한에 걸려 창의 앞쪽이 빠졌다는 사실 한 줄. 아니면 빈 문자열.
+
+    잘린 것을 조용히 두면 화면이 거짓을 말한다 — 머리글은 창 전체를 적는데
+    내용은 최근 일부뿐이다. 어디까지 실제로 덮였는지를 함께 적는다.
+    """
+    if fetch_status != FETCH_TRUNCATED or not disclosures:
+        return ""
+    dates = [str(d.get("rcept_dt") or "") for d in disclosures]
+    oldest = min((d for d in dates if len(d) == 8), default="")
+    covered = f"{_fmt_date8(oldest)}부터" if oldest else "일부 구간만"
+    return (
+        f"⚠️ 조회 창({window_phrase})의 공시가 많아 최근 {len(disclosures):,}건까지만 "
+        f"받았습니다 — 실제로 덮인 구간은 **{covered}**이고, 그보다 오래된 공시는 "
+        f"빠졌습니다. `from_date`/`to_date`로 구간을 나눠 조회하세요."
+    )
 
 
 def _resolve_lookback(
@@ -345,21 +391,12 @@ def _resolve_lookback(
             stacklevel=3,
         )
         days = min(max(lookback_days, 1), 365)
-        return days, 10, f"{days}일"
+        # deprecated 경로도 같은 예산을 쓴다 — 창이 같으면 절단 위험도 같다.
+        return days, _page_budget(days), f"{days}일"
     years = min(max(lookback_years, 1), 5)
     days = years * 365
     phrase = f"{days}일" if years == 1 else f"{years}년"
-    # 페이지 상한은 창과 무관하게 최소 50페이지(5,000건)를 준다.
-    #
-    # 옛 공식 `years * 10`은 1년 조회에 1,000건만 허용해 **대형사에서
-    # 절단됐다**(2026-08-23 실측: 삼성전자 1년 2,891건 중 1,000건만 조회).
-    # 1년 코퍼스(법인 45,426개)에서 1년 1,000건을 넘는 법인은 23개(0.05%)이고
-    # **5,000건을 넘는 법인은 0개**라, 50페이지면 1년 조회는 전부 덮인다.
-    #
-    # 상한을 올려도 작은 회사는 비용이 늘지 않는다 — fetch_company_disclosures가
-    # total_count로 조기 종료하므로 공시가 적으면 1페이지에서 끝난다. 비용이
-    # 느는 것은 지금 절단되던 0.05%뿐이다.
-    return days, max(50, years * 10), phrase
+    return days, _page_budget(days), phrase
 
 
 # ── 공통 헬퍼 ──────────────────────────────────────────────────────────────
@@ -1518,6 +1555,7 @@ def analyze_company_risk(
     if fetch_status == FETCH_ERROR:
         return _fetch_failed_notice(corp_name, window_phrase)
     # (조기 반환 제거 — 공시가 없어도 v0.6.0 자본 churn / 재무 이상 스캔은 별도로 수행)
+    _trunc_note = _truncation_notice(fetch_status, disclosures, window_phrase)
 
     # 3. 신호 분류 + 정정공시 필터
     signal_events: list[dict] = []
@@ -1858,6 +1896,8 @@ def analyze_company_risk(
     _alias_note = _alias_note_line(corp_info)
     if _alias_note:
         lines.insert(1, _alias_note)
+    if _trunc_note:
+        lines.insert(1, _trunc_note)
     if observed_events:
         lines += [
             f"━━ 관찰된 신호 ({len(observed_events)}건) ━━",
@@ -2438,6 +2478,9 @@ def build_event_timeline(
     )
     if fetch_status == FETCH_ERROR:
         return _fetch_failed_notice(corp_name, window_phrase)
+    _trunc_note = _truncation_notice(fetch_status, disclosures, window_phrase)
+    if _trunc_note:
+        _note_block += f"{_trunc_note}\n\n"
     if not disclosures:
         return (
             f"📋 **{corp_name}** ({stock_code or corp_code})\n\n"
@@ -2970,6 +3013,7 @@ def find_actor_overlap(
     per_company_solo: dict[str, list[tuple]] = {}
     failed: list[str] = []
     fetch_failed: list[str] = []   # 회사는 찾았는데 공시를 못 받은 것
+    fetch_truncated: list[str] = []  # 받긴 받았는데 창의 앞쪽이 잘린 것
 
     for query in company_names:
         result = resolve_corp(query, api_key)
@@ -2989,11 +3033,13 @@ def find_actor_overlap(
         # 못 받은 회사는 analyzed에서 빼고 따로 알린다(2026-08-23 후속 감사).
         disclosures, fetch_status = fetch_company_disclosures_with_status(
             corp_code, api_key, lookback_days=lookback_days,
-            max_pages=max(10, (lookback_days // 365 + 1) * 10),
+            max_pages=_page_budget(lookback_days),
         )
         if fetch_status == FETCH_ERROR:
             fetch_failed.append(query)   # analyzed 필터가 query 기준이다
             continue
+        if fetch_status == FETCH_TRUNCATED:
+            fetch_truncated.append(query)
         disclosures = disclosures or []
 
         cb_rcepts: list[str] = []
@@ -3108,6 +3154,16 @@ def find_actor_overlap(
         lines.append(
             f"⚠ 공시를 불러오지 못해 비교에서 빠진 기업: {', '.join(fetch_failed)} "
             "— **신호가 없다는 뜻이 아닙니다.** DART 조회가 실패했습니다."
+        )
+        lines.append("")
+
+    if fetch_truncated:
+        # 이 도구는 "여러 회사에 함께 등장하는가"를 본다. 한 회사의 창이
+        # 잘리면 겹침이 **없는 것처럼** 보이므로 잘렸다는 사실을 적어야 한다.
+        lines.append(
+            f"⚠ 공시가 많아 창의 앞쪽(오래된 쪽)이 빠진 기업: "
+            f"{', '.join(fetch_truncated)} — 이 기업의 오래된 인수·겸직은 "
+            "비교에 들어가지 않았습니다."
         )
         lines.append("")
 
@@ -3262,6 +3318,7 @@ def list_disclosures_by_stock(
     )
     if fetch_status == FETCH_ERROR:
         return _fetch_failed_notice(corp_name, window_phrase)
+    _trunc_note = _truncation_notice(fetch_status, disclosures, window_phrase)
     if not disclosures:
         return (
             f"📋 **{corp_name}** ({stock_code})\n\n"
@@ -3274,6 +3331,8 @@ def list_disclosures_by_stock(
     ]
     if _alias_note:
         lines.append(_alias_note)
+    if _trunc_note:
+        lines.append(_trunc_note)
     lines += [
         f"조회 기간: 최근 {window_phrase} | 총 {len(disclosures)}건",
         "",
@@ -4414,7 +4473,7 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
         try:
             disclosures = fetch_company_disclosures(
                 corp_code, _DART_API_KEY, lookback_years * 365,
-                max_pages=lookback_years * 10,
+                max_pages=_page_budget(lookback_years * 365),
             )
             signal_events: list[dict] = []
             for d in disclosures or []:
@@ -4750,6 +4809,12 @@ def check_disclosure_anomaly(
     lines = [
         f"━━━ [{corp_name}] 공시 구조 관찰 요약 ━━━",
         f"조회기간: 최근 {window_phrase} / 총 공시 {total}건 (정정공시 {amendment_count}건)",
+    ]
+    # 절단됐다면 아래 비율의 분모가 창 전체가 아니다 — 그 사실을 먼저 적는다.
+    _trunc_note = _truncation_notice(fetch_status, disclosures, window_phrase)
+    if _trunc_note:
+        lines.append(_trunc_note)
+    lines += [
         "",
         summary,
         "",
@@ -5432,7 +5497,7 @@ def track_capital_structure(
     # 것을 없는 것으로 내면 화면이 거짓을 말한다(2026-08-23 후속 감사).
     disclosures, fetch_status = fetch_company_disclosures_with_status(
         corp_code, api_key, lookback_years * 365,
-        max_pages=lookback_years * 10,
+        max_pages=_page_budget(lookback_years * 365),
     )
     if fetch_status == FETCH_ERROR:
         return _fetch_failed_notice(corp_name, f"최근 {lookback_years}년")
@@ -5500,6 +5565,12 @@ def track_capital_structure(
 
     lines = [
         f"📊 **{corp_name}** ({info.get('stock_code','')}) — 자본구조 추적 (최근 {lookback_years}년)",
+    ]
+    _trunc_note = _truncation_notice(
+        fetch_status, disclosures, f"최근 {lookback_years}년")
+    if _trunc_note:
+        lines.append(_trunc_note)
+    lines += [
         "",
         summary,
         "",

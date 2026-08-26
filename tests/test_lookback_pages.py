@@ -36,14 +36,19 @@ class TestPageCap:
         caps = [srv._resolve_lookback(y, None)[1] for y in range(1, 6)]
         assert caps == sorted(caps), caps
 
-    def test_lookback_days_경로는_그대로다(self):
-        """deprecated 별칭의 동작을 바꾸지 않는다."""
+    def test_lookback_days_경로도_같은_예산을_쓴다(self):
+        """deprecated 별칭이라고 덜 주지 않는다 (2026-08-26 갱신).
+
+        옛 기대값 10페이지는 "별칭의 동작을 바꾸지 않는다"는 이유였는데,
+        그 값 때문에 30일 조회도 대형사에서 1,000건에서 잘린다. 일수·라벨은
+        그대로이므로 하위 호환의 뜻은 유지된다 — 바뀌는 것은 상한뿐이다.
+        """
         import warnings
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             days, max_pages, _ = srv._resolve_lookback(1, 30)
         assert days == 30
-        assert max_pages == 10
+        assert max_pages == srv._page_budget(30) == 50
 
 
 class TestCostRationale:

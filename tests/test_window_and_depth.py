@@ -75,9 +75,14 @@ class TestResolveWindow:
         assert "형식이 올바르지 않습니다" in err
 
     def test_페이지_상한이_창에_비례한다(self):
+        """짧은 창에도 **하한 50페이지**를 준다 — 한 달치도 대형사는 잘린다.
+
+        옛 기대값 10페이지는 `_resolve_window`만의 별도 공식이 남긴 것이고,
+        2026-08-26 실측에서 그 공식이 5년 조회를 5,000건에서 잘랐다.
+        """
         _, _, _, p_short, _, _ = srv._resolve_window(1, None, "2024-01-01", "2024-01-31")
         _, _, _, p_long, _, _ = srv._resolve_window(1, None, "2020-01-01", "2024-12-31")
-        assert p_short == 10
+        assert p_short == 50
         assert p_long > p_short
 
 

@@ -535,6 +535,12 @@ def fetch_company_disclosures(
 FETCH_OK = "ok"
 FETCH_EMPTY = "empty"          # 정상 응답인데 자료가 없다(013 포함)
 FETCH_ERROR = "error"          # 네트워크·비정상 status — 못 받은 것이다
+FETCH_TRUNCATED = "truncated"  # 받긴 받았는데 **페이지 상한에 걸려 잘렸다**
+#
+# 절단은 오류가 아니지만 **성공도 아니다**. list.json은 최신순이라 잘리는 쪽은
+# 항상 오래된 쪽이고, 그러면 도구가 "최근 5년"이라 적어 놓고 최근 2년만 보여
+# 준다. 옛 코드는 이걸 FETCH_OK로 접어 로그에만 남겼다 — 화면은 아무 말도
+# 하지 않았다(2026-08-26 발견).
 
 
 def fetch_company_disclosures_with_status(
@@ -549,8 +555,10 @@ def fetch_company_disclosures_with_status(
     """`fetch_company_disclosures` + 조회 상태. 상태는 FETCH_* 중 하나.
 
     **부분 성공은 성공으로 본다.** 3페이지를 받다가 4페이지에서 끊겼다면
-    받은 3페이지는 유효하므로 FETCH_OK다 — 페이지 상한 도달과 같은 취급이고,
-    그쪽은 이미 로그 경고로 남는다. 첫 페이지부터 실패했을 때만 FETCH_ERROR다.
+    받은 3페이지는 유효하므로 FETCH_OK다. 첫 페이지부터 실패했을 때만
+    FETCH_ERROR다. 다만 **페이지 상한에 걸려 잘린 경우는 FETCH_TRUNCATED**로
+    구분해 돌려준다 — 호출부가 화면에 "창의 앞쪽이 빠졌다"고 적을 수 있어야
+    한다.
 
 특정 기업의 DART 공시 목록 조회.
 
@@ -609,7 +617,7 @@ def fetch_company_disclosures_with_status(
             break
         if page_no >= max_pages and len(results) < total:
             log.warning("공시목록 %d건 초과 기업 (corp_code=%s, total=%d) — 일부 누락", max_pages * 100, corp_code, total)
-            break
+            return results, FETCH_TRUNCATED
         page_no += 1
         time.sleep(0.25)
 
