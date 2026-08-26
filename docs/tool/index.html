@@ -1441,7 +1441,13 @@ function isSoftenedSig(s) {
 }
 // WHY THIS MATTERS 한 줄 + (보정된 신호면) "원문 확인" 버튼·슬롯.
 function renderWhyRow(s, rcept) {
-  const p = `<p style="font-size:0.92rem;margin-bottom:0.7rem"><b>${esc(s.label)}</b> — ${esc(s.prose || "등록된 해설이 없는 신호 유형입니다.")}</p>`;
+  // ⚠ 방향 안내(`s.note`)를 빼면 **해설이 자기를 배신한다** — CB/BW 해설은
+  //   "방향은 제목과 함께 표시되는 안내에서 확인하세요"라고 적는데 그 안내가
+  //   화면에 없었다. core `analyze_company_risk`·`build_event_timeline`·
+  //   시장 스캔은 모두 이 줄을 낸다(#305·#307). 상세 화면만 빠져 있었다.
+  const note = (s.note || "").trim();
+  const p = `<p style="font-size:0.92rem;margin-bottom:0.7rem"><b>${esc(s.label)}</b> — ${esc(s.prose || "등록된 해설이 없는 신호 유형입니다.")}</p>` +
+    (note ? `<p class="dim" style="font-size:0.86rem;margin:-0.45rem 0 0.7rem">※ ${esc(note)}</p>` : "");
   if (!isSoftenedSig(s)) return p;
   const slotId = "alloc-" + esc(rcept) + "-" + esc(s.key);
   return p + `<div style="margin:-0.4rem 0 0.7rem">` +
