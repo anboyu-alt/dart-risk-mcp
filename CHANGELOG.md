@@ -31,6 +31,43 @@
 
 ---
 
+## [1.20.23] — 2026-08-25
+
+### Fixed
+
+- **시장 스캔이 방향 안내를 버렸다** (#307) — 「core는 아는데 한 층만 모른다」가
+  이번 세션에서 **여섯 번** 반복돼, 그 클래스를 **전수로** 훑었다.
+  `qualify_signals` 호출부 넷을 열어 각자 무엇을 쓰는지 대조했다:
+
+      analyze_company_risk      tier · label · note · reason   ✓
+      check_disclosure_risk     tier · label · note · reason   ✓
+      build_event_timeline      tier · label · note            ✓ (#305)
+      search_market_disclosures tier · label                   ✗ **note를 버린다**
+
+  프리셋 골드 실측: `cb_issue`의 「자기전환사채만기전취득결정」 **14건**이
+  전부 「CB/BW발행」으로만 표시됐다(`treasury`도 신탁계약 10건).
+  한 공시에 여러 신호가 같은 안내를 낼 수 있어 `dict.fromkeys`로 접는다.
+  시장 골드 14개 재생성.
+
+- **해설이 가리키는 방향 안내가 뷰어 상세에 없었다** (#308) — 같은 sweep을
+  뷰어에 적용해 찾았다. `renderWhyRow`가 `s.note`를 버렸는데, CB/BW 해설은
+  *"방향은 제목과 함께 표시되는 안내에서 확인하세요"*라고 적는다 —
+  **해설이 자기를 배신했다.** 뷰어의 다른 표면(피드·타임라인 툴팁·헤드라인·
+  커멘터리)은 이미 내고 있었고 상세 화면만 빠져 있었다.
+
+  ⚠ 검증은 **소스 문자열 검색이 아니라 node 실행**으로 했다 — 그 방법은
+  v1.20.20에서 주석·docstring 자기참조로 이미 한 번 실패했다.
+
+### Added
+
+- `tests/test_qualifier_output_parity.py` — `qualify_signals` 호출부를
+  **전수로 세고** 소비처별 계약(어떤 필드를 써야 하는지)을 고정한다. 새
+  소비처가 생기거나 필드를 빠뜨리면 걸린다. 골드에 안내가 실려 있는지도
+  함께 본다(v1.20.20의 교훈 — 렌더만 고치고 골드가 낡으면 hygiene이 옛
+  출력을 훑는다).
+- `tests/test_viewer_why_row_note.py` — 뷰어 상세 해설을 node로 실제
+  실행해 안내 렌더를 확인한다.
+
 ## [1.20.22] — 2026-08-25
 
 ### Fixed
