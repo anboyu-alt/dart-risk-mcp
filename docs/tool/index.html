@@ -856,7 +856,14 @@ async function submitScan() {
 /* ── DART 호출 ────────────────────────────────── */
 function ymd(d) { return d.toISOString().slice(0, 10).replace(/-/g, ""); }
 async function dartGet(endpoint, params) {
-  const usp = new URLSearchParams({ crtfc_key: localStorage.getItem(LS_KEY), ...params });
+  // ⚠ `localStorage.getItem`은 키가 없으면 `null`을 준다. URLSearchParams가
+  // 그걸 문자열 "null"로 바꿔 **그대로 DART에 보낸다** — 실제로 나갔다
+  // (2026-08-26 네트워크 로그: `crtfc_key=null&corp_code=…`). DART는 010
+  // ("등록되지 않은 API 키입니다")로 답하고 화면은 키가 **틀렸다**고 말한다.
+  // 키가 없는 것과 틀린 것은 사용자가 할 일이 다르다.
+  const key = (localStorage.getItem(LS_KEY) || "").trim();
+  if (!key) throw new Error("API 키가 설정되지 않았습니다 — 우측 상단 설정에서 키를 입력하세요");
+  const usp = new URLSearchParams({ crtfc_key: key, ...params });
   const url = `${relayBase()}/api/${endpoint}?${usp}`;
   const r = await fetch(url);
   if (!r.ok) throw new Error(`릴레이 오류 (HTTP ${r.status}) — 설정에서 릴레이 주소를 확인하세요`);

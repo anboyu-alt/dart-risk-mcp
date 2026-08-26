@@ -77,3 +77,19 @@ def test_coveredFrom이_가장_오래된_날을_고른다():
                          encoding="utf-8")
     assert out.returncode == 0, out.stderr
     assert out.stdout == "2025.01.01"
+
+
+def test_키가_없으면_요청을_보내지_않는다():
+    """`localStorage.getItem`은 키가 없을 때 `null`을 주고, URLSearchParams가
+    그걸 **문자열 "null"로 바꿔 DART에 보낸다**. 실제로 나갔다 —
+
+        GET /api/list.json?crtfc_key=null&corp_code=00118521&…
+
+    DART는 010「등록되지 않은 API 키입니다」로 답하고, 화면은 키가 **틀렸다**고
+    말한다. 키가 없는 것과 틀린 것은 사용자가 할 일이 다르다.
+    """
+    i = _HTML.index("async function dartGet(")
+    body = _HTML[i:_HTML.index("\n}", i)]
+    assert "if (!key) throw" in body, "키 없음 가드가 사라졌다"
+    assert "crtfc_key: key" in body, "정제한 키를 써야 한다"
+    assert "crtfc_key: localStorage.getItem" not in body
