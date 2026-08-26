@@ -3787,11 +3787,42 @@ def get_shareholder_info(company_name: str, year: str = "") -> str:
 
     if bulk:
         lines.append("━━ 5% 이상 대량보유자 ━━")
+        # ⚠ 옛 코드는 `reprt_nm` → `nm` 순으로 이름을 찾았는데
+        # **majorstock.json에는 둘 다 없다** — 보고자 필드는 `repror`다.
+        # 그래서 이 목록이 **모든 회사에서** 「• -: 12,345주 (5.2%)」로
+        # 나왔다(골드 전수 확인, 2026-08-26). 누가 들고 있는지가 이 절의
+        # 전부인데 그 자리가 늘 비어 있었다.
+        #
+        # 응답은 '현재 보유자'가 아니라 **대량보유 보고 이력**이다. 삼성전자는
+        # 삼성물산 한 곳이 수십 건을 낸다 — 보고자별로 접어 **가장 최근
+        # 보고**만 보이고 몇 건을 냈는지 함께 적는다.
+        _latest: dict = {}
         for h in bulk:
-            nm = h.get("reprt_nm", h.get("nm", "-"))
-            stock_cnt = h.get("stkqy", "-")
-            ratio = h.get("stkrt", "-")
-            lines.append(f"  • {nm}: {stock_cnt}주 ({ratio}%)")
+            who = str(h.get("repror") or "").strip() or "-"
+            dt = str(h.get("rcept_dt") or "").strip()
+            cur = _latest.get(who)
+            if cur is None or dt >= cur[0]:
+                _latest[who] = (dt, h, (cur[2] + 1) if cur else 1)
+            else:
+                _latest[who] = (cur[0], cur[1], cur[2] + 1)
+        _rows = sorted(_latest.items(), key=lambda x: x[1][0], reverse=True)
+        for who, (dt, h, cnt) in _rows[:15]:
+            line = f"  • {who}: {h.get('stkqy', '-')}주 ({h.get('stkrt', '-')}%)"
+            delta = str(h.get("stkrt_irds") or "").strip()
+            if delta and delta not in ("-", "0", "0.00", "-0.00"):
+                line += f" · 비율 증감 {delta}%p"
+            # 보고사유는 원문에 개행이 섞여 와 줄을 깨뜨린다(실측: 「보유주식
+            # 등의 변동」과 「보유주식등에 관한 계약의 변경」이 두 줄로 온다).
+            resn = " ".join(str(h.get("report_resn") or "").split())
+            if resn and resn != "-":
+                line += f" · {resn[:40]}"
+            if dt:
+                line += f" · {_fmt_date8(dt) if len(dt) == 8 else dt}"
+            if cnt > 1:
+                line += f" (보고 {cnt}건 중 최근)"
+            lines.append(line)
+        if len(_rows) > 15:
+            lines.append(f"  ... 외 {len(_rows) - 15}명")
         lines.append("")
 
     lines.append("⚠️ DART 공시 기준이며, 최신 변동 사항은 반영되지 않을 수 있습니다.")

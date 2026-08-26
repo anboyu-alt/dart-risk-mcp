@@ -41,6 +41,10 @@ _SRC = (pathlib.Path(__file__).resolve().parents[1]
 _STRING_SLICES = {
     "text", "d", "digits", "date", "prev_date", "_bgn", "_end", "nm",
     "report_nm", "name", "s", "raw",
+    # 대량보유 보고사유 — 한 줄에 넣으려 길이를 줄이는 것이라 데이터 손실이
+    # 아니다(원문은 접수번호로 열어 볼 수 있다). 2026-08-26에 이 검사가
+    # 실제로 잡아 줘서 여기 적는다.
+    "resn",
 }
 # 검사 대상 밖 — 근거를 반드시 남긴다.
 _ALLOW = {
