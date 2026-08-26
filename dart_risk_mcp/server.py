@@ -3588,18 +3588,36 @@ def get_company_info(company_name: str) -> str:
     _alias_note = _alias_note_line(corp_info)
     if _alias_note:
         lines.append(_alias_note)
+    def _v(key: str) -> str:
+        """빈 문자열도 「-」로 — `.get(k, '-')`는 키가 **있고 값이 빈** 경우를
+        놓쳐 「• IR: 」처럼 라벨만 남는다(실측: 삼성전자 `ir_url` = '')."""
+        return str(info.get(key) or "").strip() or "-"
+
+    # ⚠ 옛 코드는 `corp_cls_nm`을 읽었는데 **그런 필드가 없다** — company.json이
+    # 주는 것은 `corp_cls`('Y'/'K'/'N'/'E')다. 그래서 「법인구분」이 모든
+    # 회사에서 항상 「-」였다(골드 10/10 확인, 2026-08-26). `fetch_debt_balance`
+    # 와 같은 종류의 결함이다 — 존재하지 않는 응답 필드를 읽고 있었다.
+    _cls = str(info.get("corp_cls") or "").strip().upper()
+    _cls_label = {"Y": "유가증권시장 상장", "K": "코스닥시장 상장",
+                  "N": "코넥스시장 상장", "E": "기타법인(비상장)"}.get(_cls, "")
+    _induty = str(info.get("induty_code") or "").strip()
+    # 업종도 코드만 내고 있었다 — 이름을 붙이는 함수가 이미 있는데
+    # `scan_financial_anomaly`만 쓰고 있었다.
+    _induty_txt = (f"{get_induty_name(_induty)} (KSIC {_induty})"
+                   if _induty else "-")
+    _est = str(info.get("est_dt") or "").strip()
     lines += [
         "",
-        f"• 종목코드: {info.get('stock_code', '-')}",
-        f"• 대표자: {info.get('ceo_nm', '-')}",
-        f"• 법인구분: {info.get('corp_cls_nm', '-')}",
-        f"• 업종: {info.get('induty_code', '-')}",
-        f"• 설립일: {info.get('est_dt', '-')}",
-        f"• 결산월: {info.get('acc_mt', '-')}월",
-        f"• 주소: {info.get('adres', '-')}",
-        f"• 홈페이지: {info.get('hm_url', '-')}",
-        f"• IR: {info.get('ir_url', '-')}",
-        f"• 전화: {info.get('phn_no', '-')}",
+        f"• 종목코드: {_v('stock_code')}",
+        f"• 대표자: {_v('ceo_nm')}",
+        f"• 법인구분: {_cls_label or '-'}" + (f" ({_cls})" if _cls_label else ""),
+        f"• 업종: {_induty_txt}",
+        f"• 설립일: {_fmt_date8(_est) if len(_est) == 8 else (_est or '-')}",
+        f"• 결산월: {_v('acc_mt')}월",
+        f"• 주소: {_v('adres')}",
+        f"• 홈페이지: {_v('hm_url')}",
+        f"• IR: {_v('ir_url')}",
+        f"• 전화: {_v('phn_no')}",
     ]
     return "\n".join(lines)
 
