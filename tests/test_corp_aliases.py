@@ -106,7 +106,11 @@ class TestResolveCorpAliases(unittest.TestCase):
     def test_partial_match_still_works_without_alias_hit(self):
         name, info = dc.resolve_corp("아틀라스", "dummy-key")
         self.assertEqual(name, "아틀라스링크")
-        self.assertNotIn("alias_note", info)
+        # 2026-08-25: 부분 일치도 `alias_note`로 사실을 알린다 —
+        # 「현대차」가 조용히 「현대차증권」이 되던 것을 고치면서 생긴 변화다.
+        # **고르는 규칙은 그대로**이므로 이름은 여전히 아틀라스링크다.
+        self.assertIn("부분 일치", info.get("alias_note", ""))
+        self.assertNotIn("옛 상호", info.get("alias_note", ""))
 
     def test_alias_current_not_in_corp_cache_falls_back_to_code_lookup(self):
         # current 이름 자체가 _corp_cache에 없어도(예: 정식명 표기 차이),
