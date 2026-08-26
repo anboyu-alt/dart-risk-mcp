@@ -315,7 +315,7 @@ dart_risk_mcp/
 
 - 내부 흐름: `resolve_corp` → `fetch_insider_timeline` (4개 엔드포인트 통합) → `fetch_company_disclosures` + `match_signals` → `detect_insider_pre_disclosure`
 - 통합 엔드포인트: `elestock`(임원·주요주주 특정증권 소유보고, 전체 이력 — 등기임원·지배주주 중심이며 5% 대량보유가 아니다. 그건 `fetch_major_holdings`/`majorstock.json`이다) + `hyslrSttus`(최대주주 현황) + `hyslrChgSttus`(최대주주 변동현황) + `tesstkAcqsDspsSttus`(임원·주요주주 자기주식). 신규 3개는 4개 분기 reprt_code(11011·11012·11013·11014) × N년 루프.
-- v0.8.6 출력 보정: 합산 행("계"/"합계") 스킵, 인접 분기 동일 비율(<0.005%p) dedup, lookback 윈도우 외 데이터 필터, `exec_treasury`(회사 자기주식)는 보고자별 시계열에서 분리.
+- v0.8.6 출력 보정: 합산 행("계"/"합계") 스킵, 인접 분기 동일 비율(<0.005%p) dedup, lookback 윈도우 외 데이터 필터, `exec_treasury`(회사 자기주식)는 보고자별 시계열에서 분리. **2026-08-27: 묶음 키가 (보고자, 주식 종류)로 바뀌었다** — 같은 사람이 보통주식·종류주식(우선주)을 따로 보고하는데 한 시계열에 섞여 비율이 1.99%↔0.07%로 튀고 **그 사이 Δ가 전부 거짓**이었다(두산 박형원·박인원 실측, 거짓 Δ 열두 줄). 거짓 Δ는 매수·매도 클러스터(0.5%p/30일)와 `detect_insider_pre_disclosure`의 입력이라 판정까지 오염시킨다. 주식 종류를 주는 것은 `hyslrSttus`뿐이라(`elestock`·`hyslr_chg`·`majorstock`에는 `stock_knd`가 없다) 나머지 소스의 묶음은 불변. 종류가 둘 이상인 사람만 「박형원 · 종류주식」으로 밝힌다.
 - 추가 플래그 `INSIDER_PRE_DISCLOSURE` (taxonomy 3.6, base_score 0): 매도 이벤트(Δ<0) ±30일 내 부정 공시(AUDIT/INSOLVENCY/EMBEZZLE/INQUIRY/GOING_CONCERN/DISCLOSURE_VIOL/DEBT_RESTR) 동시 발생 시 사실 표기. 점수 가산 없음(v0.8.5 원칙).
 - 보유 비율(Δ) 계산 + 30일 윈도우 매수/매도 클러스터 탐지(0.5%p 임계).
 - `lookback_years` 범위: 1~5년.

@@ -74,8 +74,13 @@ def test_표시_이름은_읽을_수_있다():
 
 
 def test_화면에_묶음_키를_쓰지_않는다():
-    """키는 공백이 지워진 형태라 그대로 출력하면 읽기 나쁘다."""
-    assert "holder = holder_names.get(_hk, _hk)" in _SRC
+    """키는 공백이 지워진 형태라 그대로 출력하면 읽기 나쁘다.
+
+    2026-08-27부터 묶음 키는 **(보고자, 주식 종류) 튜플**이다 — 보통주식과
+    종류주식을 한 시계열에 섞으면 그 사이의 Δ가 거짓이 된다(#337 후속).
+    그래서 폴백도 튜플의 첫 칸을 꺼낸다.
+    """
+    assert "holder = holder_names.get(_hk, _hk[0]" in _SRC
     assert "timeline[_hk].append(" in _SRC
     assert "timeline[holder].append(" not in _SRC
 
