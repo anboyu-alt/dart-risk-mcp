@@ -451,12 +451,35 @@ def resolve_corp(query: str, api_key: str) -> tuple[str, dict] | None:
         return resolved_name, resolved_info
 
     # 부분 매칭
+    #
+    # ⚠ **조용히 다른 회사를 돌려줄 수 있다.** 실측(2026-08-25):
+    #     resolve_corp("현대차") → **현대차증권**
+    #   「현대자동차」는 "현대차"를 부분 문자열로 **포함하지도 않아**
+    #   (현대**자동**차) 후보에조차 없다. 사용자는 현대자동차를 물었는데
+    #   증권사 리포트를 받고, 그 사실을 알려 주는 줄이 없었다.
+    #   (이 세션의 대형주 대조군에도 그렇게 섞여 들어갔다.)
+    #
+    #   `KT` → `KTE` 도 같은 경로다. 반대로 「KT&G」·「LS일렉트릭」·
+    #   「SK바이오팜」은 명부에 그 표기가 없어 None이 된다(법인명은
+    #   「케이티앤지」 등) — 34개 브랜드명 표본에서 실패 3 · 오해석 2.
+    #
+    # 고르는 규칙(가장 짧은 이름)은 바꾸지 않는다 — 무엇이 '옳은' 후보인지
+    # 일반적으로 정할 수 없다. 대신 **부분 일치였다는 사실과 다른 후보**를
+    # `alias_note`로 알린다(별칭 해석이 이미 쓰는 통로라 4개 도구가 그대로
+    # 표면화한다).
     matches = [(k, v) for k, v in _corp_cache.items() if query in k]
-    if len(matches) == 1:
-        return matches[0]
     if matches:
-        matches.sort(key=lambda x: len(x[0]))
-        return matches[0]
+        matches.sort(key=lambda x: (len(x[0]), x[0]))
+        name, info = matches[0][0], dict(matches[0][1])
+        others = [k for k, _ in matches[1:4]]
+        note = f"'{query}'와 정확히 일치하는 법인이 없어 부분 일치로 '{name}'을 조회했습니다"
+        if others:
+            more = f" 외 {len(matches) - 1 - len(others)}곳" if len(matches) - 1 > len(others) else ""
+            note += f" (다른 후보: {', '.join(others)}{more})"
+        info["alias_note"] = (
+            note + " — 다른 회사를 찾으신다면 정식 상호나 6자리 종목코드로 조회하세요"
+        )
+        return name, info
 
     return None
 
