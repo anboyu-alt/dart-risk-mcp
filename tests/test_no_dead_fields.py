@@ -29,6 +29,7 @@
 import ast
 import json
 import pathlib
+import re
 
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
 _FILES = ["dart_risk_mcp/server.py", "dart_risk_mcp/core/dart_client.py"]
@@ -109,3 +110,58 @@ def test_미확인_엔드포인트를_숨기지_않는다():
     unsampled = set(_KEYS["unsampled"])
     empty = {k for k, v in _KEYS["endpoints"].items() if not v}
     assert unsampled == empty, "unsampled 목록과 실제 빈 항목이 어긋난다"
+
+
+# ── 엔드포인트별 대조 ────────────────────────────────────────────────
+#
+# 위 검사는 **키 합집합**과 맞춘다. 그래서 어느 한 엔드포인트에만 있는
+# 이름은, 정작 읽는 쪽 응답에 없어도 통과한다 — `corp_name`이 그랬다
+# (#340: `fnlttMultiAcnt` 응답에 없는데 다른 엔드포인트엔 있어서
+# 폴백이 항상 걸렸고, 「━━ 005930 ━━」처럼 종목코드만 나왔다).
+#
+# `dart_client.py`의 fetch 함수는 대개 엔드포인트가 하나로 특정되므로
+# **그 엔드포인트의 키하고만** 맞출 수 있다. `fetch_debt_balance`의
+# `remndr_amount`(#315)를 소스에서 바로 잡았을 검사다.
+_EP_RE = re.compile(r"([A-Za-z][A-Za-z0-9]*)\.json")
+
+
+def _single_endpoint_funcs():
+    src = (_ROOT / "dart_risk_mcp" / "core" / "dart_client.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        body = ast.get_source_segment(src, fn) or ""
+        eps = {m.group(1) for m in _EP_RE.finditer(body)} & set(_KEYS["endpoints"])
+        # 표본이 없는 엔드포인트는 판정할 수 없다(「키가 없다」가 아니다)
+        eps = {e for e in eps if _KEYS["endpoints"][e]}
+        if len(eps) == 1:
+            yield fn, eps.pop()
+
+
+def test_엔드포인트별로도_죽은_필드가_없다():
+    envelope = set(_KEYS["endpoints"].get("_envelope", []))
+    bad = []
+    for fn, ep in _single_endpoint_funcs():
+        have = set(_KEYS["endpoints"][ep]) | envelope
+        reads, made = set(), set()
+        for n in ast.walk(fn):
+            if isinstance(n, ast.Dict):
+                made |= {k.value for k in n.keys
+                         if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+            if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                    and n.func.attr == "get" and n.args
+                    and isinstance(n.args[0], ast.Constant)
+                    and isinstance(n.args[0].value, str)):
+                reads.add(n.args[0].value)
+        for r in sorted(reads - have - made - _ACCEPTED):
+            if r.islower() and "_" in r and not r.startswith("_"):
+                bad.append((fn.name, ep, r))
+    assert not bad, (
+        "그 엔드포인트 응답에 없는 키를 읽는다:\n"
+        + "\n".join(f"  {f}() [{e}] → {k}" for f, e, k in bad)
+    )
+
+
+def test_대조_대상이_비어_있지_않다():
+    """짝지을 함수를 하나도 못 찾으면 검사가 헛돈다."""
+    n = len(list(_single_endpoint_funcs()))
+    assert n >= 8, f"엔드포인트가 특정되는 함수가 {n}개뿐이다"
