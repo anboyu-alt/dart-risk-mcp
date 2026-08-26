@@ -2503,6 +2503,31 @@ function sortKeyToUTCDate(sortKey) {
 // 출처: se/app.js:2854 fundChain — 자금사용 내역(원본 레코드)을 납입일
 // (pay_de) × 용도별로 묶는다. markNumber·isNoDataMarker·footnoteMarkerNote
 // 사용(원본 그대로).
+// core `classify_fund_use`(dart_client.py) 이식 — 자금 용도 4묶음.
+// 계획과 실제가 겹치지 않으면 용도가 바뀐 것이다. 못 읽으면 판정하지 않는다.
+// ⚠ 묶음을 더 쪼개면 정상 집행이 이탈로 잡힌다(원재료 매입 = 운영자금,
+// "R&D 센터 인프라 투자" = 시설자금). core와 **같은 넷**을 유지한다.
+const FUND_USE_CATEGORIES = [
+  ["타법인 취득", ["타법인", "출자증권", "지분취득", "주식취득", "출자", "영업양수", "인수자금"]],
+  ["채무 상환", ["채무상환", "차입금상환", "사채상환", "조기상환", "만기상환", "변제", "상환"]],
+  ["시설·자산", ["시설자금", "설비", "공장", "증설", "자산취득", "부동산", "토지", "건물", "인프라"]],
+  ["운영자금", ["운영자금", "운전자금", "일반운영", "원재료", "매입채무", "재료비", "인건비", "연구개발", "임상"]],
+];
+function classifyFundUse(text) {
+  const t = String(text == null ? "" : text).replace(/[\s]/g, "");
+  const out = [];
+  for (const [name, kws] of FUND_USE_CATEGORIES) {
+    if (kws.some((k) => t.includes(k.replace(/\s/g, "")))) out.push(name);
+  }
+  return out;
+}
+function fundUseShift(planText, realText) {
+  const p = classifyFundUse(planText), r = classifyFundUse(realText);
+  if (!p.length || !r.length) return null;
+  if (p.some((x) => r.includes(x))) return null;
+  return { plan: p, real: r };
+}
+
 function fundChain(records) {
   if (!Array.isArray(records)) return [];
   const groups = new Map();
@@ -2541,7 +2566,9 @@ function fundChain(records) {
       totalPlan += plan;
       const diffReason = isNoDataMarker(best.dffrnc_resn) ? null
         : footnoteMarkerNote(best.dffrnc_resn, isNoDataMarker(best.rcept_no) ? null : best.rcept_no);
-      useList.push({ purpose: purpose, plan: plan, real: markNumber(best.real_dtls_amount), diff_reason: diffReason, rows: useRows.length });
+      useList.push({ purpose: purpose, plan: plan, real: markNumber(best.real_dtls_amount),
+                     diff_reason: diffReason, rows: useRows.length,
+                     use_shift: fundUseShift(purpose, best.real_dtls_cn) });
     }
 
     out.push({ pay_de: payDe, sort_key: payDe === null ? null : axisSortKey(payDe), total_plan: totalPlan, uses: useList, row_count: rows.length });
@@ -2752,6 +2779,9 @@ function normalizeFundUsageItem(item, bsnsYear) {
     plan_useprps: String(planUseprps).trim(),
     plan_amount: planAmount,
     real_dtls_amount: item.real_cptal_use_dtls_amount !== undefined ? item.real_cptal_use_dtls_amount : null,
+    // 실제 집행 **문구**는 지금까지 가져오지 않았다 — 금액만 봤다. core가
+    // 계획↔실제 용도 묶음을 비교하게 되면서(2026-08-26) 여기서도 필요해졌다.
+    real_dtls_cn: String(item.real_cptal_use_dtls_cn || item.real_cptal_use_sttus || "").trim(),
     dffrnc_resn: (item.dffrnc_occrrnc_resn || "").trim(),
     rcept_no: item.rcept_no || null,
     bsns_year: bsnsYear,
@@ -2767,9 +2797,13 @@ function fundEntryCardHTML(entry) {
   const useTxt = entry.uses.filter((u) => u.purpose).slice(0, 3)
     .map((u) => `${esc(u.purpose)} ${fmtKRW(u.plan)}`).join("·");
   const hasDiff = entry.uses.some((u) => u.diff_reason);
+  const shifts = entry.uses.filter((u) => u.use_shift);
+  const shiftTxt = shifts.map((u) =>
+    `<div class="factline" style="margin-left:1rem">· 용도 분류: 계획 [${esc(u.use_shift.plan.join("·"))}]` +
+    ` → 실제 [${esc(u.use_shift.real.join("·"))}]</div>`).join("");
   return `<div class="factline">· ${esc(dateLabel)} 납입 · 계획 총 ${totalTxt}` +
     (useTxt ? `(${useTxt})` : "") +
-    (hasDiff ? ` · 집행 차이 사유 보고 있음` : "") + `</div>`;
+    (hasDiff ? ` · 집행 차이 사유 보고 있음` : "") + `</div>` + shiftTxt;
 }
 function fundHintListHTML(entry, hints) {
   if (entry.sort_key === null || entry.sort_key === undefined) return "";
