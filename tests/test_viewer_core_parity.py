@@ -37,7 +37,9 @@ _FUNCS = (
     "function tailOf(text)",
     "function parseReportName(",
     "function isAmendmentTag(",
-    "function isFalseAmendment(",
+    # `isFalseAmendment`는 2026-08-26에 **사라졌다** — core `_AMENDMENT_RE`가
+    # 규제기관 태그(`[정정명령부과]`)를 더 이상 정정으로 읽지 않아 우회가
+    # 필요 없어졌다.
     "function demotionReason(",
     "function adjustedLabel(",
     "function directionNote(",

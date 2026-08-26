@@ -1060,11 +1060,6 @@ function isAmendmentTag(tag) {
   return tags.includes(t) || t.endsWith("정정");
 }
 
-function isFalseAmendment(parsed) {
-  if (!parsed.tags.length) return false;
-  return !parsed.tags.some(isAmendmentTag);
-}
-
 function demotionReason(parsed, filing) {
   const r = qrules(), f = filing || {};
   const filer = String(f.flr_nm || "").trim();
@@ -1239,17 +1234,12 @@ function buildResult(name, stockCode, corpCode, items, bgn, end, totalCount) {
   for (const it of items) {
     const nm = it.report_nm || "";
     const parsed = parseReportName(nm);
-    let isAmend = AMEND_RE.test(nm);
-    // '[정정명령부과]'처럼 정정이 아닌 태그는 접두를 벗겨 재매칭한다.
-    let sigs = isAmend ? [] : matchSignals(nm);
-    if (!sigs.length && isAmend && isFalseAmendment(parsed)) {
-      sigs = matchSignals(nm.replace(/^(\[[^\]]*\])+/, ""));
-      // isFalseAmendment가 참 = 정정 꼬리표가 아니라는 단언이다. 서버
-      // (analyze_company_risk)도 여기서 is_amendment를 내린다 — 두 층이
-      // 같은 판정을 내야 한다(리뷰 C2). amendCount·정정 칩 라벨도 이
-      // 값으로 세야 칩 라벨과 필터 결과가 어긋나지 않는다.
-      isAmend = false;
-    }
+    // `[정정명령부과]`류 규제기관 조치를 정정공시로 오판하던 문제는
+    // 2026-08-26에 core `_AMENDMENT_RE`에서 고쳤고, 그 패턴이
+    // `signals-data.json`의 `amendment_pattern`으로 그대로 넘어온다 —
+    // 여기서 접두를 벗겨 재매칭하던 우회는 더 필요 없다.
+    const isAmend = AMEND_RE.test(nm);
+    const sigs = isAmend ? [] : matchSignals(nm);
     if (isAmend) amendCount++;
     // corp_name은 DART 행이 준 값이 우선이다. buildResult의 name은
     // corp-map.json·별칭으로 해석한 표시명이라, 주간 갱신 창 안의
@@ -4023,7 +4013,11 @@ function detailBlockHits(key, maxCheck) {
   const seen = new Set();
   const hits = [];
   for (const it of (CUR && CUR.items) || []) {
-    if (isAmendmentTag(it.report_nm) && !isFalseAmendment(it.report_nm)) continue;
+    // ⚠ 옛 줄은 `isAmendmentTag(it.report_nm)` — **태그** 자리에 제목을
+    // 통째로 넘겨 늘 false였다(필터가 한 번도 동작한 적이 없다). 뒤의
+    // `isFalseAmendment(문자열)`도 시그니처가 안 맞아 평가됐다면 던졌을
+    // 것이다(단락 평가 덕에 안 던졌을 뿐이다).
+    if (AMEND_RE.test(it.report_nm || "")) continue;
     const q = qualifySignals(matchSignals(it.report_nm), parseReportName(it.report_nm),
                              Object.assign({}, it));
     if (!q.some((s) => s.key === key && isObservedSig(s))) continue;
