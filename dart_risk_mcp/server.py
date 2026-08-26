@@ -5210,8 +5210,12 @@ def scan_financial_anomaly(
             else:
                 # 음수=둔화/감소, 양수=상승
                 trend = f"전년 대비 {dp:+.1f}%"
+            # ⚠ 바로 위 표는 「당기 | 전기」 순인데 이 줄은 **전기 → 당기**다.
+            #   라벨이 없으면 읽는 사람이 방향을 뒤집어 읽는다 — 셀트리온
+            #   실물에서 순이익률이 11.78% → 24.78%로 **두 배가 된** 해인데,
+            #   표 순서에 익숙해진 눈에는 '떨어졌다'로 보인다(2026-08-25).
             lines.append(
-                f"- {m['name']}  {pv:.2f}{unit} → {cv:.2f}{unit}  ({trend})"
+                f"- {m['name']}  전기 {pv:.2f}{unit} → 당기 {cv:.2f}{unit}  ({trend})"
             )
 
     # Beneish 연구 변수 — 지수 사실 표기만, 합산 점수·판정 없음(v0.8.5 원칙).
@@ -5306,8 +5310,13 @@ def scan_financial_anomaly(
             lines.append("")
     else:
         lines.append(
-            "네 지표 모두 정상 범위입니다. 단, 재무제표는 감사 전 수치가 포함될 "
-            "수 있어 스크리닝 참고용으로만 활용하세요."
+            # 옛 문구는 「네 지표」였다 — v0.8.x 이후 플래그가 9종(AR_SURGE·
+            # INVENTORY_SURGE·CASH_GAP·CAPITAL_IMPAIRMENT·CFS_OFS_REVERSAL·
+            # LOAN_ADVANCE_SURGE·RESTATEMENT·OPNET_POS_NEG·OPNET_NEG_POS)으로
+            # 늘었는데 숫자만 남아 **검사 범위를 실제보다 좁게** 말했다.
+            # 개수를 박아 두면 또 낡으므로 세지 않는다.
+            "위 지표에서는 이상이 감지되지 않았습니다. 단, 재무제표는 감사 전 "
+            "수치가 포함될 수 있어 스크리닝 참고용으로만 활용하세요."
         )
         lines.append("")
 
