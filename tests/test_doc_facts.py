@@ -88,6 +88,13 @@ def test_테스트_수는_어림수로_적는다():
     )
 
 
+# ⚠ 테스트 **개수**는 여기서 검사하지 않는다. 2026-08-26에 AST로 어림해
+# 오차를 재려다 그만뒀다 — `def test_` + parametrize로 세면 2,320이고 pytest는
+# 3,054를 센다(중첩 parametrize·subtest 때문). **틀린 자를 들이대면 문서를
+# 틀린 값으로 끌고 간다.** 재려면 `python -m pytest tests/ -q`의 마지막 줄을
+# 보고 README의 어림수를 손으로 맞춘다(2026-08-26: 2,300여 → 3,000여).
+
+
 @pytest.mark.parametrize("n,label", [
     (len(TAXONOMY), "taxonomy"),
     (len(CROSS_SIGNAL_PATTERNS), "패턴"),
