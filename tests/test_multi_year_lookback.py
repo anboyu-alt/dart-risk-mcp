@@ -76,7 +76,7 @@ def test_list_disclosures_passes_years_to_core(monkeypatch):
 
     out = srv.list_disclosures_by_stock("012345", lookback_years=3)
     assert captured["lookback_days"] == 3 * 365
-    assert captured["max_pages"] == 50
+    assert captured["max_pages"] == 60
     assert (captured["bgn_de"], captured["end_de"]) == ("", "")
     assert "최근 3년" in out  # 다년 라벨
     assert "예상 출력 규모" in out  # years>1 푸터
@@ -109,7 +109,7 @@ def test_lookback_days_alias_backward_compat(monkeypatch):
         out = srv.list_disclosures_by_stock("012345", lookback_days=90)
 
     assert captured["lookback_days"] == 90  # 일 단위 그대로(구버전 동작)
-    assert captured["max_pages"] == 10  # 구버전 기본 페이지 상한
+    assert captured["max_pages"] == 50  # 창이 같으면 예산도 같다(2026-08-26)
     assert "최근 90일" in out  # 구버전 라벨
     assert "예상 출력 규모" not in out  # 1년 미만 → 푸터 없음
     assert any(issubclass(x.category, DeprecationWarning) for x in w)
@@ -118,11 +118,11 @@ def test_lookback_days_alias_backward_compat(monkeypatch):
 def test_resolve_lookback_years_path_parity():
     """years 경로: years==1 → 365일 라벨(골든 패리티).
 
-    max_pages는 2026-08-23부터 창과 무관하게 최소 50이다 — 옛 years*10은
-    1년 조회에서 대형사를 절단했다(삼성전자 1년 2,891건 중 1,000건만).
-    일수·라벨은 그대로라 골든 패리티는 유지된다.
+    max_pages는 `_page_budget`(1년당 20페이지·하한 50)이 정한다. 2026-08-26
+    실측에서 50페이지 고정은 5년 조회를 잘랐다(미래에셋증권 5년 8,452건 중
+    5,000건만). 일수·라벨은 그대로라 골든 패리티는 유지된다.
     """
     assert srv._resolve_lookback(1, None) == (365, 50, "365일")
-    assert srv._resolve_lookback(3, None) == (1095, 50, "3년")
+    assert srv._resolve_lookback(3, None) == (1095, 60, "3년")
     # 범위 클램프(1~5)
-    assert srv._resolve_lookback(99, None) == (1825, 50, "5년")
+    assert srv._resolve_lookback(99, None) == (1825, 100, "5년")
