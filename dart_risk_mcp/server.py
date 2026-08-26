@@ -4619,8 +4619,10 @@ def track_debt_balance(company_name: str, year: str = "") -> str:
     data = fetch_debt_balance(info["corp_code"], api_key, year)
     if data["total"] <= 0:
         return (
-            f"💰 **{corp_name}** ({info.get('stock_code','')}) — 채무증권 잔액 "
-            f"({data['year'] or year or '최근'})\n\n"
+            # 머리글은 데이터 유무와 무관하게 같은 형식을 쓴다 — 같은 도구가
+            # 상황에 따라 자기 이름을 다르게 대면 출력 계약이 깨진다.
+            f"💰 **{corp_name}** ({info.get('stock_code','')}) — 미상환 채무증권 잔액 "
+            f"({data['year'] or year or '최근'}년)\n\n"
             "미상환 채무증권 잔액이 없거나 해당 공시를 찾지 못했습니다. "
             "비상장·소규모 기업이거나 채무증권 발행 실적이 없는 경우입니다."
         )

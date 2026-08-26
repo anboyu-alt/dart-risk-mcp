@@ -1,4 +1,14 @@
-"""fetch_debt_balance / detect_debt_rollover 파싱·집계·판정 검증."""
+"""fetch_debt_balance / detect_debt_rollover 파싱·집계·판정 검증.
+⚠ 2026-08-25 — 이 파일의 가짜 응답은 오래 `remndr_amount`·
+`remndr_within1y_amount`를 썼다. **DART에는 그런 필드가 없다.** 테스트는
+통과했지만 실제로는 `fetch_debt_balance`가 **모든 회사에서 늘 빈 결과**였고,
+그 위에 선 `track_debt_balance`·「채무증권 잔액 추이」·`CB_ROLLOVER`가 통째로
+죽어 있었다(8개사 스윕에서 세 블록 전부 0/8).
+
+**존재하지 않는 계약을 검증하는 테스트는 통과할수록 위험하다** — 이 세션의
+「테스트 픽스처는 원문 그대로」 교훈과 같은 종류다. 이제 실제 응답 모양
+(공모·사모·**합계** 3행 · 금액 `sm` · 만기 `yy1_below`)을 쓴다.
+"""
 import unittest
 from unittest.mock import patch, MagicMock
 
@@ -23,11 +33,11 @@ class TestFetchDebtBalance(unittest.TestCase):
     def test_aggregates_five_endpoints_total(self, mock_retry):
         # 5개 엔드포인트 각 1억씩 → 총 5억
         mock_retry.side_effect = [
-            _resp(lst=[{"remndr_amount": "100000000", "remndr_within1y_amount": "50000000"}]),
-            _resp(lst=[{"remndr_amount": "100000000", "remndr_within1y_amount": "0"}]),
-            _resp(lst=[{"remndr_amount": "100000000", "remndr_within1y_amount": "0"}]),
-            _resp(lst=[{"remndr_amount": "100000000", "remndr_within1y_amount": "0"}]),
-            _resp(lst=[{"remndr_amount": "100000000", "remndr_within1y_amount": "0"}]),
+            _resp(lst=[{"remndr_exprtn2": "공모", "sm": "100000000", "yy1_below": "50000000"}, {"remndr_exprtn2": "사모", "sm": "-", "yy1_below": "-"}, {"remndr_exprtn2": "합계", "sm": "100000000", "yy1_below": "50000000"}]),
+            _resp(lst=[{"remndr_exprtn2": "공모", "sm": "100000000", "yy1_below": "0"}, {"remndr_exprtn2": "사모", "sm": "-", "yy1_below": "-"}, {"remndr_exprtn2": "합계", "sm": "100000000", "yy1_below": "0"}]),
+            _resp(lst=[{"remndr_exprtn2": "공모", "sm": "100000000", "yy1_below": "0"}, {"remndr_exprtn2": "사모", "sm": "-", "yy1_below": "-"}, {"remndr_exprtn2": "합계", "sm": "100000000", "yy1_below": "0"}]),
+            _resp(lst=[{"remndr_exprtn2": "공모", "sm": "100000000", "yy1_below": "0"}, {"remndr_exprtn2": "사모", "sm": "-", "yy1_below": "-"}, {"remndr_exprtn2": "합계", "sm": "100000000", "yy1_below": "0"}]),
+            _resp(lst=[{"remndr_exprtn2": "공모", "sm": "100000000", "yy1_below": "0"}, {"remndr_exprtn2": "사모", "sm": "-", "yy1_below": "-"}, {"remndr_exprtn2": "합계", "sm": "100000000", "yy1_below": "0"}]),
         ]
         r = dart_client.fetch_debt_balance("00000001", "KEY", "2024")
         self.assertEqual(r["total"], 500_000_000)
@@ -38,7 +48,7 @@ class TestFetchDebtBalance(unittest.TestCase):
     def test_maturity_1y_share_calculation(self, mock_retry):
         # 총 1,000,000,000 중 1년 이내 300,000,000 → 30%
         mock_retry.side_effect = [
-            _resp(lst=[{"remndr_amount": "1000000000", "remndr_within1y_amount": "300000000"}]),
+            _resp(lst=[{"remndr_exprtn2": "공모", "sm": "1000000000", "yy1_below": "300000000"}, {"remndr_exprtn2": "사모", "sm": "-", "yy1_below": "-"}, {"remndr_exprtn2": "합계", "sm": "1000000000", "yy1_below": "300000000"}]),
             _resp(lst=[]),
             _resp(lst=[]),
             _resp(lst=[]),
@@ -58,9 +68,9 @@ class TestFetchDebtBalance(unittest.TestCase):
     @patch("dart_risk_mcp.core.dart_client._retry")
     def test_partial_failure_one_endpoint(self, mock_retry):
         mock_retry.side_effect = [
-            _resp(lst=[{"remndr_amount": "100000000", "remndr_within1y_amount": "0"}]),
+            _resp(lst=[{"remndr_exprtn2": "공모", "sm": "100000000", "yy1_below": "0"}, {"remndr_exprtn2": "사모", "sm": "-", "yy1_below": "-"}, {"remndr_exprtn2": "합계", "sm": "100000000", "yy1_below": "0"}]),
             _resp(status="013"),  # 실패
-            _resp(lst=[{"remndr_amount": "200000000", "remndr_within1y_amount": "0"}]),
+            _resp(lst=[{"remndr_exprtn2": "공모", "sm": "200000000", "yy1_below": "0"}, {"remndr_exprtn2": "사모", "sm": "-", "yy1_below": "-"}, {"remndr_exprtn2": "합계", "sm": "200000000", "yy1_below": "0"}]),
             _resp(lst=[]),
             _resp(lst=[]),
         ]
