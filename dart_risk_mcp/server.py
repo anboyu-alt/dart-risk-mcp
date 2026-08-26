@@ -123,6 +123,31 @@ from .core.qualifiers import (
 )
 from .core.signals import SIGNAL_LABELS, strip_amendment_prefix
 
+def _holder_key(v: str) -> str:
+    """보고자 이름을 묶기 위한 키 — **공백을 전부 지운다**.
+
+    DART가 보고자명에 개행과 이중 공백을 섞어 보내, `strip()`만 하면 같은
+    사람이 2~3명으로 갈린다. 이 도구의 존재 이유가 한 주체의 Δ 시계열인데
+    이름이 갈리면 그 시계열이 끊기고 클러스터 탐지도 함께 놓친다.
+
+    실측(20개사, 2026-08-25) 9건 — 카카오 「최용석 (주1)」이 세 변형으로,
+    삼성전자·SK하이닉스는 개행 유/무로, 이오플로우는 영문명의 공백 유/무로
+    갈려 있었다.
+
+    한 칸으로 줄이는 것으로는 부족하다 — 영문명은 한쪽에만 공백이 있어
+    (`Citadel Multi-Asset…` vs `CitadelMulti-Asset…`) 전부 지워야 묶인다.
+    """
+    return re.sub(r"\s+", "", v or "")
+
+
+def _holder_display(v: str) -> str:
+    """화면에 쓸 보고자 이름 — 개행만 공백으로 펴고 다듬는다.
+
+    묶음 키(`_holder_key`)는 공백이 지워진 형태라 그대로 출력하면 읽기 나쁘다.
+    """
+    return re.sub(r"\s+", " ", (v or "").strip())
+
+
 mcp = FastMCP("dart-risk-analyzer")
 
 _DART_API_KEY: str = os.environ.get("DART_API_KEY", "")
@@ -4232,6 +4257,20 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
         source_label = _SOURCE_LABEL.get(src, "기타")
         return (holder, ratio, date, source_label)
 
+    # DART가 보고자명에 **개행과 이중 공백**을 섞어 보낸다. `strip()`만 하면
+    # 같은 사람이 2~3명으로 갈리고, 이 도구의 존재 이유인 Δ 시계열이 그만큼
+    # 끊긴다. 실측(20개사, 2026-08-25) — 9건:
+    #
+    #   카카오      '최용석 (주1)' · '최용석  (주1)' · '최용석  \n(주1)'   3개
+    #   삼성전자     '삼성생명보험(특별계정)'  개행이 섞인 변형과 안 섞인 변형
+    #   SK하이닉스   'SK스퀘어' · 'SK스퀘어' + \n 변형
+    #   이오플로우    'Citadel Multi-Asset Master Fund Ltd.' · 'CitadelMulti-Asset...'
+    #   코아스       '백운조합' · '백운 조합'
+    #
+    # 묶는 키는 **공백을 전부 지운다**(영문명은 한쪽에만 공백이 있어 한 칸으로
+    # 줄이는 것만으로는 안 묶인다). 화면에 쓰는 이름은 개행만 공백으로 펴서
+    # 읽을 수 있게 두고, 변형 중 **가장 긴 것**을 고른다 — 공백이 살아 있는
+    # 쪽이라 사람이 읽기 좋다.
     _SOURCE_LABEL = {
         "elestock":      "대량보유",
         "hyslr":         "최대주주",
@@ -4242,6 +4281,7 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
     # ── 보고자별 시계열 구성 ──────────────────────────────────
     from collections import defaultdict
     timeline: dict[str, list[tuple[float, str, str]]] = defaultdict(list)
+    holder_names: dict[str, str] = {}   # 묶음 키 → 화면에 쓸 이름
     treasury_count = 0
     # lookback 윈도우 cutoff (hyslr_chg는 전체 이력을 반환하므로 연도 외 데이터 필터)
     cutoff_dt = datetime.now() - timedelta(days=lookback_years * 365)
@@ -4265,7 +4305,11 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
             rec_dt = None
         if rec_dt is not None and rec_dt < cutoff_dt:
             continue
-        timeline[holder].append((ratio, date, src_label))
+        _hk = _holder_key(holder)
+        _disp = _holder_display(holder)
+        if len(_disp) > len(holder_names.get(_hk, "")):
+            holder_names[_hk] = _disp
+        timeline[_hk].append((ratio, date, src_label))
 
     lines = [
         f"━━━ [{corp_name}] 임원·대주주 지분 변동 시계열 (최근 {lookback_years}년) ━━━",
@@ -4286,7 +4330,9 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
 
     import datetime as _dt
 
-    for holder, rows in timeline.items():
+    for _hk, rows in timeline.items():
+        # 묶음 키는 공백을 지운 형태라 화면에는 쓰지 않는다.
+        holder = holder_names.get(_hk, _hk)
         # rows: list[(ratio, date_yyyymmdd, source_label)]
         rows_sorted = sorted(rows, key=lambda r: r[1])
         # ── 인접 중복 dedup: 같은 ratio가 연속되면 첫 1건만 유지 (분기 4회 호출 노이즈 억제)
