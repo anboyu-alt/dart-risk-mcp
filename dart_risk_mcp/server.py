@@ -1598,11 +1598,13 @@ def analyze_company_risk(
             if sig["key"] == "CB_BW" and not is_amendment and rcept_no:
                 cb_rcept_nos.append(rcept_no)
 
-    # v0.5.0: DS005 결정 공시 최신 10건 구조화 ------------------
-    decision_items = [
+    # DS005 결정 공시 — **최신 10건까지만** 구조화 조회한다(건당 API 1회).
+    # 조회 예산 상한이라 렌더가 아니라 여기서 세고, 넘치면 아래에서 적는다.
+    _decision_all = [
         d for d in disclosures
         if resolve_decision_type(d.get("report_nm", ""))
-    ][:10]
+    ]
+    decision_items = _decision_all[:10]
     decisions: list[tuple[dict, dict]] = []
     failed_decisions = 0
     for _d in decision_items:
@@ -1965,6 +1967,14 @@ def analyze_company_risk(
             amt = _format_amount(inv.get("amount", ""))
             lines.append(f"• {inv['name']}" + (f" — {amt}" if amt else ""))
 
+        if len(cb_rcept_nos) > 3:
+            # 이 목록은 창 전체가 아니라 **최근 3건의 원문**에서 나온다.
+            # 그 사실을 안 적으면 인수자 명단이 전수처럼 읽힌다.
+            lines.append(
+                f"  (이 기간 CB/BW 공시 {len(cb_rcept_nos)}건 중 최근 3건의 "
+                f"원문만 확인했습니다 — 나머지 인수자는 목록에 없습니다)"
+            )
+
     # v0.5.0: 주요 결정 상대방 섹션 ---------------------------
     if decisions:
         lines += [
@@ -1988,6 +1998,11 @@ def analyze_company_risk(
                     lines.append(f"    • **주목할 이유:** {title}")
         if failed_decisions:
             lines.append(f"  (추가 {failed_decisions}건 구조화 조회 실패)")
+        if len(_decision_all) > len(decision_items):
+            lines.append(
+                f"  (이 기간 결정 공시는 {len(_decision_all)}건이며 최신 "
+                f"{len(decision_items)}건만 구조화 조회했습니다)"
+            )
 
     # v1.6.1: 자금유출·양수거래(+처분) 상대방 확인 섹션 -----------
     # capital_backflow 게이트가 이미 이 내용을 사실 블록으로 표기한 경우
@@ -2043,6 +2058,8 @@ def analyze_company_risk(
             f"💰 **조달자금 사용내역** (최근 3년, {len(fund_records)}건, "
             f"이상 {len(_anomaly_recs)}건)",
         ]
+        # 헤더가 "이상 N건"이라 적어 놓고 다섯 건만 보여 주면 나머지가
+        # 어디 갔는지 알 수 없다 — 자른 만큼을 적는다.
         for _r in _anomaly_recs[:5]:
             lines.append(
                 f"- {_format_fund_year_prefix(_r)} "
@@ -2053,6 +2070,8 @@ def analyze_company_risk(
                 title, _ = flag_to_prose(f)
                 if title:
                     lines.append(f"    • **주목할 이유:** {title}")
+        if len(_anomaly_recs) > 5:
+            lines.append(f"- ... 외 {len(_anomaly_recs) - 5}건 (같은 형식)")
 
     # v0.9.0: 부실 후속 단계 진입 경고 — 사실 표기만(점수 가산 없음)
     if distress_events:
@@ -2236,7 +2255,6 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
                 for inv in investors:
                     amt = _format_amount(inv.get("amount", ""))
                     lines.append(f"• {inv['name']}" + (f" — {amt}" if amt else ""))
-
     # v0.5.0: DS005 결정 공시면 구조화 필드 추가 ---------------
     dtype = resolve_decision_type(report_name)
     if dtype and rcept_no and _DART_API_KEY:
@@ -2727,6 +2745,12 @@ def build_event_timeline(
             for inv in investors:
                 amt = _format_amount(inv.get("amount", ""))
                 lines.append(f"  • {inv['name']}" + (f" — {amt}" if amt else ""))
+            if len(cb_rcept_list) > 3:
+                # 이 명단은 창 전체가 아니라 최근 3건의 원문에서 나온다.
+                lines.append(
+                    f"  (이 기간 CB/BW 공시 {len(cb_rcept_list)}건 중 최근 "
+                    f"3건의 원문만 확인했습니다)"
+                )
             lines.append("")
 
     # v0.6.0 재무 징후 블록 (공시 이벤트가 아닌 스칼라 판정)
@@ -3005,6 +3029,7 @@ def find_actor_overlap(
     # 기업당 CB 최대 3건 + 유상증자 최대 3건 (각 소스 독립 상한, 총 ≤ 6건)
     # 공통 상한을 쓰면 CB 공시가 많은 기업에서 유상증자 몫을 빼앗겨 "머지"가 CB-only로 회귀함
     MAX_DOCS_PER_SOURCE = 3
+    capped_corps: list[str] = []   # 상한에 걸려 원문을 다 못 연 회사
 
     # actor_map: {"actor_name": [(company, source, amount, rcept_no, role), ...]}
     # role은 임원 항목에만 채워진다(직위/등기 여부) — 동명이인을 눈으로
@@ -3059,6 +3084,12 @@ def find_actor_overlap(
             if (len(cb_rcepts) >= MAX_DOCS_PER_SOURCE
                     and len(rights_rcepts) >= MAX_DOCS_PER_SOURCE):
                 break
+
+        # 상한은 원문 조회 예산이라 필요하지만, 걸렸다는 사실은 적어야
+        # 한다 — 이 도구의 결론이 "겹치는 사람이 없다"이기 때문이다.
+        if (len(cb_rcepts) >= MAX_DOCS_PER_SOURCE
+                or len(rights_rcepts) >= MAX_DOCS_PER_SOURCE):
+            capped_corps.append(corp_name)
 
         investors: list[tuple] = []  # (source, inv_dict, rcept_no)
         for rn in cb_rcepts:
@@ -3201,9 +3232,16 @@ def find_actor_overlap(
                 f"[{' · '.join(source_set)}] 경로로 등장: "
                 f"{', '.join(shown)}"
             )
+    if capped_corps:
+        lines.append(
+            f"  ℹ️ 원문 조회 상한(기업당 CB 3건 + 유상증자 3건)에 걸린 회사: "
+            f"{', '.join(capped_corps)} — 이 회사들의 나머지 공시 인수자는 "
+            f"비교에 들어가지 않았습니다."
+        )
     lines.append("")
 
-    lines.append("━━ 회사별 전체 인수자·임원 명단 (중복 제거) ━━")
+    lines.append("━━ 회사별 인수자·임원 명단 (중복 제거) ━━" if capped_corps else
+                 "━━ 회사별 전체 인수자·임원 명단 (중복 제거) ━━")
     for corp_name, entries in per_company_solo.items():
         # (name, source) 단위로 묶고, 임원은 연도라벨을 합집합으로 모은다
         seen: dict[tuple, set] = {}
@@ -3218,7 +3256,8 @@ def find_actor_overlap(
         if not seen:
             continue
         lines.append(f"  • {corp_name} — 총 {len(seen)}명:")
-        for (name, source), years in sorted(seen.items())[:10]:
+        _people = sorted(seen.items())
+        for (name, source), years in _people[:10]:
             if source == "임원" and years:
                 role = "/".join(sorted(roles_of.get((name, source)) or ()))
                 suffix = f", {role}" if role else ""
@@ -3226,6 +3265,10 @@ def find_actor_overlap(
                     f"      [임원] {name} ({', '.join(sorted(years))}{suffix})")
             else:
                 lines.append(f"      [{source}] {name}")
+
+        if len(_people) > 10:
+            # "총 N명"은 위에 적히지만 목록이 잘렸다는 말은 없었다.
+            lines.append(f"      ... 외 {len(_people) - 10}명")
 
     no_data = [cn for cn in analyzed if cn not in per_company_solo]
     if no_data:
@@ -5008,7 +5051,9 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
                 continue
             seen_div.add(key)
             cash_dividends.append(r)
-        for r in sorted(cash_dividends, key=lambda x: (x.get("bsns_year", ""), x.get("se", "")))[:20]:
+        _div_rows = sorted(cash_dividends,
+                           key=lambda x: (x.get("bsns_year", ""), x.get("se", "")))
+        for r in _div_rows[:20]:
             yr = r.get("bsns_year", "-")
             se = r.get("se", "-")
             kn = r.get("stock_knd", "-")
@@ -5018,6 +5063,8 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
                 f"- {yr}  {se} ({kn})  당기 {ts} / 전기 {fr}"
             )
 
+        if len(_div_rows) > 20:
+            lines.append(f"   ... 외 {len(_div_rows) - 20}건")
         # DIVIDEND_DRAIN 검출 — alotMatter 자체에 같은 (bsns_year,
         # reprt_code) 그룹으로 bundling된 (연결)/(별도) 당기순이익을
         # 그대로 사용한다(별도 재무제표 조회 없음, v1.6.x 재설계).
@@ -5041,6 +5088,8 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
                     f"{fl['dividend']:,.0f}백만원  → 자금 유출 경로 검토 권장"
                 )
 
+            if len(drain_flags) > 5:
+                lines.append(f"   ... 외 {len(drain_flags) - 5}건")
     return "\n".join(lines)
 
 
