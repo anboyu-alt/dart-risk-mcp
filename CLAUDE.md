@@ -122,7 +122,7 @@ dart_risk_mcp/
 
 - 실제 과거 공시 검색은 하지 않음 (taxonomy 정적 데이터 조회)
 - `SIGNAL_KEY_TO_TAXONOMY`로 신호 키 → taxonomy ID(1.1~8.5) 매핑 후 조회
-- 사용 가능한 신호 키 (아래 표 33개, 8개 카테고리):
+- 사용 가능한 신호 키 (아래 표 36개, 8개 카테고리):
 
   > ⚠ 아래 키 중 16종(`CB_REPAY`·`CB_BUYBACK`·`CB_ROLLOVER`·`TREASURY_EB`·`BUYBACK_NEG`·`MEETING_VIOL`·`ACTIVIST`·`DISTRESS_MA`·`GAMJA_MERGE`·`CAPITAL_RED`·`RIGHTS_UNDER`·`ASSET_SPIRAL`·`CIRCULAR`·`REVENUE_IRREG`·`CONTINGENT`·`THEME_STOCK`)은 **공시 제목으로 발화하지 않는다**(`core/signals.py`의 `NON_TITLE_SIGNALS`). `find_risk_precedents`로 조회하면 그 사실이 함께 표시된다.
 
@@ -131,11 +131,11 @@ dart_risk_mcp/
   | Cat 1 CB/채권 | `CB_BW`, `CB_REPAY`, `EB`, `RCPS`, `CB_ROLLOVER`, `CB_BUYBACK`, `TREASURY_EB` |
   | Cat 2 자본구조 | `REVERSE_SPLIT`, `GAMJA_MERGE`, `3PCA`, `RIGHTS_UNDER`, `TREASURY` |
   | Cat 3 경영권 | `SHAREHOLDER`, `EXEC`, `MGMT_DISPUTE`, `CIRCULAR`, `STAKE_PLEDGE` |
-  | Cat 4 거버넌스 | `RELATED_PARTY`, `AUDIT` |
-  | Cat 5 기업활동 | `ASSET_TRANSFER`, `DEMERGER`, `MGMT`, `FUND_OUTFLOW`, `ACQ_REVIEW` |
+  | Cat 4 거버넌스 | `RELATED_PARTY`, `AUDIT`, `DISCLOSURE_VIOL` |
+  | Cat 5 기업활동 | `ASSET_TRANSFER`, `DEMERGER`, `MGMT`, `FUND_OUTFLOW`, `ACQ_REVIEW`, `EQUITY_SPLIT` |
   | Cat 6 회계/재무 | `REVENUE_IRREG`, `CONTINGENT` |
   | Cat 7 시장조작 | `INQUIRY`, `EMBEZZLE` |
-  | Cat 8 위기/부실 | `INSOLVENCY`, `DEBT_RESTR`, `GOING_CONCERN`, `DELISTING_RISK`, `WATCH_ISSUE` |
+  | Cat 8 위기/부실 | `INSOLVENCY`, `DEBT_RESTR`, `GOING_CONCERN`, `DELISTING_RISK`, `WATCH_ISSUE`, `EARNINGS_SHOCK` |
 
   > `GOING_CONCERN`의 표시 라벨은 **「회생·파산 절차」**다(v1.18.4). 1년 전수에서 이 신호를 켜는 제목은 전부 회생·파산 절차이고(107건), 옛 라벨이 가리키던 "계속기업" 표기는 DART 공시 제목에 **0건**이다(감사보고서 본문에만 있다). taxonomy는 8.4 그대로 — 회생절차 개시신청은 계속기업 의문의 후속 단계다. 국면에 따라 뜻이 정반대라(개시 83 · **폐지 12**(회생 실패→파산, 더 나쁨) · **종결 5**(회생 성공, 위험 신호 아님)) 종결에만 방향 안내를 붙인다.
 
