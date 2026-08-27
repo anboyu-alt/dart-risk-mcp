@@ -63,7 +63,7 @@ CELLTRION_NONAUDIT = [{"cntrct_cncls_de": "2025.03",
 class TestNoRatioWarning:
     def test_단위가_어긋난_실측값에도_경고가_없다(self):
         h = _history(CELLTRION_AUDIT, CELLTRION_NONAUDIT)
-        assert h["independence_warnings"] == []
+        assert "independence_warnings" not in h  # 2026-08-27 키 자체를 제거
 
     def test_계약_건수를_사실로_남긴다(self):
         h = _history(CELLTRION_AUDIT, CELLTRION_NONAUDIT)
@@ -82,7 +82,7 @@ class TestRender:
     def _out(self, contracts, warnings=()):
         data = {"opinions": [{"year": 2025, "opinion": "적정",
                               "auditor": "A회계법인", "tenure_years": 1}],
-                "auditor_changes": [], "independence_warnings": list(warnings),
+                "auditor_changes": [],
                 "non_audit_contracts": contracts}
         with patch.object(srv, "_DART_API_KEY", "k"), \
              patch.object(srv, "resolve_corp",

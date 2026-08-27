@@ -5078,7 +5078,6 @@ def check_disclosure_anomaly(
     # (비감사용역 비중 경고는 단위 문제로 2026-08-23에 제거).
     _audit_struct = fetch_audit_opinion_history(corp_code, _DART_API_KEY, 5)
     _auditor_change_count = len(_audit_struct.get("auditor_changes", []))
-    _indep_warnings = _audit_struct.get("independence_warnings", [])
 
     def _top3(items: list[str]) -> str:
         shown = items[:3]
@@ -5139,12 +5138,12 @@ def check_disclosure_anomaly(
             f"  ⚠ 최근 5년간 감사인 교체 {_auditor_change_count}회 "
             "— 감사 독립성 훼손 가능성이 제기되는 맥락입니다."
         )
-    # 비감사용역 비중 경고는 2026-08-23에 뺐다 — 단위가 없는 금액으로
-    # 계산한 비율이라 12개사 중 4개사에 잘못 떴다(core 주석 참고).
-    if _indep_warnings:
-        lines.append(
-            f"  ⚠ 비감사용역 비중 초과 연도: {', '.join(_indep_warnings)}."
-        )
+    # 비감사용역 **비중** 경고는 2026-08-23에 뺐다 — 단위가 실려 오지 않는
+    # 금액으로 계산한 비율이라 12개사 중 4개사에 잘못 떴다(core 주석 참고).
+    # 그런데 렌더 블록과 `independence_warnings` 키가 **남아 있었다** —
+    # 값이 채워지는 곳이 없어 절대 발화하지 않는데, 그걸 가짜로 채워 넣는
+    # 테스트가 있어 "동작한다"고 보였다(2026-08-27 제거). 죽은 블록은
+    # 나중에 누군가 '고쳐서' 되살릴 수 있다.
     lines += [
         "",
         f"**③ 공시의무 위반** ({len(viol_hits)}건)",

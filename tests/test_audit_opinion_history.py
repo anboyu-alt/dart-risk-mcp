@@ -108,7 +108,7 @@ class TestFetchAuditOpinionHistory(unittest.TestCase):
                         "servc_cn": "세무", "mendng": "300000000"}],
         )
         r = dart_client.fetch_audit_opinion_history("00000001", "KEY", 5)
-        self.assertEqual(r["independence_warnings"], [])
+        self.assertNotIn("independence_warnings", r)  # 2026-08-27 제거
         self.assertEqual(r["non_audit_contracts"], {2025: 1})
 
     @patch("dart_risk_mcp.core.dart_client._retry")
@@ -120,7 +120,7 @@ class TestFetchAuditOpinionHistory(unittest.TestCase):
                         "servc_cn": "세무", "mendng": "100000000"}],
         )
         r = dart_client.fetch_audit_opinion_history("00000001", "KEY", 5)
-        self.assertEqual(r["independence_warnings"], [])
+        self.assertNotIn("independence_warnings", r)  # 2026-08-27 제거
 
     @patch("dart_risk_mcp.core.dart_client._retry")
     def test_partial_failure_one_endpoint(self, mock_retry):
@@ -141,11 +141,11 @@ class TestFetchAuditOpinionHistory(unittest.TestCase):
         r = dart_client.fetch_audit_opinion_history("00000001", "KEY", 5)
         self.assertEqual(r["opinions"], [])
         self.assertEqual(r["auditor_changes"], [])
-        self.assertEqual(r["independence_warnings"], [])
+        self.assertNotIn("independence_warnings", r)  # 2026-08-27 제거
 
     def test_rejects_empty_corp_code(self):
         r = dart_client.fetch_audit_opinion_history("", "KEY", 5)
-        self.assertEqual(r, {"opinions": [], "auditor_changes": [], "independence_warnings": []})
+        self.assertEqual(r, {"opinions": [], "auditor_changes": []})
 
     def test_rejects_empty_api_key(self):
         r = dart_client.fetch_audit_opinion_history("00000001", "", 5)
@@ -190,38 +190,17 @@ class TestCheckDisclosureAnomalyAuditBonus(unittest.TestCase):
                 {"from_year": 2023, "to_year": 2024, "from": "A", "to": "B"},
                 {"from_year": 2024, "to_year": 2025, "from": "B", "to": "C"},
             ],
-            "independence_warnings": [],
         }
         result = server.check_disclosure_anomaly("테스트", lookback_years=1)
         self.assertIn("감사인 교체 2회", result)
         # v0.8.5: 점수 가산(+5점) 표기 제거 — 경고 문구만 확인
         self.assertIn("감사 독립성", result)
 
-    @patch("dart_risk_mcp.server._DART_API_KEY", "KEY")
-    @patch("dart_risk_mcp.server.fetch_audit_opinion_history")
-    @patch("dart_risk_mcp.server.match_signals")
-    @patch("dart_risk_mcp.server.fetch_company_disclosures_with_status")
-    @patch("dart_risk_mcp.server.resolve_corp")
-    def test_audit_bonus_from_non_audit_warning(
-        self, mock_resolve, mock_fetch, mock_match, mock_audit_hist
-    ):
-        from dart_risk_mcp import server
-
-        mock_resolve.return_value = ("테스트", {"corp_code": "00000001", "stock_code": "000000"})
-        mock_fetch.return_value = ([
-            {"rcept_no": "1", "rcept_dt": "20260101", "report_nm": "사업보고서"},
-        ], "ok")
-        mock_match.return_value = []
-        mock_audit_hist.return_value = {
-            "opinions": [],
-            "auditor_changes": [],
-            "independence_warnings": ["2025", "2024"],
-        }
-        result = server.check_disclosure_anomaly("테스트", lookback_years=1)
-        self.assertIn("비감사용역 비중 초과", result)
-        self.assertIn("2025", result)
-        # v0.8.5: 점수 가산(+3점) 표기 제거 — 연도 경고만 확인
-
+    # `test_audit_bonus_from_non_audit_warning`은 2026-08-27에 **지웠다**.
+    # `independence_warnings`에 가짜 값을 넣어 렌더를 확인했는데, 실제
+    # fetcher는 그 키를 채우는 곳이 없어(2026-08-23 비중 경고 제거)
+    # **절대 발화하지 않는 블록**을 "동작한다"고 보이게 하고 있었다.
+    # 존재하지 않는 계약을 검증하는 테스트는 통과할수록 위험하다(#315).
 
 if __name__ == "__main__":
     unittest.main()
