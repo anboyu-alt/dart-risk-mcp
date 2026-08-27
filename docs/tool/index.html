@@ -16,6 +16,8 @@
     --mono: Consolas, "Cascadia Code", "SF Mono", monospace;
     --c0: #8a93a2; --c1: #e0925a; --c2: #4f8fce; --c3: #9b7fe8;
     --c4: #dd7aa3; --c5: #4ad295; --c6: #cfc063; --c7: #e0564a; --c8: #c9cdd8;
+    /* c9 = 정기 보고 — 위험 신호가 아니라 배경이므로 가장 흐리게. */
+    --c9: #5a6472;
     /* 기존 변수 별칭 (렌더 코드 호환) */
     --text: var(--tx); --text-dim: var(--dim); --accent: var(--amber);
     --accent-strong: var(--amber2); --accent-soft: rgba(232,163,61,0.09);
@@ -1402,7 +1404,12 @@ function renderFeed() {
     return `<div class="feedrow g-feed" data-r="${esc(r.rcept)}">
       <span class="mm">${mmdd(r.date)}.${r.date.slice(6, 8)}</span>
       <span>${esc(r.nm)}</span>
-      <span class="colcat" style="font-size:12px;color:var(--dim2)">${s0 ? `<span class="cdot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--c${s0.category});margin-right:7px"></span>${esc(DATA.categories[String(s0.category)])}` : `<span class="nosig">—</span>`}</span>
+      <span class="colcat" style="font-size:12px;color:var(--dim2)">${(() => {
+        const cat = s0 ? s0.category : routineCategory(r.nm);
+        return cat === null || cat === undefined
+          ? `<span class="nosig">—</span>`
+          : `<span class="cdot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--c${cat});margin-right:7px"></span>${esc(DATA.categories[String(cat)])}`;
+      })()}</span>
       <span>${sigCell}${isNew ? ` <span class="mono" style="font-size:9.5px;color:var(--faint);letter-spacing:0.06em">NEW</span>` : ""}</span>
       <span class="colcorr mono" style="font-size:11.5px;color:${r.isAmend ? "#c0a24a" : "#3a4350"}">${r.isAmend ? "정정" : "—"}</span>
       ${s0 && s0.note ? `<div class="dim" style="grid-column:1/-1;font-size:0.78rem">※ ${esc(s0.note)}</div>`
@@ -1447,6 +1454,21 @@ function renderProcedural(proceduralEvents, totalCount) {
 /* ── 03 상세 ──────────────────────────────────── */
 // 라벨이 보정된 신호인지 판정 — DATA.signals의 원래 라벨과 비교만 한다.
 // 어느 쪽 문자열도 여기서 하드코딩하지 않는다(Task 10 지침).
+// 신호가 하나도 안 붙은 공시의 **사실 범주**. `signals-data.json`의
+// `routine_filing_keywords`·`categories["9"]`는 진작 export되고 있었는데
+// 뷰어가 **한 번도 읽지 않았다**(2026-08-27 발견 — export 쪽 주석은
+// `classifyDisclosureCategory`가 이걸 쓴다고 적고 있었지만 그런 함수가
+// 없다). 그래서 사업보고서·분기보고서가 「—」로만 보였다.
+//
+// 「기타」(모른다)가 아니라 **「정기 보고」(안다, 위험 신호가 아니다)**라는
+// 별도 사실 범주다 — export 쪽 실측: 삼성전자 「기타」 982건 중 924건이
+// 목록 첫 항목 하나였다. 위험 신호가 하나라도 붙으면 그쪽이 먼저 이긴다.
+function routineCategory(reportNm) {
+  const kws = (DATA && DATA.routine_filing_keywords) || [];
+  const t = String(reportNm || "").replace(/\s/g, "");
+  return kws.some((k) => t.includes(String(k).replace(/\s/g, ""))) ? 9 : null;
+}
+
 function isSoftenedSig(s) {
   const orig = (DATA.signals.find((x) => x.key === s.key) || {}).label;
   return !!orig && s.label !== orig;
