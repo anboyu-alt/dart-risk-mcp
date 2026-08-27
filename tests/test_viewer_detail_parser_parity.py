@@ -44,6 +44,11 @@ _CONSTS = (
     "OUTFLOW_NEGATION_MARKERS",
 )
 _FUNCS = (
+    # `mdToPlain`은 뷰어가 받는 마크다운 표를 core가 보는 평문 모양으로
+    # 맞춘다. 이 파일은 **평문을 양쪽에 먹이므로** 그 정규화가 무해한지도
+    # 함께 검사하는 셈이다 — 표 표현 자체의 대조는
+    # `test_viewer_markdown_input.py`가 맡는다.
+    "mdToPlain",
     "isAmendedDocument", "affiliateInt", "affiliateRatio",
     "parseAssetDisposalDetail", "parseRelatedPartyDetail",
     "parseEarningsShockDetail", "isAssetDisposalTitle", "classifyOutflowRelation",

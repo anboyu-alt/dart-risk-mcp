@@ -3921,9 +3921,28 @@ const DISPOSAL_BOOK_RE = /평가가액\s*\(?원\)?\s*([\d,]+)/;
 const DISPOSAL_EXTVAL_RE = /외부평가\s*여부\s*(\S+)/;
 const RELATION_LOOKS_DIRTY_RE = /\d[\d,]{4,}/;
 
+// core의 원문 파서 정규식은 `fetch_document_text`가 주는 **공백 구분 평문**을
+// 전제로 쓰였다. 뷰어가 받는 것은 `/api/doc`의 **마크다운 표**라 값 사이에
+// `|`가 끼어 `\s*`·`\s+`가 끊긴다 — 정규식을 그대로 옮기면 아무것도 못 읽는다.
+// 실측(2026-08-28): 「특수관계인으로부터자금차입」 20260812000839에서 core는
+// 1,200억원·계열회사를 읽는데 뷰어는 금액 0 · 관계 공란 · 상대방 이름에 `|`가
+// 붙어 나왔고, 손익구조 급변은 3행 전부 못 읽었다.
+//
+// 표 구분자를 공백으로 바꿔 core가 보는 것과 같은 모양으로 만든 뒤 돌린다.
+// 표 구분선(`| --- | --- |`)도 함께 지운다 — 값과 다음 항목 사이에 끼어들어
+// 「회사와의 관계 <값> (?=다음 항목 번호)」류 뒤보기를 끊는다. 실측: 「출자」
+// 20260812000725 · 「담보」 20260812000842에서 관계만 공란으로 남던 원인.
+function mdToPlain(text) {
+  return String(text || "")
+    .replace(/^[\s|:-]*$/gm, "")
+    .replace(/\|/g, " ")
+    .replace(/[ 	]+/g, " ");
+}
+
 function parseAssetDisposalDetail(text) {
   const out = { counterparty: "", relation: "", amount: 0, assetRatio: 0, bookValue: 0, extval: "" };
   if (!text) return out;
+  text = mdToPlain(text);
   if (isAmendedDocument(text)) return out;
   if (!["처분결정", "양도 결정", "양도결정", "자산양도"].some((w) => text.includes(w))) return out;
   for (const rx of DISPOSAL_COUNTERPARTY_RES) {
@@ -3975,6 +3994,7 @@ const RP_UNIT_EOK_RE = /단위\s*[:：]\s*억\s*원/;
 function parseRelatedPartyDetail(text) {
   const out = { counterparty: "", relation: "", amount: 0, interestRate: 0, equityRatio: "", kind: "" };
   if (!text) return out;
+  text = mdToPlain(text);
   if (isAmendedDocument(text)) return out;
   if (text.includes("차입처")) out.kind = "borrow";
   else if (text.includes("담보제공자")) out.kind = "collateral";
@@ -4010,6 +4030,7 @@ const ES_ROW_RE = /-\s*(매출액|영업이익|당기순이익)\s+(-?[\d,]+)\s+(
 function parseEarningsShockDetail(text) {
   const out = { rows: [], turnedToLoss: false };
   if (!text) return out;
+  text = mdToPlain(text);
   if (isAmendedDocument(text)) return out;
   ES_ROW_RE.lastIndex = 0;
   let m;
