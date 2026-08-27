@@ -81,6 +81,7 @@ from .core import (
     fetch_executive_compensation,
     fetch_executive_roster_detail,
     fetch_financial_statements,
+    fs_currency,
     fetch_financial_statements_all,
     fetch_fund_usage,
     fetch_insider_timeline,
@@ -3641,6 +3642,22 @@ def get_company_info(company_name: str) -> str:
 # ── 도구 11: 재무제표 조회 ────────────────────────────────────────────────
 
 
+def _currency_footer(currency: str) -> str:
+    """금액 단위 안내. 원화가 아니면 그 통화를 적는다.
+
+    옛 문구는 「금액 단위는 원화(원)이며」라 **단정**했는데, 25개사 표본에서
+    두산밥캣이 USD로 보고한다(자산총계 8,169,804,000 = 81.7억 달러).
+    그 회사에서는 11조원짜리 회사가 81억원으로 읽혔다.
+    """
+    c = (currency or "").strip().upper()
+    if c in ("", "KRW"):
+        return "⚠️ 금액 단위는 원화(원)이며 DART 공시 기준입니다."
+    return (
+        f"⚠️ 이 회사는 **{c}**로 보고합니다 — 위 금액은 원화가 아닙니다"
+        " (DART 공시 기준)."
+    )
+
+
 def _fs_div_label(div: str, fs_nm: str = "") -> str:
     """연결/별도 구분 라벨. DART의 `fs_nm`을 쓰되 모호하면 우리 말로 바꾼다.
 
@@ -3694,9 +3711,14 @@ def get_financial_summary(
         _fs_div_label(k, v[0].get("fs_nm")) for k, v in _by_div.items()
     )
 
+    # ⚠ **모든 회사가 원화로 보고하지 않는다** — 두산밥캣은 USD다
+    # (자산총계 8,169,804,000 = 81.7억 **달러**). 꼬리말이 「원화(원)」이라
+    # 단정하고 있어 11조원짜리 회사가 81억원으로 읽혔다(2026-08-27 발견).
+    _cur = fs_currency(items)
+    _cur_note = "" if _cur in ("", "KRW") else f" | 보고 통화: **{_cur}**"
     lines = [
         f"📊 **{corp_name} 재무제표** ({stock_code or corp_code})",
-        f"사업연도: {bsns_year} | {_head_label}",
+        f"사업연도: {bsns_year} | {_head_label}{_cur_note}",
         "",
     ]
 
@@ -3721,7 +3743,7 @@ def get_financial_summary(
 
     lines += [
         "",
-        "⚠️ 금액 단위는 원화(원)이며 DART 공시 기준입니다.",
+        _currency_footer(_cur),
     ]
     return "\n".join(lines)
 
@@ -3809,7 +3831,17 @@ def compare_financials(company_names: list[str], year: str = "") -> str:
                 lines.append(f"  • {nm}: {cur}")
         lines.append("")
 
-    lines.append("⚠️ 금액 단위는 원화(원)이며 DART 공시 기준입니다.")
+    _curs = sorted({c for c in (fs_currency(v) for v in by_corp.values()) if c})
+    if len(_curs) > 1:
+        # 통화가 섞이면 나란히 놓은 숫자를 그대로 비교할 수 없다.
+        lines.append(
+            "⚠️ 보고 통화가 **회사마다 다릅니다** ("
+            + " · ".join(f"{n}: {fs_currency(v)}" for n, v in by_corp.items()
+                         if fs_currency(v))
+            + ") — 숫자를 그대로 비교하지 마세요."
+        )
+    else:
+        lines.append(_currency_footer(_curs[0] if _curs else ""))
     return "\n".join(lines)
 
 
@@ -5618,22 +5650,30 @@ def scan_financial_anomaly(
     if _la_bs or _la_cf:
         lines.append("")
         lines.append("### 대여금·선급금 (계정 노출 시)")
+        # 원화가 아닌 회사가 있다(두산밥캣 USD) — 「원」을 붙이면 거짓이다.
+        _la_cur = (_loan_advance.get("currency") or "").strip().upper()
+        _la_unit = "원" if _la_cur in ("", "KRW") else f" {_la_cur}"
         if _la_bs:
             lines.append("**재무상태표(잔액)**")
             for _it in _la_bs:
-                _cur_s = f"{_it['current']:,}원" if _it["current"] is not None else "-"
-                _pri_s = f"{_it['prior']:,}원" if _it["prior"] is not None else "-"
+                _cur_s = f"{_it['current']:,}{_la_unit}" if _it["current"] is not None else "-"
+                _pri_s = f"{_it['prior']:,}{_la_unit}" if _it["prior"] is not None else "-"
                 lines.append(f"- {_it['account_nm']}: 당기 {_cur_s} / 전기 {_pri_s}")
         if _la_cf:
             lines.append("**현금흐름표(증감)**")
             for _it in _la_cf:
-                _cur_s = f"{_it['current']:,}원" if _it["current"] is not None else "-"
-                _pri_s = f"{_it['prior']:,}원" if _it["prior"] is not None else "-"
+                _cur_s = f"{_it['current']:,}{_la_unit}" if _it["current"] is not None else "-"
+                _pri_s = f"{_it['prior']:,}{_la_unit}" if _it["prior"] is not None else "-"
                 lines.append(f"- {_it['account_nm']}: 당기 {_cur_s} / 전기 {_pri_s}")
         lines.append(
             "  ※ 금감원 무자본 M&A 합동점검(2019-12)이 관계회사 대여·선급금을 "
             "유용 경로로 지목했습니다 — 상세는 재무제표 주석을 확인하세요."
         )
+        if _la_cur not in ("", "KRW"):
+            lines.append(
+                f"  ※ 보고 통화가 {_la_cur}라 원화 기준 임계(10억원)를 "
+                "적용하지 않았습니다."
+            )
 
     lines.append("")
     if flagged_metrics:
