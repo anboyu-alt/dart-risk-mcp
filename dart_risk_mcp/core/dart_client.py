@@ -3849,10 +3849,20 @@ def detect_financial_anomaly(
             "name": "대여금·선급금(재무상태표)",
             "current": la_cur,
             "prior": la_pri,
-            "unit": "원",
             "flagged": False,
         }
-        if la_cur >= 1_000_000_000 and la_cur >= la_pri * 2:
+        # ⚠ 임계 10억은 **원화 기준**이다. 원화로 보고하지 않는 회사에
+        # 그대로 들이대면 자릿수가 통째로 달라진다(두산밥캣 USD 실측 —
+        # $10억은 1.3조원이다). 통화가 원화가 아니면 판정하지 않고 그
+        # 사실을 남긴다. 금액 자체는 그대로 사실 표기한다.
+        _cur_code = (loan_advance.get("currency") or "").strip().upper()
+        m["unit"] = "원" if _cur_code in ("", "KRW") else _cur_code
+        if _cur_code not in ("", "KRW"):
+            m["note"] = (
+                f"보고 통화가 {_cur_code}라 원화 기준 임계(10억원)를 "
+                "적용하지 않았습니다"
+            )
+        elif la_cur >= 1_000_000_000 and la_cur >= la_pri * 2:
             flags.append("LOAN_ADVANCE_SURGE")
             m["flagged"] = True
         metrics.append(m)
@@ -4462,6 +4472,25 @@ def extract_cfs_ofs_ni(fs_rows: list[dict]) -> tuple[int | None, int | None]:
             result[fs_div] = v
     return result.get("CFS"), result.get("OFS")
 
+def fs_currency(rows: "list[dict] | None") -> str:
+    """재무제표 응답 행들의 통화. 섞여 있으면 가장 많은 것을 돌려준다.
+
+    ⚠ **모든 회사가 원화로 보고하지 않는다** — 25개사 표본에서 두산밥캣이
+    **USD**로 낸다(자산총계 8,169,804,000 = 81.7억 **달러**). 도구들이
+    「금액 단위는 원화(원)」이라 단정하고 있어, 그 회사에서는 11조원짜리
+    회사가 81억원으로 읽혔다(2026-08-27 발견).
+
+    빈 문자열이면 판단하지 않는다 — 없는 통화를 지어내지 않는다.
+    """
+    import collections
+
+    c = collections.Counter(
+        (r.get("currency") or "").strip().upper()
+        for r in (rows or []) if (r.get("currency") or "").strip()
+    )
+    return c.most_common(1)[0][0] if c else ""
+
+
 
 def extract_loan_advance(rows: list[dict]) -> dict:
     """fnlttSinglAcntAll rows에서 대여금·선급금 계정을 추출.
@@ -4483,7 +4512,8 @@ def extract_loan_advance(rows: list[dict]) -> dict:
         {"bs_items": [{"account_nm", "current", "prior"}, ...],
          "cf_items": [{"account_nm", "current", "prior"}, ...],
          "bs_current_total": int|None,  # BS 노출 계정이 하나도 없으면 None
-         "bs_prior_total": int|None}
+         "bs_prior_total": int|None,
+         "currency": str}             # 원화가 아닐 수 있다(두산밥캣 USD 실측)
     """
     bs_items: list[dict] = []
     cf_items: list[dict] = []
@@ -4521,6 +4551,7 @@ def extract_loan_advance(rows: list[dict]) -> dict:
         "cf_items": cf_items,
         "bs_current_total": bs_current_total,
         "bs_prior_total": bs_prior_total,
+        "currency": fs_currency(rows),
     }
 
 

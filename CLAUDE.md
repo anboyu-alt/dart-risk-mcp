@@ -441,6 +441,7 @@ dart_risk_mcp/
 | `fetch_document_content(rcept_no, api_key, ...)` | 페이지네이션 원문 조회 |
 | `fetch_company_info(corp_code, api_key)` | `/company.json` — 기업 개요 (대표자·업종·설립일 등) |
 | `fetch_financial_statements(corp_code, api_key, year, report_type)` | `/fnlttSinglAcnt.json` — 단일 기업 재무제표 |
+| `fs_currency(rows)` | 재무제표 행들의 **보고 통화**(다수결). ⚠ **모든 회사가 원화로 보고하지 않는다** — 25개사 표본에서 두산밥캣이 USD다(자산총계 8,169,804,000 = 81.7억 **달러**). 도구 꼬리말이 「금액 단위는 원화(원)」이라 단정해 11조원짜리 회사가 81억원으로 읽혔다(2026-08-27 수정). `LOAN_ADVANCE_SURGE`의 임계 10억원도 원화 기준이라, 원화가 아니면 판정하지 않고 사실만 표기한다 |
 | `fetch_multi_financial(corp_codes, api_key, year, report_type)` | `/fnlttMultiAcnt.json` — 다중 기업 재무 비교 |
 | `fetch_shareholder_status(corp_code, api_key, year, report_type)` | 최대주주 현황 + 5% 대량보유 통합 조회 |
 | `fetch_market_disclosures(api_key, bgn_de, end_de, pblntf_ty, max_pages)` | corp_code 없이 시장 전체 공시 조회 |
