@@ -803,8 +803,10 @@ _audit_history_cache: dict[tuple, tuple[float, dict]] = {}
 _AUDIT_CACHE_MAX = 20
 _AUDIT_CACHE_TTL = 600
 
-_NON_AUDIT_THRESHOLD = 0.30   # 비감사용역 비중 30% 이상 경고
-_AUDITOR_CHANGE_WINDOW = 3    # 3년 내 2회 이상 교체 경고
+# ⚠ `_NON_AUDIT_THRESHOLD`(0.30)·`_AUDITOR_CHANGE_WINDOW`(3)를 여기서
+# 뺐다(2026-08-27). **둘 다 아무도 쓰지 않았고**, 뒤엣것은 실제 규칙과도
+# 달랐다 — 교체 경고는 조회 창 전체(기본 5년)에서 2회 이상이지 3년이
+# 아니다. 남겨 두면 읽는 사람이 그 값이 살아 있다고 믿는다.
 
 # v0.8.0: 미상환 채무증권 잔액 엔드포인트 5종 -------------------------
 _DEBT_BALANCE_URLS = {
@@ -5078,11 +5080,10 @@ def fetch_audit_opinion_history(
                           "non_audit_fee_okwon": int}],
             "auditor_changes": [{"from_year": int, "to_year": int,
                                  "from": str, "to": str}],
-            "independence_warnings": [str, ...],
         }
     """
     _adt_ok = 0   # 정상 응답(000·013) 횟수 — 0이면 못 받은 것
-    empty = {"opinions": [], "auditor_changes": [], "independence_warnings": []}
+    empty = {"opinions": [], "auditor_changes": []}
     if not corp_code or not api_key:
         return empty
 
@@ -5252,7 +5253,6 @@ def fetch_audit_opinion_history(
     # v0.8.0이 **절대 금액**을 같은 이유로 뺐는데, 비율은 그 금액에서
     # 나오므로 같은 결함을 물려받는다. 판정 불가면 표기하지 않는다는 이
     # 레포의 관례대로 비율을 버리고, 단위와 무관한 사실(계약 건수)만 남긴다.
-    warnings: list[str] = []
 
     # ⚠ 연도×엔드포인트 루프라 **같은 계약이 여러 번 실려 온다** — 한
     # 사업보고서 응답이 당기·전기·전전기를 함께 담기 때문이다. 계약일+내용을
@@ -5276,7 +5276,6 @@ def fetch_audit_opinion_history(
     result = {
         "opinions": opinions,
         "auditor_changes": auditor_changes,
-        "independence_warnings": warnings,
         # 세 엔드포인트 × N년이 **모두** 비정상이면 「감사의견이 없다」가
         # 아니라 「못 받았다」다(2026-08-27 — 한도 초과에서 「찾지
         # 못했습니다」가 나왔는데 그 문구는 회사에 대한 진술로 읽힌다).
