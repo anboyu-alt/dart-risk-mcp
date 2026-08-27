@@ -3528,11 +3528,21 @@ function parseAcquisitionDetail(text) {
     ratio: pick(/자기자본대비\(%\)(?:\(A\/C\))?\s*([\d,.]+)/),
   };
 }
-// 국내 상장 여부 — 뷰어는 corp-map.json(상장사 스냅샷)만 가지고 있어 core의
-// corpCode 전체 명부 조회를 그대로 옮길 수 없다. 상장사 목록에 있으면 listed,
-// 국적이 국내가 아니면 unlisted, 그 외는 unknown으로 **보수적으로** 둔다
-// (core는 비상장까지 판정하지만 뷰어는 근거가 없으면 표기하지 않는다).
-function classifyTargetListing(name, nation) {
+// 국내 상장 여부 — core `classify_target_listing` 이식.
+//
+// ⚠ 옛 이식본은 로컬 `CORPS`(corp-map.json = **상장사 스냅샷**)에서 못 찾으면
+// `unknown`을 돌려주고 "뷰어는 근거가 없으면 표기하지 않는다"고 적어 두었다.
+// 그런데 `fund_diversion_chain` 게이트는 **unlisted일 때만** 발화한다 —
+// 즉 국적이 해외인 건을 빼면 **뷰어에서는 그 카드가 뜰 수 없었다.** core는
+// 같은 회사에서 띄운다(1년 약 45개사). 같은 제품의 두 화면이 다른 답을 냈다.
+//
+// 「근거가 없다」는 전제도 더는 참이 아니다 — `/api/corp`가 이미
+// **corpCode 전체(비상장 포함)**를 검색한다(기업 검색 폴백에서 쓰던 것).
+// core v1.13.1의 규칙을 그대로 옮긴다: **전체 명부에서 못 찾는 것은 판정
+// 불가가 아니라 국내 상장사가 아니라는 근거다.**
+//
+// 못 물어봤을 때(키 없음·오프라인·릴레이 오류)만 `unknown`으로 남긴다.
+async function classifyTargetListing(name, nation) {
   const raw = (name || "").trim();
   if (!raw) return "unknown";
   if (nation && !/대한민국|한국|국내|KOREA/i.test(nation)) return "unlisted";
@@ -3540,7 +3550,16 @@ function classifyTargetListing(name, nation) {
   for (const nm of Object.keys(CORPS || {})) {
     if (foldCorpName(nm) === folded) return "listed";
   }
-  return "unknown";
+  try {
+    const cands = await fetchCorpFallback(raw);
+    const hit = (cands || []).find((c) =>
+      foldCorpName(c.name || "") === folded
+      || (c.alias_of && foldCorpName(c.alias_of) === folded));
+    if (hit) return hit.listed ? "listed" : "unlisted";
+    return "unlisted";
+  } catch (e) {
+    return "unknown";
+  }
 }
 
 async function classifyAcquisitionEvidence(hits) {
@@ -3553,7 +3572,7 @@ async function classifyAcquisitionEvidence(hits) {
     const d = parseAcquisitionDetail(data.text);
     return { rcept: h.rcept, date: h.date, nm: h.nm, issuer: d.issuer,
              nation: d.nation, relation: d.relation, amount: d.amount, ratio: d.ratio,
-             listing: classifyTargetListing(d.issuer, d.nation),
+             listing: await classifyTargetListing(d.issuer, d.nation),
              cls: d.issuer ? classifyOutflowRelation(d.relation) : "unknown" };
   }));
 }
