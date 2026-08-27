@@ -2463,8 +2463,26 @@ _PHASE_MAP = {
     "INVENTORY_SURGE":     "심화기",
     "CASH_GAP":            "탈출기",
     "CAPITAL_IMPAIRMENT":  "탈출기",
+    # v1.6.0 이후 신설된 신호 10종 — 여기 없으면 `.get(key, "심화기")`가
+    # 전부 심화기로 떨어뜨린다. 1년 코퍼스 실측(2026-08-28) 결과 그렇게
+    # 떨어진 것이 관찰 이벤트의 **36.9%**(6,228건)였고 **심화기의 64.2%**를
+    # 차지했다 — 「가장 많이 몰려 있는 단계는 심화기」라는 요약 문장이
+    # 회사에 대한 관측이 아니라 이 표의 누락을 읽고 있었다. 그중
+    # 상장폐지·관리종목 1,085건은 탈출기(1,095건)와 맞먹는 규모다.
+    "TREASURY_TRUST":      "진입기",  # 자사주 신탁 — TREASURY와 같은 자리
+    "STAKE_PLEDGE":        "심화기",  # 최대주주 지분 담보 — SHAREHOLDER 옆
+    "FUND_OUTFLOW":        "심화기",  # 자금·자산 유출 — RELATED_PARTY 옆
+    "ACQ_REVIEW":          "심화기",  # 타법인·영업 양수 — ASSET_TRANSFER 옆
+    # 손익구조 급변은 **방향을 모른다**(흑자 증가도 이 공시로 온다). 부실이
+    # 드러난 것으로 단정할 수 없어 재무 이상 계열(AR_SURGE·INVENTORY_SURGE)과
+    # 같은 심화기에 둔다 — 기본값과 결과는 같지만 우연이 아니라 판단이다.
+    "EARNINGS_SHOCK":      "심화기",
+    "DELISTING_RISK":      "탈출기",
+    "WATCH_ISSUE":         "탈출기",
+    "DISTRESS_EVENT":      "탈출기",  # 부도·영업정지·회생·해산
+    "DIVIDEND_DRAIN":      "탈출기",  # 적자 국면의 배당 유출
+    "INSIDER_PRE_DISCLOSURE": "탈출기",  # 매도 ±30일 내 부정 공시
 }
-_PHASE_ORDER = {"진입기": 0, "심화기": 1, "탈출기": 2}
 
 
 @mcp.tool()
