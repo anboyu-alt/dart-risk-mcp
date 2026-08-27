@@ -2,6 +2,25 @@
 
 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식 준수. 버전은 [SemVer](https://semver.org/lang/ko/).
 
+## [1.20.45] - 2026-08-28
+
+### Fixed
+- **뷰어 원문 파서가 표를 평문으로 읽고 있었다** (#368) — v1.14.0이 core 정규식을
+  그대로 이식했으나 core는 공백 구분 평문을, 뷰어는 `/api/doc`의 마크다운 표를
+  받는다. 실문서에서 「특수관계인 자금거래」의 1,200억원 차입이 **금액 0 · 관계
+  공란**으로, 「손익구조 급변」은 **3행 전부** 안 읽혔고, 자산 처분은 5건 중 3건이
+  금액 0이었다. 관계는 `capital_backflow`·`fund_diversion_chain` 게이트의 판정
+  입력이라 표시만의 문제가 아니다. `mdToPlain`으로 표 구분자·구분선을 지워 맞췄다.
+
+### Added
+- `tests/test_viewer_markdown_input.py` + `tests/fixtures/viewer/doc_representations.json`
+  — 실문서에서 잘라 온 **두 표현**(평문·마크다운 표)을 각자에게 먹여 대조한다.
+  기존 파서 패리티 테스트는 같은 평문을 양쪽에 먹여 이 결함을 구조적으로 못 잡았다.
+
+### Note
+- #367은 브랜치를 잘못 밀어 #365의 변경을 한 번 더 머지했다(내용상 no-op).
+  실제 뷰어 수정은 #368이다.
+
 ## [1.20.44] - 2026-08-28
 
 ### Fixed
