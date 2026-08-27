@@ -509,7 +509,7 @@ dart_risk_mcp/
 | `GET /api/exctvSttus.json` | 임원 현황 (corp_code, bsns_year, reprt_code) — find_actor_overlap 겸직 탐지 |
 | `GET /api/pssrpCptalUseDtls.json` | 공모 자금 사용 내역 (corp_code, 연도) — dart_client.py:447 실측 명칭 |
 | `GET /api/prvsrpCptalUseDtls.json` | 사모 자금 사용 내역 (corp_code, 연도) — dart_client.py:448 실측 명칭 |
-| `GET /api/bsnAcqsDecsn.json` / `bsnTrfDecsn.json` | 영업 양수/양도 결정 (rcept_no) |
+| `GET /api/bsnInhDecsn.json` / `bsnTrfDecsn.json` | 영업 양수/양도 결정 (corp_code, bgn_de, end_de) |
 | `GET /api/tsstkAqDecsn.json` / `tsstkDpDecsn.json` | 자사주 취득/처분 결정 (v0.8.7 통합) |
 | `GET /api/tsstkAqTrctrCnsDecsn.json` / `tsstkAqTrctrCcDecsn.json` | 자사주 신탁계약 체결/해지 결정 (v0.8.7 통합) |
 | `GET /api/fnlttSinglIndx.json` | 단일회사 주요 재무지표 (corp_code, bsns_year, reprt_code, idx_cl_code) — v0.8.8 통합 |
@@ -518,7 +518,7 @@ dart_risk_mcp/
 | `GET /api/ctrcvsBgrq.json` | 회생절차 개시신청 (corp_code, bgn_de, end_de) — v0.9.0 통합 |
 | `GET /api/dsRsOcr.json` | 해산사유 발생 (corp_code, bgn_de, end_de) — v0.9.0 통합 |
 | `GET /api/alotMatter.json` | 배당에 관한 사항 (corp_code, bsns_year, reprt_code) — v0.9.0 통합 |
-| `GET /api/otcprStkInvscrTrfDecsn.json` / `otcprStkInvscrAcqsDecsn.json` | 타법인 주식 양수/양도 |
+| `GET /api/otcprStkInvscrInhDecsn.json` / `otcprStkInvscrTrfDecsn.json` | 타법인 주식 양수/양도 |
 | `GET /api/otrCprInvstmntSttus.json` | 타법인 출자현황 (corp_code, bsns_year, reprt_code) — get_affiliate_investments |
 | `GET /api/bdwtIsDecsn.json` / `cvbdIsDecsn.json` | 채권 인수/발행 결정 |
 | `GET /api/cmpMgDecsn.json` / `cmpDvDecsn.json` / `cmpDvmgDecsn.json` | 합병·분할·분할합병 결정 |
@@ -531,6 +531,8 @@ dart_risk_mcp/
 | `GET /api/entrprsBilScritsNrdmpBlce.json` | 기업어음 미상환 잔액 |
 | `GET /api/newCaplScritsNrdmpBlce.json` | 신종자본증권 미상환 잔액 |
 | `GET /api/cndlCaplScritsNrdmpBlce.json` | 조건부자본증권 미상환 잔액 |
+
+> ⚠ 2026-08-27 정정 — 양수 결정 URL 둘이 **DART가 status 101(잘못된 URL)로 거부하는 이름**으로 적혀 있었다(실측). 영업 양수는 `bsnAcqsDecsn`이 아니라 **`bsnInhDecsn`**, 타법인 주식 양수는 `otcprStkInvscrAcqsDecsn`이 아니라 **`otcprStkInvscrInhDecsn`**이다 — DART는 양수를 `Inh`(引受)로 쓴다. 코드는 처음부터 옳았고 문서만 틀렸다(아래 채무증권과 같은 종류의 오기). `tests/test_endpoint_table.py`가 이제 표의 URL이 코드에 실존하는지 기계로 대조한다.
 
 > ⚠ 2026-08-25 정정 — 위 채무증권 5종은 오래 `…IsDecsn.json`(발행결정)으로 적혀 있었으나 **그 URL은 DART가 status 101(잘못된 URL)로 거부한다**. 코드는 처음부터 `…NrdmpBlce.json`(미상환 잔액)을 쓰고 있었고 문서만 틀렸다. 응답은 한 엔드포인트가 **3행(공모·사모·합계)**을 돌려주며 금액 필드는 `sm`, 만기 구간은 `yy1_below`·`de10_below` 계열이다 — **`remndr_amount`라는 필드는 존재하지 않는다**(그 이름을 읽던 코드가 v1.20.25에서 고쳐졌다).
 
