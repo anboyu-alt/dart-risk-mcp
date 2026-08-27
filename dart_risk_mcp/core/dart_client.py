@@ -3151,6 +3151,19 @@ def _normalize_decision(raw: dict, dtype: str, url: str) -> dict:
         "ext_eval_name": ext_eval_name,
         "ext_eval_opinion": ext_eval_opinion,
         "bddd": str(raw.get("bddd") or raw.get("dcrdd") or "").strip(),
+        # 풋옵션 등 계약 체결 여부·내용. 응답에 있는데 한 번도 읽지 않던
+        # 필드다(2026-08-27 미사용 필드 전수에서 발견). 이면계약은 무자본
+        # M&A 점검의 단골 수법이라 **사실로만** 표기한다(판정·점수 없음).
+        #
+        # 실측(40개사 DS005 40행, 2024-01~2026-08): 「예」가 **1건**이고
+        # 그때 내용이 실질적이다(「각 교환사채의 사채권자는 사채의 발행일로
+        # 부터 18개…」). 2.5%면 배경이 아니라 신호다.
+        #
+        # ⚠ 같은 표본에서 **우회상장 여부(`bdlst_atn` 등)는 「예」가 0건**
+        # 이었다(32행: 해당사항없음 19 · 아니오 13). 늘 「아니오」인 줄은
+        # 넣지 않는다 — 「새 신호 유형 추가」 0단계와 같은 판단이다.
+        "put_option": str(raw.get("popt_ctr_atn") or "").strip() in ("예", "Y", "y"),
+        "put_option_text": " ".join(str(raw.get("popt_ctr_cn") or "").split()),
         "raw": raw,
     }
 
