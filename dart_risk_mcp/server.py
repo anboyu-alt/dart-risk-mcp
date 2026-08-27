@@ -2294,6 +2294,14 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
                 + ("실시 — 회계법인 등 독립된 제3자가 가격을 검증했습니다" if dec["external_eval"]
                    else "미실시 — 외부 기관의 가격 검증이 없었습니다")
             )
+            # 풋옵션 등 이면계약은 무자본 M&A 점검의 단골 수법이라 사실로
+            # 표기한다. 40건 표본에서 「예」는 1건뿐이라 있을 때만 적는다.
+            if dec.get("put_option"):
+                _po = dec.get("put_option_text") or ""
+                lines.append(
+                    "- 풋옵션 등 계약: 체결"
+                    + (f" — {_po[:120]}" if _po and _po != "-" else "")
+                )
             if dec["flags"]:
                 lines.append("")
                 lines.append("이 결정에서 주의할 점:")
@@ -5369,6 +5377,10 @@ def get_major_decision(rcept_no: str, decision_type: str = "", corp_code: str = 
         f"- 자산 총액 대비: {result['asset_ratio']:.2f}%",
         f"- 특수관계인 여부: {'예' if result['related_party'] else '아니오'}",
         f"- 외부평가 실시: {'예' if result['external_eval'] else '아니오'}",
+        *([f"- 풋옵션 등 계약: 체결"
+           + (f" — {result['put_option_text'][:120]}"
+              if result.get("put_option_text") not in ("", "-", None) else "")]
+          if result.get("put_option") else []),
         f"- 결의일: {result['bddd'] or '(미기재)'}",
     ]
     if result["flags"]:
