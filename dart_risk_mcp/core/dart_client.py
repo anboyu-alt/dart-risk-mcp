@@ -542,6 +542,37 @@ FETCH_TRUNCATED = "truncated"  # 받긴 받았는데 **페이지 상한에 걸�
 # 준다. 옛 코드는 이걸 FETCH_OK로 접어 로그에만 남겼다 — 화면은 아무 말도
 # 하지 않았다(2026-08-26 발견).
 
+class FetchList(list):
+    """리스트를 돌려주는 fetcher가 **조회 실패**를 함께 알리는 자리.
+
+    DART는 오류를 **HTTP 200 본문**(`status` 020 한도 초과, 800 점검 등)으로
+    준다. 옛 fetcher들은 그걸 빈 리스트로 접어, 도구가 「없습니다」라고
+    말했다 — **못 받은 것과 없는 것이 같은 화면**이 됐다(2026-08-27 전수:
+    `track_insider_trading`·`track_fund_usage`·`get_audit_opinion_history`·
+    `track_debt_balance`·`get_affiliate_investments`·`scan_financial_anomaly`
+    여섯 도구가 한도 초과에서 「없음」·「찾지 못했습니다」를 냈다).
+
+    `list`를 상속하므로 기존 호출부는 그대로 동작한다 — `len`·순회·인덱싱·
+    `isinstance(x, list)` 전부 같다. 다른 점은 `.fetch_failed` 하나다.
+    """
+
+    fetch_failed: bool = False
+
+    def __init__(self, iterable=(), fetch_failed: bool = False):
+        super().__init__(iterable)
+        self.fetch_failed = fetch_failed
+
+
+def fetch_failed(result) -> bool:
+    """fetcher 결과가 「못 받았다」를 뜻하는가. 리스트·dict 둘 다 받는다."""
+    if isinstance(result, FetchList):
+        return result.fetch_failed
+    if isinstance(result, dict):
+        return bool(result.get("fetch_failed"))
+    return False
+
+
+
 
 def fetch_company_disclosures_with_status(
     corp_code: str,
@@ -2548,11 +2579,12 @@ def fetch_financial_statements_all(
         data = resp.json()
     except Exception as e:
         log.debug("전체 재무제표 조회 실패 (%s/%s): %s", corp_code, fs_div, e)
-        return []
+        return FetchList(fetch_failed=True)
     if data.get("status") != "000":
         _log_dart_status(data.get("status", "?"), f"전체 재무제표({fs_div}) corp_code={corp_code}")
-        return []
-    return data.get("list", []) or []
+        # 013(자료 없음)만 「없다」이고 나머지 비정상은 「못 받았다」다.
+        return FetchList(fetch_failed=data.get("status") != "013")
+    return FetchList(data.get("list", []) or [])
 
 
 def fetch_multi_financial(
@@ -2795,6 +2827,7 @@ def fetch_insider_timeline(
     years = [str(current_year - i) for i in range(lookback_years + 1)]
     quarter_codes = ("11011", "11012", "11013", "11014")
 
+    _ins_ok = 0   # 정상 응답(000·013) 횟수 — 0이면 못 받은 것
     records: list[dict] = []
 
     # 1) 5% 대량보유 (elestock은 전체 이력 반환 — 1회만 호출)
@@ -2834,6 +2867,9 @@ def fetch_insider_timeline(
                         },
                     )
                     data = resp.json()
+                    # 013(자료 없음)도 정상 답변이라 실패로 세지 않는다.
+                    if data.get("status") in ("000", "013"):
+                        _ins_ok += 1
                     if data.get("status") == "000":
                         for rec in data.get("list", []):
                             rec = dict(rec)
@@ -2853,7 +2889,8 @@ def fetch_insider_timeline(
                     )
 
     records.sort(key=lambda r: r.get("rcept_dt", r.get("bsns_year", "")), reverse=True)
-    return records
+    # 넷 다 못 받았으면 「없다」가 아니라 「못 받았다」다.
+    return FetchList(records, fetch_failed=(not records) and _ins_ok == 0)
 
 
 # v0.8.6: 임원·대주주 매도 + 인접 부정 공시 패턴 검출용 부정 신호 키 집합
@@ -2957,6 +2994,7 @@ def fetch_fund_usage(
 
     from datetime import date
     current_year = date.today().year
+    _fu_ok = 0    # 정상 응답(000·013) 횟수 — 0이면 못 받은 것
     results: list[dict] = []
 
     for yr in range(current_year - lookback_years, current_year + 1):
@@ -2972,6 +3010,8 @@ def fetch_fund_usage(
                     data = _retry("GET", url, params=params).json()
                 except Exception:
                     continue
+                if data.get("status") in ("000", "013"):
+                    _fu_ok += 1
                 if data.get("status") != "000":
                     continue
                 for item in data.get("list", []):
@@ -2980,8 +3020,14 @@ def fetch_fund_usage(
                     results.append(rec)
 
     _clear_stale_unreported(results)
-    _cache_set(_fund_usage_cache, cache_key, results, _FUND_CACHE_MAX)
-    return results
+    out = FetchList(results, fetch_failed=(not results) and _fu_ok == 0)
+    # ⚠ **못 받은 결과를 캐시하지 않는다.** 한도 초과·점검 같은 일시적
+    # 실패를 10분 동안 붙들면, 한도가 풀린 뒤에도 같은 거짓말을
+    # 되풀이한다(2026-08-27 — 이 규칙을 넣기 전에는 실패가 캐시돼
+    # 다음 호출까지 오염됐다).
+    if not out.fetch_failed:
+        _cache_set(_fund_usage_cache, cache_key, out, _FUND_CACHE_MAX)
+    return out
 
 
 def _clear_stale_unreported(records: list) -> int:
@@ -4886,7 +4932,8 @@ def fetch_affiliate_investments(
         data = resp.json()
         if data.get("status") != "000":
             _log_dart_status(data.get("status", "?"), f"타법인출자 corp_code={corp_code}")
-            return []
+            # 013(자료 없음)만 「없다」이고 나머지 비정상은 「못 받았다」다.
+            return FetchList(fetch_failed=data.get("status") != "013")
         rows = data.get("list", []) or []
         return [
             r for r in rows
@@ -5034,6 +5081,7 @@ def fetch_audit_opinion_history(
             "independence_warnings": [str, ...],
         }
     """
+    _adt_ok = 0   # 정상 응답(000·013) 횟수 — 0이면 못 받은 것
     empty = {"opinions": [], "auditor_changes": [], "independence_warnings": []}
     if not corp_code or not api_key:
         return empty
@@ -5064,6 +5112,8 @@ def fetch_audit_opinion_history(
                     "reprt_code": "11011",
                 }, timeout=15)
                 data = resp.json() if resp is not None else {}
+                if data.get("status") in ("000", "013"):
+                    _adt_ok += 1
                 if data.get("status") == "000":
                     raw[kind].extend(data.get("list", []))
             except Exception:
@@ -5227,9 +5277,18 @@ def fetch_audit_opinion_history(
         "opinions": opinions,
         "auditor_changes": auditor_changes,
         "independence_warnings": warnings,
+        # 세 엔드포인트 × N년이 **모두** 비정상이면 「감사의견이 없다」가
+        # 아니라 「못 받았다」다(2026-08-27 — 한도 초과에서 「찾지
+        # 못했습니다」가 나왔는데 그 문구는 회사에 대한 진술로 읽힌다).
+        "fetch_failed": (not opinions) and _adt_ok == 0,
         "non_audit_contracts": non_audit_contracts,
     }
-    _cache_set(_audit_history_cache, cache_key, result, _AUDIT_CACHE_MAX)
+    # ⚠ **못 받은 결과를 캐시하지 않는다.** 한도 초과·점검 같은 일시적
+    # 실패를 10분 동안 붙들면, 한도가 풀린 뒤에도 같은 거짓말을
+    # 되풀이한다(2026-08-27 — 이 규칙을 넣기 전에는 실패가 캐시돼
+    # 다음 호출까지 오염됐다).
+    if not result["fetch_failed"]:
+        _cache_set(_audit_history_cache, cache_key, result, _AUDIT_CACHE_MAX)
     return result
 
 
@@ -5267,6 +5326,7 @@ def fetch_debt_balance(
     if cached is not None:
         return cached
 
+    _debt_ok = 0   # 정상 응답(000·013) 횟수 — 0이면 못 받은 것
     by_kind: dict[str, dict] = {}
     total = 0
     maturity_1y = 0
@@ -5282,6 +5342,8 @@ def fetch_debt_balance(
             data = resp.json() if resp is not None else {}
         except Exception:
             continue
+        if data.get("status") in ("000", "013"):
+            _debt_ok += 1
         if data.get("status") != "000":
             continue
 
@@ -5320,9 +5382,18 @@ def fetch_debt_balance(
         "by_kind": by_kind,
         "total": total,
         "maturity_1y_share": maturity_share,
+        # 다섯 엔드포인트가 **모두** 비정상이면 「채무증권이 없다」가 아니라
+        # 「못 받았다」다(2026-08-27 — 한도 초과에서 「찾지 못했습니다」가
+        # 나왔는데 그 문구는 회사에 대한 진술로 읽힌다).
+        "fetch_failed": total <= 0 and _debt_ok == 0,
         "equity_ratio": None,
     }
-    _cache_set(_debt_balance_cache, cache_key, result, _DEBT_CACHE_MAX)
+    # ⚠ **못 받은 결과를 캐시하지 않는다.** 한도 초과·점검 같은 일시적
+    # 실패를 10분 동안 붙들면, 한도가 풀린 뒤에도 같은 거짓말을
+    # 되풀이한다(2026-08-27 — 이 규칙을 넣기 전에는 실패가 캐시돼
+    # 다음 호출까지 오염됐다).
+    if not result["fetch_failed"]:
+        _cache_set(_debt_balance_cache, cache_key, result, _DEBT_CACHE_MAX)
     return result
 
 

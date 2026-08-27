@@ -49,6 +49,7 @@ from .core import (
     fetch_company_disclosures_with_status,
     FETCH_ERROR,
     FETCH_TRUNCATED,
+    fetch_failed,
     fetch_market_disclosures,
     fetch_market_disclosures_with_status,
     fetch_company_info,
@@ -4036,6 +4037,8 @@ def get_affiliate_investments(company_name: str, year: str = "") -> str:
 
     rows = fetch_affiliate_investments(corp_code, api_key, year)
     if not rows:
+        if fetch_failed(rows):
+            return _fetch_failed_notice(corp_name, f"{year or '최근'}년")
         return (f"🏢 **{corp_name}** ({info.get('stock_code','')}) — 타법인 출자현황 ({year})\n\n"
                 "해당 연도 사업보고서에서 타법인 출자 내역을 찾지 못했습니다. "
                 "(출자가 없거나, 보고서 미제출·데이터 미제공일 수 있습니다)")
@@ -4509,6 +4512,10 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
     records = fetch_insider_timeline(corp_code, _DART_API_KEY, lookback_years)
 
     if not records:
+        # 넷 다 못 받은 것을 「공시 없음」이라 적으면 **회사에 대한 진술**이
+        # 된다 — 한도 초과·키 오류가 「이 회사는 조용하다」로 보인다.
+        if fetch_failed(records):
+            return _fetch_failed_notice(corp_name, f"최근 {lookback_years}년")
         return f"[{corp_name}] 최근 {lookback_years}년간 대량보유·최대주주 공시 없음."
 
     # ── source별 정규화 — 의미 없는 합산 행/빈 ratio/회사 자기주식 row 스킵 ──
@@ -4635,6 +4642,8 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
         "",
     ]
 
+    if fetch_failed(records):
+        return _fetch_failed_notice(corp_name, f"최근 {lookback_years}년")
     if not timeline:
         lines.append("(추출 가능한 보고자별 보유 비율 없음 — 합산 행·미보고 항목만 존재)")
         if treasury_count:
@@ -4822,6 +4831,8 @@ def get_audit_opinion_history(company_name: str, lookback_years: int = 5) -> str
     data = fetch_audit_opinion_history(info["corp_code"], api_key, lookback_years)
 
     if not data["opinions"]:
+        if fetch_failed(data):
+            return _fetch_failed_notice(corp_name, f"최근 {lookback_years}년")
         return (
             f"📋 **{corp_name}** ({info.get('stock_code','')}) — 감사의견 이력\n\n"
             f"최근 {lookback_years}년 감사의견 공시를 찾지 못했습니다. "
@@ -4941,6 +4952,8 @@ def track_debt_balance(company_name: str, year: str = "") -> str:
 
     data = fetch_debt_balance(info["corp_code"], api_key, year)
     if data["total"] <= 0:
+        if fetch_failed(data):
+            return _fetch_failed_notice(corp_name, f"{data['year'] or year or '최근'}년")
         return (
             # 머리글은 데이터 유무와 무관하게 같은 형식을 쓴다 — 같은 도구가
             # 상황에 따라 자기 이름을 다르게 대면 출력 계약이 깨진다.
@@ -5196,6 +5209,8 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
 
     records = fetch_fund_usage(info["corp_code"], _DART_API_KEY, lookback_years)
     if not records:
+        if fetch_failed(records):
+            return _fetch_failed_notice(corp_name, f"최근 {lookback_years}년")
         return (
             f"💰 **{corp_name}** 자금사용내역\n\n"
             f"최근 {lookback_years}년간 등록된 공모/사모 자금사용내역이 없습니다.\n"
@@ -5476,8 +5491,12 @@ def scan_financial_anomaly(
         fs_list = fetch_financial_statements_all(corp_code, api_key, year, report_type, "OFS")
         _fs_div_used = "OFS"
     if not fs_list:
+        # 「데이터 없음 또는 권한 부족」은 둘을 한 문장에 섞어 아무것도
+        # 알려 주지 않았다. 응답 상태로 갈린 것을 그대로 말한다.
+        if fetch_failed(fs_list):
+            return _fetch_failed_notice(corp_name, f"{year} {report_type}")
         return (f"📊 **{corp_name}** ({info.get('stock_code','')}) — {year} {report_type}\n\n"
-                "재무제표 조회 불가(데이터 없음 또는 권한 부족).")
+                "해당 사업연도 재무제표가 공시되지 않았습니다.")
 
     current, prior = _fs_response_to_periods({"list": fs_list})
 
