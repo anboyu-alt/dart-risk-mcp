@@ -2,6 +2,21 @@
 
 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식 준수. 버전은 [SemVer](https://semver.org/lang/ko/).
 
+## [1.20.43] - 2026-08-28
+
+### Fixed
+- **뷰어에만 없던 「자기자본 대비」** (#363) — `parseOutflowDetail`이 자금유출
+  원문의 `자기자본대비(%)`를 아예 읽지 않았다. 실문서 3건에서 core는 12.4·17.3·
+  6.8을 읽는데 뷰어는 공란이라, 「누구에게 얼마가 나갔나」에서 규모 감각을 주는
+  유일한 값이 뷰어에서만 빠져 있었다.
+- **모르는 신호가 헤드라인이 되던 자리** (#363) — 뷰어 `pickHeadline`이 목록에
+  없는 키를 `indexOf`의 -1로 받아 맨 앞에 놓았다. core는 맨 뒤에 놓는다.
+
+### Added
+- `tests/test_viewer_twin_parity.py` — core ↔ 뷰어 쌍둥이를 같은 입력으로 돌려
+  대조한다. 뷰어 헤드라인이 `export_tool_data.py`의 정렬 순서에 통째로 기대는
+  암묵적 결합도 함께 못 박는다(export가 순서를 바꾸면 헤드라인이 조용히 달라진다).
+
 ## Stability / Deprecation Policy (v1.0 GA부터 발효)
 
 본 정책은 v1.0.0 GA에서 발효합니다. 마이너 릴리스(1.x)는 사용자에게 노출되는 모든 표면을 stable contract로 간주하며, 다음 규칙을 따릅니다.
