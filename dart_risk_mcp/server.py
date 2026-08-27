@@ -2296,6 +2296,9 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
             )
             # 풋옵션 등 이면계약은 무자본 M&A 점검의 단골 수법이라 사실로
             # 표기한다. 40건 표본에서 「예」는 1건뿐이라 있을 때만 적는다.
+            _sub = _counterparty_substance(dec)
+            if _sub:
+                lines.append(f"- 상대방 재무: {_sub}")
             if dec.get("put_option"):
                 _po = dec.get("put_option_text") or ""
                 lines.append(
@@ -3648,6 +3651,26 @@ def get_company_info(company_name: str) -> str:
 
 
 # ── 도구 11: 재무제표 조회 ────────────────────────────────────────────────
+
+
+def _counterparty_substance(d: dict) -> str:
+    """상대방의 재무 실체 한 줄. 값이 없으면 빈 문자열.
+
+    껍데기 법인인지가 여기서 드러난다 — 자본금은 큰데 자본총계가 그보다
+    작으면 결손이 쌓였다는 뜻이다. **사실만 적는다**(판정·점수 없음).
+    """
+    bits = []
+    # DART는 값이 없을 때 「-」를 넣는다 — 빈 문자열이 아니라서 그냥 두면
+    # 「주요사업 -」이 나온다(링크드 실측).
+    _biz = (d.get("cp_business") or "").strip()
+    if _biz and _biz != "-":
+        bits.append(f"주요사업 {_biz[:40]}")
+    for key, label in (("cp_assets", "자산"), ("cp_debt", "부채"),
+                       ("cp_equity", "자본"), ("cp_capital", "자본금")):
+        v = d.get(key)
+        if v:
+            bits.append(f"{label} {_format_amount(str(v)) or f'{v:,}원'}")
+    return " · ".join(bits)
 
 
 def _currency_footer(currency: str) -> str:
@@ -5377,6 +5400,8 @@ def get_major_decision(rcept_no: str, decision_type: str = "", corp_code: str = 
         f"- 자산 총액 대비: {result['asset_ratio']:.2f}%",
         f"- 특수관계인 여부: {'예' if result['related_party'] else '아니오'}",
         f"- 외부평가 실시: {'예' if result['external_eval'] else '아니오'}",
+        *([f"- 상대방 재무: {_counterparty_substance(result)}"]
+          if _counterparty_substance(result) else []),
         *([f"- 풋옵션 등 계약: 체결"
            + (f" — {result['put_option_text'][:120]}"
               if result.get("put_option_text") not in ("", "-", None) else "")]

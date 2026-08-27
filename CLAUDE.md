@@ -337,6 +337,7 @@ dart_risk_mcp/
 
 - 내부 흐름: `resolve_decision_type`(공시명 → decision_type) → `fetch_major_decision` (12개 DS005 엔드포인트 중 자동 선택)
 - 이상 플래그: `DECISION_RELATED_PARTY`(특수관계 거래), `DECISION_OVERSIZED`(자산총액 대비 과대), `DECISION_NO_EXTVAL`(외부평가 미시행)
+- **상대방 재무 실체**(`dlptn_cpt`/`dlptn_mbsn`·`rbsnfdtl_tast/tdbt/teqt/cpt`, 2026-08-27 신설): `fund_diversion_chain`의 「확인해볼 것」이 사용자에게 직접 확인하라던 「상대 법인의 실체」의 일부가 **같은 응답 안에** 있었다. 실측 40행에서 `dlptn_*` 13행·`rbsnfdtl_*` 20행 전부 채워짐. 라이브: 다산디엠씨 「상대방 재무: 주요사업 네트워크 서비스 솔루션의 개발 및 공급 · 자본금 209억원」. 사실 표기만 — 「껍데기」 같은 판정 어휘를 쓰지 않는다
 - **풋옵션 등 계약**(`popt_ctr_atn`/`popt_ctr_cn`, 2026-08-27 신설): 이면계약은 무자본 M&A 점검의 단골 수법이라 체결됐을 때만 사실로 표기한다(판정·점수 없음). 실측 40개사 DS005 40행에서 「예」 **1건**(2.5%)이고 그때 내용이 실질적이다 — 라이브: 링크드 20260212001692(#321에서 자금 용도 이탈로 이미 걸린 회사). ⚠ 같은 표본에서 **우회상장 여부(`bdlst_atn` 등)는 「예」가 0건**이라(32행: 해당사항없음 19·아니오 13) 넣지 않았다 — 늘 「아니오」인 줄은 배경이지 신호가 아니다
 - `corp_code`: DART 기업코드 8자리. **권장** — DS005 12종은 DART 스펙상 corp_code가 사실상 필수라, 없으면 rcept_no 단독 폴백이 빈 결과를 내는 유형이 있다(아래 라이브 검증 매트릭스의 「부가 발견」 참고). 접수번호만 알 때는 `resolve_corp_code_from_rcept_no`로 역해석한다
   > ⚠ 2026-08-25 정정 — 이 자리에 오래 `corp_cls`(`Y`/`K`/`N`/`E`)가 적혀 있었으나 **그런 인자는 없다**. 같은 문서 604행이 "corp_code가 항상 필수"라 적고 있어 자기모순이었다. `tests/test_doc_tool_signatures.py`가 이제 기계로 대조한다

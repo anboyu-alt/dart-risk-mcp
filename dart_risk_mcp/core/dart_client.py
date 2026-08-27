@@ -3164,6 +3164,24 @@ def _normalize_decision(raw: dict, dtype: str, url: str) -> dict:
         # 넣지 않는다 — 「새 신호 유형 추가」 0단계와 같은 판단이다.
         "put_option": str(raw.get("popt_ctr_atn") or "").strip() in ("예", "Y", "y"),
         "put_option_text": " ".join(str(raw.get("popt_ctr_cn") or "").split()),
+        # 상대방의 **재무 실체**. `fund_diversion_chain`의 「확인해볼 것」이
+        # *"상대 법인의 실체 — 타법인출자현황의 최초취득일·피출자사 손익"*을
+        # 사용자에게 직접 확인하라고 안내하는데, 그 답의 일부가 **같은
+        # 응답 안에** 있었다(2026-08-27 미사용 필드 전수에서 발견).
+        #
+        # 실측(40개사 DS005): `dlptn_cpt`(상대방 자본금)·`dlptn_mbsn`(주요
+        # 사업)은 20행 중 13행, `rbsnfdtl_*`(상대회사 자산·부채·자본)은
+        # **20행 전부** 채워져 있다. 껍데기 법인은 여기서 바로 드러난다
+        # (실측 예: 자산 11.9억 · 부채 0.1억 · 자본 11.8억인데 자본금이
+        # 12.1억 — 결손 상태).
+        #
+        # 두 묶음은 유형이 다르다 — `dlptn_*`는 거래상대방(양수도),
+        # `rbsnfdtl_*`는 상대회사(합병·주식교환). 하나만 채워진다.
+        "cp_capital": _to_int_safe(raw.get("dlptn_cpt") or raw.get("rbsnfdtl_cpt")),
+        "cp_business": " ".join(str(raw.get("dlptn_mbsn") or "").split()),
+        "cp_assets": _to_int_safe(raw.get("rbsnfdtl_tast")),
+        "cp_debt": _to_int_safe(raw.get("rbsnfdtl_tdbt")),
+        "cp_equity": _to_int_safe(raw.get("rbsnfdtl_teqt")),
         "raw": raw,
     }
 
