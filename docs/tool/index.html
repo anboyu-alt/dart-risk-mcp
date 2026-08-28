@@ -2850,6 +2850,9 @@ function computeTurnoverMetrics(period, prior) {
     else if (denominator === 0) reason = "분모가 0입니다";
     else if (denominator < 0) reason = `${denLabel}이(가) 음수로 보고돼 회전율을 계산하지 않습니다`;
     else if (numerator < 0) reason = `${numLabel}이(가) 음수로 보고돼 회전율을 계산하지 않습니다`;
+    // 산술로는 0.00회가 나오지만 "회전이 느리다"가 아니라 "팔 것이 없다"는 뜻이다
+    // (실측: 스팩·개발단계 회사). core `compute_turnover_metrics`와 같은 판단.
+    else if (numerator === 0) reason = `${numLabel}이(가) 0원이라 회전율을 계산하지 않습니다`;
     else return { value: numerator / denominator, numerator, denominator, basis: "", reason: "" };
     return { value: null, numerator, denominator, basis: "", reason };
   }
@@ -2877,6 +2880,7 @@ function computeTurnoverMetrics(period, prior) {
     if (costNum === null) reason = "매출원가·매출액 계정이 재무제표에 나타나지 않습니다";
     else if (denominator === 0) reason = "분모가 0입니다";
     else if (denominator < 0) reason = `${denLabel}이(가) 음수로 보고돼 회전율을 계산하지 않습니다`;
+    else if (costNum === 0) reason = `${costBasis || "매출원가"}이(가) 0원이라 회전율을 계산하지 않습니다`;
     else return { value: costNum / denominator, numerator: costNum, denominator, basis: costBasis, reason: "" };
     return { value: null, numerator: costNum, denominator, basis: costBasis, reason };
   }
@@ -2905,6 +2909,12 @@ function computeTurnoverMetrics(period, prior) {
     } else if (rev === null) {
       wcMetric = { value: null, numerator: null, denominator: workingCapital, basis: "",
         reason: "매출액 계정이 재무제표에 나타나지 않습니다" };
+    } else if (rev <= 0) {
+      // 이 분기는 simpleMetric을 거치지 않아, core에서도 이 한 줄만 「0.00회」로
+      // 남아 있었다(스팩 실측).
+      wcMetric = { value: null, numerator: rev, denominator: workingCapital, basis: "",
+        reason: rev === 0 ? "매출액이(가) 0원이라 회전율을 계산하지 않습니다"
+                          : "매출액이(가) 음수로 보고돼 회전율을 계산하지 않습니다" };
     } else {
       wcMetric = { value: rev / workingCapital, numerator: rev, denominator: workingCapital, basis: "", reason: "" };
     }

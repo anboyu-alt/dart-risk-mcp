@@ -4195,6 +4195,13 @@ def compute_turnover_metrics(period: dict, *, prior: dict | None = None) -> dict
             reason = f"{den_label}이(가) 음수로 보고돼 회전율을 계산하지 않습니다"
         elif numerator < 0:
             reason = f"{num_label}이(가) 음수로 보고돼 회전율을 계산하지 않습니다"
+        elif numerator == 0:
+            # 산술로는 0.00회가 나오지만 **회전율로 읽히면 안 된다** — "회전이
+            # 느리다"가 아니라 "팔 것이 없다"는 뜻이다. 실측: 스팩
+            # (하나금융21호기업인수목적)이 매출 0원인데 표에 「0.00회」로 찍혔고,
+            # 그러면서 CCC 사유는 「매출채권회전율이 없어」라고 말해 화면이
+            # 자기모순이었다. 개발단계 바이오·투자목적회사도 같은 자리에 온다.
+            reason = f"{num_label}이(가) 0원이라 회전율을 계산하지 않습니다"
         else:
             return {"value": numerator / denominator, "numerator": numerator,
                     "denominator": denominator, "basis": "", "reason": ""}
@@ -4228,6 +4235,8 @@ def compute_turnover_metrics(period: dict, *, prior: dict | None = None) -> dict
             reason = "분모가 0입니다"
         elif denominator < 0:
             reason = f"{den_label}이(가) 음수로 보고돼 회전율을 계산하지 않습니다"
+        elif cost_num == 0:
+            reason = f"{cost_basis or '매출원가'}이(가) 0원이라 회전율을 계산하지 않습니다"
         else:
             return {"value": cost_num / denominator, "numerator": cost_num,
                     "denominator": denominator, "basis": cost_basis, "reason": ""}
@@ -4258,6 +4267,17 @@ def compute_turnover_metrics(period: dict, *, prior: dict | None = None) -> dict
         elif rev is None:
             wc_metric = {"value": None, "numerator": None, "denominator": working_capital,
                          "basis": "", "reason": "매출액 계정이 재무제표에 나타나지 않습니다"}
+        elif rev <= 0:
+            # 다른 지표와 같은 판단 — 매출이 0이면 "회전이 느리다"가 아니라
+            # "팔 것이 없다"다. 이 분기는 `_simple_metric`을 거치지 않아
+            # 스팩에서 이 한 줄만 「0.00회」로 남아 있었다.
+            wc_metric = {
+                "value": None, "numerator": rev, "denominator": working_capital,
+                "basis": "",
+                "reason": ("매출액이(가) 0원이라 회전율을 계산하지 않습니다"
+                           if rev == 0
+                           else "매출액이(가) 음수로 보고돼 회전율을 계산하지 않습니다"),
+            }
         else:
             wc_metric = {"value": rev / working_capital, "numerator": rev,
                          "denominator": working_capital, "basis": "", "reason": ""}
