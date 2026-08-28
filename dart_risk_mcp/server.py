@@ -4557,6 +4557,32 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
         digits = "".join(ch for ch in str(s) if ch.isdigit())
         return digits[:8] if len(digits) >= 8 else str(s)
 
+    # 분기 보고서의 기준일 — `hyslrSttus`는 **`rcept_dt`를 주지 않는다**
+    # (실측 아틀라스링크 48행 전부 없음). 옛 코드는 `bsns_year`로 폴백해
+    # 한 해의 분기 보고서 넷이 전부 「2025」가 됐고, 그러면 정렬이 API 반환
+    # 순서로 정해져 **Δ가 통째로 거짓**이 된다.
+    #
+    # 실측(10개사, 2026-08-28): 시계열 162개 중 **35개(22%)**에서 날짜가
+    # 중복됐고 **거짓 Δ가 60줄**이었다 — 셀트리온홀딩스 2025가 네 번 나와
+    # Δ-1.54%p·+1.14%p가 찍혔고(임계 0.5%p를 넘어 매도·매수 클러스터까지
+    # 오탐), 나이스정보통신은 2026 46.90% → 2026 42.70%(Δ-4.20%p)였다.
+    # 실제로는 아무도 사고팔지 않았다 — 분기가 다를 뿐이다.
+    #
+    # `reprt_code`는 48/48 있으므로 분기말로 바꾸면 정렬·표시가 함께 낫는다.
+    _REPRT_QUARTER_END = {
+        "11013": "0331",  # 1분기보고서
+        "11012": "0630",  # 반기보고서
+        "11014": "0930",  # 3분기보고서
+        "11011": "1231",  # 사업보고서
+    }
+
+    def _period_date(rec: dict) -> str:
+        """정기보고서 레코드 → 분기말 YYYYMMDD. 연도가 없으면 빈 문자열."""
+        year = "".join(ch for ch in str(rec.get("bsns_year") or "") if ch.isdigit())
+        if len(year) != 4:
+            return ""
+        return year + _REPRT_QUARTER_END.get(str(rec.get("reprt_code") or ""), "1231")
+
     def _extract_row(rec: dict) -> tuple[str, float, str, str, str] | None:
         """레코드를 (holder, ratio_pct, date_yyyymmdd, source_label, 주식종류)로 정규화.
 
@@ -4576,11 +4602,15 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
         elif src == "hyslr_chg":
             holder = (rec.get("mxmm_shrholdr_nm") or "").strip()
             ratio = _parse_ratio(rec.get("qota_rt"))
-            date = _normalize_date(rec.get("change_on") or rec.get("rcept_dt"))
+            # 변동일이 있으면 그것이 가장 정확하다. 없을 때만 분기말로 —
+            # 연도만 남기면 hyslr과 같은 거짓 Δ가 난다.
+            date = (_normalize_date(rec.get("change_on"))
+                    or _normalize_date(rec.get("rcept_dt"))
+                    or _period_date(rec))
         else:  # hyslr (기본)
             holder = (rec.get("nm") or "").strip()
             ratio = _parse_ratio(rec.get("trmend_posesn_stock_qota_rt"))
-            date = _normalize_date(rec.get("rcept_dt") or rec.get("bsns_year"))
+            date = _normalize_date(rec.get("rcept_dt")) or _period_date(rec)
         if holder in _SKIP_HOLDER_TOKENS:
             return None
         if ratio is None:
@@ -4616,7 +4646,11 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
     # 읽을 수 있게 두고, 변형 중 **가장 긴 것**을 고른다 — 공백이 살아 있는
     # 쪽이라 사람이 읽기 좋다.
     _SOURCE_LABEL = {
-        "elestock":      "대량보유",
+        # ⚠ 「대량보유」가 아니다 — `elestock`은 임원·주요주주 특정증권 소유
+        # 상황보고(등기임원·지배주주 중심)이고, 5% 대량보유는 `majorstock`
+        # (`fetch_major_holdings`)이 별개로 준다. CLAUDE.md가 이 혼동을
+        # 이미 경고하고 있었는데 라벨만 옛 이름으로 남아 있었다.
+        "elestock":      "임원·주요주주 소유보고",
         "hyslr":         "최대주주",
         "hyslr_chg":     "최대주주 변동",
         "exec_treasury": "임원·주요주주 자기주식",
