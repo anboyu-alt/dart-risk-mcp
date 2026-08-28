@@ -5207,6 +5207,17 @@ def check_disclosure_anomaly(
     return _append_size_footer("\n".join(lines), lookback_years)
 
 
+# 자금사용 상세 목록에 실을 최대 건수. `get_affiliate_investments`의 상위
+# 30건 관례와 같은 값이다. 이상 플래그가 붙은 건은 이 상한과 무관하게
+# 전부 실리므로, 이 값은 "정상 건을 몇 개까지 보여줄까"만 정한다.
+_FUND_USAGE_DETAIL_MAX = 30
+# 플래그가 붙은 건의 안전 상한. 이 도구의 목적이 그 건들을 보여 주는 것이라
+# 상한을 낮게 두면 안 되지만, 없으면 최악이 무제한이다 — 실측 오르비텍은
+# 55건이 전부 플래그라 28,389자였다. 그 사례를 **온전히** 담고도 여유가 있는
+# 값으로 잡았다. 여기에 걸리면 몇 건을 뺐는지 사실로 적는다.
+_FUND_USAGE_FLAGGED_MAX = 60
+
+
 @mcp.tool()
 def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
     """공모/사모 자금 사용내역(계획 vs 실제)을 조회해 조달자금 유용·
@@ -5262,7 +5273,23 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
         "",
     ]
 
-    for rec in records:
+    # 상세 목록 상한 — 금융지주·증권사는 회차가 수백 개다(실측 2026-08-28:
+    # KB금융 499건 51,343자 · 미래에셋증권 46,682자. 다른 도구는 전부 1만 자
+    # 미만이다). 한 번의 도구 호출이 대화 컨텍스트의 상당 부분을 먹는다.
+    #
+    # ⚠ **조용히 자르지 않는다**(`tests/test_no_silent_caps.py`와 같은 태도) —
+    # 이상 플래그가 붙은 건은 **개수와 무관하게 전부** 싣고, 나머지는 최신순
+    # 상한까지만 실은 뒤 몇 건을 뺐는지 사실로 적는다. 집계(총 건수·플래그
+    # 건수)는 그대로라 요약이 달라지지 않는다.
+    _flagged = [r for r in records if r["flags"]]
+    _rest = [r for r in records if not r["flags"]]
+    _flag_omitted = max(0, len(_flagged) - _FUND_USAGE_FLAGGED_MAX)
+    _flagged = _flagged[:_FUND_USAGE_FLAGGED_MAX]
+    _budget = max(0, _FUND_USAGE_DETAIL_MAX - len(_flagged))
+    _omitted = max(0, len(_rest) - _budget)
+    _shown = _flagged + _rest[:_budget]
+
+    for rec in _shown:
         lines.append(
             f"{_format_fund_year_prefix(rec)} "
             f"납입 {rec['pay_amount']:,}원"
@@ -5290,6 +5317,15 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
             if title and body:
                 lines.append(f"  ⚠ **{title}**")
                 lines.append(f"    {body}")
+        lines.append("")
+
+    if _omitted or _flag_omitted:
+        _parts = [f"…전체 {len(records)}건 중 {len(_shown)}건을 표시했습니다"]
+        if _omitted:
+            _parts.append(f"이상 플래그가 없는 {_omitted}건 생략")
+        if _flag_omitted:
+            _parts.append(f"플래그가 붙은 건도 {_flag_omitted}건 생략")
+        lines.append(" · ".join(_parts) + ".")
         lines.append("")
 
     if anomaly_records:
