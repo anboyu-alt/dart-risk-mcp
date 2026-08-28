@@ -21,6 +21,7 @@ from mcp.server.fastmcp import FastMCP
 from .core import (
     calculate_risk_score,
     category_prose,
+    turnover_prose,
     compute_turnover_metrics,
     fetch_turnover_history,
     detect_capital_churn,
@@ -5796,6 +5797,7 @@ def scan_financial_anomaly(
             f"- {_tlabel}: 전기 {_pri_s} → 당기 {_turnover_value_str(_tm)}{_yoy_s}"
         )
     lines.append("  다년 추세는 `track_turnover_trend`로 확인할 수 있습니다.")
+    lines.append("  지표를 읽는 법은 `track_turnover_trend`가 함께 설명합니다.")
 
     # Beneish 연구 변수 — 지수 사실 표기만, 합산 점수·판정 없음(v0.8.5 원칙).
     # 감가상각비는 사업보고서 XBRL 기재값에서 좁게 추출해 DEPI·TATA 복원 (annual만).
@@ -6369,6 +6371,35 @@ def track_turnover_trend(
         _currency = fs_currency(_fs_rows)
     except Exception:
         _currency = ""
+
+    # 지표 읽는 법 — core TURNOVER_PROSE를 그대로 읽는다(문구 복제 금지,
+    # 뷰어 turnoverProseHTML과 같은 출처). 판정 어휘 없음(v0.8.5 원칙).
+    #
+    # ⚠ **화면에 값이 나온 지표만** 해설한다. 6항목을 전부 붙이면 삼성전자
+    # 3년 조회가 1,412 → 2,769자로 배가 되고, 그 절반이 회사와 무관한 고정
+    # 문구가 된다(스팩·금융업에서는 값이 두어 개뿐인데 해설만 여섯 개 붙는다).
+    # 계산되지 않은 지표는 바로 위 「관찰된 사실」에 사유가 이미 적혀 있다.
+    # 뷰어는 접힌 `<details>`라 6항목 전부를 담는다 — 거기서는 방해가 없다.
+    _prose_keys = [
+        k for k in _TURNOVER_LABELS
+        if any(per_year[y]["metrics"].get(k, {}).get("value") is not None
+               for y in years_desc)
+    ]
+    if any(per_year[y]["ccc"].get("value") is not None for y in years_desc):
+        _prose_keys.append("ccc")
+
+    if _prose_keys:
+        lines.append("**지표 읽는 법**")
+    for _tkey in _prose_keys:
+        _p = turnover_prose(_tkey)
+        if not _p:
+            continue
+        lines.append(f"- {_p['label']} ({_p['formula']})")
+        lines.append(f"  - {_p['meaning']}")
+        lines.append(f"  - {_p['fall']}")
+        lines.append(f"  - {_p['caveat']}")
+    if _prose_keys:
+        lines.append("")
 
     lines.append(
         "기말잔액 기준으로 계산했습니다 — DART가 제공하는 재무지표와 산정 "

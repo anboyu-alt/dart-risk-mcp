@@ -125,6 +125,8 @@ from .explain import (
     pattern_to_prose,
     pattern_checkpoints,
     category_prose,
+    turnover_prose,
+    TURNOVER_PROSE,
 )
 from .qualifiers import (
     ParsedName,
@@ -221,6 +223,8 @@ __all__ = [
     "pattern_to_prose",
     "pattern_checkpoints",
     "category_prose",
+    "turnover_prose",
+    "TURNOVER_PROSE",
     "fetch_audit_opinion_history",
     "fetch_debt_balance",
     "detect_debt_rollover",
