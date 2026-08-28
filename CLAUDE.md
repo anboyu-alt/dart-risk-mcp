@@ -341,6 +341,7 @@ dart_risk_mcp/
 - 이상 플래그: `FUND_DIVERSION`(용도 변경), `FUND_UNREPORTED`(실제 집행 미보고)
 - `lookback_years` 범위: 1~5년
 - 반환: 납입일·계획금액·실제집행·차이사유 + 플래그 + 금감원 카탈로그(`zombie_ma`, `fake_new_biz`) 발췌
+- **상세 목록 상한(2026-08-28)**: 금융지주·증권사는 조달 회차가 수백 개다 — 실측 KB금융 499건 **51,343자** · 미래에셋증권 46,682자로, 같은 표본에서 다른 도구는 전부 1만 자 미만이었다(analyze 최대 9,247). 한 번의 호출이 대화 컨텍스트의 상당 부분을 먹는다. **이상 플래그가 붙은 건은 상한과 무관하게 전부**(안전 상한 `_FUND_USAGE_FLAGGED_MAX`=60 — 실측 오르비텍 55건 전부 플래그 사례를 온전히 담는 값), 나머지는 `_FUND_USAGE_DETAIL_MAX`=30건까지 싣고 **몇 건을 뺐는지 사실로 적는다**(조용히 자르지 않는다). 집계(총 건수·플래그 건수)는 상한과 무관하게 전체 기준 그대로다. KB금융 51,343 → 4,546자. `tests/test_fund_usage_detail_cap.py`가 고정.
 
 ### 19. `get_major_decision(rcept_no, decision_type="", corp_code="")` ✨
 
