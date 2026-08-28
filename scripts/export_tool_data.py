@@ -50,6 +50,7 @@ from dart_risk_mcp.core.explain import (  # noqa: E402
     signal_to_prose,
     pattern_to_prose,
     pattern_checkpoints,
+    TURNOVER_PROSE,
 )
 from dart_risk_mcp.core.dart_client import _FS_ALIASES  # noqa: E402
 from dart_risk_mcp.core import qualifiers as _q  # noqa: E402
@@ -363,6 +364,11 @@ def build_signals_data() -> dict:
         "routine_filing_keywords": list(ROUTINE_FILING_KEYWORDS),
         "fs_aliases": {**{k: list(_FS_ALIASES[k]) for k in _FS_ALIAS_KEYS},
                        **_VIEWER_EXTRA_ALIASES},
+        # 회전율·CCC 지표 해설(v1.21.3) — core TURNOVER_PROSE를 그대로
+        # 내보낸다. 뷰어가 문구를 손으로 복제하면 core가 바뀔 때 뷰어만
+        # 조용히 낡는다(위 _FS_ALIAS_KEYS와 같은 이유). score·severity·
+        # confidence 없음(v0.8.5 원칙).
+        "turnover_prose": {k: dict(v) for k, v in TURNOVER_PROSE.items()},
         # 신호 한정층 규칙 — 데이터만 내보내고 로직은 뷰어 JS가 이식한다.
         # 문자열 목록의 이중 관리를 막는 것이 목적이다(키워드와 동일한 원칙).
         "qualifier_rules": {

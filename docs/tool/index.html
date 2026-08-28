@@ -3005,6 +3005,37 @@ const TURNOVER_METRIC_DEFS = [
   ["asset", "총자산회전율", "매출액 ÷ 자산총계"],
 ];
 
+// JS 지표 키(camelCase) → core TURNOVER_PROSE 키(snake_case). "ccc"는
+// TURNOVER_METRIC_DEFS에 없지만(별도 계산 경로) 해설에는 6항목 전부 넣는다.
+const TURNOVER_PROSE_KEY_MAP = [
+  ["receivable", "receivable"],
+  ["inventory", "inventory"],
+  ["payable", "payable"],
+  ["workingCapital", "working_capital"],
+  ["asset", "asset"],
+  ["ccc", "ccc"],
+];
+
+function turnoverProseHTML() {
+  // core TURNOVER_PROSE를 export_tool_data.py가 그대로 내보낸 것 — 문구를
+  // 손으로 복제하지 않는다(위 fs_aliases와 같은 이유). 데이터가 없으면
+  // 렌더하지 않는다.
+  const prose = DATA && DATA.turnover_prose;
+  if (!prose || !Object.keys(prose).length) return "";
+  const rows = TURNOVER_PROSE_KEY_MAP.map(([, dataKey]) => {
+    const p = prose[dataKey];
+    if (!p) return "";
+    return `<div style="margin-bottom:0.65rem">` +
+      `<div style="font-weight:700">${esc(p.label)} <span class="dim" style="font-weight:400">(${esc(p.formula)})</span></div>` +
+      `<div style="margin-top:0.15rem">${esc(p.meaning)}</div>` +
+      `<div class="dim" style="margin-top:0.1rem">${esc(p.fall)}</div>` +
+      `<div class="dim" style="margin-top:0.1rem">${esc(p.caveat)}</div>` +
+      `</div>`;
+  }).join("");
+  return `<details style="margin-top:0.5rem;font-size:0.85rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">지표 읽는 법</summary>
+    <div style="margin-top:0.5rem">${rows}</div></details>`;
+}
+
 function turnoverTrendBlockHTML(periods, years, divUsed) {
   // years: 최신순(내림차순) 사업연도 배열(최대 3개). yoy는 바로 전년도와 비교.
   const byYear = {};
@@ -3062,6 +3093,7 @@ function turnoverTrendBlockHTML(periods, years, divUsed) {
 
   html += `<details style="margin-top:0.5rem;font-size:0.85rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">계산 근거 표</summary>
     <div style="overflow-x:auto"><table><tr><th>연도</th><th>지표</th><th>값</th><th>계산식</th><th>비고</th></tr>${detailRows.join("")}</table></div></details>`;
+  html += turnoverProseHTML();
   html += `<p class="dim" style="font-size:0.8rem;margin-top:0.5rem">더 깊은 재무 이상 스캔(매출채권·재고 급증, Beneish 변수 8종, 전기 재작성 감지)은 <a href="../#start">MCP 대화</a>의 scan_financial_anomaly가 제공합니다.</p>`;
   return html;
 }
