@@ -161,16 +161,20 @@ class TestDetectFinancialAnomalyWithIndx(unittest.TestCase):
         prior = {"매출액": 900, "매출채권": 80,
                  "당기순이익": 60, "영업활동현금흐름": 50,
                  "자본총계": 480, "자본금": 100}
-        current_indx = {"매출채권회전율": 8.1, "자기자본비율": 80.0, "순이익률": 8.0}
-        prior_indx = {"매출채권회전율": 12.3, "자기자본비율": 78.0, "순이익률": 6.7}
+        # ⚠ 2026-08-28: "매출채권회전율"은 더 이상 _CORE_INDX_NAMES에 없다
+        # (idx_val이 ×100 스케일로 와 「회」 단위와 어긋났다 — dart_client.py의
+        # _CORE_INDX_NAMES 주석 참고). 여전히 코어에 남아 있는 "부채비율"로
+        # 같은 수치·같은 검증 의도를 유지한다.
+        current_indx = {"부채비율": 8.1, "자기자본비율": 80.0, "순이익률": 8.0}
+        prior_indx = {"부채비율": 12.3, "자기자본비율": 78.0, "순이익률": 6.7}
         flags, metrics = dart_client.detect_financial_anomaly(
             current, prior,
             current_indx=current_indx, prior_indx=prior_indx,
         )
         indx_metrics = [m for m in metrics if m.get("source") == "indx"]
         self.assertGreaterEqual(len(indx_metrics), 1)
-        # 매출채권회전율: 8.1 vs 12.3 → -34.1% YoY
-        ar_turnover = next(m for m in indx_metrics if m["name"] == "매출채권회전율")
+        # 부채비율: 8.1 vs 12.3 → -34.1% YoY
+        ar_turnover = next(m for m in indx_metrics if m["name"] == "부채비율")
         self.assertAlmostEqual(ar_turnover["current"], 8.1, places=2)
         self.assertAlmostEqual(ar_turnover["prior"], 12.3, places=2)
         self.assertLess(ar_turnover["delta_pct"], 0)
@@ -179,7 +183,7 @@ class TestDetectFinancialAnomalyWithIndx(unittest.TestCase):
                          "indx 항목은 절대 임계 없이 사실 표기만")
 
     def test_handles_missing_prior_indx_value(self):
-        current_indx = {"매출채권회전율": 8.1}
+        current_indx = {"부채비율": 8.1}
         prior_indx = {}  # 비어있음
         flags, metrics = dart_client.detect_financial_anomaly(
             {}, {}, current_indx=current_indx, prior_indx=prior_indx,

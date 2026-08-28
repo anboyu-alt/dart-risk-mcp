@@ -67,6 +67,7 @@ from dart_risk_mcp.server import (  # noqa: E402
     scan_financial_anomaly,
     search_market_disclosures,
     track_capital_structure,
+    track_turnover_trend,
     track_debt_balance,
     track_fund_usage,
     track_insider_trading,
@@ -110,6 +111,7 @@ COMPANY_TOOL_MATRIX: list[tuple[str, Callable[[dict], str]]] = [
     ("scan_fs",       lambda c: scan_financial_anomaly(c["name"], "2024", "annual")),
     ("capital",       lambda c: track_capital_structure(c["name"], 3)),
     ("affiliates",    lambda c: get_affiliate_investments(c["name"], "2024")),
+    ("turnover",      lambda c: track_turnover_trend(c["name"], 3)),
 ]
 
 # B. 종목코드 인자 1개 도구

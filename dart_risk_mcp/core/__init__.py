@@ -78,6 +78,8 @@ from .dart_client import (
     fetch_control_change_detail,
     classify_holder_type,
     strip_holder_suffix,
+    compute_turnover_metrics,
+    fetch_turnover_history,
 )
 from .signals import (
     match_signals, is_amendment_disclosure,
@@ -245,6 +247,8 @@ __all__ = [
     "fetch_control_change_detail",
     "classify_holder_type",
     "strip_holder_suffix",
+    "compute_turnover_metrics",
+    "fetch_turnover_history",
     "load_watchlist",
     "save_watchlist",
     "add_person",

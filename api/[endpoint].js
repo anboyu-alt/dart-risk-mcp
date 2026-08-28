@@ -21,6 +21,7 @@ const ALLOWED_ENDPOINTS = new Set([
   "pssrpCptalUseDtls.json",           // 공모자금 사용 내역 (뷰어 자금 체인 블록)
   "prvsrpCptalUseDtls.json",          // 사모자금 사용 내역 (뷰어 자금 체인 블록)
   "otrCprInvstmntSttus.json",         // 타법인 출자현황 (뷰어 종속회사 유출 사실 병기)
+  "fnlttSinglAcntAll.json",           // 전체 계정과목 (뷰어 회전율 3기간 블록)
 ]);
 
 export default async function handler(req, res) {

@@ -57,8 +57,14 @@ from dart_risk_mcp.core import signals as _sig  # noqa: E402
 from dart_risk_mcp.core.signals import AMBIGUOUS_SIGNAL_KEYS  # noqa: E402
 from dart_risk_mcp.core.signals import observation_priority  # noqa: E402
 
-# 뷰어 심화 블록(재무 핵심)에서 쓰는 계정 별칭 부분집합
-_FS_ALIAS_KEYS = ("매출", "영업이익", "당기순이익", "자본총계", "자본금")
+# 뷰어 심화 블록(재무 핵심)에서 쓰는 계정 별칭 부분집합.
+# 8종("매출원가"~"자산총계")은 v1.21.0 회전율 3기간 블록(TURNOVER TREND)이
+# compute_turnover_metrics의 JS 이식본에 필요한 것 — core _FS_ALIASES를
+# 그대로 내보내 별칭을 손으로 복제하지 않는다(복제하면 core가 갈릴 때
+# 뷰어만 조용히 낡는다).
+_FS_ALIAS_KEYS = ("매출", "영업이익", "당기순이익", "자본총계", "자본금",
+                  "매출원가", "매출채권", "재고자산", "매입채무",
+                  "유동자산", "유동부채", "자산총계")
 
 # 뷰어 전용 추가 별칭 — core _FS_ALIASES에 없는 계정 (fnlttSinglAcnt 주요계정)
 _VIEWER_EXTRA_ALIASES = {

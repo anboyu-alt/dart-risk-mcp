@@ -21,7 +21,7 @@ AI 어시스턴트와 개발자를 위한 프로젝트 내부 가이드입니다
 dart_risk_mcp/
 ├── __init__.py          # 패키지 버전 (0.1.0)
 ├── __main__.py          # 진입점 → server.main() 호출
-├── server.py            # MCP 서버 + 26개 도구 정의
+├── server.py            # MCP 서버 + 27개 도구 정의
 └── core/
     ├── __init__.py      # 공개 API export
     ├── dart_client.py   # DART API 클라이언트 (핵심)
@@ -70,7 +70,7 @@ dart_risk_mcp/
 
 ---
 
-## MCP 도구 26개
+## MCP 도구 27개
 
 ### 1. `analyze_company_risk(company_name, lookback_years=1, lookback_days=0, from_date="", to_date="")`
 
@@ -368,7 +368,7 @@ dart_risk_mcp/
 
 ### 21. `scan_financial_anomaly(company_name, year="", report_type="annual")` ✨ v0.8.8
 
-재무제표 4개 지표(매출채권·재고자산·현금흐름·자본잠식)를 전년 대비 비교해 이상을 탐지하고, **단일회사 주요 재무지표 7종의 YoY 추세**를 별도 블록으로 표기합니다.
+재무제표 4개 지표(매출채권·재고자산·현금흐름·자본잠식)를 전년 대비 비교해 이상을 탐지하고, **단일회사 주요 재무지표 5종의 YoY 추세**와 **회전율(기말잔액 기준)**을 별도 블록으로 표기합니다.
 
 - 내부 흐름: `resolve_corp` → `fetch_financial_statements_all` (CFS→OFS 폴백) → `_fs_response_to_periods` → **`fetch_company_indicators` × 2(당기/전기)** → `extract_loan_advance(fs_list)`(추가 API 호출 없음) → `detect_financial_anomaly(current, prior, current_indx, prior_indx, loan_advance=...)`
 - 이상 플래그 9종: `AR_SURGE`, `INVENTORY_SURGE`, `CASH_GAP`, `CAPITAL_IMPAIRMENT`(절대 임계) + `CFS_OFS_REVERSAL`(별도>연결 당기순이익 역전 — 종속회사 합산 손실, 격차 ≥10%일 때만. 정상 대기업의 연결>별도 괴리는 플래그하지 않음 — 삼성전자 +46% 라이브 검증) + `OPNET_POS_NEG`(영업흑자·순손실 — 영업외 손실)·`OPNET_NEG_POS`(영업적자·순이익 흑자 — 일회성 이익 의심, 상폐 요건 회피 연관) + `RESTATEMENT`(전기 수치 재작성 — 올해 보고서의 전기값 vs 작년 보고서의 당기값을 6계정×fs_div 대조, 0.5% 허용오차. `detect_restatement`, 직전 연도 `fnlttSinglAcnt` 1회 추가 호출) + `LOAN_ADVANCE_SURGE`(v1.6.0, 금감원 2019-12 무자본 M&A 합동점검 유의사항 ③ 도구화 — 재무상태표 대여금+선급금 합계가 전기 대비 2배↑·10억원↑이면 플래그)
@@ -376,7 +376,8 @@ dart_risk_mcp/
 - "대여금·선급금 (계정 노출 시)" 블록(`extract_loan_advance`, v1.6.0): fnlttSinglAcntAll rows에서 "대여금"·"선급금" 포함 계정("선급비용" 제외)을 sj_div로 재무상태표(BS, 잔액)/현금흐름표(CF, 증감) 구분해 당기/전기 사실 표기 + 금감원 합동점검 인용 1줄. 계정 자체가 노출되지 않는 회사가 흔해(셀트리온·삼성전자·제이스코홀딩스·아틀라스링크 0건) 미노출 시 블록 자체 생략(정상). 노출 시에도 BS(잔액) 항목이 있을 때만 표 상단 지표 행 + `LOAN_ADVANCE_SURGE` 판정 대상, CF(흐름) 전용 노출은 사실 표기만 하고 판정하지 않음
 - "이익조작 연구 변수" 블록(`compute_beneish_variables`, kreports 이식/Apache 2.0): Beneish 개별 변수 최대 8종(DSRI·GMI·AQI·SGI·SGAI·LVGI + DEPI·TATA)을 전년=1.00 기준 지수로 사실 표기(단, TATA는 당기 비율). **M-Score 합산·임계 판정 없음**(v0.8.5 원칙, 안내 문구 자동 첨부). DEPI·TATA의 감가상각비는 fnlttSinglAcntAll 미노출이라 사업보고서 XBRL 인스턴스에서 좁게 추출(`extract_xbrl_depreciation`, annual만, ZIP +1회, `_is_zip_safe` 가드) — 소형사는 XBRL 재무 태깅이 없어(기업개황 dart-gcd만) 미발화가 정상이며 이때 기존 6종만 표기. TATA는 축약식(ΔCA−Δ현금−ΔCL−감가상각비)/총자산, LVGI는 부채총계/자산총계 기준(명칭에 명시). 라이브 발화: 삼성전자·셀트리온·두산·두산에너빌리티 4/6사
 - "연구개발비 비중 (사업보고서 기재)" 블록(`extract_rd_ratio_from_report`, kreports business_insights 이식/Apache 2.0): 최근 사업보고서 원문의 "연구개발비/매출액 비율" 표에서 최근 3개 연도 값을 regex 추출해 사실 표기 (annual만, ZIP 다운로드 +1회). % 생략 변형은 인접 소수점 연속 규칙으로 흡수, 산정 기준 상이 안내 자동 첨부. 라이브 검증 5/6사(제이스코는 R&D 표 없음 — 정상 미검출)
-- v0.8.8 추가: `fnlttSinglIndx` 4카테고리(M210000 수익성·M220000 안정성·M230000 성장성·M240000 활동성)에서 핵심 7종(순이익률·자기자본비율·부채비율·유동비율·매출액증가율·매출채권회전율·재고자산회전율)을 `12.30%p → 8.10%p (전년 대비 -34.1%)` 형식으로 표기. 점수 가산 없음, 사실 표기만(v0.8.5 원칙).
+- v0.8.8 추가: `fnlttSinglIndx` 4카테고리(M210000 수익성·M220000 안정성·M230000 성장성·M240000 활동성)에서 핵심 5종(순이익률·자기자본비율·부채비율·유동비율·매출액증가율)을 `12.30%p → 8.10%p (전년 대비 -34.1%)` 형식으로 표기. 점수 가산 없음, 사실 표기만(v0.8.5 원칙). ⚠ **2026-08-28 이전에는 7종이었다** — 매출채권·재고자산회전율을 뺐다. DART `fnlttSinglIndx`의 회전율 `idx_val`은 **×100 스케일**로 오는데 코드가 그대로 "회" 단위를 붙여 골든에 「재고자산회전율 4780.49회」·「매출채권회전율 358.67회」처럼 물리적으로 불가능한 값이 나왔다(삼성전자 실측 총자산회전율 62.007 ↔ 자체 계산 0.58회로 확인). 게다가 삼성전자조차 매출채권·매입채무 회전율 `idx_val`이 null이고 자본금회전율은 `#########`라 이 경로 자체가 신뢰할 수 없었다. 대신 "회전율 (기말잔액 기준)" 블록을 신설(`compute_turnover_metrics`, 아래 v1.21.0) — 이미 확보한 당기/전기 재무제표로 계산해 **추가 API 호출 0회**.
+- "회전율 (기말잔액 기준)" 블록(v1.21.0): 위와 같은 `current`/`prior`로 `compute_turnover_metrics`를 호출해 회전율 5종(`track_turnover_trend`와 공유하는 `_TURNOVER_LABELS`)을 전기→당기·YoY%로 표기. 값이 없으면 이유(계정 미노출·분모 0 등)를 사실로 남긴다. 상세 계산 규칙·CCC·다년 추세는 `track_turnover_trend`(27번) 참고
 - `report_type` 허용값: `annual`·`half`·`q1`·`q3`
 - 결과 하단 "업종별 유의 회계정책 (참고)" 블록: `fetch_company_info`의 KSIC 업종코드로 `core/sector_policy.py` 정적 맵(kreports 이식, Apache 2.0)을 조회해 해당 업종에서 회계처리 판단 영향이 큰 항목을 [핵심]/[참고] 라벨로 안내. 업종 일반 참고 자료이며 기업 판정·점수 아님(v0.8.5 원칙)
 - ※ DART API는 업종 평균을 직접 제공하지 않습니다(검증 완료). 본 도구는 **회사 자체 YoY 추세**로 false-positive를 완화합니다.
@@ -430,6 +431,20 @@ dart_risk_mcp/
 - 용도: 무자본 M&A 세력의 SPC·자회사망 추적, `related_party_hollowing` 패턴·`find_actor_overlap`·`scan_financial_anomaly`(CFS_OFS_REVERSAL)와 교차 확인
 - 금액은 DART 응답 원문 표기 그대로(보고서별 단위 혼용 가능 → 단위 유의 안내 자동 첨부). 점수·등급 없음
 - `year` 미입력 시 직전 연도. 표 셀은 개행·파이프 정제(`_cell`) — 원문 개행이 표를 깨지 않음
+
+### 27. `track_turnover_trend(company_name, lookback_years=3)` ✨ v1.21.0
+
+매출채권·재고자산·매입채무·운전자본·총자산 회전율 5종을 **기말잔액 기준**으로 다년
+추적하고, 분자·분모(매출·매출원가·매출채권 등)의 전년 대비 변화와 현금전환주기
+(CCC)를 사실로 표기합니다. 적정범위 평가·점수·등급 없음(v0.8.5 원칙).
+
+- 내부 흐름: `resolve_corp` → `fetch_turnover_history`(연도당 `fnlttSinglAcntAll` 1~2콜, CFS→OFS 폴백) → `compute_turnover_metrics`
+- 반환: 연도별 회전율 표 · 분자·분모 내역과 YoY% · 관찰된 사실(단조 추세·운전자본 부호 변화·분자분모 괴리) · CCC · 산정 기준 안내
+- **모든 회전율은 기말잔액 기준**이다(평균잔액이 아니다) — 분기 재무제표는 기초잔액이 항상 노출되지 않아, 항목마다 기준이 갈리는 것을 피하려고 기말잔액으로 통일한다
+- **분자·분모 괴리 문장은 임계값을 쓰지 않는다** — ⓐ 부호가 반대인 경우(항상) ⓑ 그 해 회전율이 가장 크게 움직인 지표 하나(임계가 아니라 **순위**). 처음 구현은 모든 조합을 찍어 삼성전자 3년에 10줄이 나왔고 대부분이 「매출액 +10.9%인데 자산총계 +10.2%」처럼 갈리지 않은 것이었다
+- `lookback_years` 범위 1~5(밖이면 3으로 강제), 기본 3년. `years_failed`(조회 자체가 실패한 연도)를 「데이터가 없는 것이 아니라 조회가 실패했다」로 사실 표기 — 빈 값이 「없다」로 읽히면 안 된다는 원칙(CLAUDE.md 「오류 처리」 참고)
+- 매출원가 미노출 시 재고자산·매입채무 회전율은 매출액으로 폴백하고 그 사실을 라벨에 남긴다(예: "(매출액 기준)"). 매출원가를 음수로 보고하는 회사(실측: STX 2024 -7,990억·2023 -8,866억)는 절댓값으로 계산하고 "(매출원가, 음수 보고 절댓값)"로 표기 — 자산 계정(매출채권·재고·매입채무·운전자본)의 음수는 절댓값으로 읽을 근거가 없어 미계산 + 사유만 남긴다
+- 라이브: 삼성전자 3년 총자산회전율 0.57→0.58→0.59회·CCC 133.2→130.0→127.4일, STX 3년 CCC 51.8→45.9→45.8일(음수 매출원가 절댓값 경로)
 
 ---
 
@@ -498,6 +513,10 @@ dart_risk_mcp/
 | `fetch_audit_opinion_history(corp_code, api_key, lookback_years)` | 감사의견 3개 엔드포인트 × 연도 루프 통합 + 재직 연수·교체·비감사 비중 경고 |
 | `fetch_debt_balance(corp_code, api_key, year)` | 채무증권 5개 엔드포인트 통합 + 1년 이내 만기 비중 산출 |
 | `detect_debt_rollover(balance_history, capital_events)` | 3년 잔액 변동 ≤10% + CB ≥2건 → CB_ROLLOVER 판정 |
+| `_FS_ALIASES`(딕셔너리, v1.21.0 확장) | 계정명 → 실제 표기 별칭 목록. `_pick_account`는 **정확 일치**라 별칭 하나가 빠지면 그 회사에서 지표가 **조용히** 사라진다. 2026-08-28 실측(38개사 `fnlttSinglAcntAll` 전수): 재고자산 별칭이 「재고자산」 하나뿐이라 **6개사(16%)**에서 재고를 못 찾았고(CJ제일제당·오리온·진원생명과학·STX·KR모터스·코아스, 전부 「유동재고자산」 표기) 그 회사들에서는 `INVENTORY_SURGE`까지 함께 죽어 있었다. 매출채권에 이마트 「매출채권 및 기타수취채권」·KR모터스 「매출채권 및 기타채권」 2건 추가. 매입채무는 별칭 자체가 없어 **7종 신설**(매입채무 22곳·매입채무및기타채무 14·매입채무 및 기타유동채무 2·매입채무 및 기타지급채무 1(이마트)·유동매입채무 1(오리온)·단기매입채무 1(제이스코홀딩스)·매입채무 및 기타채무 1(KR모터스)). 세 계정 모두 **장기·비유동 계열과 현금흐름표 항목**(「매입채무의 증가(감소)」 등)은 제외 — `_fs_response_to_periods`가 `sj_div`를 보지 않고 `account_nm`만 키로 쓰므로 잔액 자리에 흐름이 섞인다 |
+| `_ACCOUNT_ORDINAL_PREFIX_RE` / `_pick_account`의 번호 접두 폴백(v1.21.0) | 고려아연 1사가 「Ⅱ.매출원가」·「Ⅰ.유동자산」처럼 로마숫자 접두를 달아 매출액·매출원가·유동자산·유동부채가 통째로 안 잡히던 것을 수정 — 정확 일치를 먼저 시도하고, 실패하면 접두(`[ⅠⅡⅢ...]+[.．]`)를 뗀 이름으로 한 번 더 찾는다. 기존 회사의 정확 일치 동작은 불변 |
+| `compute_turnover_metrics(period, *, prior=None)` | 당기(및 선택적 전기) 재무 dict에서 회전율 5종(매출채권·재고자산·매입채무·운전자본·총자산)과 현금전환주기(CCC)를 계산하는 순수 함수(네트워크 호출 없음). 전부 **기말잔액** 기준. 매출원가 미노출 시 매출로 폴백(재고자산·매입채무 공통, `basis`에 사실 표기). **비용을 음수로 보고하는 회사**(실측: STX 2024 매출원가 -7,990억·2023 -8,866억)는 절댓값으로 계산하고 그 사실을 `basis`에 남긴다 — 자산 계정(매출채권·재고·매입채무)의 음수는 절댓값으로 읽을 근거가 없어 뒤집지 않는다(분모가 음수면 사유만 남김). 운전자본이 0 이하이면 회전율을 내지 않는다("음의 운전자본"이 회전율로 읽히면 오해를 낳으므로). `prior` 지정 시 각 metric에 `yoy_pct`·`numerator_yoy_pct`·`denominator_yoy_pct` 추가. 값 없음은 판정이 아니라 계산 불가 사실(v0.8.5 원칙) — `scan_financial_anomaly`의 "회전율 (기말잔액 기준)" 블록·`track_turnover_trend`가 함께 쓴다 |
+| `fetch_turnover_history(corp_code, api_key, lookback_years=3, report_type="annual")` | 연도별 `fnlttSinglAcntAll`을 모아 `compute_turnover_metrics`의 입력 재료를 만든다(CFS→OFS 폴백, `fetch_loss_streak`와 같은 연도 루프 관례). `lookback_years` 1~5로 클램프. 반환에 `years_requested`/`years_retrieved`/`years_failed`/`fs_div`/`periods`를 담아 조회 실패 연도를 「자료 없음」과 구분한다(「빈 값이 없다로 읽히면 안 된다」 원칙) |
 | `find_pattern_overlaps(detected_taxonomies, min_overlap=2)` | 패턴별 부분 겹침 조회 — `matched`/`missing`/`n_matched`/`n_total`, 충족률 내림차순 결정적 정렬. `find_pattern_match`(부분집합, 첫 매칭 1건)와 별개이며 그쪽은 그대로 유지. **v1.20.13: 카드로 세울 최소 개수는 `required_overlap(n_total, min_overlap)`이 정한다** — `PATTERN_MIN_RATIO`(0.6) 비례, 하한 `min_overlap`, 상한 `n_total`. 즉 2신호→2 · 3신호→2 · 4신호→3 · 5신호→3 · 6신호→4 |
 | `taxonomy_label_ko(tid)` | taxonomy id → 한글 라벨. **동봉 MD(`dart_risk_mcp/knowledge/`) 1순위** → `data/catalog/labels_ko.json` → 영문 폴백. ⚠ `pyproject`의 `packages=["dart_risk_mcp"]` 때문에 `data/`는 설치 패키지에 없다 — labels_ko만 보면 설치본에서 조용히 영문으로 퇴화한다(2026-08-17 실측) |
 
@@ -666,6 +685,7 @@ PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설
 | `_earnings_shock_block`/"📉 손익구조 급변 내역"(v1.14.0) | ✅ | 2026-08-22 라이브 — 포시에스 20260820900300(매출액 +8.0% · 영업이익 +32.1% · 당기순이익 +57.3%). **적자전환 경로는 파서 단위 테스트만** — 2026-08-10~20 시장 표집에서 손익구조 공시 자체가 1건뿐이었고 그 1건이 흑자 증가라 라이브 전환 사례 미발굴 |
 | `match_affiliate_row`/`summarize_affiliate_stake` — 종속회사 유출 사실 병기(v1.9.0) | ✅ | 아틀라스링크 실측 3건(20260729/20260120/20251015 — 상대방 전부 "주식회사 한국파일") 전부 타법인 출자현황과 매칭돼 "최초취득 2023-09 · 지분 46.3→62.4% 확대 · 피출자사 최근 순이익 -49억원" 병기 확인. 골드 `아틀라스링크_analyze.txt`/`아틀라스링크_timeline.txt` 갱신 |
 | `track_fund_usage`의 `FUND_UNREPORTED`(실제 집행 미보고) | ✅ | 2026-08-03 — 오르비텍(00297989, 046120) `track_fund_usage(lookback_years=3)` MCP 종단 실행 라이브 매칭: 2025·2026 사모 제8~11회차(각 연도 4건, 총 8건) 전부 "받은 돈이 어디에 쓰였는지 보고되지 않고 있습니다" 발화 확인, 점수·등급 문구 없음(hygiene 9/9 PASS). 골드 `오르비텍_fund_usage.txt` 신규(`scripts/regen_goldens.py` COMPANIES에 오르비텍 추가). **오탐 모드 병기(코퍼스 실측, 15개 조달건·48레코드 표본)**: FUND_UNREPORTED의 주된 오탐 원인은 recency(신규 조달 유예 부족)가 아니라 **"다년 보고 스냅샷 미정산"**이다 — 48건 중 31건(64.6%, 8개 조달건)은 같은 조달건의 더 최신 연도 보고서에서 이미 `real_dtls_amount>0`·`real_dtls_cn` 기재로 갱신돼 도구가 더 이상 플래그하지 않는 옛 스냅샷 잔재였다(예: 48건 중 최다 기여였던 유티아이 25건이 4개 조달건 전부 100% 완전소진으로 해소). 도구의 실제 판정 로직(`_detect_fund_anomaly`, 최신연도 라인아이템 기준)으로도 여전히 발화하는 실질 미해소는 17건(7개 조달건, 4개 회사 — 링크드·HLB·오르비텍·피아이이)뿐이며, 오르비텍 4개 조달건(사모 제8~11회차)이 2026년 보고서에서도 real=0을 유지하는 가장 뚜렷한 실측 사례다. 개선 후보(코드 미변경, 기록만): 같은 조달건의 최신 연도 보고서 기준 재정산 로직 부재가 오탐의 구조적 원인 — 상세는 `docs/superpowers/plans/2026-08-02-fund-misuse-detection-verification.md` 부록 B |
+| `track_turnover_trend`(v1.21.0)·`scan_financial_anomaly`의 "회전율 (기말잔액 기준)" 블록 | ✅ | 삼성전자 3년 총자산회전율 0.57→0.58→0.59회·CCC 133.2→130.0→127.4일 라이브 매칭, 골드 `삼성전자_turnover.txt`. STX 3년은 음수 매출원가 절댓값 경로(2024 -7,990억·2023 -8,866억)로 재고자산·매입채무 회전율에 "(매출원가, 음수 보고 절댓값)" 표기, CCC 51.8→45.9→45.8일, 골드 `STX_turnover.txt`. 이마트(매출채권 「및 기타수취채권」·매입채무 「및 기타지급채무」 — 별칭 추가 후 CCC 0.1~5.7일로 유통업 특성이 그대로 나온다)·카카오·NAVER(매출원가 계정이 없어 매출액 폴백)·고려아연(번호 접두 「Ⅱ.매출원가」 등) 4개사는 `_FS_ALIASES`/`_pick_account` 신규 별칭·폴백 경로의 실측 근거이며, 6사 정규 매트릭스(38개사 표본 밖이라 골드 없음)에는 포함되지 않는다 |
 | `track_fund_usage`의 `FUND_DIVERSION`(용도 변경) | ✅ | **2026-08-26 ⚠ 해소** — 원인은 키워드 부족이 아니라 **판정이 해설과 어긋나 있던 것**이었다. 해설은 *"계획('신규 사업 투자')과 실제 집행('기존 차입금 상환')이 다르게 기재된 상태"*를 설명하는데, 판정은 `dffrnc_occrrnc_resn`(차이사유) 문구에 「목적 변경」류 정형 표현이 있는지만 보고 **계획과 실제를 서로 비교한 적이 없었다**. `classify_fund_use`(용도 4묶음 — 타법인 취득·채무 상환·시설·자산·운영자금)를 신설해 두 묶음이 겹치지 않으면 발화하도록 했다. 30개사 2,877건 실측: 양쪽 기재 2,343건 중 **94%가 분류**되고 도구 판정으로 **160건(5.6%)·14개사** 발화. 이탈 방향은 시설·자산→운영자금 57 · 운영자금→채무 상환 39 · 운영자금→타법인 취득 26 · 채무 상환→시설·자산 11로 뜻이 분명하다. 라이브: **링크드**(운영자금→타법인 취득/채무 상환) · **비에스제이홀딩스**(채무 상환→시설·자산) · **KR모터스**(타법인 취득→차입금상환) — CLAUDE.md가 "현재 키워드 미포착"으로 남겨 둔 실사례가 전부 잡힌다. ⚠ **묶음을 잘게 쪼개면 안 된다** — 1차 측정에서 여덟 묶음으로 나눴더니 정상 집행이 이탈로 잡혔다(원재료·매입채무 결제는 실질이 운영자금, "R&D 센터 인프라 투자"는 실질이 시설자금, 본사 부동산 취득은 시설과 같은 묶음). 기존 차이사유 키워드 경로는 그대로 살아 있다 |
 | 신호/패턴 | 판정 근거 | 확인 계층 | 근거 |
 |---|---|---|---|
@@ -973,8 +993,8 @@ INQUIRY의 `"거래정지"` 오탐은 우연히 발견됐다. 같은 종류의 �
 
 ### 골드 출력 재생성 (회귀 검증용)
 
-`scripts/regen_goldens.py`로 6개 회사 × 24개 도구 매트릭스를 한 번에 재생성합니다.
-(전체 26개 중 `lookup_known_actor`·`manage_watchlist`는 외부 데이터·사용자 자산에
+`scripts/regen_goldens.py`로 6개 회사 × 25개 도구 매트릭스를 한 번에 재생성합니다.
+(전체 27개 중 `lookup_known_actor`·`manage_watchlist`는 외부 데이터·사용자 자산에
 의존해 매트릭스에서 제외됩니다.)
 API 키는 `tmp/_apikey.txt` 또는 환경변수 `DART_API_KEY`에서 자동 로드.
 
@@ -991,7 +1011,7 @@ python scripts/regen_goldens.py                                       # 전체 �
 ## 공개 리스크 뷰어 인프라 (docs/tool/)
 
 - **정적 단일 파일**: `docs/tool/index.html` (외부 JS 의존 0, 빌드 없음). 데이터는 `signals-data.json`(scripts/export_tool_data.py로 수동 재생성) + `corp-map.json` + `corp-aliases.json`.
-- **릴레이**: JS 릴레이 `api/[endpoint].js`(Vercel icn1)·`relay/worker.js`(Cloudflare 미러)·`scripts/dev_relay.py`(로컬) 3곳이 **동일 화이트리스트 10종**을 복제 유지 — list, company, fnlttSinglAcnt, accnutAdtorNmNdAdtOpinion, exctvSttus, elestock, alotMatter, pssrpCptalUseDtls, prvsrpCptalUseDtls, otrCprInvstmntSttus(v1.9.0 — 종속회사 유출 사실 병기). 하나 추가하면 3곳 모두 갱신.
+- **릴레이**: JS 릴레이 `api/[endpoint].js`(Vercel icn1)·`relay/worker.js`(Cloudflare 미러)·`scripts/dev_relay.py`(로컬) 3곳이 **동일 화이트리스트 11종**을 복제 유지 — list, company, fnlttSinglAcnt, accnutAdtorNmNdAdtOpinion, exctvSttus, elestock, alotMatter, pssrpCptalUseDtls, prvsrpCptalUseDtls, otrCprInvstmntSttus(v1.9.0 — 종속회사 유출 사실 병기), fnlttSinglAcntAll(v1.21.0 — 뷰어 회전율 3기간 블록). 하나 추가하면 3곳 모두 갱신.
 - **원문 추출**: `api/doc.py`(껍데기) + `tool_server/doc.py`(몸통, 단위 테스트 `tests/test_tool_server_doc.py`) — `GET /api/doc?rcept_no=&max_chars=` + `X-DART-Key` 헤더. `fetch_disclosure_full` 재사용, 200 응답만 CDN 캐시(s-maxage=86400, 키가 URL에 없어 캐시 키 안전). `.vercelignore`에 `!tool_server` 필수(빠뜨리면 함수 번들에 안 들어가 ModuleNotFoundError).
 - **「정기 보고」 범주(2026-08-27 배선)**: `export_tool_data.py`가 `routine_filing_keywords`와 `categories["9"]="정기 보고"`를 진작 내보내고 그 주석이 *"뷰어의 `classifyDisclosureCategory`가 …이 번호를 반환한다"*고 적고 있었는데, **그런 함수가 없었다** — 뷰어는 신호가 붙은 행에서만 카테고리를 그려 사업보고서·분기보고서가 전부 「—」였다(데이터는 실려 나가고 기능은 없던 상태). `routineCategory()`로 배선했다. 「기타」(모른다)가 아니라 **「정기 보고」(안다, 위험 신호가 아니다)**라는 별도 사실 범주이며, 위험 신호가 하나라도 붙으면 그쪽이 먼저 이긴다. ⚠ `--c9` 색도 CSS에 없어 배선만 했으면 점이 투명하게 찍혔을 것이다 — 위험 신호가 아니므로 팔레트에서 가장 흐린 값(`#5a6472`)을 줬다.
 - **caution 파생 필드**: export_tool_data.py가 신호별 taxonomy severity를 2단계로 접어 `caution: bool`(CRITICAL/HIGH=true)만 내보낸다. severity·score 원값은 계속 미노출. 뷰어는 이를 '주의/참고' 관찰 우선순위 배지로 렌더(면책 동반) — **뷰어 한정 예외**이며 MCP 도구 출력의 무판정 원칙은 그대로다. 패턴에는 caution을 넣지 않는다(9종 전원 CRITICAL/HIGH → 상수).
@@ -1012,6 +1032,7 @@ python scripts/regen_goldens.py                                       # 전체 �
 - **`classifyOutflowRelation` 드리프트 수정(v1.14.0)**: 뷰어에 core의 2026-08-04 수정(부정 표기 우선 검사)이 빠져 있어 "특수관계 없음"·"최대주주 아님"을 부분 문자열 매칭이 **계열로 읽었다** — CRITICAL 패턴 오발화 경로. 관계 미추출을 external로 떨어뜨리던 것도 unknown으로 정정했다. 이식 시 로직을 각자 옮기는 구조라 이런 드리프트가 조용히 남는다는 것이 이번 라운드의 교훈.
 - **관찰 우선순위 축 분리(v1.15.0)**: v1.14.0은 배지 뒤집힘을 예외 목록으로 우회했는데, 원인은 **severity가 두 질문에 겸직**하고 있던 것이었다 — "점수를 매기나?"(OBSERVATION = base_score 0)와 "먼저 봐야 하나?". 그래서 두 방향으로 깨졌다: ① 무점수 신호가 낮은 우선순위로 내려앉음(「상장폐지 결정」이 '참고') ② severity가 HIGH라는 이유만으로 양면적 신호에 배지가 붙음(`RELATED_PARTY`·`ASSET_TRANSFER`는 `AMBIGUOUS_SIGNAL_KEYS`라 헤드라인 승격이 막혀 있는데 배지는 '주의' — 자기모순). `core/signals.py`에 `observation_priority(key)` → `first`/`watch`/`context` 축을 신설해 severity와 분리했다. 기준은 **"그 공시 한 건만 보고 무엇을 알 수 있는가"** — `first`는 회사의 존속·상장 자격·회계 신뢰성이 걸린 사실(공시 한 건으로 의미 확정), `watch`는 지배구조·자본·자금 흐름의 사건(조합·시계열로 의미가 커짐), `context`는 제목만으로 정상/이상이 갈리지 않아 원문 확인이 필요한 것. 실측: severity 파생 배지는 90일 관찰 공시의 **56.3%**에 붙어 변별력이 없었고(절반을 넘으면 배지가 아니라 기본값), 새 축의 `first`는 **13.0%**다. `signals-data.json`의 `caution` 불리언은 `priority` 문자열로 **대체**됐다(뷰어가 유일한 소비처였다). 뷰어 배지도 3종으로 — 「먼저」(amber 외곽선) · 「참고」(회색, 관찰 신호가 전부 context일 때만) · watch는 기존 `● 신호` 유지. **점수는 여전히 매기지 않는다**(v0.8.5 불변) — 이 값으로 집계·정렬·가산하지 않으며 severity·base_score 원값 미노출도 그대로다. `AMBIGUOUS_SIGNAL_KEYS`(헤드라인 차단)와는 **합치지 않았다** — 겹치지만 같은 개념이 아니라 합치면 헤드라인 정책이 조용히 바뀐다(7종 → 17종). 대신 `AMBIGUOUS ⊆ context` 포함 관계만 불변식으로 두고 `tests/test_observation_priority.py`가 지킨다.
 - **알려진 한계 해소(v1.10.0)**: MCP `resolve_corp`가 corpCode.xml 현재명만 검색해 옛 상호 검색이 실패하던 한계를 core `load_corp_aliases()`로 해소했다. 뷰어와 별도 데이터를 새로 만들지 않고 동일 `corp-aliases.json`을 core도 참조한다(우선순위: env `DART_CORP_ALIASES_PATH` > 레포 상대 `docs/tool/corp-aliases.json`(개발 체크아웃) > 원격 vercel 주소 24시간 파일 캐시 > `{}`). `resolve_corp` 해석 순서는 정확 일치 → 종목코드 → 별칭 정확 일치(신규) → 부분 일치이며, 알로이스형 동명 충돌(동명의 죽은 법인과 상호변경 이력이 같은 이름을 공유)은 자동 전환하지 않고 기존 정확 일치 결과에 참고 안내만 병기한다. `analyze_company_risk`·`build_event_timeline`·`list_disclosures_by_stock`·`get_company_info` 4개 도구가 해석 결과에 `alias_note`가 있으면 리포트 상단에 안내 1줄을 표기한다.
+- **회전율 3기간 블록(TURNOVER TREND, v1.21.0)**: core `compute_turnover_metrics`/`_pick_account`를 `computeTurnoverMetrics`/`pickAccountByAliases`/`turnoverYoyPct`로 이식했다(`#turnoverCore`). `loadTurnoverTrend`가 최근 3개 사업연도(당해 -1~-3년, `fnlttSinglAcntAll`)를 순차 조회해 3기간 표를 그린다 — MCP 도구 `track_turnover_trend`는 `lookback_years` 1~5를 받지만 뷰어는 **항상 3기간 고정**(파라미터 없음)이 의도된 범위 차이다. `export_tool_data.py`의 `_FS_ALIAS_KEYS`가 5키 → 12키(매출·영업이익·당기순이익·자본총계·자본금 + 매출원가·매출채권·재고자산·매입채무·유동자산·유동부채·자산총계)로 넓어져 core `_FS_ALIASES`를 그대로 내보낸다 — 별칭을 뷰어에 손으로 복제하지 않는다(복제하면 core가 갈릴 때 뷰어만 조용히 낡는다). 쌍둥이 대조는 `tests/test_viewer_turnover_parity.py`(정상·매출원가 미노출·음수 매출원가·음수 분모·분모 0·운전자본 음수·번호 접두·별칭 변형·prior 지정 9케이스)가 잠근다.
 
 ## 테스트 방법
 

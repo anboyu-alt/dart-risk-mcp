@@ -51,10 +51,10 @@ def test_문서_도구_목록이_등록_도구와_같다():
     )
 
 
-def test_도구_개수가_스물여섯이다():
-    """CLAUDE.md 곳곳이 "26개"라 적는다 — 늘리면 그 문장들도 함께 고쳐야 한다."""
-    assert len(_HEADS) == 26
-    assert "MCP 도구 26개" in _DOC
+def test_도구_개수가_스물일곱이다():
+    """CLAUDE.md 곳곳이 "27개"라 적는다 — 늘리면 그 문장들도 함께 고쳐야 한다."""
+    assert len(_HEADS) == 27
+    assert "MCP 도구 27개" in _DOC
 
 
 @pytest.mark.parametrize("name,argtxt", _HEADS)

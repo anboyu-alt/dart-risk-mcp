@@ -82,6 +82,7 @@ _FIRST_LINE_PATTERNS: dict[str, str] = {
     "scan_fs":       r"^📊 \*\*.+\*\* \(\d{6}\) — 재무 이상 스캔 \(\d{4}, \w+\)$",
     "shareholder":   r"^👥 \*\*주주 현황: .+\*\* \(\d{6}\)$",
     "timeline":      r"^⏳ \*\*이벤트 타임라인: .+\*\* \(\d{6}\)$",
+    "turnover":      r"^📊 \*\*.+\*\* \(\d{6}\) — 회전율 추세 \(\d+년\)$",
     # 종목코드 1개
     "list":          r"^📋 \*\*.+\*\* \(\d{6}\) 공시 접수번호 목록$",
     # rcept 4개
@@ -134,6 +135,9 @@ _ALLOWED_PAREN_ABBREVS = {
     # 등장했다. 내부 flag 코드가 아니라 한글 용어에 병기된 표준 회계 약어라
     # RCPS·IFRS와 같은 부류로 허용한다.
     "ROE", "ROA", "EPS", "EBITDA", "EBIT", "EV", "FCF", "OCI",
+    # CCC(현금전환주기): 2026-08-28 track_turnover_trend 추가 — 내부 flag 코드가
+    # 아니라 회계·재무 문헌에서 널리 쓰는 표준 지표 약어(DSO+DIO-DPO)다.
+    "CCC",
     # 기타 산업 표준
     "OECD", "IFRS", "GAAP", "ESG",
     # MOU: 금감원 카탈로그 발췌 본문(허위 MOU 체결로 주가부양한 사례 요약)에
