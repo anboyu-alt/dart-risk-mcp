@@ -6,6 +6,12 @@
 
 키·파라미터·응답을 저장하거나 로그로 남기지 않는다 (요청 라인 로그도 억제).
 
+**로컬 전용 편의**: 브라우저가 키를 보내지 않았을 때만 환경변수 `DART_API_KEY`로
+채운다. 개발자가 이미 MCP 서버용으로 가진 키를 브라우저에 다시 붙여넣지 않아도
+되게 하려는 것이다. `relay/worker.js`·`api/[endpoint].js`(공용 배포)에는 **넣지
+않는다** — 거기서 서버 키를 주입하면 그 주소를 아는 누구나 제작자의 한도를 쓴다.
+이 스크립트는 기본이 127.0.0.1 바인딩이라 그 위험이 없다.
+
 사용:
     python scripts/dev_relay.py            # http://127.0.0.1:8787/
     python scripts/dev_relay.py --port 9000
@@ -15,7 +21,7 @@ import json
 import os
 import sys
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 import requests
 
@@ -31,6 +37,28 @@ ALLOWED_ENDPOINTS = {"list.json", "company.json",
                      "fnlttSinglAcntAll.json"}
 DART_BASE = "https://opendart.fss.or.kr/api/"
 TOOL_DIR = os.path.join(os.path.dirname(__file__), "..", "docs", "tool")
+
+
+def _env_key() -> str:
+    """환경변수의 DART 키. 없으면 빈 문자열(오류가 아니다)."""
+    return (os.environ.get("DART_API_KEY") or "").strip()
+
+
+def _with_key(query: str) -> str:
+    """`crtfc_key`가 비어 있으면 환경변수로 채운 쿼리 문자열을 돌려준다.
+
+    브라우저가 보낸 키가 있으면 **그것을 그대로 쓴다** — 환경변수가 사용자의
+    선택을 덮어쓰지 않는다.
+    """
+    pairs = parse_qsl(query, keep_blank_values=True)
+    if any(k == "crtfc_key" and v for k, v in pairs):
+        return query
+    key = _env_key()
+    if not key:
+        return query
+    pairs = [(k, v) for k, v in pairs if k != "crtfc_key"]
+    pairs.append(("crtfc_key", key))
+    return urlencode(pairs)
 
 
 class RelayHandler(SimpleHTTPRequestHandler):
@@ -75,9 +103,23 @@ class RelayHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parts = urlsplit(self.path)
+        if parts.path == "/api/health":
+            # 로컬 릴레이가 환경변수 키를 갖고 있는지만 알린다 — **값은 절대
+            # 내보내지 않는다**. 뷰어는 이 신호를 보고 브라우저에 키가 없어도
+            # 검색 화면을 연다. 공용 배포(Vercel·Cloudflare)에는 이 경로가
+            # 없으므로 404가 나고 뷰어는 기존대로 키를 요구한다.
+            payload = json.dumps(
+                {"ok": True, "server_key": bool(_env_key())}
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         if parts.path == "/api/doc":
             query = dict(parse_qsl(parts.query))
-            api_key = (self.headers.get("X-DART-Key") or "").strip()
+            api_key = (self.headers.get("X-DART-Key") or "").strip() or _env_key()
             status, body = handle_doc(query, api_key)
             payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
@@ -88,7 +130,7 @@ class RelayHandler(SimpleHTTPRequestHandler):
             return
         if parts.path == "/api/corp":
             query = dict(parse_qsl(parts.query))
-            api_key = (self.headers.get("X-DART-Key") or "").strip()
+            api_key = (self.headers.get("X-DART-Key") or "").strip() or _env_key()
             status, body = handle_corp(query, api_key)
             payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
@@ -106,7 +148,7 @@ class RelayHandler(SimpleHTTPRequestHandler):
                 self.wfile.write(b'{"error": "forbidden"}')
                 return
             try:
-                r = requests.get(DART_BASE + endpoint + "?" + parts.query,
+                r = requests.get(DART_BASE + endpoint + "?" + _with_key(parts.query),
                                  timeout=30)
                 body = r.content
                 self.send_response(r.status_code)

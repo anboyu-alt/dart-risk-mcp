@@ -87,9 +87,16 @@ def test_키가_없으면_요청을_보내지_않는다():
 
     DART는 010「등록되지 않은 API 키입니다」로 답하고, 화면은 키가 **틀렸다**고
     말한다. 키가 없는 것과 틀린 것은 사용자가 할 일이 다르다.
+
+    ⚠ 2026-08-28: 가드 조건이 `!key` → `!key && !SERVER_KEY`로 넓어졌다.
+    로컬 개발 릴레이(`scripts/dev_relay.py`)가 환경변수 키를 채워 줄 때는
+    브라우저에 키가 없어도 되기 때문이다. **의도는 그대로다** — 키가 없을 때
+    `crtfc_key`를 아예 보내지 않는다(빈 값도, "null"도 아니다).
     """
     i = _HTML.index("async function dartGet(")
     body = _HTML[i:_HTML.index("\n}", i)]
-    assert "if (!key) throw" in body, "키 없음 가드가 사라졌다"
+    assert "if (!key && !SERVER_KEY)" in body, "키 없음 가드가 사라졌다"
     assert "crtfc_key: key" in body, "정제한 키를 써야 한다"
     assert "crtfc_key: localStorage.getItem" not in body
+    # 키가 없으면 파라미터 자체를 넣지 않는다 — 릴레이가 채우거나 위 가드가 막는다
+    assert "key ? { crtfc_key: key, ...params } : { ...params }" in body
