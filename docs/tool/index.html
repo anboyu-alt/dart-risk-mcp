@@ -3162,20 +3162,33 @@ function dividendPanelHTML(records) {
 // 남기지 않지만, fundChain의 diff_reason 각주 안내(footnoteMarkerNote)가
 // 접수번호를 쓸 수 있어 뷰어 어댑터에서는 원본 그대로 붙여둔다(적응 지점).
 const FUND_USAGE_ENDPOINTS = ["pssrpCptalUseDtls.json", "prvsrpCptalUseDtls.json"];
+
+// DART 자금사용 응답은 **미기재를 `"-"`로 준다**. JS에서도 `"-"`는 참이라
+// 그대로 두면 「집행 차이 사유 보고 있음」이 **없는데 뜬다** — core는 문자열을
+// 그대로 보여줘 사용자가 「-」임을 알 수 있었지만 뷰어는 그것을 **판단 문장**으로
+// 바꾸므로 더 나쁘다. core `_fund_text`와 같은 목록을 쓴다.
+const FUND_BLANK_TOKENS = new Set(["", "-", "–", "—", "해당사항없음", "해당사항 없음"]);
+function fundText(v) {
+  const t = String(v === null || v === undefined ? "" : v).trim();
+  return FUND_BLANK_TOKENS.has(t) ? "" : t;
+}
+
 function normalizeFundUsageItem(item, bsnsYear) {
-  const planUseprps = item.rs_cptal_use_plan_useprps || item.mtrpt_cptal_use_plan_useprps ||
-    item.cptal_use_plan || item.on_dclrt_cptal_use_plan || "";
-  const planAmount = item.rs_cptal_use_plan_prcure_amount || item.mtrpt_cptal_use_plan_prcure_amount ||
-    item.pay_amount || null;
+  const planUseprps = fundText(item.rs_cptal_use_plan_useprps)
+    || fundText(item.mtrpt_cptal_use_plan_useprps)
+    || fundText(item.cptal_use_plan) || fundText(item.on_dclrt_cptal_use_plan) || "";
+  const planAmount = fundText(item.rs_cptal_use_plan_prcure_amount)
+    || fundText(item.mtrpt_cptal_use_plan_prcure_amount)
+    || fundText(item.pay_amount) || null;
   return {
-    pay_de: item.pay_de !== undefined && item.pay_de !== null ? String(item.pay_de) : "",
-    plan_useprps: String(planUseprps).trim(),
+    pay_de: fundText(item.pay_de),
+    plan_useprps: planUseprps,
     plan_amount: planAmount,
-    real_dtls_amount: item.real_cptal_use_dtls_amount !== undefined ? item.real_cptal_use_dtls_amount : null,
+    real_dtls_amount: fundText(item.real_cptal_use_dtls_amount) || null,
     // 실제 집행 **문구**는 지금까지 가져오지 않았다 — 금액만 봤다. core가
     // 계획↔실제 용도 묶음을 비교하게 되면서(2026-08-26) 여기서도 필요해졌다.
-    real_dtls_cn: String(item.real_cptal_use_dtls_cn || item.real_cptal_use_sttus || "").trim(),
-    dffrnc_resn: (item.dffrnc_occrrnc_resn || "").trim(),
+    real_dtls_cn: fundText(item.real_cptal_use_dtls_cn) || fundText(item.real_cptal_use_sttus) || "",
+    dffrnc_resn: fundText(item.dffrnc_occrrnc_resn),
     rcept_no: item.rcept_no || null,
     bsns_year: bsnsYear,
   };
