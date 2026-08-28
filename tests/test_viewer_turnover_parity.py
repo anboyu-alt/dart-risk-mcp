@@ -231,6 +231,20 @@ _PRIOR = {
     "자산총계": 1_700_000_000,
 }
 
+# 스팩(기업인수목적회사)은 영업이 없어 **매출이 0원**이다. 실측:
+# 하나금융21호기업인수목적 2023 — 매출 0원, 매출채권 3억, 운전자본 151억.
+# 산술로는 0.00회가 나오지만 회전율로 읽히면 "회전이 느리다"로 오해된다.
+_ZERO_REVENUE = {
+    "매출액": 0,
+    "매출원가": 0,
+    "매출채권": 300_000_000,
+    "재고자산": 100_000_000,
+    "매입채무": 50_000_000,
+    "유동자산": 16_000_000_000,
+    "유동부채": 900_000_000,
+    "자산총계": 16_100_000_000,
+}
+
 _CASES = [
     ("정상", _NORMAL, None),
     ("매출원가_미노출_폴백", _COGS_MISSING, None),
@@ -240,6 +254,7 @@ _CASES = [
     ("운전자본_음수", _WORKING_CAPITAL_NEGATIVE, None),
     ("번호_접두_폴백", _ORDINAL_PREFIX, None),
     ("별칭_변형", _ALIAS_VARIANTS, None),
+    ("매출_0원_스팩", _ZERO_REVENUE, None),
     ("prior_지정_yoy", _NORMAL, _PRIOR),
 ]
 
@@ -273,3 +288,22 @@ def test_음수_매출원가가_basis에_절댓값_사실을_남긴다():
     js = _viewer([[_COGS_NEGATIVE, None]])[0]
     assert js["metrics"]["inventory"]["basis"] == "매출원가(음수 보고, 절댓값)"
     assert js["metrics"]["inventory"]["numerator"] == 600_000_000
+
+
+def test_매출이_0원이면_회전율을_내지_않는다():
+    """스팩·개발단계 회사 — 「0.00회」는 값이 아니라 오해다.
+
+    실측(하나금융21호기업인수목적 2023): 표에는 「0.00회」가 찍히는데 CCC 사유는
+    「매출채권회전율이 없어」라고 말해 **화면이 자기모순**이었다. 운전자본
+    회전율은 `_simple_metric`을 거치지 않는 별도 분기라 그 한 줄만 따로 남았다.
+    """
+    r = compute_turnover_metrics(_ZERO_REVENUE)
+    js = _viewer([[_ZERO_REVENUE, None]])[0]
+    for key in ("receivable", "asset", "working_capital"):
+        assert r["metrics"][key]["value"] is None, key
+        assert "0원" in r["metrics"][key]["reason"], key
+    # 뷰어는 camelCase 키를 쓴다
+    for key in ("receivable", "asset", "workingCapital"):
+        assert js["metrics"][key]["value"] is None, key
+        assert "0원" in js["metrics"][key]["reason"], key
+    assert r["ccc"]["value"] is None
