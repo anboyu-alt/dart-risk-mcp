@@ -995,16 +995,28 @@ def _normalize_fund_usage(item: dict, kind: str, year: int) -> dict:
         "kind": kind,
         "year": year,
         "tm": str(item.get("tm", "")),
-        "pay_de": str(item.get("pay_de", "")),
+        "pay_de": _fund_text(item.get("pay_de")),
         "pay_amount": _to_int_safe(item.get("pay_amount")),
-        "plan_useprps": str(plan_useprps).strip(),
+        "plan_useprps": _fund_text(plan_useprps),
         "plan_amount": plan_amount,
-        "real_dtls_cn": str(real_dtls_cn).strip(),
+        "real_dtls_cn": _fund_text(real_dtls_cn),
         "real_dtls_amount": _to_int_safe(item.get("real_cptal_use_dtls_amount")),
-        "dffrnc_resn": str(item.get("dffrnc_occrrnc_resn") or "").strip(),
+        "dffrnc_resn": _fund_text(item.get("dffrnc_occrrnc_resn")),
         "plan_cats": sorted(classify_fund_use(plan_useprps)),
         "real_cats": sorted(classify_fund_use(real_dtls_cn)),
     }
+
+
+# DART 자금사용 응답은 **미기재를 `"-"`로 준다**. 파이썬에서 `"-"`는 참이라
+# 그대로 두면 화면에 「차이사유: -」가 찍힌다(실측 KB금융 3년 499줄). 빈 값으로
+# 접어 렌더가 그 줄 자체를 내지 않게 한다.
+_FUND_BLANK_TOKENS = {"", "-", "–", "—", "해당사항없음", "해당사항 없음"}
+
+
+def _fund_text(v) -> str:
+    """자금사용 텍스트 필드 정규화 — 미기재 표기는 빈 문자열."""
+    t = str(v or "").strip()
+    return "" if t in _FUND_BLANK_TOKENS else t
 
 
 def _detect_fund_anomaly(rec: dict) -> list[str]:

@@ -5316,8 +5316,21 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
     # 이상 플래그가 붙은 건은 **개수와 무관하게 전부** 싣고, 나머지는 최신순
     # 상한까지만 실은 뒤 몇 건을 뺐는지 사실로 적는다. 집계(총 건수·플래그
     # 건수)는 그대로라 요약이 달라지지 않는다.
-    _flagged = [r for r in records if r["flags"]]
-    _rest = [r for r in records if not r["flags"]]
+    # 계획·실제·차이사유·납입일이 **전부 미기재**인 행은 DART가 빈 껍데기로
+    # 준 것이라 화면에 아무것도 말하지 않는다(실측 아틀라스링크 36건 중 4건이
+    # 모든 칸이 `"-"`). 목록에서만 빼고 **총 건수 집계는 그대로** 둔다 —
+    # 조회된 것은 조회된 것이다. 뺀 개수는 아래에서 사실로 적는다.
+    def _is_blank_record(r: dict) -> bool:
+        return not any((
+            r.get("plan_useprps"), r.get("real_dtls_cn"), r.get("dffrnc_resn"),
+            r.get("pay_de"), r.get("plan_amount"), r.get("real_dtls_amount"),
+            r.get("pay_amount"), r.get("flags"),
+        ))
+
+    _blank = [r for r in records if _is_blank_record(r)]
+    _usable = [r for r in records if not _is_blank_record(r)]
+    _flagged = [r for r in _usable if r["flags"]]
+    _rest = [r for r in _usable if not r["flags"]]
     _flag_omitted = max(0, len(_flagged) - _FUND_USAGE_FLAGGED_MAX)
     _flagged = _flagged[:_FUND_USAGE_FLAGGED_MAX]
     _budget = max(0, _FUND_USAGE_DETAIL_MAX - len(_flagged))
@@ -5325,10 +5338,21 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
     _shown = _flagged + _rest[:_budget]
 
     for rec in _shown:
-        lines.append(
-            f"{_format_fund_year_prefix(rec)} "
-            f"납입 {rec['pay_amount']:,}원"
-        )
+        # ⚠ 「납입 0원」이라 적으면 안 된다 — DART는 `pay_amount`를 **늘
+        # 미기재(`"-"`)로 준다**(실측 6개사 937건 **100%**, 응답 39행 전수
+        # 확인). 0원이 납입됐다는 뜻이 아니라 그 칸이 비어 있다는 뜻이다.
+        # 대신 실제로 채워져 오는 납입일을 쓴다.
+        #
+        # `tests/test_no_dead_fields.py`가 이걸 못 잡은 이유: 그 검사는
+        # "읽기만 하고 아무도 안 넣는 키"를 찾는데, `pay_amount`는 응답에
+        # **있다**(값이 "-"일 뿐이다). 「키는 있는데 값이 늘 비어 있는」 것은
+        # 다른 부류다.
+        _head = _format_fund_year_prefix(rec)
+        if rec.get("pay_amount"):
+            _head += f" 납입 {rec['pay_amount']:,}원"
+        elif rec.get("pay_de"):
+            _head += f" 납입일 {rec['pay_de']}"
+        lines.append(_head)
         lines.append(
             f"  계획: {rec['plan_useprps'][:60] or '(공란)'} "
             f"({rec['plan_amount']:,}원)"
@@ -5354,12 +5378,14 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
                 lines.append(f"    {body}")
         lines.append("")
 
-    if _omitted or _flag_omitted:
+    if _omitted or _flag_omitted or _blank:
         _parts = [f"…전체 {len(records)}건 중 {len(_shown)}건을 표시했습니다"]
         if _omitted:
             _parts.append(f"이상 플래그가 없는 {_omitted}건 생략")
         if _flag_omitted:
             _parts.append(f"플래그가 붙은 건도 {_flag_omitted}건 생략")
+        if _blank:
+            _parts.append(f"계획·실제가 모두 미기재인 {len(_blank)}건 제외")
         lines.append(" · ".join(_parts) + ".")
         lines.append("")
 
