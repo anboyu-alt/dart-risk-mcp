@@ -21,6 +21,8 @@ from mcp.server.fastmcp import FastMCP
 from .core import (
     calculate_risk_score,
     category_prose,
+    compute_turnover_metrics,
+    fetch_turnover_history,
     detect_capital_churn,
     detect_debt_rollover,
     detect_dividend_drain,
@@ -5468,6 +5470,82 @@ _METRIC_TO_FLAG: dict[str, str] = {
 }
 
 
+# ── 회전율 (compute_turnover_metrics 렌더 공용, scan_financial_anomaly ─────
+# 요약 블록 + track_turnover_trend 도구가 함께 쓴다) ───────────────────────
+_TURNOVER_LABELS: dict[str, str] = {
+    "receivable": "매출채권회전율",
+    "inventory": "재고자산회전율",
+    "payable": "매입채무회전율",
+    "working_capital": "운전자본회전율",
+    "asset": "총자산회전율",
+}
+# 관찰 사실 문장(분자·분모 괴리)을 조립할 때 쓰는 분모 라벨.
+_TURNOVER_DENOM_LABELS: dict[str, str] = {
+    "receivable": "매출채권",
+    "inventory": "재고자산",
+    "payable": "매입채무",
+    "working_capital": "운전자본",
+    "asset": "자산총계",
+}
+
+
+def _turnover_numerator_label(key: str, m: dict) -> str:
+    """분자 라벨. inventory/payable은 매출원가 미노출 시 매출액으로 폴백하므로
+    `basis`를 그대로 읽는다(사실 표기 — 계산 방식이 회사마다 다를 수 있다)."""
+    if key in ("inventory", "payable"):
+        basis = (m.get("basis") or "").strip()
+        if basis.startswith("매출원가"):
+            return "매출원가"
+        if basis == "매출액":
+            return "매출액"
+        return "매출원가·매출액"
+    return "매출액"
+
+
+def _turnover_value_str(m: dict) -> str:
+    """compute_turnover_metrics 개별 지표 dict → 표시 문자열.
+
+    값이 없으면 "—"(사유는 호출부에서 별도 표기). 폴백(매출원가 미노출 →
+    매출액 대체, 음수 보고 절댓값)이면 그 사실을 괄호로 덧붙인다 — 판정이
+    아니라 "이 숫자가 어떻게 나왔는지"의 사실 표기(v0.8.5 원칙).
+    """
+    v = m.get("value")
+    if v is None:
+        return "—"
+    basis = (m.get("basis") or "").strip()
+    note = ""
+    if basis == "매출액":
+        note = "(매출액 기준)"
+    elif basis == "매출원가(음수 보고, 절댓값)":
+        note = "(매출원가, 음수 보고 절댓값)"
+    elif basis and basis != "매출원가":
+        note = f"({basis})"
+    return f"{v:.2f}회{note}"
+
+
+def _turnover_chg_word(pct: float) -> str:
+    if pct > 0:
+        return "늘었습니다"
+    if pct < 0:
+        return "줄었습니다"
+    return "변화가 없습니다"
+
+
+def _eun_neun(word: str) -> str:
+    """받침 유무에 따라 조사 '은'/'는' 선택.
+
+    분자·분모 라벨이 "매출원가"·"자산총계"(받침 없음)와 "매출채권"·"매입채무"
+    (받침 있음/없음이 섞임)를 오가며 문장에 그대로 붙는다 — 하드코딩한 "은"
+    하나로는 "매출원가은"·"자산총계은" 같은 틀린 조사가 나온다.
+    """
+    if not word:
+        return "는"
+    code = ord(word[-1])
+    if 0xAC00 <= code <= 0xD7A3:
+        return "는" if (code - 0xAC00) % 28 == 0 else "은"
+    return "는"
+
+
 @mcp.tool()
 def scan_financial_anomaly(
     company_name: str,
@@ -5661,6 +5739,27 @@ def scan_financial_anomaly(
             lines.append(
                 f"- {m['name']}  전기 {pv:.2f}{unit} → 당기 {cv:.2f}{unit}  ({trend})"
             )
+
+    # v1.x: 회전율 (기말잔액 기준) — current/prior는 위에서 이미 확보했으므로
+    # 추가 API 호출 0회. DART fnlttSinglIndx의 회전율 idx_val이 ×100 스케일로
+    # 와서(_CORE_INDX_NAMES에서 제거한 이유) 그 자리를 자체 계산으로 대체한다.
+    lines.append("")
+    lines.append("**회전율 (기말잔액 기준)**")
+    _turnover = compute_turnover_metrics(current, prior=prior)
+    for _tkey, _tlabel in _TURNOVER_LABELS.items():
+        _tm = _turnover["metrics"].get(_tkey, {})
+        if _tm.get("value") is None:
+            _reason = _tm.get("reason") or "계정이 재무제표에 나타나지 않습니다"
+            lines.append(f"- {_tlabel}: {_reason}")
+            continue
+        _pri_v = _tm.get("prior_value")
+        _pri_s = f"{_pri_v:.2f}회" if _pri_v is not None else "—"
+        _yoy = _tm.get("yoy_pct")
+        _yoy_s = f" (전년 대비 {_yoy:+.1f}%)" if _yoy is not None else " (전년 비교 불가)"
+        lines.append(
+            f"- {_tlabel}: 전기 {_pri_s} → 당기 {_turnover_value_str(_tm)}{_yoy_s}"
+        )
+    lines.append("  다년 추세는 `track_turnover_trend`로 확인할 수 있습니다.")
 
     # Beneish 연구 변수 — 지수 사실 표기만, 합산 점수·판정 없음(v0.8.5 원칙).
     # 감가상각비는 사업보고서 XBRL 기재값에서 좁게 추출해 DEPI·TATA 복원 (annual만).
@@ -5989,6 +6088,257 @@ def track_capital_structure(
         "실제 조달 금액은 `get_major_decision` 또는 `get_disclosure_document`로 "
         "개별 공시를 열어 확인해야 합니다."
     )
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def track_turnover_trend(
+    company_name: str,
+    lookback_years: int = 3,
+) -> str:
+    """
+    매출채권·재고자산·매입채무·운전자본·총자산 회전율을 다년(기말잔액 기준)으로
+    추적하고, 분자·분모(매출·매출원가·매출채권 등)의 전년 대비 변화와 현금전환
+    주기(CCC)를 사실로 표기합니다. 임계값·판정 없음(v0.8.5 원칙).
+
+    Args:
+        company_name: 기업명 또는 종목코드(6자리).
+        lookback_years: 1~5(밖이면 3으로 강제).
+
+    Returns:
+        연도별 회전율 표 + 분자·분모 내역 + 관찰된 사실(단조 추세·부호 변화·
+        분자분모 괴리) + CCC 텍스트.
+    """
+    api_key = os.environ.get("DART_API_KEY", "")
+    if not api_key:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+
+    if not isinstance(lookback_years, int) or not (1 <= lookback_years <= 5):
+        lookback_years = 3
+
+    corp_info = resolve_corp(company_name, api_key)
+    if not corp_info or not corp_info[1]:
+        return f"❌ 기업 '{company_name}'을(를) 찾을 수 없습니다."
+    corp_name, info = corp_info
+    corp_code = info["corp_code"]
+    stock_code = info.get("stock_code", "")
+
+    history = fetch_turnover_history(corp_code, api_key, lookback_years)
+    periods = history["periods"]
+    years_retrieved = history["years_retrieved"]
+
+    header = f"📊 **{corp_name}** ({stock_code or corp_code}) — 회전율 추세 ({lookback_years}년)"
+    if not years_retrieved:
+        if history["years_failed"]:
+            return _fetch_failed_notice(corp_name, f"최근 {lookback_years}년")
+        return f"{header}\n\n해당 기간 재무제표가 공시되지 않았습니다."
+
+    # 연도 문자열이 4자리라 사전순 정렬 = 시간순 정렬.
+    years_asc = sorted(years_retrieved)     # 오래된 → 최신
+    years_desc = list(reversed(years_asc))  # 최신 → 오래된 (표시용)
+
+    # 연도별 계산 — prior는 그 해 바로 앞(사전순) 연도가 조회됐을 때만.
+    per_year: dict[str, dict] = {}
+    for idx, y in enumerate(years_asc):
+        prior_y = years_asc[idx - 1] if idx > 0 else None
+        prior_period = periods.get(prior_y) if prior_y else None
+        per_year[y] = compute_turnover_metrics(periods[y], prior=prior_period)
+
+    lines = [header]
+    _alias_note = _alias_note_line(info)
+    if _alias_note:
+        lines.append(_alias_note)
+    if history["years_failed"]:
+        # 「빈 값이 없다로 읽히면 안 된다」— 조회 실패 연도는 자료 없음이 아니다.
+        lines.append(
+            f"⚠️ 조회에 실패한 연도: {', '.join(history['years_failed'])} — "
+            "데이터가 없는 것이 아니라 조회 자체가 실패했습니다."
+        )
+    lines.append("")
+
+    # 연도별 표 (최신 연도가 왼쪽)
+    lines.append("**연도별 회전율 (기말잔액 기준)**")
+    lines.append("| 연도 | " + " | ".join(_TURNOVER_LABELS.values()) + " |")
+    lines.append("|---|" + "---|" * len(_TURNOVER_LABELS))
+    for y in years_desc:
+        row = [y]
+        pm = per_year[y]["metrics"]
+        for tkey in _TURNOVER_LABELS:
+            row.append(_turnover_value_str(pm.get(tkey, {})))
+        lines.append("| " + " | ".join(row) + " |")
+    lines.append("")
+
+    # 분자·분모 내역 — 금액과 전년 대비 %.
+    def _amt(v: "int | None") -> str:
+        if v is None:
+            return "—"
+        return _format_amount(f"{v}원") or f"{v:,}원"
+
+    def _amt_line(label: str, v: "int | None", yoy: "float | None") -> str:
+        yoy_s = f" (전년 대비 {yoy:+.1f}%)" if yoy is not None else ""
+        return f"  - {label}: {_amt(v)}{yoy_s}"
+
+    lines.append("**분자·분모 내역**")
+    for y in years_desc:
+        pm = per_year[y]["metrics"]
+        rec = pm.get("receivable", {})
+        inv = pm.get("inventory", {})
+        pay = pm.get("payable", {})
+        wc = pm.get("working_capital", {})
+        cost_label = _turnover_numerator_label("inventory", inv)
+        lines.append(f"- {y}년:")
+        lines.append(_amt_line("매출액", rec.get("numerator"), rec.get("numerator_yoy_pct")))
+        # 매출원가 미노출이면 재고자산·매입채무 회전율도 매출액을 대신 쓴다
+        # (compute_turnover_metrics의 폴백) — 바로 위 매출액 줄과 값이 같으므로
+        # 여기서 또 찍으면 같은 금액이 "매출액"이라는 이름으로 두 번 나온다.
+        if cost_label != "매출액":
+            lines.append(_amt_line(cost_label, inv.get("numerator"), inv.get("numerator_yoy_pct")))
+        lines.append(_amt_line("매출채권", rec.get("denominator"), rec.get("denominator_yoy_pct")))
+        lines.append(_amt_line("재고자산", inv.get("denominator"), inv.get("denominator_yoy_pct")))
+        lines.append(_amt_line("매입채무", pay.get("denominator"), pay.get("denominator_yoy_pct")))
+        lines.append(_amt_line(
+            "운전자본(유동자산-유동부채)",
+            per_year[y]["working_capital"], wc.get("denominator_yoy_pct"),
+        ))
+    lines.append("")
+
+    # 관찰된 사실 — 임계값 없음, 판정 없음(v0.8.5 원칙).
+    obs: list[str] = []
+
+    # ① 3개 연도 이상 값이 있는 지표에서 단조 하락/상승.
+    for tkey, tlabel in _TURNOVER_LABELS.items():
+        seq = [(y, per_year[y]["metrics"].get(tkey, {}).get("value")) for y in years_asc]
+        seq = [(y, v) for y, v in seq if v is not None]
+        if len(seq) < 3:
+            continue
+        vals = [v for _, v in seq]
+        if all(vals[i] > vals[i + 1] for i in range(len(vals) - 1)):
+            obs.append(
+                f"- {tlabel}: {len(vals)}년 연속 낮아지고 있습니다 "
+                f"({seq[0][0]}년 {seq[0][1]:.2f}회 → {seq[-1][0]}년 {seq[-1][1]:.2f}회)."
+            )
+        elif all(vals[i] < vals[i + 1] for i in range(len(vals) - 1)):
+            obs.append(
+                f"- {tlabel}: {len(vals)}년 연속 높아지고 있습니다 "
+                f"({seq[0][0]}년 {seq[0][1]:.2f}회 → {seq[-1][0]}년 {seq[-1][1]:.2f}회)."
+            )
+
+    # ② 운전자본 부호가 바뀐 연도.
+    wc_seq = [(y, per_year[y]["working_capital"]) for y in years_asc
+              if per_year[y]["working_capital"] is not None]
+    for i in range(len(wc_seq) - 1):
+        y0, v0 = wc_seq[i]
+        y1, v1 = wc_seq[i + 1]
+        if (v0 >= 0) != (v1 >= 0):
+            obs.append(
+                f"- 운전자본 부호가 {y0}년({_amt(v0)})에서 {y1}년({_amt(v1)})으로 바뀌었습니다."
+            )
+
+    # ③ 분자·분모가 갈린 경우.
+    #
+    # ⚠ **임계값을 만들지 않는다**(v0.8.5) — 그렇다고 모든 조합을 늘어놓으면
+    # 안 된다. 처음 구현은 지표×연도 전부를 찍어 삼성전자 3년에 10줄이 나왔고
+    # 그중 「매출액 +10.9%인데 자산총계 +10.2%」처럼 **갈리지 않은 것**이
+    # 대부분이었다. 사실을 다 적는 것과 무엇이 사실인지 보이게 적는 것은 다르다.
+    #
+    # 임계 대신 두 가지 무임계 기준만 쓴다:
+    #   ⓐ 부호가 반대 — 매출은 줄었는데 매출채권은 늘어난 경우처럼 방향 자체가
+    #      갈린 것. 크기와 무관하게 사실이다.
+    #   ⓑ 그 해에 회전율이 가장 크게 움직인 지표 하나 — 임계가 아니라 **순위**다.
+    #      회전율의 변화가 곧 분자·분모가 갈린 정도이므로, 가장 많이 움직인
+    #      것을 짚으면 "어느 쪽이 끌었나"를 한 줄로 볼 수 있다.
+    for idx in range(1, len(years_asc)):
+        y = years_asc[idx]
+        pm = per_year[y]["metrics"]
+        cands = []
+        for tkey in _TURNOVER_LABELS:
+            m = pm.get(tkey, {})
+            num_pct = m.get("numerator_yoy_pct")
+            den_pct = m.get("denominator_yoy_pct")
+            if num_pct is None or den_pct is None:
+                continue
+            opposed = (num_pct > 0) != (den_pct > 0)
+            cands.append((tkey, m, num_pct, den_pct, opposed))
+        if not cands:
+            continue
+        # ⓑ 후보: 회전율 변화폭이 가장 큰 지표(부호 반대 건은 ⓐ로 이미 나온다)
+        top = max(
+            (c for c in cands if not c[4] and c[1].get("yoy_pct") is not None),
+            key=lambda c: abs(c[1]["yoy_pct"]),
+            default=None,
+        )
+        for tkey, m, num_pct, den_pct, opposed in cands:
+            if not opposed and (top is None or tkey != top[0]):
+                continue
+            num_label = _turnover_numerator_label(tkey, m)
+            den_label = _TURNOVER_DENOM_LABELS[tkey]
+            obs.append(
+                f"- {y}년 {num_label}{_eun_neun(num_label)} {num_pct:+.1f}%인데 "
+                f"{den_label}{_eun_neun(den_label)} {den_pct:+.1f}% "
+                f"{_turnover_chg_word(den_pct)}."
+            )
+
+    # ④ 계산되지 않은 지표(최신 연도) — reason을 그대로 사실로.
+    #
+    # 운전자본만 금액을 여기서 다시 만든다 — core는 순수 함수라 `_format_amount`
+    # (server.py)를 쓸 수 없어 `-253,460,000,000원`처럼 원 단위로 적는데, 같은
+    # 리포트의 다른 금액은 「141조원」이라 나란히 두면 읽는 눈이 걸린다.
+    _latest_year = years_desc[0]
+    _latest_pm = per_year[_latest_year]["metrics"]
+    for tkey, tlabel in _TURNOVER_LABELS.items():
+        m = _latest_pm.get(tkey, {})
+        if m.get("value") is not None or not m.get("reason"):
+            continue
+        _wc = per_year[_latest_year].get("working_capital")
+        if tkey == "working_capital" and _wc is not None and _wc <= 0:
+            obs.append(
+                f"- {_latest_year}년 {tlabel}: 유동부채가 유동자산보다 커 "
+                f"운전자본이 음수입니다({_amt(_wc)})."
+            )
+        else:
+            obs.append(f"- {_latest_year}년 {tlabel}: {m['reason']}")
+
+    lines.append("**관찰된 사실**")
+    if obs:
+        lines.extend(obs)
+    else:
+        lines.append(
+            "- 단조 추세·운전자본 부호 변화·분자분모 괴리로 특기할 사실이 "
+            "관찰되지 않았습니다."
+        )
+    lines.append("")
+
+    # 현금전환주기(CCC) = DSO + DIO - DPO.
+    lines.append("**현금전환주기 (CCC)**")
+    for y in years_desc:
+        ccc = per_year[y]["ccc"]
+        if ccc.get("value") is None:
+            lines.append(f"- {y}년: {ccc.get('reason') or '계산할 수 없습니다'}")
+            continue
+        lines.append(
+            f"- {y}년: DSO {ccc['dso']:.1f}일 · DIO {ccc['dio']:.1f}일 · "
+            f"DPO {ccc['dpo']:.1f}일 → CCC {ccc['value']:.1f}일"
+        )
+    lines.append("")
+
+    # 통화 확인 — fetch_turnover_history는 원본 rows를 밖으로 주지 않으므로
+    # 최신 연도 1회만 추가 조회(scan_financial_anomaly가 currency 등 부가
+    # 정보를 별도 호출로 채우는 것과 같은 관례).
+    _latest_year = years_desc[0]
+    _latest_div = history["fs_div"].get(_latest_year, "CFS")
+    _currency = ""
+    try:
+        _fs_rows = fetch_financial_statements_all(
+            corp_code, api_key, _latest_year, "annual", _latest_div)
+        _currency = fs_currency(_fs_rows)
+    except Exception:
+        _currency = ""
+
+    lines.append(
+        "기말잔액 기준으로 계산했습니다 — DART가 제공하는 재무지표와 산정 "
+        "기준이 달라 수치가 다를 수 있습니다."
+    )
+    lines.append(_currency_footer(_currency))
     return "\n".join(lines)
 
 

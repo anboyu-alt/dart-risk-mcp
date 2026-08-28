@@ -3745,9 +3745,36 @@ _FS_ALIASES = {
     # ⚠ 「장기매출채권」(5곳)·「비유동매출채권」(2곳)·「장기매출채권및기타채권」
     #   (2곳)은 **넣지 않는다** — 매출채권/매출 비율은 유동 채권을 보는
     #   지표이고, 비유동을 섞으면 회전율 해석이 뒤집힌다.
+    # 2026-08-28 재실측(38개사)에서 2곳이 더 나왔다 — 이마트 「매출채권 및
+    # 기타수취채권」·KR모터스 「매출채권 및 기타채권」. 위 원칙 그대로 유동만.
     "매출채권": ["매출채권", "매출채권및기타채권",
-             "유동매출채권", "매출채권 및 기타유동채권", "단기 매출채권"],
-    "재고자산": ["재고자산"],
+             "유동매출채권", "매출채권 및 기타유동채권", "단기 매출채권",
+             "매출채권 및 기타수취채권", "매출채권 및 기타채권"],
+    # ⚠ 2026-08-28 실측(38개사) — 별칭이 「재고자산」 하나뿐이라 **6개사(16%)**
+    # 에서 재고를 못 찾았고, 그 회사들에서는 `INVENTORY_SURGE`와 재고자산
+    # 회전율이 조용히 사라졌다(CJ제일제당·오리온·진원생명과학·STX·KR모터스·
+    # 코아스 — 전부 「유동재고자산」 표기). 매출채권과 같은 원칙으로 **유동만**
+    # 넣는다. 「재고자산의 감소(증가)」는 현금흐름표 항목이라 제외 —
+    # `_fs_response_to_periods`가 sj_div를 보지 않아 잔액 자리에 흐름이 섞인다.
+    "재고자산": ["재고자산", "유동재고자산"],
+    # 2026-08-28 실측(38개사 fnlttSinglAcntAll 전수, 회전율 지표 신설 착수):
+    # 유동 재무상태표 표기 7종 — 매입채무 22곳·매입채무및기타채무 14곳·
+    # 매입채무 및 기타유동채무 2곳·매입채무 및 기타지급채무 1곳(이마트)·
+    # 유동매입채무 1곳(오리온)·단기매입채무 1곳(제이스코홀딩스)·
+    # 매입채무 및 기타채무 1곳(KR모터스). "매입채무"를 맨 앞(가장 좁은
+    # 순수 매입채무)에 두고 나머지는 실측 빈도순.
+    #
+    # ⚠ 「장기매입채무및기타채무」(4곳)는 넣지 않는다 — 매출채권 별칭과 같은
+    #   원칙: 회전율은 유동 채무를 보는 지표이고 비유동을 섞으면 해석이
+    #   뒤집힌다.
+    # ⚠ 현금흐름표 항목도 넣지 않는다 — 「매입채무의 증가(감소)」
+    #   (대한항공·오리온)·「매입채무의 감소」(한국전력공사)·
+    #   「매입채무 및 기타채무의 증가(감소)」(한농화성)는 잔액이 아니라
+    #   흐름(증감액)이다. `_fs_response_to_periods`는 `sj_div`를 보지 않고
+    #   `account_nm`만 키로 쓰므로 섞이면 회전율이 무의미해진다.
+    "매입채무": ["매입채무", "매입채무및기타채무", "매입채무 및 기타유동채무",
+             "매입채무 및 기타지급채무", "유동매입채무", "단기매입채무",
+             "매입채무 및 기타채무"],
     "영업현금흐름": ["영업활동현금흐름", "영업활동으로인한현금흐름",
                "영업활동으로 인한 현금흐름", "영업활동 현금흐름"],
     "당기순이익": ["당기순이익", "당기순이익(손실)", "당기순이익(당기순손실)",
@@ -3770,12 +3797,39 @@ _FS_ALIASES = {
 }
 
 
+# 손익계산서·재무상태표 항목에 번호를 매겨 보고하는 회사가 있다 — 실측
+# (38개사 fnlttSinglAcntAll, 2026-08-28): 고려아연 1사가 「Ⅱ.매출원가」·
+# 「Ⅲ.매출총이익」·「Ⅰ.유동자산」처럼 로마숫자 접두를 단다. `_pick_account`는
+# **정확 일치**라 이 회사에서는 매출액·매출원가·유동자산·유동부채가 통째로
+# 안 잡혀 회전율·Beneish·AR_SURGE가 조용히 사라진다.
+#
+# 별칭을 계정마다 두 배로 늘리는 대신 접두만 떼고 한 번 더 찾는다 — 접두는
+# 표시용 번호이지 계정명이 아니다. **정확 일치를 먼저 시도**하므로 기존
+# 회사의 동작은 바뀌지 않는다.
+_ACCOUNT_ORDINAL_PREFIX_RE = re.compile(r"^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+\s*[.．]\s*")
+
+
 def _pick_account(fs: dict, names: list[str]):
-    """fs dict에서 names 우선순위대로 첫 유효 값을 반환. 없으면 None."""
+    """fs dict에서 names 우선순위대로 첫 유효 값을 반환. 없으면 None.
+
+    정확 일치로 못 찾으면 번호 접두(「Ⅱ.매출원가」)를 뗀 이름으로 한 번 더 본다.
+    """
     for n in names:
         v = fs.get(n)
         if v is not None:
             return v
+    stripped = None
+    for key, v in fs.items():
+        if v is None or not _ACCOUNT_ORDINAL_PREFIX_RE.match(key):
+            continue
+        if stripped is None:
+            stripped = {}
+        stripped.setdefault(_ACCOUNT_ORDINAL_PREFIX_RE.sub("", key).strip(), v)
+    if stripped:
+        for n in names:
+            v = stripped.get(n)
+            if v is not None:
+                return v
     return None
 
 
@@ -4066,6 +4120,258 @@ def fetch_loss_streak(corp_code: str, api_key: str, lookback_years: int = 5) -> 
     return {"years": years,
             "op_loss_streak": _streak("op"),
             "ni_loss_streak": _streak("ni")}
+
+
+def _turnover_yoy_pct(cur: float | int | None, pri: float | int | None) -> float | None:
+    """전기 대비 변동률(%). 전기값이 없거나 0이면 계산 불가(None)."""
+    if cur is None or pri is None or pri == 0:
+        return None
+    return (cur - pri) / abs(pri) * 100
+
+
+def compute_turnover_metrics(period: dict, *, prior: dict | None = None) -> dict:
+    """당기(및 선택적으로 전기) 재무 dict에서 회전율·현금전환주기(CCC)를 계산.
+
+    순수 함수 — 네트워크 호출 없음. `period`/`prior`는 `_fs_response_to_periods`가
+    만드는 {계정명: 금액} dict(당기·전기 각각 별도 호출로 얻는다). `_pick_account`
+    (정확 일치)로 계정을 꺼내므로, 표기가 `_FS_ALIASES`에 없으면 그 회사에서는
+    조용히 `value=None`이 된다 — 판정이 아니라 계정이 재무제표에 나타나지
+    않는다는 사실이다.
+
+    모든 회전율은 **기말잔액** 기준이다(평균잔액이 아니다) — 분기 재무제표는
+    기초잔액이 항상 노출되지 않아, 항목마다 기준이 갈리는 것을 피하기 위해
+    기말잔액으로 통일한다.
+
+    계산:
+        receivable      매출채권회전율 = 매출 / 매출채권
+        inventory       재고자산회전율 = 매출원가 / 재고자산
+                        (매출원가 미노출이면 매출로 폴백, basis에 사실 표기)
+        payable         매입채무회전율 = 매출원가 / 매입채무 (같은 폴백)
+        working_capital 운전자본회전율 = 매출 / (유동자산 − 유동부채)
+        asset           총자산회전율 = 매출 / 자산총계
+
+    분자·분모 중 하나라도 계정이 없으면 value=None + 한국어 사실 문장(reason).
+    분모가 0이면 value=None + "분모가 0입니다". 운전자본이 0 이하이면
+    value=None + 금액을 담은 사실 문장(운전자본 자체는 음수 나눗셈이 산술적으로는
+    가능하지만, "매출/음의 운전자본"이 회전율로 읽히면 오해를 낳으므로 계산하지
+    않는다).
+
+    CCC(현금전환주기) = DSO + DIO − DPO, 각각 365 / 해당 회전율. 셋 중
+    하나라도 회전율이 없으면 CCC value=None + 어느 것이 없어서인지 사유.
+
+    `prior`를 주면(재귀 1회, 무한 재귀 방지를 위해 prior 없이 호출) 각 metric에
+    prior_value·yoy_pct·numerator_yoy_pct·denominator_yoy_pct를 추가한다.
+    전기값이 없거나 0이면 yoy_pct는 None.
+
+    점수·등급 어휘를 쓰지 않는다(v0.8.5 원칙) — value=None은 판정이 아니라
+    계산 불가 사실이다.
+
+    Returns:
+        {"metrics": {키: {"value", "numerator", "denominator", "basis", "reason",
+                          (prior 지정 시) "prior_value", "yoy_pct",
+                          "numerator_yoy_pct", "denominator_yoy_pct"}, ...},
+         "ccc": {"dso", "dio", "dpo", "value", "reason"},
+         "working_capital": int|None}  # 유동자산-유동부채 원값(회전율이 아니다)
+    """
+    rev = _pick_account(period, _FS_ALIASES["매출"])
+    cogs = _pick_account(period, _FS_ALIASES["매출원가"])
+    ar = _pick_account(period, _FS_ALIASES["매출채권"])
+    inv = _pick_account(period, _FS_ALIASES["재고자산"])
+    ap = _pick_account(period, _FS_ALIASES["매입채무"])
+    ca = _pick_account(period, _FS_ALIASES["유동자산"])
+    cl = _pick_account(period, _FS_ALIASES["유동부채"])
+    ta = _pick_account(period, _FS_ALIASES["자산총계"])
+
+    def _simple_metric(numerator, denominator, num_label: str, den_label: str) -> dict:
+        if numerator is None:
+            reason = f"{num_label} 계정이 재무제표에 나타나지 않습니다"
+        elif denominator is None:
+            reason = f"{den_label} 계정이 재무제표에 나타나지 않습니다"
+        elif denominator == 0:
+            reason = "분모가 0입니다"
+        elif denominator < 0:
+            # 자산 계정이 음수로 보고된 경우 — 비용 계정과 달리 절댓값으로
+            # 읽을 근거가 없다. 음수 회전율은 뜻이 뒤집히므로 계산하지 않는다.
+            reason = f"{den_label}이(가) 음수로 보고돼 회전율을 계산하지 않습니다"
+        elif numerator < 0:
+            reason = f"{num_label}이(가) 음수로 보고돼 회전율을 계산하지 않습니다"
+        else:
+            return {"value": numerator / denominator, "numerator": numerator,
+                    "denominator": denominator, "basis": "", "reason": ""}
+        return {"value": None, "numerator": numerator, "denominator": denominator,
+                "basis": "", "reason": reason}
+
+    # 손익계산서를 가산 형식으로 적어 **비용을 음수로** 보고하는 회사가 있다
+    # (실측 2026-08-28: STX 2024 매출원가 -7,990억 · 2023 -8,866억). 그대로
+    # 나누면 회전율이 음수로 나와 뜻이 뒤집힌다. 절댓값으로 계산하되 그 사실을
+    # basis에 남긴다 — 자산 계정(매출채권·재고·매입채무)은 음수 해석의 근거가
+    # 없으므로 여기서 뒤집지 않는다(분모가 음수면 아래 metric이 사유를 낸다).
+    cogs_negated = cogs is not None and cogs < 0
+    if cogs_negated:
+        cogs = abs(cogs)
+
+    # 매출원가 미노출 시 매출로 폴백 — 재고자산회전율·매입채무회전율 공통.
+    if cogs is not None:
+        cost_num = cogs
+        cost_basis = "매출원가(음수 보고, 절댓값)" if cogs_negated else "매출원가"
+    elif rev is not None:
+        cost_num, cost_basis = rev, "매출액"
+    else:
+        cost_num, cost_basis = None, ""
+
+    def _cost_based_metric(denominator, den_label: str) -> dict:
+        if cost_num is None:
+            reason = "매출원가·매출액 계정이 재무제표에 나타나지 않습니다"
+        elif denominator is None:
+            reason = f"{den_label} 계정이 재무제표에 나타나지 않습니다"
+        elif denominator == 0:
+            reason = "분모가 0입니다"
+        elif denominator < 0:
+            reason = f"{den_label}이(가) 음수로 보고돼 회전율을 계산하지 않습니다"
+        else:
+            return {"value": cost_num / denominator, "numerator": cost_num,
+                    "denominator": denominator, "basis": cost_basis, "reason": ""}
+        return {"value": None, "numerator": cost_num, "denominator": denominator,
+                "basis": cost_basis, "reason": reason}
+
+    metrics: dict[str, dict] = {
+        "receivable": _simple_metric(rev, ar, "매출액", "매출채권"),
+        "inventory": _cost_based_metric(inv, "재고자산"),
+        "payable": _cost_based_metric(ap, "매입채무"),
+        "asset": _simple_metric(rev, ta, "매출액", "자산총계"),
+    }
+
+    # 운전자본회전율 — 유동자산·유동부채가 둘 다 있어야 운전자본을 낼 수 있다.
+    working_capital: int | None = None
+    if ca is None or cl is None:
+        missing = [lbl for v, lbl in ((ca, "유동자산"), (cl, "유동부채")) if v is None]
+        wc_metric = {"value": None, "numerator": rev, "denominator": None,
+                     "basis": "", "reason": f"{'·'.join(missing)} 계정이 재무제표에 나타나지 않습니다"}
+    else:
+        working_capital = ca - cl
+        if working_capital <= 0:
+            wc_metric = {
+                "value": None, "numerator": rev, "denominator": working_capital,
+                "basis": "",
+                "reason": f"유동부채가 유동자산보다 커 운전자본이 음수입니다({working_capital:,}원)",
+            }
+        elif rev is None:
+            wc_metric = {"value": None, "numerator": None, "denominator": working_capital,
+                         "basis": "", "reason": "매출액 계정이 재무제표에 나타나지 않습니다"}
+        else:
+            wc_metric = {"value": rev / working_capital, "numerator": rev,
+                         "denominator": working_capital, "basis": "", "reason": ""}
+    metrics["working_capital"] = wc_metric
+
+    # CCC = DSO + DIO - DPO, 각각 365 / 회전율.
+    _ccc_labels = {"receivable": "매출채권회전율", "inventory": "재고자산회전율",
+                   "payable": "매입채무회전율"}
+
+    def _days(turnover: float | None) -> float | None:
+        if turnover is None or turnover == 0:
+            return None
+        return 365 / turnover
+
+    dso = _days(metrics["receivable"]["value"])
+    dio = _days(metrics["inventory"]["value"])
+    dpo = _days(metrics["payable"]["value"])
+    _ccc_days = {"receivable": dso, "inventory": dio, "payable": dpo}
+    missing_ccc = [lbl for key, lbl in _ccc_labels.items() if _ccc_days[key] is None]
+    if missing_ccc:
+        ccc = {"dso": dso, "dio": dio, "dpo": dpo, "value": None,
+               "reason": f"{'·'.join(missing_ccc)}이(가) 없어 현금전환주기를 계산할 수 없습니다"}
+    else:
+        ccc = {"dso": dso, "dio": dio, "dpo": dpo,
+               "value": dso + dio - dpo, "reason": ""}
+
+    if prior is not None:
+        prior_result = compute_turnover_metrics(prior)
+        for key, m in metrics.items():
+            pm = prior_result["metrics"].get(key, {})
+            metrics[key] = {
+                **m,
+                "prior_value": pm.get("value"),
+                "yoy_pct": _turnover_yoy_pct(m.get("value"), pm.get("value")),
+                "numerator_yoy_pct": _turnover_yoy_pct(m.get("numerator"), pm.get("numerator")),
+                "denominator_yoy_pct": _turnover_yoy_pct(m.get("denominator"), pm.get("denominator")),
+            }
+
+    return {"metrics": metrics, "ccc": ccc, "working_capital": working_capital}
+
+
+def fetch_turnover_history(
+    corp_code: str,
+    api_key: str,
+    lookback_years: int = 3,
+    report_type: str = "annual",
+) -> dict:
+    """연도별 `fnlttSinglAcntAll`을 모아 `compute_turnover_metrics`의 입력 재료를 만든다.
+
+    `fetch_loss_streak`의 연도 루프 관례(직전 사업연도부터 과거로 lookback_years회)와
+    `fetch_financial_statements_all`의 CFS→OFS 폴백(scan_financial_anomaly와
+    동일 순서 — CFS 우선, 비면 OFS 재시도), `fetch_indicator_history`의 정직한
+    실패 보고(`years_failed`는 못 받은 연도, 빈 결과인데 실패가 아니면 단순
+    미공시라 어디에도 넣지 않는다 — CLAUDE.md 「빈 값이 「없다」로 읽히면
+    안 된다」)를 합쳤다.
+
+    lookback_years는 1~5로 클램프한다.
+
+    Returns:
+        {"years_requested": ["2024", "2023", "2022"],
+         "years_retrieved": [...], "years_failed": [...],
+         "fs_div": {"2024": "CFS", ...},
+         "periods": {"2024": {계정명: 금액}, ...}}
+
+    예외를 밖으로 던지지 않는다.
+    """
+    years_requested: list[str] = []
+    years_retrieved: list[str] = []
+    years_failed: list[str] = []
+    fs_div_used: dict[str, str] = {}
+    periods: dict[str, dict] = {}
+
+    if not corp_code or not api_key:
+        return {"years_requested": years_requested, "years_retrieved": years_retrieved,
+                "years_failed": years_failed, "fs_div": fs_div_used, "periods": periods}
+
+    try:
+        ly = int(lookback_years)
+    except (TypeError, ValueError):
+        ly = 3
+    ly = max(1, min(5, ly))
+
+    this_year = datetime.now().year
+    for offset in range(ly):
+        y = str(this_year - 1 - offset)
+        years_requested.append(y)
+        try:
+            fs_list = fetch_financial_statements_all(corp_code, api_key, y, report_type, "CFS")
+            div_used = "CFS"
+            if not fs_list:
+                fs_list = fetch_financial_statements_all(corp_code, api_key, y, report_type, "OFS")
+                div_used = "OFS"
+        except Exception as e:
+            log.debug("회전율 재무제표 조회 실패 (%s/%s): %s", corp_code, y, e)
+            years_failed.append(y)
+            continue
+        if fetch_failed(fs_list):
+            years_failed.append(y)
+            continue
+        if not fs_list:
+            # 못 받은 것이 아니라 그 연도 재무제표가 그냥 공시되지 않은 것.
+            continue
+        cur, _ = _fs_response_to_periods({"list": fs_list})
+        periods[y] = cur
+        fs_div_used[y] = div_used
+        years_retrieved.append(y)
+
+    return {
+        "years_requested": years_requested,
+        "years_retrieved": years_retrieved,
+        "years_failed": years_failed,
+        "fs_div": fs_div_used,
+        "periods": periods,
+    }
 
 
 def detect_profit_direction_divergence(current: dict) -> tuple[list[str], list[dict]]:
@@ -4497,15 +4803,21 @@ def compute_beneish_variables(
     return out
 
 
-# v0.8.8: fnlttSinglIndx 핵심 지표 7종 (사용자 출력에 표기) -----------------
+# v0.8.8: fnlttSinglIndx 핵심 지표 5종 (사용자 출력에 표기) -----------------
+# ⚠ 2026-08-28: "매출채권회전율"·"재고자산회전율"을 제거했다. DART
+# fnlttSinglIndx의 회전율 idx_val은 ×100 스케일로 온다(삼성전자 실측
+# 총자산회전율 62.007 ↔ 자체 계산 0.58회) — 코드가 그대로 "회" 단위를 붙여
+# 골든에 "재고자산회전율 4780.49회"·"매출채권회전율 358.67회" 같은 물리적으로
+# 불가능한 값이 나왔다. 게다가 삼성전자조차 매출채권회전율 idx_val이 null이라
+# 이 경로는 신뢰할 수 없었다. `compute_turnover_metrics`(기말잔액 기준 자체
+# 계산, scan_financial_anomaly의 "회전율 (기말잔액 기준)" 블록·
+# track_turnover_trend)가 이를 대체한다.
 _CORE_INDX_NAMES: tuple[str, ...] = (
     "순이익률",
     "자기자본비율",
     "부채비율",
     "유동비율",
     "매출액증가율(YoY)",
-    "매출채권회전율",
-    "재고자산회전율",
 )
 
 _INDX_UNIT: dict[str, str] = {
@@ -4514,8 +4826,6 @@ _INDX_UNIT: dict[str, str] = {
     "부채비율": "%",
     "유동비율": "%",
     "매출액증가율(YoY)": "%",
-    "매출채권회전율": "회",
-    "재고자산회전율": "회",
 }
 
 

@@ -1930,6 +1930,8 @@ function renderDash() {
 
   html += `<div class="panel"><div class="slabel">▍FINANCIAL CORE — 최근 사업보고서 · 사실 표기</div>
     <div id="finCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">재무제표 조회 중…</span></div></div>`;
+  html += `<div class="panel"><div class="slabel">▍TURNOVER TREND — 회전율 3기간 · 사실 표기</div>
+    <div id="turnoverCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">회전율 계산 중…</span></div></div>`;
   html += `<div class="panel"><div class="slabel">▍DIVIDEND — 배당과 순이익</div>
     <div id="divCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">배당 내역 조회 중…</span></div></div>`;
   html += `<div class="panel"><div class="slabel">▍FUND CHAIN — 조달 자금의 행방</div>
@@ -2751,6 +2753,288 @@ function ratioTrendBlock(rows, div) {
       `<td>${r.값 === null ? "―" : r.값.toFixed(2) + "%"}</td><td>${esc(r.계산식)}</td><td>${r.사유 ? esc(r.사유) : "―"}</td></tr>`).join("") +
     `</table></div></details>`;
   return html;
+}
+
+// ── 회전율 3기간(TURNOVER TREND, #turnoverCore) — core dart_client.py
+// compute_turnover_metrics / _pick_account 이식. 순수 계산 함수라 뷰어의
+// 나머지 SE 이식(비율 추이 등)과 달리 core와 **문자 그대로 같은 사유 문장**을
+// 옮긴다(tests/test_viewer_turnover_parity.py가 대조). 이름·계약이 다른
+// 기존 pickAccount(Map + canonicalName)와 혼동하지 않도록 별도 함수로 둔다.
+const ACCOUNT_ORDINAL_PREFIX_RE = /^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+\s*[.．]\s*/;
+function pickAccountByAliases(period, names) {
+  for (const n of names) {
+    const v = period[n];
+    if (v !== undefined && v !== null) return v;
+  }
+  let stripped = null;
+  for (const key of Object.keys(period)) {
+    const v = period[key];
+    if (v === undefined || v === null || !ACCOUNT_ORDINAL_PREFIX_RE.test(key)) continue;
+    if (stripped === null) stripped = Object.create(null);
+    const sk = key.replace(ACCOUNT_ORDINAL_PREFIX_RE, "").trim();
+    if (!(sk in stripped)) stripped[sk] = v;
+  }
+  if (stripped) {
+    for (const n of names) {
+      const v = stripped[n];
+      if (v !== undefined && v !== null) return v;
+    }
+  }
+  return null;
+}
+
+// 출처: dart_client.py _turnover_yoy_pct
+function turnoverYoyPct(cur, pri) {
+  if (cur === null || cur === undefined || pri === null || pri === undefined || pri === 0) return null;
+  return ((cur - pri) / Math.abs(pri)) * 100;
+}
+
+// 출처: dart_client.py compute_turnover_metrics — 기말잔액 기준 회전율 5종 +
+// CCC. period/prior는 {계정명: 금액} dict({@link fsAllRowsToPeriod} 산출물).
+// 순수 함수 — 네트워크 호출 없음. 반환 키는 camelCase(priorValue·yoyPct·
+// numeratorYoyPct·denominatorYoyPct)로 옮기되, value·numerator·denominator·
+// basis·reason과 그 안의 한국어 사유 문장은 core와 **문자 그대로 동일**하다.
+function computeTurnoverMetrics(period, prior) {
+  const A = DATA.fs_aliases;
+  const rev = pickAccountByAliases(period, A["매출"]);
+  let cogs = pickAccountByAliases(period, A["매출원가"]);
+  const ar = pickAccountByAliases(period, A["매출채권"]);
+  const inv = pickAccountByAliases(period, A["재고자산"]);
+  const ap = pickAccountByAliases(period, A["매입채무"]);
+  const ca = pickAccountByAliases(period, A["유동자산"]);
+  const cl = pickAccountByAliases(period, A["유동부채"]);
+  const ta = pickAccountByAliases(period, A["자산총계"]);
+
+  function simpleMetric(numerator, denominator, numLabel, denLabel) {
+    let reason;
+    if (numerator === null) reason = `${numLabel} 계정이 재무제표에 나타나지 않습니다`;
+    else if (denominator === null) reason = `${denLabel} 계정이 재무제표에 나타나지 않습니다`;
+    else if (denominator === 0) reason = "분모가 0입니다";
+    else if (denominator < 0) reason = `${denLabel}이(가) 음수로 보고돼 회전율을 계산하지 않습니다`;
+    else if (numerator < 0) reason = `${numLabel}이(가) 음수로 보고돼 회전율을 계산하지 않습니다`;
+    else return { value: numerator / denominator, numerator, denominator, basis: "", reason: "" };
+    return { value: null, numerator, denominator, basis: "", reason };
+  }
+
+  // 비용을 음수로 보고하는 회사(가산 형식 손익계산서) 대응 — 절댓값으로
+  // 계산하되 basis에 사실을 남긴다. 자산 계정(매출채권·재고·매입채무)은
+  // 음수 해석의 근거가 없어 여기서 뒤집지 않는다.
+  const cogsNegated = cogs !== null && cogs < 0;
+  if (cogsNegated) cogs = Math.abs(cogs);
+
+  let costNum, costBasis;
+  if (cogs !== null) {
+    costNum = cogs;
+    costBasis = cogsNegated ? "매출원가(음수 보고, 절댓값)" : "매출원가";
+  } else if (rev !== null) {
+    costNum = rev;
+    costBasis = "매출액";
+  } else {
+    costNum = null;
+    costBasis = "";
+  }
+
+  function costBasedMetric(denominator, denLabel) {
+    let reason;
+    if (costNum === null) reason = "매출원가·매출액 계정이 재무제표에 나타나지 않습니다";
+    else if (denominator === 0) reason = "분모가 0입니다";
+    else if (denominator < 0) reason = `${denLabel}이(가) 음수로 보고돼 회전율을 계산하지 않습니다`;
+    else return { value: costNum / denominator, numerator: costNum, denominator, basis: costBasis, reason: "" };
+    return { value: null, numerator: costNum, denominator, basis: costBasis, reason };
+  }
+
+  const metrics = {
+    receivable: simpleMetric(rev, ar, "매출액", "매출채권"),
+    inventory: costBasedMetric(inv, "재고자산"),
+    payable: costBasedMetric(ap, "매입채무"),
+    asset: simpleMetric(rev, ta, "매출액", "자산총계"),
+  };
+
+  // 운전자본회전율 — 유동자산·유동부채가 둘 다 있어야 운전자본을 낼 수 있다.
+  let workingCapital = null;
+  let wcMetric;
+  if (ca === null || cl === null) {
+    const missing = [];
+    if (ca === null) missing.push("유동자산");
+    if (cl === null) missing.push("유동부채");
+    wcMetric = { value: null, numerator: rev, denominator: null, basis: "",
+      reason: `${missing.join("·")} 계정이 재무제표에 나타나지 않습니다` };
+  } else {
+    workingCapital = ca - cl;
+    if (workingCapital <= 0) {
+      wcMetric = { value: null, numerator: rev, denominator: workingCapital, basis: "",
+        reason: `유동부채가 유동자산보다 커 운전자본이 음수입니다(${workingCapital.toLocaleString()}원)` };
+    } else if (rev === null) {
+      wcMetric = { value: null, numerator: null, denominator: workingCapital, basis: "",
+        reason: "매출액 계정이 재무제표에 나타나지 않습니다" };
+    } else {
+      wcMetric = { value: rev / workingCapital, numerator: rev, denominator: workingCapital, basis: "", reason: "" };
+    }
+  }
+  metrics.workingCapital = wcMetric;
+
+  // CCC = DSO + DIO − DPO, 각각 365 / 회전율.
+  const cccLabels = [["receivable", "매출채권회전율"], ["inventory", "재고자산회전율"], ["payable", "매입채무회전율"]];
+  function days(turnover) {
+    if (turnover === null || turnover === 0) return null;
+    return 365 / turnover;
+  }
+  const dso = days(metrics.receivable.value);
+  const dio = days(metrics.inventory.value);
+  const dpo = days(metrics.payable.value);
+  const cccDays = { receivable: dso, inventory: dio, payable: dpo };
+  const missingCcc = cccLabels.filter(([k]) => cccDays[k] === null).map(([, lbl]) => lbl);
+  let ccc;
+  if (missingCcc.length) {
+    ccc = { dso, dio, dpo, value: null, reason: `${missingCcc.join("·")}이(가) 없어 현금전환주기를 계산할 수 없습니다` };
+  } else {
+    ccc = { dso, dio, dpo, value: dso + dio - dpo, reason: "" };
+  }
+
+  if (prior !== null && prior !== undefined) {
+    const priorResult = computeTurnoverMetrics(prior, null);
+    for (const key of Object.keys(metrics)) {
+      const m = metrics[key];
+      const pm = priorResult.metrics[key] || {};
+      const pmValue = pm.value !== undefined ? pm.value : null;
+      const pmNumerator = pm.numerator !== undefined ? pm.numerator : null;
+      const pmDenominator = pm.denominator !== undefined ? pm.denominator : null;
+      metrics[key] = Object.assign({}, m, {
+        priorValue: pmValue,
+        yoyPct: turnoverYoyPct(m.value, pmValue),
+        numeratorYoyPct: turnoverYoyPct(m.numerator, pmNumerator),
+        denominatorYoyPct: turnoverYoyPct(m.denominator, pmDenominator),
+      });
+    }
+  }
+
+  return { metrics, ccc, workingCapital };
+}
+
+// fnlttSinglAcntAll rows → {계정명: 금액}. 출처: dart_client.py
+// _fs_response_to_periods와 같은 방식(account_nm 키, 이미 채워진 키는
+// 덮어쓰지 않음) — thstrm_amount(당기)만 쓴다(fetch_turnover_history는
+// 연도별 별도 호출이라 prior_amount를 쓰지 않는다).
+function fsAllRowsToPeriod(rows) {
+  const period = Object.create(null);
+  if (!Array.isArray(rows)) return period;
+  for (const r of rows) {
+    if (!r || typeof r !== "object") continue;
+    const name = (r.account_nm || "").trim();
+    if (!name) continue;
+    const v = parseAmt(r.thstrm_amount);
+    if (v !== null && !(name in period)) period[name] = v;
+  }
+  return period;
+}
+
+// 사업연도 하나의 fnlttSinglAcntAll을 CFS 우선 → 비면 OFS로 조회. 출처:
+// dart_client.py fetch_turnover_history의 연도별 루프. 최종(OFS로 넘어갔다면
+// OFS) 결과의 실패 여부만 본다 — CFS의 일시 실패도 OFS가 성공하면 실패로
+// 세지 않는 것까지 core와 같다.
+async function fetchTurnoverPeriod(corpCode, year) {
+  let j = await dartGet("fnlttSinglAcntAll.json",
+    { corp_code: corpCode, bsns_year: year, reprt_code: "11011", fs_div: "CFS" });
+  let fail = dartFail(j);
+  let rows = j.status === "000" ? (j.list || []) : [];
+  let div = "CFS";
+  if (!rows.length) {
+    j = await dartGet("fnlttSinglAcntAll.json",
+      { corp_code: corpCode, bsns_year: year, reprt_code: "11011", fs_div: "OFS" });
+    fail = dartFail(j);
+    rows = j.status === "000" ? (j.list || []) : [];
+    div = "OFS";
+  }
+  if (!rows.length) return { period: null, div: null, fail };
+  return { period: fsAllRowsToPeriod(rows), div, fail: null };
+}
+
+const TURNOVER_METRIC_DEFS = [
+  ["receivable", "매출채권회전율", "매출액 ÷ 매출채권"],
+  ["inventory", "재고자산회전율", "매출원가(미노출 시 매출액) ÷ 재고자산"],
+  ["payable", "매입채무회전율", "매출원가(미노출 시 매출액) ÷ 매입채무"],
+  ["workingCapital", "운전자본회전율", "매출액 ÷ 운전자본(유동자산−유동부채)"],
+  ["asset", "총자산회전율", "매출액 ÷ 자산총계"],
+];
+
+function turnoverTrendBlockHTML(periods, years, divUsed) {
+  // years: 최신순(내림차순) 사업연도 배열(최대 3개). yoy는 바로 전년도와 비교.
+  const byYear = {};
+  for (let i = 0; i < years.length; i++) {
+    const y = years[i];
+    const prior = i + 1 < years.length ? periods[years[i + 1]] : null;
+    byYear[y] = computeTurnoverMetrics(periods[y], prior);
+  }
+  const ascYears = [...years].reverse();
+
+  const divLabel = (d) => (d === "CFS" ? "연결" : d === "OFS" ? "별도" : "―");
+  const divNote = ascYears.every((y) => divUsed[y] === divUsed[ascYears[0]])
+    ? ` · ${divLabel(divUsed[ascYears[0]])}`
+    : " (연도별 연결·별도 구분이 다릅니다 — 상세는 계산 근거 표 참고)";
+
+  let html = `<p class="mm" style="font-size:0.78rem;margin-bottom:0.4rem">사업연도 ${ascYears.join("·")}${divNote} 재무제표</p>`;
+  html += `<p class="dim" style="font-size:0.8rem;margin-bottom:0.5rem">운전자본 = 유동자산 − 유동부채. 모든 회전율은 <b>기말잔액</b> 기준으로 계산했습니다 — DART가 제공하는 재무지표와 산정 기준이 달라 수치가 다를 수 있습니다.</p>`;
+
+  const detailRows = [];
+  for (const [key, label, formula] of TURNOVER_METRIC_DEFS) {
+    const ms = ascYears.map((y) => byYear[y].metrics[key]);
+    const parts = ascYears.map((y, i) => `${y} ${ms[i].value === null ? "―" : ms[i].value.toFixed(2) + "회"}`);
+    let trendNote = "";
+    if (ms.length >= 3 && ms.every((m) => m.value !== null)) {
+      let up = true, down = true;
+      for (let i = 1; i < ms.length; i++) {
+        if (ms[i].value <= ms[i - 1].value) up = false;
+        if (ms[i].value >= ms[i - 1].value) down = false;
+      }
+      if (up) trendNote = " — 3기간 연속 상승";
+      else if (down) trendNote = " — 3기간 연속 하락";
+    }
+    html += `<div class="factline">· ${esc(label)}: ${parts.map(esc).join(" → ")}${trendNote}</div>`;
+    ascYears.forEach((y, i) => {
+      const m = ms[i];
+      detailRows.push(`<tr><td>${esc(String(y))}</td><td>${esc(label)}</td>` +
+        `<td>${m.value === null ? "―" : m.value.toFixed(4)}</td>` +
+        `<td>${esc(formula)}${m.basis ? " — " + esc(m.basis) : ""}</td>` +
+        `<td>${m.reason ? esc(m.reason) : "―"}</td></tr>`);
+    });
+  }
+
+  const cccs = ascYears.map((y) => byYear[y].ccc);
+  const cccParts = ascYears.map((y, i) => `${y} ${cccs[i].value === null ? "―" : cccs[i].value.toFixed(1) + "일"}`);
+  html += `<div class="factline">· 현금전환주기(CCC = DSO+DIO−DPO): ${cccParts.map(esc).join(" → ")}</div>`;
+  ascYears.forEach((y, i) => {
+    const c = cccs[i];
+    const formula = `DSO(${c.dso === null ? "―" : c.dso.toFixed(1)})+DIO(${c.dio === null ? "―" : c.dio.toFixed(1)})−DPO(${c.dpo === null ? "―" : c.dpo.toFixed(1)})`;
+    detailRows.push(`<tr><td>${esc(String(y))}</td><td>현금전환주기(CCC)</td>` +
+      `<td>${c.value === null ? "―" : c.value.toFixed(2)}</td><td>${esc(formula)}</td>` +
+      `<td>${c.reason ? esc(c.reason) : "―"}</td></tr>`);
+  });
+
+  html += `<details style="margin-top:0.5rem;font-size:0.85rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">계산 근거 표</summary>
+    <div style="overflow-x:auto"><table><tr><th>연도</th><th>지표</th><th>값</th><th>계산식</th><th>비고</th></tr>${detailRows.join("")}</table></div></details>`;
+  html += `<p class="dim" style="font-size:0.8rem;margin-top:0.5rem">더 깊은 재무 이상 스캔(매출채권·재고 급증, Beneish 변수 8종, 전기 재작성 감지)은 <a href="../#start">MCP 대화</a>의 scan_financial_anomaly가 제공합니다.</p>`;
+  return html;
+}
+
+async function loadTurnoverTrend(corpCode) {
+  const el = $("turnoverCore");
+  const thisYear = new Date().getFullYear();
+  const years = [thisYear - 1, thisYear - 2, thisYear - 3];
+  const periods = {};
+  const divUsed = {};
+  let anyFail = null;
+  for (const y of years) {
+    const r = await fetchTurnoverPeriod(corpCode, y);
+    if (r.period) { periods[y] = r.period; divUsed[y] = r.div; }
+    else if (r.fail) anyFail = anyFail || r.fail;
+  }
+  const retrievedYears = Object.keys(periods).map(Number).sort((a, b) => b - a);
+  if (!retrievedYears.length) {
+    el.innerHTML = anyFail ? fetchFailHTML(anyFail)
+      : `<span class="dim" style="font-size:0.88rem">최근 3개 사업연도 재무제표를 찾지 못했습니다 (신규 상장·비공시 등).</span>`;
+    return;
+  }
+  el.innerHTML = turnoverTrendBlockHTML(periods, retrievedYears, divUsed);
 }
 
 // ── 작업2: 배당 대 이익 패널 (#divCore) ──
@@ -4273,6 +4557,9 @@ function loadDeepBlocks(corpCode) {
   const finCorePromise = loadFinancialCore(corpCode).catch((e) => {
     $("finCore").innerHTML = `<span class="dim" style="font-size:0.88rem">조회 실패: ${esc(e.message)}</span>`;
     return null;
+  });
+  loadTurnoverTrend(corpCode).catch((e) => {
+    $("turnoverCore").innerHTML = `<span class="dim" style="font-size:0.88rem">조회 실패: ${esc(e.message)}</span>`;
   });
   loadDividendCore(corpCode).catch((e) => {
     $("divCore").innerHTML = `<span class="dim" style="font-size:0.88rem">조회 실패: ${esc(e.message)}</span>`;
