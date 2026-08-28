@@ -116,6 +116,9 @@
     border-radius: 3px; padding: 5px 12px; cursor: pointer; user-select: none; }
   .chip.on { border-color: var(--amber); color: var(--amber); }
   .chip.solid.on { background: var(--amber); color: #0b0e14; border-color: var(--amber); font-weight: 700; }
+  /* 회전율 사업연도 선택 — 패널 안에 두는 유일한 칩 줄이라 여백만 준다 */
+  .tyears { display: flex; gap: 6px; margin: 0 0 10px; font-size: 0.82rem; }
+  .tyears .chip { padding: 3px 10px; }
   .chip .cdot { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
     margin-right: 6px; vertical-align: 0; }
 
@@ -449,7 +452,20 @@ const LS_SNAP = "dart_scan_snap";     // 재스캔 diff 스냅샷 — 기업당(
 
 const $ = (id) => document.getElementById(id);
 let DATA = null, CORPS = null, AMEND_RE = null, ALIASES = null;
+// 릴레이가 서버 쪽 키를 갖고 있는가 — 로컬 개발 릴레이만 알려 준다(값은 오지
+// 않는다, 있다/없다뿐). `probeServerKey()`가 부팅 때 한 번 확인한다.
+let SERVER_KEY = false;
 let LOOKBACK_DAYS = 365;
+// 회전율 블록이 볼 사업연도 수 — MCP `track_turnover_trend`의 lookback_years와
+// 같은 1~5 계약이다(기본 3). 공시 목록의 LOOKBACK_DAYS와는 축이 다르다:
+// 저쪽은 접수일 기준 일수, 이쪽은 **사업연도** 수라 한 칩으로 묶을 수 없다.
+// 값은 브라우저에 남겨 다음 스캔에서도 같은 기간을 본다.
+let TURNOVER_YEARS = (() => {
+  try {
+    const v = +localStorage.getItem("dart_turnover_years");
+    return v >= 1 && v <= 5 ? v : 3;
+  } catch (e) { return 3; }
+})();
 let CUR = null;          // 마지막 스캔 결과 {name, stock, corp, items, events, ...}
 let FEED_FILTER = { mode: "all", cat: null };
 
@@ -516,7 +532,8 @@ async function boot() {
   DATA = sig; CORPS = corps; ALIASES = aliases || {};
   AMEND_RE = new RegExp(DATA.amendment_pattern);
   renderVersionLine();
-  if (localStorage.getItem(LS_KEY)) {
+  await probeServerKey();
+  if (localStorage.getItem(LS_KEY) || SERVER_KEY) {
     showSearch();
     // 딥링크 자동 스캔: 해시에 종목코드가 있고 키도 있으면 그 종목·기간으로 스캔한다.
     // 키가 없을 때(이 if 밖)는 해시를 건드리지 않고 그대로 키 입력 화면을 보여준다.
@@ -532,12 +549,25 @@ async function boot() {
   renderRecent();
   renderFavs();
 }
+// 로컬 개발 릴레이만 `/api/health`를 준다. 공용 배포에는 없으므로 404·네트워크
+// 실패로 끝나고 SERVER_KEY는 false로 남는다 — 그때는 기존대로 키를 요구한다.
+// 응답에 키 값은 담기지 않는다(있다/없다 불리언 하나뿐).
+async function probeServerKey() {
+  try {
+    const r = await fetch(`${relayBase()}/api/health`, { cache: "no-store" });
+    if (!r.ok) return;
+    const j = await r.json();
+    SERVER_KEY = !!(j && j.server_key);
+  } catch (e) { /* 공용 배포·오프라인 — 조용히 기존 동작 */ }
+}
+
 function showSearch() {
   $("setupPanel").classList.add("hidden");
   $("searchPanel").classList.remove("hidden");
   $("recentWrap").classList.remove("hidden");
   const k = localStorage.getItem(LS_KEY) || "";
-  $("keyMask").textContent = k ? k.slice(0, 4) + "…" + k.slice(-4) : "(없음)";
+  $("keyMask").textContent = k ? k.slice(0, 4) + "…" + k.slice(-4)
+    : (SERVER_KEY ? "(로컬 릴레이의 환경변수 키)" : "(없음)");
   $("q").focus();
 }
 $("saveKey").onclick = () => {
@@ -864,8 +894,13 @@ async function dartGet(endpoint, params) {
   // ("등록되지 않은 API 키입니다")로 답하고 화면은 키가 **틀렸다**고 말한다.
   // 키가 없는 것과 틀린 것은 사용자가 할 일이 다르다.
   const key = (localStorage.getItem(LS_KEY) || "").trim();
-  if (!key) throw new Error("API 키가 설정되지 않았습니다 — 우측 상단 설정에서 키를 입력하세요");
-  const usp = new URLSearchParams({ crtfc_key: key, ...params });
+  // 로컬 개발 릴레이(`scripts/dev_relay.py`)는 환경변수 `DART_API_KEY`로 키를
+  // 채워 준다. 그때는 브라우저에 키가 없어도 되므로 막지 않는다 — 공용
+  // 배포에는 `/api/health`가 없어 SERVER_KEY가 false로 남고 기존대로 막힌다.
+  if (!key && !SERVER_KEY) {
+    throw new Error("API 키가 설정되지 않았습니다 — 우측 상단 설정에서 키를 입력하세요");
+  }
+  const usp = new URLSearchParams(key ? { crtfc_key: key, ...params } : { ...params });
   const url = `${relayBase()}/api/${endpoint}?${usp}`;
   const r = await fetch(url);
   if (!r.ok) throw new Error(`릴레이 오류 (HTTP ${r.status}) — 설정에서 릴레이 주소를 확인하세요`);
@@ -1930,7 +1965,10 @@ function renderDash() {
 
   html += `<div class="panel"><div class="slabel">▍FINANCIAL CORE — 최근 사업보고서 · 사실 표기</div>
     <div id="finCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">재무제표 조회 중…</span></div></div>`;
-  html += `<div class="panel"><div class="slabel">▍TURNOVER TREND — 회전율 3기간 · 사실 표기</div>
+  html += `<div class="panel"><div class="slabel">▍TURNOVER TREND — 회전율 추세 · 사실 표기</div>
+    <div class="tyears">${[1, 2, 3, 4, 5].map((n) =>
+      `<span class="chip${n === TURNOVER_YEARS ? " on" : ""}" data-tyears="${n}">${n}년</span>`
+    ).join("")}</div>
     <div id="turnoverCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">회전율 계산 중…</span></div></div>`;
   html += `<div class="panel"><div class="slabel">▍DIVIDEND — 배당과 순이익</div>
     <div id="divCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">배당 내역 조회 중…</span></div></div>`;
@@ -2986,8 +3024,10 @@ function turnoverTrendBlockHTML(periods, years, divUsed) {
         if (ms[i].value <= ms[i - 1].value) up = false;
         if (ms[i].value >= ms[i - 1].value) down = false;
       }
-      if (up) trendNote = " — 3기간 연속 상승";
-      else if (down) trendNote = " — 3기간 연속 하락";
+      // ⚠ 개수를 하드코딩하지 않는다 — 사업연도 수를 고를 수 있게 된 뒤로는
+      // 5년을 골라도 「3기간」이라 적히던 자리다(회사에 대한 거짓 표기).
+      if (up) trendNote = ` — ${ms.length}기간 연속 상승`;
+      else if (down) trendNote = ` — ${ms.length}기간 연속 하락`;
     }
     html += `<div class="factline">· ${esc(label)}: ${parts.map(esc).join(" → ")}${trendNote}</div>`;
     ascYears.forEach((y, i) => {
@@ -3019,7 +3059,8 @@ function turnoverTrendBlockHTML(periods, years, divUsed) {
 async function loadTurnoverTrend(corpCode) {
   const el = $("turnoverCore");
   const thisYear = new Date().getFullYear();
-  const years = [thisYear - 1, thisYear - 2, thisYear - 3];
+  const n = Math.min(5, Math.max(1, TURNOVER_YEARS || 3));
+  const years = Array.from({ length: n }, (_, i) => thisYear - 1 - i);
   const periods = {};
   const divUsed = {};
   let anyFail = null;
@@ -3031,7 +3072,7 @@ async function loadTurnoverTrend(corpCode) {
   const retrievedYears = Object.keys(periods).map(Number).sort((a, b) => b - a);
   if (!retrievedYears.length) {
     el.innerHTML = anyFail ? fetchFailHTML(anyFail)
-      : `<span class="dim" style="font-size:0.88rem">최근 3개 사업연도 재무제표를 찾지 못했습니다 (신규 상장·비공시 등).</span>`;
+      : `<span class="dim" style="font-size:0.88rem">최근 ${n}개 사업연도 재무제표를 찾지 못했습니다 (신규 상장·비공시 등).</span>`;
     return;
   }
   el.innerHTML = turnoverTrendBlockHTML(periods, retrievedYears, divUsed);
@@ -4550,6 +4591,32 @@ async function loadAssetTransferCore() {
   });
 }
 
+// 회전율 블록만 다시 그린다 — 연도 칩을 바꿔도 **전체 재스캔은 하지 않는다**.
+// 공시 목록·신호·패턴은 사업연도 수와 무관하므로 다시 받을 이유가 없다.
+function runTurnoverTrend(corpCode) {
+  const el = $("turnoverCore");
+  if (el) {
+    el.innerHTML = `<span class="spinner"></span><span class="dim" style="font-size:0.88rem">회전율 계산 중…</span>`;
+  }
+  loadTurnoverTrend(corpCode).catch((e) => {
+    $("turnoverCore").innerHTML = `<span class="dim" style="font-size:0.88rem">조회 실패: ${esc(e.message)}</span>`;
+  });
+}
+
+function bindTurnoverYearChips(corpCode) {
+  document.querySelectorAll(".tyears .chip[data-tyears]").forEach((c) => {
+    c.onclick = () => {
+      const n = +c.dataset.tyears;
+      if (!(n >= 1 && n <= 5) || n === TURNOVER_YEARS) return;
+      TURNOVER_YEARS = n;
+      try { localStorage.setItem("dart_turnover_years", String(n)); } catch (e) {}
+      document.querySelectorAll(".tyears .chip[data-tyears]").forEach((x) =>
+        x.classList.toggle("on", x === c));
+      runTurnoverTrend(corpCode);
+    };
+  });
+}
+
 function loadDeepBlocks(corpCode) {
   // loadAuditOpinions가 연속 적자 factline(작업4)에 쓸 수 있도록 loadFinancialCore의
   // 결과(3기간 영업이익·순이익 → lossStreak)를 promise로 넘긴다. finCore가 실패해도
@@ -4558,9 +4625,8 @@ function loadDeepBlocks(corpCode) {
     $("finCore").innerHTML = `<span class="dim" style="font-size:0.88rem">조회 실패: ${esc(e.message)}</span>`;
     return null;
   });
-  loadTurnoverTrend(corpCode).catch((e) => {
-    $("turnoverCore").innerHTML = `<span class="dim" style="font-size:0.88rem">조회 실패: ${esc(e.message)}</span>`;
-  });
+  runTurnoverTrend(corpCode);
+  bindTurnoverYearChips(corpCode);
   loadDividendCore(corpCode).catch((e) => {
     $("divCore").innerHTML = `<span class="dim" style="font-size:0.88rem">조회 실패: ${esc(e.message)}</span>`;
   });
