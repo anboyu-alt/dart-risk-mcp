@@ -737,9 +737,30 @@ def _confirm_outflow_counterparties(
                     r = _r if "error" not in _r else None
                 except Exception:
                     r = None
-            if r is None:
-                out.append(_outflow_row(rcept_dt, report_nm, rcept, "", "", "unknown", 0))
-                continue
+            if r is None or not (r.get("counterparty") or "").strip():
+                # DS005가 비었다고 상대를 모르는 게 아니다 — 원문에는 있다.
+                # 실측(2026-08-28): 아틀라스링크 20260810000747
+                # 「유형자산양수결정」에서 DS005는 error인데 원문에는
+                # 「6. 거래상대방 회사명(성명) 정은산업 주식회사 … 216억」이
+                # 있었고, **뷰어는 그것을 읽어 두 화면이 서로 다른 사실을
+                # 말했다**(MCP 「(미확인)」 vs 뷰어 「정은산업 주식회사」).
+                try:
+                    _d = fetch_asset_disposal_detail(rcept, _DART_API_KEY) or {}
+                except Exception:
+                    _d = {}
+                _cp = (_d.get("counterparty") or "").strip()
+                if _cp:
+                    _rel = _d.get("relation", "")
+                    out.append(_outflow_row(
+                        rcept_dt, report_nm, rcept, _cp, _rel,
+                        classify_outflow_relation(_rel) if _rel else "unknown",
+                        _d.get("amount", 0),
+                    ))
+                    continue
+                if r is None:
+                    out.append(_outflow_row(
+                        rcept_dt, report_nm, rcept, "", "", "unknown", 0))
+                    continue
             relation = r.get("relation_text") or ""
             cls = (
                 classify_outflow_relation(relation) if relation
