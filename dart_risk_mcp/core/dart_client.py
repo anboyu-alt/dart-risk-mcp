@@ -385,6 +385,11 @@ def _josa_ro(word: str) -> str:
     return "(으)로"
 
 
+# 부분 일치를 허용하는 최소 질의 길이. 뷰어의 `/api/corp`가 요구하는 2자와
+# 같은 값이다 — 한 글자로 부분 일치를 하면 관계없는 회사가 잡힌다.
+_MIN_PARTIAL_QUERY = 2
+
+
 def resolve_corp(query: str, api_key: str) -> tuple[str, dict] | None:
     """기업명 또는 종목코드(6자리) → (정식 기업명, {corp_code, stock_code}).
 
@@ -396,6 +401,15 @@ def resolve_corp(query: str, api_key: str) -> tuple[str, dict] | None:
     상호변경 이력의 "알로이스"), 기존 정확 일치 결과는 그대로 두고
     "alias_note"에 참고 안내만 병기한다 — 자동 전환하지 않는다.
     """
+    # ⚠ 빈 문자열은 **모든 이름의 부분 문자열**이라, 아래 부분 일치가
+    # 「가장 짧은 이름」 규칙으로 아무 회사나 돌려준다. 실측(2026-08-30):
+    # `resolve_corp("")` → **「경」(00623698)** — 사용자는 빈 입력을 했는데
+    # 엉뚱한 회사의 완전한 리포트를 받고, 자기가 요청한 회사인 줄 안다.
+    # (공백만 있는 입력은 이미 None이 나왔다 — 빈 문자열만 새고 있었다.)
+    query = (query or "").strip()
+    if not query:
+        return None
+
     if not _corp_cache:
         _load_corp_codes(api_key)
 
@@ -467,7 +481,14 @@ def resolve_corp(query: str, api_key: str) -> tuple[str, dict] | None:
     # 일반적으로 정할 수 없다. 대신 **부분 일치였다는 사실과 다른 후보**를
     # `alias_note`로 알린다(별칭 해석이 이미 쓰는 통로라 4개 도구가 그대로
     # 표면화한다).
-    matches = [(k, v) for k, v in _corp_cache.items() if query in k]
+    # ⚠ **한 글자짜리 부분 일치는 하지 않는다.** 실측(2026-08-30):
+    #     resolve_corp("주") → 「가주」 · resolve_corp("a") → 「Nexans」
+    #   사용자가 오타로 한 글자를 넣으면 관계없는 회사의 리포트를 받는다.
+    #   정확 일치·종목코드·별칭은 길이와 무관하게 그대로 동작하므로
+    #   「경」처럼 실제로 한 글자인 법인은 계속 찾힌다(정확 일치 경로).
+    #   뷰어의 `/api/corp`도 이미 2자 이상만 받는다 — 같은 판단이다.
+    matches = ([(k, v) for k, v in _corp_cache.items() if query in k]
+               if len(query) >= _MIN_PARTIAL_QUERY else [])
     if matches:
         matches.sort(key=lambda x: (len(x[0]), x[0]))
         name, info = matches[0][0], dict(matches[0][1])
