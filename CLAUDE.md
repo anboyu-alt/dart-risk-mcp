@@ -464,6 +464,8 @@ dart_risk_mcp/
 
 ### `dart_client.py`
 
+> ⚠ **이 표의 시그니처는 실제 코드와 대조된다(2026-08-30)**. 도구 시그니처는 `tests/test_doc_tool_signatures.py`가 지키는데 이 내부 함수 표는 아무도 안 지켜 낡아 있었다 — 63개 전수 대조에서 **4건 오기**(`fetch_fund_usage`에 없는 `corp_cls`, `fetch_major_decision` 순서, `resolve_decision_type(report_nm→report_name)`, `detect_debt_rollover(balance_history→balances)`). 이 문서의 4인자 형태로 `fetch_fund_usage`를 부르면 `TypeError`가 난다(실제로 걸렸다). 이제 `tests/test_doc_internal_signatures.py`가 **실제에 없는 인자·뒤바뀐 순서** 두 가지를 기계로 잡는다. 일부만 적는 것(`...`·`**kwargs`·`*`)은 허용한다.
+
 | 함수 | 역할 |
 |------|------|
 | `_retry(method, url, **kwargs)` | 429/5xx 지수 백오프 재시도 (최대 3회) |
@@ -514,18 +516,18 @@ dart_risk_mcp/
 | `fetch_loss_streak(corp_code, api_key, lookback_years)` | 연도별 영업이익·순이익 부호 → 최신 연도부터 연속 적자 연수 |
 | `extract_cfs_ofs_ni(fs_rows)` | fnlttSinglAcnt rows에서 (연결, 별도) 당기순이익 쌍 추출 — CFS_OFS_REVERSAL 판정 입력 |
 | `extract_loan_advance(rows)` | fnlttSinglAcntAll rows에서 대여금·선급금 계정을 BS(잔액)/CF(증감)로 구분 추출 — LOAN_ADVANCE_SURGE 판정 입력(v1.6.0, 금감원 2019-12 무자본 M&A 합동점검 유의사항 ③) |
-| `fetch_fund_usage(corp_code, api_key, corp_cls, lookback_years)` | 공모·사모 자금사용 2개 엔드포인트 통합 + 이상 플래그 탐지 |
-| `fetch_major_decision(rcept_no, corp_cls, decision_type)` | 12개 DS005 주요결정 엔드포인트 중 decision_type에 따라 자동 선택 |
+| `fetch_fund_usage(corp_code, api_key, lookback_years)` | 공모·사모 자금사용 2개 엔드포인트 통합 + 이상 플래그 탐지 |
+| `fetch_major_decision(rcept_no, api_key, decision_type, corp_code, corp_cls)` | 12개 DS005 주요결정 엔드포인트 중 decision_type에 따라 자동 선택 |
 | `resolve_corp_code_from_rcept_no(rcept_no, api_key, max_pages=3)` | rcept_no → corp_code 역해석 — 접수일 하루치 주요사항보고(B) 목록 대조, 최대 3페이지·매칭 즉시 종료·10분 캐시. DS005 필수 corp_code를 접수번호만 아는 경로(check_disclosure_risk)에서 복원 |
 | `FETCH_TRUNCATED`(2026-08-26 신설) | 공시 목록을 받다가 **페이지 상한에 걸려 잘린** 상태. 옛 코드는 이걸 `FETCH_OK`로 접어 로그에만 남겼다 — list.json은 **최신순**이라(실측: page 1 = 20260826, page 44 = 20210831) 잘리는 쪽은 언제나 **오래된 쪽**이고, 그러면 도구가 "최근 5년"이라 적어 놓고 최근 2년만 보여 준다. 실측(10개사): 미래에셋증권 5년 8,452건인데 옛 상한 50페이지가 3,452건을 버렸고, 옛 공식 `years*10`을 쓰던 `find_actor_overlap`·`track_capital_structure`는 **1년 조회에서도** 삼성전자 1,894건을 버렸다. 페이지 예산 계산이 네 곳으로 흩어져 서로 달랐던 것이 원인 — `_page_budget` 한 곳으로 합쳤다. 상한을 올려도 잘리는 회사는 남으므로 `_truncation_notice`가 "실제로 덮인 구간"을 한 줄로 적는다. ⚠ 비용: 미래에셋 5년 전수 조회는 **81.6초**(85페이지)로 대기 예산 1분을 넘는다 — 조용히 틀린 것보다 낫다는 판단이며, 좁히려면 `from_date`/`to_date`를 쓴다 |
 | `resolve_disclosure_row_with_status(rcept_no, api_key, max_pages=50)` | rcept_no → (list.json 원본 행, 상태). 상태는 `ROW_FOUND`/`ROW_NOT_FOUND`/`ROW_SCAN_LIMIT`/`ROW_ERROR`. `pblntf_ty` 필터 없이 조회 — 형제 함수(`resolve_corp_code_from_rcept_no`)는 `pblntf_ty="B"`로 좁혀 지분공시·거래소공시를 못 찾는다. **상한 12→50 (2026-08-22)**: 1년 코퍼스 실측(270,882건·244영업일)에서 하루 1,200건 상한은 **영업일의 77%만 커버**했다(5,000건이면 99.2%). 대부분의 날은 중앙값 774건이라 `total_page`로 자연 종료하므로 비용이 늘지 않는다 — 느는 것은 지금 실패하던 23%뿐이다. **페이지 2부터는 동시 2개 배치**로 받는다(동시성은 속도가 아니라 **대기 예산**으로 정했다 — 허용 대기 1분에 순차도 27초라 병렬화는 필수가 아니고, 버스트는 스로틀 위험만 늘린다. 4로 8초까지 줄였다가 2로 낮춰 ~14초. ⚠ 그래도 버스트라 DART 분당 스로틀 조건을 만든다 — status 020/800은 HTTP 200으로 오므로 `_retry`가 못 잡아 `_ROW_TRANSIENT_STATUSES`로 별도 재시도한다. `_fetch_indx_page`가 SE-4h 사고 후 도입한 것과 같은 관례)(무거운 날 46페이지 순차 = API 응답만 27초라 도구로 못 쓴다. 실측 순차 27초 → 동시 2로 13.8초). list.json은 **접수번호 순이 아니라**(20260331 실측: page 1에 …000015와 …604216 공존) 전수를 훑어야 해 건너뛸 수 없다. 매칭 즉시 종료·10분 캐시(`_rcept_row_cache`, **부재·상한 도달도 센티널로 캐시**해 재조회가 50회를 다시 쓰지 않게 한다. 단 네트워크 오류·비정상 status는 일시적일 수 있어 미캐시). DART `status=013`(데이터 없음, 휴장일 등)은 오류가 아니라 부재로 분류한다. 알려진 한계: 접수번호 앞 8자리가 접수일과 다른 공시는 `ROW_NOT_FOUND`(실측 0.7% — 20260803 전수 610건 중 4건) |
 | `resolve_disclosure_row_from_rcept_no(...)` | 위 함수의 하위 호환 래퍼 — 행만 반환하고 실패 이유를 버린다. 새 코드는 `_with_status`를 쓴다 |
-| `resolve_decision_type(report_nm)` | 공시명 → decision_type 키 자동 추론 (`[기재정정]` 등 접두어 제거) |
+| `resolve_decision_type(report_name)` | 공시명 → decision_type 키 자동 추론 (`[기재정정]` 등 접두어 제거) |
 | `detect_capital_churn(events, lookback_years)` | 12개월 슬라이딩 윈도우로 CAPITAL_CHURN 판정 |
 | `detect_financial_anomaly(current, prior)` | 4개 지표 YoY 비교 → 플래그+메트릭 |
 | `fetch_audit_opinion_history(corp_code, api_key, lookback_years)` | 감사의견 3개 엔드포인트 × 연도 루프 통합 + 재직 연수·교체·비감사 비중 경고 |
 | `fetch_debt_balance(corp_code, api_key, year)` | 채무증권 5개 엔드포인트 통합 + 1년 이내 만기 비중 산출 |
-| `detect_debt_rollover(balance_history, capital_events)` | 3년 잔액 변동 ≤10% + CB ≥2건 → CB_ROLLOVER 판정 |
+| `detect_debt_rollover(balances, events)` | 3년 잔액 변동 ≤10% + CB ≥2건 → CB_ROLLOVER 판정 |
 | `_FS_ALIASES`(딕셔너리, v1.21.0 확장) | 계정명 → 실제 표기 별칭 목록. `_pick_account`는 **정확 일치**라 별칭 하나가 빠지면 그 회사에서 지표가 **조용히** 사라진다. 2026-08-28 실측(38개사 `fnlttSinglAcntAll` 전수): 재고자산 별칭이 「재고자산」 하나뿐이라 **6개사(16%)**에서 재고를 못 찾았고(CJ제일제당·오리온·진원생명과학·STX·KR모터스·코아스, 전부 「유동재고자산」 표기) 그 회사들에서는 `INVENTORY_SURGE`까지 함께 죽어 있었다. 매출채권에 이마트 「매출채권 및 기타수취채권」·KR모터스 「매출채권 및 기타채권」 2건 추가. 매입채무는 별칭 자체가 없어 **7종 신설**(매입채무 22곳·매입채무및기타채무 14·매입채무 및 기타유동채무 2·매입채무 및 기타지급채무 1(이마트)·유동매입채무 1(오리온)·단기매입채무 1(제이스코홀딩스)·매입채무 및 기타채무 1(KR모터스)). 세 계정 모두 **장기·비유동 계열과 현금흐름표 항목**(「매입채무의 증가(감소)」 등)은 제외 — `_fs_response_to_periods`가 `sj_div`를 보지 않고 `account_nm`만 키로 쓰므로 잔액 자리에 흐름이 섞인다 |
 | `_ACCOUNT_ORDINAL_PREFIX_RE` / `_pick_account`의 번호 접두 폴백(v1.21.0) | 고려아연 1사가 「Ⅱ.매출원가」·「Ⅰ.유동자산」처럼 로마숫자 접두를 달아 매출액·매출원가·유동자산·유동부채가 통째로 안 잡히던 것을 수정 — 정확 일치를 먼저 시도하고, 실패하면 접두(`[ⅠⅡⅢ...]+[.．]`)를 뗀 이름으로 한 번 더 찾는다. 기존 회사의 정확 일치 동작은 불변 |
 | `compute_turnover_metrics(period, *, prior=None)` | 당기(및 선택적 전기) 재무 dict에서 회전율 5종(매출채권·재고자산·매입채무·운전자본·총자산)과 현금전환주기(CCC)를 계산하는 순수 함수(네트워크 호출 없음). 전부 **기말잔액** 기준. 매출원가 미노출 시 매출로 폴백(재고자산·매입채무 공통, `basis`에 사실 표기). **비용을 음수로 보고하는 회사**(실측: STX 2024 매출원가 -7,990억·2023 -8,866억)는 절댓값으로 계산하고 그 사실을 `basis`에 남긴다 — 자산 계정(매출채권·재고·매입채무)의 음수는 절댓값으로 읽을 근거가 없어 뒤집지 않는다(분모가 음수면 사유만 남김). 운전자본이 0 이하이면 회전율을 내지 않는다("음의 운전자본"이 회전율로 읽히면 오해를 낳으므로). `prior` 지정 시 각 metric에 `yoy_pct`·`numerator_yoy_pct`·`denominator_yoy_pct` 추가. 값 없음은 판정이 아니라 계산 불가 사실(v0.8.5 원칙) — `scan_financial_anomaly`의 "회전율 (기말잔액 기준)" 블록·`track_turnover_trend`가 함께 쓴다 | **분자가 0이면 계산하지 않는다**(v1.21.2) — 산술로는 0.00회지만 「회전이 느리다」가 아니라 「팔 것이 없다」는 뜻이다. 실측: 스팩(하나금융21호기업인수목적 2023, 매출 0원)에서 표에는 「0.00회」가 찍히는데 CCC 사유는 「매출채권회전율이 없어」라고 말해 **화면이 자기모순**이었다. 운전자본회전율은 `_simple_metric`을 거치지 않는 별도 분기라 그 한 줄만 따로 남아 두 번에 걸쳐 고쳤다. 개발단계 바이오·투자목적회사도 같은 자리에 온다.
