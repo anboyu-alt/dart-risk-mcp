@@ -3212,8 +3212,13 @@ function fundEntryDateLabel(entry) {
 function fundEntryCardHTML(entry) {
   const dateLabel = fundEntryDateLabel(entry);
   const totalTxt = fmtKRW(entry.total_plan);
-  const useTxt = entry.uses.filter((u) => u.purpose).slice(0, 3)
-    .map((u) => `${esc(u.purpose)} ${fmtKRW(u.plan)}`).join("·");
+  // ⚠ 용도가 5개인 조달건에서 3개만 보이고 2개는 흔적이 없었다.
+  // core는 「전체 N건 중 M건 표시 · 생략」을 적는다 — 같은 태도로 맞춘다.
+  const _useAll = entry.uses.filter((u) => u.purpose);
+  const _useShown = _useAll.slice(0, 3);
+  const useTxt = _useShown.map((u) => `${esc(u.purpose)} ${fmtKRW(u.plan)}`).join("·")
+    + (_useAll.length > _useShown.length
+       ? ` 외 ${_useAll.length - _useShown.length}개` : "");
   const hasDiff = entry.uses.some((u) => u.diff_reason);
   const shifts = entry.uses.filter((u) => u.use_shift);
   const shiftTxt = shifts.map((u) =>
@@ -4189,6 +4194,16 @@ function capitalBackflowCardHTML(pattern, events, results, totalCount, affiliate
       }
       othersLine = `<div class="sigs" style="margin-top:0.25rem">그 외 확인된 유출 상대: ${parts.join(", ")}</div>`;
     }
+    // ⚠ `totalCount`(전체 유출성 공시 수)를 **받기만 하고 쓰지 않았다.**
+    // 원문은 최근 4건만 보는데, 나머지에 계열 유출이 있어도 「확인된 특수관계
+    // 유출」에 안 들어온다 — 패턴 판정의 근거를 제한하면서 그 제한을 숨기는
+    // 것이다. core도 같은 자리를 2026-08-30에 고쳤다.
+    const _unreviewed = Math.max(0, (totalCount || 0) - results.length);
+    if (_unreviewed) {
+      othersLine += `<div class="dim" style="margin-top:0.25rem;font-size:0.82rem">`
+        + `유출성 공시 ${totalCount}건 중 최근 ${results.length}건의 원문만 확인했습니다`
+        + ` · ${_unreviewed}건 미확인 (그 안에 계열 유출이 있어도 위 목록에 없습니다)</div>`;
+    }
     return `<div class="patterncard"><b>${esc(pattern.name)}</b>${esc(pattern.description)}
       ${patternProseCheckpointsHTML(pattern)}
       ${evidenceBlock}
@@ -4240,7 +4255,13 @@ async function loadCapitalBackflowGate(pattern, events, corpCode) {
     return;
   }
   const allHits = patternTaxonomyEvidence("5.7", events);
-  const hits = allHits.slice(0, 4);
+  // ⚠ 원문 조회 비용 때문에 4건만 본다. 그 사실을 말하지 않으면 나머지에
+  // 계열 유출이 있어도 「확인된 특수관계 유출」에 안 들어온다 — **패턴 판정의
+  // 근거를 제한하면서 그 제한을 숨기는 것**이다. core도 같은 자리를
+  // 2026-08-30에 고쳤다(아틀라스링크 실측: 유출성 공시 10건 중 4건만 확인).
+  const OUTFLOW_REVIEW_MAX = 4;
+  const hits = allHits.slice(0, OUTFLOW_REVIEW_MAX);
+  const unreviewed = Math.max(0, allHits.length - hits.length);
   // 자리표시자가 **스피너**라 그냥 return하면 영원히 돈다 — 사용자는
   // "아직 불러오는 중"으로 읽고 기다린다(실패보다 나쁘다. 실패는 끝난 걸
   // 안다). 형제 게이트(loadFundDiversionGate)와 같이 카드를 걷는다.

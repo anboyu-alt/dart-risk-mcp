@@ -789,9 +789,18 @@ def _confirm_outflow_counterparties(
       재사용해 추가 호출 없이 채운다. 없으면(캐시 밖) 최대 2건까지만 보충 조회한다.
     """
     decisions_by_rcept = decisions_by_rcept or {}
-    candidates = _outflow_review_candidates(signal_events, disclosures)[:4]
+    # ⚠ 원문 조회 비용 때문에 최근 4건만 본다. 그런데 헤더의 「최근 최대
+    # 4건」은 **표시된 개수**일 뿐이라, 유출 공시가 10건인 회사에서 나머지
+    # 6건을 확인하지 않았다는 사실이 화면 어디에도 없었다. 그 6건에 계열
+    # 유출이 있어도 「확인된 특수관계 유출」에 안 들어온다 — 패턴 판정의
+    # 근거를 제한하면서 그 제한을 말하지 않는 것이다.
+    _OUTFLOW_REVIEW_MAX = 4
+    _all_candidates = _outflow_review_candidates(signal_events, disclosures)
+    candidates = _all_candidates[:_OUTFLOW_REVIEW_MAX]
+    _outflow_unreviewed = max(0, len(_all_candidates) - len(candidates))
 
     out: list[dict] = []
+    out_unreviewed = _outflow_unreviewed   # 렌더가 사실로 적는다
     extra_fetches = 0
     for rcept, rcept_dt, report_nm in candidates:
         dtype = resolve_decision_type(report_nm)
@@ -866,7 +875,14 @@ def _confirm_outflow_counterparties(
                 detail.get("counterparty", ""), detail.get("relation", ""),
                 cls, detail.get("amount", 0),
             ))
-    return out
+    # 리스트에 사실을 붙여 렌더가 쓰게 한다(FetchList가 fetch_failed를
+    # 붙이는 것과 같은 결 — 호출부 시그니처를 바꾸지 않는다).
+    class _Reviewed(list):
+        unreviewed = 0
+
+    _res = _Reviewed(out)
+    _res.unreviewed = out_unreviewed
+    return _res
 
 
 def _format_affiliate_stake_line(stake: dict) -> str:
@@ -1889,6 +1905,8 @@ def analyze_company_risk(
         )
     except Exception:
         outflow_confirmations = []
+    # 확인하지 못한 유출성 공시 수 — 헤더가 사실로 적는다.
+    _oc_unreviewed = getattr(outflow_confirmations, "unreviewed", 0)
 
     # 후속 3위: 종속회사로 확인된 상대방을 타법인 출자현황과 대조(사실 병기).
     # subsidiary 분류가 없으면 API 호출 없이 즉시 빈 dict.
@@ -2128,7 +2146,11 @@ def analyze_company_risk(
     if outflow_confirmations and not capital_backflow_fact_lines:
         lines += [
             "",
-            f"🔍 **자금유출·양수거래 상대방 확인** (최근 최대 {len(outflow_confirmations)}건)",
+            ("🔍 **자금유출·양수거래 상대방 확인** "
+             + (f"(유출성 공시 {len(outflow_confirmations) + _oc_unreviewed}건 중 "
+                f"최근 {len(outflow_confirmations)}건의 원문만 확인 · "
+                f"{_oc_unreviewed}건 미확인)"
+                if _oc_unreviewed else f"(최근 {len(outflow_confirmations)}건)")),
             "금전대여·채무보증·담보제공·유형자산양수/양도·영업양수/양도·"
             "타법인주식및출자증권양수/양도로 매칭된 공시의 거래상대방·관계를 "
             "확인합니다. 관계는 계열·특수관계/종속회사/외부/미확인 4범주로 "
