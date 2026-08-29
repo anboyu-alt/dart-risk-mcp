@@ -300,7 +300,7 @@ dart_risk_mcp/
 - **v1.18.1 하루 청크 직행 + 절단 제거**: v1.10.2의 2일 청크 + 1일 재분할을 **하루 청크 직행**으로 바꿨다. 1년 코퍼스 실측에서 **2일 묶음의 92%가 상한에 닿아**(122개 중 112개) 거의 항상 재분할됐으므로, 2일 청크는 헛조회를 한 번 더 하는 것일 뿐이었다. 하루 상한도 15페이지(1,500건) → **70페이지(7,000건)** — 실측 하루 분포가 중앙값 774 · p90 2,224 · **최대 6,006**건이라 옛 상한은 영업일의 18%에서 깨졌다. 라이브 검증(30일 창): 전체 **19,524건** 스캔 · **절단 0** · 독립 수집한 1년 코퍼스의 같은 구간과 **정확히 일치**. 시간도 218.9초 → **168.7초**로 줄었다(헛조회가 사라져서).
 - **v1.18.1 시점 지정 + 대기 예산 분기**: `from_date`/`to_date`(analyze_company_risk와 같은 계약). 그리고 창이 `_LONG_SCAN_DAYS`(10일)를 넘으면 **바로 실행하지 않고** 예상 소요·좁히는 법을 안내한 뒤 `confirm_long=True`를 받아 실행한다 — 11분을 기다리게 해놓고 결과가 절단돼 있는 것보다 무엇을 기다리는지 먼저 아는 편이 낫다는 판단(허용 대기 1분 기준, 실측 7일 17.7초 · 14일 107.5초)
 - 내부 흐름: `fetch_market_disclosures` (corp_code 없이 `/list.json`) → `match_signals` → 한정층(`qualify_signals`)으로 관찰/절차 분리 → `_filter_market_rows`가 절차·사후 보고 행을 제외하고 관찰 신호만 preset 필터에 통과
-- 반환: 날짜|기업|공시명|신호|접수번호 한 줄씩(관찰 신호만). 헤더에 "전체 N건 중 관찰 신호 M건 (표시 K건) · 절차·사후 보고 P건 제외" 건수 표기
+- 반환: 공시 한 건이 **세 줄**이다 — `날짜 | 기업명` · `📄 공시명` · `🔖 [신호] rcept_no=…`(관찰 신호만). 옛 서술은 「한 줄씩」이었으나 실제와 달라 2026-08-30에 정정했다(형식을 믿고 파싱하는 쪽이 깨진다). 헤더에 "전체 N건 중 관찰 신호 M건 (표시 K건) · 절차·사후 보고 P건 제외" 건수 표기
 
 ### 15. `check_disclosure_anomaly(company_name, lookback_years=1, lookback_days=0)` ✨
 
@@ -598,6 +598,8 @@ dart_risk_mcp/
 | 워치리스트(영속, 캐시 아님) | `~/.config/dart-risk-mcp/watchlist.json` (`DART_WATCHLIST_PATH`로 오버라이드) | 영속(비휘발) |
 | 행위자 레지스트리(Notion) | `~/.cache/dart-risk-mcp/known_actors_notion.json` | 24시간 |
 | 행위자 레지스트리(주입 캐시) | `known_actors.set_registry_cache()` 시임 — 외부 소비자가 캐시를 주입할 수 있는 확장점. SE 폐기(2026-08-23) 후 주입하는 곳은 없고, MCP·CLI는 파일 캐시만 쓴다 | 24시간 |
+
+> ⚠ **못 받은 결과를 캐시하지 않는다(2026-08-27 · 2026-08-30)**. 한도 초과·점검 같은 일시적 실패를 10분 붙들면 한도가 풀린 뒤에도 같은 거짓말을 되풀이한다. 2026-08-27에 `fetch_debt_balance`·`fetch_fund_usage`·`fetch_audit_opinion_history` 세 곳을 고쳤는데, 2026-08-30 캐시 감사에서 **세 곳이 더 남아 있던 것**을 찾았다 — `fetch_treasury_decisions`·`fetch_distress_events`·`fetch_dividend_history`. 정상 응답(000·**013**)을 한 번이라도 받았을 때만 캐시한다. ⚠ **진짜 「없음」은 캐시해야 한다** — 013을 실패로 세면 캐시가 통째로 무력해진다(라이브 확인: 두산 부실 이벤트 0건도 캐시됨). `tests/test_cache_failure_guard.py`가 여섯 곳 전부와 **가드 없는 새 `_cache_set`이 생기는 것**까지 막는다.
 
 > 워치리스트는 캐시가 아니라 사용자 자산이라 `~/.cache`가 아닌 `~/.config`에 영속 저장합니다. `core/watchlist.py`의 `add_person`/`remove_person`/`get_person_companies`/`list_persons`/`load_watchlist`/`save_watchlist`가 관리합니다.
 

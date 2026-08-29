@@ -5948,6 +5948,9 @@ def fetch_treasury_decisions(
     end_de = end.strftime("%Y%m%d")
 
     events: list[dict] = []
+    # 정상 응답(000·013) 횟수 — 0이면 **한 번도 못 받은 것**이라
+    # 빈 결과를 캐시하면 안 된다(기존 `_ins_ok`·`_fu_ok` 관례와 같다).
+    _tre_ok = 0
     for ep_path, key, dtype, label in _TREASURY_DECISION_ENDPOINTS:
         try:
             resp = _retry(
@@ -5960,6 +5963,8 @@ def fetch_treasury_decisions(
                 },
             )
             data = resp.json()
+            if data.get("status") in ("000", "013"):
+                _tre_ok += 1
             if data.get("status") != "000":
                 _log_dart_status(data.get("status", "?"),
                                  f"{ep_path} corp_code={corp_code}")
@@ -5983,7 +5988,13 @@ def fetch_treasury_decisions(
             log.debug("%s 조회 실패 (%s): %s", ep_path, corp_code, e)
 
     events.sort(key=lambda e: e["rcept_dt"])
-    _cache_set(_treasury_decisions_cache, cache_key, events, _TREASURY_CACHE_MAX)
+    # ⚠ **못 받은 결과를 캐시하지 않는다.** 한도 초과·점검 같은 일시적
+    # 실패를 10분 동안 붙들면, 한도가 풀린 뒤에도 같은 거짓말을 되풀이한다.
+    # 같은 결함을 2026-08-27에 세 곳에서 고쳤는데(fetch_debt_balance ·
+    # fetch_fund_usage · fetch_audit_opinion_history) 이 함수는 그때 빠졌다.
+    # 정상 응답(000·013)이 한 번도 없었으면 「없다」가 아니라 「못 받았다」다.
+    if events or _tre_ok:
+        _cache_set(_treasury_decisions_cache, cache_key, events, _TREASURY_CACHE_MAX)
     return events
 
 
@@ -6336,6 +6347,9 @@ def fetch_distress_events(
     end_de = end.strftime("%Y%m%d")
 
     events: list[dict] = []
+    # 정상 응답(000·013) 횟수 — 0이면 **한 번도 못 받은 것**이라
+    # 빈 결과를 캐시하면 안 된다(기존 `_ins_ok`·`_fu_ok` 관례와 같다).
+    _dis_ok = 0
     for ep_path, subtype in _DISTRESS_ENDPOINTS:
         try:
             resp = _retry(
@@ -6348,6 +6362,8 @@ def fetch_distress_events(
                 },
             )
             data = resp.json()
+            if data.get("status") in ("000", "013"):
+                _dis_ok += 1
             if data.get("status") != "000":
                 _log_dart_status(data.get("status", "?"),
                                  f"{ep_path} corp_code={corp_code}")
@@ -6371,7 +6387,13 @@ def fetch_distress_events(
             log.debug("%s 조회 실패 (%s): %s", ep_path, corp_code, e)
 
     events.sort(key=lambda e: e["rcept_dt"])
-    _cache_set(_distress_events_cache, cache_key, events, _DISTRESS_CACHE_MAX)
+    # ⚠ **못 받은 결과를 캐시하지 않는다.** 한도 초과·점검 같은 일시적
+    # 실패를 10분 동안 붙들면, 한도가 풀린 뒤에도 같은 거짓말을 되풀이한다.
+    # 같은 결함을 2026-08-27에 세 곳에서 고쳤는데(fetch_debt_balance ·
+    # fetch_fund_usage · fetch_audit_opinion_history) 이 함수는 그때 빠졌다.
+    # 정상 응답(000·013)이 한 번도 없었으면 「없다」가 아니라 「못 받았다」다.
+    if events or _dis_ok:
+        _cache_set(_distress_events_cache, cache_key, events, _DISTRESS_CACHE_MAX)
     return events
 
 
@@ -6404,6 +6426,9 @@ def fetch_dividend_history(
     quarter_codes = ("11011", "11012", "11013", "11014")
 
     records: list[dict] = []
+    # 정상 응답(000·013) 횟수 — 0이면 **한 번도 못 받은 것**이라
+    # 빈 결과를 캐시하면 안 된다(기존 `_ins_ok`·`_fu_ok` 관례와 같다).
+    _div_ok = 0
     for year in years:
         for reprt_code in quarter_codes:
             try:
@@ -6417,6 +6442,8 @@ def fetch_dividend_history(
                     },
                 )
                 data = resp.json()
+                if data.get("status") in ("000", "013"):
+                    _div_ok += 1
                 if data.get("status") != "000":
                     _log_dart_status(data.get("status", "?"),
                                      f"alotMatter year={year} reprt={reprt_code} corp_code={corp_code}")
@@ -6430,7 +6457,13 @@ def fetch_dividend_history(
                 log.debug("alotMatter year=%s reprt=%s 조회 실패 (%s): %s",
                           year, reprt_code, corp_code, e)
 
-    _cache_set(_dividend_history_cache, cache_key, records, _DIVIDEND_CACHE_MAX)
+    # ⚠ **못 받은 결과를 캐시하지 않는다.** 한도 초과·점검 같은 일시적
+    # 실패를 10분 동안 붙들면, 한도가 풀린 뒤에도 같은 거짓말을 되풀이한다.
+    # 같은 결함을 2026-08-27에 세 곳에서 고쳤는데(fetch_debt_balance ·
+    # fetch_fund_usage · fetch_audit_opinion_history) 이 함수는 그때 빠졌다.
+    # 정상 응답(000·013)이 한 번도 없었으면 「없다」가 아니라 「못 받았다」다.
+    if records or _div_ok:
+        _cache_set(_dividend_history_cache, cache_key, records, _DIVIDEND_CACHE_MAX)
     return records
 
 
