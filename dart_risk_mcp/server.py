@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 from mcp.server.fastmcp import FastMCP
 
 from .core import (
+    _fund_text,
     calculate_risk_score,
     category_prose,
     turnover_prose,
@@ -5466,7 +5467,14 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
                 continue
             seen_div.add(key)
             cash_dividends.append(r)
-        _div_rows = sorted(cash_dividends,
+        # 당기·전기가 **둘 다 미기재**인 행은 아무것도 말하지 않는다
+        # (두산 실측: 27줄 중 8줄이 「당기 - / 전기 -」였다). 목록에서만
+        # 빼고 몇 건인지 밝힌다 — 자금사용 목록과 같은 태도.
+        def _div_blank(r: dict) -> bool:
+            return not _fund_text(r.get("thstrm")) and not _fund_text(r.get("frmtrm"))
+
+        _div_blank_n = sum(1 for r in cash_dividends if _div_blank(r))
+        _div_rows = sorted((r for r in cash_dividends if not _div_blank(r)),
                            key=lambda x: (x.get("bsns_year", ""), x.get("se", "")))
         for r in _div_rows[:20]:
             yr = r.get("bsns_year", "-")
@@ -5480,6 +5488,8 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
 
         if len(_div_rows) > 20:
             lines.append(f"   ... 외 {len(_div_rows) - 20}건")
+        if _div_blank_n:
+            lines.append(f"   (당기·전기가 모두 미기재인 {_div_blank_n}건 제외)")
         # DIVIDEND_DRAIN 검출 — alotMatter 자체에 같은 (bsns_year,
         # reprt_code) 그룹으로 bundling된 (연결)/(별도) 당기순이익을
         # 그대로 사용한다(별도 재무제표 조회 없음, v1.6.x 재설계).
@@ -5497,10 +5507,18 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
                 # 있다 — 라벨에 지배지분 기준임을 병기한다. OFS(별도)는
                 # 개념상 비지배지분이 없어 해당 사항 없음.
                 label = "연결·지배지분 기준" if fl["fs_div"] == "CFS" else "별도"
+                # ⚠ 같은 리포트 안에서 단위가 섞이면 안 된다 — 위 자금사용
+                # 목록은 원 단위(「33,000,000,000원」)인데 여기만 백만원
+                # 원시값(「-388,279백만원」)이라, 두 수를 나란히 두고도 어느
+                # 쪽이 큰지 바로 읽히지 않았다(330억 vs 358억). 리포트 공통
+                # 표기로 환산하고 원문 단위 값을 괄호에 남긴다.
+                _ni_won = int(round(fl["net_income"] * 1_000_000))
+                _dv_won = int(round(fl["dividend"] * 1_000_000))
                 lines.append(
                     f"   • {fl['bsns_year']} 사업연도 ({label}) 당기순이익 "
-                    f"{fl['net_income']:,.0f}백만원 + 현금배당금총액 "
-                    f"{fl['dividend']:,.0f}백만원  → 자금 유출 경로 검토 권장"
+                    f"{_format_amount(str(_ni_won))} + 현금배당금총액 "
+                    f"{_format_amount(str(_dv_won))}"
+                    f"  → 자금 유출 경로 검토 권장"
                 )
 
             if len(drain_flags) > 5:
