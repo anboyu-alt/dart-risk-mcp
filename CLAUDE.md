@@ -136,8 +136,16 @@ dart_risk_mcp/
   | Cat 4 거버넌스 | `RELATED_PARTY`, `AUDIT`, `DISCLOSURE_VIOL` |
   | Cat 5 기업활동 | `ASSET_TRANSFER`, `DEMERGER`, `MGMT`, `FUND_OUTFLOW`, `ACQ_REVIEW`, `EQUITY_SPLIT` |
   | Cat 6 회계/재무 | `REVENUE_IRREG`, `CONTINGENT` |
-  | Cat 7 시장조작 | `INQUIRY`, `EMBEZZLE` |
-  | Cat 8 위기/부실 | `INSOLVENCY`, `DEBT_RESTR`, `GOING_CONCERN`, `DELISTING_RISK`, `WATCH_ISSUE`, `EARNINGS_SHOCK` |
+  | Cat 7 시장조작 | `INQUIRY` |
+  | Cat 8 위기/부실 | `INSOLVENCY`, `DEBT_RESTR`, `GOING_CONCERN`, `DELISTING_RISK`, `WATCH_ISSUE`, `EARNINGS_SHOCK`, `EMBEZZLE` |
+
+  > `EMBEZZLE`은 Cat 7(시장조작)에 적혀 있었으나 taxonomy는 **8.1 하나뿐**이라
+  > Cat 8로 옮겼다(2026-08-30 실측). 옛 이중 매핑(`['5.3','8.1']`)이 정리된
+  > 뒤에도 표가 따라오지 않은 것인데, 애초에 5도 8도 아닌 **7**에 있었으니
+  > 이 칸은 어느 시점에도 taxonomy와 맞은 적이 없다. Cat 7에 `INQUIRY` 하나만
+  > 남는 것이 실상에 맞다 — 시세조종·미공개정보이용류는 조사·제재의 결과라
+  > 회사 공시 제목에 나타나지 않는다(30일 15,555건 전수 0건).
+  > `tests/test_doc_signal_categories.py`가 이 표를 코드와 대조한다.
 
   > `GOING_CONCERN`의 표시 라벨은 **「회생·파산 절차」**다(v1.18.4). 1년 전수에서 이 신호를 켜는 제목은 전부 회생·파산 절차이고(107건), 옛 라벨이 가리키던 "계속기업" 표기는 DART 공시 제목에 **0건**이다(감사보고서 본문에만 있다). taxonomy는 8.4 그대로 — 회생절차 개시신청은 계속기업 의문의 후속 단계다. 국면에 따라 뜻이 정반대라(개시 83 · **폐지 12**(회생 실패→파산, 더 나쁨) · **종결 5**(회생 성공, 위험 신호 아님)) 종결에만 방향 안내를 붙인다.
 

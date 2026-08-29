@@ -286,7 +286,14 @@ def _category_of(signal_key: str) -> int:
     """대표 카테고리 — 복수 taxonomy면 무거운 쪽(높은 번호).
 
     카테고리 번호는 대체로 뒤로 갈수록 무겁다(7 시장조작, 8 위기/부실).
-    예: EMBEZZLE ['5.3','8.1'] → 8, INQUIRY ['4.3','7.1'] → 7.
+    예: AUDIT ['4.4','8.4'] → 8, FUND_DIVERSION ['5.3','8.1'] → 8.
+
+    ⚠ 옛 예시(EMBEZZLE ['5.3','8.1'] · INQUIRY ['4.3','7.1'])는 **둘 다 이제
+    단일 매핑이라** 이 규칙을 아무것도 예시하지 못했다 — EMBEZZLE은 발화 실적
+    0으로 키워드가 정리됐고(2026-08-17), INQUIRY는 4.3을 떼어냈다(v1.12.1,
+    조회공시는 공시의무 위반이 아니라서). 규칙을 설명하려고 **그 규칙을 더는
+    타지 않는 사례**를 들고 있던 셈이라 실측 두 건으로 교체했다(2026-08-30).
+    `tests/test_export_category_examples.py`가 이 예시를 매핑과 대조한다.
     """
     cats = []
     for tax_id in _taxonomies_of(signal_key):
