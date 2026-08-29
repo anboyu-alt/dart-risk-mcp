@@ -5061,8 +5061,16 @@ async function fetchRoster(corpCode, onYear, failed) {
       for (const row of j.list || []) {
         const nm = (row.nm || "").trim();
         if (!nm || nm === "계" || nm === "합계") continue;
-        if (!roster.has(nm)) roster.set(nm, new Set());
-        roster.get(nm).add(String(y));
+        if (!roster.has(nm)) roster.set(nm, { years: new Set(), rgist: new Set() });
+        const e = roster.get(nm);
+        e.years.add(String(y));
+        // ⚠ `rgist_exctv_at`(등기/미등기)을 안 보고 「등기임원으로 등장」이라
+        // 단정하고 있었다. 실측(2026-08-30): 셀트리온 이혁재는 **미등기**
+        // (수석부사장)인데 「2개사 이상에 등기임원으로 등장」 목록에 올랐다.
+        // core `find_actor_overlap`은 「셀트리온(수석부사장/미등기)」로
+        // 정확히 표기한다 — 뷰어만 틀렸다.
+        const rg = String(row.rgist_exctv_at || "").trim();
+        if (rg) e.rgist.add(rg);
       }
     } catch (e) { if (failed) failed.add(String(y)); }
   }
@@ -5091,9 +5099,10 @@ async function compareActors() {
 
   const byPerson = new Map();
   for (const [company, roster] of rosters) {
-    for (const [nm, years] of roster) {
+    for (const [nm, info] of roster) {
       if (!byPerson.has(nm)) byPerson.set(nm, new Map());
-      byPerson.get(nm).set(company, [...years].sort());
+      // 연도와 등기 여부를 함께 넘긴다 — 렌더가 「(2025 · 미등기)」로 적는다.
+      byPerson.get(nm).set(company, info);
     }
   }
   const overlaps = [...byPerson.entries()]
@@ -5103,11 +5112,16 @@ async function compareActors() {
   let html = `<div class="panel">
     <div class="slabel">▍OVERLAP RESULT — ${compareList.map(esc).join(" · ")} · ${ROSTER_YEARS.label}</div>`;
   if (overlaps.length) {
-    html += `<div class="callout">⚠️ <b>2개사 이상에 등기임원으로 등장한 인물 ${overlaps.length}명</b>
+    html += `<div class="callout">⚠️ <b>2개사 이상에 임원으로 등장한 인물 ${overlaps.length}명</b>
       — 서로 무관해 보이는 회사들을 같은 사람이 오간 기록입니다. 아래는 DART 공시 사실이며 판정이 아닙니다.
       <ul>` + overlaps.map(([nm, m]) =>
         `<li><b>${esc(nm)}</b> — ${m.size}개사: ` +
-        [...m.entries()].map(([c, ys]) => `${esc(c)}(${ys.join(", ")})`).join(" · ") + `</li>`).join("") +
+        [...m.entries()].map(([c, info]) => {
+          const ys = info.years ? [...info.years].sort() : [];
+          const rg = info.rgist && info.rgist.size
+            ? ` · ${[...info.rgist].sort().join("/")}` : "";
+          return `${esc(c)}(${esc(ys.join(", "))}${esc(rg)})`;
+        }).join(" · ") + `</li>`).join("") +
       `</ul></div>`;
   } else {
     if (fetchFailed.length) {
@@ -5120,7 +5134,8 @@ async function compareActors() {
   html += `<details style="margin-top:0.8rem;font-size:0.88rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">회사별 전체 임원 명단 보기</summary>` +
     [...rosters.entries()].map(([c, roster]) =>
       `<p style="margin-top:0.6rem"><b>${esc(c)}</b> — ${roster.size}명<br><span class="dim" style="font-size:0.84rem">` +
-      [...roster.entries()].map(([nm, ys]) => `${esc(nm)}(${[...ys].sort().join(",")})`).join(" · ") +
+      [...roster.entries()].map(([nm, info]) =>
+        `${esc(nm)}(${esc([...(info.years || [])].sort().join(","))})`).join(" · ") +
       `</span></p>`).join("") + `</details>`;
   html += `<p class="dim" style="font-size:0.8rem;margin-top:0.8rem">
     ※ 임원현황은 DART 사업보고서에 공시된 공개 기록이며, 이 화면은 그것을 실시간으로 겹쳐 보여줄 뿐입니다.
