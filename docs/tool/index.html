@@ -725,6 +725,14 @@ function daysBetween(dateStrA, dateStrB) {
   const b = new Date(dateStrB + "T00:00:00Z");
   return Math.round((b - a) / 86400000);
 }
+// 사업연도도 **KST 달력** 기준이다 — DART의 `bsns_year`가 KST 연도이고,
+// 이 파일의 나머지 날짜 계산도 KST로 통일했다. `new Date().getFullYear()`는
+// 브라우저 로컬 연도라 KST 1/1 00~09시에는 **작년**을, KST보다 앞선 시간대
+// (예: UTC+13)에서는 12/31 저녁에 **내년**을 고른다 — 둘 다 없는 보고서를
+// 조회하거나 한 해 낡은 보고서를 본다. 좁은 창이지만 축을 섞을 이유가 없다.
+function kstYear() {
+  return kstDate(Date.now()).getUTCFullYear();
+}
 function todayKST() {
   // KST 벽시계 날짜 — 계산 근거는 `kstDate` 위 주석 참고.
   return kstDate(Date.now()).toISOString().slice(0, 10);
@@ -1531,8 +1539,15 @@ function renderProcedural(proceduralEvents, totalCount) {
     const dates = bulk.map((e) => e.date).sort();
     // 임계값을 두지 않는다 — 건수만으로는 아틀라스링크(15/61)와
     // 셀트리온(14/222)을 가를 수 없다. 분모를 함께 적어 사용자가 읽게 한다.
+    // ⚠ 상한에 걸린 회사에서 `totalCount`는 '전체'가 아니라 '수집한 만큼'이다.
+    // KPI는 2026-08-24에 「수집 공시」로 고쳤는데 **이 줄은 그 수정이 안 닿아**,
+    // 삼성전자 1년(수집 1,000 · 전체 2,892)에서 같은 화면이 1,000을 「전체
+    // 공시」라 부르고 바로 위 주석은 「전체 공시는 2,892건」이라 적었다
+    // (2026-08-30 발견). 라벨을 사실에 맞춘다 — 숫자는 그대로 둔다(분모가
+    // 바뀌면 위 건수와 짝이 안 맞는다).
+    const denomLabel = CUR.truncated ? "수집 공시" : "전체 공시";
     summary = `<div class="dim" style="margin:0.4rem 0 0.8rem">
-      대량보유상황보고 ${bulk.length}건 — 전체 공시 ${totalCount}건 중
+      대량보유상황보고 ${bulk.length}건 — ${denomLabel} ${totalCount}건 중
       (${fmtDate(dates[0])}~${fmtDate(dates[dates.length - 1])})</div>`;
   }
   const rowsHtml = proceduralEvents.map((e) => `
@@ -2032,8 +2047,8 @@ function renderDash() {
     <div id="divCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">배당 내역 조회 중…</span></div></div>`;
   html += `<div class="panel"><div class="slabel">▍FUND CHAIN — 조달 자금의 행방</div>
     <div id="fundCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">자금사용 내역 조회 중…</span></div></div>`;
-  html += `<div class="panel"><div class="slabel">▍5% HOLDINGS — 보고 시계열 · 사실 표기</div>
-    <div id="holdCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">대량보유 보고 조회 중…</span></div></div>`;
+  html += `<div class="panel"><div class="slabel">▍INSIDER HOLDINGS — 임원·주요주주 소유보고 시계열 · 사실 표기</div>
+    <div id="holdCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">임원·주요주주 소유보고 조회 중…</span></div></div>`;
   html += `<div class="panel"><div class="slabel">▍AUDIT OPINION — 3개년 · 사실 표기</div>
     <div id="auditCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">감사보고 조회 중…</span></div></div>`;
   html += convoPanel(name);
@@ -2137,10 +2152,23 @@ function flowNotes(events) {
 
 function timelinePanel(events, bgn, end) {
   // 월별 밀도
+  // 월 버킷은 **KST 달력**이어야 한다 — 이벤트는 `e.date`(KST 접수일 8자리)로
+  // 버킷을 찾는데, 옛 코드는 `bgn.getFullYear()/getMonth()`로 **브라우저 로컬**
+  // 달력의 월 목록을 만들었다. 버킷이 없으면 `if (bucket && …)`이 그 이벤트를
+  // **조용히 버린다**.
+  //
+  // 재현(2026-08-30, node): 인스턴트 2026-08-31T16:00Z(= KST 09-01 01:00),
+  // `TZ=UTC` → 마지막 버킷이 8월이라 KST 접수일 20260901 공시가 **누락**된다
+  // (KST 브라우저에선 미발현). KST 00~09시의 월 넘김 구간이다.
+  //
+  // ⚠ `end_de`를 KST로 고친 뒤(같은 날) 이 공시들이 **실제로 수집되기 시작**해
+  // 「가져왔는데 차트에 없다」가 됐다. 그 수정의 뒷정리다.
+  const _bk = kstDate(bgn), _ek = kstDate(end);
   const months = [];
-  const mstart = new Date(bgn.getFullYear(), bgn.getMonth(), 1);
-  for (let m = new Date(mstart); m <= end; m.setMonth(m.getMonth() + 1)) {
-    months.push({ y: m.getFullYear(), m: m.getMonth(), n: 0, maxCat: 0, heavy: false });
+  for (let y = _bk.getUTCFullYear(), m = _bk.getUTCMonth();
+       y < _ek.getUTCFullYear() || (y === _ek.getUTCFullYear() && m <= _ek.getUTCMonth());
+       m === 11 ? (m = 0, y++) : m++) {
+    months.push({ y: y, m: m, n: 0, maxCat: 0, heavy: false });
   }
   for (const e of events) {
     const y = +e.date.slice(0, 4), mo = +e.date.slice(4, 6) - 1;
@@ -2178,10 +2206,15 @@ function timelinePanel(events, bgn, end) {
     lanes += `<text x="${padL - 8}" y="${y + 4}" text-anchor="end" font-size="11.5" fill="#7c8797" font-family="'Apple SD Gothic Neo','Malgun Gothic',sans-serif">${esc(DATA.categories[String(c)])}</text>`;
   });
   const labelEvery = LOOKBACK_DAYS <= 365 ? 2 : LOOKBACK_DAYS <= 1095 ? 6 : 12;
-  for (let m = new Date(bgn.getFullYear(), bgn.getMonth() + 1, 1); m < end; m.setMonth(m.getMonth() + 1)) {
-    const mx = padL + ((m.getTime() - t0) / (t1 - t0)) * (W - padL - 20);
+  // 격자선은 위에서 만든 **같은 버킷**을 쓴다 — 따로 계산하면 라벨과 막대가
+  // 다른 달력을 말할 수 있다. x 좌표는 `x(d8)`과 같은 규약(`Date.UTC`)으로
+  // 잡아 그 달 1일 점과 정확히 겹치게 한다.
+  for (const mo of months.slice(1)) {
+    const t = Date.UTC(mo.y, mo.m, 1);
+    if (t >= t1) break;
+    const mx = padL + ((t - t0) / (t1 - t0)) * (W - padL - 20);
     grid += `<line x1="${mx}" y1="${padT - 8}" x2="${mx}" y2="${H - padB + 4}" stroke="#171d27" stroke-width="1"/>`;
-    if (m.getMonth() % labelEvery === 0) grid += `<text x="${mx}" y="${H - 8}" text-anchor="middle" font-size="10" fill="#5e6a78">${m.getFullYear() % 100}.${String(m.getMonth() + 1).padStart(2, "0")}</text>`;
+    if (mo.m % labelEvery === 0) grid += `<text x="${mx}" y="${H - 8}" text-anchor="middle" font-size="10" fill="#5e6a78">${mo.y % 100}.${String(mo.m + 1).padStart(2, "0")}</text>`;
   }
   for (const e of events) {
     for (const s of e.signals.filter(isObservedSig)) {
@@ -2805,11 +2838,16 @@ function ratioTrendLine(byMetric, metricName, unit, higherIsWorse) {
     }
     monotoneWorse = higherIsWorse ? up : down;
   }
-  const trendNote = monotoneWorse ? (higherIsWorse ? " — 3기간 연속 상승" : " — 3기간 연속 하락") : "";
+  // 기간 수는 `RATIO_PERIODS`(현재 3)에서 오므로 지금은 「3기간」이 참이다.
+  // 그래도 **파생값으로 적는다** — 회전율 블록에서 같은 하드코딩이 5년을
+  // 고르면 「3기간 연속」이라 거짓말하는 것을 이미 겪었다(v1.21.0).
+  const _n = rows.length;
+  const trendNote = monotoneWorse
+    ? (higherIsWorse ? ` — ${_n}기간 연속 상승` : ` — ${_n}기간 연속 하락`) : "";
   const latestRow = [...rows].reverse().find((r) => r.값 !== null) || null;
   return {
     html: `<div class="factline">· ${esc(metricName)}: ${parts}${trendNote}</div>`,
-    monotoneWorse, latest: latestRow ? latestRow.값 : null,
+    monotoneWorse, periods: _n, latest: latestRow ? latestRow.값 : null,
   };
 }
 function ratioTrendBlock(rows, div) {
@@ -2836,8 +2874,8 @@ function ratioTrendBlock(rows, div) {
   if (current) html += current.html;
 
   const warns = [];
-  if (debt && debt.monotoneWorse) warns.push("부채비율이 3기간 연속 상승했습니다.");
-  if (current && current.monotoneWorse) warns.push("유동비율이 3기간 연속 하락했습니다.");
+  if (debt && debt.monotoneWorse) warns.push(`부채비율이 ${debt.periods}기간 연속 상승했습니다.`);
+  if (current && current.monotoneWorse) warns.push(`유동비율이 ${current.periods}기간 연속 하락했습니다.`);
   if (debt && debt.latest !== null && debt.latest > 200) warns.push(`부채비율이 200%를 초과했습니다 (${debt.latest.toFixed(0)}%).`);
   if (current && current.latest !== null && current.latest < 100) warns.push(`유동비율이 100% 미만입니다 (${current.latest.toFixed(0)}%).`);
   const impairmentMap = byMetric.get("자본잠식률");
@@ -3181,7 +3219,7 @@ function turnoverTrendBlockHTML(periods, years, divUsed) {
 
 async function loadTurnoverTrend(corpCode) {
   const el = $("turnoverCore");
-  const thisYear = new Date().getFullYear();
+  const thisYear = kstYear();
   const n = Math.min(5, Math.max(1, TURNOVER_YEARS || 3));
   const years = Array.from({ length: n }, (_, i) => thisYear - 1 - i);
   const periods = {};
@@ -4194,7 +4232,7 @@ function formatAffiliateStakeLine(stake) {
 async function fetchSubsidiaryAffiliateFacts(results, corpCode) {
   const subs = (results || []).filter((r) => r.cls === "subsidiary" && r.counterparty);
   if (!subs.length || !corpCode) return {};
-  const thisYear = new Date().getFullYear();
+  const thisYear = kstYear();
   let rows = [];
   for (const y of [thisYear - 1, thisYear - 2]) {
     try {
@@ -4611,6 +4649,7 @@ function earningsShockCardHTML(rows) {
 function detailBlockHits(key, maxCheck) {
   const seen = new Set();
   const hits = [];
+  let total = 0;
   for (const it of (CUR && CUR.items) || []) {
     // ⚠ 옛 줄은 `isAmendmentTag(it.report_nm)` — **태그** 자리에 제목을
     // 통째로 넘겨 늘 false였다(필터가 한 번도 동작한 적이 없다). 뒤의
@@ -4623,10 +4662,30 @@ function detailBlockHits(key, maxCheck) {
     const rc = it.rcept_no;
     if (!rc || seen.has(rc)) continue;
     seen.add(rc);
-    hits.push({ rcept: rc, date: it.rcept_dt, nm: it.report_nm });
-    if (hits.length >= maxCheck) break;
+    total++;
+    // ⚠ 옛 코드는 여기서 `break`해 **전체가 몇 건인지 세지 않았다**. 그래서
+    // 세 블록(특수관계인 3건·손익구조 2건·자금유출 4+4건)이 조용히 잘렸다 —
+    // 바로 옆 `loadCapitalBackflowGate`는 「N건 중 최근 M건만 확인 · P건
+    // 미확인」이라 밝히는데 이쪽만 아무 말이 없었다(2026-08-30 발견).
+    // 원문 조회(네트워크)는 여전히 `maxCheck`건만 한다 — **상한을 없애는 게
+    // 아니라 밝히는 것**이다. `break`를 뺀 만큼 목록을 끝까지 훑지만
+    // 메모리 안이라 싸다: 실측(삼성전자 1년 · 2,896건) **8회 호출 201ms**
+    // (25ms/회). 「공짜」는 아니니 상한을 더 늘릴 때는 다시 잰다.
+    if (hits.length < maxCheck) hits.push({ rcept: rc, date: it.rcept_dt, nm: it.report_nm });
   }
+  hits.total = total;
   return hits;
+}
+
+// 상한을 **없애지 않고 밝힌다** — 원문 ZIP 조회 비용은 그대로 두고, 몇 건을
+// 안 봤는지만 사실로 적는다(core의 「전체 N건 중 최근 M건 표시 · P건 생략」과
+// 같은 태도). 생략이 없으면 아무 말도 하지 않는다 — 없는 소음을 만들지 않는다.
+function detailCapNote(hits) {
+  const total = (hits && hits.total) || 0;
+  const shown = (hits && hits.length) || 0;
+  if (total <= shown) return "";
+  return `<div class="dim" style="font-size:0.82rem;margin-bottom:0.45rem">`
+    + `해당 공시 ${total}건 중 최근 ${shown}건의 원문만 확인 · ${total - shown}건 미확인</div>`;
 }
 
 async function loadRelatedPartyCore() {
@@ -4644,7 +4703,7 @@ async function loadRelatedPartyCore() {
     el.innerHTML = `<span class="dim" style="font-size:0.88rem">원문에서 거래 상대방을 확인하지 못했습니다 — DART 원문에서 직접 확인하세요.</span>`;
     return;
   }
-  el.innerHTML = relatedPartyCardHTML(rows);
+  el.innerHTML = detailCapNote(hits) + relatedPartyCardHTML(rows);
   $("result").querySelectorAll(".patEvLink").forEach((a) => {
     a.onclick = (e) => { e.preventDefault(); renderDetail(a.dataset.r); };
   });
@@ -4665,7 +4724,7 @@ async function loadEarningsShockCore() {
     el.innerHTML = `<span class="dim" style="font-size:0.88rem">원문에서 계정별 증감 내역을 확인하지 못했습니다 — DART 원문에서 직접 확인하세요.</span>`;
     return;
   }
-  el.innerHTML = earningsShockCardHTML(rows);
+  el.innerHTML = detailCapNote(hits) + earningsShockCardHTML(rows);
   $("result").querySelectorAll(".patEvLink").forEach((a) => {
     a.onclick = (e) => { e.preventDefault(); renderDetail(a.dataset.r); };
   });
@@ -4725,12 +4784,21 @@ function assetTransferCardHTML(rows) {
 // parseOutflowDetail은 {counterparty, relation, amount(문자열)}을 돌려주고
 // parseAssetDisposalDetail은 {counterparty, relation, amount(숫자), assetRatio,
 // extval}을 돌려준다. 카드가 한 모양만 알면 되도록 여기서 맞춘다.
+// ⚠ `parseOutflowDetail`이 내는 키를 **여기서 빠뜨리면 화면에 못 닿는다.**
+// `equityRatio`가 실제로 그랬다(2026-08-30 발견) — 2026-08-28에 「core는
+// 12.4·17.3·6.8을 내는데 뷰어는 공란」이라며 추출을 넣었는데, 값이 이 정규화를
+// 지나며 버려져 `assetTransferCardHTML`의
+// `if (d.equityRatio) …자기자본 대비…` 줄이 **한 번도 참이 된 적이 없다.**
+// 「누구에게 얼마가 나갔나」에서 규모 감각을 주는 유일한 값이라 공란이 아프다.
+// 자산 처분 서식은 자산총액 대비(`assetRatio`), 금전대여·담보 서식은 자기자본
+// 대비 — 둘은 다른 분모라 한 칸에 합치지 않는다.
 function normalizeOutflowDetail(d) {
   return {
     counterparty: (d && d.counterparty) || "",
     relation: (d && d.relation) || "",
     amount: affiliateInt((d && d.amount) || "") || 0,
     assetRatio: 0,
+    equityRatio: (d && d.equityRatio) || "",
     bookValue: 0,
     extval: "",
   };
@@ -4750,8 +4818,13 @@ function normalizeOutflowDetail(d) {
 async function loadAssetTransferCore() {
   const el = $("atCore");
   if (!el) return;
-  const hits = detailBlockHits("ASSET_TRANSFER", 4).filter((h) => isAssetDisposalTitle(h.nm))
-    .concat(detailBlockHits("FUND_OUTFLOW", 4));
+  // ⚠ `concat`은 배열의 커스텀 속성(`total`)을 옮기지 않는다 — 직접 합친다.
+  // `filter`는 무해하다: `ASSET_DISPOSAL_TITLE_MARKS`가 `ASSET_TRANSFER`
+  // 키워드 5종과 정확히 같아 걸러지는 건이 없다(2026-08-30 대조 확인).
+  const atHits = detailBlockHits("ASSET_TRANSFER", 4);
+  const foHits = detailBlockHits("FUND_OUTFLOW", 4);
+  const hits = atHits.filter((h) => isAssetDisposalTitle(h.nm)).concat(foHits);
+  hits.total = (atHits.total || 0) + (foHits.total || 0);
   const seen = new Set();
   const rows = [];
   for (const h of hits) {
@@ -4771,7 +4844,7 @@ async function loadAssetTransferCore() {
     el.innerHTML = `<span class="dim" style="font-size:0.88rem">원문에서 거래 상대방을 확인하지 못했습니다 — DART 원문에서 직접 확인하세요.</span>`;
     return;
   }
-  el.innerHTML = assetTransferCardHTML(rows);
+  el.innerHTML = detailCapNote(hits) + assetTransferCardHTML(rows);
   $("result").querySelectorAll(".patEvLink").forEach((a) => {
     a.onclick = (e) => { e.preventDefault(); renderDetail(a.dataset.r); };
   });
@@ -4842,7 +4915,7 @@ function loadDeepBlocks(corpCode) {
 
 async function loadDividendCore(corpCode) {
   const el = $("divCore");
-  const thisYear = new Date().getFullYear();
+  const thisYear = kstYear();
   const records = [];
   let fail = null;
   for (const y of [thisYear - 1, thisYear - 2, thisYear - 3]) {
@@ -4857,7 +4930,7 @@ async function loadDividendCore(corpCode) {
 
 async function loadFundChainCore(corpCode) {
   const el = $("fundCore");
-  const thisYear = new Date().getFullYear();
+  const thisYear = kstYear();
   const records = [];
   let fail = null;
   for (const y of [thisYear - 1, thisYear - 2, thisYear - 3]) {
@@ -4877,7 +4950,7 @@ async function loadFundChainCore(corpCode) {
 
 async function loadFinancialCore(corpCode) {
   const el = $("finCore");
-  const thisYear = new Date().getFullYear();
+  const thisYear = kstYear();
   let rows = null, year = null, fail = null;
   for (const y of [thisYear - 1, thisYear - 2]) {
     const j = await dartGet("fnlttSinglAcnt.json",
@@ -4962,7 +5035,7 @@ async function loadHoldings(corpCode) {
   if (!rows.length) {
     const fail = dartFail(j);
     el.innerHTML = fail ? fetchFailHTML(fail)
-      : `<span class="dim" style="font-size:0.88rem">5% 대량보유 보고 이력이 없습니다.</span>`;
+      : `<span class="dim" style="font-size:0.88rem">임원·주요주주 소유보고 이력이 없습니다.</span>`;
     return;
   }
   const byRep = new Map();
@@ -5001,13 +5074,13 @@ async function loadHoldings(corpCode) {
       accumNotes.map(esc).join("<br>") +
       `<br><span class="dim" style="font-size:0.8rem">계단식 매집은 지배 재편·경영권 경합 국면에서 반복 관찰되는 형태입니다 — 각 보고서의 취득 자금 출처·보고 사유를 원문에서 확인하세요.</span></div>`;
   }
-  html += `<p class="dim" style="font-size:0.8rem;margin-top:0.5rem">※ DART 5% 대량보유 보고(elestock)의 공개 기록 미러링입니다. 최대주주 현황·임원 지분까지 통합한 시계열은 MCP 대화의 track_insider_trading이 제공합니다.</p>`;
+  html += `<p class="dim" style="font-size:0.8rem;margin-top:0.5rem">※ DART <b>임원·주요주주 특정증권 소유보고</b>(elestock)의 공개 기록 미러링입니다 — 등기임원·지배주주 중심이며 <b>5% 대량보유 보고가 아닙니다</b>(그건 majorstock 별도 엔드포인트입니다). 최대주주 현황까지 통합한 시계열은 MCP 대화의 track_insider_trading이 제공합니다.</p>`;
   el.innerHTML = html;
 }
 
 async function loadAuditOpinions(corpCode, finCorePromise) {
   const el = $("auditCore");
-  const thisYear = new Date().getFullYear();
+  const thisYear = kstYear();
   const byYear = new Map();
   let fail = null;
   for (const y of [thisYear - 1, thisYear - 2, thisYear - 3]) {
@@ -5113,12 +5186,12 @@ $("runCompare").onclick = () => compareActors();
 //   이듬해 3월에 나오므로 그 해는 대개 비어 있다 — 커버리지를 넉넉히 보이게
 //   하는 표기다. 실제로 훑는 **연도 범위**를 그대로 적는다.
 const ROSTER_YEARS = (() => {
-  const y = new Date().getFullYear();
+  const y = kstYear();
   return { from: y - 3, to: y, label: `${y - 3}~${y} 사업연도` };
 })();
 
 async function fetchRoster(corpCode, onYear, failed) {
-  const thisYear = new Date().getFullYear();
+  const thisYear = kstYear();
   const roster = new Map();
   for (let y = ROSTER_YEARS.from; y <= ROSTER_YEARS.to; y++) {
     onYear(y);

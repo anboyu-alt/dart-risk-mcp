@@ -3035,19 +3035,37 @@ def detect_insider_pre_disclosure(
         sell_date = _parse(rec.get("rcept_dt"))
         if sell_date is None:
             continue
+        # ⚠ 옛 코드는 창 안의 **첫 번째**(리스트 순서)를 잡고 `break`했다 —
+        # 가장 가까운 공시가 아니라 임의의 공시였다. 방향까지 표기하게 되면서
+        # 「어느 공시와 며칠 떨어졌나」가 화면에 나오므로 **가장 가까운 것**을
+        # 고른다(동률이면 이른 날짜 — 결정적).
+        best = None
         for disc_date, disc_key, report_nm in negative:
-            gap = abs((disc_date - sell_date).days)
-            if gap <= window_days:
-                flags.append({
-                    "holder": rec.get("holder", "미상"),
-                    "sell_date": rec.get("rcept_dt", ""),
-                    "delta_pct": delta_f,
-                    "disclosure_key": disc_key,
-                    "disclosure_date": disc_date.strftime("%Y%m%d"),
-                    "report_nm": report_nm,
-                    "days_gap": gap,
-                })
-                break  # 같은 매도 이벤트에 대해 중복 플래그 방지
+            signed = (disc_date - sell_date).days
+            if abs(signed) > window_days:
+                continue
+            cand = (abs(signed), disc_date, signed, disc_key, report_nm)
+            if best is None or cand[:2] < best[:2]:
+                best = cand
+        if best is not None:
+            _, disc_date, signed, disc_key, report_nm = best
+            flags.append({
+                "holder": rec.get("holder", "미상"),
+                "sell_date": rec.get("rcept_dt", ""),
+                "delta_pct": delta_f,
+                "disclosure_key": disc_key,
+                "disclosure_date": disc_date.strftime("%Y%m%d"),
+                "report_nm": report_nm,
+                "days_gap": abs(signed),
+                # 부호 있는 간격 — **양수면 공시가 매도보다 나중**(= 매도가
+                # 먼저, 이 플래그 이름이 뜻하는 방향), 음수면 공시가 먼저다.
+                # 옛 코드는 `abs()`로 이 부호를 버렸고 렌더는 「N일 후」로
+                # 고정해, 공시가 **먼저** 난 건을 「매도 N일 후 공시」라고
+                # 반대로 적었다(2026-08-30 실측: 제이스코홀딩스 4건 전부가
+                # 공시가 먼저인데 전부 「후」라고 표기됐다). 방향이 뒤집히면
+                # 「정보 우위 매도」와 「악재 뒤 손절」이 뒤바뀐다.
+                "gap_signed": signed,
+            })
     return flags
 
 

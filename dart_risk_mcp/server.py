@@ -129,6 +129,11 @@ from .core.qualifiers import (
 )
 from .core.signals import SIGNAL_LABELS
 
+# 법인 표기 접사 — core `_AFFIL_CORP_SUFFIX_RE`와 같은 집합이다(그쪽은
+# 타법인 출자현황 대조용). 이름을 **비교**할 때만 지우고 화면에는 원문을 쓴다.
+_CORP_FORM_RE = re.compile(r"(주식회사|유한회사|유한책임회사|\(주\)|㈜)")
+
+
 def _holder_key(v: str) -> str:
     """보고자 이름을 묶기 위한 키 — **공백을 전부 지운다**.
 
@@ -142,8 +147,20 @@ def _holder_key(v: str) -> str:
 
     한 칸으로 줄이는 것으로는 부족하다 — 영문명은 한쪽에만 공백이 있어
     (`Citadel Multi-Asset…` vs `CitadelMulti-Asset…`) 전부 지워야 묶인다.
+
+    **법인 표기도 접는다(2026-08-30).** 공백만 접던 때는 「㈜캐디언스시스템」과
+    「(주)캐디언스시스템」이 별개 시계열로 갈렸다 — 같은 법인인데 표기만 다르다.
+    갈리면 **Δ가 분기를 건너뛴다**: 제이스코홀딩스 실측에서 실제 시계열은
+    7.75 → 6.94 → 6.14 → 5.52인데 화면은 Δ-1.61(20240930→20250331)과
+    Δ-1.42(20241231→20250630) 두 줄로 나와, 실제 분기 변동(-0.80·-0.62)의
+    **두 배**로 부풀었다. 이 Δ는 매수·매도 클러스터(0.5%p/30일)와
+    `detect_insider_pre_disclosure`의 입력이라 판정까지 오염된다.
+
+    빈도: 12개사 표본에서 **1곳**(제이스코홀딩스). 드물지만 걸리면 그 회사의
+    Δ가 전부 거짓이다. 「묶음 축」 결함의 세 번째 사례다 — 앞의 둘은 주식
+    종류(두산)와 날짜(hyslrSttus)였다.
     """
-    return re.sub(r"\s+", "", v or "")
+    return _CORP_FORM_RE.sub("", re.sub(r"\s+", "", v or ""))
 
 
 def _holder_display(v: str) -> str:
@@ -4649,6 +4666,22 @@ def get_executive_compensation(
     return "\n".join(lines)
 
 
+def _gap_phrase(flag: dict) -> str:
+    """매도와 부정 공시의 **방향**을 사실로 적는다.
+
+    `gap_signed`가 양수면 공시가 매도보다 나중(= 매도가 먼저), 음수면 공시가
+    먼저다. 옛 렌더는 `abs` 값에 「N일 후」를 고정으로 붙여 **공시가 먼저 난
+    건을 반대로 적었다** — 「정보 우위 매도」와 「악재 뒤 손절」이 뒤바뀐다.
+    """
+    n = flag.get("days_gap", 0)
+    signed = flag.get("gap_signed")
+    if signed is None:            # 옛 호출자 호환 — 방향을 모르면 말하지 않는다
+        return f"{n}일 간격"
+    if signed == 0:
+        return "같은 날"
+    return f"매도 {n}일 후" if signed > 0 else f"매도 {n}일 전"
+
+
 @mcp.tool()
 def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
     """최대주주·5% 대량보유자의 지분 변동 시계열을 분석합니다.
@@ -4865,11 +4898,18 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
         # rows: list[(ratio, date_yyyymmdd, source_label)]
         rows_sorted = sorted(rows, key=lambda r: r[1])
         # ── 인접 중복 dedup: 같은 ratio가 연속되면 첫 1건만 유지 (분기 4회 호출 노이즈 억제)
-        deduped: list[tuple[float, str, str]] = []
+        #
+        # ⚠ 접힌 줄의 **마지막 날짜**는 버리지 않는다. 접고 나면 화면에는
+        # 처음 관측일만 남는데, 그러면 「20240930 30.39%」만 보이고 그 지분이
+        # **20260630 보고에서도 그대로였다**는 사실이 사라진다(두산에너빌리티
+        # 실측 — 보고자 병합 뒤 드러났다). 읽는 사람은 자료가 2년 묵은 줄로
+        # 오해한다. 값은 그대로 두고 「…까지 동일」만 덧붙인다.
+        deduped: list[list] = []
         for ratio, date, src_lbl in rows_sorted:
             if deduped and abs(deduped[-1][0] - ratio) < 0.005:
+                deduped[-1][3] = date      # 같은 값이 이어진 마지막 날짜
                 continue  # 0.005%p 미만 차이는 동일 데이터로 간주
-            deduped.append((ratio, date, src_lbl))
+            deduped.append([ratio, date, src_lbl, date])
         if not deduped:
             continue
 
@@ -4892,10 +4932,12 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
         lines.append(f"▶ {holder}")
         prev_ratio: float | None = None
         prev_date: str = ""
-        for ratio, date, src_lbl in deduped:
+        for ratio, date, src_lbl, last_date in deduped:
             delta = ratio - prev_ratio if prev_ratio is not None else 0.0
             delta_str = f" (Δ{delta:+.2f}%)" if prev_ratio is not None else ""
-            lines.append(f"    {date}  {ratio:.2f}%{delta_str}  [{src_lbl}]")
+            same_str = f" (~{last_date} 동일)" if last_date != date else ""
+            lines.append(
+                f"    {date}  {ratio:.2f}%{delta_str}{same_str}  [{src_lbl}]")
 
             if prev_ratio is not None and delta < 0:
                 insider_sells.append({
@@ -4962,7 +5004,12 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
 
         if pre_flags:
             lines += [
-                "⚠️  매도 + 인접 부정 공시 패턴 탐지 (정보 우위 매도 가능성 검토)",
+                # ⚠ 옛 문구는 「정보 우위 매도 가능성 검토」였다. 이 창은
+                # **±30일 양방향**이라 공시가 매도보다 **먼저** 난 건도 들어온다
+                # — 그때는 정보 우위가 아니라 악재 뒤 손절이다. 실측
+                # (제이스코홀딩스 2026-08-30) 4건이 **전부** 공시가 먼저였다.
+                # 방향은 아래 각 줄이 「공시 N일 전/후 매도」로 밝힌다.
+                "⚠️  매도 ±30일 안에 부정 공시가 관찰됩니다 (사실 표기 — 방향은 줄마다 다름)",
             ]
             # holder + sell_date + disclosure 단위로 정렬·중복 제거
             seen_keys: set[tuple] = set()
@@ -4973,7 +5020,7 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
                 seen_keys.add(key)
                 lines.append(
                     f"   • {f['holder']}  매도일 {f['sell_date']}  Δ{f['delta_pct']:+.2f}%p  "
-                    f"→ {f['days_gap']}일 후 {f['disclosure_key']} 공시 ({f['disclosure_date']})"
+                    f"→ {_gap_phrase(f)} {f['disclosure_key']} 공시 ({f['disclosure_date']})"
                 )
             lines.append("")
 
