@@ -2,6 +2,18 @@
 
 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식 준수. 버전은 [SemVer](https://semver.org/lang/ko/).
 
+## [1.21.12] - 2026-08-30
+
+### Fixed
+- **운전자본회전율 발산이 값처럼 보이던 것** (#393) — 두산 2023에서 운전자본
+  74억·매출 19조로 2,559.01회. 임계 없이 모든 연도에 분모를 병기했다.
+- **실패를 10분 붙들던 캐시 세 곳** (#398) — `fetch_treasury_decisions`·
+  `fetch_distress_events`·`fetch_dividend_history`. 2026-08-27에 세 곳을
+  고쳤는데 세 곳이 더 남아 있었다. 진짜 「없음」(013)은 그대로 캐시한다.
+
+### Changed
+- `search_market_disclosures`의 출력 형식 서술을 실제(세 줄)에 맞췄다 (#398).
+
 ## [1.21.11] - 2026-08-30
 
 ### Fixed
