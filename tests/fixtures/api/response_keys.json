@@ -1,16 +1,5 @@
 {
  "collected": "2026-08-26",
- "note": "42개 엔드포인트를 실제로 호출해 list[0].keys()를 모은 것. 빈 배열은 표본에 자료가 없어 확인하지 못한 엔드포인트다 — '키가 없다'가 아니라 '확인 못 했다'는 뜻이다. `_envelope`은 응답의 최상위 필드(list 바깥)다 — list.json 20260820 실측.",
- "unsampled": [
-  "bsnInhDecsn",
-  "bsnTrfDecsn",
-  "cmpDvDecsn",
-  "dfOcr",
-  "dsRsOcr",
-  "stkrtbdInhDecsn",
-  "stkrtbdTrfDecsn",
-  "tgastTrfDecsn"
- ],
  "endpoints": {
   "_envelope": [
    "message",
@@ -329,6 +318,18 @@
    "rqd"
   ],
   "dfOcr": [],
+  "drctrAdtAllMendngSttusGmtsckConfmAmount": [
+   "corp_cls",
+   "corp_code",
+   "corp_name",
+   "fscl_year",
+   "gmtsck_confm_amount",
+   "nmpr",
+   "rcept_no",
+   "rm",
+   "se",
+   "stlm_dt"
+  ],
   "dsRsOcr": [],
   "elestock": [
    "corp_code",
@@ -838,5 +839,16 @@
    "se",
    "stlm_dt"
   ]
- }
+ },
+ "note": "42개 엔드포인트를 실제로 호출해 list[0].keys()를 모은 것. 빈 배열은 표본에 자료가 없어 확인하지 못한 엔드포인트다 — '키가 없다'가 아니라 '확인 못 했다'는 뜻이다. `_envelope`은 응답의 최상위 필드(list 바깥)다 — list.json 20260820 실측.",
+ "unsampled": [
+  "bsnInhDecsn",
+  "bsnTrfDecsn",
+  "cmpDvDecsn",
+  "dfOcr",
+  "dsRsOcr",
+  "stkrtbdInhDecsn",
+  "stkrtbdTrfDecsn",
+  "tgastTrfDecsn"
+ ]
 }

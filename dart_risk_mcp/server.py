@@ -4072,7 +4072,12 @@ def get_shareholder_info(company_name: str, year: str = "") -> str:
     corp_code = corp_info["corp_code"]
     stock_code = corp_info.get("stock_code", "")
 
-    data = fetch_shareholder_status(corp_code, _DART_API_KEY, year)
+    # 숫자가 **어느 사업연도 기준인지** 화면이 말하지 않고 있었다. 기말
+    # 잔고는 연도마다 크게 달라지므로(코아스 실측 0.66% → 20.42%) 기준을
+    # 밝히지 않으면 읽는 사람이 시점을 알 수 없다. 기본값을 여기서 정해
+    # 조회와 표기가 같은 값을 쓰게 한다.
+    _year = year or str(datetime.now().year - 1)
+    data = fetch_shareholder_status(corp_code, _DART_API_KEY, _year)
 
     major = data.get("major_holders", [])
     bulk = data.get("bulk_holders", [])
@@ -4081,18 +4086,62 @@ def get_shareholder_info(company_name: str, year: str = "") -> str:
         return f"❌ {corp_name}의 주주 정보를 불러올 수 없습니다. 연도를 확인하세요."
 
     lines = [
-        f"👥 **주주 현황: {corp_name}** ({stock_code or corp_code})",
+        f"👥 **주주 현황: {corp_name}** ({stock_code or corp_code}) — "
+        f"{_year} 사업연도 보고 기준",
         "",
     ]
 
     if major:
         lines.append("━━ 최대주주 및 특수관계인 ━━")
+        # DART는 **전부 미기재인 자리 행**을 보낸다(실측 STX·나이스정보통신:
+        # `stock_knd='-'` · 주식수 `-` · 비율 `-`인 「계」 행). 그리는 순간
+        # 「계 (-): -주 (-%)」가 되어 아무것도 말하지 않는다. 빼되 **몇 건을
+        # 뺐는지는 밝힌다** — 자금사용의 빈 껍데기 행과 같은 태도.
+        _blank_rows = 0
+        # ⚠ 옛 코드는 `bsis_…`(**기초** 잔고)를 읽었다. 이 절의 제목은
+        # 「주주 현황」이고 도구 이름도 현황인데 **기간 시작 시점의 값**을
+        # 보여 준 것이다. 기말은 `trmend_…`다.
+        #
+        # 실측(2026-08-30, 12개사): **9곳**이 기초 ≠ 기말이고 차이가 크다 —
+        # 코아스 0.66% → **20.42%**(19.76%p) · KR모터스 47.08% → 63.16% ·
+        # 셀트리온 28.31% → 31.21%. 같은 응답을 쓰는
+        # `track_insider_trading`은 이미 `trmend_…`를 쓰고 있어 **두 도구가
+        # 같은 회사에 다른 지분율을 냈다**.
+        #
+        # 기초는 버리지 않는다 — 달라졌으면 그 사실이 정보다.
         for h in major:
-            nm = h.get("nm", "-")
-            relate = h.get("relate", "")
-            stock_cnt = h.get("bsis_posesn_stock_co", "-")
-            ratio = h.get("bsis_posesn_stock_qota_rt", "-")
-            lines.append(f"  • {nm} ({relate}): {stock_cnt}주 ({ratio}%)")
+            if all(str(h.get(k) or "-").strip() in ("-", "")
+                   for k in ("trmend_posesn_stock_co",
+                             "trmend_posesn_stock_qota_rt",
+                             "bsis_posesn_stock_co")):
+                _blank_rows += 1
+                continue
+            # ⚠ 이름에도 개행이 섞여 온다 — 실측 STX 「에이피씨 / 머큐리(유)」가
+            # 이름 가운데 개행을 물고 와 한 행을 두 줄로 찢었다.
+            # `report_resn`은 이미 접고 있었는데
+            # **이름은 안 접고 있었다**(exec_comp의 `ofcps`와 같은 함정).
+            nm = " ".join(str(h.get("nm") or "-").split()) or "-"
+            # 합계 행은 `relate`가 비어 「계 ()」로 나왔다. 그 자리에 주식
+            # 종류가 있으니(보통주/우선주) 그걸 쓴다 — 「계」가 왜 둘인지도
+            # 그제야 읽힌다.
+            relate = " ".join(
+                str(h.get("relate") or h.get("stock_knd") or "-").split()) or "-"
+            stock_cnt = h.get("trmend_posesn_stock_co", "-")
+            ratio = h.get("trmend_posesn_stock_qota_rt", "-")
+            delta = ""
+            try:
+                _b = float(str(h.get("bsis_posesn_stock_qota_rt")).replace(",", ""))
+                _e = float(str(ratio).replace(",", ""))
+                if abs(_e - _b) >= 0.01:
+                    delta = f" · 기초 {_b:.2f}% 대비 {_e - _b:+.2f}%p"
+            except (TypeError, ValueError):
+                delta = ""
+            lines.append(f"  • {nm} ({relate}): {stock_cnt}주 ({ratio}%){delta}")
+        if _blank_rows:
+            lines.append(
+                f"  ※ 주식수·비율이 모두 미기재인 행 {_blank_rows}건은 뺐습니다 "
+                "(DART가 종류별 자리만 채워 보낸 행입니다)."
+            )
         lines.append("")
 
     if bulk:
@@ -4108,7 +4157,7 @@ def get_shareholder_info(company_name: str, year: str = "") -> str:
         # 보고**만 보이고 몇 건을 냈는지 함께 적는다.
         _latest: dict = {}
         for h in bulk:
-            who = str(h.get("repror") or "").strip() or "-"
+            who = " ".join(str(h.get("repror") or "").split()) or "-"
             dt = str(h.get("rcept_dt") or "").strip()
             cur = _latest.get(who)
             if cur is None or dt >= cur[0]:
@@ -4640,30 +4689,106 @@ def get_executive_compensation(
     agm_cols = [("se", "구분"), ("nmpr", "인원수"),
                 ("gmtsck_confm_amount", "주총승인 금액(원)")]
 
+    def _avg_mismatch_note(items, tot_key: str, cnt_key: str, avg_key: str) -> str:
+        """총액 ÷ 인원 ≠ DART가 준 1인평균이면 그 사실을 적는다.
+
+        화면에 세 숫자를 나란히 두는데 나눠 보면 안 맞는다 — 읽는 사람은
+        어느 쪽이 틀렸는지 알 수 없다. **다시 계산해 덮어쓰지 않는다**(그건
+        DART가 말하지 않은 값을 만드는 것이다). 사실만 밝힌다.
+
+        실측(2026-08-30, 12개사 미등기임원): **4건이 다르다** — 두산 8% ·
+        삼성전자 4% · 셀트리온 1% · 제이스코홀딩스 3%. DART의 평균은 기말
+        인원이 아니라 기중 평균 인원 등 다른 분모를 쓰는 것으로 보인다.
+        """
+        def _n(v) -> int:
+            try:
+                return int(str(v).replace(",", "").strip())
+            except (TypeError, ValueError):
+                return 0
+
+        for item in items or []:
+            tot, cnt, avg = (_n(item.get(tot_key)), _n(item.get(cnt_key)),
+                             _n(item.get(avg_key)))
+            if not (tot and cnt and avg):
+                continue
+            calc = tot // cnt
+            if abs(calc - avg) / avg > 0.01:
+                return (
+                    f"    ※ 총액을 인원수로 나누면 {calc:,}원이지만 DART가 준 "
+                    f"1인평균은 {avg:,}원입니다 — 평균의 분모(기중 인원 등)가 "
+                    "달라 서로 맞지 않을 수 있습니다. 둘 다 공시 원문 값입니다."
+                )
+        return ""
+
+    def _agm_rows(items: list[dict]) -> str:
+        """⑤ 주총 한도 — DART가 **구분·인원을 개행으로 묶어** 한 행에 준다.
+
+        `_rows`는 개행을 공백으로 접는다(`ofcps` 함정 대응). 그러면 이 행이
+        「구분: 등기이사 사외이사 감사위원 | 인원수: 3 0 4」가 되어 **어느
+        숫자가 어느 구분인지 알 수 없다**(두산 실측 2026-08-30).
+
+        ⚠ 개행이 **항상 구분자인 것은 아니다**. 두산에너빌리티는
+        `se = '등기이사\n (사외이사, 감사위원회 위원 제외)'` · `nmpr = '3'`으로,
+        **한 이름이 줄바꿈된 것**이다. 그래서 `se`와 `nmpr`의 조각 수가 같을
+        때만 나눈다 — 다르면 옛 동작(공백으로 접기) 그대로.
+
+        금액은 실측 3건 모두 **하나**였다(구분이 여럿이어도). 나눌 수 없으므로
+        합계로 표기하고 그 사실을 적는다 — 구분별로 아는 척하지 않는다.
+        """
+        if not items:
+            return "    (공시 없음)"
+        out: list[str] = []
+        for item in items:
+            se_parts = [p.strip() for p in str(item.get("se") or "").split("\n")]
+            np_parts = [p.strip() for p in str(item.get("nmpr") or "").split("\n")]
+            se_parts = [p for p in se_parts if p]
+            np_parts = [p for p in np_parts if p]
+            amt = " ".join(str(item.get("gmtsck_confm_amount") or "-").split()) or "-"
+            if len(se_parts) > 1 and len(se_parts) == len(np_parts):
+                pairs = " · ".join(f"{a} {b}명" for a, b in zip(se_parts, np_parts))
+                out.append(
+                    f"    • {pairs} | 주총승인 금액(합계, 원): {amt}"
+                    if amt != "-" else f"    • {pairs} | 주총승인 금액: 미기재"
+                )
+                continue
+            out.append(_rows([item], agm_cols).strip("\n"))
+        return "\n".join(out)
+
     lines = [
         f"━━━ [{corp_name}] 임원 보수 현황 ({display_year}년 {report_type}) ━━━",
         "",
         "① 이사·감사 전체 보수 (5억 이상 공시 대상)",
         _rows(data["high_pay"], all_cols),
+        _avg_mismatch_note(data["high_pay"], "mendng_totamt",
+                           "nmpr", "jan_avrg_mendng_am"),
         "",
         "② 개인별 보수 (상위 5인)",
         _rows(data["individual"], indv_cols),
         "",
         "③ 미등기임원 보수",
         _rows(data["unregistered"], unreg_cols),
+        _avg_mismatch_note(data["unregistered"], "fyer_salary_totamt",
+                           "nmpr", "jan_salary_am"),
         "",
         "④ 이사·감사 개인별 보수 (5억 이상)",
         _rows(data.get("audit_indv", []), indv_cols),
         "",
         "⑤ 주총 승인 보수한도",
-        _rows(data["agm_limit"], agm_cols),
+        _agm_rows(data["agm_limit"]),
         "",
         "─────────────────────────────────────────────",
         "※ 임원 보수 정보는 공시 기반 불공정거래 탐지의 참고 자료이며,",
         "   경영진의 사익 추구 여부 등 이상 징후 파악에 활용됩니다.",
         "💡 임원 지분 변동: track_insider_trading(company_name=...)",
     ]
-    return "\n".join(lines)
+    # 위 두 주석 줄은 해당 없으면 빈 문자열이라 **빈 줄이 하나 더** 생긴다.
+    # 연속 빈 줄을 하나로 접는다.
+    _out: list[str] = []
+    for _l in lines:
+        if not _l and _out and not _out[-1]:
+            continue
+        _out.append(_l)
+    return "\n".join(_out)
 
 
 def _gap_phrase(flag: dict) -> str:
@@ -5320,20 +5445,90 @@ def check_disclosure_anomaly(
     capital_hits: list[str] = []
     inquiry_hits: list[str] = []
 
+    # ⚠ **한정층을 적용한다(2026-08-30).** 이 도구만 빠져 있었다 — 나머지
+    # 넷(`analyze_company_risk`·`build_event_timeline`·`check_disclosure_risk`·
+    # `search_market_disclosures`)은 이미 쓴다.
+    #
+    # 지표 설명이 무엇을 세는지 말하는데 원자료가 그와 다른 것을 담고 있었다.
+    # 12개사 365일 실측:
+    #
+    #   ④ 자본 스트레스   27건 중 **16건(59%)** 강등 — 「유상증자또는주식관련
+    #      사채등의**발행결과**」 10건은 이미 센 「유상증자결정」의 결과 보고이고
+    #      (한 사건을 두 번), 「유상증자결정(**종속회사**의주요경영사항)」 2건은
+    #      이 회사의 행위가 아니다(R3)
+    #   ⑤ 조회공시       19건 중 **9건(47%)** 강등 — 전부 「풍문또는보도에대한
+    #      **해명(미확정)**」(R4)이다. 설명은 「거래소가 …**요구**한 건수」인데
+    #      해명은 회사의 **답변**이다. 삼성전자·두산은 걸린 것이 **전부** 해명이라
+    #      「요구 2건·5건」이라 적으면서 그 창에 요구가 없었다
+    #   ②③              강등 0건 — 영향 없다
+    #
+    # 지우지 않는다: 제외 건수를 아래에서 사실로 남긴다(`search_market_disclosures`
+    # 와 같은 태도).
+    procedural_hits: list[str] = []
+    inquiry_rows: list[tuple[str, str]] = []   # (접수일, 제목) — ⑤ 전용
     for d in disclosures:
         nm = d.get("report_nm", "")
         if is_amendment_disclosure(nm):
             continue
         sigs = match_signals(nm)
-        keys = {s["key"] for s in sigs}
+        if not sigs:
+            continue
+        quals = qualify_signals(sigs, parse_report_name(nm), d)
+        if any(s["key"] == "INQUIRY" for s in sigs):
+            inquiry_rows.append((d.get("rcept_dt", ""), nm))
+        keys = {s["key"] for s, q in zip(sigs, quals) if q.tier == TIER_OBSERVED}
+        if not keys:
+            # ⑤(INQUIRY)는 제외한다 — 위에서 사건 단위로 따로 세므로
+            # 여기서 「제외했다」고 적으면 두 번 말하는 셈이다.
+            if {s["key"] for s in sigs} & (
+                    {"AUDIT", "DISCLOSURE_VIOL"} | _CAPITAL_STRESS):
+                procedural_hits.append(nm)
+            continue
         if "AUDIT" in keys:
             audit_hits.append(nm)
         if "DISCLOSURE_VIOL" in keys:
             viol_hits.append(nm)
         if keys & _CAPITAL_STRESS:
             capital_hits.append(nm)
-        if "INQUIRY" in keys:
-            inquiry_hits.append(nm)
+        # ⑤는 아래에서 따로 센다 — 한정층이 회사 쪽 기록을 강등하는데
+        #    그러면 조회 사건 자체가 사라진다(바로 아래 주석의 실측).
+
+    # ── ⑤ 조회공시: **사건 수**로 센다 ─────────────────────────
+    #
+    # 한정층을 그대로 쓰면 안 되는 유일한 지표다. 실측(12개사 365일)에서
+    # 조회공시 계열은 **세 형태**로 기록된다:
+    #
+    #   조회공시요구(풍문또는보도)                     거래소가 낸 요구
+    #   조회공시요구(풍문또는보도)에대한답변(부인/미확정)  회사의 답변
+    #   풍문또는보도에대한해명(미확정)                  회사가 낸 해명(요구 기록 없음)
+    #
+    # 한정층은 뒤 둘을 R4로 강등한다 — **신호·패턴에서는 옳다**(해명은 사건이
+    # 아니라 답변이다). 그런데 이 지표는 「거래소가 해명을 요구한 건수」라,
+    # 회사 쪽 기록만 남는 회사에서 0이 된다: 두산 5→0 · 삼성전자 2→0 ·
+    # 셀트리온 2→0 · KR모터스 2→0(7곳 중 **4곳**). 실제로 있었던 조회 대응을
+    # 지우는 것이라 강등을 그대로 쓰면 안 된다.
+    #
+    # 반대로 원자료를 그대로 세면 **요구+답변이 한 사건인데 둘로** 잡힌다
+    # (진원생명과학 20260617 요구 → 20260618 답변 · 코아스 20250922 → 0923).
+    #
+    # 그래서 **날짜 근접 병합**으로 사건을 센다. 실측 답변은 전부 요구 **다음
+    # 날**이라 3일이면 충분하고, 그보다 넓히면 서로 다른 조회를 합칠 위험이
+    # 커진다. 검산(7곳): 진원 3 · 코아스 1 · KR모터스 2 · 두산 5 · 삼성 2 ·
+    # 셀트리온 2 · 제이스코 1.
+    _INQUIRY_EVENT_GAP_DAYS = 3
+    inquiry_rows.sort(key=lambda r: r[0])
+    _last_dt: datetime | None = None
+    for _d8, _nm in inquiry_rows:
+        try:
+            _cur = datetime.strptime(_d8[:8], "%Y%m%d")
+        except (ValueError, TypeError):
+            _cur = None
+        if (_last_dt is not None and _cur is not None
+                and (_cur - _last_dt).days <= _INQUIRY_EVENT_GAP_DAYS):
+            continue          # 같은 조회의 요구·답변 — 한 사건으로 센다
+        inquiry_hits.append(_nm)
+        if _cur is not None:
+            _last_dt = _cur
 
     # ── 지표 집계 (건수·비율만) ─────────────────────────────────
     amend_ratio = amendment_count / total
@@ -5357,6 +5552,17 @@ def check_disclosure_anomaly(
         f"{total}건을 5개 구조 지표로 분류했습니다. 이 도구는 공시 행태의 "
         "사실 요약만 제공하며, 기업의 위험도를 등급화하지 않습니다."
     )
+    # 제외한 것을 숨기지 않는다 — 조용히 빼면 「원래 없었다」로 읽힌다.
+    if procedural_hits:
+        summary += (
+            "\n\n"
+            f"※ 지표 ②~④에서 **절차·사후 보고 {len(procedural_hits)}건을 "
+            "제외**했습니다 — 결과 보고(「…발행결과」·「…청약결과」)·자회사 사안·"
+            "해명(미확정)·정정입니다. 같은 사건을 두 번 세거나 회사가 낸 사건이 "
+            # DART 제목은 안쪽에 여백이 길게 들어온다 — 목록에서는 원문대로
+            # 두지만 **문장 안**에 넣을 때는 접어야 읽힌다.
+            f"아닌 건들입니다(예: {' '.join(procedural_hits[0].split())[:40]})."
+        )
 
     lines = [
         f"━━━ [{corp_name}] 공시 구조 관찰 요약 ━━━",
