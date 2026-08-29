@@ -4176,7 +4176,14 @@ function capitalBackflowCardHTML(pattern, events, results, totalCount, affiliate
         const label = r.counterparty || r.nm;
         if (seen.has(label)) continue;
         seen.add(label);
-        const tag = r.cls === "subsidiary" ? "종속회사" : (r.relation || "실명 확인");
+        // ⚠ DART는 미기재를 `"-"`로 준다 — JS에서 참이라 그대로 두면
+        // 「정은산업 주식회사(-)」가 되고, 읽는 사람은 **관계가 「-」**라고
+        // 오해한다. 같은 뷰어의 OUTFLOW 블록은 이미 「(관계 미기재)」라
+        // 적는다 — 한 화면 안에서 같은 사실을 두 가지로 말하고 있었다.
+        const relTag = String(r.relation || "").trim();
+        const tag = r.cls === "subsidiary"
+          ? "종속회사"
+          : (!relTag || relTag === "-" ? "관계 미기재" : relTag);
         const fact = r.cls === "subsidiary" ? facts[r.counterparty] : "";
         parts.push(`${esc(label)}(${esc(tag)}${fact ? ` — ${esc(fact)}` : ""})`);
       }

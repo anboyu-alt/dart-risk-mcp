@@ -1707,7 +1707,12 @@ def analyze_company_risk(
         d for d in disclosures
         if resolve_decision_type(d.get("report_nm", ""))
     ]
-    decision_items = _decision_all[:10]
+    # ⚠ 헤더가 「최대 10건」이라 적어도, **전체가 몇 건이었는지** 말하지
+    # 않으면 사용자는 그 회사에 결정이 10건뿐이라고 읽는다. 자금사용 목록에
+    # 적용한 원칙과 같다(「전체 N건 중 M건 표시 · … 생략」).
+    _DECISION_SHOW_MAX = 10
+    decision_items = _decision_all[:_DECISION_SHOW_MAX]
+    _decision_omitted = max(0, len(_decision_all) - len(decision_items))
     decisions: list[tuple[dict, dict]] = []
     failed_decisions = 0
     for _d in decision_items:
@@ -1937,10 +1942,15 @@ def analyze_company_risk(
     #   ③ 내부 severity를 숫자로 되돌려준다 — 90%를 보면 CRITICAL임을 안다
     #      (v0.8.5: 위험도를 정량화하거나 등급으로 노출하지 않는다)
     # 특정 회사 리포트에서 "예상 지분 손실 70%"는 셋 중 가장 무겁다.
-    # 7. CB 인수자 추출 (최근 3건까지)
+    # 7. CB 인수자 추출 — 최근 3건에서만 뽑는다(원문 ZIP 조회 비용).
+    # ⚠ 「3건까지」가 코드 주석에만 있고 화면엔 없었다. CB가 10건인 회사에서
+    # 3건만 보고 아무 말이 없으면, 사용자는 그게 전부라고 읽는다.
+    _CB_EXTRACT_MAX = 3
     cb_investors: list[dict] = []
     seen_investors: set[str] = set()
-    for _cb_rcept in cb_rcept_nos[:3]:
+    _cb_scanned = cb_rcept_nos[:_CB_EXTRACT_MAX]
+    _cb_omitted = max(0, len(cb_rcept_nos) - len(_cb_scanned))
+    for _cb_rcept in _cb_scanned:
         for inv in extract_cb_investors(_cb_rcept, _DART_API_KEY, corp_code):
             if inv["name"] not in seen_investors:
                 seen_investors.add(inv["name"])
@@ -2060,7 +2070,9 @@ def analyze_company_risk(
     if cb_investors:
         lines += [
             "",
-            "━━ CB 인수자 ━━",
+            ("━━ CB 인수자 ━━"
+             + (f"  (CB/BW 공시 {len(cb_rcept_nos)}건 중 최근 {len(_cb_scanned)}건의 "
+                f"원문에서 추출 · {_cb_omitted}건 미조회)" if _cb_omitted else "")),
             "아래는 이 기업이 발행한 전환사채(CB)를 실제로 받아간 "
             "개인·법인입니다. 같은 이름이 다른 기업에도 반복 등장하면 "
             "세력 이동의 단서가 됩니다.",
@@ -2082,7 +2094,10 @@ def analyze_company_risk(
     if decisions:
         lines += [
             "",
-            "📑 **주요 결정 상대방** (최근 순, 최대 10건)",
+            ("📑 **주요 결정 상대방** "
+             + (f"(전체 {len(_decision_all)}건 중 최근 {len(decision_items)}건 표시 · "
+                f"{_decision_omitted}건 생략)"
+                if _decision_omitted else f"(최근 순 {len(decision_items)}건)")),
             "양수도·합병 같은 주요 결정의 거래 상대방과 규모입니다. "
             "상대방이 특수관계인이거나, 거래 규모가 회사 자산 대비 "
             "과도하거나, 외부 평가가 생략됐을 때 아래에 '주목할 이유'를 "
