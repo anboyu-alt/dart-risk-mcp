@@ -1,4 +1,5 @@
 from .dart_client import (
+    _fund_text,
     resolve_corp,
     load_corp_aliases,
     fetch_company_disclosures,
@@ -144,6 +145,7 @@ from .qualifiers import (
 )
 
 __all__ = [
+    "_fund_text",
     "resolve_corp",
     "load_corp_aliases",
     "fetch_company_disclosures",
