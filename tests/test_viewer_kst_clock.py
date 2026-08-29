@@ -144,3 +144,68 @@ def test_조회_창이_KST_기준임을_밝혀_둔다():
 def test_시계_라벨이_KST라고_적혀_있다():
     """라벨과 값이 갈리면 안 된다 — 이 버그가 정확히 그 상태였다."""
     assert "SESSION · KST" in _HTML
+
+
+# ── 밀도 차트 월 버킷 ──────────────────────────────────────────
+#
+# `end_de`를 KST로 고치자 KST 00~09시의 공시가 **실제로 수집되기 시작**했는데,
+# 밀도 차트의 월 버킷은 여전히 **브라우저 로컬 달력**으로 만들어졌다. 버킷이
+# 없으면 `if (bucket && …)`이 그 이벤트를 조용히 버린다 — 「가져왔는데 차트에
+# 없다」가 된다. 그 수정의 뒷정리다.
+#
+# 재현(수정 전, node): 인스턴트 2026-08-31T16:00Z(= KST 09-01 01:00) ·
+# `TZ=UTC` → 마지막 버킷이 8월이라 KST 접수일 20260901 공시가 누락.
+
+def _month_loop() -> str:
+    i = _HTML.index("  const _bk = kstDate(bgn), _ek = kstDate(end);")
+    j = _HTML.index("  }", _HTML.index("months.push({ y: y, m: m", i)) + 3
+    return _HTML[i:j]
+
+
+def _run_months(tz: str) -> dict:
+    src = (
+        "const KST_OFFSET_MS = 9*60*60*1000;\n"
+        + _cut("kstDate") + "\n"
+        "const NOW = new Date('2026-08-31T16:00:00Z');\n"  # KST 09-01 01:00
+        "const end = NOW, bgn = new Date(NOW.getTime() - 365*86400e3);\n"
+        + _month_loop() + "\n"
+        "console.log(JSON.stringify({last: months[months.length-1],"
+        " has202609: !!months.find(x => x.y===2026 && x.m===8), n: months.length}));\n"
+    )
+    tf = tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8")
+    tf.write(src)
+    tf.close()
+    try:
+        r = subprocess.run([shutil.which("node"), tf.name],
+                           env=dict(os.environ, TZ=tz),
+                           capture_output=True, text=True, encoding="utf-8")
+        assert r.returncode == 0, f"node 실패({tz}):\n{(r.stderr or '')[:600]}"
+        return json.loads(r.stdout)
+    finally:
+        os.unlink(tf.name)
+
+
+@pytest.mark.parametrize("tz", _ZONES)
+def test_월_버킷이_KST_달력이다(tz):
+    got = _run_months(tz)
+    assert got["has202609"], (
+        f"TZ={tz}에서 KST 2026-09 버킷이 없다 — 그 달 공시가 차트에서 사라진다"
+    )
+    assert got["last"]["y"] == 2026 and got["last"]["m"] == 8
+    assert got["n"] == 13
+
+
+def test_버킷이_로컬_달력_함수를_쓰지_않는다():
+    loop = _month_loop()
+    for bad in ("bgn.getFullYear()", "bgn.getMonth()", "end.getMonth()"):
+        assert bad not in loop, f"로컬 달력이 남아 있다: {bad}"
+    assert "_bk.getUTCFullYear()" in loop and "_ek.getUTCMonth()" in loop
+
+
+def test_격자선이_같은_버킷을_쓴다():
+    """따로 계산하면 라벨과 막대가 다른 달력을 말할 수 있다."""
+    i = _HTML.index("const labelEvery = ")
+    body = _HTML[i:i + 900]
+    assert "for (const mo of months.slice(1))" in body
+    assert "Date.UTC(mo.y, mo.m, 1)" in body, "x(d8)과 같은 규약이어야 점과 겹친다"
+    assert "bgn.getMonth() + 1" not in body, "옛 로컬 달력 루프가 남아 있다"
