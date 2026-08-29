@@ -5915,8 +5915,17 @@ def scan_financial_anomaly(
         _pri_s = f"{_pri_v:.2f}회" if _pri_v is not None else "—"
         _yoy = _tm.get("yoy_pct")
         _yoy_s = f" (전년 대비 {_yoy:+.1f}%)" if _yoy is not None else " (전년 비교 불가)"
+        # 운전자본은 차감으로 만들어진 분모라 0 근처로 쉽게 간다 —
+        # 그러면 회전율이 발산한다(두산 2023 실측 2,558.87회). 분모를
+        # 병기해 발산의 원인이 그 자리에서 보이게 한다. 임계·판정 없음.
+        _den_s = ""
+        if _tkey == "working_capital":
+            _den = _tm.get("denominator")
+            if _den is not None:
+                _den_s = f" (운전자본 {_format_amount(f'{_den}원') or f'{_den:,}원'})"
         lines.append(
-            f"- {_tlabel}: 전기 {_pri_s} → 당기 {_turnover_value_str(_tm)}{_yoy_s}"
+            f"- {_tlabel}: 전기 {_pri_s} → 당기 {_turnover_value_str(_tm)}"
+            f"{_den_s}{_yoy_s}"
         )
     lines.append("  다년 추세는 `track_turnover_trend`로 확인할 수 있습니다.")
     lines.append("  지표를 읽는 법은 `track_turnover_trend`가 함께 설명합니다.")
@@ -6317,6 +6326,12 @@ def track_turnover_trend(
     lines.append("")
 
     # 연도별 표 (최신 연도가 왼쪽)
+    # 금액 포맷터 — 표(운전자본 병기)와 분자·분모 내역이 함께 쓴다.
+    def _amt(v: "int | None") -> str:
+        if v is None:
+            return "—"
+        return _format_amount(f"{v}원") or f"{v:,}원"
+
     lines.append("**연도별 회전율 (기말잔액 기준)**")
     lines.append("| 연도 | " + " | ".join(_TURNOVER_LABELS.values()) + " |")
     lines.append("|---|" + "---|" * len(_TURNOVER_LABELS))
@@ -6324,16 +6339,29 @@ def track_turnover_trend(
         row = [y]
         pm = per_year[y]["metrics"]
         for tkey in _TURNOVER_LABELS:
-            row.append(_turnover_value_str(pm.get(tkey, {})))
+            cell = _turnover_value_str(pm.get(tkey, {}))
+            # ⚠ 운전자본은 이 도구에서 **유일하게 차감으로 만들어진 분모**다
+            # (유동자산−유동부채). 다른 분모는 잔액 그 자체라 0에 가까워질
+            # 일이 드물지만, 이건 두 큰 수의 차라 0 근처로 쉽게 간다. 그러면
+            # 회전율이 발산해 「효율이 좋다」가 아니라 **「분모가 0에 가깝다」**는
+            # 뜻이 된다.
+            #
+            # 실측(2026-08-30, 두산 000150): 2023년 운전자본이 약 75억인데
+            # 매출이 19조라 회전율이 **2,559.01회**로 찍혔다. 다른 회전율은
+            # 전부 한 자릿수다. 표만 보면 이 회사가 운전자본을 극도로 효율적
+            # 으로 쓴다고 읽힌다.
+            #
+            # 임계를 만들지 않는다(v1.21.0 원칙) — **모든 연도에 조건 없이**
+            # 분모를 병기해 발산의 원인이 그 자리에서 보이게 한다.
+            if tkey == "working_capital":
+                _den = (pm.get(tkey) or {}).get("denominator")
+                if _den is not None and cell != "—":
+                    cell += f" (운전자본 {_amt(_den)})"
+            row.append(cell)
         lines.append("| " + " | ".join(row) + " |")
     lines.append("")
 
     # 분자·분모 내역 — 금액과 전년 대비 %.
-    def _amt(v: "int | None") -> str:
-        if v is None:
-            return "—"
-        return _format_amount(f"{v}원") or f"{v:,}원"
-
     def _amt_line(label: str, v: "int | None", yoy: "float | None") -> str:
         yoy_s = f" (전년 대비 {yoy:+.1f}%)" if yoy is not None else ""
         return f"  - {label}: {_amt(v)}{yoy_s}"
