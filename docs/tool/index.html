@@ -3057,7 +3057,19 @@ function turnoverTrendBlockHTML(periods, years, divUsed) {
   const detailRows = [];
   for (const [key, label, formula] of TURNOVER_METRIC_DEFS) {
     const ms = ascYears.map((y) => byYear[y].metrics[key]);
-    const parts = ascYears.map((y, i) => `${y} ${ms[i].value === null ? "―" : ms[i].value.toFixed(2) + "회"}`);
+    // ⚠ 운전자본은 **차감으로 만들어진 분모**(유동자산−유동부채)라 0 근처로
+    // 쉽게 간다 — 그러면 회전율이 발산해 「효율이 좋다」가 아니라 「분모가 0에
+    // 가깝다」는 뜻이 된다(두산 2023 실측: 운전자본 74억 · 매출 19조 →
+    // 2,559.01회, 다른 회전율은 전부 한 자릿수). 임계를 만들지 않고 **모든
+    // 연도에 조건 없이** 분모를 병기해 원인이 그 자리에서 보이게 한다.
+    const parts = ascYears.map((y, i) => {
+      const v = ms[i].value === null ? "―" : ms[i].value.toFixed(2) + "회";
+      if (key === "workingCapital" && ms[i].value !== null
+          && ms[i].denominator !== null && ms[i].denominator !== undefined) {
+        return `${y} ${v} (운전자본 ${fmtKRW(ms[i].denominator)})`;
+      }
+      return `${y} ${v}`;
+    });
     let trendNote = "";
     if (ms.length >= 3 && ms.every((m) => m.value !== null)) {
       let up = true, down = true;
