@@ -4255,6 +4255,17 @@ async function loadCapitalBackflowGate(pattern, events, corpCode) {
 // 정직성을 택함). audit 블록이 이미 보여주는 최근 3개년 감사의견 이력과 커버
 // 범위가 같아 자연스럽게 맞물린다. 데이터 없는(null) 기간을 만나면 core와 동일하게
 // 그 지점에서 연속을 보수적으로 끊는다.
+// 연속 연수가 **본 기간을 다 채우면 그 값은 창 상한이지 사실이 아니다.**
+// core도 같은 함정에 있었다 — 창 5년으로 「5년 연속(2021~2025)」이라 적었는데
+// 창을 9년으로 넓혀 재측정하니 STX 순손실은 7년, 헬릭스미스는 9년+였다.
+// 뷰어가 보는 것은 한 응답의 3기간뿐이라 이 꼬리가 더 자주 붙는다.
+function lossStreakTail(n, series) {
+  const seen = series.filter((v) => v !== null).length;
+  return (seen && n >= seen)
+    ? ` (본 ${seen}개 기간이 모두 적자 — 그 이전은 이 블록의 조회 범위 밖입니다)`
+    : ".";
+}
+
 function lossStreakFromPeriods(series) {
   let n = 0;
   for (const v of series) {
@@ -4795,8 +4806,13 @@ async function loadFinancialCore(corpCode) {
       `자본이 두둑한데 본업이 이익을 못 내는 상장사는 무자본 M&A·자금 유용의 표적이 되기 쉽다는 것이 ` +
       `금감원 적발 사례에서 반복 관찰되는 패턴입니다. 지배구조 변동과 함께 읽어보세요.`);
   }
-  if (op[0] !== null && op[1] !== null && op[0] < 0 && op[1] < 0) warns.push("2개 연도 연속 영업적자입니다.");
-  if (ni[0] !== null && ni[1] !== null && ni[0] < 0 && ni[1] < 0) warns.push("2개 연도 연속 순손실입니다.");
+  // ⚠ 「2개 연도」는 **하드코딩된 임계 문구**였다 — 실제로 3기간 연속이어도
+  // 늘 「2개 연도」라 적었고, 바로 아래 AUDIT 블록은 같은 데이터로 「3년 연속」
+  // 이라 적어 **같은 화면이 두 숫자를 말했다**(STX 실측). 실제 개수를 쓴다.
+  const _opStreak = lossStreakFromPeriods(op);
+  const _niStreak = lossStreakFromPeriods(ni);
+  if (_opStreak >= 2) warns.push(`${_opStreak}개 연도 연속 영업적자입니다${lossStreakTail(_opStreak, op)}`);
+  if (_niStreak >= 2) warns.push(`${_niStreak}개 연도 연속 순손실입니다${lossStreakTail(_niStreak, ni)}`);
   if (eq !== null && eq < 0) warns.push(`완전 자본잠식 상태입니다 — 자본총계 ${fmtKRW(eq)}.`);
   else if (eq !== null && cap !== null && eq < cap) warns.push(`부분 자본잠식 상태입니다 — 자본총계(${fmtKRW(eq)})가 자본금(${fmtKRW(cap)})보다 작습니다.`);
   if (warns.length) {
@@ -4808,7 +4824,15 @@ async function loadFinancialCore(corpCode) {
   html += ratioTrendBlock(rows, div);
   html += `<p class="dim" style="font-size:0.8rem;margin-top:0.5rem">더 깊은 재무 이상 스캔(매출채권·재고 급증, Beneish 변수 8종, 전기 재작성 감지)은 <a href="../#start">MCP 대화</a>의 scan_financial_anomaly가 제공합니다.</p>`;
   el.innerHTML = html;
-  return { div, year, lossStreak: { op: lossStreakFromPeriods(op), ni: lossStreakFromPeriods(ni) } };
+  const _op = lossStreakFromPeriods(op), _ni = lossStreakFromPeriods(ni);
+  const _seenOp = op.filter((v) => v !== null).length;
+  const _seenNi = ni.filter((v) => v !== null).length;
+  return {
+    div, year,
+    lossStreak: { op: _op, ni: _ni },
+    // 둘 중 하나라도 본 기간을 다 채웠으면 창에 막힌 값이다.
+    lossStreakCapped: (_seenOp > 0 && _op >= _seenOp) || (_seenNi > 0 && _ni >= _seenNi),
+  };
 }
 
 async function loadHoldings(corpCode) {
@@ -4900,11 +4924,14 @@ async function loadAuditOpinions(corpCode, finCorePromise) {
   // 고른 구분 하나로 고정돼 있어 연결·별도가 섞이지 않는다.
   const finData = finCorePromise ? await finCorePromise : null;
   if (finData && finData.lossStreak) {
+    // 이 값도 재무 블록이 본 3기간에서 센 것이라 창에 막힐 수 있다.
+    const _capNote = finData.lossStreakCapped
+      ? " (조회 범위 안에서 센 값 — 실제 연속 연수는 더 길 수 있습니다)" : "";
     if (finData.lossStreak.op >= 2) {
-      html += `<div class="factline">· 영업손실 ${finData.lossStreak.op}년 연속 — 관리종목 요건 관련 관찰 지점</div>`;
+      html += `<div class="factline">· 영업손실 ${finData.lossStreak.op}년 연속${esc(_capNote)} — 관리종목 요건 관련 관찰 지점</div>`;
     }
     if (finData.lossStreak.ni >= 2) {
-      html += `<div class="factline">· 순손실 ${finData.lossStreak.ni}년 연속 — 관리종목 요건 관련 관찰 지점</div>`;
+      html += `<div class="factline">· 순손실 ${finData.lossStreak.ni}년 연속${esc(_capNote)} — 관리종목 요건 관련 관찰 지점</div>`;
     }
   }
   el.innerHTML = html;

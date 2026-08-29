@@ -4974,11 +4974,28 @@ def get_audit_opinion_history(company_name: str, lookback_years: int = 5) -> str
         _yrs = _streak.get("years", [])
         _latest = _yrs[0]["year"] if _yrs else "?"
         lines.append("**연속 적자 (참고)**")
+        # ⚠ 연속 연수가 **조회 창을 다 채우면 그 값은 창 상한이지 사실이 아니다.**
+        # 옛 문구는 거기에 연도 범위까지 붙여 「5년 연속(2021~2025)」이라 적었고,
+        # 이는 2021년에 시작했다는 뜻으로 읽힌다. 실측(2026-08-28, 창을 9년으로
+        # 넓혀 재측정):
+        #     STX 순손실        창 5년 표기 5년(2021~2025) → 실제 **7년**
+        #     헬릭스미스 영업손실 창 5년 표기 5년(2021~2025) → 실제 **9년+**
+        # 절단된 값에 시작 연도를 단정해 붙이는 것은 「조용한 절단」의 가장
+        # 나쁜 형태다. 창을 다 채웠으면 그 사실을 말한다.
+        _n_years = len(_yrs)
+
+        def _streak_part(label: str, n: int) -> str:
+            if _n_years and n >= _n_years:
+                return (f"{label} {n}년 연속 — 조회한 {_n_years}개 사업연도가 모두 "
+                        f"적자입니다(그 이전은 이 조회 범위 밖이라 실제 연속 연수는 "
+                        f"더 길 수 있습니다)")
+            return f"{label} {n}년 연속({_latest - n + 1}~{_latest})"
+
         parts = []
         if _op_n >= 2:
-            parts.append(f"영업손실 {_op_n}년 연속({_latest - _op_n + 1}~{_latest})")
+            parts.append(_streak_part("영업손실", _op_n))
         if _ni_n >= 2:
-            parts.append(f"순손실 {_ni_n}년 연속({_latest - _ni_n + 1}~{_latest})")
+            parts.append(_streak_part("순손실", _ni_n))
         lines.append("- " + " · ".join(parts))
         lines.append(
             "  사업보고서 기준 사실 표기입니다. 코스닥 관리종목 지정 요건은 "
