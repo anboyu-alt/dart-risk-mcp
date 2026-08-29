@@ -482,7 +482,13 @@ def _format_fund_year_prefix(rec: dict) -> str:
     v0.7.3: 기존 `[2023 public 회차-]` 형태가 사용자 출력에 노출되던 문제를 수정.
     `조달자금 사용내역` 블록의 공통 프리픽스로 사용.
     """
-    year = rec.get("year", "")
+    # ⚠ `year`는 **보고서 사업연도**이지 조달 시점이 아니다. 그대로 쓰면
+    # 「[2023 공모 제306회차] 납입일 2021.07.06」처럼 앞뒤가 어긋난다(두산
+    # 실측). 실측 2026-08-28: 라벨 연도 ≠ 납입 연도가 STX 96% · 오르비텍 91% ·
+    # KB금융 84%였다. 납입 연도를 알면 그것을 쓴다 — 사용자가 「언제 조달했나」로
+    # 읽는 자리다.
+    _pay_year = "".join(ch for ch in str(rec.get("pay_de") or "") if ch.isdigit())[:4]
+    year = _pay_year if len(_pay_year) == 4 else rec.get("year", "")
     kind_label = _fund_kind_korean(rec.get("kind"))
     tm_part = _fund_round_korean(rec.get("tm"))
     inner = " ".join(p for p in [str(year), kind_label, tm_part] if p)
