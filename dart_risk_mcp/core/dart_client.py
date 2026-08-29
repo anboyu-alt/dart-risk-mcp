@@ -1420,6 +1420,18 @@ _DISPOSAL_EXTVAL_RE = re.compile(r"외부평가\s*여부\s*(\S+)")
 # 관계 값에 5자리 이상 숫자(금액)가 섞이면 정규식이 표를 삼킨 것이다.
 _RELATION_LOOKS_DIRTY_RE = re.compile(r"\d[\d,]{4,}")
 
+# 상대방 값에도 같은 태도가 필요하다. 공시 하단 주석에
+# 「상기 6.의 취득예정일자는 **거래상대방과의** 주식취득 완료일 기준으로
+# 작성되었습니다」 같은 **문장**이 있어, 「거래상대방 …」 정규식이 표가 아니라
+# 그 문장을 문다. 실측(2026-08-28, 시장 26건 표본): 상대방을 낸 5건 중 **1건
+# (20%)**이 「과의 주식취득 완료일 기준으로 작성되었습니다. - 상기 7.의 …」였다.
+#
+# 누락보다 나쁘다 — 화면은 그것을 거래상대방이라고 **자신 있게** 말한다.
+# 회사·사람 이름에는 종결어미도 조사 시작도 없다.
+_COUNTERPARTY_LOOKS_DIRTY_RE = re.compile(
+    r"(?:습니다|됩니다|입니다|하였|기준으로|바랍니다)|^\s*(?:과의|와의|의|은|는|이|가)\s"
+)
+
 
 def parse_asset_disposal_detail(text: str) -> dict:
     """자산 처분·양도 결정 원문에서 상대방·관계·가액을 추출한다(순수 함수).
@@ -1459,7 +1471,12 @@ def parse_asset_disposal_detail(text: str) -> dict:
         m = rx.search(text)
         if m and m.group(1).strip():
             # 표 셀 구분자로 남는 꼬리 하이픈을 떼어낸다("…투자신탁15호 -").
-            out["counterparty"] = m.group(1).strip().rstrip("-").strip()[:60]
+            cand = m.group(1).strip().rstrip("-").strip()
+            # 문장을 물었으면 버리고 **다음 패턴을 계속 본다** — 그 문서에도
+            # 진짜 표가 있을 수 있다(없는 사실을 적지 않되, 있는 사실은 찾는다).
+            if _COUNTERPARTY_LOOKS_DIRTY_RE.search(cand):
+                continue
+            out["counterparty"] = cand[:60]
             break
     m = _DISPOSAL_RELATION_RE.search(text)
     if m:
