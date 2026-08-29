@@ -280,6 +280,66 @@ def _exec_role_label(row: dict) -> str:
     return "/".join(parts)
 
 
+# 인자 검증 — 잘못된 값을 **조용히 받아 축소 결과를 내지 않는다**.
+#
+# 실측(2026-08-30, 경계 입력 두드리기):
+#   `get_shareholder_info(회사, "abcd")`      1,192자 → **182자**
+#   `get_affiliate_investments(회사, "2099")` 2,681자 → **108자**
+#   `scan_financial_anomaly(회사, "1900")`    2,769자 →  **60자**
+# 사용자는 「이 회사는 데이터가 없구나」로 읽는다. 실제로는 **연도가 틀렸다**.
+#
+# 범위를 넓게 잡되(2000~내년) 형식은 엄격히 본다 — 「20240」·「-2024」·
+# 전각 「２０２４」가 전부 조용히 통과하고 있었다.
+_YEAR_MIN = 2000
+
+
+def _validate_year(year) -> str:
+    """연도 인자 검증. 정상이면 빈 문자열, 아니면 사용자용 오류 문구.
+
+    빈 값은 정상이다 — 도구들이 「미입력 시 직전 연도」로 문서화돼 있다.
+    """
+    y = str(year or "").strip()
+    if not y:
+        return ""
+    if not (len(y) == 4 and y.isascii() and y.isdigit()):
+        return (f"❌ year는 4자리 숫자여야 합니다 (받은 값: {year!r}). "
+                f"예: \"2024\". 미입력하면 직전 연도를 조회합니다.")
+    n = int(y)
+    _max = datetime.now().year + 1
+    if not (_YEAR_MIN <= n <= _max):
+        return (f"❌ year가 조회 가능 범위를 벗어났습니다 (받은 값: {y}). "
+                f"{_YEAR_MIN}~{_max} 사이여야 합니다.")
+    return ""
+
+
+def _coerce_lookback(value, default: int = 1, lo: int = 1, hi: int = 5) -> int:
+    """`lookback_years`를 정수로 강제한다 — **예외를 도구 밖으로 내보내지 않는다**.
+
+    실측(2026-08-30): `analyze_company_risk(회사, "3")`·`(회사, None)`이
+    `TypeError: '>' not supported between instances of 'int' and 'str'`로
+    도구를 통째로 죽였다. MCP 클라이언트가 느슨하면 문자열이 올 수 있다.
+    `track_turnover_trend`는 `isinstance` 검사가 있어 안전했다 — 그쪽에
+    맞춘다.
+
+    bool은 int의 하위형이라 `True`가 1로 통과하는데, 그건 의미가 없으므로
+    기본값으로 돌린다.
+    """
+    if isinstance(value, bool) or value is None:
+        return default
+    if isinstance(value, str):
+        v = value.strip()
+        if not (v.isascii() and v.isdigit()):
+            return default
+        value = int(v)
+    if not isinstance(value, (int, float)):
+        return default
+    try:
+        n = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return max(lo, min(hi, n))
+
+
 def _resolve_window(
     lookback_years: int,
     lookback_days: "int | None",
@@ -1579,6 +1639,7 @@ def analyze_company_risk(
     """
     if not _DART_API_KEY:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+    lookback_years = _coerce_lookback(lookback_years)
 
     bgn_de, end_de, lookback_days, max_pages, window_phrase, win_err = _resolve_window(
         lookback_years, lookback_days, from_date, to_date
@@ -2543,6 +2604,7 @@ def build_event_timeline(
     """
     if not _DART_API_KEY:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+    lookback_years = _coerce_lookback(lookback_years)
 
     bgn_de, end_de, lookback_days, max_pages, window_phrase, win_err = _resolve_window(
         lookback_years, lookback_days, from_date, to_date
@@ -3767,6 +3829,9 @@ def get_financial_summary(
     """
     if not _DART_API_KEY:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+    _yerr = _validate_year(year)
+    if _yerr:
+        return _yerr
 
     result = resolve_corp(company_name, _DART_API_KEY)
     if not result:
@@ -3844,6 +3909,9 @@ def compare_financials(company_names: list[str], year: str = "") -> str:
     """
     if not _DART_API_KEY:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+    _yerr = _validate_year(year)
+    if _yerr:
+        return _yerr
     if len(company_names) < 2:
         return "❌ 최소 2개 기업을 입력하세요."
     if len(company_names) > 5:
@@ -3939,6 +4007,9 @@ def get_shareholder_info(company_name: str, year: str = "") -> str:
     """
     if not _DART_API_KEY:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+    _yerr = _validate_year(year)
+    if _yerr:
+        return _yerr
 
     result = resolve_corp(company_name, _DART_API_KEY)
     if not result:
@@ -4073,6 +4144,9 @@ def get_affiliate_investments(company_name: str, year: str = "") -> str:
     api_key = os.environ.get("DART_API_KEY", "")
     if not api_key:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+    _yerr = _validate_year(year)
+    if _yerr:
+        return _yerr
 
     corp_info = resolve_corp(company_name, api_key)
     if not corp_info or not corp_info[1]:
@@ -4454,6 +4528,9 @@ def get_executive_compensation(
     """
     if not _DART_API_KEY:
         return "오류: DART_API_KEY 환경변수가 설정되지 않았습니다."
+    _yerr = _validate_year(year)
+    if _yerr:
+        return _yerr
 
     _resolved = resolve_corp(company_name, _DART_API_KEY)
     corp_name, meta = _resolved if _resolved else ("", {})
@@ -5044,6 +5121,9 @@ def track_debt_balance(company_name: str, year: str = "") -> str:
     api_key = _DART_API_KEY
     if not api_key:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+    _yerr = _validate_year(year)
+    if _yerr:
+        return _yerr
 
     _resolved = resolve_corp(company_name, api_key)
     corp_name, info = _resolved if _resolved else ("", {})
@@ -5727,6 +5807,9 @@ def scan_financial_anomaly(
     api_key = os.environ.get("DART_API_KEY", "")
     if not api_key:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+    _yerr = _validate_year(year)
+    if _yerr:
+        return _yerr
 
     corp_info = resolve_corp(company_name, api_key)
     if not corp_info or not corp_info[1]:
