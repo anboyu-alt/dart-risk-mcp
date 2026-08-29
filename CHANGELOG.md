@@ -2,6 +2,14 @@
 
 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식 준수. 버전은 [SemVer](https://semver.org/lang/ko/).
 
+## [1.21.15] - 2026-08-30
+
+### Fixed
+- **CLAUDE.md 내부 함수 표의 시그니처 오기 4건** (#404) — 문서대로 부르면
+  `TypeError`가 난다(`fetch_fund_usage`에 없는 `corp_cls` 등). 도구 표는 테스트가
+  지키는데 내부 함수 표는 아무도 안 지켜 낡아 있었다. 63개 전수 대조 후
+  `tests/test_doc_internal_signatures.py`로 고정.
+
 ## [1.21.14] - 2026-08-30
 
 ### Fixed
