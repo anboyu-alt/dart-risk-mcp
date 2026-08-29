@@ -112,7 +112,9 @@ _RP_CONSTS = ("RP_COUNTERPARTY_RES", "RP_RELATION_RE", "RP_AMOUNT_RE",
 _DISP_CONSTS = ("DISPOSAL_COUNTERPARTY_RES", "DISPOSAL_RELATION_RE",
                 "DISPOSAL_AMOUNT_RE", "DISPOSAL_AMOUNT_BARE_RE",
                 "DISPOSAL_UNIT_MILLION_RE", "DISPOSAL_RATIO_RE",
-                "DISPOSAL_BOOK_RE", "DISPOSAL_EXTVAL_RE", "RELATION_LOOKS_DIRTY_RE")
+                "DISPOSAL_BOOK_RE", "DISPOSAL_EXTVAL_RE", "RELATION_LOOKS_DIRTY_RE",
+                # 상대방 값이 주석 문장을 물면 버린다(2026-08-28)
+                "COUNTERPARTY_LOOKS_DIRTY_RE")
 
 
 @pytest.mark.parametrize("tag", ["related_borrow", "related_invest"])

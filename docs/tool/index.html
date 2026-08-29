@@ -4311,6 +4311,13 @@ const DISPOSAL_RATIO_RE = /자산총액\s*대비\s*\(%\)\s*([\d,.]+)/;
 const DISPOSAL_BOOK_RE = /평가가액\s*\(?원\)?\s*([\d,]+)/;
 const DISPOSAL_EXTVAL_RE = /외부평가\s*여부\s*(\S+)/;
 const RELATION_LOOKS_DIRTY_RE = /\d[\d,]{4,}/;
+// 상대방 값에도 같은 태도 — core `_COUNTERPARTY_LOOKS_DIRTY_RE` 이식.
+// 공시 하단 주석의 「…거래상대방과의 주식취득 완료일 기준으로 작성되었습니다」
+// 같은 **문장**을 표로 오인해 무는 일이 있다(시장 26건 표본에서 상대방을 낸
+// 5건 중 1건). 누락보다 나쁘다 — 화면이 그것을 거래상대방이라고 자신 있게
+// 말한다. 회사·사람 이름에는 종결어미도 조사 시작도 없다.
+const COUNTERPARTY_LOOKS_DIRTY_RE =
+  /(?:습니다|됩니다|입니다|하였|기준으로|바랍니다)|^\s*(?:과의|와의|의|은|는|이|가)\s/;
 
 // core의 원문 파서 정규식은 `fetch_document_text`가 주는 **공백 구분 평문**을
 // 전제로 쓰였다. 뷰어가 받는 것은 `/api/doc`의 **마크다운 표**라 값 사이에
@@ -4339,7 +4346,11 @@ function parseAssetDisposalDetail(text) {
   for (const rx of DISPOSAL_COUNTERPARTY_RES) {
     const m = rx.exec(text);
     if (m && m[1].trim()) {
-      out.counterparty = m[1].trim().replace(/-+$/, "").trim().slice(0, 60);
+      const cand = m[1].trim().replace(/-+$/, "").trim();
+      // 문장을 물었으면 버리고 다음 패턴을 계속 본다 — 그 문서에도 진짜 표가
+      // 있을 수 있다(없는 사실을 적지 않되, 있는 사실은 찾는다).
+      if (COUNTERPARTY_LOOKS_DIRTY_RE.test(cand)) continue;
+      out.counterparty = cand.slice(0, 60);
       break;
     }
   }
