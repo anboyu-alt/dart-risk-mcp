@@ -3056,7 +3056,10 @@ def fetch_fund_usage(
                     results.append(rec)
 
     _clear_stale_unreported(results)
-    out = FetchList(results, fetch_failed=(not results) and _fu_ok == 0)
+    # 플래그를 정리한 **뒤에** 접는다 — 옛 스냅샷이 있어야 「나중 보고서에
+    # 집행이 기재됐다」를 판단할 수 있다.
+    collapsed = _collapse_fund_snapshots(results)
+    out = FetchList(collapsed, fetch_failed=(not results) and _fu_ok == 0)
     # ⚠ **못 받은 결과를 캐시하지 않는다.** 한도 초과·점검 같은 일시적
     # 실패를 10분 동안 붙들면, 한도가 풀린 뒤에도 같은 거짓말을
     # 되풀이한다(2026-08-27 — 이 규칙을 넣기 전에는 실패가 캐시돼
@@ -3064,6 +3067,53 @@ def fetch_fund_usage(
     if not out.fetch_failed:
         _cache_set(_fund_usage_cache, cache_key, out, _FUND_CACHE_MAX)
     return out
+
+
+def _collapse_fund_snapshots(records: list) -> list:
+    """같은 용도 줄이 보고서 연도마다 반복된 것을 **최신 스냅샷 하나로** 접는다.
+
+    자금사용 내역은 같은 조달건이 여러 연도 보고서에 되풀이 실린다.
+    `_clear_stale_unreported`가 옛 스냅샷의 **플래그**는 이미 떼지만,
+    **레코드 자체는 전부 남아** 건수와 목록이 부풀려진다.
+
+    실측(2026-08-28, 6개사 lookback 3년):
+
+        레코드 990건 → 고유 용도 줄 235건 (**76%가 중복**)
+        KB금융  499 → 146   「총 499건 조회」는 3.4배 부풀려진 수였다
+        오르비텍 132 →  16
+        STX     138 →  27
+
+    접는 단위는 (조달유형, 회차, 납입일, 계획용도, 계획금액)이다 — 한 조달건
+    안의 **용도별 줄은 서로 다른 사실**이라 뭉개면 안 된다. 대표는 **가장 최신
+    보고서 연도**의 레코드다(최신 스냅샷이 실제 집행 상황을 담는다 —
+    `_clear_stale_unreported`의 판단과 같은 근거).
+
+    입력 순서는 보존한다(연도 루프 순서 = 오래된 것부터). 반환 리스트의
+    원소는 입력 dict 그대로이며 복사하지 않는다.
+    """
+    best: dict = {}
+    order: list = []
+    for rec in records:
+        key = (
+            rec.get("kind") or "",
+            rec.get("tm") or "",
+            rec.get("pay_de") or "",
+            rec.get("plan_useprps") or "",
+            rec.get("plan_amount") or 0,
+        )
+        prev = best.get(key)
+        if prev is None:
+            best[key] = rec
+            order.append(key)
+            continue
+        # 보고서 연도가 더 최신인 쪽을 대표로 둔다. 같은 해면 먼저 온 것을
+        # 유지한다(연도 루프가 분기 코드 순서대로 넣으므로 결정적이다).
+        try:
+            if int(rec.get("year") or 0) > int(prev.get("year") or 0):
+                best[key] = rec
+        except (TypeError, ValueError):
+            pass
+    return [best[k] for k in order]
 
 
 def _clear_stale_unreported(records: list) -> int:
