@@ -45,6 +45,12 @@ _CONTRACT = {
     # `DIRECTION_NOTES` 대상은 **하나도 없다**(실측). 버리는 사실이 아니라
     # 해당 없는 필드다. 이 근거가 깨지면 아래 테스트가 잡는다.
     "check_disclosure_anomaly": ("tier",),
+    # 2026-08-30 신설(위험 목록 9번). **`tier`만** 쓴다 — 이 도구는 신호
+    # 라벨이 아니라 **원문 제목**을 시계열에 찍고, 방향(`note`)은 이미
+    # `detect_capital_churn`이 `CHURN_NON_DILUTIVE_MARKS`로 희석성/비희석성을
+    # 갈라 따로 다룬다. 되사기·소각은 **강등이 아니라 방향 안내**라 tier가
+    # observed이므로 이 필터에 걸리지 않는다(그게 이 수정이 안전한 이유다).
+    "track_capital_structure": ("tier",),
 }
 
 
@@ -80,7 +86,9 @@ def test_소비처가_한정층_필드를_버리지_않는다(fn, fields):
         k = _SRC.find("\ndef ", j + 1)
         body += _SRC[j:k if k > 0 else len(_SRC)]
     for f in fields:
-        assert re.search(rf"\bq(?:q)?\.{f}\b|\bq\.{f}\b|\"{f}\"", body), (
+        # ⚠ 변수 이름이 `q`·`qq`뿐이라고 가정하면 안 된다 — `_q.tier`처럼
+        #    접두어가 붙은 이름도 같은 읽기다(2026-08-30에 실제로 걸렸다).
+        assert re.search(rf"\b\w*\.{f}\b|\"{f}\"", body), (
             f"{fn}이 한정층의 `{f}`를 쓰지 않는다 — 화면마다 같은 공시가 "
             f"다르게 보이는 원인이 된다"
         )
