@@ -396,6 +396,8 @@ dart_risk_mcp/
   - 3년 이상 채무잔액이 거의 변동 없고(YoY ≤ 10%) CB 발행 ≥2건 → `CB_ROLLOVER` 플래그(자본 차환 의존)
 - `lookback_years` 범위: 1~5년
 - v0.8.0: "최근 3년 채무증권 잔액 추이" 블록을 시계열 위에 출력
+- **한정층 적용 (2026-08-30, 제작자 승인)**: 같은 `detect_capital_churn`을 부르는 `analyze_company_risk`는 이미 `observed_events`만 넘기는데 **이쪽만 원자료를 그대로 넘기고 있었다** — 한 함수의 두 호출부가 다른 것을 셌다. `detect_capital_churn`이 자체로 빼는 것은 정정(`is_amendment`)과 「발행결과」·「결과보고서」(`CHURN_RESULT_MARKS`)뿐이라 아래가 남았다(25개사 3년 실측, 새로 빠지는 **69건**): R3 자회사 34 · R5 `[첨부정정]` 20(`is_amendment_disclosure`가 이 태그를 안 본다) · R2 해제·철회 9 · R2c 「청약결과」 6(`CHURN_RESULT_MARKS`에 「발행결과」만 있다). ⚠ **되사기·소각은 안 빠진다** — 방향 안내라 tier가 observed다(빼면 한탑이 떨어진다는 `detect_capital_churn` 독스트링의 경고와 충돌하지 않는다). 구조화 자사주 이벤트는 제목이 없어 한정 대상이 아니다. 제외 건수는 화면에 사실로 적는다. **라이브: 진짜 사례 유지**(한탑·코아스·제이스코홀딩스·진원생명과학·유티아이) · **대형주 3곳 해소**(SK하이닉스·이마트·고려아연 — 첫째는 사용자 제보로 지목된 회사).
+  > ⚠ 처음엔 `Qualified`에 규칙 id를 신설해 「중복·타사만」 빼려 했으나, 25개사에서 **「중복·타사만」과 「observed만」이 결과가 완전히 같았다**(자본 이벤트 키가 R1·R1b·R1c·R4·R6로 강등되는 일이 실제로는 없다). 개념을 늘리지 않고 형제 호출부와 같은 방식을 쓴다. `tests/test_capital_churn_scope.py`가 이 판단과 되사기 유지를 함께 고정한다.
 
 ### 21. `scan_financial_anomaly(company_name, year="", report_type="annual")` ✨ v0.8.8
 

@@ -6483,10 +6483,43 @@ def track_capital_structure(
         return _fetch_failed_notice(corp_name, f"최근 {lookback_years}년")
 
     # match_signals로 신호 탐지 + 자본 이벤트만 필터는 detect_capital_churn이 처리
+    #
+    # ⚠ **한정층을 건다(2026-08-30).** 같은 `detect_capital_churn`을 부르는
+    # `analyze_company_risk`는 이미 `observed_events`만 넘기는데 이쪽만
+    # 원자료를 그대로 넘기고 있었다 — **한 함수의 두 호출부가 다른 것을 셌다.**
+    #
+    # `detect_capital_churn`이 자체로 빼는 것은 정정(`is_amendment`)과
+    # 「발행결과」·「결과보고서」(`CHURN_RESULT_MARKS`)뿐이라 아래가 남아 있었다
+    # (25개사 3년 실측, 새로 빠지는 69건):
+    #
+    #   R3 자회사     34건  「유상증자결정(**종속회사**의주요경영사항)」
+    #   R5 첨부정정    20건  `is_amendment_disclosure`가 이 태그를 안 본다
+    #   R2 해제·철회    9건  「최대주주변경을수반하는주식담보제공계약해제ㆍ취소등」
+    #   R2c 청약결과    6건  `CHURN_RESULT_MARKS`에 「발행결과」만 있다
+    #
+    # ⚠ **되사기·소각은 안 빠진다** — 방향 안내만 붙고 tier는 observed다.
+    # 그것들을 빼면 한탑(라이브 검증된 진짜 사례)이 떨어진다는 경고가
+    # `detect_capital_churn` 독스트링에 있는데, 이 필터는 그 경고와 충돌하지
+    # 않는다(한탑 실측 True 유지).
+    #
+    # 라이브 효과: 진짜 사례 유지(한탑·코아스·제이스코홀딩스·진원생명과학·
+    # 유티아이) · 대형주 3곳(SK하이닉스·이마트·고려아연) 플래그 해소.
+    # SK하이닉스는 사용자 제보로 「이런 게 잡히면 안 된다」고 지목된 회사다.
+    #
+    # 「중복·타사만 뺀다」와 「observed만 남긴다」는 25개사에서 **결과가 완전히
+    # 같았다** — 자본 이벤트 키가 R1·R1b·R1c·R4·R6로 강등되는 일이 실제로는
+    # 없기 때문이다. 그래서 개념을 새로 만들지 않고 형제 호출부와 같은 방식을 쓴다.
     signal_events: list[dict] = []
+    _churn_demoted = 0
     for d in disclosures:
-        matches = match_signals(d.get("report_nm", ""))
-        for m in matches:
+        report_nm = d.get("report_nm", "")
+        matches = match_signals(report_nm)
+        _quals = qualify_signals(matches, parse_report_name(report_nm), d)
+        for m, _q in zip(matches, _quals):
+            if _q.tier != TIER_OBSERVED:
+                if m["key"] in CAPITAL_EVENT_KEYS:
+                    _churn_demoted += 1
+                continue
             signal_events.append({
                 "key": m["key"],
                 "label": m["label"],
@@ -6558,6 +6591,15 @@ def track_capital_structure(
         f"12개월 최대 집중도: **{result['max_12m_count']}건**",
         "",
     ]
+    # 조용히 빼지 않는다 — 뺀 것이 있으면 몇 건인지, 어떤 부류인지 밝힌다.
+    if _churn_demoted:
+        lines.append(
+            f"※ 자회사 사안·정정본·철회된 건·이미 센 결정의 청약결과 "
+            f"**{_churn_demoted}건은 집계에서 뺐습니다** — 이 회사가 자본을 "
+            "건드린 횟수가 아니거나 같은 사건을 두 번 세는 것입니다. "
+            "되사기·소각은 빼지 않습니다(자본 구조를 건드린 리듬의 일부입니다)."
+        )
+        lines.append("")
     if result["by_year"]:
         lines.append("**연도별 집계**")
         for y in sorted(result["by_year"].keys()):
