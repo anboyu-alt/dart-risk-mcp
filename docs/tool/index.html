@@ -157,8 +157,7 @@
   .g-feed { grid-template-columns: 92px 1fr 118px 96px 56px; }
   .mono { font-family: var(--mono); }
   .mm { font-family: var(--mono); font-size: 12.5px; color: var(--dim2); }
-  .badge-max { font-family: var(--mono); font-size: 10.5px; background: var(--red)fff;
-    background: #c03a3a; color: #fff; border-radius: 3px; padding: 2px 7px; letter-spacing: 0.08em; }
+  .badge-max { font-family: var(--mono); font-size: 10.5px; background: #c03a3a; color: #fff; border-radius: 3px; padding: 2px 7px; letter-spacing: 0.08em; }
   .sigdot { font-family: var(--mono); font-size: 10.5px; color: var(--red); }
   /* 매칭은 됐지만 전부 강등된 행 — '신호 없음'(—)과 구별하되 붉게 두지 않는다 */
   .procmark { font-family: var(--mono); font-size: 10.5px; color: var(--dim2); }
@@ -1484,6 +1483,18 @@ function renderFeed() {
     // 매칭은 됐지만 전부 강등된 행 — '신호 없음'과 구별해 사유를 보여준다
     // (대시보드의 「절차·사후 보고」 절과 같은 태도).
     const procSig = !obsSigs0.length && r.signals.length ? r.signals[0] : null;
+    // 이 배지는 「이 행이 **이 기간 대표 신호 유형**을 담고 있다」는 뜻이다.
+    //
+    // ⚠ 옛 낱말은 「MAX」였는데 **집합과 맞지 않았다.** 조건이 「헤드라인
+    // 신호 **키**를 담고 있나」라 그 키를 가진 행이 여럿이면 전부 붙는다 —
+    // 실측(15개사 1년): 관찰 행 215건 중 **59건(27.4%)**에 붙었고,
+    // HLB는 헤드라인이 CB_BW인데 CB 공시가 14건이라 **16행 중 14행(88%)**이
+    // 「MAX」였다. 최상급 낱말이 대부분의 행에 찍힌 셈이다(참고: 「먼저」
+    // 배지는 13.0%이고, 그 언저리가 「배지가 아니라 기본값」의 경계다).
+    // 게다가 같은 줄의 다른 배지는 전부 한국어 사실 표기다.
+    //
+    // 집합은 그대로 두고 낱말만 사실에 맞췄다 — 상세 화면의 두 자리
+    // (`SIGNAL · TOP WEIGHT`·「이 기간 최상위」)도 같은 `isTop` 조건이라 함께.
     // MAX는 이 기간 최상위 "관찰" 신호에만 붙는다 — 절차·사후 보고로 강등된
     // 행이 헤드라인과 같은 key를 우연히 공유해도(리뷰 라운드1 Finding 1,
     // 대량보유상황보고 SHAREHOLDER 재현) MAX를 물려받지 않는다.
@@ -1496,7 +1507,7 @@ function renderFeed() {
     // 그쪽이 읽을 값이므로 배지로 낮춰 보이게 하지 않는다.
     const ctxOnly = !isTop && !hasFirst && obsSigs.length
       && obsSigs.every((s) => s.priority === "context");
-    const sigCell = isTop ? `<span class="badge-max">MAX</span>`
+    const sigCell = isTop ? `<span class="badge-max">대표 유형</span>`
       : hasFirst ? `<span class="badge-cau">먼저</span>`
       : ctxOnly ? `<span class="badge-ctx">참고</span>`
       : obsSigs.length ? `<span class="sigdot">● 신호</span>`
@@ -1636,7 +1647,7 @@ function renderDetail(rcept) {
     <div class="panel ${s0 && isHeavySignal(s0) ? "red" : "amber"}">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
         ${s0 ? `<span class="tag" style="background:var(--c${cat});font-size:0.78rem;padding:0.2rem 0.7rem">${esc(DATA.categories[String(cat)])}</span>` : ""}
-        ${isTop ? `<span class="mono" style="font-size:11px;color:var(--red);letter-spacing:0.16em">SIGNAL · TOP WEIGHT</span>`
+        ${isTop ? `<span class="mono" style="font-size:11px;color:var(--red);letter-spacing:0.16em">SIGNAL · HEADLINE TYPE</span>`
                  : s0 ? `<span class="mono" style="font-size:11px;color:var(--dim);letter-spacing:0.16em">SIGNAL DETECTED</span>`
                  : procSig ? `<span class="mono" style="font-size:11px;color:var(--dim2);letter-spacing:0.16em">PROCEDURAL FILING</span>`
                  : `<span class="mono" style="font-size:11px;color:var(--faint);letter-spacing:0.16em">NO SIGNAL MATCH</span>`}
@@ -1659,7 +1670,7 @@ function renderDetail(rcept) {
         <div class="slabel">▍META</div>
         <div style="display:flex;flex-direction:column;gap:10px;font-size:13px;font-family:var(--mono)">
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">카테고리</span><span>${s0 ? esc(DATA.categories[String(cat)]) : "—"}</span></div>
-          <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">신호 무게</span><span style="color:${isTop ? "var(--red)" : "var(--dim2)"}">${isTop ? "이 기간 최상위" : detObs.length ? "감지됨" : procSig ? "절차·사후 보고" : "—"}</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">신호 무게</span><span style="color:${isTop ? "var(--red)" : "var(--dim2)"}">${isTop ? "이 기간 대표 유형" : detObs.length ? "감지됨" : procSig ? "절차·사후 보고" : "—"}</span></div>
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">정정 여부</span><span>${r.isAmend ? "정정공시" : "원공시"}</span></div>
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">체인 위치</span><span>${pos >= 0 ? `${pos + 1} / ${CUR.observedEvents.length}` : "—"}</span></div>
           ${r.signals.some((s) => isObservedSig(s) && s.priority === "first") ? `<div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">관찰 순서</span><span><span class="badge-cau">먼저</span> <span class="dim" style="font-size:0.78rem">— 회사의 존속·상장·회계 신뢰성이 걸린 사실 (위험도 등급 아님)</span></span></div>` : ""}
