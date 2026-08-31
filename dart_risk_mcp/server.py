@@ -40,8 +40,10 @@ from .core import (
     extract_loan_advance,
     fetch_affiliate_investments,
     fetch_issuance_history,
+    fetch_mezzanine_decisions,
     fetch_stock_totals,
     summarize_dilution,
+    summarize_mezzanine,
     match_affiliate_row,
     summarize_affiliate_stake,
     NOTE_CATEGORIES,
@@ -810,6 +812,172 @@ _ASSET_DISPOSAL_TITLE_MARKS = (
     "유형자산처분", "비유동자산처분", "유형자산양도",
     "특수관계인에대한자산양도", "영업양도",
 )
+
+
+_MEZZANINE_LIST_MAX = 12
+_MEZZANINE_ISSUE_MAX = 8
+
+
+def _mzn_won(v: "int | None") -> str:
+    return _format_amount(str(v)) if v else "-"
+
+
+def _mezzanine_block(
+    corp_code: str, api_key: str, lookback_years: int, disclosures: list[dict],
+) -> list[str]:
+    """메자닌(CB·BW·EB) 현황 — 개괄 → 공시 리스트 → 발행 조건 (점수 없음).
+
+    이 도구는 CB/BW를 **제목으로만** 잡았고 「발행 조건」은 어디에도 없었다.
+    `cvbdIsDecsn` 등이 전환가액·리픽싱 하한·잠재 희석률을 구조화로 주는데
+    `cb_extractor._parse_structured`가 인수자 3필드만 남기고 버려 왔다.
+
+    ⚠ **공시 목록을 재조회하지 않는다** — 호출자가 이미 갖고 있는 것을 받는다
+    (API 콜 0 추가). 발행결정만 3콜.
+
+    ⚠ **「전체 공시의 N%」를 적지 않는다** — 공시 목록은 상한에 걸려 잘릴 수
+    있어(삼성전자 3,933건 중 1,000건) 분모가 거짓이 된다.
+    """
+    dec = fetch_mezzanine_decisions(corp_code, api_key, lookback_years)
+    totals = fetch_stock_totals(corp_code, api_key)
+    d = summarize_mezzanine(dec["rows"], disclosures, totals)
+
+    if not d["filings_total"] and not d["issues"] and not dec["failed_kinds"]:
+        return []
+
+    out = ["**메자닌 (CB·BW·EB)**", ""]
+
+    if dec["failed_kinds"]:
+        out.append(
+            "⚠ " + "·".join(dec["failed_kinds"]) + " 발행결정을 받지 못했습니다 — "
+            "발행이 없다는 뜻이 아닙니다. 아래 집계에서 빠져 있습니다."
+        )
+        out.append("")
+
+    # ── 1단 개괄 ──
+    if d["filings_total"]:
+        _amend = (f" (정정 {d['filings_amended']}건은 아래 집계에서 제외)"
+                  if d["filings_amended"] else "")
+        out.append(f"- 이 기간 메자닌 관련 공시 **{d['filings_total']}건**{_amend}")
+        _label = {"issue": "발행", "refix": "전환가액 조정", "exercise": "전환·행사",
+                  "redeem": "회수", "resell": "자기사채 매도", "result": "결과"}
+        _parts = [f"{_label[k]} {v}건" for k, v in
+                  sorted(d["filing_counts"].items(), key=lambda x: -x[1]) if k in _label]
+        if _parts:
+            out.append("  " + " · ".join(_parts))
+
+    if d["by_kind"]:
+        _k = " · ".join(
+            f"{k} {v['count']}건 {_mzn_won(v['face'])}"
+            + (f" (권면 미기재 {v['face_unknown']}건)" if v["face_unknown"] else "")
+            for k, v in sorted(d["by_kind"].items()))
+        out.append(f"- 발행 결정: {_k}")
+
+    if d["potential_shares"]:
+        if d["potential_pct"] is not None:
+            out.append(
+                f"- 발행 시 기준 잠재 주식수 {d['potential_shares']:,}주 "
+                f"— 현재 보통주 발행총수의 **{d['potential_pct']:.1f}%**")
+            out.append(
+                "  ⚠ 이미 전환된 분을 뺄 수 없어 **상한**입니다. 중도 상환·"
+                "취득된 건도 그대로 들어 있습니다.")
+        else:
+            out.append(f"- 발행 시 기준 잠재 주식수 {d['potential_shares']:,}주 "
+                       "(보통주 발행총수를 찾지 못해 비중은 계산하지 않았습니다)")
+
+    _m = d["maturity"]
+    if _m["not_yet"] or _m["passed"] or _m["unknown"]:
+        _mt = [f"만기일 미도래 {_m['not_yet']}건"]
+        if _m["passed"]:
+            _mt.append(f"만기일 경과 {_m['passed']}건")
+        if _m["unknown"]:
+            _mt.append(f"만기일 미기재 {_m['unknown']}건")
+        if d["exercise_open"]:
+            _mt.append(f"전환·행사 청구기간 열림 {d['exercise_open']}건")
+        out.append("- " + " · ".join(_mt))
+        out.append(
+            "  ⚠ 이것은 **잔액이 아닙니다** — 발행결정 공시에 적힌 만기일을 그대로 "
+            "센 것이며 이후의 조기상환·만기 전 취득·전환은 반영돼 있지 않습니다.")
+    out.append("")
+
+    # ── 2단 공시 리스트 ──
+    if d["filings"]:
+        _shown = d["filings"][:_MEZZANINE_LIST_MAX]
+        out.append(f"**메자닌 공시** (최근순)")
+        for f in _shown:
+            _rd = f" 제{f['round']}회차" if f["round"] else ""
+            _am = " [정정]" if f["is_amendment"] else ""
+            out.append(f"- {_fmt_date8(f['date'])} [{f['label']}{_rd}]{_am} "
+                       f"{f['report_nm'][:46]} · rcept_no={f['rcept_no']}")
+        if d["filings_total"] > len(_shown):
+            out.append(f"- ... 전체 {d['filings_total']}건 중 최근 {len(_shown)}건 "
+                       f"표시 · {d['filings_total'] - len(_shown)}건 생략")
+        out.append("")
+
+    # ── 3단 발행 조건 디테일 ──
+    if d["issues"]:
+        out.append("**발행 조건** (납입일 최근순)")
+        # 회차가 많은 회사를 대비한 상한. 실측 3년 기준 최대 7건이라 지금은
+        # 아무것도 잘리지 않지만, 5년 창이나 발행이 잦은 회사에서 터진다.
+        # ⚠ 자르면 **몇 건을 뺐는지 반드시 적는다**(조용한 절단 금지).
+        for it in d["issues"][:_MEZZANINE_ISSUE_MAX]:
+            _rd = f"제{it['round']}회차 " if it["round"] else ""
+            _hd = (f"- {_rd}{it['kind']} {_mzn_won(it['face_amount'])}"
+                   f" · {it['offering'] or '발행방법 미기재'}")
+            if it["coupon"] is not None and it["ytm"] is not None:
+                _hd += f" · 표면 {it['coupon']:g}% / 만기 {it['ytm']:g}%"
+            if it["pay_date"]:
+                _hd += f" · 납입 {_fmt_date8(it['pay_date'])}"
+            if it["maturity"]:
+                _hd += f" · 만기 {_fmt_date8(it['maturity'])}"
+            out.append(_hd)
+
+            _l2 = []
+            if it["strike"]:
+                _l2.append(f"{it['strike_label']} {it['strike']:,.0f}원")
+            if it["potential_shares"]:
+                _l2.append(f"잠재 주식수 {it['potential_shares']:,}주")
+            if it["potential_pct_at_issue"] is not None:
+                _l2.append(f"발행 당시 총수 대비 {it['potential_pct_at_issue']:g}%")
+            if it["exercise_from"] and it["exercise_to"]:
+                _l2.append(f"청구 {_fmt_date8(it['exercise_from'])}"
+                           f"~{_fmt_date8(it['exercise_to'])}")
+            # 뽑아 놓고 렌더하지 않으면 죽은 배선이다 — 이 레포가 반복해 고친 부류
+            if it["exchange_target"]:
+                _l2.append(f"교환 대상 {it['exchange_target'][:24]}")
+            if it["detachable"]:
+                _l2.append(f"사채와 인수권 분리 {it['detachable'][:12]}")
+            if _l2:
+                out.append("    " + " · ".join(_l2))
+
+            if it["refix_field_absent"]:
+                out.append("    시가하락에 따른 조정: 서식에 해당 항목 없음"
+                           "(교환 대상이 이미 발행된 주식입니다)")
+            elif it["refix_floor"] and it["refix_floor_pct"] is not None:
+                _r = (f"    시가하락 시 최저 조정가액 {it['refix_floor']:,.0f}원 "
+                      f"(발행 당시 {it['strike_label']}의 {it['refix_floor_pct']:.1f}%)")
+                if it["refix_floor_pct"] < 69.5:
+                    _r += " — 70% 미만으로 조정 가능한 조건입니다(주주총회 특별결의 사항)"
+                    if it["refix_sub70_limit"]:
+                        _r += f" · 잔여한도 {_mzn_won(it['refix_sub70_limit'])}"
+                out.append(_r)
+            if it["use_of_funds"]:
+                out.append("    자금조달 목적: " + " · ".join(it["use_of_funds"]))
+        if len(d["issues"]) > _MEZZANINE_ISSUE_MAX:
+            out.append(f"- ... 전체 {len(d['issues'])}건 중 최근 "
+                       f"{_MEZZANINE_ISSUE_MAX}건 표시 · "
+                       f"{len(d['issues']) - _MEZZANINE_ISSUE_MAX}건 생략")
+        out.append("")
+
+    out.append(
+        "※ 발행결정 공시에 기재된 조건을 그대로 옮긴 사실이며, 적정·부적정 판단이 "
+        "아닙니다.")
+    out.append(
+        "※ 위 발행 건과 아래 「주식 수 변동」의 전환·행사 실적은 **서로 다른 "
+        "원장**입니다. 증자(감자) 현황의 행사 행에는 회차가 기재되지 않아 어느 "
+        "발행분이 전환됐는지 이을 수 없습니다 — 리픽싱으로 조정된 가액에서 전환이 "
+        "일어나므로 발행가액으로 되짚는 것도 맞지 않습니다.")
+    out.append("")
+    return out
 
 
 _DILUTION_KIND_LABEL = {
@@ -6743,6 +6911,10 @@ def track_capital_structure(
     # 이 도구는 CB/BW 발행을 제목으로 잡았지만 **전환이 실제로 얼마나
     # 일어났는지**는 보지 않았다. 기존 주주가 희석되는 건 전환 시점이고,
     # 그것이 무자본 M&A 수법의 핵심 고리다(저가 CB 발행 → 주가 부양 → 전환).
+    # 메자닌은 희석의 **원인**이다 — 발행 조건을 먼저 보여야
+    # 아래 전환 실적이 읽힌다. 공시 목록은 이미 갖고 있어 넘긴다.
+    lines += _mezzanine_block(corp_code, api_key, lookback_years,
+                              disclosures)
     lines += _dilution_block(corp_code, api_key, lookback_years)
 
     # v0.8.0: 채무증권 잔액 추이 + CB_ROLLOVER 판정

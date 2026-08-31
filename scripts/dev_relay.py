@@ -35,7 +35,8 @@ ALLOWED_ENDPOINTS = {"list.json", "company.json",
                      "alotMatter.json", "pssrpCptalUseDtls.json",
                      "prvsrpCptalUseDtls.json", "otrCprInvstmntSttus.json",
                      "fnlttSinglAcntAll.json", "irdsSttus.json",
-                     "stockTotqySttus.json"}
+                     "stockTotqySttus.json", "cvbdIsDecsn.json",
+                     "bdwtIsDecsn.json", "exbdIsDecsn.json"}
 DART_BASE = "https://opendart.fss.or.kr/api/"
 TOOL_DIR = os.path.join(os.path.dirname(__file__), "..", "docs", "tool")
 

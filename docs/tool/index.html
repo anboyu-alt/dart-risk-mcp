@@ -2054,6 +2054,8 @@ function renderDash() {
       `<span class="chip${n === TURNOVER_YEARS ? " on" : ""}" data-tyears="${n}">${n}년</span>`
     ).join("")}</div>
     <div id="turnoverCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">회전율 계산 중…</span></div></div>`;
+  html += `<div class="panel"><div class="slabel">▍MEZZANINE — 메자닌 현황 · 사실 표기</div>
+    <div id="mezzanineCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">메자닌 발행결정 조회 중…</span></div></div>`;
   html += `<div class="panel"><div class="slabel">▍DILUTION — 주식 수 변동 · 사실 표기</div>
     <div id="dilutionCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">증자·감자 현황 조회 중…</span></div></div>`;
   html += `<div class="panel"><div class="slabel">▍DIVIDEND — 배당과 순이익</div>
@@ -3228,6 +3230,358 @@ function turnoverTrendBlockHTML(periods, years, divUsed) {
   html += turnoverProseHTML();
   html += `<p class="dim" style="font-size:0.8rem;margin-top:0.5rem">더 깊은 재무 이상 스캔(매출채권·재고 급증, Beneish 변수 8종, 전기 재작성 감지)은 <a href="../#start">MCP 대화</a>의 scan_financial_anomaly가 제공합니다.</p>`;
   return html;
+}
+
+// ── 메자닌(MEZZANINE, #mezzanineCore) — core dart_client.py의 JS 쌍둥이
+//
+// 이 도구는 CB/BW를 **제목으로만** 잡았고 「발행 조건」(전환가액·리픽싱 하한·
+// 잠재 희석률)은 어디에도 없었다. `cvbdIsDecsn` 등이 그것을 구조화로 주는데
+// `cb_extractor._parse_structured`가 인수자 3필드만 남기고 버려 왔다.
+//
+// core: classify_mezzanine_filing · parse_mezzanine_row · summarize_mezzanine
+//       (tests/test_viewer_twin_parity.py가 대조)
+
+// 생애주기 6분류 — 3년 실측에서 **실제로 온 제목**만 넣었다.
+// ⚠ 「사채」 한 글자로 넓히면 「단기사채」·「회사채」가 딸려온다.
+const MZN_FILING_RULES = [
+  ["issue", "발행", ["전환사채권발행결정", "신주인수권부사채권발행결정", "교환사채권발행결정"]],
+  ["refix", "조정", ["전환가액의조정", "전환가액ㆍ신주인수권행사가액ㆍ교환가액의조정",
+                    "신주인수권행사가액의조정", "전환주식의전환가액조정", "교환가액의조정"]],
+  ["exercise", "전환·행사", ["전환청구권행사", "전환청구권ㆍ신주인수권ㆍ교환청구권행사",
+                           "전환주식의전환청구권행사", "신주인수권행사"]],
+  ["redeem", "회수", ["발행후만기전사채취득", "자기전환사채만기전취득",
+                     "자기신주인수권부사채만기전취득", "자기교환사채만기전취득"]],
+  ["resell", "자기사채 매도", ["자기전환사채매도", "자기신주인수권부사채매도", "자기교환사채매도"]],
+  ["result", "결과", ["주식관련사채등의발행결과", "주식관련사채등의청약결과"]],
+];
+const MZN_ROUND_RE = /제\s*(\d{1,4})\s*회차/;
+const MZN_USE_FIELDS = [
+  ["fdpp_fclt", "시설자금"], ["fdpp_bsninh", "영업양수자금"], ["fdpp_op", "운영자금"],
+  ["fdpp_dtrp", "채무상환자금"], ["fdpp_ocsa", "타법인 증권 취득자금"], ["fdpp_etc", "기타자금"],
+];
+
+function classifyMezzanineFiling(reportNm) {
+  const nm = String(reportNm || "").split(/\s+/).filter(Boolean).join(" ");
+  if (!nm) return null;
+  const flat = nm.replace(/\s/g, "");
+  for (const [category, label, marks] of MZN_FILING_RULES) {
+    if (marks.some((m) => flat.includes(m.replace(/\s/g, "")))) {
+      const m = MZN_ROUND_RE.exec(nm);
+      return {
+        category, label,
+        round: m ? parseInt(m[1], 10) : null,
+        is_amendment: AMEND_RE.test(nm),
+      };
+    }
+  }
+  return null;
+}
+
+function mznNum(raw) {
+  const s = String(raw === null || raw === undefined ? "" : raw).replace(/,/g, "").trim();
+  if (!s || s === "-") return null;
+  const v = Number(s);
+  return Number.isFinite(v) ? v : null;
+}
+
+function mznInt(raw) {
+  const v = mznNum(raw);
+  return v === null ? null : Math.trunc(v);
+}
+
+function mznDate(raw) {
+  const m = /(\d{4})\D{0,2}(\d{1,2})\D{0,2}(\d{1,2})/.exec(String(raw || "").trim());
+  if (!m) return "";
+  return `${m[1]}${String(+m[2]).padStart(2, "0")}${String(+m[3]).padStart(2, "0")}`;
+}
+
+function parseMezzanineRow(row, kind) {
+  const map = {
+    CB: ["cv_prc", "cvrqpd_bgd", "cvrqpd_edd", "전환가액"],
+    BW: ["ex_prc", "expd_bgd", "expd_edd", "행사가액"],
+    EB: ["ex_prc", "exrqpd_bgd", "exrqpd_edd", "교환가액"],
+  }[kind];
+  const [strikeField, fromField, toField, label] = map;
+  const strike = mznNum(row[strikeField]);
+  // ⚠ EB에는 리픽싱 필드가 **없다**(교환 대상이 이미 발행된 주식) — 공란으로
+  //   두면 「리픽싱 조항 없음」으로 읽힌다. `refixFieldAbsent`로 가른다.
+  const floor = kind === "EB" ? null : mznNum(row.act_mktprcfl_cvprc_lwtrsprc);
+  const out = {
+    kind,
+    rcept_no: String(row.rcept_no || "").trim(),
+    round: mznInt(row.bd_tm),
+    face_amount: mznInt(row.bd_fta),
+    coupon: mznNum(row.bd_intr_ex),
+    ytm: mznNum(row.bd_intr_sf),
+    maturity: mznDate(row.bd_mtd),
+    pay_date: mznDate(row.pymd),
+    offering: String(row.bdis_mthn || "").split(/\s+/).filter(Boolean).join(" "),
+    strike,
+    strike_label: label,
+    exercise_from: mznDate(row[fromField]),
+    exercise_to: mznDate(row[toField]),
+    refix_field_absent: kind === "EB",
+    refix_floor: floor,
+    refix_floor_pct: (floor && strike) ? (floor / strike) * 100 : null,
+    refix_sub70_limit: kind === "EB" ? null : mznInt(row.rmislmt_lt70p),
+    use_of_funds: MZN_USE_FIELDS.filter(([f]) => mznInt(row[f])).map(([, l]) => l),
+    potential_shares: null,
+    potential_pct_at_issue: null,
+    detachable: "",
+    exchange_target: "",
+  };
+  if (kind === "CB") {
+    out.potential_shares = mznInt(row.cvisstk_cnt);
+    out.potential_pct_at_issue = mznNum(row.cvisstk_tisstk_vs);
+  } else if (kind === "BW") {
+    out.potential_shares = mznInt(row.nstk_isstk_cnt);
+    out.potential_pct_at_issue = mznNum(row.nstk_isstk_tisstk_vs);
+    out.detachable = String(row.bdwt_div_atn || "").split(/\s+/).filter(Boolean).join(" ");
+  } else {
+    out.potential_pct_at_issue = mznNum(row.extg_tisstk_vs);
+    out.exchange_target = String(row.extg || "").split(/\s+/).filter(Boolean).join(" ");
+  }
+  return out;
+}
+
+function summarizeMezzanine(decisionRows, filings, totals, today) {
+  const now = today || ymd(Date.now());
+  const seen = {};
+  for (const r of decisionRows || []) {
+    const it = parseMezzanineRow(r, r._kind || "CB");
+    const k = it.rcept_no || JSON.stringify(r);
+    if (!(k in seen)) seen[k] = it;
+  }
+  const issues = Object.values(seen).sort((a, b) =>
+    (b.pay_date || "").localeCompare(a.pay_date || ""));
+
+  const byKind = {};
+  for (const it of issues) {
+    if (!byKind[it.kind]) byKind[it.kind] = { count: 0, face: 0, face_unknown: 0 };
+    byKind[it.kind].count++;
+    if (it.face_amount === null) byKind[it.kind].face_unknown++;
+    else byKind[it.kind].face += it.face_amount;
+  }
+
+  const potential = issues.reduce((s, it) => s + (it.potential_shares || 0), 0);
+  const common = pickCommonStockTotal(totals || []);
+  const potentialPct = (common && potential) ? (potential / common) * 100 : null;
+
+  // ⚠ 하한을 3버킷으로 나누면 **70%보다 높은 하한이 「미상」으로 떨어진다**.
+  //   제이스코 5·6회차는 506원 → 500원(98.8%)이고 이건 리픽싱 여지가 거의
+  //   없다는 뜻이라 11.1%와 정반대다. 값이 있으면 %를 그대로 들고, 법정 하한을
+  //   밑도는 70% 미만만 따로 센다.
+  const refix = { floors: [], lt70: [], absent: [], no_value: [] };
+  for (const it of issues) {
+    if (it.refix_field_absent) refix.absent.push(it);
+    else if (it.refix_floor_pct === null) refix.no_value.push(it);
+    else {
+      refix.floors.push(it);
+      if (it.refix_floor_pct < 69.5) refix.lt70.push(it);
+    }
+  }
+
+  const maturity = { not_yet: 0, passed: 0, unknown: 0 };
+  let exerciseOpen = 0;
+  for (const it of issues) {
+    if (!it.maturity) maturity.unknown++;
+    else if (it.maturity >= now) maturity.not_yet++;
+    else maturity.passed++;
+    if (it.exercise_from && it.exercise_to
+        && it.exercise_from <= now && now <= it.exercise_to) exerciseOpen++;
+  }
+
+  const listed = [];
+  const byCat = {};
+  let amended = 0;
+  for (const d of filings || []) {
+    const c = classifyMezzanineFiling(d.report_nm || "");
+    if (!c) continue;
+    listed.push({
+      date: String(d.rcept_dt || "").trim(),
+      rcept_no: String(d.rcept_no || "").trim(),
+      report_nm: String(d.report_nm || "").split(/\s+/).filter(Boolean).join(" "),
+      ...c,
+    });
+    if (c.is_amendment) amended++;
+    else byCat[c.category] = (byCat[c.category] || 0) + 1;   // 정정은 집계에서 제외
+  }
+  listed.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+  return {
+    issues, byKind, potential_shares: potential, common_total: common,
+    potential_pct: potentialPct, refix, maturity, exercise_open: exerciseOpen,
+    filings: listed, filing_counts: byCat, filings_total: listed.length,
+    filings_amended: amended,
+  };
+}
+
+const MZN_LIST_MAX = 12;
+const MZN_ISSUE_MAX = 8;
+const MZN_CAT_LABEL = {
+  issue: "발행", refix: "전환가액 조정", exercise: "전환·행사",
+  redeem: "회수", resell: "자기사채 매도", result: "결과",
+};
+
+// 순수 함수 — 이미 집계된 요약만으로 HTML을 만든다(테스트 용이).
+function mezzanineBlockHTML(d, failedKinds) {
+  let html = "";
+  if ((failedKinds || []).length) {
+    html += `<div class="dim" style="font-size:0.86rem;margin-bottom:8px">⚠ ` +
+      `${esc(failedKinds.join("·"))} 발행결정을 받지 못했습니다 — 발행이 없다는 ` +
+      `뜻이 아닙니다. 아래 집계에서 빠져 있습니다.</div>`;
+  }
+
+  const facts = [];
+  if (d.filings_total) {
+    const am = d.filings_amended
+      ? ` <span class="dim">(정정 ${d.filings_amended}건은 집계에서 제외)</span>` : "";
+    facts.push(`이 기간 메자닌 관련 공시 <b>${d.filings_total}건</b>${am}`);
+    const parts = Object.entries(d.filing_counts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => `${MZN_CAT_LABEL[k] || k} ${v}건`);
+    if (parts.length) facts.push(`<span class="dim">${esc(parts.join(" · "))}</span>`);
+  }
+  const kinds = Object.entries(d.byKind).sort();
+  if (kinds.length) {
+    facts.push("발행 결정: " + kinds.map(([k, v]) =>
+      `${k} ${v.count}건 ${fmtWon(v.face)}` +
+      (v.face_unknown ? ` (권면 미기재 ${v.face_unknown}건)` : "")).join(" · "));
+  }
+  if (d.potential_shares) {
+    if (d.potential_pct !== null) {
+      facts.push(`발행 시 기준 잠재 주식수 ${d.potential_shares.toLocaleString()}주 ` +
+        `— 현재 보통주 발행총수의 <b>${d.potential_pct.toFixed(1)}%</b>`);
+      facts.push(`<span class="dim">⚠ 이미 전환된 분을 뺄 수 없어 <b>상한</b>입니다. ` +
+        `중도 상환·취득된 건도 그대로 들어 있습니다.</span>`);
+    } else {
+      facts.push(`발행 시 기준 잠재 주식수 ${d.potential_shares.toLocaleString()}주 ` +
+        `<span class="dim">(보통주 발행총수를 찾지 못해 비중은 계산하지 않았습니다)</span>`);
+    }
+  }
+  const m = d.maturity;
+  if (m.not_yet || m.passed || m.unknown) {
+    const mt = [`만기일 미도래 ${m.not_yet}건`];
+    if (m.passed) mt.push(`만기일 경과 ${m.passed}건`);
+    if (m.unknown) mt.push(`만기일 미기재 ${m.unknown}건`);
+    if (d.exercise_open) mt.push(`전환·행사 청구기간 열림 ${d.exercise_open}건`);
+    facts.push(esc(mt.join(" · ")));
+    facts.push(`<span class="dim">⚠ 이것은 <b>잔액이 아닙니다</b> — 발행결정 공시에 ` +
+      `적힌 만기일을 그대로 센 것이며 이후의 조기상환·만기 전 취득·전환은 ` +
+      `반영돼 있지 않습니다.</span>`);
+  }
+  html += `<div style="font-size:0.9rem;line-height:1.75">${facts.join("<br>")}</div>`;
+
+  if (d.filings.length) {
+    const shown = d.filings.slice(0, MZN_LIST_MAX);
+    html += `<table class="t" style="margin-top:12px"><thead><tr><th>일자</th>` +
+      `<th>구분</th><th>공시</th></tr></thead><tbody>`;
+    for (const f of shown) {
+      const rd = f.round ? ` 제${f.round}회차` : "";
+      const am = f.is_amendment ? ` <span class="dim">[정정]</span>` : "";
+      html += `<tr><td>${esc(fmtDate(f.date))}</td>` +
+        `<td>${esc((MZN_CAT_LABEL[f.category] || f.category) + rd)}</td>` +
+        `<td><a href="${dartUrl(f.rcept_no)}" target="_blank" rel="noopener">` +
+        `${esc(f.report_nm)}</a>${am}</td></tr>`;
+    }
+    html += `</tbody></table>`;
+    if (d.filings_total > shown.length) {
+      html += `<div class="dim" style="font-size:0.82rem;margin-top:4px">` +
+        `전체 ${d.filings_total}건 중 최근 ${shown.length}건 표시 · ` +
+        `${d.filings_total - shown.length}건 생략</div>`;
+    }
+  }
+
+  if (d.issues.length) {
+    html += `<details style="margin-top:12px"><summary style="cursor:pointer">` +
+      `발행 조건 ${d.issues.length}건 (납입일 최근순)</summary><div style="margin-top:8px">`;
+    for (const it of d.issues.slice(0, MZN_ISSUE_MAX)) {
+      const rd = it.round ? `제${it.round}회차 ` : "";
+      let head = `${rd}${it.kind} ${fmtWon(it.face_amount)}` +
+        ` · ${esc(it.offering || "발행방법 미기재")}`;
+      if (it.coupon !== null && it.ytm !== null) head += ` · 표면 ${it.coupon}% / 만기 ${it.ytm}%`;
+      if (it.pay_date) head += ` · 납입 ${fmtDate(it.pay_date)}`;
+      if (it.maturity) head += ` · 만기 ${fmtDate(it.maturity)}`;
+      const l2 = [];
+      if (it.strike) l2.push(`${it.strike_label} ${it.strike.toLocaleString()}원`);
+      if (it.potential_shares) l2.push(`잠재 주식수 ${it.potential_shares.toLocaleString()}주`);
+      if (it.potential_pct_at_issue !== null) l2.push(`발행 당시 총수 대비 ${it.potential_pct_at_issue}%`);
+      if (it.exercise_from && it.exercise_to) {
+        l2.push(`청구 ${fmtDate(it.exercise_from)}~${fmtDate(it.exercise_to)}`);
+      }
+      if (it.exchange_target) l2.push(`교환 대상 ${it.exchange_target.slice(0, 24)}`);
+      if (it.detachable) l2.push(`사채와 인수권 분리 ${it.detachable.slice(0, 12)}`);
+      let l3 = "";
+      if (it.refix_field_absent) {
+        l3 = "시가하락에 따른 조정: 서식에 해당 항목 없음(교환 대상이 이미 발행된 주식입니다)";
+      } else if (it.refix_floor && it.refix_floor_pct !== null) {
+        l3 = `시가하락 시 최저 조정가액 ${it.refix_floor.toLocaleString()}원 ` +
+          `(발행 당시 ${it.strike_label}의 ${it.refix_floor_pct.toFixed(1)}%)`;
+        if (it.refix_floor_pct < 69.5) {
+          l3 += " — 70% 미만으로 조정 가능한 조건입니다(주주총회 특별결의 사항)";
+          if (it.refix_sub70_limit) l3 += ` · 잔여한도 ${fmtWon(it.refix_sub70_limit)}`;
+        }
+      }
+      html += `<div style="margin-bottom:10px;font-size:0.87rem;line-height:1.7">` +
+        `${esc(head)}` +
+        (l2.length ? `<br><span class="dim">${esc(l2.join(" · "))}</span>` : "") +
+        (l3 ? `<br><span class="dim">${esc(l3)}</span>` : "") +
+        (it.use_of_funds.length
+          ? `<br><span class="dim">자금조달 목적: ${esc(it.use_of_funds.join(" · "))}</span>` : "") +
+        `</div>`;
+    }
+    if (d.issues.length > MZN_ISSUE_MAX) {
+      html += `<div class="dim" style="font-size:0.82rem">전체 ${d.issues.length}건 중 ` +
+        `최근 ${MZN_ISSUE_MAX}건 표시 · ${d.issues.length - MZN_ISSUE_MAX}건 생략</div>`;
+    }
+    html += `</div></details>`;
+  }
+
+  html += `<div class="dim" style="font-size:0.82rem;margin-top:8px">` +
+    `※ 발행결정 공시에 기재된 조건을 그대로 옮긴 사실이며, 적정·부적정 판단이 아닙니다.<br>` +
+    `※ 위 발행 건과 아래 「주식 수 변동」의 전환·행사 실적은 <b>서로 다른 원장</b>입니다. ` +
+    `증자(감자) 현황의 행사 행에는 회차가 기재되지 않아 어느 발행분이 전환됐는지 이을 수 ` +
+    `없습니다 — 리픽싱으로 조정된 가액에서 전환이 일어나므로 발행가액으로 되짚는 것도 ` +
+    `맞지 않습니다.</div>`;
+  return html;
+}
+
+async function loadMezzanine(corpCode, items) {
+  const el = $("mezzanineCore");
+  // ⚠ **스캔 창(`LOOKBACK_DAYS`)에 맞춘다.** 처음엔 발행결정만 `TURNOVER_YEARS`
+  //   (사업연도 축)로 받았는데, 공시 리스트는 스캔 결과(일수 축)라 한 블록에
+  //   「공시 23건(1년)」과 「발행 3건(3년)」이 나란히 놓였다 — 같은 창을 말하는
+  //   것처럼 읽힌다. 두 축을 섞지 않는다(CLAUDE.md의 두 축 구분과 같은 판단).
+  const end = ymd(Date.now());
+  const bgn = ymd(Date.now() - LOOKBACK_DAYS * 86400000);
+  const kinds = [["CB", "cvbdIsDecsn.json"], ["BW", "bdwtIsDecsn.json"],
+                 ["EB", "exbdIsDecsn.json"]];
+  const rows = [];
+  const failed = [];
+  await Promise.all(kinds.map(async ([kind, ep]) => {
+    const j = await dartGet(ep, { corp_code: corpCode, bgn_de: bgn, end_de: end });
+    // ⚠ 하나가 실패해도 「없다」로 접지 않는다 — 013만 진짜 부재다.
+    // ⚠ 여기서 조기 `return`을 쓰지 않는다 — 콜백을 빠져나갈 뿐인데
+    //   `test_viewer_render_invariants`의 「스피너를 안 지우고 return하는
+    //   분기」 검사가 로더의 이탈로 읽는다. 가드를 약화시키기보다 분기를 없앤다.
+    if (dartFail(j)) {
+      failed.push(kind);
+    } else {
+      for (const r of (j.status === "000" ? (j.list || []) : [])) {
+        rows.push({ ...r, _kind: kind });
+      }
+    }
+  }));
+  const totals = await dartGet("stockTotqySttus.json",
+    { corp_code: corpCode, bsns_year: String(kstYear() - 1), reprt_code: "11011" });
+  const d = summarizeMezzanine(rows, items || [],
+    totals.status === "000" ? (totals.list || []) : []);
+  if (!d.filings_total && !d.issues.length && !failed.length) {
+    el.innerHTML = `<span class="dim" style="font-size:0.88rem">이 기간에 ` +
+      `메자닌(CB·BW·EB) 관련 공시가 없습니다.</span>`;
+    return;
+  }
+  el.innerHTML = mezzanineBlockHTML(d, failed);
 }
 
 // ── 희석 추적(DILUTION, #dilutionCore) — core dart_client.py의 JS 쌍둥이
@@ -5078,6 +5432,10 @@ function loadDeepBlocks(corpCode) {
   });
   runTurnoverTrend(corpCode);
   bindTurnoverYearChips(corpCode);
+  // 공시 목록은 이미 스캔한 것을 넘긴다 — 재조회하지 않는다.
+  loadMezzanine(corpCode, (CUR && CUR.items) || []).catch((e) => {
+    $("mezzanineCore").innerHTML = `<span class="dim" style="font-size:0.88rem">조회 실패: ${esc(e.message)}</span>`;
+  });
   loadDilution(corpCode).catch((e) => {
     $("dilutionCore").innerHTML = `<span class="dim" style="font-size:0.88rem">조회 실패: ${esc(e.message)}</span>`;
   });
