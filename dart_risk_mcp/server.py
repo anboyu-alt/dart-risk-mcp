@@ -810,7 +810,18 @@ _ASSET_DISPOSAL_TITLE_MARKS = (
 
 
 def _is_asset_disposal_title(report_nm: str) -> bool:
-    flat = (report_nm or "").replace(" ", "")
+    """자산 처분·양도 계열 제목인가 — 어느 파서를 쓸지 가르는 게이트.
+
+    ⚠ 공백을 **모두** 지운다. 옛 코드는 `replace(" ", "")`로 스페이스만
+    지웠는데 뷰어 쌍둥이 `isAssetDisposalTitle`은 `replace(/\\s/g, "")`라
+    「유형자산\\n처분결정」에서 두 화면의 판정이 갈렸다(2026-08-31, 패리티
+    테스트가 잡았다). 넓은 쪽이 옳다 — 이 게이트가 닫히면 「누구에게 팔았나」가
+    화면에서 통째로 사라진다.
+
+    실제 제목 1,220종에는 일반 공백만 있어(비공백 공백문자 0건) 지금 동작은
+    바뀌지 않는다. 잠복 드리프트를 없애는 것이다.
+    """
+    flat = re.sub(r"\s", "", report_nm or "")
     return any(m in flat for m in _ASSET_DISPOSAL_TITLE_MARKS)
 
 
