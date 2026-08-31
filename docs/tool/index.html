@@ -2054,6 +2054,8 @@ function renderDash() {
       `<span class="chip${n === TURNOVER_YEARS ? " on" : ""}" data-tyears="${n}">${n}년</span>`
     ).join("")}</div>
     <div id="turnoverCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">회전율 계산 중…</span></div></div>`;
+  html += `<div class="panel"><div class="slabel">▍DILUTION — 주식 수 변동 · 사실 표기</div>
+    <div id="dilutionCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">증자·감자 현황 조회 중…</span></div></div>`;
   html += `<div class="panel"><div class="slabel">▍DIVIDEND — 배당과 순이익</div>
     <div id="divCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">배당 내역 조회 중…</span></div></div>`;
   html += `<div class="panel"><div class="slabel">▍FUND CHAIN — 조달 자금의 행방</div>
@@ -3226,6 +3228,185 @@ function turnoverTrendBlockHTML(periods, years, divUsed) {
   html += turnoverProseHTML();
   html += `<p class="dim" style="font-size:0.8rem;margin-top:0.5rem">더 깊은 재무 이상 스캔(매출채권·재고 급증, Beneish 변수 8종, 전기 재작성 감지)은 <a href="../#start">MCP 대화</a>의 scan_financial_anomaly가 제공합니다.</p>`;
   return html;
+}
+
+// ── 희석 추적(DILUTION, #dilutionCore) — core dart_client.py의 JS 쌍둥이
+//
+// 이 도구는 CB/BW **발행**을 공시 제목으로 잡지만 **전환이 실제로 얼마나
+// 일어났는지**는 보지 않았다. 기존 주주가 희석되는 건 전환 시점이고, 그것이
+// 무자본 M&A 수법의 마지막 고리다(저가 CB 발행 → 주가 부양 → 전환 → 매도).
+//
+// core: classify_issuance_type · _issuance_date8 · pick_common_stock_total ·
+//       summarize_dilution  (tests/test_viewer_twin_parity.py가 대조)
+
+// ⚠ 비례 배분(무상증자·주식분할·주식배당)은 **희석이 아니다** — 모든 주주에게
+//   같은 비율로 배분돼 지분율이 변하지 않는다. 희석으로 세면 「주주에게 공짜로
+//   준 것」을 위험처럼 표시하게 된다.
+const ISSUANCE_PROPORTIONAL = ["무상증자", "주식분할", "주식배당", "무상주"];
+const ISSUANCE_DILUTIVE = [
+  "전환권행사", "신주인수권행사", "주식매수선택권행사", "유상증자",
+  "전환청구", "행사", "출자전환", "교환권행사",
+];
+const ISSUANCE_DECREASE = ["감자", "소각", "이익소각"];
+// ⚠ 보통주 표기는 20개사 실측으로 만들었다 — 「보통주」18 ·
+//   「의결권 있는 주식」1(셀트리온) · 「보통주식」1(두산)로 20/20을 덮는다.
+const COMMON_STOCK_LABELS = ["보통주", "보통주식", "의결권 있는 주식", "의결권있는 주식"];
+// ⚠ 「합계」·「비고」 행이 20/20 회사에 섞여 온다 — 분모로 잡으면 우선주까지 더해진다.
+const STOCK_TOTAL_SKIP = ["합계", "계", "총계", "비고"];
+
+function classifyIssuanceType(stle) {
+  const s = String(stle == null ? "" : stle).replace(/\s/g, "");
+  if (!s || s === "-") return "unknown";
+  if (ISSUANCE_PROPORTIONAL.some((m) => s.includes(m))) return "proportional";
+  if (ISSUANCE_DECREASE.some((m) => s.includes(m))) return "decrease";
+  if (ISSUANCE_DILUTIVE.some((m) => s.includes(m))) return "dilutive";
+  return "unknown";
+}
+
+function issuanceDate8(raw) {
+  const s = String(raw == null ? "" : raw).trim();
+  const m = /^(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})/.exec(s);
+  if (m) return `${m[1]}${String(+m[2]).padStart(2, "0")}${String(+m[3]).padStart(2, "0")}`;
+  return /^\d{8}$/.test(s) ? s : "";
+}
+
+function pickCommonStockTotal(totals) {
+  for (const row of totals || []) {
+    const se = String((row && row.se) || "").split(/\s+/).filter(Boolean).join(" ");
+    if (!se || STOCK_TOTAL_SKIP.some((s) => se.startsWith(s))) continue;
+    if (!COMMON_STOCK_LABELS.some((l) => se.includes(l))) continue;
+    const v = affiliateInt(row && row.istc_totqy);
+    if (v) return v;
+  }
+  return null;
+}
+
+function summarizeDilution(rows, totals, since) {
+  const byType = {};
+  const buckets = { dilutive: 0, proportional: 0, decrease: 0, unknown: 0 };
+  const dates = [];
+  let undated = 0, blank = 0, inWindow = 0;
+  for (const r of rows || []) {
+    // ⚠ DART는 신주 발행이 없는 회사에도 **모든 칸이 `-`인 자리 행**을 보낸다
+    //   (실측 삼성전자 2행·두산 1행). 「미기재」로 세면 없는 사실이 있는
+    //   것처럼 읽힌다.
+    const vals = ["isu_dcrs_de", "isu_dcrs_stle", "isu_dcrs_stock_knd", "isu_dcrs_qy"]
+      .map((k) => String((r && r[k]) || "").trim());
+    if (vals.every((v) => v === "" || v === "-")) { blank++; continue; }
+    const d = issuanceDate8(r && r.isu_dcrs_de);
+    if (!d) { undated++; continue; }
+    dates.push(d);
+    if (since && d < since) continue;
+    inWindow++;
+    const stle = String((r && r.isu_dcrs_stle) || "").split(/\s+/)
+      .filter(Boolean).join(" ") || "(미기재)";
+    const qty = affiliateInt(r && r.isu_dcrs_qy) || 0;
+    const kind = classifyIssuanceType(stle);
+    if (!byType[stle]) byType[stle] = { count: 0, shares: 0, kind };
+    byType[stle].count++;
+    byType[stle].shares += qty;
+    buckets[kind] += kind === "decrease" ? Math.abs(qty) : qty;
+  }
+  const common = pickCommonStockTotal(totals);
+  const pct = (common && buckets.dilutive > 0)
+    ? (buckets.dilutive / common) * 100 : null;
+  dates.sort();
+  return {
+    byType, buckets, commonTotal: common, dilutivePct: pct,
+    earliest: dates.length ? dates[0] : "",
+    latest: dates.length ? dates[dates.length - 1] : "",
+    undated, blank, inWindow,
+  };
+}
+
+const DILUTION_KIND_LABEL = {
+  dilutive: "희석", proportional: "비례 배분", decrease: "감소", unknown: "미분류",
+};
+
+// 순수 함수 — 이미 집계된 요약만으로 HTML을 만든다(테스트 용이).
+function dilutionBlockHTML(d, years) {
+  if (!d.inWindow) {
+    // ⚠ 「자료 없음」과 「창 밖」을 같은 화면으로 만들지 않는다. 실측
+    //   아틀라스링크는 원장에 5건이 있는데 전부 2018~2021이라 3년 창에서 0건이다.
+    if (d.earliest) {
+      return `<span class="dim" style="font-size:0.88rem">조회 창(최근 ${years}년) 안에는 ` +
+        `기재된 변동이 없습니다. 원장에는 ${esc(fmtDate(d.earliest))}~` +
+        `${esc(fmtDate(d.latest))} 구간의 기재가 있습니다.</span>`;
+    }
+    return `<span class="dim" style="font-size:0.88rem">사업보고서 「증자(감자) 현황」에 ` +
+      `기재된 주식 수 변동이 없습니다.</span>`;
+  }
+  const b = d.buckets;
+  const facts = [];
+  if (b.dilutive) {
+    const pct = d.dilutivePct !== null
+      ? ` — 현재 보통주 발행총수의 <b>${d.dilutivePct.toFixed(1)}%</b>` : "";
+    facts.push(`기존 주주 지분이 줄어드는 발행: ${b.dilutive.toLocaleString()}주${pct}`);
+  }
+  if (b.proportional) {
+    facts.push(`비례 배분(무상증자·분할·배당 등): ${b.proportional.toLocaleString()}주 ` +
+      `— 모든 주주에게 같은 비율로 배분돼 지분율은 변하지 않습니다`);
+  }
+  if (b.decrease) facts.push(`감소(감자·소각): ${b.decrease.toLocaleString()}주`);
+  if (b.unknown) {
+    facts.push(`미분류: ${b.unknown.toLocaleString()}주 — DART가 증감 형태를 ` +
+      `기재하지 않은 건입니다(원문 확인 필요)`);
+  }
+
+  let html = `<div style="font-size:0.9rem;line-height:1.7">${facts.join("<br>")}</div>`;
+
+  const top = Object.entries(d.byType)
+    .sort((a, b2) => Math.abs(b2[1].shares) - Math.abs(a[1].shares));
+  if (top.length) {
+    html += `<table class="t" style="margin-top:10px"><thead><tr>` +
+      `<th>구분</th><th>형태</th><th style="text-align:right">건수</th>` +
+      `<th style="text-align:right">주식 수</th></tr></thead><tbody>`;
+    for (const [stle, v] of top.slice(0, 8)) {
+      const label = DILUTION_KIND_LABEL[v.kind] || v.kind;
+      const name = stle === "-" ? "(형태 미기재)" : stle;
+      html += `<tr><td>${esc(label)}</td><td>${esc(name)}</td>` +
+        `<td style="text-align:right">${v.count}</td>` +
+        `<td style="text-align:right">${v.shares.toLocaleString()}</td></tr>`;
+    }
+    html += `</tbody></table>`;
+    if (top.length > 8) {
+      html += `<div class="dim" style="font-size:0.82rem;margin-top:4px">… 외 ${top.length - 8}종</div>`;
+    }
+  }
+
+  const notes = [`원장이 덮는 구간 ${d.earliest ? fmtDate(d.earliest) + "~" + fmtDate(d.latest) : "구간 미상"}`];
+  if (d.undated) notes.push(`일자 미기재 ${d.undated}건 제외`);
+  notes.push(d.commonTotal
+    ? `보통주 발행총수 ${d.commonTotal.toLocaleString()}주`
+    : "보통주 발행총수를 찾지 못해 비중은 계산하지 않았습니다");
+  html += `<div class="dim" style="font-size:0.82rem;margin-top:8px">※ ${esc(notes.join(" · "))}.<br>` +
+    `※ 사업보고서 「증자(감자) 현황」 기재를 그대로 집계한 사실이며, 적정·부적정 판단이 아닙니다.</div>`;
+  return html;
+}
+
+async function loadDilution(corpCode) {
+  const el = $("dilutionCore");
+  const year = String(kstYear() - 1);
+  const q = { corp_code: corpCode, bsns_year: year, reprt_code: "11011" };
+  const [hist, totals] = await Promise.all([
+    dartGet("irdsSttus.json", q),
+    dartGet("stockTotqySttus.json", q),
+  ]);
+  // ⚠ DART는 오류를 HTTP 200 본문으로 준다 — 빈 목록으로 접으면 「없다」가
+  //   된다(013만 진짜 부재다). `dartFail`이 그 둘을 가른다.
+  const fail = dartFail(hist);
+  if (fail) { el.innerHTML = fetchFailHTML(fail); return; }
+  const rows = hist.status === "000" ? (hist.list || []) : [];
+  if (!rows.length) {
+    el.innerHTML = `<span class="dim" style="font-size:0.88rem">사업보고서 ` +
+      `「증자(감자) 현황」 기재가 없습니다.</span>`;
+    return;
+  }
+  const years = Math.min(5, Math.max(1, TURNOVER_YEARS || 3));
+  // 창 시작일도 KST 달력으로 만든다(`ymd`가 그 축을 쓴다).
+  const since = ymd(Date.now() - 365 * years * 86400000);
+  const totalRows = (totals && totals.status === "000") ? (totals.list || []) : [];
+  el.innerHTML = dilutionBlockHTML(summarizeDilution(rows, totalRows, since), years);
 }
 
 async function loadTurnoverTrend(corpCode) {
@@ -4897,6 +5078,9 @@ function loadDeepBlocks(corpCode) {
   });
   runTurnoverTrend(corpCode);
   bindTurnoverYearChips(corpCode);
+  loadDilution(corpCode).catch((e) => {
+    $("dilutionCore").innerHTML = `<span class="dim" style="font-size:0.88rem">조회 실패: ${esc(e.message)}</span>`;
+  });
   loadDividendCore(corpCode).catch((e) => {
     $("divCore").innerHTML = `<span class="dim" style="font-size:0.88rem">조회 실패: ${esc(e.message)}</span>`;
   });

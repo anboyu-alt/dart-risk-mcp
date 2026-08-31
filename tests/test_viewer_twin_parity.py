@@ -39,13 +39,17 @@ from dart_risk_mcp.core import signals as _sig
 from dart_risk_mcp.core.dart_client import (
     _fold_corp_name,
     _is_amended_document,
+    _issuance_date8,
     _looks_like_nation,
     classify_holder_type,
+    classify_issuance_type,
     classify_outflow_relation,
     match_affiliate_row,
+    pick_common_stock_total,
     parse_outflow_detail,
     strip_holder_suffix,
     summarize_affiliate_stake,
+    summarize_dilution,
 )
 from dart_risk_mcp.server import (
     _find_latest_control_change,
@@ -105,6 +109,11 @@ _FUNCS = (
     "function findLatestControlChange(",
     "function isAmendedDocument(",
     "function isAssetDisposalTitle(",
+    # 2026-08-31 희석 추적 이식 — 위 가드가 즉시 신고해 함께 넣었다.
+    "function classifyIssuanceType(",
+    "function issuanceDate8(",
+    "function pickCommonStockTotal(",
+    "function summarizeDilution(",
 )
 
 # 이름은 `_FUNCS`에서 뽑는다 — 예전에는 아래 JS의 `const FN = {...}`에도 손으로
@@ -131,6 +140,29 @@ def _cut_decl(html: str, name: str) -> "str | None":
     line = html[i:eol]
     if line.rstrip().endswith(";") and line.count("{") == line.count("}"):
         return line
+    # ⚠ `_cut`은 **중괄호만** 균형을 본다. 여러 줄 **배열**(`const X = [` …
+    #   `];`)을 만나면 다음 `}`까지 훑어 **뒤따르는 선언까지 삼킨다** — 실제로
+    #   희석 상수를 이식할 때 `ISSUANCE_DILUTIVE`를 자르다 `ISSUANCE_DECREASE`를
+    #   함께 가져와 node가 "already been declared"로 죽었다.
+    #   괄호 세 종류를 함께 세고 `;`에서 끝낸다.
+    depth, j, in_s, q = 0, i, False, ""
+    while j < len(html):
+        c = html[j]
+        if in_s:
+            if c == "\\":
+                j += 2
+                continue
+            if c == q:
+                in_s = False
+        elif c in "\"'`":
+            in_s, q = True, c
+        elif c in "{[(":
+            depth += 1
+        elif c in "}])":
+            depth -= 1
+        elif c == ";" and depth == 0:
+            return html[i:j + 1]
+        j += 1
     return _cut(html, html[i:m.end()])
 
 
@@ -566,3 +598,99 @@ def test_이름으로_짝지어지는_쌍은_모두_잠겨_있다():
         "\n이 파일에 대조를 추가하거나, 다른 파일이 덮는다면 그 근거를 "
         "_COVERED_ELSEWHERE에 적어라."
     )
+
+
+# ── 희석 추적 (2026-08-31 이식) ──────────────────────────────────────────
+#
+# 위 `test_이름으로_짝지어지는_쌍은_모두_잠겨_있다`가 이식 직후 이 넷을 즉시
+# 신고했다 — 가드가 설계대로 동작한 첫 사례다.
+
+_ISSUANCE_STYLES = [
+    # 15개사 실측 형태(빈도순)
+    "전환권행사", "신주인수권행사", "주식매수선택권행사",
+    "유상증자(제3자배정)", "유상증자(주주배정)", "유상증자(주주우선공모)",
+    "유상증자(일반공모)", "무상증자", "무상감자", "주식배당", "주식분할",
+    # 경계
+    "유상증자", "이익소각", "출자전환", "교환권행사", "-", "", "  ",
+]
+
+
+def test_증감_형태_분류가_같다():
+    """⚠ **비례 배분을 희석으로 세는지**가 갈리면 화면의 뜻이 반대가 된다."""
+    calls = [["classifyIssuanceType", s] for s in _ISSUANCE_STYLES]
+    got = _viewer(calls)
+    bad = [(s, classify_issuance_type(s), g)
+           for s, g in zip(_ISSUANCE_STYLES, got) if classify_issuance_type(s) != g]
+    assert not bad, "형태 분류가 갈린다:\n" + "\n".join(
+        f"  {s!r} core={c} 뷰어={v}" for s, c, v in bad)
+
+
+def test_증감_일자_파싱이_같다():
+    raws = ["2023.08.11", "2023-08-11", "2023.8.1", "20230811", "-", "",
+            "2023/08/11", "2023.08", "abc"]
+    got = _viewer([["issuanceDate8", r] for r in raws])
+    bad = [(r, _issuance_date8(r), g)
+           for r, g in zip(raws, got) if _issuance_date8(r) != g]
+    assert not bad, f"일자 파싱이 갈린다: {bad}"
+
+
+def test_보통주_발행총수_선택이_같다():
+    """「합계」·「비고」를 잡으면 분모가 커진다 — 20/20 회사에 섞여 온다."""
+    cases = [
+        [{"se": "보통주", "istc_totqy": "88,616,044"},
+         {"se": "우선주", "istc_totqy": "-"},
+         {"se": "합계", "istc_totqy": "99,999,999"},
+         {"se": "비고", "istc_totqy": "-"}],
+        [{"se": "의결권 있는 주식", "istc_totqy": "230,960,969"},   # 셀트리온
+         {"se": "합계", "istc_totqy": "230,960,969"}],
+        [{"se": "보통주식", "istc_totqy": "16,193,835"},            # 두산
+         {"se": "종류주식", "istc_totqy": "4,889,500"},
+         {"se": "합계", "istc_totqy": "21,083,335"}],
+        [{"se": "합계", "istc_totqy": "100"}],                      # 못 고름
+        [],
+    ]
+    got = _viewer([["pickCommonStockTotal", c] for c in cases])
+    for c, g in zip(cases, got):
+        assert pick_common_stock_total(c) == g, (
+            f"발행총수 선택이 갈린다: core={pick_common_stock_total(c)} 뷰어={g}")
+
+
+def test_희석_집계가_같다():
+    """자리 행·창 밖·미분류까지 같은 값이 나오는지."""
+    rows = [
+        {"isu_dcrs_de": "2025.06.01", "isu_dcrs_stle": "전환권행사",
+         "isu_dcrs_stock_knd": "보통주", "isu_dcrs_qy": "1,000,000"},
+        {"isu_dcrs_de": "2025.07.01", "isu_dcrs_stle": "무상증자",
+         "isu_dcrs_stock_knd": "보통주", "isu_dcrs_qy": "500,000"},
+        {"isu_dcrs_de": "2019.01.01", "isu_dcrs_stle": "유상증자(제3자배정)",
+         "isu_dcrs_stock_knd": "보통주", "isu_dcrs_qy": "9,000,000"},   # 창 밖
+        {"isu_dcrs_de": "2023.12.28", "isu_dcrs_stle": "-",
+         "isu_dcrs_stock_knd": "보통주", "isu_dcrs_qy": "73,887,750"},  # 미분류
+        {"isu_dcrs_de": "-", "isu_dcrs_stle": "-",
+         "isu_dcrs_stock_knd": "-", "isu_dcrs_qy": "-"},                # 자리 행
+        {"isu_dcrs_de": "-", "isu_dcrs_stle": "전환권행사",
+         "isu_dcrs_stock_knd": "보통주", "isu_dcrs_qy": "7"},           # 일자만 없음
+    ]
+    totals = [{"se": "보통주", "istc_totqy": "10,000,000"},
+              {"se": "합계", "istc_totqy": "99,999,999"}]
+    since = "20230101"
+    got = _viewer([["summarizeDilution", rows, totals, since]])[0]
+    core = summarize_dilution(rows, totals, since=since)
+
+    for k_core, k_js in (("buckets", "buckets"), ("common_total", "commonTotal"),
+                         ("earliest", "earliest"), ("latest", "latest"),
+                         ("undated", "undated"), ("blank", "blank"),
+                         ("in_window", "inWindow")):
+        assert core[k_core] == got[k_js], (
+            f"{k_core}가 갈린다: core={core[k_core]!r} 뷰어={got[k_js]!r}")
+    assert core["dilutive_pct"] == pytest.approx(got["dilutivePct"])
+    assert {k: (v["count"], v["shares"], v["kind"])
+            for k, v in core["by_type"].items()} == \
+           {k: (v["count"], v["shares"], v["kind"]) for k, v in got["byType"].items()}
+
+
+def test_뷰어도_비례_배분을_희석으로_세지_않는다():
+    """core 쪽 안전장치(`test_dilution.py`)의 뷰어 짝 — 뜻이 반대가 되는 자리다."""
+    got = _viewer([["classifyIssuanceType", s]
+                   for s in ("무상증자", "주식분할", "주식배당")])
+    assert got == ["proportional"] * 3
