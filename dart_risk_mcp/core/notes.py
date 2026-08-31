@@ -102,6 +102,11 @@ def classify_note_title(title: str) -> list[str]:
 def summarize_note_sections(file_list: list[dict]) -> list[tuple[str, list[str]]]:
     """파일별 섹션 목록에서 카테고리 → 섹션 id 목록 요약을 만든다.
 
+    ⚠ **현재 프로덕션 소비처 0** (2026-08-30 AST 전수 확인). 공개 API로 남겨
+    두지만 새 코드가 이것에 기대기 전에 `tests/test_unused_exports.py`의
+    근거를 먼저 읽을 것 — 지우지 않는 이유는 PyPI 배포 패키지라
+    외부 import를 깰 수 있기 때문이지, 검증된 경로여서가 아니다.
+
     Args:
         file_list: list_document_sections 반환 구조
             [{"sections": [{"id": ..., "title": ...}, ...], ...}, ...]

@@ -20,7 +20,6 @@ from mcp.server.fastmcp import FastMCP
 
 from .core import (
     _fund_text,
-    calculate_risk_score,
     category_prose,
     turnover_prose,
     compute_turnover_metrics,
@@ -36,7 +35,6 @@ from .core import (
     extract_rd_ratio_from_report,
     extract_xbrl_depreciation,
     fetch_loss_streak,
-    estimate_crisis_timeline,
     extract_cb_investors,
     extract_cfs_ofs_ni,
     extract_loan_advance,
@@ -494,12 +492,35 @@ def _format_amount(amount: str) -> str:
     digits = body.replace("원", "").replace(",", "")
     if digits.isdigit():
         n = int(digits)
+        # ⚠ **조 단위를 정수로 절삭하면 안 된다(2026-08-30 수정).**
+        #
+        # 옛 코드는 `n // 1_000_000_000_000`이라 1.9조가 **「1조원」**이 됐다 —
+        # 9,000억원을 버린 값이고 47% 과소 표기다. 골든에도 「1조원」 16건 ·
+        # 「2조원」 19건이 있었는데, 그 구간의 실제 값은 1.0~1.99조 아무 데나
+        # 있을 수 있었다. 실측 손실: 삼성전자 매출액 300.9조 → 「300조원」
+        # (8,709억) · 자산총계 514.5조 → 「514조원」(5,319억).
+        #
+        # 표시용 반올림이 아니라 **화면이 사실과 다른 값을 말하던 것**이다.
+        # 소수 한 자리를 쓴다 — 뷰어 `fmtKRW`가 이미 그렇게 한다.
+        # 억·만 구간도 절삭 → 반올림. 오차 자체는 작지만(≤0.03%) 절삭은
+        # **항상 크기를 줄이는** 방향이라, 유출·손실을 다루는 도구에서
+        # 체계적 과소 표기가 된다. 반올림은 중립이고 뷰어와도 같다.
+        #
+        # ⚠ 반올림이 다음 단위를 넘으면 **승급**한다 — 안 그러면 99,999,999원이
+        # 「10,000만원」, 999,999,999,999원이 「10,000억원」으로 나온다(값은
+        # 맞지만 단위를 잘못 고른 표기다).
         if n >= 1_000_000_000_000:
-            return f"{sign}{n // 1_000_000_000_000}조원"
+            return f"{sign}{n / 1_000_000_000_000:,.1f}조원"
         if n >= 100_000_000:
-            return f"{sign}{n // 100_000_000}억원"
+            _v = round(n / 100_000_000)
+            if _v >= 10_000:
+                return f"{sign}{n / 1_000_000_000_000:,.1f}조원"
+            return f"{sign}{_v:,}억원"
         if n >= 10_000:
-            return f"{sign}{n // 10_000}만원"
+            _v = round(n / 10_000)
+            if _v >= 10_000:
+                return f"{sign}{round(n / 100_000_000):,}억원"
+            return f"{sign}{_v:,}만원"
     return amount
 
 
@@ -4452,7 +4473,9 @@ def search_market_disclosures(
                 f"❌ 조회 구간이 {days}일입니다 — 시장 전체 스캔은 최대 90일까지"
                 " 지원합니다. 구간을 나눠 조회하세요."
             )
-        window_label = f"{_bgn[:4]}.{_bgn[4:6]}.{_bgn[6:]}~{_end[:4]}.{_end[4:6]}.{_end[6:]}"
+        # 같은 표기를 손으로 한 번 더 조립하고 있었다 — 헬퍼를 쓴다(출력 동일,
+        # 8자리가 아닐 때 쓰레기 문자열이 나오지 않는다는 점만 다르다).
+        window_label = f"{_fmt_date8(_bgn)}~{_fmt_date8(_end)}"
     else:
         days = max(1, min(90, days))
         # 양끝 포함이라 days-1을 빼야 정확히 days일 창이 된다

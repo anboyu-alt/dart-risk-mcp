@@ -149,19 +149,29 @@ def collect_renames(api_key: str, start: datetime, end: datetime,
     거래소공시(pblntf_ty='I')는 90일에 4,000건을 넘길 수 있어(페이지 상한)
     30일 청크로 순회한다(누락 방지). 반환: (레코드 목록, 통계 dict).
     각 레코드: {old_name, new_name, corp_code, stock_code, rcept_no, date}
+
+    ⚠ 30일 청크도 **상한에 닿을 수 있다**(60페이지 = 6,000건). 닿으면 그
+    청크의 남은 공시가 조용히 사라져 옛 상호가 별칭 맵에 안 들어간다 —
+    그러면 그 회사는 옛 이름으로 검색되지 않는다. 상한 자체는 그대로 두고
+    닿은 청크를 `stats["truncated_chunks"]`에 사실로 남긴다(2026-08-30).
     """
     records: list[dict] = []
     stats = {"scanned": 0, "candidates": 0, "extracted": 0, "no_match": 0, "errors": 0,
              "invalid": 0,
+             # 목록 조회가 상한에 닿아 뒷부분을 못 본 청크의 시작일
+             "truncated_chunks": [],
              # 패턴 불일치 공시의 (rcept_no, 회사명, 제목) — 정규식이 못 읽는
              # 서식 변형을 눈으로 확인해 보강하기 위한 진단 목록
              "no_match_samples": []}
+    cap_rows = max_pages * 100
     cur = start
     while cur <= end:
         chunk_end = min(cur + timedelta(days=29), end)
         discs = fetch_market_disclosures(
             api_key, cur.strftime("%Y%m%d"), chunk_end.strftime("%Y%m%d"),
             pblntf_ty="I", max_pages=max_pages) or []
+        if len(discs) >= cap_rows:
+            stats["truncated_chunks"].append(cur.strftime("%Y-%m-%d"))
         stats["scanned"] += len(discs)
         hits = [d for d in discs if "상호변경" in (d.get("report_nm") or "")]
         stats["candidates"] += len(hits)
@@ -259,6 +269,9 @@ def main():
     print(f"\n스캔: 공시 {stats['scanned']}건, 상호변경안내 후보 {stats['candidates']}건, "
           f"추출 {stats['extracted']}건, 패턴 불일치 {stats['no_match']}건, "
           f"오류 {stats['errors']}건")
+    if stats["truncated_chunks"]:
+        print(f"⚠️ 목록 조회가 상한에 닿은 청크 {len(stats['truncated_chunks'])}개: "
+              f"{', '.join(stats['truncated_chunks'])} — 그 30일은 전수가 아니다")
     # Windows 콘솔(cp949)에서 인코딩 불가 문자가 print를 죽이지 않도록
     # ASCII 구분자만 쓰고, 제목의 별난 문자는 replace로 흡수한다.
     for rn, corp, title in stats["no_match_samples"][:20]:

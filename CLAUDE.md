@@ -222,7 +222,7 @@ dart_risk_mcp/
 
 여러 기업(2~5개)의 CB/BW/EB·유상증자 인수자 + **등기임원 겸직**을 통합 비교해 공통 행위자(세력)를 탐지합니다.
 
-- 기업별 CB/유상증자 공시 인수자(최대 3건/기업) + `fetch_executive_roster`로 임원현황 다년 수집
+- 기업별 CB/유상증자 공시 인수자(최대 3건/기업) + `fetch_executive_roster_detail`로 임원현황 다년 수집 (⚠ 2026-08-30 정정 — 오래 `fetch_executive_roster`라 적혀 있었으나 실코드는 직위·등기 여부를 보존하는 `_detail` 판을 쓴다. 옛 함수는 프로덕션 소비처 0)
 - 2개 이상 기업에 (돈 댄 사람 **또는** 등기임원으로) 등장 = 공통 행위자. 출처 태그 `[CB]`/`[유상증자]`/`[임원]`
 - 핵심: 무자본 M&A 세력은 인수마다 새 SPC/조합을 만들어 조합명이 매번 다르지만, **임원 이름은 고정점** — 다년 합집합으로 겸직 포착
 - `lookback_years` 범위 1~5년. 기본 1년이면 출력 안내가 "최근 365일", N년이면 "최근 N년"으로 정직 표기
@@ -370,6 +370,7 @@ dart_risk_mcp/
 - **보고서 연도별 중복을 접는다(2026-08-28)**: 같은 조달건이 여러 연도 보고서에 되풀이 실린다. `_clear_stale_unreported`가 옛 스냅샷의 **플래그**는 이미 뗐지만 **레코드 자체는 전부 남아** 건수·목록이 부풀려졌다 — 실측 6개사 990건 중 고유 용도 줄은 **235건(76%가 중복)**이고, KB금융 「총 499건 조회」의 실제는 **146줄**이었다. `_collapse_fund_snapshots`가 **(조달유형, 회차, 납입일, 계획용도, 계획금액)**으로 접고 **가장 최신 보고서 연도**를 대표로 둔다(한 조달건 안의 용도별 줄은 서로 다른 사실이라 뭉개지 않는다). ⚠ 플래그를 정리한 **뒤에** 접어야 한다 — 옛 스냅샷이 있어야 「나중 보고서에 집행이 기재됐다」를 판단할 수 있다. CLAUDE.md가 이미 「같은 조달건의 최신 연도 보고서 기준 재정산 로직 부재가 오탐의 구조적 원인」이라 개선 후보로 적어 둔 것을 구현했다.
 - **라벨 연도가 조달 시점이 아니었다(2026-08-28)**: `[2023 공모 제306회차] 납입일 2021.07.06` — `year`는 **보고서 사업연도**다. 실측 라벨 연도 ≠ 납입 연도가 STX **96%** · 오르비텍 91% · KB금융 84%. 사용자가 「언제 조달했나」로 읽는 자리라 납입 연도를 쓰고, 납입일이 없을 때만 보고서 연도로 폴백한다. `tests/test_fund_snapshot_collapse.py`가 고정.
 - **배당 블록의 단위·빈 행(2026-08-28)**: 같은 리포트 안에서 자금사용 목록은 원 단위(`33,000,000,000원`)인데 배당 유출 문장만 DART 원시 단위(`-388,279백만원`)를 그대로 써 두 수를 나란히 두고도 어느 쪽이 큰지 안 읽혔다(330억 vs 358억). `_format_amount`로 환산해 뷰어(억원)와도 맞췄다. 그리고 「당기 - / 전기 -」처럼 아무것도 말하지 않는 행이 두산 실측 27줄 중 8줄(dedup 전 22건)이라 목록에서 빼고 제외 건수를 밝힌다 — **한쪽만 있으면 남긴다**(당기만 있어도 사실이다). `tests/test_dividend_block_units.py`가 고정.
+- **`_format_amount`가 조 단위에서 자릿수 감각을 잃었다(2026-08-30)**: 삼성전자 자산총계 514,531,948,000,000원이 **「5145319억원」**으로 나왔다 — 구분 없는 일곱 자리라 「514조」인지 셀 수 없다. 위험 목록에는 「뷰어와의 **1억 차이**」로 적혀 있었는데 실제 문제는 그게 아니었다. 1조 이상은 **조원**(`514.5조원`), 그 아래는 콤마를 넣고(`6,413억원`) 절삭 대신 반올림한다. 값은 그대로이고 바뀐 것은 **읽을 수 있는가**다(골든 40개 파일). ⚠ 뷰어 `fmtKRW`는 억 단위까지만 쓰고 조 단위 자리에 오지 않아 건드리지 않았다 — 두 레이어의 차이는 아래 기록대로다.
 - **미기재를 값으로 읽던 것(2026-08-28)**: DART 자금사용 응답은 **빈 칸을 `"-"`로 준다**. 파이썬·JS 모두 `"-"`가 참이고 `_to_int_safe("-")`는 0이라, 화면이 없는 사실을 말했다 — **「납입 0원」**(실측 6개사 937건 · **100%**가 `pay_amount` 미기재. 0원이 납입된 게 아니라 DART가 그 칸을 안 채운다) · **「차이사유: -」**(KB금융 3년 **499줄**) · **「계획: (공란) (0원)」** (행 전체가 빈 껍데기 — 아틀라스링크 36건 중 20건). `_fund_text`가 미기재 표기를 빈 값으로 접고, 렌더는 금액이 있을 때만 「납입 N원」·없으면 실제로 채워져 오는 **납입일**을 쓴다. 빈 껍데기 행은 목록에서만 빼고 **총 건수 집계는 그대로** 두며 제외 건수를 사실로 적는다. ⚠ **뷰어가 더 나빴다** — core는 `"-"`를 그대로 보여줘 사용자가 미기재임을 알 수 있었지만 뷰어는 그것을 「집행 차이 사유 보고 있음」이라는 **판단 문장**으로 바꿨다(라이브 확인: `truthyDiff: true`). 같은 정규화를 이식했다. ⚠ `tests/test_no_dead_fields.py`는 이 부류를 못 잡는다 — 그 검사는 「읽기만 하고 아무도 안 넣는 키」를 찾는데 `pay_amount`는 응답에 **있다**(값이 `"-"`일 뿐). 「키는 있는데 값이 늘 비어 있는」 것은 다른 부류다. `tests/test_fund_usage_blank_fields.py`가 고정.
 - **상세 목록 상한(2026-08-28)**: 금융지주·증권사는 조달 회차가 수백 개다 — 실측 KB금융 499건 **51,343자** · 미래에셋증권 46,682자로, 같은 표본에서 다른 도구는 전부 1만 자 미만이었다(analyze 최대 9,247). 한 번의 호출이 대화 컨텍스트의 상당 부분을 먹는다. **이상 플래그가 붙은 건은 상한과 무관하게 전부**(안전 상한 `_FUND_USAGE_FLAGGED_MAX`=60 — 실측 오르비텍 55건 전부 플래그 사례를 온전히 담는 값), 나머지는 `_FUND_USAGE_DETAIL_MAX`=30건까지 싣고 **몇 건을 뺐는지 사실로 적는다**(조용히 자르지 않는다). 집계(총 건수·플래그 건수)는 상한과 무관하게 전체 기준 그대로다. KB금융 51,343 → 4,546자. `tests/test_fund_usage_detail_cap.py`가 고정.
 
@@ -512,12 +513,12 @@ dart_risk_mcp/
 | `fetch_shareholder_status(corp_code, api_key, year, report_type)` | 최대주주 현황 + 5% 대량보유 통합 조회 |
 | `fetch_market_disclosures(api_key, bgn_de, end_de, pblntf_ty, max_pages)` | corp_code 없이 시장 전체 공시 조회 |
 | `fetch_executive_compensation(corp_code, api_key, year, report_type)` | 보수 4개 엔드포인트 통합 조회 |
-| `fetch_executive_roster(corp_code, api_key, lookback_years)` | 임원현황(exctvSttus) 다년 수집 → {임원명: {연도}} 합집합. 조합명 비고정성 우회용 고정점 (find_actor_overlap 임원 차원) |
+| `fetch_executive_roster(corp_code, api_key, lookback_years)` | 임원현황(exctvSttus) 다년 수집 → {임원명: {연도}} 합집합. ⚠ **프로덕션 소비처 0** — `find_actor_overlap`은 직위·등기 여부를 보존하는 `fetch_executive_roster_detail`을 쓴다(2026-08-30 정정) |
 | `fetch_insider_timeline(corp_code, api_key, lookback_years)` | elestock + hyslrSttus + hyslrChgSttus + tesstkAcqsDspsSttus 4엔드포인트 × 4분기 통합 시계열 (v0.8.6) |
 | `detect_insider_pre_disclosure(insider_records, signal_events, window_days=30)` | 매도 ±30일 내 부정 공시 패턴 탐지 (v0.8.6) |
 | `fetch_treasury_decisions(corp_code, api_key, lookback_years)` | 자사주 결정 4엔드포인트(취득·처분·신탁체결·신탁해지) 통합. key=TREASURY/TREASURY_TRUST로 정규화 (v0.8.7) |
 | `fetch_company_indicators(corp_code, api_key, bsns_year, reprt_code)` | 단일회사 주요 재무지표 4카테고리(수익성·안정성·성장성·활동성) 통합 → {idx_nm: float} flat dict (v0.8.8) |
-| `fetch_distress_events(corp_code, api_key, lookback_years)` | 부도·영업정지·회생절차·해산사유 4엔드포인트 통합. key=DISTRESS_EVENT + subtype 라벨 (v0.9.0) |
+| `fetch_distress_events(corp_code, api_key, lookback_years)` | 부도·영업정지·회생절차·해산사유 4엔드포인트 통합. key=DISTRESS_EVENT + subtype 라벨 (v0.9.0). ⚠ `_distress_summary`는 서브타입마다 필드를 읽고 `or "기본 문자열"`로 떨어뜨리는데, 이 모양에서 이미 실사고가 났다(`rehabilitation`이 없는 `rs`/`ctrcvs_rs`를 읽어 신청사유가 **항상 하드코딩 문자열**이었다, 2026-08-04 발견 · 실제는 `rq_rs`). 부도·해산은 발화 사례가 없어 오래 미검증으로 남았으나 **레포 안의 `opendart_api_guide.md`**로 2026-08-30에 네 서브타입 전부 대조 완료(`df_cn`·`df_amt`·`df_bnk` / `bsnsp_cn`·`bsnsp_rs` / `rq_rs` / `ds_rs`). 명세에 있으나 안 읽는 `df_rs`·`dfd`는 **렌더를 확인할 라이브 사례가 없어** 넣지 않았다. `tests/test_distress_fields_vs_spec.py`가 기계로 대조한다 |
 | `fetch_dividend_history(corp_code, api_key, lookback_years)` | alotMatter을 분기 4코드 × N년 호출. 각 record에 bsns_year/reprt_code 부착 (v0.9.0) |
 | `detect_dividend_drain(dividend_records)` | 적자 시점 배당 유출(DIVIDEND_DRAIN) 패턴 — alotMatter 자체가 bundling한 연도별 (연결)/(별도)당기순이익을 그 연도 현금배당과 짝지어 flag(SE-12, v0.9.0 재설계). 별도 재무제표 조회 불필요. CFS 순이익은 지배기업소유주지분순이익(비지배지분 제외)이라 총 당기순이익과 부호가 다를 수 있음(두산 2023 CFS 실측: alotMatter -3,883억 vs 총 당기순이익 +2,721억) — 출력에 "연결·지배지분 기준" 명시 |
 | `fetch_affiliate_investments(corp_code, api_key, year, report_type)` | 타법인 출자현황(otrCprInvstmntSttus) 조회 + 합계 행 제거 |
@@ -1013,6 +1014,61 @@ instances of 'int' and 'str'`를 던졌다 — 프로젝트 규칙(예외를 도
 에도 넣어 `NameError`를 만들었다. 기존 테스트 7건이 잡았고, 이후 AST로 「삽입
 지점이 속한 함수에 `year` 인자가 실제로 있는지」를 전수 확인했다 — 문자열 탐색은
 여러 줄 시그니처를 잘못 읽는다.
+
+---
+
+## 날짜 표기는 값의 출처를 따른다 (2026-08-30)
+
+리포트 안에 `20260709` · `2026.07.09` · `2026-07-09`가 섞여 나온다. 골든 전수를
+겹침 없이 세어 보니 **포맷이 흔들린 게 아니라 값의 출처가 다른 것**이었다.
+
+    도구 생성  5,580   YYYYMMDD 5,123(92%) · YYYY.MM.DD 314 · YYYY-MM-DD 134 · YYYY-MM 9
+    원문 인용    394
+
+우리가 만드는 표기는 **`_fmt_date8` 하나뿐**이고 일관되게 `YYYY.MM.DD`다.
+나머지는 DART가 그 표기로 주는 값(`affiliates` 최초취득일 152 · `fund_usage`
+납입일 123)이거나, 금감원 카탈로그 보도자료 날짜(61)·`majorstock`의
+`rcept_dt`(23)·산문(19)이다. **통일하면 「DART가 준 값」과 「우리가 만든 값」의
+구분이 사라진다** — 그래서 통일하지 않는다.
+
+⚠ `majorstock.json`의 `rcept_dt`는 **`2026-06-08`**로 온다 — 같은 이름의 필드가
+`list.json`에서는 `20260608`이다. 렌더가 `len(dt) == 8`로 갈라 통과시키는데,
+이걸 버그로 보고 `dt[:8]`로 자르면 **`2026-06-`**가 된다. 부수 수정:
+`search_market_disclosures`의 창 라벨이 같은 포맷을 손으로 한 번 더 조립하고
+있었다(헬퍼 호출로 교체). `tests/test_date_format_sources.py`가 고정.
+
+---
+
+## 「N개사 실측」의 표본 (2026-08-30)
+
+CLAUDE.md의 「N개사」 51건 중 **47건은 이미 같은 줄에 측정 시점**을 달고 있고
+32건은 재현 근거 경로를 든다. 빠져 있던 것은 **표본 목록**이라
+`tests/fixtures/samples/measurement_cohorts.json`에 9개 표본(39·38·25·20·15·
+12·12·10·8사)의 회사 이름을 고정했다. **값이 아니라 표본을 고정한다** — 시장이
+달라지면 건수는 바뀌는 게 맞고, 바뀌었는지 알려면 같은 회사를 다시 재야 한다.
+
+⚠ 고정하자마자 불일치가 하나 드러났다 — 매입채무 별칭은 **39사**를 넘겼는데
+`dart_client.py` 주석과 위 `_FS_ALIASES` 항목은 「38개사」라 보고한다. 어느 쪽을
+지울지는 재측정 전에 알 수 없어 `n`(표본)과 `doc_n`(보고 값)을 따로 든다.
+`tests/test_measurement_cohorts.py`가 고정.
+
+---
+
+## 백필 스크립트의 상한 보고 (2026-08-30)
+
+`backfill_corp_aliases.py`·`backfill_renames.py`는 30일 청크 × `max_pages=60`
+(= 6,000건)으로 훑으면서 **그 청크가 다시 상한에 닿았는지는 보지 않았다**.
+닿으면 뒷부분이 조용히 사라져 — 별칭이면 그 회사가 옛 이름으로 검색되지 않고,
+개명이면 행위자 이름 병합이 그만큼 빠진다. `backfill_sightings.py`는 같은
+자리에서 이미 청크별 절단을 알리고 있었다(셋 중 둘만 빠져 있었다).
+
+**상한도 청크 길이도 올리지 않았다** — 예산·실행 시간이 달라지고 이미 쌓인
+비공개 데이터와의 정합이 흔들린다. 닿았다는 **사실만** 알린다.
+
+⚠ 처음엔 `collect_renames`의 반환 dict에 `_truncated_chunks` 키를 넣었는데, 그
+dict는 **키가 corp_code**라 `main`의 `e["names"]`가 죽고 `merge_renames`가 그
+키를 **비공개 sightings 파일에 써 넣는다**. 되돌리고 로그로만 알린다.
+`tests/test_backfill_cap_reporting.py`가 상한 값 불변까지 함께 고정.
 
 ---
 
