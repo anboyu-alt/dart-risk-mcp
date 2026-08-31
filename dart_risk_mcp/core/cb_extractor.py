@@ -114,7 +114,28 @@ def _clean_name_structured(raw: str) -> str:
 
 
 def _parse_structured(data: dict) -> list[dict]:
-    """구조화 엔드포인트 응답을 표준 dict 목록으로 변환."""
+    """구조화 엔드포인트 응답을 표준 dict 목록으로 변환.
+
+    ⚠ **이 경로는 인수자를 한 번도 돌려준 적이 없다**(2026-09-01 실측).
+    `cvbdIsDecsn`·`bdwtIsDecsn` 응답을 3개사에서 받아 키를 합치니 **56종 중
+    `actnmn`·`actsen`이 둘 다 없다**. 아래 `row.get("actnmn", "")`는 항상 빈
+    문자열을 만들고 `_BLANK_PATTERNS`가 전량 걸러내므로, 인수자 추출은 **HTML
+    폴백(`_extract_investor_table`)이 100%를 해 왔다.**
+
+    그 사실이 오래 드러나지 않은 이유: 세 발행결정 엔드포인트가
+    `tests/fixtures/api/response_keys.json`에 **아예 없어서**(`unsampled`도
+    아니었다) `test_no_dead_fields.py`가 검사한 적이 없다. 이번에 픽스처에
+    실측 키를 넣었다.
+
+    ⚠ `bd_fta`를 「인수자별 금액」으로 쓰는 것도 실은 어긋난다 — 6개사 40행에서
+    **한 `rcept_no`당 한 행**이고 `bd_fta`는 **사채 권면총액**이다. 다만 위
+    이유로 이 함수가 결과를 낸 적이 없어 실피해는 없었다.
+
+    **함수를 지우지 않는 이유**: 동작이 이미 그러하므로 지울 이득이 없고,
+    인수자 추출 4개 도구가 이 반환 모양에 걸려 있다. 대신 사실을 여기 적어
+    다음 사람이 같은 착각을 하지 않게 한다. 발행 조건(전환가액·리픽싱)은
+    `dart_client.parse_mezzanine_row`가 같은 응답에서 읽는다.
+    """
     results = []
     if not data:
         return results

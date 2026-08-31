@@ -24,7 +24,12 @@ from pathlib import Path
 
 import requests
 
-from .signals import CAPITAL_EVENT_KEYS, DILUTIVE_CAPITAL_EVENTS, NON_DILUTIVE_CAPITAL_EVENTS
+from .signals import (
+    CAPITAL_EVENT_KEYS,
+    DILUTIVE_CAPITAL_EVENTS,
+    NON_DILUTIVE_CAPITAL_EVENTS,
+    is_amendment_disclosure,
+)
 
 log = logging.getLogger(__name__)
 
@@ -5160,6 +5165,321 @@ def _fetch_decision_filtered(endpoint: str, rcept_no: str, api_key: str, corp_co
     except Exception as e:
         log.debug("%s 조회 실패 (rcept=%s corp=%s): %s", endpoint, rcept_no, corp_code, e)
         return {}
+
+
+# ── 메자닌(CB·BW·EB) ─────────────────────────────────────────────────────
+#
+# 메자닌은 이 도구가 쫓는 수법(무자본 M&A·주가부양)의 중심 도구인데, 정보가
+# 다섯 군데로 흩어져 있고 **가장 중요한 「발행 조건」은 어디에도 없었다**.
+# v1.21.21 희석 블록의 꼬리말이 「발행 조건은 개별 공시를 열어 확인하라」고
+# 적어 둔 자리가 이것이다.
+#
+# ⚠ 배선은 이미 있었다 — `fetch_cb_issue_decision`(아래)이 구조화 응답을
+#   받아오는데 유일한 호출자 `cb_extractor._parse_structured`가 3필드만 남기고
+#   전환가액·리픽싱·만기를 버렸다. 새 엔드포인트는 필요 없다.
+
+_MZN_ENDPOINTS = (("CB", "cvbdIsDecsn"), ("BW", "bdwtIsDecsn"), ("EB", "exbdIsDecsn"))
+
+# 메자닌 공시의 생애주기 6분류 — 3년 실측(제이스코 119건·코아스 134건·HLB 30·
+# 유티아이 34)에서 **실제로 온 제목**만 넣었다. 개념어를 넣지 않는다.
+# ⚠ 「사채」 한 글자로 넓히면 「단기사채」·「회사채」·「신종자본증권」이 딸려온다.
+_MZN_FILING_RULES = (
+    # (분류, 라벨, 제목에 있어야 하는 표현들)
+    ("issue", "발행", ("전환사채권발행결정", "신주인수권부사채권발행결정",
+                      "교환사채권발행결정")),
+    ("refix", "조정", ("전환가액의조정", "전환가액ㆍ신주인수권행사가액ㆍ교환가액의조정",
+                      "신주인수권행사가액의조정", "전환주식의전환가액조정",
+                      "교환가액의조정")),
+    ("exercise", "전환·행사", ("전환청구권행사", "전환청구권ㆍ신주인수권ㆍ교환청구권행사",
+                             "전환주식의전환청구권행사", "신주인수권행사")),
+    ("redeem", "회수", ("발행후만기전사채취득", "자기전환사채만기전취득",
+                       "자기신주인수권부사채만기전취득", "자기교환사채만기전취득")),
+    ("resell", "자기사채 매도", ("자기전환사채매도", "자기신주인수권부사채매도",
+                              "자기교환사채매도")),
+    ("result", "결과", ("주식관련사채등의발행결과", "주식관련사채등의청약결과")),
+)
+# 「(제3회차)」·「(제38회차)」·「(제36회차)」 — 회차가 제목에 적히는 경우가 있다.
+# ⚠ 일부에만 있다. 없는 것을 추정하지 않는다.
+_MZN_ROUND_RE = re.compile(r"제\s*(\d{1,4})\s*회차")
+
+
+def classify_mezzanine_filing(report_nm: str) -> "dict | None":
+    """공시 제목 → 메자닌 생애주기 분류·회차 (순수 함수).
+
+    메자닌과 무관하면 None. 반환:
+        {"category": "issue"|"refix"|"exercise"|"redeem"|"resell"|"result",
+         "label": 한글 라벨, "round": int|None, "is_amendment": bool}
+
+    ⚠ 회차(`round`)는 **제목에 적혀 있을 때만** 채운다. 실측에서 「전환가액의조정
+    (제38회차)」처럼 적히는 경우가 있고 없는 경우도 있다 — 없는 것을 추정하면
+    엉뚱한 발행 건에 붙는다.
+    """
+    nm = " ".join(str(report_nm or "").split())
+    if not nm:
+        return None
+    flat = nm.replace(" ", "")
+    for category, label, marks in _MZN_FILING_RULES:
+        if any(m.replace(" ", "") in flat for m in marks):
+            m = _MZN_ROUND_RE.search(nm)
+            return {
+                "category": category,
+                "label": label,
+                "round": int(m.group(1)) if m else None,
+                "is_amendment": is_amendment_disclosure(nm),
+            }
+    return None
+
+
+def _mzn_num(raw) -> "float | None":
+    """콤마·공백·'-'(미기재) 안전 숫자 파서. 값이 없으면 None(0이 아니다)."""
+    s = str(raw if raw is not None else "").replace(",", "").strip()
+    if not s or s == "-":
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _mzn_int(raw) -> "int | None":
+    v = _mzn_num(raw)
+    return int(v) if v is not None else None
+
+
+def _mzn_date(raw) -> str:
+    """`2023년 04월 27일`·`2023.04.27`·`2023-04-27` → `20230427`. 못 읽으면 ''."""
+    s = str(raw or "").strip()
+    m = re.search(r"(\d{4})\D{0,2}(\d{1,2})\D{0,2}(\d{1,2})", s)
+    if not m:
+        return ""
+    return f"{m.group(1)}{int(m.group(2)):02d}{int(m.group(3)):02d}"
+
+
+# 자금조달 목적 6종 — DART 필드명 → 표시 라벨
+_MZN_USE_FIELDS = (
+    ("fdpp_fclt", "시설자금"),
+    ("fdpp_bsninh", "영업양수자금"),
+    ("fdpp_op", "운영자금"),
+    ("fdpp_dtrp", "채무상환자금"),
+    ("fdpp_ocsa", "타법인 증권 취득자금"),
+    ("fdpp_etc", "기타자금"),
+)
+
+
+def parse_mezzanine_row(row: dict, kind: str) -> dict:
+    """CB/BW/EB 발행결정 한 행에서 발행 조건을 읽는다 (순수 함수).
+
+    ⚠ **EB에는 리픽싱 필드가 없다** — 교환 대상이 이미 발행된 주식이라 서식
+    자체에 항목이 없다. 값이 없는 것(`None`)과 **서식에 항목이 없는 것**을
+    `refix_field_absent`로 가른다. 공란으로 두면 「리픽싱 조항 없음」으로 읽힌다.
+
+    ⚠ 결측은 전부 `None`이고 `0`이 아니다.
+    """
+    strike_field, from_field, to_field, label = {
+        "CB": ("cv_prc", "cvrqpd_bgd", "cvrqpd_edd", "전환가액"),
+        "BW": ("ex_prc", "expd_bgd", "expd_edd", "행사가액"),
+        "EB": ("ex_prc", "exrqpd_bgd", "exrqpd_edd", "교환가액"),
+    }[kind]
+    strike = _mzn_num(row.get(strike_field))
+    floor = None if kind == "EB" else _mzn_num(row.get("act_mktprcfl_cvprc_lwtrsprc"))
+    out = {
+        "kind": kind,
+        "rcept_no": (row.get("rcept_no") or "").strip(),
+        "round": _mzn_int(row.get("bd_tm")),
+        "face_amount": _mzn_int(row.get("bd_fta")),   # 권면총액(실측: 1 rcept = 1 행)
+        "coupon": _mzn_num(row.get("bd_intr_ex")),
+        "ytm": _mzn_num(row.get("bd_intr_sf")),
+        "maturity": _mzn_date(row.get("bd_mtd")),
+        "pay_date": _mzn_date(row.get("pymd")),
+        "offering": " ".join(str(row.get("bdis_mthn") or "").split()),
+        "strike": strike,
+        "strike_label": label,
+        "exercise_from": _mzn_date(row.get(from_field)),
+        "exercise_to": _mzn_date(row.get(to_field)),
+        # EB는 서식에 항목이 없다 — 「값 없음」과 구분한다
+        "refix_field_absent": kind == "EB",
+        "refix_floor": floor,
+        "refix_floor_pct": (floor / strike * 100) if (floor and strike) else None,
+        "refix_sub70_limit": (None if kind == "EB"
+                              else _mzn_int(row.get("rmislmt_lt70p"))),
+        "use_of_funds": [lbl for f, lbl in _MZN_USE_FIELDS if _mzn_int(row.get(f))],
+        # ⚠ 종류별 키도 **여기 리터럴에 전부 선언**한다. 나중에 `out["k"] = v`로
+        #   넣으면 `test_no_dead_fields`의 스캔이 그것을 「생성」으로 못 보고
+        #   「읽기만 하는 죽은 키」로 신고한다(실제로 걸렸다). 렌더 쪽에서도
+        #   `.get()` 방어가 필요 없어진다.
+        "potential_shares": None,
+        "potential_pct_at_issue": None,
+        "detachable": "",       # BW: 사채와 인수권의 분리 여부
+        "exchange_target": "",  # EB: 교환 대상
+    }
+    if kind == "CB":
+        out["potential_shares"] = _mzn_int(row.get("cvisstk_cnt"))
+        out["potential_pct_at_issue"] = _mzn_num(row.get("cvisstk_tisstk_vs"))
+    elif kind == "BW":
+        out["potential_shares"] = _mzn_int(row.get("nstk_isstk_cnt"))
+        out["potential_pct_at_issue"] = _mzn_num(row.get("nstk_isstk_tisstk_vs"))
+        out["detachable"] = " ".join(str(row.get("bdwt_div_atn") or "").split())
+    else:  # EB — 교환 대상은 이미 발행된 주식이라 신주가 나오지 않는다
+        out["potential_pct_at_issue"] = _mzn_num(row.get("extg_tisstk_vs"))
+        out["exchange_target"] = " ".join(str(row.get("extg") or "").split())
+    return out
+
+
+def fetch_mezzanine_decisions(
+    corp_code: str, api_key: str, lookback_years: int = 3,
+) -> dict:
+    """CB·BW·EB 발행결정을 창 전체로 받는다 (3콜).
+
+    기존 `fetch_cb_issue_decision`(아래)은 **rcept_no 한 건**을 위한 것이라
+    (`_fetch_decision_filtered`) 창 전체에는 못 쓴다. 같은 파라미터 관례만 따르는
+    형제 함수다.
+
+    ⚠ **종류별 실패를 따로 든다**(`failed_kinds`). CB만 020으로 죽었는데 BW·EB
+    결과가 「전부」로 표기되면 그게 이 레포가 금지하는 실패 모드다. 013은 진짜
+    부재이므로 실패가 아니다.
+    """
+    end = datetime.now()
+    bgn = end - timedelta(days=365 * max(1, min(5, lookback_years)))
+    window = (bgn.strftime("%Y%m%d"), end.strftime("%Y%m%d"))
+    rows: list[dict] = []
+    failed: list[str] = []
+    if not api_key or not corp_code:
+        return {"rows": rows, "failed_kinds": failed, "fetch_failed": False,
+                "window": window}
+    for kind, endpoint in _MZN_ENDPOINTS:
+        try:
+            resp = _retry(
+                "GET", f"{DART_BASE}/{endpoint}.json",
+                params={"crtfc_key": api_key, "corp_code": corp_code,
+                        "bgn_de": window[0], "end_de": window[1]},
+            )
+            data = resp.json()
+        except Exception as e:  # noqa: BLE001
+            log.debug("메자닌 %s 조회 실패 (%s): %s", endpoint, corp_code, e)
+            failed.append(kind)
+            continue
+        status = data.get("status")
+        if status != "000":
+            if status != "013":     # 013은 자료 없음 — 실패가 아니다
+                _log_dart_status(status or "?", f"메자닌 {endpoint} {corp_code}")
+                failed.append(kind)
+            continue
+        for r in data.get("list", []) or []:
+            rows.append({**r, "_kind": kind})
+    return {"rows": rows, "failed_kinds": failed,
+            "fetch_failed": bool(failed), "window": window}
+
+
+def summarize_mezzanine(
+    decision_rows: list[dict],
+    filings: "list[dict] | None" = None,
+    totals: "list[dict] | None" = None,
+    today: str = "",
+) -> dict:
+    """메자닌 발행 조건 + 기간 내 공시를 개괄·리스트로 접는다 (순수 함수).
+
+    Args:
+        decision_rows: `fetch_mezzanine_decisions`의 `rows`
+        filings: 기간 내 공시 목록(`fetch_company_disclosures` 결과) — 생애주기
+            분류에 쓴다. **재조회하지 않고 넘겨받는다**(API 콜 0).
+        totals: `fetch_stock_totals` 결과 — 잠재 희석률의 분모
+        today: `YYYYMMDD`(테스트 고정용). 빈 값이면 오늘.
+
+    「얼마나 걸려있나」의 답은 **발행 시 잠재 주식수 합계 ÷ 현재 보통주 발행총수**다.
+    ⚠ `cvisstk_tisstk_vs`(총수 대비 %)를 **더하지 않는다** — 회차마다 발행 시점의
+    분모가 달라 합이 뜻을 잃는다. 주식 **수**를 더하고 우리가 아는 하나의 분모로
+    나눈다.
+    ⚠ 이미 전환된 분을 뺄 수 없어 그 비율은 **상한**이다(호출자가 그렇게 적는다).
+    """
+    now = today or datetime.now().strftime("%Y%m%d")
+    issues = [parse_mezzanine_row(r, r.get("_kind", "CB")) for r in decision_rows or []]
+    # 실측: 한 rcept_no당 한 행이고 `bd_fta`는 권면총액이다(6개사 40행 중복 0).
+    # 그래도 방어적으로 접는다 — 서식이 바뀌면 이중집계가 조용히 생긴다.
+    seen: dict = {}
+    for it in issues:
+        seen.setdefault(it["rcept_no"] or id(it), it)
+    issues = sorted(seen.values(), key=lambda x: x["pay_date"], reverse=True)
+
+    by_kind: dict = {}
+    for it in issues:
+        slot = by_kind.setdefault(it["kind"], {"count": 0, "face": 0, "face_unknown": 0})
+        slot["count"] += 1
+        if it["face_amount"] is None:
+            slot["face_unknown"] += 1
+        else:
+            slot["face"] += it["face_amount"]
+
+    potential = sum(it["potential_shares"] or 0 for it in issues)
+    common = pick_common_stock_total(totals or [])
+    potential_pct = (potential / common * 100) if (common and potential) else None
+
+    # ⚠ 하한을 3버킷(70%미만/70%/그 외)으로 나누면 **70%보다 높은 하한을
+    #   「미상」으로 잘못 떨어뜨린다**. 실측에서 제이스코 5·6회차가 전환가 506원·
+    #   하한 500원(98.8%)이었고 이건 미상이 아니라 **리픽싱 여지가 거의 없다**는
+    #   뜻이다 — 11.1%와 정반대인데 같은 칸에 들어갔다(첫 구현의 오류).
+    #   값이 있으면 %를 그대로 들고, 별도로 **70% 미만**만 센다(법정 하한을
+    #   밑도는 예외 — 주총 특별결의 사항이고 42건 중 2건뿐이었다).
+    refix = {"floors": [], "lt70": [], "absent": [], "no_value": []}
+    for it in issues:
+        if it["refix_field_absent"]:
+            refix["absent"].append(it)
+        elif it["refix_floor_pct"] is None:
+            refix["no_value"].append(it)
+        else:
+            refix["floors"].append(it)
+            if it["refix_floor_pct"] < 69.5:
+                refix["lt70"].append(it)
+
+    maturity = {"not_yet": 0, "passed": 0, "unknown": 0}
+    exercise_open = 0
+    for it in issues:
+        if not it["maturity"]:
+            maturity["unknown"] += 1
+        elif it["maturity"] >= now:
+            maturity["not_yet"] += 1
+        else:
+            maturity["passed"] += 1
+        if it["exercise_from"] and it["exercise_to"] \
+                and it["exercise_from"] <= now <= it["exercise_to"]:
+            exercise_open += 1
+
+    # ── 기간 내 메자닌 공시 리스트 ──
+    listed: list[dict] = []
+    by_cat: dict = {}
+    amended = 0
+    for d in filings or []:
+        nm = d.get("report_nm") or ""
+        c = classify_mezzanine_filing(nm)
+        if not c:
+            continue
+        row = {
+            "date": (d.get("rcept_dt") or "").strip(),
+            "rcept_no": (d.get("rcept_no") or "").strip(),
+            "report_nm": " ".join(nm.split()),
+            **c,
+        }
+        listed.append(row)
+        if c["is_amendment"]:
+            amended += 1
+        else:
+            # 정정은 집계에서 뺀다 — 원본이 따로 있어 두 번 세면 부풀려진다
+            by_cat[c["category"]] = by_cat.get(c["category"], 0) + 1
+    listed.sort(key=lambda x: x["date"], reverse=True)
+
+    return {
+        "issues": issues,
+        "by_kind": by_kind,
+        "potential_shares": potential,
+        "common_total": common,
+        "potential_pct": potential_pct,
+        "refix": refix,
+        "maturity": maturity,
+        "exercise_open": exercise_open,
+        "filings": listed,
+        "filing_counts": by_cat,
+        "filings_total": len(listed),
+        "filings_amended": amended,
+    }
 
 
 def fetch_cb_issue_decision(rcept_no: str, api_key: str, corp_code: str = "") -> dict:

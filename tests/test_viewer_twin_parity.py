@@ -38,6 +38,9 @@ from dart_risk_mcp.core import qualifiers as _q
 from dart_risk_mcp.core import signals as _sig
 from dart_risk_mcp.core.dart_client import (
     _fold_corp_name,
+    classify_mezzanine_filing,
+    parse_mezzanine_row,
+    summarize_mezzanine,
     _is_amended_document,
     _issuance_date8,
     _looks_like_nation,
@@ -114,6 +117,10 @@ _FUNCS = (
     "function issuanceDate8(",
     "function pickCommonStockTotal(",
     "function summarizeDilution(",
+    # 2026-09-01 메자닌 이식 — 위 가드가 즉시 6쌍을 신고했다.
+    "function classifyMezzanineFiling(",
+    "function parseMezzanineRow(",
+    "function summarizeMezzanine(",
 )
 
 # 이름은 `_FUNCS`에서 뽑는다 — 예전에는 아래 JS의 `const FN = {...}`에도 손으로
@@ -560,6 +567,9 @@ def test_이름으로_짝지어지는_쌍은_모두_잠겨_있다():
         "_split_issuer_nation": "test_acquisition_parser_parity.py",
         "_affiliate_int": "이 파일의 summarizeAffiliateStake 대조에 포함",
         "_affiliate_ratio": "이 파일의 summarizeAffiliateStake 대조에 포함",
+        "_mzn_num": "이 파일의 parseMezzanineRow 대조에 포함",
+        "_mzn_int": "이 파일의 parseMezzanineRow 대조에 포함",
+        "_mzn_date": "이 파일의 parseMezzanineRow 대조에 포함",
     }
 
     core_funcs: dict = {}
@@ -694,3 +704,100 @@ def test_뷰어도_비례_배분을_희석으로_세지_않는다():
     got = _viewer([["classifyIssuanceType", s]
                    for s in ("무상증자", "주식분할", "주식배당")])
     assert got == ["proportional"] * 3
+
+
+# ── 메자닌 (2026-09-01 이식) ─────────────────────────────────────────────
+
+_MZN_TITLES = [
+    "주요사항보고서(전환사채권발행결정)", "주요사항보고서(신주인수권부사채권발행결정)",
+    "교환사채권발행결정", "전환가액의조정", "전환가액의조정 (제38회차)",
+    "신주인수권행사가액의조정(제37회차)", "전환가액ㆍ신주인수권행사가액ㆍ교환가액의조정(안내공시)",
+    "전환청구권행사 (제3회차)", "전환청구권ㆍ신주인수권ㆍ교환청구권행사",
+    "전환사채(해외전환사채포함)발행후만기전사채취득", "주요사항보고서(자기전환사채만기전취득결정)",
+    "주요사항보고서(자기전환사채매도결정)", "[기재정정]주요사항보고서(자기전환사채매도결정)",
+    "유상증자또는주식관련사채등의발행결과(자율공시)",
+    # 메자닌이 아닌 것 — 「사채」로 넓히면 딸려온다
+    "주요사항보고서(단기사채발행결정)", "회사채발행결정", "최대주주변경", "",
+]
+
+
+def test_메자닌_공시_분류가_같다():
+    got = _viewer([["classifyMezzanineFiling", t] for t in _MZN_TITLES])
+    bad = []
+    for t, g in zip(_MZN_TITLES, got):
+        c = classify_mezzanine_filing(t)
+        if (c is None) != (g is None):
+            bad.append((t, c, g)); continue
+        if c and (c["category"] != g["category"] or c["round"] != g["round"]
+                  or c["is_amendment"] != g["is_amendment"]):
+            bad.append((t, c, g))
+    assert not bad, "분류가 갈린다:\n" + "\n".join(
+        f"  {t!r}\n    core={c}\n    뷰어={g}" for t, c, g in bad[:5])
+
+
+_MZN_CB = {
+    "rcept_no": "20250115000001", "bd_tm": "4", "bd_fta": "40,000,000,000",
+    "bd_intr_ex": "7.5", "bd_intr_sf": "11.2", "bd_mtd": "2028년 01월 15일",
+    "bdis_mthn": "사모", "pymd": "2025년 01월 15일", "cv_prc": "1,670",
+    "cvisstk_cnt": "23,952,095", "cvisstk_tisstk_vs": "36.55",
+    "cvrqpd_bgd": "2026년 01월 15일", "cvrqpd_edd": "2027년 12월 15일",
+    "act_mktprcfl_cvprc_lwtrsprc": "1,169", "rmislmt_lt70p": "-",
+    "fdpp_op": "30,000,000,000", "fdpp_dtrp": "10,000,000,000",
+}
+_MZN_BW = {**_MZN_CB, "rcept_no": "b", "ex_prc": "4,293",
+           "nstk_isstk_cnt": "2,329,373", "nstk_isstk_tisstk_vs": "18.5",
+           "expd_bgd": "2025년 09월 11일", "expd_edd": "2027년 08월 11일",
+           "bdwt_div_atn": "분리형"}
+_MZN_EB = {"rcept_no": "e", "bd_tm": "1", "ex_prc": "10,000", "extg": "자기주식",
+           "extg_tisstk_vs": "3.2", "exrqpd_bgd": "2025년 01월 01일",
+           "exrqpd_edd": "2027년 01월 01일", "bd_fta": "5,000,000,000"}
+
+
+@pytest.mark.parametrize("row,kind", [
+    (_MZN_CB, "CB"), (_MZN_BW, "BW"), (_MZN_EB, "EB"),
+    # 결측·음수·미기재
+    ({"rcept_no": "x", "bd_fta": "-", "cv_prc": "-", "bd_intr_ex": "-"}, "CB"),
+])
+def test_메자닌_발행조건_파싱이_같다(row, kind):
+    got = _viewer([["parseMezzanineRow", row, kind]])[0]
+    core = parse_mezzanine_row(row, kind)
+    for k in core:
+        assert core[k] == got.get(k) or _num(core[k]) == _num(got.get(k)), (
+            f"{kind}의 {k}가 갈린다: core={core[k]!r} 뷰어={got.get(k)!r}")
+
+
+def test_메자닌_집계가_같다():
+    """⚠ 하한 버킷이 갈리면 98.8%(리픽싱 여지 없음)와 11.1%(예외)가 뒤섞인다."""
+    rows = [
+        {**_MZN_CB, "rcept_no": "a", "cv_prc": "4,501",
+         "act_mktprcfl_cvprc_lwtrsprc": "500", "_kind": "CB"},      # 11.1%
+        {**_MZN_CB, "rcept_no": "b", "cv_prc": "506",
+         "act_mktprcfl_cvprc_lwtrsprc": "500", "_kind": "CB"},      # 98.8%
+        {**_MZN_EB, "_kind": "EB"},                                  # 서식에 없음
+        {**_MZN_CB, "rcept_no": "d", "bd_mtd": "-", "_kind": "CB"},  # 만기 미기재
+    ]
+    filings = [
+        {"rcept_dt": "20260714", "rcept_no": "1",
+         "report_nm": "주요사항보고서(전환사채권발행결정)"},
+        {"rcept_dt": "20260713", "rcept_no": "2",
+         "report_nm": "[기재정정]주요사항보고서(전환사채권발행결정)"},
+        {"rcept_dt": "20260712", "rcept_no": "3", "report_nm": "최대주주변경"},
+    ]
+    totals = [{"se": "보통주", "istc_totqy": "10,000,000"},
+              {"se": "합계", "istc_totqy": "99,999,999"}]
+    got = _viewer([["summarizeMezzanine", rows, filings, totals, "20260901"]])[0]
+    core = summarize_mezzanine(rows, filings, totals, today="20260901")
+
+    assert core["maturity"] == got["maturity"]
+    assert core["potential_shares"] == got["potential_shares"]
+    assert core["common_total"] == got["common_total"]
+    assert core["potential_pct"] == pytest.approx(got["potential_pct"])
+    assert core["exercise_open"] == got["exercise_open"]
+    assert core["filings_total"] == got["filings_total"]
+    assert core["filings_amended"] == got["filings_amended"]
+    assert core["filing_counts"] == got["filing_counts"]
+    for bucket in ("floors", "lt70", "absent", "no_value"):
+        assert [x["rcept_no"] for x in core["refix"][bucket]] == \
+               [x["rcept_no"] for x in got["refix"][bucket]], f"{bucket}이 갈린다"
+    assert {k: (v["count"], v["face"]) for k, v in core["by_kind"].items()} == \
+           {k: (v["count"], v["face"]) for k, v in got["byKind"].items()}

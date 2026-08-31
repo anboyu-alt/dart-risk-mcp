@@ -24,6 +24,9 @@ const ALLOWED_ENDPOINTS = new Set([
   "fnlttSinglAcntAll.json",           // 전체 계정과목 (뷰어 회전율 3기간 블록)
   "irdsSttus.json",                   // 증자(감자) 현황 (뷰어 희석 블록)
   "stockTotqySttus.json",             // 주식의 총수 (희석 비중의 분모)
+  "cvbdIsDecsn.json",                 // 전환사채권 발행결정 (메자닌 조건)
+  "bdwtIsDecsn.json",                 // 신주인수권부사채권 발행결정
+  "exbdIsDecsn.json",                 // 교환사채권 발행결정
 ]);
 
 export default async function handler(req, res) {
