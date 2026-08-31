@@ -1,0 +1,59 @@
+name: Propose release
+
+# 배포가 뒤처졌으면 **이슈로 제안**한다. 배포하지는 않는다.
+#
+# 왜: `chore(release)` 커밋으로 버전을 올려도 그것만으로는 배포되지 않는다 —
+# PyPI(publish-pypi.yml)와 .mcpb(build-mcpb.yml)의 방아쇠는 GitHub Release
+# 게시다. 2026-08-31 실측으로 master 1.21.20 ↔ PyPI 1.12.0(2026-08-16),
+# 222개 변경이 사용자에게 가지 않고 있던 것을 발견했다. 워크플로우가 실패한
+# 게 아니라 호출된 적이 없었다.
+#
+# ⚠ 자동 배포는 하지 않는다 — PyPI 업로드는 되돌릴 수 없고, 무엇을 언제
+# 내보낼지는 사람이 정한다. 제안 조건은 scripts/propose_release.py 참고
+# (작은 수정만 쌓인 경우는 제안하지 않는다).
+
+on:
+  schedule:
+    - cron: "0 0 * * 1"      # 매주 월요일 09:00 KST
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  propose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0      # 태그·이력 전체 — 마지막 배포 이후 구간 계산에 필요
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: 배포 간격 점검
+        id: check
+        run: python scripts/propose_release.py --print-body | tee /tmp/out.txt
+
+      - name: 제안 이슈 생성·갱신
+        if: steps.check.outputs.propose == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          sed -n '/^---BODY---$/,$p' /tmp/out.txt | tail -n +2 > /tmp/body.md
+          TITLE="배포 제안: v${VERSION}"
+          # 이미 열려 있는 제안이 있으면 새로 만들지 않고 본문만 갱신한다
+          EXISTING=$(gh issue list --state open --label release-proposal \
+                       --json number -q '.[0].number')
+          if [ -n "$EXISTING" ]; then
+            gh issue edit "$EXISTING" --title "$TITLE" --body-file /tmp/body.md
+            echo "갱신: #$EXISTING"
+          else
+            gh label create release-proposal --description "배포 제안(자동)" \
+              --color ededed 2>/dev/null || true
+            gh issue create --title "$TITLE" --body-file /tmp/body.md \
+              --label release-proposal
+          fi
