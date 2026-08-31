@@ -71,14 +71,25 @@ def collect_renames(api_key: str, start: datetime, end: datetime,
 
     거래소공시(I)는 90일에 4,000건을 넘어 페이지 상한에 걸리므로 30일
     청크로 순회한다(누락 방지).
+
+    ⚠ 30일 청크도 **상한에 닿을 수 있다**(60페이지 = 6,000건). 닿으면 그
+    청크의 남은 공시가 조용히 사라지고, 거기 있던 상호변경은 `corp_renames`에
+    안 들어가 행위자 이름 병합이 그만큼 빠진다. 상한 자체는 그대로 두고
+    **닿았다는 사실만** 청크 줄과 반환값(`_truncated_chunks`)에 남긴다 —
+    `backfill_sightings.py`가 이미 하는 것과 같은 방식이다(2026-08-30).
     """
     renames: dict = {}
+    truncated: list[str] = []
+    cap_rows = max_pages * 100
     cur = start
     while cur <= end:
         chunk_end = min(cur + timedelta(days=29), end)
         discs = fetch_market_disclosures(
             api_key, cur.strftime("%Y%m%d"), chunk_end.strftime("%Y%m%d"),
             pblntf_ty="I", max_pages=max_pages) or []
+        capped = len(discs) >= cap_rows
+        if capped:
+            truncated.append(cur.strftime("%Y-%m-%d"))
         hits = [d for d in discs if "상호변경" in (d.get("report_nm") or "")]
         for d in hits:
             rn, cc = d.get("rcept_no", ""), d.get("corp_code", "")
@@ -98,8 +109,16 @@ def collect_renames(api_key: str, start: datetime, end: datetime,
                 "rcept_no": rn, "before": sorted(olds), "after": after,
             })
         print(f"[{cur:%Y-%m-%d}~{chunk_end:%Y-%m-%d}] "
-              f"공시 {len(discs)}건 중 상호변경 {len(hits)}건")
+              f"공시 {len(discs)}건 중 상호변경 {len(hits)}건"
+              + (f" · ⚠️목록 상한({cap_rows}건) — 이 청크 뒷부분 누락" if capped else ""))
         cur = chunk_end + timedelta(days=1)
+    if truncated:
+        print(f"⚠️ 상한에 닿은 청크 {len(truncated)}개: {', '.join(truncated)}"
+              f" — 이 구간은 전수가 아니다")
+    # ⚠ 반환 dict에는 넣지 않는다 — 키가 corp_code인 자료구조라, 밑줄 키를
+    #   더하면 `main`의 `e["names"]`가 죽고 `merge_renames`가 그것을 **비공개
+    #   sightings 파일에 써 넣는다**(실제로 한 번 그렇게 짰다가 되돌렸다).
+    #   상한 도달은 로그로만 알린다 — 동작은 그대로다.
     return renames
 
 

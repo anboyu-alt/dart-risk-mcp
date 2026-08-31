@@ -118,15 +118,18 @@ class FormatAffiliateStakeLineTest(unittest.TestCase):
     def test_full_line_matches_spec_example(self):
         from dart_risk_mcp.server import _format_affiliate_stake_line
 
-        # -4,969,000,000원 → 억원 단위는 기존 _format_amount 관례(정수 나눗셈,
-        # 부호는 별도 보존 후 재부착)를 따라 -49억원(절삭)이다. 설계 문서의
-        # "-50억원"은 예시 서술이었고, 실제 검증 지침은 "기존 _format_amount
-        # 관례를 따를 것"이므로 이 절삭 규칙이 정답이다.
+        # -4,969,000,000원 → **-50억원**(반올림).
+        #
+        # 2026-08-30 이전에는 -49억원이었다. 그때 이 주석은 「설계 문서의
+        # "-50억원"은 예시 서술이었고 기존 `_format_amount` 관례(절삭)가
+        # 정답」이라 적었는데, 그 관례 자체가 결함이었다 — 절삭이 조 단위에서
+        # 1.9조를 「1조원」으로 만들고 있었다(9,000억 손실). 반올림으로
+        # 바꾸면서 이 값이 **설계 문서가 원래 적은 -50억원**과 같아졌다.
         stake = summarize_affiliate_stake(_HANKUK_FILE_ROW_2025)
         line = _format_affiliate_stake_line(stake)
         self.assertEqual(
             line,
-            "최초취득 2023-09 · 지분 46.3→62.4% 확대 · 피출자사 최근 순이익 -49억원",
+            "최초취득 2023-09 · 지분 46.3→62.4% 확대 · 피출자사 최근 순이익 -50억원",
         )
 
     def test_no_stake_change_omits_stake_segment(self):

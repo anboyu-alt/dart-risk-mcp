@@ -381,9 +381,16 @@ def _is_amendment_tag(tag: str) -> bool:
 def is_false_amendment(parsed: ParsedName) -> bool:
     """_AMENDMENT_RE에는 걸리지만 실제 정정공시가 아닌 경우.
 
-    match_signals는 '[정정명령부과]증권신고서'를 정정공시로 오판해 신호를
-    통째로 삭제한다. 호출부는 이 함수가 True일 때만 접두를 벗겨 재매칭한다 —
-    진짜 정정공시([기재정정] 등)의 기존 동작은 바뀌지 않는다.
+    ⚠ **현재 프로덕션 소비처 0** (2026-08-30 AST 전수 확인).
+
+    옛 독스트링은 「호출부는 이 함수가 True일 때만 접두를 벗겨 재매칭한다」고
+    적었는데 **그런 호출부는 더 이상 없다** — 2026-08-26에 `_AMENDMENT_RE`
+    자체를 고쳐(「정정으로 **시작**」이 `[정정명령부과]`·`[정정제출요구]`까지
+    삼키던 것) 우회가 불필요해졌고, core·뷰어 양쪽에서 우회를 제거했다.
+    없어진 동작을 설명하고 있었다.
+
+    공개 API로 남겨 두지만(PyPI 배포 패키지라 외부 import를 깰 수 있다) 새
+    코드가 이것에 기대기 전에 `tests/test_unused_exports.py`의 근거를 읽을 것.
     """
     if not parsed.tags:
         return False

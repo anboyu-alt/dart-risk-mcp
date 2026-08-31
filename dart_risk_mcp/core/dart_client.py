@@ -3632,6 +3632,10 @@ def resolve_disclosure_row_from_rcept_no(
     """접수번호 → list.json 행. 실패 시 None (하위 호환 래퍼).
 
     실패 이유가 필요하면 `resolve_disclosure_row_with_status`를 쓴다.
+
+    ⚠ **현재 프로덕션 소비처 0** (2026-08-30 AST 전수 확인). 이름 그대로
+    하위 호환용이라 남긴다 — PyPI 배포 패키지라 외부 import를 깰 수 있다.
+    새 코드는 `_with_status`를 쓸 것(이 래퍼는 실패 이유를 버린다).
     """
     row, _ = resolve_disclosure_row_with_status(rcept_no, api_key, max_pages)
     return row
@@ -5253,6 +5257,13 @@ def fetch_executive_roster(
 ) -> dict[str, set[str]]:
     """임원현황(exctvSttus)을 최근 N개 사업연도 수집해 {임원명: {연도}} 합집합 반환.
 
+    ⚠ **현재 프로덕션 소비처 0** (2026-08-30 AST 전수 확인) —
+    `find_actor_overlap`은 `fetch_executive_roster_detail`(직위·등기 여부를
+    보존하는 판)을 쓴다. CLAUDE.md가 오래 이 함수를 쓴다고 적고 있었으나
+    실코드와 달랐다(같은 날 정정). 공개 API로 남겨 두지만(PyPI 배포 패키지라
+    외부 import를 깰 수 있다) 새 코드는 `_detail`을 쓸 것 — 이쪽은 직위·등기
+    여부를 버린다.
+
     임원현황은 사업보고서(reprt_code=11011) 기재 항목이라 당해년도는 아직 미제출일 수
     있다. 루프 범위를 current_year 까지 포함하되 미제출 연도(status!='000')는 건너뛴다.
     조합명이 매번 달라도 '사람 이름'은 고정점이므로, 다년 합집합으로 겸직을 포착한다.
@@ -6175,6 +6186,11 @@ def fetch_indicator_history(
     reprt_code: str = "11011",
 ) -> dict:
     """연도별 주요 재무지표를 분류(idx_cl_nm)를 보존해 반환.
+
+    ⚠ **현재 프로덕션 소비처 0** (2026-08-30 AST 전수 확인). 공개 API로 남겨
+    두지만 새 코드가 이것에 기대기 전에 `tests/test_unused_exports.py`의
+    근거를 먼저 읽을 것 — 지우지 않는 이유는 PyPI 배포 패키지라
+    외부 import를 깰 수 있기 때문이지, 검증된 경로여서가 아니다.
 
     반환 형태(SE-4h 최종 수정 — 예전에는 행 목록 자체를 돌려줬다):
 

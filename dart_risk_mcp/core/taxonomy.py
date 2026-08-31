@@ -1437,6 +1437,11 @@ def calculate_risk_score(
     weights: Optional[Dict[str, float]] = None,
 ) -> float:
     """
+
+    ⚠ **현재 프로덕션 소비처 0** (2026-08-30 AST 전수 확인). v0.8.5가 점수·등급
+    노출을 금지하면서 렌더 경로에서 빠졌고, `server.py`의 죽은 import도 같은 날
+    제거했다. 공개 API로 남겨 두지만(PyPI 배포) **이 값이 사용자 출력에 닿으면
+    안 된다** — `tests/test_golden_output_hygiene.py`가 그것을 막는다.
     Calculate composite risk score from detected signals.
 
     Args:
@@ -1731,6 +1736,11 @@ def find_pattern_overlaps(
 
 def estimate_crisis_timeline(signal_id: str) -> Dict[str, int]:
     """severity에서 파생한 참고용 상수. **사용자 출력에 렌더하지 않는다.**
+
+    ⚠ **현재 프로덕션 소비처 0** (2026-08-30 AST 전수 확인). 「위기 타임라인」은
+    v0.8.5 원칙에 따라 출력에서 제거됐다(severity에서 파생된 '위기 N개월' 표기).
+    `server.py`의 죽은 import도 같은 날 제거했다. 공개 API로 남겨 두지만
+    출력에 되살리면 무판정 원칙과 충돌한다.
 
     ⚠ 반환값은 측정이 아니라 `SEVERITY_LEVELS`의 4행 조회표다. taxonomy 40종이
     단 3가지 답을 공유하며, 숫자에서 severity를 그대로 되읽을 수 있다
