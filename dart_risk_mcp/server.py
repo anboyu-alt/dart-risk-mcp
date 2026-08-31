@@ -39,6 +39,9 @@ from .core import (
     extract_cfs_ofs_ni,
     extract_loan_advance,
     fetch_affiliate_investments,
+    fetch_issuance_history,
+    fetch_stock_totals,
+    summarize_dilution,
     match_affiliate_row,
     summarize_affiliate_stake,
     NOTE_CATEGORIES,
@@ -807,6 +810,101 @@ _ASSET_DISPOSAL_TITLE_MARKS = (
     "유형자산처분", "비유동자산처분", "유형자산양도",
     "특수관계인에대한자산양도", "영업양도",
 )
+
+
+_DILUTION_KIND_LABEL = {
+    "dilutive": "희석",
+    "proportional": "비례 배분",
+    "decrease": "감소",
+    "unknown": "미분류",
+}
+
+
+def _dilution_block(corp_code: str, api_key: str, lookback_years: int) -> list[str]:
+    """「주식 수가 언제·왜·얼마나 늘었나」를 사실로 표기한다 (점수 없음).
+
+    `irdsSttus`(증자·감자 현황)는 공시 제목이 아니라 **원장**이다 — 전환권
+    행사가 언제 몇 주였는지가 그대로 온다. 실측(15개사): 신주 발생원 중
+    전환권행사 147건 · 신주인수권행사 89건으로 가장 흔하다.
+
+    ⚠ **비례 배분을 희석에 넣지 않는다.** 무상증자·주식분할·주식배당은 모든
+    주주에게 같은 비율로 배분돼 지분율이 변하지 않는다 — 희석으로 세면
+    도구가 **주주에게 공짜로 준 것**을 위험처럼 표시하게 된다.
+
+    ⚠ 한 번 호출로 오는 구간이 회사마다 다르다(실측 3~12년). 그래서 요청한
+    창이 아니라 **실제로 덮인 구간**을 밝힌다 — 빈 값이 「없다」로 읽히면 안
+    된다는 원칙.
+    """
+    rows = fetch_issuance_history(corp_code, api_key)
+    if getattr(rows, "fetch_failed", False):
+        return ["**주식 수 변동**", "",
+                "⚠ 증자·감자 현황을 받지 못했습니다 — 변동이 없다는 뜻이 아닙니다.",
+                ""]
+    if not rows:
+        return []
+    totals = fetch_stock_totals(corp_code, api_key)
+    _since = (datetime.now() - timedelta(days=365 * lookback_years)).strftime("%Y%m%d")
+    d = summarize_dilution(rows, totals, since=_since)
+
+    if not d["in_window"]:
+        # ⚠ 「자료가 없다」와 「창 밖이다」를 같은 화면으로 만들지 않는다.
+        #    실측 아틀라스링크: 원장에 5건이 있는데 전부 2018~2021이라 3년
+        #    창에서는 0건이다 — 침묵하면 「이 회사는 신주 발행이 없었다」로
+        #    읽힌다. 빈 값이 「없다」로 읽히면 안 된다는 원칙(CLAUDE.md).
+        if d["earliest"]:
+            return [
+                "**주식 수 변동** (증자·감자 현황 원장)", "",
+                f"- 조회 창(최근 {lookback_years}년) 안에는 기재된 변동이 "
+                f"없습니다. 원장에는 {_fmt_date8(d['earliest'])}~"
+                f"{_fmt_date8(d['latest'])} 구간의 기재가 있습니다 — "
+                "창을 넓히면 보입니다.",
+                "",
+            ]
+        # 모든 칸이 `-`인 자리 행만 온 회사(신주 발행이 없다)는 넘어간다 —
+        # 「미기재 N건」이라 적으면 없는 사실이 있는 것처럼 읽힌다.
+        return []
+
+    out = ["**주식 수 변동** (증자·감자 현황 원장)", ""]
+    b = d["buckets"]
+    if b["dilutive"]:
+        _pct = (f" — 현재 보통주 발행총수의 {d['dilutive_pct']:.1f}%"
+                if d["dilutive_pct"] is not None else "")
+        out.append(f"- 기존 주주 지분이 줄어드는 발행: {b['dilutive']:,}주{_pct}")
+    if b["proportional"]:
+        out.append(f"- 비례 배분(무상증자·분할·배당 등): {b['proportional']:,}주 "
+                   "— 모든 주주에게 같은 비율로 배분돼 지분율은 변하지 않습니다")
+    if b["decrease"]:
+        out.append(f"- 감소(감자·소각): {b['decrease']:,}주")
+    if b["unknown"]:
+        out.append(f"- 미분류: {b['unknown']:,}주 — DART가 증감 형태를 "
+                   "기재하지 않은 건입니다(원문 확인 필요)")
+    out.append("")
+
+    _top = sorted(d["by_type"].items(), key=lambda x: -abs(x[1]["shares"]))
+    if _top:
+        out.append("형태별 (주식 수 순, 최대 8종)")
+        for stle, v in _top[:8]:
+            _lbl = _DILUTION_KIND_LABEL.get(v["kind"], v["kind"])
+            _name = stle if stle != "-" else "(형태 미기재)"
+            out.append(f"- [{_lbl}] {_name}: {v['count']}건 · {v['shares']:,}주")
+        if len(_top) > 8:
+            out.append(f"- ... 외 {len(_top) - 8}종")
+        out.append("")
+
+    _cov = (f"{_fmt_date8(d['earliest'])}~{_fmt_date8(d['latest'])}"
+            if d["earliest"] else "구간 미상")
+    _notes = [f"원장이 덮는 구간 {_cov}"]
+    if d["undated"]:
+        _notes.append(f"일자 미기재 {d['undated']}건 제외")
+    if d["common_total"]:
+        _notes.append(f"보통주 발행총수 {d['common_total']:,}주")
+    else:
+        _notes.append("보통주 발행총수를 찾지 못해 비중은 계산하지 않았습니다")
+    out.append("※ " + " · ".join(_notes) + ".")
+    out.append("※ 사업보고서 「증자(감자) 현황」 기재를 그대로 집계한 사실이며, "
+               "적정·부적정 판단이 아닙니다.")
+    out.append("")
+    return out
 
 
 def _is_asset_disposal_title(report_nm: str) -> bool:
@@ -6640,6 +6738,13 @@ def track_capital_structure(
             lines.append(f"- {y}: {result['by_year'][y]}건")
         lines.append("")
 
+    # 희석 추적 — 공시 제목이 아니라 **주식 수 원장**을 본다.
+    #
+    # 이 도구는 CB/BW 발행을 제목으로 잡았지만 **전환이 실제로 얼마나
+    # 일어났는지**는 보지 않았다. 기존 주주가 희석되는 건 전환 시점이고,
+    # 그것이 무자본 M&A 수법의 핵심 고리다(저가 CB 발행 → 주가 부양 → 전환).
+    lines += _dilution_block(corp_code, api_key, lookback_years)
+
     # v0.8.0: 채무증권 잔액 추이 + CB_ROLLOVER 판정
     from datetime import datetime as _dt
     _current_year = _dt.now().year
@@ -6702,9 +6807,13 @@ def track_capital_structure(
             lines.append("")
 
     lines.append(
-        "📎 참고: 이 도구는 공시 '횟수·리듬'을 잡아냅니다. 정확한 희석률이나 "
-        "실제 조달 금액은 `get_major_decision` 또는 `get_disclosure_document`로 "
-        "개별 공시를 열어 확인해야 합니다."
+        # ⚠ 옛 문구는 「정확한 희석률…은 개별 공시로 확인하라」였는데, 이제
+        # 「주식 수 변동」 블록이 사업보고서 원장에서 희석 주식 수와 비중을
+        # 낸다 — 화면이 제 데이터와 모순됐다. 남은 한계만 적는다.
+        "📎 참고: 공시 '횟수·리듬'과 사업보고서에 기재된 '주식 수 변동'을 "
+        "봅니다. 발행 조건(전환가액·할인율)과 실제 조달 금액은 "
+        "`get_major_decision` 또는 `get_disclosure_document`로 개별 공시를 "
+        "열어 확인해야 합니다."
     )
     return "\n".join(lines)
 

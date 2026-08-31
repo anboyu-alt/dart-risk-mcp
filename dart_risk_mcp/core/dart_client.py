@@ -5446,6 +5446,221 @@ def _fold_corp_name(name: str) -> str:
     return s.strip().upper()
 
 
+# ── 희석 추적 (증자·감자 현황 + 주식의 총수) ─────────────────────────────
+#
+# 이 도구는 CB/BW **발행**을 공시 제목으로 잡지만 **전환이 실제로 얼마나
+# 일어났는지**는 한 번도 보지 않았다. 그런데 기존 주주가 실제로 희석되는 건
+# 전환 시점이고, 그것이 무자본 M&A 수법의 핵심 고리다(저가 CB 발행 → 주가
+# 부양 → 전환 → 매도).
+#
+# 실측(2026-08-31, 15개사 사업보고서): 증감 형태 분포는
+#   전환권행사 147 · 신주인수권행사 89 · 주식매수선택권행사 71 ·
+#   유상증자 39 · 무상증자 6 · 주식배당 3 · 주식분할 2 · 무상감자 4
+# 즉 **전환권·신주인수권 행사가 가장 흔한 신주 발생원**이다.
+
+# 「비례 배분」은 희석이 아니다 — 무상증자·주식분할·주식배당은 모든 주주에게
+# 같은 비율로 배분되므로 지분율이 변하지 않는다. 이걸 희석으로 세면 도구가
+# **주주에게 공짜로 준 것**을 위험처럼 표시하게 된다(파생손실 사고와 같은
+# 부류의 함정 — 뜻이 반대인 것을 같은 자리에 넣는 것).
+_ISSUANCE_PROPORTIONAL = ("무상증자", "주식분할", "주식배당", "무상주")
+# 기존 주주 지분이 실제로 줄어드는 것들
+_ISSUANCE_DILUTIVE = (
+    "전환권행사", "신주인수권행사", "주식매수선택권행사", "유상증자",
+    "전환청구", "행사", "출자전환", "교환권행사",
+)
+_ISSUANCE_DECREASE = ("감자", "소각", "이익소각")
+
+# 발행주식총수 표에서 **보통주 행**을 고르는 표기 변형.
+# ⚠ 손으로 짓지 않고 20개사 실측으로 만들었다 — 「보통주」18 ·
+# 「의결권 있는 주식」1(셀트리온) · 「보통주식」1(두산)으로 20/20을 덮는다.
+# 별칭 하나가 빠지면 그 회사에서 분모가 조용히 사라진다(`_FS_ALIASES` 사고).
+_COMMON_STOCK_LABELS = ("보통주", "보통주식", "의결권 있는 주식", "의결권있는 주식")
+# ⚠ 「합계」·「비고」 행이 **모든 회사에 섞여 온다**(20/20). 보통주로 잡으면
+# 값이 두 배가 된다 — 합계 행 제거는 이 레포에서 반복된 관례다.
+_STOCK_TOTAL_SKIP = ("합계", "계", "총계", "비고")
+
+
+def classify_issuance_type(stle: str) -> str:
+    """증감 형태 표기 → dilutive / proportional / decrease / unknown (순수 함수).
+
+    ⚠ **비례 배분을 희석으로 세지 않는다.** 무상증자·주식분할·주식배당은
+    모든 주주에게 같은 비율로 배분돼 지분율이 변하지 않는다.
+
+    ⚠ 판정 순서가 중요하다 — 「무상증자」는 `_ISSUANCE_DILUTIVE`의 "유상증자"에
+    걸리지 않지만, 비례 배분을 **먼저** 보는 것이 안전하다(새 표기가 늘어도
+    희석 쪽으로 잘못 떨어지지 않는다).
+    """
+    s = (stle or "").replace(" ", "")
+    if not s or s == "-":
+        return "unknown"
+    if any(m in s for m in _ISSUANCE_PROPORTIONAL):
+        return "proportional"
+    if any(m in s for m in _ISSUANCE_DECREASE):
+        return "decrease"
+    if any(m in s for m in _ISSUANCE_DILUTIVE):
+        return "dilutive"
+    return "unknown"
+
+
+def _issuance_date8(raw: str) -> str:
+    """`2023.08.11`·`2023-08-11` → `20230811`. 못 읽으면 빈 문자열.
+
+    실측 321건 중 점 표기 318 · 대시 3. 미기재는 「-」로 온다.
+    """
+    s = (raw or "").strip()
+    m = re.match(r"(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})", s)
+    if m:
+        return f"{m.group(1)}{int(m.group(2)):02d}{int(m.group(3)):02d}"
+    return s if re.fullmatch(r"\d{8}", s) else ""
+
+
+def fetch_issuance_history(
+    corp_code: str, api_key: str, year: str = "", report_type: str = "annual",
+) -> list[dict]:
+    """DART /irdsSttus.json — 증자(감자) 현황 (정기보고서 주요정보).
+
+    주식 수가 **언제·왜·얼마나** 늘고 줄었는지의 원장이다. 필드:
+    `isu_dcrs_de`(일자) · `isu_dcrs_stle`(형태) · `isu_dcrs_stock_knd`(종류) ·
+    `isu_dcrs_qy`(수량) · `isu_dcrs_mstvdv_fval_amount`(액면가) ·
+    `isu_dcrs_mstvdv_amount`(발행가).
+
+    ⚠ 한 번 호출로 **다년 이력**이 온다(실측 3~12년, 회사마다 다르다).
+    연도 루프가 필요 없고, 대신 실제로 덮인 구간을 호출자가 밝혀야 한다.
+    """
+    if not api_key or not corp_code:
+        return []
+    if not year:
+        year = str(datetime.now().year - 1)
+    reprt_code = _REPORT_CODES.get(report_type, "11011")
+    try:
+        resp = _retry(
+            "GET", f"{DART_BASE}/irdsSttus.json",
+            params={"crtfc_key": api_key, "corp_code": corp_code,
+                    "bsns_year": year, "reprt_code": reprt_code},
+        )
+        data = resp.json()
+        if data.get("status") != "000":
+            _log_dart_status(data.get("status", "?"), f"증자현황 corp_code={corp_code}")
+            return FetchList(fetch_failed=data.get("status") != "013")
+        return list(data.get("list", []) or [])
+    except Exception as e:
+        log.debug("증자현황 조회 실패 (%s): %s", corp_code, e)
+        return []
+
+
+def fetch_stock_totals(
+    corp_code: str, api_key: str, year: str = "", report_type: str = "annual",
+) -> list[dict]:
+    """DART /stockTotqySttus.json — 주식의 총수 현황 (정기보고서 주요정보).
+
+    `istc_totqy`(현재 발행주식 총수)·`tesstk_co`(자기주식)·
+    `distb_stock_co`(유통주식수)를 주식 종류별로 준다.
+    """
+    if not api_key or not corp_code:
+        return []
+    if not year:
+        year = str(datetime.now().year - 1)
+    reprt_code = _REPORT_CODES.get(report_type, "11011")
+    try:
+        resp = _retry(
+            "GET", f"{DART_BASE}/stockTotqySttus.json",
+            params={"crtfc_key": api_key, "corp_code": corp_code,
+                    "bsns_year": year, "reprt_code": reprt_code},
+        )
+        data = resp.json()
+        if data.get("status") != "000":
+            _log_dart_status(data.get("status", "?"), f"주식총수 corp_code={corp_code}")
+            return FetchList(fetch_failed=data.get("status") != "013")
+        return list(data.get("list", []) or [])
+    except Exception as e:
+        log.debug("주식총수 조회 실패 (%s): %s", corp_code, e)
+        return []
+
+
+def pick_common_stock_total(totals: list[dict]) -> "int | None":
+    """주식의 총수 표에서 **보통주 발행총수**를 고른다 (순수 함수).
+
+    ⚠ 「합계」·「비고」 행이 모든 회사에 섞여 온다(20/20 실측) — 그걸 잡으면
+    우선주까지 더해져 분모가 커진다. 보통주 표기 3종으로 20/20을 덮는다.
+    못 고르면 None — 「0」이 아니다(없는 사실을 만들지 않는다).
+    """
+    for row in totals or []:
+        se = " ".join(str(row.get("se") or "").split())
+        if not se or any(se.startswith(s) for s in _STOCK_TOTAL_SKIP):
+            continue
+        if not any(lbl in se for lbl in _COMMON_STOCK_LABELS):
+            continue
+        v = _affiliate_int(row.get("istc_totqy"))
+        if v:
+            return v
+    return None
+
+
+def summarize_dilution(
+    rows: list[dict], totals: list[dict], since: str = "",
+) -> dict:
+    """증자·감자 이력을 형태별로 접어 **사실만** 요약한다 (순수 함수).
+
+    Args:
+        rows: `fetch_issuance_history` 결과
+        totals: `fetch_stock_totals` 결과
+        since: `YYYYMMDD` — 이 날짜 이후만 집계(빈 값이면 전부)
+
+    Returns:
+        {"by_type": {형태: {"count", "shares"}}, "buckets": {분류: shares},
+         "common_total": int|None, "dilutive_pct": float|None,
+         "earliest": str, "latest": str, "undated": int, "blank": int,
+         "in_window": int}
+
+    ⚠ 비율은 **희석 주식 수 / 현재 보통주 발행총수**다. 분자가 분모에
+    포함되므로 「지금 주식의 몇 %가 이 구간에 새로 나왔나」로 읽힌다.
+    분모를 못 고르면 None을 돌려준다 — 추정하지 않는다.
+
+    ⚠ **「빈 껍데기 행」과 「날짜만 없는 행」을 가른다.** DART는 신주 발행이
+    없는 회사에도 **모든 칸이 `-`인 자리 행**을 보낸다(실측: 삼성전자 2행·
+    두산 1행이 전부 그것). 둘을 같이 세면 화면이 「미기재 2건」이라 적고
+    사용자는 「뭔가 있는데 날짜를 모른다」로 읽는다 — 실제로는 **아무것도
+    없다**. `blank`는 자리 행, `undated`는 값은 있는데 날짜만 없는 행이다.
+    """
+    by_type: dict = {}
+    buckets = {"dilutive": 0, "proportional": 0, "decrease": 0, "unknown": 0}
+    dates, undated, blank, in_window = [], 0, 0, 0
+    for r in rows or []:
+        _vals = [str(r.get(k) or "").strip()
+                 for k in ("isu_dcrs_de", "isu_dcrs_stle",
+                           "isu_dcrs_stock_knd", "isu_dcrs_qy")]
+        if all(v in ("", "-") for v in _vals):
+            blank += 1
+            continue
+        d = _issuance_date8(r.get("isu_dcrs_de"))
+        if not d:
+            undated += 1
+            continue
+        dates.append(d)
+        if since and d < since:
+            continue
+        in_window += 1
+        stle = " ".join(str(r.get("isu_dcrs_stle") or "").split()) or "(미기재)"
+        qty = _affiliate_int(r.get("isu_dcrs_qy")) or 0
+        kind = classify_issuance_type(stle)
+        slot = by_type.setdefault(stle, {"count": 0, "shares": 0, "kind": kind})
+        slot["count"] += 1
+        slot["shares"] += qty
+        buckets[kind] += abs(qty) if kind == "decrease" else qty
+
+    common = pick_common_stock_total(totals)
+    pct = None
+    if common and buckets["dilutive"] > 0:
+        pct = buckets["dilutive"] / common * 100
+    return {
+        "by_type": by_type, "buckets": buckets, "common_total": common,
+        "dilutive_pct": pct,
+        "earliest": min(dates) if dates else "",
+        "latest": max(dates) if dates else "",
+        "undated": undated, "blank": blank, "in_window": in_window,
+    }
+
+
 def match_affiliate_row(rows: list[dict], counterparty_name: str) -> "dict | None":
     """타법인 출자현황 rows에서 상대방 이름과 일치하는 행을 찾는다 (순수 함수).
 
