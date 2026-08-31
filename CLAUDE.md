@@ -990,6 +990,49 @@ INQUIRY의 `"거래정지"` 오탐은 우연히 발견됐다. 같은 종류의 �
 `test_mcp_dependency_pin.py`가 네 곳의 버전 일치를 고정하므로, 릴리스
 커밋에서 한 곳을 빠뜨리면 테스트가 잡는다.
 
+### ⚠ 버전 커밋만으로는 배포되지 않는다 (2026-08-31)
+
+**릴리스 커밋은 저장소 안의 일이고, 사용자에게 가는 것은 그다음이다.**
+PyPI(`publish-pypi.yml`)와 Desktop 확장(`build-mcpb.yml`)의 **유일한 방아쇠는
+GitHub Release 게시**(`on: release: [published]`)다.
+
+실측으로 발견했다 — master가 `1.21.20`인데 **PyPI는 `1.12.0`**(2026-08-16
+업로드)이었다. 그 사이 **222개 변경 · 릴리스 커밋 68개 · 15일**이 사용자에게
+가지 않았다. 워크플로우가 실패한 게 아니라 **호출된 적이 없었다**(publish-pypi
+실행 이력 전부 success, 마지막이 v1.12.0). `pip install dart-risk-mcp` 사용자와
+확장 사용자는 두 주 동안 옛 판을 쓰고 있었다.
+
+배포하려면 태그를 밀고 그 태그로 Release를 게시한다:
+
+```bash
+git tag -a v1.21.20 origin/master -m v1.21.20 && git push origin v1.21.20
+```
+
+⚠ `gh release create`에 짧은 SHA를 `--target`으로 주면 `target_commitish is
+invalid`로 거부된다 — 태그를 먼저 밀고 `--verify-tag`를 쓴다.
+
+⚠ **`.mcpb` 번들은 PyPI를 앞설 수 없다** — 확장은 `uv`가 PyPI에서
+`dart-risk-mcp==<버전>`을 받아 실행하는 런처(2.2KB)다. 두 워크플로우가 같은
+이벤트로 나란히 돌지만, PyPI 업로드가 실패하면 그 번들은 설치되지 않는다.
+
+⚠ **PyPI JSON API의 최신 버전은 캐시가 뒤처진다** — 1.21.20을 올린 직후에도
+`/pypi/dart-risk-mcp/json`은 `1.12.0`을 돌려줬다. 확인은 설치가 실제로 읽는
+**simple index**(`https://pypi.org/simple/dart-risk-mcp/`)로 한다.
+
+**재발 방지는 자동 배포가 아니라 제안이다** — `scripts/propose_release.py`와
+주간 `propose-release.yml`이 PyPI와 master를 대조해 **이슈로 제안만** 한다
+(제작자 결정: *"아주 작은 수정까지 다 릴리스 할 필요는 없으니"*). 새 기능·
+도구 목록 변경·미배포 10개 이상 중 하나일 때만 부르고, 패치 몇 개로는 부르지
+않는다. PyPI 조회에 실패하면 **제안하지 않는다** — 모르는 것은 「뒤처졌다」가
+아니다. `tests/test_propose_release.py`가 판정과 **배포하지 않는다는 경계**를
+함께 고정한다.
+
+### ⚠ CHANGELOG 공백 — `1.20.25`~`1.20.42`
+
+18개 버전이 **실재했는데**(릴리스 커밋 확인) CHANGELOG 항목이 없다. 변경은
+코드와 커밋 이력에 남아 있다. 이 구간의 이력을 찾을 때는 CHANGELOG가 아니라
+`git log v1.12.0..v1.21.20`을 봐야 한다.
+
 ## 인자 검증 (2026-08-30)
 
 도구를 경계 입력으로 두드려 두 부류를 찾았다.
