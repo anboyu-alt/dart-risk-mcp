@@ -25,6 +25,8 @@ const ALLOWED_ENDPOINTS = new Set([
   "prvsrpCptalUseDtls.json",
   "otrCprInvstmntSttus.json",
   "fnlttSinglAcntAll.json",
+  "irdsSttus.json",
+  "stockTotqySttus.json",
 ]);
 
 const CORS_HEADERS = {
