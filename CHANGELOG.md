@@ -761,6 +761,97 @@ taxonomy가 필요 없다」고 적혀 있었는데, **`1.1`은 「Refixing(리�
 
 ---
 
+<!-- 아래 1.20.25~1.20.42는 커밋에서 재구성한 항목이다(2026-09-02). -->
+
+> ⚠ **1.20.25~1.20.42 18개 항목은 커밋에서 재구성했다(2026-09-02).**
+> 그 구간에 CHANGELOG 작성이 누락돼 있었다. 각 줄은 **커밋 제목을 그대로**
+> 옮긴 것이고 PR 링크를 붙였다 — 요약·해석·측정 수치를 덧붙이지 않았다.
+> 당시의 판단 근거는 각 PR 본문과 `CLAUDE.md`에 있다.
+
+## [1.20.25] - 2026-08-27
+
+- fix(debt): 채무증권 잔액이 항상 비어 있던 문제 — 도구 하나가 통째로 죽어 있었다 ([#315](https://github.com/anboyu-alt/dart-risk-mcp/pull/315))
+
+## [1.20.26] - 2026-08-27
+
+- fix(scan): 5년이라 적고 최근 2년만 보여 주던 문제 — 절단이 조용했다 ([#317](https://github.com/anboyu-alt/dart-risk-mcp/pull/317))
+- fix(viewer): 뷰어가 core보다 더 많이 잘렸다 — 페이지 예산을 맞추고 덮인 구간을 적는다 ([#318](https://github.com/anboyu-alt/dart-risk-mcp/pull/318))
+
+## [1.20.27] - 2026-08-27
+
+- fix(output): 잘린 목록이 전수처럼 읽히던 자리 여섯 곳 ([#320](https://github.com/anboyu-alt/dart-risk-mcp/pull/320))
+- fix(fund): 용도 변경 판정이 해설과 어긋나 있었다 — 계획과 실제를 비교한 적이 없다 ([#321](https://github.com/anboyu-alt/dart-risk-mcp/pull/321))
+
+## [1.20.28] - 2026-08-27
+
+- fix(viewer): 뷰어가 실제 집행 문구를 아예 안 가져오고 있었다 ([#323](https://github.com/anboyu-alt/dart-risk-mcp/pull/323))
+- fix(taxonomy): 리픽싱 매핑이 0%로 보이던 이유는 조사 하나였다 ([#324](https://github.com/anboyu-alt/dart-risk-mcp/pull/324))
+- fix(signals): 규제기관이 정정을 명령한 사실이 화면에서 사라지고 있었다 ([#325](https://github.com/anboyu-alt/dart-risk-mcp/pull/325))
+
+## [1.20.29] - 2026-08-27
+
+- fix(company): 「법인구분」이 모든 회사에서 항상 「-」였다 ([#327](https://github.com/anboyu-alt/dart-risk-mcp/pull/327))
+- fix(shareholder): 5% 대량보유자의 **이름**이 모든 회사에서 비어 있었다 ([#328](https://github.com/anboyu-alt/dart-risk-mcp/pull/328))
+
+## [1.20.30] - 2026-08-27
+
+- test(api): 죽은 필드를 자동으로 잡는다 — 같은 결함이 세 번 나왔다 ([#330](https://github.com/anboyu-alt/dart-risk-mcp/pull/330))
+- chore(goldens): 전체 재생성 + README 어림수 갱신 ([#331](https://github.com/anboyu-alt/dart-risk-mcp/pull/331))
+- fix(comp): 임원 보수 네 섹션이 전부 어긋나 있었다 ([#332](https://github.com/anboyu-alt/dart-risk-mcp/pull/332))
+
+## [1.20.31] - 2026-08-27
+
+- fix(comp): 해당자가 없는데 「성명: - | 직위: - | 보수총액: -」이 나왔다 ([#334](https://github.com/anboyu-alt/dart-risk-mcp/pull/334))
+- fix(viewer): 키가 없는데 「crtfc_key=null」을 DART에 보내고 있었다 ([#335](https://github.com/anboyu-alt/dart-risk-mcp/pull/335))
+
+## [1.20.32] - 2026-08-27
+
+- fix(fund): 회차가 「제12회차회차」로 나오고 있었다 ([#337](https://github.com/anboyu-alt/dart-risk-mcp/pull/337))
+- fix(insider): 판 적도 산 적도 없는데 Δ±1.96%p가 열두 줄 찍혔다 ([#338](https://github.com/anboyu-alt/dart-risk-mcp/pull/338))
+
+## [1.20.33] - 2026-08-27
+
+- fix(fs): 「연결재무제표」라 적어 놓고 별도 수치를 이어 붙이고 있었다 ([#340](https://github.com/anboyu-alt/dart-risk-mcp/pull/340))
+- test(api): 죽은 필드를 **엔드포인트별로도** 대조한다 ([#341](https://github.com/anboyu-alt/dart-risk-mcp/pull/341))
+
+## [1.20.34] - 2026-08-27
+
+- fix(fs): 11조원짜리 회사가 81억원으로 읽히고 있었다 — 보고 통화 ([#343](https://github.com/anboyu-alt/dart-risk-mcp/pull/343))
+
+## [1.20.35] - 2026-08-27
+
+- feat(decision): 풋옵션 이면계약을 사실로 표기한다 ([#345](https://github.com/anboyu-alt/dart-risk-mcp/pull/345))
+
+## [1.20.36] - 2026-08-27
+
+- feat(decision): 상대 법인의 실체를 사용자에게 미루지 않는다 ([#347](https://github.com/anboyu-alt/dart-risk-mcp/pull/347))
+
+## [1.20.37] - 2026-08-27
+
+- fix(errors): 한도가 찼을 뿐인데 「이 회사는 조용하다」고 말하고 있었다 ([#349](https://github.com/anboyu-alt/dart-risk-mcp/pull/349))
+
+## [1.20.38] - 2026-08-27
+
+- docs(signals): 실제로 발화하는 신호 셋이 키 표에서 빠져 있었다 ([#351](https://github.com/anboyu-alt/dart-risk-mcp/pull/351))
+- docs(api): 엔드포인트 표에 DART가 거부하는 URL이 둘 더 있었다 ([#352](https://github.com/anboyu-alt/dart-risk-mcp/pull/352))
+
+## [1.20.39] - 2026-08-27
+
+- docs(corpus): 코퍼스를 다시 수집하고 신호 건수는 다시 재지 않았다 ([#354](https://github.com/anboyu-alt/dart-risk-mcp/pull/354))
+- fix(viewer): 데이터는 실려 나가는데 기능이 없던 「정기 보고」 범주 ([#355](https://github.com/anboyu-alt/dart-risk-mcp/pull/355))
+
+## [1.20.40] - 2026-08-27
+
+- fix(audit): 절대 발화하지 않는 「비감사용역 비중」 경고가 남아 있었다 ([#357](https://github.com/anboyu-alt/dart-risk-mcp/pull/357))
+
+## [1.20.41] - 2026-08-27
+
+- fix(listing): 켰다면 상장 리츠 40곳을 비상장으로 뒤집었을 지름길 ([#359](https://github.com/anboyu-alt/dart-risk-mcp/pull/359))
+
+## [1.20.42] - 2026-08-27
+
+- fix(viewer): 뷰어에서는 뜰 수 없던 「조달-유용 체인」 카드 ([#361](https://github.com/anboyu-alt/dart-risk-mcp/pull/361))
+
 ## [1.20.24] — 2026-08-25
 
 재무 축 감사를 시작했다. 신호·패턴·표시 축은 20라운드를 팠는데
