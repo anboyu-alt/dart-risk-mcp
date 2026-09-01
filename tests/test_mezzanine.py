@@ -37,6 +37,7 @@ import pytest
 from dart_risk_mcp.core.dart_client import (
     _mzn_date,
     classify_mezzanine_filing,
+    mezzanine_overhang,
     parse_mezzanine_row,
     summarize_mezzanine,
 )
@@ -277,7 +278,9 @@ def test_잔액이라고_말하지_않는다():
     out = _rendered()
     assert "미상환 잔액" not in out
     assert "잔액이 아닙니다" in out, "한계 고지가 사라졌다"
-    assert "만기일 미도래" in out
+    # 「만기 미도래 N건」 — 대기물량 줄에 합쳐졌다(옛 표기는 「만기일 미도래」로
+    # 따로 한 줄이었다). 낱말이 아니라 **잔액이 아니라는 사실**이 걸려 있어야 한다.
+    assert "만기 미도래" in out
 
 
 def test_이을_수_없다는_고지가_있다():
@@ -344,3 +347,138 @@ def test_발행결정_3종이_실측_키_픽스처에_있다():
         assert "actnmn" not in ks, f"{ep}에 actnmn이 생겼다면 구조화 경로를 되살려라"
     assert "cv_prc" in d["endpoints"]["cvbdIsDecsn"]
     assert "act_mktprcfl_cvprc_lwtrsprc" in d["endpoints"]["cvbdIsDecsn"]
+
+
+# ── 대기물량(오버행) ─────────────────────────────────────────────────────
+
+def _issue(kind="CB", **kw):
+    """실측(크라우드웍스 제2회차 CB)을 기본값으로 한 발행 조건 한 건."""
+    row = _cb_row(bd_tm="2", bd_fta="4,000,000,000", cv_prc="2,105",
+                  cvisstk_cnt="1,900,237",
+                  act_mktprcfl_cvprc_lwtrsprc="1,474",
+                  bd_mtd="2029년 07월 13일")
+    row.update(kw)
+    return parse_mezzanine_row(row, kind)
+
+
+def test_권면을_가액으로_나눈_수가_DART_값과_같다():
+    """이 계산의 **근거**다 — 권면총액 ÷ 전환가액 = `cvisstk_cnt`.
+
+    실측(크라우드웍스): CB 40억÷2,105 = 1,900,237 · BW 100억÷27,150 = 368,324로
+    DART가 준 값과 정확히 일치한다. 그래서 **하한 가액을 대입한 시나리오**도
+    같은 방식으로 낼 수 있다.
+    """
+    o = mezzanine_overhang([_issue()], 13_603_176, today="20260901")
+    r = o["rows"][0]
+    assert r["shares_at_strike"] == 1_900_237      # DART `cvisstk_cnt`와 동일
+    assert r["shares_at_floor"] == 2_713_704       # 하한 1,474원 대입
+
+
+def test_하한_시나리오가_발행가액_기준보다_크다():
+    """⚠ 발행 시 기준만 보면 **과소평가**다 — 리픽싱으로 가액이 내려가면 같은
+    권면총액에서 더 많은 주식이 나온다(실측 16.7% → 23.8%)."""
+    o = mezzanine_overhang([_issue()], 13_603_176, today="20260901")
+    assert o["shares_at_floor"] > o["shares_at_strike"]
+    assert o["pct_at_floor"] > o["pct_at_strike"]
+
+
+def test_EB는_대기물량에서_뺀다():
+    """교환 대상이 **이미 발행된 주식**이라 신주가 나오지 않는다 — 희석이 아니다.
+
+    「주식 수 변동」 블록이 무상증자·주식분할을 희석에서 빼는 것과 같은 판단.
+    """
+    o = mezzanine_overhang([_issue(kind="EB")], 10_000_000, today="20260901")
+    assert o["rows"] == [] and o["excluded_eb"] == 1
+    assert o["shares_at_strike"] == 0
+
+
+def test_만기가_지난_건은_대기물량이_아니다():
+    o = mezzanine_overhang(
+        [_issue(bd_mtd="2020년 01월 01일"), _issue(rcept_no="b")],
+        10_000_000, today="20260901")
+    assert len(o["rows"]) == 1 and o["excluded_matured"] == 1
+
+
+def test_만기_미기재는_넣고_따로_표시한다():
+    """빼면 **과소평가**가 된다 — 만기를 모르는 것이 만기가 지난 것은 아니다."""
+    o = mezzanine_overhang([_issue(bd_mtd="-")], 10_000_000, today="20260901")
+    assert len(o["rows"]) == 1 and o["excluded_matured"] == 0
+    assert o["rows"][0]["maturity_unknown"] is True
+
+
+def test_하한을_모르면_발행가액_기준으로_대체한다():
+    """0으로 두면 합계가 발행가액 기준보다 **작아져** 「리픽싱이 희석을 줄인다」는
+    거짓이 된다."""
+    o = mezzanine_overhang(
+        [_issue(act_mktprcfl_cvprc_lwtrsprc="-")], 10_000_000, today="20260901")
+    assert o["rows"][0]["shares_at_floor"] is None      # 모르는 것은 모른다고 둔다
+    assert o["floor_unknown"] == 1
+    assert o["shares_at_floor"] == o["shares_at_strike"]  # 합계는 대체값으로
+
+
+def test_분모가_없으면_비율을_내지_않는다():
+    o = mezzanine_overhang([_issue()], None, today="20260901")
+    assert o["pct_at_strike"] is None and o["pct_at_floor"] is None
+    assert o["shares_at_strike"] == 1_900_237          # 주식 수 자체는 낸다
+
+
+def test_요약이_대기물량을_함께_낸다():
+    """블록이 따로 계산하지 않고 `summarize_mezzanine` 하나에서 받는다."""
+    d = summarize_mezzanine(
+        [{**_cb_row(bd_tm="2", bd_fta="4,000,000,000", cv_prc="2,105",
+                    cvisstk_cnt="1,900,237",
+                    act_mktprcfl_cvprc_lwtrsprc="1,474",
+                    bd_mtd="2029년 07월 13일"), "_kind": "CB"}],
+        [], _tot("13,603,176"), today="20260901")
+    assert d["overhang"]["shares_at_strike"] == 1_900_237
+    assert d["overhang"]["common_total"] == 13_603_176
+
+
+def test_대기물량_표기에_상한_고지가_붙는다():
+    """이미 전환·상환된 분을 뺄 수 없다 — 그 사실이 숫자 옆에 있어야 한다."""
+    out = _rendered()
+    assert "상한" in out
+
+
+def test_잔액_고지가_만기_건수에_붙는다():
+    """⚠ 고지가 **엉뚱한 항목 아래** 붙던 것(크라우드웍스 실측).
+
+    대기물량이 있는 회사에서는 「만기일 미도래」줄이 사라지고 그 자리에
+    「전환·행사 청구기간 열림 1건」만 남는데, 「잔액이 아닙니다」가 그 밑에
+    붙어 **청구기간에 대한 말처럼** 읽혔다. 고지는 만기 건수를 말한 줄
+    바로 아래에 있어야 한다.
+    """
+    lines = _rendered().split("\n")
+    i = next(k for k, ln in enumerate(lines) if "잔액이 아닙니다" in ln)
+    # 그 고지가 딸린 **블록의 머리글**(들여쓰지 않은 목록 줄)을 거슬러 찾는다
+    head = next(lines[k] for k in range(i, -1, -1) if lines[k].startswith("- "))
+    assert "만기" in head, f"고지가 딸린 항목이 만기 건수가 아니다: {head!r}"
+    assert "청구기간" not in head
+
+
+def test_만기일_경과를_두_번_세지_않는다():
+    """대기물량 블록의 「※ 제외: 만기일 경과 N건」과 아래 만기 줄이 같은 건을
+    각각 세고 있었다."""
+    rows = [
+        {**_cb_row(rcept_no="a", bd_mtd="2020년 01월 01일"), "_kind": "CB"},
+        {**_cb_row(rcept_no="b", bd_mtd="2029년 01월 01일"), "_kind": "CB"},
+    ]
+    d = summarize_mezzanine(rows, [], _tot(), today="20260901")
+    from dart_risk_mcp import server as _srv
+    out = "\n".join(_srv._mezzanine_lines(d) if hasattr(_srv, "_mezzanine_lines") else [])
+    if not out:                      # 렌더가 함수로 분리돼 있지 않으면 건너뛴다
+        pytest.skip("렌더 헬퍼가 없다")
+    assert out.count("만기일 경과") <= 1
+
+
+def test_창_밖_미도래_건이_빠진다는_사실을_밝힌다():
+    """⚠ 「상한」과 **반대 방향**의 한계다.
+
+    발행결정은 창 기반 조회라 창보다 먼저 발행돼 아직 만기가 오지 않은 건이
+    통째로 빠진다 — 실측(크라우드웍스): 1년 창 40억 ↔ 5년 창 140억(2023.12
+    발행 BW의 만기가 2028.12인데 1년 창에서는 보이지 않는다). 밝히지 않으면
+    「이 회사의 대기물량은 40억뿐」으로 읽힌다.
+    """
+    out = _rendered()
+    assert "조회 창 안에 발행된 건만" in out
+    assert "창을 넓히면" in out

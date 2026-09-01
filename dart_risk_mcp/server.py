@@ -817,6 +817,16 @@ _ASSET_DISPOSAL_TITLE_MARKS = (
 _MEZZANINE_LIST_MAX = 12
 _MEZZANINE_ISSUE_MAX = 8
 
+_MZN_WINDOW_CAVEAT = (
+    "  ⚠ **이 조회 창 안에 발행된 건만** 셌니다 — "
+    "그보다 먼저 발행돼 아직 만기가 오지 않은 "
+    "메자닌은 빠집니다. 창을 넓히면 늘 수 있습니다."
+)
+_MZN_NOT_BALANCE = (
+    "  ⚠ 이것은 **잔액이 아닙니다** — 발행결정 공시에 적힌 만기일을 그대로 "
+    "센 것이며 이후의 조기상환·만기 전 취득·전환은 반영돼 있지 않습니다."
+)
+
 
 def _mzn_won(v: "int | None") -> str:
     return _format_amount(str(v)) if v else "-"
@@ -872,31 +882,73 @@ def _mezzanine_block(
             for k, v in sorted(d["by_kind"].items()))
         out.append(f"- 발행 결정: {_k}")
 
-    if d["potential_shares"]:
-        if d["potential_pct"] is not None:
-            out.append(
-                f"- 발행 시 기준 잠재 주식수 {d['potential_shares']:,}주 "
-                f"— 현재 보통주 발행총수의 **{d['potential_pct']:.1f}%**")
-            out.append(
-                "  ⚠ 이미 전환된 분을 뺄 수 없어 **상한**입니다. 중도 상환·"
-                "취득된 건도 그대로 들어 있습니다.")
-        else:
-            out.append(f"- 발행 시 기준 잠재 주식수 {d['potential_shares']:,}주 "
-                       "(보통주 발행총수를 찾지 못해 비중은 계산하지 않았습니다)")
+    # ── 대기물량(오버행) ──
+    #
+    # ⚠ 「발행 시 기준 잠재 주식수」만 적으면 **오버행을 과소평가한다** —
+    #   리픽싱으로 가액이 내려가면 같은 권면총액에서 더 많은 주식이 나온다.
+    #   실측(크라우드웍스): 발행가액 기준 16.7% ↔ 하한까지 내려가면 23.8%.
+    _ov = d["overhang"]
+    if _ov["common_total"]:
+        out.append(f"- 현재 보통주 발행총수 **{_ov['common_total']:,}주**")
+    if _ov["rows"]:
+        # 만기일 미기재 건도 대기물량에 들어간다(빼면 과소평가) — 그러면
+        # 「만기 미도래」라고만 적는 것이 정확하지 않아 함께 밝힌다.
+        _unk = sum(1 for r in _ov["rows"] if r["maturity_unknown"])
+        _lbl = "만기 미도래" if not _unk else f"만기 미도래·미기재({_unk}건 포함)"
+        _hd = f"- 메자닌 대기물량: {_lbl} {len(_ov['rows'])}건"
+        if _ov["face_total"]:
+            _hd += f" · 권면총액 {_mzn_won(_ov['face_total'])}"
+        out.append(_hd)
+        _s, _f = _ov["shares_at_strike"], _ov["shares_at_floor"]
+        _ps, _pf = _ov["pct_at_strike"], _ov["pct_at_floor"]
+        if _s:
+            out.append(f"    · 전환·행사가액이 **발행 당시 수준**이면 {_s:,}주"
+                       + (f" (발행총수의 {_ps:.1f}%)" if _ps is not None else ""))
+        if _f and _f != _s:
+            out.append(f"    · **리픽싱 하한까지 내려가면** {_f:,}주"
+                       + (f" (발행총수의 {_pf:.1f}%)" if _pf is not None else ""))
+        if _ov["floor_unknown"]:
+            out.append(f"    · 하한이 기재되지 않은 {_ov['floor_unknown']}건은 "
+                       "발행 당시 가액 기준으로 넣었습니다")
+        out.append(
+            "  ⚠ **상한입니다** — 이미 전환·상환·취득된 분을 알 수 없어 뺄 수 "
+            "없습니다. 실제 전환가액은 조정 공시로 이미 달라져 있을 수 있습니다.")
+        # 「잔액이 아니다」는 **만기 건수**에 대한 고지다 — 아래 `_mt` 줄에 두면
+        # 대기물량이 있는 회사에서는 그 줄이 「청구기간 열림」만 담게 돼 고지가
+        # 엉뚱한 항목 아래 붙는다(크라우드웍스 실측).
+        out.append(_MZN_NOT_BALANCE)
+        # ⚠ 반대 방향의 한계다 — 위 「상한」은 **과대**를, 이것은 **과소**를
+        #   말한다. 발행결정은 창 기반 조회라 창보다 먼저 발행된 미도래 건이
+        #   통째로 빠진다. 실측(크라우드웍스): 1년 40억 ↔ 5년 140억
+        #   (2023.12 발행 BW의 만기가 2028.12인데 1년 창에서는 안 보인다).
+        out.append(_MZN_WINDOW_CAVEAT)
+        if _ov["excluded_matured"] or _ov["excluded_eb"]:
+            _ex = []
+            if _ov["excluded_matured"]:
+                _ex.append(f"만기일 경과 {_ov['excluded_matured']}건")
+            if _ov["excluded_eb"]:
+                # EB는 이미 발행된 주식을 넘기는 것이라 신주가 나오지 않는다
+                _ex.append(f"EB {_ov['excluded_eb']}건(교환 대상이 이미 발행된 주식)")
+            out.append("  ※ 제외: " + " · ".join(_ex))
 
     _m = d["maturity"]
-    if _m["not_yet"] or _m["passed"] or _m["unknown"]:
-        _mt = [f"만기일 미도래 {_m['not_yet']}건"]
+    # 「만기일 미도래」는 위 대기물량 줄이 이미 말한다 — 두 줄에 겹쳐 적지 않는다.
+    # 대기물량 줄이 이미 만기 건수를 말하면 여기서 되풀이하지 않는다 —
+    # 만기일 경과·미기재도 그 블록의 「제외」·「미기재 포함」에 이미 적혔다.
+    _mt = []
+    if not _ov["rows"]:
+        _mt.append(f"만기일 미도래 {_m['not_yet']}건")
         if _m["passed"]:
             _mt.append(f"만기일 경과 {_m['passed']}건")
         if _m["unknown"]:
             _mt.append(f"만기일 미기재 {_m['unknown']}건")
-        if d["exercise_open"]:
-            _mt.append(f"전환·행사 청구기간 열림 {d['exercise_open']}건")
+    _says_maturity = bool(_mt)
+    if d["exercise_open"]:
+        _mt.append(f"전환·행사 청구기간 열림 {d['exercise_open']}건")
+    if _mt:
         out.append("- " + " · ".join(_mt))
-        out.append(
-            "  ⚠ 이것은 **잔액이 아닙니다** — 발행결정 공시에 적힌 만기일을 그대로 "
-            "센 것이며 이후의 조기상환·만기 전 취득·전환은 반영돼 있지 않습니다.")
+        if _says_maturity:
+            out.append(_MZN_NOT_BALANCE)
     out.append("")
 
     # ── 2단 공시 리스트 ──
@@ -911,6 +963,32 @@ def _mezzanine_block(
         if d["filings_total"] > len(_shown):
             out.append(f"- ... 전체 {d['filings_total']}건 중 최근 {len(_shown)}건 "
                        f"표시 · {d['filings_total'] - len(_shown)}건 생략")
+        out.append("")
+
+    # ── 회차별 오버행 (어느 가액에서 얼마가 나오나) ──
+    if _ov["rows"]:
+        out.append("**회차별 대기물량** (만기 미도래 · 가액이 내려갈수록 주식 수가 는다)")
+        for r in _ov["rows"]:
+            _rd = f"제{r['round']}회차 " if r["round"] else ""
+            _line = f"- {_rd}{r['kind']} 권면 {_mzn_won(r['face'])}"
+            if r["maturity_unknown"]:
+                _line += " (만기일 미기재)"
+            out.append(_line)
+            if r["strike"] and r["shares_at_strike"]:
+                _p = (r["shares_at_strike"] / _ov["common_total"] * 100
+                      if _ov["common_total"] else None)
+                out.append(f"    가액 {r['strike']:,.0f}원 → {r['shares_at_strike']:,}주"
+                           + (f" ({_p:.1f}%)" if _p is not None else ""))
+            if r["floor"] and r["shares_at_floor"]:
+                _p = (r["shares_at_floor"] / _ov["common_total"] * 100
+                      if _ov["common_total"] else None)
+                _fp = f" (발행가의 {r['floor_pct']:.1f}%)" if r["floor_pct"] is not None else ""
+                out.append(f"    하한 {r['floor']:,.0f}원{_fp} → {r['shares_at_floor']:,}주"
+                           + (f" ({_p:.1f}%)" if _p is not None else ""))
+        if d["filing_counts"].get("refix"):
+            out.append(f"※ 이 기간 전환가액 조정 공시가 {d['filing_counts']['refix']}건 "
+                       "있습니다 — 실제 가액은 위 「발행 당시」와 다를 수 있습니다"
+                       "(조정 후 가액은 개별 공시에 있습니다).")
         out.append("")
 
     # ── 3단 발행 조건 디테일 ──
