@@ -5370,6 +5370,84 @@ def fetch_mezzanine_decisions(
             "fetch_failed": bool(failed), "window": window}
 
 
+def mezzanine_overhang(
+    issues: list[dict], common_total: "int | None", today: str = "",
+) -> dict:
+    """메자닌 **대기물량**(오버행)을 가액 시나리오로 계산한다 (순수 함수).
+
+    「지금 몇 주가 있고, 메자닌이 얼마나 대기 중이며, **어느 가액에서 얼마가
+    나올 수 있나**」에 답한다.
+
+    ⚠ **「발행 시 기준 잠재 주식수」만 보면 오버행을 과소평가한다.** 리픽싱으로
+    전환가액이 내려가면 **같은 권면총액에서 더 많은 주식**이 나온다. 실측
+    (크라우드웍스): 발행가액 기준 2,268,561주(16.7%)인데 **리픽싱 하한까지
+    내려가면 3,239,742주(23.8%)** — 7.1%p가 숨어 있었다.
+
+    계산 근거: **권면총액 ÷ 전환(행사)가액 = 주식 수**가 DART가 주는
+    `cvisstk_cnt`와 정확히 일치한다(크라우드웍스 CB 1,900,237 · BW 368,324
+    실측 일치). 그래서 하한 가액을 대입한 시나리오를 신뢰성 있게 낼 수 있다.
+
+    ⚠ **EB는 오버행에서 제외한다** — 교환 대상이 **이미 발행된 주식**이라 신주가
+    나오지 않는다. 희석이 아니다(「주식 수 변동」 블록이 비례 배분을 희석에서
+    빼는 것과 같은 판단).
+
+    ⚠ **만기일이 지난 건은 뺀다** — 대기물량이 아니다. 만기일 미기재는 **넣고**
+    그 사실을 따로 센다(빼면 과소평가가 된다).
+
+    ⚠ 결과는 **상한**이다 — 이미 전환·상환·취득된 분을 알 수 없어 못 뺀다.
+
+    Returns:
+        {"rows": [{kind, round, face, strike, shares_at_strike, floor,
+                   floor_pct, shares_at_floor, maturity, maturity_unknown}],
+         "face_total", "shares_at_strike", "shares_at_floor",
+         "pct_at_strike", "pct_at_floor", "common_total",
+         "excluded_matured", "excluded_eb", "floor_unknown"}
+    """
+    now = today or datetime.now().strftime("%Y%m%d")
+    rows: list[dict] = []
+    excluded_matured = excluded_eb = floor_unknown = 0
+    for it in issues or []:
+        if it["kind"] == "EB":
+            excluded_eb += 1
+            continue
+        if it["maturity"] and it["maturity"] < now:
+            excluded_matured += 1
+            continue
+        face, strike = it["face_amount"], it["strike"]
+        at_strike = int(face / strike) if (face and strike) else it["potential_shares"]
+        floor = it["refix_floor"]
+        at_floor = int(face / floor) if (face and floor) else None
+        if at_floor is None:
+            floor_unknown += 1
+        rows.append({
+            "kind": it["kind"], "round": it["round"], "face": face,
+            "strike": strike, "shares_at_strike": at_strike,
+            "floor": floor, "floor_pct": it["refix_floor_pct"],
+            "shares_at_floor": at_floor, "maturity": it["maturity"],
+            "maturity_unknown": not it["maturity"],
+        })
+
+    face_total = sum(r["face"] or 0 for r in rows)
+    at_strike = sum(r["shares_at_strike"] or 0 for r in rows)
+    # 하한을 모르는 건은 **발행가액 기준 주식 수로 대체**한다 — 0으로 두면
+    # 합계가 발행가액 기준보다 작아져 「하한이 더 적다」는 거짓이 된다.
+    at_floor = sum((r["shares_at_floor"] if r["shares_at_floor"] is not None
+                    else (r["shares_at_strike"] or 0)) for r in rows)
+    return {
+        "rows": sorted(rows, key=lambda r: -(r["shares_at_floor"]
+                                             or r["shares_at_strike"] or 0)),
+        "face_total": face_total,
+        "shares_at_strike": at_strike,
+        "shares_at_floor": at_floor,
+        "pct_at_strike": (at_strike / common_total * 100) if common_total and at_strike else None,
+        "pct_at_floor": (at_floor / common_total * 100) if common_total and at_floor else None,
+        "common_total": common_total,
+        "excluded_matured": excluded_matured,
+        "excluded_eb": excluded_eb,
+        "floor_unknown": floor_unknown,
+    }
+
+
 def summarize_mezzanine(
     decision_rows: list[dict],
     filings: "list[dict] | None" = None,
@@ -5468,6 +5546,7 @@ def summarize_mezzanine(
 
     return {
         "issues": issues,
+        "overhang": mezzanine_overhang(issues, common, now),
         "by_kind": by_kind,
         "potential_shares": potential,
         "common_total": common,

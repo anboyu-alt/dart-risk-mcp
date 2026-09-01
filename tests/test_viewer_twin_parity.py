@@ -39,6 +39,7 @@ from dart_risk_mcp.core import signals as _sig
 from dart_risk_mcp.core.dart_client import (
     _fold_corp_name,
     classify_mezzanine_filing,
+    mezzanine_overhang,
     parse_mezzanine_row,
     summarize_mezzanine,
     _is_amended_document,
@@ -121,6 +122,7 @@ _FUNCS = (
     "function classifyMezzanineFiling(",
     "function parseMezzanineRow(",
     "function summarizeMezzanine(",
+    "function mezzanineOverhang(",
 )
 
 # 이름은 `_FUNCS`에서 뽑는다 — 예전에는 아래 JS의 `const FN = {...}`에도 손으로
@@ -801,3 +803,60 @@ def test_메자닌_집계가_같다():
                [x["rcept_no"] for x in got["refix"][bucket]], f"{bucket}이 갈린다"
     assert {k: (v["count"], v["face"]) for k, v in core["by_kind"].items()} == \
            {k: (v["count"], v["face"]) for k, v in got["byKind"].items()}
+
+
+def test_대기물량_계산이_같다():
+    """⚠ 「발행 시 기준」만 보면 오버행을 과소평가한다 — 리픽싱으로 가액이
+    내려가면 같은 권면총액에서 더 많은 주식이 나온다(크라우드웍스 실측
+    16.7% ↔ 하한까지 23.8%). 두 레이어가 갈리면 한쪽이 위험을 덜 보여준다.
+    """
+    issues = [
+        # 크라우드웍스 실측값
+        parse_mezzanine_row({**_MZN_CB, "rcept_no": "cb", "bd_tm": "2",
+                             "bd_fta": "4,000,000,000", "cv_prc": "2,105",
+                             "act_mktprcfl_cvprc_lwtrsprc": "1,474",
+                             "cvisstk_cnt": "1,900,237",
+                             "bd_mtd": "2029년 07월 13일"}, "CB"),
+        parse_mezzanine_row({**_MZN_BW, "rcept_no": "bw", "bd_tm": "1",
+                             "bd_fta": "10,000,000,000", "ex_prc": "27,150",
+                             "act_mktprcfl_cvprc_lwtrsprc": "19,010",
+                             "nstk_isstk_cnt": "368,324",
+                             "bd_mtd": "2028년 12월 01일"}, "BW"),
+        # 만기 경과 — 대기물량이 아니다
+        parse_mezzanine_row({**_MZN_CB, "rcept_no": "old",
+                             "bd_mtd": "2020년 01월 01일"}, "CB"),
+        # EB — 교환 대상이 이미 발행된 주식이라 신주가 나오지 않는다
+        parse_mezzanine_row({**_MZN_EB, "rcept_no": "eb"}, "EB"),
+        # 하한 미기재 — 발행가액 기준으로 대체돼야 한다
+        parse_mezzanine_row({**_MZN_CB, "rcept_no": "nofloor",
+                             "act_mktprcfl_cvprc_lwtrsprc": "-",
+                             "bd_mtd": "2029년 01월 01일"}, "CB"),
+    ]
+    got = _viewer([["mezzanineOverhang", issues, 13_603_176, "20260901"]])[0]
+    core = mezzanine_overhang(issues, 13_603_176, today="20260901")
+
+    for k in ("face_total", "shares_at_strike", "shares_at_floor", "common_total",
+              "excluded_matured", "excluded_eb", "floor_unknown"):
+        assert core[k] == got[k], f"{k}가 갈린다: core={core[k]!r} 뷰어={got[k]!r}"
+    assert core["pct_at_strike"] == pytest.approx(got["pct_at_strike"])
+    assert core["pct_at_floor"] == pytest.approx(got["pct_at_floor"])
+    assert [r["rcept_no"] if "rcept_no" in r else (r["kind"], r["round"])
+            for r in core["rows"]] == \
+           [r["rcept_no"] if "rcept_no" in r else (r["kind"], r["round"])
+            for r in got["rows"]]
+    for a, b in zip(core["rows"], got["rows"]):
+        assert a["shares_at_strike"] == b["shares_at_strike"]
+        assert a["shares_at_floor"] == b["shares_at_floor"]
+
+    # 실측 고정 — 크라우드웍스 두 회차가 DART 공시값과 정확히 일치해야 한다
+    #             (권면 ÷ 가액 = `cvisstk_cnt`가 성립하는 것이 이 계산의 근거다)
+    _by = {r["round"]: r for r in core["rows"] if r["kind"] in ("CB", "BW")}
+    assert _by[2]["shares_at_strike"] == 1_900_237     # CB 40억 ÷ 2,105원
+    assert _by[2]["shares_at_floor"] == 2_713_704      # 하한 1,474원
+    assert _by[1]["shares_at_strike"] == 368_324       # BW 100억 ÷ 27,150원
+    assert _by[1]["shares_at_floor"] == 526_038        # 하한 19,010원
+    # 하한 시나리오는 **반드시** 발행가액 기준보다 크거나 같다 — 작아지면
+    # 「리픽싱이 희석을 줄인다」는 거짓이 된다(하한 미기재 건을 0으로 두면 그렇게 된다)
+    assert core["shares_at_floor"] > core["shares_at_strike"]
+    assert core["excluded_matured"] == 1 and core["excluded_eb"] == 1
+    assert core["floor_unknown"] == 1
