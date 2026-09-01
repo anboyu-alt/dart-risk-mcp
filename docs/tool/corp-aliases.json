@@ -609,6 +609,11 @@
   "current": "SY동아",
   "stock_code": "041930"
  },
+ "동양생명": {
+  "corp_code": "00117267",
+  "current": "동양생명보험",
+  "stock_code": "082640"
+ },
  "동양철관": {
   "corp_code": "00117629",
   "current": "KBI동양철관",
@@ -2878,6 +2883,11 @@
   "corp_code": "01267958",
   "current": "프로티아",
   "stock_code": "303360"
+ },
+ "플레이그램": {
+  "corp_code": "00103130",
+  "current": "MDS스피어",
+  "stock_code": "009810"
  },
  "플레이위드": {
   "corp_code": "00138367",
