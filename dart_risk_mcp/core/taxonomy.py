@@ -247,6 +247,45 @@ TAXONOMY = {
         "field_evidence": ["자사주EB급증 (20251010)"],
         "investor_implication": "Hidden share dilution; share count manipulation",
     },
+    # 2026-09-02 신설 — 위험 목록 10번 B.
+    #
+    # 이 도구는 메자닌 **발행**(제목)과 **전환 실적**(증자·감자 현황 원장)을
+    # 각각 보는데, **그 사이의 공시 기록**이 신호에서 빠져 있었다.
+    # 「전환청구권행사」는 **기존 주주가 실제로 희석된 시점**이다.
+    #
+    # 1년 전수(271,141건 · 절단일 0)에서 **735건 / 304개사가 무신호**였다.
+    # 기존 1.1~1.7 어디에도 맞지 않는다 — 1.1은 가액 **조정**이고 1.4 RCPS는
+    # 발행 **조건**이지 행사가 아니다(카테고리 1·2 전수 확인).
+    #
+    # ⚠ **base_score 0 · OBSERVATION**이다(8.5 선례). 행사 자체는 정상적인
+    # 계약 이행이기도 하다 — 전환은 사채가 자본으로 바뀌는 것이라 방향이
+    # 하나로 정해지지 않는다. 「희석이 실제로 일어났다」는 **사실**만 표기한다.
+    # ⚠ **어느 패턴에도 넣지 않는다** — 패턴 발화 조건을 바꾸지 않는 것이
+    # 이 신설의 전제였다(전 패턴 영향 +0 실측).
+    "1.8": {
+        "id": "1.8",
+        "category": "Convertible Bond & Debt Manipulation",
+        "name": "Mezzanine Conversion/Exercise (Realized Dilution)",
+        "description": (
+            "전환청구권·신주인수권·교환청구권이 실제로 행사돼 신주가 발행된 "
+            "시점. 발행결정(1.1~1.7)과 증자·감자 현황 원장 사이의 공시 기록이며, "
+            "기존 주주의 지분이 실제로 희석된 사실을 알린다. 사실 표기 전용 — "
+            "행사 자체는 정상적인 계약 이행이기도 하다."
+        ),
+        "base_score": 0,
+        "severity": "OBSERVATION",
+        "crisis_timeline_months": 0,
+        "keywords": [],
+        "red_flags": [
+            "발행 시 전환가액보다 크게 낮은 가액에서 행사",
+            "리픽싱 조정 공시 직후의 대량 행사",
+            "짧은 기간에 여러 회차가 동시에 행사",
+        ],
+        "field_evidence": [],
+        "investor_implication": (
+            "Dilution already realized; compare with issuance terms and refixing history"
+        ),
+    },
 
     # CATEGORY 2: Capital Structure Manipulation (6 signals)
     "2.1": {
@@ -1067,6 +1106,17 @@ TAXONOMY = {
         ],
         "investor_implication": "Retail investor losses; speculative bubble",
     },
+    # ⚠ **「파생상품거래손실발생」을 여기에 매핑하지 말 것** (2026-09-02, 위험
+    #   목록 11번 (b) 판단). 이 항목의 개념어에 「파생상품거래」가 있어 1년
+    #   전수의 그 공시 94건(전부 무신호)이 자연스러운 집이 있는 것처럼 보인다.
+    #   **뜻이 반대다** — 2026-08-31 실측에서 77%가 CB 내재파생 **평가손실**이고
+    #   9건이 명시적으로 주가 **상승**을 사유로 든다(24/30건은 현금 유출 없음).
+    #   이 항목의 정의는 「투기적 남용」이다. 실제로 신설을 시도했다가 되돌렸다.
+    #   `tests/test_default_recall.py`가 「매핑하지 않았다」를 고정한다.
+    #
+    #   주인 신호가 없고(관측 불가) 어느 패턴에도 쓰이지 않으며 카탈로그 사례도
+    #   0건이라 **지우는 선택지**가 있었으나 두기로 했다 — 지워도 얻는 게 없고,
+    #   실제 위험은 항목의 존재가 아니라 위 오해였다.
     "7.3": {
         "id": "7.3",
         "category": "Market Manipulation & Trading",

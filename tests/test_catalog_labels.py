@@ -1,7 +1,7 @@
 """카탈로그 한글 라벨 역추출·로드 회귀 테스트.
 
 기존 MD 37개 유형의 한글 제목·정의·위험신호는 v0.7.5 한글화 산출물로 MD에만
-존재한다(TAXONOMY의 name은 45개 중 41개가 영문). MD 재생성 시 영문 퇴행을
+존재한다(TAXONOMY의 name은 대부분 영문). MD 재생성 시 영문 퇴행을
 막으려면 이 라벨을 별도 자산으로 보존해야 한다.
 """
 import re
@@ -18,7 +18,9 @@ _MD_DIR = Path(__file__).resolve().parents[1] / "dart_risk_mcp" / "knowledge" / 
 
 # dart-monitor에서 이식한 손수 작성 MD가 담고 있던 37종. 파이프라인 재생성이 이 중
 # 하나라도 떨어뜨리면 회귀이므로 명시적으로 고정한다.
-_NEW_8 = ["2.7", "2.8", "3.6", "3.7", "5.6", "5.7", "5.8", "8.5"]
+# 초기 37종 이후에 신설된 taxonomy. ⚠ 이름에 개수를 넣지 않는다 —
+# 「_NEW_8」이던 것이 1.8 신설(2026-09-02)로 9종이 됐다.
+_POST_LEGACY = ["1.8", "2.7", "2.8", "3.6", "3.7", "5.6", "5.7", "5.8", "8.5"]
 _LEGACY_37 = {
     "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7",
     "2.1", "2.2", "2.3", "2.4", "2.5", "2.6",
@@ -107,17 +109,20 @@ class TestParseMdLabels(unittest.TestCase):
             ["위메이드 800억원 CB조기상환", "리픽싱모니터"],
         )
 
-    def test_real_catalog_yields_45_types(self):
-        # 실제 카탈로그 8개 파일에서 taxonomy 45종 전부가 파싱돼야 한다.
+    def test_real_catalog_yields_all_types(self):
+        # 실제 카탈로그 8개 파일에서 taxonomy **전종**이 파싱돼야 한다.
+        # ⚠ 개수를 하드코딩하지 않는다 — 1.8 신설(2026-09-02) 때
+        #    「45」가 세 곳에서 깨졌다. TAXONOMY에서 파생한다.
+        from dart_risk_mcp.core.taxonomy import TAXONOMY
         # 기준선이 37이던 시절은 dart-monitor에서 이식한 손수 작성 MD를 쓰던 때이고,
         # 2026-08-17 파이프라인 재생성으로 _LEGACY_37에 없던 8종(2.7·2.8·3.6·3.7·
         # 5.6·5.7·5.8·8.5 — 사례 공백을 메우려던 바로 그 유형들)이 채워졌다.
         merged = {}
         for p in sorted(_MD_DIR.glob("0*.md")):
             merged.update(parse_md_labels(p.read_text(encoding="utf-8")))
-        self.assertEqual(len(merged), 45)
+        self.assertEqual(len(merged), len(TAXONOMY))
         self.assertEqual(merged["1.1"]["title"], "전환가액 하향조정(리픽싱)")
-        self.assertEqual(sorted(set(merged) - _LEGACY_37), _NEW_8)
+        self.assertEqual(sorted(set(merged) - _LEGACY_37), _POST_LEGACY)
 
     def test_real_catalog_field_articles_legacy_37_preserved(self):
         # 재생성이 기존 한글 '현장 기사 인용'을 지우지 않았는지 지키는 가드다.
@@ -137,7 +142,7 @@ class TestParseMdLabels(unittest.TestCase):
 
 
 class TestLoadLabels(unittest.TestCase):
-    def test_all_45_taxonomy_ids_have_korean_labels(self):
+    def test_all_taxonomy_ids_have_korean_labels(self):
         from dart_risk_mcp.core.taxonomy import TAXONOMY
 
         labels = load_labels()

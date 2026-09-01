@@ -2963,6 +2963,9 @@ _PHASE_MAP = {
     "3PCA": "진입기", "REVERSE_SPLIT": "진입기", "RIGHTS_UNDER": "진입기",
     "TREASURY": "진입기", "MGMT": "진입기", "DEMERGER": "진입기",
     # 심화기: 지배구조 변화 / 기업활동 조작
+    # 메자닌 행사 = 실제 희석이 일어난 시점. 발행(진입기)의 **결과**이고
+    # 자본 구성이 실제로 바뀌는 국면이라 심화기다 — 부실로 단정하지 않는다.
+    "MEZZ_EXERCISE": "심화기",
     "SHAREHOLDER": "심화기", "EXEC": "심화기", "MGMT_DISPUTE": "심화기",
     "CIRCULAR": "심화기", "RELATED_PARTY": "심화기", "GAMJA_MERGE": "심화기",
     "ASSET_TRANSFER": "심화기", "BUYBACK_NEG": "심화기", "DISTRESS_MA": "심화기",
