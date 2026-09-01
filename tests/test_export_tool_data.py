@@ -391,9 +391,10 @@ class TestCatalogData(unittest.TestCase):
         for tid, n in expected.items():
             self.assertEqual(by_tax[tid]["n"], n, msg=tid)
 
-    def test_tax_labels_cover_all_45_taxonomy_ids(self):
+    def test_tax_labels_cover_all_taxonomy_ids(self):
         self.assertEqual(set(self.catalog["tax_labels"].keys()), set(TAXONOMY.keys()))
-        self.assertEqual(len(self.catalog["tax_labels"]), 45)
+        # ⚠ 개수를 하드코딩하지 않는다 — 1.8 신설(2026-09-02) 때 깨졌다
+        self.assertEqual(len(self.catalog["tax_labels"]), len(TAXONOMY))
         for tid, label in self.catalog["tax_labels"].items():
             self.assertIsInstance(label, str)
             self.assertTrue(label, msg=tid)
@@ -439,7 +440,7 @@ class TestCatalogData(unittest.TestCase):
             result = mod.build_catalog_data()
             self.assertEqual(result["total_cases"], 0)
             self.assertEqual(result["by_taxonomy"], {})
-            self.assertEqual(len(result["tax_labels"]), 45)
+            self.assertEqual(len(result["tax_labels"]), len(TAXONOMY))
         finally:
             mod._CATALOG_JSONL = original_path
 

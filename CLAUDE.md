@@ -25,7 +25,7 @@ dart_risk_mcp/
 └── core/
     ├── __init__.py      # 공개 API export
     ├── dart_client.py   # DART API 클라이언트 (핵심)
-    ├── signals.py       # 57개 신호 유형 (8개 카테고리) + 키워드 매칭 (v0.4.0 카탈로그 기반 보강)
+    ├── signals.py       # 58개 신호 유형 (8개 카테고리) + 키워드 매칭 (v0.4.0 카탈로그 기반 보강)
     ├── catalog.py       # 금감원·금융위 MD 카탈로그 로더 (load_catalog_excerpt, taxonomy_label_ko)
     ├── cb_extractor.py  # CB/BW 인수자명 추출
     ├── sector_policy.py # 업종별 유의 회계정책 정적 맵 (KSIC 조회, kreports 이식/Apache 2.0)
@@ -33,7 +33,7 @@ dart_risk_mcp/
     ├── watchlist.py     # 인물↔회사군 영속 워치리스트 (순수 파일 I/O)
     ├── known_actors.py  # 공개기록 행위자 레지스트리 로드/조회, 회사명 역방향 조회 포함 (비공개 Notion opt-in)
     ├── qualifiers.py    # 신호 한정층 — 제목 구조 파싱(parse_report_name) + observed/procedural tier 판정(qualify_signals) + 헤드라인 선정(pick_headline). 순수 함수, 네트워크 호출 없음
-    └── taxonomy.py      # 45개 신호 분류 + 위험 점수 + 복합 패턴 11종
+    └── taxonomy.py      # 46개 신호 분류 + 위험 점수 + 복합 패턴 11종
 ```
 
 > 동봉 데이터: `dart_risk_mcp/data/known_actors.json`(빈 스켈레톤 — v1.5.0부터 인물 데이터 미포함). 레지스트리 원본은 제작자 비공개 Notion DB. DB 셋업: `scripts/setup_known_actors_db.py`(+`setup-known-actors-db.yml`, 1회성).
@@ -124,13 +124,13 @@ dart_risk_mcp/
 
 - 실제 과거 공시 검색은 하지 않음 (taxonomy 정적 데이터 조회)
 - `SIGNAL_KEY_TO_TAXONOMY`로 신호 키 → taxonomy ID(1.1~8.5) 매핑 후 조회
-- 사용 가능한 신호 키 (아래 표 36개, 8개 카테고리):
+- 사용 가능한 신호 키 (아래 표 37개, 8개 카테고리):
 
   > ⚠ 아래 키 중 16종(`CB_REPAY`·`CB_BUYBACK`·`CB_ROLLOVER`·`TREASURY_EB`·`BUYBACK_NEG`·`MEETING_VIOL`·`ACTIVIST`·`DISTRESS_MA`·`GAMJA_MERGE`·`CAPITAL_RED`·`RIGHTS_UNDER`·`ASSET_SPIRAL`·`CIRCULAR`·`REVENUE_IRREG`·`CONTINGENT`·`THEME_STOCK`)은 **공시 제목으로 발화하지 않는다**(`core/signals.py`의 `NON_TITLE_SIGNALS`). `find_risk_precedents`로 조회하면 그 사실이 함께 표시된다.
 
   | 카테고리 | 키 목록 |
   |---------|---------|
-  | Cat 1 CB/채권 | `CB_BW`, `CB_REPAY`, `EB`, `RCPS`, `CB_ROLLOVER`, `CB_BUYBACK`, `TREASURY_EB` |
+  | Cat 1 CB/채권 | `CB_BW`, `CB_REPAY`, `EB`, `RCPS`, `CB_ROLLOVER`, `CB_BUYBACK`, `TREASURY_EB`, `MEZZ_EXERCISE` |
   | Cat 2 자본구조 | `REVERSE_SPLIT`, `GAMJA_MERGE`, `3PCA`, `RIGHTS_UNDER`, `TREASURY` |
   | Cat 3 경영권 | `SHAREHOLDER`, `EXEC`, `MGMT_DISPUTE`, `CIRCULAR`, `STAKE_PLEDGE` |
   | Cat 4 거버넌스 | `RELATED_PARTY`, `AUDIT`, `DISCLOSURE_VIOL` |
@@ -997,6 +997,26 @@ INQUIRY의 `"거래정지"` 오탐은 우연히 발견됐다. 같은 종류의 �
 원문 값이었다. 근거는 `docs/DEFERRED-DECISIONS.md` 12번,
 `tests/test_accounting_sanction_signal.py`가 고정.
 
+**메자닌 행사 신호 신설 — taxonomy 1.8 (2026-09-02)**: 이 도구는 메자닌
+**발행**(제목)과 **전환 실적**(증자·감자 현황 원장)을 각각 보는데 **그 사이의
+공시 기록**이 신호에서 빠져 있었다 — 「전환청구권행사」는 **기존 주주가 실제로
+희석된 시점**이고 1년 전수에서 **735건 / 304개사가 무신호**였다. 기존 1.1~1.7
+어디에도 맞지 않아(1.1은 가액 **조정**, 1.4 RCPS는 발행 **조건**) **`1.8`을
+신설**했다 — 이 라운드에서 taxonomy를 새로 만든 유일한 건이다.
+`base_score 0 · OBSERVATION`(8.5 선례)이고 **어느 패턴에도 넣지 않았다**
+(전 패턴 영향 +0 실측). `AMBIGUOUS_SIGNAL_KEYS`·`_PRIORITY_CONTEXT`에 넣어
+헤드라인 승격을 막았다 — 행사 자체는 정상적인 계약 이행이기도 하다.
+⚠ **키워드에 「신주인수권행사」를 그대로 쓰면 안 된다** — 그러면
+「신주인수권**행사**가액의조정」 160건(리픽싱, v1.21.24)이 함께 걸려 **조정을
+행사라고 잘못 적는다**. 뒤 3글자를 실측하니 `가액ㆍ` 127 · 공백 47 · `가액의`
+33 · `)` 5라, 공백형(`"신주인수권행사 "`)·괄호형(`"신주인수권행사)"`) 둘로
+정확히 갈렸다 — 좁힌 키워드가 넓은 것과 **동일하게 735건**을 잡으면서 리픽싱
+159건을 배제한다(실측 차이 0건). ⚠ **알려진 한계**: 공백형은 DART가 제목 뒤에
+붙이는 여백에 기댄다(1년 전수 47건 전부 여백 있음). 여백 없는 제목이 오면
+놓치는데, 잘못 붙이는 것보다 낫다고 판단했다. 남는 겹침은 「전환주식의전환
+청구권행사(상환전환우선주)」 9건이 `RCPS`와 함께 켜지는 것뿐이고 **둘 다 참**이다.
+근거: `docs/DEFERRED-DECISIONS.md` 10번, `tests/test_mezzanine_exercise_signal.py`.
+
 **키워드를 고치기 전에 반드시 잴 것**: ① 그 표현이 DART 제목에 실제로 나오는가
 ② 몇 건/몇 개사인가 ③ 그 키워드가 **혼자** 켜는 건수(제거 시 실제 손실)
 ④ 다른 신호 키워드를 부분 문자열로 포함하는가 ⑤ 제거로 무신호가 되는 제목은 무엇인가.
@@ -1175,6 +1195,22 @@ dict는 **키가 corp_code**라 `main`의 `e["names"]`가 죽고 `merge_renames`
 
 새로 발견한 위험 항목은 고치지 말고 이 파일에 추가한다.
 
+**2026-09-02 현재 13개 항목이 전부 닫혔다** — 열린 항목이 없다. 그 과정에서
+같은 패턴이 셋 나왔으니 다음 사람이 알아 두면 좋다.
+
+**① 항목에 적힌 전제가 틀린 경우가 많았다.** 10·11·12번 모두 그랬다. 10번은
+「`1.1`이 이미 있으니 새 taxonomy가 필요 없다」고 적었는데 `1.1`은 조정이었고
+(→ 결국 `1.8`을 만들었다), 12번은 「`4.3`은 공시 의무 위반이라 담을 수 없다」고
+적었는데 **이 레포 자신의 카탈로그가 4.3에 130건(최다)을 매핑**하고 있었다.
+**항목을 읽고 바로 실행하지 말고 먼저 다시 재라.**
+
+**② 90일 창으로 잰 근거는 1년 전수와 갈린다.** 12번의 「과징금·추징금」은
+제목에 **0건**이었고(원문 값이었다), 90일에 없던 「기소」는 1년에서 38건 중
+**34건이 펀드 상품명**이었다(「의료기**기소**부장」).
+
+**③ 「도달 불가」와 「공시가 안 보인다」는 다른 것이다.** 11번의 13종 중 `2.2`는
+개념 제목 289건이 **무신호 0건**이다 — 주소만 비었고 공시는 다른 신호가 잡는다.
+
 ---
 
 ## 자주 있는 작업
@@ -1240,6 +1276,16 @@ python scripts/regen_goldens.py                                       # 전체 �
 ```
 
 생성 후 `python -m pytest tests/test_golden_output_hygiene.py -v`로 회귀 검증.
+
+⚠ **골든은 재생성할 때마다 늘어난다** — `get_disclosure_document`·`view_disclosure`·
+`list_disclosure_sections`·`check_disclosure_risk` 넷은 그때의 **최신 접수번호**를
+파일명에 박으므로, 전체 재생성 1회마다 회사당 4개씩(6개사 기준 최대 20개) 새
+파일이 생기고 옛 것은 남는다. 2026-09-02 재생성에서 300 → **320건**이 됐고
+삼성전자·셀트리온은 각각 6세트를 갖고 있다. 옛 세트도 실제 공시의 스냅샷이라
+회귀 자산으로 쓸모가 있어 지우지 않았지만, **무한히 늘어난다**는 것은 알아 둘
+일이다(정리 기준을 정하려면 제작자 판단이 필요하다). README의 건수는
+`tests/test_doc_facts.py::test_골드_출력_건수가_실제와_같다`가 대조하므로
+재생성 뒤에는 그 수치도 함께 고쳐야 한다.
 
 ---
 

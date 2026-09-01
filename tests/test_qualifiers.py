@@ -364,9 +364,12 @@ def test_ambiguous_keys_contents():
     # 대다수라 상대방·가액 확인 전에는 헤드라인으로 올릴 근거가 없다.
     # 3차(2026-08-22): RELATED_PARTY(계열사 자금 지원은 일상)·EARNINGS_SHOCK
     # (증가일 수도 감소일 수도 있다) 추가 — 원문 확인 전에는 헤드라인 근거가 없다.
+    # MEZZ_EXERCISE 추가(2026-09-02) — 메자닌 행사도 정상적인 계약 이행으로
+    # 빈발하고(1년 735건/304개사) 전환은 사채가 자본으로 바뀌는 것이라 방향이
+    # 하나로 정해지지 않는다. 발행 조건과 견줘야 뜻이 생긴다.
     assert AMBIGUOUS_SIGNAL_KEYS == frozenset(
         {"TREASURY", "TREASURY_TRUST", "FUND_OUTFLOW", "ACQ_REVIEW",
-         "ASSET_TRANSFER", "RELATED_PARTY", "EARNINGS_SHOCK"}
+         "ASSET_TRANSFER", "RELATED_PARTY", "EARNINGS_SHOCK", "MEZZ_EXERCISE"}
     )
 
 
