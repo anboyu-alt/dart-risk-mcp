@@ -287,3 +287,76 @@ def test_판정_어휘가_없다():
     html = _viewer([["mezzanineFilingsHTML", _SAMPLE, "category"]])[0]
     for word in ("고위험", "매우위험", "위험도", "점수", "등급"):
         assert word not in html, f"판정 어휘: {word}"
+
+
+# ── 정정 접기 토글 (2026-09-02, 제작자 요청) ──────────────────────────────
+#
+# 라이브에서 **코아스는 109건 중 67건이 정정**이라 목록의 절반 이상이
+# `[정정]`으로 채워진다. 접을 수 있게 했다.
+#
+# ⚠ **거르는 것은 자르는 것이다.** 숨기면 꼬리말이 몇 건을 숨겼는지 반드시
+#   말해야 한다(조용한 절단 금지). 기본은 **끄기**(전부 표시)다 — 기본을 켜면
+#   사용자가 요청하지도 않았는데 화면에서 절반이 사라진다.
+
+def test_기본은_전부_표시다():
+    """`hideAmend`를 안 주면 옛 동작 그대로여야 한다."""
+    a = _viewer([["mezzanineFilingsHTML", _SAMPLE, "date"]])[0]
+    b = _viewer([["mezzanineFilingsHTML", _SAMPLE, "date", False]])[0]
+    assert a == b
+    assert a.count(_ROW) == len(_SAMPLE)
+
+
+def test_접으면_정정이_사라진다():
+    html = _viewer([["mezzanineFilingsHTML", _SAMPLE, "date", True]])[0]
+    keep = [f for f in _SAMPLE if not f["is_amendment"]]
+    assert html.count(_ROW) == len(keep)
+    assert "[정정]" not in html
+
+
+def test_접었으면_숨긴_건수를_밝힌다():
+    """⚠ 조용한 절단 금지 — 전체와 표시와 숨김을 다 말한다."""
+    html = _viewer([["mezzanineFilingsHTML", _SAMPLE, "date", True]])[0]
+    amended = sum(1 for f in _SAMPLE if f["is_amendment"])
+    assert f"전체 {len(_SAMPLE)}건 중 {len(_SAMPLE) - amended}건 표시" in html
+    assert f"정정 {amended}건 숨김" in html
+
+
+def test_접지_않았으면_전부_실었다고_말한다():
+    html = _viewer([["mezzanineFilingsHTML", _SAMPLE, "date", False]])[0]
+    assert "숨김" not in html
+    assert "전부 표시" in html
+
+
+@pytest.mark.parametrize("mode", ["round", "category"])
+def test_접었을_때_그룹_건수가_보이는_행과_맞는다(mode):
+    """⚠ 머리에 적힌 수와 그 아래 행 수가 어긋나면 화면이 제 데이터와 다르다.
+
+    거르기를 **정렬·집계보다 먼저** 하지 않으면 여기서 걸린다.
+    """
+    html = _viewer([["mezzanineFilingsHTML", _SAMPLE, mode, True]])[0]
+    keep = [f for f in _SAMPLE if not f["is_amendment"]]
+    heads = re.findall(r'<tr class="mzn-grp"><td colspan="3">[^<]*?· (\d+)건</td>', html)
+    assert sum(int(n) for n in heads) == len(keep)
+    assert html.count(_ROW) == len(keep)
+
+
+def test_정정이_없으면_칩을_내지_않는다():
+    """0건짜리 토글은 소음이다."""
+    src = _HTML.read_text(encoding="utf-8")
+    # 칩 마크업이 `d.filings_amended` 진위에 걸려 있어야 한다
+    i = src.index("data-mznamend")
+    ctx = src[max(0, i - 400):i]
+    assert "d.filings_amended" in ctx, "정정 0건에도 칩이 나온다"
+
+
+def test_칩에_건수가_적혀_있다():
+    """누르기 전에 무엇이 사라지는지 알 수 있어야 한다."""
+    src = _HTML.read_text(encoding="utf-8")
+    i = src.index("data-mznamend")
+    assert "정정 접기 (${d.filings_amended})" in src[i:i + 300]
+
+
+def test_기본값이_끄기다():
+    src = _HTML.read_text(encoding="utf-8")
+    assert re.search(r"let MZN_HIDE_AMEND = false;", src), (
+        "기본을 켜면 요청하지도 않은 절반이 화면에서 사라진다")
