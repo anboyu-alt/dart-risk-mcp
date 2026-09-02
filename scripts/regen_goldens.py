@@ -384,6 +384,66 @@ def build_call_matrix(
 # ────────────────────────────────────────────────────────────────────────────
 # 진입점
 # ────────────────────────────────────────────────────────────────────────────
+
+# ── rcept 계열 골든 프루닝 ────────────────────────
+#
+# `risk_check`·`doc`·`sections`·`view` 넷은 **그때의 최신 접수번호**를 파일명에
+# 박는다. 그래서 전체 재생성 1회마다 **새 파일**이 생기고 옛 것은 남는다 —
+# 갱신되는 게 아니라 **쌓인다**.
+#
+# 실측(2026-09-02): 320건 중 rcept 계열이 136건(43%)이고 그중 **116건(85%)이
+# 낛았다**(가장 오래된 것은 4개월 전 코드의 출력). 골든은 diff 기준이 아니라
+# `test_golden_output_hygiene`·`test_no_internal_key_leak`·
+# `test_no_severity_derived_stats`·`test_golden_freshness`가 훑는 **검사
+# 코퍼스**이고, 특정 rcept 파일을 지목하는 소비처는 **없다**.
+#
+# **(회사, 도구)별로 최신 2개만 남긴다.**
+#
+#   왜 세트가 아니라 도구별인가 — 세트가 항상 네씩 맞렸게 오지 않는다. 실측에서
+#     6개 회사가 `sections`만 **다른 rcept**를 쓴다(어느 회차의 재생성기가
+#     도구마다 다른 공시를 골랐다). 세트로 묶으면 그 쌍이 「파편」으로 보여
+#     온전한 것을 지우고 파편을 남기는 일이 생긴다.
+#   왜 1이 아닌가 — 재생성 사이의 연속성이 남아야 「이번에 무엇이 바뀜나」를
+#     비교할 근거가 있고, 서로 다른 공시 유형 2종이 남아 원문 서식 다양성이
+#     최소한 유지된다.
+#   왜 3 이상이 아닌가 — 옛 세트가 더하는 고유 문구 2,888종 중 **2,431종(84%)이
+#     공시 원문 덤프**(`doc`·`view`)라 우리가 만든 문구가 아니다. 세트를 늘려도
+#     **도구 출력** 검사 표면은 거의 넓어지지 않는데 무한히 쌓인다.
+#
+# ⚠ 지운 파일은 라이브 API 산출물이라 언제든 다시 만들 수 있고 git 이력에도
+#   남는다. 값이 아니라 **쌓임**을 정리하는 것이다.
+# ⚠ 이름을 `RCEPT_TOOLS`로 두면 121행의 동명 상수(도구 목록)를
+#   **덮어쓴다** — 그쪽은 `(단축명, 호출함수)` 튜플 리스트라
+#   `t[0]`이 첫 글자가 돼 매트릭스가 조용히 깨진다. 실제로 한 번 겁치다.
+_RCEPT_GOLD_TOOLS = ("risk_check", "doc", "sections", "view")
+KEEP_RCEPT_FILES = 2
+_RCEPT_GOLD_RE = re.compile(
+    r"^(?P<co>.+?)_(?P<tool>" + "|".join(_RCEPT_GOLD_TOOLS) + r")_(?P<rcept>\d{14})\.txt$"
+)
+
+
+def prune_rcept_goldens(dry_run: bool = False) -> "list[pathlib.Path]":
+    """(회사, 도구)별로 최신 `KEEP_RCEPT_FILES`개만 남기고 나머지를 지운다.
+
+    접수번호는 앞 8자리가 접수일이라 **문자열 정렬이 곳 시간순**이다.
+    반환값은 지운(또는 지울) 파일 목록.
+    """
+    groups: "dict[tuple[str, str], list[tuple[str, pathlib.Path]]]" = {}
+    for f in GOLDEN.glob("*.txt"):
+        m = _RCEPT_GOLD_RE.match(f.name)
+        if m:
+            groups.setdefault((m.group("co"), m.group("tool")), []).append(
+                (m.group("rcept"), f))
+
+    removed: "list[pathlib.Path]" = []
+    for key in sorted(groups):
+        for _, f in sorted(groups[key])[:-KEEP_RCEPT_FILES]:
+            removed.append(f)
+            if not dry_run:
+                f.unlink()
+    return removed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="DART Risk MCP 골드 출력 재생성 (6 회사 × 23 도구)",
@@ -443,6 +503,12 @@ def main() -> int:
             saved += 1
         else:
             failed += 1
+
+    pruned = prune_rcept_goldens()
+    if pruned:
+        # 조용히 지우지 않는다 — 무엇을 얼마나 지웠는지 밝힌다(레포 관례)
+        print(f"\n  [PRUNE] rcept 계열 옛 세트 정리: {len(pruned)}개 삭제 "
+              f"((회사, 도구)별 최신 {KEEP_RCEPT_FILES}개 유지)")
 
     fixture_count = len(list(GOLDEN.glob("*.txt")))
     print(
