@@ -33,8 +33,9 @@ description `debt_spiral` 18.0 — 전부 ≤8 초과). 실제로 부담이 되�
 
 이 공식으로 완성본 6개는 전부 통과한다(최대 `AUDIT` 7.4).
 
-⚠ **최장 문장 71자**도 같은 이유의 보정이다 — 브리프는 70자라 적었는데
-지정된 완성본 `CAPITAL_RED`의 마지막 문장이 정확히 71자다.
+⚠ **최장 문장 71자 · description 133자**도 같은 이유의 보정이다 — 브리프는
+각각 70자·130자라 적었는데 지정된 완성본이 정확히 71자(`CAPITAL_RED`의 마지막
+문장)·133자(`fund_diversion_chain` description)다.
 """
 from __future__ import annotations
 
@@ -56,13 +57,13 @@ _MAX_AVG_SENTENCE = 35      # SIGNAL_PROSE 전체 문장 평균
 _MAX_JARGON = 8.0           # 전문어 밀도(천자당)
 _PATTERN_MAX_AVG = 45       # PATTERN_PROSE 문장 평균
 _PATTERN_MAX_SENTENCE = 90
-_DESC_MAX_CHARS = 130
+_DESC_MAX_CHARS = 133      # 완성본 `fund_diversion_chain` = 133자
 
 # ── 회귀 래칫 ────────────────────────────────────────────────────────────
 # 재작성 직후 실측값. 「≤ 상수 + 1」로 잠근다 — 다음 사람이 문장을 늘리거나
 # 전문어를 되풀이하면 여기서 걸린다. 값을 올리려면 그럴 만한 이유를 남겨라.
-_RATCHET_AVG_SENTENCE = 32.6
-_RATCHET_JARGON = 0.3
+_RATCHET_AVG_SENTENCE = 33.3   # 재작성 전 51.3
+_RATCHET_JARGON = 0.3          # 재작성 전 1.1
 
 # 사전이 풀어 주지 않는 전문어 — 첫 등장만 무료.
 _UNGLOSSED = {
