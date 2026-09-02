@@ -32,7 +32,9 @@ API 호출 없이 검증한다 — `tests/test_qualification_wiring.py`의
 ## 이 파일이 잠그는 것
 
 ① 6개 도구 각각 — 해설이 찍힌 출력에 마커가 정확히 1회, 마커 앞에
-   빈 줄이 정확히 하나, 절 줄 수 ≤8, 각 정의가 GLOSSARY 원문과 일치,
+   빈 줄이 정확히 하나, **절 마지막 `- ` 항목 다음 줄은 빈 줄이거나
+   출력 끝**(없으면 뒤따르는 고지가 마크다운 lazy continuation으로 그
+   항목에 흡수된다), 용어 줄 ≤8 + 생략 줄 0~1, 각 정의가 GLOSSARY 원문과 일치,
    절에 실린 표제어는 **예외 없이 전부** 해설 본문(마커 이전)에 실제로
    등장한다(=passthrough나 미렌더 텍스트가 아니라 진짜 렌더된 해설에서
    나왔다는 증거 — required_terms뿐 아니라 found_terms 전체에 적용).
@@ -62,6 +64,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import re
 
 import dart_risk_mcp.server as srv
 from dart_risk_mcp.core import FETCH_OK
@@ -103,14 +106,62 @@ def _resolve_corp_stub(name, api_key):
     return ("테스트기업", {"corp_code": "00000001", "stock_code": "000000"})
 
 
+_OMISSION_PREFIX = "- 외 "
+
+
+def _is_term_line(ln: str) -> bool:
+    """절의 `- ` 줄 중 **표제어 줄**만 고른다.
+
+    상한(8)에 걸려 뺀 용어가 있으면 `glossary_footer`가 마지막에
+    「- 외 N개 용어는 생략」을 붙인다(조용한 절단 금지). 그 줄도 `- `로
+    시작하지만 표제어가 아니다 — `- 외 `로 시작하고 ` — ` 구분자가 없다.
+    """
+    return ln.startswith("- ") and not (
+        ln.startswith(_OMISSION_PREFIX) and " — " not in ln
+    )
+
+
 def _split_glossary(out: str):
-    """마커 인덱스로 (본문, 용어 절 줄들, 마커 이후 전체)를 가른다."""
+    """마커 인덱스로 (본문, 용어 절 표제어 줄들, 마커 이후 전체)를 가른다.
+
+    생략 줄은 표제어 줄에 섞지 않는다 — 섞으면 `found_terms`가 「외」를
+    표제어로 오인한다.
+    """
     assert out.count(_MARKER) == 1, f"마커가 1회가 아니다: {out.count(_MARKER)}회\n{out}"
     idx = out.index(_MARKER)
     head = out[:idx]
     tail = out[idx + len(_MARKER):]
-    lines = [ln for ln in tail.split("\n") if ln.startswith("- ")]
+    lines = [ln for ln in tail.split("\n") if _is_term_line(ln)]
     return head, lines, tail
+
+
+def _omission_lines(out: str) -> "list[str]":
+    """절의 생략 줄(0개 또는 1개)."""
+    _, _, tail = _split_glossary(out)
+    return [
+        ln for ln in tail.split("\n")
+        if ln.startswith(_OMISSION_PREFIX) and " — " not in ln
+    ]
+
+
+def _assert_blank_line_after_section(out: str) -> None:
+    """절의 마지막 `- ` 줄 **다음 줄**이 빈 줄이거나 출력 끝이어야 한다.
+
+    없으면 뒤따르는 고지(timeline의 「⚠️ … 실제 상황과 다를 수 있습니다」,
+    track_capital_structure의 「📎 참고: …」 등)가 마크다운 lazy
+    continuation으로 마지막 용어 항목에 흡수돼 풀이의 일부처럼 읽힌다
+    (골든 28개에서 재현했다 — 예 `STX_timeline.txt`).
+    """
+    _, _, tail = _split_glossary(out)
+    rows = tail.split("\n")
+    last = max(i for i, ln in enumerate(rows) if ln.startswith("- "))
+    if last + 1 >= len(rows):
+        return  # 출력 끝
+    nxt = rows[last + 1]
+    assert nxt.strip() == "", (
+        f"용어 절 마지막 항목 다음 줄이 빈 줄이 아니다: {nxt!r} — "
+        "마크다운 lazy continuation으로 항목에 흡수된다"
+    )
 
 
 def _assert_single_blank_line_before_marker(out: str) -> None:
@@ -127,13 +178,24 @@ def _assert_single_blank_line_before_marker(out: str) -> None:
 
 
 def _assert_glossary_section(out: str, required_terms: set):
-    """① — 마커 1회·마커 앞 빈 줄 정확히 하나·줄 수 ≤8·각 정의가
-    GLOSSARY 원문과 일치·절에 실린 표제어는 **전부(required_terms뿐
-    아니라 found_terms 전체)** 해설 본문(마커 이전)에 실제로 등장한다."""
+    """① — 마커 1회·마커 앞뒤 빈 줄 정확히 하나·**용어 줄 ≤8 + 생략 줄
+    0~1**·각 정의가 GLOSSARY 원문과 일치·절에 실린 표제어는
+    **전부(required_terms뿐 아니라 found_terms 전체)** 해설 본문(마커
+    이전)에 실제로 등장한다."""
     head, lines, _ = _split_glossary(out)
     _assert_single_blank_line_before_marker(out)
+    _assert_blank_line_after_section(out)
     assert lines, "용어 절이 비어 있다"
-    assert len(lines) <= 8, f"줄 수가 8을 넘는다: {len(lines)}"
+    assert len(lines) <= 8, f"용어 줄이 8을 넘는다: {len(lines)}"
+    omitted = _omission_lines(out)
+    assert len(omitted) <= 1, f"생략 줄이 둘 이상이다: {omitted}"
+    if omitted:
+        assert len(lines) == 8, (
+            f"생략 줄이 있는데 용어 줄이 8개가 아니다: {len(lines)}"
+        )
+        assert re.fullmatch(r"- 외 \d+개 용어는 생략", omitted[0]), (
+            f"생략 줄 형식이 다르다: {omitted[0]!r}"
+        )
     found_terms = set()
     for ln in lines:
         body = ln[2:]  # "- " 제거

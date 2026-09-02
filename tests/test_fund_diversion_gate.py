@@ -69,7 +69,7 @@ class TestGateDecision:
 
 class TestRenderedBlock:
     def test_게이트가_막으면_패턴이_목록에서_빠진다(self):
-        lines, fact_lines, filtered, _shown = _render_pattern_watch_block(
+        lines, fact_lines, filtered = _render_pattern_watch_block(
             ["1.1", "5.8"], [], True, {},
             acq_confirmations=[_row("-", "external", "무관법인")],
         )
@@ -79,7 +79,7 @@ class TestRenderedBlock:
         assert "무관법인" in "\n".join(fact_lines)
 
     def test_게이트를_통과하면_패턴이_표시된다(self):
-        lines, fact_lines, filtered, _shown = _render_pattern_watch_block(
+        lines, fact_lines, filtered = _render_pattern_watch_block(
             ["1.1", "5.8"], [], True, {},
             acq_confirmations=[_row("계열회사", "affiliated")],
         )
@@ -90,7 +90,7 @@ class TestRenderedBlock:
     def test_확인이_없으면_기존_동작_유지(self):
         """acq_confirmations 미전달 = 하위 호환. 다만 게이트 입력이 없으므로
         패턴은 표시되지 않는다(원문 확인 없이 CRITICAL 카드를 띄우지 않는다)."""
-        lines, _, filtered, _shown = _render_pattern_watch_block(["1.1", "5.8"], [], True, {})
+        lines, _, filtered = _render_pattern_watch_block(["1.1", "5.8"], [], True, {})
         assert not any(f["pattern_id"] == "fund_diversion_chain" for f in filtered)
 
     def test_두_게이트의_사실_블록이_섞이지_않는다(self):
@@ -100,7 +100,7 @@ class TestRenderedBlock:
             "rcept_no": "2", "counterparty": "유출상대", "relation": "종속회사",
             "classification": "subsidiary", "amount": 100,
         }]
-        _, fact_lines, _, _shown = _render_pattern_watch_block(
+        _, fact_lines, _ = _render_pattern_watch_block(
             ["3.1", "5.7", "1.1", "5.8"], outflow, True, {},
             acq_confirmations=[_row("-", "external", "취득대상")],
         )
@@ -300,7 +300,7 @@ class TestUnlistedRequirement:
         assert "자기자본 대비 8.5%" in joined
 
     def test_렌더_블록에서도_동일하게_막힌다(self):
-        lines, fact_lines, filtered, _shown = _render_pattern_watch_block(
+        lines, fact_lines, filtered = _render_pattern_watch_block(
             ["1.1", "5.8"], [], True, {},
             acq_confirmations=[_row("계열회사", "affiliated", "상장계열사", listing="listed")],
         )

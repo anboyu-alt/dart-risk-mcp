@@ -1891,7 +1891,7 @@ def _render_pattern_watch_block(
     taxonomy_dates: "dict[str, list[str]] | None" = None,
     taxonomy_owners: "dict[str, set] | None" = None,
     acq_confirmations: "list[dict] | None" = None,
-) -> tuple[list[str], list[str], list[dict], list[dict]]:
+) -> tuple[list[str], list[str], list[dict]]:
     """관찰된 taxonomy와 등록 패턴의 부분 겹침을 "무엇이 보이고 무엇이 안
     보이는지" 사실로 렌더한다(analyze_company_risk·build_event_timeline 공용).
 
@@ -1909,15 +1909,11 @@ def _render_pattern_watch_block(
     2개 관찰"로 표시하면 v1.6.1이 없앤 오탐이 되살아난다.
 
     Returns:
-        (lines, capital_backflow_fact_lines, filtered, shown) — lines는
-        겹치는 패턴이 없으면 빈 리스트(블록 자체 생략). capital_backflow_fact_lines는
+        (lines, capital_backflow_fact_lines, filtered) — lines는 겹치는
+        패턴이 없으면 빈 리스트(블록 자체 생략). capital_backflow_fact_lines는
         게이트가 실패했을 때만 채워진다(기존 elif 경로와 동일하게 호출부가
         렌더). filtered는 게이트를 통과한 겹침 전체(표시 상한 적용 전) —
-        호출부가 요약 문장에서 최상위 겹침 하나를 참조할 때 쓴다. shown은
-        `filtered[:max_show]` — 실제로 lines에 렌더된 패턴만(과제 4의 「이
-        리포트에 나온 용어」 절 입력이 호출부에서 이 상한을 다시 만들지
-        않도록 여기서 반환한다 — `tests/test_no_silent_caps.py`가 요구하는
-        "잘림을 알리는 len() 비교"가 이 함수 안에 이미 있다).
+        호출부가 요약 문장에서 최상위 겹침 하나를 참조할 때 쓴다.
     """
     overlaps = find_pattern_overlaps(
         list(tax_ids), min_overlap=2, taxonomy_dates=taxonomy_dates,
@@ -1966,7 +1962,7 @@ def _render_pattern_watch_block(
             _fact_lines.append("")
         _fact_lines += ["━━ 타법인 취득 대상 확인 ━━"] + fund_diversion_fact_lines
     if not filtered:
-        return [], _fact_lines, [], []
+        return [], _fact_lines, []
 
     lines: list[str] = ["", "━━ 관찰된 신호가 겹치는 등록 패턴 ━━"]
     shown = filtered[:max_show]
@@ -2022,7 +2018,7 @@ def _render_pattern_watch_block(
             f"외 {len(filtered) - max_show}개 패턴이 표시 기준을 넘겨 겹칩니다."
         )
 
-    return lines, _fact_lines, filtered, shown
+    return lines, _fact_lines, filtered
 
 
 # ── 도구 1: 기업 종합 위험 분석 ────────────────────────────────────────────
@@ -2324,7 +2320,7 @@ def analyze_company_risk(
         except Exception:
             _acq_confirmations = []
 
-    pattern_overlap_lines, capital_backflow_fact_lines, _pattern_overlaps, _pattern_shown = _render_pattern_watch_block(
+    pattern_overlap_lines, capital_backflow_fact_lines, _pattern_overlaps = _render_pattern_watch_block(
         tax_ids_all,
         outflow_confirmations,
         _has_control_change_title(disclosures),
@@ -2337,10 +2333,9 @@ def analyze_company_risk(
     # 「이 리포트에 나온 용어」 절 입력 — 실제로 찍힌 해설만 모은다.
     # ⚠ 패턴 prose는 넣지 않는다 — `_render_pattern_watch_block`은
     # PATTERN_PROSE를 렌더하지 않는다(패턴명·taxonomy 라벨·확인해볼 것만
-    # 찍는다). `_pattern_shown`에서 `pattern_to_prose(...)`를 모으면 화면에
+    # 찍는다). 렌더된 패턴에서 `pattern_to_prose(...)`를 모으면 화면에
     # 없는 용어("메자닌" 등)가 절에 실린다(리뷰에서 자기주식취득+채무조정+
-    # 상환전환우선주 조합으로 재현). `_pattern_shown`은 이 절 입력용이
-    # 아니라 향후 다른 소비처를 위해 반환값 그대로 받아 둔다.
+    # 상환전환우선주 조합으로 재현).
     _glossary_texts: list[str] = []
 
     # 6. 타임라인 (내부 랭킹 점수 기준 — 출력에는 노출되지 않음)
@@ -2672,7 +2667,11 @@ def analyze_company_risk(
         # 걷어낸 뒤 한 원소로 되접는다(실측: 안 걷으면 find_risk_precedents
         # 등에서 마커 앞에 빈 줄이 두 번 남는다).
         lines = ["\n".join(lines).rstrip("\n")]
-        lines.append(_glossary)
+        # 절 **뒤에도** 빈 줄 하나를 남긴다 — 없으면 뒤따르는 고지(⚠️·📎 등)가
+        # 마크다운 lazy continuation으로 절의 마지막 `- ` 항목에 흡수돼 용어
+        # 풀이의 일부처럼 읽힌다(골든 28개에서 재현). 절이 리포트의 마지막
+        # 내용인 경로에서는 이 개행을 반환 직전 rstrip이 걷어낸다.
+        lines.append(_glossary + "\n")
 
     if not deep:
         lines.append(_shallow_notice(
@@ -2680,7 +2679,7 @@ def analyze_company_risk(
             [e.get("rcept_dt") or e.get("date") or "" for e in observed_events],
         ))
 
-    return _append_size_footer("\n".join(lines), lookback_years)
+    return _append_size_footer("\n".join(lines).rstrip("\n"), lookback_years)
 
 
 # ── 도구 2: 개별 공시 분석 ─────────────────────────────────────────────────
@@ -2903,9 +2902,13 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
         # 걷어낸 뒤 한 원소로 되접는다(실측: 안 걷으면 find_risk_precedents
         # 등에서 마커 앞에 빈 줄이 두 번 남는다).
         lines = ["\n".join(lines).rstrip("\n")]
-        lines.append(_glossary)
+        # 절 **뒤에도** 빈 줄 하나를 남긴다 — 없으면 뒤따르는 고지(⚠️·📎 등)가
+        # 마크다운 lazy continuation으로 절의 마지막 `- ` 항목에 흡수돼 용어
+        # 풀이의 일부처럼 읽힌다(골든 28개에서 재현). 절이 리포트의 마지막
+        # 내용인 경로에서는 이 개행을 반환 직전 rstrip이 걷어낸다.
+        lines.append(_glossary + "\n")
 
-    return "\n".join(lines)
+    return "\n".join(lines).rstrip("\n")
 
 
 # ── 도구 3: 선례 검색 (경량 구현) ─────────────────────────────────────────
@@ -3004,9 +3007,13 @@ def find_risk_precedents(signal_types: list[str], lookback_days: int = 90) -> st
         # 걷어낸 뒤 한 원소로 되접는다(실측: 안 걷으면 find_risk_precedents
         # 등에서 마커 앞에 빈 줄이 두 번 남는다).
         lines = ["\n".join(lines).rstrip("\n")]
-        lines.append(_glossary)
+        # 절 **뒤에도** 빈 줄 하나를 남긴다 — 없으면 뒤따르는 고지(⚠️·📎 등)가
+        # 마크다운 lazy continuation으로 절의 마지막 `- ` 항목에 흡수돼 용어
+        # 풀이의 일부처럼 읽힌다(골든 28개에서 재현). 절이 리포트의 마지막
+        # 내용인 경로에서는 이 개행을 반환 직전 rstrip이 걷어낸다.
+        lines.append(_glossary + "\n")
 
-    return "\n".join(lines)
+    return "\n".join(lines).rstrip("\n")
 
 
 # ── 도구 4: 이벤트 타임라인 (서사 구조) ────────────────────────────────────
@@ -3225,7 +3232,7 @@ def build_event_timeline(
 
     # v1.6.1: capital_backflow 게이트 — analyze_company_risk와 동일한 확인
     # 로직(_render_pattern_watch_block 내부에서 재사용).
-    pattern_overlap_lines, capital_backflow_fact_lines, _pattern_overlaps, _pattern_shown = _render_pattern_watch_block(
+    pattern_overlap_lines, capital_backflow_fact_lines, _pattern_overlaps = _render_pattern_watch_block(
         all_tax_ids,
         outflow_confirmations,
         _has_control_change_title(disclosures),
@@ -3239,7 +3246,7 @@ def build_event_timeline(
     # 「이 리포트에 나온 용어」 절 입력 — 실제로 찍힌 해설만 모은다.
     # ⚠ 패턴 prose는 넣지 않는다 — `_render_pattern_watch_block`은
     # PATTERN_PROSE를 렌더하지 않는다(패턴명·taxonomy 라벨·확인해볼 것만
-    # 찍는다). `_pattern_shown`을 여기서 쓰면 화면에 없는 용어가 절에 실린다
+    # 찍는다). 렌더된 패턴을 여기서 쓰면 화면에 없는 용어가 절에 실린다
     # (analyze_company_risk와 같은 이유, 같은 수정).
     _glossary_texts: list[str] = []
 
@@ -3453,7 +3460,11 @@ def build_event_timeline(
         # 걷어낸 뒤 한 원소로 되접는다(실측: 안 걷으면 find_risk_precedents
         # 등에서 마커 앞에 빈 줄이 두 번 남는다).
         lines = ["\n".join(lines).rstrip("\n")]
-        lines.append(_glossary)
+        # 절 **뒤에도** 빈 줄 하나를 남긴다 — 없으면 뒤따르는 고지(⚠️·📎 등)가
+        # 마크다운 lazy continuation으로 절의 마지막 `- ` 항목에 흡수돼 용어
+        # 풀이의 일부처럼 읽힌다(골든 28개에서 재현). 절이 리포트의 마지막
+        # 내용인 경로에서는 이 개행을 반환 직전 rstrip이 걷어낸다.
+        lines.append(_glossary + "\n")
 
     lines.append("⚠️ 이 타임라인은 공시 제목 기반 자동 분류이며, 실제 상황과 다를 수 있습니다.")
     if not deep:
@@ -4323,6 +4334,10 @@ def _glossary_block(texts: "list[str]") -> str:
 
     빈 결과("")면 아무것도 반환하지 않는다 — 호출부는 빈 문자열도 `lines`에
     넣지 않아야 한다(그러면 join 결과에 불필요한 빈 줄이 남는다).
+
+    ⚠ 반환값은 앞에 개행 하나만 붙인다. **뒤쪽 빈 줄은 호출부가 붙인다**
+    (`_glossary + "\\n"`) — 절 뒤에 고지가 이어지는 도구와 절이 마지막인
+    도구가 섞여 있어, 여기서 뒤 개행까지 붙이면 후자에 꼬리 개행이 남는다.
     """
     footer = glossary_footer(texts)
     if not footer:
@@ -7172,7 +7187,11 @@ def track_capital_structure(
         # 걷어낸 뒤 한 원소로 되접는다(실측: 안 걷으면 find_risk_precedents
         # 등에서 마커 앞에 빈 줄이 두 번 남는다).
         lines = ["\n".join(lines).rstrip("\n")]
-        lines.append(_glossary)
+        # 절 **뒤에도** 빈 줄 하나를 남긴다 — 없으면 뒤따르는 고지(⚠️·📎 등)가
+        # 마크다운 lazy continuation으로 절의 마지막 `- ` 항목에 흡수돼 용어
+        # 풀이의 일부처럼 읽힌다(골든 28개에서 재현). 절이 리포트의 마지막
+        # 내용인 경로에서는 이 개행을 반환 직전 rstrip이 걷어낸다.
+        lines.append(_glossary + "\n")
 
     lines.append(
         # ⚠ 옛 문구는 「정확한 희석률…은 개별 공시로 확인하라」였는데, 이제
@@ -7491,7 +7510,11 @@ def track_turnover_trend(
         # 걷어낸 뒤 한 원소로 되접는다(실측: 안 걷으면 find_risk_precedents
         # 등에서 마커 앞에 빈 줄이 두 번 남는다).
         lines = ["\n".join(lines).rstrip("\n")]
-        lines.append(_glossary)
+        # 절 **뒤에도** 빈 줄 하나를 남긴다 — 없으면 뒤따르는 고지(⚠️·📎 등)가
+        # 마크다운 lazy continuation으로 절의 마지막 `- ` 항목에 흡수돼 용어
+        # 풀이의 일부처럼 읽힌다(골든 28개에서 재현). 절이 리포트의 마지막
+        # 내용인 경로에서는 이 개행을 반환 직전 rstrip이 걷어낸다.
+        lines.append(_glossary + "\n")
 
     lines.append(
         "기말잔액 기준으로 계산했습니다 — DART가 제공하는 재무지표와 산정 "
