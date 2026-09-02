@@ -1018,7 +1018,6 @@ def test_층4_원장_항목은_아직_고지가_없다(fn):
 # 알려진 결함 xfail — PR-N1
 # ══════════════════════════════════════════════════════════════════════════
 
-@pytest.mark.xfail(strict=True, reason="PR-N1 — loadDeepBlocks catch 8곳이 부재 아님을 아직 말하지 않는다")
 def test_loadDeepBlocks_catch가_부재아님을_말한다():
     echoes = _loaddeepblocks_echo_catches()
     HONEST = ("fetchFailHTML(", "뜻이 아닙니다", "직접 확인")
