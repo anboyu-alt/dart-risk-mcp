@@ -51,6 +51,9 @@ from dart_risk_mcp.core.explain import (  # noqa: E402
     pattern_to_prose,
     pattern_checkpoints,
     TURNOVER_PROSE,
+    GLOSSARY,
+    GLOSSARY_ALIASES,
+    METRIC_PROSE,
 )
 from dart_risk_mcp.core.dart_client import _FS_ALIASES  # noqa: E402
 from dart_risk_mcp.core import qualifiers as _q  # noqa: E402
@@ -376,6 +379,17 @@ def build_signals_data() -> dict:
         # 조용히 낡는다(위 _FS_ALIAS_KEYS와 같은 이유). score·severity·
         # confidence 없음(v0.8.5 원칙).
         "turnover_prose": {k: dict(v) for k, v in TURNOVER_PROSE.items()},
+        # 전문어 용어 사전(과제 1) — core GLOSSARY/GLOSSARY_ALIASES를 그대로
+        # 내보낸다(문구 복제 금지, 위 turnover_prose와 같은 이유).
+        "glossary": dict(GLOSSARY),
+        "glossary_aliases": dict(GLOSSARY_ALIASES),
+        # 지표 읽는 법(과제 3) — core METRIC_PROSE를 그대로 내보낸다(문구
+        # 복제 금지, 위 turnover_prose/glossary와 같은 이유). 뷰어 렌더
+        # 배선은 다음 과제 — 여기서는 데이터만 싣는다.
+        "metric_prose": {
+            panel: {k: dict(v) for k, v in entries.items()}
+            for panel, entries in METRIC_PROSE.items()
+        },
         # 신호 한정층 규칙 — 데이터만 내보내고 로직은 뷰어 JS가 이식한다.
         # 문자열 목록의 이중 관리를 막는 것이 목적이다(키워드와 동일한 원칙).
         "qualifier_rules": {

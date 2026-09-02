@@ -224,8 +224,12 @@ class TestBuildSignalsData(unittest.TestCase):
                               list(PATTERN_CHECKPOINTS.get(slug, [])))
 
     def test_pattern_prose_and_checkpoints_no_score_or_grade_vocabulary(self):
-        """prose·checkpoints도 v0.8.5 무판정 원칙 대상 — 등급·점수 어휘가
-        새로 들어오지 않았는지 기존 hygiene 검사기로 재확인."""
+        """prose·checkpoints·**description**도 v0.8.5 무판정 원칙 대상 —
+        등급·점수 어휘가 새로 들어오지 않았는지 기존 hygiene 검사기로 재확인.
+
+        `description`은 뷰어 패턴 카드의 머리 단락으로 그대로 나가는데
+        이 검사에서 빠져 있었다(2026-09-03 추가). 원천 dict 쪽은
+        `tests/test_prose_hygiene_static.py`가 함께 잠근다."""
         sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
         from test_golden_output_hygiene import (  # noqa: E402
             _SCORE_GRADE_PATTERNS,
@@ -234,7 +238,9 @@ class TestBuildSignalsData(unittest.TestCase):
         import re
 
         for p in self.data["patterns"]:
-            text = p["prose"] + " " + " ".join(p["checkpoints"])
+            text = " ".join(
+                [p["prose"], p.get("description", ""), " ".join(p["checkpoints"])]
+            )
             for pattern, desc in _SCORE_GRADE_PATTERNS:
                 self.assertIsNone(re.search(pattern, text),
                                    f"{p['key']} prose/checkpoints에 {desc} 잔존")
