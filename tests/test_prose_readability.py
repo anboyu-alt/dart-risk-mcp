@@ -19,19 +19,30 @@
   ④ 전문어가 되풀이되지 않는가
   ⑤ 개발자 근거(실측·표본·측정일)가 사용자 화면에 새지 않는가
 
-⚠ **전문어 밀도 공식의 계산 근거** — 브리프 문언은 「출현 총수 − GLOSSARY
-표제어의 distinct 수」였으나, 그대로 계산하면 브리프가 함께 지정한 **완성본
-문구 자체가 임계를 넘는다**(`AUDIT` 22.2 · `CAPITAL_RED` 16.9 · 완성본
-description `debt_spiral` 18.0 — 전부 ≤8 초과). 실제로 부담이 되는 것은
-「사전에 없어서 아무도 풀어 주지 않는 낱말이 되풀이되는 것」이므로 아래처럼
-계산한다:
+⚠ **전문어 밀도 공식과 임계의 실측 근거** — 세는 방식은 브리프의 취지
+그대로 **「전문어마다 첫 등장은 무료, 되풀이되면 센다」**이다(GLOSSARY
+표제어도 예외가 아니다 — 사전은 첫 등장을 풀어 줄 뿐, 같은 낱말이 네 번
+나오는 문단이 쉬워지지는 않는다). 임계만 실측으로 정했다.
 
-    - GLOSSARY 표제어·별칭은 **모든 등장이 무료**다. 뷰어가 등장할 때마다
-      점선 밑줄+툴팁을 붙이고 MCP는 `glossary_footer`로 풀어 준다.
-    - 그 밖의 전문어(가장납입·의견거절 등)는 **첫 등장만 무료**다 — 문맥에서
-      한 번 풀어 쓸 기회를 주고, 되풀이되면 센다.
+세 후보를 브리프가 지정한 **완성본 6개**에 대입한 결과(천자당):
 
-이 공식으로 완성본 6개는 전부 통과한다(최대 `AUDIT` 7.4).
+    항목              브리프 문언   사전 전등장 무료   채택(첫 등장 무료)
+    CB_BW                    0.0              0.0              0.0
+    RCPS                     0.0              0.0              0.0
+    AUDIT                   22.2              7.4              7.4
+    EARNINGS_SHOCK           0.0              0.0              0.0
+    MEZZ_EXERCISE            0.0              0.0              0.0
+    CAPITAL_RED             16.9              0.0             16.9
+
+브리프 문언(「출현 총수 − GLOSSARY 표제어 distinct 수」)은 `AUDIT`을 22.2로
+계산해 브리프 자신의 임계 8을 넘긴다 — 사전에 없는 「부적정」 2회에 아무런
+공제가 없기 때문이다. 반대로 「사전 낱말은 전 등장 무료」로 하면 `CAPITAL_RED`
+의 「감자」 4회가 0.0이 되어, **사전 표제어만으로 채운 문단은 아무리 되풀이해도
+0**이 된다(래칫이 무력해진다).
+
+그래서 채택한 공식에서 **완성본이 통과하는 최소 상한은 17**이다
+(`CAPITAL_RED` 16.9). 이 값은 「감자」류 필수 용어를 네 번까지 쓰는 것은
+허용하되, 그 이상 되풀이되면 잡는 선이다.
 
 ⚠ **최장 문장 71자 · description 133자**도 같은 이유의 보정이다 — 브리프는
 각각 70자·130자라 적었는데 지정된 완성본이 정확히 71자(`CAPITAL_RED`의 마지막
@@ -54,18 +65,29 @@ from dart_risk_mcp.core.taxonomy import CROSS_SIGNAL_PATTERNS
 # ── 임계 ─────────────────────────────────────────────────────────────────
 _MAX_SENTENCE = 71          # 항목별 최장 문장(CAPITAL_RED 완성본 = 71)
 _MAX_AVG_SENTENCE = 35      # SIGNAL_PROSE 전체 문장 평균
-_MAX_JARGON = 8.0           # 전문어 밀도(천자당)
+_MAX_JARGON = 17.0          # 전문어 밀도(천자당) — 완성본 통과 최소 상한
 _PATTERN_MAX_AVG = 45       # PATTERN_PROSE 문장 평균
 _PATTERN_MAX_SENTENCE = 90
 _DESC_MAX_CHARS = 133      # 완성본 `fund_diversion_chain` = 133자
 
 # ── 회귀 래칫 ────────────────────────────────────────────────────────────
-# 재작성 직후 실측값. 「≤ 상수 + 1」로 잠근다 — 다음 사람이 문장을 늘리거나
-# 전문어를 되풀이하면 여기서 걸린다. 값을 올리려면 그럴 만한 이유를 남겨라.
-_RATCHET_AVG_SENTENCE = 33.3   # 재작성 전 51.3
-_RATCHET_JARGON = 0.3          # 재작성 전 1.1
+# 재작성 직후 실측값. 다음 사람이 문장을 늘리거나 전문어를 되풀이하면 여기서
+# 걸린다. 값을 올리려면 그럴 만한 이유를 남겨라.
+#
+# ⚠ **여유를 넉넉히 주면 래칫이 아니다.** 첫 판은 밀도 여유가 `+1`이라
+# 재작성 전 문구(같은 공식으로 평균 2.93)를 통째로 되돌려도 통과했다.
+# 여유를 `+0.3`으로 좁히고, **항목별 최댓값**도 함께 잠근다 — 평균만 잠그면
+# 한 항목이 크게 나빠져도 나머지 39개에 묻힌다.
+#
+# 되돌림 검증(재작성 전 `SIGNAL_PROSE` 40개를 같은 공식으로):
+#   문장 평균 51.3 (> 33.9+1)  · 밀도 평균 2.93 (> 1.5+0.3)
+#   밀도 최댓값 24.7 (> 16.9+1) — 세 래칫 전부 실패한다.
+_RATCHET_AVG_SENTENCE = 33.9   # 재작성 전 51.3
+_RATCHET_JARGON = 1.5          # 재작성 전 2.93 (평균)
+_RATCHET_JARGON_MAX = 16.9     # 재작성 전 24.7 (항목별 최댓값)
 
-# 사전이 풀어 주지 않는 전문어 — 첫 등장만 무료.
+# 사전이 첫 등장을 풀어 주는 전문어 — GLOSSARY 표제어·별칭.
+# 그 밖의 전문어는 아래에 손으로 적는다(사전이 풀어 주지 않는다).
 _UNGLOSSED = {
     "가장납입", "과대계상", "실질심사", "우발채무", "계속기업", "유동화",
     "차환", "무자본", "최대주주", "대량보유", "특수관계자", "영업양수",
@@ -101,10 +123,10 @@ def _jargon_hits(text: str) -> list[tuple[int, int, str]]:
 
 
 def jargon_density(text: str) -> float:
-    """천자당 '풀이 없이 되풀이된 전문어' 수. 파일 머리말의 공식 참고."""
+    """천자당 '되풀이된 전문어' 수 — 낱말마다 첫 등장은 무료(사전·문맥이 한 번
+    풀어 줄 기회), 두 번째부터 센다. 근거는 파일 머리말의 대입표."""
     hits = _jargon_hits(text)
-    unglossed = [t for _, _, t in hits if t not in _GLOSSED]
-    charged = len(unglossed) - len(set(unglossed))
+    charged = len(hits) - len({t for _, _, t in hits})
     return charged / max(1, len(text)) * 1000
 
 
@@ -231,6 +253,16 @@ def test_문장_평균이_다시_늘지_않는다():
 def test_전문어_밀도가_다시_오르지_않는다():
     densities = [jargon_density(t) for t in SIGNAL_PROSE.values()]
     avg = sum(densities) / len(densities)
-    assert avg <= _RATCHET_JARGON + 1, (
+    assert avg <= _RATCHET_JARGON + 0.3, (
         f"전문어 밀도 평균 {avg:.2f}/천자 — 래칫({_RATCHET_JARGON})을 넘었다"
+    )
+
+
+def test_가장_나쁜_항목도_다시_나빠지지_않는다():
+    """평균만 잠그면 한 항목이 크게 나빠져도 나머지 39개에 묻힌다."""
+    worst = max(SIGNAL_PROSE, key=lambda k: jargon_density(SIGNAL_PROSE[k]))
+    d = jargon_density(SIGNAL_PROSE[worst])
+    assert d <= _RATCHET_JARGON_MAX + 1, (
+        f"{worst}: 전문어 밀도 {d:.1f}/천자 — "
+        f"항목별 래칫({_RATCHET_JARGON_MAX})을 넘었다"
     )
