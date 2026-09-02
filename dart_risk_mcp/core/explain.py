@@ -917,7 +917,8 @@ def turnover_prose(key: str) -> dict:
 # 전문어가 설명 없이 쓰인다. 이 사전은 그 용어를 회계 소양이 없는 사람도
 # 읽을 수 있는 한 문장으로 풀어 주는 **단일 출처**다 — 뷰어는
 # `signals-data.json`의 `glossary`로 받아 점선 밑줄+툴팁을 붙이고, MCP는
-# 이후 과제에서 리포트 말미에 「이 리포트에 나온 용어」 절로 붙인다.
+# `server.py`의 `_glossary_block`이 리포트 말미에 「이 리포트에 나온 용어」
+# 절로 붙인다(`glossary_footer` 참고).
 #
 # 이 파일의 다른 사전(`SIGNAL_PROSE` 등)과 마찬가지로 v0.8.5 무판정
 # 원칙을 그대로 따른다 — **판정 어휘 금지 낱말**(위험·양호·우수·나쁨·
@@ -1010,9 +1011,11 @@ def glossary_footer(texts, limit: int = 8) -> str:
     """`texts`(문자열 iterable)를 이어 붙인 것에서 등장하는 용어를 모아
     "이 리포트에 나온 용어" 절로 렌더한다. 용어가 없으면 빈 문자열.
 
-    현재 프로덕션 소비처 0 — 이 헬퍼를 리포트 말미에 붙이는 배선은
-    후속 과제(사전 도입 과제 다음)의 몫이다. `tests/test_unused_exports.py`
-    의 `KNOWN_UNUSED`에 같은 사유로 등재돼 있다.
+    `server.py`의 `_glossary_block`이 감싸 MCP 도구 6종(analyze_company_risk·
+    check_disclosure_risk·find_risk_precedents·build_event_timeline·
+    track_capital_structure·track_turnover_trend) 말미에 붙인다 — 각 도구가
+    실제로 렌더에 쓴 해설 문자열(SIGNAL_PROSE·PATTERN_PROSE·TURNOVER_PROSE)만
+    넘긴다.
     """
     combined = "".join(texts) if texts else ""
     terms = glossary_terms_in(combined)[:limit]

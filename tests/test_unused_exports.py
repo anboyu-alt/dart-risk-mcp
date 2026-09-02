@@ -46,8 +46,6 @@ _PROD_DIRS = ("dart_risk_mcp", "scripts", "tool_server", "api")
 #   is_false_amendment          2026-08-26 근본 수정으로 우회가 불필요해졌다
 #   resolve_disclosure_row_…    이름 그대로 하위 호환 래퍼
 #   summarize_note_sections     도구가 `classify_note_title`+`scan_note_titles`를 직접 쓴다
-#   glossary_footer             용어 사전(과제 1)만 이 라운드에 들어간다 — 리포트
-#                                말미에 붙이는 배선은 후속 과제의 몫이다
 KNOWN_UNUSED = frozenset({
     "calculate_risk_score",
     "estimate_crisis_timeline",
@@ -56,7 +54,6 @@ KNOWN_UNUSED = frozenset({
     "is_false_amendment",
     "resolve_disclosure_row_from_rcept_no",
     "summarize_note_sections",
-    "glossary_footer",
 })
 
 

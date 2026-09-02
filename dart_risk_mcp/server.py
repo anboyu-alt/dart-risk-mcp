@@ -104,6 +104,7 @@ from .core import (
     find_pattern_match,
     find_pattern_overlaps,
     flag_to_prose,
+    glossary_footer,
     is_amendment_disclosure,
     list_document_sections,
     load_catalog_excerpt,
@@ -1890,7 +1891,7 @@ def _render_pattern_watch_block(
     taxonomy_dates: "dict[str, list[str]] | None" = None,
     taxonomy_owners: "dict[str, set] | None" = None,
     acq_confirmations: "list[dict] | None" = None,
-) -> tuple[list[str], list[str], list[dict]]:
+) -> tuple[list[str], list[str], list[dict], list[dict]]:
     """관찰된 taxonomy와 등록 패턴의 부분 겹침을 "무엇이 보이고 무엇이 안
     보이는지" 사실로 렌더한다(analyze_company_risk·build_event_timeline 공용).
 
@@ -1908,11 +1909,15 @@ def _render_pattern_watch_block(
     2개 관찰"로 표시하면 v1.6.1이 없앤 오탐이 되살아난다.
 
     Returns:
-        (lines, capital_backflow_fact_lines, filtered) — lines는 겹치는
-        패턴이 없으면 빈 리스트(블록 자체 생략). capital_backflow_fact_lines는
+        (lines, capital_backflow_fact_lines, filtered, shown) — lines는
+        겹치는 패턴이 없으면 빈 리스트(블록 자체 생략). capital_backflow_fact_lines는
         게이트가 실패했을 때만 채워진다(기존 elif 경로와 동일하게 호출부가
         렌더). filtered는 게이트를 통과한 겹침 전체(표시 상한 적용 전) —
-        호출부가 요약 문장에서 최상위 겹침 하나를 참조할 때 쓴다.
+        호출부가 요약 문장에서 최상위 겹침 하나를 참조할 때 쓴다. shown은
+        `filtered[:max_show]` — 실제로 lines에 렌더된 패턴만(과제 4의 「이
+        리포트에 나온 용어」 절 입력이 호출부에서 이 상한을 다시 만들지
+        않도록 여기서 반환한다 — `tests/test_no_silent_caps.py`가 요구하는
+        "잘림을 알리는 len() 비교"가 이 함수 안에 이미 있다).
     """
     overlaps = find_pattern_overlaps(
         list(tax_ids), min_overlap=2, taxonomy_dates=taxonomy_dates,
@@ -1961,7 +1966,7 @@ def _render_pattern_watch_block(
             _fact_lines.append("")
         _fact_lines += ["━━ 타법인 취득 대상 확인 ━━"] + fund_diversion_fact_lines
     if not filtered:
-        return [], _fact_lines, []
+        return [], _fact_lines, [], []
 
     lines: list[str] = ["", "━━ 관찰된 신호가 겹치는 등록 패턴 ━━"]
     shown = filtered[:max_show]
@@ -2017,7 +2022,7 @@ def _render_pattern_watch_block(
             f"외 {len(filtered) - max_show}개 패턴이 표시 기준을 넘겨 겹칩니다."
         )
 
-    return lines, _fact_lines, filtered
+    return lines, _fact_lines, filtered, shown
 
 
 # ── 도구 1: 기업 종합 위험 분석 ────────────────────────────────────────────
@@ -2319,7 +2324,7 @@ def analyze_company_risk(
         except Exception:
             _acq_confirmations = []
 
-    pattern_overlap_lines, capital_backflow_fact_lines, _pattern_overlaps = _render_pattern_watch_block(
+    pattern_overlap_lines, capital_backflow_fact_lines, _pattern_overlaps, _pattern_shown = _render_pattern_watch_block(
         tax_ids_all,
         outflow_confirmations,
         _has_control_change_title(disclosures),
@@ -2328,6 +2333,13 @@ def analyze_company_risk(
         taxonomy_owners=tax_owners_all,
         acq_confirmations=_acq_confirmations,
     )
+
+    # 「이 리포트에 나온 용어」 절 입력 — 실제로 찍힌 해설만 모은다. 패턴
+    # prose는 실제 lines에 렌더된 패턴(`_pattern_shown` — 함수가 이미 상한을
+    # 적용하고 그 잘림을 「외 N개…」로 알린 뒤 반환한다)만큼만 반영한다.
+    _glossary_texts: list[str] = [
+        pattern_to_prose(ov["pattern_id"]) for ov in _pattern_shown
+    ]
 
     # 6. 타임라인 (내부 랭킹 점수 기준 — 출력에는 노출되지 않음)
     # 헤드라인 — 양면적 신호는 단독으로 후보가 되지 않는다.
@@ -2441,6 +2453,8 @@ def analyze_company_risk(
                 or _key_seen[e["key"]] <= _PROSE_REPEAT_LIMIT
             )
             meaning = signal_to_prose(e["key"]) if _show_prose else ""
+            if meaning:
+                _glossary_texts.append(meaning)
             one_liner = meaning if meaning else (e["label"] if _show_prose else "")
             # 첫 줄: 날짜 · 공시명
             lines.append(
@@ -2648,6 +2662,10 @@ def analyze_company_risk(
     if reg_section:
         lines += [""] + reg_section
 
+    _glossary = _glossary_block(_glossary_texts)
+    if _glossary:
+        lines.append(_glossary)
+
     if not deep:
         lines.append(_shallow_notice(
             "analyze_company_risk", corp_name,
@@ -2701,6 +2719,9 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
         lines.append(f"제출인: {filing['flr_nm']}")
     lines.append("")
 
+    # 「이 리포트에 나온 용어」 절 입력 — 실제로 화면에 찍힌 해설만 모은다.
+    _glossary_texts: list[str] = []
+
     if not matched:
         if is_amendment:
             # match_signals는 정정공시에 항상 []를 반환하므로 루프 안의
@@ -2746,6 +2767,7 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
                 lines.append(f"🎯 **{q.label}**{amendment_note}")
                 if prose:
                     lines.append(prose)
+                    _glossary_texts.append(prose)
                 if q.note:
                     lines.append(f"※ {q.note}")
                 lines.append("")
@@ -2865,6 +2887,10 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
     if catalog:
         lines += ["", catalog]
 
+    _glossary = _glossary_block(_glossary_texts)
+    if _glossary:
+        lines.append(_glossary)
+
     return "\n".join(lines)
 
 
@@ -2901,6 +2927,9 @@ def find_risk_precedents(signal_types: list[str], lookback_days: int = 90) -> st
 
     lines = ["📚 **신호별 해석 — 왜 주목해야 하는지**", ""]
 
+    # 「이 리포트에 나온 용어」 절 입력 — 실제로 화면에 찍힌 해설만 모은다.
+    _glossary_texts: list[str] = []
+
     if unknown:
         known_list = ", ".join(sig_map.keys())
         lines.append(f"⚠️ 알 수 없는 신호 키: {', '.join(unknown)}")
@@ -2914,6 +2943,7 @@ def find_risk_precedents(signal_types: list[str], lookback_days: int = 90) -> st
         lines.append(f"━━ {sig['label']} ━━")
         if prose:
             lines.append(prose)
+            _glossary_texts.append(prose)
         # 이 신호가 공시 제목으로는 발화하지 않는다면 그 사실을 먼저 알린다 —
         # 조회는 되는데 실제로는 한 번도 안 잡히는 신호를 설명만 보여주면
         # "이 도구가 이걸 탐지한다"는 인상을 준다(2026-08-22 1년 실측).
@@ -2937,6 +2967,8 @@ def find_risk_precedents(signal_types: list[str], lookback_days: int = 90) -> st
             ]
             prose_body = pattern_to_prose(pattern.get("pattern_id", ""))
             lines.append(prose_body or pattern.get("description", ""))
+            if prose_body:
+                _glossary_texts.append(prose_body)
             _checkpoints = pattern_checkpoints(pattern.get("pattern_id", ""))
             if _checkpoints:
                 lines.append("")
@@ -2949,6 +2981,10 @@ def find_risk_precedents(signal_types: list[str], lookback_days: int = 90) -> st
     catalog = load_catalog_excerpt(all_tax_ids)
     if catalog:
         lines += ["", catalog]
+
+    _glossary = _glossary_block(_glossary_texts)
+    if _glossary:
+        lines.append(_glossary)
 
     return "\n".join(lines)
 
@@ -3169,7 +3205,7 @@ def build_event_timeline(
 
     # v1.6.1: capital_backflow 게이트 — analyze_company_risk와 동일한 확인
     # 로직(_render_pattern_watch_block 내부에서 재사용).
-    pattern_overlap_lines, capital_backflow_fact_lines, _pattern_overlaps = _render_pattern_watch_block(
+    pattern_overlap_lines, capital_backflow_fact_lines, _pattern_overlaps, _pattern_shown = _render_pattern_watch_block(
         all_tax_ids,
         outflow_confirmations,
         _has_control_change_title(disclosures),
@@ -3179,6 +3215,13 @@ def build_event_timeline(
         acq_confirmations=_acq_confirmations,
     )
     _top_overlap = _pattern_overlaps[0] if _pattern_overlaps else None
+
+    # 「이 리포트에 나온 용어」 절 입력 — 실제로 찍힌 해설만 모은다. 패턴
+    # prose는 실제 lines에 렌더된 패턴(`_pattern_shown` — 함수가 이미 상한을
+    # 적용하고 그 잘림을 「외 N개…」로 알린 뒤 반환한다)만큼만 반영한다.
+    _glossary_texts: list[str] = [
+        pattern_to_prose(ov["pattern_id"]) for ov in _pattern_shown
+    ]
 
     # 타임라인 출력
     first_date = events[0][0]
@@ -3252,6 +3295,7 @@ def build_event_timeline(
                 prose = signal_to_prose(sig_key)
                 if prose:
                     lines.append(f"      → {prose}")
+                    _glossary_texts.append(prose)
                 seen_keys.add(sig_key)
             # v0.5.0: 결정 공시면 상대방 한 줄 추가
             _dtype = resolve_decision_type(evt[4])
@@ -3380,6 +3424,10 @@ def build_event_timeline(
     reg_section = _registry_company_section(corp_name)
     if reg_section:
         lines += reg_section + [""]
+
+    _glossary = _glossary_block(_glossary_texts)
+    if _glossary:
+        lines.append(_glossary)
 
     lines.append("⚠️ 이 타임라인은 공시 제목 기반 자동 분류이며, 실제 상황과 다를 수 있습니다.")
     if not deep:
@@ -4232,6 +4280,28 @@ def _currency_footer(currency: str) -> str:
         f"⚠️ 이 회사는 **{c}**로 보고합니다 — 위 금액은 원화가 아닙니다"
         " (DART 공시 기준)."
     )
+
+
+def _glossary_block(texts: "list[str]") -> str:
+    """실제로 화면에 찍힌 해설 문자열에서 GLOSSARY 표제어를 모아 "이 리포트에
+    나온 용어" 절을 만든다(`core.explain.glossary_footer`를 감싼다).
+
+    MCP 출력에는 마우스 오버가 없다 — 뷰어처럼 점선 밑줄+툴팁을 달 수 없으니,
+    리포트 말미에 텍스트 절로 붙인다. 붙이지 않으면 MCP 클라이언트(LLM)가
+    제 나름의 정의로 설명해 뷰어와 어긋난다(단일 출처 위반).
+
+    `texts`에는 **실제로 렌더에 쓴 해설 문자열만** 넣는다 — DART 원문·공시
+    제목·회사명·인수자명 같은 passthrough 문자열은 절대 넣지 않는다(오르비텍
+    56KB류 출력에서 소음이 된다). `TURNOVER_PROSE`가 값이 나온 지표만
+    해설하는 것과 같은 예산 규칙이다.
+
+    빈 결과("")면 아무것도 반환하지 않는다 — 호출부는 빈 문자열도 `lines`에
+    넣지 않아야 한다(그러면 join 결과에 불필요한 빈 줄이 남는다).
+    """
+    footer = glossary_footer(texts)
+    if not footer:
+        return ""
+    return "\n" + footer
 
 
 def _fs_div_label(div: str, fs_nm: str = "") -> str:
@@ -7028,6 +7098,9 @@ def track_capital_structure(
             "",
         ]
 
+    # 「이 리포트에 나온 용어」 절 입력 — 실제로 화면에 찍힌 해설만 모은다.
+    _glossary_texts: list[str] = []
+
     if result["events"]:
         lines.append("**시계열** (최대 30건)")
         _events_slice = result["events"][:30]
@@ -7042,6 +7115,11 @@ def track_capital_structure(
             if _show_prose:
                 meaning = signal_to_prose(e["key"], e.get("report_nm", ""))
                 one_liner = meaning.split("다.")[0] + "다." if meaning else e.get("label", "")
+                # 화면에는 첫 문장만 잘려 나가지만(one_liner), 용어 절은
+                # 절단 전 전체 해설을 본다 — 예: 3PCA의 「제3자배정」은 둘째
+                # 문장에만 나온다.
+                if meaning:
+                    _glossary_texts.append(meaning)
             else:
                 one_liner = ""
             lines.append(
@@ -7058,6 +7136,11 @@ def track_capital_structure(
             lines.append("**유사 패턴 서술**")
             lines.append(pattern)
             lines.append("")
+            _glossary_texts.append(pattern)
+
+    _glossary = _glossary_block(_glossary_texts)
+    if _glossary:
+        lines.append(_glossary)
 
     lines.append(
         # ⚠ 옛 문구는 「정확한 희석률…은 개별 공시로 확인하라」였는데, 이제
@@ -7349,6 +7432,9 @@ def track_turnover_trend(
     if any(per_year[y]["ccc"].get("value") is not None for y in years_desc):
         _prose_keys.append("ccc")
 
+    # 「이 리포트에 나온 용어」 절 입력 — 실제로 화면에 찍힌 해설만 모은다.
+    _glossary_texts: list[str] = []
+
     if _prose_keys:
         lines.append("**지표 읽는 법**")
     for _tkey in _prose_keys:
@@ -7359,8 +7445,15 @@ def track_turnover_trend(
         lines.append(f"  - {_p['meaning']}")
         lines.append(f"  - {_p['fall']}")
         lines.append(f"  - {_p['caveat']}")
+        _glossary_texts += [
+            _p["label"], _p["formula"], _p["meaning"], _p["fall"], _p["caveat"],
+        ]
     if _prose_keys:
         lines.append("")
+
+    _glossary = _glossary_block(_glossary_texts)
+    if _glossary:
+        lines.append(_glossary)
 
     lines.append(
         "기말잔액 기준으로 계산했습니다 — DART가 제공하는 재무지표와 산정 "

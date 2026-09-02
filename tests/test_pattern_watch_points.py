@@ -95,13 +95,13 @@ class TestTaxonomyLabelKo(unittest.TestCase):
 
 class TestRenderPatternWatchBlock(unittest.TestCase):
     def test_no_overlap_returns_empty(self):
-        lines, fact_lines, filtered = _render_pattern_watch_block(["1.1"], [], True, {})
+        lines, fact_lines, filtered, _shown = _render_pattern_watch_block(["1.1"], [], True, {})
         self.assertEqual(lines, [])
         self.assertEqual(fact_lines, [])
         self.assertEqual(filtered, [])
 
     def test_partial_overlap_renders_n_of_m_and_checkpoints(self):
-        lines, _, filtered = _render_pattern_watch_block(["4.4", "3.1"], [], True, {})
+        lines, _, filtered, _shown = _render_pattern_watch_block(["4.4", "3.1"], [], True, {})
         self.assertTrue(filtered)
         joined = "\n".join(lines)
         self.assertIn("━━ 관찰된 신호가 겹치는 등록 패턴 ━━", joined)
@@ -115,7 +115,7 @@ class TestRenderPatternWatchBlock(unittest.TestCase):
         # 구성됨)는 완전일치라 "안 보임" 줄이 없어야 한다. 같은 taxonomy를
         # 부분적으로 공유하는 다른(더 큰) 패턴이 함께 뜰 수 있으므로,
         # capital_churn_anomaly 카드 하나만 잘라내 검증한다.
-        lines, _, filtered = _render_pattern_watch_block(["2.7", "4.3"], [], True, {})
+        lines, _, filtered, _shown = _render_pattern_watch_block(["2.7", "4.3"], [], True, {})
         churn = next(f for f in filtered if f["pattern_id"] == "capital_churn_anomaly")
         self.assertEqual(churn["n_matched"], churn["n_total"])
         self.assertEqual(churn["missing"], [])
@@ -131,7 +131,7 @@ class TestRenderPatternWatchBlock(unittest.TestCase):
         # 2026-08-25: 임계가 패턴 크기에 비례하게 바뀌어 taxonomy를 보강했다.
         tax_ids = ["3.1", "5.7", "1.2", "2.4", "4.3", "7.1", "2.7",
                    "8.1", "4.4", "2.6", "1.5", "1.3"]
-        lines, fact_lines, filtered = _render_pattern_watch_block(tax_ids, [], True, {})
+        lines, fact_lines, filtered, _shown = _render_pattern_watch_block(tax_ids, [], True, {})
         self.assertEqual(len(filtered), 5)
         joined = "\n".join(lines)
         self.assertEqual(joined.count("▸ "), 3)
@@ -153,7 +153,7 @@ class TestRenderPatternWatchBlock(unittest.TestCase):
             "rcept_no": "1", "counterparty": "테스트법인",
             "relation": "종속회사", "classification": "subsidiary", "amount": 100,
         }]
-        lines, fact_lines, filtered = _render_pattern_watch_block(
+        lines, fact_lines, filtered, _shown = _render_pattern_watch_block(
             ["3.1", "5.7"], confirmations, True, {}
         )
         joined = "\n".join(lines)
@@ -170,7 +170,7 @@ class TestRenderPatternWatchBlock(unittest.TestCase):
             "rcept_no": "1", "counterparty": "테스트법인",
             "relation": "계열회사", "classification": "affiliated", "amount": 100,
         }]
-        lines, fact_lines, filtered = _render_pattern_watch_block(
+        lines, fact_lines, filtered, _shown = _render_pattern_watch_block(
             ["3.1", "5.7"], confirmations, False, {}
         )
         self.assertFalse(any(f["pattern_id"] == "capital_backflow" for f in filtered))
@@ -183,7 +183,7 @@ class TestRenderPatternWatchBlock(unittest.TestCase):
             "rcept_no": "1", "counterparty": "테스트법인",
             "relation": "계열회사", "classification": "affiliated", "amount": 100,
         }]
-        lines, fact_lines, filtered = _render_pattern_watch_block(
+        lines, fact_lines, filtered, _shown = _render_pattern_watch_block(
             ["3.1", "5.7"], confirmations, True, {}
         )
         self.assertTrue(any(f["pattern_id"] == "capital_backflow" for f in filtered))
@@ -195,7 +195,7 @@ class TestRenderPatternWatchBlock(unittest.TestCase):
 
     def test_no_judgment_vocabulary_in_rendered_output(self):
         tax_ids = ["4.4", "3.1", "7.1", "1.2", "2.4", "2.7", "4.3"]
-        lines, _, _ = _render_pattern_watch_block(tax_ids, [], True, {})
+        lines, _, _, _shown = _render_pattern_watch_block(tax_ids, [], True, {})
         joined = "\n".join(lines)
         self.assertTrue(joined)  # 비어 있으면 아래 단언이 무의미해진다
         for banned in ("위험합니다", "의심됩니다", "해당됩니다", "매우위험", "고위험", "가능성 높음"):
