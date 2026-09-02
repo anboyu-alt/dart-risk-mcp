@@ -70,7 +70,7 @@ def test_패턴_서술에_severity_토큰이_없다():
 
 @pytest.mark.parametrize("name", ["FLAG_PROSE", "SIGNAL_PROSE",
                                   "PATTERN_PROSE", "CATEGORY_PROSE",
-                                  "GLOSSARY"])
+                                  "GLOSSARY", "METRIC_PROSE"])
 def test_해설에_severity_토큰이_없다(name):
     obj = getattr(explain, name, None)
     if obj is None:

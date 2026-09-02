@@ -15,7 +15,7 @@ GLOSSARY 쪽을 잠근다.
   ③ 고아 금지 — 모든 표제어가(별칭 포함 어느 형태로든) 기존 해설
      사전(SIGNAL_PROSE ∪ PATTERN_PROSE ∪ TURNOVER_PROSE ∪
      CROSS_SIGNAL_PATTERNS[*].description ∪ PATTERN_CHECKPOINTS ∪
-     FLAG_PROSE) 어딘가에 부분 문자열로 등장한다. 지금 문구 기준으로
+     FLAG_PROSE ∪ METRIC_PROSE) 어딘가에 부분 문자열로 등장한다. 지금 문구 기준으로
      실패하는 표제어는 `_PENDING_REWRITE`로 명시 제외한다(아래 참고).
   ④ 역방향 — 테스트가 고정한 필수 전문어 목록이 전부 GLOSSARY에 있다.
   ⑤ 모순 방지 — 전환사채·교환사채·상환전환우선주 풀이에 "발행입니다"가
@@ -48,6 +48,7 @@ from dart_risk_mcp.core.explain import (  # noqa: E402
     TURNOVER_PROSE,
     FLAG_PROSE,
     PATTERN_CHECKPOINTS,
+    METRIC_PROSE,
 )
 from dart_risk_mcp.core.taxonomy import CROSS_SIGNAL_PATTERNS  # noqa: E402
 from tests.test_golden_output_hygiene import (  # noqa: E402
@@ -98,6 +99,9 @@ def _existing_prose_blob() -> str:
     texts.extend(_collect_strings(TURNOVER_PROSE))
     texts.extend(_collect_strings(FLAG_PROSE))
     texts.extend(_collect_strings(PATTERN_CHECKPOINTS))
+    # METRIC_PROSE(과제 3) — 사전 표제어가 이 사전의 문구에서도 쓰일 수
+    # 있게 고아 검사 원천 합집합에 추가한다(브리프 지시).
+    texts.extend(_collect_strings(METRIC_PROSE))
     for pat in CROSS_SIGNAL_PATTERNS.values():
         texts.append(pat.get("description", ""))
     return " ".join(texts)

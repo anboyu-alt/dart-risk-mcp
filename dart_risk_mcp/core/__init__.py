@@ -142,6 +142,7 @@ from .explain import (
     GLOSSARY_ALIASES,
     glossary_terms_in,
     glossary_footer,
+    METRIC_PROSE,
 )
 from .qualifiers import (
     ParsedName,
@@ -255,6 +256,7 @@ __all__ = [
     "GLOSSARY_ALIASES",
     "glossary_terms_in",
     "glossary_footer",
+    "METRIC_PROSE",
     "fetch_audit_opinion_history",
     "fetch_debt_balance",
     "detect_debt_rollover",
