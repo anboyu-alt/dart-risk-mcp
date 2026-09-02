@@ -138,6 +138,10 @@ from .explain import (
     category_prose,
     turnover_prose,
     TURNOVER_PROSE,
+    GLOSSARY,
+    GLOSSARY_ALIASES,
+    glossary_terms_in,
+    glossary_footer,
 )
 from .qualifiers import (
     ParsedName,
@@ -247,6 +251,10 @@ __all__ = [
     "category_prose",
     "turnover_prose",
     "TURNOVER_PROSE",
+    "GLOSSARY",
+    "GLOSSARY_ALIASES",
+    "glossary_terms_in",
+    "glossary_footer",
     "fetch_audit_opinion_history",
     "fetch_debt_balance",
     "detect_debt_rollover",

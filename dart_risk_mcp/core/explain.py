@@ -24,6 +24,10 @@ __all__ = [
     "CATEGORY_PROSE",
     "TURNOVER_PROSE",
     "turnover_prose",
+    "GLOSSARY",
+    "GLOSSARY_ALIASES",
+    "glossary_terms_in",
+    "glossary_footer",
 ]
 
 
@@ -873,3 +877,100 @@ TURNOVER_PROSE: dict[str, dict] = {
 def turnover_prose(key: str) -> dict:
     """회전율 지표 키 → 읽는 법 dict. 모르면 빈 dict."""
     return TURNOVER_PROSE.get(key, {})
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# GLOSSARY: 전문어 용어 사전 (v1.21.30 후속)
+#
+# 뷰어·MCP 해설 곳곳에 「전환사채」·「리픽싱」·「희석」 같은 회계·자본시장
+# 전문어가 설명 없이 쓰인다. 이 사전은 그 용어를 회계 소양이 없는 사람도
+# 읽을 수 있는 한 문장으로 풀어 주는 **단일 출처**다 — 뷰어는
+# `signals-data.json`의 `glossary`로 받아 점선 밑줄+툴팁을 붙이고, MCP는
+# 이후 과제에서 리포트 말미에 「이 리포트에 나온 용어」 절로 붙인다.
+#
+# 이 파일의 다른 사전(`SIGNAL_PROSE` 등)과 마찬가지로 v0.8.5 무판정
+# 원칙을 그대로 따른다 — **판정 어휘 금지 낱말**(위험·양호·우수·나쁨·
+# 점수·등급·위험도·스코어·매우위험·고위험·중위험·저위험·CRITICAL·HIGH·
+# MEDIUM·LOW·base_score·confidence)은 표제어·풀이·별칭 어디에도 쓰지
+# 않는다. 용어를 설명할 뿐 회사를 판정하지 않는다.
+#
+# 풀이 규칙(전부 기계로 검증됨 — `tests/test_glossary.py`):
+#   - 정확히 한 문장(`"다."` 개수 == 1), 60자 이하
+#   - 표제어 자체로 시작하지 않는다(동어반복 금지)
+#   - 영문 약어(CB/BW/EB 등)는 문장 안에 쓰지 않는다 — 약어는
+#     `GLOSSARY_ALIASES`의 키로만 존재한다
+# ─────────────────────────────────────────────────────────────────────────
+
+GLOSSARY: dict[str, str] = {
+    "전환사채": "돈을 빌리면서 나중에 주식으로 바꿀 권리를 붙인 채권입니다.",
+    "신주인수권부사채": "채권과 별도로 새 주식을 살 권리가 딸려 오는 회사채입니다.",
+    "교환사채": "정해진 값에 다른 회사 주식으로 바꿀 수 있는 채권입니다.",
+    "메자닌": "빚과 주식의 성격을 함께 지닌 채권·우선주를 묶어 부르는 말입니다.",
+    "리픽싱": "주가가 떨어지면 전환가액을 따라 내리는 조정입니다.",
+    "전환가액": "채권을 주식으로 바꿀 때 적용하는 주당 가격입니다.",
+    "희석": "주식 수가 늘어 기존 주주의 지분 비율이 줄어드는 것입니다.",
+    "상환전환우선주": "일정 조건에서 돈으로 돌려받거나 주식으로 바꿀 수 있는 우선주입니다.",
+    "감자": "회사가 발행 주식 수나 액면가를 줄여 자본금을 축소하는 절차입니다.",
+    "자본잠식": "쌓인 손실이 커져 자본금마저 까먹기 시작한 상태입니다.",
+    "제3자배정": "기존 주주가 아닌 특정 대상에게 새 주식을 배정하는 증자 방식입니다.",
+    "자기주식": "회사가 자기 돈으로 사들여 갖고 있는 자기 회사 주식입니다.",
+    "특수관계인": "최대주주·임원·계열사처럼 회사와 이해관계가 얽힌 상대를 말합니다.",
+    "타법인출자": "다른 회사의 주식이나 지분을 사서 자금을 넣는 것입니다.",
+    "매출채권": "물건이나 서비스를 팔고 아직 받지 못한 외상값입니다.",
+    "매입채무": "거래처에서 물건을 사고 아직 주지 않은 외상값입니다.",
+    "운전자본": "유동자산에서 유동부채를 뺀, 영업에 매일 쓰이는 돈입니다.",
+    "대손상각": "받기 어려워진 외상값을 손실로 처리해 장부에서 지우는 것입니다.",
+    "연결/별도": "계열사를 합쳐 보는 연결과 그 회사만 따로 보는 별도 재무제표입니다.",
+    "종속회사": "지분을 절반 넘게 갖고 실질적으로 지배하는 다른 회사입니다.",
+}
+
+GLOSSARY_ALIASES: dict[str, str] = {
+    "자사주": "자기주식",
+    "CB": "전환사채",
+    "BW": "신주인수권부사채",
+    "EB": "교환사채",
+    "RCPS": "상환전환우선주",
+    "제3자 배정": "제3자배정",
+    "연결·별도": "연결/별도",
+}
+
+
+def glossary_terms_in(text: str) -> list[str]:
+    """`text`에 등장하는 GLOSSARY 표제어를 첫 등장 위치 순으로, 중복 없이
+    반환한다. 별칭도 인식해 표제어로 정규화한다(예: "CB" → "전환사채").
+
+    표제어·별칭을 길이 내림차순으로 훑어 짧은 표제어가 긴 표제어의 일부를
+    가로채지 않게 한다. 부분 문자열 일치를 허용한다 — 한국어는 조사·
+    합성어가 붙으므로 "전환사채권"·"희석성" 안의 표제어도 잡는다.
+    """
+    if not text:
+        return []
+    candidates = sorted(
+        set(GLOSSARY) | set(GLOSSARY_ALIASES), key=len, reverse=True
+    )
+    first_pos: dict[str, int] = {}
+    for cand in candidates:
+        idx = text.find(cand)
+        if idx == -1:
+            continue
+        canonical = GLOSSARY_ALIASES.get(cand, cand)
+        if canonical not in first_pos or idx < first_pos[canonical]:
+            first_pos[canonical] = idx
+    return [term for term, _ in sorted(first_pos.items(), key=lambda kv: kv[1])]
+
+
+def glossary_footer(texts, limit: int = 8) -> str:
+    """`texts`(문자열 iterable)를 이어 붙인 것에서 등장하는 용어를 모아
+    "이 리포트에 나온 용어" 절로 렌더한다. 용어가 없으면 빈 문자열.
+
+    현재 프로덕션 소비처 0 — 이 헬퍼를 리포트 말미에 붙이는 배선은
+    후속 과제(사전 도입 과제 다음)의 몫이다. `tests/test_unused_exports.py`
+    의 `KNOWN_UNUSED`에 같은 사유로 등재돼 있다.
+    """
+    combined = "".join(texts) if texts else ""
+    terms = glossary_terms_in(combined)[:limit]
+    if not terms:
+        return ""
+    lines = ["**이 리포트에 나온 용어**"]
+    lines.extend(f"- {term} — {GLOSSARY[term]}" for term in terms)
+    return "\n".join(lines)
