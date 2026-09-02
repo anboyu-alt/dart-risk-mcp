@@ -3493,6 +3493,12 @@ try {
   const s = localStorage.getItem("dart_mzn_sort");
   if (s && MZN_SORT_LABEL[s]) MZN_SORT = s;
 } catch (e) {}
+// 정정 접기 — **기본은 끄기(전부 표시)**다. 켜는 것은 사용자의 선택이고,
+// 켰을 때는 꼬리말이 몇 건을 숨겼는지 밝힌다(조용한 절단 금지).
+let MZN_HIDE_AMEND = false;
+try {
+  MZN_HIDE_AMEND = localStorage.getItem("dart_mzn_hide_amend") === "1";
+} catch (e) {}
 let MZN_FILINGS = [];
 
 // 순수 함수 — 정렬만 한다. **건을 잃지 않는다**(입력 길이 = 출력 길이).
@@ -3530,10 +3536,15 @@ function mznGroupKey(f, mode) {
 // 순수 함수 — 공시 목록 표만 만든다. `mezzanineBlockHTML`에서 떼어낸 이유는
 // 정렬할 때 **발행 조건 `<details>`가 닫히지 않게** 이 부분만 다시 그리기
 // 위해서다.
-function mezzanineFilingsHTML(filings, mode) {
-  const rows = sortMznFilings(filings, mode);
-  if (!rows.length) return "";
-  const amended = rows.filter((f) => f.is_amendment).length;
+function mezzanineFilingsHTML(filings, mode, hideAmend) {
+  const all = filings || [];
+  const amended = all.filter((f) => f.is_amendment).length;
+  // ⚠ **거르는 것은 자르는 것이다** — 몇 건을 숨겼는지 꼬리말에 반드시 적는다
+  //   (조용한 절단 금지). 실측 코아스는 109건 중 **67건이 정정**이라, 숨기면
+  //   목록의 절반 이상이 사라진다.
+  const rows = sortMznFilings(
+    hideAmend ? all.filter((f) => !f.is_amendment) : all, mode);
+  if (!rows.length && !all.length) return "";
   let html = `<div class="mzn-scroll"><table class="t" style="margin-top:0">` +
     `<thead><tr><th>일자</th><th>구분</th><th>공시</th></tr></thead><tbody>`;
   let prev = null;
@@ -3557,10 +3568,14 @@ function mezzanineFilingsHTML(filings, mode) {
       `${esc(f.report_nm)}</a>${am}</td></tr>`;
   }
   html += `</tbody></table></div>`;
-  // 조용히 자르지 않는다 — 자를 것이 없으므로 **전부 실었다는 사실**을 적는다.
+  // 조용히 자르지 않는다 — 숨겼으면 **몇 건을 숨겼는지**, 아니면 **전부 실었다는
+  // 사실**을 적는다. 둘 다 전체 건수를 먼저 말한다.
   html += `<div class="dim" style="font-size:0.82rem;margin-top:4px">` +
-    `전체 ${rows.length}건 (전부 표시` +
-    (amended ? ` · 정정 ${amended}건 포함` : "") + `)</div>`;
+    (hideAmend && amended
+      ? `전체 ${all.length}건 중 ${rows.length}건 표시 · 정정 ${amended}건 숨김`
+      : `전체 ${rows.length}건 (전부 표시` +
+        (amended ? ` · 정정 ${amended}건 포함` : "") + `)`) +
+    `</div>`;
   return html;
 }
 
@@ -3656,9 +3671,16 @@ function mezzanineBlockHTML(d, failedKinds) {
       Object.keys(MZN_SORT_LABEL).map((k) =>
         `<span class="chip${k === MZN_SORT ? " on" : ""}" data-mznsort="${k}">` +
         `${esc(MZN_SORT_LABEL[k])}</span>`).join("") +
+      // 정정이 있을 때만 접기 칩을 낸다 — 0건이면 소음이다. 칩에 건수를 적어
+      // **누르기 전에** 무엇이 사라지는지 알 수 있게 한다(코아스는 109 중 67).
+      (d.filings_amended
+        ? `<span class="chip${MZN_HIDE_AMEND ? " on" : ""}" data-mznamend="1" ` +
+          `style="margin-left:10px">정정 접기 (${d.filings_amended})</span>`
+        : "") +
       `</div>`;
     // 목록만 따로 담는다 — 정렬 시 이 안만 다시 그려 아래 `<details>`가 닫히지 않는다.
-    html += `<div id="mznFilings">${mezzanineFilingsHTML(d.filings, MZN_SORT)}</div>`;
+    html += `<div id="mznFilings">` +
+      `${mezzanineFilingsHTML(d.filings, MZN_SORT, MZN_HIDE_AMEND)}</div>`;
   }
 
   if (ov.rows.length) {
@@ -3792,7 +3814,7 @@ async function loadMezzanine(corpCode, items) {
 function renderMznFilings() {
   const box = document.getElementById("mznFilings");
   if (!box) return;
-  box.innerHTML = mezzanineFilingsHTML(MZN_FILINGS, MZN_SORT);
+  box.innerHTML = mezzanineFilingsHTML(MZN_FILINGS, MZN_SORT, MZN_HIDE_AMEND);
 }
 
 // `bindTurnoverYearChips`와 같은 형태 — 선택을 localStorage에 기억한다.
@@ -3808,6 +3830,17 @@ function bindMznSortChips() {
       renderMznFilings();
     };
   });
+  const am = document.querySelector(".chip[data-mznamend]");
+  if (am) {
+    am.onclick = () => {
+      MZN_HIDE_AMEND = !MZN_HIDE_AMEND;
+      try {
+        localStorage.setItem("dart_mzn_hide_amend", MZN_HIDE_AMEND ? "1" : "0");
+      } catch (e) {}
+      am.classList.toggle("on", MZN_HIDE_AMEND);
+      renderMznFilings();
+    };
+  }
 }
 
 // ── 희석 추적(DILUTION, #dilutionCore) — core dart_client.py의 JS 쌍둥이
