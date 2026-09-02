@@ -2334,12 +2334,14 @@ def analyze_company_risk(
         acq_confirmations=_acq_confirmations,
     )
 
-    # 「이 리포트에 나온 용어」 절 입력 — 실제로 찍힌 해설만 모은다. 패턴
-    # prose는 실제 lines에 렌더된 패턴(`_pattern_shown` — 함수가 이미 상한을
-    # 적용하고 그 잘림을 「외 N개…」로 알린 뒤 반환한다)만큼만 반영한다.
-    _glossary_texts: list[str] = [
-        pattern_to_prose(ov["pattern_id"]) for ov in _pattern_shown
-    ]
+    # 「이 리포트에 나온 용어」 절 입력 — 실제로 찍힌 해설만 모은다.
+    # ⚠ 패턴 prose는 넣지 않는다 — `_render_pattern_watch_block`은
+    # PATTERN_PROSE를 렌더하지 않는다(패턴명·taxonomy 라벨·확인해볼 것만
+    # 찍는다). `_pattern_shown`에서 `pattern_to_prose(...)`를 모으면 화면에
+    # 없는 용어("메자닌" 등)가 절에 실린다(리뷰에서 자기주식취득+채무조정+
+    # 상환전환우선주 조합으로 재현). `_pattern_shown`은 이 절 입력용이
+    # 아니라 향후 다른 소비처를 위해 반환값 그대로 받아 둔다.
+    _glossary_texts: list[str] = []
 
     # 6. 타임라인 (내부 랭킹 점수 기준 — 출력에는 노출되지 않음)
     # 헤드라인 — 양면적 신호는 단독으로 후보가 되지 않는다.
@@ -2664,6 +2666,12 @@ def analyze_company_risk(
 
     _glossary = _glossary_block(_glossary_texts)
     if _glossary:
+        # `lines`의 원소 하나가 이미 내부에 trailing 개행을 담고 있을 수
+        # 있어(예: load_catalog_excerpt 발췌가 "...\n"로 끝난다) 원소 단위
+        # pop으로는 못 거른다 — 지금까지 만든 텍스트를 합쳐 뒤쪽 빈 줄을
+        # 걷어낸 뒤 한 원소로 되접는다(실측: 안 걷으면 find_risk_precedents
+        # 등에서 마커 앞에 빈 줄이 두 번 남는다).
+        lines = ["\n".join(lines).rstrip("\n")]
         lines.append(_glossary)
 
     if not deep:
@@ -2889,6 +2897,12 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
 
     _glossary = _glossary_block(_glossary_texts)
     if _glossary:
+        # `lines`의 원소 하나가 이미 내부에 trailing 개행을 담고 있을 수
+        # 있어(예: load_catalog_excerpt 발췌가 "...\n"로 끝난다) 원소 단위
+        # pop으로는 못 거른다 — 지금까지 만든 텍스트를 합쳐 뒤쪽 빈 줄을
+        # 걷어낸 뒤 한 원소로 되접는다(실측: 안 걷으면 find_risk_precedents
+        # 등에서 마커 앞에 빈 줄이 두 번 남는다).
+        lines = ["\n".join(lines).rstrip("\n")]
         lines.append(_glossary)
 
     return "\n".join(lines)
@@ -2984,6 +2998,12 @@ def find_risk_precedents(signal_types: list[str], lookback_days: int = 90) -> st
 
     _glossary = _glossary_block(_glossary_texts)
     if _glossary:
+        # `lines`의 원소 하나가 이미 내부에 trailing 개행을 담고 있을 수
+        # 있어(예: load_catalog_excerpt 발췌가 "...\n"로 끝난다) 원소 단위
+        # pop으로는 못 거른다 — 지금까지 만든 텍스트를 합쳐 뒤쪽 빈 줄을
+        # 걷어낸 뒤 한 원소로 되접는다(실측: 안 걷으면 find_risk_precedents
+        # 등에서 마커 앞에 빈 줄이 두 번 남는다).
+        lines = ["\n".join(lines).rstrip("\n")]
         lines.append(_glossary)
 
     return "\n".join(lines)
@@ -3216,12 +3236,12 @@ def build_event_timeline(
     )
     _top_overlap = _pattern_overlaps[0] if _pattern_overlaps else None
 
-    # 「이 리포트에 나온 용어」 절 입력 — 실제로 찍힌 해설만 모은다. 패턴
-    # prose는 실제 lines에 렌더된 패턴(`_pattern_shown` — 함수가 이미 상한을
-    # 적용하고 그 잘림을 「외 N개…」로 알린 뒤 반환한다)만큼만 반영한다.
-    _glossary_texts: list[str] = [
-        pattern_to_prose(ov["pattern_id"]) for ov in _pattern_shown
-    ]
+    # 「이 리포트에 나온 용어」 절 입력 — 실제로 찍힌 해설만 모은다.
+    # ⚠ 패턴 prose는 넣지 않는다 — `_render_pattern_watch_block`은
+    # PATTERN_PROSE를 렌더하지 않는다(패턴명·taxonomy 라벨·확인해볼 것만
+    # 찍는다). `_pattern_shown`을 여기서 쓰면 화면에 없는 용어가 절에 실린다
+    # (analyze_company_risk와 같은 이유, 같은 수정).
+    _glossary_texts: list[str] = []
 
     # 타임라인 출력
     first_date = events[0][0]
@@ -3427,6 +3447,12 @@ def build_event_timeline(
 
     _glossary = _glossary_block(_glossary_texts)
     if _glossary:
+        # `lines`의 원소 하나가 이미 내부에 trailing 개행을 담고 있을 수
+        # 있어(예: load_catalog_excerpt 발췌가 "...\n"로 끝난다) 원소 단위
+        # pop으로는 못 거른다 — 지금까지 만든 텍스트를 합쳐 뒤쪽 빈 줄을
+        # 걷어낸 뒤 한 원소로 되접는다(실측: 안 걷으면 find_risk_precedents
+        # 등에서 마커 앞에 빈 줄이 두 번 남는다).
+        lines = ["\n".join(lines).rstrip("\n")]
         lines.append(_glossary)
 
     lines.append("⚠️ 이 타임라인은 공시 제목 기반 자동 분류이며, 실제 상황과 다를 수 있습니다.")
@@ -7115,11 +7141,11 @@ def track_capital_structure(
             if _show_prose:
                 meaning = signal_to_prose(e["key"], e.get("report_nm", ""))
                 one_liner = meaning.split("다.")[0] + "다." if meaning else e.get("label", "")
-                # 화면에는 첫 문장만 잘려 나가지만(one_liner), 용어 절은
-                # 절단 전 전체 해설을 본다 — 예: 3PCA의 「제3자배정」은 둘째
-                # 문장에만 나온다.
+                # 용어 절은 화면에 실제로 찍힌 문장(one_liner, 첫 문장만)만
+                # 본다 — 절단 뒤쪽 문장에만 있는 용어(예: 3PCA의
+                # 「제3자배정」)는 화면에 없으므로 절에도 넣지 않는다.
                 if meaning:
-                    _glossary_texts.append(meaning)
+                    _glossary_texts.append(one_liner)
             else:
                 one_liner = ""
             lines.append(
@@ -7140,6 +7166,12 @@ def track_capital_structure(
 
     _glossary = _glossary_block(_glossary_texts)
     if _glossary:
+        # `lines`의 원소 하나가 이미 내부에 trailing 개행을 담고 있을 수
+        # 있어(예: load_catalog_excerpt 발췌가 "...\n"로 끝난다) 원소 단위
+        # pop으로는 못 거른다 — 지금까지 만든 텍스트를 합쳐 뒤쪽 빈 줄을
+        # 걷어낸 뒤 한 원소로 되접는다(실측: 안 걷으면 find_risk_precedents
+        # 등에서 마커 앞에 빈 줄이 두 번 남는다).
+        lines = ["\n".join(lines).rstrip("\n")]
         lines.append(_glossary)
 
     lines.append(
@@ -7453,6 +7485,12 @@ def track_turnover_trend(
 
     _glossary = _glossary_block(_glossary_texts)
     if _glossary:
+        # `lines`의 원소 하나가 이미 내부에 trailing 개행을 담고 있을 수
+        # 있어(예: load_catalog_excerpt 발췌가 "...\n"로 끝난다) 원소 단위
+        # pop으로는 못 거른다 — 지금까지 만든 텍스트를 합쳐 뒤쪽 빈 줄을
+        # 걷어낸 뒤 한 원소로 되접는다(실측: 안 걷으면 find_risk_precedents
+        # 등에서 마커 앞에 빈 줄이 두 번 남는다).
+        lines = ["\n".join(lines).rstrip("\n")]
         lines.append(_glossary)
 
     lines.append(

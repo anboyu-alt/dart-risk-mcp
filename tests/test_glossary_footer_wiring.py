@@ -13,14 +13,33 @@ API 호출 없이 검증한다 — `tests/test_qualification_wiring.py`의
 `tests/test_fetch_failure_honesty.py`의 `patch.object(srv, ...)` 패턴을
 그대로 따른다.
 
+## 컨트롤러 정정 (리뷰 라운드 1)
+
+승인된 계획의 규칙 「실제로 찍힌 해설에서만 용어를 모은다」가 **여섯 곳
+전부에 예외 없이** 적용된다 — `track_capital_structure`에 "절단 전 전체
+해설을 본다"는 예외를 뒀던 첫 구현은 브리프 해석 오류였다(컨트롤러가
+정정). 그래서:
+
+- `analyze_company_risk`·`build_event_timeline`은 `_render_pattern_watch_block`
+  이 렌더하지 않는 `pattern_to_prose(...)`를 절대 절 입력에 넣지 않는다
+  (그 함수는 패턴명·taxonomy 라벨·확인해볼 것만 찍지 PATTERN_PROSE 문장을
+  찍지 않는다 — 재현: 자기주식취득+채무조정+상환전환우선주 조합에서
+  화면에 없는 "메자닌"이 절에 실렸었다).
+- `track_capital_structure`는 화면에 실제로 찍힌 문장(`one_liner`, 첫
+  문장만)만 절 입력에 넣는다 — 절단된 뒤쪽 문장의 용어(3PCA의
+  "제3자배정" 등)는 절에 나타나면 안 된다.
+
 ## 이 파일이 잠그는 것
 
-① 6개 도구 각각 — 해설이 찍힌 출력에 마커가 정확히 1회, 절 줄 수 ≤8,
-   각 정의가 60자 이하, 절의 표제어가 전부 해설 본문(마커 이전)에 실제로
-   등장한다(=passthrough가 아니라 진짜 렌더된 해설에서 나왔다는 증거).
+① 6개 도구 각각 — 해설이 찍힌 출력에 마커가 정확히 1회, 마커 앞에
+   빈 줄이 정확히 하나, 절 줄 수 ≤8, 각 정의가 GLOSSARY 원문과 일치,
+   절에 실린 표제어는 **예외 없이 전부** 해설 본문(마커 이전)에 실제로
+   등장한다(=passthrough나 미렌더 텍스트가 아니라 진짜 렌더된 해설에서
+   나왔다는 증거 — required_terms뿐 아니라 found_terms 전체에 적용).
 ② 해설이 하나도 안 찍힌 경로(관찰 신호 0건)에는 절이 없다.
 ③ passthrough 비스캔 — 공시 제목에만 있고 해설에는 없는 용어는 절에
-   나타나지 않는다(동적 1건 + 6곳 호출부 전체의 정적 잠금).
+   나타나지 않는다(동적 1건 + 6곳 호출부 전체의 정적 잠금 — append뿐
+   아니라 대입·`+=`·컴프리헨션까지 AST로 전부 훑는다).
 ④ 정적 — `_glossary_block(` 호출이 정확히 6회이고 각각이 대상 함수
    본문 안에 있다(AST로 함수 경계를 확인 — 문자열 탐색은 CLAUDE.md
    「인자 검증」 절이 경고하는 함정이 있다).
@@ -31,16 +50,13 @@ API 호출 없이 검증한다 — `tests/test_qualification_wiring.py`의
 
 여섯 곳 전부에 같은 신호(`REVERSE_SPLIT`, 제목 "주요사항보고서(감자결정)")를
 쓴다 — 이 신호의 해설 **첫 문장**에 GLOSSARY 표제어 "감자"가 그대로
-들어 있어(`"감자 또는 주식병합 공시입니다."`), 절단 여부와 무관하게
-표제어가 실제 렌더된 문장에 등장한다는 것을 안전하게 검증할 수 있다.
-DS005 12종 어디에도 걸리지 않아(`resolve_decision_type` 실측 공문자열)
-`get_major_decision` 호출도 유발하지 않는다.
+들어 있어(`"감자 또는 주식병합 공시입니다."`), `track_capital_structure`의
+절단(첫 문장만 렌더)과도 무관하게 안전하게 검증된다. DS005 12종 어디에도
+걸리지 않아(`resolve_decision_type` 실측 공문자열) `get_major_decision`
+호출도 유발하지 않는다.
 
-`track_capital_structure`만 한 가지 예외를 진 텍스트로 검증한다 —
-CLAUDE.md가 명시하는 설계(그 도구의 시계열은 화면에 **첫 문장만** 자르지만
-용어 절 입력은 **절단 전 전체**를 본다, 3PCA의 "제3자배정"이 둘째 문장에만
-있다는 것이 그 근거다)를 `test_track_capital_structure_전체_텍스트를_본다`
-로 별도 고정한다.
+`track_capital_structure`는 별도로 "절단된 문장의 용어는 절에 없다"를
+직접 증명하는 테스트를 하나 더 둔다(3PCA의 "제3자배정"으로).
 """
 from __future__ import annotations
 
@@ -97,10 +113,25 @@ def _split_glossary(out: str):
     return head, lines, tail
 
 
+def _assert_single_blank_line_before_marker(out: str) -> None:
+    """마커 앞 개행이 정확히 2개(=빈 줄 하나)인지 — 3개 이상(빈 줄 두 개
+    이상)이면 안 된다. 리뷰에서 find_risk_precedents 등 여러 도구가
+    "\\n\\n\\n"(빈 줄 두 개)이 되고 있던 것을 잡았다."""
+    idx = out.index(_MARKER)
+    head = out[:idx]
+    stripped = head.rstrip("\n")
+    trailing = len(head) - len(stripped)
+    assert trailing == 2, (
+        f"마커 앞 개행이 {trailing}개다(2개=빈 줄 하나여야 한다): {head[-6:]!r}"
+    )
+
+
 def _assert_glossary_section(out: str, required_terms: set):
-    """① — 마커 1회·줄 수 ≤8·각 정의 ≤60자·표제어가 GLOSSARY 소속·
-    표제어가 실제로 본문(마커 이전)에 등장한다."""
+    """① — 마커 1회·마커 앞 빈 줄 정확히 하나·줄 수 ≤8·각 정의가
+    GLOSSARY 원문과 일치·절에 실린 표제어는 **전부(required_terms뿐
+    아니라 found_terms 전체)** 해설 본문(마커 이전)에 실제로 등장한다."""
     head, lines, _ = _split_glossary(out)
+    _assert_single_blank_line_before_marker(out)
     assert lines, "용어 절이 비어 있다"
     assert len(lines) <= 8, f"줄 수가 8을 넘는다: {len(lines)}"
     found_terms = set()
@@ -112,14 +143,17 @@ def _assert_glossary_section(out: str, required_terms: set):
         assert definition == GLOSSARY[term]
         assert len(definition) <= 60, f"{term}의 정의가 60자를 넘는다: {definition!r}"
         found_terms.add(term)
-    for t in required_terms:
-        assert t in found_terms, f"기대한 표제어 {t!r}가 절에 없다: {found_terms}"
-        # passthrough가 아니라 실제 해설 본문에서 나왔다는 증거 — 마커
-        # 이전 텍스트(신호·패턴 렌더 본문)에 표제어가 그대로 있어야 한다.
+    # 브리프의 핵심 규칙 — "실제로 찍힌 해설에서만 용어를 모은다": 절에
+    # 실린 표제어는 **예외 없이 전부** 해설 본문에 등장해야 한다(요구한
+    # required_terms만이 아니라 찾아낸 found_terms 전체).
+    for t in found_terms:
         assert t in head, (
             f"{t!r}가 용어 절에는 있는데 해설 본문(마커 이전)에는 없다 — "
-            "passthrough로 새어 들어왔을 수 있다"
+            "passthrough로 새어 들어왔거나 화면에 렌더되지 않은 문장에서 "
+            "왔을 수 있다"
         )
+    for t in required_terms:
+        assert t in found_terms, f"기대한 표제어 {t!r}가 절에 없다: {found_terms}"
     return found_terms
 
 
@@ -151,6 +185,46 @@ class TestAnalyzeCompanyRisk:
         # 용어 절 줄 다음에 남는 것은 개행뿐이어야 한다.
         after_lines = [ln for ln in tail.split("\n") if ln.strip() and not ln.startswith("- ")]
         assert not after_lines, f"용어 절 뒤에 본문이 남아 있다: {after_lines}"
+
+    def test_패턴이_렌더돼도_패턴_prose는_넣지_않는다(self, monkeypatch):
+        """`_render_pattern_watch_block`은 PATTERN_PROSE를 렌더하지 않는다
+        (패턴명·taxonomy 라벨·확인해볼 것만 찍는다) — 그래서 「관찰된 신호가
+        겹치는 등록 패턴」 블록이 실제로 뜬 상황에서도 용어 절에는 그
+        신호들 자체의 SIGNAL_PROSE 표제어만 실려야 한다.
+
+        REVERSE_SPLIT 3건(12개월 이내, 희석성 ≥3건 조건 충족)으로
+        CAPITAL_CHURN(2.7)을 합성 발화시키고 DISCLOSURE_VIOL(4.3, 제목
+        "불성실공시법인지정")을 더하면 게이트 없는 2신호 패턴
+        capital_churn_anomaly가 2/2 전부 일치로 렌더된다(라이브 확인:
+        "구성 신호 2개 중 2개가 이 기간 공시에서 관찰됐습니다"). 그
+        PATTERN_PROSE("희석" 포함)가 절에 없어야 하고, REVERSE_SPLIT의
+        SIGNAL_PROSE에서 나온 "감자"만 있어야 한다."""
+        monkeypatch.setattr(srv, "_DART_API_KEY", "testkey")
+        monkeypatch.setattr(srv, "resolve_corp", _resolve_corp_stub)
+        rows = [
+            _mk_disclosure(_REVERSE_SPLIT_TITLE, rcept_no="1" * 14, rcept_dt="20260101"),
+            _mk_disclosure(_REVERSE_SPLIT_TITLE, rcept_no="2" * 14, rcept_dt="20260201"),
+            _mk_disclosure(_REVERSE_SPLIT_TITLE, rcept_no="3" * 14, rcept_dt="20260301"),
+            _mk_disclosure("불성실공시법인지정", rcept_no="4" * 14, rcept_dt="20260401"),
+        ]
+        monkeypatch.setattr(
+            srv, "fetch_company_disclosures_with_status",
+            lambda *a, **kw: (rows, FETCH_OK),
+        )
+        monkeypatch.setattr(srv, "fetch_fund_usage", lambda *a, **kw: [])
+        monkeypatch.setattr(srv, "fetch_distress_events", lambda *a, **kw: [])
+        monkeypatch.setattr(srv, "fetch_financial_statements_all", lambda *a, **kw: [])
+        out = srv.analyze_company_risk("테스트기업")
+        # 패턴 겹침 블록이 실제로 뜨고 전부 일치했는지가 전제 조건이다
+        # (게이트가 있는 capital_backflow/fund_diversion_chain과 달리
+        # capital_churn_anomaly는 확인 게이트가 없어 이 조합만으로 뜬다).
+        assert "관찰된 신호가 겹치는 등록 패턴" in out
+        assert "구성 신호 2개 중 2개가 이 기간 공시에서 관찰됐습니다" in out
+        found_terms = _assert_glossary_section(out, {"감자"})
+        assert "희석" not in found_terms, (
+            "capital_churn_anomaly의 PATTERN_PROSE(\"희석\" 포함)가 화면에 "
+            "없는데도 용어 절에 새어 들어왔다"
+        )
 
 
 class TestCheckDisclosureRisk:
@@ -202,11 +276,14 @@ class TestFindRiskPrecedents:
         assert _MARKER not in out
 
     def test_패턴_prose도_모은다(self):
-        """2개 이상 신호가 전부 일치하는 등록 패턴을 찾으면 그 PATTERN_PROSE도
-        용어 절 입력에 들어간다 — "capital_churn_anomaly"(2.7+4.3, CAPITAL_CHURN
-        + DISCLOSURE_VIOL로 전부 일치)는 "희석"이라는 GLOSSARY 표제어를
-        포함한다(실측 확인). 두 신호의 개별 SIGNAL_PROSE에는 GLOSSARY 표제어가
-        없어, 이 절이 순수하게 패턴 prose에서만 나온 것임을 보장한다."""
+        """이 도구는 실제로 `prose_body = pattern_to_prose(...)`를
+        `lines.append(prose_body or ...)`로 화면에 낸다(server.py 렌더
+        코드 확인) — analyze_company_risk/build_event_timeline과 달리
+        패턴 prose를 절 입력에 넣어도 된다. "capital_churn_anomaly"
+        (2.7+4.3, CAPITAL_CHURN + DISCLOSURE_VIOL로 전부 일치)는 "희석"
+        이라는 GLOSSARY 표제어를 포함한다(실측 확인). 두 신호의 개별
+        SIGNAL_PROSE에는 GLOSSARY 표제어가 없어, 이 절이 순수하게 패턴
+        prose에서만 나온 것임을 보장한다."""
         out = srv.find_risk_precedents(["CAPITAL_CHURN", "DISCLOSURE_VIOL"])
         # 패턴 서술이 실제로 찍혔는지 먼저 확인(전제 조건).
         assert "이 신호들이 동시에 나타날 때의 의미" in out
@@ -277,8 +354,10 @@ class TestTrackCapitalStructure:
             assert bad not in after[0]
 
     def test_패턴_prose도_모은다(self, monkeypatch):
-        """희석성 자본 이벤트 3건(12개월 이내)이면 CAPITAL_CHURN이 뜨고
-        capital_churn_anomaly 패턴 서술("희석" 포함)도 용어 절에 실린다."""
+        """희석성 자본 이벤트 3건(12개월 이내)이면 CAPITAL_CHURN이 뜨고,
+        이 도구는 실제로 `lines.append(pattern)`으로 capital_churn_anomaly
+        PATTERN_PROSE("희석" 포함)를 화면에 낸다 — 그래서 절 입력에 넣어도
+        된다(analyze_company_risk/build_event_timeline과 다른 점)."""
         self._base_patches(monkeypatch)
         rows = [
             _mk_disclosure(_REVERSE_SPLIT_TITLE, rcept_no="1"*14, rcept_dt="20260101"),
@@ -293,34 +372,43 @@ class TestTrackCapitalStructure:
         assert "유사 패턴 서술" in out  # 전제 조건 — 패턴이 실제로 렌더됐는지
         _assert_glossary_section(out, {"감자", "희석"})
 
-    def test_track_capital_structure_전체_텍스트를_본다(self, monkeypatch):
-        """CLAUDE.md의 명시적 설계 — 화면의 시계열 한 줄은 **첫 문장만**
-        잘라 보여주지만(`meaning.split("다.")[0] + "다."`), 용어 절 입력은
-        절단 전 전체 해설을 본다. 3PCA의 "제3자배정"은 둘째 문장에만 있어
-        (`"유상증자 공시입니다."`가 첫 문장), 이 사실을 직접 증명한다.
+    def test_절단된_문장의_용어는_절에_없다(self, monkeypatch):
+        """컨트롤러 정정 — "실제로 찍힌 해설에서만 용어를 모은다"는
+        규칙이 이 도구에도 예외 없이 적용된다. 화면의 시계열 한 줄은
+        **첫 문장만** 보여준다(`meaning.split("다.")[0] + "다."`) — 3PCA의
+        "제3자배정"은 둘째 문장에만 있어(`"유상증자 공시입니다."`가 첫
+        문장) 화면에도, 그래서 용어 절에도 나타나면 안 된다.
+
+        REVERSE_SPLIT을 함께 넣어 절 자체는 뜨게 하되("감자"), 3PCA 쪽의
+        절단된 용어("제3자배정")가 새지 않는 것을 직접 확인한다.
         """
         self._base_patches(monkeypatch)
-        title = "주요사항보고서(제3자배정유상증자결정)"
+        rows = [
+            _mk_disclosure(_REVERSE_SPLIT_TITLE, rcept_no="1" * 14, rcept_dt="20260101"),
+            _mk_disclosure(
+                "주요사항보고서(제3자배정유상증자결정)",
+                rcept_no="2" * 14, rcept_dt="20260201",
+            ),
+        ]
         monkeypatch.setattr(
             srv, "fetch_company_disclosures_with_status",
-            lambda *a, **kw: ([_mk_disclosure(title)], FETCH_OK),
+            lambda *a, **kw: (rows, FETCH_OK),
         )
         out = srv.track_capital_structure("테스트기업")
-        head, lines, _ = _split_glossary(out)
-        found_terms = {ln[2:].split(" — ", 1)[0] for ln in lines}
-        assert "제3자배정" in found_terms, "절단 전 전체 해설에서 나와야 하는 용어가 없다"
-        # 화면에 실제로 찍힌 한 줄(첫 문장만)에는 이 표제어가 없다 — 그래서
-        # "표제어가 해설 본문에 등장" 일반 규칙과 달리 이 도구는 예외라는
-        # 사실 자체가 이 테스트의 요점이다.
-        assert "유상증자 공시입니다." in head
-        # one_liner로 실제 렌더된 줄만 뽑아 검사 — meaning 전체(제3자배정
-        # 포함)가 아니라 절단된 한 줄만 남아 있어야 한다.
-        rendered_line = next(
-            ln for ln in head.split("\n") if ln.strip().startswith("→ ")
+        head, _, _ = _split_glossary(out)
+        # 3PCA 쪽 렌더 줄(→ ...)이 실제로 첫 문장만인지 먼저 확인한다(전제).
+        rendered_3pca = next(
+            ln for ln in head.split("\n")
+            if ln.strip().startswith("→") and "유상증자" in ln
         )
-        assert "제3자배정" not in rendered_line, (
-            "화면에 찍힌 한 줄에 아직 절단되지 않은 문장이 남아 있다 — "
-            "이 테스트의 전제(첫 문장 절단)가 깨졌다"
+        assert "제3자배정" not in rendered_3pca, (
+            "전제가 깨졌다 — 화면에 이미 절단되지 않은 문장이 찍히고 있다"
+        )
+        assert rendered_3pca.strip() == "→ " + "유상증자 공시입니다."
+        found_terms = _assert_glossary_section(out, {"감자"})
+        assert "제3자배정" not in found_terms, (
+            "화면(one_liner)에 없는 용어가 용어 절에 실렸다 — 절단된 뒤쪽 "
+            "문장이 새어 들어왔다"
         )
 
 
@@ -450,10 +538,11 @@ def _function_source(name: str) -> str:
 
 
 # `_glossary_texts`에 실려도 되는 것은 우리가 만든 해설 문자열뿐이다 —
-# signal_to_prose/pattern_to_prose의 반환값(meaning/prose/prose_body/
-# pattern)과 TURNOVER_PROSE 필드(_p[...])만 허용한다. report_nm·title·
-# corp_name·label처럼 DART 원문이나 표시용 라벨을 가리키는 이름은 전부 금지.
-_ALLOWED_GLOSSARY_SOURCES = {"meaning", "prose", "prose_body", "pattern"}
+# signal_to_prose/pattern_to_prose/turnover_prose의 반환값을 담는 이름
+# (meaning/prose/prose_body/pattern/one_liner)과 TURNOVER_PROSE 필드
+# (_p[...])만 허용한다. report_nm·title·corp_name·label처럼 DART 원문이나
+# 표시용 라벨을 가리키는 이름은 전부 금지.
+_ALLOWED_GLOSSARY_SOURCES = {"meaning", "prose", "prose_body", "pattern", "one_liner"}
 _FORBIDDEN_SUBSTRINGS = (
     "report_nm", "corp_name", "corp_info", "title", "label",
     "d[", "e[\"report_nm\"", "e['report_nm'", "evt[", "sig[\"label\"",
@@ -468,8 +557,10 @@ def test_glossary_texts_수집이_여섯_곳_모두에_있다():
 
 
 def test_glossary_texts에_report_nm이나_title을_넘기지_않는다():
-    """정적 잠금 — 여섯 함수 전부에서 `_glossary_texts`를 채우는 표현이
-    DART 원문·제목·라벨을 가리키는 변수명을 쓰지 않는다."""
+    """정적 잠금(문자열 대조) — 여섯 함수 전부에서 `_glossary_texts`를
+    채우는 표현이 DART 원문·제목·라벨을 가리키는 변수명을 쓰지 않는다.
+    AST 기반의 더 정밀한 검사는
+    `test_glossary_texts_모든_유입_경로가_허용된_이름만_쓴다`가 한다."""
     for name in _TOOL_NAMES:
         body = _function_source(name)
         for line in body.splitlines():
@@ -483,9 +574,102 @@ def test_glossary_texts에_report_nm이나_title을_넘기지_않는다():
                 )
 
 
+def _flatten_list_like(node: ast.AST) -> list:
+    """List/Tuple 리터럴이면 그 원소들을(재귀), ListComp/GeneratorExp면
+    반복 표현식(elt)을, 그 외엔 노드 자체를 하나짜리 리스트로 돌려준다.
+
+    패턴 prose 누수(리뷰 finding 1)는 정확히 이 경로 — 컴프리헨션의 elt
+    — 로 들어왔다. `.append(X)`만 보던 옛 검사는 이 경로를 놓쳤다.
+    """
+    if isinstance(node, (ast.List, ast.Tuple)):
+        out: list = []
+        for el in node.elts:
+            out.extend(_flatten_list_like(el))
+        return out
+    if isinstance(node, (ast.ListComp, ast.GeneratorExp)):
+        return _flatten_list_like(node.elt)
+    return [node]
+
+
+def _is_glossary_texts_name(node: ast.AST) -> bool:
+    return isinstance(node, ast.Name) and node.id == "_glossary_texts"
+
+
+def _glossary_texts_source_exprs(fn: ast.FunctionDef) -> list:
+    """`_glossary_texts`로 흘러드는 모든 값 표현식을 찾는다 — 초기 대입
+    (`_glossary_texts: list[str] = [...]`/`= [...]`), `+=`, `.append(X)`/
+    `.extend(X)`, 그리고 그 안의 리스트·컴프리헨션까지 전부 편다."""
+    exprs: list = []
+    for sub in ast.walk(fn):
+        if isinstance(sub, ast.AnnAssign) and _is_glossary_texts_name(sub.target):
+            if sub.value is not None:
+                exprs.extend(_flatten_list_like(sub.value))
+        elif isinstance(sub, ast.Assign) and any(
+            _is_glossary_texts_name(t) for t in sub.targets
+        ):
+            exprs.extend(_flatten_list_like(sub.value))
+        elif isinstance(sub, ast.AugAssign) and _is_glossary_texts_name(sub.target):
+            exprs.extend(_flatten_list_like(sub.value))
+        elif (
+            isinstance(sub, ast.Call)
+            and isinstance(sub.func, ast.Attribute)
+            and sub.func.attr in ("append", "extend")
+            and _is_glossary_texts_name(sub.func.value)
+        ):
+            for a in sub.args:
+                exprs.extend(_flatten_list_like(a))
+    return exprs
+
+
+def _describe_expr(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Subscript):
+        return f"{_describe_expr(node.value)}[...]"
+    if isinstance(node, ast.Call):
+        fname = getattr(node.func, "id", None) or getattr(node.func, "attr", "")
+        return f"{fname}(...)"
+    return ast.dump(node)
+
+
+def test_glossary_texts_모든_유입_경로가_허용된_이름만_쓴다():
+    """AST로 여섯 함수 전부를 훑어 `_glossary_texts`로 흘러드는 **모든**
+    표현식(대입·`+=`·`.append`·`.extend`·리스트/컴프리헨션 내부까지)이
+    허용 목록 안의 이름이거나 `_p[...]` 형태인지 확인한다.
+
+    함수 호출 결과(예: `pattern_to_prose(...)`)를 변수에 담지 않고 곧바로
+    흘려 넣는 것은 **허용하지 않는다** — 리뷰에서 잡힌 패턴 prose 누수가
+    정확히 이 형태(컴프리헨션 elt에 직접 함수 호출)였다. 먼저 이름 있는
+    변수에 담아야(그리고 그 변수가 실제로 화면에도 렌더되는지 사람이
+    확인해야) 이 허용 목록에 들어올 수 있다.
+    """
+    tree = ast.parse(_SRC)
+    module_funcs = {
+        node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
+    for name in _TOOL_NAMES:
+        fn = module_funcs[name]
+        for expr in _glossary_texts_source_exprs(fn):
+            if isinstance(expr, ast.Name):
+                assert expr.id in _ALLOWED_GLOSSARY_SOURCES, (
+                    f"{name}: 허용 목록 밖 이름이 용어 절에 유입된다: "
+                    f"{expr.id!r}"
+                )
+            elif isinstance(expr, ast.Subscript) and isinstance(expr.value, ast.Name):
+                assert expr.value.id == "_p", (
+                    f"{name}: 허용되지 않은 subscript 유입: "
+                    f"{_describe_expr(expr)!r}"
+                )
+            else:
+                raise AssertionError(
+                    f"{name}: 허용되지 않은 표현식이 용어 절에 직접 유입된다"
+                    f"(먼저 이름 있는 변수에 담아야 한다): {_describe_expr(expr)!r}"
+                )
+
+
 def test_glossary_texts_append_인자가_허용_목록_안에_있다():
-    """`.append(X)` 형태의 X가 허용된 이름(meaning/prose/prose_body/
-    pattern) 또는 TURNOVER_PROSE 필드(`_p[...]`)여야 한다."""
+    """`.append(X)` 형태만 보는 얕은 문자열 검사 — 위 AST 검사와 별개로
+    남겨 이중 잠금한다(문자열 검사는 더 읽기 쉬운 실패 메시지를 준다)."""
     for name in _TOOL_NAMES:
         body = _function_source(name)
         for line in body.splitlines():
@@ -496,6 +680,29 @@ def test_glossary_texts_append_인자가_허용_목록_안에_있다():
             assert arg in _ALLOWED_GLOSSARY_SOURCES or arg.startswith("_p["), (
                 f"{name}의 append 인자가 허용 목록 밖이다: {arg!r}"
             )
+
+
+def test_analyze와_build_event_timeline은_패턴_prose를_호출하지_않는다():
+    """리뷰 finding 1의 회귀 방지 — `_render_pattern_watch_block`은
+    PATTERN_PROSE를 렌더하지 않으므로 이 두 함수 안에 `pattern_to_prose(...)`
+    **호출**이 아예 없어야 한다(AST 기준 — 설명용 주석에 그 이름이
+    나오는 것은 정상이라 문자열 검사가 아니라 `ast.Call`만 본다)."""
+    tree = ast.parse(_SRC)
+    module_funcs = {
+        node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
+    for name in ("analyze_company_risk", "build_event_timeline"):
+        fn = module_funcs[name]
+        calls = [
+            n for n in ast.walk(fn)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Name)
+            and n.func.id == "pattern_to_prose"
+        ]
+        assert not calls, (
+            f"{name}이 렌더하지 않는 PATTERN_PROSE를 여전히 호출한다 "
+            f"({len(calls)}회)"
+        )
 
 
 # ── ④ 정적: `_glossary_block(` 호출이 정확히 6회, 각각 대상 함수 안 ──────
@@ -542,12 +749,7 @@ def test_glossary_block_각_호출이_대상_함수_안에_있다():
 
 
 def test_glossary_block_이_모듈_밖에서_호출되지_않는다():
-    """`_glossary_block(` 자체의 전체 출현 횟수도 6이어야 한다 — 정의
-    자체(`def _glossary_block(`)는 포함하지 않도록 정확히 인자 형태로 센다."""
-    calls = [
-        m for m in _SRC.split("_glossary_block(") if not m.startswith("texts")
-    ]
-    # split 특성상 마지막 조각은 호출이 아닌 나머지 본문이라 -1을 뺀다.
+    """`_glossary_block(` 자체의 전체 출현 횟수도 6이어야 한다."""
     assert _SRC.count("_glossary_block(_glossary_texts)") == 6
 
 
