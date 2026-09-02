@@ -317,7 +317,10 @@ class TestGlossaryTermsIn(unittest.TestCase):
         self.assertEqual(terms, ["희석", "감자"])
         self.assertEqual(len(terms), len(set(terms)))
 
-    def test_limit_초과분은_잘린다(self):
+    def test_limit_초과분은_잘리고_몇_개를_뺐는지_밝힌다(self):
+        """상한(8)을 넘긴 용어는 빼되 **조용히 자르지 않는다** — CLAUDE.md
+        「조용한 절단 금지」. 9개를 넣으면 표제어 8줄 + 「외 1개 용어는
+        생략」 한 줄이 나온다."""
         nine_terms = [
             "전환사채", "신주인수권부사채", "교환사채", "메자닌", "리픽싱",
             "전환가액", "희석", "상환전환우선주", "감자",
@@ -329,15 +332,24 @@ class TestGlossaryTermsIn(unittest.TestCase):
         self.assertEqual(len(all_terms), 9)
 
         footer = glossary_footer([text], limit=8)
-        lines = [ln for ln in footer.splitlines() if ln.startswith("- ")]
-        self.assertEqual(len(lines), 8)
+        rows = [ln for ln in footer.splitlines() if ln.startswith("- ")]
+        term_rows = [ln for ln in rows if " — " in ln]
+        omitted_rows = [ln for ln in rows if " — " not in ln]
+        self.assertEqual(len(term_rows), 8)
         # 잘린 것이 몇 건인지뿐 아니라 어느 표제어가 남고 어느 것이
         # 빠졌는지도 확인한다 — 첫 등장 순이므로 마지막 아홉 번째("감자")
         # 만 빠져야 한다.
-        kept = [ln.split(" — ", 1)[0][2:] for ln in lines]
+        kept = [ln.split(" — ", 1)[0][2:] for ln in term_rows]
         self.assertEqual(kept, nine_terms[:8])
         self.assertNotIn("감자", kept)
         self.assertNotIn(f"- 감자 — {GLOSSARY['감자']}", footer)
+        # 조용히 자르지 않는다 — 뺀 개수를 마지막 줄에 적는다(N=1).
+        self.assertEqual(omitted_rows, ["- 외 1개 용어는 생략"])
+        self.assertTrue(footer.endswith("- 외 1개 용어는 생략"))
+
+    def test_상한_이하면_생략_줄이_없다(self):
+        footer = glossary_footer(["전환사채와 감자 이야기입니다."], limit=8)
+        self.assertNotIn("생략", footer)
 
 
 class TestGlossaryFooter(unittest.TestCase):
