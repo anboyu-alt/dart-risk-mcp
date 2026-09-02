@@ -54,7 +54,14 @@ _DATA = {"signals": [{"key": "CB_BW", "label": "CB/BW발행"},
 
 
 def _run(expr, data=None):
-    src = "\n".join([_ESC, _extract("isSoftenedSig"), _extract("renderWhyRow")])
+    # PR-V(뷰어 「지표 읽는 법」 일반화)로 renderWhyRow의 s.prose가
+    # esc(...) 대신 proseTextHTML(...)(esc → boldMarksHTML → glossTermsHTML)을
+    # 거치게 됐다 — 그 세 함수도 함께 끌어와야 한다. DATA에 glossary가
+    # 없어도 proseTextHTML은 `typeof DATA !== "undefined" && DATA && ...`로
+    # 안전하게 빈 사전으로 떨어진다.
+    src = "\n".join([_ESC, _extract("isSoftenedSig"), _extract("renderWhyRow"),
+                      _extract("proseTextHTML"), _extract("boldMarksHTML"),
+                      _extract("glossTermsHTML")])
     payload = json.dumps(data if data is not None else _DATA, ensure_ascii=False)
     script = (f"const DATA = {payload};\n{src}\n"
               f"process.stdout.write(String({expr}));")

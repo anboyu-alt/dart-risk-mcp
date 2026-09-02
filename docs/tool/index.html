@@ -230,15 +230,35 @@
   circle.hv { filter: drop-shadow(0 0 5px rgba(224,86,74,0.9)); }
 
   .headline { background: var(--panel); border: 1px solid var(--line); border-radius: 5px;
-    padding: 16px 20px; margin-top: 14px; position: relative; overflow: hidden; }
-  .headline::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--amber); }
+    padding: 16px 20px; margin-top: 14px; position: relative; }
+  /* ⚠ overflow:hidden을 빼야 한다 — 있으면 용어 사전 툴팁(.term-def)이
+     헤드라인 안에서 밖으로 못 나가고 잘린다. 대신 막대(::before) 쪽에
+     border-radius를 줘 카드 모서리 밖으로 새지 않게 한다. */
+  .headline::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    background: var(--amber); border-radius: 5px 0 0 5px; }
   .headline b { font-size: 1.05rem; }
   .callout { background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 5px;
     padding: 16px 20px; margin-top: 12px; font-size: 0.9rem; }
   .callout ul { margin: 0.5rem 0 0 1.1rem; }
   .callout li { margin: 0.18rem 0; }
   .proselist { display: grid; gap: 0.7rem; margin-top: 0.6rem; font-size: 0.88rem; }
-  .proselist .p { color: var(--dim); }
+  /* ── 시각 위계(PR-V) — 첫 문장은 밝게, 나머지는 낮춰서(explainHTML) ── */
+  .explain .lead { color: var(--tx); }
+  .explain .rest { color: var(--dim); }
+  /* ── 「지표 읽는 법」 접힘(proseDetailsHTML) ── */
+  .mpd > summary { cursor: pointer; color: var(--amber); font-weight: 700; }
+  .mp { margin-bottom: 0.65rem; }
+  .mp .mp-h { font-weight: 700; color: var(--tx); }
+  .mp-f { color: var(--dim); font-weight: 400; }
+  .mp-m { color: var(--tx); margin-top: 0.15rem; }
+  .mp-x { color: var(--dim); margin-top: 0.1rem; }
+  /* ── 용어 사전 툴팁(glossTermsHTML) — 빨강 없음(v0.8.5), 밑줄+호버로만 표시 ── */
+  .term { border-bottom: 1px dotted var(--dim2); cursor: help; position: relative; }
+  .term-def { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 30;
+    min-width: 14rem; max-width: min(22rem, 80vw); background: var(--panel);
+    border: 1px solid var(--line2); padding: 0.4rem 0.6rem; display: none;
+    font-weight: 400; white-space: normal; }
+  .term:hover .term-def, .term:focus-within .term-def, .term:focus .term-def { display: block; }
   .patterncard { border: 1px solid var(--warn-border); background: var(--warn-bg);
     border-radius: 4px; padding: 0.9rem 1.1rem; margin-top: 0.7rem; font-size: 0.9rem; }
   .patterncard b { display: block; margin-bottom: 0.2rem; }
@@ -1610,7 +1630,7 @@ function renderWhyRow(s, rcept) {
   //   화면에 없었다. core `analyze_company_risk`·`build_event_timeline`·
   //   시장 스캔은 모두 이 줄을 낸다(#305·#307). 상세 화면만 빠져 있었다.
   const note = (s.note || "").trim();
-  const p = `<p style="font-size:0.92rem;margin-bottom:0.7rem"><b>${esc(s.label)}</b> — ${esc(s.prose || "등록된 해설이 없는 신호 유형입니다.")}</p>` +
+  const p = `<p style="font-size:0.92rem;margin-bottom:0.7rem"><b>${esc(s.label)}</b> — ${proseTextHTML(s.prose || "등록된 해설이 없는 신호 유형입니다.")}</p>` +
     (note ? `<p class="dim" style="font-size:0.86rem;margin:-0.45rem 0 0.7rem">※ ${esc(note)}</p>` : "");
   if (!isSoftenedSig(s)) return p;
   const slotId = "alloc-" + esc(rcept) + "-" + esc(s.key);
@@ -1901,6 +1921,9 @@ function renderDash() {
     관찰 신호 <b style="color:var(--tx)">${observedEvents.length}건</b>
     · 절차·사후 보고 <b style="color:var(--tx)">${proceduralEvents.length}건</b>
   </div>`;
+  // "amend_rate"(정정공시 비율 KPI, 위)·"tiers"(관찰/절차·사후 보고 구분,
+  // 바로 위 줄)는 둘 다 이 화면에 실제로 표시된다 — 자연스러운 자리라 붙인다.
+  html += metricProseHTML("overview");
 
   if (heaviest) {
     html += `<div style="display:grid;grid-template-columns:1.15fr 1fr;gap:16px;align-items:start" class="dashgrid">
@@ -1908,7 +1931,7 @@ function renderDash() {
         <div class="headline"><div class="slabel amber" style="margin-bottom:8px">▍HEAVIEST SIGNAL</div>
           <div style="font-size:1.1rem;font-weight:800">${esc(displayLabel(heaviest.key) || heaviest.label)} <span style="color:var(--red)">×${typeCount[heaviest.key]}</span></div>
           ${commonNote(heaviest.key) ? `<div class="mnote">※ ${esc(commonNote(heaviest.key))}</div>` : ""}
-          <div class="dim" style="margin-top:0.4rem">${esc(heaviest.prose || "")}</div>
+          <div class="explain" style="margin-top:0.4rem">${explainHTML(heaviest.prose || "")}</div>
         </div>
         ${crisisEvents.length ? `<div class="callout"><div class="slabel red" style="margin-bottom:8px">▍WATCH</div>
           <b>시장감시·위기/부실 유형 공시 ${crisisEvents.length}건 관찰</b> — ${esc(crisisLabels(crisisEvents))} 유형입니다. 원문을 먼저 확인해 보세요.
@@ -1945,7 +1968,7 @@ function renderDash() {
       <div class="proselist">` + detectedTypes.map((s) =>
         `<div><span class="tag" style="background:var(--c${s.category})">${esc(displayLabel(s.key) || s.label)}</span>${s.priority === "first" ? ` <span class="badge-cau">먼저</span>` : s.priority === "context" ? ` <span class="badge-ctx">참고</span>` : ""} <span class="mono" style="font-size:0.78rem;color:var(--dim2)">×${typeCount[s.key]}</span>
          ${commonNote(s.key) ? `<div class="mnote">※ ${esc(commonNote(s.key))}</div>` : ""}
-         <div class="p">${esc(s.prose || "등록된 해설이 없는 신호 유형입니다.")}</div>
+         <div class="explain">${explainHTML(s.prose || "등록된 해설이 없는 신호 유형입니다.")}</div>
          ${signalCatalogCasesHTML(s)}</div>`).join("") +
       `</div></div>`;
     // 자본 리듬 — 12개월 슬라이딩 윈도우 최대 집중도 (MCP detect_capital_churn과 동일 관점)
@@ -1993,7 +2016,7 @@ function renderDash() {
           // 판정 자체는 예전과 동일하다.
           if (p.key === "fund_diversion_chain") {
             // capital_backflow와 같은 이유의 비동기 원문 확인 게이트.
-            return `<div class="patterncard" id="pat-${esc(p.key)}">${headline}${esc(p.description)}
+            return `<div class="patterncard" id="pat-${esc(p.key)}">${headline}${proseTextHTML(p.description)}
               ${overlapBlock}
               ${patternProseCheckpointsHTML(p)}
               <div class="sigs">${patternWindowLabel(p)} · 구성 신호가 촉발된 공시:</div>
@@ -2005,7 +2028,7 @@ function renderDash() {
               </div>`;
           }
           if (p.key === "capital_backflow") {
-            return `<div class="patterncard" id="pat-${esc(p.key)}">${headline}${esc(p.description)}
+            return `<div class="patterncard" id="pat-${esc(p.key)}">${headline}${proseTextHTML(p.description)}
               ${overlapBlock}
               ${patternProseCheckpointsHTML(p)}
               <div class="sigs">${patternWindowLabel(p)} · 구성 신호가 촉발된 공시:</div>
@@ -2016,7 +2039,7 @@ function renderDash() {
               ${patternCatalogCasesHTML(p)}
               </div>`;
           }
-          return `<div class="patterncard">${headline}${esc(p.description)}
+          return `<div class="patterncard">${headline}${proseTextHTML(p.description)}
             ${overlapBlock}
             ${patternProseCheckpointsHTML(p)}
             <div class="sigs">${patternWindowLabel(p)} · 구성 신호가 촉발된 공시:</div>
@@ -3147,24 +3170,180 @@ const TURNOVER_PROSE_KEY_MAP = [
   ["ccc", "ccc"],
 ];
 
+// ── 「읽는 법」 렌더러 일반화 + 용어 사전 툴팁 (PR-V) ──────────────────────
+//
+// 회전율 패널에만 있던 "지표 읽는 법" 접힘을 공용 렌더러로 뽑고, 신호·패턴
+// 해설(prose) 전반에 굵게(`**`)·용어 사전 툴팁을 입힌다. 순수 함수는 사전·
+// 항목을 인자로 받고(테스트 하네스가 `DATA`를 못 끌어오므로), `DATA`를 읽는
+// 얇은 래퍼(`proseTextHTML`·`glossStaticHTML`·`metricProseHTML`·
+// `turnoverProseHTML`·`explainHTML`)를 별도로 둔다.
+
+// `**굵게**` → `<b>`. 짝이 안 맞는 `**`는 그대로 둔다(정규식 자체가 짝을
+// 찾을 때만 치환하므로 별도 처리가 필요 없다).
+function boldMarksHTML(escaped) {
+  return String(escaped == null ? "" : escaped).replace(/\*\*([^*]+?)\*\*/g, "<b>$1</b>");
+}
+
+// 용어 사전 툴팁 — 표제어·별칭을 문자열 그대로 찾아
+// `<span class="term" tabindex="0">낱말<span class="term-def">풀이</span></span>`
+// 으로 감싼다. 순수 함수(DOM 접근 없음). `/(<[^>]*>)/`로 태그·텍스트를 갈라
+// 태그 조각은 손대지 않고, `<a>`·`<summary>`·`<code>`·`class="term"` 안의
+// 텍스트는 건너뛴다(중첩 대화형 금지 + 멱등 — 이미 감싼 낱말을 다시 감싸지
+// 않는다). 낱말당 한 호출 안에서 첫 1회만 감싼다. 부분 일치를 허용한다
+// (「전환사채권」 안의 「전환사채」) — 뒤따르는 한글까지 통째로 끌어안는
+// 대안은 조사(「전환사채**를**」)까지 밑줄이 그어져 기각했다.
+function glossTermsHTML(escapedHtml, glossary, aliases) {
+  const html = String(escapedHtml == null ? "" : escapedHtml);
+  const gloss = glossary || {};
+  const alias = aliases || {};
+  // class 속성값을 공백으로 나눠 토큰 "term"과 정확히 일치할 때만 보호
+  // 대상으로 본다 — 부분 문자열 매칭(`\bterm\b`)은 "term-def"(툴팁 자신)도
+  // 걸려 든다.
+  const isTermClass = (tag) => {
+    const m = tag.match(/class\s*=\s*["']([^"']*)["']/);
+    return !!m && m[1].split(/\s+/).indexOf("term") !== -1;
+  };
+  const defs = {};
+  for (const term of Object.keys(gloss)) if (term && gloss[term]) defs[term] = gloss[term];
+  for (const a of Object.keys(alias)) {
+    // 별칭은 표제어의 풀이를 그대로 쓴다. 표제어가 사전에 없으면 건너뛴다.
+    const def = gloss[alias[a]];
+    if (a && def) defs[a] = def;
+  }
+  // 길이 내림차순 — 「신주인수권부사채」가 「신주인수권」류보다 먼저 매칭돼야
+  // 좌측 우선 교대식에서 더 긴(더 구체적인) 표제어가 이긴다.
+  const terms = Object.keys(defs).sort((x, y) => y.length - x.length);
+  if (!terms.length) return html;
+  const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const termRe = new RegExp(terms.map(escRe).join("|"), "g");
+  const VOID_TAGS = { br: 1, hr: 1, img: 1, input: 1, meta: 1, link: 1,
+    area: 1, base: 1, col: 1, embed: 1, source: 1, track: 1, wbr: 1 };
+
+  const parts = html.split(/(<[^>]*>)/);
+  const seen = new Set();
+  const stack = [];
+  let depth = 0;
+  const out = [];
+  for (const part of parts) {
+    if (!part) continue;
+    if (part.charAt(0) === "<") {
+      const close = part.match(/^<\/\s*([a-zA-Z][a-zA-Z0-9]*)/);
+      if (close) {
+        const nm = close[1].toLowerCase();
+        if (stack.length && stack[stack.length - 1].name === nm) {
+          if (stack.pop().protected) depth--;
+        }
+        out.push(part);
+        continue;
+      }
+      const open = part.match(/^<\s*([a-zA-Z][a-zA-Z0-9]*)/);
+      const name = open ? open[1].toLowerCase() : null;
+      const selfClose = /\/>\s*$/.test(part);
+      if (name && !selfClose && !VOID_TAGS[name]) {
+        const protectedOpen = name === "a" || name === "summary" ||
+          name === "code" || (name === "span" && isTermClass(part));
+        stack.push({ name, protected: protectedOpen });
+        if (protectedOpen) depth++;
+      }
+      out.push(part);
+      continue;
+    }
+    if (depth > 0) { out.push(part); continue; }
+    out.push(part.replace(termRe, (m) => {
+      if (seen.has(m)) return m;
+      seen.add(m);
+      return `<span class="term" tabindex="0">${m}<span class="term-def" role="tooltip">${esc(defs[m])}</span></span>`;
+    }));
+  }
+  return out.join("");
+}
+
+// 일반 텍스트 파이프라인: esc → `**굵게**` → 용어 사전. 신호·패턴 해설 등
+// "DART 응답이나 하드코딩된 raw 문자열"에 쓴다(이미 HTML인 정적 상수에는
+// `glossStaticHTML`을 쓴다).
+function proseTextHTML(raw) {
+  const gloss = (typeof DATA !== "undefined" && DATA && DATA.glossary) || {};
+  const aliases = (typeof DATA !== "undefined" && DATA && DATA.glossary_aliases) || {};
+  return glossTermsHTML(boldMarksHTML(esc(raw == null ? "" : raw)), gloss, aliases);
+}
+
+// 이미 안전한 정적 HTML 상수(MZN_NOT_BALANCE 등 `<b>`가 이미 박혀 있는
+// 문자열)에 사전만 입힌다 — esc()를 다시 거치면 그 안의 태그가 깨진다.
+function glossStaticHTML(rawHtml) {
+  const gloss = (typeof DATA !== "undefined" && DATA && DATA.glossary) || {};
+  const aliases = (typeof DATA !== "undefined" && DATA && DATA.glossary_aliases) || {};
+  return glossTermsHTML(rawHtml, gloss, aliases);
+}
+
+// 첫 문장만 밝게(`.lead`), 나머지는 낮춰(`.rest`) — 시각 위계. esc를 거친
+// 문자열을 받는다(사전 함수보다 앞서야 한다는 뜻이 아니라, 이 함수 자체가
+// 태그를 새로 만들 뿐 텍스트를 escape하지는 않는다는 뜻 — 사전 함수는
+// 태그를 건너뛰므로 이 함수 다음에 걸어도 안전하다).
+function leadSentenceHTML(escaped) {
+  const s = String(escaped == null ? "" : escaped);
+  const m = s.match(/[.!?](?=\s|$)/);
+  if (!m) return `<span class="lead">${s}</span>`;
+  const cut = m.index + 1;
+  const lead = s.slice(0, cut);
+  const rest = s.slice(cut);
+  if (!rest.trim()) return `<span class="lead">${lead}</span>`;
+  return `<span class="lead">${lead}</span><span class="rest">${rest}</span>`;
+}
+
+// HEAVIEST·COMMENTARY처럼 "첫 문장 강조 + 용어 사전"을 함께 쓰는 자리의
+// 얇은 합성 — esc → 굵게 → 첫 문장 분리 → 사전(태그를 건너뛰므로 이 순서가
+// 안전하다).
+function explainHTML(raw) {
+  const gloss = (typeof DATA !== "undefined" && DATA && DATA.glossary) || {};
+  const aliases = (typeof DATA !== "undefined" && DATA && DATA.glossary_aliases) || {};
+  return glossTermsHTML(
+    leadSentenceHTML(boldMarksHTML(esc(raw == null ? "" : raw))), gloss, aliases);
+}
+
+// "지표 읽는 법" 접힘 — `[{label, formula?, meaning, fall?, caveat?}]` →
+// `<details class="mpd">`. formula/fall/caveat은 있을 때만 렌더한다(빈 괄호·
+// 빈 줄 금지). 텍스트는 전부 `proseTextHTML`을 거친다(제목만 예외 — summary
+// 안은 용어 사전을 적용하지 않는다, 대화형 토글이 깨진다).
+function proseDetailsHTML(title, entries) {
+  if (!entries || !entries.length) return "";
+  const rows = entries.map((p) => {
+    const formula = p && p.formula
+      ? ` <span class="mp-f">(${proseTextHTML(p.formula)})</span>` : "";
+    const fall = p && p.fall
+      ? `<div class="mp-x">${proseTextHTML(p.fall)}</div>` : "";
+    const caveat = p && p.caveat
+      ? `<div class="mp-x">${proseTextHTML(p.caveat)}</div>` : "";
+    return `<div class="mp">` +
+      `<div class="mp-h">${proseTextHTML(p.label)}${formula}</div>` +
+      `<div class="mp-m">${proseTextHTML(p.meaning)}</div>` +
+      fall + caveat +
+      `</div>`;
+  }).join("");
+  return `<details class="mpd" style="margin-top:0.5rem;font-size:0.85rem">` +
+    `<summary>${esc(title)}</summary>` +
+    `<div style="margin-top:0.5rem">${rows}</div></details>`;
+}
+
+// 패널별 "지표 읽는 법" — `signals-data.json`의 `metric_prose[panel]`을
+// 삽입 순서대로 렌더한다. `excludeKeys`는 **그 패널이 화면에 그리지 않는
+// 지표**를 걸러낸다(데이터는 그대로 두고 뷰어에서만 뺀다 — 없는 숫자의
+// 읽는 법을 붙이면 안 되므로). 키가 없으면 빈 문자열(옛 JSON 호환).
+function metricProseHTML(panel, excludeKeys) {
+  const all = (typeof DATA !== "undefined" && DATA && DATA.metric_prose &&
+    DATA.metric_prose[panel]) || {};
+  const exclude = new Set(excludeKeys || []);
+  const entries = Object.keys(all).filter((k) => !exclude.has(k)).map((k) => all[k]);
+  return proseDetailsHTML("지표 읽는 법", entries);
+}
+
 function turnoverProseHTML() {
   // core TURNOVER_PROSE를 export_tool_data.py가 그대로 내보낸 것 — 문구를
   // 손으로 복제하지 않는다(위 fs_aliases와 같은 이유). 데이터가 없으면
   // 렌더하지 않는다.
   const prose = DATA && DATA.turnover_prose;
   if (!prose || !Object.keys(prose).length) return "";
-  const rows = TURNOVER_PROSE_KEY_MAP.map(([, dataKey]) => {
-    const p = prose[dataKey];
-    if (!p) return "";
-    return `<div style="margin-bottom:0.65rem">` +
-      `<div style="font-weight:700">${esc(p.label)} <span class="dim" style="font-weight:400">(${esc(p.formula)})</span></div>` +
-      `<div style="margin-top:0.15rem">${esc(p.meaning)}</div>` +
-      `<div class="dim" style="margin-top:0.1rem">${esc(p.fall)}</div>` +
-      `<div class="dim" style="margin-top:0.1rem">${esc(p.caveat)}</div>` +
-      `</div>`;
-  }).join("");
-  return `<details style="margin-top:0.5rem;font-size:0.85rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">지표 읽는 법</summary>
-    <div style="margin-top:0.5rem">${rows}</div></details>`;
+  const entries = TURNOVER_PROSE_KEY_MAP.map(([, dataKey]) => prose[dataKey]).filter(Boolean);
+  return proseDetailsHTML("지표 읽는 법", entries);
 }
 
 function turnoverTrendBlockHTML(periods, years, divUsed) {
@@ -3638,10 +3817,10 @@ function mezzanineBlockHTML(d, failedKinds) {
     // 「잔액이 아니다」는 **만기 건수**에 대한 고지다 — 아래 만기 줄에 두면
     // 대기물량이 있는 회사에서 그 줄이 「청구기간 열림」만 담게 돼 고지가
     // 엉뚱한 항목 아래 붙는다(크라우드웍스 실측, core와 같은 수정).
-    facts.push(MZN_NOT_BALANCE);
+    facts.push(glossStaticHTML(MZN_NOT_BALANCE));
     // ⚠ 반대 방향의 한계 — 위 「상한」은 **과대**를, 이것은 **과소**를 말한다.
     //   실측(크라우드웍스): 1년 40억 ↔ 5년 140억.
-    facts.push(MZN_WINDOW_CAVEAT);
+    facts.push(glossStaticHTML(MZN_WINDOW_CAVEAT));
     const ex = [];
     if (ov.excluded_matured) ex.push(`만기일 경과 ${ov.excluded_matured}건`);
     if (ov.excluded_eb) ex.push(`EB ${ov.excluded_eb}건(교환 대상이 이미 발행된 주식)`);
@@ -3660,7 +3839,7 @@ function mezzanineBlockHTML(d, failedKinds) {
     const saysMaturity = mt.length > 0;
     if (d.exercise_open) mt.push(`전환·행사 청구기간 열림 ${d.exercise_open}건`);
     if (mt.length) facts.push(esc(mt.join(" · ")));
-    if (saysMaturity) facts.push(MZN_NOT_BALANCE);
+    if (saysMaturity) facts.push(glossStaticHTML(MZN_NOT_BALANCE));
   }
   html += `<div style="font-size:0.9rem;line-height:1.75">${facts.join("<br>")}</div>`;
 
@@ -3761,12 +3940,14 @@ function mezzanineBlockHTML(d, failedKinds) {
     html += `</div></details>`;
   }
 
-  html += `<div class="dim" style="font-size:0.82rem;margin-top:8px">` +
+  html += metricProseHTML("mezzanine");
+
+  html += `<div class="dim" style="font-size:0.82rem;margin-top:8px">${glossStaticHTML(
     `※ 발행결정 공시에 기재된 조건을 그대로 옮긴 사실이며, 적정·부적정 판단이 아닙니다.<br>` +
     `※ 위 발행 건과 아래 「주식 수 변동」의 전환·행사 실적은 <b>서로 다른 원장</b>입니다. ` +
     `증자(감자) 현황의 행사 행에는 회차가 기재되지 않아 어느 발행분이 전환됐는지 이을 수 ` +
     `없습니다 — 리픽싱으로 조정된 가액에서 전환이 일어나므로 발행가액으로 되짚는 것도 ` +
-    `맞지 않습니다.</div>`;
+    `맞지 않습니다.`)}</div>`;
   return html;
 }
 
@@ -3987,13 +4168,16 @@ function dilutionBlockHTML(d, years) {
     }
   }
 
+  html += metricProseHTML("dilution");
+
   const notes = [`원장이 덮는 구간 ${d.earliest ? fmtDate(d.earliest) + "~" + fmtDate(d.latest) : "구간 미상"}`];
   if (d.undated) notes.push(`일자 미기재 ${d.undated}건 제외`);
   notes.push(d.commonTotal
     ? `보통주 발행총수 ${d.commonTotal.toLocaleString()}주`
     : "보통주 발행총수를 찾지 못해 비중은 계산하지 않았습니다");
   html += `<div class="dim" style="font-size:0.82rem;margin-top:8px">※ ${esc(notes.join(" · "))}.<br>` +
-    `※ 사업보고서 「증자(감자) 현황」 기재를 그대로 집계한 사실이며, 적정·부적정 판단이 아닙니다.</div>`;
+    glossStaticHTML(`※ 사업보고서 「증자(감자) 현황」 기재를 그대로 집계한 사실이며, 적정·부적정 판단이 아닙니다.`) +
+    `</div>`;
   return html;
 }
 
@@ -4161,6 +4345,7 @@ function fundChainPanelHTML(records, disclosures) {
     html += `<details style="margin-top:0.4rem;font-size:0.85rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">그 외 조달건 ${rest.length}건 보기</summary>` +
       rest.map((e) => fundEntryCardHTML(e) + fundHintListHTML(e, hints)).join("") + `</details>`;
   }
+  html += metricProseHTML("fund_usage");
   return html;
 }
 
@@ -4347,7 +4532,7 @@ function patternEvidenceHTML(pattern, events) {
 // 접힘 기본 닫힘 유지(카드 과밀 방지).
 function patternProseCheckpointsHTML(p) {
   const proseBlock = p.prose
-    ? `<div style="margin-top:0.35rem;font-size:0.85rem;line-height:1.55">${esc(p.prose)}</div>`
+    ? `<div style="margin-top:0.35rem;font-size:0.85rem;line-height:1.55">${proseTextHTML(p.prose)}</div>`
     : "";
   const checkpointsBlock = (p.checkpoints && p.checkpoints.length)
     ? `<details style="margin-top:0.4rem;font-size:0.82rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">무엇을 확인하면 되나</summary>
@@ -5821,12 +6006,13 @@ async function loadFinancialCore(corpCode) {
   if (eq !== null && eq < 0) warns.push(`완전 자본잠식 상태입니다 — 자본총계 ${fmtKRW(eq)}.`);
   else if (eq !== null && cap !== null && eq < cap) warns.push(`부분 자본잠식 상태입니다 — 자본총계(${fmtKRW(eq)})가 자본금(${fmtKRW(cap)})보다 작습니다.`);
   if (warns.length) {
-    html += `<div class="factwarn">⚠️ ${warns.map(esc).join("<br>⚠️ ")}<br><span class="dim" style="font-size:0.8rem">사실 표기입니다 — 정확한 맥락은 감사보고서·사업보고서 원문에서 확인하세요.</span></div>`;
+    html += `<div class="factwarn">⚠️ ${warns.map(proseTextHTML).join("<br>⚠️ ")}<br><span class="dim" style="font-size:0.8rem">사실 표기입니다 — 정확한 맥락은 감사보고서·사업보고서 원문에서 확인하세요.</span></div>`;
   } else if (rev[0] !== null || ni[0] !== null) {
     html += `<p class="dim" style="font-size:0.85rem;margin-top:0.4rem">연속 적자·자본잠식에 해당하는 관찰 없음.</p>`;
   }
   html += `<div class="slabel" style="margin:14px 0 6px">▍RATIO TREND — 부채비율·유동비율 3기간</div>`;
   html += ratioTrendBlock(rows, div);
+  html += metricProseHTML("financial");
   html += `<p class="dim" style="font-size:0.8rem;margin-top:0.5rem">더 깊은 재무 이상 스캔(매출채권·재고 급증, Beneish 변수 8종, 전기 재작성 감지)은 <a href="../#start">MCP 대화</a>의 scan_financial_anomaly가 제공합니다.</p>`;
   el.innerHTML = html;
   const _op = lossStreakFromPeriods(op), _ni = lossStreakFromPeriods(ni);
@@ -5884,9 +6070,12 @@ async function loadHoldings(corpCode) {
   if (accumNotes.length) {
     html += `<div class="factwarn">📈 <b>단기 매집 흐름 관찰</b> — 60일 안에 보유비율이 1%p 이상 늘어난 보고자가 있습니다:<br>` +
       accumNotes.map(esc).join("<br>") +
-      `<br><span class="dim" style="font-size:0.8rem">계단식 매집은 지배 재편·경영권 경합 국면에서 반복 관찰되는 형태입니다 — 각 보고서의 취득 자금 출처·보고 사유를 원문에서 확인하세요.</span></div>`;
+      `<br><span class="dim" style="font-size:0.8rem">${glossStaticHTML(
+        `계단식 매집은 지배 재편·경영권 경합 국면에서 반복 관찰되는 형태입니다 — 각 보고서의 취득 자금 출처·보고 사유를 원문에서 확인하세요.`)}</span></div>`;
   }
-  html += `<p class="dim" style="font-size:0.8rem;margin-top:0.5rem">※ DART <b>임원·주요주주 특정증권 소유보고</b>(elestock)의 공개 기록 미러링입니다 — 등기임원·지배주주 중심이며 <b>5% 대량보유 보고가 아닙니다</b>(그건 majorstock 별도 엔드포인트입니다). 최대주주 현황까지 통합한 시계열은 MCP 대화의 track_insider_trading이 제공합니다.</p>`;
+  html += metricProseHTML("insider");
+  html += `<p class="dim" style="font-size:0.8rem;margin-top:0.5rem">${glossStaticHTML(
+    `※ DART <b>임원·주요주주 특정증권 소유보고</b>(elestock)의 공개 기록 미러링입니다 — 등기임원·지배주주 중심이며 <b>5% 대량보유 보고가 아닙니다</b>(그건 majorstock 별도 엔드포인트입니다). 최대주주 현황까지 통합한 시계열은 MCP 대화의 track_insider_trading이 제공합니다.`)}</p>`;
   el.innerHTML = html;
 }
 
@@ -5922,7 +6111,8 @@ async function loadAuditOpinions(corpCode, finCorePromise) {
     if (prevAuditor && auditor !== "―" && prevAuditor !== "―" && auditor !== prevAuditor) changed = true;
     prevAuditor = auditor;
   }
-  if (hasBad) html += `<div class="factwarn">⚠️ 적정 외 감사의견이 관찰됐습니다 — 상장폐지 사유·개선기간과 직결될 수 있는 가장 무거운 회계 신호입니다. 감사보고서 원문을 확인하세요.</div>`;
+  if (hasBad) html += `<div class="factwarn">⚠️ ${glossStaticHTML(
+    `적정 외 감사의견이 관찰됐습니다 — 상장폐지 사유·개선기간과 직결될 수 있는 가장 무거운 회계 신호입니다. 감사보고서 원문을 확인하세요.`)}</div>`;
   if (changed) html += `<div class="factline dim" style="font-size:0.85rem">· 기간 중 감사인 교체가 관찰됐습니다 (표기 차이일 수 있음 — 원문 확인).</div>`;
   // ── 작업4: 연속 적자 — loadFinancialCore가 이미 받은 3기간(당기/전기/전전기) 금액을
   // 재사용한다(추가 API 호출 0회). 2년 이상 연속일 때만 표기하고, fs_div는 finCore가
@@ -5939,6 +6129,11 @@ async function loadAuditOpinions(corpCode, finCorePromise) {
       html += `<div class="factline">· 순손실 ${finData.lossStreak.ni}년 연속${esc(_capNote)} — 관리종목 요건 관련 관찰 지점</div>`;
     }
   }
+  // ⚠ "mgmt_issue"(감사 강조사항 — 계속기업 불확실성 등)는 metric_prose에
+  // 있지만 이 패널은 그 값을 화면에 그리지 않는다(DART accnutAdtorNmNdAdtOpinion
+  // 응답에서 감사의견·감사인만 읽고 강조사항 필드는 쓰지 않는다). 그리지
+  // 않는 지표의 「읽는 법」을 붙이면 없는 숫자를 설명하는 것이라 걸러낸다.
+  html += metricProseHTML("audit", ["mgmt_issue"]);
   el.innerHTML = html;
 }
 

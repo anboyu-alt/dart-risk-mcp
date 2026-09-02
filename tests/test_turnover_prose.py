@@ -158,13 +158,28 @@ class TestViewerReadsTurnoverProse(unittest.TestCase):
         self.assertIn("turnoverProseHTML()", block)
 
     def test_esc를_거쳐_렌더한다(self):
+        # PR-V(뷰어 「지표 읽는 법」 일반화)로 turnoverProseHTML은 공용
+        # 렌더러 proseDetailsHTML(title, entries)에 위임하도록 바뀌었다 —
+        # 이제 다섯 필드를 직접 esc()하는 코드가 turnoverProseHTML 자신의
+        # 본문에는 없다(proseDetailsHTML(...)을 호출할 뿐). esc 검사의 대상도
+        # 실제로 그 필드를 조립하는 proseDetailsHTML 본문으로 옮긴다 —
+        # 이 함수 안에서는 proseTextHTML(...)이 esc()·boldMarksHTML()·
+        # glossTermsHTML()을 순서대로 거치므로, DART 응답에 섞인 특수문자가
+        # 레이아웃을 깨거나 주입 경로가 되지 않는다는 원래 취지는 그대로다.
+        self.assertIn("function turnoverProseHTML()", self.html)
         i = self.html.index("function turnoverProseHTML()")
         j = self.html.index("\n}", i)
-        body = self.html[i:j]
-        # label/formula/meaning/fall/caveat 다섯 필드 전부 esc()를 통과해야
-        # DART 응답에 섞인 특수문자가 레이아웃을 깨거나 주입 경로가 되지 않는다.
+        turnover_body = self.html[i:j]
+        self.assertIn("proseDetailsHTML(", turnover_body,
+                       "turnoverProseHTML이 공용 렌더러 proseDetailsHTML을 호출하지 않는다")
+
+        k = self.html.index("function proseDetailsHTML(")
+        n = self.html.index("\n}", k)
+        pd_body = self.html[k:n]
         for field in ("p.label", "p.formula", "p.meaning", "p.fall", "p.caveat"):
-            self.assertIn(f"esc({field})", body, f"{field}가 esc()를 거치지 않는다")
+            self.assertIn(
+                f"proseTextHTML({field})", pd_body,
+                f"{field}가 proseTextHTML()(esc 포함)을 거치지 않는다")
 
 
 if __name__ == "__main__":
