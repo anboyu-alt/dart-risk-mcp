@@ -904,7 +904,7 @@ def turnover_prose(key: str) -> dict:
 GLOSSARY: dict[str, str] = {
     "전환사채": "돈을 빌리면서 나중에 주식으로 바꿀 권리를 붙인 채권입니다.",
     "신주인수권부사채": "채권과 별도로 새 주식을 살 권리가 딸려 오는 회사채입니다.",
-    "교환사채": "정해진 값에 다른 회사 주식으로 바꿀 수 있는 채권입니다.",
+    "교환사채": "회사가 갖고 있는 주식(다른 회사 것이나 자기주식)으로 바꿀 수 있는 채권입니다.",
     "메자닌": "빚과 주식의 성격을 함께 지닌 채권·우선주를 묶어 부르는 말입니다.",
     "리픽싱": "주가가 떨어지면 전환가액을 따라 내리는 조정입니다.",
     "전환가액": "채권을 주식으로 바꿀 때 적용하는 주당 가격입니다.",
@@ -921,7 +921,7 @@ GLOSSARY: dict[str, str] = {
     "운전자본": "유동자산에서 유동부채를 뺀, 영업에 매일 쓰이는 돈입니다.",
     "대손상각": "받기 어려워진 외상값을 손실로 처리해 장부에서 지우는 것입니다.",
     "연결/별도": "계열사를 합쳐 보는 연결과 그 회사만 따로 보는 별도 재무제표입니다.",
-    "종속회사": "지분을 절반 넘게 갖고 실질적으로 지배하는 다른 회사입니다.",
+    "종속회사": "실질적으로 지배하는(보통 지분 절반 이상) 다른 회사입니다.",
 }
 
 GLOSSARY_ALIASES: dict[str, str] = {
@@ -939,23 +939,39 @@ def glossary_terms_in(text: str) -> list[str]:
     """`text`에 등장하는 GLOSSARY 표제어를 첫 등장 위치 순으로, 중복 없이
     반환한다. 별칭도 인식해 표제어로 정규화한다(예: "CB" → "전환사채").
 
-    표제어·별칭을 길이 내림차순으로 훑어 짧은 표제어가 긴 표제어의 일부를
-    가로채지 않게 한다. 부분 문자열 일치를 허용한다 — 한국어는 조사·
-    합성어가 붙으므로 "전환사채권"·"희석성" 안의 표제어도 잡는다.
+    표제어·별칭을 길이 내림차순으로 훑되, **이미 더 긴 후보가 차지한
+    문자 구간과 겹치는 매치는 배제**한다(`claimed_spans`) — 정렬만으로는
+    부족하다. 예를 들어 "전환사채권"이라는 표현이 있고 그 안에 표제어
+    "전환사채"가 부분 문자열로 들어 있다면(가상 사례 — 현재 20개
+    표제어 사이에는 이런 충돌이 없다), 더 긴 쪽이 구간을 먼저 차지해
+    짧은 쪽이 같은 자리에서 다시 매칭되지 않는다. 부분 문자열 일치
+    자체는 여전히 허용한다 — 한국어는 조사·합성어가 붙으므로
+    "전환사채권"·"희석성" 안의 표제어도(겹치지 않는 한) 잡는다.
     """
     if not text:
         return []
     candidates = sorted(
         set(GLOSSARY) | set(GLOSSARY_ALIASES), key=len, reverse=True
     )
+    claimed_spans: list[tuple[int, int]] = []
     first_pos: dict[str, int] = {}
     for cand in candidates:
-        idx = text.find(cand)
-        if idx == -1:
-            continue
         canonical = GLOSSARY_ALIASES.get(cand, cand)
-        if canonical not in first_pos or idx < first_pos[canonical]:
-            first_pos[canonical] = idx
+        search_from = 0
+        while True:
+            idx = text.find(cand, search_from)
+            if idx == -1:
+                break
+            end = idx + len(cand)
+            search_from = idx + 1
+            overlaps = any(
+                idx < c_end and end > c_start for c_start, c_end in claimed_spans
+            )
+            if overlaps:
+                continue
+            claimed_spans.append((idx, end))
+            if canonical not in first_pos or idx < first_pos[canonical]:
+                first_pos[canonical] = idx
     return [term for term, _ in sorted(first_pos.items(), key=lambda kv: kv[1])]
 
 

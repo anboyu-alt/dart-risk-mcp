@@ -34,6 +34,7 @@ import os
 import pathlib
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
@@ -271,13 +272,31 @@ class TestGlossaryTermsIn(unittest.TestCase):
         text = "이번 발행은 신주인수권부사채 형태입니다."
         terms = glossary_terms_in(text)
         self.assertIn("신주인수권부사채", terms)
-        # 그 안에 다른 표제어가 오인돼 함께 잡히지 않는다.
+        # 그 안에 다른 표제어가 오인돼 함께 잡히지 않는다. 현재 20개
+        # 표제어 사이에는 실제 부분 문자열 겹침이 없어(우연) 이 검사는
+        # 통과가 보장돼 있다 — 실제 겹침 배제 로직은 아래
+        # test_겹치는_구간은_긴_표제어가_차지하고_짧은_쪽은_배제된다가 잠근다.
         for term in GLOSSARY:
             if term != "신주인수권부사채":
                 self.assertNotIn(
                     term, terms,
                     f"{term!r}이 '신주인수권부사채' 안에서 오인 매칭됐다: {terms}",
                 )
+
+    def test_겹치는_구간은_긴_표제어가_차지하고_짧은_쪽은_배제된다(self):
+        """길이 정렬만으로는 겹침 배제를 검증할 수 없다 — 현재 20개
+        표제어는 우연히 서로 부분 문자열 관계가 아니기 때문이다. GLOSSARY에
+        실제로 "전환사채"를 포함하는 상위어("전환사채권")를 임시로 얹어,
+        같은 자리에서 짧은 표제어가 별도로 다시 잡히지 않는지 직접 검증한다."""
+        patched = dict(GLOSSARY)
+        patched["전환사채권"] = "테스트 전용 임시 표제어입니다."
+        with mock.patch("dart_risk_mcp.core.explain.GLOSSARY", patched):
+            terms = glossary_terms_in("이번 발행은 전환사채권 형태입니다.")
+        self.assertIn("전환사채권", terms)
+        self.assertNotIn(
+            "전환사채", terms,
+            f"짧은 표제어 '전환사채'가 '전환사채권'과 같은 구간에서 중복 매칭됐다: {terms}",
+        )
 
     def test_별칭이_표제어로_정규화된다(self):
         self.assertEqual(glossary_terms_in("자사주 매입 공시입니다"), ["자기주식"])
@@ -301,10 +320,20 @@ class TestGlossaryTermsIn(unittest.TestCase):
         ]
         self.assertGreaterEqual(len(nine_terms), 9)
         text = " · ".join(nine_terms)
-        self.assertEqual(len(glossary_terms_in(text)), 9)
+        all_terms = glossary_terms_in(text)
+        self.assertEqual(all_terms, nine_terms)  # 첫 등장 순 = 입력 순
+        self.assertEqual(len(all_terms), 9)
+
         footer = glossary_footer([text], limit=8)
         lines = [ln for ln in footer.splitlines() if ln.startswith("- ")]
         self.assertEqual(len(lines), 8)
+        # 잘린 것이 몇 건인지뿐 아니라 어느 표제어가 남고 어느 것이
+        # 빠졌는지도 확인한다 — 첫 등장 순이므로 마지막 아홉 번째("감자")
+        # 만 빠져야 한다.
+        kept = [ln.split(" — ", 1)[0][2:] for ln in lines]
+        self.assertEqual(kept, nine_terms[:8])
+        self.assertNotIn("감자", kept)
+        self.assertNotIn(f"- 감자 — {GLOSSARY['감자']}", footer)
 
 
 class TestGlossaryFooter(unittest.TestCase):
