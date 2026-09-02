@@ -43,8 +43,11 @@ r"""뷰어 ※/⚠ 고지 ~103자리가 지키는 **사실**을 다음 PR(요약
   지운 뒤 수량 토큰(`\d[\d,]*\s*(건|주|%|년|개|명|종|기간|원)`)의 **집합**을
   `tests/fixtures/viewer_notice_facts.json`과 비교한다. 다음 PR이 "정정
   3건"을 "정정 있음"으로 뭉개면 토큰 집합이 줄어 걸린다.
-- **층 4** — 새 조용한 절단 방지. 렌더/로더 함수 안의 모든 `.slice(0, N)`·
-  `.slice(-N)` 곁에 절단을 알리는 낱말이 있는지 훑는다.
+- **층 4** — 새 조용한 절단 방지. `render`/`load` 접두 함수 + `…HTML` 계열
+  함수(선언·화살표 둘 다) 61개 전수에서 모든 `.slice(0, N)`·`.slice(-N)`이
+  실제로 그 슬라이스를 가리키는 절단 고지와 **식별자로 짝지어지는지** 본다
+  (아래 "층4 원장" 절 — 리뷰에서 고정폭 창의 함정이 발견돼 식별자 짝
+  맞추기로 다시 짰다).
 
 ## 층 3 픽스처와 용어 사전(PR-C/PR-V)의 상호작용
 
@@ -126,6 +129,54 @@ class="term">낱말<span class="term-def">…풀이…</span></span>`로 감싼�
 가 이미 전역으로 지킨다) — 다만 "이것은 사실 표기이지 판정이 아니다"라는
 **명시적** 문장이 그 함수 자체에는 없다는 뜻이다. 다음 PR이 다룰 후보로
 report에 남긴다.
+
+## 층4 원장 — 리뷰 라운드1에서 다시 짠 것과 그 이유(창 규칙 포함)
+
+최초 구현은 두 가지가 헐거웠다(리뷰 지적). ① `_NOTICE_WORD_RE`(외|생략|
+미확인|숨김|표시|확인 시도|중 최근)를 **함수 전체**에 걸어, 그 슬라이스와
+무관한 낱말이 우연히 "고지가 있다"로 통과시켰다 — 실측: `loadAuditOpinions`
+는 「적정 **외** 감사의견」(무관), `renderFeed`는 `${CUR.truncated}건 중
+최근`(**다른** 절단 — 스캔 전체 상한이지 `list.slice(0, 200)`의 상한이
+아니다)이 각각 구했다. 조사 중 세 번째도 나왔다 — `loadCapitalBackflowGate`
+의 유일한 매치는 주석 「자리**표시**자가 스피너라…」("표시"가 부분 일치)
+였다. ② 함수 목록이 `render|load` 접두 30개뿐이라 전체 슬라이스 52곳 중
+6곳만 봤다.
+
+두 가지 모두 고쳤다:
+
+- **절단 낱말을 실제 모양으로 좁힌다**(`_NOTICE_RE`) — 이 코드베이스의
+  진짜 절단 고지는 전부 "건" 바로 옆이거나(「건 생략」·「건 표시」·「건
+  숨김」·「건 미확인」·「건 중 최근」) "외" 바로 뒤에 보간이 온다(「외
+  ${」). 「자리표시자」·「적정 외」는 이 모양이 아니라 걸러진다.
+- **식별자로 짝을 맞춘다**(`_slice_paired`) — 슬라이스의 원본 변수(예
+  `list`)와 경계값(예 `200`)이 그 고지 문구 옆(±100자, 문구 기준)에
+  실제로 나오는지 본다. **고정폭 창은 쓰지 않는다** — `dilutionBlockHTML`
+  처럼 슬라이스와 그 고지가 469자, `mezzanineBlockHTML`처럼 2,104자
+  떨어져 있는 **정상** 사례가 있어(둘 다 이미 층1이 잠근 진짜 고지다),
+  고정폭 창을 쓰면 창을 아무리 넉넉히 잡아도 어느 값에서든 정상 사례를
+  놓치거나(너무 좁으면) 무관한 낱말을 다시 구제하는(너무 넓으면 함수
+  전체와 같아진다) 딜레마에 빠진다. 식별자 짝 맞추기는 거리와 무관하게
+  "이 고지가 **이 슬라이스의** 숫자를 말하는가"만 본다.
+- **함수 목록을 넓힌다**(`_all_render_load_funcs`) — `render|load` 접두 +
+  `function \w*HTML\w*(...)` 선언 + `const \w*HTML\w* = (async )?(...) =>
+  {...}` 화살표(브리프가 예로 든 형태이나 이 코드베이스에는 현재 0개) —
+  30개 → 61개.
+- **원리적으로 같은 5번째 예외**를 추가했다(`_is_split_pair`) — 브리프의
+  4개(`slice(0,1)`·`slice()`·`slice(1)`·`slice(-1)`)는 전부 "정보가 안
+  사라진다"는 같은 원리다. `.slice(0, VAR)`와 짝인 `.slice(VAR)`(같은
+  식별자, 단일 인자)가 같은 함수에 있으면 원본을 정확히 둘로 나눠 **둘
+  다 쓰는 것**이다(`leadSentenceHTML`의 lead/rest) — 절단이 아니라 분할.
+
+다시 짠 뒤 나온 결과는 5개 함수다(코드 옆 `_LAYER4_KNOWN_GAPS`에 각각의
+사실을 적어 뒀다) — `loadHoldings`(PR-N4, xfail)·`loadFundDiversionGate`
+(Important 3: 잘린 개수를 전체처럼 찍는다, 「없다」보다 나쁘다)·
+`loadAuditOpinions`(구조적으로 오늘은 무해하지만 그 사실을 코드가 말하지
+않는다)·`renderFeed`(피드 200행 초과가 조용히 잘린다, 스캔 전체 절단
+안내와는 별개 사실)·`mezzanineBlockHTML`(문자열 **값** 절단 2곳 — 같은
+함수의 다른 슬라이스는 이미 층1이 잠갔다). **이 중 xfail은 하나뿐이다**
+— 이 과제가 "결함 정확히 둘만 xfail로 표시하라"는 지시를 받았기 때문이며,
+나머지 넷은 회귀 테스트(`test_층4_원장_항목은_아직_고지가_없다`)로
+사실만 고정해 PR-N4가 참고하게 한다.
 """
 import json
 import pathlib
@@ -314,18 +365,25 @@ FUNC_REQUIRED = {
         r"\$\{_unreviewed\}건 미확인",
     ],
     # ≈9개 — 실제 본문을 읽고 절단·상한을 말하는 문자열을 전수 확인했다.
+    # 리뷰 반영: 「생략」·「제외:」처럼 낱말만 있고 옆의 `${…}` 변수를 안
+    # 물던 항목을 실제 소스의 변수까지 포함하도록 좁혔다 — 그래야 그
+    # 낱말이 "이 함수의 이 절단"을 가리킨다는 것을 정적으로도 보장한다.
     "mezzanineBlockHTML": [
         r"정정 \$\{d\.filings_amended\}건",
-        r"제외:",
+        r"제외: \$\{esc\(ex\.join",
         r"만기일 경과",
         r"\bEB\b",
         r"MZN_ISSUE_MAX",
-        r"생략",
+        r"\$\{d\.issues\.length - MZN_ISSUE_MAX\}건 생략",
         r"발행이 없다는 뜻이 아닙니다",
         r"서로 다른 원장",
         r"판단이 아닙니다",
     ],
-    "mezzanineFilingsHTML": [r"전체 \$\{", r"표시", r"숨김"],
+    "mezzanineFilingsHTML": [
+        r"전체 \$\{",
+        r"\$\{rows\.length\}건 표시",
+        r"\$\{amended\}건 숨김",
+    ],
     "dilutionBlockHTML": [
         r"일자 미기재",
         r"외 \$\{top\.length - 8\}종",
@@ -748,67 +806,212 @@ def test_층3_fixture_json이_비어있지_않다():
 # 층 4 — 새 조용한 절단 방지
 # ══════════════════════════════════════════════════════════════════════════
 
-_SLICE_RE = re.compile(r"\.slice\(\s*0\s*,\s*[\w.]+\s*\)|\.slice\(\s*-\d+\s*\)")
-_NOTICE_WORD_RE = re.compile(r"외|생략|미확인|숨김|표시|확인 시도|중 최근")
+# ── 리뷰 라운드1 반영 — 이 절 전체를 다시 짰다 ──────────────────────────
+#
+# 지적 ① **낱말만 보면 무관한 낱말이 슬라이스를 "구제"한다.** 원래는
+#   `_NOTICE_WORD_RE`(외|생략|미확인|숨김|표시|확인 시도|중 최근)를 함수
+#   **전체**에 걸었다 — 그 슬라이스와 아무 상관 없는 낱말이 있어도
+#   "고지가 있다"로 통과했다. 실측: `loadAuditOpinions`의 유일한 매치는
+#   「적정 **외** 감사의견」("외"가 그냥 무관한 낱말), `renderFeed`의
+#   유일한 매치는 `${CUR.truncated}건 중 최근`(**다른** 절단 — 스캔
+#   전체가 얼마나 잘렸는지 안내이지 `list.slice(0, 200)`의 상한과 무관).
+#   조사 중 세 번째도 나왔다 — `loadCapitalBackflowGate`의 유일한 매치는
+#   주석 「자리**표시**자가 스피너라…」("표시"가 "자리표시자"의 부분
+#   일치)였다.
+#
+#   두 겹으로 고쳤다:
+#   (a) 절단 낱말을 **실제로 쓰이는 모양**으로 좁힌다(`_NOTICE_RE`). 이
+#       코드베이스의 진짜 절단 고지는 전부 "건" 바로 옆이거나(「건
+#       생략」·「건 표시」·「건 숨김」·「건 미확인」·「건 중 최근」) "외"
+#       바로 뒤에 보간이 온다(「외 ${」). 「자리표시자」·「적정 외」는 이
+#       모양이 아니라 걸러진다. 브리프의 낱말 자체(외·생략·미확인·숨김·
+#       표시·확인 시도·중 최근)는 버리지 않았다 — 모양만 좁혔다.
+#   (b) 그래도 남는 동형(`renderFeed`처럼 **진짜 모양인데 다른 절단을
+#       가리키는** 경우)은 **식별자로 짝을 맞춘다**(`_slice_paired`) —
+#       슬라이스의 원본 변수(`list`)·경계값(`200`)이 그 고지 문구 옆
+#       (±100자)에 실제로 나오는지 본다. 이 식별자 짝 맞추기가 있으므로
+#       고정폭 창(예: ±400자)에 기대지 않는다 — ②에서 보듯 정상 케이스도
+#       슬라이스와 고지가 2천자 넘게 떨어져 있을 수 있어 창 크기 자체가
+#       신뢰할 수 없는 신호였다.
+#
+# 지적 ② **함수 목록이 좁았다.** `render|load` 접두만 훑어 30개였다(전체
+#   슬라이스 52곳 중 6곳만 검사 대상). `function \w*HTML\w*(...)` 선언과
+#   `const \w*HTML\w* = (async )?(...) => {...}` 화살표 함수까지 넓혀
+#   61개 함수를 훑는다(이 코드베이스에는 아직 후자가 0개이지만, 브리프가
+#   명시적으로 요구한 형태라 규칙은 남겨 둔다 — 생기면 자동으로 잡힌다).
+#   `dilutionBlockHTML`이 이 넓힌 목록으로 새로 들어왔는데, 슬라이스와
+#   고지가 469자 떨어져 있어 고정폭 창이었다면 여전히 놓쳤을 사례다 —
+#   식별자 짝 맞추기(①-b)가 거리와 무관하게 잡아낸다.
+#
+# 브리프가 든 4개 예외(단건 선택 `slice(0,1)`·전체 복사 `slice()`·첫
+# 항목 제외 `slice(1)`·마지막 항목 `slice(-1)`)에 **5번째**를 원리적으로
+# 추가했다 — `_is_split_pair`: `.slice(0, VAR)`의 짝인 `.slice(VAR)`(같은
+# 식별자, 단일 인자)가 같은 함수에 있으면 원본을 정확히 둘로 나눠 **둘
+# 다 쓰는 것**이다(`leadSentenceHTML`의 lead/rest — 절단이 아니라 분할).
+# 브리프의 4개와 원리가 같다(정보가 안 사라진다는 점) — 새로 만든 게
+# 아니라 같은 원칙을 다른 모양에 적용한 것이다.
 
-# 렌더/로더 함수 전수 — `function`/`async function`으로 시작하는 최상위
-# 선언 중 이름에 render/load가 들어간 것을 전부 훑는다.
+_SLICE_RE = re.compile(
+    r"\.slice\(\s*0\s*,\s*(?!1\s*\))([\w.]+)\s*\)"
+    r"|\.slice\(\s*-(?!1\s*\))(\d+)\s*\)"
+)
+
+_NOTICE_RE = re.compile(
+    r"외\s*\$\{"
+    r"|건\s*생략"
+    r"|건\s*미확인|미확인"
+    r"|건\s*숨김"
+    r"|건\s*표시"
+    r"|확인 시도"
+    r"|건\s*중\s*최근"
+)
+
 _RENDER_LOAD_FUNC_RE = re.compile(
     r"^(?:async )?function ((?:render|load)\w*)\s*\(", re.M)
+_HTML_FUNC_DECL_RE = re.compile(r"^(?:async )?function (\w*HTML\w*)\s*\(", re.M)
+_HTML_ARROW_RE = re.compile(
+    r"^(?:const|let)\s+(\w*HTML\w*)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>\s*\{", re.M)
 
 
 def _all_render_load_funcs(html: str) -> list:
-    return sorted(set(m.group(1) for m in _RENDER_LOAD_FUNC_RE.finditer(html)))
+    names = set(m.group(1) for m in _RENDER_LOAD_FUNC_RE.finditer(html))
+    names |= set(m.group(1) for m in _HTML_FUNC_DECL_RE.finditer(html))
+    names |= set(m.group(1) for m in _HTML_ARROW_RE.finditer(html))
+    return sorted(names)
 
 
-# 브리프는 층4에서 걸리는 함수가 `loadHoldings` 하나(PR-N4)라고 적었다.
-# 실측(전수 스캔)에서는 **둘**이 걸린다 — `loadFundDiversionGate`의
-# `allHits.slice(0, 3)`도 몇 건 중 3건만 봤는지 알리지 않는다(형제 함수
-# `loadCapitalBackflowGate`의 `OUTFLOW_REVIEW_MAX`는 `totalCount`/
-# `_unreviewed`로 이미 밝히는데, 이쪽은 같은 패턴이면서 안 밝힌다). 이
-# 결함은 브리프가 지정한 두 개(PR-N1·PR-N4)에 들지 않는 **새로 발견한
-# 항목**이다 — 조용히 검사 범위에서 빼는 대신, 별도 이름의 xfail로
-# 정직하게 남기고 report에 적었다(다음 PR 후보).
-_LAYER4_KNOWN_GAPS = {"loadHoldings", "loadFundDiversionGate"}
+def _cut_render_func(html: str, name: str) -> str:
+    """`function name(...)` 선언과 `const name = ... => {...}` 화살표
+    함수 둘 다 받는다 — `_cut`(함수 선언 전용)이 못 찾으면 `_cut_decl`로
+    넘어간다.
+    """
+    if re.search(r"^(?:async )?function " + re.escape(name) + r"\s*\(", html, re.M):
+        return _cut(html, name)
+    b = _cut_decl(html, name)
+    assert b is not None, f"함수를 찾지 못했다: {name}"
+    return b
+
+
+def _source_of(body: str, pos: int) -> str:
+    """`.slice(` 바로 앞의 단순 식별자 체인(`a.b.c`)을 뒤에서부터 잡는다.
+    체인 앞이 `)`(연쇄 호출 결과, 예: `[...x].sort().slice(...)`)면 단순
+    식이 아니므로 빈 문자열을 돌려준다 — 이때는 식별자 짝을 맞출 수 없어
+    `_slice_paired`가 더 약한 규칙(모양만)으로 대체한다.
+    """
+    m = re.search(r"([\w.]+)$", body[:pos])
+    return m.group(1) if m else ""
+
+
+def _is_split_pair(body: str, bound: str) -> bool:
+    if not re.match(r"^[A-Za-z_]\w*$", bound):
+        return False
+    return bool(re.search(r"\.slice\(\s*" + re.escape(bound) + r"\s*\)", body))
+
+
+def _slice_paired(body: str, source: str, bound: str) -> bool:
+    """이 슬라이스가 절단 고지와 실제로 짝지어지는지 본다(지적 ①-b)."""
+    src_len_tok = re.escape(source) + r"\.length" if source else None
+    bound_is_ident = bool(re.match(r"^[A-Za-z_]\w*$", bound))
+    bound_tok = re.escape(bound) if bound_is_ident else None
+    for nm in _NOTICE_RE.finditer(body):
+        near = body[max(0, nm.start() - 100): nm.end() + 100]
+        if src_len_tok and re.search(src_len_tok, near):
+            return True
+        if bound_tok and re.search(r"\b" + bound_tok + r"\b", near):
+            return True
+        if not source and not bound_is_ident:
+            # 원본식이 복잡해 식별자 짝을 못 만든다 — ①-a로 좁힌 진짜
+            # 모양의 고지가 함수 어딘가에라도 있으면 인정한다.
+            return True
+    if source and re.search(src_len_tok + r"\s*[,)]", body):
+        # 게이트류 폴백 — 자기 본문에 고지가 없어도, 이미 다른 곳에서
+        # 잠근 렌더 함수에 원본 길이를 인자로 그대로 넘기면(그 렌더
+        # 함수가 화면에서 고지를 낸다) 인정한다. 호출부를 따라가 그 렌더
+        # 함수 본문을 확인하지는 않는다 — 인자 전달 여부만 본다.
+        return True
+    return False
+
+
+def _layer4_violations(html: str) -> dict:
+    violations = {}
+    for fn in _all_render_load_funcs(html):
+        body = _cut_render_func(html, fn)
+        bad = []
+        for m in _SLICE_RE.finditer(body):
+            bound = m.group(1) or m.group(2)
+            source = _source_of(body, m.start())
+            if _is_split_pair(body, bound):
+                continue
+            if not _slice_paired(body, source, bound):
+                bad.append(m.group(0))
+        if bad:
+            violations[fn] = bad
+    return violations
+
+
+# ── 원장(ledger) — 알려진 절단 5곳 ──────────────────────────────────────
+#
+# 이 중 **하나만**(`loadHoldings`) xfail이다(PR-N4, 브리프가 지정). 나머지
+# 넷은 "결함은 정확히 둘만 xfail로 표시하라"는 이 과제의 지시를 따라
+# xfail로 만들지 않고 실측 사실만 원장에 남긴다 — PR-N4가 이 목록
+# 전체(다섯)를 고친다.
+_LAYER4_KNOWN_GAPS = {
+    "loadHoldings": (
+        "reps.sort(...).slice(0, 5)·pts.slice(-10) 등 4곳. 절단 고지 없음."),
+    "loadFundDiversionGate": (
+        "allHits.slice(0, 3) — 고지가 없는 정도가 아니라, 그 결과를 "
+        "그대로 acquisitionFactsHTML에 넘겨 「타법인 주식·출자증권 취득 "
+        "${results.length}건」을 찍는다. results는 최대 3건으로 잘린 "
+        "hits에서 파생된 값이라, **화면에는 잘린 개수(≤3)가 마치 전체 "
+        "건수인 것처럼 찍힌다** — 「고지가 없다」보다 나쁘다(PR-N4가 "
+        "고친다)."),
+    "loadAuditOpinions": (
+        "[...byYear.keys()].sort().reverse().slice(0, 3) — 절단 고지 "
+        "없음. 다만 byYear는 이 함수 자신이 정확히 3개 연도(thisYear-1/"
+        "-2/-3)만 조회해 채우므로 구조적으로 3개를 넘을 수 없다 — 오늘은 "
+        "정보 손실이 없지만, 그 사실을 코드가 말하지 않는다."),
+    "renderFeed": (
+        "list.slice(0, 200) — 절단 고지 없음. 근처의 `${CUR.truncated}"
+        "건 중 최근 ${CUR.items.length}건`은 **다른 절단**(스캔 전체가 "
+        "얼마나 잘렸는지)이며, 피드가 200행 넘게 조용히 잘리는 사실과는 "
+        "별개다."),
+    "mezzanineBlockHTML": (
+        "it.exchange_target.slice(0, 24)·it.detachable.slice(0, 12) — "
+        "목록 절단이 아니라 **문자열 값 절단**(교환 대상·분리 여부 "
+        "표기를 24·12자로 자름)이다. 같은 함수의 다른 슬라이스"
+        "(d.issues.slice(0, MZN_ISSUE_MAX))는 이미 「생략」 고지가 있어 "
+        "층1·층2가 잠갔다 — 이 둘은 그와 다른, 아직 안 잠긴 부류다."),
+}
 
 
 def test_층4_slice_옆에_절단_고지가_있다():
     html = _html()
     funcs = _all_render_load_funcs(html)
-    assert funcs, "render/load 함수를 하나도 못 찾았다 — 정규식이 낡았다"
-    violations = {}
-    for fn in funcs:
-        body = _cut(html, fn)
-        hits = _SLICE_RE.findall(body)
-        if not hits:
-            continue
-        if not _NOTICE_WORD_RE.search(body):
-            violations[fn] = hits
-    # 알려진 결함(PR-N4 + 새로 발견한 항목) 외에 새 절단이 생기면 여기서 걸린다.
-    assert set(violations) == _LAYER4_KNOWN_GAPS, (
-        f"절단 고지가 없는 slice 목록이 알려진 항목과 다르다: {violations}")
+    assert funcs, "render/HTML 계열 함수를 하나도 못 찾았다 — 정규식이 낡았다"
+    violations = _layer4_violations(html)
+    # 알려진 원장(다섯) 외에 새 절단이 생기면 여기서 걸린다.
+    assert set(violations) == set(_LAYER4_KNOWN_GAPS), (
+        f"절단 고지가 없는 함수 목록이 알려진 원장과 다르다: {violations}")
 
 
 @pytest.mark.xfail(strict=True, reason="PR-N4 — loadHoldings의 reps/pts slice에 절단 고지가 없다")
 def test_층4_loadHoldings_slice에도_절단_고지가_생겼다():
     body = _cut(_html(), "loadHoldings")
     assert _SLICE_RE.search(body), "이 함수에 더 이상 slice가 없다 — xfail 자체를 지워야 한다"
-    assert _NOTICE_WORD_RE.search(body), (
+    assert _NOTICE_RE.search(body), (
         "loadHoldings의 slice 옆에 절단 고지가 아직 없다(PR-N4 대상)")
 
 
-def test_층4_loadFundDiversionGate는_이_잠금의_대상이_아니다():
-    """xfail로 만들지 않은 이유를 실측으로 고정한다 — 이 과제는 "알려진
-    결함 정확히 둘"(PR-N1·PR-N4)만 xfail로 표시하라는 요구를 받았다.
-    `loadFundDiversionGate`의 `allHits.slice(0, 3)` 옆에도 절단 고지가
-    없다는 사실 자체는 참이다(아래에서 실측으로 확인) — 다만 그 사실을
-    이 파일의 xfail 목록에 세 번째로 얹지 않고, `_LAYER4_KNOWN_GAPS`에서
-    빼 **검사 범위 밖**으로 명시하고 report에 남긴다(다음 PR 후보).
+@pytest.mark.parametrize(
+    "fn", sorted(set(_LAYER4_KNOWN_GAPS) - {"loadHoldings"}))
+def test_층4_원장_항목은_아직_고지가_없다(fn):
+    """xfail로 만들지 않은 넷 — "결함 정확히 둘"이라는 이 과제의 지시를
+    지키기 위해 xfail 목록에 얹지 않고, 사실 자체를 회귀로 고정한다(그
+    함수가 실제로 고쳐지면 여기서 걸려 원장에서 빼라고 알려준다).
     """
-    body = _cut(_html(), "loadFundDiversionGate")
-    assert _SLICE_RE.search(body)
-    assert not _NOTICE_WORD_RE.search(body), (
-        "이 함수에 절단 고지가 생겼다 — _LAYER4_KNOWN_GAPS에서 빼도 된다")
+    html = _html()
+    assert fn in _layer4_violations(html), (
+        f"{fn}에 절단 고지가 생겼다 — _LAYER4_KNOWN_GAPS에서 빼도 된다")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -850,8 +1053,12 @@ def _notice_chars(html_source: str) -> int:
     return total
 
 
-# 현재값을 상한으로 잠근다(늘어나면 실패, 줄어드는 것은 언제나 허용).
-_NOTICE_CHARS_CEILING = _notice_chars(_html())
+# ⚠ 리뷰 지적(Critical) — 여기서 `_notice_chars(_html())`로 상한을 다시
+# 재면 "검사 대상 파일에서 잰 값과 검사 대상 파일에서 잰 값"을 비교하는
+# 것이라 **절대 실패할 수 없다**(파일이 아무리 늘어나도 상한도 같이
+# 늘어난다). 상한은 이 커밋 시점에 손으로 측정해 **리터럴로 박는다** —
+# PR-N1~N4가 이 값을 내린다 · 올라가면 실패.
+_NOTICE_CHARS_CEILING = 8302
 
 
 def test_고지_총량_상한():
