@@ -5906,29 +5906,29 @@ function loadDeepBlocks(corpCode) {
   // 결과(3기간 영업이익·순이익 → lossStreak)를 promise로 넘긴다. finCore가 실패해도
   // null로 흡수해 auditCore 렌더는 항상 정상 진행된다.
   const finCorePromise = loadFinancialCore(corpCode).catch((e) => {
-    $("finCore").innerHTML = fetchFailHTML(e.message); // 조회 실패 ≠ 자료 없음
+    $("finCore").innerHTML = fetchFailHTML(e.message);
     return null;
   });
   runTurnoverTrend(corpCode);
   bindTurnoverYearChips(corpCode);
   // 공시 목록은 이미 스캔한 것을 넘긴다 — 재조회하지 않는다.
   loadMezzanine(corpCode, (CUR && CUR.items) || []).catch((e) => {
-    $("mezzanineCore").innerHTML = fetchFailHTML(e.message); // 조회 실패 ≠ 자료 없음
+    $("mezzanineCore").innerHTML = fetchFailHTML(e.message);
   });
   loadDilution(corpCode).catch((e) => {
-    $("dilutionCore").innerHTML = fetchFailHTML(e.message); // 조회 실패 ≠ 자료 없음
+    $("dilutionCore").innerHTML = fetchFailHTML(e.message);
   });
   loadDividendCore(corpCode).catch((e) => {
-    $("divCore").innerHTML = fetchFailHTML(e.message); // 조회 실패 ≠ 자료 없음
+    $("divCore").innerHTML = fetchFailHTML(e.message);
   });
   loadFundChainCore(corpCode).catch((e) => {
-    $("fundCore").innerHTML = fetchFailHTML(e.message); // 조회 실패 ≠ 자료 없음
+    $("fundCore").innerHTML = fetchFailHTML(e.message);
   });
   loadHoldings(corpCode).catch((e) => {
-    $("holdCore").innerHTML = fetchFailHTML(e.message); // 조회 실패 ≠ 자료 없음
+    $("holdCore").innerHTML = fetchFailHTML(e.message);
   });
   loadAuditOpinions(corpCode, finCorePromise).catch((e) => {
-    $("auditCore").innerHTML = fetchFailHTML(e.message); // 조회 실패 ≠ 자료 없음
+    $("auditCore").innerHTML = fetchFailHTML(e.message);
   });
   // #ctrlCore는 findLatestControlChange가 최대주주변경 공시를 찾았을 때만
   // buildResult에서 만들어진다 — 없으면 $ 조회가 null이라 loadControlChangeCore가
@@ -5940,7 +5940,7 @@ function loadDeepBlocks(corpCode) {
   if (ctrlChangeDisclosure) {
     loadControlChangeCore(ctrlChangeDisclosure).catch((e) => {
       const el = $("ctrlCore");
-      if (el) el.innerHTML = fetchFailHTML(e.message); // 조회 실패 ≠ 자료 없음
+      if (el) el.innerHTML = fetchFailHTML(e.message);
     });
   }
 }

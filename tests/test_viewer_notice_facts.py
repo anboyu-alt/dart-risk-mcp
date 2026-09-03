@@ -70,15 +70,19 @@ class="term">낱말<span class="term-def">…풀이…</span></span>`로 감싼�
 지금은 필요하지 않아 넣지 않았다(요구하지 않는 방어 코드는 추가하지
 않는다).
 
-## 알려진 결함 둘 (xfail 대상)
+## 알려진 결함 (xfail 대상)
 
-- **PR-N1** `loadDeepBlocks`의 catch 8곳(안전망 `.catch((e) => {...})`)이
-  `조회 실패: ${e.message}`만 적고 「자료가 없다는 뜻이 아닙니다」류 정직
-  문구가 없다. (나머지 3곳은 `.catch(() => {})`로 완전히 조용하다 — 이건
-  이 두 결함과 다른 종류이고, 부수적 보강 블록이 실패해도 화면에 아무
-  주장도 하지 않으므로 이 PR의 잠금 대상이 아니다. 아래 F 절 참고.)
+- ~~**PR-N1** `loadDeepBlocks`의 catch 8곳이 `조회 실패: ${e.message}`만
+  적고 정직 문구가 없다~~ → **PR-N1이 고쳤다**(아래 F 절 참고). 8곳 전부
+  `fetchFailHTML(`을 태워 「자료가 없다는 뜻이 아닙니다」를 동반한다. 이
+  결함의 잠금은 `test_F_loadDeepBlocks_catch_8곳이_fetchFailHTML을_탄다`가
+  이어받는다(이름을 바꾼 것이 아니라 **정의를 뒤집었다** — 옛 이름
+  `_에코_catch는_8곳이다`는 "8곳이 문제 문구를 낸다"를 잠갔고, 새 이름은
+  "8곳이 고쳐진 호출을 탄다"를 잠근다). (나머지 3곳은 `.catch(() => {})`로
+  완전히 조용하다 — 이건 이 결함과 다른 종류이고, 부수적 보강 블록이
+  실패해도 화면에 아무 주장도 하지 않으므로 이 PR의 잠금 대상이 아니다.)
 - **PR-N4** `loadHoldings`의 `reps….slice(0, 5)`·`pts.slice(-10)`에 절단
-  고지가 없다.
+  고지가 없다. (아직 미해결 — 유일한 xfail.)
 
 ## F 전수 — 브리프의 "catch 블록이 있는 load… 함수 전부"를 실측으로 좁힌 이유
 
@@ -90,18 +94,31 @@ class="term">낱말<span class="term-def">…풀이…</span></span>`로 감싼�
 `loadDeepBlocks` 다섯뿐이다. 이 다섯에 문자 그대로 "`fetchFailHTML(` 존재"를
 요구하면 **5개 전부**가 걸린다 — 브리프가 말한 "알려진 결함은 2개뿐"과
 모순된다. 실측(`loadDeepBlocks` 안의 catch 11곳을 중괄호 균형으로 전부
-잘라 봄)으로 좁히면: `조회 실패:` 에코 문구를 내는 것은 정확히 8곳이고
-(브리프의 "8곳"과 일치), 나머지 3곳(`loadRelatedPartyCore`·
-`loadEarningsShockCore`·`loadAssetTransferCore`의 `.catch(() => {})`)은
-본문이 완전히 비어 있어 **아무 말도 하지 않는다** — 이건 "실패를 없음으로
-속이는" 결함이 아니라 "보강 블록이 조용히 안 나타나는" 별개의 설계다(이
-셋은 이미 다른 컨테이너가 없으면 패널 자체를 안 그리는 조건부 렌더링
-대상). 그래서 F는 다음처럼 **좁혀서** 구현한다: `loadDeepBlocks`의 catch
-본문 중 `조회 실패` 문구를 실제로 내는 것만 뽑아(현재 8곳) 정직 문구
-존재를 검사한다 — 이것이 PR-N1의 정의역이다. `loadFundDiversionGate`·
-`loadCapitalBackflowGate`는 catch 본문에 `직접 확인하세요`가 이미 있어
-정직하고(별도 회귀 테스트로 잠근다), `loadFavs`/`loadSnapStore`는 DART
-데이터를 다루지 않아 범위 밖이다.
+잘라 봄)으로 좁히면: `loadDeepBlocks`는 catch 8곳(정직 문구 부재)·침묵
+3곳(`.catch(() => {})`, `loadRelatedPartyCore`·`loadEarningsShockCore`·
+`loadAssetTransferCore`)으로 나뉘고, 침묵 3곳은 "실패를 없음으로 속이는"
+결함이 아니라 "보강 블록이 조용히 안 나타나는" 별개의 설계다(이미 다른
+컨테이너가 없으면 패널 자체를 안 그리는 조건부 렌더링 대상). 그래서 F는
+`loadDeepBlocks`의 catch 8곳으로 **좁혀서** 구현했다 — 이것이 PR-N1의
+정의역이다.
+
+**PR-N1 수정과 그 리뷰(2026-09-03)**: 최초 수정은 8곳을 전부
+`fetchFailHTML(e.message)` 호출로 바꿨는데, 그러면 catch 본문에서 `조회
+실패` 리터럴이 사라져 위 회귀 테스트(옛 `_에코_catch는_8곳이다`가 "8곳"을,
+`_침묵_catch_3곳은…`이 "3곳"을 그 리터럴 유무로 세고 있었다)가 깨졌다.
+1차 수정은 각 catch에 `// 조회 실패 ≠ 자료 없음` 인라인 주석을 남겨
+리터럴 카운트를 맞췄는데, **이건 테스트를 통과시키려고 코드에 문구를
+심은 것**이라 컨트롤러 리뷰에서 거짓 잠금(false lock)으로 지적됐다 —
+테스트가 "고쳐졌다"고 말하는 근거가 실행되는 호출이 아니라 주석이었다.
+그래서 주석을 지우고, 테스트를 **정의를 뒤집어** 다시 짰다: "8곳이
+`조회 실패` 리터럴을 낸다"(결함이 존재한다는 잠금) →
+"8곳이 `fetchFailHTML(`을 탄다 + `조회 실패:` 리터럴이 0번 나온다"(결함이
+고쳐졌다는 잠금). "침묵 3곳"의 판정 기준도 `조회 실패` 부재에서
+`fetchFailHTML(` 부재로 옮겼다 — 옛 기준을 그대로 두면 고쳐진 8곳도
+"침묵"으로 잘못 세게 된다(둘 다 이제 `조회 실패` 리터럴이 없으므로).
+`loadFundDiversionGate`·`loadCapitalBackflowGate`는 catch 본문에 `직접
+확인하세요`가 이미 있어 정직하고(별도 회귀 테스트로 잠근다), `loadFavs`/
+`loadSnapStore`는 DART 데이터를 다루지 않아 범위 밖이다.
 
 ## D 전수 — "패널 렌더 함수 8개"도 실측과 다르다
 
@@ -439,7 +456,7 @@ def test_층2_compareActors_필수_낱말():
     assert "연결 없음" in body
 
 
-# ── F 전수 — loadDeepBlocks의 「조회 실패」 에코 catch만 대상(모듈 docstring 참고) ──
+# ── F 전수 — loadDeepBlocks의 catch 8곳(모듈 docstring 참고) ──
 
 def _catch_bodies(src: str) -> list:
     """`catch (e) { ... }`·`.catch((e) => { ... })` 양쪽 형태의 본문을
@@ -462,27 +479,46 @@ def _catch_bodies(src: str) -> list:
     return out
 
 
-def _loaddeepblocks_echo_catches() -> list:
-    body = _cut(_html(), "loadDeepBlocks")
-    return [b for b in _catch_bodies(body) if "조회 실패" in b]
+def _loaddeepblocks_catches() -> list:
+    return _catch_bodies(_cut(_html(), "loadDeepBlocks"))
 
 
-def test_F_loadDeepBlocks_에코_catch는_8곳이다():
-    """회귀 잠금 — 이 개수가 늘거나 줄면 아래 xfail의 정의역도 같이
-    갱신해야 한다(조용히 어긋나지 않게 개수 자체를 고정한다).
+def test_F_loadDeepBlocks_catch_8곳이_fetchFailHTML을_탄다():
+    """PR-N0가 기록한 결함 — 이 함수의 catch 8곳이 `조회 실패: ${e.message}`만
+    적고 「자료가 없다는 뜻이 아닙니다」류 정직 문구가 없었다 — 을 PR-N1이
+    고쳤다. 이 테스트는 옛 `test_F_loadDeepBlocks_에코_catch는_8곳이다`를
+    이어받되 **정의를 뒤집었다**: 옛 버전은 "8곳이 `조회 실패` 리터럴을
+    낸다"(결함이 존재한다)를 잠갔고, 이 버전은 "8곳이 실제로
+    `fetchFailHTML(`을 호출하고, 옛 에코 리터럴은 한 번도 안 남는다"(결함이
+    고쳐졌다)를 잠근다.
+
+    PR-N1의 1차 시도는 호출부만 바꾸고 각 catch에 `// 조회 실패 ≠ 자료
+    없음` 주석을 남겨 옛 리터럴 카운트("8곳")를 맞췄는데, 그건 **테스트를
+    통과시키려고 코드에 문구를 심은 것**이라 거짓 잠금이다 — 주석은
+    실행되지 않으므로 "고쳐졌다"는 증거가 될 수 없다. 리뷰 지적으로
+    주석을 지우고 이 테스트로 대체했다: 통과 여부가 실제 호출(`fetchFailHTML(`)
+    존재와 옛 리터럴(`조회 실패:`) 부재라는 **실행 가능한 사실**에만
+    좌우된다.
     """
-    echoes = _loaddeepblocks_echo_catches()
-    assert len(echoes) == 8, [b[:60] for b in echoes]
+    catches = _loaddeepblocks_catches()
+    fetch_fail = [b for b in catches if "fetchFailHTML(" in b]
+    assert len(fetch_fail) == 8, [b[:60] for b in catches]
+    body = _cut(_html(), "loadDeepBlocks")
+    assert "조회 실패:" not in body, (
+        "옛 에코 리터럴(또는 그것을 흉내 낸 주석)이 아직 loadDeepBlocks에 남아 있다")
 
 
 def test_F_loadDeepBlocks_침묵_catch_3곳은_실패를_주장하지_않는다():
     """`loadRelatedPartyCore`/`loadEarningsShockCore`/`loadAssetTransferCore`의
-    `.catch(() => {})`는 완전히 비어 있다 — PR-N1과 다른 부류(주장 자체가
-    없다)임을 고정한다. 이 셋에 나중에 `조회 실패`류 문구가 생기면 이
-    회귀 검사가 F의 정의역이 바뀌었음을 알려준다.
+    `.catch(() => {})`는 완전히 비어 있다 — 위에서 고친 8곳(전부
+    `fetchFailHTML(`을 탄다)과 다른 부류(주장 자체가 없다)임을 고정한다.
+    ⚠ "침묵"의 판정 기준을 PR-N1에서 `조회 실패` 부재 → `fetchFailHTML(`
+    부재로 옮겼다 — 옛 기준을 그대로 두면 고쳐진 8곳도 옛 리터럴이 없으니
+    "침묵"으로 잘못 세게 된다. 이 셋에 나중에 `fetchFailHTML(` 호출이
+    생기면 이 회귀 검사가 F의 정의역이 바뀌었음을 알려준다.
     """
-    body = _cut(_html(), "loadDeepBlocks")
-    silent = [b for b in _catch_bodies(body) if "조회 실패" not in b]
+    catches = _loaddeepblocks_catches()
+    silent = [b for b in catches if "fetchFailHTML(" not in b]
     assert len(silent) == 3
     for b in silent:
         assert b.strip() in ("{}", "{ }")
@@ -1015,17 +1051,12 @@ def test_층4_원장_항목은_아직_고지가_없다(fn):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 알려진 결함 xfail — PR-N1
-# ══════════════════════════════════════════════════════════════════════════
-
-def test_loadDeepBlocks_catch가_부재아님을_말한다():
-    echoes = _loaddeepblocks_echo_catches()
-    HONEST = ("fetchFailHTML(", "뜻이 아닙니다", "직접 확인")
-    assert echoes
-    missing = [b[:70] for b in echoes if not any(h in b for h in HONEST)]
-    assert not missing, f"정직 문구가 없는 catch: {missing}"
-
-
+# PR-N1 결함 xfail은 더 이상 없다 — 고쳐진 상태의 잠금은 위 F 전수 절의
+# `test_F_loadDeepBlocks_catch_8곳이_fetchFailHTML을_탄다`가 이어받는다.
+# (옛 `test_loadDeepBlocks_catch가_부재아님을_말한다`는 그 테스트로 흡수됐다
+# — `_loaddeepblocks_echo_catches()`에 의존했는데 그 헬퍼 자체가 "옛
+# 리터럴이 있는 catch"라는, PR-N1 이후로는 항상 빈 집합을 돌려주는 개념이라
+# 별도로 남겨 둘 이유가 없었다.)
 # ══════════════════════════════════════════════════════════════════════════
 # 측정 보조 — 고지 총량 상한
 # ══════════════════════════════════════════════════════════════════════════
