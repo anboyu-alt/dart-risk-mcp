@@ -55,6 +55,10 @@ def _code() -> str:
 
 def test_최상급_낱말을_쓰지_않는다():
     body = _code()
+    # 피드 위 범례(`.mnote`)도 같은 배지를 설명하는 자리다 — 2026-08-30에
+    # 배지만 바꾸고 범례는 「MAX로 표시」로 남아 있었다(v1.22.0 이연 항목 1).
+    assert "MAX로 표시" not in _HTML
+    assert "「대표 유형」으로 표시" in _HTML
     for bad in (">MAX<", "TOP WEIGHT", "이 기간 최상위"):
         assert bad not in body, f"최상급 낱말이 남아 있다: {bad}"
 

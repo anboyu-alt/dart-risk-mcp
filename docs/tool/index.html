@@ -426,7 +426,7 @@
       <p class="screen-sub">카테고리로 필터링해 흐름을 확인하세요. 행을 누르면 상세로 이동합니다.</p>
       <div class="chips" id="feedChips" style="margin-bottom:16px"></div>
       <div class="rows" id="feedTable"></div>
-      <div class="mnote">// 무게 최상위 신호 행은 MAX로 표시 · 사실 관찰이며 판정 아님</div>
+      <div class="mnote">// 이 기간 대표 유형 신호가 있는 행은 「대표 유형」으로 표시 · 사실 관찰이며 판정 아님</div>
       <div id="procWrap"></div>
     </section>
 
@@ -1539,11 +1539,11 @@ function renderFeed() {
     //
     // 집합은 그대로 두고 낱말만 사실에 맞췄다 — 상세 화면의 두 자리
     // (`SIGNAL · TOP WEIGHT`·「이 기간 최상위」)도 같은 `isTop` 조건이라 함께.
-    // MAX는 이 기간 최상위 "관찰" 신호에만 붙는다 — 절차·사후 보고로 강등된
-    // 행이 헤드라인과 같은 key를 우연히 공유해도(리뷰 라운드1 Finding 1,
-    // 대량보유상황보고 SHAREHOLDER 재현) MAX를 물려받지 않는다.
+    // 「대표 유형」은 이 기간 최상위 "관찰" 신호에만 붙는다 — 절차·사후 보고로
+    // 강등된 행이 헤드라인과 같은 key를 우연히 공유해도(리뷰 라운드1 Finding 1,
+    // 대량보유상황보고 SHAREHOLDER 재현) 배지를 물려받지 않는다.
     const isTop = heavyKey && r.signals.some((s) => isObservedSig(s) && s.key === heavyKey);
-    // 우선순위 배지도 MAX와 같은 원칙 — 절차·사후 보고로 강등된 행에
+    // 우선순위 배지도 「대표 유형」과 같은 원칙 — 절차·사후 보고로 강등된 행에
     // 관찰 신호와 같은 시각 언어(배지)를 씌우지 않는다(리뷰 라운드2 Finding).
     const obsSigs = r.signals.filter(isObservedSig);
     const hasFirst = !isTop && obsSigs.some((s) => s.priority === "first");
