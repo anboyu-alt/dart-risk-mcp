@@ -3842,6 +3842,15 @@ function mezzanineFilingsHTML(filings, mode, hideAmend) {
 }
 
 // 순수 함수 — 이미 집계된 요약만으로 HTML을 만든다(테스트 용이).
+// 긴 값을 n자에서 자르되 **원문 전체를 title에 남긴다** — 「…외 N자」에 마우스를
+// 얹으면 잘린 부분이 그대로 보인다(사실 손실 0). 이름에 HTML이 든 것은 층4
+// 절단 검사(test_viewer_notice_facts)의 대상으로 남기기 위해서다.
+function clipWithTitleHTML(label, value, n) {
+  const s = String(value);
+  if (s.length <= n) return esc(label + s);
+  return `<span title="${esc(s)}">${esc(label + s.slice(0, n))}…외 ${s.length - n}자</span>`;
+}
+
 function mezzanineBlockHTML(d, failedKinds) {
   let html = "";
   if ((failedKinds || []).length) {
@@ -3998,12 +4007,11 @@ function mezzanineBlockHTML(d, failedKinds) {
       if (it.exercise_from && it.exercise_to) {
         l2.push(`청구 ${fmtDate(it.exercise_from)}~${fmtDate(it.exercise_to)}`);
       }
-      // 목록이 아니라 **문자열 값**을 자르는 두 곳 — 잘렸다는 사실을 「…외 N자」로
-      // 적는다(원문 전체는 공시 원문에 있다). 안 자르면 한 줄이 표를 밀어낸다.
-      if (it.exchange_target) l2.push(`교환 대상 ${it.exchange_target.slice(0, 24)}`
-        + (it.exchange_target.length > 24 ? `…외 ${it.exchange_target.length - 24}자` : ""));
-      if (it.detachable) l2.push(`사채와 인수권 분리 ${it.detachable.slice(0, 12)}`
-        + (it.detachable.length > 12 ? `…외 ${it.detachable.length - 12}자` : ""));
+      // 문자열 **값**을 자르는 두 곳 — 자르되 원문 전체를 title에 남긴다(l2h는
+      // 이미 esc를 거친 HTML이라 아래에서 다시 esc하지 않는다).
+      const l2h = [];
+      if (it.exchange_target) l2h.push(clipWithTitleHTML("교환 대상 ", it.exchange_target, 24));
+      if (it.detachable) l2h.push(clipWithTitleHTML("사채와 인수권 분리 ", it.detachable, 12));
       let l3 = "";
       if (it.refix_field_absent) {
         l3 = "시가하락에 따른 조정: 서식에 해당 항목 없음(교환 대상이 이미 발행된 주식입니다)";
@@ -4017,7 +4025,8 @@ function mezzanineBlockHTML(d, failedKinds) {
       }
       html += `<div style="margin-bottom:10px;font-size:0.87rem;line-height:1.7">` +
         `${esc(head)}` +
-        (l2.length ? `<br><span class="dim">${esc(l2.join(" · "))}</span>` : "") +
+        ((l2.length || l2h.length)
+          ? `<br><span class="dim">${[esc(l2.join(" · ")), ...l2h].filter(Boolean).join(" · ")}</span>` : "") +
         (l3 ? `<br><span class="dim">${esc(l3)}</span>` : "") +
         (it.use_of_funds.length
           ? `<br><span class="dim">자금조달 목적: ${esc(it.use_of_funds.join(" · "))}</span>` : "") +
@@ -6117,7 +6126,7 @@ async function loadFinancialCore(corpCode) {
   if (eq !== null && eq < 0) warns.push(`완전 자본잠식입니다 — 자본총계 ${fmtKRW(eq)}.`);
   else if (eq !== null && cap !== null && eq < cap) warns.push(`부분 자본잠식입니다 — 자본총계 ${fmtKRW(eq)}가 자본금 ${fmtKRW(cap)}보다 작습니다.`);
   if (warns.length) {
-    html += `<div class="factwarn">⚠️ ${warns.map(proseTextHTML).join("<br>⚠️ ")}<br><span class="snote">사실 표기입니다 — 맥락은 감사보고서 원문에서 확인하세요.</span></div>`;
+    html += `<div class="factwarn">⚠️ ${warns.map(proseTextHTML).join("<br>⚠️ ")}<br><span class="snote">사실 표기입니다 — 맥락은 감사보고서·사업보고서 원문에서 확인하세요.</span></div>`;
   } else if (rev[0] !== null || ni[0] !== null) {
     html += `<p class="dim" style="font-size:0.85rem;margin-top:0.4rem">연속 적자·자본잠식에 해당하는 관찰 없음.</p>`;
   }
@@ -6174,7 +6183,7 @@ async function loadHoldings(corpCode) {
       `<a href="${dartUrl(p.rcept)}" target="_blank" rel="noopener" title="${esc(md(p.d))} 보고" style="color:var(--tx)">` +
       `${esc(md(p.d))} <b class="mono">${p.rate.toFixed(2)}%</b></a>`).join(`<span class="arrow"> → </span>`);
     const more = pts.length > shown.length
-      ? ` <span class="dim" style="font-size:0.78rem">(보고 ${pts.length}건 중 최근 ${shown.length}건 표시)</span>` : "";
+      ? ` <span class="snote">(보고 ${pts.length}건 중 최근 ${shown.length}건 표시)</span>` : "";
     html += `<div class="factline">· <b>${esc(who)}</b>: ${series}${more}</div>`;
     for (let i = 0; i < pts.length; i++) {
       for (let jj = i + 1; jj < pts.length && dayDiff(pts[i].d, pts[jj].d) <= 60; jj++) {
@@ -6189,7 +6198,7 @@ async function loadHoldings(corpCode) {
     html += `<div class="factwarn">📈 <b>단기 매집 흐름 관찰</b> — 60일 안에 보유비율이 1%p 이상 늘어난 보고자가 있습니다:<br>` +
       accumNotes.map(esc).join("<br>") +
       `<br><span class="dim" style="font-size:0.8rem">${glossStaticHTML(
-        `계단식 매집은 지배 재편·경영권 경합에서 반복 관찰되는 형태입니다 — 취득 자금 출처·보고 사유를 원문에서 확인하세요.`)}</span></div>`;
+        `계단식 매집은 지배 재편·경영권 경합에서 반복 관찰되는 형태입니다 — 각 보고서의 취득 자금 출처·보고 사유를 원문에서 확인하세요.`)}</span></div>`;
   }
   html += metricProseHTML("insider");
   html += `<div class="dim" style="font-size:0.8rem;margin:0.5rem 0 0">${glossStaticHTML(
@@ -6397,7 +6406,7 @@ async function compareActors() {
       `</ul></div>`;
   } else {
     if (fetchFailed.length) {
-      html += `<p class="dim" style="margin-top:0.5rem">⚠ 임원현황을 불러오지 못한 연도가 있습니다 — ${esc(fetchFailed.join(" · "))}. <strong style="color:var(--tx)">겹치는 인물이 없다는 뜻이 아닙니다.</strong></p>`;
+      html += `<p class="dim" style="margin-top:0.5rem">⚠ 임원현황을 불러오지 못한 연도가 있습니다 — ${esc(fetchFailed.join(" · "))}. <strong style="color:var(--tx)">겹치는 인물이 없다는 뜻이 아닙니다.</strong> 잠시 후 다시 시도하세요.</p>`;
     }
     html += `<div class="dim" style="margin:0.5rem 0 0">` + whyDetailsHTML(
       `${ROSTER_YEARS.label} 임원현황에서 2개사 이상에 등장하는 인물이 없습니다 — '겸직 없음'이 '연결 없음'을 뜻하지는 않습니다.`,

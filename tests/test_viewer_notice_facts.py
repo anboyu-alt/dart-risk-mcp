@@ -345,6 +345,45 @@ def _expand_consts(html: str, body: str, names: list) -> str:
     return out
 
 
+def _notice_members(html: str) -> dict:
+    """`const NOTICE = {…}` 의 문자열 멤버를 {KEY: 값}으로 읽는다.
+
+    `_expand_consts`가 **함수 밖 문자열 상수**(`MZN_NOT_BALANCE` 등)를 이름
+    참조에서 정의로 바꿔 넣듯이, 이건 같은 문제의 **객체 멤버** 판이다 —
+    PR-N4가 네 패널(`fundChainPanelHTML`·`loadHoldings`·`loadAuditOpinions`·
+    `capitalBackflowCardHTML`)의 무판정 문구를 `${NOTICE.NO_JUDGMENT}` 참조로
+    넣어, 함수 본문에는 리터럴이 없다. 참조를 값으로 펴야 D 검사가 그
+    문구를 볼 수 있다.
+    """
+    decl = _cut_decl(html, "NOTICE")
+    assert decl is not None, "NOTICE 상수를 찾지 못했다"
+    out = {}
+    for m in re.finditer(r"^\s*(\w+):\s*([\"`'])", decl, re.M):
+        key, quote = m.group(1), m.group(2)
+        i = m.end()
+        buf = []
+        while i < len(decl):
+            c = decl[i]
+            if c == "\\":
+                buf.append(decl[i:i + 2])
+                i += 2
+                continue
+            if c == quote:
+                break
+            buf.append(c)
+            i += 1
+        out[key] = "".join(buf)
+    assert out, "NOTICE에서 문자열 멤버를 하나도 못 읽었다 — 정규식이 낡았다"
+    return out
+
+
+def _expand_notice(html: str, body: str) -> str:
+    """`${NOTICE.X}`·`NOTICE.X` 참조를 그 상수의 실제 문자열로 바꾼다."""
+    for key, val in _notice_members(html).items():
+        body = body.replace("${NOTICE." + key + "}", val).replace("NOTICE." + key, val)
+    return body
+
+
 def _strip_tags(html_fragment: str) -> str:
     return re.sub(r"<[^>]*>", " ", html_fragment)
 
@@ -556,12 +595,21 @@ D_FUNCS = (
     "loadFinancialCore",
     "dividendPanelHTML",
     "compareActors",
+    # ⚠ 아래 넷은 PR-N0가 「무판정 문구가 없다」고 적어 이 검사에서 빠져 있던
+    # 자리다(모듈 docstring의 D 전수 절 참고). PR-N4가 넷 다 채웠고,
+    # `${NOTICE.NO_JUDGMENT}` 참조로 넣었으므로 `_expand_notice`로 펴서 본다 —
+    # 그러지 않으면 문구가 실제로 화면에 나가는데도 검사에는 안 보인다.
+    "fundChainPanelHTML",
+    "loadHoldings",
+    "loadAuditOpinions",
+    "capitalBackflowCardHTML",
 )
 
 
 @pytest.mark.parametrize("func", D_FUNCS)
 def test_D_무판정_문구가_있다(func):
-    body = _cut(_html(), func)
+    html = _html()
+    body = _expand_notice(html, _cut(html, func))
     assert re.search(D_JUDGMENT_RE, body), f"{func}에서 무판정 문구가 사라졌다"
 
 
