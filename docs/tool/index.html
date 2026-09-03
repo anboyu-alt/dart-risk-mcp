@@ -252,6 +252,14 @@
   .mp-f { color: var(--dim); font-weight: 400; }
   .mp-m { color: var(--tx); margin-top: 0.15rem; }
   .mp-x { color: var(--dim); margin-top: 0.1rem; }
+  /* ── 「왜 그런가」 접힘(whyDetailsHTML) — 사실은 늘 보이고 이유만 접는다 ──
+     빨강 없음(v0.8.5). summary는 dim·작게 — 본문(사실)보다 앞서 읽히면 안 된다. */
+  details.why { display: inline; }
+  details.why > summary { display: inline; cursor: pointer; color: var(--dim2);
+    font-size: 0.78rem; border-bottom: 1px dotted var(--dim2); list-style: none; }
+  details.why > summary::-webkit-details-marker { display: none; }
+  details.why > summary:hover { color: var(--tx); }
+  details.why > .why-b { display: block; color: var(--dim); margin-top: 0.15rem; }
   /* ── 용어 사전 툴팁(glossTermsHTML) — 빨강 없음(v0.8.5), 밑줄+호버로만 표시 ── */
   .term { border-bottom: 1px dotted var(--dim2); cursor: help; position: relative; }
   .term-def { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 30;
@@ -3275,6 +3283,25 @@ function glossStaticHTML(rawHtml) {
   return glossTermsHTML(rawHtml, gloss, aliases);
 }
 
+// ── 「왜 그런가」 접기(whyDetailsHTML) ──────────────────────────────────
+// 고지의 **첫 문장(사실)**은 늘 보이고, 그 사실이 왜 그런지만 접는다. 읽는
+// 사람이 회계를 몰라도 한 문장으로 사실을 보고, 궁금하면 한 번 더 눌러
+// 이유를 본다.
+// ⚠ 접는 것은 **이유뿐**이다 — 절단·상한 건수(A)·무판정(D)·실패/없음(F)
+//   고지는 접지 않는다. 사실은 하나도 지우지 않는다(이유 안의 숫자·단위도
+//   그대로 남는다 — 숨기는 것이 아니라 한 겹 뒤에 두는 것이다).
+// ⚠ 두 인자는 **이미 안전한 HTML**이다(`<b>`가 박힌 정적 문구) — `esc()`를
+//   거치는 문자열에는 쓰지 않는다(태그가 글자로 찍힌다).
+// `cls`를 주면 사실 문장만 그 클래스로 감싼다(호출부마다 `.dim` 감싸개를
+// 되풀이하지 않게) — 이유는 `.why-b`가 이미 낮춘 색이라 감싸지 않는다.
+function whyDetailsHTML(fact, reason, cls) {
+  const f = String(fact == null ? "" : fact);
+  const body = cls ? `<span class="${cls}">${f}</span>` : f;
+  if (!reason) return body;
+  return `${body} <details class="why"><summary>왜 그런가</summary>` +
+    `<span class="why-b">${reason}</span></details>`;
+}
+
 // 첫 문장만 밝게(`.lead`), 나머지는 낮춰(`.rest`) — 시각 위계. esc를 거친
 // 문자열을 받는다(사전 함수보다 앞서야 한다는 뜻이 아니라, 이 함수 자체가
 // 태그를 새로 만들 뿐 텍스트를 escape하지는 않는다는 뜻 — 사전 함수는
@@ -3672,8 +3699,15 @@ const NOTICE = {
   // MCP 안내문(scan_financial_anomaly 홍보).
   MCP_MORE_FIN_ANOMALY: `<p class="dim" style="font-size:0.8rem;margin-top:0.5rem">더 깊은 재무 이상 스캔(매출채권·재고 급증, Beneish 변수 8종, 전기 재작성 감지)은 <a href="../#start">MCP 대화</a>의 scan_financial_anomaly가 제공합니다.</p>`,
 };
-const MZN_WINDOW_CAVEAT = '<span class="dim">⚠ <b>이 조회 창 안에 발행된 건만</b> 셌니다 — 그보다 먼저 발행돼 아직 만기가 오지 않은 메자닌은 빠집니다. 창을 넓히면 늘 수 있습니다.</span>';
-const MZN_NOT_BALANCE = '<span class="dim">⚠ 이것은 <b>잔액이 아닙니다</b> — 발행결정 공시에 적힌 만기일을 그대로 센 것이며 이후의 조기상환·만기 전 취득·전환은 반영돼 있지 않습니다.</span>';
+// ⚠ 두 고지 모두 **첫 문장에 사실**(부정어 골격 + 출처)을 남기고 이유만
+//   접는다(whyDetailsHTML) — 「빠집니다」·「잔액이 아닙니다」·「창」·
+//   「발행결정」은 노출 문장에 그대로 있어야 한다.
+const MZN_WINDOW_CAVEAT = whyDetailsHTML(
+  '⚠ <b>이 조회 창 안에 발행된 건만</b> 셌니다 — 창보다 먼저 발행된 건은 빠집니다.',
+  '먼저 발행돼 아직 만기가 오지 않은 메자닌이 그렇습니다. 창을 넓히면 늘 수 있습니다.', 'dim');
+const MZN_NOT_BALANCE = whyDetailsHTML(
+  '⚠ 이것은 <b>잔액이 아닙니다</b> — 발행결정 공시의 만기일을 그대로 센 것입니다.',
+  '이후의 조기상환·만기 전 취득·전환은 반영돼 있지 않습니다.', 'dim');
 // ⚠ MZN_UPPER_BOUND(「상한 — 이미 전환된 분을 못 뺀다」)는 **여기 두지
 //   않는다** — mezzanineBlockHTML 안의 "상한입니다" 문구는
 //   test_층2_mezzanineBlockHTML_필수_낱말이 **원문 소스**(expand_consts가
@@ -3846,9 +3880,10 @@ function mezzanineBlockHTML(d, failedKinds) {
       facts.push(`<span class="dim">&nbsp;&nbsp;· 하한이 기재되지 않은 ` +
         `${ov.floor_unknown}건은 발행 당시 가액 기준으로 넣었습니다</span>`);
     }
-    facts.push(`<span class="dim">⚠ <b>상한입니다</b> — 이미 전환·상환·취득된 분을 ` +
-      `알 수 없어 뺄 수 없습니다. 실제 전환가액은 조정 공시로 이미 달라져 있을 ` +
-      `수 있습니다.</span>`);
+    facts.push(whyDetailsHTML(
+      `⚠ <b>상한입니다</b> — 이미 전환·상환·취득된 분을 뺄 수 없습니다.`,
+      `그 분량을 알 수 없기 때문입니다. 실제 전환가액도 조정 공시로 이미 달라져 ` +
+      `있을 수 있습니다.`, "dim"));
     // 「잔액이 아니다」는 **만기 건수**에 대한 고지다 — 아래 만기 줄에 두면
     // 대기물량이 있는 회사에서 그 줄이 「청구기간 열림」만 담게 돼 고지가
     // 엉뚱한 항목 아래 붙는다(크라우드웍스 실측, core와 같은 수정).
@@ -3924,9 +3959,11 @@ function mezzanineBlockHTML(d, failedKinds) {
     }
     html += `</tbody></table>`;
     if (d.filing_counts.refix) {
-      html += `<div class="dim" style="font-size:0.82rem;margin-top:4px">※ 이 기간 ` +
-        `전환가액 조정 공시가 ${d.filing_counts.refix}건 있습니다 — 실제 가액은 ` +
-        `「발행 당시」와 다를 수 있습니다(조정 후 가액은 개별 공시에 있습니다).</div>`;
+      html += `<div style="font-size:0.82rem;margin-top:4px">` +
+        whyDetailsHTML(
+          `※ 이 기간 전환가액 조정 공시가 ${d.filing_counts.refix}건 있습니다 — ` +
+          `실제 가액은 「발행 당시」와 다를 수 있습니다.`,
+          `조정 후 가액은 개별 공시에 있습니다.`, "dim") + `</div>`;
     }
   }
 
@@ -3977,12 +4014,14 @@ function mezzanineBlockHTML(d, failedKinds) {
 
   html += metricProseHTML("mezzanine");
 
+  // 첫 줄(무판정, D)은 접지 않는다 — 둘째 줄만 사실/이유로 갈라 접는다.
   html += `<div class="dim" style="font-size:0.82rem;margin-top:8px">${glossStaticHTML(
     `※ 발행결정 공시에 기재된 조건을 그대로 옮긴 사실이며, 적정·부적정 판단이 아닙니다.<br>` +
-    `※ 위 발행 건과 아래 「주식 수 변동」의 전환·행사 실적은 <b>서로 다른 원장</b>입니다. ` +
-    `증자(감자) 현황의 행사 행에는 회차가 기재되지 않아 어느 발행분이 전환됐는지 이을 수 ` +
-    `없습니다 — 리픽싱으로 조정된 가액에서 전환이 일어나므로 발행가액으로 되짚는 것도 ` +
-    `맞지 않습니다.`)}</div>`;
+    whyDetailsHTML(
+      `※ 위 발행 건과 아래 「주식 수 변동」의 전환·행사 실적은 <b>서로 다른 원장</b>입니다.`,
+      `증자(감자) 현황의 행사 행에는 회차가 기재되지 않아 어느 발행분이 전환됐는지 이을 수 ` +
+      `없습니다. 리픽싱으로 조정된 가액에서 전환이 일어나므로 발행가액으로 되짚는 것도 ` +
+      `맞지 않습니다.`))}</div>`;
   return html;
 }
 
@@ -4173,8 +4212,13 @@ function dilutionBlockHTML(d, years) {
     facts.push(`기존 주주 지분이 줄어드는 발행: ${b.dilutive.toLocaleString()}주${pct}`);
   }
   if (b.proportional) {
-    facts.push(`비례 배분(무상증자·분할·배당 등): ${b.proportional.toLocaleString()}주 ` +
-      `— 모든 주주에게 같은 비율로 배분돼 지분율은 변하지 않습니다`);
+    // 「지분율은 변하지 않는다」가 사실이고, 「모든 주주에게 같은 비율로
+    // 배분되기 때문」이 그 이유다 — 이유만 접는다(CLAUDE.md 「비례 배분을
+    // 희석으로 세지 않는다」의 근거는 접혀도 사라지지 않는다).
+    facts.push(whyDetailsHTML(
+      `비례 배분(무상증자·분할·배당 등): ${b.proportional.toLocaleString()}주 ` +
+      `— 지분율은 변하지 않습니다`,
+      `모든 주주에게 같은 비율로 배분되기 때문입니다.`));
   }
   if (b.decrease) facts.push(`감소(감자·소각): ${b.decrease.toLocaleString()}주`);
   if (b.unknown) {
