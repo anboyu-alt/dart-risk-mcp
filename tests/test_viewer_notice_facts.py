@@ -81,8 +81,10 @@ class="term">낱말<span class="term-def">…풀이…</span></span>`로 감싼�
   "8곳이 고쳐진 호출을 탄다"를 잠근다). (나머지 3곳은 `.catch(() => {})`로
   완전히 조용하다 — 이건 이 결함과 다른 종류이고, 부수적 보강 블록이
   실패해도 화면에 아무 주장도 하지 않으므로 이 PR의 잠금 대상이 아니다.)
-- **PR-N4** `loadHoldings`의 `reps….slice(0, 5)`·`pts.slice(-10)`에 절단
-  고지가 없다. (아직 미해결 — 유일한 xfail.)
+- ~~**PR-N4** `loadHoldings`의 `reps….slice(0, 5)`·`pts.slice(-10)`에 절단
+  고지가 없다~~ → **PR-N4가 고쳤다**(「보고자 N명 중 M명 표시 · P명 생략」·
+  「보고 N건 중 최근 M건 표시」). xfail 표시를 뗐고 테스트 본문은 그대로다 —
+  이제 정상 통과가 잠금이다. **xfail은 이 파일에 더 이상 없다.**
 
 ## F 전수 — 브리프의 "catch 블록이 있는 load… 함수 전부"를 실측으로 좁힌 이유
 
@@ -184,16 +186,16 @@ report에 남긴다.
   식별자, 단일 인자)가 같은 함수에 있으면 원본을 정확히 둘로 나눠 **둘
   다 쓰는 것**이다(`leadSentenceHTML`의 lead/rest) — 절단이 아니라 분할.
 
-다시 짠 뒤 나온 결과는 5개 함수다(코드 옆 `_LAYER4_KNOWN_GAPS`에 각각의
-사실을 적어 뒀다) — `loadHoldings`(PR-N4, xfail)·`loadFundDiversionGate`
-(Important 3: 잘린 개수를 전체처럼 찍는다, 「없다」보다 나쁘다)·
-`loadAuditOpinions`(구조적으로 오늘은 무해하지만 그 사실을 코드가 말하지
-않는다)·`renderFeed`(피드 200행 초과가 조용히 잘린다, 스캔 전체 절단
-안내와는 별개 사실)·`mezzanineBlockHTML`(문자열 **값** 절단 2곳 — 같은
-함수의 다른 슬라이스는 이미 층1이 잠갔다). **이 중 xfail은 하나뿐이다**
-— 이 과제가 "결함 정확히 둘만 xfail로 표시하라"는 지시를 받았기 때문이며,
-나머지 넷은 회귀 테스트(`test_층4_원장_항목은_아직_고지가_없다`)로
-사실만 고정해 PR-N4가 참고하게 한다.
+다시 짠 뒤 나온 결과는 5개 함수였다 — `loadHoldings`·`loadFundDiversionGate`
+(잘린 개수를 전체처럼 찍는다, 「없다」보다 나쁘다)·`loadAuditOpinions`
+(구조적으로 오늘은 무해하지만 그 사실을 코드가 말하지 않는다)·`renderFeed`
+(피드 200행 초과가 조용히 잘린다, 스캔 전체 절단 안내와는 별개 사실)·
+`mezzanineBlockHTML`(문자열 **값** 절단 2곳 — 같은 함수의 다른 슬라이스는
+이미 층1이 잠갔다). **PR-N4가 다섯 곳 전부에 고지를 붙여 `_LAYER4_KNOWN_GAPS`
+는 비었다**(상한 값은 하나도 안 바꿨다). 그래서
+`test_층4_원장_항목은_아직_고지가_없다`는 파라미터가 없어 건너뛴다 — 원장이
+비었다는 사실 자체가 그 테스트가 말하려던 것이고, 새 절단이 생기면 집합 동등
+검사(`test_층4_slice_옆에_절단_고지가_있다`)가 먼저 걸린다.
 """
 import json
 import pathlib
@@ -985,39 +987,20 @@ def _layer4_violations(html: str) -> dict:
     return violations
 
 
-# ── 원장(ledger) — 알려진 절단 5곳 ──────────────────────────────────────
+# ── 원장(ledger) — 알려진 절단 ──────────────────────────────────────────
 #
-# 이 중 **하나만**(`loadHoldings`) xfail이다(PR-N4, 브리프가 지정). 나머지
-# 넷은 "결함은 정확히 둘만 xfail로 표시하라"는 이 과제의 지시를 따라
-# xfail로 만들지 않고 실측 사실만 원장에 남긴다 — PR-N4가 이 목록
-# 전체(다섯)를 고친다.
-_LAYER4_KNOWN_GAPS = {
-    "loadHoldings": (
-        "reps.sort(...).slice(0, 5)·pts.slice(-10) 등 4곳. 절단 고지 없음."),
-    "loadFundDiversionGate": (
-        "allHits.slice(0, 3) — 고지가 없는 정도가 아니라, 그 결과를 "
-        "그대로 acquisitionFactsHTML에 넘겨 「타법인 주식·출자증권 취득 "
-        "${results.length}건」을 찍는다. results는 최대 3건으로 잘린 "
-        "hits에서 파생된 값이라, **화면에는 잘린 개수(≤3)가 마치 전체 "
-        "건수인 것처럼 찍힌다** — 「고지가 없다」보다 나쁘다(PR-N4가 "
-        "고친다)."),
-    "loadAuditOpinions": (
-        "[...byYear.keys()].sort().reverse().slice(0, 3) — 절단 고지 "
-        "없음. 다만 byYear는 이 함수 자신이 정확히 3개 연도(thisYear-1/"
-        "-2/-3)만 조회해 채우므로 구조적으로 3개를 넘을 수 없다 — 오늘은 "
-        "정보 손실이 없지만, 그 사실을 코드가 말하지 않는다."),
-    "renderFeed": (
-        "list.slice(0, 200) — 절단 고지 없음. 근처의 `${CUR.truncated}"
-        "건 중 최근 ${CUR.items.length}건`은 **다른 절단**(스캔 전체가 "
-        "얼마나 잘렸는지)이며, 피드가 200행 넘게 조용히 잘리는 사실과는 "
-        "별개다."),
-    "mezzanineBlockHTML": (
-        "it.exchange_target.slice(0, 24)·it.detachable.slice(0, 12) — "
-        "목록 절단이 아니라 **문자열 값 절단**(교환 대상·분리 여부 "
-        "표기를 24·12자로 자름)이다. 같은 함수의 다른 슬라이스"
-        "(d.issues.slice(0, MZN_ISSUE_MAX))는 이미 「생략」 고지가 있어 "
-        "층1·층2가 잠갔다 — 이 둘은 그와 다른, 아직 안 잠긴 부류다."),
-}
+# **PR-N4가 다섯 곳을 전부 고쳐 이 원장은 비었다.** 상한 값은 하나도 바꾸지
+# 않았고 고지만 붙였다 — `loadHoldings`(보고자 5명·각 최근 10건),
+# `loadFundDiversionGate`(후보 N건 중 최근 3건만 원문 확인 + 잘린 개수를
+# 전체처럼 찍던 `acquisitionFactsHTML`의 「취득 ${results.length}건」을
+# 「원문을 확인한 N건」으로), `loadAuditOpinions`(조회 범위가 최근 3개
+# 사업연도라는 사실), `renderFeed`(피드 200행 상한 — 스캔 전체 절단
+# 안내와는 별개 사실), `mezzanineBlockHTML`(문자열 값 절단 2곳 →
+# 「…외 N자」).
+#
+# 비어 있는 것이 정상이다. 새 절단이 생기면 아래 집합 동등 검사가 걸린다 —
+# 그때 고지를 붙이지 않고 여기에 이름만 적어 넘기지 말 것.
+_LAYER4_KNOWN_GAPS = {}
 
 
 def test_층4_slice_옆에_절단_고지가_있다():
@@ -1030,7 +1013,6 @@ def test_층4_slice_옆에_절단_고지가_있다():
         f"절단 고지가 없는 함수 목록이 알려진 원장과 다르다: {violations}")
 
 
-@pytest.mark.xfail(strict=True, reason="PR-N4 — loadHoldings의 reps/pts slice에 절단 고지가 없다")
 def test_층4_loadHoldings_slice에도_절단_고지가_생겼다():
     body = _cut(_html(), "loadHoldings")
     assert _SLICE_RE.search(body), "이 함수에 더 이상 slice가 없다 — xfail 자체를 지워야 한다"

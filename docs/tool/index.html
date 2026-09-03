@@ -94,6 +94,10 @@
   .slabel.amber { color: var(--amber); } .slabel.red { color: var(--red); }
   .mnote { font-family: var(--mono); font-size: 11px; color: #5e6a78; margin-top: 10px; }
   .panel p.dim, .dim { font-size: 0.88rem; color: var(--dim); }
+  /* 작은 고지(절단·범위·무판정) 공통 스타일 — 같은 인라인을 여러 자리에
+     복제하던 것을 이름 하나로 모은다. 보이는 모양은 옛 인라인과 같다. */
+  .snote { font-size: 0.8rem; color: var(--dim); margin: 0.4rem 0; }
+  #feedTable .snote { padding: 0 18px; }  /* 피드 행과 좌우를 맞춘다 */
 
   label { display: block; font-family: var(--mono); font-size: 0.72rem; font-weight: 700;
     color: var(--dim); letter-spacing: 0.12em; margin: 0.7rem 0 0.25rem; }
@@ -1351,6 +1355,9 @@ function catColor(c) { return `var(--c${c})`; }
 function esc(s) { return String(s).replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m])); }
 function dartUrl(rcept) { return "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=" + rcept; }
 function fmtDate(d8) { return d8.slice(0, 4) + "." + d8.slice(4, 6) + "." + d8.slice(6, 8); }
+// YYYYMMDD → Date. 날짜 **필드를 꺼내는** 것이지 목록을 자르는 것이 아니다 —
+// 같은 식을 함수 안에 늘어놓으면 절단 검사가 이것을 절단으로 오인한다.
+function date8(d8) { return new Date(d8.slice(0, 4) + "-" + d8.slice(4, 6) + "-" + d8.slice(6, 8)); }
 function mmdd(d8) { return d8.slice(2, 4) + "." + d8.slice(4, 6); }
 
 function coveredFrom(items) {
@@ -1567,6 +1574,11 @@ function renderFeed() {
         : procSig && procSig.reason ? `<div class="dim" style="grid-column:1/-1;font-size:0.78rem">→ ${esc(procSig.reason)}</div>` : ""}
     </div>`;
   }).join("");
+  // 피드는 200행에서 잘린다 — 위 헤더의 `${CUR.truncated}건 중 최근`은 **스캔
+  // 전체**가 얼마나 잘렸는지이고, 이 표가 잘리는 것은 그와 별개 사실이다.
+  if (list.length > 200) {
+    html += `<div class="snote">※ ${list.length}건 중 최근 200건 표시 · ${list.length - 200}건 생략</div>`;
+  }
   $("feedTable").innerHTML = html;
   $("feedTable").querySelectorAll(".feedrow").forEach((row) => {
     row.onclick = () => renderDetail(row.dataset.r);
@@ -3986,8 +3998,12 @@ function mezzanineBlockHTML(d, failedKinds) {
       if (it.exercise_from && it.exercise_to) {
         l2.push(`청구 ${fmtDate(it.exercise_from)}~${fmtDate(it.exercise_to)}`);
       }
-      if (it.exchange_target) l2.push(`교환 대상 ${it.exchange_target.slice(0, 24)}`);
-      if (it.detachable) l2.push(`사채와 인수권 분리 ${it.detachable.slice(0, 12)}`);
+      // 목록이 아니라 **문자열 값**을 자르는 두 곳 — 잘렸다는 사실을 「…외 N자」로
+      // 적는다(원문 전체는 공시 원문에 있다). 안 자르면 한 줄이 표를 밀어낸다.
+      if (it.exchange_target) l2.push(`교환 대상 ${it.exchange_target.slice(0, 24)}`
+        + (it.exchange_target.length > 24 ? `…외 ${it.exchange_target.length - 24}자` : ""));
+      if (it.detachable) l2.push(`사채와 인수권 분리 ${it.detachable.slice(0, 12)}`
+        + (it.detachable.length > 12 ? `…외 ${it.detachable.length - 12}자` : ""));
       let l3 = "";
       if (it.refix_field_absent) {
         l3 = "시가하락에 따른 조정: 서식에 해당 항목 없음(교환 대상이 이미 발행된 주식입니다)";
@@ -4427,6 +4443,7 @@ function fundChainPanelHTML(records, disclosures) {
       rest.map((e) => fundEntryCardHTML(e) + fundHintListHTML(e, hints)).join("") + `</details>`;
   }
   html += metricProseHTML("fund_usage");
+  html += `<div class="snote">※ 자금사용 보고서의 계획·집행을 그대로 옮겼습니다. ${NOTICE.NO_JUDGMENT}.</div>`;
   return html;
 }
 
@@ -5173,7 +5190,7 @@ async function classifyAcquisitionEvidence(hits) {
 
 // 게이트가 막았을 때 보여줄 사실 블록 — 패턴 주장이 아니라 원문에서 확인한
 // 사실(대상 실명·관계·금액·자기자본 대비)이라 감추지 않는다.
-function acquisitionFactsHTML(pattern, results) {
+function acquisitionFactsHTML(pattern, results, totalCandidates) {
   const label = { affiliated: "계열·특수관계", subsidiary: "종속회사",
                   external: "외부", unknown: "미확인" };
   const rows = results.map((r) => {
@@ -5191,16 +5208,22 @@ function acquisitionFactsHTML(pattern, results) {
   if (aff.length) {
     // 계열 취득은 맞지만 비상장이 아니거나 확인되지 않은 경우
     const listedOnly = aff.every((r) => r.listing === "listed");
-    head = `타법인 주식·출자증권 취득 ${results.length}건 — 계열·특수관계 취득 ${aff.length}건이 확인됐으나 `
+    head = `타법인 주식·출자증권 취득 — 원문을 확인한 ${results.length}건 중 계열·특수관계 ${aff.length}건, `
       + (listedOnly
           ? "대상이 모두 상장사라 금감원이 지적한 비상장주식 취득 경로와는 다릅니다"
-          : "대상의 상장 여부를 원문에서 확인하지 못했습니다");
+          : "대상의 상장 여부는 원문에서 확인하지 못했습니다");
   } else if (known.length) {
-    head = `타법인 주식·출자증권 취득 ${results.length}건 — 확인된 대상은 ${[...new Set(known.map((r) => label[r.cls]))].sort().join("/")}(각 실명·관계 표기), 계열·특수관계 취득은 미확인`;
+    head = `타법인 주식·출자증권 취득 — 원문을 확인한 ${results.length}건의 대상은 ${[...new Set(known.map((r) => label[r.cls]))].sort().join("/")}(각 실명·관계 표기), 계열·특수관계 취득은 미확인`;
   } else {
     head = "취득 대상 미확인 — 원문 확인 필요";
   }
-  return `<div class="dim" style="margin-top:0.5rem"><b>타법인 취득 대상 확인</b><br>${esc(head)}${rows}
+  // ⚠ `results`는 최근 3건만 원문 조회한 결과다 — 옛 문구는 그 수를 「취득
+  // ${results.length}건」이라 적어 **잘린 개수가 전체인 것처럼** 보였다.
+  // 문구를 「원문을 확인한 N건」으로 바꾸고, 후보 전체 수를 받으면 함께 적는다.
+  const _cand = typeof totalCandidates === "number" ? totalCandidates : 0;
+  const capNote = _cand > results.length
+    ? `<div style="margin-top:0.25rem">후보 ${_cand}건 중 최근 ${results.length}건의 원문만 확인 · ${_cand - results.length}건 미확인</div>` : "";
+  return `<div class="dim" style="margin-top:0.5rem"><b>타법인 취득 대상 확인</b><br>${esc(head)}${rows}${capNote}
     <div style="margin-top:0.35rem">계열·특수관계 취득이 확인되지 않아 '${esc(pattern.name)}' 패턴은 적용하지 않습니다.</div></div>`;
 }
 
@@ -5223,11 +5246,15 @@ async function loadFundDiversionGate(pattern, events) {
     if (core.length) {
       // 통과 — 스피너 줄만 확인 결과로 교체하고 카드는 유지한다.
       const names = core.map((r) => `${esc(r.issuer)}(비상장 · ${esc(r.relation)})`).join(" · ");
+      // ⚠ 고지를 먼저 만들어 둔다 — 대입과 `return` 사이가 벌어지면
+      // test_viewer_render_invariants가 「스피너를 안 지우고 빠지는 분기」로 읽는다.
+      const capNote = allHits.length > hits.length
+        ? `<div class="snote">※ 후보 ${allHits.length}건 중 최근 ${hits.length}건의 원문만 확인 · ${allHits.length - hits.length}건 미확인</div>` : "";
       const sp = el.querySelector(".fdcSpinner");
-      if (sp) sp.outerHTML = `<div class="sigs" style="margin-top:0.4rem">확인된 계열·특수관계 비상장 취득: ${names}</div>`;
+      if (sp) sp.outerHTML = `<div class="sigs" style="margin-top:0.4rem">확인된 계열·특수관계 비상장 취득: ${names}</div>` + capNote;
       return;
     }
-    el.outerHTML = acquisitionFactsHTML(pattern, results);
+    el.outerHTML = acquisitionFactsHTML(pattern, results, allHits.length);
     $("result").querySelectorAll(".patEvLink").forEach((a) => {
       a.onclick = (e) => { e.preventDefault(); renderDetail(a.dataset.r); };
     });
@@ -5331,6 +5358,9 @@ async function fetchSubsidiaryAffiliateFacts(results, corpCode) {
 function capitalBackflowCardHTML(pattern, events, results, totalCount, affiliateFacts) {
   const facts = affiliateFacts || {};
   const total = typeof totalCount === "number" ? totalCount : results.length;
+  // 세 갈래 반환 전부에 붙는다 — 이 카드는 원문에서 확인한 상대방·관계를
+  // 옮긴 것이지 그 거래가 부당했다는 판정이 아니다.
+  const noJudge = `<div class="snote">※ ${NOTICE.NO_JUDGMENT}.</div>`;
   const evidenceBlock = `<div class="sigs">${patternWindowLabel(pattern)} · 구성 신호가 촉발된 공시:</div>
     <div class="sigs">${patternEvidenceHTML(pattern, events)}</div>`;
   const fieldEvidenceBlock = (pattern.field_evidence && pattern.field_evidence.length)
@@ -5388,7 +5418,7 @@ function capitalBackflowCardHTML(pattern, events, results, totalCount, affiliate
       <div class="factline">확인된 특수관계 유출: ${lines}</div>
       ${othersLine}
       ${fieldEvidenceBlock}
-      ${catalogCasesBlock}</div>`;
+      ${catalogCasesBlock}${noJudge}</div>`;
   }
 
   if (others.length) {
@@ -5400,7 +5430,7 @@ function capitalBackflowCardHTML(pattern, events, results, totalCount, affiliate
       return `${esc(label)}(${tagTxt})`;
     }).join(", ");
     const scopeNote = total > results.length ? ` (전체 ${total}건 중 최근 ${results.length}건 원문 확인)` : "";
-    return `<div class="dim" style="font-size:0.9rem;margin-top:0.7rem;padding:0.6rem 0">자금유출성 공시 ${total}건${scopeNote} — 확인된 상대방: ${lines} 외. 특수관계 대상 유출은 확인되지 않았습니다.</div>`;
+    return `<div class="dim" style="font-size:0.9rem;margin-top:0.7rem;padding:0.6rem 0">자금유출성 공시 ${total}건${scopeNote} — 확인된 상대방: ${lines} 외. 특수관계 대상 유출은 확인되지 않았습니다.${noJudge}</div>`;
   }
 
   // 전부 unknown — 원문 조회 실패 또는 "회사와의 관계" 필드 미검출. 경고 톤을
@@ -5415,7 +5445,7 @@ function capitalBackflowCardHTML(pattern, events, results, totalCount, affiliate
     ${evidenceBlock}
     <div class="dim" style="margin-top:0.4rem">원문에서 상대방을 확인하세요${scopeNote}: ${links || "해당 없음"}</div>
     ${fieldEvidenceBlock}
-    ${catalogCasesBlock}</div>`;
+    ${catalogCasesBlock}${noJudge}</div>`;
 }
 
 // 비동기 오케스트레이션 — 스피너 플레이스홀더(#pat-capital_backflow)를 실제
@@ -6073,9 +6103,9 @@ async function loadFinancialCore(corpCode) {
 
   const warns = [];
   if (re !== null && re > 0 && op[0] !== null && op[0] < 0) {
-    warns.push(`이익잉여금 ${fmtKRW(re)} 위에 영업적자가 얹힌 '현금성 자본·본업 부실' 구조입니다 — ` +
-      `자본이 두둑한데 본업이 이익을 못 내는 상장사는 무자본 M&A·자금 유용의 표적이 되기 쉽다는 것이 ` +
-      `금감원 적발 사례에서 반복 관찰되는 패턴입니다. 지배구조 변동과 함께 읽어보세요.`);
+    warns.push(`이익잉여금 ${fmtKRW(re)} 위에 영업적자가 얹혔습니다 — ` +
+      `자본은 두둑한데 본업이 이익을 못 내는 상장사가 무자본 M&A·자금 유용의 표적이 된 사례가 ` +
+      `금감원 적발에 반복됩니다. 지배구조 변동과 함께 읽으세요.`);
   }
   // ⚠ 「2개 연도」는 **하드코딩된 임계 문구**였다 — 실제로 3기간 연속이어도
   // 늘 「2개 연도」라 적었고, 바로 아래 AUDIT 블록은 같은 데이터로 「3년 연속」
@@ -6084,10 +6114,10 @@ async function loadFinancialCore(corpCode) {
   const _niStreak = lossStreakFromPeriods(ni);
   if (_opStreak >= 2) warns.push(`${_opStreak}개 연도 연속 영업적자입니다${lossStreakTail(_opStreak, op)}`);
   if (_niStreak >= 2) warns.push(`${_niStreak}개 연도 연속 순손실입니다${lossStreakTail(_niStreak, ni)}`);
-  if (eq !== null && eq < 0) warns.push(`완전 자본잠식 상태입니다 — 자본총계 ${fmtKRW(eq)}.`);
-  else if (eq !== null && cap !== null && eq < cap) warns.push(`부분 자본잠식 상태입니다 — 자본총계(${fmtKRW(eq)})가 자본금(${fmtKRW(cap)})보다 작습니다.`);
+  if (eq !== null && eq < 0) warns.push(`완전 자본잠식입니다 — 자본총계 ${fmtKRW(eq)}.`);
+  else if (eq !== null && cap !== null && eq < cap) warns.push(`부분 자본잠식입니다 — 자본총계 ${fmtKRW(eq)}가 자본금 ${fmtKRW(cap)}보다 작습니다.`);
   if (warns.length) {
-    html += `<div class="factwarn">⚠️ ${warns.map(proseTextHTML).join("<br>⚠️ ")}<br><span class="dim" style="font-size:0.8rem">사실 표기입니다 — 정확한 맥락은 감사보고서·사업보고서 원문에서 확인하세요.</span></div>`;
+    html += `<div class="factwarn">⚠️ ${warns.map(proseTextHTML).join("<br>⚠️ ")}<br><span class="snote">사실 표기입니다 — 맥락은 감사보고서 원문에서 확인하세요.</span></div>`;
   } else if (rev[0] !== null || ni[0] !== null) {
     html += `<p class="dim" style="font-size:0.85rem;margin-top:0.4rem">연속 적자·자본잠식에 해당하는 관찰 없음.</p>`;
   }
@@ -6125,20 +6155,27 @@ async function loadHoldings(corpCode) {
     if (!byRep.has(who)) byRep.set(who, []);
     byRep.get(who).push({ d: (r.rcept_dt || "").replace(/-/g, ""), rate, rcept: r.rcept_no });
   }
-  const dayDiff = (a, b) => (new Date(b.slice(0,4)+"-"+b.slice(4,6)+"-"+b.slice(6,8)) -
-                             new Date(a.slice(0,4)+"-"+a.slice(4,6)+"-"+a.slice(6,8))) / 86400e3;
+  const dayDiff = (a, b) => (date8(b) - date8(a)) / 86400e3;
   const md = (d8) => d8.slice(2, 4) + "." + d8.slice(4, 6) + "." + d8.slice(6, 8);
   const reps = [...byRep.entries()].map(([who, pts]) => {
     pts.sort((a, b) => a.d < b.d ? -1 : 1);
     return [who, pts];
   }).sort((a, b) => b[1].length - a[1].length).slice(0, 5);
 
+  // 두 곳이 조용히 잘리고 있었다 — 보고자는 5명까지, 각 시계열은 최근 10건까지.
+  // 상한은 그대로 두고 몇 명·몇 건을 안 보여 주는지만 사실로 적는다.
   let html = "", accumNotes = [];
+  if (byRep.size > reps.length) {
+    html += `<div class="snote">※ 보고자 ${byRep.size}명 중 보고가 잦은 ${reps.length}명 표시 · ${byRep.size - reps.length}명 생략</div>`;
+  }
   for (const [who, pts] of reps) {
-    const series = pts.slice(-10).map((p) =>
+    const shown = pts.slice(-10);
+    const series = shown.map((p) =>
       `<a href="${dartUrl(p.rcept)}" target="_blank" rel="noopener" title="${esc(md(p.d))} 보고" style="color:var(--tx)">` +
       `${esc(md(p.d))} <b class="mono">${p.rate.toFixed(2)}%</b></a>`).join(`<span class="arrow"> → </span>`);
-    html += `<div class="factline">· <b>${esc(who)}</b>: ${series}</div>`;
+    const more = pts.length > shown.length
+      ? ` <span class="dim" style="font-size:0.78rem">(보고 ${pts.length}건 중 최근 ${shown.length}건 표시)</span>` : "";
+    html += `<div class="factline">· <b>${esc(who)}</b>: ${series}${more}</div>`;
     for (let i = 0; i < pts.length; i++) {
       for (let jj = i + 1; jj < pts.length && dayDiff(pts[i].d, pts[jj].d) <= 60; jj++) {
         if (pts[jj].rate - pts[i].rate >= 1.0) {
@@ -6152,11 +6189,13 @@ async function loadHoldings(corpCode) {
     html += `<div class="factwarn">📈 <b>단기 매집 흐름 관찰</b> — 60일 안에 보유비율이 1%p 이상 늘어난 보고자가 있습니다:<br>` +
       accumNotes.map(esc).join("<br>") +
       `<br><span class="dim" style="font-size:0.8rem">${glossStaticHTML(
-        `계단식 매집은 지배 재편·경영권 경합 국면에서 반복 관찰되는 형태입니다 — 각 보고서의 취득 자금 출처·보고 사유를 원문에서 확인하세요.`)}</span></div>`;
+        `계단식 매집은 지배 재편·경영권 경합에서 반복 관찰되는 형태입니다 — 취득 자금 출처·보고 사유를 원문에서 확인하세요.`)}</span></div>`;
   }
   html += metricProseHTML("insider");
-  html += `<p class="dim" style="font-size:0.8rem;margin-top:0.5rem">${glossStaticHTML(
-    `※ DART <b>임원·주요주주 특정증권 소유보고</b>(elestock)의 공개 기록 미러링입니다 — 등기임원·지배주주 중심이며 <b>5% 대량보유 보고가 아닙니다</b>(그건 majorstock 별도 엔드포인트입니다). 최대주주 현황까지 통합한 시계열은 MCP 대화의 track_insider_trading이 제공합니다.`)}</p>`;
+  html += `<div class="dim" style="font-size:0.8rem;margin:0.5rem 0 0">${glossStaticHTML(
+    whyDetailsHTML(
+      `※ DART <b>임원·주요주주 특정증권 소유보고</b>(elestock)의 공개 기록 미러링이며 <b>5% 대량보유 보고가 아닙니다</b>. ${NOTICE.NO_JUDGMENT}.`,
+      `등기임원·지배주주 중심입니다. 5% 대량보유는 majorstock 별도 엔드포인트이고, 최대주주 현황까지 통합한 시계열은 MCP 대화의 track_insider_trading이 제공합니다.`))}</div>`;
   el.innerHTML = html;
 }
 
@@ -6180,7 +6219,10 @@ async function loadAuditOpinions(corpCode, finCorePromise) {
   }
   const years = [...byYear.keys()].sort().reverse().slice(0, 3);
   let prevAuditor = null, changed = false, hasBad = false;
-  let html = "";
+  // 이 함수는 위에서 정확히 3개 사업연도만 조회하므로 slice(0, 3)이 오늘은
+  // 아무것도 버리지 않는다 — 그래도 화면이 「최근 3년만 본다」고 말하지
+  // 않으면 그 이전 감사의견이 없는 것으로 읽힌다.
+  let html = `<div class="snote">※ 최근 3개 사업연도만 조회합니다 — 감사의견 ${years.length}건 표시 · 그 이전은 이 화면에 없습니다. ${NOTICE.NO_JUDGMENT}.</div>`;
   for (const yr of years) {
     const r = byYear.get(yr);
     const op = (r.adt_opinion || "").trim() || "―";
@@ -6193,7 +6235,7 @@ async function loadAuditOpinions(corpCode, finCorePromise) {
     prevAuditor = auditor;
   }
   if (hasBad) html += `<div class="factwarn">⚠️ ${glossStaticHTML(
-    `적정 외 감사의견이 관찰됐습니다 — 상장폐지 사유·개선기간과 직결될 수 있는 가장 무거운 회계 신호입니다. 감사보고서 원문을 확인하세요.`)}</div>`;
+    `적정 외 감사의견이 관찰됐습니다 — 상장폐지 사유·개선기간과 직결될 수 있습니다. 감사보고서 원문을 확인하세요.`)}</div>`;
   if (changed) html += `<div class="factline dim" style="font-size:0.85rem">· 기간 중 감사인 교체가 관찰됐습니다 (표기 차이일 수 있음 — 원문 확인).</div>`;
   // ── 작업4: 연속 적자 — loadFinancialCore가 이미 받은 3기간(당기/전기/전전기) 금액을
   // 재사용한다(추가 API 호출 0회). 2년 이상 연속일 때만 표기하고, fs_div는 finCore가
@@ -6343,7 +6385,7 @@ async function compareActors() {
     <div class="slabel">▍OVERLAP RESULT — ${compareList.map(esc).join(" · ")} · ${ROSTER_YEARS.label}</div>`;
   if (overlaps.length) {
     html += `<div class="callout">⚠️ <b>2개사 이상에 임원으로 등장한 인물 ${overlaps.length}명</b>
-      — 서로 무관해 보이는 회사들을 같은 사람이 오간 기록입니다. 아래는 DART 공시 사실이며 판정이 아닙니다.
+      — 같은 사람이 여러 회사를 오간 DART 공시 기록이며 판정이 아닙니다.
       <ul>` + overlaps.map(([nm, m]) =>
         `<li><b>${esc(nm)}</b> — ${m.size}개사: ` +
         [...m.entries()].map(([c, info]) => {
@@ -6355,11 +6397,11 @@ async function compareActors() {
       `</ul></div>`;
   } else {
     if (fetchFailed.length) {
-      html += `<p class="dim" style="margin-top:0.5rem">⚠ 임원현황을 불러오지 못한 연도가 있습니다 — ${esc(fetchFailed.join(" · "))}.
-      <strong style="color:var(--tx)">겹치는 인물이 없다는 뜻이 아닙니다.</strong> 잠시 후 다시 시도하세요.</p>`;
+      html += `<p class="dim" style="margin-top:0.5rem">⚠ 임원현황을 불러오지 못한 연도가 있습니다 — ${esc(fetchFailed.join(" · "))}. <strong style="color:var(--tx)">겹치는 인물이 없다는 뜻이 아닙니다.</strong></p>`;
     }
-    html += `<p class="dim" style="margin-top:0.5rem">${ROSTER_YEARS.label} 임원현황에서 2개사 이상에 등장하는 인물이 없습니다.
-      '겸직 없음'이 '연결 없음'을 뜻하지는 않습니다 — 인수자(CB·유상증자) 경로는 이 화면이 다루지 않습니다.</p>`;
+    html += `<div class="dim" style="margin:0.5rem 0 0">` + whyDetailsHTML(
+      `${ROSTER_YEARS.label} 임원현황에서 2개사 이상에 등장하는 인물이 없습니다 — '겸직 없음'이 '연결 없음'을 뜻하지는 않습니다.`,
+      `인수자(CB·유상증자) 경로는 이 화면이 다루지 않습니다.`) + `</div>`;
   }
   html += `<details style="margin-top:0.8rem;font-size:0.88rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700">회사별 전체 임원 명단 보기</summary>` +
     [...rosters.entries()].map(([c, roster]) =>
@@ -6367,11 +6409,9 @@ async function compareActors() {
       [...roster.entries()].map(([nm, info]) =>
         `${esc(nm)}(${esc([...(info.years || [])].sort().join(","))})`).join(" · ") +
       `</span></p>`).join("") + `</details>`;
-  html += `<p class="dim" style="font-size:0.8rem;margin-top:0.8rem">
-    ※ 임원현황은 DART 사업보고서에 공시된 공개 기록이며, 이 화면은 그것을 실시간으로 겹쳐 보여줄 뿐입니다.
-    <strong style="color:var(--tx)">동명이인 가능성이 항상 있습니다</strong> — 생년·경력은 각 사 사업보고서 원문에서 확인하세요.
-    돈을 댄 사람(CB·유상증자 인수자) 차원까지 겹쳐 보려면 <a href="../#start">MCP 대화</a>의 find_actor_overlap을 사용하세요.
-    공개기록 행위자 레지스트리·연결망 시각화는 별도 운영(승인제)입니다.</p></div>`;
+  html += `<div class="dim" style="font-size:0.8rem;margin:0.8rem 0 0">` + whyDetailsHTML(
+    `※ DART 사업보고서 임원현황을 겹쳐 본 것입니다 — <strong style="color:var(--tx)">동명이인 가능성이 항상 있습니다</strong>.`,
+    `생년·경력은 각 사 사업보고서 원문에서 확인하세요. 돈을 댄 사람(CB·유상증자 인수자)까지 겹쳐 보려면 <a href="../#start">MCP 대화</a>의 find_actor_overlap을 쓰세요. 공개기록 행위자 레지스트리·연결망 시각화는 별도 운영(승인제)입니다.`) + `</div></div>`;
   $("cresult").innerHTML = html;
   track("compare");
 }
