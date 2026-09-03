@@ -5968,7 +5968,9 @@ function runTurnoverTrend(corpCode) {
     el.innerHTML = `<span class="spinner"></span><span class="dim" style="font-size:0.88rem">회전율 계산 중…</span>`;
   }
   loadTurnoverTrend(corpCode).catch((e) => {
-    $("turnoverCore").innerHTML = `<span class="dim" style="font-size:0.88rem">조회 실패: ${esc(e.message)}</span>`;
+    // 실패를 「자료 없음」으로 읽히게 두지 않는다 — `loadDeepBlocks`의 catch 8곳
+    // (PR-N1)과 같은 부류인데 연도 칩 재렌더 경로만 옛 문구로 남아 있었다.
+    $("turnoverCore").innerHTML = fetchFailHTML(e.message);
   });
 }
 
