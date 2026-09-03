@@ -387,3 +387,73 @@ class TestStaticWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 첫 문장 강조와 `**굵게**`의 경계 교차 — v1.22.0 이연 항목 3 (제작자 지시로 잠금)
+# ══════════════════════════════════════════════════════════════════════════
+#
+# `explainHTML` = glossTerms(leadSentence(boldMarks(esc(raw)))). `boldMarksHTML`이
+# `**…**`를 `<b>…</b>`로 바꾼 **뒤에** `leadSentenceHTML`이 첫 마침표에서 문자열을
+# 두 span으로 가르므로, 굵게 구간이 첫 문장 경계를 걸치면 `<b>`의 여는 태그는
+# `.lead`에, 닫는 태그는 `.rest`에 들어가 태그가 교차한다. 브라우저가 복구하지만
+# 강조 범위가 어긋난다.
+#
+# 코드로 막지 않고 **데이터로 잠근다** — core의 재작성 규칙이 첫 문장을
+# 「~ 공시입니다」 한 문장으로 고정하고 그 안에 강조 표시가 없어 구조적으로
+# 생길 수 없다(현재 40개 전부 0건). 이 테스트는 그 사실을 명시한다: 해설이
+# 늘거나 바뀌어 경계를 걸치는 굵게가 생기면 여기서 잡힌다. 검사 대상은
+# ① `explainHTML`이 실제로 받는 `signals[].prose`(배포 산출물 signals-data.json)
+# ② 그 원천 `SIGNAL_PROSE`(core) — 둘 다 본다.
+
+_FIRST_BOUNDARY = re.compile(r"[.!?](?=\s|$)")  # leadSentenceHTML과 같은 규칙
+
+
+def _bold_crosses_first_boundary(raw: str) -> bool:
+    """raw 문자열 기준 — 첫 문장 경계 앞의 `**` 개수가 홀수면 굵게 구간이
+    경계를 걸친다(짝이 안 맞는 `**`도 홀수라 함께 걸린다 — 그것 자체가 결함)."""
+    m = _FIRST_BOUNDARY.search(raw)
+    if not m:
+        return False
+    return raw[:m.start()].count("**") % 2 == 1
+
+
+class TestLeadSentenceBoldBoundary(unittest.TestCase):
+    def _signal_prose_from_export(self) -> dict:
+        data = json.loads(
+            (_ROOT / "docs" / "tool" / "signals-data.json").read_text(encoding="utf-8"))
+        return {s["key"]: s.get("prose") or "" for s in data["signals"]}
+
+    def test_검사기가_교차를_실제로_잡는다(self):
+        """RED 증명 — 경계를 걸치는 입력에서 검사가 실패해야 잠금이 뜻이 있다."""
+        crossing = "**첫 문장은 여기서 끝납니다. 그런데 굵게는** 둘째 문장까지 갑니다."
+        self.assertTrue(_bold_crosses_first_boundary(crossing))
+        bolded = _viewer([["boldMarksHTML", crossing]])[0]
+        lead = _viewer([["leadSentenceHTML", bolded]])[0]
+        lead_span = re.search(r'<span class="lead">(.*?)</span>', lead, re.S).group(1)
+        self.assertNotEqual(lead_span.count("<b>"), lead_span.count("</b>"),
+                            "교차 입력인데 .lead 안 <b>가 균형이라면 검사가 무의미하다")
+        # 대조: 경계 안에서 닫히는 굵게는 통과
+        self.assertFalse(_bold_crosses_first_boundary("**첫 문장**입니다. 둘째 문장."))
+
+    def test_core_SIGNAL_PROSE는_첫_문장_경계를_걸치는_굵게가_없다(self):
+        from dart_risk_mcp.core.explain import SIGNAL_PROSE
+        bad = [k for k, v in SIGNAL_PROSE.items() if _bold_crosses_first_boundary(v)]
+        self.assertEqual(bad, [], f"첫 문장 경계를 걸치는 **굵게**: {bad}")
+
+    def test_배포_산출물의_signals_prose를_실제_파이프라인에_태워도_lead_안_b_태그가_균형이다(self):
+        """raw 검사와 별개로 뷰어 함수 자체를 태운다 — 규칙이 바뀌어도(경계
+        정규식·굵게 정규식) 산출물 기준으로 잡히게."""
+        prose = self._signal_prose_from_export()
+        keys = sorted(prose)
+        bolded = _viewer([["boldMarksHTML", prose[k]] for k in keys])
+        leads = _viewer([["leadSentenceHTML", b] for b in bolded])
+        bad = []
+        for k, out in zip(keys, leads):
+            m = re.search(r'<span class="lead">(.*?)</span>', out, re.S)
+            self.assertIsNotNone(m, f"{k}: .lead span이 없다")
+            span = m.group(1)
+            if span.count("<b>") != span.count("</b>"):
+                bad.append(k)
+        self.assertEqual(bad, [], f".lead 안에서 <b>가 열리고 닫히지 않는 신호: {bad}")
+        self.assertGreaterEqual(len(keys), 40, "검사 대상이 줄었다 — export가 비었나")
