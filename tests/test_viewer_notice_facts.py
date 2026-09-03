@@ -1088,38 +1088,9 @@ def test_층4_원장_항목은_아직_고지가_없다(fn):
 # 리터럴이 있는 catch"라는, PR-N1 이후로는 항상 빈 집합을 돌려주는 개념이라
 # 별도로 남겨 둘 이유가 없었다.)
 # ══════════════════════════════════════════════════════════════════════════
-# 측정 보조 — 고지 총량 상한
+# (제거) 고지 총량 상한 `_notice_chars`/`_NOTICE_CHARS_CEILING` — 2026-09-03 제작자 결정
 # ══════════════════════════════════════════════════════════════════════════
-
-def _notice_chars(html_source: str) -> int:
-    """※·⚠ 마커가 들어간 문자열 리터럴(백틱 템플릿·큰따옴표 문자열)의 총
-    글자 수 + `.dim`/`.factwarn`/`.mnote` 클래스가 붙은 조각의 바로 뒤
-    텍스트 글자 수를 더한 **소스 기준 근사치**다. 정확한 렌더 결과 글자
-    수가 아니라 소스 안의 고지 분량이 늘어나는지 줄어드는지를 보는
-    상한선이다 — 다음 PR들이 이 값을 낮춰야 한다.
-    """
-    total = 0
-    for m in re.finditer(r"`([^`]*)`", html_source, re.S):
-        s = m.group(1)
-        if "※" in s or "⚠" in s:
-            total += len(s)
-    for m in re.finditer(r'"([^"\n]*)"', html_source):
-        s = m.group(1)
-        if "※" in s or "⚠" in s:
-            total += len(s)
-    for cls in ("dim", "factwarn", "mnote"):
-        for m in re.finditer(r'class="' + cls + r'"[^>]*>([^<]*)', html_source):
-            total += len(m.group(1))
-    return total
-
-
-# ⚠ 리뷰 지적(Critical) — 여기서 `_notice_chars(_html())`로 상한을 다시
-# 재면 "검사 대상 파일에서 잰 값과 검사 대상 파일에서 잰 값"을 비교하는
-# 것이라 **절대 실패할 수 없다**(파일이 아무리 늘어나도 상한도 같이
-# 늘어난다). 상한은 이 커밋 시점에 손으로 측정해 **리터럴로 박는다** —
-# PR-N1~N4가 이 값을 내린다 · 올라가면 실패.
-_NOTICE_CHARS_CEILING = 8276  # PR-N4 완료 시점 재기준(8302→8276) — 이후 고지 추가는 이 값을 넘지 못한다
-
-
-def test_고지_총량_상한():
-    assert _notice_chars(_html()) <= _NOTICE_CHARS_CEILING
+# 소스 근사치라 노출 분량의 척도가 아니었다 — 접힌 「왜 그런가」 본문까지 세고
+# `.snote`류 새 클래스는 세지 않으며 `class="dim"` 뒤의 JS 소스까지 물었다.
+# 실측은 태그를 뗀 노출 글자로만 했고(N2~N4 PR 본문), 사실 보존은 위 4층이
+# 맡는다. 「분량이 늘었나」는 이 상한이 아니라 라이브 노출 글자 재측정으로 본다.
