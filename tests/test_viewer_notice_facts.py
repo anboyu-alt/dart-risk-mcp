@@ -1118,7 +1118,7 @@ def _notice_chars(html_source: str) -> int:
 # 것이라 **절대 실패할 수 없다**(파일이 아무리 늘어나도 상한도 같이
 # 늘어난다). 상한은 이 커밋 시점에 손으로 측정해 **리터럴로 박는다** —
 # PR-N1~N4가 이 값을 내린다 · 올라가면 실패.
-_NOTICE_CHARS_CEILING = 8302
+_NOTICE_CHARS_CEILING = 8276  # PR-N4 완료 시점 재기준(8302→8276) — 이후 고지 추가는 이 값을 넘지 못한다
 
 
 def test_고지_총량_상한():
