@@ -1919,7 +1919,7 @@ function renderDash() {
       <div class="kpi"><div class="v">${amendCount}</div><div class="k">정정공시</div></div>
       <div class="kpi ${amendRate >= 20 ? "alert" : ""}"><div class="v">${amendRate}%</div><div class="k">정정 비율</div></div>
     </div>
-    ${CUR.truncated ? `<p class="dim" style="font-size:0.82rem;margin-top:0.7rem">※ 전체 공시 ${CUR.truncated}건 중 최근 ${items.length}건만 수집·분석했습니다. <b>실제로 덮인 구간은 ${coveredFrom(items)}부터</b>이고 그 이전은 빠졌습니다 — 기간을 좁혀 나눠 보거나 MCP 대화를 이용하세요.</p>` : ""}
+    ${CUR.truncated ? `<p class="dim" style="font-size:0.82rem;margin-top:0.7rem">※ 이 기간 전체 공시 ${CUR.truncated}건 중 최근 ${items.length}건만 수집·분석했습니다(공시 다량 기업). <b>실제로 덮인 구간은 ${coveredFrom(items)}부터</b>이고 그 이전은 빠졌습니다 — 기간을 좁혀 나눠 보거나 MCP 대화를 이용하세요.</p>` : ""}
     ${amendRate >= AMEND_NOTE_FLOOR ? `<div class="dim" style="font-size:0.82rem;margin-top:0.7rem">${whyDetailsHTML(
       `※ 정정공시 비율 ${amendRate}% — 비율만으로 이상 여부가 갈리지는 않습니다. 같은 사안이 반복 정정되는지 원문에서 확인하세요.`,
       `시장 실측(2026-07-10~08-22, 공시 27,780건)에서 같은 기간 공시 10건 이상인 상장사 488곳의 중앙값은 10%, 상위 25%가 23%, 상위 10%가 39%입니다.`)}</div>` : ""}
@@ -1999,7 +1999,7 @@ function renderDash() {
     if (capitalEvents.length) {
       const fires = churn.dil >= 3 || (churn.dil >= 2 && churn.non >= 2);
       html += `<div class="panel"><div class="slabel amber">▍CAPITAL RHYTHM</div>
-        <div class="dim">이 기간 자본 관련 공시(증자·감자·자사주·CB/BW/EB/RCPS)가 총 <strong style="color:var(--tx)">${capitalEvents.length}건</strong>
+        <div class="dim" style="margin:0.7rem 0">이 기간 자본 관련 공시(증자·감자·자사주·CB/BW/EB/RCPS)가 총 <strong style="color:var(--tx)">${capitalEvents.length}건</strong>
         — 12개월 기준 희석성(증자·메자닌) <strong style="color:var(--tx)">${churn.dil}건</strong> ·
         비희석성(자사주 등) <strong style="color:var(--tx)">${churn.non}건</strong>입니다.
         ${fires
