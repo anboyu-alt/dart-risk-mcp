@@ -175,11 +175,14 @@ class TestGlossTermsHTMLLongestFirst(unittest.TestCase):
 
 
 class TestGlossTermsHTMLOncePerCall(unittest.TestCase):
-    def test_낱말당_첫_1회만_감싼다(self):
+    def test_모든_등장을_감싼다(self):
+        """제작자 판단(2026-09-03): 이용자는 리포트를 발췌해 읽으므로 어느
+        문장을 집어도 풀이가 있어야 한다. 옛 규칙 「한 호출 안에서 첫 1회만」은
+        두 번째 등장을 맨 문장으로 남겼다."""
         text = "전환사채 발행 후 전환사채 재발행"
         out = _viewer([["glossTermsHTML", text, _GLOSSARY, {}]])[0]
-        self.assertEqual(out.count('class="term-def"'), 1,
-                          f"두 번째 등장까지 감쌌다: {out!r}")
+        self.assertEqual(out.count('class="term-def"'), 2,
+                          f"두 번째 등장이 감싸지지 않았다: {out!r}")
 
 
 class TestGlossTermsHTMLTagProtection(unittest.TestCase):
@@ -191,7 +194,7 @@ class TestGlossTermsHTMLTagProtection(unittest.TestCase):
         out = _viewer([["glossTermsHTML", text, _GLOSSARY, {}]])[0]
         # <a> 안의 「전환사채」는 감싸지지 않는다.
         self.assertIn('<a href="#">전환사채</a>', out)
-        # <a> 밖의 (이 호출에서 최초로 눈에 띄는) 「전환사채」는 감싸진다.
+        # <a> 밖의 「전환사채」는 감싸진다(밖에 하나뿐이라 1).
         self.assertEqual(out.count('class="term-def"'), 1)
 
     def test_summary_안은_적용하지_않는다(self):
@@ -205,9 +208,14 @@ class TestGlossTermsHTMLTagProtection(unittest.TestCase):
         self.assertEqual(out, text)
 
     def test_이미_감싼_term_span_안은_다시_적용하지_않는다(self):
-        once = _viewer([["glossTermsHTML", "전환사채 발행", _GLOSSARY, {}]])[0]
+        # ⚠ 낱말이 **두 번** 나오는 입력이어야 한다 — 옛 테스트는 한 번만 나오는
+        # 입력이라, 「첫 1회만」 규칙 아래서 두 번째 적용이 다음 등장을 잡아
+        # 낱말당 툴팁이 둘이 되는 결함(v1.22.0 이연 항목 4)을 못 잡았다.
+        text = "전환사채 발행 후 전환사채 재발행"
+        once = _viewer([["glossTermsHTML", text, _GLOSSARY, {}]])[0]
         twice = _viewer([["glossTermsHTML", once, _GLOSSARY, {}]])[0]
         self.assertEqual(once, twice, "멱등성이 깨졌다 — f(f(x)) != f(x)")
+        self.assertEqual(twice.count('class="term-def"'), 2)
 
 
 class TestGlossTermsHTMLEscapePreserved(unittest.TestCase):

@@ -3211,9 +3211,14 @@ function boldMarksHTML(escaped) {
 // 으로 감싼다. 순수 함수(DOM 접근 없음). `/(<[^>]*>)/`로 태그·텍스트를 갈라
 // 태그 조각은 손대지 않고, `<a>`·`<summary>`·`<code>`·`class="term"` 안의
 // 텍스트는 건너뛴다(중첩 대화형 금지 + 멱등 — 이미 감싼 낱말을 다시 감싸지
-// 않는다). 낱말당 한 호출 안에서 첫 1회만 감싼다. 부분 일치를 허용한다
-// (「전환사채권」 안의 「전환사채」) — 뒤따르는 한글까지 통째로 끌어안는
-// 대안은 조사(「전환사채**를**」)까지 밑줄이 그어져 기각했다.
+// 않는다). **모든 등장을 감싼다** — 처음엔 「한 호출 안에서 첫 1회만」이었는데
+// 제작자 판단(2026-09-03)으로 바꿨다: 이용자는 리포트를 처음부터 차례로 읽지
+// 않고 필요한 부분을 발췌해 읽으므로 어느 문장을 집어도 풀이가 있어야 한다.
+// 재작성 규칙이 단락 안 반복을 이미 드물게 만들어 밑줄이 크게 늘지 않고,
+// 부수로 멱등성(f(f(x)) === f(x))이 실제로 성립한다 — 옛 「첫 1회」는 두 번째
+// 적용에서 아직 안 감싼 다음 등장을 잡아 낱말당 툴팁이 둘이 됐다. 부분 일치를
+// 허용한다(「전환사채권」 안의 「전환사채」) — 뒤따르는 한글까지 통째로
+// 끌어안는 대안은 조사(「전환사채**를**」)까지 밑줄이 그어져 기각했다.
 function glossTermsHTML(escapedHtml, glossary, aliases) {
   const html = String(escapedHtml == null ? "" : escapedHtml);
   const gloss = glossary || {};
@@ -3242,7 +3247,6 @@ function glossTermsHTML(escapedHtml, glossary, aliases) {
     area: 1, base: 1, col: 1, embed: 1, source: 1, track: 1, wbr: 1 };
 
   const parts = html.split(/(<[^>]*>)/);
-  const seen = new Set();
   const stack = [];
   let depth = 0;
   const out = [];
@@ -3271,11 +3275,8 @@ function glossTermsHTML(escapedHtml, glossary, aliases) {
       continue;
     }
     if (depth > 0) { out.push(part); continue; }
-    out.push(part.replace(termRe, (m) => {
-      if (seen.has(m)) return m;
-      seen.add(m);
-      return `<span class="term" tabindex="0">${m}<span class="term-def" role="tooltip">${esc(defs[m])}</span></span>`;
-    }));
+    out.push(part.replace(termRe, (m) =>
+      `<span class="term" tabindex="0">${m}<span class="term-def" role="tooltip">${esc(defs[m])}</span></span>`));
   }
   return out.join("");
 }
