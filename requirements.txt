@@ -1,2 +1,10 @@
-mcp>=1.0.0
+# Vercel 서버리스 함수(api/*.py) 전용 의존성. MCP 서버 패키지의 의존성은
+# pyproject.toml이 따로 관리한다 — 이 파일은 pip로 설치되지 않는다.
+#
+# `mcp`를 넣지 않는다(2026-09-07). 함수 4개(doc·corp·stats·track)가
+# import하는 것은 requests·표준 라이브러리·dart_risk_mcp.core.dart_client
+# 뿐인데, `mcp`는 pydantic·starlette·uvicorn·httpx 등을 끌고 와 함수당
+# 번들이 약 8배(3MB → 24MB)가 됐고, 그것이 배포마다 4개씩 복제돼 Vercel
+# Functions Storage 무료 한도 10GB를 채웠다. tests/test_vercel_requirements.py가
+# 이 경계를 고정한다.
 requests>=2.28.0
