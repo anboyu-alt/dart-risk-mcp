@@ -31,8 +31,14 @@ FAILURE_MARK = "자료가 없다는 뜻이 아닙니다"
 
 
 @pytest.fixture
-def _stub(monkeypatch):
-    """모든 조회가 실패하는 세상을 만든다."""
+def _stub(monkeypatch, no_structured_dart):
+    """모든 조회가 실패하는 세상을 만든다.
+
+    구조화 fetcher 스텁은 `no_structured_dart`(tests/conftest.py)가 맡는다 —
+    옛 목록은 `fetch_executive_roster`(프로덕션 소비처 0인 옛 함수)를 스텁하고
+    실제로 쓰이는 `_detail` 판과 메자닌·희석 fetcher는 빠져 있어 가짜 키로
+    DART에 새고 있었다(2026-09-07 실측 7회).
+    """
     monkeypatch.setattr(srv, "_DART_API_KEY", "TESTKEY", raising=False)
     monkeypatch.setattr(
         srv, "resolve_corp",
@@ -43,15 +49,6 @@ def _stub(monkeypatch):
         lambda *a, **kw: ([], FETCH_ERROR),
     )
     monkeypatch.setattr(srv, "fetch_company_disclosures", lambda *a, **kw: [])
-    for name in ("fetch_executive_roster", "extract_cb_investors",
-                 "fetch_treasury_decisions"):
-        if hasattr(srv, name):
-            monkeypatch.setattr(srv, name, lambda *a, **kw: [])
-    # 반환 모양이 다르다 — 리스트로 스텁하면 도구가 TypeError로 죽는다
-    monkeypatch.setattr(
-        srv, "fetch_debt_balance",
-        lambda *a, **kw: {"total": 0, "year": None, "by_type": {}, "within_1y_ratio": None},
-    )
 
 
 def _call(fn, *args, **kwargs):

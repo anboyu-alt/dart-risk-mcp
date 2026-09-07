@@ -1396,7 +1396,9 @@ rcept 계열 136건(43%)이고 그중 **116건(85%)이 낡았다**(최고 4개�
 
 ## 테스트 방법
 
-**CI가 전체 스위트를 돌린다 (2026-09-07 신설, `.github/workflows/test.yml`)** — PR과 master push마다 ubuntu · Python 3.11 · node 22로 `pytest tests/` 전체. **일부러 `DART_API_KEY`를 주입하지 않는다**(가드 스텝이 있으면 실패시킨다) — 키가 없어야 네트워크 테스트가 skip돼 결정적이고, 키 유무에 따라 갈리는 코드가 드러난다(PR #458에서 7건이 그렇게 잠복해 있었다). 그전까지는 pytest를 부르는 워크플로우가 카탈로그·hygiene 부분집합뿐이라 전체 스위트는 제작자 PC(늘 키 있음)에서만 돌았다. 로컬에서도 두 조건을 다 본다: Bash(키 없음 — 윈도우 User 환경변수를 상속하지 않는다)와 PowerShell(키 있음). 소요 약 3분.
+**CI가 전체 스위트를 돌린다 (2026-09-07 신설, `.github/workflows/test.yml`)** — PR과 master push마다 ubuntu · Python 3.11 · node 22로 `pytest tests/` 전체. **일부러 `DART_API_KEY`를 주입하지 않는다**(가드 스텝이 있으면 실패시킨다) — 키가 없어야 네트워크 테스트가 skip돼 결정적이고, 키 유무에 따라 갈리는 코드가 드러난다(PR #458에서 7건이 그렇게 잠복해 있었다). 그전까지는 pytest를 부르는 워크플로우가 카탈로그·hygiene 부분집합뿐이라 전체 스위트는 제작자 PC(늘 키 있음)에서만 돌았다. 로컬에서도 두 조건을 다 본다: Bash(키 없음 — 윈도우 User 환경변수를 상속하지 않는다)와 PowerShell(키 있음). 소요 약 1분 20초(키 없음) · 4분 30초(키 있음 — 네트워크 테스트 36개가 실제로 돈다).
+
+**가짜 키 DART 호출 가드 (2026-09-07, `tests/conftest.py`)**: 도구 하나가 fetcher를 여럿 부르는데 테스트가 공시 목록만 mock하면 나머지(자금사용·채무잔액·부실 이벤트·메자닌·희석·원문)가 패치된 가짜 키 `"k"`로 **DART에 실제 요청**을 보낸다. 전수 측정: **13개 테스트가 231회**, 스위트 175초 중 약 96초였고 CI가 매 실행마다 그 요청을 DART에 던지고 있었다(가장 느린 테스트 34초). `pytest_runtest_call` 래퍼가 `requests.Session.request`를 감싸 opendart 호스트 + env 실제 키와 다른 `crtfc_key`(키 없는 환경에서는 전부)면 **DART의 실제 거절 응답과 같은 모양**(HTTP 200 · `{"status":"010","message":"등록되지 않은 인증키입니다."}` — 라이브 실측)을 즉시 돌려주고, 테스트가 끝나면 **그 테스트를 실패**시켜 어느 엔드포인트가 샜는지 알린다. 고치는 법은 `@pytest.mark.usefixtures("no_structured_dart")`(구조화 fetcher 14종을 빈 성공 응답으로 스텁, `STRUCTURED_FETCH_STUBS`). 실제 키 호출은 통과시킨다. ⚠ 호스트는 `DART_BASE`에서 읽는다 — 첫 판이 `fss`를 `fsc`로 손으로 적어 가드가 아무것도 못 잡았다. ⚠ 반환 모양이 fetcher마다 다르다(`fetch_debt_balance`는 dict, `fetch_mezzanine_decisions`는 `{"rows","failed_kinds","fetch_failed"}`) — 리스트로 뭉뚱그리면 도구가 TypeError로 죽는다. 효과: 키 없는 스위트 **175초 → 80초**, 새는 테스트 0. 부수: 페이지 간 `time.sleep(0.25)`·재시도 sleep을 실제로 돌리던 테스트 2개도 `dc.time.sleep`을 막았다(`TestThrottleGuard`와 같은 관례).
 
 ```bash
 # 서버 import 검증

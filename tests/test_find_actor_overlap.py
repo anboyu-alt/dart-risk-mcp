@@ -240,7 +240,16 @@ class TestFindActorOverlapMerging(unittest.TestCase):
             with patch.dict("os.environ", {
                 "DART_WATCHLIST_PATH": str(Path(tmp) / "wl.json"),
                 "DART_API_KEY": "test_key",
-            }):
+            }), patch(
+                "dart_risk_mcp.server.resolve_corp",
+                side_effect=lambda q, k: (q, {"corp_code": q, "stock_code": "000000"}),
+            ), patch(
+                "dart_risk_mcp.server.fetch_company_disclosures_with_status",
+                return_value=([], FETCH_OK),
+            ), patch("dart_risk_mcp.server.fetch_executive_roster_detail", return_value=[]):
+                # resolve_corp를 안 막으면 corpCode.xml을 가짜 키로 실제 내려받는다 —
+                # 로컬은 ~/.cache의 명부 캐시가 있어 통과했고 CI(캐시 없음)에서
+                # 가드에 걸렸다(2026-09-07). 위 test_watchlist_merges_companies와 같은 mock.
                 result = find_actor_overlap(["회사가", "회사나"], watchlist="유령")
 
         # 미등록 워치리스트는 안내하되 company_names로 계속 진행

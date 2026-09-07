@@ -66,7 +66,10 @@ class TestStatus:
         assert (row, st) == (None, dc.ROW_NOT_FOUND)
 
     def test_비정상_status는_error(self):
-        with patch.object(dc, "_retry", return_value=_resp([], status="020")):
+        # 020은 재시도 대상이라 sleep(1)+sleep(2)가 실제로 돈다 — 아래
+        # TestThrottleGuard와 같이 sleep을 막는다(3초 → 즉시).
+        with patch.object(dc, "_retry", return_value=_resp([], status="020")), \
+             patch.object(dc.time, "sleep"):
             row, st = dc.resolve_disclosure_row_with_status("20260814900829", "k")
         assert (row, st) == (None, dc.ROW_ERROR)
 
@@ -222,8 +225,12 @@ class TestLimitRationale:
         assert sig.parameters["max_pages"].default == 50
 
 
+@pytest.mark.usefixtures("no_structured_dart")
 class TestToolMessage:
-    """도구 출력에서 '신호 없음'과 '확인 못 함'이 구분되는지."""
+    """도구 출력에서 '신호 없음'과 '확인 못 함'이 구분되는지.
+
+    `no_structured_dart`: 행 조회는 mock했지만 원문 미리보기(`fetch_document_text`)가
+    가짜 키로 document.xml을 실제 호출하고 있었다(2026-09-07)."""
 
     def _run(self, status, **kw):
         import dart_risk_mcp.server as srv

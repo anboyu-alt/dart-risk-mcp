@@ -136,8 +136,12 @@ class TestShallowNotice:
         assert 'from_date="2026-03-01"' in out
 
 
+@pytest.mark.usefixtures("no_structured_dart")
 class TestShallowNoticeWiring:
-    """두 도구의 이벤트 자료구조가 달라도 안내가 나오는지 — 실사고 회귀."""
+    """두 도구의 이벤트 자료구조가 달라도 안내가 나오는지 — 실사고 회귀.
+
+    `no_structured_dart`: `_run`이 부실 이벤트·원문·CB 인수자는 mock했지만
+    자금사용·재무제표는 빠져 가짜 키로 DART에 새고 있었다(2026-09-07)."""
 
     def _run(self, fn, **kw):
         rows = [{"rcept_no": "20260814900001", "report_nm": "전환사채권발행결정",
