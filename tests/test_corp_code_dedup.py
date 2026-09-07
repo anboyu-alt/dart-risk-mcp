@@ -10,6 +10,7 @@
 """
 import io
 import json
+import shutil
 import unittest
 import zipfile
 from pathlib import Path
@@ -73,7 +74,11 @@ class TestLoadCorpCodesCollision(unittest.TestCase):
     def setUp(self):
         self._orig_cache = dict(dc._corp_cache)
         dc._corp_cache.clear()
-        self._tmp_patch = patch.object(dc, "_CACHE_DIR", Path(self._make_tmp_dir()))
+        # mkdtemp는 스스로 지우지 않는다 — 2026-09-07까지 실행마다 디렉터리 4개를
+        # 남겼다(corp_codes_v2.json 포함). tests/conftest.py가 이제 잡는다.
+        self._tmp_dir = self._make_tmp_dir()
+        self.addCleanup(shutil.rmtree, self._tmp_dir, ignore_errors=True)
+        self._tmp_patch = patch.object(dc, "_CACHE_DIR", Path(self._tmp_dir))
         self._tmp_patch.start()
 
     def tearDown(self):
