@@ -1,4 +1,6 @@
-"""스위트 공통 — 가짜 키로 DART를 실제 호출하는 테스트를 잡는다 (2026-09-07).
+"""스위트 공통 가드 둘 (2026-09-07): ① 가짜 키 DART 호출 ② 지우지 않은 mkdtemp.
+
+②는 파일 말미 「mkdtemp 가드」 참고. 아래는 ①.
 
 ## 왜
 
@@ -33,6 +35,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -144,6 +147,52 @@ def pytest_runtest_call(item):
             "  고치는 법: @pytest.mark.usefixtures(\"no_structured_dart\") 또는 "
             "stub_structured_fetchers(monkeypatch). 새 fetcher면 "
             "tests/conftest.py의 STRUCTURED_FETCH_STUBS에 빈 성공 응답을 추가.",
+            pytrace=False,
+        )
+    return result
+
+
+# ---------------------------------------------------------------- mkdtemp 가드
+
+_MKDTEMP_KEY = pytest.StashKey[list]()
+_ORIG_MKDTEMP = tempfile.mkdtemp
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_setup(item):
+    """테스트가 만든 `tempfile.mkdtemp()` 경로를 기록한다(setup부터 teardown까지).
+
+    2026-09-07: 두 파일의 테스트 9개가 mkdtemp를 지우지 않아 **실행마다 디렉터리
+    9개**를 남겼다 — 보통은 시스템 임시 폴더에 쌓여 보이지 않다가, TMPDIR이 레포
+    루트인 샌드박스에서 130개가 한꺼번에 드러났다. `TemporaryDirectory()`나
+    pytest `tmp_path`는 스스로 정리하므로 여기 걸리지 않는다.
+    """
+    created: list[str] = []
+
+    def recording_mkdtemp(*a, **k):
+        path = _ORIG_MKDTEMP(*a, **k)
+        created.append(path)
+        return path
+
+    item.stash[_MKDTEMP_KEY] = created
+    tempfile.mkdtemp = recording_mkdtemp
+    return (yield)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item, nextitem):
+    try:
+        result = yield
+    finally:
+        tempfile.mkdtemp = _ORIG_MKDTEMP  # 기록기를 뗀다 — 다음 setup이 새로 단다
+    created = item.stash.get(_MKDTEMP_KEY, [])
+    leaked = [p for p in created if os.path.isdir(p)]
+    if leaked:
+        pytest.fail(
+            "tempfile.mkdtemp()로 만든 디렉터리를 지우지 않았다: "
+            + ", ".join(os.path.basename(p) for p in leaked)
+            + "\n  고치는 법: tempfile.TemporaryDirectory() / pytest tmp_path를 쓰거나 "
+            "self.addCleanup(shutil.rmtree, path, ignore_errors=True).",
             pytrace=False,
         )
     return result

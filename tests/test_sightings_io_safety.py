@@ -7,6 +7,7 @@
   스텝(if: always())이 그것을 커밋할 수 있다 — 원자 교체로 저장한다.
 """
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,7 +17,11 @@ import scripts.discover_actors as da
 
 class TestLoadSafety(unittest.TestCase):
     def setUp(self):
+        # mkdtemp는 스스로 지우지 않는다 — 2026-09-07까지 실행마다 디렉터리 5개를
+        # 남겼다(샌드박스에서 TMPDIR이 레포 루트라 눈에 띄었다). tests/conftest.py가
+        # 이제 지우지 않은 mkdtemp를 잡는다.
         self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
 
     def test_missing_file_returns_skeleton(self):
         out = da._load(self.dir / "absent.json", {"version": 1, "sightings": {}})
@@ -37,18 +42,19 @@ class TestLoadSafety(unittest.TestCase):
 
 class TestAtomicWrite(unittest.TestCase):
     def test_writes_valid_json_and_no_tmp_leftover(self):
-        d = Path(tempfile.mkdtemp())
-        p = d / "sightings.json"
-        da._atomic_write_json(p, {"version": 1, "sightings": {"김테스트": []}})
-        self.assertEqual(json.loads(p.read_text(encoding="utf-8"))["version"], 1)
-        self.assertEqual(list(d.glob("*.tmp")), [])
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            p = d / "sightings.json"
+            da._atomic_write_json(p, {"version": 1, "sightings": {"김테스트": []}})
+            self.assertEqual(json.loads(p.read_text(encoding="utf-8"))["version"], 1)
+            self.assertEqual(list(d.glob("*.tmp")), [])
 
     def test_overwrites_existing(self):
-        d = Path(tempfile.mkdtemp())
-        p = d / "sightings.json"
-        p.write_text('{"old": true}', encoding="utf-8")
-        da._atomic_write_json(p, {"new": True})
-        self.assertEqual(json.loads(p.read_text(encoding="utf-8")), {"new": True})
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "sightings.json"
+            p.write_text('{"old": true}', encoding="utf-8")
+            da._atomic_write_json(p, {"new": True})
+            self.assertEqual(json.loads(p.read_text(encoding="utf-8")), {"new": True})
 
 
 if __name__ == "__main__":
