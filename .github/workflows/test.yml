@@ -1,0 +1,53 @@
+name: Tests
+
+# 전체 pytest — PR과 master push마다. (2026-09-07 신설)
+#
+# 그전까지 pytest를 부르는 워크플로우는 refresh-catalog·regen-goldens 둘뿐이었고
+# 둘 다 카탈로그·hygiene 테스트만 지정했다. 전체 스위트는 제작자 PC에서만 돌았고
+# 그 PC는 늘 DART_API_KEY가 있어, 「키 없는 환경」에서 스위트가 돈 적이 없었다.
+# 그래서 키를 두 갈래로 읽던 결함이 7건의 실패로 오래 잠복했다(PR #458).
+#
+# ⚠ 일부러 DART_API_KEY를 주입하지 않는다. 키가 없어야 (1) 네트워크에 기대는
+# 테스트가 skip돼 결과가 결정적이고 (2) 키 유무에 따라 갈리는 코드가 드러난다.
+# 키가 필요한 검증(골든 재생성)은 regen-goldens.yml이 따로 맡는다.
+#
+# node는 뷰어(docs/tool/index.html) 쌍둥이 함수를 실행하는 테스트 38개가 쓴다.
+# 없으면 skip되어 조용히 통과하므로 명시적으로 설치한다.
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - name: Install package (+catalog extra) and pytest
+        run: |
+          pip install -e ".[catalog]"
+          pip install pytest
+      - name: Guard — no API key in this job
+        run: |
+          if [ -n "${DART_API_KEY:-}" ]; then
+            echo "이 잡은 키 없이 돌아야 한다(위 주석). DART_API_KEY가 주입돼 있다." >&2
+            exit 1
+          fi
+      - name: Run full test suite (keyless)
+        run: python -m pytest tests/ -q -p no:cacheprovider -rs --durations=15

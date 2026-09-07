@@ -1396,6 +1396,8 @@ rcept 계열 136건(43%)이고 그중 **116건(85%)이 낡았다**(최고 4개�
 
 ## 테스트 방법
 
+**CI가 전체 스위트를 돌린다 (2026-09-07 신설, `.github/workflows/test.yml`)** — PR과 master push마다 ubuntu · Python 3.11 · node 22로 `pytest tests/` 전체. **일부러 `DART_API_KEY`를 주입하지 않는다**(가드 스텝이 있으면 실패시킨다) — 키가 없어야 네트워크 테스트가 skip돼 결정적이고, 키 유무에 따라 갈리는 코드가 드러난다(PR #458에서 7건이 그렇게 잠복해 있었다). 그전까지는 pytest를 부르는 워크플로우가 카탈로그·hygiene 부분집합뿐이라 전체 스위트는 제작자 PC(늘 키 있음)에서만 돌았다. 로컬에서도 두 조건을 다 본다: Bash(키 없음 — 윈도우 User 환경변수를 상속하지 않는다)와 PowerShell(키 있음). 소요 약 3분.
+
 ```bash
 # 서버 import 검증
 python -c "import dart_risk_mcp.server; print('OK')"
