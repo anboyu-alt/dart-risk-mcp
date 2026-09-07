@@ -180,6 +180,22 @@ mcp = FastMCP("dart-risk-analyzer")
 _DART_API_KEY: str = os.environ.get("DART_API_KEY", "")
 
 
+def _api_key() -> str:
+    """DART API 키 — **이 함수 하나로만** 읽는다.
+
+    import 시점에 읽어 둔 모듈 상수를 먼저, 비어 있으면 호출 시점의 env를
+    쓴다. 2026-09-07 이전에는 22개 도구가 모듈 상수를, 4개 도구가 env를 직접
+    읽어 테스트·환경이 한쪽만 채우면 다른 쪽 도구가 「환경변수가 설정되지
+    않았습니다」로 조기 반환했다(키 없는 환경에서 7건 실패).
+
+    ⚠ 순서를 뒤집으면(env 우선) 안 된다 — 테스트 다수가 모듈 상수를 패치하고
+    그 값("testkey")이 fetcher에 넘어갔는지를 `assert_called_with`로 본다.
+    env 우선이면 제작자 PC(env에 실제 키)에서 그 검사가 깨진다. 프로덕션은
+    두 값이 같아 순서와 무관하다. `tests/test_api_key_single_source.py`가 고정.
+    """
+    return _DART_API_KEY or os.environ.get("DART_API_KEY", "")
+
+
 def _estimate_output_size(text: str) -> tuple[int, int]:
     """렌더된 출력의 문자 수와 대략적 토큰 수를 추정한다.
 
@@ -1203,7 +1219,7 @@ def _confirm_outflow_counterparties(
             if r is None and extra_fetches < 2:
                 extra_fetches += 1
                 try:
-                    _r = fetch_major_decision(rcept, _DART_API_KEY, dtype, corp_code)
+                    _r = fetch_major_decision(rcept, _api_key(), dtype, corp_code)
                     r = _r if "error" not in _r else None
                 except Exception:
                     r = None
@@ -1215,7 +1231,7 @@ def _confirm_outflow_counterparties(
                 # 있었고, **뷰어는 그것을 읽어 두 화면이 서로 다른 사실을
                 # 말했다**(MCP 「(미확인)」 vs 뷰어 「정은산업 주식회사」).
                 try:
-                    _d = fetch_asset_disposal_detail(rcept, _DART_API_KEY) or {}
+                    _d = fetch_asset_disposal_detail(rcept, _api_key()) or {}
                 except Exception:
                     _d = {}
                 _cp = (_d.get("counterparty") or "").strip()
@@ -1245,7 +1261,7 @@ def _confirm_outflow_counterparties(
             # 등은 resolve_decision_type이 빈 값이라 DS005로 못 읽는다. 원문에는
             # 거래상대·관계·가액이 구조적으로 있어 직접 파싱한다(실측 상대방 100%).
             try:
-                detail = fetch_asset_disposal_detail(rcept, _DART_API_KEY)
+                detail = fetch_asset_disposal_detail(rcept, _api_key())
             except Exception:
                 detail = {}
             rel = (detail or {}).get("relation", "")
@@ -1257,7 +1273,7 @@ def _confirm_outflow_counterparties(
             ))
         else:
             try:
-                detail = fetch_outflow_detail(rcept, _DART_API_KEY)
+                detail = fetch_outflow_detail(rcept, _api_key())
             except Exception:
                 detail = {}
             if not detail or not detail.get("kind"):
@@ -1307,13 +1323,13 @@ def _build_affiliate_stake_facts(confirmations: list[dict], corp_code: str) -> d
     매칭 실패·API 실패는 조용히 생략(기존 표기 그대로) — 점수 가산 없음.
     """
     subs = [c for c in confirmations if c["classification"] == "subsidiary" and c.get("counterparty")]
-    if not subs or not corp_code or not _DART_API_KEY:
+    if not subs or not corp_code or not _api_key():
         return {}
     year = datetime.now().year - 1
     rows: list[dict] = []
     for y in (year, year - 1):
         try:
-            rows = fetch_affiliate_investments(corp_code, _DART_API_KEY, str(y))
+            rows = fetch_affiliate_investments(corp_code, _api_key(), str(y))
         except Exception:
             rows = []
         if rows:
@@ -1459,7 +1475,7 @@ def _related_party_detail_block(
     rows: list[tuple[dict, dict]] = []
     for e in picked:
         try:
-            detail = fetch_related_party_detail(e["rcept_no"], _DART_API_KEY)
+            detail = fetch_related_party_detail(e["rcept_no"], _api_key())
         except Exception:
             detail = {}
         if detail and detail.get("counterparty"):
@@ -1526,7 +1542,7 @@ def _earnings_shock_block(
     rows: list[tuple[dict, dict]] = []
     for e in picked:
         try:
-            detail = fetch_earnings_shock_detail(e["rcept_no"], _DART_API_KEY)
+            detail = fetch_earnings_shock_detail(e["rcept_no"], _api_key())
         except Exception:
             detail = {}
         if detail and detail.get("rows"):
@@ -1556,7 +1572,7 @@ def _control_change_detail_block(d: dict) -> list[str]:
     가산 없음(v0.8.5), 판정 어휘 없음 — 명칭·유형·자금은 사실 표기만.
     """
     rcept_no = d.get("rcept_no", "")
-    detail = fetch_control_change_detail(rcept_no, _DART_API_KEY)
+    detail = fetch_control_change_detail(rcept_no, _api_key())
     if not detail:
         return []
     prev = detail["prev_holder"] or "(미기재)"
@@ -1640,7 +1656,7 @@ def _confirm_acquisition_targets(
             "nation": "", "listing": "unknown",
         }
         try:
-            det = fetch_acquisition_detail(rcept, _DART_API_KEY)
+            det = fetch_acquisition_detail(rcept, _api_key())
         except Exception:
             det = {}
         if det and det.get("issuer"):
@@ -2047,7 +2063,7 @@ def analyze_company_risk(
         to_date: 조회 종료일(선택). 미지정 시 오늘. from_date만 주면 그날부터
             오늘까지, to_date만 주면 그날 기준 1년.
     """
-    if not _DART_API_KEY:
+    if not _api_key():
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
     lookback_years = _coerce_lookback(lookback_years)
 
@@ -2059,7 +2075,7 @@ def analyze_company_risk(
     deep = _is_deep_window(lookback_days)
 
     # 1. 기업 조회
-    result = resolve_corp(company_name, _DART_API_KEY)
+    result = resolve_corp(company_name, _api_key())
     if not result:
         return f"❌ '{company_name}'에 해당하는 기업을 DART에서 찾을 수 없습니다."
     corp_name, corp_info = result
@@ -2068,7 +2084,7 @@ def analyze_company_risk(
 
     # 2. 공시 목록 조회
     disclosures, fetch_status = fetch_company_disclosures_with_status(
-        corp_code, _DART_API_KEY, lookback_days, max_pages=max_pages,
+        corp_code, _api_key(), lookback_days, max_pages=max_pages,
         bgn_de=bgn_de, end_de=end_de,
     )
     if fetch_status == FETCH_ERROR:
@@ -2127,21 +2143,21 @@ def analyze_company_risk(
     failed_decisions = 0
     for _d in decision_items:
         _dtype = resolve_decision_type(_d["report_nm"])
-        _r = fetch_major_decision(_d["rcept_no"], _DART_API_KEY, _dtype, corp_code)
+        _r = fetch_major_decision(_d["rcept_no"], _api_key(), _dtype, corp_code)
         if "error" in _r:
             failed_decisions += 1
             continue
         decisions.append((_d, _r))
 
     # v0.5.0: 자금사용내역 (최근 3년 고정) -------------------------
-    fund_records = fetch_fund_usage(corp_code, _DART_API_KEY, 3)
+    fund_records = fetch_fund_usage(corp_code, _api_key(), 3)
 
     # v0.9.0: 부실 후속 이벤트(부도/영업정지/회생/해산) 흡수 — 발생 시 사실 표기만 ------
     # 연 단위 API라 올림으로 맞추고(365일→1년; 기존 +1은 기본 조회에서
     # 2년치를 수집해 조회 기간 밖 이벤트가 섞였다 — 감사 E-3), 연 경계
     # 잔여분은 rcept_dt 컷오프로 정확히 창을 맞춘다.
     distress_events = fetch_distress_events(
-        corp_code, _DART_API_KEY,
+        corp_code, _api_key(),
         max(1, (lookback_days + 364) // 365),
     )
     _distress_cutoff = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y%m%d")
@@ -2236,9 +2252,9 @@ def analyze_company_risk(
     try:
         _year = str(datetime.now().year - 1)
         # 전체 계정 과목 필요 (매출채권·재고자산 포함) → fnlttSinglAcntAll 사용. CFS 우선, 없으면 OFS.
-        fs_list = fetch_financial_statements_all(corp_code, _DART_API_KEY, _year, "annual", "CFS")
+        fs_list = fetch_financial_statements_all(corp_code, _api_key(), _year, "annual", "CFS")
         if not fs_list:
-            fs_list = fetch_financial_statements_all(corp_code, _DART_API_KEY, _year, "annual", "OFS")
+            fs_list = fetch_financial_statements_all(corp_code, _api_key(), _year, "annual", "OFS")
         if fs_list:
             _cur, _pri = _fs_response_to_periods({"list": fs_list})
             fs_flags, fs_metrics = detect_financial_anomaly(_cur, _pri)
@@ -2371,7 +2387,7 @@ def analyze_company_risk(
     _cb_scanned = cb_rcept_nos[:_CB_EXTRACT_MAX]
     _cb_omitted = max(0, len(cb_rcept_nos) - len(_cb_scanned))
     for _cb_rcept in _cb_scanned:
-        for inv in extract_cb_investors(_cb_rcept, _DART_API_KEY, corp_code):
+        for inv in extract_cb_investors(_cb_rcept, _api_key(), corp_code):
             if inv["name"] not in seen_investors:
                 seen_investors.add(inv["name"])
                 cb_investors.append(inv)
@@ -2702,9 +2718,9 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
     # 기존 동작(자리표시자 제목, 무신호)으로 조용히 퇴화한다 — 회귀가 아니다.
     filing: "dict | None" = None
     lookup_status = ""
-    if rcept_no and _DART_API_KEY:
+    if rcept_no and _api_key():
         filing, lookup_status = resolve_disclosure_row_with_status(
-            rcept_no, _DART_API_KEY
+            rcept_no, _api_key()
         )
 
     # 제목을 직접 넘긴 호출자는 그 제목이 보이길 기대하므로 report_name이 우선한다.
@@ -2808,10 +2824,10 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
         )
         and not is_amendment
     ):
-        if not _DART_API_KEY:
+        if not _api_key():
             lines += ["", "⚠️ DART_API_KEY 미설정 — CB 인수자 조회 불가"]
         else:
-            investors = extract_cb_investors(rcept_no, _DART_API_KEY, "")
+            investors = extract_cb_investors(rcept_no, _api_key(), "")
             if investors:
                 lines += ["", "━━ CB/BW 인수자 ━━"]
                 for inv in investors:
@@ -2819,13 +2835,13 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
                     lines.append(f"• {inv['name']}" + (f" — {amt}" if amt else ""))
     # v0.5.0: DS005 결정 공시면 구조화 필드 추가 ---------------
     dtype = resolve_decision_type(report_name)
-    if dtype and rcept_no and _DART_API_KEY:
+    if dtype and rcept_no and _api_key():
         # DS005는 corp_code+날짜가 항상 필수(rcept_no 단독 모드 없음) —
         # 접수일 하루치 주요사항보고 목록에서 corp_code를 역해석하고,
         # 실패하면 헛호출 없이 섹션을 생략한다.
-        _dec_corp = resolve_corp_code_from_rcept_no(rcept_no, _DART_API_KEY)
+        _dec_corp = resolve_corp_code_from_rcept_no(rcept_no, _api_key())
         dec = (
-            fetch_major_decision(rcept_no, _DART_API_KEY, dtype, _dec_corp)
+            fetch_major_decision(rcept_no, _api_key(), dtype, _dec_corp)
             if _dec_corp
             else {"error": "corp_code 역해석 실패 — 섹션 생략"}
         )
@@ -2868,8 +2884,8 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
                         lines.append(f"  • {title}")
 
     # 원문 요약
-    if rcept_no and _DART_API_KEY:
-        text = fetch_document_text(rcept_no, _DART_API_KEY, max_chars=500)
+    if rcept_no and _api_key():
+        text = fetch_document_text(rcept_no, _api_key(), max_chars=500)
         if text:
             lines += ["", "━━ 원문 요약 (첫 500자) ━━", text[:500]]
         elif not report_name:
@@ -3098,7 +3114,7 @@ def build_event_timeline(
         to_date: 조회 종료일(선택). 미지정 시 오늘. from_date만 주면 그날부터
             오늘까지, to_date만 주면 그날 기준 1년.
     """
-    if not _DART_API_KEY:
+    if not _api_key():
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
     lookback_years = _coerce_lookback(lookback_years)
 
@@ -3109,7 +3125,7 @@ def build_event_timeline(
         return f"❌ {win_err}"
     deep = _is_deep_window(lookback_days)
 
-    result = resolve_corp(company_name, _DART_API_KEY)
+    result = resolve_corp(company_name, _api_key())
     if not result:
         return f"❌ '{company_name}'에 해당하는 기업을 DART에서 찾을 수 없습니다."
     corp_name, corp_info = result
@@ -3120,7 +3136,7 @@ def build_event_timeline(
     _note_block = f"{_alias_note}\n\n" if _alias_note else ""
 
     disclosures, fetch_status = fetch_company_disclosures_with_status(
-        corp_code, _DART_API_KEY, lookback_days, max_pages=max_pages,
+        corp_code, _api_key(), lookback_days, max_pages=max_pages,
         bgn_de=bgn_de, end_de=end_de,
     )
     if fetch_status == FETCH_ERROR:
@@ -3327,8 +3343,8 @@ def build_event_timeline(
             # v0.5.0: 결정 공시면 상대방 한 줄 추가
             _dtype = resolve_decision_type(evt[4])
             _evt_rcept = evt[5] if len(evt) > 5 else ""
-            if _dtype and _evt_rcept and _DART_API_KEY:
-                _dec = fetch_major_decision(_evt_rcept, _DART_API_KEY, _dtype, corp_code)
+            if _dtype and _evt_rcept and _api_key():
+                _dec = fetch_major_decision(_evt_rcept, _api_key(), _dtype, corp_code)
                 if "error" not in _dec and _dec["counterparty"]:
                     lines.append(
                         f"      └ 거래 상대방: {_dec['counterparty']} "
@@ -3367,7 +3383,7 @@ def build_event_timeline(
         seen: set[str] = set()
         investors: list[dict] = []
         for rn in cb_rcept_list[:3]:
-            for inv in extract_cb_investors(rn, _DART_API_KEY, corp_code):
+            for inv in extract_cb_investors(rn, _api_key(), corp_code):
                 if inv["name"] not in seen:
                     seen.add(inv["name"])
                     investors.append(inv)
@@ -3392,9 +3408,9 @@ def build_event_timeline(
     try:
         _year = str(datetime.now().year - 1)
         # 전체 계정 과목 필요 (매출채권·재고자산 포함) → fnlttSinglAcntAll 사용. CFS 우선, 없으면 OFS.
-        fs_list = fetch_financial_statements_all(corp_code, _DART_API_KEY, _year, "annual", "CFS")
+        fs_list = fetch_financial_statements_all(corp_code, _api_key(), _year, "annual", "CFS")
         if not fs_list:
-            fs_list = fetch_financial_statements_all(corp_code, _DART_API_KEY, _year, "annual", "OFS")
+            fs_list = fetch_financial_statements_all(corp_code, _api_key(), _year, "annual", "OFS")
         if fs_list:
             _cur, _pri = _fs_response_to_periods({"list": fs_list})
             fs_flags, fs_metrics = detect_financial_anomaly(_cur, _pri)
@@ -3667,7 +3683,7 @@ def find_actor_overlap(
     _ry_from = _ry_to - lookback_years
     roster_label = f"{_ry_from}~{_ry_to} 사업연도"
 
-    api_key = os.environ.get("DART_API_KEY") or _DART_API_KEY
+    api_key = _api_key()
     if not api_key:
         return "DART_API_KEY 환경변수가 설정되지 않았습니다."
 
@@ -3983,7 +3999,7 @@ def list_disclosures_by_stock(
     """
     import re as _re
 
-    if not _DART_API_KEY:
+    if not _api_key():
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
 
     if not _re.match(r"^\d{6}$", stock_code):
@@ -3995,7 +4011,7 @@ def list_disclosures_by_stock(
     if win_err:
         return f"❌ {win_err}"
 
-    result = resolve_corp(stock_code, _DART_API_KEY)
+    result = resolve_corp(stock_code, _api_key())
     if not result:
         return f"❌ 종목코드 '{stock_code}'에 해당하는 기업을 DART에서 찾을 수 없습니다."
 
@@ -4005,7 +4021,7 @@ def list_disclosures_by_stock(
     _note_block = f"{_alias_note}\n\n" if _alias_note else ""
 
     disclosures, fetch_status = fetch_company_disclosures_with_status(
-        corp_code, _DART_API_KEY, lookback_days, max_pages=max_pages,
+        corp_code, _api_key(), lookback_days, max_pages=max_pages,
         bgn_de=bgn_de, end_de=end_de,
     )
     if fetch_status == FETCH_ERROR:
@@ -4058,12 +4074,12 @@ def get_disclosure_document(rcept_no: str, max_chars: int = 8000) -> str:
         rcept_no: DART 접수번호 14자리 (예: "20240315000123")
         max_chars: 최대 반환 글자수 (기본 8000, 최대 20000)
     """
-    if not _DART_API_KEY:
+    if not _api_key():
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
     if not rcept_no:
         return "❌ rcept_no(접수번호)를 입력하세요."
 
-    result = fetch_disclosure_full(rcept_no, _DART_API_KEY, max_chars)
+    result = fetch_disclosure_full(rcept_no, _api_key(), max_chars)
 
     if not result["text"] and not result["files"]:
         return f"❌ 접수번호 {rcept_no}의 공시 원문을 불러올 수 없습니다."
@@ -4102,12 +4118,12 @@ def list_disclosure_sections(rcept_no: str) -> str:
     Args:
         rcept_no: DART 접수번호 14자리 (예: "20240315000123")
     """
-    if not _DART_API_KEY:
+    if not _api_key():
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
     if not rcept_no:
         return "❌ rcept_no(접수번호)를 입력하세요."
 
-    file_list = list_document_sections(rcept_no, _DART_API_KEY)
+    file_list = list_document_sections(rcept_no, _api_key())
     if not file_list:
         return f"❌ 접수번호 {rcept_no}의 공시 원문을 불러올 수 없습니다."
 
@@ -4128,7 +4144,7 @@ def list_disclosure_sections(rcept_no: str) -> str:
     # 주석 카테고리 요약 — 섹션 제목 + 원문 <TITLE> 스캔 병합 (kreports NOTE_KEYWORDS 이식).
     # 사업보고서 주석 항목은 섹션으로 안 잡히는 경우가 많아 TITLE 스캔이 주 경로.
     try:
-        _title_hits = scan_note_titles(rcept_no, _DART_API_KEY)
+        _title_hits = scan_note_titles(rcept_no, _api_key())
     except Exception:
         _title_hits = []
     note_summary = build_note_summary(file_list, _title_hits)
@@ -4169,7 +4185,7 @@ def view_disclosure(
         page: 페이지 번호 (기본 1)
         page_size: 페이지당 글자 수 (기본 4000, 범위 1000~8000)
     """
-    if not _DART_API_KEY:
+    if not _api_key():
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
     if not rcept_no:
         return "❌ rcept_no(접수번호)를 입력하세요."
@@ -4184,7 +4200,7 @@ def view_disclosure(
 
     result = fetch_document_content(
         rcept_no=rcept_no,
-        api_key=_DART_API_KEY,
+        api_key=_api_key(),
         file_index=file_index,
         section_id=section_id or None,
         page=page,
@@ -4227,16 +4243,16 @@ def get_company_info(company_name: str) -> str:
     Args:
         company_name: 기업명 (예: "삼성전자") 또는 종목코드 6자리 (예: "005930")
     """
-    if not _DART_API_KEY:
+    if not _api_key():
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
 
-    result = resolve_corp(company_name, _DART_API_KEY)
+    result = resolve_corp(company_name, _api_key())
     if not result:
         return f"❌ '{company_name}'에 해당하는 기업을 DART에서 찾을 수 없습니다."
     corp_name, corp_info = result
     corp_code = corp_info["corp_code"]
 
-    info = fetch_company_info(corp_code, _DART_API_KEY)
+    info = fetch_company_info(corp_code, _api_key())
     if not info:
         return f"❌ {corp_name}의 기업 개요를 불러올 수 없습니다."
 
@@ -4371,20 +4387,20 @@ def get_financial_summary(
         year: 사업연도 4자리 (예: "2024"). 미입력 시 직전 연도
         report_type: 보고서 유형 — "annual"(사업보고서), "half"(반기), "q1"(1분기), "q3"(3분기)
     """
-    if not _DART_API_KEY:
+    if not _api_key():
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
     _yerr = _validate_year(year)
     if _yerr:
         return _yerr
 
-    result = resolve_corp(company_name, _DART_API_KEY)
+    result = resolve_corp(company_name, _api_key())
     if not result:
         return f"❌ '{company_name}'에 해당하는 기업을 DART에서 찾을 수 없습니다."
     corp_name, corp_info = result
     corp_code = corp_info["corp_code"]
     stock_code = corp_info.get("stock_code", "")
 
-    items = fetch_financial_statements(corp_code, _DART_API_KEY, year, report_type)
+    items = fetch_financial_statements(corp_code, _api_key(), year, report_type)
     if not items:
         return f"❌ {corp_name}의 재무제표를 불러올 수 없습니다. 연도/보고서 유형을 확인하세요."
 
@@ -4451,7 +4467,7 @@ def compare_financials(company_names: list[str], year: str = "") -> str:
         company_names: 비교할 기업명 목록 (2~5개, 예: ["삼성전자", "SK하이닉스"])
         year: 사업연도 4자리 (예: "2024"). 미입력 시 직전 연도
     """
-    if not _DART_API_KEY:
+    if not _api_key():
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
     _yerr = _validate_year(year)
     if _yerr:
@@ -4465,7 +4481,7 @@ def compare_financials(company_names: list[str], year: str = "") -> str:
     corp_map: list[tuple[str, str]] = []  # (corp_name, corp_code)
     failed: list[str] = []
     for name in company_names:
-        result = resolve_corp(name, _DART_API_KEY)
+        result = resolve_corp(name, _api_key())
         if not result:
             failed.append(name)
             continue
@@ -4476,7 +4492,7 @@ def compare_financials(company_names: list[str], year: str = "") -> str:
         return f"❌ 비교 가능한 기업이 2개 미만입니다. 찾을 수 없는 기업: {', '.join(failed)}"
 
     corp_codes = [cc for _, cc in corp_map]
-    items = fetch_multi_financial(corp_codes, _DART_API_KEY, year)
+    items = fetch_multi_financial(corp_codes, _api_key(), year)
 
     if not items:
         return "❌ 재무 데이터를 불러올 수 없습니다. 연도를 확인하세요."
@@ -4549,13 +4565,13 @@ def get_shareholder_info(company_name: str, year: str = "") -> str:
         company_name: 기업명 (예: "삼성전자") 또는 종목코드 6자리
         year: 사업연도 4자리 (예: "2024"). 미입력 시 직전 연도
     """
-    if not _DART_API_KEY:
+    if not _api_key():
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
     _yerr = _validate_year(year)
     if _yerr:
         return _yerr
 
-    result = resolve_corp(company_name, _DART_API_KEY)
+    result = resolve_corp(company_name, _api_key())
     if not result:
         return f"❌ '{company_name}'에 해당하는 기업을 DART에서 찾을 수 없습니다."
     corp_name, corp_info = result
@@ -4567,7 +4583,7 @@ def get_shareholder_info(company_name: str, year: str = "") -> str:
     # 밝히지 않으면 읽는 사람이 시점을 알 수 없다. 기본값을 여기서 정해
     # 조회와 표기가 같은 값을 쓰게 한다.
     _year = year or str(datetime.now().year - 1)
-    data = fetch_shareholder_status(corp_code, _DART_API_KEY, _year)
+    data = fetch_shareholder_status(corp_code, _api_key(), _year)
 
     major = data.get("major_holders", [])
     bulk = data.get("bulk_holders", [])
@@ -4734,7 +4750,7 @@ def get_affiliate_investments(company_name: str, year: str = "") -> str:
     Returns:
         출자 내역 표(장부가액 상위 30건) + 요약 사실 + 단위 유의 안내.
     """
-    api_key = os.environ.get("DART_API_KEY", "")
+    api_key = _api_key()
     if not api_key:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
     _yerr = _validate_year(year)
@@ -4911,7 +4927,7 @@ def search_market_disclosures(
     """
     from datetime import datetime, timedelta
 
-    if not _DART_API_KEY:
+    if not _api_key():
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
     if preset not in _PRESET_TO_SIGNALS:
         return (
@@ -5009,7 +5025,7 @@ def search_market_disclosures(
     while cur <= scan_end:
         day_str = cur.strftime("%Y%m%d")
         day_items, day_status = fetch_market_disclosures_with_status(
-            _DART_API_KEY, day_str, day_str, max_pages=_PAGES_PER_DAY,
+            _api_key(), day_str, day_str, max_pages=_PAGES_PER_DAY,
         )
         if day_status == FETCH_ERROR:
             failed_days.append(day_str)
@@ -5121,19 +5137,19 @@ def get_executive_compensation(
     Returns:
         임원 보수 4섹션 텍스트
     """
-    if not _DART_API_KEY:
+    if not _api_key():
         return "오류: DART_API_KEY 환경변수가 설정되지 않았습니다."
     _yerr = _validate_year(year)
     if _yerr:
         return _yerr
 
-    _resolved = resolve_corp(company_name, _DART_API_KEY)
+    _resolved = resolve_corp(company_name, _api_key())
     corp_name, meta = _resolved if _resolved else ("", {})
     if not corp_name:
         return f"기업을 찾을 수 없습니다: {company_name}"
     corp_code = meta["corp_code"]
 
-    data = fetch_executive_compensation(corp_code, _DART_API_KEY, year, report_type)
+    data = fetch_executive_compensation(corp_code, _api_key(), year, report_type)
     if data.get("fetch_failed"):
         # 4개 엔드포인트가 모두 실패 — 「(공시 없음)」 네 줄로 보이면
         # 보수 공시가 없는 회사와 구분되지 않는다.
@@ -5312,17 +5328,17 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
     Returns:
         보고자별 지분 변동 테이블 + 클러스터 알림
     """
-    if not _DART_API_KEY:
+    if not _api_key():
         return "오류: DART_API_KEY 환경변수가 설정되지 않았습니다."
 
-    _resolved = resolve_corp(company_name, _DART_API_KEY)
+    _resolved = resolve_corp(company_name, _api_key())
     corp_name, meta = _resolved if _resolved else ("", {})
     if not corp_name:
         return f"기업을 찾을 수 없습니다: {company_name}"
     corp_code = meta["corp_code"]
 
     lookback_years = max(1, min(5, lookback_years))
-    records = fetch_insider_timeline(corp_code, _DART_API_KEY, lookback_years)
+    records = fetch_insider_timeline(corp_code, _api_key(), lookback_years)
 
     if not records:
         # 넷 다 못 받은 것을 「공시 없음」이라 적으면 **회사에 대한 진술**이
@@ -5601,7 +5617,7 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
     if insider_sells:
         try:
             disclosures = fetch_company_disclosures(
-                corp_code, _DART_API_KEY, lookback_years * 365,
+                corp_code, _api_key(), lookback_years * 365,
                 max_pages=_page_budget(lookback_years * 365),
             )
             signal_events: list[dict] = []
@@ -5677,7 +5693,7 @@ def get_audit_opinion_history(company_name: str, lookback_years: int = 5) -> str
     Returns:
         감사의견 표·감사인 교체 이력·비감사용역 계약 건수 텍스트.
     """
-    api_key = _DART_API_KEY
+    api_key = _api_key()
     if not api_key:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
 
@@ -5819,7 +5835,7 @@ def track_debt_balance(company_name: str, year: str = "") -> str:
     Returns:
         종류별 잔액 표 + 만기 1년 이내 비중 텍스트.
     """
-    api_key = _DART_API_KEY
+    api_key = _api_key()
     if not api_key:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
     _yerr = _validate_year(year)
@@ -5906,10 +5922,10 @@ def check_disclosure_anomaly(
     Returns:
         지표별 탐지 건수·근거 공시명 텍스트 (점수·등급 없음)
     """
-    if not _DART_API_KEY:
+    if not _api_key():
         return "오류: DART_API_KEY 환경변수가 설정되지 않았습니다."
 
-    _resolved = resolve_corp(company_name, _DART_API_KEY)
+    _resolved = resolve_corp(company_name, _api_key())
     corp_name, meta = _resolved if _resolved else ("", {})
     if not corp_name:
         return f"기업을 찾을 수 없습니다: {company_name}"
@@ -5918,7 +5934,7 @@ def check_disclosure_anomaly(
     lookback_days, max_pages, window_phrase = _resolve_lookback(lookback_years, lookback_days)
 
     disclosures, fetch_status = fetch_company_disclosures_with_status(
-        corp_code, _DART_API_KEY, lookback_days, max_pages=max_pages)
+        corp_code, _api_key(), lookback_days, max_pages=max_pages)
     if fetch_status == FETCH_ERROR:
         return _fetch_failed_notice(corp_name, window_phrase)
     total = len(disclosures)
@@ -6027,7 +6043,7 @@ def check_disclosure_anomaly(
     # v0.8.5: 내부 스코어 계산을 제거. 출력에는 건수·비율·사실만 노출한다.
     # 감사의견 구조화 엔드포인트는 감사인 교체 이력에만 사용한다
     # (비감사용역 비중 경고는 단위 문제로 2026-08-23에 제거).
-    _audit_struct = fetch_audit_opinion_history(corp_code, _DART_API_KEY, 5)
+    _audit_struct = fetch_audit_opinion_history(corp_code, _api_key(), 5)
     _auditor_change_count = len(_audit_struct.get("auditor_changes", []))
 
     def _top3(items: list[str]) -> str:
@@ -6169,17 +6185,17 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
         company_name: 기업명 또는 6자리 종목코드
         lookback_years: 조회 연도 수 (1~5, 기본 3)
     """
-    if not _DART_API_KEY:
+    if not _api_key():
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
     if not isinstance(lookback_years, int) or not (1 <= lookback_years <= 5):
         return "❌ lookback_years는 1~5 사이 정수여야 합니다."
 
-    _resolved = resolve_corp(company_name, _DART_API_KEY)
+    _resolved = resolve_corp(company_name, _api_key())
     corp_name, info = _resolved if _resolved else ("", {})
     if not info:
         return f"❌ '{company_name}'에 해당하는 기업을 찾을 수 없습니다."
 
-    records = fetch_fund_usage(info["corp_code"], _DART_API_KEY, lookback_years)
+    records = fetch_fund_usage(info["corp_code"], _api_key(), lookback_years)
     if not records:
         if fetch_failed(records):
             return _fetch_failed_notice(corp_name, f"최근 {lookback_years}년")
@@ -6316,7 +6332,7 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
 
     # v0.9.0: 배당 이력 + 적자 시점 배당 유출(DIVIDEND_DRAIN) 표기 ----------
     dividend_records = fetch_dividend_history(
-        info["corp_code"], _DART_API_KEY, lookback_years
+        info["corp_code"], _api_key(), lookback_years
     )
     if dividend_records:
         lines += ["", "**배당 이력 (alotMatter)**"]
@@ -6405,10 +6421,10 @@ def get_major_decision(rcept_no: str, decision_type: str = "", corp_code: str = 
             조회를 위해 corp_code 전달을 권장한다. 미지정 시 rcept_no
             단독 폴백을 시도하나 일부 결정 유형은 빈 결과가 반환될 수 있다.
     """
-    if not _DART_API_KEY:
+    if not _api_key():
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
 
-    result = fetch_major_decision(rcept_no, _DART_API_KEY, decision_type, corp_code)
+    result = fetch_major_decision(rcept_no, _api_key(), decision_type, corp_code)
     if "error" in result:
         return f"❌ {result['error']}"
 
@@ -6586,7 +6602,7 @@ def scan_financial_anomaly(
     Returns:
         지표별 당기/전기/Δ 표 + 이상 징후별 쉬운 설명 텍스트.
     """
-    api_key = os.environ.get("DART_API_KEY", "")
+    api_key = _api_key()
     if not api_key:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
     _yerr = _validate_year(year)
@@ -6949,7 +6965,7 @@ def track_capital_structure(
     Returns:
         이벤트 총수·12개월 집중도·연도별 집계·시계열·플래그 텍스트.
     """
-    api_key = os.environ.get("DART_API_KEY", "")
+    api_key = _api_key()
     if not api_key:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
 
@@ -7223,7 +7239,7 @@ def track_turnover_trend(
         연도별 회전율 표 + 분자·분모 내역 + 관찰된 사실(단조 추세·부호 변화·
         분자분모 괴리) + CCC 텍스트.
     """
-    api_key = os.environ.get("DART_API_KEY", "")
+    api_key = _api_key()
     if not api_key:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
 

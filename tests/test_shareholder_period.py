@@ -95,7 +95,7 @@ def test_조회와_표기가_같은_연도를_쓴다():
     """기본값을 두 곳에서 따로 정하면 라벨과 데이터가 갈릴 수 있다."""
     body = _code()
     assert '_year = year or str(datetime.now().year - 1)' in body
-    assert "fetch_shareholder_status(corp_code, _DART_API_KEY, _year)" in body
+    assert "fetch_shareholder_status(corp_code, _api_key(), _year)" in body
 
 
 def test_insider와_같은_필드를_본다():
