@@ -20,6 +20,8 @@ def test_fetch_company_disclosures_respects_max_pages(monkeypatch):
         return _Resp()
 
     monkeypatch.setattr(dc, "_retry", _fake_retry)
+    # 페이지 사이 time.sleep(0.25)이 실제로 돈다 — 40페이지면 10초. 막는다.
+    monkeypatch.setattr(dc.time, "sleep", lambda s: None)
     # 기본 max_pages=10
     rows = dc.fetch_company_disclosures("00126380", "KEY", lookback_days=365)
     assert calls["n"] == 10

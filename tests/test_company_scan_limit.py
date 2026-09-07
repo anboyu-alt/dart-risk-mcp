@@ -103,8 +103,13 @@ class TestPageBudget:
         assert "if page_no * 100 >= total:" in src
 
 
+@pytest.mark.usefixtures("no_structured_dart")
 class TestAllCallSites:
-    """네 경로가 **같은 예산**을 쓴다 — 흩어져 있던 것이 이번 결함의 원인이다."""
+    """네 경로가 **같은 예산**을 쓴다 — 흩어져 있던 것이 이번 결함의 원인이다.
+
+    `no_structured_dart`: 공시 목록만 mock하면 도구가 자금사용·채무잔액 등 다른
+    fetcher를 가짜 키로 DART에 실제 호출한다(2026-09-07 실측 — 이 클래스 하나가
+    스위트에서 가장 느린 테스트 4개를 냈다, 최대 34초)."""
 
     def test_track_capital_structure(self):
         for yrs, want in [(1, 50), (5, 100)]:

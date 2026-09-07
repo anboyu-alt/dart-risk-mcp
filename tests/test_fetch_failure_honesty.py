@@ -88,8 +88,12 @@ class TestBackwardCompat:
             assert dc.fetch_company_disclosures("00126380", "k") == []
 
 
+@pytest.mark.usefixtures("no_structured_dart")
 class TestToolMessages:
-    """도구가 실패를 '공시 없음'으로 말하지 않는지."""
+    """도구가 실패를 '공시 없음'으로 말하지 않는지.
+
+    `no_structured_dart`: 공시 목록 외의 fetcher가 가짜 키로 DART에 새지 않게
+    (2026-09-07 — analyze 파라미터가 자금사용 32회 등 38회를 실제 호출했다)."""
 
     TOOLS = [
         ("analyze_company_risk", lambda: srv.analyze_company_risk("삼성전자")),
