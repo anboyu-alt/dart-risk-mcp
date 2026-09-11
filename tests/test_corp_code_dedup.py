@@ -75,7 +75,7 @@ class TestLoadCorpCodesCollision(unittest.TestCase):
         self._orig_cache = dict(dc._corp_cache)
         dc._corp_cache.clear()
         # mkdtemp는 스스로 지우지 않는다 — 2026-09-07까지 실행마다 디렉터리 4개를
-        # 남겼다(corp_codes_v2.json 포함). tests/conftest.py가 이제 잡는다.
+        # 남겼다(corp_codes_v*.json 포함). tests/conftest.py가 이제 잡는다.
         self._tmp_dir = self._make_tmp_dir()
         self.addCleanup(shutil.rmtree, self._tmp_dir, ignore_errors=True)
         self._tmp_patch = patch.object(dc, "_CACHE_DIR", Path(self._tmp_dir))
@@ -118,7 +118,7 @@ class TestLoadCorpCodesCollision(unittest.TestCase):
 
         dc._load_corp_codes("dummy-key")
 
-        cache_file = dc._CACHE_DIR / "corp_codes_v2.json"
+        cache_file = dc._CACHE_DIR / f"corp_codes_v{dc._CORP_CACHE_VERSION}.json"
         payload = json.loads(cache_file.read_text(encoding="utf-8"))
         self.assertEqual(payload["_v"], dc._CORP_CACHE_VERSION)
         self.assertEqual(payload["data"]["삼성전자"],
@@ -131,7 +131,8 @@ class TestLoadCorpCodesCollision(unittest.TestCase):
         실사고(2026-08-05): v2 페이로드를 레거시 경로에 쓰자 같은 캐시
         디렉터리를 쓰는 구버전 MCP가 {"_v","data"}를 평면 dict로 읽어
         이름 조회 전멸 + "'int' object has no attribute 'get'"으로 죽었다.
-        신버전은 corp_codes_v2.json만 쓰고 레거시 파일은 그대로 둔다.
+        신버전은 corp_codes_v{_CORP_CACHE_VERSION}.json만 쓰고 레거시 파일은
+        그대로 둔다(2026-09-11 v3 — 파일명을 버전 상수에서 끌어온다).
         """
         dc._CACHE_DIR.mkdir(parents=True, exist_ok=True)
         legacy_file = dc._CACHE_DIR / "corp_codes.json"
@@ -154,12 +155,12 @@ class TestLoadCorpCodesCollision(unittest.TestCase):
         # 레거시 파일 내용은 바이트 그대로 보존 (구버전 설치본이 계속 사용)
         self.assertEqual(legacy_file.read_text(encoding="utf-8"), legacy_body)
         # 신버전 캐시는 별도 파일로
-        self.assertTrue((dc._CACHE_DIR / "corp_codes_v2.json").exists())
+        self.assertTrue((dc._CACHE_DIR / f"corp_codes_v{dc._CORP_CACHE_VERSION}.json").exists())
 
     @patch("dart_risk_mcp.core.dart_client._retry")
     def test_current_version_cache_within_ttl_skips_network(self, mock_retry):
         dc._CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        cache_file = dc._CACHE_DIR / "corp_codes_v2.json"
+        cache_file = dc._CACHE_DIR / f"corp_codes_v{dc._CORP_CACHE_VERSION}.json"
         cache_file.write_text(json.dumps({
             "_v": dc._CORP_CACHE_VERSION,
             "data": {"기존회사": {"corp_code": "c1", "stock_code": "111111"}},

@@ -177,6 +177,17 @@ def _log_dart_status(status: str, context: str = "") -> None:
 
 _corp_cache: dict = {}
 
+# 동명 법인 후보. {이름: [(corp_code, stock_code, modify_date), ...]}
+# **이름이 둘 이상의 법인에 걸린 경우에만** 담는다. `_corp_cache`는 이름을
+# 키로 쓰는 평면 dict라 충돌하면 한쪽이 반드시 사라지는데, 비상장 법인을
+# 조회할 때는 그 침묵이 그대로 오답이 된다(사용자가 빈손을 받고 이유를
+# 모른다). 실측(2026-09-11 · corpCode.xml 119,173법인): 고유 이름 111,272
+# 중 동명 이름 5,536개 · 거기 묶인 법인 13,437개이고, 상장사가 낀 묶음은
+# 523개뿐이라 **대부분 비상장끼리**의 문제다.
+# ⚠ `_corp_cache`의 모양은 건드리지 않는다 — resolve_corp·corp-map·
+#   tool_server가 전부 그 평면 dict를 읽는다. 이건 곁에 두는 추가분이다.
+_corp_dupes: dict = {}
+
 # 캐시 파일 포맷 버전. 이름 충돌 정책(아래 _merge_corp_entry)이 도입되기
 # 전에 저장된 캐시는 "이름을 키로 쓰는 dict를 마지막 항목이 덮어쓰는" 단순
 # 로직으로 만들어졌다 — 동명 법인이 있으면 XML 등장 순서에 따라 어느 쪽이
@@ -184,7 +195,12 @@ _corp_cache: dict = {}
 # 구 협진 vs 비상장 01358296/구 나이콤, 상장 쪽이 소실되어 뷰어·resolve_corp
 # 양쪽에서 검색 불가). `_v` 필드가 없거나 버전이 다르면 무조건 재다운로드해
 # 이미 오염된 채 굳어 있던 캐시 파일을 치유한다(24h TTL 로직 자체는 그대로).
-_CORP_CACHE_VERSION = 2
+#
+# v3(2026-09-11): 페이로드에 `dupes`(동명 법인 후보)가 늘었다. 포맷이 바뀌었으므로
+# **파일명도 바꾼다**(corp_codes_v3.json) — 같은 파일을 신·구 버전이 공유하면
+# 서로 `_v` 불일치로 번갈아 재다운로드하는 핑퐁이 난다(v1→v2 때의 실사고와
+# 같은 뿌리, 2026-08-05).
+_CORP_CACHE_VERSION = 3
 
 
 def _resolve_corp_cache_dir() -> Path:
@@ -245,7 +261,7 @@ def _load_corp_codes(api_key: str) -> None:
     다르면(구버전 캐시, 아래 _CORP_CACHE_VERSION 주석 참고) 무효로 보고
     24h TTL과 무관하게 재다운로드한다.
     """
-    global _corp_cache
+    global _corp_cache, _corp_dupes
 
     cache_dir = _resolve_corp_cache_dir()
     # 파일명이 corp_codes_v2.json인 이유(실사고, 2026-08-05): v2 페이로드
@@ -256,13 +272,14 @@ def _load_corp_codes(api_key: str) -> None:
     # 'get'"으로 즉사했다. 포맷이 바뀌면 파일명을 바꿔 신·구 버전이 각자의
     # 캐시를 갖게 한다. 레거시 corp_codes.json은 구버전 소유물로 두고
     # 절대 읽지도 쓰지도 않는다.
-    cache_file = cache_dir / "corp_codes_v2.json"
+    cache_file = cache_dir / f"corp_codes_v{_CORP_CACHE_VERSION}.json"
     if cache_file.exists() and (time.time() - cache_file.stat().st_mtime) < 86400:
         try:
             with open(cache_file, encoding="utf-8") as f:
                 payload = json.load(f)
             if isinstance(payload, dict) and payload.get("_v") == _CORP_CACHE_VERSION:
                 _corp_cache = payload.get("data", {})
+                _corp_dupes = payload.get("dupes", {})
                 return
             # 구버전/알 수 없는 포맷 — 아래로 흘러 재다운로드
         except Exception:
@@ -284,6 +301,7 @@ def _load_corp_codes(api_key: str) -> None:
         root = ET.fromstring(xml_bytes.decode("utf-8", errors="replace"))
         new_cache: dict = {}
         modify_dates: dict = {}
+        all_by_name: dict = {}
         for item in root.findall(".//list"):
             name  = (item.findtext("corp_name")  or "").strip()
             code  = (item.findtext("corp_code")   or "").strip()
@@ -291,13 +309,154 @@ def _load_corp_codes(api_key: str) -> None:
             mdate = (item.findtext("modify_date") or "").strip()
             if name and code:
                 _merge_corp_entry(new_cache, modify_dates, name, code, stock, mdate)
+                all_by_name.setdefault(name, []).append([code, stock, mdate])
 
         _corp_cache = new_cache
+        # 동명인 이름만 남긴다 — 전부 담으면 캐시가 이름 수만큼 커진다.
+        _corp_dupes = {n: v for n, v in all_by_name.items() if len(v) > 1}
         # cache_dir은 _resolve_corp_cache_dir()에서 이미 mkdir까지 마쳤다.
         with open(cache_file, "w", encoding="utf-8") as f:
-            json.dump({"_v": _CORP_CACHE_VERSION, "data": _corp_cache}, f, ensure_ascii=False)
+            json.dump({"_v": _CORP_CACHE_VERSION, "data": _corp_cache,
+                       "dupes": _corp_dupes}, f, ensure_ascii=False)
     except Exception as e:
         log.warning("Corp code 로드 실패: %s", e)
+
+
+def fetch_audit_report_text(rcept_no: str, api_key: str) -> str:
+    """감사보고서 원문을 **자르지 않고** 마크다운으로 돌려준다. 실패하면 "".
+
+    ⚠ `fetch_disclosure_full`을 쓰지 않는 이유: 그쪽은
+    `max_chars = min(max_chars, 20000)`으로 하드 캡이 걸려 있다(화면 표시용이라
+    옳다). 하지만 재무제표 / 주석 구간을 **자르려면 원문 전체**가 있어야 한다 —
+    실측 올품 연결 2025는 마크다운 103,968자라 20,000자만 받으면 주석이 통째로
+    밖에 있다. 내부(`_fetch_document_zip` → `_decode_zip_file` →
+    `_html_to_structured_text`)와 ZIP 캐시는 그대로 재사용하므로 호출이 늘지
+    않는다. 잘라서 보여 주는 일은 호출부(도구)가 한다.
+    """
+    zf = _fetch_document_zip(rcept_no, api_key)
+    if not zf:
+        return ""
+    try:
+        doc_files = [n for n in zf.namelist()
+                     if n.lower().endswith((".xml", ".html", ".htm"))]
+        if not doc_files:
+            return ""
+        best, best_len = "", -1
+        for name in doc_files:
+            body = _decode_zip_file(zf, name) or ""
+            if len(body) > best_len:
+                best, best_len = body, len(body)
+        return _html_to_structured_text(best) if best else ""
+    except Exception as e:
+        log.debug("감사보고서 원문 조회 실패 (%s): %s", rcept_no, e)
+        return ""
+
+
+# 감사보고서 제목에서 사업연도를 읽는다 — 「연결감사보고서 (2025.12)」.
+# ⚠ 접수일이 아니다. 2025 사업연도 보고서는 2026년에 접수된다.
+_AUDIT_FY_RE = re.compile(r"\((\d{4})[.\-/]?\s*\d{0,2}\)")
+
+
+def find_audit_reports(
+    corp_code: str,
+    api_key: str,
+    year: str = "",
+    scope: str = "consolidated",
+    lookback_days: int = 1200,
+) -> list[dict]:
+    """감사보고서 공시를 찾아 최신순으로 돌려준다.
+
+    OpenDART 재무제표 API는 정기보고서 제출 법인 위주라 비상장 외부감사대상
+    법인에서는 자료가 없다. 감사보고서 원문은 공시되므로 이쪽으로 우회한다.
+
+    ⚠ **「감사보고서」는 「연결감사보고서」의 부분 문자열이다.** 별도를 찾을 때
+    낱말 포함으로 고르면 연결이 먼저 잡힌다(실측 올품은 같은 날 두 건을 낸다).
+
+    Returns:
+        `[{rcept_no, rcept_dt, report_nm, flr_nm, corp_cls, fiscal_year}]`
+        — 제출인(`flr_nm`)은 회계법인이고 `corp_cls`는 비상장이면 `E`다.
+        둘 다 화면이 사실로 쓰므로 버리지 않는다.
+    """
+    rows = fetch_company_disclosures(corp_code, api_key,
+                                     lookback_days=lookback_days) or []
+    want_consolidated = scope != "separate"
+    out: list[dict] = []
+    for r in rows:
+        nm = (r.get("report_nm") or "").strip()
+        if "감사보고서" not in nm:
+            continue
+        is_consolidated = "연결감사보고서" in nm
+        if is_consolidated != want_consolidated:
+            continue
+        m = _AUDIT_FY_RE.search(nm)
+        fy = m.group(1) if m else ""
+        if year and fy != str(year):
+            continue
+        out.append({
+            "rcept_no": r.get("rcept_no", ""),
+            "rcept_dt": r.get("rcept_dt", ""),
+            "report_nm": nm,
+            "flr_nm": r.get("flr_nm", ""),
+            "corp_cls": r.get("corp_cls", ""),
+            "fiscal_year": fy,
+        })
+    out.sort(key=lambda r: r["rcept_dt"], reverse=True)
+    return out
+
+
+def corp_name_by_code(corp_code: str, api_key: str) -> str:
+    """corp_code → 회사명. 이미 받아 둔 명부에서 되찾는다(추가 호출 없음).
+
+    동명 법인을 되물어 사용자가 corp_code로 답한 경로에서, 화면에 코드만
+    찍히지 않게 하려고 쓴다. 못 찾으면 "".
+    """
+    code = (corp_code or "").strip()
+    if not code:
+        return ""
+    if not _corp_cache:
+        _load_corp_codes(api_key)
+    for name, rows in _corp_dupes.items():
+        if any(c == code for c, _s, _m in rows):
+            return name
+    for name, info in _corp_cache.items():
+        if info.get("corp_code") == code:
+            return name
+    return ""
+
+
+def find_corp_candidates(name: str, api_key: str) -> list[dict]:
+    """이름에 걸린 법인 **전부**를 돌려준다. `[{corp_code, stock_code, modify_date}]`.
+
+    `resolve_corp`는 한 건만 돌려주므로 동명 법인이 있으면 나머지가 보이지
+    않는다. 비상장 조회에서는 그 침묵이 오답이 된다 — 실측 '올품'은
+    00442385(2017년 수정분, **공시 0건**)와 00455750(2024년 수정분, 현행)
+    둘이고, 앞의 것을 잡으면 빈손이 된다.
+
+    정렬은 `_merge_corp_entry`의 선택 규칙과 같다(상장 우선 → modify_date
+    최신 우선). **판정이 아니라 제시 순서일 뿐**이며, 호출부는 후보가 둘
+    이상이면 사용자에게 보여 주고 되물어야 한다.
+
+    이름이 동명 목록에 없으면 `_corp_cache`의 단일 항목을 한 건짜리 목록으로
+    돌려준다. 못 찾으면 빈 목록.
+    """
+    key = (name or "").strip()
+    if not key:
+        return []
+    if not _corp_cache:
+        _load_corp_codes(api_key)
+
+    rows = _corp_dupes.get(key)
+    if not rows:
+        one = _corp_cache.get(key)
+        if not one:
+            return []
+        return [{"corp_code": one.get("corp_code", ""),
+                 "stock_code": one.get("stock_code", ""),
+                 "modify_date": ""}]
+
+    out = [{"corp_code": c, "stock_code": s, "modify_date": m} for c, s, m in rows]
+    out.sort(key=lambda r: (bool(r["stock_code"]), r["modify_date"]), reverse=True)
+    return out
 
 
 # ── 옛 상호(상호변경) 별칭 ────────────────────────────────────────

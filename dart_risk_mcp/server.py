@@ -50,6 +50,17 @@ from .core import (
     classify_note_title,
     build_note_summary,
     scan_note_titles,
+    fetch_audit_report_text,
+    fetch_cb_issue_decision,
+    fetch_bw_issue_decision,
+    fetch_eb_issue_decision,
+    parse_mezzanine_row,
+    find_audit_reports,
+    find_corp_candidates,
+    corp_name_by_code,
+    find_note_headings,
+    split_audit_report,
+    search_notes,
     extract_rights_offering_investors,
     fetch_audit_opinion_history,
     fetch_company_disclosures,
@@ -7728,6 +7739,462 @@ def track_turnover_trend(
     )
     lines.append(_currency_footer(_currency))
     return "\n".join(lines)
+
+
+
+# ── 비상장 외부감사대상 법인 (v1.23.0) ─────────────────────────────────
+#
+# OpenDART 재무제표 API(`fnlttSinglAcnt` 계열)는 정기보고서 제출 법인 위주라
+# 비상장 법인은 「조회된 데이타가 없습니다」를 돌려준다. 취재 대상이 비상장
+# 계열사인 경우가 많은데 그쪽을 볼 수단이 없었다. 감사보고서 원문은 DART에
+# 그대로 공시되므로 원문 경로로 우회한다.
+_UNLISTED_SECTIONS = ("fs", "notes", "all")
+_UNLISTED_MAX_CHARS = 12000
+
+
+def _unlisted_candidate_block(name: str, cands: list[dict]) -> str:
+    """동명 법인 후보를 보여 주고 되묻는다 — 임의로 고르지 않는다."""
+    lines = [
+        f"❓ **'{name}'** 이름으로 DART에 법인이 {len(cands)}개 있습니다 — "
+        "어느 쪽인지 알 수 없어 조회하지 않았습니다.",
+        "",
+        "| corp_code | 종목코드 | 기업개황 수정일 |",
+        "|---|---|---|",
+    ]
+    for c in cands:
+        lines.append(
+            f"| {c['corp_code']} | {c.get('stock_code') or '-'} "
+            f"| {c.get('modify_date') or '-'} |"
+        )
+    lines += [
+        "",
+        "수정일이 최신인 쪽이 현행일 가능성이 높지만 **확정은 아닙니다** — "
+        "옛 법인에 공시가 한 건도 없는 경우가 있습니다(실측 '올품' 00442385는 0건).",
+        "`list_disclosures_by_stock`은 종목코드 전용이라 비상장에는 쓸 수 없습니다. "
+        "위 corp_code 중 하나를 골라 다시 부르세요 — "
+        "`get_unlisted_financials(company_name=\"<corp_code 8자리>\")`도 받습니다.",
+    ]
+    return "\n".join(lines)
+
+
+def _unlisted_notes_toc(notes: list[dict]) -> list[str]:
+    """주석 목차 — `core/notes.py`의 분류를 그대로 재사용한다."""
+    out = [f"**주석 {len(notes)}개**", ""]
+    for n in notes:
+        tags = classify_note_title(n["title"])
+        tag = f"  ⟨{' · '.join(tags)}⟩" if tags else ""
+        out.append(f"- {n['no']}. {n['title']}{tag}")
+    return out
+
+
+@mcp.tool()
+def get_unlisted_financials(
+    company_name: str,
+    year: str = "",
+    scope: str = "consolidated",
+    section: str = "fs",
+) -> str:
+    """비상장 외부감사대상 법인의 재무제표·주석을 감사보고서 원문에서 읽는다.
+
+    OpenDART 재무제표 API는 정기보고서 제출 법인 위주라 비상장사는 자료가
+    없다. 감사보고서는 공시되므로 그 원문에서 재무제표와 주석을 꺼낸다.
+    **상장사라면 `get_financial_summary`가 구조화 데이터를 주므로 그쪽이 낫다.**
+
+    Args:
+        company_name: 기업명. 동명 법인이 있으면 후보를 보여 주고 되묻는다
+            (되물을 때 안내하는 corp_code 8자리를 그대로 넣어도 된다).
+        year: 사업연도(예: "2025"). 빈 값이면 가장 최근 감사보고서.
+            ⚠ 공시 제목의 괄호 연도이며 접수일이 아니다 —
+            2025 사업연도 보고서는 2026년에 접수된다.
+        scope: "consolidated"(연결감사보고서) | "separate"(감사보고서).
+        section: "fs"(재무제표) | "notes"(주석 목차) | "all".
+
+    Returns:
+        감사보고서 출처(접수번호·제출 회계법인·법인구분)와 요청 구간.
+        주석 참조번호 열은 원문에 있으면 그대로 남긴다 — 숫자에서 주석으로
+        건너뛰는 통로다. 판정·점수·등급은 붙이지 않는다.
+    """
+    api_key = _api_key()
+    if not api_key:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+    _yerr = _validate_year(year)
+    if _yerr:
+        return _yerr
+    if section not in _UNLISTED_SECTIONS:
+        return (f"❌ section은 {' · '.join(_UNLISTED_SECTIONS)} 중 하나여야 합니다 "
+                f"(받은 값: {section!r}).")
+
+    query = (company_name or "").strip()
+    if not query:
+        return "❌ 기업명을 입력하세요."
+
+    # corp_code를 직접 받은 경우(되물음에 답한 경로)
+    if re.fullmatch(r"\d{8}", query):
+        corp_code = query
+        corp_name = corp_name_by_code(query, api_key) or query
+        stock_code = ""
+    else:
+        cands = find_corp_candidates(query, api_key)
+        if not cands:
+            return (f"❌ '{query}'을(를) DART 기업 명부에서 찾지 못했습니다. "
+                    "정식 상호를 확인하세요(예: '주식회사'를 뺀 이름).")
+        if len(cands) > 1:
+            return _unlisted_candidate_block(query, cands)
+        corp_code = cands[0]["corp_code"]
+        stock_code = cands[0].get("stock_code") or ""
+        corp_name = query
+
+    if stock_code:
+        return (f"ℹ️ **{corp_name}**({stock_code})은 상장사입니다. "
+                "상장사는 OpenDART 재무제표 API로 구조화된 값을 받을 수 있으니 "
+                "`get_financial_summary`·`scan_financial_anomaly`를 쓰세요. "
+                "이 도구는 그 API에 자료가 없는 비상장 외부감사대상 법인 전용입니다.")
+
+    reports = find_audit_reports(corp_code, api_key, year=year, scope=scope)
+    if not reports:
+        _scope_nm = "감사보고서" if scope == "separate" else "연결감사보고서"
+        _yr = f"{year} 사업연도 " if year else ""
+        return (f"🔎 **{corp_name}**({corp_code}) — {_yr}{_scope_nm}를 찾지 못했습니다.\n\n"
+                "조회 창(최근 1,200일) 안에 그 공시가 없거나, 연결재무제표를 "
+                "작성하지 않는 회사일 수 있습니다. "
+                f"`scope=\"{'consolidated' if scope == 'separate' else 'separate'}\"`로 "
+                "바꿔 보거나 `list_disclosures_by_stock` 대신 "
+                "`get_company_info`로 법인 실체를 먼저 확인하세요.")
+
+    rep = reports[0]
+    text = fetch_audit_report_text(rep["rcept_no"], api_key)
+    if not text:
+        return (f"❌ 감사보고서 원문을 받지 못했습니다 "
+                f"(접수번호 {rep['rcept_no']}). 자료가 없다는 뜻이 아니라 "
+                "조회에 실패했다는 뜻입니다 — 잠시 후 다시 시도하세요.")
+
+    split = split_audit_report(text)
+    cls_nm = {"Y": "유가증권", "K": "코스닥", "N": "코넥스",
+              "E": "비상장(기타법인)"}.get(rep.get("corp_cls", ""), rep.get("corp_cls", "-"))
+
+    lines = [
+        f"🏢 **{corp_name}** ({corp_code}) — {rep['report_nm']}",
+        f"접수번호 {rep['rcept_no']} · 접수일 {_fmt_date8(rep['rcept_dt'])} · "
+        f"제출인 {rep.get('flr_nm') or '-'} · 법인구분 {cls_nm}",
+        f"원문 {split['length']:,}자 · 재무제표 구간 앵커: {split['fs_basis']}",
+        "",
+    ]
+    if len(reports) > 1:
+        _others = " · ".join(f"{r['fiscal_year']}({r['rcept_no']})" for r in reports[1:5])
+        lines.append(f"📎 같은 조건의 다른 사업연도: {_others}")
+        lines.append("")
+
+    body: list[str] = []
+    if section in ("fs", "all"):
+        end = split["notes_start"] if split["notes_start"] is not None else split["notes_end"]
+        fs_text = text[split["fs_start"]:end].strip()
+        body.append("━━ 재무제표 ━━")
+        body.append(fs_text if fs_text else "(재무제표 구간을 찾지 못했습니다)")
+        body.append("")
+    if section in ("notes", "all"):
+        body.append("━━ 주석 ━━")
+        if split["notes"]:
+            body += _unlisted_notes_toc(split["notes"])
+            body.append("")
+            body.append(
+                f"본문은 `search_notes_in_report(rcept_no=\"{rep['rcept_no']}\", "
+                "terms=[\"찾을 낱말\"])`로 읽으세요 — 주석 번호·제목과 함께 나옵니다."
+            )
+        else:
+            body.append("주석 번호 헤딩을 찾지 못했습니다 — 서식이 달라 "
+                        "자동 분할이 안 되는 문서입니다. "
+                        f"`view_disclosure(rcept_no=\"{rep['rcept_no']}\")`로 "
+                        "원문을 직접 넘겨 보세요.")
+        body.append("")
+
+    out = "\n".join(body)
+    if len(out) > _UNLISTED_MAX_CHARS:
+        kept = out[:_UNLISTED_MAX_CHARS]
+        lines.append(kept)
+        lines.append("")
+        lines.append(
+            f"…여기서 잘렸습니다 — 이 구간 {len(out):,}자 중 "
+            f"{_UNLISTED_MAX_CHARS:,}자만 표시했습니다({len(out) - _UNLISTED_MAX_CHARS:,}자 남음). "
+            f"이어 받으려면 `view_disclosure(rcept_no=\"{rep['rcept_no']}\", page=2)`로 "
+            "원문을 넘기거나, `search_notes_in_report`로 찾는 낱말만 꺼내세요."
+        )
+    else:
+        lines.append(out)
+
+    lines.append("")
+    lines.append(
+        "📎 금액·단위는 감사보고서 원문 표기 그대로입니다(천원/백만원 혼용 가능). "
+        "표의 「주석」 열은 그 숫자가 어느 주석에서 설명되는지를 가리킵니다."
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+
+# 주석 본문 검색 — 한 보고서 안에서만 돈다.
+_NOTE_SEARCH_MAX_NOTES = 12     # 표시할 주석 수
+_NOTE_SEARCH_MAX_HITS = 3       # 주석 하나당 발췌 수
+
+
+@mcp.tool()
+def search_notes_in_report(
+    rcept_no: str,
+    terms: list[str],
+    mode: str = "all",
+    context_chars: int = 600,
+) -> str:
+    """공시 **한 건**의 주석 본문을 낱말로 찾아 앞뒤 문맥과 함께 보여준다.
+
+    ⚠ **이것은 보고서 한 건 안에서만 도는 검색이다.** 「전 상장사에서 이런
+    주석이 있는 회사를 찾아줘」는 이 도구로 안 된다 — 그러려면 전 회사 주석을
+    미리 훑어 둔 색인 DB가 있어야 한다. 회사를 먼저 고른 뒤 그 회사의
+    접수번호로 부르는 순서다.
+
+    Args:
+        rcept_no: DART 접수번호 14자리. 비상장 법인은
+            `get_unlisted_financials`가 알려주는 감사보고서 접수번호를 쓰고,
+            상장사는 `list_disclosures_by_stock`으로 고른다.
+        terms: 찾을 낱말 목록. 각 원소 안에 세로줄(`|`)을 넣으면 OR이다 —
+            한국 공시는 같은 말을 붙여도 쓰고 띄어도 쓰므로
+            `["영업권손상차손|영업권 손상차손"]`처럼 함께 넣는다.
+            세로줄은 **낱말 구분자이고 정규식이 아니다**(괄호·별표가 든
+            회계 용어를 그대로 찾는다).
+        mode: "all"(모든 원소가 함께 있는 주석만) | "any"(하나라도).
+        context_chars: 적중 앞뒤로 함께 낼 글자 수(기본 600).
+
+    Returns:
+        적중한 주석의 번호·제목과 발췌. 판정·점수·등급은 붙이지 않는다.
+    """
+    api_key = _api_key()
+    if not api_key:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+    rc = (rcept_no or "").strip()
+    if not re.fullmatch(r"\d{14}", rc):
+        return ("❌ 접수번호 14자리를 넣으세요 "
+                "(예: 20260407001504). 비상장 법인은 "
+                "`get_unlisted_financials`가 알려주는 감사보고서 접수번호를 씁니다.")
+    if not terms or not any((t or "").strip() for t in terms):
+        return ("❌ 찾을 낱말을 하나 이상 넣으세요. 같은 말의 다른 표기는 "
+                "세로줄로 묶습니다 — 예: `[\"영업권손상차손|영업권 손상차손\"]`.")
+    context_chars = max(50, min(2000, int(context_chars or 600)))
+
+    text = fetch_audit_report_text(rc, api_key)
+    if not text:
+        return (f"❌ 공시 원문을 받지 못했습니다(접수번호 {rc}). "
+                "자료가 없다는 뜻이 아니라 **조회에 실패했다**는 뜻입니다 — "
+                "접수번호를 확인하거나 잠시 후 다시 시도하세요.")
+
+    res = search_notes(text, terms, mode=mode, context_chars=context_chars)
+    mode_nm = "하나라도 들어간" if mode == "any" else "모두 들어간"
+    shown_terms = " · ".join(f"`{t}`" for t in terms if (t or "").strip())
+
+    lines = [
+        f"🔎 **{rc}** 주석 검색 — {shown_terms} ({mode_nm} 주석)",
+        f"훑은 범위: {res['scope']} · 주석 {res['scanned_notes']}개 · 원문 {len(text):,}자",
+        "ℹ️ 이 검색은 **이 보고서 한 건** 안에서만 돕니다 — 여러 회사를 "
+        "가로지르는 검색이 아닙니다.",
+        "",
+    ]
+    if not res["notes"]:
+        lines.append(
+            f"찾지 못했습니다. 주석 {res['scanned_notes']}개를 훑었지만 "
+            f"{mode_nm} 곳이 없습니다."
+        )
+        lines.append("")
+        lines.append(
+            "다른 표기가 쓰였을 수 있습니다 — 붙여 쓴 말과 띄어 쓴 말을 "
+            "세로줄로 함께 넣거나(`\"영업권손상차손|영업권 손상차손\"`), "
+            "`mode=\"any\"`로 넓혀 보세요."
+        )
+        return "\n".join(lines) + "\n"
+
+    lines.append(f"**적중 주석 {len(res['notes'])}개 · 발췌 {res['total_hits']}건**")
+    lines.append("")
+    for n in res["notes"][:_NOTE_SEARCH_MAX_NOTES]:
+        head = f"── 주석 {n['no']}. {n['title']}" if n["no"] else "── (주석 구분 없음)"
+        lines.append(head)
+        for h in n["hits"][:_NOTE_SEARCH_MAX_HITS]:
+            lines.append(f"  · `{h['term']}`")
+            lines.append(f"    {h['excerpt']}")
+        if len(n["hits"]) > _NOTE_SEARCH_MAX_HITS:
+            lines.append(
+                f"  … 이 주석에서 {len(n['hits'])}건 중 "
+                f"{_NOTE_SEARCH_MAX_HITS}건만 표시 "
+                f"({len(n['hits']) - _NOTE_SEARCH_MAX_HITS}건 생략)"
+            )
+        lines.append("")
+    if len(res["notes"]) > _NOTE_SEARCH_MAX_NOTES:
+        lines.append(
+            f"… 적중 주석 {len(res['notes'])}개 중 {_NOTE_SEARCH_MAX_NOTES}개만 "
+            f"표시했습니다({len(res['notes']) - _NOTE_SEARCH_MAX_NOTES}개 생략) — "
+            "낱말을 좁히거나 `mode=\"all\"`로 줄이세요."
+        )
+        lines.append("")
+    lines.append(
+        f"📎 원문 전체는 `view_disclosure(rcept_no=\"{rc}\")`로 넘겨 볼 수 있습니다."
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+
+# 메자닌 단건 조회 — `parse_mezzanine_row`가 이미 읽는 값을 접수번호 하나로 본다.
+_MZN_FETCHERS = {
+    "CB": ("전환사채", lambda rc, k, cc: fetch_cb_issue_decision(rc, k, cc)),
+    "BW": ("신주인수권부사채", lambda rc, k, cc: fetch_bw_issue_decision(rc, k, cc)),
+    "EB": ("교환사채", lambda rc, k, cc: fetch_eb_issue_decision(rc, k, cc)),
+}
+_MZN_KIND_MARKS = (("CB", "전환사채권발행결정"),
+                   ("BW", "신주인수권부사채권발행결정"),
+                   ("EB", "교환사채권발행결정"))
+
+
+def _mzn_amount(v) -> str:
+    """금액 표기. `parse_mezzanine_row`가 가액을 float로 주므로 정수면 `.0`을 뗀다.
+
+    원문은 「1,203」인데 화면에 「1,203.0원」이 찍히면 없는 소수 자리를
+    만들어 낸 것이다 — 값과 단위를 원문대로 둔다는 원칙에 어긋난다.
+    """
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        return "-"
+    return f"{int(v):,}" if float(v).is_integer() else f"{v:,}"
+
+
+@mcp.tool()
+def get_mezzanine_terms(rcept_no: str, corp_code: str = "") -> str:
+    """CB·BW·EB **발행결정 한 건**의 발행 조건을 표로 낸다.
+
+    전환가액·리픽싱 하한·잠재 희석·이자율·청구기간·자금용도를 공시 원문
+    구조화 응답에서 그대로 읽는다. 회사 전체를 훑는
+    `track_capital_structure`·`analyze_company_risk`와 달리 **접수번호 하나**만
+    본다 — 취재에서는 이쪽이 더 자주 필요하다.
+
+    Args:
+        rcept_no: DART 접수번호 14자리(발행결정 공시).
+        corp_code: DART 기업코드 8자리. **권장** — DS005 계열은 DART 스펙상
+            corp_code가 사실상 필수다. 비우면 접수번호로 역해석한다.
+
+    Returns:
+        발행 조건 표. 맨 위에 잠재 희석률과 리픽싱 하한을 둔다.
+        ⚠ EB는 서식에 리픽싱 항목 자체가 없다 — 「조항 없음」과 구분해 적는다.
+        판정·점수·등급은 붙이지 않는다.
+    """
+    api_key = _api_key()
+    if not api_key:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+    rc = (rcept_no or "").strip()
+    if not re.fullmatch(r"\d{14}", rc):
+        return "❌ 접수번호 14자리를 넣으세요 (예: 20260910000549)."
+
+    row, status = resolve_disclosure_row_with_status(rc, api_key)
+    if not row:
+        return (f"❌ 접수번호 {rc}의 공시 제목을 읽지 못했습니다(상태 {status}). "
+                "**메자닌 공시가 아니라는 뜻이 아닙니다** — 제목을 확인할 수 없어 "
+                "CB·BW·EB 중 어느 서식인지 고를 수 없었습니다. "
+                "접수번호를 확인하거나 잠시 후 다시 시도하세요.")
+
+    report_nm = (row.get("report_nm") or "").strip()
+    flat = report_nm.replace(" ", "")
+    kind = next((k for k, mark in _MZN_KIND_MARKS if mark in flat), "")
+    if not kind:
+        return (f"ℹ️ **{report_nm}** — CB·BW·EB **발행결정** 공시가 아닙니다.\n\n"
+                "이 도구는 「전환사채권발행결정」·「신주인수권부사채권발행결정」·"
+                "「교환사채권발행결정」 세 서식만 읽습니다. 전환가액 조정(리픽싱)이나 "
+                "전환청구권 행사 공시는 발행 조건 서식이 아니므로 "
+                f"`check_disclosure_risk(rcept_no=\"{rc}\")`로 보세요.")
+
+    cc = (corp_code or "").strip()
+    if not cc:
+        cc = resolve_corp_code_from_rcept_no(rc, api_key) or ""
+    if not cc:
+        return (f"❌ 접수번호 {rc}에서 corp_code를 역해석하지 못했습니다. "
+                "이 서식은 DART 스펙상 corp_code가 사실상 필수입니다 — "
+                "`corp_code` 인자로 8자리를 직접 넣어 주세요.")
+
+    label, fetcher = _MZN_FETCHERS[kind]
+    data = fetcher(rc, api_key, cc) or {}
+    rows = data.get("list") or []
+    target = next((r for r in rows if (r.get("rcept_no") or "").strip() == rc), None)
+    if target is None:
+        target = rows[0] if rows else None
+    if target is None:
+        return (f"❌ **{report_nm}**({rc})의 구조화 데이터를 받지 못했습니다. "
+                "자료가 없다는 뜻이 아니라 조회에 실패했다는 뜻입니다 — "
+                "corp_code가 맞는지 확인하세요(정정 공시는 최초 접수일 기준이라 "
+                "원본 접수번호를 써야 합니다).")
+
+    t = parse_mezzanine_row(target, kind)
+    corp_nm = (row.get("corp_name") or "").strip()
+
+    lines = [
+        f"💠 **{corp_nm or cc}** — {report_nm}",
+        f"접수번호 {rc} · 접수일 {_fmt_date8(row.get('rcept_dt', ''))} · "
+        f"{label}({kind})" + (f" 제{t['round']}회차" if t["round"] else ""),
+        "",
+    ]
+
+    # 취재에서 가장 먼저 보는 두 값 — 희석과 리픽싱 하한
+    #
+    # ⚠ **EB를 희석이라 부르면 안 된다.** 교환 대상이 이미 발행된 주식이라
+    #   신주가 나오지 않는다 — `mezzanine_overhang`이 EB를 빼는 것과 같은
+    #   판단이다. EB의 `extg_tisstk_vs`는 「교환 대상 주식이 총수에서 차지하는
+    #   비중」이지 새로 생길 주식의 비중이 아니다.
+    if kind == "EB":
+        _pc = (f" — 교환 대상 주식이 주식총수의 {t['potential_pct_at_issue']:g}%"
+               if t["potential_pct_at_issue"] is not None else "")
+        lines.append(f"📈 **신주 없음**{_pc}. 교환사채는 이미 발행된 주식과 "
+                     "바꾸는 것이라 주식 수가 늘지 않습니다.")
+    elif t["potential_shares"] is not None or t["potential_pct_at_issue"] is not None:
+        _sh = (f"{t['potential_shares']:,}주"
+               if t["potential_shares"] is not None else "주식 수 미기재")
+        _pc = (f" · 발행 시 주식총수 대비 {t['potential_pct_at_issue']:g}%"
+               if t["potential_pct_at_issue"] is not None else "")
+        lines.append(f"📈 **잠재 희석** — {_sh}{_pc}")
+
+    if t["refix_field_absent"]:
+        lines.append("🔻 **리픽싱** — 이 서식에는 **항목이 없습니다**(교환사채). "
+                     "「조항 없음」이 아니라 DART 서식이 그 칸을 두지 않는다는 뜻입니다.")
+    elif t["refix_floor"] is not None:
+        # ⚠ 소수 한 자리로 반올림하면 69.98%가 **70.0%**로 찍혀, 바로 옆의
+        #   「70%보다 낮습니다」와 화면이 자기모순을 일으킨다(실측 CSA 코스믹
+        #   1,203/1,719 = 69.98%). 법정 하한이 정확히 70%라 그 언저리가 흔하다.
+        _pct = (f" (발행 {t['strike_label']} 대비 {t['refix_floor_pct']:.2f}%)"
+                if t["refix_floor_pct"] is not None else "")
+        _sub = ""
+        if t["refix_floor_pct"] is not None and t["refix_floor_pct"] < 70:
+            _sub = " — 법정 하한(70%)보다 낮습니다"
+        lines.append(f"🔻 **리픽싱 하한** — {_mzn_amount(t['refix_floor'])}원{_pct}{_sub}")
+    else:
+        lines.append("🔻 **리픽싱 하한** — 공시에 값이 없습니다(미기재).")
+    lines.append("")
+
+    lines += [
+        "| 항목 | 값 |",
+        "|---|---|",
+        f"| 권면(전자등록)총액 | {_mzn_amount(t['face_amount'])}원 |",
+        f"| 회차 | {t['round'] if t['round'] is not None else '-'} |",
+        f"| 발행방법 | {t['offering'] or '-'} |",
+        f"| {t['strike_label']} | {_mzn_amount(t['strike'])}원 |",
+        f"| 표면이자율(%) | {t['coupon'] if t['coupon'] is not None else '-'} |",
+        f"| 만기이자율(%) | {t['ytm'] if t['ytm'] is not None else '-'} |",
+        f"| 납입일 | {_fmt_date8(t['pay_date']) or '-'} |",
+        f"| 만기일 | {_fmt_date8(t['maturity']) or '-'} |",
+        f"| 청구·행사기간 | {_fmt_date8(t['exercise_from']) or '-'} ~ "
+        f"{_fmt_date8(t['exercise_to']) or '-'} |",
+    ]
+    if kind == "BW" and t["detachable"]:
+        lines.append(f"| 사채와 인수권의 분리 | {t['detachable']} |")
+    if kind == "EB" and t["exchange_target"]:
+        lines.append(f"| 교환 대상 | {t['exchange_target']} |")
+    if t["refix_sub70_limit"] is not None:
+        lines.append(f"| 70% 미만 조정 한도 | {_mzn_amount(t['refix_sub70_limit'])}원 |")
+    lines.append(f"| 자금용도 | {' · '.join(t['use_of_funds']) or '-'} |")
+    lines.append("")
+
+    lines.append(
+        "📎 발행 **시점의 조건**입니다 — 조기상환·만기전취득·전환은 각각 다른 "
+        "공시라 여기에 반영되지 않습니다(미상환 잔액이 아닙니다). "
+        "회사 전체의 대기물량(오버행)은 `track_capital_structure`가 냅니다."
+    )
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def main() -> None:
