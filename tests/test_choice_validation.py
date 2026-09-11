@@ -94,7 +94,19 @@ class TestValidValuesStillWork(unittest.TestCase):
     """거절이 정상 경로를 막으면 안 된다 — 빈 값·기본값은 그대로 흐른다."""
 
     def test_빈_scope는_거절되지_않는다(self):
-        out = _reject(lambda: S.get_audit_opinion_text("갑", "2025", ""))
+        """⚠ 이 호출은 인자 검증을 **통과해** 네트워크로 간다.
+
+        거절 테스트들은 검증 단계에서 멈추지만 이건 아니라, 하부를 막지 않으면
+        가짜 키로 DART를 실제 호출한다 — 키 없는 CI에서 conftest 가드가 잡는다
+        (제작자 PC는 env에 실제 키가 있어 그냥 통과했다).
+        """
+        with patch.object(S, "_api_key", return_value="k"), \
+             patch.object(S, "find_audit_reports", return_value=[]), \
+             patch.object(S, "fetch_company_disclosures", return_value=[]), \
+             patch.object(S, "resolve_corp",
+                          return_value=("갑", {"corp_code": "00000000",
+                                               "stock_code": ""})):
+            out = S.get_audit_opinion_text("갑", "2025", "")
         self.assertFalse(out.startswith("❌ scope"), out[:80])
 
     def test_기본_report_type은_거절되지_않는다(self):
