@@ -72,6 +72,9 @@ from dart_risk_mcp.server import (  # noqa: E402
     get_financial_statements_full,
     list_report_revisions,
     get_audit_opinion_text,
+    search_notes_in_report,
+    get_mezzanine_terms,
+    get_unlisted_financials,
     track_debt_balance,
     track_fund_usage,
     track_insider_trading,
@@ -143,6 +146,25 @@ RCEPT_TOOLS: list[tuple[str, Callable[[str], str]]] = [
     ("view",          lambda r: view_disclosure(r, "", 1, 4000)),
 ]
 
+_MEZZ_TITLE_MARKS = ("전환사채권발행결정", "신주인수권부사채권발행결정",
+                     "교환사채권발행결정")
+
+# C-2. 유형이 정해진 rcept 도구 (v1.23.0) — (단축명, 제목 마커, 호출 함수)
+_TITLED_RCEPT_TOOLS: list[tuple[str, tuple[str, ...], Callable[[str], str]]] = [
+    ("notes", ("사업보고서",),
+     lambda r: search_notes_in_report(r, ["계속기업", "특수관계자"])),
+    ("mezz", _MEZZ_TITLE_MARKS, lambda r: get_mezzanine_terms(r)),
+]
+
+# C-3. 비상장 외감법인 — `get_unlisted_financials`는 상장사를 되돌려 보내므로
+#      COMPANIES(전부 상장사)로는 「상장사입니다」만 저장된다.
+#      `tests/fixtures/audit_reports/`에 원문 픽스처가 있는 실측 사례를 쓴다.
+#      ⚠ **이름이 아니라 corp_code로 부른다** — 「올품」은 DART에 동명 법인이
+#      둘(00455750·00442385)이라 이름으로 부르면 도구가 되물음을 내고 그것이
+#      골드로 저장된다(실제 재무제표 출력이 아니라 hygiene 코퍼스로서 값이
+#      낮다). 이 도구는 8자리 corp_code를 그대로 받는 경로가 있다.
+_UNLISTED_COMPANIES = [("올품", "00455750")]
+
 # D. 회사 다중·DS005
 MULTI_TOOLS: list[tuple[str, Callable[[list[dict]], str]]] = [
     # find_actor_overlap은 2~5개만 받는다. COMPANIES가 10개로 늘어난 뒤
@@ -186,6 +208,8 @@ def _short_names() -> set[str]:
     s = {t[0] for t in COMPANY_TOOL_MATRIX}
     s.add(STOCK_TOOL[0])
     s.update(t[0] for t in RCEPT_TOOLS)
+    s.update(t[0] for t in _TITLED_RCEPT_TOOLS)
+    s.add("unlisted")
     s.update(t[0] for t in MULTI_TOOLS)
     s.add("precedents")
     s.add("market")
@@ -207,6 +231,37 @@ def _resolve_first_normal_rcept(company: dict, api_key: str) -> str | None:
             rcept = d.get("rcept_no", "").strip()
             if rcept and rcept.isdigit() and len(rcept) >= 10:
                 return rcept
+    return None
+
+
+def _resolve_titled_rcept(company: dict, api_key: str, marks: tuple[str, ...],
+                          lookback_days: int = 1100,
+                          skip_amendments: bool = True) -> str | None:
+    """제목이 `marks` 중 하나를 담은 **최신** 공시의 접수번호.
+
+    `search_notes_in_report`·`get_mezzanine_terms`는 아무 공시가 아니라 **특정
+    유형**을 받아야 뜻이 있다(주석 검색은 사업보고서, 메자닌 조건은 발행결정).
+    `_resolve_first_normal_rcept`가 주는 「첫 정상 공시」를 먹이면 「주석을 찾지
+    못했습니다」만 골드로 남아 hygiene 검사의 코퍼스로서 값이 떨어진다.
+
+    ⚠ 정정본은 건너뛴다 — DS005·메자닌 구조화 조회가 최초접수일 기준이라
+    정정 접수번호로는 빈 결과가 온다(CLAUDE.md 「부가 발견 2」).
+    """
+    corp = resolve_corp(company["name"], api_key)
+    if not corp or not corp[1]:
+        return None
+    corp_code = corp[1].get("corp_code")
+    if not corp_code:
+        return None
+    for d in fetch_company_disclosures(corp_code, api_key, lookback_days) or []:
+        nm = (d.get("report_nm") or "").strip()
+        if skip_amendments and is_amendment_disclosure(nm):
+            continue
+        if not any(m in nm.replace(" ", "") for m in marks):
+            continue
+        rcept = (d.get("rcept_no") or "").strip()
+        if rcept.isdigit() and len(rcept) >= 10:
+            return rcept
     return None
 
 
@@ -346,6 +401,34 @@ def build_call_matrix(
                 label = f"{c['name']} {short}_{rcept}"
                 path = GOLDEN / f"{c['name']}_{short}_{rcept}.txt"
                 calls.append((label, (lambda fn=fn, r=rcept: fn(r)), path))
+
+    # C-2. 유형이 정해진 rcept 도구 2종 (v1.23.0) — 파일명에 rcept를 넣지
+    #      않는다. 이 둘은 「회사의 그 유형 최신 공시」라는 뜻이라 회사 기준으로
+    #      덮어쓰는 편이 낫다(rcept를 넣으면 재생성마다 파일이 쌓이고
+    #      `prune_rcept_goldens`의 (회사, 도구) 최신 2개 규칙에 얹혀야 한다).
+    for short, marks, fn in _TITLED_RCEPT_TOOLS:
+        if tool_filter and short not in tool_filter:
+            continue
+        for c in companies:
+            rcept = _resolve_titled_rcept(c, api_key, marks)
+            if not rcept:
+                sys.stderr.write(f"  SKIP {short}: {c['name']} 해당 공시 없음\n")
+                continue
+            label = f"{c['name']} {short}"
+            path = GOLDEN / f"{c['name']}_{short}.txt"
+            calls.append((label, (lambda fn=fn, r=rcept: fn(r)), path))
+
+    # C-3. 비상장 전용 (v1.23.0) — COMPANIES가 전부 상장사라 이 도구는 그
+    #      매트릭스에서 「상장사입니다」만 저장된다. 실측된 비상장 외감법인을
+    #      따로 둔다(`tests/fixtures/audit_reports/`에 원문 픽스처가 있는 회사).
+    if not tool_filter or "unlisted" in tool_filter:
+        for nm, code in _UNLISTED_COMPANIES:
+            calls.append((
+                f"{nm} unlisted",
+                (lambda code=code: get_unlisted_financials(
+                    code, "", "consolidated", "fs")),
+                GOLDEN / f"{nm}_unlisted.txt",
+            ))
 
     # D-1. 회사 다중 (actor_overlap·compare_fs) — 한 번씩만
     for short, fn in MULTI_TOOLS:

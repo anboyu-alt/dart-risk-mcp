@@ -92,6 +92,13 @@ _FIRST_LINE_PATTERNS: dict[str, str] = {
     "fsfull":        r"^(?:📒 \*\*.+ 전체 계정 재무제표\*\* \(\d{6}\)"
                      r"|🔎 \*\*.+\*\* \(\d{6}\) — .+ 찾지 못했습니다\.)$",
     "revisions":     r"^🗂 \*\*.+\*\* \(\d{6}\) — \d{4} 사업연도 .+ 판본$",
+    # rcept 유형이 정해진 둘 + 비상장 전용 하나(2026-09-12에 마저 메웠다).
+    # ⚠ `mezz`는 **실패 출력도 유효**하다 — DS005 구조화 조회가 빈 결과를
+    #   내는 접수가 실재한다(실측 오르비텍, CLAUDE.md 「부가 발견 2」).
+    "notes":         r"^🔎 \*\*\d+\*\* 주석 검색 — ",
+    "mezz":          r"^(?:💠 \*\*.+\*\* — .+|❌ .+)$",
+    # 비상장은 종목코드가 없어 괄호 안이 corp_code 8자리다.
+    "unlisted":      r"^🏢 \*\*.+\*\* \(\d{8}\) — .+$",
     "audit_text":    r"^(?:🧾 \*\*.+\*\* \(\d{6}\) — \d{4} 사업연도 .*감사보고서"
                      r"|🔎 \*\*.+\*\* \(\d{6}\) — .+ 찾지 못했습니다\.)$",
     # 종목코드 1개
@@ -145,6 +152,11 @@ _ALLOWED_PAREN_ABBREVS = {
     #   안다(내부 flag 코드가 새는 것과 다르다). 도구가 실제로 내는 값만
     #   넣는다 — 안 본 약어를 미리 넣으면 이 검사가 무력해진다.
     "CFS", "OFS", "BS", "IS", "CIS", "CF", "SCE",
+    # 통화 코드 — 2026-09-12. `search_notes_in_report` 골드(STX)의 주석
+    # 인용문에서 나왔고, 우리 화면도 같은 표기를 낸다(`_currency_footer`가
+    # 「이 회사는 **USD**로 보고합니다」라 적는다 — 실측 두산밥캣). 내부 코드가
+    # 아니라 ISO 통화 표기다. ⚠ 실측에 나온 하나만 넣는다.
+    "USD",
     # 정부·기관
     "MFDS", "FSC", "FSS", "SEC", "NICE", "KFTC", "KRX",
     # 회계 표준 지표
@@ -206,14 +218,23 @@ def _our_words_only(path) -> str:
     인용 블록은 `━━` 줄에서 시작해 우리 문장 표지(📎·ℹ️·표·머리글)에서 끝난다.
     """
     text = path.read_text(encoding="utf-8")
-    if not path.name.endswith("_audit_text.txt"):
+    if path.name.endswith("_audit_text.txt"):
+        start, stop = ("━━",), ("📎", "ℹ️", "|", "🧾", "🔎", "접수번호", "원문 ")
+    elif path.name.endswith("_notes.txt"):
+        # `search_notes_in_report`도 **주석 원문을 발췌해 보여주는 것이 목적**인
+        # 도구다(v1.23.0). 「── 주석 N.」부터가 발췌이고 표 줄(`|`)이 그 발췌의
+        # 일부라, audit_text의 종료 표지를 그대로 쓰면 첫 표에서 인용이 끊긴다.
+        # 여기서는 꼬리말(📎)만 우리 말이다 — 실측 STX 골드의 「담보설정금액
+        # (USD)」·「(JPY)」가 이 검사에 걸렸는데, 회사가 낸 표의 통화 표기다.
+        start, stop = ("──",), ("📎",)
+    else:
         return text
     keep, inside = [], False
     for ln in text.splitlines():
-        if ln.startswith("━━"):
+        if ln.startswith(start):
             inside = True
             continue
-        if ln.startswith(("📎", "ℹ️", "|", "🧾", "🔎", "접수번호", "원문 ")):
+        if ln.startswith(stop):
             inside = False
         if not inside:
             keep.append(ln)

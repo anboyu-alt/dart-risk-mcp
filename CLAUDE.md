@@ -1486,12 +1486,12 @@ dict는 **키가 corp_code**라 `main`의 `e["names"]`가 죽고 `merge_renames`
 
 ### 골드 출력 재생성 (회귀 검증용)
 
-`scripts/regen_goldens.py`로 10개 회사 × 28개 도구 매트릭스를 한 번에 재생성합니다.
+`scripts/regen_goldens.py`로 10개 회사 × 31개 도구 매트릭스를 한 번에 재생성합니다.
 (전체 33개 중 `lookup_known_actor`·`manage_watchlist`는 외부 데이터·사용자 자산에
 의존하고, `get_unlisted_financials`·`search_notes_in_report`·`get_mezzanine_terms`는
 비상장 법인·접수번호 단건이 대상이라 이 매트릭스에 해당 사례가 없어 제외됩니다.)
 
-> ⚠ **v1.23.0~v1.26.0 도구 여섯이 이 매트릭스에 하나도 없었다(2026-09-12 발견)**. 그래서 `tests/test_golden_output_hygiene.py`가 그 출력을 **한 번도 검사한 적이 없다** — v0.8.5 무판정 원칙(점수·등급·이모지 회귀)의 기계적 방어가 그만큼 비어 있었다. 회사명 단일 인자인 셋(`get_financial_statements_full`·`list_report_revisions`·`get_audit_opinion_text`)을 먼저 넣어 골든 30건을 만들었고, **넣자마자 두 건이 걸렸다**: ① `fs_div="CFS"`·`statement="BS"` 같은 **인자 값**이 「미등록 영문 코드」로 잡혔다(사용자가 그대로 호출에 쓰는 값이라 화면에 있어야 한다 — 근거와 함께 화이트리스트에 등록) ② 삼성전자 감사보고서 인용문의 「Device Solutions**(DS)** 부문」이 잡혔다. ②는 **이 도구가 원문을 그대로 인용하는 것이 목적**이라 우리 어휘 규칙을 걸면 안 되는 자리다 — `tests/test_audit_opinion_text_tool.py`의 `_our_words`가 같은 판단을 먼저 했고(감사인이 쓴 「위험」을 지우면 안 된다), 그 규칙을 `_our_words_only`로 hygiene에 옮겨 **모든 검사에 일관 적용**한다(점수·등급 낱말도 감사인 문장에서는 정상이다). 나머지 셋은 비상장 사례·접수번호가 필요해 별도 판단으로 남긴다.
+> ⚠ **v1.23.0~v1.26.0 도구 여섯이 이 매트릭스에 하나도 없었다(2026-09-12 발견)**. 그래서 `tests/test_golden_output_hygiene.py`가 그 출력을 **한 번도 검사한 적이 없다** — v0.8.5 무판정 원칙(점수·등급·이모지 회귀)의 기계적 방어가 그만큼 비어 있었다. 회사명 단일 인자인 셋(`get_financial_statements_full`·`list_report_revisions`·`get_audit_opinion_text`)을 먼저 넣어 골든 30건을 만들었고, **넣자마자 두 건이 걸렸다**: ① `fs_div="CFS"`·`statement="BS"` 같은 **인자 값**이 「미등록 영문 코드」로 잡혔다(사용자가 그대로 호출에 쓰는 값이라 화면에 있어야 한다 — 근거와 함께 화이트리스트에 등록) ② 삼성전자 감사보고서 인용문의 「Device Solutions**(DS)** 부문」이 잡혔다. ②는 **이 도구가 원문을 그대로 인용하는 것이 목적**이라 우리 어휘 규칙을 걸면 안 되는 자리다 — `tests/test_audit_opinion_text_tool.py`의 `_our_words`가 같은 판단을 먼저 했고(감사인이 쓴 「위험」을 지우면 안 된다), 그 규칙을 `_our_words_only`로 hygiene에 옮겨 **모든 검사에 일관 적용**한다(점수·등급 낱말도 감사인 문장에서는 정상이다). **나머지 셋도 이어서 메웠다** — `search_notes_in_report`·`get_mezzanine_terms`는 아무 접수번호가 아니라 **특정 유형**(사업보고서 / 메자닌 발행결정)이 필요해 `_resolve_titled_rcept`를 새로 뒀고(정정본은 건너뛴다 — DS005·메자닌 구조화 조회가 최초접수일 기준이라 정정 접수번호로는 빈 결과가 온다), 파일명에 rcept를 **넣지 않는다**(「그 회사의 그 유형 최신 공시」라는 뜻이라 회사 기준으로 덮어쓰는 편이 낫고, 넣으면 재생성마다 쌓여 프루닝 규칙에 얹혀야 한다). `get_unlisted_financials`는 COMPANIES가 전부 상장사라 「상장사입니다」만 저장되므로 실측 비상장 법인(올품)을 따로 두되 **이름이 아니라 corp_code로 부른다** — 「올품」은 DART에 동명 법인이 둘(00455750·00442385)이라 이름으로 부르면 되물음이 골드가 된다(실제로 한 번 그렇게 저장됐다: 406자 되물음 → corp_code로 바꾸니 7,536자 재무제표). ⚠ **`search_notes_in_report`도 원문 인용 도구다** — STX 골드의 「담보설정금액**(USD)**」·「**(JPY)**」가 내부 코드 검사에 걸렸는데 회사가 낸 표의 통화 표기다. `_our_words_only`를 이 파일에도 적용하되 **종료 표지를 달리한다**: 주석 발췌는 표 줄(`|`)이 인용의 일부라 audit_text 규칙을 그대로 쓰면 첫 표에서 인용이 끊긴다(여기서는 꼬리말 `📎`만 우리 말이다). 최종 **10개사 × 31개 도구 · 골드 304건**.
 API 키는 `tmp/_apikey.txt` 또는 환경변수 `DART_API_KEY`에서 자동 로드.
 
 ```bash
