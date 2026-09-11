@@ -50,6 +50,12 @@ from .core import (
     classify_note_title,
     build_note_summary,
     scan_note_titles,
+    fetch_audit_report_text,
+    find_audit_reports,
+    find_corp_candidates,
+    corp_name_by_code,
+    find_note_headings,
+    split_audit_report,
     extract_rights_offering_investors,
     fetch_audit_opinion_history,
     fetch_company_disclosures,
@@ -7728,6 +7734,194 @@ def track_turnover_trend(
     )
     lines.append(_currency_footer(_currency))
     return "\n".join(lines)
+
+
+
+# ── 비상장 외부감사대상 법인 (v1.23.0) ─────────────────────────────────
+#
+# OpenDART 재무제표 API(`fnlttSinglAcnt` 계열)는 정기보고서 제출 법인 위주라
+# 비상장 법인은 「조회된 데이타가 없습니다」를 돌려준다. 취재 대상이 비상장
+# 계열사인 경우가 많은데 그쪽을 볼 수단이 없었다. 감사보고서 원문은 DART에
+# 그대로 공시되므로 원문 경로로 우회한다.
+_UNLISTED_SECTIONS = ("fs", "notes", "all")
+_UNLISTED_MAX_CHARS = 12000
+
+
+def _unlisted_candidate_block(name: str, cands: list[dict]) -> str:
+    """동명 법인 후보를 보여 주고 되묻는다 — 임의로 고르지 않는다."""
+    lines = [
+        f"❓ **'{name}'** 이름으로 DART에 법인이 {len(cands)}개 있습니다 — "
+        "어느 쪽인지 알 수 없어 조회하지 않았습니다.",
+        "",
+        "| corp_code | 종목코드 | 기업개황 수정일 |",
+        "|---|---|---|",
+    ]
+    for c in cands:
+        lines.append(
+            f"| {c['corp_code']} | {c.get('stock_code') or '-'} "
+            f"| {c.get('modify_date') or '-'} |"
+        )
+    lines += [
+        "",
+        "수정일이 최신인 쪽이 현행일 가능성이 높지만 **확정은 아닙니다** — "
+        "옛 법인에 공시가 한 건도 없는 경우가 있습니다(실측 '올품' 00442385는 0건).",
+        "`list_disclosures_by_stock`은 종목코드 전용이라 비상장에는 쓸 수 없습니다. "
+        "위 corp_code 중 하나를 골라 다시 부르세요 — "
+        "`get_unlisted_financials(company_name=\"<corp_code 8자리>\")`도 받습니다.",
+    ]
+    return "\n".join(lines)
+
+
+def _unlisted_notes_toc(notes: list[dict]) -> list[str]:
+    """주석 목차 — `core/notes.py`의 분류를 그대로 재사용한다."""
+    out = [f"**주석 {len(notes)}개**", ""]
+    for n in notes:
+        tags = classify_note_title(n["title"])
+        tag = f"  ⟨{' · '.join(tags)}⟩" if tags else ""
+        out.append(f"- {n['no']}. {n['title']}{tag}")
+    return out
+
+
+@mcp.tool()
+def get_unlisted_financials(
+    company_name: str,
+    year: str = "",
+    scope: str = "consolidated",
+    section: str = "fs",
+) -> str:
+    """비상장 외부감사대상 법인의 재무제표·주석을 감사보고서 원문에서 읽는다.
+
+    OpenDART 재무제표 API는 정기보고서 제출 법인 위주라 비상장사는 자료가
+    없다. 감사보고서는 공시되므로 그 원문에서 재무제표와 주석을 꺼낸다.
+    **상장사라면 `get_financial_summary`가 구조화 데이터를 주므로 그쪽이 낫다.**
+
+    Args:
+        company_name: 기업명. 동명 법인이 있으면 후보를 보여 주고 되묻는다
+            (되물을 때 안내하는 corp_code 8자리를 그대로 넣어도 된다).
+        year: 사업연도(예: "2025"). 빈 값이면 가장 최근 감사보고서.
+            ⚠ 공시 제목의 괄호 연도이며 접수일이 아니다 —
+            2025 사업연도 보고서는 2026년에 접수된다.
+        scope: "consolidated"(연결감사보고서) | "separate"(감사보고서).
+        section: "fs"(재무제표) | "notes"(주석 목차) | "all".
+
+    Returns:
+        감사보고서 출처(접수번호·제출 회계법인·법인구분)와 요청 구간.
+        주석 참조번호 열은 원문에 있으면 그대로 남긴다 — 숫자에서 주석으로
+        건너뛰는 통로다. 판정·점수·등급은 붙이지 않는다.
+    """
+    api_key = _api_key()
+    if not api_key:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+    _yerr = _validate_year(year)
+    if _yerr:
+        return _yerr
+    if section not in _UNLISTED_SECTIONS:
+        return (f"❌ section은 {' · '.join(_UNLISTED_SECTIONS)} 중 하나여야 합니다 "
+                f"(받은 값: {section!r}).")
+
+    query = (company_name or "").strip()
+    if not query:
+        return "❌ 기업명을 입력하세요."
+
+    # corp_code를 직접 받은 경우(되물음에 답한 경로)
+    if re.fullmatch(r"\d{8}", query):
+        corp_code = query
+        corp_name = corp_name_by_code(query, api_key) or query
+        stock_code = ""
+    else:
+        cands = find_corp_candidates(query, api_key)
+        if not cands:
+            return (f"❌ '{query}'을(를) DART 기업 명부에서 찾지 못했습니다. "
+                    "정식 상호를 확인하세요(예: '주식회사'를 뺀 이름).")
+        if len(cands) > 1:
+            return _unlisted_candidate_block(query, cands)
+        corp_code = cands[0]["corp_code"]
+        stock_code = cands[0].get("stock_code") or ""
+        corp_name = query
+
+    if stock_code:
+        return (f"ℹ️ **{corp_name}**({stock_code})은 상장사입니다. "
+                "상장사는 OpenDART 재무제표 API로 구조화된 값을 받을 수 있으니 "
+                "`get_financial_summary`·`scan_financial_anomaly`를 쓰세요. "
+                "이 도구는 그 API에 자료가 없는 비상장 외부감사대상 법인 전용입니다.")
+
+    reports = find_audit_reports(corp_code, api_key, year=year, scope=scope)
+    if not reports:
+        _scope_nm = "감사보고서" if scope == "separate" else "연결감사보고서"
+        _yr = f"{year} 사업연도 " if year else ""
+        return (f"🔎 **{corp_name}**({corp_code}) — {_yr}{_scope_nm}를 찾지 못했습니다.\n\n"
+                "조회 창(최근 1,200일) 안에 그 공시가 없거나, 연결재무제표를 "
+                "작성하지 않는 회사일 수 있습니다. "
+                f"`scope=\"{'consolidated' if scope == 'separate' else 'separate'}\"`로 "
+                "바꿔 보거나 `list_disclosures_by_stock` 대신 "
+                "`get_company_info`로 법인 실체를 먼저 확인하세요.")
+
+    rep = reports[0]
+    text = fetch_audit_report_text(rep["rcept_no"], api_key)
+    if not text:
+        return (f"❌ 감사보고서 원문을 받지 못했습니다 "
+                f"(접수번호 {rep['rcept_no']}). 자료가 없다는 뜻이 아니라 "
+                "조회에 실패했다는 뜻입니다 — 잠시 후 다시 시도하세요.")
+
+    split = split_audit_report(text)
+    cls_nm = {"Y": "유가증권", "K": "코스닥", "N": "코넥스",
+              "E": "비상장(기타법인)"}.get(rep.get("corp_cls", ""), rep.get("corp_cls", "-"))
+
+    lines = [
+        f"🏢 **{corp_name}** ({corp_code}) — {rep['report_nm']}",
+        f"접수번호 {rep['rcept_no']} · 접수일 {_fmt_date8(rep['rcept_dt'])} · "
+        f"제출인 {rep.get('flr_nm') or '-'} · 법인구분 {cls_nm}",
+        f"원문 {split['length']:,}자 · 재무제표 구간 앵커: {split['fs_basis']}",
+        "",
+    ]
+    if len(reports) > 1:
+        _others = " · ".join(f"{r['fiscal_year']}({r['rcept_no']})" for r in reports[1:5])
+        lines.append(f"📎 같은 조건의 다른 사업연도: {_others}")
+        lines.append("")
+
+    body: list[str] = []
+    if section in ("fs", "all"):
+        end = split["notes_start"] if split["notes_start"] is not None else split["notes_end"]
+        fs_text = text[split["fs_start"]:end].strip()
+        body.append("━━ 재무제표 ━━")
+        body.append(fs_text if fs_text else "(재무제표 구간을 찾지 못했습니다)")
+        body.append("")
+    if section in ("notes", "all"):
+        body.append("━━ 주석 ━━")
+        if split["notes"]:
+            body += _unlisted_notes_toc(split["notes"])
+            body.append("")
+            body.append(
+                f"본문은 `search_notes_in_report(rcept_no=\"{rep['rcept_no']}\", "
+                "terms=[\"찾을 낱말\"])`로 읽으세요 — 주석 번호·제목과 함께 나옵니다."
+            )
+        else:
+            body.append("주석 번호 헤딩을 찾지 못했습니다 — 서식이 달라 "
+                        "자동 분할이 안 되는 문서입니다. "
+                        f"`view_disclosure(rcept_no=\"{rep['rcept_no']}\")`로 "
+                        "원문을 직접 넘겨 보세요.")
+        body.append("")
+
+    out = "\n".join(body)
+    if len(out) > _UNLISTED_MAX_CHARS:
+        kept = out[:_UNLISTED_MAX_CHARS]
+        lines.append(kept)
+        lines.append("")
+        lines.append(
+            f"…여기서 잘렸습니다 — 이 구간 {len(out):,}자 중 "
+            f"{_UNLISTED_MAX_CHARS:,}자만 표시했습니다({len(out) - _UNLISTED_MAX_CHARS:,}자 남음). "
+            f"이어 받으려면 `view_disclosure(rcept_no=\"{rep['rcept_no']}\", page=2)`로 "
+            "원문을 넘기거나, `search_notes_in_report`로 찾는 낱말만 꺼내세요."
+        )
+    else:
+        lines.append(out)
+
+    lines.append("")
+    lines.append(
+        "📎 금액·단위는 감사보고서 원문 표기 그대로입니다(천원/백만원 혼용 가능). "
+        "표의 「주석」 열은 그 숫자가 어느 주석에서 설명되는지를 가리킵니다."
+    )
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def main() -> None:

@@ -32,7 +32,11 @@ import pathlib
 import re
 
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
-_FILES = ["dart_risk_mcp/server.py", "dart_risk_mcp/core/dart_client.py"]
+# 2026-09-11: `core/audit_report.py`가 빠져 있어 그 모듈이 **만드는** 키를
+# server.py가 읽는 것이 「죽은 필드」로 신고됐다(fs_start·notes_start 등).
+# `_ACCEPTED`로 우회하면 안 된다 — 그건 「확인 못 한 API 필드」 자리다.
+_FILES = ["dart_risk_mcp/server.py", "dart_risk_mcp/core/dart_client.py",
+          "dart_risk_mcp/core/audit_report.py"]
 _KEYS = json.loads((_ROOT / "tests" / "fixtures" / "api" / "response_keys.json")
                    .read_text(encoding="utf-8"))
 _API = {k for v in _KEYS["endpoints"].values() for k in v}

@@ -130,6 +130,16 @@ from .notes import (
     build_note_summary,
 )
 from .dart_client import scan_note_titles
+from .dart_client import (
+    fetch_audit_report_text,
+    find_audit_reports,
+    find_corp_candidates,
+    corp_name_by_code,
+)
+from .audit_report import (
+    find_note_headings,
+    split_audit_report,
+)
 from .explain import (
     flag_to_prose,
     signal_to_prose,
@@ -214,6 +224,12 @@ __all__ = [
     "summarize_note_sections",
     "build_note_summary",
     "scan_note_titles",
+    "fetch_audit_report_text",
+    "find_audit_reports",
+    "find_corp_candidates",
+    "corp_name_by_code",
+    "find_note_headings",
+    "split_audit_report",
     "detect_capital_churn",
     "CHURN_RESULT_MARKS",
     "CHURN_NON_DILUTIVE_MARKS",
