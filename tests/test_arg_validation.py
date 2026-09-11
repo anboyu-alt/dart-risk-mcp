@@ -29,6 +29,8 @@
 import os
 from datetime import datetime
 
+from unittest.mock import patch
+
 import pytest
 
 import dart_risk_mcp.server as S
@@ -110,4 +112,56 @@ def test_도구가_잘못된_연도를_거절한다(fn):
 @pytest.mark.parametrize("lb", ["3", None, True, 1.9, 100, 0, -1])
 def test_analyze가_lookback_예외를_내지_않는다(lb):
     out = S.analyze_company_risk("삼성전자", lb)
+    assert isinstance(out, str) and out.strip()
+
+
+# ── lookback_years를 받는 **모든** 도구 (2026-09-12) ──────────────────────
+#
+# 기존 검사는 `analyze_company_risk` 하나뿐이었다. 정적으로 훑으니 이 인자를
+# 받는 도구가 11개인데 `_coerce_lookback`을 거치는 것은 2개뿐이다 — 나머지가
+# 안전한지 아무도 확인한 적이 없었다. 프로젝트 규칙은 「예외를 도구 레벨로
+# 전파하지 않는다」이므로 느슨한 MCP 클라이언트가 문자열을 보내도 도구가 죽으면
+# 안 된다.
+
+_LOOKBACK_TOOLS = [
+    ("analyze_company_risk", lambda v: S.analyze_company_risk("삼성전자", v)),
+    ("build_event_timeline", lambda v: S.build_event_timeline("삼성전자", v)),
+    ("find_risk_precedents", lambda v: S.find_risk_precedents(["CB_BW"], v)),
+    ("find_actor_overlap",
+     lambda v: S.find_actor_overlap(["삼성전자", "셀트리온"], v)),
+    ("list_disclosures_by_stock",
+     lambda v: S.list_disclosures_by_stock("005930", v)),
+    ("track_insider_trading", lambda v: S.track_insider_trading("삼성전자", v)),
+    ("get_audit_opinion_history",
+     lambda v: S.get_audit_opinion_history("삼성전자", v)),
+    ("check_disclosure_anomaly",
+     lambda v: S.check_disclosure_anomaly("삼성전자", v)),
+    ("track_fund_usage", lambda v: S.track_fund_usage("삼성전자", v)),
+    ("track_capital_structure",
+     lambda v: S.track_capital_structure("삼성전자", v)),
+    ("track_turnover_trend", lambda v: S.track_turnover_trend("삼성전자", v)),
+]
+
+
+@pytest.mark.parametrize("name,call", _LOOKBACK_TOOLS,
+                         ids=[n for n, _ in _LOOKBACK_TOOLS])
+@pytest.mark.parametrize("lb", ["3", None, True, 1.9, 100, 0, -1])
+def test_키가_없어도_lookback으로_죽지_않는다(name, call, lb):
+    """키 확인보다 **앞에서** 인자를 만지는 도구를 잡는다.
+
+    실측: `find_actor_overlap("갑","을", "3")`이 키 없는 환경에서도
+    `TypeError: '>' not supported between instances of 'int' and 'str'`로
+    죽었다 — 사용자에게는 도구가 통째로 사라진 것으로 보인다.
+    """
+    with patch.object(S, "_api_key", return_value=""):
+        out = call(lb)
+    assert isinstance(out, str) and out.strip()
+
+
+@pytest.mark.skipif(not _KEY, reason="DART_API_KEY 없음")
+@pytest.mark.parametrize("name,call", _LOOKBACK_TOOLS,
+                         ids=[n for n, _ in _LOOKBACK_TOOLS])
+@pytest.mark.usefixtures("no_structured_dart")
+def test_실행_경로에서도_lookback으로_죽지_않는다(name, call):
+    out = call("3")
     assert isinstance(out, str) and out.strip()

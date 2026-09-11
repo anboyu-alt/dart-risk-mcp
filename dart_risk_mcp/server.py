@@ -223,8 +223,15 @@ def _estimate_output_size(text: str) -> tuple[int, int]:
     return chars, tokens
 
 
-def _append_size_footer(text: str, lookback_years: int) -> str:
-    """다년 조회(lookback_years > 1)일 때만 예상 출력 규모 푸터를 덧붙인다."""
+def _append_size_footer(text: str, lookback_years) -> str:
+    """다년 조회(lookback_years > 1)일 때만 예상 출력 규모 푸터를 덧붙인다.
+
+    ⚠ 여기서도 강제한다 — 도구가 `_resolve_lookback`으로 **지역 변수만**
+    정규화하면 호출부의 원본이 그대로 여기 온다. 실측
+    `list_disclosures_by_stock("005930", "3")`이 이 줄에서 `TypeError`로
+    죽었다(창 계산은 이미 성공한 뒤였다).
+    """
+    lookback_years = _coerce_lookback(lookback_years)
     if lookback_years <= 1:
         return text
     chars, tokens = _estimate_output_size(text)
@@ -363,6 +370,97 @@ def _validate_year(year) -> str:
         return (f"❌ year가 조회 가능 범위를 벗어났습니다 (받은 값: {y}). "
                 f"{_YEAR_MIN}~{_max} 사이여야 합니다.")
     return ""
+
+
+def _coerce_str_list(value) -> "list[str]":
+    """목록 인자를 문자열 리스트로 강제한다 — **문자열을 쪼개지 않는다**.
+
+    파이썬에서 문자열은 순회 가능하다. `terms: list[str]`에 `"계속기업"`을 주면
+    `["계","속","기","업"]`처럼 돌아가는데 **예외도 나지 않고 결과도 그럴듯해
+    보인다**. 실측(2026-09-12 라이브):
+
+        search_notes_in_report("20260324000035", "계속기업")
+          → 주석 검색 — `계` · `속` · `기` · `업` (모두 들어간 주석) · 16,808자
+
+    화면이 제 데이터와 다른 것을 말하고 사용자는 「계속기업」을 검색했다고 믿는다.
+    `compare_financials("삼성전자")`는 「찾을 수 없는 기업: 삼, 성, 전」으로
+    드러나서 그나마 나았고, `find_actor_overlap`·`find_risk_precedents`는
+    조용히 결과를 냈다. 문자열 하나는 「하나를 찾겠다」는 뜻이므로 감싼다.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        v = value.strip()
+        return [v] if v else []
+    try:
+        items = list(value)
+    except TypeError:
+        v = str(value).strip()
+        return [v] if v else []
+    out: list[str] = []
+    for it in items:
+        s = (it if isinstance(it, str) else str(it)).strip()
+        if s:
+            out.append(s)
+    return out
+
+
+_REPORT_TYPES = ("annual", "half", "q1", "q3")
+_AUDIT_SCOPES = ("consolidated", "separate")
+
+
+def _validate_choice(name: str, value, allowed) -> str:
+    """열거형 인자 검증. 정상이면 빈 문자열, 아니면 사용자용 오류 문구.
+
+    ⚠ **모르는 값을 조용히 기본값으로 삼키면 안 된다.** 실측(2026-09-12):
+    `get_audit_opinion_text(scope="엉뚱")`이 **연결감사보고서**를 그대로 냈다 —
+    `separate`를 `seperate`로 오타 내면 별도가 아니라 연결을 받고 화면은 그
+    사실을 말하지 않는다. `get_financial_statements_full(report_type="엉뚱")`은
+    「찾지 못했습니다」라 적어 **「없다」와 「잘못 물었다」를 섞었고**,
+    `get_executive_compensation`은 머리글에 「2024년 엉뚱」을 적고 결과를 냈다.
+
+    빈 값은 통과시킨다 — 「미지정」은 오타가 아니라 기본값을 쓰겠다는 뜻이고
+    도구 문서가 그렇게 약속하고 있다(`_validate_year`와 같은 태도).
+    """
+    v = str(value or "").strip()
+    if not v or v in allowed:
+        return ""
+    return (f"❌ {name}은(는) {' · '.join(allowed)} 중 하나여야 합니다 "
+            f"(받은 값: {value!r}).")
+
+
+def _coerce_int(value, default: int, lo: int, hi: int) -> int:
+    """정수 인자를 강제한다 — **예외를 도구 밖으로 내보내지 않는다**.
+
+    실측(2026-09-12): `get_disclosure_document(rcept, "3000")`·
+    `view_disclosure(rcept, "", "2", 2000)`·`search_market_disclosures(preset, "1")`
+    등 **여섯 자리**가 `TypeError`로 도구를 통째로 죽였다. MCP 클라이언트가
+    느슨하면 숫자가 문자열로 온다.
+
+    ⚠ 클램프 값은 각 도구가 이미 쓰던 것을 그대로 넘긴다 — 이 함수가 바꾸는
+    것은 「죽느냐 마느냐」뿐이고 정상 입력의 동작은 건드리지 않는다.
+    bool은 int의 하위형이라 `True`가 1로 통과하는데 의미가 없으므로 기본값으로
+    돌린다(`_coerce_lookback`과 같은 판단).
+    """
+    if isinstance(value, bool) or value is None:
+        return default
+    if isinstance(value, str):
+        v = value.strip()
+        if v.startswith("-"):
+            v, sign = v[1:], -1
+        else:
+            sign = 1
+        if not (v.isascii() and v.isdigit()):
+            return default
+        n = sign * int(v)
+    elif isinstance(value, (int, float)):
+        try:
+            n = int(value)
+        except (ValueError, OverflowError):
+            return default
+    else:
+        return default
+    return max(lo, min(hi, n))
 
 
 def _coerce_lookback(value, default: int = 1, lo: int = 1, hi: int = 5) -> int:
@@ -508,10 +606,14 @@ def _resolve_lookback(
             DeprecationWarning,
             stacklevel=3,
         )
-        days = min(max(lookback_days, 1), 365)
+        days = _coerce_lookback(lookback_days, default=365, lo=1, hi=365)
         # deprecated 경로도 같은 예산을 쓴다 — 창이 같으면 절단 위험도 같다.
         return days, _page_budget(days), f"{days}일"
-    years = min(max(lookback_years, 1), 5)
+    # ⚠ 여기서 강제하는 것이 뿌리다 — 이 함수를 거치는 도구가 여럿인데
+    #   옛 `min(max(...))`는 문자열·None에 TypeError를 던져 **도구를 통째로**
+    #   죽였다(실측 `list_disclosures_by_stock`·`check_disclosure_anomaly`).
+    #   프로젝트 규칙은 「예외를 도구 레벨로 전파하지 않는다」이다.
+    years = _coerce_lookback(lookback_years)
     days = years * 365
     phrase = f"{days}일" if years == 1 else f"{years}년"
     return days, _page_budget(days), phrase
@@ -3036,6 +3138,7 @@ def find_risk_precedents(signal_types: list[str], lookback_days: int = 90) -> st
         signal_types: 신호 유형 목록 (예: ["CB_BW", "3PCA", "SHAREHOLDER"])
         lookback_days: 참고용 (현재 버전에서는 사용되지 않음)
     """
+    signal_types = _coerce_str_list(signal_types)
     if not signal_types:
         return "❌ signal_types 목록을 입력하세요. 예: ['CB_BW', 'SHAREHOLDER']"
 
@@ -3675,6 +3778,7 @@ def manage_watchlist(
     # 파일이 손상돼 옆으로 치워졌으면 **먼저 알린다**. 빈 목록만 보면
     # 사용자는 자기 목록이 사라진 줄 안다 — 실제로는 .corrupt 파일에
     # 내용이 남아 있어 손으로 되살릴 수 있다.
+    companies = _coerce_str_list(companies)
     quarantined = (load_watchlist() or {}).get("_quarantined")
     notice = (
         f"⚠ 워치리스트 파일을 읽을 수 없어 `{quarantined}` 로 옮겨 두고 "
@@ -3776,6 +3880,7 @@ def find_actor_overlap(
         watchlist: 저장된 워치리스트 인물명. 지정 시 해당 회사군을 company_names와
             합집합으로 분석한다 (manage_watchlist로 관리).
     """
+    company_names = _coerce_str_list(company_names)
     names = list(company_names or [])
     watchlist_note = ""
     if watchlist:
@@ -3793,7 +3898,7 @@ def find_actor_overlap(
         base = "입력 오류: 2개 이상 5개 이하 기업명(또는 종목코드) 리스트를 전달하세요."
         return f"{base}\n{watchlist_note}" if watchlist_note else base
 
-    lookback_years = min(max(lookback_years, 1), 5)
+    lookback_years = _coerce_lookback(lookback_years)
     lookback_days = lookback_years * 365
     # 기본 1년은 기존 '최근 365일' 문구를 유지(골드 호환), N년은 정직하게 반영
     window_label = "최근 365일" if lookback_years == 1 else f"최근 {lookback_years}년"
@@ -4227,6 +4332,10 @@ def get_disclosure_document(rcept_no: str, max_chars: int = 8000) -> str:
     if not rcept_no:
         return "❌ rcept_no(접수번호)를 입력하세요."
 
+    # ⚠ 이 도구에는 클램프가 아예 없었다 — 독스트링만 「최대 20000」이라 적고
+    #   하부(`fetch_disclosure_full`)의 내부 강제에 기대고 있었다. 그 하부가
+    #   `min()`을 쓰므로 문자열·None이 오면 TypeError로 도구가 죽는다.
+    max_chars = _coerce_int(max_chars, 8000, 1000, 20000)
     result = fetch_disclosure_full(rcept_no, _api_key(), max_chars)
 
     if not result["text"] and not result["files"]:
@@ -4337,7 +4446,10 @@ def view_disclosure(
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
     if not rcept_no:
         return "❌ rcept_no(접수번호)를 입력하세요."
-    page_size = max(1000, min(8000, page_size))
+    # ⚠ 클램프 값은 그대로 두고 **강제 변환만** 더한다 — 옛 `max/min`은
+    #   문자열·None에 TypeError를 던져 도구를 통째로 죽였다.
+    page = _coerce_int(page, 1, 1, 10 ** 6)
+    page_size = _coerce_int(page_size, 4000, 1000, 8000)
 
     # section_id에서 file_index 파싱
     file_index = 0
@@ -4467,6 +4579,26 @@ def _counterparty_substance(d: dict) -> str:
     return " · ".join(bits)
 
 
+# ⚠ 계정명은 **회사 표기가 아니다**. `fnlttSinglAcnt`가 주는 이름은 회사가 제출한
+#   XBRL의 표준 태그에 맞춘 것이라, 실측 8개사 241행에서 15.4%가 감사보고서 원문과
+#   다르다(같음 33.2%). 뜻이 뒤집히는 표기가 15개사 중 **8곳**에서 나왔고 전부
+#   적자 회사다 — 이 도구의 주 사용처가 바로 그런 회사다:
+#     CSA 코스믹·제이스코홀딩스·STX  API 「이익잉여금」 → 원문 「결손금」
+#     CSA 코스믹·STX·KR모터스        API 「영업이익」   → 원문 「영업손실」
+#   기사에 「이익잉여금 -694억」이라 쓰면 숫자 부호는 맞지만 회사가 쓰지 않은,
+#   뜻이 반대인 이름이다. ⚠ 대조를 여기 붙이지 않는 이유는 감사보고서 ZIP 조회가
+#   필요해서다 — 이 도구는 가볍고 빠른 것이 쓸모이고 그 무거운 길은
+#   `get_financial_statements_full`이 맡는다. 사실을 적고 갈 곳을 알린다(추가 호출 0).
+_ACCOUNT_NAME_NOTICE = (
+    "📎 계정명은 **DART 재무 API 표기**이며 회사가 공시에 쓴 표기와 다를 수 "
+    "있습니다 — 실측 8개사 241행 중 15.4%가 다르고, 적자 회사에서는 API "
+    "「이익잉여금」이 원문에서 「결손금」, 「영업이익」이 「영업손실」인 경우가 "
+    "있습니다(뜻이 뒤집힙니다). 회사 표기 그대로가 필요하면 "
+    "`get_financial_statements_full`을 쓰세요 — 감사보고서 원문과 대조해 "
+    "원문 표기를 앞에 적습니다."
+)
+
+
 def _currency_footer(currency: str) -> str:
     """금액 단위 안내. 원화가 아니면 그 통화를 적는다.
 
@@ -4545,6 +4677,9 @@ def get_financial_summary(
     _yerr = _validate_year(year)
     if _yerr:
         return _yerr
+    _cerr = _validate_choice('report_type', report_type, _REPORT_TYPES)
+    if _cerr:
+        return _cerr
 
     result = resolve_corp(company_name, _api_key())
     if not result:
@@ -4603,6 +4738,7 @@ def get_financial_summary(
     lines += [
         "",
         _currency_footer(_cur),
+        _ACCOUNT_NAME_NOTICE,
     ]
     return "\n".join(lines)
 
@@ -4775,12 +4911,16 @@ def compare_financials(
         report_type: "annual" | "half" | "q1" | "q3".
         accounts: 계정명 부분일치 목록. 미지정이면 응답의 전 계정.
     """
+    company_names = _coerce_str_list(company_names)
     if not _api_key():
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
     for _y in (year, year_to):
         _yerr = _validate_year(_y)
         if _yerr:
             return _yerr
+        _cerr = _validate_choice('report_type', report_type, _REPORT_TYPES)
+        if _cerr:
+            return _cerr
     if len(company_names) < 2:
         return "❌ 최소 2개 기업을 입력하세요."
     if len(company_names) > _COMPARE_MAX_CORPS:
@@ -5310,7 +5450,7 @@ def search_market_disclosures(
             f"❌ 알 수 없는 preset: {preset!r}\n"
             f"허용값: {', '.join(sorted(_PRESET_TO_SIGNALS))}"
         )
-    max_results = max(1, min(200, max_results))
+    max_results = _coerce_int(max_results, 50, 1, 200)
 
     now = datetime.now()
 
@@ -5338,7 +5478,7 @@ def search_market_disclosures(
         # 8자리가 아닐 때 쓰레기 문자열이 나오지 않는다는 점만 다르다).
         window_label = f"{_fmt_date8(_bgn)}~{_fmt_date8(_end)}"
     else:
-        days = max(1, min(90, days))
+        days = _coerce_int(days, 7, 1, 90)
         # 양끝 포함이라 days-1을 빼야 정확히 days일 창이 된다
         scan_start = now - timedelta(days=days - 1)
         scan_end = now
@@ -5518,6 +5658,9 @@ def get_executive_compensation(
     _yerr = _validate_year(year)
     if _yerr:
         return _yerr
+    _cerr = _validate_choice('report_type', report_type, _REPORT_TYPES)
+    if _cerr:
+        return _cerr
 
     _resolved = resolve_corp(company_name, _api_key())
     corp_name, meta = _resolved if _resolved else ("", {})
@@ -5713,7 +5856,7 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
         return f"기업을 찾을 수 없습니다: {company_name}"
     corp_code = meta["corp_code"]
 
-    lookback_years = max(1, min(5, lookback_years))
+    lookback_years = _coerce_lookback(lookback_years, default=2)
     records = fetch_insider_timeline(corp_code, _api_key(), lookback_years)
 
     if not records:
@@ -7001,6 +7144,9 @@ def scan_financial_anomaly(
     _yerr = _validate_year(year)
     if _yerr:
         return _yerr
+    _cerr = _validate_choice('report_type', report_type, _REPORT_TYPES)
+    if _cerr:
+        return _cerr
 
     corp_info = resolve_corp(company_name, api_key)
     if not corp_info or not corp_info[1]:
@@ -8032,6 +8178,9 @@ def get_unlisted_financials(
     _yerr = _validate_year(year)
     if _yerr:
         return _yerr
+    _cerr = _validate_choice('scope', scope, _AUDIT_SCOPES)
+    if _cerr:
+        return _cerr
     if section not in _UNLISTED_SECTIONS:
         return (f"❌ section은 {' · '.join(_UNLISTED_SECTIONS)} 중 하나여야 합니다 "
                 f"(받은 값: {section!r}).")
@@ -8181,6 +8330,7 @@ def search_notes_in_report(
     Returns:
         적중한 주석의 번호·제목과 발췌. 판정·점수·등급은 붙이지 않는다.
     """
+    terms = _coerce_str_list(terms)
     api_key = _api_key()
     if not api_key:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
@@ -8192,7 +8342,8 @@ def search_notes_in_report(
     if not terms or not any((t or "").strip() for t in terms):
         return ("❌ 찾을 낱말을 하나 이상 넣으세요. 같은 말의 다른 표기는 "
                 "세로줄로 묶습니다 — 예: `[\"영업권손상차손|영업권 손상차손\"]`.")
-    context_chars = max(50, min(2000, int(context_chars or 600)))
+    # ⚠ 옛 코드는 `int(context_chars or 600)`이라 `"abc"`에 ValueError를 던졌다.
+    context_chars = _coerce_int(context_chars, 600, 50, 2000)
 
     text = fetch_audit_report_text(rc, api_key)
     if not text:
@@ -8550,6 +8701,9 @@ def get_financial_statements_full(
     _yerr = _validate_year(year)
     if _yerr:
         return _yerr
+    _cerr = _validate_choice('report_type', report_type, _REPORT_TYPES)
+    if _cerr:
+        return _cerr
 
     want = (statement or "").strip().upper()
     if want and want not in _FSFULL_ORDER:
@@ -8926,6 +9080,9 @@ def get_audit_opinion_text(
     _yerr = _validate_year(year)
     if _yerr:
         return _yerr
+    _cerr = _validate_choice('scope', scope, _AUDIT_SCOPES)
+    if _cerr:
+        return _cerr
     resolved = resolve_corp(company_name, api_key)
     if not resolved:
         return f"❌ '{company_name}'에 해당하는 기업을 DART에서 찾을 수 없습니다."
