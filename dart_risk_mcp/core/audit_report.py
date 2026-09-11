@@ -40,6 +40,8 @@ __all__ = [
     "split_audit_report",
     "search_notes",
     "split_audit_opinion",
+    "build_fs_account_index",
+    "lookup_fs_account",
 ]
 
 # 재무제표 표제. 자간이 벌어진 형태(「연 결 재 무 상 태 표」)로 오므로
@@ -528,3 +530,193 @@ def _paragraph_around(text: str, pos: int) -> str:
     hi = text.find("\n\n", pos)
     hi = len(text) if hi < 0 else hi
     return text[lo:hi].strip()
+
+
+# ── 원문 계정명 대조 (v1.26.0) ─────────────────────────────────────────
+#
+# `fnlttSinglAcntAll`은 회사가 제출한 XBRL의 **표준 태그**에 맞춘 계정명을 준다.
+# 회사가 어느 태그에 실었느냐에 따라 원문과 어긋난다 — 실측 CSA 코스믹 2025에서
+# API의 「파생상품평가손익 -8,969,358」은 원문 연결포괄손익계산서의
+# 「지분법자본변동 (8,969,358)」이고(블루원(주) 관계기업투자에서 나온 값),
+# 「파생상품평가손익」은 **문서 전체에 0건**이다.
+#
+# 규모(2026-09-12 · 8개사 · API 행 1,444개): 대조 성공 76.9%(같음 50.6% ·
+# **다름 26.4%**) · 모호 9.1% · 못찾음 14.0%. 네 개 중 하나가 다르다.
+#
+# ⚠ 숫자는 손대지 않는다. 여기서 바꾸는 것은 **이름뿐**이다.
+
+# 표 위의 단위 표기. 긴 것부터 봐야 「백만원」이 「원」에 먼저 걸리지 않는다.
+_FS_UNITS = (("십억원", 1_000_000_000), ("억원", 100_000_000),
+             ("백만원", 1_000_000), ("천원", 1_000), ("원", 1))
+_FS_UNIT_RE = re.compile(r"단위\s*[:：]\s*([가-힣]+)")
+
+# 재무제표 표제 → sj_div. 「손익계산서」는 포괄손익계산서의 접미이기도 해
+# 순서대로 본다(긴 것 먼저).
+_FS_DIV_KEYS = (
+    ("CIS", ("포괄손익계산서",)),
+    ("SCE", ("자본변동표",)),
+    ("CF", ("현금흐름표",)),
+    ("BS", ("재무상태표", "대차대조표")),
+    ("IS", ("손익계산서",)),
+)
+# 손익계산서를 따로 내지 않는 회사가 많다 — 서로 폴백한다.
+_FS_DIV_FALLBACK = {"IS": "CIS", "CIS": "IS"}
+
+# 번호 접두. ⚠ 로마숫자를 **라틴 대문자**로 적는 회사가 많다(「I. 유동자산」 —
+# U+2160이 아니라 ASCII I). 그걸 빼면 실측 「다름」이 부풀려진다.
+_FS_BULLET_RE = re.compile(r"^[\-–—▶▷►○●■□*]+")
+_FS_ORD_RE = re.compile(
+    r"^\s*(?:[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+|[IVX]{1,4}|\d{1,2}|[가나다라마바사아자차]|[①-⑳])\s*[.)]\s*")
+# 날짜처럼 생긴 것은 계정명이 아니다 — 실측 삼성전자 자본총계 402조가
+# 자본변동표의 「2025.12.31(당기말)」 행에 물렸다.
+# ⚠ 구분자 뒤에 **공백이 오는 표기**를 함께 본다 — 실측 두산 자본변동표는
+#   「2025. 1. 1.(당기초)」라 붙여 쓴 꼴만 보던 옛 가드를 통과했고, API 「기초」가
+#   그 날짜 행에 물려 계정명이 시점 표시로 바뀌었다.
+#   한글 표기도 실재한다 — 실측 STX 자본변동표 「2025년 1월 1일(당기초)」 32건
+#   (8개사 인덱스 2,659행 기준).
+_FS_DATEISH_RE = re.compile(
+    r"\d{4}\s*[.\-/]\s*\d{1,2}\s*[.\-/]\s*\d{1,2}"
+    r"|\d{4}\s*년\s*\d{1,2}\s*월")
+_FS_HANGUL_RE = re.compile(r"[가-힣A-Za-z]")
+
+
+def _fs_norm(name: str) -> str:
+    """계정명 비교용 정규화 — 공백·번호 접두·불릿·괄호·가운뎃점을 접는다.
+
+    ⚠ 접는 것은 **비교할 때뿐**이고 화면에는 원문 표기를 그대로 낸다.
+    """
+    t = re.sub(r"\s+", "", name or "")
+    prev = None
+    while prev != t:
+        prev = t
+        t = _FS_ORD_RE.sub("", t)
+        # 들여쓰기 불릿은 계정명의 일부가 아니다 — 실측 두산 자본변동표가
+        # 하위 항목을 「- 당기순이익」으로 적어 「다름」이 부풀었다.
+        t = _FS_BULLET_RE.sub("", t)
+    for ch in "()（）·ㆍ,":
+        t = t.replace(ch, "")
+    return t
+
+
+def _fs_amounts(cells: list[str]) -> list[int]:
+    """셀에서 금액을 읽는다. **괄호는 음수**다."""
+    out = []
+    for c in cells:
+        t = (c or "").strip()
+        neg = t.startswith("(") and t.endswith(")")
+        if neg:
+            t = t[1:-1]
+        t = t.replace(",", "").replace("원", "").strip()
+        if re.fullmatch(r"-?\d+", t) and len(t.lstrip("-")) >= 2:
+            v = int(t)
+            out.append(-v if neg else v)
+    return out
+
+
+def _fs_is_account_name(name: str) -> bool:
+    """계정명으로 볼 만한가 — 날짜·숫자 덩어리는 뺀다."""
+    t = (name or "").strip()
+    if not t or len(t) > 60:
+        return False
+    if _FS_DATEISH_RE.search(t):
+        return False
+    return bool(_FS_HANGUL_RE.search(t))
+
+
+def build_fs_account_index(fs_text: str) -> dict:
+    """감사보고서 **재무제표 구간**에서 {재무제표: {금액: 계정명들}}을 만든다.
+
+    Returns:
+        `{"unit": (표기, 배수), "by_div": {sj_div: {amount: [name, ...]}}}`
+
+    ⚠ **재무제표별로** 나눈다. 전역으로 모으면 엉뚱한 표의 행에 붙고 모호가
+    늘어난다(실측 CSA 코스믹 모호 16 → 41).
+    """
+    text = fs_text or ""
+    unit_name, unit_mul = "원", 1
+    m = _FS_UNIT_RE.search(text[:5000])
+    if m:
+        for nm, mul in _FS_UNITS:
+            if m.group(1).endswith(nm):
+                unit_name, unit_mul = nm, mul
+                break
+
+    lines = text.split("\n")
+    # 표제 행(단일 셀)로 구간을 가른다
+    marks: list[tuple[int, str]] = []
+    for i, ln in enumerate(lines):
+        c = _cells(ln)
+        if not c or len(c) != 1:
+            continue
+        flat = _flat(c[0])
+        if len(flat) > 24:
+            continue
+        for div, keys in _FS_DIV_KEYS:
+            if any(flat.endswith(k) for k in keys):
+                marks.append((i, div))
+                break
+
+    by_div: dict[str, dict[int, list[str]]] = {}
+    for idx, (start_i, div) in enumerate(marks):
+        end_i = marks[idx + 1][0] if idx + 1 < len(marks) else len(lines)
+        bucket = by_div.setdefault(div, {})
+        for ln in lines[start_i:end_i]:
+            c = _cells(ln)
+            if not c or len(c) < 2:
+                continue
+            name = " ".join((c[0] or "").split())
+            if not _fs_is_account_name(name):
+                continue
+            for v in _fs_amounts(c[1:]):
+                names = bucket.setdefault(v * unit_mul, [])
+                if name not in names:
+                    names.append(name)
+    return {"unit": (unit_name, unit_mul), "by_div": by_div}
+
+
+def lookup_fs_account(index: dict, sj_div: str, amount: int,
+                      api_name: str) -> dict:
+    """금액으로 원문 계정명을 찾는다.
+
+    Returns:
+        `{"name": 원문 계정명 or "", "status": same|diff|ambiguous|missing,
+          "candidates": [후보들]}`
+
+    ⚠ **금액 0은 찾지 않는다** — 표에 흔해 아무 데나 물린다.
+    ⚠ 같은 금액에 **정규화 후에도 다른 이름이 둘 이상**이면 붙이지 않고
+      후보만 돌려준다. 틀린 이름을 조용히 붙이는 것이 그냥 두는 것보다 나쁘다.
+    """
+    miss = {"name": "", "status": "missing", "candidates": []}
+    if not amount:
+        return miss
+    by_div = (index or {}).get("by_div") or {}
+    # ⚠ 폴백은 **금액 단위**로 한다. 맵 단위로 하면 CIS 맵이 비어 있지 않은
+    #   순간 IS 표를 아예 안 본다 — 실측 CSA 코스믹은 매출원가·판매비와관리비가
+    #   손익계산서 쪽에 있어 「대조 실패」가 10/26까지 올라갔다.
+    # ⚠ 부호 규약이 서로 다르다. 원문 손익계산서는 비용을 **괄호(차감 표시)**로
+    #   적고 API는 매출원가·판관비·금융비용을 **양수**로 준다 — 같은 사실인데
+    #   부호를 그대로 대조하면 원문에 버젓이 있는 줄을 「대조 실패」라 적는다
+    #   (실측 CSA 코스믹 26행 중 확인 10행 → 세 줄이 이 이유로 샜다).
+    #   **정확 일치가 먼저**이고, 그 부호로 못 찾을 때만 뒤집어 본다 — 같은
+    #   절댓값의 +행과 -행이 서로 다른 계정일 수 있다.
+    found: list[str] = []
+    for want in (amount, -amount):
+        for div in (sj_div, _FS_DIV_FALLBACK.get(sj_div)):
+            if not div:
+                continue
+            got = (by_div.get(div) or {}).get(want)
+            if got:
+                found = got
+                break
+        if found:
+            break
+    if not found:
+        return miss
+    if len({_fs_norm(n) for n in found}) > 1:
+        return {"name": "", "status": "ambiguous", "candidates": list(found)}
+    # 정규화가 같은 것들 중 **가장 짧은 표기**를 대표로 — 번호 접두가 붙은
+    # 것과 안 붙은 것이 함께 있으면 짧은 쪽이 읽기 쉽다.
+    best = sorted(found, key=len)[0]
+    same = _fs_norm(best) == _fs_norm(api_name)
+    return {"name": best, "status": "same" if same else "diff",
+            "candidates": list(found)}

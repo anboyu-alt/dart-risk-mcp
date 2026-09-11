@@ -185,6 +185,23 @@ class TestFactsAreKept(unittest.TestCase):
         for banned in ("매우위험", "고위험", "위험도", "점수", "등급"):
             self.assertNotIn(banned, out)
 
+    def test_계정명이_공시_원문_그대로라고_단정하지_않는다(self):
+        """DART 재무 API는 회사가 제출한 **XBRL 표준 태그**의 이름을 준다.
+
+        실측 8개사 2,144행에서 15.7%가 감사보고서 표기와 다르다 — CSA 코스믹
+        「지분법자본변동」이 API에서는 「파생상품평가손익」으로 온다. 그것을
+        「원문 그대로」라 적으면 기사에 회사가 쓰지 않은 계정명이 실린다.
+        `get_financial_statements_full`의 꼬리말을 고칠 때 같은 문구가 여기에도
+        있었다.
+        """
+        out = _run(["갑회사", "을회사"], "2022", "2024")
+        self.assertNotIn("계정명은 DART 응답 원문 그대로", out)
+        self.assertNotIn("금액·계정명은 DART 응답 원문 그대로", out)
+
+    def test_원문_계정명이_필요하면_어디로_갈지_알려준다(self):
+        out = _run(["갑회사", "을회사"], "2022", "2024")
+        self.assertIn("get_financial_statements_full", out)
+
 
 if __name__ == "__main__":
     unittest.main()
