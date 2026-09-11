@@ -52,6 +52,7 @@ from .core import (
     build_note_summary,
     scan_note_titles,
     fetch_audit_report_text,
+    _AUDIT_DOC_KINDS,
     fetch_cb_issue_decision,
     fetch_bw_issue_decision,
     fetch_eb_issue_decision,
@@ -8767,6 +8768,7 @@ def list_report_revisions(
 #   (올품 20260407001504, 제출인 삼일회계법인). 두 경로를 다 다룬다.
 _AUDIT_TEXT_LOOKBACK = 1100
 _AUDIT_SECTION_MAX = 3000     # 절 하나당 인용 상한
+_AUDIT_MAX_CANDIDATES = 5     # 판본을 이만큼까지 훑는다
 
 
 def _audit_quote(body: str) -> list[str]:
@@ -8821,23 +8823,45 @@ def get_audit_opinion_text(
     want_kind = "감사보고서" if scope == "separate" else "연결감사보고서"
 
     # ① 독립 감사보고서 공시 → ② 사업보고서 첨부 순으로 찾는다.
-    rcept, source, filer = "", "", ""
+    #
+    # ⚠ **정정본 ZIP에는 감사보고서 첨부가 없다.** 실측(2026-09-11):
+    #     카카오 20250318001297 사업보고서        → 사업보고서·감사보고서·연결감사보고서
+    #     카카오 20250324000901 [기재정정]사업보고서 → 사업보고서 **하나뿐**
+    #   최신 판본만 보고 멈추면 사업보고서 본문을 읽게 되고, 그 본문의
+    #   감사의견 요약 표(「| 계속기업 관련중요한 불확실성 |」) 때문에
+    #   **계속기업이 오탐된다**. 그래서 판본을 최신→과거로 훑으며 실제로
+    #   감사보고서가 든 ZIP을 고른다(ZIP은 캐시되므로 재조회 비용이 없다).
+    candidates: list[tuple[str, str, str]] = []   # (rcept_no, source, filer)
     reports = find_audit_reports(corp_code, api_key, year=year, scope=scope,
                                  lookback_days=_AUDIT_TEXT_LOOKBACK) or []
-    if reports:
-        rcept = reports[0]["rcept_no"]
-        source = f"{reports[0]['report_nm']} 공시"
-        filer = reports[0].get("flr_nm", "")
-    if not rcept:
-        rows = fetch_company_disclosures(corp_code, api_key,
-                                         lookback_days=_AUDIT_TEXT_LOOKBACK) or []
-        for r in rows:
-            nm = str(r.get("report_nm") or "")
-            if "사업보고서" in nm and f"({year}." in nm:
-                rcept, source = str(r.get("rcept_no") or ""), f"{nm} 첨부"
-                filer = str(r.get("flr_nm") or "")
-                break
-    if not rcept:
+    for r in reports:
+        candidates.append((r["rcept_no"], f"{r['report_nm']} 공시",
+                           r.get("flr_nm", "")))
+    rows = fetch_company_disclosures(corp_code, api_key,
+                                     lookback_days=_AUDIT_TEXT_LOOKBACK) or []
+    for r in rows:
+        nm = str(r.get("report_nm") or "")
+        if "사업보고서" in nm and f"({year}." in nm:
+            candidates.append((str(r.get("rcept_no") or ""), f"{nm} 첨부",
+                               str(r.get("flr_nm") or "")))
+
+    rcept, source, filer, text, kind = "", "", "", "", ""
+    tried: list[str] = []
+    for cand_rcept, cand_source, cand_filer in candidates[:_AUDIT_MAX_CANDIDATES]:
+        if not cand_rcept:
+            continue
+        tried.append(cand_rcept)
+        cand_text = fetch_audit_report_text(cand_rcept, api_key, prefer=want_kind)
+        cand_kind = cand_text.split("\n", 1)[0].strip() if cand_text else ""
+        if cand_kind in _AUDIT_DOC_KINDS:
+            rcept, source, filer = cand_rcept, cand_source, cand_filer
+            text, kind = cand_text, cand_kind
+            break
+        if cand_text and not rcept:
+            # 감사보고서가 아닌 문서 — 판정하지 않되 무엇을 봤는지는 남긴다
+            rcept, source, filer = cand_rcept, cand_source, cand_filer
+            text, kind = cand_text, cand_kind
+    if not candidates:
         return (f"🔎 **{corp_name}** ({stock_code or corp_code}) — {year} 사업연도 "
                 f"{want_kind}를 찾지 못했습니다.\n\n"
                 "감사보고서는 상장사의 경우 **사업보고서 ZIP에 첨부**돼 오고"
@@ -8846,13 +8870,18 @@ def get_audit_opinion_text(
                 "있습니다 — 자료가 없다는 뜻이 아닙니다. "
                 "`list_report_revisions`로 그 해 보고서가 있는지 먼저 보세요.")
 
-    text = fetch_audit_report_text(rcept, api_key, prefer=want_kind)
+    # ⚠ 머리글은 **실제로 읽은 문서**를 적는다. 연결을 찾다가 별도밖에 없어
+    #   그쪽을 읽었는데 「연결감사보고서」라 적으면 화면이 거짓을 말한다
+    #   (실측 한농화성·아틀라스링크는 사업보고서 ZIP에 별도 감사보고서만 있다).
+    head_kind = kind if kind in _AUDIT_DOC_KINDS else want_kind
     lines = [
         f"🧾 **{corp_name}** ({stock_code or corp_code}) — {year} 사업연도 "
-        f"{want_kind}",
+        f"{head_kind}",
         f"접수번호 {rcept} · 경로 {source}"
         + (f" · 제출인 {filer}" if filer else ""),
     ]
+    if kind in _AUDIT_DOC_KINDS and kind != want_kind:
+        lines.append(f"ℹ️ 요청한 「{want_kind}」가 없어 **「{kind}」**를 읽었습니다.")
     if not text:
         lines += [
             "",
@@ -8862,9 +8891,26 @@ def get_audit_opinion_text(
         ]
         return "\n".join(lines) + "\n"
 
+    # ⚠ **감사보고서가 아닌 문서로 절을 판정하지 않는다.** 정정본 ZIP에는
+    #   첨부가 없어 사업보고서 본문이 돌아오는데, 그 본문에는 감사의견 요약
+    #   표(「| 계속기업 관련중요한 불확실성 |」)가 있어 계속기업이 오탐된다
+    #   (실측 카카오·다산디엠씨). 읽은 것을 밝히고 판정은 멈춘다.
+    if kind not in _AUDIT_DOC_KINDS:
+        lines += [
+            "",
+            f"🔎 이 접수의 ZIP에는 **감사보고서가 첨부돼 있지 않습니다** "
+            f"(문서 종류 「{kind or '알 수 없음'}」 {len(text):,}자). "
+            "각 절의 유무는 **확인하지 못했습니다** — 없다는 뜻이 아닙니다.",
+            "",
+            f"훑어본 접수: {' · '.join(tried)}. "
+            "정정본에는 감사보고서 첨부가 빠지는 경우가 있습니다 — "
+            f"`list_report_revisions(\"{corp_name}\", \"{year}\")`로 판본을 보고 "
+            "원본 접수번호를 골라 `get_disclosure_document`로 직접 여세요.",
+        ]
+        return "\n".join(lines).rstrip() + "\n"
+
     s = split_audit_opinion(text)
-    kind_line = text.split("\n", 1)[0].strip()
-    lines.append(f"원문 {len(text):,}자 · ZIP 안 문서 종류 「{kind_line}」")
+    lines.append(f"원문 {len(text):,}자 · ZIP 안 문서 종류 「{kind}」")
     lines.append("")
 
     gc = s["going_concern"]

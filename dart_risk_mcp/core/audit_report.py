@@ -367,7 +367,18 @@ _OTHER_HEADS_F = _folded(_OTHER_HEADS)
 
 
 def _is_heading(line: str, wanted) -> str:
-    """줄 전체가 절 제목이면 그 제목을 돌려준다.
+    """줄이 절 제목으로 **시작**하면 그 제목을 돌려준다.
+
+    ⚠ 줄 **전체**가 제목일 것을 요구하면 안 된다 — 제목이 본문과 붙어 오는
+    서식이 있다(실측 아틀라스링크·한농화성):
+
+        재무제표에 대한 경영진과 지배기구의 책임경영진은 한국채택국제회계기준에 …
+        감사의견우리는 주식회사 …의 재무제표를 감사하였습니다.
+
+    그러면 의견 블록의 **끝을 못 찾아** 상용문구가 블록 안에 들어오고
+    계속기업이 오탐된다(주석 제목에서 이미 겪은 것과 같은 현상).
+
+    ⚠ **긴 제목을 먼저 본다** — 「감사의견근거」가 「감사의견」으로 시작한다.
 
     표 행(`| … |`)은 목차이므로 제외한다 — 「독립된 감사인의 감사보고서」는
     목차에도 나오고 본문에도 나온다(실측 offset 244 vs 841).
@@ -375,7 +386,12 @@ def _is_heading(line: str, wanted) -> str:
     if line.lstrip().startswith("|"):
         return ""
     flat = _flat(line)
-    return flat if flat in wanted else ""
+    if not flat:
+        return ""
+    for w in sorted(wanted, key=len, reverse=True):
+        if flat.startswith(w):
+            return w
+    return ""
 
 
 def _section(text: str, start: int, ends: list[int]) -> str:
@@ -431,19 +447,25 @@ def split_audit_opinion(text: str) -> dict:
     out["opinion_block_start"], out["opinion_block_end"] = start, end
 
     # ③ 블록 안의 절 제목을 모은다
+    # 절 제목 후보. ⚠ 제목이 본문과 붙어 오므로 **접두 일치**로 찾고,
+    #   「감사의견근거」가 「감사의견」으로 시작하니 **긴 것을 먼저** 본다.
+    _basis_f = frozenset(o + _BASIS_SUFFIX for o in _OPINION_HEADS_F)
+    _all_heads = (_basis_f | _OPINION_HEADS_F | _GC_HEADS_F
+                  | _EMPHASIS_HEADS_F | _KAM_HEADS_F | _OTHER_HEADS_F)
     heads: list[tuple[int, str]] = []
     for i, ln in enumerate(lines):
         if not (start <= offs[i] < end):
             continue
-        flat = _flat(ln)
-        if ln.lstrip().startswith("|") or not flat or len(flat) > 24:
+        hit = _is_heading(ln, _all_heads)
+        if not hit:
             continue
-        if (flat in _OPINION_HEADS_F or flat in _GC_HEADS_F
-                or flat in _EMPHASIS_HEADS_F or flat in _KAM_HEADS_F
-                or flat in _OTHER_HEADS_F
-                or (flat.endswith(_BASIS_SUFFIX)
-                    and flat[:-len(_BASIS_SUFFIX)] in _OPINION_HEADS_F)):
-            heads.append((offs[i], flat))
+        # ⚠ 같은 제목이 **연달아** 오는 서식이 있다(실측 CSA 코스믹:
+        #   「핵심감사사항」 다음 줄이 「핵심감사사항은 우리의 전문가적 …」).
+        #   접두 일치라 둘 다 걸리는데, 그대로 두면 첫 절이 **6자로 잘린다**.
+        #   연속 중복은 앞의 것만 남긴다.
+        if heads and heads[-1][1] == hit:
+            continue
+        heads.append((offs[i], hit))
     bounds = [o for o, _ in heads] + [end]
 
     def _take(names, suffix: bool = False) -> dict:
@@ -453,8 +475,24 @@ def split_audit_opinion(text: str) -> dict:
                 and flat[:-len(_BASIS_SUFFIX)] in names)
             if hit:
                 body = _section(text, off, bounds)
+                # 제목이 본문과 붙어 있으면(`감사의견우리는 …`) 제목 글자만
+                # 떼어 낸다. 공백이 섞인 표기도 있어 글자 수로 자르지 않고
+                # 접두를 한 번 더 확인한다.
+                stripped = body.lstrip()
+                cut = len(body) - len(stripped)
+                head_len = 0
+                probe = _flat(stripped[:len(flat) + 12])
+                if probe.startswith(flat):
+                    seen = 0
+                    for idx, ch in enumerate(stripped):
+                        if not ch.isspace():
+                            seen += 1
+                        if seen == len(flat):
+                            head_len = idx + 1
+                            break
+                out_text = stripped[head_len:].strip() if head_len else stripped
                 return {"present": True, "heading": flat,
-                        "text": body[len(flat):].strip() or body}
+                        "text": out_text or body.strip()}
         return dict(empty)
 
     out["basis"] = _take(_OPINION_HEADS_F, suffix=True)
