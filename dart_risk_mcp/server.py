@@ -60,6 +60,7 @@ from .core import (
     corp_name_by_code,
     find_note_headings,
     split_audit_report,
+    split_audit_opinion,
     search_notes,
     extract_rights_offering_investors,
     fetch_audit_opinion_history,
@@ -6049,6 +6050,11 @@ def track_insider_trading(company_name: str, lookback_years: int = 2) -> str:
 def get_audit_opinion_history(company_name: str, lookback_years: int = 5) -> str:
     """감사의견·감사인 교체·비감사용역 이력을 조회합니다.
 
+    연도별 **의견 결과와 감사인 교체**를 봅니다. 감사인이 그 의견에 무엇이라고
+    썼는지(의견근거·계속기업 관련 불확실성·강조사항·핵심감사사항)는 구조화
+    응답에 없고 원문에 있습니다 — **`get_audit_opinion_text`**가 그 문장을
+    원문 그대로 인용합니다.
+
     DART OpenAPI 3개 엔드포인트(`accnutAdtorNmNdAdtOpinion`,
     `adtServcCnclsSttus`, `accnutAdtorNonAdtServcCnclsSttus`)를 결합해
     연도별 감사의견·감사인·보수 경고 신호를 한글 서술로 반환합니다.
@@ -8723,6 +8729,169 @@ def list_report_revisions(
         "📎 정정본은 나중에 제출된 판본이라는 사실일 뿐입니다 — 앞 판본에 문제가 "
         "있었다는 뜻도, 뒤 판본이 더 맞다는 뜻도 아닙니다. 무엇을 쓸지는 원문을 "
         "보고 정하세요."
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+
+# ── 감사의견 절 읽기 (v1.25.0) ─────────────────────────────────────────
+#
+# `get_audit_opinion_history`는 year·opinion·auditor 셋뿐이라 「적정의견」이라는
+# 결과만 나오고 그 의견에 딸린 강조사항·계속기업 문단은 빠진다. 상장폐지로 가는
+# 회사 상당수가 「적정의견 + 계속기업 불확실성」 상태를 몇 해 거치는데 그 구간이
+# 통째로 비어 있었다.
+#
+# ⚠ **상장사는 감사보고서가 독립 공시로 오지 않는다.** 실측(2026-09-11 · 상장
+#   13곳) **전부** 사업보고서 ZIP에 첨부돼 있다. 비상장은 반대로 독립 공시다
+#   (올품 20260407001504, 제출인 삼일회계법인). 두 경로를 다 다룬다.
+_AUDIT_TEXT_LOOKBACK = 1100
+_AUDIT_SECTION_MAX = 3000     # 절 하나당 인용 상한
+
+
+def _audit_quote(body: str) -> list[str]:
+    """절 본문을 원문 그대로 인용한다. 요약하지 않는다."""
+    body = (body or "").strip()
+    if not body:
+        return []
+    cut = body[:_AUDIT_SECTION_MAX]
+    out = ["", cut]
+    if len(body) > len(cut):
+        out.append(f"…(이 절 {len(body):,}자 중 {len(cut):,}자 표시 · "
+                   f"{len(body) - len(cut):,}자 생략)")
+    return out
+
+
+@mcp.tool()
+def get_audit_opinion_text(
+    company_name: str,
+    year: str = "",
+    scope: str = "consolidated",
+) -> str:
+    """감사보고서 원문에서 **감사인이 쓴 문장**을 그대로 읽는다.
+
+    감사의견·의견근거·계속기업 관련 불확실성·강조사항·핵심감사사항·기타사항을
+    **원문 그대로 인용**한다. 연도별 의견과 감사인 교체 이력은
+    `get_audit_opinion_history`가 낸다 — 이력·교체는 그쪽, **감사인이 뭐라고
+    썼는지는 이 도구**다.
+
+    Args:
+        company_name: 기업명 또는 종목코드 6자리.
+        year: 사업연도 4자리. 빈 값이면 직전 연도.
+        scope: "consolidated"(연결감사보고서) | "separate"(감사보고서).
+
+    Returns:
+        절별 유무 표와 원문 인용. 판정·점수·등급은 붙이지 않는다 —
+        계속기업 절이 있다는 **사실**과 그 문단을 보여줄 뿐이다.
+    """
+    api_key = _api_key()
+    if not api_key:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+    _yerr = _validate_year(year)
+    if _yerr:
+        return _yerr
+    resolved = resolve_corp(company_name, api_key)
+    if not resolved:
+        return f"❌ '{company_name}'에 해당하는 기업을 DART에서 찾을 수 없습니다."
+    corp_name, info = resolved
+    corp_code = info["corp_code"]
+    stock_code = info.get("stock_code", "")
+    if not year:
+        year = str(datetime.now().year - 1)
+    want_kind = "감사보고서" if scope == "separate" else "연결감사보고서"
+
+    # ① 독립 감사보고서 공시 → ② 사업보고서 첨부 순으로 찾는다.
+    rcept, source, filer = "", "", ""
+    reports = find_audit_reports(corp_code, api_key, year=year, scope=scope,
+                                 lookback_days=_AUDIT_TEXT_LOOKBACK) or []
+    if reports:
+        rcept = reports[0]["rcept_no"]
+        source = f"{reports[0]['report_nm']} 공시"
+        filer = reports[0].get("flr_nm", "")
+    if not rcept:
+        rows = fetch_company_disclosures(corp_code, api_key,
+                                         lookback_days=_AUDIT_TEXT_LOOKBACK) or []
+        for r in rows:
+            nm = str(r.get("report_nm") or "")
+            if "사업보고서" in nm and f"({year}." in nm:
+                rcept, source = str(r.get("rcept_no") or ""), f"{nm} 첨부"
+                filer = str(r.get("flr_nm") or "")
+                break
+    if not rcept:
+        return (f"🔎 **{corp_name}** ({stock_code or corp_code}) — {year} 사업연도 "
+                f"{want_kind}를 찾지 못했습니다.\n\n"
+                "감사보고서는 상장사의 경우 **사업보고서 ZIP에 첨부**돼 오고"
+                "(실측 상장 13곳 전부), 비상장은 독립 공시로 옵니다. "
+                "조회 창(최근 1,100일) 안에 둘 다 없거나 아직 제출 전일 수 "
+                "있습니다 — 자료가 없다는 뜻이 아닙니다. "
+                "`list_report_revisions`로 그 해 보고서가 있는지 먼저 보세요.")
+
+    text = fetch_audit_report_text(rcept, api_key, prefer=want_kind)
+    lines = [
+        f"🧾 **{corp_name}** ({stock_code or corp_code}) — {year} 사업연도 "
+        f"{want_kind}",
+        f"접수번호 {rcept} · 경로 {source}"
+        + (f" · 제출인 {filer}" if filer else ""),
+    ]
+    if not text:
+        lines += [
+            "",
+            "❌ 원문을 받지 못했습니다 — **자료가 없다는 뜻이 아니라 조회에 "
+            "실패했다는 뜻**입니다. 각 절의 유무는 **확인 불가**입니다. "
+            "잠시 후 다시 시도하세요.",
+        ]
+        return "\n".join(lines) + "\n"
+
+    s = split_audit_opinion(text)
+    kind_line = text.split("\n", 1)[0].strip()
+    lines.append(f"원문 {len(text):,}자 · ZIP 안 문서 종류 「{kind_line}」")
+    lines.append("")
+
+    gc = s["going_concern"]
+    lines.append("| 절 | 이 보고서에 |")
+    lines.append("|---|---|")
+    for label, key in (("감사의견", "opinion"), ("의견근거", "basis"),
+                       ("강조사항", "emphasis"), ("핵심감사사항", "kam"),
+                       ("기타사항", "other_matters")):
+        sec = s[key]
+        mark = f"있음 — 「{sec['heading']}」" if sec["present"] else "없음"
+        lines.append(f"| {label} | {mark} |")
+    if gc["present"]:
+        _where = ("별도 절 「" + gc["found_in"] + "」" if gc["own_section"]
+                  else f"절 제목은 없고 「{gc['found_in'] or '의견 블록'}」 안에 있음")
+        lines.append(f"| 계속기업 관련 | 있음 — {_where} |")
+    else:
+        lines.append("| 계속기업 관련 | 없음 |")
+    lines.append("")
+    lines.append(
+        "ℹ️ 「없음」은 **이 보고서에 그 절이 없다**는 뜻입니다(조회는 됐습니다). "
+        "⚠ 「계속기업」 낱말은 경영진·감사인의 책임 단락에 **정형 문구로 항상** "
+        "나오므로 그 구간은 세지 않았습니다 — 감사의견 블록 안만 봅니다."
+    )
+
+    for label, key in (("감사의견", "opinion"), ("의견근거", "basis")):
+        sec = s[key]
+        if sec["present"]:
+            lines.append("")
+            lines.append(f"━━ {sec['heading']} ━━")
+            lines += _audit_quote(sec["text"])
+    if gc["present"]:
+        lines.append("")
+        lines.append("━━ 계속기업 관련 ━━")
+        lines += _audit_quote(gc["text"])
+    for label, key in (("강조사항", "emphasis"), ("핵심감사사항", "kam"),
+                       ("기타사항", "other_matters")):
+        sec = s[key]
+        if sec["present"]:
+            lines.append("")
+            lines.append(f"━━ {sec['heading']} ━━")
+            lines += _audit_quote(sec["text"])
+
+    lines.append("")
+    lines.append(
+        "📎 위 문장은 감사보고서 **원문 그대로**입니다 — 요약하거나 바꿔 쓰지 "
+        "않았습니다. 연도별 의견 추이와 감사인 교체는 "
+        "`get_audit_opinion_history`, 주석 본문은 "
+        f"`search_notes_in_report(rcept_no=\"{rcept}\", terms=[…])`로 보세요."
     )
     return "\n".join(lines).rstrip() + "\n"
 
