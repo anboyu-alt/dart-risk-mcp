@@ -2,6 +2,41 @@
 
 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식 준수. 버전은 [SemVer](https://semver.org/lang/ko/).
 
+## [1.26.3] - 2026-09-12
+
+**감사보고서를 못 받은 것을 「없다」로 말하던 것.** v1.23.0에 들어온
+`find_audit_reports`가 CLAUDE.md 「오류 처리」 규칙 **밖에** 있었다.
+
+### Fixed
+
+- **조회 실패가 「감사보고서 없음」으로 보이던 것.** 상태를 버리는
+  `fetch_company_disclosures`를 써서 한도 초과(status 020)·점검 때도 빈 리스트를
+  돌려줬고, 그러면 세 도구(`get_unlisted_financials`·`get_audit_opinion_text`·
+  `get_financial_statements_full`의 계정명 대조 경로)가 「감사보고서를 찾지
+  못했습니다 — … **연결재무제표를 작성하지 않는 회사일 수 있습니다**」라
+  **회사에 대한 진술**을 했다. 형제 함수
+  `fetch_company_disclosures_with_status`가 이미 있었고 다른 도구들은 그쪽을
+  쓴다 — 이 경로만 빠져 있었다. 반환을 `FetchList`(list 상속 + `.fetch_failed`)로
+  바꿔 **하위 호환을 지키면서** 실패를 싣고, 두 도구가 기존
+  `_fetch_failed_notice`로 갈리게 했다. ⚠ **기존 테스트가 이 결함을 정당화하고
+  있었다** — 「**조회 실패는** 빈 목록이다」라는 이름의 테스트가 실제로는 **빈
+  응답**을 먹이고 있었다. 이름을 사실에 맞게 고치고(「자료가 없으면」) 진짜 실패
+  케이스를 따로 추가했다.
+
+### Changed
+
+- **골드 매트릭스에 v1.23.0~v1.26.0 도구 셋 추가**(`get_financial_statements_full`·
+  `list_report_revisions`·`get_audit_opinion_text`, 10개사 × 3 = 30건).
+  그전까지 새 도구 **여섯이 골드 매트릭스에 하나도 없어**
+  `test_golden_output_hygiene.py`가 그 출력을 한 번도 검사한 적이 없었다 —
+  v0.8.5 무판정 원칙의 기계적 방어가 그만큼 비어 있었다. 넣자마자 두 건이
+  걸렸다: ① `fs_div="CFS"` 같은 **인자 값**(사용자가 그대로 호출에 쓰므로 화면에
+  있어야 한다 — 근거와 함께 화이트리스트 등록) ② 감사보고서 인용문의
+  「Device Solutions(DS) 부문」(이 도구는 **원문 인용이 목적**이라 우리 어휘
+  규칙을 걸면 안 된다 — `_our_words_only`로 인용 블록을 걷어내 **모든** hygiene
+  검사에 일관 적용). 부수로 README·CLAUDE.md의 낡은 건수를 고쳤다(「6개사 ×
+  25개 도구 · 260건」 → 실제 **10개사 × 28개 도구 · 290건**).
+
 ## [1.26.2] - 2026-09-12
 
 **목록을 자를 때 최근을 버리던 것.** 2026-08-30 라운드는 「몇 건을 잘랐나」를
