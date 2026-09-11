@@ -36,7 +36,10 @@ ROWS = [
 
 
 def _find(**kw):
-    with patch.object(dc, "fetch_company_disclosures", return_value=list(ROWS)):
+    # 2026-09-12: `find_audit_reports`가 상태를 보는 판으로 바뀌었다 —
+    # 조회 실패와 「감사보고서 없음」을 가르기 위해서다.
+    with patch.object(dc, "fetch_company_disclosures_with_status",
+                      return_value=(list(ROWS), dc.FETCH_OK)):
         return dc.find_audit_reports("00455750", "k", **kw)
 
 
@@ -82,9 +85,23 @@ class TestFindAuditReports(unittest.TestCase):
     def test_알_수_없는_scope는_연결로_본다(self):
         self.assertEqual(_find(scope="이상한값")[0]["rcept_no"], "20260407001504")
 
-    def test_조회_실패는_빈_목록이다(self):
-        with patch.object(dc, "fetch_company_disclosures", return_value=[]):
-            self.assertEqual(dc.find_audit_reports("00455750", "k"), [])
+    def test_자료가_없으면_빈_목록이다(self):
+        """⚠ 이 테스트는 2026-09-12까지 「조회 실패는 빈 목록이다」라는 **이름**을
+        달고 있었지만 실제로 먹인 것은 **빈 응답**이었다 — 이름이 결함을
+        정당화하고 있었다. 둘은 다른 사실이고 아래 테스트가 그 차이를 잡는다.
+        """
+        with patch.object(dc, "fetch_company_disclosures_with_status",
+                          return_value=([], dc.FETCH_OK)):
+            got = dc.find_audit_reports("00455750", "k")
+        self.assertEqual(list(got), [])
+        self.assertFalse(getattr(got, "fetch_failed", False))
+
+    def test_조회_실패는_빈_목록과_구분된다(self):
+        with patch.object(dc, "fetch_company_disclosures_with_status",
+                          return_value=([], dc.FETCH_ERROR)):
+            got = dc.find_audit_reports("00455750", "k")
+        self.assertEqual(list(got), [])
+        self.assertTrue(getattr(got, "fetch_failed", False))
 
 
 if __name__ == "__main__":

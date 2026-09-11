@@ -396,12 +396,24 @@ def find_audit_reports(
     낱말 포함으로 고르면 연결이 먼저 잡힌다(실측 올품은 같은 날 두 건을 낸다).
 
     Returns:
-        `[{rcept_no, rcept_dt, report_nm, flr_nm, corp_cls, fiscal_year}]`
-        — 제출인(`flr_nm`)은 회계법인이고 `corp_cls`는 비상장이면 `E`다.
-        둘 다 화면이 사실로 쓰므로 버리지 않는다.
+        `FetchList[{rcept_no, rcept_dt, report_nm, flr_nm, corp_cls,
+        fiscal_year}]` — 제출인(`flr_nm`)은 회계법인이고 `corp_cls`는 비상장이면
+        `E`다. 둘 다 화면이 사실로 쓰므로 버리지 않는다.
+
+        ⚠ **조회 실패는 `.fetch_failed`로 알린다.** 옛 코드는 상태를 버리는
+        `fetch_company_disclosures`를 써서 한도 초과(status 020)·점검 때도 빈
+        리스트를 돌려줬고, 그러면 도구가 「감사보고서를 찾지 못했습니다 …
+        연결재무제표를 작성하지 않는 회사일 수 있습니다」라 **회사에 대한
+        진술**을 했다(CLAUDE.md 「오류 처리」가 못 박은 부류). 형제 함수
+        `fetch_company_disclosures_with_status`가 이미 있었고 다른 도구들은
+        그쪽을 쓴다 — 이 경로만 빠져 있었다. `FetchList`는 list를 상속하므로
+        기존 호출부는 그대로 동작한다.
     """
-    rows = fetch_company_disclosures(corp_code, api_key,
-                                     lookback_days=lookback_days) or []
+    rows, _status = fetch_company_disclosures_with_status(
+        corp_code, api_key, lookback_days=lookback_days)
+    if _status == FETCH_ERROR:
+        return FetchList(fetch_failed=True)
+    rows = rows or []
     want_consolidated = scope != "separate"
     out: list[dict] = []
     for r in rows:
@@ -424,7 +436,7 @@ def find_audit_reports(
             "fiscal_year": fy,
         })
     out.sort(key=lambda r: r["rcept_dt"], reverse=True)
-    return out
+    return FetchList(out)
 
 
 def corp_name_by_code(corp_code: str, api_key: str) -> str:
