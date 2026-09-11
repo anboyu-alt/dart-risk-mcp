@@ -11,11 +11,14 @@ Apache License 2.0 조건에 따라 이식·수정. (https://github.com/capitalp
 본문 전체가 아닌 제목에 대고 매칭하므로 넓은 키워드는 오탐이 커진다.
 """
 
+import re
+
 __all__ = [
     "NOTE_CATEGORIES",
     "classify_note_title",
     "summarize_note_sections",
     "build_note_summary",
+    "outline_note_tables",
 ]
 
 # key: (한글 라벨, 제목 매칭 키워드) — 키워드는 '포함' 매칭, 대소문자 무시(영문)
@@ -159,3 +162,122 @@ def build_note_summary(
         for key in _PRIORITY_ORDER
         if key in by_key
     ]
+
+
+# ── 주석 표 뼈대 (v1.25.0) ────────────────────────────────────────────
+#
+# 주석 목차에 「표 N개 · 각 표의 제목과 열 이름」을 덧붙여, 어느 주석을 열지
+# 고르는 데 쓴다. **금액은 넣지 않는다** — 이미 받아 둔 원문을 다시 파싱하는
+# 순수 함수라 추가 API 호출이 없다.
+#
+# ⚠ **2열 블록은 데이터 표가 아니다.** 실측(올품 주석 1·13·19)에서 마크다운
+#   표로 잡히는 것의 절반 이상이 단위 표기(`| | (단위: 천원) |`)·소제목
+#   (`| - 당기 | (단위: 천원) |`)·각주(`| (*1) | 설명… |`)다. 주석 19는 「표」가
+#   14개 잡히지만 데이터 표는 6개뿐이다. 데이터 표는 **열 3개 이상**이다.
+_NOTE_MIN_COLUMNS = 3
+_NOTE_UNIT_RE = re.compile(r"\(\s*단위\s*[:：][^)]*\)")
+
+
+def _note_is_separator(line: str) -> bool:
+    """마크다운 표의 구분선(`|---|---|`)인가."""
+    s = line.strip()
+    if not (s.startswith("|") and s.endswith("|")):
+        return False
+    body = s[1:-1].replace("|", "").replace("-", "").replace(":", "").strip()
+    return body == "" and "-" in s
+
+
+def _note_cells(line: str) -> list[str] | None:
+    s = line.strip()
+    if len(s) < 2 or not (s.startswith("|") and s.endswith("|")):
+        return None
+    return [c.strip() for c in s[1:-1].split("|")]
+
+
+def outline_note_tables(
+    text: str,
+    max_tables: int = 8,
+    max_columns: int = 12,
+) -> list[dict]:
+    """주석별 표 뼈대 — 표 제목·열 이름·행 수·단위 표기. **금액은 없다.**
+
+    Returns:
+        `[{note_no, title, structured, reason, tables_total, tables_omitted,
+           tables: [{caption, columns, columns_total, rows_n,
+                     unit_as_reported}]}]`
+
+    **행 이름은 담지 않는다** — 목차가 길어지면 목차의 의미가 없다. 표를
+    구조화하지 못하면 `structured=False`와 이유를 담고 **추측해 만들지 않는다**.
+    """
+    from .audit_report import find_note_headings
+
+    if not text:
+        return []
+    out: list[dict] = []
+    for note in find_note_headings(text):
+        body = text[note["offset"]:note["end"]]
+        lines = body.split("\n")
+        tables: list[dict] = []
+        skipped_narrow = 0
+        pending_unit, pending_caption = "", ""
+        i = 0
+        while i < len(lines):
+            cells = _note_cells(lines[i])
+            if cells is None:
+                t = lines[i].strip()
+                if t:
+                    pending_caption = t
+                i += 1
+                continue
+            # 표 머리 + 구분선이어야 데이터 표다
+            if i + 1 < len(lines) and _note_is_separator(lines[i + 1]):
+                j = i + 2
+                rows = 0
+                while j < len(lines) and _note_cells(lines[j]) is not None \
+                        and not _note_is_separator(lines[j]):
+                    rows += 1
+                    j += 1
+                if len(cells) >= _NOTE_MIN_COLUMNS:
+                    tables.append({
+                        "caption": pending_caption[:80],
+                        "columns": cells[:max_columns],
+                        "columns_total": len(cells),
+                        "rows_n": rows,
+                        "unit_as_reported": pending_unit,
+                    })
+                    pending_unit, pending_caption = "", ""
+                else:
+                    # ⚠ 좁은 블록을 그냥 버리면 **단위를 잃는다** — 실측에서
+                    #   `| | (단위: 천원) |`이 구분선까지 갖춘 2열 표로 온다.
+                    #   버리되 단위 표기는 건져 다음 표에 딸려 보낸다.
+                    m = _NOTE_UNIT_RE.search(lines[i])
+                    if m:
+                        pending_unit = m.group(0)
+                    skipped_narrow += 1
+                i = j
+                continue
+            # 구분선 없는 한 줄짜리 블록 — 단위·각주 운반체
+            m = _NOTE_UNIT_RE.search(lines[i])
+            if m:
+                pending_unit = m.group(0)
+            i += 1
+
+        total = len(tables)
+        shown = tables[:max_tables]
+        reason = ""
+        structured = True
+        if not tables:
+            structured = False
+            reason = (f"열 {_NOTE_MIN_COLUMNS}개 이상인 데이터 표를 찾지 못했습니다"
+                      f"(2열 블록 {skipped_narrow}개는 단위·각주로 보고 제외)."
+                      if skipped_narrow else "이 주석에 마크다운 표가 없습니다.")
+        out.append({
+            "note_no": note["no"],
+            "title": note["title"],
+            "structured": structured,
+            "reason": reason,
+            "tables_total": total,
+            "tables_omitted": max(0, total - len(shown)),
+            "tables": shown,
+        })
+    return out

@@ -51,14 +51,15 @@ def test_문서_도구_목록이_등록_도구와_같다():
     )
 
 
-def test_도구_개수가_서른둘이다():
-    """CLAUDE.md 곳곳이 "32개"라 적는다 — 늘리면 그 문장들도 함께 고쳐야 한다.
+def test_도구_개수가_서른셋이다():
+    """CLAUDE.md 곳곳이 "33개"라 적는다 — 늘리면 그 문장들도 함께 고쳐야 한다.
 
     2026-09-11 v1.23.0에서 27 → 30 (비상장 재무·주석 검색·메자닌 단건).
     2026-09-11 v1.24.0에서 30 → 32 (전체 계정 재무·판본 목록).
+    2026-09-11 v1.25.0에서 32 → 33 (감사의견 절 읽기).
     """
-    assert len(_HEADS) == 32
-    assert "MCP 도구 32개" in _DOC
+    assert len(_HEADS) == 33
+    assert "MCP 도구 33개" in _DOC
 
 
 @pytest.mark.parametrize("name,argtxt", _HEADS)

@@ -126,6 +126,7 @@ from .sector_policy import get_critical_items, get_induty_name
 from .notes import (
     NOTE_CATEGORIES,
     classify_note_title,
+    outline_note_tables,
     summarize_note_sections,
     build_note_summary,
 )
@@ -142,6 +143,7 @@ from .dart_client import (
 from .audit_report import (
     find_note_headings,
     search_notes,
+    split_audit_opinion,
     split_audit_report,
 )
 from .explain import (
@@ -225,6 +227,7 @@ __all__ = [
     "get_induty_name",
     "NOTE_CATEGORIES",
     "classify_note_title",
+    "outline_note_tables",
     "summarize_note_sections",
     "build_note_summary",
     "scan_note_titles",
@@ -237,6 +240,7 @@ __all__ = [
     "corp_name_by_code",
     "find_note_headings",
     "search_notes",
+    "split_audit_opinion",
     "split_audit_report",
     "detect_capital_churn",
     "CHURN_RESULT_MARKS",

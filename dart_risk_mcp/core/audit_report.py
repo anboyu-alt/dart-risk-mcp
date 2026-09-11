@@ -39,6 +39,7 @@ __all__ = [
     "find_note_headings",
     "split_audit_report",
     "search_notes",
+    "split_audit_opinion",
 ]
 
 # 재무제표 표제. 자간이 벌어진 형태(「연 결 재 무 상 태 표」)로 오므로
@@ -315,3 +316,177 @@ def search_notes(
         "scope": scope,
         "total_hits": sum(len(n["hits"]) for n in out),
     }
+
+
+# ── 감사의견 절 (v1.25.0) ─────────────────────────────────────────────
+#
+# ⚠ **「계속기업」은 상용문구에 항상 나온다.** 감사보고서의 「재무제표에 대한
+#   경영진과 지배기구의 책임」·「감사인의 책임」 단락이 계속기업 존속능력
+#   평가를 정형 문구로 언급한다. 낱말로 세면 모든 회사가 걸린다 — 실측
+#   CSA 코스믹은 문서 전체 7건인데 **의견 블록 안에는 0건**이고, 올품은 6건
+#   중 0건이다. 그래서 **경영진 책임 단락 앞**을 의견 블록으로 자른다.
+#
+# ⚠ **의견 제목이 「감사의견」이 아닐 수 있다.** 제이스코홀딩스 2025는
+#   「의견거절」·「의견거절근거」이고, 계속기업 불확실성이 **그 근거 단락
+#   안**에 있다(별도 절 제목 없음). 제목만 찾으면 이 회사를 놓친다.
+_OPINION_HEADS = ("감사의견", "한정의견", "부적정의견", "의견거절", "검토의견")
+_BASIS_SUFFIX = "근거"
+# 의견 블록의 끝 — 여기서부터는 정형 문구다.
+_OPINION_BLOCK_END = (
+    "재무제표에 대한 경영진과 지배기구의 책임",
+    "연결재무제표에 대한 경영진과 지배기구의 책임",
+    "재무제표에 대한 경영진과 지배기구의책임",
+    "재무제표감사에 대한 감사인의 책임",
+    "연결재무제표감사에 대한 감사인의 책임",
+)
+_OPINION_START = "독립된 감사인의 감사보고서"
+_GC_HEADS = ("계속기업 관련 중요한 불확실성", "계속기업관련 중요한 불확실성",
+             "계속기업 가정의 불확실성")
+_EMPHASIS_HEADS = ("강조사항",)
+_KAM_HEADS = ("핵심감사사항",)
+_OTHER_HEADS = ("기타사항", "그 밖의 사항")
+
+
+def _folded(words: tuple) -> frozenset:
+    """제목 상수를 **공백 접은 형태**로 바꾼다.
+
+    ⚠ 원문 제목은 「연결재무제표에 대한 경영진과 지배기구의 책임」처럼 띄어
+    쓰는데 비교는 `_flat`(공백 제거)로 한다. 상수를 그대로 두면 한 건도 안
+    맞는다(실제로 처음에 그랬다 — 의견 블록이 문서 전체가 됐다).
+    """
+    return frozenset(_flat(w) for w in words)
+
+
+_OPINION_HEADS_F = _folded(_OPINION_HEADS)
+_OPINION_BLOCK_END_F = _folded(_OPINION_BLOCK_END)
+_OPINION_START_F = _folded((_OPINION_START,))
+_GC_HEADS_F = _folded(_GC_HEADS)
+_EMPHASIS_HEADS_F = _folded(_EMPHASIS_HEADS)
+_KAM_HEADS_F = _folded(_KAM_HEADS)
+_OTHER_HEADS_F = _folded(_OTHER_HEADS)
+
+
+def _is_heading(line: str, wanted) -> str:
+    """줄 전체가 절 제목이면 그 제목을 돌려준다.
+
+    표 행(`| … |`)은 목차이므로 제외한다 — 「독립된 감사인의 감사보고서」는
+    목차에도 나오고 본문에도 나온다(실측 offset 244 vs 841).
+    """
+    if line.lstrip().startswith("|"):
+        return ""
+    flat = _flat(line)
+    return flat if flat in wanted else ""
+
+
+def _section(text: str, start: int, ends: list[int]) -> str:
+    later = [e for e in ends if e > start]
+    return text[start:min(later)].strip() if later else text[start:].strip()
+
+
+def split_audit_opinion(text: str) -> dict:
+    """감사보고서 원문에서 감사의견 관련 절을 잘라 낸다 (순수 함수).
+
+    Returns:
+        {
+          "opinion_block_start": int, "opinion_block_end": int,
+          "opinion":       {present, heading, text},   # 감사의견 / 의견거절 …
+          "basis":         {present, heading, text},   # …근거
+          "going_concern": {present, own_section, found_in, text},
+          "emphasis":      {present, heading, text},   # 강조사항
+          "kam":           {present, heading, text},   # 핵심감사사항
+          "other_matters": {present, heading, text},   # 기타사항
+        }
+
+    문장은 **원문 그대로** 담는다 — 요약하거나 바꿔 쓰지 않는다. 기사에 옮길 때
+    감사인이 실제로 쓴 문장이 필요하다. 판정·점수·등급은 붙이지 않는다.
+    """
+    empty = {"present": False, "heading": "", "text": ""}
+    out = {
+        "opinion_block_start": 0, "opinion_block_end": 0,
+        "opinion": dict(empty), "basis": dict(empty),
+        "going_concern": {"present": False, "own_section": False,
+                          "found_in": "", "text": ""},
+        "emphasis": dict(empty), "kam": dict(empty), "other_matters": dict(empty),
+    }
+    if not text:
+        return out
+    lines, offs = _line_offsets(text)
+
+    # ① 의견 블록의 시작 — 본문의 「독립된 감사인의 감사보고서」(목차 아님)
+    start = 0
+    for i, ln in enumerate(lines):
+        if _is_heading(ln, _OPINION_START_F):
+            start = offs[i]
+            break
+    # ② 끝 — 정형 문구 단락의 첫 등장
+    end = len(text)
+    for i, ln in enumerate(lines):
+        if offs[i] <= start:
+            continue
+        if _is_heading(ln, _OPINION_BLOCK_END_F):
+            end = offs[i]
+            break
+    if end <= start:
+        end = len(text)
+    out["opinion_block_start"], out["opinion_block_end"] = start, end
+
+    # ③ 블록 안의 절 제목을 모은다
+    heads: list[tuple[int, str]] = []
+    for i, ln in enumerate(lines):
+        if not (start <= offs[i] < end):
+            continue
+        flat = _flat(ln)
+        if ln.lstrip().startswith("|") or not flat or len(flat) > 24:
+            continue
+        if (flat in _OPINION_HEADS_F or flat in _GC_HEADS_F
+                or flat in _EMPHASIS_HEADS_F or flat in _KAM_HEADS_F
+                or flat in _OTHER_HEADS_F
+                or (flat.endswith(_BASIS_SUFFIX)
+                    and flat[:-len(_BASIS_SUFFIX)] in _OPINION_HEADS_F)):
+            heads.append((offs[i], flat))
+    bounds = [o for o, _ in heads] + [end]
+
+    def _take(names, suffix: bool = False) -> dict:
+        for off, flat in heads:
+            hit = flat in names if not suffix else (
+                flat.endswith(_BASIS_SUFFIX)
+                and flat[:-len(_BASIS_SUFFIX)] in names)
+            if hit:
+                body = _section(text, off, bounds)
+                return {"present": True, "heading": flat,
+                        "text": body[len(flat):].strip() or body}
+        return dict(empty)
+
+    out["basis"] = _take(_OPINION_HEADS_F, suffix=True)
+    out["opinion"] = _take(_OPINION_HEADS_F)
+    out["emphasis"] = _take(_EMPHASIS_HEADS_F)
+    out["kam"] = _take(_KAM_HEADS_F)
+    out["other_matters"] = _take(_OTHER_HEADS_F)
+
+    # ④ 계속기업 — 절 제목이 있으면 그 절, 없으면 **의견 블록 안**에서 찾는다.
+    #    블록 밖(경영진·감사인 책임)에만 있으면 상용문구이므로 세지 않는다.
+    gc = _take(_GC_HEADS_F)
+    if gc["present"]:
+        out["going_concern"] = {"present": True, "own_section": True,
+                                "found_in": gc["heading"], "text": gc["text"]}
+    else:
+        block = text[start:end]
+        pos = block.find("계속기업")
+        if pos >= 0:
+            where = ""
+            for off, flat in heads:
+                if off - start <= pos:
+                    where = flat
+            para = _paragraph_around(block, pos)
+            out["going_concern"] = {"present": True, "own_section": False,
+                                    "found_in": where, "text": para}
+    return out
+
+
+def _paragraph_around(text: str, pos: int) -> str:
+    """`pos`가 든 문단을 원문 그대로 돌려준다(빈 줄 경계)."""
+    lo = text.rfind("\n\n", 0, pos)
+    lo = 0 if lo < 0 else lo + 2
+    hi = text.find("\n\n", pos)
+    hi = len(text) if hi < 0 else hi
+    return text[lo:hi].strip()

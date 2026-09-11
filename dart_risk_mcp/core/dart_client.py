@@ -322,7 +322,11 @@ def _load_corp_codes(api_key: str) -> None:
         log.warning("Corp code 로드 실패: %s", e)
 
 
-def fetch_audit_report_text(rcept_no: str, api_key: str) -> str:
+# ZIP 안 파일의 **첫 줄**이 문서 종류다. 감사보고서 계열 두 가지.
+_AUDIT_DOC_KINDS = frozenset({"감사보고서", "연결감사보고서"})
+
+
+def fetch_audit_report_text(rcept_no: str, api_key: str, prefer: str = "") -> str:
     """감사보고서 원문을 **자르지 않고** 마크다운으로 돌려준다. 실패하면 "".
 
     ⚠ `fetch_disclosure_full`을 쓰지 않는 이유: 그쪽은
@@ -332,6 +336,17 @@ def fetch_audit_report_text(rcept_no: str, api_key: str) -> str:
     밖에 있다. 내부(`_fetch_document_zip` → `_decode_zip_file` →
     `_html_to_structured_text`)와 ZIP 캐시는 그대로 재사용하므로 호출이 늘지
     않는다. 잘라서 보여 주는 일은 호출부(도구)가 한다.
+
+    ⚠ **가장 큰 파일이 감사보고서가 아닐 수 있다.** 사업보고서 ZIP에서는 가장
+    큰 파일이 **사업보고서 본문**이고 감사보고서는 첨부로 따로 들어 있다
+    (실측 CSA 코스믹 20260324000035: 본문 1,781,011자 · 감사보고서 408,892자 ·
+    연결감사보고서 489,653자. 본문에는 「감사의견근거」·「독립된 감사인의
+    감사보고서」가 **0건**이다).
+
+    `prefer`를 주면 **첫 줄이 그 문서 종류인 파일**을 고른다 — DART가 각 파일
+    첫 줄에 종류를 적는다(`사업보고서` · `감사보고서` · `연결감사보고서`).
+    못 찾으면 감사보고서 계열 중 아무거나, 그것도 없으면 가장 큰 파일로
+    떨어진다(옛 동작).
     """
     zf = _fetch_document_zip(rcept_no, api_key)
     if not zf:
@@ -341,12 +356,20 @@ def fetch_audit_report_text(rcept_no: str, api_key: str) -> str:
                      if n.lower().endswith((".xml", ".html", ".htm"))]
         if not doc_files:
             return ""
-        best, best_len = "", -1
+        texts = []
         for name in doc_files:
             body = _decode_zip_file(zf, name) or ""
-            if len(body) > best_len:
-                best, best_len = body, len(body)
-        return _html_to_structured_text(best) if best else ""
+            texts.append(_html_to_structured_text(body) if body else "")
+        if prefer:
+            want = re.sub(r"\s+", "", prefer)
+            kinds = [re.sub(r"\s+", "", t.split("\n", 1)[0]) for t in texts]
+            for kind, t in zip(kinds, texts):
+                if kind == want:
+                    return t
+            for kind, t in zip(kinds, texts):
+                if kind in _AUDIT_DOC_KINDS:
+                    return t
+        return max(texts, key=len) if texts else ""
     except Exception as e:
         log.debug("감사보고서 원문 조회 실패 (%s): %s", rcept_no, e)
         return ""
