@@ -1,6 +1,7 @@
 name: Publish network viz
 
-# 행위자 연결망 HTML을 매일 빌드해 Cloudflare Pages(비공개 시크릿 URL)에 배포.
+# 행위자 연결망 HTML을 매일 빌드해 Cloudflare Pages에 배포.
+# 배포 대상은 두 곳이며 **같은 파일 한 벌**을 쓴다(아래 "두 배포" 절 참고).
 # refresh-known-actors(04:00 KST)가 sightings를 갱신한 뒤 돌도록 04:40 KST에 예약.
 #
 # 수집 정책: 증권사·은행은 신탁·커스터디 역할로 대부분의 딜에 정상 등장해
@@ -8,7 +9,21 @@ name: Publish network viz
 #   기관과 자문·PE·VC는 수집하되 sector="기타기관"으로 태깅해 그래프에서
 #   기본 숨김 — 상단 '기타 기관' 토글로 노출한다.
 #
-# 접근 통제 4중 모델 (클로즈베타):
+# 두 배포가 공존한다:
+#   [A] 게이트 배포 — CF_PAGES_PROJECT. Cloudflare Access 로그인 뒤에만 열린다.
+#   [B] 공개 배포   — CF_PAGES_PUBLIC_PROJECT. 로그인 없이 열린다.
+# 둘은 **별도 Pages 프로젝트**라 호스트네임이 다르다. Access는 코드가 아니라
+# Cloudflare 엣지에서 호스트네임 단위로 걸리고, 현재 Access 애플리케이션의
+# 호스트네임 목록은 [A]의 것 2개뿐이므로 [B]는 구조적으로 그 목록에 안 걸린다.
+#
+# ⚠ 롤백 절차 = 아래 "Deploy public mirror" 스텝 **하나를 지우고 [B] Pages
+#   프로젝트를 삭제**한다. 그러면 공개 노출이 사라지고 [A]의 접근 통제가 즉시
+#   원상 복구된다. [A]의 토큰 경로·미끼 페이지·실패 가드는 [B]가 생겨도
+#   그대로 유지되므로 이 워크플로우의 다른 줄은 건드릴 필요가 없다.
+#   (스텝만 지우고 Pages 프로젝트를 남기면 **마지막 배포본이 계속 떠 있다** —
+#    갱신만 멈출 뿐 노출은 안 사라진다. 프로젝트 삭제가 롤백의 본체다.)
+#
+# [A] 접근 통제 4중 모델 (클로즈베타):
 #   (1) Cloudflare Access 이메일 OTP 로그인 — 기본 거부(deny-by-default),
 #       허용 명단은 Zero Trust 대시보드의 Rule group으로 관리.
 #       Access 애플리케이션 1개에 public hostname 2개: 프로덕션
@@ -22,12 +37,19 @@ name: Publish network viz
 # 배포는 Access와 무관: wrangler는 api.cloudflare.com API로 업로드하므로
 # 보호된 호스트네임을 거치지 않음. 이 워크플로우는 수정 불필요.
 #
-# 필요한 Secrets (없으면 배포 스텝은 조용히 스킵):
-#   CLOUDFLARE_API_TOKEN   — Pages 편집 권한 토큰
-#   CLOUDFLARE_ACCOUNT_ID  — Cloudflare 계정 ID
-#   CF_PAGES_PROJECT       — Pages 프로젝트명 (서브도메인이 됨, 비공개 유지)
-#   NETWORK_URL_TOKEN      — URL 경로 시크릿 토큰 (예: 무작위 20자)
-#   SIGHTINGS_REPO_TOKEN   — private sightings 저장소 읽기용 (기존 재사용)
+# [B] 공개 배포에 남는 것: (4) noindex 메타 하나뿐이다. (1)~(3)은 의도적으로
+#   없다 — 토큰 경로도 미끼 페이지도 두지 않고 루트(index.html)에 바로 둔다.
+#   noindex는 **롤백 가능성을 지키기 위한 장치**다. 검색 색인이 쌓이면 공개
+#   주소를 내려도 캐시·스니펫이 남아 롤백이 무의미해진다. 제거하지 말 것.
+#
+# 필요한 Secrets (없으면 해당 배포 스텝은 조용히 스킵):
+#   CLOUDFLARE_API_TOKEN     — Pages 편집 권한 토큰 (두 배포 공용)
+#   CLOUDFLARE_ACCOUNT_ID    — Cloudflare 계정 ID (두 배포 공용)
+#   CF_PAGES_PROJECT         — [A] 게이트 Pages 프로젝트명 (비공개 유지)
+#   NETWORK_URL_TOKEN        — [A] URL 경로 시크릿 토큰 (예: 무작위 20자)
+#   CF_PAGES_PUBLIC_PROJECT  — [B] 공개 Pages 프로젝트명. 미설정이면 공개
+#                              배포 스텝만 스킵되고 [A]는 영향 없음.
+#   SIGHTINGS_REPO_TOKEN     — private sightings 저장소 읽기용 (기존 재사용)
 
 on:
   schedule:
@@ -86,3 +108,50 @@ jobs:
             --production-branch=production 2>/dev/null || true
           npx --yes wrangler@3 pages deploy dist \
             --project-name="$CF_PAGES_PROJECT" --branch=production --commit-dirty=true
+
+      # ─────────────────────────────────────────────────────────────────────
+      # [B] 공개 배포 — Cloudflare Access를 거치지 않는 별도 Pages 프로젝트.
+      # ⚠ 롤백: 이 스텝 하나를 지우고 [B] Pages 프로젝트를 삭제하면 끝이다.
+      #   위 [A] 배포의 토큰 경로·미끼 페이지·실패 가드는 이 스텝과 무관하게
+      #   그대로 남아 있으므로 다른 줄은 되돌릴 것이 없다.
+      # ⚠ 빌드를 다시 돌리지 않고 [A]가 만든 파일을 **그대로 복사**한다.
+      #   실명 HTML이라 두 배포의 내용이 갈리면 안 된다 — 같은 바이트를 보낸다.
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Deploy public mirror to Cloudflare Pages (게이트 없음)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CF_PAGES_PUBLIC_PROJECT: ${{ secrets.CF_PAGES_PUBLIC_PROJECT }}
+          NETWORK_URL_TOKEN: ${{ secrets.NETWORK_URL_TOKEN }}
+        run: |
+          if [ -z "$CF_PAGES_PUBLIC_PROJECT" ]; then
+            echo "::notice::CF_PAGES_PUBLIC_PROJECT 미설정 — 공개 배포 스킵 (게이트 배포는 영향 없음)"
+            exit 0
+          fi
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::notice::CLOUDFLARE_API_TOKEN 미설정 — 공개 배포 스킵"
+            exit 0
+          fi
+          src="dist/$NETWORK_URL_TOKEN"
+          if [ ! -f "$src/index.html" ]; then
+            echo "::error::공개 배포할 빌드 산출물이 없습니다 — [A] 빌드 스텝이 실패했는지 확인하세요"
+            exit 1
+          fi
+          # 공개 빌드는 토큰 경로·미끼 페이지 없이 루트에 둔다.
+          # ⚠ index.html만 복사하면 안 된다 — 빌드는 details.json도 내고
+          #   템플릿이 fetch("details.json")로 같은 디렉터리에서 읽는다.
+          #   빠뜨리면 노드를 눌러도 타임라인·원본 공시가 404다.
+          #   산출물이 늘어도 따라오도록 디렉터리를 통째로 옮긴다.
+          mkdir -p dist_public
+          cp -r "$src/." dist_public/
+          # noindex 메타가 살아 있는지 확인 — 색인이 쌓이면 공개 주소를 내려도
+          # 캐시가 남아 롤백이 무의미해진다. 없으면 배포하지 않는다.
+          if ! grep -q 'name="robots" content="noindex' dist_public/index.html; then
+            echo "::error::noindex 메타가 없습니다 — 공개 배포를 중단합니다"
+            exit 1
+          fi
+          npx --yes wrangler@3 pages project create "$CF_PAGES_PUBLIC_PROJECT" \
+            --production-branch=production 2>/dev/null || true
+          npx --yes wrangler@3 pages deploy dist_public \
+            --project-name="$CF_PAGES_PUBLIC_PROJECT" --branch=production --commit-dirty=true
+          echo "공개 주소: https://$CF_PAGES_PUBLIC_PROJECT.pages.dev/"
