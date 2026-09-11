@@ -227,7 +227,7 @@ python -m dart_risk_mcp.setup
 
 더 긴 대화 데모는 [소개 페이지](https://anboyu-alt.github.io/dart-risk-mcp/#demo)에 있습니다.
 
-## 도구 27개 — 질문으로 찾기
+## 도구 30개 — 질문으로 찾기
 
 도구 이름을 외울 필요 없습니다. AI에게 질문하면 알맞은 도구가 호출됩니다.
 
@@ -292,7 +292,7 @@ python -m pytest -q                      # 전체 테스트 (API 키 불필요)
 python scripts/regen_goldens.py --dry-run  # 실측 골드 재생성 매트릭스 확인 (키 필요)
 ```
 
-- 아키텍처·27개 도구 상세·DART 엔드포인트 맵·신호 추가 방법: **[CLAUDE.md](CLAUDE.md)** (개발자 가이드)
+- 아키텍처·30개 도구 상세·DART 엔드포인트 맵·신호 추가 방법: **[CLAUDE.md](CLAUDE.md)** (개발자 가이드)
 - 변경 이력: [Releases](https://github.com/anboyu-alt/dart-risk-mcp/releases)
 - 외부 의존성은 `mcp`, `requests` 둘뿐입니다(최소 의존성 원칙). HTML 파싱도 표준 라이브러리로 처리합니다.
 - PR 환영합니다. 단, [비범위 항목](CLAUDE.md#비범위-v10-ga에서-영구-확정)(점수 부여·실시간 알림·매매 추천 등)은 설계 결정과 충돌하므로 받지 않습니다.

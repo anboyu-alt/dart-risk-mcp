@@ -131,6 +131,9 @@ from .notes import (
 )
 from .dart_client import scan_note_titles
 from .dart_client import (
+    fetch_bw_issue_decision,
+    fetch_cb_issue_decision,
+    fetch_eb_issue_decision,
     fetch_audit_report_text,
     find_audit_reports,
     find_corp_candidates,
@@ -138,6 +141,7 @@ from .dart_client import (
 )
 from .audit_report import (
     find_note_headings,
+    search_notes,
     split_audit_report,
 )
 from .explain import (
@@ -225,10 +229,14 @@ __all__ = [
     "build_note_summary",
     "scan_note_titles",
     "fetch_audit_report_text",
+    "fetch_cb_issue_decision",
+    "fetch_bw_issue_decision",
+    "fetch_eb_issue_decision",
     "find_audit_reports",
     "find_corp_candidates",
     "corp_name_by_code",
     "find_note_headings",
+    "search_notes",
     "split_audit_report",
     "detect_capital_churn",
     "CHURN_RESULT_MARKS",

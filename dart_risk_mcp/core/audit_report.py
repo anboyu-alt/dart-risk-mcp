@@ -38,6 +38,7 @@ import re
 __all__ = [
     "find_note_headings",
     "split_audit_report",
+    "search_notes",
 ]
 
 # 재무제표 표제. 자간이 벌어진 형태(「연 결 재 무 상 태 표」)로 오므로
@@ -226,4 +227,91 @@ def split_audit_report(text: str) -> dict:
         "fs_basis": basis,
         "tail_start": tail,
         "length": len(text or ""),
+    }
+
+
+def _term_variants(term: str) -> list[str]:
+    """`"가|나"` → `["가", "나"]`. 빈 조각은 버린다.
+
+    ⚠ 세로줄은 **낱말 구분자이지 정규식이 아니다**. 사용자가 넣은 문자열을
+    그대로 찾는다 — 정규식으로 해석하면 괄호·별표가 든 회계 용어
+    (「(주1)」·「손상(*)」)에서 터진다.
+    """
+    return [p.strip() for p in (term or "").split("|") if p.strip()]
+
+
+def search_notes(
+    text: str,
+    terms: list[str],
+    mode: str = "all",
+    context_chars: int = 600,
+) -> dict:
+    """보고서 **한 건** 안에서 주석을 낱말로 찾는다.
+
+    ⚠ **전 회사를 가로지르는 검색이 아니다.** 그러려면 사전 색인 DB가 있어야
+    한다. 이 함수는 넘겨받은 원문 하나만 훑는다.
+
+    `terms`의 각 원소는 세로줄(`|`)로 OR을 넣을 수 있다 — 한국 공시는 같은
+    말을 붙여도 쓰고 띄어도 써서(「영업권손상차손」 ↔ 「영업권 손상차손」)
+    한 표기만 찾으면 놓친다.
+
+    `mode="all"`이면 **모든 원소**가 들어 있는 주석만, `"any"`면 하나라도
+    들어 있는 주석을 돌려준다(원소 안의 세로줄은 언제나 OR이다).
+
+    Returns:
+        {"notes": [{no, title, offset, end, hits: [{term, offset, excerpt}]}],
+         "scanned_notes": int, "scope": str, "total_hits": int}
+
+        주석 헤딩을 못 찾은 문서는 문서 전체를 한 덩어리로 훑고 `scope`에
+        그 사실을 적는다 — 조용히 빈손을 돌려주면 「그런 말이 없다」로 읽힌다.
+    """
+    text = text or ""
+    groups = [v for v in (_term_variants(t) for t in (terms or [])) if v]
+    notes = find_note_headings(text)
+    spans = [dict(n) for n in notes]
+    scope = "주석"
+    if not spans:
+        scope = "문서 전체"
+        spans = [{"no": 0, "title": "(주석 헤딩을 찾지 못함)",
+                  "offset": 0, "end": len(text)}]
+
+    if not groups:
+        return {"notes": [], "scanned_notes": len(notes), "scope": scope,
+                "total_hits": 0}
+
+    want_all = mode != "any"
+    out: list[dict] = []
+    for sp in spans:
+        body = text[sp["offset"]:sp["end"]]
+        matched, hits = 0, []
+        for variants in groups:
+            found_here = False
+            for v in variants:
+                start = body.find(v)
+                while start != -1:
+                    lo = max(0, start - context_chars)
+                    hi = min(len(body), start + len(v) + context_chars)
+                    hits.append({
+                        "term": v,
+                        "offset": sp["offset"] + start,
+                        "excerpt": body[lo:hi].strip(),
+                    })
+                    found_here = True
+                    start = body.find(v, start + len(v))
+            if found_here:
+                matched += 1
+        if not hits:
+            continue
+        if want_all and matched < len(groups):
+            continue
+        hits.sort(key=lambda h: h["offset"])
+        item = dict(sp)
+        item["hits"] = hits
+        out.append(item)
+
+    return {
+        "notes": out,
+        "scanned_notes": len(notes),
+        "scope": scope,
+        "total_hits": sum(len(n["hits"]) for n in out),
     }
