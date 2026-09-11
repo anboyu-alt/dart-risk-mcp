@@ -2,6 +2,56 @@
 
 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식 준수. 버전은 [SemVer](https://semver.org/lang/ko/).
 
+## [1.26.1] - 2026-09-12
+
+**느슨한 인자에 도구가 죽거나 조용히 틀리던 것.** 2026-08-30 라운드는 연도와
+`analyze_company_risk`의 `lookback_years` 하나만 고쳤다. 남은 인자를 정적으로
+훑고 **실제로 두드리니** 네 부류가 나왔다.
+
+### Fixed
+
+- **`lookback_years`가 여전히 도구를 죽이던 곳 4개.** 이 인자를 받는 도구가
+  11개인데 `_coerce_lookback`을 거치는 것은 2개뿐이었고 기존 테스트는
+  `analyze_company_risk` 하나만 봤다. `find_actor_overlap`(키가 없어도 죽는다)·
+  `list_disclosures_by_stock`·`track_insider_trading`·`check_disclosure_anomaly`가
+  `TypeError`로 죽었다 — 사용자에게는 **도구가 통째로 사라진 것**으로 보인다.
+  뒤 둘은 `_resolve_lookback` 안에서 고쳤고(그 함수를 거치는 도구가 여럿이라
+  뿌리가 거기다), 원본 문자열을 그대로 받던 `_append_size_footer`도 막았다.
+- **모르는 열거형 값을 조용히 삼키던 곳 7개.** core `_VALID_REPORT_TYPES`는
+  **로그 경고만** 하고 넘어가 화면에 아무것도 안 남는다 —
+  `get_audit_opinion_text(scope="엉뚱")`이 **연결감사보고서**를 그대로 냈다
+  (`separate`를 `seperate`로 오타 내면 별도가 아니라 연결을 받고 화면은 그
+  사실을 말하지 않는다). `get_financial_statements_full(report_type="엉뚱")`은
+  「찾지 못했습니다」라 적어 **「없다」와 「잘못 물었다」를 섞었고**,
+  `get_executive_compensation`은 머리글에 「2024년 엉뚱」을 적고 결과를 냈다.
+  `_validate_choice`를 `_validate_year`와 같은 모양으로 만들어 배선했다.
+  ⚠ 빈 값은 통과시킨다 — 「미지정」은 오타가 아니라 기본값을 쓰겠다는 뜻이다.
+- **목록 인자에 문자열 하나가 오면 글자로 쪼개지던 것 5곳.** 파이썬에서 문자열은
+  순회 가능하다 — `search_notes_in_report(rcept, "계속기업")`이 「`계`·`속`·`기`·
+  `업`이 모두 든 주석」을 찾아 **16,808자**를 냈고 예외도 안 났다.
+  `compare_financials("삼성전자")`는 「찾을 수 없는 기업: 삼, 성, 전」으로
+  드러나서 그나마 나았고 나머지는 조용히 결과를 냈다. `_coerce_str_list`로
+  감싼다 — 문자열 하나는 「하나를 찾겠다」는 뜻이다.
+- **정수 인자 여섯 자리.** `get_disclosure_document(max_chars)`·
+  `view_disclosure(page, page_size)`·`search_market_disclosures(days,
+  max_results)`가 문자열·`None`에 `TypeError`로 죽었다. `_coerce_int` 신설 —
+  ⚠ 클램프 값은 각 도구가 이미 쓰던 것 그대로다(바뀌는 것은 「죽느냐 마느냐」뿐).
+  곁가지 둘: `get_disclosure_document`는 **클램프가 아예 없어** 독스트링의
+  「최대 20000」이 하부 강제에 기대고 있었고, `search_notes_in_report`는
+  `int(context_chars or 600)`이라 `"abc"`에 `ValueError`를 던졌다.
+
+### Changed
+
+- **`get_financial_summary` 꼬리말이 계정명의 출처를 밝힌다.** 「같은 문구가 다른
+  도구에도 있는지」 훑다가 **문구가 아니라 데이터 자체**가 v1.26.0과 같은 문제임을
+  확인했다 — `fnlttSinglAcnt`의 계정명도 XBRL 표준 태그다. 8개사 241행 실측
+  **15.4%가 다름**이고, **뜻이 뒤집히는 표기가 15개사 중 8곳**, 전부 적자
+  회사다(이 도구의 주 사용처): API 「이익잉여금」이 원문에서 「결손금」
+  (CSA 코스믹 -694억 · 제이스코홀딩스 -963억 · STX -3,229억), 「영업이익」이
+  「영업손실」. ⚠ **대조를 붙이지 않았다** — 감사보고서 ZIP 조회가 필요한데 이
+  도구는 가볍고 빠른 것이 쓸모이고 그 무거운 길은 `get_financial_statements_full`이
+  맡는다. 꼬리말에 사실과 갈 곳을 적는다(추가 호출 0).
+
 ## [1.26.0] - 2026-09-12
 
 **회사가 쓰지 않은 계정명을 내던 것.** `get_financial_statements_full`은 첫 줄부터
