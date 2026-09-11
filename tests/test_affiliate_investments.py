@@ -102,7 +102,11 @@ class TestGetAffiliateInvestmentsTool(unittest.TestCase):
         self.assertIn("필리핀 현지법인 설립", out)
         for line in out.splitlines():
             if line.startswith("|") and "해외법인" in line:
-                self.assertEqual(line.count("|"), 7)  # 6컬럼 = 파이프 7개
+                # 2026-09-11: 6컬럼 → 10컬럼. 응답에 있는데 화면이 버리던
+                # 최초취득금액·기초장부가액·증감(취득·처분)·증감(평가)를
+                # 실었다 — 기말만 보면 「그해에 전액 털었다」가 `-` 한 글자로
+                # 사라진다(tests/test_affiliate_book_value_flow.py 참고).
+                self.assertEqual(line.count("|"), 11)  # 10컬럼 = 파이프 11개
 
     def test_no_score_or_grade_words(self, mock_resolve, mock_fetch):
         # v0.8.5: 점수·등급 표현 미유입

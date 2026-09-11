@@ -998,8 +998,15 @@ def _to_int_safe(v) -> int:
         return 0
 
 
-def _normalize_fund_usage(item: dict, kind: str, year: int) -> dict:
-    """공모(rs_*)/사모(mtrpt_*)/구필드를 통합 스키마로 정규화."""
+def _normalize_fund_usage(
+    item: dict, kind: str, year: int, reprt_code: str = ""
+) -> dict:
+    """공모(rs_*)/사모(mtrpt_*)/구필드를 통합 스키마로 정규화.
+
+    `reprt_code`는 `_collapse_fund_snapshots`가 **어느 보고서 스냅샷인지**를
+    가르는 데 쓴다 — 같은 조달건이 분기·반기·사업보고서에 되풀이 실리는데
+    연도만으로는 한 해 안의 넷을 구분할 수 없다. 옛 호출자를 위해 선택 인자다.
+    """
     plan_useprps = (
         item.get("rs_cptal_use_plan_useprps")
         or item.get("mtrpt_cptal_use_plan_useprps")
@@ -1017,17 +1024,23 @@ def _normalize_fund_usage(item: dict, kind: str, year: int) -> dict:
         or item.get("real_cptal_use_sttus")
         or ""
     )
+    pay_de = _fund_text(item.get("pay_de"))
+    stlm_dt = normalize_date8(_fund_text(item.get("stlm_dt")))
+    dffrnc_resn = _fund_text(item.get("dffrnc_occrrnc_resn"))
     return {
         "kind": kind,
         "year": year,
+        "reprt_code": reprt_code,
         "tm": str(item.get("tm", "")),
-        "pay_de": _fund_text(item.get("pay_de")),
+        "pay_de": pay_de,
+        "stlm_dt": stlm_dt,
+        "pay_pending": _is_payment_pending(pay_de, stlm_dt, dffrnc_resn),
         "pay_amount": _to_int_safe(item.get("pay_amount")),
         "plan_useprps": _fund_text(plan_useprps),
         "plan_amount": plan_amount,
         "real_dtls_cn": _fund_text(real_dtls_cn),
         "real_dtls_amount": _to_int_safe(item.get("real_cptal_use_dtls_amount")),
-        "dffrnc_resn": _fund_text(item.get("dffrnc_occrrnc_resn")),
+        "dffrnc_resn": dffrnc_resn,
         "plan_cats": sorted(classify_fund_use(plan_useprps)),
         "real_cats": sorted(classify_fund_use(real_dtls_cn)),
     }
@@ -1038,6 +1051,11 @@ def _normalize_fund_usage(item: dict, kind: str, year: int) -> dict:
 # 접어 렌더가 그 줄 자체를 내지 않게 한다.
 _FUND_BLANK_TOKENS = {"", "-", "–", "—", "해당사항없음", "해당사항 없음"}
 
+# 보고서코드의 **제출 시점 순서**. 한 사업연도 안에서 1분기(5월) → 반기(8월)
+# → 3분기(11월) → 사업보고서(이듬해 3월) 순으로 늦다. 같은 조달건이 여러
+# 보고서에 되풀이 실리므로, 어느 쪽이 최신 스냅샷인지 가르는 데 쓴다.
+_REPORT_ORDER = {"11013": 1, "11012": 2, "11014": 3, "11011": 4}
+
 
 def _fund_text(v) -> str:
     """자금사용 텍스트 필드 정규화 — 미기재 표기는 빈 문자열."""
@@ -1045,9 +1063,46 @@ def _fund_text(v) -> str:
     return "" if t in _FUND_BLANK_TOKENS else t
 
 
+# 「아직 납입되지 않았다」를 가리키는 차이사유 표기. 30개사×4년×4개 보고서코드
+# 실측(2026-09-11)에서 **1건**뿐이라 이것만으로는 못 잡는다 — 아래 날짜 비교가
+# 주 판정이고 이 목록은 결산일이 안 오는 응답의 보조다. ⚠ 「미사용」·「미도래」·
+# 「예치」는 넣지 않는다. 그건 **돈은 들어왔고 안 썼다**는 뜻이라 전제가 틀리지
+# 않았다(같은 표본 71건). 넣으면 발화의 62%가 사라져 패턴 입력이 통째로 바뀐다.
+_FUND_PENDING_MARKS = ("납입 전", "납입전", "미납입", "납입 예정", "납입예정")
+
+
+def _is_payment_pending(pay_de: str, stlm_dt: str, dffrnc_resn: str) -> bool:
+    """이 보고서 시점에 조달 자금이 **아직 들어오지 않았는지**.
+
+    주 판정은 날짜 비교다 — 납입일이 그 보고서의 결산일보다 늦으면, 결산일
+    현재 그 돈은 회사에 없다. 표기가 아니라 사실이라 서식 변형에 안 흔들린다.
+
+    실측(2026-09-11 · 30개사 · 2023~2026 · 4개 보고서코드): `pay_de > stlm_dt`는
+    3건이고 그중 `FUND_UNREPORTED`가 붙던 것이 **정확히 1건**이다(CSA 코스믹
+    00406037 2025 반기 — 납입일 2025.09.25 · 결산일 2025.06.30 · 계획 99.99억 ·
+    실제 0원 · 차이사유 「납입 전」). 오탐 0.
+
+    날짜가 한쪽이라도 없으면 표기로 넘어간다(`_FUND_PENDING_MARKS`).
+    """
+    if pay_de and stlm_dt:
+        p = normalize_date8(pay_de)
+        if p and p > stlm_dt:
+            return True
+    return any(m in (dffrnc_resn or "") for m in _FUND_PENDING_MARKS)
+
+
 def _detect_fund_anomaly(rec: dict) -> list[str]:
     flags: list[str] = []
-    if rec["plan_amount"] > 0 and (
+    # ⚠ **받지 않은 돈을 「받은 돈」이라 말하지 않는다.** 납입 전인 건에
+    # FUND_UNREPORTED를 붙이면 화면이 *"받은 돈이 어디에 쓰였는지 보고되지
+    # 않고 있습니다"*라 적는다 — 돈이 아직 없다. 표시만의 문제가 아니라
+    # 이 플래그는 taxonomy **4.3**이고 4.3을 요구하는 패턴이 넷이라
+    # (delisting_evasion·zombie_ma·fake_new_biz·capital_churn_anomaly)
+    # 한 줄이 패턴 겹침 수를 올린다(2026-09-11 제보 — 기사 작성 중 발견).
+    pending = _is_payment_pending(
+        rec.get("pay_de") or "", rec.get("stlm_dt") or "", rec.get("dffrnc_resn") or ""
+    )
+    if rec["plan_amount"] > 0 and not pending and (
         rec["real_dtls_amount"] == 0 or not rec["real_dtls_cn"]
     ):
         flags.append("FUND_UNREPORTED")
@@ -3115,7 +3170,7 @@ def fetch_fund_usage(
                 if data.get("status") != "000":
                     continue
                 for item in data.get("list", []):
-                    rec = _normalize_fund_usage(item, kind, yr)
+                    rec = _normalize_fund_usage(item, kind, yr, reprt_code)
                     rec["flags"] = _detect_fund_anomaly(rec)
                     results.append(rec)
 
@@ -3147,37 +3202,90 @@ def _collapse_fund_snapshots(records: list) -> list:
         오르비텍 132 →  16
         STX     138 →  27
 
-    접는 단위는 (조달유형, 회차, 납입일, 계획용도, 계획금액)이다 — 한 조달건
-    안의 **용도별 줄은 서로 다른 사실**이라 뭉개면 안 된다. 대표는 **가장 최신
-    보고서 연도**의 레코드다(최신 스냅샷이 실제 집행 상황을 담는다 —
-    `_clear_stale_unreported`의 판단과 같은 근거).
+    ⚠ **2026-09-11 재설계.** 옛 키는 (조달유형, 회차, 납입일, 계획용도,
+    계획금액)이었는데 **두 방향으로 다 틀렸다** — 접어야 할 것을 못 접고,
+    접으면 안 되는 것을 접었다. 라이브 재현(CSA 코스믹 00406037 3년 창)에서
+    17건이 나왔고 **고유 키 17/17 — 한 건도 접히지 않았다**. 원인 셋이 전부
+    DART 원본이다.
+
+      1. 회차 칸이 보고서마다 다르다 — 같은 조달건(납입일 2023.07.12)이
+         사업보고서엔 `tm="17"`, 분기·반기엔 `tm="-"`.
+      2. 계획 용도 칸에 **금액**이 온다 — 2025 보고서 `"24,999"`(백만원)
+         ↔ 2026 보고서 `"운영자금"`. 제출사가 그 칸을 다르게 채운다.
+      3. 계획 금액도 흔든다 — 24,999,000,000 ↔ 25,000,000,000.
+
+    반대로 HLB 2026 반기 공모에서는 `pay_de=""`·`plan_useprps=""`·
+    `plan_amount=0`인 집행 행 8줄(타법인증권취득자금 132억·156억·449억…)이
+    키가 전부 같아 **한 줄로 접혔다** — 서로 다른 집행인데 사라졌다.
+
+    새 규칙은 둘이다.
+
+      · **조달건**(조달유형, 납입일, 회차)으로 묶는다. 계획 용도·금액은
+        제출사가 흔들어 키로 쓸 수 없다.
+      · 그 그룹에서 **가장 최신 보고서 스냅샷**(사업연도, 보고서코드)의 행을
+        **전부** 남긴다. 한 스냅샷 안의 행은 서로 다른 사실이라 뭉개지 않는다.
+
+    회차가 빈 그룹은 같은 (조달유형, 납입일)에 회차 그룹이 **정확히 하나**일
+    때만 흡수한다 — 둘 이상이면 어느 쪽인지 알 수 없으므로 추정하지 않는다
+    (실측 CSA 코스믹 2025.12.24에 제19회차 48억과 제3회차 30억이 함께 있다).
+
+    실측(2026-09-11 · 30개사 · 2023~2026 · 4개 보고서코드 · raw 3,881건):
+
+        옛 876건 → 새 665건
+        CSA 코스믹   17 →  11      미래에셋증권 198 → 101
+        KB금융      146 →  91      에이프로젠    64 →  51
+        HLB          21 →  40      ← 늘어난 것이 **복구**다(위 8줄)
 
     입력 순서는 보존한다(연도 루프 순서 = 오래된 것부터). 반환 리스트의
     원소는 입력 dict 그대로이며 복사하지 않는다.
     """
-    best: dict = {}
+    def _tm(rec) -> str:
+        t = str(rec.get("tm") or "").strip()
+        return "" if t in _FUND_BLANK_TOKENS else t
+
+    def _snapshot(rec) -> tuple:
+        """이 행이 실린 보고서의 시점. 늦을수록 크다."""
+        try:
+            year = int(rec.get("year") or 0)
+        except (TypeError, ValueError):
+            year = 0
+        return (year, _REPORT_ORDER.get(rec.get("reprt_code") or "", 0))
+
+    # ① 조달건 그룹 — (조달유형, 납입일, 회차)
+    groups: dict[tuple, list] = {}
     order: list = []
     for rec in records:
-        key = (
-            rec.get("kind") or "",
-            rec.get("tm") or "",
-            rec.get("pay_de") or "",
-            rec.get("plan_useprps") or "",
-            rec.get("plan_amount") or 0,
-        )
-        prev = best.get(key)
-        if prev is None:
-            best[key] = rec
+        key = (rec.get("kind") or "", rec.get("pay_de") or "", _tm(rec))
+        if key not in groups:
+            groups[key] = []
             order.append(key)
-            continue
-        # 보고서 연도가 더 최신인 쪽을 대표로 둔다. 같은 해면 먼저 온 것을
-        # 유지한다(연도 루프가 분기 코드 순서대로 넣으므로 결정적이다).
-        try:
-            if int(rec.get("year") or 0) > int(prev.get("year") or 0):
-                best[key] = rec
-        except (TypeError, ValueError):
-            pass
-    return [best[k] for k in order]
+        groups[key].append(rec)
+
+    # ② 회차가 빈 그룹 흡수 — 같은 (조달유형, 납입일)의 회차가 하나뿐일 때만
+    tms_by_pay: dict[tuple, set] = {}
+    for kind, pay_de, tm in groups:
+        if tm:
+            tms_by_pay.setdefault((kind, pay_de), set()).add(tm)
+    merged: dict[tuple, list] = {}
+    merged_order: list = []
+    for key in order:
+        kind, pay_de, tm = key
+        if not tm:
+            siblings = tms_by_pay.get((kind, pay_de)) or set()
+            if len(siblings) == 1:
+                key = (kind, pay_de, next(iter(siblings)))
+        if key not in merged:
+            merged[key] = []
+            merged_order.append(key)
+        merged[key].extend(groups[(kind, pay_de, tm)])
+
+    # ③ 그룹마다 가장 최신 스냅샷의 행을 전부 남긴다
+    out: list = []
+    for key in merged_order:
+        rows = merged[key]
+        top = max(_snapshot(r) for r in rows)
+        out.extend(r for r in rows if _snapshot(r) == top)
+    return out
 
 
 def _clear_stale_unreported(records: list) -> int:
