@@ -33,6 +33,7 @@ import tempfile
 import pytest
 
 from dart_risk_mcp.core.dart_client import (
+    parse_acquisition_detail,
     parse_asset_disposal_detail,
     parse_earnings_shock_detail,
     parse_related_party_detail,
@@ -107,6 +108,16 @@ def _run(fn: str, text: str, *, consts=(), funcs=()) -> dict:
         os.unlink(tf.name)
 
 
+def _num(v):
+    """뷰어는 금액·비율을 문자열로 돌려준다(core는 int/float) — 비교용 변환."""
+    if isinstance(v, (int, float)):
+        return v
+    t = str(v or "").replace(",", "").strip()
+    if not t:
+        return 0
+    return float(t) if "." in t else int(t)
+
+
 _RP_CONSTS = ("RP_COUNTERPARTY_RES", "RP_RELATION_RE", "RP_AMOUNT_RE",
               "RP_RATE_RE", "RP_EQUITY_RE", "RP_UNIT_MILLION_RE", "RP_UNIT_EOK_RE")
 _DISP_CONSTS = ("DISPOSAL_COUNTERPARTY_RES", "DISPOSAL_RELATION_RE",
@@ -157,6 +168,39 @@ def test_자산처분_파서가_표에서도_같은_값을_읽는다():
     assert core["counterparty"] == view["counterparty"]
     assert core["amount"] == view["amount"]
     assert "|" not in view["counterparty"]
+
+
+def test_취득_파서가_표에서도_같은_값을_읽는다():
+    """`fund_diversion_chain` 게이트의 판정 입력 — 표에서 못 읽으면 카드가 죽는다.
+
+    실측(2026-09-11, 세종메디칼 20221004900595): 뷰어가 취득 대상을 못 읽어
+    화면이 "(미확인) · 관계: 미확인 (| 특수관계인 |)"을 냈다. 파이프가 그대로
+    보인 것이 단서였다 — `mdToPlain`을 거치지 않은 유일한 파서였다.
+    """
+    fx = _FX["acquisition"]
+    core = parse_acquisition_detail(fx["plain"])
+    view = _run("parseAcquisitionDetail", fx["md"],
+                consts=("ACQ_CORP_FORM_RE", "ACQ_NATION_TOKENS",
+                        "RELATION_LOOKS_DIRTY_RE"),
+                funcs=("looksLikeNation", "splitIssuerNation"))
+    assert core["issuer"] and core["relation"], "픽스처가 비었다 — 검사가 헛돈다"
+    assert core["issuer"] == view["issuer"]
+    assert core["relation"] == view["relation"], "관계는 게이트 판정의 입력이다"
+    assert core["amount"] == _num(view["amount"])
+    assert core["equity_ratio"] == _num(view["ratio"])
+    assert "|" not in view["issuer"] and "|" not in view["relation"]
+
+
+def test_취득_상대방_이름이_비지_않는다():
+    """빈 값끼리 같아 보이지 않게 못 박는다 — 이 자리가 실제로 "" 였다."""
+    view = _run("parseAcquisitionDetail", _FX["acquisition"]["md"],
+                consts=("ACQ_CORP_FORM_RE", "ACQ_NATION_TOKENS",
+                        "RELATION_LOOKS_DIRTY_RE"),
+                funcs=("looksLikeNation", "splitIssuerNation"))
+    assert view["issuer"] == "(주)카나리아바이오"
+    assert view["relation"] == "특수관계인"
+    assert _num(view["amount"]) == 19999998370
+    assert _num(view["ratio"]) == 33.91
 
 
 def test_mdToPlain이_구분선까지_지운다():

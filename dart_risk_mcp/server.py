@@ -1186,6 +1186,40 @@ def _is_asset_disposal_title(report_nm: str) -> bool:
     return any(m in flat for m in _ASSET_DISPOSAL_TITLE_MARKS)
 
 
+# 「타법인주식및출자증권취득/양수」 계열 제목 — 취득 서식 파서를 쓸지 가르는 게이트.
+# `_ASSET_DISPOSAL_TITLE_MARKS`와 같은 결이며, 공백은 모두 지운 뒤 본다.
+_ACQ_TITLE_MARKS = ("타법인주식및출자증권취득", "타법인주식및출자증권양수")
+
+
+def _is_acquisition_title(report_nm: str) -> bool:
+    flat = re.sub(r"\s", "", report_nm or "")
+    return any(m in flat for m in _ACQ_TITLE_MARKS)
+
+
+def _acquisition_counterparty(rcept: str) -> dict:
+    """취득·양수 서식 원문에서 상대방을 읽는다(유출 상대방 확인의 폴백).
+
+    ⚠ 「타법인주식및출자증권취득결정」(자율공시)은 `resolve_decision_type`이
+    빈 값이고 `_is_asset_disposal_title`도 False라, 옛 코드는 **금전대여·담보
+    서식 파서**로 떨어져 상대방을 못 읽었다. 그 결과 같은 리포트 안에서 한
+    블록은 「거래상대방: (미확인)」이라 적고 다른 블록(취득 대상 확인)은 같은
+    공시에서 「(주)카나리아바이오 · 특수관계인 · 200억」을 읽고 있었다
+    (세종메디칼 258830, 2026-09-11 실측 3건 전부).
+
+    원문 ZIP은 10분 캐시를 공유하므로 같은 공시를 두 번 읽어도 네트워크
+    호출이 늘지 않는다.
+    """
+    try:
+        d = fetch_acquisition_detail(rcept, _api_key()) or {}
+    except Exception:
+        return {}
+    cp = (d.get("issuer") or "").strip()
+    if not cp:
+        return {}
+    return {"counterparty": cp, "relation": d.get("relation", "") or "",
+            "amount": d.get("amount", 0)}
+
+
 def _confirm_outflow_counterparties(
     signal_events: list[dict],
     disclosures: list[dict],
@@ -1235,6 +1269,11 @@ def _confirm_outflow_counterparties(
                 except Exception:
                     _d = {}
                 _cp = (_d.get("counterparty") or "").strip()
+                if not _cp and _is_acquisition_title(report_nm):
+                    # 양수결정 서식은 처분 파서가 못 읽는 경우가 있다 — 취득
+                    # 서식 파서로 한 번 더 본다(같은 ZIP 캐시라 호출 증가 없음).
+                    _d = _acquisition_counterparty(rcept) or _d
+                    _cp = (_d.get("counterparty") or "").strip()
                 if _cp:
                     _rel = _d.get("relation", "")
                     out.append(_outflow_row(
@@ -1255,6 +1294,14 @@ def _confirm_outflow_counterparties(
             out.append(_outflow_row(
                 rcept_dt, report_nm, rcept,
                 r.get("counterparty") or "", relation, cls, r.get("amount", 0),
+            ))
+        elif _is_acquisition_title(report_nm):
+            _d = _acquisition_counterparty(rcept)
+            rel = _d.get("relation", "")
+            out.append(_outflow_row(
+                rcept_dt, report_nm, rcept, _d.get("counterparty", ""), rel,
+                classify_outflow_relation(rel) if rel else "unknown",
+                _d.get("amount", 0),
             ))
         elif _is_asset_disposal_title(report_nm):
             # 「유형자산 처분결정」(자율공시)·「특수관계인에 대한 자산양도」(공정거래법)
@@ -1641,8 +1688,12 @@ def _confirm_acquisition_targets(
             continue
         seen.add(rcept)
         picked.append(e)
-        if len(picked) >= max_check:
-            break
+    # ⚠ 상한을 넘긴 후보는 **세어 두고 나서** 자른다 — 옛 코드는 여기서 곧장
+    # break해 「취득 N건」이 늘 상한 이하로 찍혔다. 판정(계열·비상장 확인)의
+    # 근거를 상한으로 제한하면서 그 제한을 숨기면, 나머지에 계열 취득이 있어도
+    # 화면에 흔적이 없다(`_confirm_outflow_counterparties`가 이미 고친 부류).
+    unreviewed = max(0, len(picked) - max_check)
+    picked = picked[:max_check]
 
     out: list[dict] = []
     for e in picked:
@@ -1659,8 +1710,12 @@ def _confirm_acquisition_targets(
             det = fetch_acquisition_detail(rcept, _api_key())
         except Exception:
             det = {}
-        if det and det.get("issuer"):
-            row["issuer"] = det["issuer"]
+        # ⚠ 옛 게이트는 issuer가 비면 **관계·금액·자기자본 대비까지 통째로**
+        # 버렸다 — 이름을 못 읽은 것과 관계를 못 읽은 것은 다른 사실인데 한
+        # 덩어리로 묶여, 원문에 「특수관계인」이 적혀 있어도 화면에서 사라졌다.
+        # 상장 여부만 이름에 의존한다(이름 없이 명부를 물을 수 없다).
+        if det:
+            row["issuer"] = det.get("issuer", "")
             row["relation"] = det.get("relation", "")
             row["amount"] = det.get("amount", 0)
             row["equity_ratio"] = det.get("equity_ratio", 0.0)
@@ -1669,19 +1724,41 @@ def _confirm_acquisition_targets(
             # 금감원 무자본 M&A 합동점검(2019-12)의 "유용 최대 경로는 비상장주식
             # 취득(55%)" 축. 판정은 사실 표기용이며 게이트 통과 조건에는 쓰지
             # 않는다 — 정상적인 비상장 자회사 편입도 대부분 비상장이기 때문.
-            try:
-                row["listing"] = classify_target_listing(
-                    det.get("issuer", ""), det.get("nation", "")
-                )
-            except Exception:
-                row["listing"] = "unknown"
+            if det.get("issuer"):
+                try:
+                    row["listing"] = classify_target_listing(
+                        det.get("issuer", ""), det.get("nation", "")
+                    )
+                except Exception:
+                    row["listing"] = "unknown"
         out.append(row)
-    return out
+
+    class _Reviewed(list):
+        unreviewed = 0
+
+    _res = _Reviewed(out)
+    _res.unreviewed = unreviewed
+    return _res
 
 
 # 취득 대상의 국내 상장 여부 표시 라벨. 미확인은 아무것도 붙이지 않는다
 # (없는 사실을 만들어 표기하지 않는다는 v0.8.5 원칙).
 _ACQ_LISTING_LABEL = {"listed": "(상장)", "unlisted": "(비상장)", "unknown": ""}
+
+
+def _acq_cap_note(confirmations: list[dict]) -> str:
+    """확인 상한에 걸려 원문을 열지 않은 후보 수를 사실로 적는다.
+
+    판정(계열·비상장 확인)의 근거를 최근 N건으로 제한하면서 그 제한을 숨기면,
+    나머지에 계열 취득이 있어도 목록에 들어오지 않는다. 상한 자체는 그대로
+    두고(원문 ZIP 비용) 문구만 붙인다 — 뷰어 `acquisitionFactsHTML`과 같은 표현.
+    """
+    unreviewed = getattr(confirmations, "unreviewed", 0)
+    if not unreviewed:
+        return ""
+    total = len(confirmations) + unreviewed
+    return (f"(후보 {total}건 중 최근 {len(confirmations)}건의 원문만 확인 · "
+            f"{unreviewed}건 미확인)")
 
 
 def _render_acquisition_confirmations(confirmations: list[dict]) -> list[str]:
@@ -1759,8 +1836,8 @@ def _fund_diversion_gate(confirmations: list[dict]) -> dict:
             else "대상의 상장 여부를 원문에서 확인하지 못했습니다"
         )
         lines = [
-            f"타법인 주식·출자증권 취득 {len(confirmations)}건 — 계열·특수관계 "
-            f"취득 {len(affiliated)}건이 확인됐으나 {why}",
+            f"타법인 주식·출자증권 취득 {len(confirmations)}건{_acq_cap_note(confirmations)}"
+            f" — 계열·특수관계 취득 {len(affiliated)}건이 확인됐으나 {why}",
         ]
         lines += _render_acquisition_confirmations(confirmations)
         return {"pass": False, "affiliated": affiliated, "fact_lines": lines}
@@ -1769,16 +1846,21 @@ def _fund_diversion_gate(confirmations: list[dict]) -> dict:
     if known:
         labels = sorted({_OUTFLOW_CLASS_LABEL[c["classification"]] for c in known})
         lines = [
-            f"타법인 주식·출자증권 취득 {len(confirmations)}건 — 확인된 대상은 "
-            f"{'/'.join(labels)}(각 실명·관계 표기), 계열·특수관계 취득은 미확인",
+            f"타법인 주식·출자증권 취득 {len(confirmations)}건{_acq_cap_note(confirmations)}"
+            f" — 확인된 대상은 {'/'.join(labels)}(각 실명·관계 표기), "
+            f"계열·특수관계 취득은 미확인",
         ]
         lines += _render_acquisition_confirmations(confirmations)
         return {"pass": False, "affiliated": [], "fact_lines": lines}
 
     rcepts = ", ".join(c["rcept_no"] for c in confirmations if c["rcept_no"])
+    _cap = _acq_cap_note(confirmations)
+    _cap_txt = f" {_cap}" if _cap else ""
     return {
         "pass": False, "affiliated": [],
-        "fact_lines": [f"취득 대상 미확인 — 원문 확인 필요 (rcept: {rcepts})"],
+        "fact_lines": [
+            f"취득 대상 미확인 — 원문 확인 필요 (rcept: {rcepts}){_cap_txt}"
+        ],
     }
 
 

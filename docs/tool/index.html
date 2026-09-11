@@ -1754,10 +1754,35 @@ function setDocCache(rcept, data) {
 }
 // 이 공시 제목에서 실제로 매칭된 키워드만 모은다 (matchSignals는 신호
 // 단위만 반환하므로, 어떤 키워드가 히트했는지는 여기서 다시 확인한다).
+//
+// ⚠ **원문 열람이 죽던 자리다.** `r.signals`는 `matchSignals`의 원본이 아니라
+// 한정층(`qualifySignals`)이 만든 객체이고, 거기에는 `keywords`가 없다
+// (`key`·`label`·`category`·`priority`·`taxonomies`·`prose`·`tier`·`reason`).
+// 그래서 `for (const kw of s.keywords)`가 **신호가 붙은 모든 공시에서**
+// `TypeError: s.keywords is not iterable`을 던졌고, 예외가 렌더를 중단시켜
+// 패널이 **빈 채로** 남았다 — 사용자에게는 「원문이 안 나온다」로 보인다
+// (2026-09-11 라이브 재현: 코아스 20260506800991, 신호 객체 63개 전부 누락).
+// 키워드는 배포 데이터에서 키로 되찾는다.
+// ⚠ `DATA`는 비동기로 로드된다 — 즉시 실행으로 만들면 빈 맵이 굳는다.
+// 첫 호출 때 한 번 만든다(`matchSignals`가 호출 시점에 DATA를 보는 것과 같은 결).
+let _SIGNAL_KW_BY_KEY = null;
+function signalKeywordsByKey(key) {
+  if (!_SIGNAL_KW_BY_KEY) {
+    const m = Object.create(null);
+    for (const s of ((typeof DATA !== "undefined" && DATA.signals) || [])) {
+      if (Array.isArray(s.keywords)) m[s.key] = s.keywords;
+    }
+    if (Object.keys(m).length) _SIGNAL_KW_BY_KEY = m;
+    else return [];   // 아직 안 왔다 — 캐시하지 않는다
+  }
+  return _SIGNAL_KW_BY_KEY[key] || [];
+}
 function matchedKeywordsFor(r) {
   const kws = new Set();
-  for (const s of r.signals) {
-    for (const kw of s.keywords) {
+  for (const s of (r.signals || [])) {
+    const list = Array.isArray(s.keywords) ? s.keywords
+               : signalKeywordsByKey(s.key);
+    for (const kw of list) {
       if (r.nm.includes(kw)) kws.add(kw);
     }
     // SE-14: FUND_OUTFLOW(금전대여·채무보증·담보제공·유형자산양수) 공시는
@@ -1797,6 +1822,14 @@ function renderDocViewer(panel, data, r) {
   }
   const kws = matchedKeywordsFor(r);
   const blocks = documentBlocks(data.text || "");
+  // 200을 받았는데 실을 것이 없으면 **빈 화면으로 두지 않는다** — 사용자에게는
+  // "원문이 없는 공시"와 "받아 왔는데 못 그린 응답"이 같은 빈 패널로 보인다
+  // (2026-09-11 제보: 패널은 열리는데 본문이 비었다). 받은 분량을 사실로 적는다.
+  if (!blocks.length) {
+    panel.innerHTML = `<div class="slabel">▍DISCLOSURE TEXT</div>
+      <p class="dim">원문 응답은 받았지만 표시할 본문이 없습니다 (응답 ${(data.text || "").length}자 · 블록 0개) — DART 원문 링크를 이용하세요.</p>`;
+    return;
+  }
   let html = `<div class="slabel">▍DISCLOSURE TEXT — 본문 열람</div>`;
   if (kws.length) {
     html += `<div class="factline">이 공시 제목에서 감지된 신호 키워드 ${kws.length}개를 본문에서 강조 표시했습니다.</div>`;
@@ -1821,7 +1854,13 @@ async function fetchDisclosureText(rcept) {
     });
     let j = {};
     try { j = await res.json(); } catch (e) { /* 빈 본문 등 — 아래서 상태코드로 처리 */ }
-    if (!res.ok || j.error) throw new Error(j.error || `조회 실패 (HTTP ${res.status})`);
+    // 서버는 이유를 구분해 준다(400 키 없음 / 404 본문 없음 / 502 DART 조회
+    // 실패 — tool_server/doc.py). 옛 줄은 `j.error`가 있으면 상태를 지워
+    // 「왜 못 받았나」가 화면에서 사라졌다. 둘 다 남긴다.
+    if (!res.ok || j.error) {
+      throw new Error(j.error ? `${j.error} (HTTP ${res.status})`
+                              : `조회 실패 (HTTP ${res.status})`);
+    }
     setDocCache(rcept, j);
     return j;
   } catch (e) {
@@ -1873,7 +1912,12 @@ async function toggleDocViewer(r) {
   if (!isHidden) { panel.classList.add("hidden"); return; }
   panel.classList.remove("hidden");
   const cached = getDocCache(r.rcept);
-  if (cached) { renderDocViewer(panel, cached, r); return; }
+  if (cached) {
+    // ⚠ 캐시 경로가 실제로 죽던 쪽이다 — 스캔 중 `loadAssetTransferCore` 등이
+    // 이미 원문을 받아 두므로 사용자가 버튼을 누르면 대개 여기로 온다.
+    try { renderDocViewer(panel, cached, r); } catch (e) { docRenderFailed(panel, e); }
+    return;
+  }
   panel.innerHTML = `<div class="slabel">▍DISCLOSURE TEXT</div><span class="spinner"></span><span class="dim" style="font-size:0.88rem">원문 조회 중…</span>`;
   const j = await fetchDisclosureText(r.rcept);
   if (j && j.error) {
@@ -1881,7 +1925,19 @@ async function toggleDocViewer(r) {
       <p class="dim">${esc(j.error)} — DART 원문 링크를 이용하세요.</p>`;
     return;
   }
-  renderDocViewer(panel, j, r);
+  // 렌더가 던지면 패널은 스피너 상태로 멎는다(미처리 rejection). 이유를 적는다.
+  try {
+    renderDocViewer(panel, j, r);
+  } catch (e) {
+    docRenderFailed(panel, e);
+  }
+}
+
+// 렌더가 던지면 패널은 **빈 채로** 남는다(미처리 rejection) — 사용자에게는
+// "원문이 없는 공시"와 구분되지 않는다. 이유를 사실로 적는다.
+function docRenderFailed(panel, e) {
+  panel.innerHTML = `<div class="slabel">▍DISCLOSURE TEXT</div>
+    <p class="dim">원문은 받았지만 화면에 그리지 못했습니다 (${esc((e && e.message) || String(e))}) — DART 원문 링크를 이용하세요.</p>`;
 }
 
 /* ── 작업3: 재스캔 diff factline (대시보드 최상단, KPI 위) ── */
@@ -5133,18 +5189,34 @@ function splitIssuerNation(raw) {
   }
   return { name, nation };
 }
+// ⚠ 이 파서는 2026-08-28에 형제 파서 셋(`parseAssetDisposalDetail`·
+// `parseRelatedPartyDetail`·`parseEarningsShockDetail`)에 `mdToPlain`을 걸 때
+// **혼자 빠졌다**. core는 `fetch_document_text`의 평문을 받고 뷰어는
+// `/api/doc`의 **마크다운 표**를 받는데, 정규식은 값 사이를 `\s*`로 잇는다 —
+// 표에서는 그 자리에 `|`가 들어와 `발행회사 | 회사명`이 끊긴다.
+// 실측(2026-09-11, 세종메디칼 258830): 취득 3건 전부 화면이 「취득 대상:
+// (미확인) · 관계: 미확인 (| 특수관계인 |)」이었고, core는 같은 공시에서
+// 「(주)카나리아바이오 · 특수관계인 · 199.9억 · 자기자본 대비 33.91%」를
+// 정확히 읽었다 — 같은 제품의 두 화면이 다른 사실을 말하고 있었다.
+// 관계는 `fund_diversion_chain` 게이트의 **판정 입력**이라 표시만의 문제가
+// 아니다(issuer를 못 읽으면 그 건은 영영 `unknown`이 된다).
 function parseAcquisitionDetail(text) {
   const empty = { issuer: "", nation: "", relation: "", amount: "", ratio: "" };
   if (!text || typeof text !== "string") return empty;
-  if (text.indexOf("출자증권") === -1) return empty;
-  const t = text.replace(/\s+/g, " ");
+  const t = mdToPlain(text).replace(/\s+/g, " ");
+  // 진입 가드는 core `parse_acquisition_detail`과 같은 문구를 쓴다 — 옛
+  // `"출자증권"` 단독은 core보다 넓어, 두 구현이 서로 다른 문서를 받아들였다.
+  if (t.indexOf("타법인 주식 및 출자증권") === -1
+      && t.indexOf("타법인주식및출자증권") === -1) return empty;
   const pick = (re) => { const m = t.match(re); return m ? m[1].trim() : ""; };
   const im = t.match(/발행회사\s*회사명(?:\s*\(\s*국적\s*\)\s*(.+?)\s*(?=대표이사|대표자|자본금)|\s*(.+?)\s*국적)/);
   const split = splitIssuerNation(im ? (im[1] || im[2] || "") : "");
+  // 관계 값이 표를 벗어나 주석 문장을 물면 버린다 — core와 같은 가드·같은 상한.
+  const rel = pick(/회사와\s*의?\s*관계\s*(.+?)\s*(?:발행주식총수|주요사업)/);
   return {
     issuer: split.name,
     nation: split.nation,
-    relation: pick(/회사와\s*의?\s*관계\s*(.+?)\s*(?:발행주식총수|주요사업)/),
+    relation: RELATION_LOOKS_DIRTY_RE.test(rel) ? "" : rel.slice(0, 40),
     amount: pick(/(?:취득금액|양수금액)\(원\)(?:\(A\))?\s*([\d,]+)/),
     ratio: pick(/자기자본대비\(%\)(?:\(A\/C\))?\s*([\d,.]+)/),
   };
@@ -5194,7 +5266,10 @@ async function classifyAcquisitionEvidence(hits) {
     return { rcept: h.rcept, date: h.date, nm: h.nm, issuer: d.issuer,
              nation: d.nation, relation: d.relation, amount: d.amount, ratio: d.ratio,
              listing: await classifyTargetListing(d.issuer, d.nation),
-             cls: d.issuer ? classifyOutflowRelation(d.relation) : "unknown" };
+             // ⚠ 옛 줄은 `d.issuer ? … : "unknown"`이라, 이름을 못 읽으면
+             // 원문에 「특수관계인」이 적혀 있어도 관계가 통째로 사라졌다.
+             // 이름과 관계는 서로 다른 사실이다(core와 같은 분리).
+             cls: d.relation ? classifyOutflowRelation(d.relation) : "unknown" };
   }));
 }
 
@@ -5856,6 +5931,15 @@ function isAssetDisposalTitle(nm) {
   return ASSET_DISPOSAL_TITLE_MARKS.some((m) => flat.includes(m));
 }
 
+// 「타법인주식및출자증권취득/양수」는 서식이 또 다르다 — 처분 파서도 금전대여
+// 파서도 상대방을 못 읽어, 이 계열이 통째로 「거래상대방 확인 실패」였다.
+// core `_is_acquisition_title`의 쌍둥이(같은 마커·같은 공백 처리).
+const ACQ_TITLE_MARKS = ["타법인주식및출자증권취득", "타법인주식및출자증권양수"];
+function isAcquisitionTitle(nm) {
+  const flat = String(nm || "").replace(/\s/g, "");
+  return ACQ_TITLE_MARKS.some((m) => flat.includes(m));
+}
+
 const OUTFLOW_CLS_LABEL = {
   affiliated: "계열·특수관계", subsidiary: "종속회사",
   external: "외부", unknown: "미확인",
@@ -5926,6 +6010,17 @@ function normalizeOutflowDetail(d) {
 // 뷰어는 그 수정이 절반만 이식돼 있었다. 자산 처분은 독립 블록이 됐지만
 // 금전대여·담보제공은 여전히 패턴 카드 경로(loadCapitalBackflowGate)에만
 // 실려, 경영권 변경이 없는 회사에서 통째로 사라졌다.
+// 취득 파서의 필드 이름은 다르다(발행회사 = 상대방). 상대방 확인 행 모양으로
+// 옮긴다 — core가 `_acquisition_counterparty`에서 하는 것과 같은 변환.
+function acquisitionAsOutflow(d) {
+  return {
+    counterparty: (d && d.issuer) || "",
+    relation: (d && d.relation) || "",
+    amount: (d && d.amount) || "",
+    equityRatio: (d && d.ratio) || "",
+  };
+}
+
 async function loadAssetTransferCore() {
   const el = $("atCore");
   if (!el) return;
@@ -5934,8 +6029,12 @@ async function loadAssetTransferCore() {
   // 키워드 5종과 정확히 같아 걸러지는 건이 없다(2026-08-30 대조 확인).
   const atHits = detailBlockHits("ASSET_TRANSFER", 4);
   const foHits = detailBlockHits("FUND_OUTFLOW", 4);
-  const hits = atHits.filter((h) => isAssetDisposalTitle(h.nm)).concat(foHits);
-  hits.total = (atHits.total || 0) + (foHits.total || 0);
+  // core `_outflow_review_candidates`는 ACQ_REVIEW도 후보로 삼는데 뷰어는
+  // 빠뜨리고 있었다 — 취득·양수 공시의 상대방이 화면에 없었다.
+  const acqHits = detailBlockHits("ACQ_REVIEW", 4);
+  const hits = atHits.filter((h) => isAssetDisposalTitle(h.nm))
+    .concat(foHits).concat(acqHits);
+  hits.total = (atHits.total || 0) + (foHits.total || 0) + (acqHits.total || 0);
   const seen = new Set();
   const rows = [];
   for (const h of hits) {
@@ -5945,7 +6044,9 @@ async function loadAssetTransferCore() {
     if (!data || data.error || !data.text) continue;
     // 서식이 다르다 — 자산 처분은 「처분금액/양도가액」, 금전대여·담보는
     // 「대여금액/담보설정금액」. 제목으로 갈라 맞는 파서를 쓴다.
-    const detail = isAssetDisposalTitle(h.nm)
+    const detail = isAcquisitionTitle(h.nm)
+      ? acquisitionAsOutflow(parseAcquisitionDetail(data.text))
+      : isAssetDisposalTitle(h.nm)
       ? parseAssetDisposalDetail(data.text)
       : normalizeOutflowDetail(parseOutflowDetail(data.text));
     if (detail.counterparty) rows.push(Object.assign({}, h, { detail: detail }));

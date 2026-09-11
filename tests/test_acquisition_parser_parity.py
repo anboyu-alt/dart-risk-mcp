@@ -67,7 +67,7 @@ def _cut_const(html, prefix):
     out = []
     for l in lines[i:]:
         out.append(l)
-        if l.rstrip().endswith("];") or l.rstrip().endswith("/i;"):
+        if l.rstrip().endswith(";"):
             break
     return "\n".join(out)
 
@@ -77,8 +77,13 @@ def _viewer(texts):
     # parseAcquisitionDetail은 splitIssuerNation·ACQ_CORP_FORM_RE에 의존한다
     form_re = _cut_const(html, "const ACQ_CORP_FORM_RE")
     nation_tokens = _cut_const(html, "const ACQ_NATION_TOKENS")
+    # 2026-09-11: `mdToPlain`(마크다운 표 → core가 보는 평문)과
+    # `RELATION_LOOKS_DIRTY_RE`(관계가 주석 문장을 물면 버린다) 의존 추가.
+    dirty_re = _cut_const(html, "const RELATION_LOOKS_DIRTY_RE")
     js = (form_re + "\n"
           + nation_tokens + "\n"
+          + dirty_re + "\n"
+          + _cut(html, "function mdToPlain(text)") + "\n"
           + _cut(html, "function looksLikeNation(text)") + "\n"
           + _cut(html, "function splitIssuerNation(raw)") + "\n"
           + _cut(html, "function parseAcquisitionDetail(text)") + "\n"

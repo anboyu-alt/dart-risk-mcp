@@ -1297,7 +1297,10 @@ def parse_acquisition_detail(text: str) -> dict:
         out["issuer"], out["nation"] = _split_issuer_nation(raw)
     m = _ACQ_RELATION_RE.search(text)
     if m:
-        out["relation"] = m.group(1).strip()
+        # 관계 값이 표를 벗어나 주석 문장을 물면 버린다 — `parse_asset_disposal_detail`
+        # 이 이미 쓰는 가드를 그대로 재사용한다(새 상수를 만들지 않는다).
+        rel = m.group(1).strip()
+        out["relation"] = "" if _RELATION_LOOKS_DIRTY_RE.search(rel) else rel[:40]
     m = _ACQ_AMOUNT_RE.search(text)
     if m:
         try:
