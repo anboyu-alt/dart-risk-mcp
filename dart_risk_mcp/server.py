@@ -409,6 +409,9 @@ _REPORT_TYPES = ("annual", "half", "q1", "q3")
 _AUDIT_SCOPES = ("consolidated", "separate")
 
 
+_CAPITAL_TIMELINE_MAX = 30   # `track_capital_structure` 시계열 표시 상한
+
+
 def _validate_choice(name: str, value, allowed) -> str:
     """열거형 인자 검증. 정상이면 빈 문자열, 아니면 사용자용 오류 문구.
 
@@ -2786,10 +2789,20 @@ def analyze_company_risk(
         _cutoff = (datetime.now() - timedelta(days=365)).strftime("%Y%m%d")
         recent = [e for e in churn["events"] if (e.get("rcept_dt") or "").replace("-", "") >= _cutoff]
         if recent:
-            for e in recent[:10]:
+            # ⚠ `recent`는 오름차순이라 옛 `[:10]`은 **가장 오래된 10건**을
+            #   남기고 최근을 버렸다. 12개월 창이라 범위는 좁지만 **15개사 중
+            #   7곳이 이 상한을 넘는다**(실측 코아스 21 · 유티아이 21 ·
+            #   CSA 코스믹 15 · HLB 14 · 진원생명과학 14 · KR모터스 12 ·
+            #   오르비텍 12) — 코아스는 11건이 잘리고 그게 전부 최근이다.
+            #   `track_capital_structure`와 같은 판단: 최근을 고르고 표시는
+            #   시간순을 지킨다.
+            _dropped_recent = max(0, len(recent) - 10)
+            for e in recent[-10:]:
                 lines.append(f"- {e['rcept_dt']} · {_clean_report_name(e['report_nm'])}")
-            if len(recent) > 10:
-                lines.append(f"- ... (+{len(recent) - 10}건)")
+            if _dropped_recent:
+                lines.append(
+                    f"- ... (총 {len(recent)}건 중 최근 10건 표시 · "
+                    f"앞선 {_dropped_recent}건 생략)")
         else:
             lines.append("- 최근 12개월 내 자본 이벤트 없음")
 
@@ -7698,8 +7711,21 @@ def track_capital_structure(
     _glossary_texts: list[str] = []
 
     if result["events"]:
-        lines.append("**시계열** (최대 30건)")
-        _events_slice = result["events"][:30]
+        # ⚠ `detect_capital_churn`의 `events`는 **오름차순**이다
+        #   (`events.sort(key=lambda e: e["rcept_dt"])`). 옛 코드는 `[:30]`이라
+        #   **가장 오래된 30건**을 남기고 최근을 버렸다 — 실측 제이스코홀딩스
+        #   3년 조회에서 마지막 줄이 2025-06-27이라 그 뒤 1년이 통째로 빠졌다.
+        #   이 도구의 목적이 자본 이벤트의 리듬이고, 모니터링에서 가장 중요한
+        #   구간은 최근이다. **최근 N건을 고르되 표시는 시간순**을 지킨다
+        #   (시계열은 흐름이라 뒤집으면 안 된다).
+        _total_events = len(result["events"])
+        _events_slice = result["events"][-_CAPITAL_TIMELINE_MAX:]
+        _dropped = _total_events - len(_events_slice)
+        lines.append(
+            f"**시계열** (최대 {_CAPITAL_TIMELINE_MAX}건)" if not _dropped else
+            f"**시계열** — 총 {_total_events}건 중 **최근 "
+            f"{len(_events_slice)}건** 표시 · 앞선 {_dropped}건 생략"
+        )
         _cap_key_counts = Counter(e["key"] for e in _events_slice)
         _cap_key_seen: dict[str, int] = {}
         for e in _events_slice:
@@ -7722,8 +7748,10 @@ def track_capital_structure(
                 f"- {e['rcept_dt']} · {e['report_nm']}"
                 + (f"\n  → {one_liner}" if one_liner else "")
             )
-        if len(result["events"]) > 30:
-            lines.append(f"- ... (총 {len(result['events'])}건 중 30건 표시)")
+        if _dropped:
+            lines.append(
+                f"- ... (앞선 {_dropped}건은 위 머리글의 안내대로 생략했습니다 "
+                f"— 더 보려면 `lookback_years`를 줄여 구간을 좁히세요)")
         lines.append("")
 
     if churn_flagged:
