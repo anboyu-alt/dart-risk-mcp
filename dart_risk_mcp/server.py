@@ -48,6 +48,7 @@ from .core import (
     summarize_affiliate_stake,
     NOTE_CATEGORIES,
     classify_note_title,
+    outline_note_tables,
     build_note_summary,
     scan_note_titles,
     fetch_audit_report_text,
@@ -7961,13 +7962,33 @@ def _unlisted_candidate_block(name: str, cands: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _unlisted_notes_toc(notes: list[dict]) -> list[str]:
-    """주석 목차 — `core/notes.py`의 분류를 그대로 재사용한다."""
+def _unlisted_notes_toc(notes: list[dict], text: str = "") -> list[str]:
+    """주석 목차 — `core/notes.py`의 분류·표 뼈대를 그대로 재사용한다.
+
+    `text`를 주면 각 항목에 **표 제목·열 이름**을 덧붙인다(금액은 넣지 않는다).
+    제목만으로는 어느 주석에 무엇이 들었는지 알 수 없어 본문을 여러 번
+    왕복하게 되는데, 이미 받아 둔 원문을 다시 파싱하는 것이라 **추가 API
+    호출이 없다**.
+    """
     out = [f"**주석 {len(notes)}개**", ""]
+    outline = {o["note_no"]: o for o in outline_note_tables(text)} if text else {}
     for n in notes:
         tags = classify_note_title(n["title"])
         tag = f"  ⟨{' · '.join(tags)}⟩" if tags else ""
         out.append(f"- {n['no']}. {n['title']}{tag}")
+        o = outline.get(n["no"])
+        if not o or not o["tables"]:
+            continue
+        _omit = (f" · 외 {o['tables_omitted']}개 생략"
+                 if o["tables_omitted"] else "")
+        out.append(f"    표 {o['tables_total']}개{_omit}")
+        for t in o["tables"]:
+            cols = " · ".join(t["columns"])
+            if t["columns_total"] > len(t["columns"]):
+                cols += f" …(열 {t['columns_total']}개 중 {len(t['columns'])}개)"
+            cap = f"{t['caption'][:40]} — " if t["caption"] else ""
+            unit = f" {t['unit_as_reported']}" if t["unit_as_reported"] else ""
+            out.append(f"      · {cap}[{cols}] {t['rows_n']}행{unit}")
     return out
 
 
@@ -8078,7 +8099,7 @@ def get_unlisted_financials(
     if section in ("notes", "all"):
         body.append("━━ 주석 ━━")
         if split["notes"]:
-            body += _unlisted_notes_toc(split["notes"])
+            body += _unlisted_notes_toc(split["notes"], text)
             body.append("")
             body.append(
                 f"본문은 `search_notes_in_report(rcept_no=\"{rep['rcept_no']}\", "

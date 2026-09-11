@@ -126,6 +126,7 @@ from .sector_policy import get_critical_items, get_induty_name
 from .notes import (
     NOTE_CATEGORIES,
     classify_note_title,
+    outline_note_tables,
     summarize_note_sections,
     build_note_summary,
 )
@@ -226,6 +227,7 @@ __all__ = [
     "get_induty_name",
     "NOTE_CATEGORIES",
     "classify_note_title",
+    "outline_note_tables",
     "summarize_note_sections",
     "build_note_summary",
     "scan_note_titles",
