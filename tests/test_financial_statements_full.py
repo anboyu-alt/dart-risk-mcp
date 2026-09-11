@@ -45,11 +45,17 @@ def _run(statement="", year="2025", fs_div="CFS", rows=None, report_type="annual
     def _fetch(corp_code, api_key, yr, rt="annual", fd="CFS"):
         return seq[0] if fd == fs_div else []
 
+    # v1.26.0부터 이 도구는 감사보고서 원문으로 계정명을 대조한다. 여기서는
+    # 그 경로를 막아(원문 없음) **API 표기만 나오는 상태**를 본다 — 원문
+    # 대조 자체는 `tests/test_fs_full_original_names.py`가 본다.
     with patch.object(server, "_api_key", return_value="k"), \
          patch.object(server, "resolve_corp",
                       return_value=("CSA 코스믹",
                                     {"corp_code": "00406037", "stock_code": "083660"})), \
-         patch.object(server, "fetch_financial_statements_all", side_effect=_fetch):
+         patch.object(server, "fetch_financial_statements_all", side_effect=_fetch), \
+         patch.object(server, "find_audit_reports", return_value=[]), \
+         patch.object(server, "fetch_company_disclosures", return_value=[]), \
+         patch.object(server, "fetch_audit_report_text", return_value=""):
         return server.get_financial_statements_full(
             "CSA 코스믹", year, report_type, fs_div, statement)
 
@@ -146,7 +152,10 @@ class TestFallbackAndFailure(unittest.TestCase):
              patch.object(server, "resolve_corp",
                           return_value=("CSA 코스믹", {"corp_code": "00406037",
                                                     "stock_code": "083660"})), \
-             patch.object(server, "fetch_financial_statements_all", side_effect=_fetch):
+             patch.object(server, "fetch_financial_statements_all", side_effect=_fetch), \
+             patch.object(server, "find_audit_reports", return_value=[]), \
+             patch.object(server, "fetch_company_disclosures", return_value=[]), \
+             patch.object(server, "fetch_audit_report_text", return_value=""):
             out = server.get_financial_statements_full("CSA 코스믹", "2025")
         self.assertEqual(calls, ["CFS", "OFS"])
         self.assertIn("별도", out)

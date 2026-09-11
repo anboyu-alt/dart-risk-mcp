@@ -63,6 +63,8 @@ from .core import (
     find_note_headings,
     split_audit_report,
     split_audit_opinion,
+    build_fs_account_index,
+    lookup_fs_account,
     search_notes,
     extract_rights_offering_investors,
     fetch_audit_opinion_history,
@@ -4739,8 +4741,12 @@ def _compare_financials_series(
             + ") — 숫자를 그대로 비교하지 마세요."
         )
     lines.append(
-        "📎 금액·계정명은 DART 응답 원문 그대로입니다. 회사마다 **연결과 별도 중 "
-        "한쪽만** 골라 실었고 그 구분을 행에 적었습니다 — 섞어서 더하면 안 됩니다."
+        "📎 금액·계정명은 **DART 재무 API 표기 그대로**입니다 — 공시 원문 표기가 "
+        "아닙니다. API는 회사가 제출한 XBRL의 표준 태그에 맞춘 이름을 주므로 "
+        "회사가 감사보고서에 쓴 계정명과 어긋날 수 있습니다(실측 8개사 2,144행 중 "
+        "15.7%). 원문 표기가 필요하면 `get_financial_statements_full`을 쓰세요. "
+        "회사마다 **연결과 별도 중 한쪽만** 골라 실었고 그 구분을 행에 적었습니다 "
+        "— 섞어서 더하면 안 됩니다."
     )
     return "\n".join(lines).rstrip() + "\n"
 
@@ -8054,7 +8060,12 @@ def get_unlisted_financials(
         return (f"ℹ️ **{corp_name}**({stock_code})은 상장사입니다. "
                 "상장사는 OpenDART 재무제표 API로 구조화된 값을 받을 수 있으니 "
                 "`get_financial_summary`·`scan_financial_anomaly`를 쓰세요. "
-                "이 도구는 그 API에 자료가 없는 비상장 외부감사대상 법인 전용입니다.")
+                "이 도구는 그 API에 자료가 없는 비상장 외부감사대상 법인 전용입니다.\n\n"
+                "📎 **회사가 공시에 쓴 계정명 그대로**가 필요하면 "
+                "`get_financial_statements_full`을 쓰세요 — 전체 계정을 내면서 "
+                "감사보고서 원문과 대조해 원문 표기를 앞에 적습니다. 재무 API의 "
+                "계정명은 XBRL 표준 태그에 맞춘 이름이라 회사 표기와 어긋날 수 "
+                "있습니다(실측 8개사 2,144행 중 15.7%).")
 
     reports = find_audit_reports(corp_code, api_key, year=year, scope=scope)
     if not reports:
@@ -8424,6 +8435,62 @@ _FSFULL_ALIAS = {"IS": ("IS", "CIS")}          # 「손익」은 둘 다 고른�
 _FSFULL_MAX_ROWS = 120                          # 재무제표 한 종류당
 
 
+def _fsfull_audit_index(corp_code: str, api_key: str, year: str,
+                        scope_kind: str = "연결감사보고서") -> dict:
+    """감사보고서 원문의 재무제표 구간에서 계정명 색인을 만든다.
+
+    `get_audit_opinion_text`와 **같은 경로**로 접수를 고른다 — 상장사는
+    감사보고서가 사업보고서 ZIP에 첨부돼 오고, 정정본 ZIP에는 그 첨부가
+    없다(실측 카카오). ZIP 캐시를 재사용하므로 호출이 늘지 않는다.
+
+    Returns:
+        `{"index": …, "rcept_no": str, "source": str}` — 못 받으면 index가 None.
+    """
+    out = {"index": None, "rcept_no": "", "source": ""}
+    cands: list[tuple[str, str]] = []
+    for r in (find_audit_reports(corp_code, api_key, year=year,
+                                 scope="consolidated",
+                                 lookback_days=_AUDIT_TEXT_LOOKBACK) or []):
+        cands.append((r["rcept_no"], f"{r['report_nm']} 공시"))
+    for r in (fetch_company_disclosures(corp_code, api_key,
+                                        lookback_days=_AUDIT_TEXT_LOOKBACK) or []):
+        nm = str(r.get("report_nm") or "")
+        if "사업보고서" in nm and f"({year}." in nm:
+            cands.append((str(r.get("rcept_no") or ""), f"{nm} 첨부"))
+    for rcept, source in cands[:_AUDIT_MAX_CANDIDATES]:
+        if not rcept:
+            continue
+        text = fetch_audit_report_text(rcept, api_key, prefer=scope_kind)
+        if not text or text.split("\n", 1)[0].strip() not in _AUDIT_DOC_KINDS:
+            continue
+        split = split_audit_report(text)
+        fs = text[split["fs_start"]:split["notes_start"] or len(text)]
+        idx = build_fs_account_index(fs)
+        if idx["by_div"]:
+            out.update(index=idx, rcept_no=rcept, source=source)
+            break
+    return out
+
+
+def _fsfull_name_cell(match: dict, api_name: str) -> str:
+    """계정명 칸 — 원문을 앞에, API 표기가 다를 때만 괄호에.
+
+    ⚠ 「없다」와 「못 찾았다」를 가른다. 원문과 API가 같으면 하나만 적고,
+    원문에서 못 찾으면 그 행에 그 사실을 적는다 — 조용히 API 이름만 내면
+    사용자는 그것이 회사 표기인 줄 안다.
+    """
+    st = match.get("status")
+    if st == "same":
+        return _fsfull_cell(match["name"])
+    if st == "diff":
+        return f"{_fsfull_cell(match['name'])} (API: {_fsfull_cell(api_name)})"
+    if st == "ambiguous":
+        n = len(match.get("candidates") or [])
+        return (f"{_fsfull_cell(api_name)} "
+                f"(원문에 같은 금액이 {n}곳 — 이름을 붙이지 않았습니다)")
+    return f"{_fsfull_cell(api_name)} (원문 대조 실패)"
+
+
 def _fsfull_cell(v) -> str:
     """표 셀 정제 — 계정명의 개행·파이프가 표를 깨지 않게(`_cell`과 같은 관례)."""
     s = str(v if v not in (None, "") else "-").strip()
@@ -8535,6 +8602,12 @@ def get_financial_statements_full(
         return (f"🔎 **{corp_name}** — {year} 응답에 {statement or '기본'} 구간이 "
                 f"없습니다. 이 보고서에 있는 것: {_have or '(없음)'}.")
 
+    # 원문 계정명 대조 — 숫자는 그대로 두고 **이름만** 바꾼다.
+    _audit = _fsfull_audit_index(corp_code, api_key, year)
+    _idx = _audit["index"]
+    _stat = {"same": 0, "diff": 0, "ambiguous": 0, "missing": 0}
+    _sce_shown = 0
+
     _curr = fs_currency(rows)
     lines = [
         f"📒 **{corp_name} 전체 계정 재무제표** ({stock_code or corp_code})",
@@ -8545,6 +8618,14 @@ def get_financial_statements_full(
     ]
     if used_div != fs_div:
         lines.insert(2, "ℹ️ 연결(CFS)에 자료가 없어 **별도(OFS)**로 조회했습니다.")
+    if _idx:
+        lines.insert(2, f"계정명 대조: 감사보고서 {_audit['rcept_no']} "
+                        f"({_audit['source']}) · 단위 {_idx['unit'][0]}")
+    else:
+        lines.insert(2,
+            "⚠️ 감사보고서 원문을 받지 못해 **원문 대조를 하지 못했습니다**. "
+            "아래 계정명은 DART 재무 API 표기이며, 회사가 공시에 쓴 표기와 "
+            "다를 수 있습니다(자료가 없다는 뜻이 아닙니다).")
 
     # 기간 라벨은 응답이 준 것을 그대로 쓴다(「제 27 기」 등)
     sample = rows[0]
@@ -8562,8 +8643,21 @@ def get_financial_statements_full(
         lines.append("| " + " | ".join(head) + " |")
         lines.append("|" + "---|" * len(head))
         for r in shown:
+            _api_nm = str(r.get("account_nm") or "")
+            if _idx:
+                try:
+                    _v = int(str(r.get("thstrm_amount") or "").replace(",", ""))
+                except ValueError:
+                    _v = 0
+                _m = lookup_fs_account(_idx, div, _v, _api_nm)
+                _stat[_m["status"]] += 1
+                if div == "SCE":
+                    _sce_shown += 1
+                _name_cell = _fsfull_name_cell(_m, _api_nm)
+            else:
+                _name_cell = _fsfull_cell(_api_nm)
             cells = [
-                _fsfull_cell(r.get("account_nm")),
+                _name_cell,
                 _fsfull_amount(r.get("thstrm_amount")),
                 _fsfull_amount(r.get("frmtrm_amount")),
             ]
@@ -8579,12 +8673,32 @@ def get_financial_statements_full(
             )
         lines.append("")
 
+    if _idx:
+        _done = _stat["same"] + _stat["diff"]
+        _tot = sum(_stat.values())
+        lines.append(
+            f"🔎 계정명 대조: {_tot}행 중 **{_done}행** 원문 확인 "
+            f"(같음 {_stat['same']} · 다름 {_stat['diff']}) · "
+            f"모호 {_stat['ambiguous']} · 대조 실패 {_stat['missing']}"
+        )
+        if _sce_shown:
+            # ⚠ 침묵하면 「원문에 없다」로 읽힌다. 이 표만 대조가 낮은 것은
+            #   자료가 없어서가 아니라 표 구조가 다르기 때문이다.
+            lines.append(
+                f"ℹ️ 이 가운데 자본변동표(SCE) {_sce_shown}행은 계정명이 행이 "
+                "아니라 **열**에 있어 금액 대조가 잘 맞지 않습니다 — 실측 "
+                "8개사에서 이 표만 28% 확인(나머지 재무제표는 77~89%). 원문에 "
+                "그 계정이 없다는 뜻이 아닙니다."
+            )
+        lines.append("")
     lines.append(
-        "📎 계정 순서와 계정명은 **DART 응답 원문 그대로**입니다 — 정렬하거나 "
-        "이름을 바꾸지 않았습니다. ⚠ 응답 순서는 손익계산서를 읽는 순서가 "
-        "아닙니다(실측 CSA 코스믹은 영업이익이 앞, 매출액이 뒤에 옵니다). "
-        "금액은 자릿점만 넣었고 단위 배수를 곱하지 않았습니다. "
-        "훑어보기에는 `get_financial_summary`가 더 짧습니다."
+        "📎 계정명은 **감사보고서 원문 표기**이며, DART 재무 API 표기가 다를 때만 "
+        "괄호에 함께 적었습니다 — API는 회사가 제출한 XBRL의 표준 태그에 맞춘 "
+        "이름을 주므로 회사가 쓴 표기와 어긋날 수 있습니다(실측 8개사 2,144행 중 "
+        "15.7%). **금액과 계정 순서는 API 응답 그대로**입니다(정렬하지 "
+        "않았습니다). ⚠ 그 순서는 손익계산서를 읽는 순서가 아닙니다(실측 CSA "
+        "코스믹은 영업이익이 앞, 매출액이 뒤). 금액은 자릿점만 넣었고 단위 배수를 "
+        "곱하지 않았습니다. 훑어보기에는 `get_financial_summary`가 더 짧습니다."
     )
     return "\n".join(lines).rstrip() + "\n"
 

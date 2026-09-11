@@ -96,6 +96,16 @@ class TestListedGoesElsewhere(unittest.TestCase):
         out = _run(candidates=listed)
         self.assertIn("get_financial_summary", out)
 
+    def test_원문_계정명이_필요한_사람에게_갈_곳을_알려준다(self):
+        """상장사를 되돌려 보내는 이유는 「구조화 값이 있어서」인데, 그 값의
+        **계정명은 XBRL 표준 태그**라 회사가 쓴 표기와 다를 수 있다(실측 8개사
+        2,144행 중 15.7%). 원문 표기를 찾아 이 도구에 온 사람을 아무 말 없이
+        되돌려 보내면 그 사람의 용건은 해결되지 않는다.
+        """
+        listed = [{"corp_code": "00126380", "stock_code": "005930", "modify_date": ""}]
+        out = _run(candidates=listed)
+        self.assertIn("get_financial_statements_full", out)
+
 
 class TestSections(unittest.TestCase):
     def test_fs는_재무제표_숫자를_낸다(self):
