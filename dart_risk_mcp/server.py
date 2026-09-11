@@ -4525,6 +4525,11 @@ def get_financial_summary(
 ) -> str:
     """기업의 주요 재무제표를 조회한다 (매출, 영업이익, 순이익, 자산, 부채).
 
+    훑어볼 때 쓴다 — 이 API(`fnlttSinglAcnt`)는 주요 계정만 준다(실측 CSA 코스믹
+    2025에서 계정명 14종). 매출원가·판매비와관리비·금융수익·금융원가·기타이익·
+    기타손실·지분법손익처럼 **여기 없는 줄이 필요하면
+    `get_financial_statements_full`**이 전체 계정을 원문 순서 그대로 낸다.
+
     Args:
         company_name: 기업명 (예: "삼성전자") 또는 종목코드 6자리
         year: 사업연도 4자리 (예: "2024"). 미입력 시 직전 연도
@@ -4600,25 +4605,193 @@ def get_financial_summary(
 # ── 도구 12: 다중 기업 재무 비교 ──────────────────────────────────────────
 
 
-@mcp.tool()
-def compare_financials(company_names: list[str], year: str = "") -> str:
-    """여러 기업의 재무제표를 비교한다 (최대 5개 기업).
+# ── 다연도 재무 비교 (v1.24.0) ────────────────────────────────────────
+#
+# `fetch_multi_financial`은 corp_code를 **콤마로 묶어 한 번에** 받는다 —
+# 실측(2026-09-11) 20개사 1콜 606행, 누락 0. 그래서 콜 수는 **연도 수**이고
+# 회사 수와 곱해지지 않는다. 연도 폭 상한이 곧 콜 상한이다.
+_COMPARE_MAX_CORPS = 20
+_COMPARE_MAX_YEARS = 10
 
-    매출액, 영업이익, 당기순이익, 자산총계, 부채총계를 나란히 비교한다.
+
+def _compare_pick_div(rows: list[dict]) -> str:
+    """회사마다 연결/별도 중 **하나**를 고른다. 연결 우선.
+
+    ⚠ 섞어서 더하면 안 된다 — 응답은 CFS와 OFS를 나란히 주고(실측 304·302행),
+    이어 붙이면 삼성전자 자산총계가 514조와 324조로 오간다. 고른 쪽은 표에
+    회사마다 적는다.
+    """
+    divs = {str(r.get("fs_div") or "") for r in rows}
+    return "CFS" if "CFS" in divs else (sorted(divs)[0] if divs else "")
+
+
+def _compare_settlement_note(dt: str) -> str:
+    """`thstrm_dt`에서 결산 끝 날짜를 뽑는다 — 12월 결산이 아닌지 가리는 데 쓴다.
+
+    실측 표기 두 가지: `"2024.12.31 현재"`(재무상태표) ·
+    `"2024.01.01 ~ 2024.12.31"`(손익). 둘 다 **끝 날짜**가 결산일이다.
+    `fetch_company_info`를 회사마다 부르면 N콜이 늘지만 이 값이면 0콜이다.
+    """
+    m = re.findall(r"(\d{4})[.\-/](\d{2})[.\-/](\d{2})", str(dt or ""))
+    return f"{m[-1][1]}.{m[-1][2]}" if m else ""
+
+
+def _compare_financials_series(
+    corp_map: list[tuple[str, str]],
+    corp_codes: list[str],
+    years: list[str],
+    report_type: str,
+    accounts: list[str] | None,
+    failed: list[str],
+) -> str:
+    """연도 구간을 계정별 표(행=회사 · 열=연도)로 낸다."""
+    name_by_code = {cc: nm for nm, cc in corp_map}
+    # {account: {corp_code: {year: amount}}}
+    table: dict[str, dict[str, dict[str, str]]] = {}
+    div_by_corp: dict[str, str] = {}
+    stl_by_corp: dict[str, set] = {}
+    cur_by_corp: dict[str, set] = {}
+    empty_years: list[str] = []
+
+    for y in years:
+        rows = fetch_multi_financial(corp_codes, _api_key(), y, report_type) or []
+        if not rows:
+            empty_years.append(y)
+            continue
+        by_corp: dict[str, list[dict]] = {}
+        for r in rows:
+            by_corp.setdefault(str(r.get("corp_code") or ""), []).append(r)
+        for code, crows in by_corp.items():
+            div = div_by_corp.setdefault(code, _compare_pick_div(crows))
+            for r in crows:
+                if str(r.get("fs_div") or "") != div:
+                    continue
+                nm = str(r.get("account_nm") or "").strip()
+                if not nm:
+                    continue
+                if accounts and not any(a.strip() in nm for a in accounts if a.strip()):
+                    continue
+                stl = _compare_settlement_note(r.get("thstrm_dt"))
+                if stl:
+                    stl_by_corp.setdefault(code, set()).add(stl)
+                if r.get("currency"):
+                    cur_by_corp.setdefault(code, set()).add(str(r["currency"]))
+                # DART가 「당기순이익(손실)」을 두 번 준다(IS·CIS) — 먼저 온 것을 둔다
+                table.setdefault(nm, {}).setdefault(code, {}).setdefault(
+                    y, str(r.get("thstrm_amount") or "-"))
+
+    lines = [
+        f"📊 **재무 비교** — {len(corp_map)}개 기업 · {years[0]}~{years[-1]} "
+        f"({len(years)}개 사업연도)",
+        f"조회 콜 {len(years)}회 (회사는 한 번에 묶어 보냅니다 — 회사 수와 "
+        f"곱해지지 않습니다)",
+        "",
+    ]
+    if failed:
+        lines.append(f"⚠️ DART에서 찾을 수 없는 기업: {', '.join(failed)} — "
+                     "이 회사들은 아래 표에 아예 없습니다(빈칸이 아닙니다).")
+        lines.append("")
+    if empty_years:
+        lines.append(f"⚠️ 자료가 오지 않은 사업연도: {' · '.join(empty_years)} — "
+                     "그 해 열은 비어 있습니다(0이 아닙니다).")
+        lines.append("")
+
+    if not table:
+        _what = f"계정 {' · '.join(accounts)}" if accounts else "계정"
+        lines.append(f"🔎 {_what}에 걸리는 값이 없습니다. "
+                     "계정명은 부분일치로 찾습니다 — 표기를 넓혀 보세요"
+                     "(예: '영업이익' 대신 '영업').")
+        return "\n".join(lines).rstrip() + "\n"
+
+    order = [nm for nm, _ in sorted(
+        table.items(), key=lambda kv: -sum(len(v) for v in kv[1].values()))]
+    head = ["기업", "구분"] + years
+    for nm in order:
+        lines.append(f"━━ {nm} ━━")
+        lines.append("| " + " | ".join(head) + " |")
+        lines.append("|" + "---|" * len(head))
+        for cname, code in corp_map:
+            if code not in table[nm]:
+                continue
+            div = div_by_corp.get(code, "")
+            cells = [_fsfull_cell(cname), _fs_div_label(div, "")]
+            cells += [table[nm][code].get(y, "-") for y in years]
+            lines.append("| " + " | ".join(cells) + " |")
+        lines.append("")
+
+    odd = {name_by_code.get(c, c): sorted(s) for c, s in stl_by_corp.items()
+           if s and s != {"12.31"}}
+    if odd:
+        lines.append(
+            "⚠️ **12월 결산이 아닌 회사가 섞여 있습니다** — "
+            + " · ".join(f"{n}: {'/'.join(v)} 결산" for n, v in odd.items())
+            + ". 사업연도가 같아도 덮는 기간이 달라 그대로 견주면 안 됩니다."
+        )
+    curs = sorted({c for s in cur_by_corp.values() for c in s})
+    if len(curs) > 1:
+        lines.append(
+            "⚠️ 보고 통화가 회사마다 다릅니다 ("
+            + " · ".join(f"{name_by_code.get(c, c)}: {'/'.join(sorted(s))}"
+                         for c, s in cur_by_corp.items())
+            + ") — 숫자를 그대로 비교하지 마세요."
+        )
+    lines.append(
+        "📎 금액·계정명은 DART 응답 원문 그대로입니다. 회사마다 **연결과 별도 중 "
+        "한쪽만** 골라 실었고 그 구분을 행에 적었습니다 — 섞어서 더하면 안 됩니다."
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+@mcp.tool()
+def compare_financials(
+    company_names: list[str],
+    year: str = "",
+    year_to: str = "",
+    report_type: str = "annual",
+    accounts: list[str] | None = None,
+) -> str:
+    """여러 기업의 재무제표를 나란히 비교한다 (최대 20개 기업 · 최대 10개 연도).
+
+    매출액·영업이익·당기순이익·자산총계·부채총계를 기본으로 내고, `accounts`로
+    좁힐 수 있다. `year_to`를 주면 그 구간을 연도별로 조회해 시계열로 낸다.
+
+    ⚠ **조회 콜은 회사 수와 무관하게 연도 수만큼**이다 — `fnlttMultiAcnt`가
+    corp_code를 콤마로 묶어 한 번에 받는다(실측 2026-09-11: 20개사 1콜 606행,
+    누락 0). 연도 폭 상한 10이 곧 콜 상한이다.
 
     Args:
-        company_names: 비교할 기업명 목록 (2~5개, 예: ["삼성전자", "SK하이닉스"])
-        year: 사업연도 4자리 (예: "2024"). 미입력 시 직전 연도
+        company_names: 비교할 기업명 목록 (2~20개).
+        year: 사업연도 4자리. 미입력 시 직전 연도.
+        year_to: 구간의 끝 사업연도. 주면 year~year_to를 시계열로 낸다.
+        report_type: "annual" | "half" | "q1" | "q3".
+        accounts: 계정명 부분일치 목록. 미지정이면 응답의 전 계정.
     """
     if not _api_key():
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
-    _yerr = _validate_year(year)
-    if _yerr:
-        return _yerr
+    for _y in (year, year_to):
+        _yerr = _validate_year(_y)
+        if _yerr:
+            return _yerr
     if len(company_names) < 2:
         return "❌ 최소 2개 기업을 입력하세요."
-    if len(company_names) > 5:
-        return "❌ 최대 5개 기업까지 비교할 수 있습니다."
+    if len(company_names) > _COMPARE_MAX_CORPS:
+        return (f"❌ 한 번에 최대 {_COMPARE_MAX_CORPS}개 기업까지 비교합니다 "
+                f"(받은 값: {len(company_names)}개). API는 더 받지만 표가 읽히지 "
+                "않습니다 — 나눠 부르세요.")
+
+    if not year:
+        year = str(datetime.now().year - 1)
+    years = [year]
+    if year_to:
+        y1, y2 = int(year), int(year_to)
+        if y2 < y1:
+            return (f"❌ 구간이 거꾸로입니다 (year={year} · year_to={year_to}). "
+                    "year가 시작, year_to가 끝입니다.")
+        if y2 - y1 + 1 > _COMPARE_MAX_YEARS:
+            return (f"❌ 연도 폭은 최대 {_COMPARE_MAX_YEARS}년입니다 "
+                    f"(받은 구간 {y1}~{y2} = {y2 - y1 + 1}년). "
+                    "조회 콜이 연도 수만큼 늘어납니다 — 구간을 좁히세요.")
+        years = [str(y) for y in range(y1, y2 + 1)]
 
     # 기업 코드 수집
     corp_map: list[tuple[str, str]] = []  # (corp_name, corp_code)
@@ -4635,7 +4808,12 @@ def compare_financials(company_names: list[str], year: str = "") -> str:
         return f"❌ 비교 가능한 기업이 2개 미만입니다. 찾을 수 없는 기업: {', '.join(failed)}"
 
     corp_codes = [cc for _, cc in corp_map]
-    items = fetch_multi_financial(corp_codes, _api_key(), year)
+    if len(years) > 1:
+        return _compare_financials_series(
+            corp_map, corp_codes, years, report_type, accounts, failed)
+
+    items = fetch_multi_financial(corp_codes, _api_key(), year, report_type)
+
 
     if not items:
         return "❌ 재무 데이터를 불러올 수 없습니다. 연도를 확인하세요."
@@ -8193,6 +8371,358 @@ def get_mezzanine_terms(rcept_no: str, corp_code: str = "") -> str:
         "📎 발행 **시점의 조건**입니다 — 조기상환·만기전취득·전환은 각각 다른 "
         "공시라 여기에 반영되지 않습니다(미상환 잔액이 아닙니다). "
         "회사 전체의 대기물량(오버행)은 `track_capital_structure`가 냅니다."
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+
+# ── 전체 계정 재무제표 (v1.24.0) ───────────────────────────────────────
+#
+# `fetch_financial_statements_all`(`fnlttSinglAcntAll`)은 진작 있었는데 회전율·
+# Beneish·대여금 추출 같은 **내부 계산에만** 쓰이고 도구로 노출된 적이 없었다.
+# `get_financial_summary`가 부르는 `fnlttSinglAcnt`는 주요 계정만 줘서(실측 CSA
+# 코스믹 2025에서 계정명 14종) 매출원가·판매비와관리비·금융수익·금융원가·
+# 기타이익·기타손실·지분법손익이 **하나도 나오지 않는다**.
+#
+# ⚠ `sj_div`가 **IS가 아니라 CIS일 수 있다**(실측 2026-09-11):
+#     CSA 코스믹 2025  BS 43 · CIS 26 · CF 99 · SCE 91   ← IS **없음**
+#     삼성전자  2024   BS 52 · IS 17 · CIS 13 · CF 40 · SCE 91
+#     두산      2024   BS 65 · IS 29 · CIS 14 · CF 60 · SCE 192
+#   손익계산서를 따로 내는 회사도 있고 포괄손익계산서 하나만 내는 회사도 있다.
+#   `statement="IS"`를 글자대로 받으면 CSA 코스믹에서 **0행**이 된다.
+_FSFULL_ORDER = ("BS", "IS", "CIS", "CF", "SCE")
+_FSFULL_DEFAULT = ("BS", "IS", "CIS", "CF")   # 자본변동표는 길어서 기본에서 뺀다
+_FSFULL_ALIAS = {"IS": ("IS", "CIS")}          # 「손익」은 둘 다 고른다
+_FSFULL_MAX_ROWS = 120                          # 재무제표 한 종류당
+
+
+def _fsfull_cell(v) -> str:
+    """표 셀 정제 — 계정명의 개행·파이프가 표를 깨지 않게(`_cell`과 같은 관례)."""
+    s = str(v if v not in (None, "") else "-").strip()
+    return " ".join(s.replace("|", "／").split())
+
+
+def _fsfull_amount(raw) -> str:
+    """원문 금액에 자릿점만 넣는다. 배수를 곱하거나 단위를 바꾸지 않는다.
+
+    `fnlttSinglAcntAll`은 자릿점 **없이** 준다(실측 `'17729615657'`). 숫자로
+    읽히지 않는 값(빈 칸·`'-'`)은 손대지 않고 그대로 보여 준다 — 미기재를
+    0으로 바꾸면 없는 사실을 만든다.
+    """
+    s = str(raw if raw is not None else "").strip()
+    if not s:
+        return "-"
+    neg = s.startswith("-")
+    body = s[1:] if neg else s
+    body = body.replace(",", "")
+    if not body.isdigit():
+        return s
+    return ("-" if neg else "") + f"{int(body):,}"
+
+
+@mcp.tool()
+def get_financial_statements_full(
+    company_name: str,
+    year: str = "",
+    report_type: str = "annual",
+    fs_div: str = "CFS",
+    statement: str = "",
+) -> str:
+    """재무제표의 **전체 계정**을 원문 순서·원문 계정명 그대로 낸다.
+
+    `get_financial_summary`는 주요 계정만 낸다 — 훑을 때는 그쪽이 낫다.
+    **매출원가·판매비와관리비·금융수익·금융원가·기타이익·기타손실·지분법손익
+    처럼 그 요약에 없는 줄이 필요할 때 이 도구를 쓴다.**
+
+    Args:
+        company_name: 기업명 또는 종목코드 6자리.
+        year: 사업연도 4자리. 빈 값이면 직전 연도.
+        report_type: "annual" | "half" | "q1" | "q3".
+        fs_div: "CFS"(연결) | "OFS"(별도). CFS가 비면 OFS로 한 번 더 시도하고
+            어느 쪽을 썼는지 밝힌다.
+        statement: 빈 값이면 재무상태표·손익·현금흐름표. "BS" | "IS" | "CIS" |
+            "CF" | "SCE" 중 하나로 좁힐 수 있다. ⚠ **"IS"는 손익계산서와
+            포괄손익계산서를 **둘 다** 고른다 — 포괄손익계산서 하나만 내는
+            회사가 있어 글자대로 받으면 0행이 된다.
+
+    Returns:
+        재무제표별 표(계정명 · 당기 · 전기 · 전전기). 계정 순서와 계정명은
+        **원문 그대로**이며 판정·점수·등급은 붙이지 않는다.
+    """
+    api_key = _api_key()
+    if not api_key:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+    _yerr = _validate_year(year)
+    if _yerr:
+        return _yerr
+
+    want = (statement or "").strip().upper()
+    if want and want not in _FSFULL_ORDER:
+        return (f"❌ statement은 {' · '.join(_FSFULL_ORDER)} 중 하나여야 합니다 "
+                f"(받은 값: {statement!r}). 빈 값이면 "
+                f"{' · '.join(_FSFULL_DEFAULT)}를 모두 냅니다.")
+    fs_div = (fs_div or "CFS").strip().upper()
+    if fs_div not in ("CFS", "OFS"):
+        return f"❌ fs_div는 CFS(연결) 또는 OFS(별도)여야 합니다 (받은 값: {fs_div!r})."
+
+    resolved = resolve_corp(company_name, api_key)
+    if not resolved:
+        return f"❌ '{company_name}'에 해당하는 기업을 DART에서 찾을 수 없습니다."
+    corp_name, info = resolved
+    corp_code = info["corp_code"]
+    stock_code = info.get("stock_code", "")
+    if not year:
+        year = str(datetime.now().year - 1)
+
+    # CFS 우선, 비면 OFS — 기존 `analyze_company_risk`가 쓰는 것과 같은 패턴
+    used_div = fs_div
+    rows = fetch_financial_statements_all(corp_code, api_key, year, report_type, fs_div)
+    failed = fetch_failed(rows)
+    if not rows and not failed and fs_div == "CFS":
+        used_div = "OFS"
+        rows = fetch_financial_statements_all(corp_code, api_key, year, report_type, "OFS")
+        failed = fetch_failed(rows)
+    if not rows:
+        if failed:
+            return _fetch_failed_notice(corp_name, f"{year} {report_type}")
+        return (
+            f"🔎 **{corp_name}** ({stock_code or corp_code}) — {year} "
+            f"{report_type} 전체 계정 재무제표를 찾지 못했습니다.\n\n"
+            "이 API(`fnlttSinglAcntAll`)는 **정기보고서 제출 법인 위주**라 "
+            "비상장 외부감사대상 법인은 자료가 없습니다 — 그런 회사는 "
+            "`get_unlisted_financials`가 감사보고서 원문에서 읽습니다. "
+            "상장사인데 비었다면 연도·보고서 유형을 확인하세요."
+        )
+
+    # 종류별로 나눈다. **응답 순서를 그대로 쓴다** — 가나다·금액순으로 다시
+    # 세우면 원문에서 그 줄을 찾을 수 없다.
+    by_div: dict[str, list[dict]] = {}
+    for r in rows:
+        by_div.setdefault(str(r.get("sj_div") or ""), []).append(r)
+
+    targets = _FSFULL_ALIAS.get(want, (want,)) if want else _FSFULL_DEFAULT
+    picked = [d for d in _FSFULL_ORDER if d in targets and by_div.get(d)]
+    if not picked:
+        _have = " · ".join(f"{d}({len(v)}행)" for d, v in by_div.items() if v)
+        return (f"🔎 **{corp_name}** — {year} 응답에 {statement or '기본'} 구간이 "
+                f"없습니다. 이 보고서에 있는 것: {_have or '(없음)'}.")
+
+    _curr = fs_currency(rows)
+    lines = [
+        f"📒 **{corp_name} 전체 계정 재무제표** ({stock_code or corp_code})",
+        f"사업연도 {year} · {report_type} · "
+        f"{'연결(CFS)' if used_div == 'CFS' else '별도(OFS)'}"
+        + (f" · 보고 통화 **{_curr}**" if _curr not in ("", "KRW") else ""),
+        "",
+    ]
+    if used_div != fs_div:
+        lines.insert(2, "ℹ️ 연결(CFS)에 자료가 없어 **별도(OFS)**로 조회했습니다.")
+
+    # 기간 라벨은 응답이 준 것을 그대로 쓴다(「제 27 기」 등)
+    sample = rows[0]
+    has_bfe = any(str(r.get("bfefrmtrm_amount") or "").strip() for r in rows)
+    head = ["계정명", str(sample.get("thstrm_nm") or "당기").strip(),
+            str(sample.get("frmtrm_nm") or "전기").strip()]
+    if has_bfe:
+        head.append(str(sample.get("bfefrmtrm_nm") or "전전기").strip())
+
+    for div in picked:
+        items = by_div[div]
+        label = str(items[0].get("sj_nm") or div).strip()
+        shown = items[:_FSFULL_MAX_ROWS]
+        lines.append(f"━━ {label} ({div}) · {len(items)}행 ━━")
+        lines.append("| " + " | ".join(head) + " |")
+        lines.append("|" + "---|" * len(head))
+        for r in shown:
+            cells = [
+                _fsfull_cell(r.get("account_nm")),
+                _fsfull_amount(r.get("thstrm_amount")),
+                _fsfull_amount(r.get("frmtrm_amount")),
+            ]
+            if has_bfe:
+                cells.append(_fsfull_amount(r.get("bfefrmtrm_amount")))
+            lines.append("| " + " | ".join(cells) + " |")
+        if len(items) > len(shown):
+            lines.append(
+                f"… {label} {len(items)}행 중 {len(shown)}행 표시 "
+                f"({len(items) - len(shown)}행 생략) — "
+                f"`statement=\"{div}\"`로 좁히거나 "
+                f"`get_disclosure_document`로 원문을 여세요."
+            )
+        lines.append("")
+
+    lines.append(
+        "📎 계정 순서와 계정명은 **DART 응답 원문 그대로**입니다 — 정렬하거나 "
+        "이름을 바꾸지 않았습니다. ⚠ 응답 순서는 손익계산서를 읽는 순서가 "
+        "아닙니다(실측 CSA 코스믹은 영업이익이 앞, 매출액이 뒤에 옵니다). "
+        "금액은 자릿점만 넣었고 단위 배수를 곱하지 않았습니다. "
+        "훑어보기에는 `get_financial_summary`가 더 짧습니다."
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+
+# ── 보고서 판본 목록 (v1.24.0) ─────────────────────────────────────────
+#
+# `detect_restatement`는 「전기 숫자가 바뀌었나」에 답한다. 여기서 답하는 것은
+# 다른 질문이다 — 「이 보고서에 판본이 몇 개이고 **내가 본 숫자는 어느 판본인가**」.
+#
+# ⚠ 묶는 키는 **제목 괄호의 사업연도**다. 실측(2026-09-11 · 10개사 · 1,100일)
+#   에서 정기보고서 제목에 사업연도가 **100%** 적힌다(CSA 코스믹 13/13).
+#
+#       20240320 20240320001364 | 사업보고서 (2023.12)
+#       20240326 20240326000792 | [기재정정]사업보고서 (2023.12)
+#
+# ⚠ 어느 판본을 보고 있는지는 **대조로 확정**한다 — 재무제표 응답의 각 행에
+#   `rcept_no`가 실려 오고 그것이 DART가 그 사업연도에 대해 내주는 판본이다.
+#   실측 4건 중 **3건이 원본이 아니라 정정본**이었다(CSA 코스믹 2023 ·
+#   두산 2024 · 제이스코홀딩스 2023).
+_REVISION_TITLES = {
+    "annual": "사업보고서",
+    "half": "반기보고서",
+    "q1": "분기보고서",
+    "q3": "분기보고서",
+}
+# 사업연도 괄호 — 「사업보고서 (2023.12)」
+_REVISION_FY_RE = re.compile(r"\((\d{4})[.\-/](\d{2})\)")
+# 제목 앞 태그. ⚠ `is_amendment_disclosure`를 쓰지 않는다 — 그 패턴은
+# `[기재정정]`·`[첨부추가]`·`[정정]`만 보고 **`[첨부정정]`은 놓친다**(실측 CSA
+# 코스믹 86건 중 1건). 여기서 묻는 것은 「나중에 낸 판본인가」라 태그가 있으면
+# 그것으로 충분하고, 어떤 태그인지 **그대로 보여 준다**.
+_REVISION_TAG_RE = re.compile(r"^\[([^\]]+)\]")
+
+
+@mcp.tool()
+def list_report_revisions(
+    company_name: str,
+    year: str = "",
+    report_type: str = "annual",
+) -> str:
+    """한 사업연도의 정기보고서 **판본**을 늘어놓는다 (원본 + 정정본).
+
+    같은 보고서가 여러 번 접수된다. 재무 숫자를 기사에 옮길 때 원본을 봤는지
+    최종 정정본을 봤는지가 갈리는데, 지금까지 그걸 볼 수단이 없었다.
+
+    ⚠ **어느 판본이 옳다고 판정하지 않는다.** 존재하는 판본을 사실대로 늘어놓고
+    이 도구·이 서버가 어느 것을 기본으로 쓰는지 규칙만 밝힌다. 정정본이 오히려
+    최종 확정 정보를 담는 경우가 있어 「정정 = 오류」로 읽히는 말을 쓰지 않는다.
+
+    Args:
+        company_name: 기업명 또는 종목코드 6자리.
+        year: 사업연도 4자리. 빈 값이면 직전 연도.
+        report_type: "annual"(사업보고서) | "half"(반기) | "q1" · "q3"(분기).
+
+    Returns:
+        접수일 순 판본 목록과, 그중 DART 재무 API가 실제로 내주는 판본 표시.
+    """
+    api_key = _api_key()
+    if not api_key:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+    _yerr = _validate_year(year)
+    if _yerr:
+        return _yerr
+    title = _REVISION_TITLES.get(report_type)
+    if not title:
+        return (f"❌ report_type은 {' · '.join(_REVISION_TITLES)} 중 하나여야 "
+                f"합니다 (받은 값: {report_type!r}).")
+
+    resolved = resolve_corp(company_name, api_key)
+    if not resolved:
+        return f"❌ '{company_name}'에 해당하는 기업을 DART에서 찾을 수 없습니다."
+    corp_name, info = resolved
+    corp_code = info["corp_code"]
+    if not year:
+        year = str(datetime.now().year - 1)
+
+    rows = fetch_company_disclosures(corp_code, api_key, lookback_days=1100,
+                                     max_pages=_page_budget(1100))
+    if not rows:
+        if fetch_failed(rows):
+            return _fetch_failed_notice(corp_name, "최근 1,100일")
+        rows = []
+
+    # 같은 (보고서 종류, 사업연도)로 묶는다 — 정정 태그는 제목 앞에 붙으므로
+    # 종류 판정에 방해되지 않는다.
+    versions: list[dict] = []
+    for r in rows:
+        nm = str(r.get("report_nm") or "").strip()
+        if title not in nm:
+            continue
+        m = _REVISION_FY_RE.search(nm)
+        if not m or m.group(1) != str(year):
+            continue
+        versions.append({
+            "rcept_no": str(r.get("rcept_no") or ""),
+            "rcept_dt": str(r.get("rcept_dt") or ""),
+            "report_nm": nm,
+            "period": f"{m.group(1)}.{m.group(2)}",
+            "tag": (_REVISION_TAG_RE.match(nm).group(1)
+                    if _REVISION_TAG_RE.match(nm) else ""),
+        })
+    versions.sort(key=lambda v: (v["rcept_dt"], v["rcept_no"]))
+
+    lines = [
+        f"🗂 **{corp_name}** ({info.get('stock_code') or corp_code}) — "
+        f"{year} 사업연도 {title} 판본",
+    ]
+    if not versions:
+        lines.append("")
+        lines.append(
+            f"최근 1,100일 공시목록에서 {year} 사업연도 {title}를 찾지 못했습니다. "
+            "그 보고서가 이 조회 창보다 앞서 접수됐거나, 아직 제출 전일 수 있습니다 "
+            "— 자료가 없다는 뜻이 아닙니다."
+        )
+        return "\n".join(lines) + "\n"
+
+    # 재무 API가 어느 판본을 내주는지 — 응답 행의 `rcept_no`가 곧 그 답이다.
+    fs_rows = fetch_financial_statements(corp_code, api_key, year, report_type) or []
+    served = ""
+    for r in fs_rows:
+        if r.get("rcept_no"):
+            served = str(r["rcept_no"])
+            break
+
+    _amend_n = sum(1 for v in versions if v["tag"])
+    lines.append(
+        f"판본 {len(versions)}건 (원본 {len(versions) - _amend_n} · "
+        f"정정·후속 {_amend_n}) · 접수일 순"
+    )
+    lines.append("")
+    lines.append("| 접수일 | 접수번호 | 공시명 | 구분 | 재무 수치 출처 |")
+    lines.append("|---|---|---|---|---|")
+    for v in versions:
+        # 셀만 봐도 뜻이 서게 적는다 — 열 머리글을 못 보고 한 줄만
+        # 잘라 읽는 경우가 흔하다.
+        mark = "**재무 API가 이 판본을 제공**" if served and v["rcept_no"] == served else ""
+        lines.append(
+            f"| {_fmt_date8(v['rcept_dt'])} | {v['rcept_no']} "
+            f"| {_fsfull_cell(v['report_nm'])} "
+            f"| {v['tag'] or '원본'} | {mark} |"
+        )
+    lines.append("")
+
+    if not served:
+        lines.append(
+            "ℹ️ DART 재무 API가 어느 판본을 내주는지 **확인하지 못했습니다** — "
+            "재무제표 응답을 받지 못했습니다(자료가 없다는 뜻이 아닙니다)."
+        )
+    elif not any(v["rcept_no"] == served for v in versions):
+        lines.append(
+            f"ℹ️ DART 재무 API는 접수번호 **{served}**의 수치를 내주는데, 그 접수가 "
+            "위 목록에 없습니다 — 조회 창(최근 1,100일) 밖이거나 공시명이 위 "
+            "묶음 기준과 다른 건일 수 있습니다."
+        )
+    lines.append(
+        "📎 **선택 규칙**: 이 서버의 재무 도구(`get_financial_summary`·"
+        "`get_financial_statements_full`·`compare_financials` 등)는 DART가 그 "
+        "사업연도에 대해 내주는 수치를 그대로 씁니다 — 위 표에서 표시된 판본이 "
+        "그것입니다. 접수번호를 골라 보려면 `get_disclosure_document`·"
+        "`view_disclosure`로 그 판본의 원문을 직접 여세요."
+    )
+    lines.append(
+        "📎 정정본은 나중에 제출된 판본이라는 사실일 뿐입니다 — 앞 판본에 문제가 "
+        "있었다는 뜻도, 뒤 판본이 더 맞다는 뜻도 아닙니다. 무엇을 쓸지는 원문을 "
+        "보고 정하세요."
     )
     return "\n".join(lines).rstrip() + "\n"
 
