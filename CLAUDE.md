@@ -564,7 +564,17 @@ CB·BW·EB **발행결정 한 건**의 발행 조건을 표로 냅니다.
 >
 > **자본변동표(SCE)는 계정명이 행이 아니라 열에 있다** — 실측 2,144행 중 SCE가 1,101행(51%)이고 대조율 **28.4%**인 반면 나머지는 BS 89.4 · IS 88.9 · CIS 78.5 · CF 77.2%다. 자료가 없어서가 아니라 표 구조가 달라서이므로 **통째로 빼지 않고**(diff 43쌍을 전수 확인하니 「- 당기순이익」·「당기순손실」처럼 전부 옳았다) 그 사실을 한 줄로 밝힌다. 들여쓰기 불릿(「- 」)은 **비교할 때만** 접는다 — 표시는 원문 그대로이고, 접지 않으면 「다름」이 18.7 → 15.7%만큼 부푼다.
 >
-> **같은 문구가 다른 도구에도 있었다** — `compare_financials`의 꼬리말 「금액·계정명은 DART 응답 원문 그대로입니다」를 같은 이유로 고쳤고(계정명 출처가 같은 XBRL 계열이다), `get_unlisted_financials`가 상장사를 되돌려 보낼 때 「원문 계정명이 필요하면 `get_financial_statements_full`」을 안내하도록 덧붙였다 — 되돌려 보내는 이유가 「구조화 값이 있어서」인데 그 값의 계정명이 바로 문제인 자리였다.
+> **⚠ `get_financial_summary`도 같은 결함이다 (2026-09-12 후속 실측)**. 위 수정을 마치고 「같은 문구가 다른 도구에도 있는지」 훑다가, 문구가 아니라 **데이터 자체**가 같은 문제임을 확인했다 — `fnlttSinglAcnt`의 계정명도 XBRL 표준 태그다. 8개사 241행 실측: **15.4%가 다름**(같음 33.2%). 그리고 **뜻이 뒤집히는 표기가 15개사 중 8곳**에서 나왔고 **전부 적자 회사**다 — 이 도구의 주 사용처가 바로 그런 회사다:
+
+    CSA 코스믹 -694억 · 제이스코홀딩스 -963억 · STX -3,229억
+        API 「이익잉여금」      → 원문 「결손금」
+    CSA 코스믹 · STX · KR모터스
+        API 「영업이익」        → 원문 「영업손실」
+        API 「법인세차감전 순이익」 → 원문 「법인세비용차감전순손실」
+
+기사에 「이익잉여금 -694억」이라 쓰면 숫자 부호는 맞지만 **회사가 쓰지 않은, 뜻이 반대인 이름**이다. ⚠ **대조를 이 도구에 붙이지 않았다** — 감사보고서 ZIP 조회가 필요한데 이 도구는 가볍고 빠른 것이 쓸모이고 그 무거운 길은 `get_financial_statements_full`이 맡는다. 대신 꼬리말에 **사실과 갈 곳**을 적는다(`compare_financials`와 같은 처리, 추가 호출 0). `tests/test_summary_account_names.py`가 고정. ⚠ 그 테스트의 픽스처는 **자릿점을 넣어야 한다** — `fnlttSinglAcnt`는 `"514,531,948,000,000"`처럼 주고 도구는 그대로 내보낸다(첫 판이 raw 숫자를 넣어 기대값과 어긋났다).
+
+**같은 문구가 다른 도구에도 있었다** — `compare_financials`의 꼬리말 「금액·계정명은 DART 응답 원문 그대로입니다」를 같은 이유로 고쳤고(계정명 출처가 같은 XBRL 계열이다), `get_unlisted_financials`가 상장사를 되돌려 보낼 때 「원문 계정명이 필요하면 `get_financial_statements_full`」을 안내하도록 덧붙였다 — 되돌려 보내는 이유가 「구조화 값이 있어서」인데 그 값의 계정명이 바로 문제인 자리였다.
 
 재료는 이미 있었다 — `fetch_financial_statements_all`(`fnlttSinglAcntAll`)이 전체 계정을 받아 오는데 `server.py`가 회전율·Beneish·대여금 추출 같은 **내부 계산에만** 쓰고 도구로 노출한 적이 없다. `get_financial_summary`가 부르는 `fnlttSinglAcnt`는 주요 계정만 줘서(실측 CSA 코스믹 2025 계정명 **14종**) 매출원가·판매비와관리비·금융수익·금융원가·기타이익·기타손실·지분법손익이 **하나도 나오지 않는다**.
 
@@ -1230,6 +1240,82 @@ invalid`로 거부된다 — 태그를 먼저 밀고 `--verify-tag`를 쓴다.
 명시했다. ⚠ **그때의 실측 수치·판단 근거는 CHANGELOG에 없다**(PR 본문과 이
 문서에 있다) — 재구성으로 그것을 복원하지 않는 것이 이 선택의 요점이다.
 그 구간의 상세를 볼 때는 PR 링크나 `git log v1.20.24..v1.20.43`을 본다.
+
+## 인자 검증 — 2차 (2026-09-12)
+
+2026-08-30 라운드는 **연도**와 `analyze_company_risk`의 `lookback_years` 하나를
+고쳤다. 남은 인자를 정적으로 훑고 실제로 두드리니 두 부류가 더 나왔다.
+
+**① `lookback_years`가 여전히 도구를 죽이는 곳 4개.** 이 인자를 받는 도구가
+11개인데 `_coerce_lookback`을 거치는 것은 **2개뿐**이었고, 나머지는 아무도
+확인한 적이 없었다(기존 테스트는 `analyze_company_risk` 하나만 본다). 실측으로
+`find_actor_overlap`(키가 없어도 죽는다 — 키 확인보다 **앞에서** 인자를 만진다)·
+`list_disclosures_by_stock`·`track_insider_trading`·`check_disclosure_anomaly`가
+`TypeError: '>' not supported between instances of 'int' and 'str'`로 죽었다.
+사용자에게는 도구가 통째로 사라진 것으로 보인다 — 프로젝트 규칙(「예외를 도구
+레벨로 전파하지 않는다」) 위반이다. ⚠ **뒤 둘은 `_resolve_lookback` 안에서
+고쳤다** — 그 함수를 거치는 도구가 여럿이라 뿌리가 거기다(deprecated
+`lookback_days` 경로도 같은 모양이라 함께 고쳤다). `tests/test_arg_validation.py`가
+이제 11개 **전부**를 키 없는 경로·실행 경로 양쪽에서 두드린다.
+
+**② 모르는 열거형 값을 조용히 삼키던 곳 7개.** core `_VALID_REPORT_TYPES`는
+**로그 경고만** 하고 넘어가 사용자 화면에 아무것도 안 남는다. 그 결과:
+
+    get_audit_opinion_text("삼성전자", "2025", scope="엉뚱")
+      → 🧾 삼성전자 — 2025 사업연도 **연결감사보고서**
+
+`separate`를 `seperate`로 오타 내면 별도가 아니라 **연결**을 받고 화면은 그
+사실을 말하지 않는다 — **요청과 다른 것을 주면서 다르다고 말하지 않는** 부류다.
+`get_financial_statements_full(report_type="엉뚱")`은 「찾지 못했습니다」라 적어
+**「없다」와 「잘못 물었다」를 섞었고**(같은 인자를 받는 `list_report_revisions`는
+제대로 거절해 도구마다 답이 갈렸다), `get_executive_compensation`은 머리글에
+「2024년 **엉뚱**」을 적고 결과를 냈다. `_validate_choice(name, value, allowed)`를
+`_validate_year`와 같은 모양으로 만들어 7곳(`get_financial_summary`·
+`compare_financials`·`get_executive_compensation`·`scan_financial_anomaly`·
+`get_financial_statements_full`의 `report_type`, `get_unlisted_financials`·
+`get_audit_opinion_text`의 `scope`)에 배선했다. ⚠ **빈 값은 통과시킨다** —
+「미지정」은 오타가 아니라 기본값을 쓰겠다는 뜻이고 도구 문서가 그렇게 약속한다.
+⚠ 배선은 **AST로 함수를 식별해** 넣었다(2026-08-30에 문자열 탐색으로 하다 `year`
+인자가 없는 도구에 넣어 `NameError`를 만든 전례). 라이브 12건으로 정상 경로가
+그대로인 것을 확인했다. `tests/test_choice_validation.py`가 고정.
+
+`manage_watchlist(action)`·`get_major_decision(decision_type)`은 이미 자체 거절
+문구를 갖고 있어 건드리지 않았다(형식만 다르고 동작은 옳다).
+
+**③ 목록 인자에 문자열 하나가 오면 글자 단위로 쪼개지던 것.** 파이썬에서
+문자열은 순회 가능하다 — `terms: list[str]`에 `"계속기업"`을 주면
+`["계","속","기","업"]`처럼 돌아가는데 **예외도 나지 않고 결과도 그럴듯해
+보인다**. 실측 라이브:
+
+    search_notes_in_report("20260324000035", "계속기업")
+      → 🔎 … 주석 검색 — `계` · `속` · `기` · `업` (모두 들어간 주석) · 16,808자
+
+화면이 제 데이터와 다른 것을 말하고, 사용자는 「계속기업」을 검색했다고 믿는다
+(`mode="all"`이라 네 글자가 다 든 주석이 사실상 전부라 결과도 그럴싸하다).
+`compare_financials("삼성전자")`는 「찾을 수 없는 기업: **삼, 성, 전**」으로
+드러나서 그나마 나았고, `find_actor_overlap`·`find_risk_precedents`는 조용히
+결과를 냈다. `_coerce_str_list`를 5곳(`search_notes_in_report`의 `terms`,
+`compare_financials`·`find_actor_overlap`의 `company_names`,
+`find_risk_precedents`의 `signal_types`, `manage_watchlist`의 `companies`)에
+배선했다 — 문자열 하나는 「하나를 찾겠다」는 뜻이므로 감싼다. 수정 후 라이브:
+「`계속기업` (모두 들어간 주석)」으로 정확히 검색되고, 2개 이상을 요구하는 두
+도구는 「최소 2개 기업을 입력하세요」로 **입력이 하나라는 사실**을 말한다.
+`tests/test_list_arg_coercion.py`가 고정.
+
+**④ 정수 인자 여섯 자리가 더 죽었다.** ①과 같은 부류를 `lookback_years` 밖으로
+넓혀 훑으니 `get_disclosure_document(max_chars)`·`view_disclosure(page,
+page_size)`·`search_market_disclosures(days, max_results)`가 문자열·`None`에
+`TypeError`로 죽었다. `_coerce_int(value, default, lo, hi)`를 만들고
+`_coerce_lookback`과 같은 규칙(bool은 기본값, 범위 밖은 클램프)을 적용했다.
+⚠ **클램프 값은 각 도구가 이미 쓰던 것을 그대로 넘긴다** — 바뀌는 것은
+「죽느냐 마느냐」뿐이고 정상 입력의 동작은 그대로다(라이브 9건으로 확인).
+곁가지 둘: `get_disclosure_document`는 **클램프가 아예 없어** 독스트링의
+「최대 20000」이 하부의 내부 강제에 기대고 있었고, `search_notes_in_report`는
+`int(context_chars or 600)`이라 `"abc"`에 `ValueError`를 던졌다.
+`tests/test_int_arg_coercion.py`가 고정 — ⚠ 이 테스트는 **키가 있어야** 결함이
+드러난다(클램프가 키 확인 뒤에 있어, 첫 판은 `_api_key`를 빈 값으로 둬 6건이
+전부 「통과」했다). `find_risk_precedents(lookback_days)`는 **쓰이지 않는 인자**라
+그대로 뒀다.
 
 ## 인자 검증 (2026-08-30)
 
