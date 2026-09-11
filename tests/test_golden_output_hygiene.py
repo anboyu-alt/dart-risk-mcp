@@ -85,6 +85,15 @@ _FIRST_LINE_PATTERNS: dict[str, str] = {
     "shareholder":   r"^👥 \*\*주주 현황: .+\*\* \(\d{6}\) — \d{4} 사업연도 보고 기준$",
     "timeline":      r"^⏳ \*\*이벤트 타임라인: .+\*\* \(\d{6}\)$",
     "turnover":      r"^📊 \*\*.+\*\* \(\d{6}\) — 회전율 추세 \(\d+년\)$",
+    # v1.23.0~v1.26.0 도구 — 2026-09-12까지 골드 매트릭스에 **없었다**
+    # (그래서 이 검사가 그 출력을 한 번도 보지 않았다).
+    # ⚠ 자료를 못 찾은 경우(🔎)도 유효한 출력이라 두 갈래를 함께 받는다 —
+    #   감사보고서·사업보고서는 제출 시점에 매여 회사·연도마다 갈린다.
+    "fsfull":        r"^(?:📒 \*\*.+ 전체 계정 재무제표\*\* \(\d{6}\)"
+                     r"|🔎 \*\*.+\*\* \(\d{6}\) — .+ 찾지 못했습니다\.)$",
+    "revisions":     r"^🗂 \*\*.+\*\* \(\d{6}\) — \d{4} 사업연도 .+ 판본$",
+    "audit_text":    r"^(?:🧾 \*\*.+\*\* \(\d{6}\) — \d{4} 사업연도 .*감사보고서"
+                     r"|🔎 \*\*.+\*\* \(\d{6}\) — .+ 찾지 못했습니다\.)$",
     # 종목코드 1개
     "list":          r"^📋 \*\*.+\*\* \(\d{6}\) 공시 접수번호 목록$",
     # rcept 4개
@@ -129,6 +138,13 @@ _ALLOWED_PAREN_ABBREVS = {
     # 실측에 나온 두 개만 넣는다 — 안 본 약어를 미리 넣으면 이 검사가
     # 막으려는 것(우리가 만든 라벨에 코드가 새는 것)을 못 잡는다.
     "CSO", "CTO",
+    # 재무제표 구분 — 2026-09-12 추가. `get_financial_statements_full`을 이
+    # 검사의 코퍼스에 넣자 바로 걸렸다(STX_fsfull.txt의 「연결(CFS)」).
+    # ⚠ 이것들은 **사용자가 넣는 인자 값**이다 — `fs_div="CFS"`·
+    #   `statement="BS"`처럼 그대로 호출에 쓰므로 화면에 있어야 무엇을 넣을지
+    #   안다(내부 flag 코드가 새는 것과 다르다). 도구가 실제로 내는 값만
+    #   넣는다 — 안 본 약어를 미리 넣으면 이 검사가 무력해진다.
+    "CFS", "OFS", "BS", "IS", "CIS", "CF", "SCE",
     # 정부·기관
     "MFDS", "FSC", "FSS", "SEC", "NICE", "KFTC", "KRX",
     # 회계 표준 지표
@@ -176,13 +192,41 @@ def _short_name(fname: str) -> str:
     return rest
 
 
+def _our_words_only(path) -> str:
+    """골드 본문 중 **우리가 쓴 문장만** 남긴다.
+
+    `get_audit_opinion_text`는 감사보고서 문장을 **원문 그대로 인용하는 것이
+    목적**인 도구다(v1.25.0). 그 인용문에 우리 어휘 규칙을 걸면 감사인이 쓴 말을
+    지우게 된다 — 실측으로 삼성전자 골드의 「Device Solutions**(DS)** 부문」이
+    이 파일의 내부 코드 검사에 걸렸고, 같은 이유로 「위험」·「등급」 같은 낱말도
+    감사인 문장에서는 정상이다(`tests/test_audit_opinion_text_tool.py`의
+    `_our_words`가 같은 판단을 먼저 했다 — 규칙을 여기로 옮겨 **모든** hygiene
+    검사에 일관되게 적용한다).
+
+    인용 블록은 `━━` 줄에서 시작해 우리 문장 표지(📎·ℹ️·표·머리글)에서 끝난다.
+    """
+    text = path.read_text(encoding="utf-8")
+    if not path.name.endswith("_audit_text.txt"):
+        return text
+    keep, inside = [], False
+    for ln in text.splitlines():
+        if ln.startswith("━━"):
+            inside = True
+            continue
+        if ln.startswith(("📎", "ℹ️", "|", "🧾", "🔎", "접수번호", "원문 ")):
+            inside = False
+        if not inside:
+            keep.append(ln)
+    return "\n".join(keep)
+
+
 class TestGoldenOutputHygiene(unittest.TestCase):
     def _iter_fixtures(self) -> list[Path]:
         return sorted(FIXTURES.glob("*.txt"))
 
     def test_no_internal_flag_codes(self) -> None:
         for path in self._iter_fixtures():
-            text = path.read_text(encoding="utf-8")
+            text = _our_words_only(path)
             for code in _INTERNAL_CODES:
                 self.assertNotIn(
                     code, text, f"{path.name}에 내부 flag 코드 '{code}' 노출"
@@ -190,7 +234,7 @@ class TestGoldenOutputHygiene(unittest.TestCase):
 
     def test_no_catalog_english_metadata(self) -> None:
         for path in self._iter_fixtures():
-            text = path.read_text(encoding="utf-8")
+            text = _our_words_only(path)
             for token in _CATALOG_META:
                 self.assertNotIn(
                     token, text, f"{path.name}에 카탈로그 영문 메타 '{token}' 노출"
@@ -203,7 +247,7 @@ class TestGoldenOutputHygiene(unittest.TestCase):
 
     def test_no_english_abbreviations(self) -> None:
         for path in self._iter_fixtures():
-            text = path.read_text(encoding="utf-8")
+            text = _our_words_only(path)
             for abbr in _ABBREV:
                 self.assertNotIn(
                     abbr, text, f"{path.name}에 영문 약어 '{abbr.strip()}' 노출"
@@ -212,7 +256,7 @@ class TestGoldenOutputHygiene(unittest.TestCase):
     def test_no_score_or_grade_labels(self) -> None:
         """v0.8.5: 기업 위험도를 정량화하는 점수·등급 표기가 사용자 출력에 노출되면 안 된다."""
         for path in self._iter_fixtures():
-            text = path.read_text(encoding="utf-8")
+            text = _our_words_only(path)
             for pattern, desc in _SCORE_GRADE_PATTERNS:
                 self.assertFalse(
                     re.search(pattern, text),
@@ -222,7 +266,7 @@ class TestGoldenOutputHygiene(unittest.TestCase):
     def test_no_severity_emoji(self) -> None:
         """v0.8.5: 위상·위험도를 시각적으로 등급화하던 이모지 전면 금지."""
         for path in self._iter_fixtures():
-            text = path.read_text(encoding="utf-8")
+            text = _our_words_only(path)
             for emoji in _SEVERITY_EMOJI:
                 self.assertNotIn(
                     emoji, text, f"{path.name}에 등급 이모지 '{emoji}' 노출"
@@ -263,7 +307,7 @@ class TestGoldenOutputHygiene(unittest.TestCase):
     def test_core_headers_preserved(self) -> None:
         """v1.0: 사용자가 학습한 핵심 헤더 8종이 골드 전체에서 살아 있어야 한다."""
         all_text = "\n".join(
-            p.read_text(encoding="utf-8") for p in self._iter_fixtures()
+            _our_words_only(p) for p in self._iter_fixtures()
         )
         for header in _CORE_HEADERS:
             self.assertIn(
@@ -291,7 +335,7 @@ class TestGoldenOutputHygiene(unittest.TestCase):
                     or "_doc_" in path.name
                     or "_view_" in path.name):
                 continue
-            text = path.read_text(encoding="utf-8")
+            text = _our_words_only(path)
             for m in pat.finditer(text):
                 code = m.group(1)
                 self.assertIn(
