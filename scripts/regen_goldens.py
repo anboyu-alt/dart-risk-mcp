@@ -22,6 +22,7 @@ import argparse
 import os
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
@@ -68,6 +69,9 @@ from dart_risk_mcp.server import (  # noqa: E402
     search_market_disclosures,
     track_capital_structure,
     track_turnover_trend,
+    get_financial_statements_full,
+    list_report_revisions,
+    get_audit_opinion_text,
     track_debt_balance,
     track_fund_usage,
     track_insider_trading,
@@ -79,6 +83,11 @@ GOLDEN = ROOT / "tests" / "fixtures" / "sample_outputs"
 # ────────────────────────────────────────────────────────────────────────────
 # 6개 대상 회사 (iridescent plan 라인 211, 사용자 승인 2026-04-26)
 # ────────────────────────────────────────────────────────────────────────────
+# 감사보고서·사업보고서에 매인 도구들이 쓰는 사업연도. 다른 항목의 "2024"와
+# 달리 제출 시점을 따라가야 해서 직전 연도로 계산한다(3월 제출 전이면 그
+# 도구들이 「찾지 못했습니다」를 내는데 그것도 유효한 hygiene 대상이다).
+_FS_YEAR = str(datetime.now().year - 1)
+
 COMPANIES = [
     {"name": "셀트리온",       "stock": "068270", "category": "대형주(코스피·바이오)"},
     {"name": "제이스코홀딩스", "stock": "019660", "category": "중소형(코스닥·위험사례)"},
@@ -112,6 +121,15 @@ COMPANY_TOOL_MATRIX: list[tuple[str, Callable[[dict], str]]] = [
     ("capital",       lambda c: track_capital_structure(c["name"], 3)),
     ("affiliates",    lambda c: get_affiliate_investments(c["name"], "2024")),
     ("turnover",      lambda c: track_turnover_trend(c["name"], 3)),
+    # v1.23.0~v1.26.0에 들어온 도구들이 **하나도 이 매트릭스에 없었다**
+    # (2026-09-12 발견) — 그래서 `test_golden_output_hygiene.py`가 그 출력을
+    # 한 번도 검사한 적이 없다. v0.8.5 무판정 원칙(점수·등급·이모지 회귀)의
+    # 기계적 방어가 그만큼 비어 있었다. 회사명 단일 인자인 셋을 먼저 넣는다.
+    # ⚠ 연도는 **직전 사업연도**를 쓴다 — 다른 항목이 "2024"로 고정된 것과
+    #   달리 이 셋은 감사보고서·사업보고서 제출 시점에 매인다.
+    ("fsfull",        lambda c: get_financial_statements_full(c["name"], _FS_YEAR)),
+    ("revisions",     lambda c: list_report_revisions(c["name"], _FS_YEAR)),
+    ("audit_text",    lambda c: get_audit_opinion_text(c["name"], _FS_YEAR)),
 ]
 
 # B. 종목코드 인자 1개 도구
