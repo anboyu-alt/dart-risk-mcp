@@ -135,5 +135,63 @@ class TestAnalyzeCapitalTimeline(unittest.TestCase):
         self.assertIn("앞선", out)
 
 
+@pytest.mark.usefixtures("no_structured_dart")
+class TestDividendHistory(unittest.TestCase):
+    """`track_fund_usage`의 배당 이력도 같은 구조다.
+
+    `sorted(key=(bsns_year, se))` **오름차순** + `[:20]`이라 오래된 쪽만 남는다.
+    실측(2026-09-12 라이브, 5년 조회): 삼성전자·셀트리온·KB금융·나이스정보통신이
+    **전부 20줄에서 끊기고 마지막이 2022~2023년**이었다 — 최근 2~3년 배당이
+    통째로 화면에 없다. 배당은 한 연도에 구분(주당배당금·배당성향·수익률 …)이
+    여럿이라 5년이면 쉽게 20건을 넘는다.
+
+    「... 외 N건」은 적고 있었지만 **그 N건이 최근이라는 사실**은 말하지 않았다.
+    """
+
+    def _run(self, n_years=6, per_year=5):
+        recs = []
+        for y in range(2020, 2020 + n_years):
+            for k in range(per_year):
+                recs.append({"bsns_year": str(y), "reprt_code": "11011",
+                             "se": f"구분{k}", "stock_knd": "보통주",
+                             "thstrm": f"{y}{k}", "frmtrm": "1"})
+        with patch.object(S, "_api_key", return_value="k"), \
+             patch.object(S, "resolve_corp",
+                          return_value=("갑", {"corp_code": "00000000",
+                                               "stock_code": "000000"})), \
+             patch.object(S, "fetch_fund_usage", return_value=[{
+                 "year": "2025", "reprt_code": "11011", "kind": "공모",
+                 "tm": "1", "pay_de": "20250101", "stlm_dt": "20251231",
+                 # ⚠ 금액은 **정수**다 — `fetch_fund_usage`가 `_to_int_safe`로
+                 #   정규화해 넘긴다. 문자열로 두면 렌더의 `:,`가 ValueError다.
+                 "plan_useprps": "운영자금", "plan_amount": 1000000000,
+                 "real_dtls_cn": "운영자금", "real_dtls_amount": 1000000000,
+                 "dffrnc_resn": "", "pay_amount": 1000000000,
+                 "pay_pending": False, "flags": [],
+                 "plan_cats": ["운영자금"], "real_cats": ["운영자금"]}]), \
+             patch.object(S, "fetch_dividend_history", return_value=recs), \
+             patch.object(S, "detect_dividend_drain", return_value=[]):
+            return S.track_fund_usage("갑", 5)
+
+    def test_최근_연도를_버리지_않는다(self):
+        out = self._run()
+        self.assertIn("2025", out, "가장 최근 배당 연도가 사라졌다")
+
+    def test_어느_쪽이_잘렸는지_밝힌다(self):
+        out = self._run()
+        self.assertIn("앞선", out)
+
+    def test_표시는_시간순을_지킨다(self):
+        out = self._run()
+        ys = re.findall(r"^- (\d{4})  구분", out, re.M)
+        self.assertEqual(ys, sorted(ys))
+
+    def test_상한_이하면_전부_낸다(self):
+        out = self._run(n_years=2, per_year=3)
+        self.assertNotIn("앞선", out)
+        self.assertIn("2020", out)
+        self.assertIn("2021", out)
+
+
 if __name__ == "__main__":
     unittest.main()
