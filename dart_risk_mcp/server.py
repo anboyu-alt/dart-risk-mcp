@@ -8256,6 +8256,11 @@ def get_unlisted_financials(
                 "있습니다(실측 8개사 2,144행 중 15.7%).")
 
     reports = find_audit_reports(corp_code, api_key, year=year, scope=scope)
+    # ⚠ 「못 받았다」를 「없다」로 말하지 않는다 — 아래 안내는 「연결재무제표를
+    #   작성하지 않는 회사일 수 있습니다」처럼 **회사에 대한 진술**을 담고 있어
+    #   한도 초과·점검 때 내보내면 거짓이 된다.
+    if getattr(reports, "fetch_failed", False):
+        return _fetch_failed_notice(corp_name, "최근 1,200일")
     if not reports:
         _scope_nm = "감사보고서" if scope == "separate" else "연결감사보고서"
         _yr = f"{year} 사업연도 " if year else ""
@@ -9144,6 +9149,10 @@ def get_audit_opinion_text(
     candidates: list[tuple[str, str, str]] = []   # (rcept_no, source, filer)
     reports = find_audit_reports(corp_code, api_key, year=year, scope=scope,
                                  lookback_days=_AUDIT_TEXT_LOOKBACK) or []
+    # ⚠ 조회 실패를 「없음」으로 말하지 않는다(아래 안내가 「조회 창 안에 둘 다
+    #   없거나 아직 제출 전」이라 적어 회사에 대한 진술이 된다).
+    if getattr(reports, "fetch_failed", False):
+        return _fetch_failed_notice(corp_name, f"최근 {_AUDIT_TEXT_LOOKBACK:,}일")
     for r in reports:
         candidates.append((r["rcept_no"], f"{r['report_nm']} 공시",
                            r.get("flr_nm", "")))
