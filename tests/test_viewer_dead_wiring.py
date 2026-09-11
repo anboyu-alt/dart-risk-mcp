@@ -135,10 +135,20 @@ def test_세_블록이_모두_밝힌다():
         assert f"detailCapNote(hits) + {card}" in _HTML, f"{card}에 표기가 없다"
 
 
-def test_두_조회를_합칠_때_total도_합친다():
-    """`concat`은 커스텀 속성을 옮기지 않는다 — 놓치면 total이 0이 된다."""
+def test_조회를_합칠_때_total도_합친다():
+    """`concat`은 커스텀 속성을 옮기지 않는다 — 놓치면 total이 0이 된다.
+
+    2026-09-11에 `ACQ_REVIEW`가 세 번째 소스로 들어왔다. 리터럴로 잠그면 소스가
+    늘 때마다 이 가드가 **의도와 무관하게** 깨지므로, 「합쳐지는 소스 수」와
+    「total 합산 항 수」가 같은지를 본다 — 하나라도 빠지면 여기서 걸린다.
+    """
     body = _fn("loadAssetTransferCore")
-    assert "hits.total = (atHits.total || 0) + (foHits.total || 0);" in body
+    sources = set(re.findall(r"const (\w+Hits) = detailBlockHits\(", body))
+    assert len(sources) >= 3, f"소스를 찾지 못했다: {sources}"
+    m = re.search(r"hits\.total\s*=\s*([^;]+);", body)
+    assert m, "total 합산이 없다"
+    summed = set(re.findall(r"(\w+Hits)\.total", m.group(1)))
+    assert summed == sources, f"total에서 빠진 소스: {sources - summed}"
 
 
 def test_원문_조회_상한은_그대로다():
