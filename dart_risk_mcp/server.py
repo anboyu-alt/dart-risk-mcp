@@ -410,6 +410,7 @@ _AUDIT_SCOPES = ("consolidated", "separate")
 
 
 _CAPITAL_TIMELINE_MAX = 30   # `track_capital_structure` 시계열 표시 상한
+_DIVIDEND_ROWS_MAX = 20      # `track_fund_usage` 배당 이력 표시 상한
 
 
 def _validate_choice(name: str, value, allowed) -> str:
@@ -6903,7 +6904,15 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
         _div_blank_n = sum(1 for r in cash_dividends if _div_blank(r))
         _div_rows = sorted((r for r in cash_dividends if not _div_blank(r)),
                            key=lambda x: (x.get("bsns_year", ""), x.get("se", "")))
-        for r in _div_rows[:20]:
+        # ⚠ `_div_rows`는 (사업연도, 구분) **오름차순**이라 옛 `[:20]`은
+        #   **가장 오래된 20건**만 남겼다 — 5년 조회에서 최근 2~3년 배당이
+        #   통째로 사라진다(실측 삼성전자·셀트리온·KB금융·나이스정보통신이
+        #   전부 20줄에서 끊기고 마지막이 2022~2023년이었다). 배당은 한 연도에
+        #   구분(주당배당금·배당성향·수익률 …)이 여럿이라 쉽게 20건을 넘는다.
+        #   `track_capital_structure` 시계열과 같은 판단: **최근을 고르고
+        #   표시는 시간순**을 지킨다.
+        _div_dropped = max(0, len(_div_rows) - _DIVIDEND_ROWS_MAX)
+        for r in _div_rows[-_DIVIDEND_ROWS_MAX:]:
             yr = r.get("bsns_year", "-")
             se = r.get("se", "-")
             kn = r.get("stock_knd", "-")
@@ -6913,8 +6922,10 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
                 f"- {yr}  {se} ({kn})  당기 {ts} / 전기 {fr}"
             )
 
-        if len(_div_rows) > 20:
-            lines.append(f"   ... 외 {len(_div_rows) - 20}건")
+        if _div_dropped:
+            lines.append(
+                f"   ... 전체 {len(_div_rows)}건 중 최근 {_DIVIDEND_ROWS_MAX}건 "
+                f"표시 · 앞선 {_div_dropped}건 생략")
         if _div_blank_n:
             lines.append(f"   (당기·전기가 모두 미기재인 {_div_blank_n}건 제외)")
         # DIVIDEND_DRAIN 검출 — alotMatter 자체에 같은 (bsns_year,
