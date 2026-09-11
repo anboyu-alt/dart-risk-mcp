@@ -3591,8 +3591,22 @@ def lookup_known_actor(name: str) -> str:
     """
     records = lookup_actor(name)
     if not records:
-        return (f"'{name}'에 대한 공개기록이 레지스트리에 없습니다. "
-                "(등재는 공개 출처가 확인된 경우에만 이뤄집니다.)")
+        # ⚠ 동봉 데이터는 **빈 스켈레톤**이다(v1.5.0부터 인물 데이터 미포함 —
+        #   공개 레포에 실명을 커밋하지 않는다는 노출 경계). 그래서 설정 없이
+        #   쓰면 무엇을 넣어도 이 답이 온다. 옛 문구는 그 사실도, 채우는
+        #   방법도 말하지 않아 「늘 빈 깡통」으로 읽혔다(2026-09-11 제보).
+        return (
+            f"'{name}'에 대한 공개기록이 레지스트리에 없습니다. "
+            "(등재는 공개 출처가 확인된 경우에만 이뤄집니다.)\n\n"
+            "ℹ️ 이 레지스트리는 **기본적으로 비어 있습니다** — 동봉 데이터에는 "
+            "인물이 들어 있지 않습니다(공개 저장소에 실명을 두지 않기 위해서입니다). "
+            "채우려면 둘 중 하나를 설정하세요.\n"
+            "  · `DART_KNOWN_ACTORS_PATH` — 로컬 JSON 파일 경로\n"
+            "  · `NOTION_TOKEN` + `DB_KNOWN_ACTORS` — 비공개 Notion DB(24시간 캐시)\n"
+            "둘 다 없으면 네트워크 호출 없이 비활성화됩니다.\n"
+            "※ `manage_watchlist`의 워치리스트는 **별개 저장소**입니다 — 거기 "
+            "등록한 인물은 이 조회에 나오지 않습니다."
+        )
     lines = [f"📎 '{name}' 공개기록 (사실 표기 — 판정 아님):"]
     has_seed = False
     has_auto = False
@@ -3716,13 +3730,25 @@ def find_actor_overlap(
     lookback_years: int = 1,
     watchlist: str = "",
 ) -> str:
-    """여러 기업(2~5개)의 CB/BW/EB 인수자 + 유상증자 인수자를 비교해 공통 행위자(세력)를 탐지한다.
+    """여러 기업(2~5개)의 **임원 겸직**과 CB/BW/EB·유상증자 **인수자**를 비교해
+    공통 행위자(세력)를 탐지한다.
+
+    ⚠ **실제로는 임원 겸직이 주 산출물이다.** 인수자 쪽은 원문 ZIP을 열어야 해
+    기업당 CB 3건 + 유상증자 3건으로 상한이 걸린다 — CB를 열 번 스무 번 굴린
+    회사에서는 최근 3건만 본다(상한에 걸리면 「N건 중 3건 조회 · M건 미조회」로
+    분모를 적는다). 반면 임원현황은 사업연도 단위 명부를 다년 합집합으로 받아
+    상한이 없다. 무자본 M&A 세력은 인수마다 새 SPC·조합을 만들어 조합명이 매번
+    다르지만 **사람 이름은 고정점**이라, 겸직 쪽이 더 자주 걸린다.
+
+    임원은 **등기·미등기를 가리지 않고** 수집하며 회사별 직위·등기 여부를 함께
+    표기한다(동명이인을 눈으로 가릴 수 있게 하는 사실 표기이며 필터가 아니다).
 
     DART API 제약상, 분석 대상 기업을 직접 지정해야 한다.
     "행위자 이름으로 역검색"은 현재 불가능하다.
 
     CB/BW/EB 공시(CB_BW, EB 신호)와 유상증자 공시(3PCA, RIGHTS_UNDER 신호)를
-    모두 수집해 인수자를 통합 비교하며, 공통 행위자에는 출처 태그(CB / 유상증자)를 표시한다.
+    모두 수집해 인수자를 통합 비교하며, 공통 행위자에는 출처 태그
+    (CB / 유상증자 / 임원)를 표시한다.
 
     무자본 M&A 세력은 인수 시점에 CB를 한 번 박은 뒤 수년에 걸쳐 리픽싱·차환으로
     굴리므로, 신규 CB 발행결정 공시는 과거에 몰린다. lookback_years로 조회 윈도우를
@@ -3816,6 +3842,7 @@ def find_actor_overlap(
 
         cb_rcepts: list[str] = []
         rights_rcepts: list[str] = []
+        cb_total = rights_total = 0   # 상한과 무관한 전체 건수 — 고지의 분모
         for d in disclosures:
             report_nm = d.get("report_nm", "")
             rcept_no = d.get("rcept_no", "")
@@ -3823,20 +3850,38 @@ def find_actor_overlap(
                 continue
             signals = match_signals(report_nm) or []
             keys = {s["key"] for s in signals}
-            if keys & CB_SIGNAL_KEYS and len(cb_rcepts) < MAX_DOCS_PER_SOURCE:
-                cb_rcepts.append(rcept_no)
-            if keys & RIGHTS_SIGNAL_KEYS and len(rights_rcepts) < MAX_DOCS_PER_SOURCE:
-                rights_rcepts.append(rcept_no)
-            # 두 소스 모두 상한에 도달하면 조기 종료 (최대 6건까지만 수집)
-            if (len(cb_rcepts) >= MAX_DOCS_PER_SOURCE
-                    and len(rights_rcepts) >= MAX_DOCS_PER_SOURCE):
-                break
+            if keys & CB_SIGNAL_KEYS:
+                cb_total += 1
+                if len(cb_rcepts) < MAX_DOCS_PER_SOURCE:
+                    cb_rcepts.append(rcept_no)
+            if keys & RIGHTS_SIGNAL_KEYS:
+                rights_total += 1
+                if len(rights_rcepts) < MAX_DOCS_PER_SOURCE:
+                    rights_rcepts.append(rcept_no)
+            # ⚠ **조기 종료하지 않는다.** 옛 코드는 두 소스가 모두 상한에
+            #   닿으면 `break`해서 **전체가 몇 건인지 셀 수 없었다** — 그래서
+            #   고지가 "상한에 걸린 회사: X"까지만 적고 분모를 못 냈다.
+            #   여기서 더 도는 것은 이미 받아 둔 제목 매칭뿐이라 API 호출이
+            #   늘지 않는다(원문 조회는 아래에서 상한만큼만 한다).
 
         # 상한은 원문 조회 예산이라 필요하지만, 걸렸다는 사실은 적어야
         # 한다 — 이 도구의 결론이 "겹치는 사람이 없다"이기 때문이다.
-        if (len(cb_rcepts) >= MAX_DOCS_PER_SOURCE
-                or len(rights_rcepts) >= MAX_DOCS_PER_SOURCE):
-            capped_corps.append(corp_name)
+        # 그리고 **분모를 함께 적는다** — 몇 건 중 몇 건을 봤는지가 없으면
+        # 무엇을 못 봤는지 읽을 수 없다(2026-09-11 제보. `analyze_company_risk`는
+        # 2026-08-30에 같은 자리를 고쳤다).
+        _capped_parts = []
+        if cb_total > len(cb_rcepts):
+            _capped_parts.append(
+                f"CB/BW/EB {cb_total}건 중 최근 {len(cb_rcepts)}건 조회 · "
+                f"{cb_total - len(cb_rcepts)}건 미조회"
+            )
+        if rights_total > len(rights_rcepts):
+            _capped_parts.append(
+                f"유상증자 {rights_total}건 중 최근 {len(rights_rcepts)}건 조회 · "
+                f"{rights_total - len(rights_rcepts)}건 미조회"
+            )
+        if _capped_parts:
+            capped_corps.append(f"{corp_name}({' / '.join(_capped_parts)})")
 
         investors: list[tuple] = []  # (source, inv_dict, rcept_no)
         for rn in cb_rcepts:
@@ -3856,7 +3901,11 @@ def find_actor_overlap(
             per_company_solo.setdefault(corp_name, []).append(
                 (name, source, amount, rn, ""))
 
-        # 등기임원 겸직 수집 (조합명 비고정성 우회 — 사람 이름은 고정점)
+        # 임원 겸직 수집 (조합명 비고정성 우회 — 사람 이름은 고정점)
+        # ⚠ **등기·미등기를 가리지 않는다.** 「등기임원 겸직」이라 적으면
+        #   거짓이다 — 뷰어에서 2026-08-30에 같은 단정을 고쳤다(셀트리온
+        #   이혁재는 미등기 수석부사장이다). 등기 여부는 아래 `_detail`이
+        #   직위와 함께 담아 화면에 사실로 표기한다.
         #
         # 직위·등기 여부를 함께 담는 `_detail`을 쓴다. 이름만 보면 **동명이인이
         # 세력으로 보인다** — 대조군 실측(2026-08-23): 삼성전자 「이혁재」는
@@ -3981,9 +4030,10 @@ def find_actor_overlap(
             )
     if capped_corps:
         lines.append(
-            f"  ℹ️ 원문 조회 상한(기업당 CB 3건 + 유상증자 3건)에 걸린 회사: "
-            f"{', '.join(capped_corps)} — 이 회사들의 나머지 공시 인수자는 "
-            f"비교에 들어가지 않았습니다."
+            f"  ℹ️ 원문 조회 상한(기업당 CB 3건 + 유상증자 3건)에 걸린 회사 — "
+            f"{' / '.join(capped_corps)}. 미조회분의 인수자는 이 비교에 "
+            f"들어가지 않았습니다. 좁혀 보려면 `list_disclosures_by_stock`으로 "
+            f"공시를 고른 뒤 `check_disclosure_risk`로 개별 확인하세요."
         )
     lines.append("")
 
@@ -4821,16 +4871,20 @@ def get_affiliate_investments(company_name: str, year: str = "") -> str:
     """
     타법인 출자현황을 조회합니다 — 이 회사가 어떤 법인들에 돈을 넣었는지.
 
-    피출자 법인명·출자목적·기말 지분율·장부가액·최초취득일·피투자사
-    최근 재무(총자산/순이익)를 사실로 나열합니다. 무자본 M&A 세력의
-    SPC·자회사망 추적, 특수관계자 자산 공동화 패턴 확인에 활용합니다.
+    피출자 법인명·출자목적·최초취득일·최초취득금액·**기초 장부가액**·
+    **증감(취득·처분)**·**증감(평가)**·기말 장부가액·기말 지분율·피투자사
+    최근 순이익을 사실로 나열합니다. 기초와 증감을 함께 실어야 「그해에
+    전액을 털었다」가 보입니다 — 기말만 보면 그 건은 `-` 한 글자입니다.
+    무자본 M&A 세력의 SPC·자회사망 추적, 특수관계자 자산 공동화 패턴
+    확인에 활용합니다.
 
     Args:
         company_name: 기업명 또는 종목코드(6자리).
         year: 사업연도(예: "2024"). 빈 값이면 직전 연도.
 
     Returns:
-        출자 내역 표(장부가액 상위 30건) + 요약 사실 + 단위 유의 안내.
+        출자 내역 표(기초·기말 장부가액 중 큰 값 기준 상위 30건) + 요약 사실
+        (전액 상각·처분 건수 포함) + 단위 유의 안내. 원문의 합계 행은 제외합니다.
     """
     api_key = _api_key()
     if not api_key:
@@ -4863,9 +4917,32 @@ def get_affiliate_investments(company_name: str, year: str = "") -> str:
         except (TypeError, ValueError):
             return None
 
+    def _amt(r, field):
+        return _parse_fs_amount(r.get(field))
+
     def _book(r):
-        v = _parse_fs_amount(r.get("trmend_blce_acntbk_amount"))
+        v = _amt(r, "trmend_blce_acntbk_amount")
         return v if v is not None else -1
+
+    # ⚠ **기말만 보고 정렬하면 「그해에 전액 턴」 건이 맨 뒤로 밀린다.**
+    #   기말이 `"-"`면 옛 `_book`이 -1을 돌려줘 4억짜리 신규 출자보다 뒤에
+    #   놓였다(실측 CSA 코스믹 젠트로그룹 — 최초취득 79.4억 · 기초 12.9억 ·
+    #   증감(평가) -12.9억 · 기말 `"-"`). 그해 안에 회사가 들고 있던 규모로
+    #   정렬해야 그 건이 제자리에 온다.
+    def _scale(r):
+        vals = [abs(v) for v in (_amt(r, "trmend_blce_acntbk_amount"),
+                                 _amt(r, "bsis_blce_acntbk_amount"))
+                if v is not None]
+        return max(vals) if vals else -1
+
+    # 기초 잔액이 있었는데 기말이 0·미기재 = 당기 중 전액 소멸(상각·처분).
+    # 20개사 750행 실측(2026-09-11)에서 **39건(5.2%)**이고 그중에는 이마트
+    # ㈜에메랄드에스피브이 2조 6,531억 → 0도 있다. 표에 기초·증감이 없으면
+    # 이 사실이 `-` 한 글자로 사라진다.
+    def _wiped(r):
+        b = _amt(r, "bsis_blce_acntbk_amount")
+        e = _amt(r, "trmend_blce_acntbk_amount")
+        return bool(b and b > 0 and (e is None or e == 0))
 
     # 요약 사실
     total = len(rows)
@@ -4876,6 +4953,7 @@ def get_affiliate_investments(company_name: str, year: str = "") -> str:
         if ni is not None and ni < 0:
             loss_cnt += 1
     new_cnt = sum(1 for r in rows if str(r.get("frst_acqs_de", "")).startswith(year))
+    wiped = [r for r in rows if _wiped(r)]
 
     lines = [
         f"🏢 **{corp_name}** ({info.get('stock_code','')}) — 타법인 출자현황 ({year} 사업보고서 기준)",
@@ -4883,32 +4961,50 @@ def get_affiliate_investments(company_name: str, year: str = "") -> str:
         f"총 {total}건 · 기말 지분율 50% 이상 {majority}건 · "
         f"피투자사 최근 사업연도 순이익 적자 {loss_cnt}건 · {year}년 신규 취득 {new_cnt}건",
         "",
-        "| 피출자 법인 | 출자목적 | 기말지분율(%) | 기말장부가액 | 최초취득일 | 피투자사 순이익 |",
-        "|---|---|---|---|---|---|",
+        "| 피출자 법인 | 출자목적 | 최초취득일 | 최초취득금액 | 기초장부가액 "
+        "| 증감(취득·처분) | 증감(평가) | 기말장부가액 | 기말지분율(%) | 피투자사 순이익 |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ]
+    if wiped:
+        lines.insert(
+            3,
+            f"⚠ 기초에 잔액이 있었는데 기말 장부가액이 0·미기재인 건 {len(wiped)}건 "
+            f"— 당기 중 전액 상각·처분된 것입니다(아래 표의 「증감」 칸에서 확인하세요).",
+        )
 
     def _cell(v) -> str:
         """마크다운 표 셀 정제 — 개행·파이프가 표 구조를 깨지 않게."""
         s = str(v if v not in (None, "") else "-").strip()
         return " ".join(s.replace("|", "／").split())
 
-    shown = sorted(rows, key=_book, reverse=True)[:30]
+    shown = sorted(rows, key=_scale, reverse=True)[:30]
     for r in shown:
         lines.append(
             f"| {_cell(r.get('inv_prm'))} | {_cell(r.get('invstmnt_purps'))} "
-            f"| {_cell(r.get('trmend_blce_qota_rt'))} | {_cell(r.get('trmend_blce_acntbk_amount'))} "
-            f"| {_cell(r.get('frst_acqs_de'))} | {_cell(r.get('recent_bsns_year_fnnr_sttus_thstrm_ntpf'))} |"
+            f"| {_cell(r.get('frst_acqs_de'))} | {_cell(r.get('frst_acqs_amount'))} "
+            f"| {_cell(r.get('bsis_blce_acntbk_amount'))} "
+            f"| {_cell(r.get('incrs_dcrs_acqs_dsps_amount'))} "
+            f"| {_cell(r.get('incrs_dcrs_evl_lstmn'))} "
+            f"| {_cell(r.get('trmend_blce_acntbk_amount'))} "
+            f"| {_cell(r.get('trmend_blce_qota_rt'))} "
+            f"| {_cell(r.get('recent_bsns_year_fnnr_sttus_thstrm_ntpf'))} |"
         )
 
     if total > len(shown):
         lines.append("")
-        lines.append(f"... 외 {total - len(shown)}건 (장부가액 상위 30건만 표시)")
+        lines.append(
+            f"... 외 {total - len(shown)}건 "
+            "(기초·기말 장부가액 중 큰 값 기준 상위 30건만 표시)"
+        )
 
     lines.append("")
     lines.append(
         "📎 참고: 금액은 DART 응답 원문 표기 그대로이며 보고서에 따라 단위(천원/백만원)가 "
         "다를 수 있습니다 — 정확한 단위는 공시 원문을 확인하세요. 지분율 50% 이상이라도 "
-        "연결 종속 여부는 실질지배력 판단에 따릅니다."
+        "연결 종속 여부는 실질지배력 판단에 따릅니다. 이 표는 개별 건만 세며 "
+        "원문의 **합계 행은 제외**했습니다 — 합계는 공시 원문에서 확인하세요. "
+        "20개사 750행 실측(2026-09-11)에서 «기초 + 증감(취득·처분) + 증감(평가) = 기말»이 "
+        "94% 성립하지만, 제출사에 따라 칸을 다르게 채우기도 합니다."
     )
     lines.append(
         "💡 같은 인물·조합이 여러 회사에 등장하는지는 `find_actor_overlap`, "
@@ -6368,6 +6464,18 @@ def track_fund_usage(company_name: str, lookback_years: int = 3) -> str:
         )
         if rec["dffrnc_resn"]:
             lines.append(f"  차이사유: {rec['dffrnc_resn'][:100]}")
+        # 납입 전인 건은 `_detect_fund_anomaly`가 FUND_UNREPORTED를 붙이지
+        # 않는다(받지 않은 돈을 「받은 돈」이라 말하지 않기 위해서다). 그러면
+        # 화면에서 **이유가 통째로 사라지므로** 억제한 근거를 사실로 남긴다.
+        if rec.get("pay_pending"):
+            _why = (f"납입일 {rec['pay_de']}이 이 보고서 결산일 "
+                    f"{_fmt_date8(rec['stlm_dt'])} 이후입니다"
+                    if rec.get("stlm_dt") and rec.get("pay_de")
+                    else "공시가 납입 전이라고 적고 있습니다")
+            lines.append(
+                f"  ℹ️ {_why} — 이 보고서 시점에는 아직 납입 전이라, "
+                "집행 내역이 비어 있는 것을 미보고로 보지 않았습니다."
+            )
         # 용도가 바뀌었다는 판정의 **근거**를 함께 낸다 — 어느 묶음에서
         # 어느 묶음으로 갔는지가 안 보이면 사용자가 확인할 수 없다.
         _pc, _rc = rec.get("plan_cats") or [], rec.get("real_cats") or []
