@@ -313,6 +313,14 @@
      위험도 순서를 암시하게 된다(v0.8.5). 구멍이 생겨도 DOM 순서를 지킨다.
      ⚠ 패널에 `overflow`를 걸지 않는다 — 용어 사전 툴팁(.term-def)이 잘린다
      (.headline에서 같은 이유로 overflow:hidden을 뺀 전례가 있다). */
+  /* 스파크라인 — 숫자 시계열 옆에 얹는 보조 그림(숫자를 대체하지 않는다).
+     ⚠ 오르내림을 색으로 칠하지 않는다 — 그 자체가 판정이 된다(v0.8.5). */
+  .spark { flex: none; vertical-align: middle; }
+  .sparkrow { display: flex; align-items: center; gap: 10px; }
+  .sparkrow > span { min-width: 0; }   /* 긴 시계열이 그림을 밀어내지 않게 */
+  /* 표 안에 들어가는 스파크라인은 셀 폭을 넘지 않는다 */
+  td .spark { max-width: 100%; height: auto; }
+
   .deepgrid { display: grid; gap: 16px; align-items: start; grid-template-columns: 1fr; }
   .deepgrid > .panel { margin-bottom: 0; }  /* L87의 margin이 gap과 이중으로 먹는다 */
   .deepgrid > * { min-width: 0; }           /* 표가 트랙을 밀어내는 것 방지(.mainarea와 같은 처방) */
@@ -2805,6 +2813,48 @@ function dividendDrainFlags(records) {
   return flags;
 }
 
+// ── 스파크라인 ───────────────────────────────────────────────────────────
+// 시계열을 숫자 나열로만 두면 추세가 안 읽힌다 — 「18.91% → 18.91% → 18.81%」는
+// 세 번 읽어야 방향을 안다. 선은 한 번에 보인다.
+//
+// ⚠ **기존 숫자 시계열을 대체하지 않고 옆에 얹는다.** 그쪽에는 공시 원문 링크가
+//   달려 있고, 그림을 못 보는 환경의 대체 표현이기도 하다(스크린리더·인쇄).
+// ⚠ **오르내림을 색으로 칠하지 않는다.** 상승은 초록·하락은 빨강으로 칠하면
+//   그 자체가 좋고 나쁨의 판정이 된다(v0.8.5). 이 도구에서 지분율이 주는 것은
+//   사실이지 방향에 대한 평가가 아니다 — 중립 단색 하나만 쓴다.
+// ⚠ 값이 하나뿐이면 선이 그려지지 않는다 — 점으로 찍어 「관측이 1건」임을
+//   보이게 한다. 0건이면 아무것도 내지 않는다.
+function sparklineSVG(values, opts) {
+  const o = opts || {};
+  const w = o.w || 132, h = o.h || 30, pad = 4;
+  // ⚠ 결측이 섞이면 **그리지 않는다.** 건너뛰고 이으면 없는 연도가 사라져
+  //   시간축이 왜곡된다 — 2023·2025만 있는 값이 나란한 두 점으로 보여
+  //   「연속된 관측」처럼 읽힌다. 그림이 제 데이터와 다른 것을 말하느니
+  //   내지 않는 편이 낫다(숫자 줄은 그대로 남아 결측을 「―」로 밝힌다).
+  const xs = Array.isArray(values) ? values : [];
+  if (!xs.length || !xs.every((v) => Number.isFinite(v))) return "";
+  const lo = Math.min(...xs), hi = Math.max(...xs);
+  const span = hi - lo;
+  const px = (i) => xs.length < 2 ? w / 2 : pad + (w - pad * 2) * i / (xs.length - 1);
+  // 값이 전부 같으면 세로 한가운데 — 0으로 나누지 않는다
+  const py = (v) => span === 0 ? h / 2 : h - pad - (h - pad * 2) * (v - lo) / span;
+  const label = esc(o.label || `관측 ${xs.length}건 · ${lo.toFixed(2)}~${hi.toFixed(2)}`);
+  const stroke = o.stroke || "var(--dim2)";
+  let body;
+  if (xs.length < 2) {
+    body = `<circle cx="${px(0).toFixed(1)}" cy="${py(xs[0]).toFixed(1)}" r="3" fill="${stroke}"/>`;
+  } else {
+    const pts = xs.map((v, i) => `${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(" ");
+    body = `<polyline points="${pts}" fill="none" stroke="${stroke}" stroke-width="2"` +
+      ` stroke-linejoin="round" stroke-linecap="round"/>` +
+      // 마지막 점만 찍는다 — 점을 전부 찍으면 선을 덮어 추세가 도로 안 보인다
+      `<circle cx="${px(xs.length - 1).toFixed(1)}" cy="${py(xs[xs.length - 1]).toFixed(1)}"` +
+      ` r="2.5" fill="${stroke}"/>`;
+  }
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"` +
+    ` role="img" aria-label="${label}"><title>${label}</title>${body}</svg>`;
+}
+
 // ── 내부자 매도 ±30일 부정 공시 (core detect_insider_pre_disclosure 이식) ──
 // 입력 계약을 core와 똑같이 맞춘다 — insiderRecords는 {holder, rcept_dt,
 // delta_pct}, signalEvents는 {key, rcept_dt, report_nm}. 그래야 같은 입력에
@@ -3598,7 +3648,14 @@ function turnoverTrendBlockHTML(periods, years, divUsed) {
       if (up) trendNote = ` — ${ms.length}기간 연속 상승`;
       else if (down) trendNote = ` — ${ms.length}기간 연속 하락`;
     }
-    html += `<div class="factline">· ${esc(label)}: ${parts.map(esc).join(" → ")}${trendNote}</div>`;
+    // 스파크라인은 **모든 연도에 값이 있을 때만** 나온다(sparklineSVG가 결측을
+    // 만나면 빈 문자열을 돌려준다) — 숫자 줄은 결측을 「―」로 그대로 밝힌다.
+    const spark = sparklineSVG(ms.map((m) => m.value), {
+      w: 88, h: 24,
+      label: `${label} ${ascYears[0]}~${ascYears[ascYears.length - 1]} 추이`,
+    });
+    html += `<div class="factline${spark ? " sparkrow" : ""}">${spark}` +
+      `<span>· ${esc(label)}: ${parts.map(esc).join(" → ")}${trendNote}</span></div>`;
     ascYears.forEach((y, i) => {
       const m = ms[i];
       detailRows.push(`<tr><td>${esc(String(y))}</td><td>${esc(label)}</td>` +
@@ -3610,7 +3667,12 @@ function turnoverTrendBlockHTML(periods, years, divUsed) {
 
   const cccs = ascYears.map((y) => byYear[y].ccc);
   const cccParts = ascYears.map((y, i) => `${y} ${cccs[i].value === null ? "―" : cccs[i].value.toFixed(1) + "일"}`);
-  html += `<div class="factline">· 현금전환주기(CCC = DSO+DIO−DPO): ${cccParts.map(esc).join(" → ")}</div>`;
+  const cccSpark = sparklineSVG(cccs.map((c) => c.value), {
+    w: 88, h: 24,
+    label: `현금전환주기 ${ascYears[0]}~${ascYears[ascYears.length - 1]} 추이`,
+  });
+  html += `<div class="factline${cccSpark ? " sparkrow" : ""}">${cccSpark}` +
+    `<span>· 현금전환주기(CCC = DSO+DIO−DPO): ${cccParts.map(esc).join(" → ")}</span></div>`;
   ascYears.forEach((y, i) => {
     const c = cccs[i];
     const formula = `DSO(${c.dso === null ? "―" : c.dso.toFixed(1)})+DIO(${c.dio === null ? "―" : c.dio.toFixed(1)})−DPO(${c.dpo === null ? "―" : c.dpo.toFixed(1)})`;
@@ -6396,7 +6458,13 @@ async function loadHoldings(corpCode) {
       `${esc(md(p.d))} <b class="mono">${p.rate.toFixed(2)}%</b></a>`).join(`<span class="arrow"> → </span>`);
     const more = pts.length > shown.length
       ? ` <span class="snote">(보고 ${pts.length}건 중 최근 ${shown.length}건 표시)</span>` : "";
-    html += `<div class="factline">· <b>${esc(who)}</b>: ${series}${more}</div>`;
+    // 스파크라인은 **표시한 구간**(shown)만 그린다 — 숫자와 그림이 다른 구간을
+    // 말하면 안 된다. 상한에 걸린 건은 위 문구가 밝힌다.
+    const spark = sparklineSVG(shown.map((p) => p.rate), {
+      label: `${who} 보유비율 추이 — ${shown.length}건 · ` +
+             `${Math.min(...shown.map((p) => p.rate)).toFixed(2)}%~${Math.max(...shown.map((p) => p.rate)).toFixed(2)}%`,
+    });
+    html += `<div class="factline sparkrow">${spark}<span>· <b>${esc(who)}</b>: ${series}${more}</span></div>`;
   }
 
   // ── 흐름 탐지는 **표시 상한과 무관하게 전체 보고자**를 본다 ──────────
