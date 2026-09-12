@@ -6762,6 +6762,58 @@ def fetch_audit_opinion_history(
     return result
 
 
+def summarize_debt_balance(rows_by_kind: dict) -> dict:
+    """엔드포인트별 응답 행에서 종류별 잔액·1년 내 만기를 집계하는 순수 함수.
+
+    네트워크 호출이 없다 — 뷰어(`summarizeDebtBalance`)가 같은 규칙을 쓰도록
+    떼어 둔 것이고 `tests/test_viewer_twin_parity.py`가 둘을 대조한다.
+
+    Args:
+        rows_by_kind: {종류 키: 그 엔드포인트의 `list` 배열}.
+            종류 키는 `_DEBT_BALANCE_URLS`의 것(corporate_bond·short_term_bond·
+            commercial_paper·new_capital·cnd_capital).
+
+    Returns:
+        {"by_kind": {종류: {"total", "maturity_under_1y"}},
+         "total": int, "maturity_1y_share": float}
+
+    ⚠ **합계 행만 쓴다.** 한 엔드포인트가 공모·사모·합계 3행을 돌려주므로
+      전부 더하면 **두 배로 센다**(2026-08-25 실측).
+    ⚠ 금액은 `sm`이다. 옛 코드는 응답에 **존재하지 않는 이름**을 읽어(그
+      이름은 아래 `_DEBT_UNDER_1Y_FIELDS` 위 주석에 적어 뒀다) 이 함수 위에
+      선 것들이 통째로 죽어 있었다 — `track_debt_balance`가 늘 「잔액이
+      없거나 찾지 못했습니다」, `detect_debt_rollover`는 발화 불가.
+      ⚠ 이 독스트링에 그 옛 이름을 **적지 않는다**:
+      `tests/test_debt_balance_fields.py`는 `#` 주석만 걷어내고 독스트링은
+      코드로 보므로, 인용만 해도 「아직 읽고 있다」고 잡힌다(실제로 걸렸다).
+    ⚠ 만기 구간 필드는 엔드포인트마다 다르다 — 단기사채·기업어음의 `de*`
+      버킷은 전부 1년 이하 구간이라 합산한다(`_DEBT_UNDER_1Y_FIELDS`).
+    """
+    by_kind: dict[str, dict] = {}
+    total = 0
+    maturity_1y = 0
+    for kind, rows in (rows_by_kind or {}).items():
+        if kind not in _DEBT_UNDER_1Y_FIELDS:
+            continue
+        kind_total = 0
+        kind_1y = 0
+        for item in rows or []:
+            if (item.get("remndr_exprtn2") or "").strip() != "합계":
+                continue
+            kind_total += _safe_int(item.get("sm")) or 0
+            for f in _DEBT_UNDER_1Y_FIELDS[kind]:
+                kind_1y += _safe_int(item.get(f)) or 0
+        if kind_total > 0:
+            by_kind[kind] = {"total": kind_total, "maturity_under_1y": kind_1y}
+            total += kind_total
+            maturity_1y += kind_1y
+    return {
+        "by_kind": by_kind,
+        "total": total,
+        "maturity_1y_share": maturity_1y / total if total > 0 else 0.0,
+    }
+
+
 def fetch_debt_balance(
     corp_code: str,
     api_key: str,
@@ -6797,9 +6849,7 @@ def fetch_debt_balance(
         return cached
 
     _debt_ok = 0   # 정상 응답(000·013) 횟수 — 0이면 못 받은 것
-    by_kind: dict[str, dict] = {}
-    total = 0
-    maturity_1y = 0
+    rows_by_kind: dict[str, list[dict]] = {}
 
     for kind, url in _DEBT_BALANCE_URLS.items():
         try:
@@ -6832,21 +6882,10 @@ def fetch_debt_balance(
         #
         #   두산에너빌리티 2025 회사채: sm 808,470,000,000 ·
         #   yy1_below 536,470,000,000 (66%가 1년 이내).
-        kind_total = 0
-        kind_1y = 0
-        for item in data.get("list", []):
-            if (item.get("remndr_exprtn2") or "").strip() != "합계":
-                continue
-            kind_total += _safe_int(item.get("sm")) or 0
-            for f in _DEBT_UNDER_1Y_FIELDS[kind]:
-                kind_1y += _safe_int(item.get(f)) or 0
+        rows_by_kind[kind] = data.get("list", []) or []
 
-        if kind_total > 0:
-            by_kind[kind] = {"total": kind_total, "maturity_under_1y": kind_1y}
-            total += kind_total
-            maturity_1y += kind_1y
-
-    maturity_share = maturity_1y / total if total > 0 else 0.0
+    agg = summarize_debt_balance(rows_by_kind)
+    by_kind, total, maturity_share = agg["by_kind"], agg["total"], agg["maturity_1y_share"]
     result = {
         "year": _safe_int(year),
         "by_kind": by_kind,

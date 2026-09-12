@@ -1684,6 +1684,38 @@
   "INQUIRY",
   "INSOLVENCY"
  ],
+ "debt_endpoints": {
+  "corporate_bond": "cprndNrdmpBlce.json",
+  "short_term_bond": "srtpdPsndbtNrdmpBlce.json",
+  "commercial_paper": "entrprsBilScritsNrdmpBlce.json",
+  "new_capital": "newCaplScritsNrdmpBlce.json",
+  "cnd_capital": "cndlCaplScritsNrdmpBlce.json"
+ },
+ "debt_under_1y_fields": {
+  "corporate_bond": [
+   "yy1_below"
+  ],
+  "short_term_bond": [
+   "de10_below",
+   "de10_excess_de30_below",
+   "de30_excess_de90_below",
+   "de90_excess_de180_below",
+   "de180_excess_yy1_below"
+  ],
+  "commercial_paper": [
+   "de10_below",
+   "de10_excess_de30_below",
+   "de30_excess_de90_below",
+   "de90_excess_de180_below",
+   "de180_excess_yy1_below"
+  ],
+  "new_capital": [
+   "yy1_below"
+  ],
+  "cnd_capital": [
+   "yy1_below"
+  ]
+ },
  "catalog": {
   "total_cases": 277,
   "tax_labels": {

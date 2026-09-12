@@ -30,6 +30,11 @@ const ALLOWED_ENDPOINTS = new Set([
   "cvbdIsDecsn.json",
   "bdwtIsDecsn.json",
   "exbdIsDecsn.json",
+  "cprndNrdmpBlce.json",
+  "srtpdPsndbtNrdmpBlce.json",
+  "entrprsBilScritsNrdmpBlce.json",
+  "newCaplScritsNrdmpBlce.json",
+  "cndlCaplScritsNrdmpBlce.json",
 ]);
 
 const CORS_HEADERS = {

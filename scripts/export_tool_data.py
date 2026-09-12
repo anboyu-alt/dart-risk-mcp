@@ -57,6 +57,8 @@ from dart_risk_mcp.core.explain import (  # noqa: E402
 )
 from dart_risk_mcp.core.dart_client import _FS_ALIASES  # noqa: E402
 from dart_risk_mcp.core.dart_client import _NEGATIVE_DISCLOSURE_KEYS  # noqa: E402
+from dart_risk_mcp.core.dart_client import _DEBT_BALANCE_URLS  # noqa: E402
+from dart_risk_mcp.core.dart_client import _DEBT_UNDER_1Y_FIELDS  # noqa: E402
 from dart_risk_mcp.core import qualifiers as _q  # noqa: E402
 from dart_risk_mcp.core import signals as _sig  # noqa: E402
 from dart_risk_mcp.core.signals import AMBIGUOUS_SIGNAL_KEYS  # noqa: E402
@@ -424,6 +426,13 @@ def build_signals_data() -> dict:
         # 하려면 같은 집합을 봐야 해서 내보낸다(손으로 복제하면 core가
         # 갈릴 때 뷰어만 조용히 낡는다).
         "negative_disclosure_keys": sorted(_NEGATIVE_DISCLOSURE_KEYS),
+        # 채무증권 5종 — 종류별 엔드포인트와 「1년 이내 만기」로 세는 필드.
+        # 엔드포인트마다 만기 구간 필드가 달라(단기사채·기업어음은 de* 버킷이
+        # 여럿) 손으로 복제하면 한쪽만 낡는다.
+        "debt_endpoints": {k: v.rsplit("/", 1)[-1]
+                           for k, v in _DEBT_BALANCE_URLS.items()},
+        "debt_under_1y_fields": {k: list(v)
+                                 for k, v in _DEBT_UNDER_1Y_FIELDS.items()},
         # 금감원 적발 사례(작업 1) — score/severity/confidence 미노출.
         # 파일이 없거나 비어 있어도 빈 by_taxonomy·total_cases=0으로 항상
         # 존재한다(뷰어가 catalog 키 자체는 항상 참조할 수 있게).
