@@ -8363,9 +8363,12 @@ def search_notes_in_report(
         rcept_no: DART 접수번호 14자리. 비상장 법인은
             `get_unlisted_financials`가 알려주는 감사보고서 접수번호를 쓰고,
             상장사는 `list_disclosures_by_stock`으로 고른다.
-        terms: 찾을 낱말 목록. 각 원소 안에 세로줄(`|`)을 넣으면 OR이다 —
-            한국 공시는 같은 말을 붙여도 쓰고 띄어도 쓰므로
-            `["영업권손상차손|영업권 손상차손"]`처럼 함께 넣는다.
+        terms: 찾을 낱말 목록. **띄어쓰기는 무시하고 찾으므로**
+            「영업권손상차손」 하나만 넣어도 원문의 「영업권 손상차손」이
+            걸린다(실측: 「매입채무및기타채무」가 8곳 → 15곳). 원문 표기가
+            검색어와 다르면 결과에 그 표기를 함께 보여 준다.
+            각 원소 안의 세로줄(`|`)은 OR이라 **뜻이 같은 다른 표현**을
+            묶을 때 쓴다 — `["판매후리스|세일앤리스백"]`.
             세로줄은 **낱말 구분자이고 정규식이 아니다**(괄호·별표가 든
             회계 용어를 그대로 찾는다).
         mode: "all"(모든 원소가 함께 있는 주석만) | "any"(하나라도).
@@ -8413,9 +8416,9 @@ def search_notes_in_report(
         )
         lines.append("")
         lines.append(
-            "다른 표기가 쓰였을 수 있습니다 — 붙여 쓴 말과 띄어 쓴 말을 "
-            "세로줄로 함께 넣거나(`\"영업권손상차손|영업권 손상차손\"`), "
-            "`mode=\"any\"`로 넓혀 보세요."
+            "띄어쓰기는 이미 무시하고 찾았습니다 — 다른 낱말이 쓰였을 수 "
+            "있습니다. 뜻이 같은 다른 표현을 세로줄로 함께 넣거나"
+            "(`\"판매후리스|세일앤리스백\"`), `mode=\"any\"`로 넓혀 보세요."
         )
         return "\n".join(lines) + "\n"
 
@@ -8425,7 +8428,13 @@ def search_notes_in_report(
         head = f"── 주석 {n['no']}. {n['title']}" if n["no"] else "── (주석 구분 없음)"
         lines.append(head)
         for h in n["hits"][:_NOTE_SEARCH_MAX_HITS]:
-            lines.append(f"  · `{h['term']}`")
+            # 띄어쓰기를 무시하고 찾으므로 원문 표기가 검색어와 다를 수 있다.
+            # 다르면 그 사실을 보여 준다 — 사용자가 원문에서 그 줄을 찾아야 한다.
+            got = h.get("matched") or ""
+            if got and got != h["term"]:
+                lines.append(f"  · `{h['term']}` → 원문 표기 「{got}」")
+            else:
+                lines.append(f"  · `{h['term']}`")
             lines.append(f"    {h['excerpt']}")
         if len(n["hits"]) > _NOTE_SEARCH_MAX_HITS:
             lines.append(

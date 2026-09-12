@@ -243,6 +243,22 @@ def _term_variants(term: str) -> list[str]:
     return [p.strip() for p in (term or "").split("|") if p.strip()]
 
 
+def _fold_spaces(text: str) -> tuple[str, list[int]]:
+    """공백을 걷어낸 문자열과 **원문 오프셋 역매핑**을 함께 돌려준다.
+
+    `("가 나", [0, 2])` — 접힌 문자열의 i번째 글자는 원문 `idx[i]`에 있다.
+    이 역매핑이 있어야 적중 위치·발췌를 **원문 좌표로** 되돌릴 수 있다.
+    """
+    buf: list[str] = []
+    idx: list[int] = []
+    for i, ch in enumerate(text):
+        if ch.isspace():
+            continue
+        buf.append(ch)
+        idx.append(i)
+    return "".join(buf), idx
+
+
 def search_notes(
     text: str,
     terms: list[str],
@@ -254,16 +270,43 @@ def search_notes(
     ⚠ **전 회사를 가로지르는 검색이 아니다.** 그러려면 사전 색인 DB가 있어야
     한다. 이 함수는 넘겨받은 원문 하나만 훑는다.
 
-    `terms`의 각 원소는 세로줄(`|`)로 OR을 넣을 수 있다 — 한국 공시는 같은
-    말을 붙여도 쓰고 띄어도 써서(「영업권손상차손」 ↔ 「영업권 손상차손」)
-    한 표기만 찾으면 놓친다.
+    **띄어쓰기는 무시하고 찾는다**(2026-09-13) — 한국 공시는 같은 말을 붙여도
+    쓰고 띄어도 써서 한 표기만 찾으면 놓친다. 15개사 사업보고서 원문
+    7,641,985자 실측:
+
+        '매입채무및기타채무'  정확 일치 8곳 → 공백 무시 **15곳**
+        '매출채권및기타채권'  정확 일치 8곳 → 공백 무시 **13곳**
+        '판매비와 관리비'     정확 일치 10곳 → 공백 무시 **15곳**
+
+    절반 가까이 놓치고 있었고, 이마트의 「매입채무 및 기타 채무」처럼
+    **띄어쓰기가 두 군데** 다른 것도 있어 `|`로 손수 나열하기 어렵다.
+
+    ⚠ **오탐 위험을 따로 쟀다.** 「대여금」이 원문 "대여 금액"에 걸리는 부류를
+    겨냥해 위험 검색어 27개 × 15문서를 훑었더니 **공백을 건너뛰어야만 걸리는
+    사례가 0건**이었다(정확 일치가 이미 있거나 357건, 아예 없거나 48건).
+    오염을 만들 법한 표현은 3건 실재하지만(진원생명과학 「대여 금액/금융」 2 ·
+    두산 「차입 금액/금리」 1) **그 문서에는 「대여금」·「차입금」이 이미 정확히
+    있다** — 즉 공백 무시는 **매치가 없던 주석에 매치를 만들지 않는다**.
+    이미 걸리는 주석에 발췌를 하나 더할 뿐이다.
+
+    ⚠ 그래서 `hits[].matched`에 **원문에 실제로 적힌 표기**를 담는다 —
+    사용자가 「매출채권및기타채권」으로 찾았는데 원문이 「매출채권 및
+    기타채권」이면 그 사실이 보여야 한다.
+
+    `terms`의 각 원소는 세로줄(`|`)로 OR을 넣을 수 있다. 띄어쓰기 변형은
+    이제 자동이라 그것 때문에 나열할 필요는 없지만, **뜻이 다른 표기**를
+    묶을 때는 여전히 쓴다(「판매후리스|세일앤리스백」).
 
     `mode="all"`이면 **모든 원소**가 들어 있는 주석만, `"any"`면 하나라도
     들어 있는 주석을 돌려준다(원소 안의 세로줄은 언제나 OR이다).
 
     Returns:
-        {"notes": [{no, title, offset, end, hits: [{term, offset, excerpt}]}],
+        {"notes": [{no, title, offset, end,
+                    hits: [{term, matched, offset, excerpt}]}],
          "scanned_notes": int, "scope": str, "total_hits": int}
+
+        `term`은 사용자가 넣은 낱말, `matched`는 원문 표기다. 한 자리를
+        여러 변형이 동시에 맞혀도 **한 번만** 보고한다.
 
         주석 헤딩을 못 찾은 문서는 문서 전체를 한 덩어리로 훑고 `scope`에
         그 사실을 적는다 — 조용히 빈손을 돌려주면 「그런 말이 없다」로 읽힌다.
@@ -286,21 +329,33 @@ def search_notes(
     out: list[dict] = []
     for sp in spans:
         body = text[sp["offset"]:sp["end"]]
+        folded, fold_idx = _fold_spaces(body)
         matched, hits = 0, []
+        seen: set[int] = set()
         for variants in groups:
             found_here = False
             for v in variants:
-                start = body.find(v)
+                nv = re.sub(r"\s+", "", v)
+                if not nv:
+                    continue
+                start = folded.find(nv)
                 while start != -1:
-                    lo = max(0, start - context_chars)
-                    hi = min(len(body), start + len(v) + context_chars)
-                    hits.append({
-                        "term": v,
-                        "offset": sp["offset"] + start,
-                        "excerpt": body[lo:hi].strip(),
-                    })
+                    o_s = fold_idx[start]
+                    o_e = fold_idx[start + len(nv) - 1] + 1
+                    if o_s not in seen:     # 같은 자리를 변형끼리 중복 보고하지 않는다
+                        seen.add(o_s)
+                        lo = max(0, o_s - context_chars)
+                        hi = min(len(body), o_e + context_chars)
+                        hits.append({
+                            "term": v,
+                            # 원문에 실제로 적힌 표기 — 띄어쓰기가 다르면
+                            # 사용자가 그 사실을 볼 수 있어야 한다.
+                            "matched": body[o_s:o_e],
+                            "offset": sp["offset"] + o_s,
+                            "excerpt": body[lo:hi].strip(),
+                        })
                     found_here = True
-                    start = body.find(v, start + len(v))
+                    start = folded.find(nv, start + len(nv))
             if found_here:
                 matched += 1
         if not hits:
