@@ -2222,7 +2222,9 @@ function renderDash() {
   html += `<div class="panel"><div class="slabel">▍INSIDER HOLDINGS — 임원·주요주주 소유보고 시계열 · 사실 표기</div>
     <div id="holdCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">임원·주요주주 소유보고 조회 중…</span></div></div>`;
   html += `<div class="panel"><div class="slabel">▍AUDIT OPINION — 3개년 · 사실 표기</div>
-    <div id="auditCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">감사보고 조회 중…</span></div></div>`;
+    <div id="auditCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">감사보고 조회 중…</span></div>
+    <details id="auditSvcDetails" style="margin-top:0.7rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700;font-size:0.85rem">펼쳐서 조회 — 감사 내용과 같은 해 비감사용역 내역</summary>
+    <div id="auditSvcCore"><span class="dim" style="font-size:0.84rem">엔드포인트 2개를 조회합니다 — 스캔을 느리게 하지 않으려고 펼칠 때만 받습니다.</span></div></details></div>`;
   // 채무증권은 엔드포인트가 5개라 **펼칠 때만** 받는다 — 스캔 기본 경로를
   // 느리게 만들지 않는다. 접힌 상태에서도 무엇을 여는지 알 수 있게 적는다.
   html += `<div class="panel"><div class="slabel">▍DEBT — 채무증권 미상환 잔액</div>
@@ -2239,6 +2241,12 @@ function renderDash() {
   if (debtDetails) {
     debtDetails.addEventListener("toggle", () => {
       if (debtDetails.open) loadDebtBalance(corpCode);
+    });
+  }
+  const auditSvcDetails = $("auditSvcDetails");
+  if (auditSvcDetails) {
+    auditSvcDetails.addEventListener("toggle", () => {
+      if (auditSvcDetails.open) loadAuditServices(corpCode);
     });
   }
   // SE-14: capital_backflow만 비동기 원문 확인 게이트를 태운다 (다른 패턴은 그대로).
@@ -6691,6 +6699,74 @@ async function loadAuditOpinions(corpCode, finCorePromise) {
   // 응답에서 감사의견·감사인만 읽고 강조사항 필드는 쓰지 않는다). 그리지
   // 않는 지표의 「읽는 법」을 붙이면 없는 숫자를 설명하는 것이라 걸러낸다.
   html += metricProseHTML("audit", ["mgmt_issue"]);
+  el.innerHTML = html;
+}
+
+// ── 감사·비감사 용역 내역 — **지연 로드**(펼칠 때만) ─────────────────────
+// 지금 AUDIT OPINION은 감사의견과 감사인명만 보여 주고, 그 감사인이 **무엇을
+// 감사했는지**와 **같은 해에 비감사용역을 얼마나 받았는지**는 어디에도 없었다.
+//
+// ⚠ **비중(%)을 내지 않는다.** 감사보수(`adt_cntrct_dtls_mendng`)는 단위 없이
+//   오고(실측: 삼성전자 8,100 · 코아스 125 · 제이스코홀딩스 280 — 백만원이면
+//   81억 vs 1.25억), 비감사보수(`servc_mendng`)는 「10,000,000원」처럼 단위가
+//   붙어 온다. 둘을 나누면 1,000배로 부푼다 — core가 2026-08-23에 「비감사용역
+//   비중 30% 초과」 경고를 뺀 이유가 정확히 이것이다.
+// ⚠ 금액은 **원문 표기 그대로**만 옮긴다. 우리가 단위를 붙이지 않는다.
+// ⚠ 「독립성」 같은 판정 어휘를 쓰지 않는다 — 계약이 있었다는 사실만 적는다.
+async function loadAuditServices(corpCode) {
+  const el = $("auditSvcCore");
+  if (!el || el.dataset.loaded) return;
+  el.dataset.loaded = "1";
+  el.innerHTML = `<span class="spinner"></span><span class="dim" style="font-size:0.88rem">감사·비감사 용역 조회 중…</span>`;
+  const year = String(kstYear() - 1);
+  const q = { corp_code: corpCode, bsns_year: year, reprt_code: "11011" };
+  const [ja, jn] = [await dartGet("adtServcCnclsSttus.json", q),
+                    await dartGet("accnutAdtorNonAdtServcCnclsSttus.json", q)];
+  const fail = dartFail(ja) || dartFail(jn);
+  const okA = ja.status === "000" || ja.status === "013";
+  const okN = jn.status === "000" || jn.status === "013";
+  if (!okA && !okN) { el.innerHTML = fetchFailHTML(fail); return; }
+  const aRows = ja.status === "000" ? (ja.list || []) : [];
+  const nRows = jn.status === "000" ? (jn.list || []) : [];
+  // DART가 **모든 칸이 `-`인 자리 행**을 보낸다(실측 삼성전자 비감사 8행 중
+  // 여럿). 그리면 「계약일 - · 내용 - · 보수 -」가 된다 — 빼되 몇 건을 뺐는지
+  // 밝힌다(조용한 절단 금지).
+  const filled = (v) => { const t = String(v === null || v === undefined ? "" : v).trim();
+                          return t && t !== "-" ? t : ""; };
+  const nUse = nRows.filter((r) => filled(r.servc_cn) || filled(r.servc_mendng)
+                                   || filled(r.cntrct_cncls_de));
+  let html = "";
+  const cur = aRows.find((r) => String(r.bsns_year || "").includes("당기")) || aRows[0];
+  if (cur) {
+    const what = filled(cur.cn);
+    html += `<div class="factline">· 감사인 <b>${esc(filled(cur.adtor) || "미기재")}</b>` +
+      (what ? ` — ${esc(what.replace(/\s*\n\s*/g, " · "))}` : "") + `</div>`;
+  }
+  if (nUse.length) {
+    html += `<div class="factline" style="margin-top:0.4rem">· 같은 사업연도 <b>비감사용역 ${nUse.length}건</b></div>`;
+    html += `<table><tr><th>계약일</th><th>용역 내용</th><th>기간</th><th>보수(원문 표기)</th></tr>` +
+      nUse.slice(0, 10).map((r) =>
+        `<tr><td>${esc(filled(r.cntrct_cncls_de) || "―")}</td>` +
+        `<td>${esc((filled(r.servc_cn) || "―").replace(/\s*\n\s*/g, " "))}</td>` +
+        `<td>${esc((filled(r.servc_exc_pd) || "―").replace(/\s*\n\s*/g, " "))}</td>` +
+        `<td>${esc(filled(r.servc_mendng) || "―")}</td></tr>`).join("") + `</table>`;
+    if (nUse.length > 10) {
+      html += `<div class="snote">※ 전체 ${nUse.length}건 중 10건 표시 · ${nUse.length - 10}건 생략</div>`;
+    }
+  } else if (okN) {
+    html += `<div class="dim" style="font-size:0.88rem;margin-top:0.4rem">${esc(year)} 사업연도에 기재된 비감사용역 계약이 없습니다.</div>`;
+  }
+  const blank = nRows.length - nUse.length;
+  if (blank > 0) {
+    html += `<div class="snote">※ 계약일·내용·보수가 모두 미기재인 행 ${blank}건은 목록에서 뺐습니다.</div>`;
+  }
+  if (!html) {
+    html = `<span class="dim" style="font-size:0.88rem">${esc(year)} 사업보고서에서 감사·비감사 용역 기재를 찾지 못했습니다.</span>`;
+  }
+  html += `<div class="dim" style="font-size:0.8rem;margin-top:0.5rem">${glossStaticHTML(
+    whyDetailsHTML(
+      `※ ${esc(year)} 사업보고서 기재 사실이며 금액은 <b>원문 표기 그대로</b>입니다. ${NOTICE.NO_JUDGMENT}.`,
+      `보수 표기는 <b>회사마다 다릅니다</b> — 실측에서 코아스는 「10,000,000원」처럼 단위를 붙이고 삼성전자는 「43」처럼 숫자만 적습니다. 감사보수도 단위 없이 옵니다(삼성전자 8,100 · 코아스 125). 그래서 둘을 나눈 비중은 1,000배로 부풀 수 있어 내지 않습니다.`))}</div>`;
   el.innerHTML = html;
 }
 
