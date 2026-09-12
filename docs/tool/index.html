@@ -1044,8 +1044,11 @@ const DART_ERR = {
 // 신호 유형의 기본 라벨을 그대로 쓰면 같은 화면 안에서 표기가 갈린다 —
 // SIGNAL CHAIN은 보정 라벨, HEAVIEST·COMMENTARY는 기본 라벨이었다.
 function displayLabel(key) {
+  // ⚠ 이 함수는 **현재 스캔**(CUR)에 기댄다 — 대시보드를 돌리기 전에 부르면
+  //   터진다. 비교 화면에서 실제로 그렇게 터져서 가드를 뒀다(그쪽은 이제
+  //   `signalLabel`을 쓴다).
   const seen = new Set();
-  for (const e of (CUR.observedEvents || [])) {
+  for (const e of ((CUR && CUR.observedEvents) || [])) {
     for (const s of (e.signals || [])) {
       if (s.key === key && s.label) seen.add(s.label);
     }
@@ -1077,7 +1080,7 @@ function crisisLabels(events) {
 
 function commonNote(key) {
   const notes = new Set();
-  for (const e of (CUR.observedEvents || [])) {
+  for (const e of ((CUR && CUR.observedEvents) || [])) {
     for (const sg of (e.signals || [])) {
       if (sg.key === key) notes.add(sg.note || "");
     }
@@ -1351,6 +1354,28 @@ function pickHeadline(qualified) {
   return cands.slice().sort((a, b) => at(a.key) - at(b.key))[0];
 }
 
+// 공시 목록 수집 — `analyze`와 비교 화면이 함께 쓴다.
+// ⚠ **전역 `CUR`를 건드리지 않는다.** `buildResult`는 대시보드 상태를 통째로
+//   갈아치우므로 비교 화면에서 부르면 보고 있던 결과가 날아간다.
+async function fetchDisclosureList(corpCode, bgn, end, onPage) {
+  const items = [];
+  let totalCount = 0, totalPage = 1;
+  const cap = maxPages();
+  for (let p = 1; p <= Math.min(cap, totalPage); p++) {
+    if (onPage) onPage(p, Math.min(cap, totalPage));
+    const j = await dartGet("list.json", {
+      corp_code: corpCode, bgn_de: ymd(bgn), end_de: ymd(end),
+      page_no: p, page_count: 100,
+    });
+    if (j.status === "013") break;
+    if (j.status !== "000") throw new Error(DART_ERR[j.status] || `DART 오류 (${j.status}) ${j.message || ""}`);
+    totalPage = j.total_page || 1;
+    totalCount = j.total_count || 0;
+    items.push(...(j.list || []));
+  }
+  return { items, totalCount };
+}
+
 async function analyze(name, override) {
   let corpCode, stockCode;
   if (override && override.corpCode) {
@@ -1365,23 +1390,10 @@ async function analyze(name, override) {
   const st = $("status");
   st.className = "status";
   const end = new Date(), bgn = new Date(Date.now() - LOOKBACK_DAYS * 86400e3);
-  const items = [];
-  let totalCount = 0;
   try {
-    let totalPage = 1;
-    const cap = maxPages();
-    for (let p = 1; p <= Math.min(cap, totalPage); p++) {
-      st.innerHTML = `<span class="spinner"></span>SCANNING ${esc(name)} — page ${p}${totalPage > 1 ? "/" + Math.min(cap, totalPage) : ""}`;
-      const j = await dartGet("list.json", {
-        corp_code: corpCode, bgn_de: ymd(bgn), end_de: ymd(end),
-        page_no: p, page_count: 100,
-      });
-      if (j.status === "013") break;
-      if (j.status !== "000") throw new Error(DART_ERR[j.status] || `DART 오류 (${j.status}) ${j.message || ""}`);
-      totalPage = j.total_page || 1;
-      totalCount = j.total_count || 0;
-      items.push(...(j.list || []));
-    }
+    const { items, totalCount } = await fetchDisclosureList(corpCode, bgn, end, (p, tp) => {
+      st.innerHTML = `<span class="spinner"></span>SCANNING ${esc(name)} — page ${p}${tp > 1 ? "/" + tp : ""}`;
+    });
     st.textContent = "";
     buildResult(name, stockCode, corpCode, items, bgn, end, totalCount);
   } catch (e) {
@@ -6916,6 +6928,96 @@ async function fetchRoster(corpCode, onYear, failed) {
   return roster;
 }
 
+// ── 비교 화면의 신호 요약 ─────────────────────────────────────────────────
+// ⚠ 집계 **규칙을 복제하지 않는다** — `buildResult`가 쓰는 것과 **같은 함수들**
+//   (`AMEND_RE`·`matchSignals`·`qualifySignals`·`isObservedSig`)을 그대로
+//   부른다. 규칙을 베껴 오면 한쪽만 고쳐질 때 두 화면이 다른 말을 한다.
+// ⚠ 전역 `CUR`를 건드리지 않는다 — 보고 있던 대시보드가 날아가면 안 된다.
+// 신호 유형의 **기본 라벨**(스캔과 무관) — 비교 표처럼 특정 회사의 스캔에
+// 기대면 안 되는 자리에서 쓴다.
+function signalLabel(key) {
+  const hit = (DATA.signals || []).find((x) => x.key === key);
+  return (hit && hit.label) || key;
+}
+
+function compareSnapshot(name, items, totalCount) {
+  let amend = 0, observed = 0, procedural = 0;
+  const typeCount = Object.create(null);
+  // ⚠ `pickHeadline`은 **qualified 객체**(`{key, tier}`)를 받는다 — 키 문자열
+  //   배열을 넘기면 `q.tier`가 undefined라 후보가 비어 **대표 유형이 늘 빈다**
+  //   (조용히 틀린다). 대시보드가 `observedEvents.flatMap(obs)`를 넘기는 것과
+  //   같은 모양으로 모은다.
+  const observedSigs = [];
+  for (const it of items || []) {
+    const nm = it.report_nm || "";
+    if (AMEND_RE.test(nm)) { amend++; continue; }
+    const qual = qualifySignals(matchSignals(nm), parseReportName(nm),
+                                { ...it, corp_name: it.corp_name || name });
+    if (!qual.length) continue;
+    const obs = qual.filter(isObservedSig);
+    if (obs.length) {
+      observed++;
+      for (const sg of obs) {
+        typeCount[sg.key] = (typeCount[sg.key] || 0) + 1;
+        observedSigs.push(sg);
+      }
+    } else {
+      procedural++;
+    }
+  }
+  const n = (items || []).length;
+  return {
+    name, scanned: n, total: totalCount || n,
+    truncated: totalCount && totalCount > n ? totalCount - n : 0,
+    amend, amendRate: n ? Math.round(amend / n * 100) : 0,
+    observed, procedural,
+    headline: (pickHeadline(observedSigs) || {}).key || "",
+    typeCount,
+  };
+}
+
+function compareTableHTML(snaps, skipped) {
+  if (!snaps.length) return "";
+  let html = `<div class="panel"><div class="slabel">▍SIGNAL COMPARE — ${esc(windowLabel())} 기준 · 사실 표기</div>
+    <table><tr><th>회사</th><th>수집 공시</th><th>관찰 신호</th><th>절차·사후</th><th>정정</th><th>대표 유형</th></tr>` +
+    snaps.map((s) => {
+      // ⚠ 조회에 실패한 회사를 「0건」으로 그리면 **「신호가 없다」로 읽힌다**.
+      //   빈 값이 「없다」로 읽히면 안 된다는 원칙이 표에서도 같다.
+      if (s.failed) {
+        return `<tr><td><b>${esc(s.name)}</b></td>` +
+          `<td colspan="5" class="dim">공시를 불러오지 못했습니다 — <b>신호가 없다는 뜻이 아닙니다</b>. 잠시 후 다시 시도하세요.</td></tr>`;
+      }
+      // ⚠ `displayLabel`을 쓰지 않는다 — 그것은 **지금 보고 있는 대시보드
+      //   스캔**(CUR)에서 그 신호가 실제로 달고 나온 보정 라벨이다. 여러 회사를
+      //   나란히 놓는 이 표에서는 뜻이 맞지 않고, 대시보드를 한 번도 돌리지
+      //   않았으면 CUR이 null이라 터진다(실제로 터졌다).
+      const hl = s.headline
+        ? `${esc(signalLabel(s.headline))} <span class="mono" style="color:var(--dim2)">×${s.typeCount[s.headline]}</span>`
+        : `<span class="dim">관찰 신호 없음</span>`;
+      return `<tr><td><b>${esc(s.name)}</b></td>` +
+        `<td>${s.scanned}${s.truncated ? ` <span class="snote">/ 전체 ${s.total}</span>` : ""}</td>` +
+        `<td>${s.observed}건</td><td>${s.procedural}건</td>` +
+        `<td>${s.amend}건 (${s.amendRate}%)</td><td>${hl}</td></tr>`;
+    }).join("") + `</table>`;
+  const trunc = snaps.filter((s) => s.truncated);
+  if (trunc.length) {
+    html += `<div class="snote">※ 공시가 많아 일부만 수집한 회사: ` +
+      esc(trunc.map((s) => `${s.name}(전체 ${s.total}건 중 ${s.scanned}건)`).join(" · ")) + `</div>`;
+  }
+  if (skipped && skipped.length) {
+    // ⚠ 이름 뒤에 조사를 붙이지 않는다 — 받침에 따라 「은/는」이 갈려
+    //   「두산는」이 된다(실제로 그렇게 나왔다). 회사 이름은 무엇이든 올 수 있다.
+    html += `<div class="snote">※ 신호 비교는 ${COMPARE_SCAN_MAX}개사까지만 합니다 — ` +
+      `공시를 조회하지 않은 회사: ${esc(skipped.join(" · "))} (위 임원 겸직에는 포함).</div>`;
+  }
+  html += `<div class="dim" style="font-size:0.8rem;margin-top:0.5rem">${glossStaticHTML(
+    whyDetailsHTML(
+      `※ 각 회사의 같은 기간 공시를 같은 규칙으로 센 것입니다. ${NOTICE.NO_JUDGMENT} — 건수가 많은 회사가 더 위험하다는 뜻이 아닙니다.`,
+      `「관찰 신호」·「절차·사후」는 <b>공시 건수</b>입니다(한 공시가 신호 2개를 켜도 1로 셉니다) — 대시보드의 같은 이름과 같은 기준입니다. 대표 유형 옆의 ×N은 그 유형이 켜진 <b>신호 수</b>라 축이 다릅니다. 공시 건수는 회사 규모·업종·상장 시장에 따라 크게 다릅니다.`))}</div></div>`;
+  return html;
+}
+
+const COMPARE_SCAN_MAX = 3;   // 공시 조회는 회사마다 페이지가 여럿이라 상한을 둔다
 async function compareActors() {
   const st = $("cstatus");
   if (compareList.length < 2) { st.textContent = "비교하려면 회사를 2개 이상 추가하세요."; return; }
@@ -6933,6 +7035,26 @@ async function compareActors() {
     }
   } catch (e) {
     st.className = "status err"; st.textContent = "⚠ " + e.message; return;
+  }
+
+  // 신호 요약 — 겸직만 보면 「같은 사람이 오갔다」는 알지만 「그 회사들에서
+  // 무슨 일이 있었나」는 모른다. 같은 기간·같은 규칙으로 세어 나란히 놓는다.
+  const snaps = [];
+  const scanEnd = new Date(), scanBgn = new Date(Date.now() - LOOKBACK_DAYS * 86400e3);
+  const scanTargets = compareList.slice(0, COMPARE_SCAN_MAX);
+  const scanSkipped = compareList.slice(COMPARE_SCAN_MAX);
+  for (const name of scanTargets) {
+    try {
+      const { items, totalCount } = await fetchDisclosureList(
+        CORPS[name][0], scanBgn, scanEnd,
+        (pg, tp) => { st.innerHTML = `<span class="spinner"></span>${esc(name)} 공시 수집 중… (${pg}${tp > 1 ? "/" + tp : ""})`; });
+      snaps.push(compareSnapshot(name, items, totalCount));
+    } catch (e) {
+      // 한 회사가 실패해도 나머지는 낸다 — 실패를 「신호 없음」으로 적지 않는다.
+      snaps.push({ name, failed: true, scanned: 0, total: 0, truncated: 0,
+                   amend: 0, amendRate: 0, observed: 0, procedural: 0,
+                   headline: "", typeCount: {} });
+    }
   }
   st.textContent = "";
 
@@ -6979,6 +7101,7 @@ async function compareActors() {
   html += `<div class="dim" style="font-size:0.8rem;margin:0.8rem 0 0">` + whyDetailsHTML(
     `※ DART 사업보고서 임원현황을 겹쳐 본 것입니다 — <strong style="color:var(--tx)">동명이인 가능성이 항상 있습니다</strong>.`,
     `생년·경력은 각 사 사업보고서 원문에서 확인하세요. 돈을 댄 사람(CB·유상증자 인수자)까지 겹쳐 보려면 <a href="../#start">MCP 대화</a>의 find_actor_overlap을 쓰세요. 공개기록 행위자 레지스트리·연결망 시각화는 별도 운영(승인제)입니다.`) + `</div></div>`;
+  html += compareTableHTML(snaps, scanSkipped);
   $("cresult").innerHTML = html;
   track("compare");
 }
