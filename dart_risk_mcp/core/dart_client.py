@@ -1586,6 +1586,15 @@ _ACQ_EQUITY_RATIO_RE = re.compile(r"자기자본대비\(%\)(?:\(A/C\))?\s*([\d,.
 _ACQ_PURPOSE_RE = re.compile(r"(?:취득목적|양수목적)\s*(.+?)\s*(?:\d+\.\s*)?(?:취득예정일자|양수예정일자|거래상대방)")
 _ACQ_EXTVAL_RE = re.compile(r"외부평가\s*여부\s*(\S+)")
 _ACQ_METHOD_RE = re.compile(r"취득방법\s*(.+?)\s*\d+\.\s*취득목적")
+# 풋옵션 등 계약 — 이면계약은 무자본 M&A 점검의 단골 수법이라 **체결됐을 때만**
+# 사실로 적는다(늘 「아니오」인 줄은 배경이지 신호가 아니다).
+# ⚠ 원문 표기가 **두 형태**다(45일 20건 실측): 「풋옵션계약 등의 체결여부」와
+#   「풋옵션 등 계약 체결여부」. 한쪽만 보면 절반을 놓친다.
+#   같은 표본에서 값은 아니오 15 · **예 1**(아이엘 20260910900252, 계약내용까지
+#   있다). DS005 40행 실측의 2.5%와 같은 자릿수다.
+_ACQ_PUT_OPTION_RE = re.compile(
+    r"풋옵션\s*(?:계약\s*등의\s*체결\s*여부|등\s*계약\s*체결\s*여부)\s*(\S+)")
+_ACQ_PUT_TEXT_RE = re.compile(r"계약\s*내용\s*(.+?)(?=\s*\d+\s*\.\s|\Z)")
 
 
 def parse_acquisition_detail(text: str) -> dict:
@@ -1602,10 +1611,13 @@ def parse_acquisition_detail(text: str) -> dict:
          "equity_ratio": float,  # 자기자본 대비 %
          "purpose": str,         # 취득·양수 목적 원문
          "method": str,          # 취득방법(취득결정 서식에만 있다)
-         "extval": str}          # 외부평가 여부(양수결정 서식에만 있다)
+         "extval": str,          # 외부평가 여부(양수결정 서식에만 있다)
+         "put_option": bool,     # 풋옵션 등 계약 체결 여부(「예」일 때만 True)
+         "put_option_text": str} # 그 계약 내용(체결됐을 때만 채운다)
     """
     out = {"issuer": "", "nation": "", "relation": "", "amount": 0,
-           "equity_ratio": 0.0, "purpose": "", "method": "", "extval": ""}
+           "equity_ratio": 0.0, "purpose": "", "method": "", "extval": "",
+           "put_option": False, "put_option_text": ""}
     if not text:
         return out
     if "타법인 주식 및 출자증권" not in text and "타법인주식및출자증권" not in text:
@@ -1642,6 +1654,16 @@ def parse_acquisition_detail(text: str) -> dict:
     m = _ACQ_EXTVAL_RE.search(text)
     if m:
         out["extval"] = m.group(1).strip()
+    m = _ACQ_PUT_OPTION_RE.search(text)
+    if m:
+        # 「예」일 때만 True — 「아니오」·「-」는 계약이 없다는 뜻이다.
+        out["put_option"] = m.group(1).strip() in ("예", "Y", "y")
+        if out["put_option"]:
+            # 계약 내용은 체결됐을 때만 의미가 있다. 「풋옵션…체결여부」 뒤에서
+            # 찾아야 앞쪽의 다른 「계약내용」 항목을 잘못 집지 않는다.
+            m2 = _ACQ_PUT_TEXT_RE.search(text, m.end())
+            if m2:
+                out["put_option_text"] = " ".join(m2.group(1).split())[:200]
     return out
 
 
