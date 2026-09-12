@@ -588,13 +588,54 @@ def _josa_ro(word: str) -> str:
 # 같은 값이다 — 한 글자로 부분 일치를 하면 관계없는 회사가 잡힌다.
 _MIN_PARTIAL_QUERY = 2
 
+# 라틴 한 글자 → DART 정식 명칭이 쓰는 한글 자모 이름.
+#
+# DART corpCode.xml의 `corp_name`은 라틴 브랜드 표기를 **한글로 음사**한다
+# (케이티앤지 ← KT&G · 티케이지휴켐스 ← TKG휴켐스 · 엘에스일렉트릭 ← LS일렉트릭).
+# 사용자는 브랜드 표기로 묻는데 명부에는 그 글자가 없어 조회가 실패한다.
+_LATIN_TO_HANGUL: dict[str, str] = {
+    "A": "에이", "B": "비", "C": "씨", "D": "디", "E": "이", "F": "에프",
+    "G": "지", "H": "에이치", "I": "아이", "J": "제이", "K": "케이", "L": "엘",
+    "M": "엠", "N": "엔", "O": "오", "P": "피", "Q": "큐", "R": "알",
+    "S": "에스", "T": "티", "U": "유", "V": "브이", "W": "더블유",
+    "X": "엑스", "Y": "와이", "Z": "제트", "&": "앤",
+}
+# 한 글자짜리 머리는 음사하지 않는다 — "K" → 「케이」처럼 흔한 낱말이 되어
+# 오타 한 글자가 엉뚱한 회사를 부른다(부분 일치의 `_MIN_PARTIAL_QUERY`와 같은 판단).
+_MIN_TRANSLIT_HEAD = 2
+_LATIN_HEAD_RE = re.compile(r"^([A-Za-z&]+)(.*)$")
+
+
+def latin_head_to_hangul(query: str) -> str:
+    """질의 **앞쪽 라틴 연속 구간**만 한글 자모 이름으로 음사한다.
+
+    'KT&G' → '케이티앤지' · 'TKG휴켐스' → '티케이지휴켐스'
+    'GI이노베이션' → '지아이이노베이션' · 'LS일렉트릭' → '엘에스일렉트릭'
+
+    라틴→한글 방향은 글자마다 대응이 하나뿐이라 **모호함이 없다**. 반대 방향
+    (한글→라틴)은 「지아이이노베이션」을 'GIE노베이션'으로 잘못 쪼개는 등
+    경계가 모호해 쓰지 않는다.
+
+    음사할 것이 없으면 빈 문자열을 돌려준다.
+    """
+    m = _LATIN_HEAD_RE.match((query or "").strip())
+    if not m:
+        return ""
+    head, tail = m.group(1).upper(), m.group(2)
+    if len(head) < _MIN_TRANSLIT_HEAD:
+        return ""
+    if any(ch not in _LATIN_TO_HANGUL for ch in head):
+        return ""
+    return "".join(_LATIN_TO_HANGUL[ch] for ch in head) + tail
+
 
 def resolve_corp(query: str, api_key: str) -> tuple[str, dict] | None:
     """기업명 또는 종목코드(6자리) → (정식 기업명, {corp_code, stock_code}).
 
     부분 매칭 지원 — '삼성바이오' 입력 시 '삼성바이오로직스' 반환.
 
-    해석 순서: 정확 일치 → 종목코드 → 별칭 정확 일치(옛 상호) → 부분 일치.
+    해석 순서: 정확 일치 → 종목코드 → 별칭 정확 일치(옛 상호) → 부분 일치
+    → **라틴 표기 음사 정확 일치**('KT&G' → '케이티앤지', 마지막 수단).
     옛 상호로 해석된 경우 반환 dict에 "alias_note"가 추가된다. 정확 일치와
     별칭이 같은 이름을 두고 충돌하는 경우(예: 동명의 죽은 법인 "알로이스"와
     상호변경 이력의 "알로이스"), 기존 정확 일치 결과는 그대로 두고
@@ -700,6 +741,36 @@ def resolve_corp(query: str, api_key: str) -> tuple[str, dict] | None:
             note + " — 다른 회사를 찾으신다면 정식 상호나 6자리 종목코드로 조회하세요"
         )
         return name, info
+
+    # 라틴 표기 → 한글 음사 정확 일치 (마지막 수단)
+    #
+    # 위 부분 일치 주석이 적어 둔 「KT&G」·「LS일렉트릭」·「SK바이오팜」이
+    # None이 되던 자리다. DART 정식 명칭이 라틴 브랜드를 한글로 음사하기
+    # 때문이고(케이티앤지·엘에스일렉트릭·에스케이바이오팜), 음사는 글자
+    # 대응이 하나뿐이라 결정적이다.
+    #
+    # ⚠ **반드시 마지막에 둔다.** 명부 전수 실측(2026-09-13):
+    #   무조건 적용하면 **84건의 답이 바뀌고 상당수가 나빠진다** — 살아 있는
+    #   회사가 폐지된 동명 껍데기로 밀려난다:
+    #       'IPS'  원익IPS(240810·현존) → 아이피에스(051820·폐지)
+    #       'KR'   KR모터스(000040·현존) → 케이알(035950·폐지)
+    #       'DS'   DSR(155660·현존)     → 디에스(051710·폐지)
+    #   여기(부분 일치가 이미 실패한 뒤)에 두면 **기존 답이 바뀌는 일이
+    #   구조적으로 0**이고, 새로 찾히는 것만 550곳(그중 336곳은 modify_date가
+    #   2024년 이후인 현역 — TKG휴켐스·알에프세미·에프앤가이드·씨티씨바이오 등).
+    #
+    # ⚠ **알려진 한계**: 'KT'는 부분 일치가 먼저 「KTE」(폐지·종목코드 없음)를
+    #   잡아 여기까지 오지 않는다. 음사라면 「케이티」(030200)가 맞지만, 그걸
+    #   고치려면 부분 일치보다 앞에 두어야 하고 그러면 위 84건이 함께 깨진다.
+    #   부분 일치 결과에는 이미 `alias_note`로 "부분 일치였다"가 붙는다.
+    translit = latin_head_to_hangul(query)
+    if translit and translit != query and translit in _corp_cache:
+        info = dict(_corp_cache[translit])
+        info["alias_note"] = (
+            f"'{query}' 입력을 DART 정식 명칭 '{translit}'{_josa_ro(translit)} "
+            f"해석했습니다 (라틴 표기를 한글로 음사)"
+        )
+        return translit, info
 
     return None
 

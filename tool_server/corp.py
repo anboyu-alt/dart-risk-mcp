@@ -95,6 +95,19 @@ def search_corp_candidates(query: str, corp_cache: dict, aliases: dict) -> list[
             break
         _add(_candidate(name, info))
 
+    # 4) 라틴 표기 → 한글 음사 정확 일치 (마지막 수단)
+    #
+    #    DART 정식 명칭이 라틴 브랜드를 한글로 음사해(케이티앤지 ← KT&G)
+    #    브랜드 표기로는 이름·부분 일치가 모두 실패하던 자리다.
+    #
+    #    ⚠ **core `resolve_corp`와 같은 자리(부분 일치 뒤)에 둔다.** 여기는
+    #    후보 목록이라 자동 선택 위험이 없지만, 두 화면이 같은 질의에 서로
+    #    다른 순서를 내면 그게 드리프트다. core 쪽 실측 근거(무조건 적용 시
+    #    84건의 답이 바뀌고 현역이 폐지 껍데기로 밀린다)는 그 주석 참고.
+    translit = dc.latin_head_to_hangul(q)
+    if translit and translit != q and translit in corp_cache and len(out) < MAX_RESULTS:
+        _add(_candidate(translit, corp_cache[translit], alias_of=q))
+
     return out[:MAX_RESULTS]
 
 
