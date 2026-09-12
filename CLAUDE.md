@@ -1192,7 +1192,13 @@ INQUIRY의 `"거래정지"` 오탐은 우연히 발견됐다. 같은 종류의 �
 
 여러 PR이 머지된 뒤 한 번에:
 
-1. 버전 4곳을 같은 값으로 올린다
+1. 버전 **5곳**을 같은 값으로 올린다 — `dart_risk_mcp/__init__.py` ·
+   `pyproject.toml` · `extension/manifest.json` · `extension/pyproject.toml`의
+   `version`, 그리고 ⚠ **같은 파일의 의존성 핀**
+   `dependencies = ["dart-risk-mcp==<버전>"]`. 마지막 것은 그 파일의 `version`과
+   **별개 줄**이라 눈으로 훑으면 놓친다(2026-09-13 v1.27.0에서 실제로 놓쳤고
+   `test_mcp_dependency_pin.py`·`test_mcpb_manifest.py`가 잡았다 — 이 문서가
+   오래 「4곳」이라 적고 있던 것이 원인이다).
 2. `CHANGELOG.md`에 그 구간의 변경을 **하나의 항목**으로 정리한다
 3. `python scripts/export_tool_data.py`로 `meta.version` 반영
 4. `python -m pytest tests/ -q`
