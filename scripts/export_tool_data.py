@@ -56,6 +56,7 @@ from dart_risk_mcp.core.explain import (  # noqa: E402
     METRIC_PROSE,
 )
 from dart_risk_mcp.core.dart_client import _FS_ALIASES  # noqa: E402
+from dart_risk_mcp.core.dart_client import _NEGATIVE_DISCLOSURE_KEYS  # noqa: E402
 from dart_risk_mcp.core import qualifiers as _q  # noqa: E402
 from dart_risk_mcp.core import signals as _sig  # noqa: E402
 from dart_risk_mcp.core.signals import AMBIGUOUS_SIGNAL_KEYS  # noqa: E402
@@ -418,6 +419,11 @@ def build_signals_data() -> dict:
         # 안 보이나"를 사실로 설명할 수 있게 내보낸다(이중 관리 방지).
         "non_title_signals": dict(_sig.NON_TITLE_SIGNALS),
         "ambiguous_signal_keys": sorted(AMBIGUOUS_SIGNAL_KEYS),
+        # 내부자 매도 ±30일 안에서 찾을 "부정 공시"의 신호 키 —
+        # detect_insider_pre_disclosure의 판정 입력이다. 뷰어가 같은 판정을
+        # 하려면 같은 집합을 봐야 해서 내보낸다(손으로 복제하면 core가
+        # 갈릴 때 뷰어만 조용히 낡는다).
+        "negative_disclosure_keys": sorted(_NEGATIVE_DISCLOSURE_KEYS),
         # 금감원 적발 사례(작업 1) — score/severity/confidence 미노출.
         # 파일이 없거나 비어 있어도 빈 by_taxonomy·total_cases=0으로 항상
         # 존재한다(뷰어가 catalog 키 자체는 항상 참조할 수 있게).
