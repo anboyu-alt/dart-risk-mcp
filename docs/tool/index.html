@@ -5416,7 +5416,13 @@ function splitIssuerNation(raw) {
 // 관계는 `fund_diversion_chain` 게이트의 **판정 입력**이라 표시만의 문제가
 // 아니다(issuer를 못 읽으면 그 건은 영영 `unknown`이 된다).
 function parseAcquisitionDetail(text) {
-  const empty = { issuer: "", nation: "", relation: "", amount: "", ratio: "" };
+  // ⚠ core가 읽는 `purpose`·`method`·`extval`을 **버리고 있었다**(2026-09-13).
+  //   45일 20건 실측에서 취득목적 16/16 · 취득방법 14/16이 원문에 있는데 뷰어는
+  //   하나도 내지 않았다 — 「무엇을 사는지」가 아니라 「왜 사는지」가 이 화면의
+  //   요점인 자리다. 풋옵션은 core도 DS005로만 읽던 것을 원문에서도 읽게 했다.
+  const empty = { issuer: "", nation: "", relation: "", amount: "", ratio: "",
+                  purpose: "", method: "", extval: "",
+                  putOption: false, putOptionText: "" };
   if (!text || typeof text !== "string") return empty;
   const t = mdToPlain(text).replace(/\s+/g, " ");
   // 진입 가드는 core `parse_acquisition_detail`과 같은 문구를 쓴다 — 옛
@@ -5428,12 +5434,28 @@ function parseAcquisitionDetail(text) {
   const split = splitIssuerNation(im ? (im[1] || im[2] || "") : "");
   // 관계 값이 표를 벗어나 주석 문장을 물면 버린다 — core와 같은 가드·같은 상한.
   const rel = pick(/회사와\s*의?\s*관계\s*(.+?)\s*(?:발행주식총수|주요사업)/);
+  // ⚠ 풋옵션 표기는 **두 형태**다(실측): 「풋옵션계약 등의 체결여부」와
+  //   「풋옵션 등 계약 체결여부」. 한쪽만 보면 절반을 놓친다.
+  //   「예」일 때만 True — 늘 「아니오」인 줄은 배경이지 신호가 아니다.
+  const pm = t.match(/풋옵션\s*(?:계약\s*등의\s*체결\s*여부|등\s*계약\s*체결\s*여부)\s*(\S+)/);
+  const putOption = !!pm && ["예", "Y", "y"].indexOf(pm[1].trim()) !== -1;
+  let putOptionText = "";
+  if (putOption) {
+    // 「풋옵션…체결여부」 **뒤에서** 찾는다 — 앞쪽의 다른 「계약내용」을 집지 않게.
+    const after = t.slice(pm.index + pm[0].length);
+    const tm = after.match(/계약\s*내용\s*(.+?)(?=\s*\d+\s*\.\s|$)/);
+    if (tm) putOptionText = tm[1].trim().slice(0, 200);
+  }
   return {
     issuer: split.name,
     nation: split.nation,
     relation: RELATION_LOOKS_DIRTY_RE.test(rel) ? "" : rel.slice(0, 40),
     amount: pick(/(?:취득금액|양수금액)\(원\)(?:\(A\))?\s*([\d,]+)/),
     ratio: pick(/자기자본대비\(%\)(?:\(A\/C\))?\s*([\d,.]+)/),
+    purpose: pick(/(?:취득목적|양수목적)\s*(.+?)\s*(?:\d+\.\s*)?(?:취득예정일자|양수예정일자|거래상대방)/).slice(0, 120),
+    method: pick(/취득방법\s*(.+?)\s*\d+\.\s*취득목적/).slice(0, 60),
+    extval: pick(/외부평가\s*여부\s*(\S+)/),
+    putOption, putOptionText,
   };
 }
 // 국내 상장 여부 — core `classify_target_listing` 이식.
@@ -5475,11 +5497,16 @@ async function classifyAcquisitionEvidence(hits) {
     const data = await fetchDisclosureText(h.rcept);
     if (!data || data.error || !data.text) {
       return { rcept: h.rcept, date: h.date, nm: h.nm, issuer: "", relation: "",
-               amount: "", ratio: "", cls: "unknown" };
+               amount: "", ratio: "", purpose: "", method: "", extval: "",
+               putOption: false, putOptionText: "", cls: "unknown" };
     }
     const d = parseAcquisitionDetail(data.text);
     return { rcept: h.rcept, date: h.date, nm: h.nm, issuer: d.issuer,
              nation: d.nation, relation: d.relation, amount: d.amount, ratio: d.ratio,
+             // 파서가 읽은 것을 여기서 버리면 화면에 닿지 않는다 — 옛 코드가
+             // purpose·method·extval을 이 자리에서 통째로 흘렸다.
+             purpose: d.purpose, method: d.method, extval: d.extval,
+             putOption: d.putOption, putOptionText: d.putOptionText,
              listing: await classifyTargetListing(d.issuer, d.nation),
              // ⚠ 옛 줄은 `d.issuer ? … : "unknown"`이라, 이름을 못 읽으면
              // 원문에 「특수관계인」이 적혀 있어도 관계가 통째로 사라졌다.
@@ -5499,8 +5526,21 @@ function acquisitionFactsHTML(pattern, results, totalCandidates) {
     const rel = r.relation ? ` (${esc(r.relation)})` : "";
     const lst = { listed: "(상장)", unlisted: "(비상장)", unknown: "" }[r.listing] || "";
     const nat = r.nation ? ` · 국적 ${esc(r.nation)}` : "";
+    // 「무엇을 샀나」만큼 「왜·어떻게 샀나」가 중요한 자리다 — 원문에 있는데
+    // 뷰어가 버리던 값들(취득목적 실측 16/16 · 취득방법 14/16 · 외부평가 2/16).
+    const why = r.purpose ? `<br>&nbsp;&nbsp;&nbsp;&nbsp;취득목적: ${esc(r.purpose)}` : "";
+    const how = [r.method ? `취득방법 ${esc(r.method)}` : "",
+                 r.extval ? `외부평가 ${esc(r.extval)}` : ""].filter(Boolean).join(" · ");
+    const howLine = how ? `<br>&nbsp;&nbsp;&nbsp;&nbsp;${how}` : "";
+    // ⚠ 풋옵션은 **체결됐을 때만** 적는다 — 늘 「아니오」인 줄은 배경이지
+    //   신호가 아니다(실측 20건 중 1건). 이면계약은 금감원 무자본 M&A
+    //   합동점검의 단골 수법이라 사실로 남긴다(판정은 하지 않는다).
+    const put = r.putOption
+      ? `<br>&nbsp;&nbsp;&nbsp;&nbsp;풋옵션 등 계약: <b>체결</b>` +
+        (r.putOptionText ? ` — ${esc(r.putOptionText)}` : "")
+      : "";
     return `<div style="margin-top:0.25rem">· <a href="#" class="patEvLink" data-r="${esc(r.rcept)}" style="color:var(--tx)">${esc(fmtDate(r.date))} ${esc(r.nm)}</a>
-      <br>&nbsp;&nbsp;→ 취득 대상: ${esc(r.issuer || "(미확인)")}${lst}${nat} · 관계: ${esc(label[r.cls] || "미확인")}${rel}${amt}${ratio}</div>`;
+      <br>&nbsp;&nbsp;→ 취득 대상: ${esc(r.issuer || "(미확인)")}${lst}${nat} · 관계: ${esc(label[r.cls] || "미확인")}${rel}${amt}${ratio}${why}${howLine}${put}</div>`;
   }).join("");
   const aff = results.filter((r) => r.cls === "affiliated");
   const known = results.filter((r) => r.cls !== "unknown");
