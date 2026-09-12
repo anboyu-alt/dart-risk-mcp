@@ -300,6 +300,38 @@
   .disclaimer a { color: var(--dim); }
   .hidden { display: none !important; }
 
+  /* ── 딥 블록 반응형 격자 ──────────────────────────────────────────
+     대시보드 아래쪽 패널들은 서로 독립적인 관측이라 세로로만 쌓을 이유가 없다.
+     넓은 화면에서 2~3열로 펼쳐 스크롤을 줄인다(실측 1920px: 코아스 7,369px =
+     6.8화면 · 제이스코홀딩스 7,106px · 삼성전자 4,632px).
+     ⚠ CSS multi-column(`columns`)으로 하면 안 된다 — `.mzn-scroll thead`의
+     sticky가 multicol 프래그먼트에서 죽고, `break-inside:avoid` 요소가 컬럼
+     높이를 넘으면 **조용히 잘린다**. 12개 패널이 loadDeepBlocks로 나중에
+     길어지므로 어느 패널이 잘릴지 예측할 수조차 없다. grid는 비동기로 내용이
+     채워져도 행 높이만 커지고 패널이 열을 옮기지 않는다.
+     ⚠ `grid-auto-flow: dense` 금지 — 빈 칸을 메우려고 순서를 재배치하면
+     위험도 순서를 암시하게 된다(v0.8.5). 구멍이 생겨도 DOM 순서를 지킨다.
+     ⚠ 패널에 `overflow`를 걸지 않는다 — 용어 사전 툴팁(.term-def)이 잘린다
+     (.headline에서 같은 이유로 overflow:hidden을 뺀 전례가 있다). */
+  .deepgrid { display: grid; gap: 16px; align-items: start; grid-template-columns: 1fr; }
+  .deepgrid > .panel { margin-bottom: 0; }  /* L87의 margin이 gap과 이중으로 먹는다 */
+  .deepgrid > * { min-width: 0; }           /* 표가 트랙을 밀어내는 것 방지(.mainarea와 같은 처방) */
+  /* ⚠ 전폭 span(`.wide`)을 쓰지 않는다 — 넣어 보고 **실측으로 뺐다**.
+     표가 넓은 패널 셋(FINANCIAL CORE 6열 · TURNOVER TREND 5열 · MEZZANINE
+     5열+표 2개)에 2트랙을 주니 그 행의 남은 트랙이 통째로 비어, 코아스 1920px에서
+     격자 높이가 2,702 → 3,243px로 **오히려 541px 늘었다**. 셋이 DOM에서 연달아
+     있는 데다 dense 금지라 그 구멍을 메울 방법이 없다. 넓은 표는 아래 이유로
+     좁은 트랙에서도 안전하다.
+     ⚠ 좁은 트랙에서 표가 넘쳐도 패널·페이지는 넘치지 않는다 — 표를 감싼 div가
+     이미 `overflow-x:auto`라 표만 따로 스크롤된다(실측 트랙 388px에서 TURNOVER
+     표 498px · 패널 넘침 없음 · 페이지 가로 스크롤 없음). 그래서 브레이크포인트를
+     표 폭에 맞춰 좁힐 이유가 없다.
+     열 수는 실측으로 정했다(코아스 1920px 기준 격자 높이): 2열 2,702 < 3열 2,819.
+     2560px에서는 역전돼 3열 2,585 < 2열 2,660 — 트랙이 넉넉해져야 3열이 이긴다.
+     MEZZANINE(1,177px)이 한 행을 지배해서, 트랙이 좁을 때 3열은 두 칸을 낭비한다. */
+  @media (min-width: 1280px) { .deepgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (min-width: 2280px) { .deepgrid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
   /* 좁은 화면: 레일 → 상단 바 */
   @media (max-width: 760px) {
     .layout { flex-direction: column; }
@@ -2132,6 +2164,13 @@ function renderDash() {
     }
   }
 
+  // ── 딥 블록 구간 (반응형 격자) ──────────────────────────────────
+  // 여기부터 AUDIT OPINION까지는 서로 독립적인 관측이라 넓은 화면에서 2~3열로
+  // 편다(.deepgrid). 위쪽 서사 구간(헤드라인·HEAVIEST·TIMELINE·COMMENTARY·
+  // CAPITAL RHYTHM·PATTERN WATCH)은 읽는 순서 자체가 의미라 전폭을 유지한다.
+  // convoPanel은 격자 밖에 둔다(대화 유도 CTA라 전폭이 맞다).
+  html += `<div class="deepgrid">`;
+
   // 최대주주변경(정정·예고성 제외) 공시가 있을 때만 블록 자체를 넣는다 —
   // 없으면 스피너조차 남기지 않고 통째로 생략(findLatestControlChange가
   // null이면 아래 loadDeepBlocks도 el이 없어 자연히 조회를 건너뛴다).
@@ -2176,6 +2215,7 @@ function renderDash() {
     <div id="holdCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">임원·주요주주 소유보고 조회 중…</span></div></div>`;
   html += `<div class="panel"><div class="slabel">▍AUDIT OPINION — 3개년 · 사실 표기</div>
     <div id="auditCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">감사보고 조회 중…</span></div></div>`;
+  html += `</div>`;  // .deepgrid 닫기 — convoPanel은 격자 밖(전폭)
   html += convoPanel(name);
   $("result").innerHTML = html;
   $("result").querySelectorAll(".patEvLink").forEach((a) => {
