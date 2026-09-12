@@ -31,7 +31,9 @@ const ALLOWED_ENDPOINTS = new Set([
   "srtpdPsndbtNrdmpBlce.json",           // 단기사채 미상환 잔액
   "entrprsBilScritsNrdmpBlce.json",      // 기업어음 미상환 잔액
   "newCaplScritsNrdmpBlce.json",         // 신종자본증권 미상환 잔액
-  "cndlCaplScritsNrdmpBlce.json",        // 조건부자본증권 미상환 잔액
+  "cndlCaplScritsNrdmpBlce.json",
+  "adtServcCnclsSttus.json",             // 감사용역 계약 체결 현황
+  "accnutAdtorNonAdtServcCnclsSttus.json", // 비감사용역 계약 체결 현황        // 조건부자본증권 미상환 잔액
 ]);
 
 export default async function handler(req, res) {
