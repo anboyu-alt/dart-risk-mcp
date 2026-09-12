@@ -2805,6 +2805,74 @@ function dividendDrainFlags(records) {
   return flags;
 }
 
+// ── 내부자 매도 ±30일 부정 공시 (core detect_insider_pre_disclosure 이식) ──
+// 입력 계약을 core와 똑같이 맞춘다 — insiderRecords는 {holder, rcept_dt,
+// delta_pct}, signalEvents는 {key, rcept_dt, report_nm}. 그래야 같은 입력에
+// 같은 답이 나오는지 테스트로 대조할 수 있다.
+//
+// ⚠ `gap_signed`(부호 있는 간격)를 **반드시 유지한다**. 양수면 공시가 매도보다
+// 나중(= 매도가 먼저), 음수면 공시가 먼저다. `Math.abs`로 부호를 버리고
+// 「N일 후」를 고정으로 붙이면 **「정보 우위 매도」와 「악재 뒤 손절」이
+// 뒤바뀐다** — core가 2026-08-30에 고친 바로 그 결함이다(제이스코홀딩스 4건이
+// 전부 공시가 먼저인데 전부 「후」로 표기됐다).
+//
+// ⚠ 창 안에 부정 공시가 여럿이면 **가장 가까운 것**을 고른다(동률이면 이른
+// 날짜 — 결정적). 리스트 첫 번째를 잡으면 임의의 건이 뽑힌다.
+function detectInsiderPreDisclosure(insiderRecords, signalEvents, windowDays) {
+  const W = windowDays === undefined || windowDays === null ? 30 : windowDays;
+  if (!Array.isArray(insiderRecords) || !insiderRecords.length) return [];
+  if (!Array.isArray(signalEvents) || !signalEvents.length) return [];
+  const keys = new Set((DATA && DATA.negative_disclosure_keys) || []);
+  if (!keys.size) return [];
+  const parse = (d) => {
+    const s = String(d === null || d === undefined ? "" : d).slice(0, 8);
+    if (!/^\d{8}$/.test(s)) return null;
+    const t = Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8));
+    return Number.isFinite(t) ? t : null;
+  };
+  const negative = [];
+  for (const ev of signalEvents) {
+    if (!ev || !keys.has(ev.key)) continue;
+    const t = parse(ev.rcept_dt);
+    if (t === null) continue;
+    negative.push({ t, d8: String(ev.rcept_dt).slice(0, 8), key: ev.key, nm: ev.report_nm || "" });
+  }
+  if (!negative.length) return [];
+  const flags = [];
+  for (const rec of insiderRecords) {
+    const delta = parseFloat(rec && rec.delta_pct);
+    if (!Number.isFinite(delta) || delta >= 0) continue;  // 매수·무변동은 비대상
+    const sell = parse(rec.rcept_dt);
+    if (sell === null) continue;
+    let best = null;
+    for (const n of negative) {
+      const signed = Math.round((n.t - sell) / 86400e3);  // 상수에 기대지 않는다(패리티 하네스가 함수만 잘라 돌린다)
+      if (Math.abs(signed) > W) continue;
+      if (best === null || Math.abs(signed) < best.gap
+          || (Math.abs(signed) === best.gap && n.t < best.t)) {
+        best = { gap: Math.abs(signed), t: n.t, signed, key: n.key, d8: n.d8, nm: n.nm };
+      }
+    }
+    if (best) {
+      flags.push({
+        holder: rec.holder || "미상", sell_date: rec.rcept_dt || "", delta_pct: delta,
+        disclosure_key: best.key, disclosure_date: best.d8, report_nm: best.nm,
+        days_gap: best.gap, gap_signed: best.signed,
+      });
+    }
+  }
+  return flags;
+}
+
+// core `_gap_phrase` 이식 — 방향을 모르면 방향을 말하지 않는다.
+function gapPhrase(flag) {
+  const n = flag && flag.days_gap ? flag.days_gap : 0;
+  const signed = flag ? flag.gap_signed : null;
+  if (signed === null || signed === undefined) return `${n}일 간격`;
+  if (signed === 0) return "같은 날";
+  return signed > 0 ? `매도 ${n}일 후` : `매도 ${n}일 전`;
+}
+
 // ── 자금사용·공시 근접 힌트 (출처: se/app.js:2854-3076) ──
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -6329,10 +6397,28 @@ async function loadHoldings(corpCode) {
     const more = pts.length > shown.length
       ? ` <span class="snote">(보고 ${pts.length}건 중 최근 ${shown.length}건 표시)</span>` : "";
     html += `<div class="factline">· <b>${esc(who)}</b>: ${series}${more}</div>`;
-    for (let i = 0; i < pts.length; i++) {
+  }
+
+  // ── 흐름 탐지는 **표시 상한과 무관하게 전체 보고자**를 본다 ──────────
+  // 옛 코드는 위 렌더 루프(보고자 5명) 안에서 매집을 찾아, 6번째부터의
+  // 매집이 화면에 없다는 이유로 탐지 자체가 되지 않았다. 표시를 자르는 것과
+  // 판정을 자르는 것은 다르다(집계가 상한과 무관해야 한다는 같은 원칙).
+  const sellNotes = [];
+  for (const [who, pts] of byRep) {
+    if (pts.length < 2) continue;
+    pts.sort((a, b) => a.d < b.d ? -1 : 1);
+    for (let i = 0; i < pts.length; i++) {          // 매집 (+1.0%p / 60일)
       for (let jj = i + 1; jj < pts.length && dayDiff(pts[i].d, pts[jj].d) <= 60; jj++) {
         if (pts[jj].rate - pts[i].rate >= 1.0) {
           accumNotes.push(`${who}: ${md(pts[i].d)} ${pts[i].rate.toFixed(2)}% → ${md(pts[jj].d)} ${pts[jj].rate.toFixed(2)}% (+${(pts[jj].rate - pts[i].rate).toFixed(2)}%p / ${Math.round(dayDiff(pts[i].d, pts[jj].d))}일)`);
+          i = pts.length; break;
+        }
+      }
+    }
+    for (let i = 0; i < pts.length; i++) {          // 매도 (-1.0%p / 60일) — 매집과 대칭
+      for (let jj = i + 1; jj < pts.length && dayDiff(pts[i].d, pts[jj].d) <= 60; jj++) {
+        if (pts[i].rate - pts[jj].rate >= 1.0) {
+          sellNotes.push(`${who}: ${md(pts[i].d)} ${pts[i].rate.toFixed(2)}% → ${md(pts[jj].d)} ${pts[jj].rate.toFixed(2)}% (${(pts[jj].rate - pts[i].rate).toFixed(2)}%p / ${Math.round(dayDiff(pts[i].d, pts[jj].d))}일)`);
           i = pts.length; break;
         }
       }
@@ -6344,11 +6430,53 @@ async function loadHoldings(corpCode) {
       `<br><span class="dim" style="font-size:0.8rem">${glossStaticHTML(
         `계단식 매집은 지배 재편·경영권 경합에서 반복 관찰되는 형태입니다 — 각 보고서의 취득 자금 출처·보고 사유를 원문에서 확인하세요.`)}</span></div>`;
   }
+  if (sellNotes.length) {
+    html += `<div class="factwarn">📉 <b>단기 매도 흐름 관찰</b> — 60일 안에 보유비율이 1%p 이상 줄어든 보고자가 있습니다:<br>` +
+      sellNotes.map(esc).join("<br>") +
+      `<br><span class="dim" style="font-size:0.8rem">${glossStaticHTML(
+        `지분을 줄인 사유는 보고서마다 다릅니다 — 장내매도·담보권 실행·상속·증여가 모두 같은 형태로 나타납니다. 각 보고서의 보고 사유를 원문에서 확인하세요.`)}</span></div>`;
+  }
+
+  // ── 매도 ±30일 안의 부정 공시 (core detect_insider_pre_disclosure) ──
+  // 인접 보고 사이의 변동(Δ)을 매도 이벤트로 삼아 core와 같은 계약으로 넘긴다.
+  // ⚠ 방향을 줄마다 밝힌다 — 「매도 N일 전」과 「N일 후」는 뜻이 정반대다
+  //   (정보 우위 의심 vs 악재 뒤 손절). 우리가 어느 쪽인지 판정하지는 않는다.
+  const sellEvents = [];
+  for (const [who, pts] of byRep) {
+    for (let i = 1; i < pts.length; i++) {
+      const d = pts[i].rate - pts[i - 1].rate;
+      if (d < 0) sellEvents.push({ holder: who, rcept_dt: pts[i].d, delta_pct: d });
+    }
+  }
+  const negEvents = [];
+  for (const ev of (CUR && CUR.observedEvents) || []) {
+    for (const s of ev.signals || []) {
+      if (isObservedSig(s)) negEvents.push({ key: s.key, rcept_dt: ev.date, report_nm: ev.nm });
+    }
+  }
+  const preFlags = detectInsiderPreDisclosure(sellEvents, negEvents, 30);
+  if (preFlags.length) {
+    const seen = new Set();
+    const lines = [];
+    for (const f of preFlags) {
+      const k = `${f.holder}|${f.sell_date}|${f.disclosure_key}|${f.disclosure_date}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      // ⚠ 라벨 뒤에 「공시」를 덧붙이지 않는다 — `displayLabel("INQUIRY")`가
+      //   이미 「조회공시」라 「조회공시 공시」가 된다(라이브에서 그렇게 나왔다).
+      lines.push(`${f.holder} · 매도일 ${md(f.sell_date)} Δ${f.delta_pct.toFixed(2)}%p ` +
+        `→ ${gapPhrase(f)} ${displayLabel(f.disclosure_key) || f.disclosure_key} (${md(f.disclosure_date)})`);
+    }
+    html += `<div class="factwarn">🔍 <b>매도 ±30일 안에 부정 공시가 관찰됩니다</b> — 사실 표기이며 <b>방향은 줄마다 다릅니다</b>:<br>` +
+      lines.map(esc).join("<br>") +
+      `<br><span class="dim" style="font-size:0.8rem">${glossStaticHTML(
+        `공시가 매도보다 <b>먼저</b> 난 건과 <b>나중</b>에 난 건이 섞여 있습니다. 창은 ±30일 양방향이고 순서가 곧 인과는 아닙니다 — 각 보고서의 보고 사유와 공시 원문을 함께 확인하세요.`)}</span></div>`;
+  }
   html += metricProseHTML("insider");
   html += `<div class="dim" style="font-size:0.8rem;margin:0.5rem 0 0">${glossStaticHTML(
     whyDetailsHTML(
-      `※ DART <b>임원·주요주주 특정증권 소유보고</b>(elestock)의 공개 기록 미러링이며 <b>5% 대량보유 보고가 아닙니다</b>. ${NOTICE.NO_JUDGMENT}.`,
-      `등기임원·지배주주 중심입니다. 5% 대량보유는 majorstock 별도 엔드포인트이고, 최대주주 현황까지 통합한 시계열은 MCP 대화의 track_insider_trading이 제공합니다.`))}</div>`;
+      `※ DART <b>임원·주요주주 특정증권 소유보고</b>(elestock)의 공개 기록 미러링이며 <b>5% 대량보유 보고가 아닙니다</b>. 매집·매도 흐름은 <b>이 보고서들의 인접 보고 사이 변동</b> 기준(60일·1%p)입니다. ${NOTICE.NO_JUDGMENT}.`,
+      `등기임원·지배주주 중심입니다. 5% 대량보유는 majorstock 별도 엔드포인트이고, 최대주주 현황까지 통합한 시계열은 MCP 대화의 track_insider_trading이 제공합니다. 그쪽은 최대주주 현황(hyslrSttus)을 축으로 30일·0.5%p 기준을 쓰므로 같은 회사라도 여기와 걸리는 건이 다를 수 있습니다 — 축과 기준이 서로 다른 것이지 어느 한쪽이 틀린 것이 아닙니다.`))}</div>`;
   el.innerHTML = html;
 }
 

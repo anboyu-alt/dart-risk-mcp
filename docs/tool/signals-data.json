@@ -1675,6 +1675,15 @@
   "TREASURY",
   "TREASURY_TRUST"
  ],
+ "negative_disclosure_keys": [
+  "AUDIT",
+  "DEBT_RESTR",
+  "DISCLOSURE_VIOL",
+  "EMBEZZLE",
+  "GOING_CONCERN",
+  "INQUIRY",
+  "INSOLVENCY"
+ ],
  "catalog": {
   "total_cases": 277,
   "tax_labels": {

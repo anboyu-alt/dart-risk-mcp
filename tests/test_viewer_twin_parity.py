@@ -48,6 +48,7 @@ from dart_risk_mcp.core.dart_client import (
     classify_holder_type,
     classify_issuance_type,
     classify_outflow_relation,
+    detect_insider_pre_disclosure,
     match_affiliate_row,
     pick_common_stock_total,
     parse_outflow_detail,
@@ -57,6 +58,7 @@ from dart_risk_mcp.core.dart_client import (
 )
 from dart_risk_mcp.server import (
     _find_latest_control_change,
+    _gap_phrase,
     _format_affiliate_stake_line,
     _is_asset_disposal_title,
 )
@@ -123,6 +125,10 @@ _FUNCS = (
     "function parseMezzanineRow(",
     "function summarizeMezzanine(",
     "function mezzanineOverhang(",
+    # 2026-09-13 내부자 매도 ±30일 부정 공시 이식 — 위 가드가 즉시 2쌍을
+    # 신고했다. **방향(gap_signed)이 뒤집히면 뜻이 정반대**라 특히 중요하다.
+    "function detectInsiderPreDisclosure(",
+    "function gapPhrase(",
 )
 
 # 이름은 `_FUNCS`에서 뽑는다 — 예전에는 아래 JS의 `const FN = {...}`에도 손으로
@@ -860,3 +866,86 @@ def test_대기물량_계산이_같다():
     assert core["shares_at_floor"] > core["shares_at_strike"]
     assert core["excluded_matured"] == 1 and core["excluded_eb"] == 1
     assert core["floor_unknown"] == 1
+
+
+# ── 내부자 매도 ±30일 부정 공시 (2026-09-13 이식) ─────────────────────────
+#
+# ⚠ 이 쌍은 **방향이 뒤집히면 뜻이 정반대**가 된다 — 「매도 N일 전 악재 공시」는
+#   정보 우위 의심이고 「N일 후」는 악재 뒤 손절이다. core가 2026-08-30에
+#   `abs()`로 부호를 버리던 것을 고쳤고, 그 수정이 뷰어에도 살아 있는지를
+#   여기서 잠근다.
+
+_SELLS = [
+    {"holder": "홍길동", "rcept_dt": "20260331", "delta_pct": -1.20},
+    {"holder": "김철수", "rcept_dt": "20260415", "delta_pct": -0.30},
+    {"holder": "이영희", "rcept_dt": "20260501", "delta_pct": +0.80},   # 매수 → 비대상
+    {"holder": "박민수", "rcept_dt": "20260601", "delta_pct": -2.00},   # 창 밖
+    {"holder": "최지현", "rcept_dt": "20260310", "delta_pct": -0.50},   # 같은 날
+    {"holder": "정하나", "rcept_dt": "", "delta_pct": -0.50},           # 날짜 없음
+]
+_NEG_EVENTS = [
+    {"key": "AUDIT", "rcept_dt": "20260318", "report_nm": "감사보고서 제출"},
+    {"key": "CB_BW", "rcept_dt": "20260320", "report_nm": "전환사채권발행결정"},  # 부정 키 아님
+    {"key": "INSOLVENCY", "rcept_dt": "20260420", "report_nm": "자본잠식"},
+    {"key": "INQUIRY", "rcept_dt": "20260310", "report_nm": "조회공시요구"},
+    {"key": "EMBEZZLE", "rcept_dt": "", "report_nm": "날짜 없음"},
+]
+
+
+def test_내부자_매도_부정공시_플래그가_같다():
+    core = detect_insider_pre_disclosure(_SELLS, _NEG_EVENTS, 30)
+    got = _viewer([["detectInsiderPreDisclosure", _SELLS, _NEG_EVENTS, 30]])[0]
+    assert len(core) == len(got), f"건수가 다르다: core {len(core)} vs 뷰어 {len(got)}"
+    for a, b in zip(core, got):
+        for k in ("holder", "sell_date", "disclosure_key", "disclosure_date",
+                  "report_nm", "days_gap", "gap_signed"):
+            assert a[k] == b[k], f"{k}: core {a[k]!r} vs 뷰어 {b[k]!r}"
+        assert abs(a["delta_pct"] - b["delta_pct"]) < 1e-9
+
+
+def test_방향_부호를_버리지_않는다():
+    """`abs()`로 접으면 「정보 우위 매도」와 「악재 뒤 손절」이 뒤바뀐다."""
+    core = detect_insider_pre_disclosure(_SELLS, _NEG_EVENTS, 30)
+    signed = {f["holder"]: f["gap_signed"] for f in core}
+    assert signed["홍길동"] < 0, "공시(0318)가 매도(0331)보다 **먼저**다 — 음수여야 한다"
+    assert signed["김철수"] > 0, "공시(0420)가 매도(0415)보다 나중이다 — 양수여야 한다"
+    assert signed["최지현"] == 0, "같은 날"
+    # 뷰어도 같은 부호를 내는지 (위 대조에 포함되지만 뜻이 중요해 따로 못 박는다)
+    got = _viewer([["detectInsiderPreDisclosure", _SELLS, _NEG_EVENTS, 30]])[0]
+    assert {f["holder"]: f["gap_signed"] for f in got} == signed
+
+
+def test_가장_가까운_공시를_고른다():
+    """창 안에 여럿이면 임의의 건이 아니라 가장 가까운 것 — 동률이면 이른 날짜.
+
+    ⚠ 「가장 가까운」은 **절댓값** 기준이라 매도보다 앞선 공시도 후보다.
+      처음 이 테스트를 쓸 때 0403(+2)을 기대했는데 0330(-2)이 동률로 더
+      이르다 — core·뷰어가 둘 다 0330을 골랐고 **기대값 쪽이 틀렸다**.
+    """
+    sells = [{"holder": "A", "rcept_dt": "20260401", "delta_pct": -1.0}]
+    evs = [
+        {"key": "AUDIT", "rcept_dt": "20260420", "report_nm": "먼 것"},
+        {"key": "INQUIRY", "rcept_dt": "20260403", "report_nm": "가까운 것(+2)"},
+        {"key": "INSOLVENCY", "rcept_dt": "20260330", "report_nm": "동률이며 이른 날(-2)"},
+    ]
+    core = detect_insider_pre_disclosure(sells, evs, 30)
+    got = _viewer([["detectInsiderPreDisclosure", sells, evs, 30]])[0]
+    assert core[0]["disclosure_date"] == got[0]["disclosure_date"] == "20260330"
+
+    # 앞선 공시를 지우면 그다음으로 가까운 것(+2)이 뽑힌다
+    evs2 = [e for e in evs if e["rcept_dt"] != "20260330"]
+    core2 = detect_insider_pre_disclosure(sells, evs2, 30)
+    got2 = _viewer([["detectInsiderPreDisclosure", sells, evs2, 30]])[0]
+    assert core2[0]["disclosure_date"] == got2[0]["disclosure_date"] == "20260403"
+
+
+def test_방향_문구가_같다():
+    cases = [
+        {"days_gap": 13, "gap_signed": -13},
+        {"days_gap": 4, "gap_signed": 4},
+        {"days_gap": 0, "gap_signed": 0},
+        {"days_gap": 7},                      # 방향 미상 — 방향을 말하지 않는다
+    ]
+    got = _viewer([["gapPhrase", c] for c in cases])
+    assert got == [_gap_phrase(c) for c in cases]
+    assert got == ["매도 13일 전", "매도 4일 후", "같은 날", "7일 간격"]

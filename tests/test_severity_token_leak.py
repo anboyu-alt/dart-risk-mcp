@@ -22,6 +22,7 @@ v0.8.5: 기업 위험도를 정량화하거나 등급으로 부여하는 표기�
 
 그래서 이 테스트는 출력이 아니라 **원천 문자열**을 직접 훑는다.
 """
+import pathlib
 import re
 
 import pytest
@@ -101,3 +102,47 @@ def test_검사가_실제로_잡는지():
     assert not _leaks({"x": {"description": "참고 강도로 다룹니다"}}, "T")
     # severity 필드 자체는 걸리면 안 된다(내부값)
     assert not _leaks({"x": {"severity": "MEDIUM", "description": "정상 문장"}}, "T")
+
+
+# ── 뷰어(docs/tool/index.html) ────────────────────────────────────────────
+# 2026-09-13: 이 파일은 core의 `explain`/`signals`/`taxonomy`만 훑고 **뷰어는
+# 한 번도 보지 않았다**. 그런데 사용자가 보는 것은 뷰어다(CLAUDE.md가 여러 번
+# 적은 드리프트 방향). core를 이식할 때 core 쪽 MCP 산문(「가능성 검토 권장」·
+# 「전조 가능성」)을 그대로 옮기면 뷰어에만 판정 어휘가 남는다.
+#
+# ⚠ 「위험」 낱말 자체는 금지하지 않는다 — 이 도구가 하는 일이 위험 신호
+#   모니터링이고, 「위험 신호」·「불공정거래 위험」은 정상 표현이다. 금지하는
+#   것은 **회사에 등급·점수를 매기는 표기**다.
+
+_VIEWER = pathlib.Path(__file__).parent.parent / "docs" / "tool" / "index.html"
+
+# 한글이 섞인 문자열 리터럴만 본다 — CSS 변수(`--c7`)·코드 식별자는 대상이 아니다.
+_KO_STR = re.compile(r"[\"'`]([^\"'`\n]*[가-힣][^\"'`\n]*)[\"'`]")
+
+_GRADE_WORDS = (
+    "매우위험", "매우 위험", "고위험", "중위험", "저위험",
+    "위험등급", "위험 등급", "위험도 점수", "위험 점수", "위험점수",
+    "종합 점수", "안전 등급",
+)
+
+
+def test_뷰어_한글_문장에_severity_토큰이_없다():
+    src = _VIEWER.read_text(encoding="utf-8")
+    bad = [s for s in _KO_STR.findall(src) if _TOKENS.search(s)]
+    assert not bad, (
+        "뷰어의 한글 문장에 내부 severity 토큰이 섞였다 — 사용자에게 등급으로 "
+        "읽힌다(v0.8.5):\n  " + "\n  ".join(bad[:10])
+    )
+
+
+def test_뷰어에_등급_어휘가_없다():
+    src = _VIEWER.read_text(encoding="utf-8")
+    bad = []
+    for s in _KO_STR.findall(src):
+        for w in _GRADE_WORDS:
+            if w in s:
+                bad.append(f"{w!r} ← {s[:80]}")
+    assert not bad, (
+        "뷰어에 회사를 등급·점수로 매기는 표기가 있다(v0.8.5):\n  "
+        + "\n  ".join(bad[:10])
+    )
