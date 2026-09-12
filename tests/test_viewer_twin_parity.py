@@ -54,6 +54,7 @@ from dart_risk_mcp.core.dart_client import (
     parse_outflow_detail,
     strip_holder_suffix,
     summarize_affiliate_stake,
+    summarize_debt_balance,
     summarize_dilution,
 )
 from dart_risk_mcp.server import (
@@ -129,6 +130,9 @@ _FUNCS = (
     # 신고했다. **방향(gap_signed)이 뒤집히면 뜻이 정반대**라 특히 중요하다.
     "function detectInsiderPreDisclosure(",
     "function gapPhrase(",
+    # 2026-09-13 채무증권 잔액 이식 — 집계 규칙을 core에서 순수 함수로
+    # 떼어(summarize_debt_balance) 양쪽이 같은 규칙을 쓰게 했다.
+    "function summarizeDebtBalance(",
 )
 
 # 이름은 `_FUNCS`에서 뽑는다 — 예전에는 아래 JS의 `const FN = {...}`에도 손으로
@@ -949,3 +953,53 @@ def test_방향_문구가_같다():
     got = _viewer([["gapPhrase", c] for c in cases])
     assert got == [_gap_phrase(c) for c in cases]
     assert got == ["매도 13일 전", "매도 4일 후", "같은 날", "7일 간격"]
+
+
+# ── 채무증권 잔액 (2026-09-13 이식) ───────────────────────────────────────
+#
+# ⚠ 한 엔드포인트가 **공모·사모·합계 3행**을 돌려준다 — 전부 더하면 두 배로
+#   센다. 「합계」 행만 쓴다는 규칙이 두 구현에 똑같이 살아 있어야 한다.
+
+_DEBT_ROWS = {
+    "corporate_bond": [
+        {"remndr_exprtn2": "공모", "sm": "500,000,000,000", "yy1_below": "300,000,000,000"},
+        {"remndr_exprtn2": "사모", "sm": "308,470,000,000", "yy1_below": "236,470,000,000"},
+        {"remndr_exprtn2": "합계", "sm": "808,470,000,000", "yy1_below": "536,470,000,000"},
+    ],
+    # 단기사채·기업어음은 만기 버킷이 다섯이라 전부 더해야 1년 이내가 된다
+    "short_term_bond": [
+        {"remndr_exprtn2": "합계", "sm": "100,000,000",
+         "de10_below": "10,000,000", "de10_excess_de30_below": "20,000,000",
+         "de30_excess_de90_below": "30,000,000", "de90_excess_de180_below": "40,000,000",
+         "de180_excess_yy1_below": "-"},
+    ],
+    "commercial_paper": [{"remndr_exprtn2": "합계", "sm": "-"}],   # 미기재
+    "new_capital": [{"remndr_exprtn2": "공모", "sm": "999", "yy1_below": "999"}],  # 합계 행 없음
+    "cnd_capital": [],
+    "unknown_kind": [{"remndr_exprtn2": "합계", "sm": "77777"}],   # 모르는 종류는 무시
+}
+
+
+def test_채무증권_집계가_같다():
+    core = summarize_debt_balance(_DEBT_ROWS)
+    got = _viewer([["summarizeDebtBalance", _DEBT_ROWS]])[0]
+    assert core["total"] == got["total"]
+    assert abs(core["maturity_1y_share"] - got["maturity_1y_share"]) < 1e-12
+    assert set(core["by_kind"]) == set(got["by_kind"])
+    for k in core["by_kind"]:
+        assert core["by_kind"][k] == got["by_kind"][k]
+
+    # 실측 고정 — 두산에너빌리티 2025 회사채(합계 행만 세야 나오는 값)
+    assert core["by_kind"]["corporate_bond"]["total"] == 808_470_000_000
+    assert core["by_kind"]["corporate_bond"]["maturity_under_1y"] == 536_470_000_000
+    # 합계 행이 없는 종류·모르는 종류·빈 응답은 집계에 들어가지 않는다
+    assert "new_capital" not in core["by_kind"]
+    assert "unknown_kind" not in core["by_kind"]
+    assert "cnd_capital" not in core["by_kind"]
+
+
+def test_공모_사모를_더해_두_배로_세지_않는다():
+    """합계 행만 쓴다 — 전부 더하면 회사채가 1,616,940,000,000이 된다."""
+    for out in (summarize_debt_balance(_DEBT_ROWS),
+                _viewer([["summarizeDebtBalance", _DEBT_ROWS]])[0]):
+        assert out["by_kind"]["corporate_bond"]["total"] == 808_470_000_000

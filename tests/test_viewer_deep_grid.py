@@ -50,6 +50,10 @@ _DEEP_IDS = [
     "fundCore", "holdCore", "auditCore",
 ]
 
+# 펼칠 때만 받는 블록 — 스켈레톤에 스피너가 없는 것이 **맞다**(아직 아무것도
+# 조회하지 않았으므로). 대신 무엇을 여는 것인지 접힌 상태에서 알 수 있어야 한다.
+_LAZY_IDS = ["debtCore"]
+
 
 def _render_dash() -> str:
     """`renderDash` 함수 본문(중괄호 균형으로 잘라낸다)."""
@@ -82,7 +86,7 @@ class TestDeepGrid:
         open_at = body.find('<div class="deepgrid">')
         close_at = body.find("// .deepgrid 닫기")
         assert 0 < open_at < close_at
-        for cid in _DEEP_IDS:
+        for cid in _DEEP_IDS + _LAZY_IDS:
             at = body.find(f'id="{cid}"')
             assert at >= 0, f"{cid} 컨테이너가 renderDash에 없다"
             assert open_at < at < close_at, (
@@ -144,4 +148,35 @@ def test_딥_블록_컨테이너는_스피너로_시작한다(cid):
     assert at >= 0
     assert 'class="spinner"' in body[at:at + 200], (
         f"{cid}가 스피너 없이 시작한다 — 비어 있는 칸이 '자료 없음'으로 읽힌다"
+    )
+
+
+@pytest.mark.parametrize("cid", _LAZY_IDS)
+def test_지연_로드_블록은_무엇을_여는지_밝힌다(cid):
+    """접힌 채로는 아무것도 조회하지 않는다 — 그렇다면 무엇을 여는지 적어야 한다.
+
+    스피너를 미리 띄우면 「이미 받고 있다」는 거짓말이 되고, 아무 말도 없으면
+    「자료가 없다」로 읽힌다.
+    """
+    body = _render_dash()
+    at = body.find(f'id="{cid}"')
+    assert at >= 0
+    head = body[max(0, at - 400):at + 300]
+    assert "<details" in head, f"{cid}는 <details>로 접혀 있어야 한다"
+    assert "펼쳐서 조회" in head or "펼칠 때" in head, (
+        f"{cid}가 무엇을 여는 것인지 접힌 상태에서 알 수 없다"
+    )
+    assert 'class="spinner"' not in body[at:at + 200], (
+        f"{cid}는 아직 조회하지 않았다 — 스피너는 「받고 있다」는 거짓말이 된다"
+    )
+
+
+def test_지연_로드가_한_번만_받는다():
+    """<details>는 열고 닫을 때마다 toggle이 난다 — 매번 5콜을 쏘면 안 된다."""
+    src = _SRC
+    i = src.find("async function loadDebtBalance(")
+    assert i >= 0
+    body = src[i:i + 700]
+    assert "dataset.loaded" in body, (
+        "재진입 가드가 없다 — 접었다 펴면 엔드포인트 5개를 다시 조회한다"
     )

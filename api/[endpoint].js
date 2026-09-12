@@ -27,6 +27,11 @@ const ALLOWED_ENDPOINTS = new Set([
   "cvbdIsDecsn.json",                 // 전환사채권 발행결정 (메자닌 조건)
   "bdwtIsDecsn.json",                 // 신주인수권부사채권 발행결정
   "exbdIsDecsn.json",                 // 교환사채권 발행결정
+  "cprndNrdmpBlce.json",                 // 회사채 미상환 잔액
+  "srtpdPsndbtNrdmpBlce.json",           // 단기사채 미상환 잔액
+  "entrprsBilScritsNrdmpBlce.json",      // 기업어음 미상환 잔액
+  "newCaplScritsNrdmpBlce.json",         // 신종자본증권 미상환 잔액
+  "cndlCaplScritsNrdmpBlce.json",        // 조건부자본증권 미상환 잔액
 ]);
 
 export default async function handler(req, res) {
