@@ -114,10 +114,12 @@ class RelayHandler(SimpleHTTPRequestHandler):
         if parts.path == "/api/health":
             # 로컬 릴레이가 환경변수 키를 갖고 있는지만 알린다 — **값은 절대
             # 내보내지 않는다**. 뷰어는 이 신호를 보고 브라우저에 키가 없어도
-            # 검색 화면을 연다. 공용 배포(Vercel·Cloudflare)에는 이 경로가
-            # 없으므로 404가 나고 뷰어는 기존대로 키를 요구한다.
+            # 검색 화면을 연다. 공용 배포(api/health.js)도 같은 모양을 준다.
+            #
+            # `free_scans: 0`은 **무제한**이다 — 로컬 개발에서까지 하루 5곳에
+            # 막히면 손볼 때마다 키를 넣어야 한다. 공용 배포는 5를 준다.
             payload = json.dumps(
-                {"ok": True, "server_key": bool(_env_key())}
+                {"ok": True, "server_key": bool(_env_key()), "free_scans": 0}
             ).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
