@@ -67,7 +67,7 @@ def _interactive_select_client() -> str:
         print(f"  {i}. {label}  {existing}")
     print("  q. 취소\n")
     print("Claude Code 사용자는 'q'로 취소하고 다음 명령을 직접 사용하세요:")
-    print("  claude mcp add dart-risk-analyzer --env DART_API_KEY=발급키 -- python -m dart_risk_mcp\n")
+    print("  claude mcp add dart-risk --env DART_API_KEY=발급키 -- python -m dart_risk_mcp\n")
     while True:
         choice = input("번호 입력: ").strip().lower()
         if choice == "q":
@@ -112,8 +112,8 @@ def main() -> int:
     parser.add_argument("--client", choices=list(CLIENTS),
                         help="대상 클라이언트 (미지정 시 대화형 메뉴)")
     parser.add_argument("--api-key", help="DART API 키 (미지정 시 stdin 입력)")
-    parser.add_argument("--server-name", default="dart-risk-analyzer",
-                        help="등록 이름 (기본: dart-risk-analyzer)")
+    parser.add_argument("--server-name", default="dart-risk",
+                        help="등록 이름 (기본: dart-risk)")
     parser.add_argument("--dry-run", action="store_true",
                         help="저장 안 함, 결과 JSON만 출력")
     parser.add_argument("--force", action="store_true",
