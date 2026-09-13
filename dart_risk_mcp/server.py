@@ -191,7 +191,23 @@ def _holder_display(v: str) -> str:
     return re.sub(r"\s+", " ", (v or "").strip())
 
 
-mcp = FastMCP("dart-risk-analyzer")
+# 호출명은 하나뿐이다 — 도구 접두어(`mcp__dart-risk__…`)가 곧 이 이름이라
+# 비ASCII를 쓰면 클라이언트가 전부 `_`로 치환해 부를 이름이 남지 않는다
+# (2026-09-14 실측: 옛 확장 display_name이 한글이라 접두어가 언더스코어
+# 29개였다). 사람이 부르는 말은 instructions로 넓힌다 — 이 문장은 설치한
+# 사람이 아무 설정도 하지 않아도 모든 세션에 실린다.
+# ⚠ 다른 DART 도구를 밀어내는 말은 쓰지 않는다(제작자 결정) — 우리가
+# 무엇을 하는지만 적는다. tests/test_server_name_and_aliases.py가 고정.
+mcp = FastMCP(
+    "dart-risk",
+    instructions=(
+        "DART 공시 기반 불공정거래 위험 모니터링 서버. "
+        "'dart-risk'·'dartrisk'·'다트리스크'·'다트 리스크'는 모두 이 서버를 가리킨다. "
+        "공시를 흐름과 연결로 읽어 신호·복합 패턴·행위자(누가 돈을 댔나)를 "
+        "사실로 표기한다 — 점수·등급은 매기지 않는다. "
+        "재무제표·공시 원문의 단순 조회는 다른 DART 도구를 써도 된다."
+    ),
+)
 
 _DART_API_KEY: str = os.environ.get("DART_API_KEY", "")
 
