@@ -1902,7 +1902,20 @@ env -u DART_API_KEY python -m pytest tests/ -q          # PowerShell은 $env:DAR
     env -u DART_API_KEY   5,664 passed · 210 skipped · 0 failed ·  88초 (1분 28초)
     키 있음                5,711 passed · 163 skipped · 0 failed · 576초 (9분 35초)
 
-키가 있어야 도는 테스트는 **47개**(210−163)이고 그때 소요가 **6.5배**로 늘어난다 — 그 자리가 실제로 DART를 부른다는 뜻이다. 옛 서술의 「4분 30초」·「36개」는 어느 시점 값인지 알 수 없고 지금 실측과 다르다. 게이트는 `skipif`가 `DART_API_KEY`를 보는 **4곳**(`test_arg_validation.py` 3 · `test_resolve_corp_boundary.py`의 파일 전체 `pytestmark` 1)과 `test_golden_retention.py`의 런타임 skip 1곳이며, 나머지 skip 사유 45곳은 전부 **node 부재**다.
+키가 있어야 도는 테스트는 **47개**(210−163)다. ⚠ **개수보다 어디인지가 중요하다** — 옛 서술의 「36개」가 무엇을 세던 값인지 지금 아무도 모르는 이유가 개수만 적었기 때문이다. 실체는 **파일 둘 + 런타임 skip 하나**다:
+
+    tests/test_resolve_corp_boundary.py   파일 전체 pytestmark      21건
+    tests/test_arg_validation.py          skipif 3곳(파라미터화)    25건
+    tests/test_golden_retention.py:70     pytest.skip (런타임)       1건
+
+⚠ **`grep skipif`로는 마지막 1건을 못 찾는다** — 런타임 `pytest.skip`이라 정적으로 안 보인다. 나머지 skip 사유 45곳은 전부 **node 부재**이고 키와 무관하다.
+
+**소요의 거의 전부가 그 두 파일이다.** 같은 두 파일만 돌린 실측:
+
+    env -u DART_API_KEY   113 passed · 46 skipped ·   0.64초
+    키 있음                159 passed ·  0 skipped · 438초 ~ 568초
+
+⚠ **소요는 실행마다 갈린다** — 같은 두 파일을 같은 커밋에서 재는데 438초(7분 18초)와 568초(9분 28초)가 나왔다(다른 세션·같은 기기). 실제 DART 왕복이라 그렇다. **단일 값을 적으면 다음 사람이 또 「문서와 다르다」를 겪는다.** 전체 스위트의 9~10분도 스위트가 무거워진 게 아니라 이 두 파일 때문이고, 키를 벗기면 0.64초로 떨어진다.
 
 **가짜 키 DART 호출 가드 (2026-09-07, `tests/conftest.py`)**: 도구 하나가 fetcher를 여럿 부르는데 테스트가 공시 목록만 mock하면 나머지(자금사용·채무잔액·부실 이벤트·메자닌·희석·원문)가 패치된 가짜 키 `"k"`로 **DART에 실제 요청**을 보낸다. 전수 측정: **13개 테스트가 231회**, 스위트 175초 중 약 96초였고 CI가 매 실행마다 그 요청을 DART에 던지고 있었다(가장 느린 테스트 34초). `pytest_runtest_call` 래퍼가 `requests.Session.request`를 감싸 opendart 호스트 + env 실제 키와 다른 `crtfc_key`(키 없는 환경에서는 전부)면 **DART의 실제 거절 응답과 같은 모양**(HTTP 200 · `{"status":"010","message":"등록되지 않은 인증키입니다."}` — 라이브 실측)을 즉시 돌려주고, 테스트가 끝나면 **그 테스트를 실패**시켜 어느 엔드포인트가 샜는지 알린다. 고치는 법은 `@pytest.mark.usefixtures("no_structured_dart")`(구조화 fetcher 14종을 빈 성공 응답으로 스텁, `STRUCTURED_FETCH_STUBS`). 실제 키 호출은 통과시킨다. ⚠ 호스트는 `DART_BASE`에서 읽는다 — 첫 판이 `fss`를 `fsc`로 손으로 적어 가드가 아무것도 못 잡았다. ⚠ 반환 모양이 fetcher마다 다르다(`fetch_debt_balance`는 dict, `fetch_mezzanine_decisions`는 `{"rows","failed_kinds","fetch_failed"}`) — 리스트로 뭉뚱그리면 도구가 TypeError로 죽는다. 효과: 키 없는 스위트 **175초 → 80초**, 새는 테스트 0. 부수: 페이지 간 `time.sleep(0.25)`·재시도 sleep을 실제로 돌리던 테스트 2개도 `dc.time.sleep`을 막았다(`TestThrottleGuard`와 같은 관례).
 
