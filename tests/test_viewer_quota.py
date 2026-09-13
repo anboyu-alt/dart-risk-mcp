@@ -323,9 +323,21 @@ def test_health가_키_값을_내보내지_않는다():
 # 사라진다** — 운영자가 확인할 창구가 이것뿐이라 여기가 틀리면 알 길이 없다.
 
 def _run_health(env: dict, query: dict) -> dict:
-    """`api/health.js`의 handler를 node로 실제 실행해 응답 본문을 돌려준다."""
+    """`api/health.js`의 handler를 node로 실제 실행해 응답 본문을 돌려준다.
+
+    ⚠ **ESM `import()`에는 경로가 아니라 `file://` URL을 준다.** 윈도우 절대경로를
+    그대로 넘기면 node가 `C:`를 URL 스킴으로 읽어
+    `ERR_UNSUPPORTED_ESM_URL_SCHEME`으로 죽는다. 리눅스 절대경로는 `/`로 시작해
+    그냥 받아들여지므로 **CI(ubuntu)는 통과하고 제작자 PC(윈도우)에서만 깨진다** —
+    2026-09-14에 실제로 이 파일의 4건이 그렇게 잠복해 있었다. `as_uri()`는 두
+    플랫폼 모두에서 유효한 `file:///…`를 만든다.
+
+    같은 파일 다른 자리(`test_JS와_파이썬의_KST_날짜가_같다`)와 나머지 node
+    하네스 10개는 `node <임시파일>`처럼 **argv로 경로를 넘겨** URL이 아니므로
+    해당 사항이 없다(윈도우 실측 182 passed).
+    """
     script = (
-        f'const mod = await import({str(_HEALTH_JS)!r});\n'
+        f'const mod = await import({json.dumps(_HEALTH_JS.as_uri())});\n'
         'const res = { setHeader(){}, status(){return this;},'
         ' json(o){console.log(JSON.stringify(o));}, end(){} };\n'
         f'await mod.default({{ method: "GET", query: {json.dumps(query)} }}, res);\n'
@@ -337,6 +349,33 @@ def _run_health(env: dict, query: dict) -> dict:
     )
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+def test_ESM_import에는_파일_URL을_넘긴다():
+    """윈도우에서만 깨지는 부류라 CI(ubuntu)가 못 잡는다 — 정적으로 막는다.
+
+    node의 ESM 로더는 절대경로에 `file://` URL을 요구한다. 리눅스 경로는 `/`로
+    시작해 우연히 통과하지만 윈도우 `C:\\…`는 `C:`가 스킴으로 읽혀 죽는다.
+    즉 **CI는 초록인데 제작자 PC에서만 빨간** 자리가 조용히 생긴다.
+
+    규칙은 「경로를 끼워 넣는 `import(`는 `as_uri()`를 거친다」 하나다. 값을
+    끼워 넣지 않는 리터럴 `import("./x.js")`와 산문 속 `import()` 표기는
+    대상이 아니다.
+    """
+    needle = "import" + "("  # 이 검사기 자신의 줄이 걸리지 않게 쪼갠다
+    offenders = []
+    for path in sorted((_ROOT / "tests").glob("*.py")):
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if needle not in line or "{" not in line:
+                continue
+            if "as_uri()" in line:
+                continue
+            offenders.append(f"{path.name}:{lineno}: {line.strip()}")
+    assert not offenders, (
+        "ESM import()에 경로를 그대로 넘기면 윈도우에서 "
+        "ERR_UNSUPPORTED_ESM_URL_SCHEME으로 죽는다. Path.as_uri()를 쓸 것:\n"
+        + "\n".join(offenders)
+    )
 
 
 @pytest.mark.skipif(not shutil.which("node"), reason="node 없음")
