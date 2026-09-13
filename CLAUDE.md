@@ -1894,6 +1894,8 @@ Vercel 서버리스 구조를 못 쓴다.
 
 **지우지 않은 mkdtemp 가드 (2026-09-07, 같은 `tests/conftest.py`)**: `test_sightings_io_safety`(5)·`test_corp_code_dedup`(4)의 테스트 9개가 `tempfile.mkdtemp()`를 지우지 않아 **실행마다 디렉터리 9개**(`sightings.json`·`corp_codes_v2.json` 포함)를 남겼다. 보통은 시스템 임시 폴더에 쌓여 보이지 않다가, 이 세션의 샌드박스가 `TMPDIR`을 **레포 루트**로 잡아 `tmp0g9w77y4/` 같은 디렉터리 130개가 한꺼번에 드러났다(git status에 잡혀 커밋될 뻔했다). `addCleanup(shutil.rmtree)`·`TemporaryDirectory()`로 고쳤고, `pytest_runtest_setup`/`teardown` 래퍼가 테스트 동안 만들어진 mkdtemp 경로를 기록해 teardown 뒤에도 남아 있으면 **그 테스트를 에러**로 알린다. `TemporaryDirectory()`·pytest `tmp_path`는 스스로 정리하므로 걸리지 않는다. 환경에 무관하게 잡는다(cwd를 비교하는 방식은 TMPDIR이 딴 데를 가리키면 못 본다).
 
+**node ESM `import()`에는 `file://` URL을 넘긴다 (2026-09-14)**: `tests/test_viewer_quota.py`의 `_run_health`가 윈도우 절대경로를 그대로 `import()`에 넘겨 node가 `C:`를 URL 스킴으로 읽고 `ERR_UNSUPPORTED_ESM_URL_SCHEME`으로 죽었다 — 그 파일 **4건이 제작자 PC에서만 빨갛다**. ⚠ **CI(ubuntu)는 통과한다**: POSIX 절대경로는 `/`로 시작해 ESM 로더가 그냥 받아들이므로, 위 「CI가 전체 스위트를 돌린다」가 있어도 **이 부류는 구조적으로 못 잡는다**(키 유무로 갈리던 PR #458과 같은 계열의, 이번엔 **플랫폼**으로 갈리는 잠복). `Path.as_uri()`가 두 플랫폼 모두에서 유효한 `file:///…`를 만든다. ⚠ **다른 node 하네스는 건드리지 않았다 — 먼저 쟀다**: 나머지 10개 파일은 `node <임시파일>`처럼 **argv로 경로를 넘겨** URL 규칙이 적용되지 않고, 같은 파일의 `test_JS와_파이썬의_KST_날짜가_같다`도 인라인 소스만 넘긴다(윈도우 실측 182 passed·1 skipped). 초록인 자리는 그대로 둔다. `test_ESM_import에는_파일_URL을_넘긴다`가 「경로를 끼워 넣는 `import(`는 `as_uri()`를 거친다」를 정적으로 고정한다 — ⚠ 첫 판이 **자기 소스를 물어** 거짓 실패했고(needle을 쪼개 고쳤다), 옛 형태와 주입한 나쁜 패턴을 실제로 무는지 확인하고서야 넣었다.
+
 ```bash
 # 서버 import 검증
 python -c "import dart_risk_mcp.server; print('OK')"
