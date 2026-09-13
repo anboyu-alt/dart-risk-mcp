@@ -994,6 +994,28 @@ def _is_split_pair(body: str, bound: str) -> bool:
     return bool(re.search(r"\.slice\(\s*" + re.escape(bound) + r"\s*\)", body))
 
 
+# 여섯 번째 예외 — **가림표(mask)는 조용한 절단이 아니다.**
+#
+# `k.slice(0, 4) + "…" + k.slice(-4)`는 인증키를 `abcd…wxyz`로 가린다. 잘린
+# 것을 숨기기는커녕 **말줄임표가 출력 안에 그대로 있어** 중간이 빠졌다는 사실이
+# 화면에 보인다. 층4가 막으려는 것은 "화면이 전체인 척하는 것"이므로 여기
+# 해당하지 않는다 — `_is_split_pair`가 "둘로 나눠 둘 다 쓰면 정보가 안 사라진다"
+# 고 본 것과 같은 계열의 판단이다.
+#
+# ⚠ **같은 원본**의 앞뒤를 말줄임표로 잇는 형태만 인정한다. 원본이 다르면
+#   가림표가 아니라 서로 다른 두 값을 이어 붙인 것이고, 그건 이 예외가 말하는
+#   바가 아니다(역참조 `\1`이 그 조건이다).
+# ⚠ 숨기려는 이유가 있어 가리는 자리(인증키)에만 나타나야 한다. 목록·표를 이
+#   모양으로 줄이면 건수를 밝힐 자리가 여전히 필요하므로, 새로 걸리는 함수가
+#   생기면 가림표인지 절단인지 먼저 판단할 것.
+_MASK_ELLIPSIS_RE = re.compile(
+    r"([\w.]+)\.slice\(\s*0\s*,\s*\d+\s*\)\s*\+\s*[\"']…[\"']\s*\+\s*\1\.slice\(\s*-\s*\d+\s*\)")
+
+
+def _mask_spans(body: str) -> list:
+    return [m.span() for m in _MASK_ELLIPSIS_RE.finditer(body)]
+
+
 def _slice_paired(body: str, source: str, bound: str) -> bool:
     """이 슬라이스가 절단 고지와 실제로 짝지어지는지 본다(지적 ①-b)."""
     src_len_tok = re.escape(source) + r"\.length" if source else None
@@ -1022,10 +1044,13 @@ def _layer4_violations(html: str) -> dict:
     violations = {}
     for fn in _all_render_load_funcs(html):
         body = _cut_render_func(html, fn)
+        masks = _mask_spans(body)
         bad = []
         for m in _SLICE_RE.finditer(body):
             bound = m.group(1) or m.group(2)
             source = _source_of(body, m.start())
+            if any(a <= m.start() < b for a, b in masks):
+                continue    # 가림표 — 말줄임표가 출력에 그대로 있다
             if _is_split_pair(body, bound):
                 continue
             if not _slice_paired(body, source, bound):
@@ -1059,6 +1084,22 @@ def test_층4_slice_옆에_절단_고지가_있다():
     # 알려진 원장(다섯) 외에 새 절단이 생기면 여기서 걸린다.
     assert set(violations) == set(_LAYER4_KNOWN_GAPS), (
         f"절단 고지가 없는 함수 목록이 알려진 원장과 다르다: {violations}")
+
+
+def test_층4_가림표_예외가_진짜_절단을_놓치지_않는다():
+    """여섯 번째 예외(`_MASK_ELLIPSIS_RE`)를 넓게 잡으면 층4가 통째로 무력해진다.
+
+    인정하는 것은 **같은 원본의 앞뒤를 말줄임표로 이은 가림표** 하나뿐이다.
+    목록을 자르고 개수를 안 밝히는 진짜 절단은 그대로 걸려야 한다.
+    """
+    ok = 'const m = k.slice(0, 4) + "…" + k.slice(-4);'
+    assert _mask_spans(ok), "가림표를 못 알아본다"
+    # 원본이 다르면 가림표가 아니다 — 서로 다른 두 값을 이어 붙인 것이다.
+    assert not _mask_spans('const m = a.slice(0, 4) + "…" + b.slice(-4);')
+    # 말줄임표 없이 이으면 무엇이 빠졌는지 화면이 말하지 않는다.
+    assert not _mask_spans('const m = k.slice(0, 4) + k.slice(-4);')
+    # 목록 절단은 예외가 아니다.
+    assert not _mask_spans("rows.slice(0, MAX).map(render).join('')")
 
 
 def test_층4_loadHoldings_slice에도_절단_고지가_생겼다():

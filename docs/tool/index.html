@@ -114,6 +114,20 @@
   button.ghost { background: transparent; border: 1px solid var(--line2); color: var(--dim2); font-weight: 700; }
   button.ghost:hover { background: var(--cell); color: var(--tx); }
 
+  /* API 키 발급 안내 — 키가 없는 사람에게 가장 중요한 줄이라 본문에 섞지 않고
+     따로 세운다. 옛 화면은 설명 문단 속 링크 한 개였고, 그래서 "어디서 어떻게
+     받는가"가 눈에 띄지 않았다(제작자 지적). 발급처로 가는 버튼과 절차를 한
+     상자에 묶는다. */
+  .keyhow { display: flex; gap: 14px; flex-wrap: wrap; align-items: center;
+    background: var(--cell); border: 1px solid var(--line2); border-radius: 4px;
+    padding: 14px 16px; margin: 0.9rem 0 0.2rem; }
+  .keybtn { flex: none; display: inline-block; padding: 11px 20px; border-radius: 4px;
+    background: var(--amber); color: #0b0e14; font-weight: 800; font-size: 14px;
+    letter-spacing: 0.02em; }
+  .keybtn:hover { background: var(--amber2); color: #0b0e14; }
+  .keysteps { flex: 1 1 260px; min-width: 0; font-size: 0.86rem;
+    color: var(--dim2); line-height: 1.65; }
+
   /* 칩 (기간·필터) */
   .chips { display: flex; gap: 8px; flex-wrap: wrap; font-family: var(--mono); font-size: 12px; }
   .chip { background: var(--cell); border: 1px solid var(--line2); color: var(--dim2);
@@ -398,26 +412,6 @@
         </ul>
       </div>
 
-      <!-- 키 설정 (최초 1회) -->
-      <div class="panel amber" id="setupPanel" style="max-width:720px">
-        <div class="slabel amber">▍FIRST RUN — API KEY</div>
-        <p class="dim">
-          이 도구는 서버에 데이터를 쌓지 않습니다. 입력한 키는 <strong style="color:var(--tx)">이 브라우저에만 저장</strong>되고,
-          공개 코드로 검증 가능한 <a href="https://github.com/anboyu-alt/dart-risk-mcp/tree/master/relay">무저장 릴레이</a>를
-          거쳐 금융감독원 DART로만 전송됩니다. 키가 없다면
-          <a href="https://opendart.fss.or.kr" target="_blank" rel="noopener">opendart.fss.or.kr</a>에서
-          이메일 인증으로 2분 만에 무료 발급됩니다(일 20,000건).
-        </p>
-        <label for="keyInput">DART API KEY · 40 CHARS</label>
-        <input type="password" id="keyInput" placeholder="발급받은 인증키를 붙여넣으세요" autocomplete="off">
-        <div style="margin-top:0.9rem"><button id="saveKey">저장하고 시작 ▸</button></div>
-        <details class="settings">
-          <summary>고급 — 릴레이 주소 직접 지정 (셀프호스트)</summary>
-          <label for="relayInput">RELAY URL</label>
-          <input type="text" id="relayInput" placeholder="https://…vercel.app 또는 http://127.0.0.1:8787">
-        </details>
-      </div>
-
       <!-- 스캔 입력 -->
       <div class="panel amber hidden" id="searchPanel" style="max-width:720px">
         <div class="slabel amber">▍SCAN INPUT</div>
@@ -442,6 +436,44 @@
             저장된 키: <span id="keyMask" class="mono"></span>
             <button class="ghost" id="resetKey" style="padding:0.2rem 0.7rem;font-size:0.8rem;margin-left:0.5rem">키 변경</button>
           </p>
+        </details>
+      </div>
+
+      <!-- API 키 — 자기 키가 없는 동안 위 검색 패널과 **함께** 보인다.
+           ⚠ 둘을 갈아 끼우지 않는다. 옛 `resetKey`는 검색 패널을 숨기고 이것만
+           남겨, 공용 키로 조회하던 사람이 "키 변경"을 눌러 보면 돌아올 길이
+           없었다 — 저장 버튼이 40자 키를 요구하므로 키가 없으면 빠져나오지
+           못한다(시크릿 창 라이브에서 실제로 갇혔다). 보이는 조건을 서로
+           독립으로 둔다(`renderKeyPanel`).
+           머리말·설명은 두 상황이 달라 JS가 채운다 — 아래 정적 문구는 공용 키가
+           없는 배포(키가 있어야 아무것도 되는) 기준이다. -->
+      <div class="panel amber" id="setupPanel" style="max-width:720px">
+        <div class="slabel amber" id="keyPanelLabel">▍FIRST RUN — API KEY</div>
+        <p class="dim" id="keyPanelLead">
+          이 도구를 쓰려면 <strong style="color:var(--tx)">본인의 DART 인증키</strong>가 필요합니다.
+        </p>
+
+        <div class="keyhow">
+          <a class="keybtn" href="https://opendart.fss.or.kr" target="_blank" rel="noopener">무료 키 발급받기 ↗</a>
+          <div class="keysteps">
+            <strong style="color:var(--tx)">opendart.fss.or.kr</strong>에서 이메일로 회원가입한 뒤 인증키를
+            신청하면 <strong style="color:var(--tx)">40자리 키</strong>가 바로 발급됩니다.
+            증빙서류가 필요 없고 하루 20,000건까지 무료입니다.
+          </div>
+        </div>
+
+        <label for="keyInput">DART API KEY · 40 CHARS</label>
+        <input type="password" id="keyInput" placeholder="발급받은 인증키를 붙여넣으세요" autocomplete="off">
+        <div style="margin-top:0.9rem"><button id="saveKey">저장하고 시작 ▸</button></div>
+        <p class="dim" style="font-size:0.84rem;margin-top:0.9rem">
+          이 도구는 서버에 데이터를 쌓지 않습니다. 입력한 키는 <strong style="color:var(--tx)">이 브라우저에만 저장</strong>되고,
+          공개 코드로 검증 가능한 <a href="https://github.com/anboyu-alt/dart-risk-mcp/tree/master/relay">무저장 릴레이</a>를
+          거쳐 금융감독원 DART로만 전송됩니다.
+        </p>
+        <details class="settings">
+          <summary>고급 — 릴레이 주소 직접 지정 (셀프호스트)</summary>
+          <label for="relayInput">RELAY URL</label>
+          <input type="text" id="relayInput" placeholder="https://…vercel.app 또는 http://127.0.0.1:8787">
         </details>
       </div>
 
@@ -503,7 +535,8 @@
     <p class="disclaimer">
       본 도구의 모든 표시는 DART 공시라는 공개 기록의 사실 표기이며, 특정 기업·인물에 대한
       판정·점수·등급·투자 권유가 아닙니다. 신호는 "원문을 확인해 볼 지점"의 표시일 뿐입니다.
-      조회는 사용자의 API 키로 사용자가 시작하며, API 키는 서버에 저장되지 않습니다.
+      조회는 사용자가 시작하며, 사용자가 입력한 API 키는 서버에 저장되지 않습니다.
+      키를 입력하지 않은 동안에는 운영자 키로 하루 몇 곳까지 대신 조회해 드립니다.
       서비스 개선을 위해 접속 기록·쿠키·기기 정보를 수집합니다.
       "주의" 표시는 사실 관찰의 우선순위이며 위험 판정·투자 판단 근거가 아닙니다.
       · <a href="https://github.com/anboyu-alt/dart-risk-mcp">dart-risk-mcp</a> (MIT)
@@ -684,6 +717,8 @@ async function boot() {
   AMEND_RE = new RegExp(DATA.amendment_pattern);
   renderVersionLine();
   await probeServerKey();
+  // 키가 없는 배포에서도 키 패널 문구를 한 번은 정리한다(아래 if 밖의 경로).
+  renderKeyPanel();
   if (localStorage.getItem(LS_KEY) || SERVER_KEY) {
     showSearch();
     // 딥링크 자동 스캔: 해시에 종목코드가 있고 키도 있으면 그 종목·기간으로 스캔한다.
@@ -718,15 +753,45 @@ async function probeServerKey() {
   } catch (e) { /* 오프라인·구버전 릴레이 — 조용히 기존 동작 */ }
 }
 
-function showSearch() {
-  $("setupPanel").classList.add("hidden");
-  $("searchPanel").classList.remove("hidden");
-  $("recentWrap").classList.remove("hidden");
+/* 검색 패널과 키 패널을 **각각** 그린다 — 갈아 끼우지 않는다.
+ *
+ * 옛 코드는 둘을 맞바꿨다(`showSearch`가 setupPanel을 숨기고, `resetKey`가
+ * searchPanel을 숨겼다). 공용 키가 생기기 전에는 그래도 됐다 — 키가 없으면
+ * 어차피 아무것도 못 했으니까. 지금은 **키 없이도 하루 몇 곳이 조회되므로**
+ * 그 맞바꿈이 함정이 됐다: 공용 키로 쓰던 사람이 「키 변경」을 눌러 보면
+ * 검색 패널이 사라지고, 저장 버튼은 40자 키를 요구해 **돌아올 길이 없다**
+ * (시크릿 창 라이브에서 실제로 갇혔다).
+ *
+ * 보이는 조건을 서로 독립으로 둔다.
+ *
+ *     검색 패널 — 자기 키가 있거나 릴레이가 공용 키를 갖고 있다
+ *     키   패널 — 자기 키가 없다
+ *
+ * 공용 키가 있고 자기 키가 없는 상태(= 무료 조회 중)에서 **둘 다 보인다.**
+ * 이때 화면은 "지금 쓸 수 있다"와 "더 쓰려면 이렇게 한다"를 함께 말한다.
+ */
+function renderKeyPanel() {
   const k = localStorage.getItem(LS_KEY) || "";
+  $("searchPanel").classList.toggle("hidden", !(k || SERVER_KEY));
+  $("setupPanel").classList.toggle("hidden", !!k);
   $("keyMask").textContent = k ? k.slice(0, 4) + "…" + k.slice(-4)
     : (SERVER_KEY ? "(없음 — 공용 키로 조회 중)" : "(없음)");
+  // 같은 패널이 두 상황에 쓰인다 — 걸려 있는 것이 다르므로 문구도 다르다.
+  // 공용 키가 없으면 키가 곧 진입 조건이고, 있으면 한도를 푸는 선택지다.
+  if (!SERVER_KEY) return;   // 정적 문구가 이미 그 경우를 말하고 있다
+  const free = Number.isFinite(FREE_SCANS) ? `하루 ${FREE_SCANS}곳` : "제한 없이";
+  $("keyPanelLabel").textContent = "▍API KEY — 더 많이 조회하려면";
+  $("keyPanelLead").innerHTML =
+    `지금은 <strong style="color:var(--tx)">공용 키로 ${esc(free)}</strong>까지 조회됩니다. `
+    + `본인 키를 넣으면 이 제한이 없어집니다 — `
+    + `<strong style="color:var(--tx)">넣지 않아도 위 검색은 그대로 쓸 수 있습니다.</strong>`;
+}
+
+function showSearch() {
+  renderKeyPanel();
+  $("recentWrap").classList.remove("hidden");
   renderQuota();
-  $("q").focus();
+  if (!$("searchPanel").classList.contains("hidden")) $("q").focus();
 }
 
 /* 오늘 쓴 무료 조회 — 목록으로 보여 준다.
@@ -768,11 +833,16 @@ $("saveKey").onclick = () => {
   if (relay) localStorage.setItem(LS_RELAY, relay);
   showSearch();
 };
+// ⚠ 검색 패널을 숨기지 않는다 — 공용 키가 있으면 키를 지운 뒤에도 조회가
+//   되고, 숨기면 돌아올 길이 없다(`renderKeyPanel` 주석의 함정). 키 패널이
+//   아래에 있어 화면 밖일 수 있으므로 그리로 데려간다.
 $("resetKey").onclick = () => {
   localStorage.removeItem(LS_KEY);
-  $("searchPanel").classList.add("hidden");
-  $("recentWrap").classList.add("hidden");
-  $("setupPanel").classList.remove("hidden");
+  renderKeyPanel();
+  renderQuota();          // 공용 키 조회로 돌아가면 남은 몫을 다시 표시한다
+  $("keyInput").value = "";
+  try { $("setupPanel").scrollIntoView({ behavior: "smooth", block: "center" }); }
+  catch (e) { $("setupPanel").scrollIntoView(); }
 };
 
 /* 기간 칩 */
