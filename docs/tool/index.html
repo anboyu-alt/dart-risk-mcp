@@ -392,7 +392,7 @@
           위험 신호(횡령·거래정지·무상감자·CB 반복 발행 등 51종)를 타임라인과 해설로 보여줍니다.
         </p>
         <ul class="dim" style="font-size:0.86rem;margin:0.5rem 0 0 1.2rem">
-          <li>조회에는 <strong style="color:var(--tx)">본인의 무료 DART API 키</strong>가 필요합니다 — 키는 이 브라우저에만 저장되고, 서버에 아무것도 남지 않습니다</li>
+          <li><strong style="color:var(--tx)">하루 몇 곳은 키 없이</strong> 바로 조회됩니다 — 그 이상 보시려면 <strong style="color:var(--tx)">본인의 무료 DART API 키</strong>를 입력하세요(증빙서류 없이 즉시 발급). 입력한 키는 이 브라우저에만 저장되고, 서버에 아무것도 남지 않습니다</li>
           <li>점수·등급·매수 추천은 없습니다 — <strong style="color:var(--tx)">공시라는 공개 기록의 사실 표기</strong>와 원문 링크만 제공합니다</li>
           <li>이 페이지는 오픈소스 분석 엔진 <a href="https://anboyu-alt.github.io/dart-risk-mcp/" target="_blank" rel="noopener">dart-risk-mcp</a>의 웹 축약판입니다 — AI와의 대화(MCP)에서는 원문 열람·자금 추적까지 더 깊이 들어갑니다</li>
         </ul>
@@ -435,6 +435,7 @@
           <span class="chip" data-days="1825">5Y</span>
         </div>
         <div class="status" id="status"></div>
+        <div id="quotaWrap" class="hidden" style="margin-top:10px"></div>
         <details class="settings">
           <summary>설정</summary>
           <p class="dim" style="margin-top:0.4rem">
@@ -529,6 +530,11 @@ function windowLabel() { return LOOKBACK_DAYS <= 365 ? "1Y" : LOOKBACK_DAYS <= 1
 const LS_KEY = "dart_tool_key", LS_RELAY = "dart_tool_relay", LS_RECENT = "dart_tool_recent";
 const LS_FAVS = "dart_favs";          // 즐겨찾기 — 스펙 지정 키 이름 그대로(dart_tool_* 접두 관례와 다름)
 const LS_SNAP = "dart_scan_snap";     // 재스캔 diff 스냅샷 — 기업당(corp_code) 1개, 최대 20개 LRU
+// 키 없이 쓰는 방문자의 오늘 조회 목록 — {d: "YYYYMMDD", k: [{k,n,y}, …]}
+const LS_QUOTA = "dart_quota_used";
+// 릴레이 서버 키로 열어 주는 하루 무료 조회 기업 수. `/api/health`가 알려 주면
+// 그 값으로 덮어쓴다(서버가 단일 출처 — 뷰어에 숫자를 박아 두면 서버와 갈린다).
+let FREE_SCANS = 5;
 
 const $ = (id) => document.getElementById(id);
 let DATA = null, CORPS = null, AMEND_RE = null, ALIASES = null;
@@ -556,6 +562,52 @@ function relayBase() {
       location.hostname.endsWith(".vercel.app")) return "";
   if (DEFAULT_RELAY) return DEFAULT_RELAY.replace(/\/+$/, "");
   return "";
+}
+
+/* ── 무료 조회 한도 ──────────────────────────────
+ * 키 없는 방문자에게 릴레이의 서버 키로 하루 FREE_SCANS개 기업을 열어 준다.
+ * 자기 키를 넣으면 이 한도는 적용되지 않는다(자기 한도를 쓰는 것이므로).
+ *
+ * 세는 단위는 **(종목, 조회창)**이다. 같은 회사라도 1년과 5년은 받아 오는
+ * 공시 목록이 달라 캐시가 듣지 않으므로 별개로 센다. 반대로 같은 조합을 다시
+ * 여는 것은 CDN 캐시가 받아 주므로 세지 않는다 — 비용이 발생하는 지점에서만
+ * 한도를 쓴다.
+ *
+ * ⚠ 이것만으로 우회를 막지는 못한다(시크릿 창·저장소 삭제). 그쪽은 릴레이의
+ * IP 카운터와 전역 상한이 받는다. 여기 있는 것은 차단이 아니라 **공평 분배**다.
+ */
+function hasOwnKey() {
+  try { return !!(localStorage.getItem(LS_KEY) || "").trim(); } catch (e) { return false; }
+}
+function kstDay8() { return kstDate(Date.now()).toISOString().slice(0, 10).replace(/-/g, ""); }
+// ⚠ 기존 localStorage 읽기(:667 :927 :1005)와 pushRecent의 JSON.parse는 감싸지
+//   않아 손상된 값에 throw한다. 새 코드는 그 전철을 밟지 않는다.
+function quotaLoad() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(LS_QUOTA) || "null");
+    if (raw && raw.d === kstDay8() && Array.isArray(raw.k)) return raw;
+  } catch (e) { /* 손상·차단 — 오늘치가 없는 것으로 본다 */ }
+  return { d: kstDay8(), k: [] };
+}
+function quotaSave(o) {
+  try { localStorage.setItem(LS_QUOTA, JSON.stringify(o)); } catch (e) { /* 사생활 모드 등 */ }
+}
+// 한도 소진 안내. **키가 즉시 발급된다는 사실**과 **키가 서버로 가지 않는다는
+// 사실**을 함께 적는다 — 뒤엣것이 거부감을 크게 줄이고, 실제로 그런 구조다
+// (릴레이는 키·파라미터·응답을 저장하지 않는다).
+const QUOTA_DONE_HTML =
+  '오늘 무료 조회 몫을 모두 쓰셨습니다. ' +
+  '<a href="https://opendart.fss.or.kr" target="_blank" rel="noopener">DART 인증키</a>를 ' +
+  '입력하면 제한 없이 조회할 수 있습니다 — 개인 키는 증빙서류 없이 즉시 발급되고, ' +
+  '입력한 키는 이 브라우저에만 저장됩니다.';
+function quotaKey(stockCode, corpCode, days) { return (stockCode || corpCode || "?") + ":" + days; }
+function quotaCounted(key) { return quotaLoad().k.some((e) => e && e.k === key); }
+function quotaUsed() { return quotaLoad().k.length; }
+function quotaAdd(key, name, days) {
+  const q = quotaLoad();
+  if (q.k.some((e) => e && e.k === key)) return;
+  q.k.push({ k: key, n: name, y: days });
+  quotaSave(q);
 }
 
 /* ── 라우터 ───────────────────────────────────── */
@@ -648,16 +700,22 @@ async function boot() {
   renderRecent();
   renderFavs();
 }
-// 로컬 개발 릴레이만 `/api/health`를 준다. 공용 배포에는 없으므로 404·네트워크
-// 실패로 끝나고 SERVER_KEY는 false로 남는다 — 그때는 기존대로 키를 요구한다.
-// 응답에 키 값은 담기지 않는다(있다/없다 불리언 하나뿐).
+// 릴레이가 서버 키를 갖고 있는지 확인한다 — 로컬 개발 릴레이
+// (scripts/dev_relay.py)와 공용 배포(api/health.js) 둘 다 `/api/health`를 준다.
+// 응답에 키 값은 담기지 않는다(있다/없다 불리언과 무료 조회 수뿐).
+// 환경변수가 없는 배포에서는 server_key가 false라 기존대로 키를 요구한다.
 async function probeServerKey() {
   try {
     const r = await fetch(`${relayBase()}/api/health`, { cache: "no-store" });
     if (!r.ok) return;
     const j = await r.json();
     SERVER_KEY = !!(j && j.server_key);
-  } catch (e) { /* 공용 배포·오프라인 — 조용히 기존 동작 */ }
+    // 무료 조회 수는 **서버가 단일 출처**다 — 뷰어에 박아 두면 서버가 값을
+    // 바꿨을 때 화면만 옛 숫자를 말한다.
+    // 0은 무제한(로컬 개발 릴레이) — 손볼 때마다 키를 넣지 않아도 되게 한다.
+    const n = j && Number(j.free_scans);
+    if (Number.isFinite(n)) FREE_SCANS = n === 0 ? Infinity : Math.min(Math.max(n, 1), 100);
+  } catch (e) { /* 오프라인·구버전 릴레이 — 조용히 기존 동작 */ }
 }
 
 function showSearch() {
@@ -666,9 +724,42 @@ function showSearch() {
   $("recentWrap").classList.remove("hidden");
   const k = localStorage.getItem(LS_KEY) || "";
   $("keyMask").textContent = k ? k.slice(0, 4) + "…" + k.slice(-4)
-    : (SERVER_KEY ? "(로컬 릴레이의 환경변수 키)" : "(없음)");
+    : (SERVER_KEY ? "(없음 — 공용 키로 조회 중)" : "(없음)");
+  renderQuota();
   $("q").focus();
 }
+
+/* 오늘 쓴 무료 조회 — 목록으로 보여 준다.
+ *
+ * 숫자만 두면 "왜 2건이지?"를 묻게 된다. 같은 회사가 창만 달라 두 줄로 보이면
+ * 설명이 필요 없다(조용한 절단을 걷어내 온 것과 같은 태도).
+ *
+ * ⚠ 처음 방문자에게는 보여주지 않는다 — 시작부터 제약을 인식하면 도구를 얕게
+ *   쓴다. 절반을 넘긴 뒤부터 표시한다. */
+function renderQuota() {
+  const el = $("quotaWrap");
+  if (!el) return;
+  if (hasOwnKey() || !SERVER_KEY) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+  const q = quotaLoad();
+  const used = q.k.length;
+  if (used < Math.ceil(FREE_SCANS / 2)) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+  const rows = q.k.map((e) =>
+    `<div class="mono" style="font-size:0.82rem">${esc(e.n || e.k)} <span class="dim">(${yLabel(e.y)})</span></div>`).join("");
+  // ⚠ 소진 안내를 **두 번 적지 않는다.** 게이트에 걸리면 `#status`가 이미 같은
+  //   문장을 빨간 글씨로 말하고 있다(라이브에서 같은 문단이 위아래로 두 번
+  //   나왔다). 아직 막히지 않았지만 몫을 다 쓴 상태에서만 여기서 미리 알린다 —
+  //   다음 조회를 시도하기 전에 알아야 쓸모가 있다.
+  const statusSaysIt = (() => {
+    try { return ($("status").textContent || "").includes("무료 조회 몫"); }
+    catch (e) { return false; }
+  })();
+  el.classList.remove("hidden");
+  el.innerHTML = `<div class="dim" style="font-size:0.82rem;margin-bottom:0.3rem">`
+    + `오늘 조회한 기업 · ${used} / ${FREE_SCANS}</div>${rows}`
+    + (used >= FREE_SCANS && !statusSaysIt
+      ? `<div class="dim" style="margin-top:0.4rem;font-size:0.82rem">${QUOTA_DONE_HTML}</div>` : "");
+}
+function yLabel(days) { return days <= 365 ? "1년" : days <= 1095 ? "3년" : "5년"; }
 $("saveKey").onclick = () => {
   const k = $("keyInput").value.trim();
   if (k.length !== 40) { alert("DART API 키는 40자입니다. 다시 확인해 주세요."); return; }
@@ -1012,6 +1103,13 @@ async function dartGet(endpoint, params) {
   const usp = new URLSearchParams(key ? { crtfc_key: key, ...params } : { ...params });
   const url = `${relayBase()}/api/${endpoint}?${usp}`;
   const r = await fetch(url);
+  // 429는 릴레이의 쿼터다 — "릴레이 주소를 확인하라"는 옛 문구로 뭉뚱그리면
+  // 사용자가 할 일이 완전히 달라진다(주소 확인 ↔ 키 입력·내일 재시도).
+  // 서버가 전역 상한과 IP 상한을 다른 문구로 주므로 그대로 전한다.
+  if (r.status === 429) {
+    const j = await r.json().catch(() => null);
+    throw new Error((j && j.message) || "조회 한도에 도달했습니다 — DART 인증키를 입력하세요");
+  }
   if (!r.ok) throw new Error(`릴레이 오류 (HTTP ${r.status}) — 설정에서 릴레이 주소를 확인하세요`);
   return r.json();
 }
@@ -1389,12 +1487,31 @@ async function analyze(name, override) {
   }
   const st = $("status");
   st.className = "status";
+  // 무료 조회 한도 — **모든 진입점이 이 함수를 거친다**(딥링크·최근 스캔·
+  // 즐겨찾기·폴백 후보·본문 링크·자동완성). submitScan()에만 두면 여섯 경로가
+  // 우회한다.
+  const qk = quotaKey(stockCode, corpCode, LOOKBACK_DAYS);
+  const gated = !hasOwnKey() && SERVER_KEY && !quotaCounted(qk)
+    && quotaUsed() >= FREE_SCANS;
+  if (gated) {
+    st.className = "status err";
+    st.innerHTML = QUOTA_DONE_HTML;
+    renderQuota();
+    // ⚠ 안내는 **검색 화면 안**에 찍힌다. 결과 화면에서 본문 링크·최근 스캔으로
+    //   들어온 경우 그 화면이 보이지 않아 "눌렀는데 아무 일도 안 일어난다"가
+    //   된다(라이브에서 실제로 그랬다). 안내가 있는 화면으로 데려간다.
+    showScreen("scan");
+    return;
+  }
   const end = new Date(), bgn = new Date(Date.now() - LOOKBACK_DAYS * 86400e3);
   try {
     const { items, totalCount } = await fetchDisclosureList(corpCode, bgn, end, (p, tp) => {
       st.innerHTML = `<span class="spinner"></span>SCANNING ${esc(name)} — page ${p}${tp > 1 ? "/" + tp : ""}`;
     });
     st.textContent = "";
+    // ⚠ **성공한 뒤에** 센다. 한도 초과·점검·네트워크 실패로 아무것도 못 받은
+    //   조회가 몫을 깎으면 안 된다.
+    if (!hasOwnKey() && SERVER_KEY) { quotaAdd(qk, name, LOOKBACK_DAYS); renderQuota(); }
     buildResult(name, stockCode, corpCode, items, bgn, end, totalCount);
   } catch (e) {
     st.className = "status err";

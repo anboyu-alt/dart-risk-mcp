@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 _IMPORT_ERROR = ""
 try:
     from tool_server.doc import handle_doc  # noqa: E402
+    from tool_server import quota  # noqa: E402
 except Exception as exc:  # noqa: BLE001 — 어떤 import 실패든 보고 대상이다
     _IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 
@@ -79,6 +80,22 @@ class handler(BaseHTTPRequestHandler):
         try:
             query = dict(parse_qsl(urlsplit(self.path).query))
             api_key = (self.headers.get("X-DART-Key") or "").strip()
+            # 브라우저가 키를 보내지 않았으면 서버 키로 원문을 열어 준다.
+            # 브라우저 키가 있으면 그것을 쓴다 — 환경변수가 사용자의 선택을
+            # 덮어쓰지 않는다(api/[endpoint].js와 같은 우선순위).
+            used_server_key = False
+            if not api_key:
+                api_key = (os.environ.get("DART_API_KEY") or "").strip()
+                used_server_key = bool(api_key)
+            # 서버 키 경로만 전역 예산에 센다. IP 상한은 걸지 않는다 — 원문
+            # 열람은 이미 쿼터를 통과한 스캔의 뒤에 오고, 여기서 또 막으면
+            # 같은 행동을 두 번 세는 셈이다.
+            if used_server_key:
+                verdict = quota.check_and_count(
+                    quota.client_ip_from(self.headers), is_scan_start=False)
+                if verdict != quota.ALLOW:
+                    _send_json(self, 429, quota.deny_payload(verdict))
+                    return
             status, body = handle_doc(query, api_key)
         except Exception:
             # 예외 내용을 그대로 노출하면 내부 정보가 샐 수 있다.

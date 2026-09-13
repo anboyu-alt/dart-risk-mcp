@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 _IMPORT_ERROR = ""
 try:
     from tool_server.corp import handle_corp  # noqa: E402
+    from tool_server import quota  # noqa: E402
 except Exception as exc:  # noqa: BLE001 — 어떤 import 실패든 보고 대상이다
     _IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 
@@ -79,6 +80,19 @@ class handler(BaseHTTPRequestHandler):
         try:
             query = dict(parse_qsl(urlsplit(self.path).query))
             api_key = (self.headers.get("X-DART-Key") or "").strip()
+            # 브라우저가 키를 보내지 않았으면 서버 키로 검색해 준다. 검색은
+            # 스캔 **전** 단계라 IP 상한을 걸지 않는다 — 여기서 막으면 무엇을
+            # 조회할지 고르지도 못한다. 전역 예산에만 센다.
+            used_server_key = False
+            if not api_key:
+                api_key = (os.environ.get("DART_API_KEY") or "").strip()
+                used_server_key = bool(api_key)
+            if used_server_key:
+                verdict = quota.check_and_count(
+                    quota.client_ip_from(self.headers), is_scan_start=False)
+                if verdict != quota.ALLOW:
+                    _send_json(self, 429, quota.deny_payload(verdict))
+                    return
             status, body = handle_corp(query, api_key)
         except Exception:
             # 예외 내용을 그대로 노출하면 내부 정보가 샐 수 있다.
