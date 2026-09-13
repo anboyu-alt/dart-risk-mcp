@@ -118,9 +118,14 @@ class RelayHandler(SimpleHTTPRequestHandler):
             #
             # `free_scans: 0`은 **무제한**이다 — 로컬 개발에서까지 하루 5곳에
             # 막히면 손볼 때마다 키를 넣어야 한다. 공용 배포는 5를 준다.
-            payload = json.dumps(
-                {"ok": True, "server_key": bool(_env_key()), "free_scans": 0}
-            ).encode("utf-8")
+            _body = {"ok": True, "server_key": bool(_env_key()), "free_scans": 0}
+            # `?quota=1`은 공용 배포(api/health.js)가 쿼터 상태를 싣는 자리다.
+            # 로컬 릴레이에는 쿼터 저장소가 없으므로 **그 사실을 명시**한다 —
+            # 필드가 아예 없으면 운영자가 "쿼터가 죽었나"와 구분할 수 없다.
+            if "quota=1" in (parts.query or ""):
+                _body["quota"] = {"configured": False, "reachable": False,
+                                  "today_calls": None, "daily_cap": None}
+            payload = json.dumps(_body).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")

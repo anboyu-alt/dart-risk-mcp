@@ -27,6 +27,7 @@ from tool_server import quota
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
 _RELAY_JS = _ROOT / "api" / "[endpoint].js"
 _VIEWER = _ROOT / "docs" / "tool" / "index.html"
+_HEALTH_JS = _ROOT / "api" / "health.js"
 
 
 def _js(path: pathlib.Path) -> str:
@@ -313,3 +314,117 @@ def test_health가_키_값을_내보내지_않는다():
     health = (_ROOT / "api" / "health.js").read_text(encoding="utf-8")
     assert "server_key: !!(process.env.DART_API_KEY" in health
     assert not re.search(r"(key|crtfc_key)\s*:\s*process\.env\.DART_API_KEY", health)
+
+
+# ── /api/health 의 쿼터 상태 (2026-09-13) ───────────────────
+#
+# 쿼터는 저장소에 못 닿으면 조용히 통과시킨다(가용성을 깎지 않는다는 설계).
+# 그러면 Upstash 한도를 넘겨도 화면에 아무것도 안 나타나고 **예산 방어만
+# 사라진다** — 운영자가 확인할 창구가 이것뿐이라 여기가 틀리면 알 길이 없다.
+
+def _run_health(env: dict, query: dict) -> dict:
+    """`api/health.js`의 handler를 node로 실제 실행해 응답 본문을 돌려준다."""
+    script = (
+        f'const mod = await import({str(_HEALTH_JS)!r});\n'
+        'const res = { setHeader(){}, status(){return this;},'
+        ' json(o){console.log(JSON.stringify(o));}, end(){} };\n'
+        f'await mod.default({{ method: "GET", query: {json.dumps(query)} }}, res);\n'
+    )
+    out = subprocess.run(
+        ["node", "--input-type=module", "-e", script],
+        capture_output=True, text=True, timeout=30,
+        env={**os.environ, **env},
+    )
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="node 없음")
+def test_health의_전역_상한이_다른_런타임과_같다():
+    """세 번째 중복이다 — 갈리면 이 화면이 실제와 다른 분모를 보여 준다."""
+    assert _js_const(_js(_HEALTH_JS), "DAILY_GLOBAL_CAP") == quota.DAILY_GLOBAL_CAP
+
+
+def test_health가_같은_레디스_키를_읽는다():
+    """다른 키를 읽으면 늘 0이 나와 「한가하다」는 거짓 안심을 준다."""
+    assert "q:g:${day}" in _js(_HEALTH_JS)
+
+
+def test_health가_카운터를_올리지_않는다():
+    """상태를 보는 행위가 카운터를 올리면 안 된다 — `GET`이지 `INCR`가 아니다."""
+    src = _js(_HEALTH_JS)
+    body = src[src.index("async function quotaStatus()"):]
+    body = body[:body.index("\nexport default")]
+    assert "/get/" in body
+    assert "INCR" not in body and "incr" not in body
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="node 없음")
+def test_quota_파라미터가_없으면_저장소를_치지_않는다():
+    """뷰어가 부팅마다 부르는 경로다.
+
+    기본 응답에 쿼터를 넣으면 **방문자 수만큼** Upstash 명령이 늘고 부팅도
+    그만큼 느려진다. 쿼터 상태는 운영자만 보면 되는 값이다.
+    """
+    body = _run_health(
+        {"DART_API_KEY": "x", "UPSTASH_REDIS_REST_URL": "https://example.invalid",
+         "UPSTASH_REDIS_REST_TOKEN": "t"}, {})
+    assert "quota" not in body
+    assert body["server_key"] is True
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="node 없음")
+def test_설정_안_함과_못_닿음을_가른다():
+    """둘을 뭉치면 설정을 빠뜨린 것과 한도를 넘긴 것이 같은 화면으로 보인다."""
+    off = _run_health({"DART_API_KEY": "x", "UPSTASH_REDIS_REST_URL": "",
+                       "UPSTASH_REDIS_REST_TOKEN": ""}, {"quota": "1"})
+    assert off["quota"]["configured"] is False
+
+    dead = _run_health(
+        {"DART_API_KEY": "x", "UPSTASH_REDIS_REST_URL": "https://example.invalid",
+         "UPSTASH_REDIS_REST_TOKEN": "t"}, {"quota": "1"})
+    assert dead["quota"]["configured"] is True
+    assert dead["quota"]["reachable"] is False
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="node 없음")
+def test_못_읽은_카운터는_0이_아니라_null이다():
+    """「오늘 한 건도 안 썼다」와 「못 읽었다」는 다른 사실이다.
+
+    0으로 내면 한도를 넘겨 조회가 막힌 상태가 **가장 한가한 상태**로 보인다.
+    """
+    dead = _run_health(
+        {"DART_API_KEY": "x", "UPSTASH_REDIS_REST_URL": "https://example.invalid",
+         "UPSTASH_REDIS_REST_TOKEN": "t"}, {"quota": "1"})
+    assert dead["quota"]["today_calls"] is None
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="node 없음")
+def test_정상_응답이면_오늘_사용량을_읽는다():
+    """응답 파싱이 깨지면 운영자가 늘 `null`만 보게 된다."""
+    import http.server
+    import threading
+
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+
+        def do_GET(self):
+            payload = b'{"result":"3421"}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        body = _run_health(
+            {"DART_API_KEY": "x",
+             "UPSTASH_REDIS_REST_URL": f"http://127.0.0.1:{srv.server_port}",
+             "UPSTASH_REDIS_REST_TOKEN": "t"}, {"quota": "1"})
+    finally:
+        srv.shutdown()
+    assert body["quota"]["reachable"] is True
+    assert body["quota"]["today_calls"] == 3421
+    assert body["quota"]["daily_cap"] == quota.DAILY_GLOBAL_CAP
