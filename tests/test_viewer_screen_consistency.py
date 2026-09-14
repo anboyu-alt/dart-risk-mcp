@@ -135,3 +135,67 @@ def test_상태_칸을_무게라_부르지_않는다():
     # 주석으로 사유를 남기는 것은 되지만, 화면에 찍히는 라벨이면 안 된다
     label_like = re.findall(r'>(\s*신호 무게\s*)<', _HTML)
     assert not label_like, "「무게」는 있지도 않은 점수를 약속하는 말이다"
+
+
+# ── 2차 라운드 (2026-09-14) — 비교 표·자금사용 ─────────────────────────────
+
+def test_대표_유형_칸이_관찰_신호를_부정하지_않는다():
+    """headline이 비는 흔한 이유는 관찰 신호가 **전부 양면적 유형**이라
+    pickHeadline이 승격시키지 않는 것이고 그건 의도다. 옛 문구
+    「관찰 신호 없음」은 같은 행의 「관찰 신호 N건」과 정면으로 모순됐다
+    (15개사 중 4곳 — 티쓰리 5건·삼성전자 15건·두산 4건·KB금융 5건,
+    관찰 0건인 회사는 표본에 하나도 없었다)."""
+    body = _cut(_HTML, "function compareTableHTML(")
+    assert "대표 유형 없음" in body
+    # 주석으로 옛 문구를 설명하는 것은 되지만 화면에 찍히면 안 된다
+    # (「신호 무게」 테스트와 같은 처리 — 렌더되는 형태만 본다).
+    assert ">관찰 신호 없음<" not in body, (
+        "대표 유형 칸이 관찰 신호의 부재를 주장하고 있다"
+    )
+
+
+def test_자금사용_빈_껍데기_행을_목록에서_뺀다():
+    """DART가 모든 칸을 "-"로 준 행. 삼성전자는 그 한 줄이 패널의 전부였고
+    「납입일 미상 납입 · 계획 총 0원」으로 보였다(10개사 중 3곳)."""
+    assert "function isBlankFundRecord(" in _HTML
+    body = _cut(_HTML, "function fundChainPanelHTML(")
+    assert "isBlankFundRecord" in body, "배제 함수를 만들어 놓고 쓰지 않는다"
+    # ⚠ 조용히 빼지 않는다 — 몇 건을 뺐는지 화면이 말해야 한다
+    assert "blankNote" in body and "건은 목록에서 뺐습니다" in body
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node 없음")
+def test_빈_껍데기_판정이_실제로_동작한다():
+    js = (_cut(_HTML, "function isBlankFundRecord(") + "\n"
+          + "console.log(JSON.stringify(["
+          + "isBlankFundRecord({}),"
+          + "isBlankFundRecord({pay_de:'', plan_useprps:'', plan_amount:null}),"
+          + "isBlankFundRecord({pay_de:'2024.01.24'}),"
+          + "isBlankFundRecord({plan_amount: 100})]));\n")
+    with tempfile.NamedTemporaryFile("w", suffix=".mjs", delete=False,
+                                     encoding="utf-8") as f:
+        f.write(js)
+        path = f.name
+    try:
+        r = subprocess.run(["node", path], capture_output=True, text=True,
+                           encoding="utf-8")
+        assert r.returncode == 0, r.stderr
+        got = json.loads(r.stdout)
+    finally:
+        pathlib.Path(path).unlink(missing_ok=True)
+    assert got == [True, True, False, False]
+
+
+def test_미기재_표기_집합이_core와_같다():
+    """「해당없음」이 빠져 있어 뷰어가 그 값을 「집행 차이 사유 보고 있음」으로
+    바꿨다 — **뜻이 정반대**였다(NAVER 실측 · 14개사 510행 중 2행).
+    두 곳에 흩어진 집합이라 갈리면 한쪽만 조용히 낡는다."""
+    core = (_ROOT / "dart_risk_mcp" / "core" / "dart_client.py").read_text(encoding="utf-8")
+    m = re.search(r"_FUND_BLANK_TOKENS = \{([^}]*)\}", core)
+    assert m, "core 토큰 집합을 찾지 못했다"
+    core_set = set(re.findall(r'"([^"]*)"', m.group(1)))
+    v = re.search(r"FUND_BLANK_TOKENS = new Set\(\[([^\]]*)\]\)", _HTML)
+    assert v, "뷰어 토큰 집합을 찾지 못했다"
+    viewer_set = set(re.findall(r'"([^"]*)"', v.group(1)))
+    assert core_set == viewer_set, f"core-뷰어 불일치: {core_set ^ viewer_set}"
+    assert "해당없음" in core_set
