@@ -14,6 +14,7 @@
     --tx: #d7dde6; --dim: #7c8797; --dim2: #9fb0c0; --faint: #4a5566;
     --amber: #e8a33d; --amber2: #f2bc63; --red: #e0564a; --green: #4ad295;
     --mono: Consolas, "Cascadia Code", "SF Mono", monospace;
+    --sans: "Apple SD Gothic Neo", "Malgun Gothic", "맑은 고딕", Pretendard, sans-serif;
     --c0: #8a93a2; --c1: #e0925a; --c2: #4f8fce; --c3: #9b7fe8;
     --c4: #dd7aa3; --c5: #4ad295; --c6: #cfc063; --c7: #e0564a; --c8: #c9cdd8;
     /* c9 = 정기 보고 — 위험 신호가 아니라 배경이므로 가장 흐리게. */
@@ -28,7 +29,7 @@
   html, body { min-height: 100%; }
   body {
     background: var(--bg); color: var(--tx); font-size: 15.5px; line-height: 1.65;
-    font-family: "Apple SD Gothic Neo", "Malgun Gothic", "맑은 고딕", Pretendard, sans-serif;
+    font-family: var(--sans);
     -webkit-font-smoothing: antialiased;
     background-image:
       linear-gradient(rgba(120,140,160,0.04) 1px, transparent 1px),
@@ -89,9 +90,18 @@
     left: 0; top: 0; bottom: 0; width: 3px; border-radius: 5px 0 0 5px; }
   .panel.amber::before { background: var(--amber); }
   .panel.red::before { background: var(--red); }
+  /* 구간 제목 — 옛 .slabel은 10.5px·--dim 한 줄이라 본문(15.5px)의 68%였다.
+     페이지에서 가장 작고 가장 흐린 글자가 구간의 이름이었던 셈이라 스크롤
+     중에 경계가 눈에 걸리지 않았다. 영문은 눈썹으로 그 크기에 남기고 **뜻을
+     가진 한글만** 본문보다 크게 올린다(panelTitleHTML이 " — "에서 가른다). */
   .slabel { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.2em;
-    color: var(--dim); margin-bottom: 10px; }
+    color: var(--dim); margin-bottom: 12px; }
   .slabel.amber { color: var(--amber); } .slabel.red { color: var(--red); }
+  .sl-en { display: block; }
+  .sl-ko { display: block; margin-top: 3px; font-family: var(--sans);
+    font-size: 16px; font-weight: 700; letter-spacing: -0.01em; color: var(--tx); }
+  .slabel.amber .sl-ko { color: var(--amber2); }
+  .slabel.red .sl-ko { color: var(--red); }
   .mnote { font-family: var(--mono); font-size: 11px; color: #5e6a78; margin-top: 10px; }
   .panel p.dim, .dim { font-size: 0.88rem; color: var(--dim); }
   /* 작은 고지(절단·범위·무판정) 공통 스타일 — 같은 인라인을 여러 자리에
@@ -291,6 +301,29 @@
   .patterncard .sigs { font-size: 0.78rem; color: var(--dim); margin-top: 0.3rem; font-family: var(--mono); }
   .factline { font-size: 0.9rem; padding: 0.18rem 0; }
   .factline .neg { color: var(--red); font-weight: 750; }
+
+  /* ── 증감 화살표 ────────────────────────────────────────────────────────
+     늘었는지 줄었는지는 사실이라 ▲초록·▼빨강으로 그대로 보인다. 지표마다
+     증가의 뜻이 다른 문제는 색을 뒤집어서가 아니라 읽는 법 한 줄(DELTA_NOTE)로
+     푼다 — 근거는 deltaHTML 위 주석. */
+  .delta { font-family: var(--mono); white-space: nowrap; font-weight: 700; }
+  .delta.up   { color: var(--green); }
+  .delta.down { color: var(--red); }
+  .delta.flat, .delta.na { color: var(--dim); font-weight: 400; }
+
+  /* 사실 표 — 표 자체는 전역 `table` 규칙을 쓰고 여기서는 정렬·폭만 손본다.
+     ⚠ 패널이 아니라 표만 감싼다(.deepgrid 주석: 패널에 overflow 금지). */
+  /* 2열 격자의 한 트랙(~510px)에 지표·연도·추이·증감이 함께 들어가야 한다 —
+     전역 표 여백 그대로면 회전율 표가 45px 넘쳐 증감 열이 잘렸다(실측). */
+  .ftwrap { overflow-x: auto; }
+  .ftwrap table { margin-top: 0.5rem; }
+  .ftwrap th, .ftwrap td { padding: 0.45rem 0.4rem; }
+  th.num, td.num { text-align: right; font-family: var(--mono); white-space: nowrap; }
+  /* ⚠ 라벨 열에 nowrap을 걸면 안 된다 — 「현금전환주기(CCC = DSO+DIO−DPO)」처럼
+     긴 지표명이 첫 열을 부풀려, 2열 격자 안에서 **오른쪽 증감 열이 잘려 나간다**
+     (실측: 「▼ -」까지만 보였다). 숫자만 줄바꿈을 막고 라벨은 접히게 둔다. */
+  td.lbl { min-width: 6.5rem; }
+  .ftnote { font-size: 0.78rem; color: var(--dim); margin-top: 0.45rem; }
   .factwarn { border: 1px solid var(--warn-border); background: var(--warn-bg);
     border-radius: 4px; padding: 0.7rem 1rem; margin-top: 0.6rem; font-size: 0.88rem; }
   .chipItem { display: inline-flex; align-items: center; gap: 0.45rem;
@@ -399,7 +432,7 @@
 
       <!-- 처음 온 사람을 위한 소개 -->
       <div class="panel" style="max-width:720px">
-        <div class="slabel">▍WHAT IS THIS — 이 페이지가 하는 일</div>
+        <div class="slabel"><span class="sl-en">▍WHAT IS THIS</span><span class="sl-ko">이 페이지가 하는 일</span></div>
         <p style="font-size:0.92rem">
           한국 상장사의 이름을 입력하면, 금융감독원 전자공시(DART)에서 그 회사의 최근 공시를
           <strong>그 자리에서 실시간으로 수집</strong>해 불공정거래와 상관이 높은
@@ -448,7 +481,7 @@
            머리말·설명은 두 상황이 달라 JS가 채운다 — 아래 정적 문구는 공용 키가
            없는 배포(키가 있어야 아무것도 되는) 기준이다. -->
       <div class="panel amber" id="setupPanel" style="max-width:720px">
-        <div class="slabel amber" id="keyPanelLabel">▍FIRST RUN — API KEY</div>
+        <div class="slabel amber" id="keyPanelLabel"><span class="sl-en">▍FIRST RUN</span><span class="sl-ko">API KEY</span></div>
         <p class="dim" id="keyPanelLead">
           이 도구를 쓰려면 <strong style="color:var(--tx)">본인의 DART 인증키</strong>가 필요합니다.
         </p>
@@ -1945,7 +1978,7 @@ function renderDetail(rcept) {
     </div>
     <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:16px;align-items:start" class="detailgrid">
       <div class="panel">
-        <div class="slabel amber">▍WHY THIS MATTERS</div>
+        ${panelTitleHTML(`▍WHY THIS MATTERS`, { cls: "amber" })}
         ${detObs.length
           ? detObs.map((s) => renderWhyRow(s, r.rcept)).join("")
           : procSig
@@ -1955,7 +1988,7 @@ function renderDetail(rcept) {
         <div class="mnote">// ${NOTICE.NO_JUDGMENT}</div>
       </div>
       <div class="panel">
-        <div class="slabel">▍META</div>
+        ${panelTitleHTML(`▍META`)}
         <div style="display:flex;flex-direction:column;gap:10px;font-size:13px;font-family:var(--mono)">
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">카테고리</span><span>${s0 ? esc(DATA.categories[String(cat)]) : "—"}</span></div>
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">신호 무게</span><span style="color:${isTop ? "var(--red)" : "var(--dim2)"}">${isTop ? "이 기간 대표 유형" : detObs.length ? "감지됨" : procSig ? "절차·사후 보고" : "—"}</span></div>
@@ -1968,7 +2001,7 @@ function renderDetail(rcept) {
         <button class="ghost" id="docViewBtn" style="width:100%;margin-top:8px;padding:11px;font-size:12.5px">원문 이 화면에서 보기</button>
       </div>
     </div>
-    ${chain ? `<div class="panel"><div class="slabel">▍SIGNAL CHAIN — 이 공시의 위치</div>
+    ${chain ? `<div class="panel">${panelTitleHTML(`▍SIGNAL CHAIN — 이 공시의 위치`)}
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${chain}</div></div>` : ""}
     <div class="panel hidden" id="docViewer"></div>
     <style>@media (max-width:760px){.detailgrid{grid-template-columns:1fr !important}}</style>`;
@@ -2055,7 +2088,7 @@ function renderDocBlocks(blocks, kws) {
 }
 function renderDocViewer(panel, data, r) {
   if (!data || data.error) {
-    panel.innerHTML = `<div class="slabel">▍DISCLOSURE TEXT</div>
+    panel.innerHTML = `${panelTitleHTML(`▍DISCLOSURE TEXT`)}
       <p class="dim">${esc((data && data.error) || "원문을 불러오지 못했습니다.")} — DART 원문 링크를 이용하세요.</p>`;
     return;
   }
@@ -2065,11 +2098,11 @@ function renderDocViewer(panel, data, r) {
   // "원문이 없는 공시"와 "받아 왔는데 못 그린 응답"이 같은 빈 패널로 보인다
   // (2026-09-11 제보: 패널은 열리는데 본문이 비었다). 받은 분량을 사실로 적는다.
   if (!blocks.length) {
-    panel.innerHTML = `<div class="slabel">▍DISCLOSURE TEXT</div>
+    panel.innerHTML = `${panelTitleHTML(`▍DISCLOSURE TEXT`)}
       <p class="dim">원문 응답은 받았지만 표시할 본문이 없습니다 (응답 ${(data.text || "").length}자 · 블록 0개) — DART 원문 링크를 이용하세요.</p>`;
     return;
   }
-  let html = `<div class="slabel">▍DISCLOSURE TEXT — 본문 열람</div>`;
+  let html = `${panelTitleHTML(`▍DISCLOSURE TEXT — 본문 열람`)}`;
   if (kws.length) {
     html += `<div class="factline">이 공시 제목에서 감지된 신호 키워드 ${kws.length}개를 본문에서 강조 표시했습니다.</div>`;
   }
@@ -2157,10 +2190,10 @@ async function toggleDocViewer(r) {
     try { renderDocViewer(panel, cached, r); } catch (e) { docRenderFailed(panel, e); }
     return;
   }
-  panel.innerHTML = `<div class="slabel">▍DISCLOSURE TEXT</div><span class="spinner"></span><span class="dim" style="font-size:0.88rem">원문 조회 중…</span>`;
+  panel.innerHTML = `${panelTitleHTML(`▍DISCLOSURE TEXT`)}<span class="spinner"></span><span class="dim" style="font-size:0.88rem">원문 조회 중…</span>`;
   const j = await fetchDisclosureText(r.rcept);
   if (j && j.error) {
-    panel.innerHTML = `<div class="slabel">▍DISCLOSURE TEXT</div>
+    panel.innerHTML = `${panelTitleHTML(`▍DISCLOSURE TEXT`)}
       <p class="dim">${esc(j.error)} — DART 원문 링크를 이용하세요.</p>`;
     return;
   }
@@ -2175,7 +2208,7 @@ async function toggleDocViewer(r) {
 // 렌더가 던지면 패널은 **빈 채로** 남는다(미처리 rejection) — 사용자에게는
 // "원문이 없는 공시"와 구분되지 않는다. 이유를 사실로 적는다.
 function docRenderFailed(panel, e) {
-  panel.innerHTML = `<div class="slabel">▍DISCLOSURE TEXT</div>
+  panel.innerHTML = `${panelTitleHTML(`▍DISCLOSURE TEXT`)}
     <p class="dim">원문은 받았지만 화면에 그리지 못했습니다 (${esc((e && e.message) || String(e))}) — DART 원문 링크를 이용하세요.</p>`;
 }
 
@@ -2245,12 +2278,12 @@ function renderDash() {
   if (heaviest) {
     html += `<div style="display:grid;grid-template-columns:1.15fr 1fr;gap:16px;align-items:start" class="dashgrid">
       <div>
-        <div class="headline"><div class="slabel amber" style="margin-bottom:8px">▍HEAVIEST SIGNAL</div>
+        <div class="headline">${panelTitleHTML(`▍HEAVIEST SIGNAL`, { cls: "amber", style: "margin-bottom:8px" })}
           <div style="font-size:1.1rem;font-weight:800">${esc(displayLabel(heaviest.key) || heaviest.label)} <span style="color:var(--red)">×${typeCount[heaviest.key]}</span></div>
           ${commonNote(heaviest.key) ? `<div class="mnote">※ ${esc(commonNote(heaviest.key))}</div>` : ""}
           <div class="explain" style="margin-top:0.4rem">${explainHTML(heaviest.prose || "")}</div>
         </div>
-        ${crisisEvents.length ? `<div class="callout"><div class="slabel red" style="margin-bottom:8px">▍WATCH</div>
+        ${crisisEvents.length ? `<div class="callout">${panelTitleHTML(`▍WATCH`, { cls: "red", style: "margin-bottom:8px" })}
           <b>시장감시·위기/부실 유형 공시 ${crisisEvents.length}건 관찰</b> — ${esc(crisisLabels(crisisEvents))} 유형입니다. 원문을 먼저 확인해 보세요.
           <ul>` + crisisEvents.slice(0, 6).map((e) =>
             `<li><a href="${dartUrl(e.rcept)}" target="_blank" rel="noopener" style="color:var(--tx)">${esc(fmtDate(e.date))} · ${esc(e.nm)}</a></li>`).join("") +
@@ -2258,13 +2291,13 @@ function renderDash() {
           `</ul><div class="mnote">// ${NOTICE.NO_JUDGMENT}</div></div>` : ""}
       </div>
       <div class="panel">
-        <div class="slabel">▍CATEGORY DISTRIBUTION</div>
+        ${panelTitleHTML(`▍CATEGORY DISTRIBUTION`)}
         ${categoryBars(catCount)}
         <!-- 막대는 신호 수, 피드 칩은 공시 수다(실측 제이스코홀딩스:
              INSOLVENCY+AUDIT 한 건 때문에 7 vs 6). 둘 다 맞지만 같은 라벨에
              다른 수라 단위를 밝힌다 — 단위는 노출, 세는 법만 접는다. -->
         <div class="mnote">${whyDetailsHTML("// 신호 수 기준 — 피드 칩은 공시 수입니다.", "한 공시가 같은 카테고리 신호 2개를 켜면 이 막대는 2, 피드 칩은 1로 셉니다.")}</div>
-        <div class="slabel" style="margin:20px 0 10px">▍SIGNAL CHAIN</div>
+        ${panelTitleHTML(`▍SIGNAL CHAIN`, { style: "margin:20px 0 10px" })}
         ${flowChain(observedEvents)}
       </div>
     </div>
@@ -2280,7 +2313,7 @@ function renderDash() {
   if (observedEvents.length) {
     html += timelinePanel(observedEvents, bgn, end);
     html += flowNotes(observedEvents);
-    html += `<div class="panel"><div class="slabel">▍SIGNAL COMMENTARY — 무게순 · 사실 서술</div>
+    html += `<div class="panel">${panelTitleHTML(`▍SIGNAL COMMENTARY — 무게순 · 사실 서술`)}
       <div class="proselist">` + detectedTypes.map((s) =>
         `<div><span class="tag" style="background:var(--c${s.category})">${esc(displayLabel(s.key) || s.label)}</span>${s.priority === "first" ? ` <span class="badge-cau">먼저</span>` : s.priority === "context" ? ` <span class="badge-ctx">참고</span>` : ""} <span class="mono" style="font-size:0.78rem;color:var(--dim2)">×${typeCount[s.key]}</span>
          ${commonNote(s.key) ? `<div class="mnote">※ ${esc(commonNote(s.key))}</div>` : ""}
@@ -2305,7 +2338,7 @@ function renderDash() {
     const churn = churnCounts(capitalEvents);
     if (capitalEvents.length) {
       const fires = churn.dil >= 3 || (churn.dil >= 2 && churn.non >= 2);
-      html += `<div class="panel"><div class="slabel amber">▍CAPITAL RHYTHM</div>
+      html += `<div class="panel">${panelTitleHTML(`▍CAPITAL RHYTHM`, { cls: "amber" })}
         <div class="dim" style="margin:0.7rem 0">이 기간 자본 관련 공시(증자·감자·자사주·CB/BW/EB/RCPS)가 총 <strong style="color:var(--tx)">${capitalEvents.length}건</strong>
         — 12개월 기준 희석성(증자·메자닌) <strong style="color:var(--tx)">${churn.dil}건</strong> ·
         비희석성(자사주 등) <strong style="color:var(--tx)">${churn.non}건</strong>입니다.
@@ -2318,7 +2351,7 @@ function renderDash() {
       const maxShowPatterns = 3;
       const shownPatterns = patterns.slice(0, maxShowPatterns);
       const restPatterns = patterns.length - shownPatterns.length;
-      html += `<div class="panel"><div class="slabel red">▍PATTERN WATCH</div>
+      html += `<div class="panel">${panelTitleHTML(`▍PATTERN WATCH`, { cls: "red" })}
         <p class="dim">등록 패턴의 구성 신호 중 관찰된 것과 안 보인 것을 보여줍니다. "겹침"은 ${NOTICE.NO_JUDGMENT}.</p>` +
         shownPatterns.map((p) => {
           const headline = `<b>${esc(p.name)}</b> — 구성 신호 ${p.n_total}개 중 ${p.n_matched}개가 이 기간 공시에서 관찰됐습니다`;
@@ -2383,50 +2416,50 @@ function renderDash() {
   // null이면 아래 loadDeepBlocks도 el이 없어 자연히 조회를 건너뛴다).
   const ctrlChangeDisclosure = findLatestControlChange(items);
   if (ctrlChangeDisclosure) {
-    html += `<div class="panel"><div class="slabel">▍CONTROL CHANGE — 최대주주 변경 상세</div>
+    html += `<div class="panel">${panelTitleHTML(`▍CONTROL CHANGE — 최대주주 변경 상세`)}
       <div id="ctrlCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">최대주주 변경 원문 확인 중…</span></div></div>`;
   }
 
   // v1.14.0: 원문에만 있는 값(이자율·증감비율)을 내는 블록. 해당 신호가
   // 관찰되지 않으면 컨테이너 자체를 만들지 않아 원문 조회도 일어나지 않는다.
   if (detailBlockHits("RELATED_PARTY", 1).length) {
-    html += `<div class="panel"><div class="slabel">▍RELATED PARTY — 특수관계인 자금거래 확인</div>
+    html += `<div class="panel">${panelTitleHTML(`▍RELATED PARTY — 특수관계인 자금거래 확인`)}
       <div id="rpCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">특수관계인 거래 원문 확인 중…</span></div></div>`;
   }
   if (detailBlockHits("ASSET_TRANSFER", 1).some((h) => isAssetDisposalTitle(h.nm))
       || detailBlockHits("FUND_OUTFLOW", 1).length) {
-    html += `<div class="panel"><div class="slabel">▍OUTFLOW — 자금유출·자산이전 상대방 확인</div>
+    html += `<div class="panel">${panelTitleHTML(`▍OUTFLOW — 자금유출·자산이전 상대방 확인`)}
       <div id="atCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">원문에서 거래 상대방 확인 중…</span></div></div>`;
   }
   if (detailBlockHits("EARNINGS_SHOCK", 1).length) {
-    html += `<div class="panel"><div class="slabel">▍EARNINGS SHOCK — 손익구조 급변 내역</div>
+    html += `<div class="panel">${panelTitleHTML(`▍EARNINGS SHOCK — 손익구조 급변 내역`)}
       <div id="esCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">손익구조 원문 확인 중…</span></div></div>`;
   }
 
-  html += `<div class="panel"><div class="slabel">▍FINANCIAL CORE — 최근 사업보고서 · 사실 표기</div>
+  html += `<div class="panel">${panelTitleHTML(`▍FINANCIAL CORE — 최근 사업보고서 · 사실 표기`)}
     <div id="finCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">재무제표 조회 중…</span></div></div>`;
-  html += `<div class="panel"><div class="slabel">▍TURNOVER TREND — 회전율 추세 · 사실 표기</div>
+  html += `<div class="panel">${panelTitleHTML(`▍TURNOVER TREND — 회전율 추세 · 사실 표기`)}
     <div class="tyears">${[1, 2, 3, 4, 5].map((n) =>
       `<span class="chip${n === TURNOVER_YEARS ? " on" : ""}" data-tyears="${n}">${n}년</span>`
     ).join("")}</div>
     <div id="turnoverCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">회전율 계산 중…</span></div></div>`;
-  html += `<div class="panel"><div class="slabel">▍MEZZANINE — 메자닌 현황 · 사실 표기</div>
+  html += `<div class="panel">${panelTitleHTML(`▍MEZZANINE — 메자닌 현황 · 사실 표기`)}
     <div id="mezzanineCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">메자닌 발행결정 조회 중…</span></div></div>`;
-  html += `<div class="panel"><div class="slabel">▍DILUTION — 주식 수 변동 · 사실 표기</div>
+  html += `<div class="panel">${panelTitleHTML(`▍DILUTION — 주식 수 변동 · 사실 표기`)}
     <div id="dilutionCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">증자·감자 현황 조회 중…</span></div></div>`;
-  html += `<div class="panel"><div class="slabel">▍DIVIDEND — 배당과 순이익</div>
+  html += `<div class="panel">${panelTitleHTML(`▍DIVIDEND — 배당과 순이익`)}
     <div id="divCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">배당 내역 조회 중…</span></div></div>`;
-  html += `<div class="panel"><div class="slabel">▍FUND CHAIN — 조달 자금의 행방</div>
+  html += `<div class="panel">${panelTitleHTML(`▍FUND CHAIN — 조달 자금의 행방`)}
     <div id="fundCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">자금사용 내역 조회 중…</span></div></div>`;
-  html += `<div class="panel"><div class="slabel">▍INSIDER HOLDINGS — 임원·주요주주 소유보고 시계열 · 사실 표기</div>
+  html += `<div class="panel">${panelTitleHTML(`▍INSIDER HOLDINGS — 임원·주요주주 소유보고 시계열 · 사실 표기`)}
     <div id="holdCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">임원·주요주주 소유보고 조회 중…</span></div></div>`;
-  html += `<div class="panel"><div class="slabel">▍AUDIT OPINION — 3개년 · 사실 표기</div>
+  html += `<div class="panel">${panelTitleHTML(`▍AUDIT OPINION — 3개년 · 사실 표기`)}
     <div id="auditCore"><span class="spinner"></span><span class="dim" style="font-size:0.88rem">감사보고 조회 중…</span></div>
     <details id="auditSvcDetails" style="margin-top:0.7rem"><summary style="cursor:pointer;color:var(--amber);font-weight:700;font-size:0.85rem">펼쳐서 조회 — 감사 내용과 같은 해 비감사용역 내역</summary>
     <div id="auditSvcCore"><span class="dim" style="font-size:0.84rem">엔드포인트 2개를 조회합니다 — 스캔을 느리게 하지 않으려고 펼칠 때만 받습니다.</span></div></details></div>`;
   // 채무증권은 엔드포인트가 5개라 **펼칠 때만** 받는다 — 스캔 기본 경로를
   // 느리게 만들지 않는다. 접힌 상태에서도 무엇을 여는지 알 수 있게 적는다.
-  html += `<div class="panel"><div class="slabel">▍DEBT — 채무증권 미상환 잔액</div>
+  html += `<div class="panel">${panelTitleHTML(`▍DEBT — 채무증권 미상환 잔액`)}
     <details id="debtDetails"><summary style="cursor:pointer;color:var(--amber);font-weight:700;font-size:0.88rem">펼쳐서 조회 — 회사채·단기사채·기업어음·신종자본증권·조건부자본증권</summary>
     <div id="debtCore"><span class="dim" style="font-size:0.84rem">엔드포인트 5개를 조회합니다 — 스캔을 느리게 하지 않으려고 펼칠 때만 받습니다.</span></div></details></div>`;
   html += `</div>`;  // .deepgrid 닫기 — convoPanel은 격자 밖(전폭)
@@ -2538,7 +2571,7 @@ function flowNotes(events) {
       `특정 세력의 지분 매집 또는 지배 세력 간 경합 국면에서 반복 관찰되는 형태입니다 — 변경 전후 최대주주와 인수자금 조달 방법을 원문에서 확인하세요.`);
   }
   if (!notes.length) return "";
-  return `<div class="panel"><div class="slabel amber">▍FLOW READING — 배열 관찰</div>` +
+  return `<div class="panel">${panelTitleHTML(`▍FLOW READING — 배열 관찰`, { cls: "amber" })}` +
     notes.map((t) => `<div class="factwarn">🧭 ${esc(t)}</div>`).join("") + `</div>`;
 }
 
@@ -2579,7 +2612,7 @@ function timelinePanel(events, bgn, end) {
   }
   const dmax = Math.max(1, ...months.map((x) => x.n));
   const longWin = months.length > 14;   // 3Y·5Y — 월 라벨은 1월(연도)만
-  const density = `<div class="slabel" style="margin-top:4px">▍SIGNAL DENSITY</div>
+  const density = `${panelTitleHTML(`▍SIGNAL DENSITY`, { style: "margin-top:4px" })}
     <div class="density" style="grid-template-columns:repeat(${months.length},1fr)">` +
     months.map((x) => `<div class="dcell">${x.n ? `<span class="dfill" style="height:${Math.round(x.n / dmax * 92)}%;background:var(--c${x.heavy ? 7 : x.maxCat || 2});${x.heavy ? "box-shadow:0 0 8px rgba(224,86,74,0.6);" : ""}"></span>` : ""}</div>`).join("") +
     `</div><div class="dlabels" style="grid-template-columns:repeat(${months.length},1fr)">` +
@@ -2623,7 +2656,7 @@ function timelinePanel(events, bgn, end) {
   }
   const legend = cats.map((c) => `<span><i style="background:var(--c${c})"></i>${esc(DATA.categories[String(c)])} ${CUR.catCount[c]}</span>`).join("");
   return `<div class="panel"><div style="display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px 20px">
-      <div class="slabel" style="margin:0">▍OBSERVATION TIMELINE — ${windowLabel()} SCAN</div>
+      ${panelTitleHTML(`▍OBSERVATION TIMELINE — ${windowLabel()} SCAN`, { style: "margin:0" })}
       <div class="mm" style="font-size:11px">${fmtDate(ymd(bgn))} — ${fmtDate(ymd(end))}</div></div>
     ${density}
     <div class="chartwrap" style="margin-top:14px"><svg viewBox="0 0 ${W} ${H}" width="100%" style="min-width:640px">${grid}${lanes}${dots}</svg></div>
@@ -3107,6 +3140,105 @@ function sparklineSVG(values, opts) {
     ` role="img" aria-label="${label}"><title>${label}</title>${body}</svg>`;
 }
 
+// ── 증감 화살표 ───────────────────────────────────────────────────────────
+// 값이 늘었는지 줄었는지는 **사실**이다. ▲초록·▼빨강은 그 사실을 읽지 않고도
+// 보이게 하는 표기이지, 이 도구가 금지하는 판정(「이 회사가 좋다·나쁘다」·
+// 「투자해라」·점수·등급)이 아니다 — 2026-09-14 제작자 확인.
+//
+// 다만 **지표마다 증가의 뜻이 다르다**(매출 증가와 부채비율 증가는 반대다).
+// 그 문제는 색을 뒤집어서가 아니라 읽는 법을 줘서 푼다.
+//   ① **`higherIsWorse`를 색에 반영하지 않는다.** ratioTrendLine에 그 플래그가
+//      이미 있지만, 그것으로 색을 뒤집으면 화면이 「이 변화는 나쁘다」라고 말하게
+//      되어 위에서 금지한 쪽으로 넘어간다. 색이 말하는 것은 증가/감소 하나다.
+//   ② 표에 DELTA_NOTE를 한 줄 단다 — 색이 무엇을 가리키는지와, 증가가 좋을
+//      수도 나쁠 수도 있다는 것. **패널마다 한 번**이다(표마다 되풀이하면 같은
+//      문장이 화면을 덮는다).
+//
+// ⚠ **스파크라인은 중립 단색 그대로다** — 예외를 둔 게 아니라 대상이 다르다.
+//   점 3~5개를 잇는 선에는 단일 방향이 없어 칠할 「방향」 자체가 없다.
+//
+// 문자열 증감(「흑자 전환」·「적자 확대」)은 부호로 환원되지 않아 중립으로 둔다 —
+// loadFinancialCore가 이미 그 문구를 만든다.
+const DELTA_NOTE = "※ ▲▼와 색은 값이 늘었는지 줄었는지를 나타냅니다 — 지표에 따라 증가가 좋은 신호일 수도, 나쁜 신호일 수도 있습니다.";
+
+function deltaHTML(pct, opts) {
+  const o = opts || {};
+  if (typeof o.text === "string" && o.text) {
+    return `<span class="delta flat">${esc(o.text)}</span>`;
+  }
+  if (pct === null || pct === undefined || !Number.isFinite(pct)) {
+    return `<span class="delta na">―</span>`;     // 결측은 0이 아니다
+  }
+  const unit = o.unit === undefined ? "%" : o.unit;
+  const digits = o.digits === undefined ? 1 : o.digits;
+  const mag = Math.abs(pct).toFixed(digits);
+  if (pct > 0) return `<span class="delta up">▲ +${esc(mag + unit)}</span>`;
+  if (pct < 0) return `<span class="delta down">▼ -${esc(mag + unit)}</span>`;
+  return `<span class="delta flat">― ${esc(mag + unit)}</span>`;
+}
+
+// ── 사실 표 ───────────────────────────────────────────────────────────────
+// 표를 매번 템플릿 문자열로 손수 짜던 것(근거 표·메자닌·희석·감사보수 …)을
+// 하나로 모은다. 헤더는 문자열이거나 {label, num}(num이면 우측정렬·모노),
+// 셀은 문자열(=esc 적용)이거나 {raw}(=호출부가 이미 만든 HTML — 링크·deltaHTML·
+// 스파크라인이 그리로 온다). 행은 배열이거나 {tds, cls} 또는 {group}.
+// ⚠ 셀 배열의 이름이 `tds`인 것은 취향이 아니다 — `cells`로 두면 쌍둥이 패리티
+//   가드가 core의 `_cells`(audit_report.py)와 이름으로 짝지어 신고한다. 둘은
+//   무관한 함수라 이름을 겹치지 않게 둔다.
+// ⚠ 셀에 glossTermsHTML을 태우지 않는다 — 표 셀·summary·a·라벨은 툴팁 대상이
+//   아니다(숫자 정렬·중첩 대화형 보호). CLAUDE.md의 PR-V 항목과 같은 판단.
+// ⚠ 행을 잘랐으면 opts.note에 몇 건을 숨겼는지 적는다(조용한 절단 금지).
+// ⚠ 감싸는 것은 **표이지 패널이 아니다** — .deepgrid 주석이 패널 overflow를
+//   금지한다(용어 툴팁이 잘린다).
+function factTableHTML(headers, rows, opts) {
+  const o = opts || {};
+  const hs = (headers || []).map((h) => (h && typeof h === "object") ? h : { label: h });
+  const cellHTML = (c, tag, cls) => {
+    const klass = cls ? ` class="${cls}"` : "";
+    if (c && typeof c === "object" && "raw" in c) return `<${tag}${klass}>${c.raw}</${tag}>`;
+    const v = (c === null || c === undefined || c === "") ? "―" : String(c);
+    return `<${tag}${klass}>${esc(v)}</${tag}>`;
+  };
+  const head = hs.map((h) => cellHTML(h.label, "th", h.num ? "num" : "")).join("");
+  const body = (rows || []).map((r) => {
+    // 그룹 머리 — 행이 아니라 구분선으로 읽히게(.mzn-grp를 그대로 재사용)
+    if (r && typeof r === "object" && !Array.isArray(r) && r.group !== undefined) {
+      const g = (r.group && typeof r.group === "object" && "raw" in r.group)
+        ? r.group.raw : esc(String(r.group));
+      return `<tr class="mzn-grp"><td colspan="${hs.length}">${g}</td></tr>`;
+    }
+    const tds = (r && !Array.isArray(r) && r.tds) ? r.tds : r;
+    const cls = (r && !Array.isArray(r) && r.cls) ? ` class="${r.cls}"` : "";
+    return `<tr${cls}>` + (tds || []).map((c, i) =>
+      cellHTML(c, "td", hs[i] && hs[i].num ? "num" : (i === 0 ? "lbl" : ""))).join("") + "</tr>";
+  }).join("");
+  const notes = [o.note || "", o.deltaNote ? DELTA_NOTE : ""].filter(Boolean).join(" ");
+  const note = notes ? `<div class="ftnote">${esc(notes)}</div>` : "";
+  const wrapCls = o.scroll ? "ftwrap mzn-scroll" : "ftwrap";
+  return `<div class="${wrapCls}"><table><thead><tr>${head}</tr></thead>` +
+    `<tbody>${body}</tbody></table></div>${note}`;
+}
+
+// ── 구간 제목 ─────────────────────────────────────────────────────────────
+// "▍EARNINGS SHOCK — 손익구조 급변 내역"을 눈썹(영문)과 주제목(한글)으로 가른다.
+// 눈에 들어오는 쪽이 뜻을 가진 쪽이 되게 하려는 것 — 옛 한 줄은 10.5px·--dim이라
+// 페이지에서 가장 작고 가장 흐린 글자가 구간의 이름이었다.
+// ⚠ " — "가 없는 제목도 있다(▍SCAN INPUT·▍META·▍DISCLOSURE TEXT) — 그때는 눈썹만
+//   내고 주제목 span을 만들지 않는다(없는 것을 지어내지 않는다).
+// ⚠ 자를 때 slice가 아니라 substring을 쓴다 — 이것은 **가르기이지 절단이 아니고**
+//   양쪽을 모두 렌더하므로, 목록을 자르는 자리를 찾는 고지 가드(층4)와 섞이면
+//   읽는 사람이 둘을 구분하지 못한다.
+function panelTitleHTML(text, opts) {
+  const o = opts || {};
+  const s = String(text === null || text === undefined ? "" : text);
+  const at = s.indexOf(" — ");
+  const cls = "slabel" + (o.cls ? " " + o.cls : "");
+  const attrs = (o.id ? ` id="${o.id}"` : "") + (o.style ? ` style="${o.style}"` : "");
+  if (at < 0) return `<div class="${cls}"${attrs}>${esc(s)}</div>`;
+  return `<div class="${cls}"${attrs}><span class="sl-en">${esc(s.substring(0, at))}</span>` +
+    `<span class="sl-ko">${esc(s.substring(at + 3))}</span></div>`;
+}
+
 // ── 내부자 매도 ±30일 부정 공시 (core detect_insider_pre_disclosure 이식) ──
 // 입력 계약을 core와 똑같이 맞춘다 — insiderRecords는 {holder, rcept_dt,
 // delta_pct}, signalEvents는 {key, rcept_dt, report_nm}. 그래야 같은 입력에
@@ -3363,7 +3495,6 @@ function ratioTrendLine(byMetric, metricName, unit, higherIsWorse) {
   const rows = periods.map((p) => m.get(p));
   const known = rows.filter((r) => r.값 !== null);
   if (known.length < 2) return null;
-  const parts = periods.map((p, i) => `${esc(p)} ${rows[i].값 === null ? "―" : rows[i].값.toFixed(0) + unit}`).join(" → ");
   let monotoneWorse = false;
   if (known.length === rows.length && rows.length >= 3) {
     let up = true, down = true;
@@ -3380,8 +3511,16 @@ function ratioTrendLine(byMetric, metricName, unit, higherIsWorse) {
   const trendNote = monotoneWorse
     ? (higherIsWorse ? ` — ${_n}기간 연속 상승` : ` — ${_n}기간 연속 하락`) : "";
   const latestRow = [...rows].reverse().find((r) => r.값 !== null) || null;
+  // 표가 쓰는 재료를 그대로 돌려준다 — 옛 판은 여기서 한 줄 HTML을 조립해
+  // 값이 문자열 안에 갇혀 있었다(열로 세울 수 없었다).
+  const values = rows.map((r) => r.값);
+  // 최근 증감은 **마지막 두 관측 사이**다(결측을 건너뛰고 잇지 않는다).
+  // 단위가 %인 지표라 차이는 %가 아니라 %p다 — 비율의 비율이 아니다.
+  const knownVals = values.filter((v) => v !== null);
+  const lastDelta = knownVals.length >= 2
+    ? knownVals[knownVals.length - 1] - knownVals[knownVals.length - 2] : null;
   return {
-    html: `<div class="factline">· ${esc(metricName)}: ${parts}${trendNote}</div>`,
+    metric: metricName, unit, periodKeys: periods, values, lastDelta, trendNote,
     monotoneWorse, periods: _n, latest: latestRow ? latestRow.값 : null,
   };
 }
@@ -3401,12 +3540,28 @@ function ratioTrendBlock(rows, div) {
   const debt = ratioTrendLine(byMetric, "부채비율", "%", true);
   const current = ratioTrendLine(byMetric, "유동비율", "%", false);
 
-  let html = "";
   if (!debt && !current) {
     return `<p class="dim" style="font-size:0.85rem;margin-top:0.4rem">비율 추이를 계산할 계정을 찾지 못했습니다.</p>`;
   }
-  if (debt) html += debt.html;
-  if (current) html += current.html;
+  // 기간 열은 **관측에서 파생한다** — 개수를 박으면 기간이 바뀔 때 화면이
+  // 제 데이터와 다른 것을 말한다(회전율 블록에서 이미 겪은 함정).
+  const shown = [debt, current].filter(Boolean);
+  const periodCols = shown[0].periodKeys;
+  let html = factTableHTML(
+    ["지표", ...periodCols.map((p) => ({ label: String(p), num: true })),
+     "추이", { label: "최근 증감", num: true }],
+    shown.map((r) => {
+      const vals = r.values;
+      const cells = vals.map((v) => v === null ? "―" : v.toFixed(0) + r.unit);
+      const spark = sparklineSVG(vals, {
+        w: 64, h: 24,
+        label: `${r.metric} ${periodCols[0]}~${periodCols[periodCols.length - 1]} 추이`,
+      });
+      return [r.metric + r.trendNote, ...cells, { raw: spark },
+        { raw: deltaHTML(r.lastDelta, { unit: "%p" }) }];
+    }));
+  // ⚠ 읽는 법(DELTA_NOTE)을 여기 또 달지 않는다 — 이 표는 loadFinancialCore가
+  //   부르는 것이라 **같은 패널** 위쪽 표가 이미 한 번 달았다.
 
   const warns = [];
   if (debt && debt.monotoneWorse) warns.push(`부채비율이 ${debt.periods}기간 연속 상승했습니다.`);
@@ -3872,7 +4027,7 @@ function turnoverTrendBlockHTML(periods, years, divUsed) {
   let html = `<p class="mm" style="font-size:0.78rem;margin-bottom:0.4rem">사업연도 ${ascYears.join("·")}${divNote} 재무제표</p>`;
   html += `<p class="dim" style="font-size:0.8rem;margin-bottom:0.5rem">운전자본 = 유동자산 − 유동부채. 모든 회전율은 <b>기말잔액</b> 기준으로 계산했습니다 — DART가 제공하는 재무지표와 산정 기준이 달라 수치가 다를 수 있습니다.</p>`;
 
-  const detailRows = [];
+  const detailRows = [], trRows = [];
   for (const [key, label, formula] of TURNOVER_METRIC_DEFS) {
     const ms = ascYears.map((y) => byYear[y].metrics[key]);
     // ⚠ 운전자본은 **차감으로 만들어진 분모**(유동자산−유동부채)라 0 근처로
@@ -3880,13 +4035,15 @@ function turnoverTrendBlockHTML(periods, years, divUsed) {
     // 가깝다」는 뜻이 된다(두산 2023 실측: 운전자본 74억 · 매출 19조 →
     // 2,559.01회, 다른 회전율은 전부 한 자릿수). 임계를 만들지 않고 **모든
     // 연도에 조건 없이** 분모를 병기해 원인이 그 자리에서 보이게 한다.
-    const parts = ascYears.map((y, i) => {
+    // 표로 세워도 분모 병기는 **연도 칸 안에** 그대로 남긴다 — 열을 따로 빼면
+    // 어느 해의 분모인지가 흐려지고, 빼면 위 경고가 가리키는 원인이 사라진다.
+    const yearCells = ascYears.map((y, i) => {
       const v = ms[i].value === null ? "―" : ms[i].value.toFixed(2) + "회";
       if (key === "workingCapital" && ms[i].value !== null
           && ms[i].denominator !== null && ms[i].denominator !== undefined) {
-        return `${y} ${v} (운전자본 ${fmtKRW(ms[i].denominator)})`;
+        return { raw: `${esc(v)}<br><span class="dim" style="font-size:0.72rem">운전자본 ${esc(fmtKRW(ms[i].denominator))}</span>` };
       }
-      return `${y} ${v}`;
+      return v;
     });
     let trendNote = "";
     if (ms.length >= 3 && ms.every((m) => m.value !== null)) {
@@ -3903,11 +4060,15 @@ function turnoverTrendBlockHTML(periods, years, divUsed) {
     // 스파크라인은 **모든 연도에 값이 있을 때만** 나온다(sparklineSVG가 결측을
     // 만나면 빈 문자열을 돌려준다) — 숫자 줄은 결측을 「―」로 그대로 밝힌다.
     const spark = sparklineSVG(ms.map((m) => m.value), {
-      w: 88, h: 24,
+      w: 64, h: 24,
       label: `${label} ${ascYears[0]}~${ascYears[ascYears.length - 1]} 추이`,
     });
-    html += `<div class="factline${spark ? " sparkrow" : ""}">${spark}` +
-      `<span>· ${esc(label)}: ${parts.map(esc).join(" → ")}${trendNote}</span></div>`;
+    // 최근 증감은 **마지막 두 관측 사이**다 — 결측을 건너뛰고 잇지 않는다.
+    const knownVals = ms.map((m) => m.value).filter((v) => v !== null);
+    trRows.push([label + trendNote, ...yearCells, { raw: spark },
+      { raw: deltaHTML(knownVals.length >= 2
+          ? turnoverYoyPct(knownVals[knownVals.length - 1], knownVals[knownVals.length - 2])
+          : null) }]);
     ascYears.forEach((y, i) => {
       const m = ms[i];
       detailRows.push(`<tr><td>${esc(String(y))}</td><td>${esc(label)}</td>` +
@@ -3918,13 +4079,22 @@ function turnoverTrendBlockHTML(periods, years, divUsed) {
   }
 
   const cccs = ascYears.map((y) => byYear[y].ccc);
-  const cccParts = ascYears.map((y, i) => `${y} ${cccs[i].value === null ? "―" : cccs[i].value.toFixed(1) + "일"}`);
+  const cccCells = ascYears.map((y, i) => cccs[i].value === null ? "―" : cccs[i].value.toFixed(1) + "일");
   const cccSpark = sparklineSVG(cccs.map((c) => c.value), {
-    w: 88, h: 24,
+    w: 64, h: 24,
     label: `현금전환주기 ${ascYears[0]}~${ascYears[ascYears.length - 1]} 추이`,
   });
-  html += `<div class="factline${cccSpark ? " sparkrow" : ""}">${cccSpark}` +
-    `<span>· 현금전환주기(CCC = DSO+DIO−DPO): ${cccParts.map(esc).join(" → ")}</span></div>`;
+  // CCC의 증감은 **일수 차이**다 — 회전율의 % 변화와 단위가 다르므로 셀마다
+  // 단위를 달고, 열 이름은 「최근 증감」 하나로 둔다.
+  const cccKnown = cccs.map((c) => c.value).filter((v) => v !== null);
+  trRows.push(["현금전환주기(CCC = DSO+DIO−DPO)", ...cccCells, { raw: cccSpark },
+    { raw: deltaHTML(cccKnown.length >= 2
+        ? cccKnown[cccKnown.length - 1] - cccKnown[cccKnown.length - 2]
+        : null, { unit: "일" }) }]);
+  html += factTableHTML(
+    ["지표", ...ascYears.map((y) => ({ label: String(y), num: true })),
+     "추이", { label: "최근 증감", num: true }],
+    trRows, { deltaNote: true });
   ascYears.forEach((y, i) => {
     const c = cccs[i];
     const formula = `DSO(${c.dso === null ? "―" : c.dso.toFixed(1)})+DIO(${c.dio === null ? "―" : c.dio.toFixed(1)})−DPO(${c.dpo === null ? "―" : c.dpo.toFixed(1)})`;
@@ -6276,19 +6446,24 @@ function relatedPartyCardHTML(rows) {
 }
 
 function earningsShockCardHTML(rows) {
+  // ⚠ 파서는 금액(current·prior·change)도 읽지만 **화면에 올리지 않는다** —
+  //   ES_ROW_RE가 단위를 캡처하지 않고 원문 표의 단위(원·천원·백만원)가 제출사
+  //   마다 다르다. 없던 값을 틀린 단위로 올리는 것이 안 올리는 것보다 나쁘다
+  //   (core의 _earnings_shock_block도 같은 이유로 비율만 낸다).
   const blocks = rows.map((r) => {
-    const cells = r.detail.rows.map((x) => {
-      const pct = x.changePct === null ? "―" : (x.changePct > 0 ? "+" : "") + x.changePct.toFixed(1) + "%";
-      const turn = x.turn ? ` <span class="dim">· ${esc(x.turn)}</span>` : "";
-      return `<div style="margin-left:0.7rem">${esc(x.account)}: <span class="mono">${esc(pct)}</span>${turn}</div>`;
-    }).join("");
-    return `<div style="margin:0.4rem 0 0.55rem">
+    const tbl = factTableHTML(
+      ["계정", { label: "전기 대비 증감", num: true }, "흑자·적자 전환"],
+      r.detail.rows.map((x) => [x.account, { raw: deltaHTML(x.changePct) }, x.turn || "―"]));
+    return `<div style="margin:0.4rem 0 0.9rem">
       <div><span class="mono dim" style="font-size:0.8rem">${esc(fmtDate(r.date))}</span>
         <a href="#" class="patEvLink" data-r="${esc(r.rcept)}">${esc(r.nm)}</a></div>
-      ${cells}
+      ${tbl}
     </div>`;
   }).join("");
-  return `<div class="dim" style="font-size:0.86rem;margin-bottom:0.3rem">제목만으로는 늘었는지 줄었는지 알 수 없어, 원문 표의 증감비율과 흑자적자전환여부를 그대로 옮겼습니다.</div>${blocks}`;
+  // 고지는 공시마다 되풀이하지 않고 카드에 한 번만 — 표가 여럿이라 표마다
+  // 붙이면 같은 문장이 화면을 덮는다.
+  return `<div class="dim" style="font-size:0.86rem;margin-bottom:0.3rem">제목만으로는 늘었는지 줄었는지 알 수 없어, 원문 표의 증감비율과 흑자적자전환여부를 그대로 옮겼습니다.</div>` +
+    `${blocks}<div class="ftnote">${esc(DELTA_NOTE)}</div>`;
 }
 
 // 해당 신호가 관찰된 공시만 골라 최근 N건의 원문을 연다. 신호가 없으면
@@ -6657,24 +6832,37 @@ async function loadFinancialCore(corpCode) {
   const eq  = pickAmt(fs, A["자본총계"], "thstrm_amount");
   const cap = pickAmt(fs, A["자본금"], "thstrm_amount");
   const re  = pickAmt(fs, A["이익잉여금"], "thstrm_amount");
+  // 이익잉여금의 전기 값은 **같은 응답에 이미 들어 있다**(추가 호출 0회) — 옛
+  // 판은 당기만 내서 그 칸만 비교 없이 떠 있었다. 표로 세우면서 채운다.
+  const rePri = pickAmt(fs, A["이익잉여금"], "frmtrm_amount");
 
-  const line = (label, cur, pri) => {
-    if (cur === null) return "";
-    const curTxt = cur < 0 ? `<span class="neg">${fmtKRW(cur)} (적자)</span>` : fmtKRW(cur);
-    const priTxt = pri === null ? "―" : (pri < 0 ? `${fmtKRW(pri)} (적자)` : fmtKRW(pri));
-    let yoy = "";
-    if (pri !== null && pri !== 0) {
-      if (pri < 0 && cur < 0) yoy = Math.abs(cur) < Math.abs(pri) ? "적자 축소" : "적자 확대";
-      else if (pri < 0 && cur >= 0) yoy = "흑자 전환";
-      else if (pri >= 0 && cur < 0) yoy = "적자 전환";
-      else yoy = `전기 대비 ${(((cur - pri) / pri) * 100).toFixed(1)}%`;
-      yoy = ` <span class="dim" style="font-size:0.8rem">(${yoy})</span>`;
-    }
-    return `<div class="factline">· ${label}: 전기 ${priTxt} → 당기 ${curTxt}${yoy}</div>`;
+  // 계정 한 줄 → 표 행. 옛 판은 「전기 A → 당기 B (전기 대비 C%)」 한 줄이라
+  // 자릿수가 세로로 맞지 않아 지표끼리 견줄 수 없었다. 값과 증감 판정은 그대로
+  // 두고 배치만 바꾼다 — negWord는 계정마다 다른 음수 표기(적자/결손)다.
+  const fsRow = (label, cur, pri, negWord) => {
+    if (cur === null) return null;
+    const nw = negWord || "적자";
+    const curCell = cur < 0
+      ? { raw: `<span class="neg">${esc(fmtKRW(cur))} (${esc(nw)})</span>` }
+      : fmtKRW(cur);
+    const priCell = pri === null ? "―" : (pri < 0 ? `${fmtKRW(pri)} (${nw})` : fmtKRW(pri));
+    let delta;
+    if (pri === null || pri === 0) delta = deltaHTML(null);
+    else if (pri < 0 && cur < 0) delta = deltaHTML(null, { text: Math.abs(cur) < Math.abs(pri) ? `${nw} 축소` : `${nw} 확대` });
+    else if (pri < 0 && cur >= 0) delta = deltaHTML(null, { text: "흑자 전환" });
+    else if (pri >= 0 && cur < 0) delta = deltaHTML(null, { text: `${nw} 전환` });
+    else delta = deltaHTML(((cur - pri) / pri) * 100);
+    return [label, priCell, curCell, { raw: delta }];
   };
   let html = `<p class="mm" style="font-size:0.78rem;margin-bottom:0.4rem">${year} 사업연도 · ${div === "CFS" ? "연결" : "별도"} 재무제표</p>`;
-  html += line("매출액", rev[0], rev[1]) + line("영업이익", op[0], op[1]) + line("당기순이익", ni[0], ni[1]);
-  if (re !== null) html += `<div class="factline">· 이익잉여금: ${re < 0 ? `<span class="neg">${fmtKRW(re)} (결손)</span>` : fmtKRW(re)}</div>`;
+  html += factTableHTML(
+    ["계정", { label: "전기", num: true }, { label: "당기", num: true },
+     { label: "전기 대비 증감", num: true }],
+    [fsRow("매출액", rev[0], rev[1]),
+     fsRow("영업이익", op[0], op[1]),
+     fsRow("당기순이익", ni[0], ni[1]),
+     fsRow("이익잉여금", re, rePri, "결손")].filter(Boolean),
+    { deltaNote: true });
 
   const warns = [];
   if (re !== null && re > 0 && op[0] !== null && op[0] < 0) {
@@ -6696,7 +6884,7 @@ async function loadFinancialCore(corpCode) {
   } else if (rev[0] !== null || ni[0] !== null) {
     html += `<p class="dim" style="font-size:0.85rem;margin-top:0.4rem">연속 적자·자본잠식에 해당하는 관찰 없음.</p>`;
   }
-  html += `<div class="slabel" style="margin:14px 0 6px">▍RATIO TREND — 부채비율·유동비율 3기간</div>`;
+  html += `${panelTitleHTML(`▍RATIO TREND — 부채비율·유동비율 3기간`, { style: "margin:14px 0 6px" })}`;
   html += ratioTrendBlock(rows, div);
   html += metricProseHTML("financial");
   html += NOTICE.MCP_MORE_FIN_ANOMALY;
@@ -6743,11 +6931,12 @@ async function loadHoldings(corpCode) {
   if (byRep.size > reps.length) {
     html += `<div class="snote">※ 보고자 ${byRep.size}명 중 보고가 잦은 ${reps.length}명 표시 · ${byRep.size - reps.length}명 생략</div>`;
   }
+  // 보고자별 시계열을 표로 세운다 — 보고자는 그룹 머리(.mzn-grp), 각 보고는
+  // 행이다. ⚠ **일자에 붙은 공시 원문 링크를 잃지 않는다**(그 링크가 이 줄의
+  // 근거다 — test_viewer_sparkline이 유지를 잠근다).
+  const trRows = [];
   for (const [who, pts] of reps) {
     const shown = pts.slice(-10);
-    const series = shown.map((p) =>
-      `<a href="${dartUrl(p.rcept)}" target="_blank" rel="noopener" title="${esc(md(p.d))} 보고" style="color:var(--tx)">` +
-      `${esc(md(p.d))} <b class="mono">${p.rate.toFixed(2)}%</b></a>`).join(`<span class="arrow"> → </span>`);
     const more = pts.length > shown.length
       ? ` <span class="snote">(보고 ${pts.length}건 중 최근 ${shown.length}건 표시)</span>` : "";
     // 스파크라인은 **표시한 구간**(shown)만 그린다 — 숫자와 그림이 다른 구간을
@@ -6756,7 +6945,22 @@ async function loadHoldings(corpCode) {
       label: `${who} 보유비율 추이 — ${shown.length}건 · ` +
              `${Math.min(...shown.map((p) => p.rate)).toFixed(2)}%~${Math.max(...shown.map((p) => p.rate)).toFixed(2)}%`,
     });
-    html += `<div class="factline sparkrow">${spark}<span>· <b>${esc(who)}</b>: ${series}${more}</span></div>`;
+    trRows.push({ group: { raw: `<span class="sparkrow">${spark}<span><b>${esc(who)}</b>${more}</span></span>` } });
+    shown.forEach((p, i) => {
+      // 직전 **표시된** 보고와의 차이다 — 화면에 없는 관측과 견주면 읽는 사람이
+      // 어디서 온 값인지 확인할 수 없다. 첫 줄은 비교 대상이 없어 「―」다.
+      const prev = i > 0 ? shown[i - 1] : null;
+      trRows.push([
+        { raw: `<a href="${dartUrl(p.rcept)}" target="_blank" rel="noopener" title="${esc(md(p.d))} 보고">${esc(md(p.d))}</a>` },
+        p.rate.toFixed(2) + "%",
+        { raw: deltaHTML(prev ? p.rate - prev.rate : null, { unit: "%p", digits: 2 }) },
+      ]);
+    });
+  }
+  if (trRows.length) {
+    html += factTableHTML(
+      ["일자", { label: "보유비율", num: true }, { label: "직전 보고 대비 증감", num: true }],
+      trRows, { deltaNote: true });
   }
 
   // ── 흐름 탐지는 **표시 상한과 무관하게 전체 보고자**를 본다 ──────────
@@ -6860,6 +7064,7 @@ async function loadAuditOpinions(corpCode, finCorePromise) {
   }
   const years = [...byYear.keys()].sort().reverse().slice(0, 3);
   let prevAuditor = null, changed = false, hasBad = false;
+  const auditRows = [];
   // 이 함수는 위에서 정확히 3개 사업연도만 조회하므로 slice(0, 3)이 오늘은
   // 아무것도 버리지 않는다 — 그래도 화면이 「최근 3년만 본다」고 말하지
   // 않으면 그 이전 감사의견이 없는 것으로 읽힌다.
@@ -6871,10 +7076,15 @@ async function loadAuditOpinions(corpCode, finCorePromise) {
     const bad = op && op !== "―" && !op.includes("적정");
     const rejected = op.includes("거절") || op.includes("부적정") || op.includes("한정");
     if (bad || rejected) hasBad = true;
-    html += `<div class="factline">· ${esc(yr)}년: ${rejected || bad ? `<span class="neg">${esc(op)}</span>` : esc(op)} — ${esc(auditor)}</div>`;
+    auditRows.push([String(yr) + "년",
+      rejected || bad ? { raw: `<span class="neg">${esc(op)}</span>` } : op,
+      auditor]);
     if (prevAuditor && auditor !== "―" && prevAuditor !== "―" && auditor !== prevAuditor) changed = true;
     prevAuditor = auditor;
   }
+  // 증감 열이 없다 — 감사의견은 수치가 아니라 판정 문구라 화살표를 붙일 자리가
+  // 없다. 표로 세우는 것은 연도·의견·감사인을 세로로 맞춰 읽기 위해서다.
+  html += factTableHTML(["사업연도", "감사의견", "감사인"], auditRows);
   if (hasBad) html += `<div class="factwarn">⚠️ ${glossStaticHTML(
     `적정 외 감사의견이 관찰됐습니다 — 상장폐지 사유·개선기간과 직결될 수 있습니다. 감사보고서 원문을 확인하세요.`)}</div>`;
   if (changed) html += `<div class="factline dim" style="font-size:0.85rem">· 기간 중 감사인 교체가 관찰됐습니다 (표기 차이일 수 있음 — 원문 확인).</div>`;
@@ -7029,7 +7239,7 @@ async function loadDebtBalance(corpCode) {
 /* ── 대화 안내 ────────────────────────────────── */
 function convoPanel(name) {
   const q = (t) => esc(`"${t}"`);
-  return `<div class="panel amber"><div class="slabel amber">▍GO DEEPER — 이 화면은 입구입니다</div>
+  return `<div class="panel amber">${panelTitleHTML(`▍GO DEEPER — 이 화면은 입구입니다`, { cls: "amber" })}
     <p class="dim">이 뷰어는 공시 제목과 주요 계정 수준의 요약입니다. MCP를 설치해 AI와 대화하면 같은 공시 데이터로 이런 것까지 봅니다:</p>
     <ul class="dim" style="font-size:0.88rem;margin:0.5rem 0 0 1.2rem">
       <li>최대주주 변경 공시 <strong style="color:var(--tx)">원문을 열어</strong> 변경 전후 지분율·인수 자금 출처·특수관계 구성까지 정리</li>
@@ -7165,7 +7375,7 @@ function compareSnapshot(name, items, totalCount) {
 
 function compareTableHTML(snaps, skipped) {
   if (!snaps.length) return "";
-  let html = `<div class="panel"><div class="slabel">▍SIGNAL COMPARE — ${esc(windowLabel())} 기준 · 사실 표기</div>
+  let html = `<div class="panel">${panelTitleHTML(`▍SIGNAL COMPARE — ${windowLabel()} 기준 · 사실 표기`)}
     <table><tr><th>회사</th><th>수집 공시</th><th>관찰 신호</th><th>절차·사후</th><th>정정</th><th>대표 유형</th></tr>` +
     snaps.map((s) => {
       // ⚠ 조회에 실패한 회사를 「0건」으로 그리면 **「신호가 없다」로 읽힌다**.
@@ -7258,7 +7468,7 @@ async function compareActors() {
     .sort((a, b) => b[1].size - a[1].size);
 
   let html = `<div class="panel">
-    <div class="slabel">▍OVERLAP RESULT — ${compareList.map(esc).join(" · ")} · ${ROSTER_YEARS.label}</div>`;
+    ${panelTitleHTML(`▍OVERLAP RESULT — ${compareList.join(" · ")} · ${ROSTER_YEARS.label}`)}`;
   if (overlaps.length) {
     html += `<div class="callout">⚠️ <b>2개사 이상에 임원으로 등장한 인물 ${overlaps.length}명</b>
       — 같은 사람이 여러 회사를 오간 DART 공시 기록이며 판정이 아닙니다.

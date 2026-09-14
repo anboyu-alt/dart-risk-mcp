@@ -64,14 +64,20 @@ def test_값이_없으면_병기하지_않는다():
 
 
 def test_뷰어에도_같은_병기가_있다():
-    i = _HTML.index("const parts = ascYears.map((y, i) => {")
+    # 앵커가 `parts` → `yearCells`로 바뀐 것은 회전율 블록이 한 줄 텍스트에서
+    # 표로 바뀌면서다(2026-09-14). 병기 자체는 그대로 — 분모는 여전히 연도 칸
+    # 안에 조건 없이 붙는다.
+    i = _HTML.index("const yearCells = ascYears.map((y, i) => {")
     body = _HTML[i:i + 700]
     assert 'key === "workingCapital"' in body, "뷰어 키는 camelCase다"
-    assert "운전자본 ${fmtKRW(ms[i].denominator)}" in body
+    assert "운전자본 ${esc(fmtKRW(ms[i].denominator))}" in body
     assert "ms[i].denominator !== null" in body, "분모가 없을 때를 가르지 않는다"
 
 
 def test_뷰어도_임계를_쓰지_않는다():
-    i = _HTML.index("const parts = ascYears.map((y, i) => {")
+    # 앵커가 `parts` → `yearCells`로 바뀐 것은 회전율 블록이 한 줄 텍스트에서
+    # 표로 바뀌면서다(2026-09-14). 병기 자체는 그대로 — 분모는 여전히 연도 칸
+    # 안에 조건 없이 붙는다.
+    i = _HTML.index("const yearCells = ascYears.map((y, i) => {")
     body = _HTML[i:i + 700]
     assert not re.search(r"value\s*[><]=?\s*\d{2,}", body)
