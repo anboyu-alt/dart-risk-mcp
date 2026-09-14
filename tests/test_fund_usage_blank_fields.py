@@ -124,7 +124,10 @@ def test_뷰어_정규화가_core와_같은_값을_낸다():
               if l.startswith("const FUND_BLANK_TOKENS")]
     assert tokens, "뷰어에 미기재 목록이 없다"
     src = tokens[0] + "\n" + _cut("function fundText(")
-    cases = ["-", "", "  -  ", "운영자금", "A-B 사업", "해당사항없음", "–", "—"]
+    # 「해당없음」(사항 없이)은 2026-09-14에 더했다 — 빠져 있어서 뷰어가 그
+    # 값을 「집행 차이 사유 보고 있음」으로 바꿨다(NAVER 실측, 뜻이 정반대).
+    cases = ["-", "", "  -  ", "운영자금", "A-B 사업", "해당사항없음", "–", "—",
+             "해당없음", "해당 없음"]
     js = (src + "\nconst C = " + json.dumps(cases, ensure_ascii=False) +
           ";\nconsole.log(JSON.stringify(C.map(fundText)));")
     tf = tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8")

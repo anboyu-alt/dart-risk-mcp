@@ -5082,10 +5082,25 @@ const FUND_USAGE_ENDPOINTS = ["pssrpCptalUseDtls.json", "prvsrpCptalUseDtls.json
 // 그대로 두면 「집행 차이 사유 보고 있음」이 **없는데 뜬다** — core는 문자열을
 // 그대로 보여줘 사용자가 「-」임을 알 수 있었지만 뷰어는 그것을 **판단 문장**으로
 // 바꾸므로 더 나쁘다. core `_fund_text`와 같은 목록을 쓴다.
-const FUND_BLANK_TOKENS = new Set(["", "-", "–", "—", "해당사항없음", "해당사항 없음"]);
+// ⚠ 「해당없음」(사항 없이)이 빠져 있어 그 값이 아래 truthy 검사를 통과했고
+//   「집행 차이 사유 보고 있음」으로 **뜻이 정반대로** 나왔다(NAVER 실측).
+//   core `_FUND_BLANK_TOKENS`와 같은 집합을 유지한다.
+// ⚠ 한 줄로 유지한다 — test_fund_usage_blank_fields가 이 선언을 `startswith`로
+//   한 줄만 떼어 node에 먹인다(여러 줄로 쪼개면 그 하네스가 깨진다).
+const FUND_BLANK_TOKENS = new Set(["", "-", "–", "—", "해당사항없음", "해당사항 없음", "해당없음", "해당 없음"]);
 function fundText(v) {
   const t = String(v === null || v === undefined ? "" : v).trim();
   return FUND_BLANK_TOKENS.has(t) ? "" : t;
+}
+
+// 계획·실제·차이사유·납입일·금액이 **전부 미기재**인 행. DART가 빈 껍데기로
+// 주는 것이라 화면에 아무것도 말하지 않는데, 옛 뷰어는 그것을 「납입일 미상
+// 납입 · 계획 총 0원」으로 그렸다 — 삼성전자는 **그 한 줄이 패널의 전부**였다
+// (10개사 중 3곳: 삼성전자·NAVER·셀트리온). core `_is_blank_record`와 같은
+// 배제이고, core와 마찬가지로 **목록에서만 빼고 뺀 건수는 사실로 적는다.**
+function isBlankFundRecord(r) {
+  return !(r && (r.plan_useprps || r.real_dtls_cn || r.dffrnc_resn
+    || r.pay_de || r.plan_amount || r.real_dtls_amount));
 }
 
 function normalizeFundUsageItem(item, bsnsYear) {
@@ -5142,8 +5157,16 @@ function fundHintListHTML(entry, hints) {
 function fundChainPanelHTML(records, disclosures) {
   const empty = `<span class="dim" style="font-size:0.88rem">자금사용 내역 기록 없음 (최근 3개 사업연도 · 공모·사모)</span>`;
   if (!Array.isArray(records) || !records.length) return empty;
-  const chain = fundChain(records);
-  if (!chain.length) return empty;
+  // 빈 껍데기 행을 목록에서 뺀다 — 조회된 것은 조회된 것이므로 **뺀 건수는
+  // 밝힌다**(조용한 절단 금지). core `_is_blank_record`와 같은 태도.
+  const blankCount = records.filter(isBlankFundRecord).length;
+  const blankNote = blankCount
+    ? `<div class="snote">※ 계획·집행·납입일이 모두 미기재인 행 ${blankCount}건은 목록에서 뺐습니다 — 조회는 됐고 내용이 비어 있습니다.</div>`
+    : "";
+  const usable = records.filter((r) => !isBlankFundRecord(r));
+  if (!usable.length) return empty + blankNote;
+  const chain = fundChain(usable);
+  if (!chain.length) return empty + blankNote;
   const hints = fundChainDisclosureHints(chain, disclosures, DATA, 90);
   const shown = chain.slice(0, 3);
   const rest = chain.slice(3);
@@ -5153,6 +5176,7 @@ function fundChainPanelHTML(records, disclosures) {
       rest.map((e) => fundEntryCardHTML(e) + fundHintListHTML(e, hints)).join("") + `</details>`;
   }
   html += metricProseHTML("fund_usage");
+  html += blankNote;
   html += `<div class="snote">※ 자금사용 보고서의 계획·집행을 그대로 옮겼습니다. ${NOTICE.NO_JUDGMENT}.</div>`;
   return html;
 }
@@ -7445,7 +7469,13 @@ function compareTableHTML(snaps, skipped) {
       //   않았으면 CUR이 null이라 터진다(실제로 터졌다).
       const hl = s.headline
         ? `${esc(signalLabel(s.headline))} <span class="mono" style="color:var(--dim2)">×${s.typeCount[s.headline]}</span>`
-        : `<span class="dim">관찰 신호 없음</span>`;
+        // ⚠ 「관찰 신호 없음」이 아니다 — headline이 비는 흔한 이유는 관찰
+        //   신호가 **전부 양면적 유형**(AMBIGUOUS_SIGNAL_KEYS)이라 pickHeadline이
+        //   대표로 승격시키지 않는 것이고, 그건 의도다. 옛 문구는 같은 행의
+        //   「관찰 신호 N건」과 정면으로 모순됐다(15개사 중 4곳 — 티쓰리 5건·
+        //   삼성전자 15건·두산 4건·KB금융 5건, 그리고 관찰 0건인 회사는 표본에
+        //   하나도 없었다). 이 칸의 이름이 「대표 유형」이므로 그것만 말한다.
+        : `<span class="dim">대표 유형 없음</span>`;
       return `<tr><td><b>${esc(s.name)}</b></td>` +
         `<td>${s.scanned}${s.truncated ? ` <span class="snote">/ 전체 ${s.total}</span>` : ""}</td>` +
         `<td>${s.observed}건</td><td>${s.procedural}건</td>` +
