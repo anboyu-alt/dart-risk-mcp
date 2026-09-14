@@ -2,13 +2,15 @@
 
 [![PyPI](https://img.shields.io/pypi/v/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![Python](https://img.shields.io/pypi/pyversions/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![License](https://img.shields.io/pypi/l/dart-risk-mcp)](https://pypi.org/project/dart-risk-mcp/) [![Release](https://img.shields.io/github/v/release/anboyu-alt/dart-risk-mcp)](https://github.com/anboyu-alt/dart-risk-mcp/releases) [![Downloads](https://static.pepy.tech/badge/dart-risk-mcp/month)](https://pepy.tech/project/dart-risk-mcp) [![Last commit](https://img.shields.io/github/last-commit/anboyu-alt/dart-risk-mcp)](https://github.com/anboyu-alt/dart-risk-mcp/commits/master)
 
-**공시 기반 불공정거래 위험 모니터링** — 금융감독원 전자공시(DART)에서 위험 신호를 읽어내는 MCP 서버입니다.
+**공시 기반 불공정거래 위험 모니터링 + 공시·재무 탐색** — 금융감독원 전자공시(DART)에서 위험 신호를 읽어내고, 공시 원문·재무제표·감사보고서를 파고드는 MCP 서버입니다.
 
 > 📖 **처음이신가요?** 사전 지식 없이 읽을 수 있는 [프로젝트 소개 페이지](https://anboyu-alt.github.io/dart-risk-mcp/)를 먼저 보세요.
 >
 > 🔎 **설치 없이 맛보기** — [리스크 뷰어](https://dart-risk-mcp.vercel.app): 종목명을 입력하면 본인의 무료 DART 키로 최근 12개월 공시를 실시간 스캔해 신호 타임라인·자본 이벤트 리듬을 시각화합니다(점수 없음, 사실만).
 
 공시는 누구에게나 공개돼 있지만, **한 건씩 따로** 공개됩니다. 불공정거래의 신호는 낱장이 아니라 흐름과 연결에 있습니다 — 12개월 안에 자본을 세 번 주무르는 리듬, 회사마다 이름을 바꾸는 투자조합 뒤의 같은 임원, 조달 명분과 다른 곳으로 흘러간 돈. 이 도구는 Claude 같은 AI가 DART에 직접 접속해 그 흐름을 읽게 해 줍니다.
+
+**그리고 신호를 찾지 않을 때도 씁니다.** 도구 33개 중 위험 분석 전용은 일부이고, 나머지는 조회·확인용입니다 — 공시 원문을 섹션·페이지로 읽고, 주석 본문을 낱말로 검색하며, 재무제표 전체 계정을 **감사보고서 원문의 계정명과 대조**해 냅니다(DART API가 주는 이름은 XBRL 표준 태그라 회사가 쓴 말과 다를 때가 있습니다 — 「이익잉여금」이 원문에는 「결손금」인 식). **비상장 외부감사대상 법인**의 재무제표·주석도 감사보고서 원문에서 읽고, 최대 20개사 × 10개 연도를 나란히 비교합니다. 「이 회사 매출원가가 얼마야?」 같은 평범한 질문에도 답합니다.
 
 ---
 
