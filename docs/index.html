@@ -258,7 +258,7 @@
       <a href="#why">왜 필요한가</a>
       <a href="#what">무엇을 하나</a>
       <a href="#demo">대화 데모</a>
-      <a href="#tools">도구 26개</a>
+      <a href="#tools">도구 33개</a>
       <a href="#cases">실측 사례</a>
       <a href="#start">시작하기</a>
       <a href="#principles">원칙</a>
@@ -281,12 +281,12 @@
     공시 수백 건을 가져와 신호·패턴·행위자를 정리해 줍니다.
   </p>
   <div class="chips">
-    <span class="chip hl">도구 26개</span>
-    <span class="chip hl">위험 신호 37종</span>
-    <span class="chip hl">복합 패턴 9종</span>
+    <span class="chip hl">도구 33개</span>
+    <span class="chip hl">위험 신호 42종</span>
+    <span class="chip hl">복합 패턴 11종</span>
     <span class="chip">점수·등급 없음 — 사실만</span>
     <span class="chip">Python · MIT</span>
-    <span class="chip">실측 검증 6개사 골드 133건</span>
+    <span class="chip">실측 검증 10개사 골드 304건</span>
   </div>
   <div class="cta">
     <a class="btn primary" href="#start">처음이라도 따라 하는 설치 가이드</a>
@@ -387,7 +387,7 @@
       </div>
     </div>
     <p style="font-size:0.86rem">이 도구의 복합 패턴 <code>zombie_ma</code>(무자본 M&A)는 위 신호 조합이
-    실제 공시에서 함께 나타나는지를 봅니다. 같은 방식의 패턴이 9종 등록돼 있습니다.</p>
+    실제 공시에서 함께 나타나는지를 봅니다. 같은 방식의 패턴이 11종 등록돼 있습니다.</p>
   </div>
 </section>
 
@@ -398,14 +398,14 @@
   <div class="grid c2">
     <div class="card">
       <span class="num">A</span>
-      <h3>신호 탐지 — 37종</h3>
+      <h3>신호 탐지 — 42종</h3>
       <p>전환사채·무상감자·최대주주 변경·감사의견 이슈·조회공시·회생절차 등 위험과 상관이
-      높은 공시 유형 37종을 8개 카테고리로 분류해 자동 표시합니다. 금감원·금융위의 공개
+      높은 공시 유형 42종을 8개 카테고리로 분류해 자동 표시합니다. 금감원·금융위의 공개
       적발 사례를 근거로 키워드가 보강돼 있습니다.</p>
     </div>
     <div class="card">
       <span class="num">B</span>
-      <h3>패턴 인식 — 9종</h3>
+      <h3>패턴 인식 — 11종</h3>
       <p>신호 하나가 아니라 <strong>조합</strong>을 봅니다. 무자본 M&A(<code>zombie_ma</code>),
       상장폐지 회피(<code>delisting_evasion</code>), 허위 신사업 주가부양(<code>fake_new_biz</code>),
       자본 이벤트 과다 반복(<code>capital_churn_anomaly</code>) 등 실제 적발 사례에서 추출한
@@ -494,11 +494,19 @@
   </p>
 </section>
 
-<!-- ═══════════ 도구 26개 ═══════════ -->
+<!-- ═══════════ 도구 33개 ═══════════ -->
 <section id="tools">
-  <div class="kicker">26 tools</div>
+  <div class="kicker">33 tools</div>
   <h2>도구는 "질문"으로 찾으세요</h2>
   <p class="lead">도구 이름을 외울 필요 없습니다. AI에게 아래 질문을 그대로 던지면 알맞은 도구가 호출됩니다.</p>
+
+  <div class="card" style="margin:1.2rem 0 0;border-left:3px solid currentColor">
+    <h3 style="margin-top:0">공시 도구를 여러 개 쓰고 있다면</h3>
+    <p style="margin-bottom:0">이 서버의 이름은 <strong><code>dart-risk</code></strong> 입니다.
+    <em>"dart-risk로 셀트리온 봐줘"</em>처럼 앞에 붙이면 이쪽으로 옵니다 —
+    <code>dartrisk</code> · <code>다트리스크</code> · <code>다트 리스크</code> 라고 불러도 같은 곳을 가리킵니다.
+    다른 DART 도구를 밀어내지는 않습니다. 재무제표·원문 조회는 익숙한 도구를 쓰셔도 됩니다.</p>
+  </div>
 
   <div class="toolgroup">
     <h3><span class="q">"이 회사, 괜찮은 거야?"</span> — 종합 진단</h3>
@@ -526,7 +534,7 @@
     <div class="tools">
       <div class="tool"><code>scan_financial_anomaly</code><span class="d">4대 이상 지표 + 재작성 감지 + Beneish 변수 8종 + 업종별 유의 회계정책</span></div>
       <div class="tool"><code>get_financial_summary</code><span class="d">매출·이익·자산·부채 핵심 계정</span></div>
-      <div class="tool"><code>compare_financials</code><span class="d">2~5개 회사 나란히 비교</span></div>
+      <div class="tool"><code>compare_financials</code><span class="d">2~20개 회사 · 연도 구간 비교</span></div>
       <div class="tool"><code>get_audit_opinion_history</code><span class="d">5년 감사의견·감사인 교체·비감사용역 비중·연속 적자</span></div>
       <div class="tool"><code>track_debt_balance</code><span class="d">채무증권 5종 잔액 + 1년 내 만기 비중(차환 압박)</span></div>
     </div>
@@ -569,7 +577,7 @@
   <h2>전부 실제 DART 응답으로 검증된 결과입니다</h2>
   <p class="lead">
     아래는 실제 API 호출에서 나온 출력 그대로입니다(해당 시점 기준).
-    이 프로젝트는 6개사 × 23개 도구의 실측 골드 출력 133건으로 매 변경마다 회귀 검증합니다.
+    이 프로젝트는 10개사 × 31개 도구의 실측 골드 출력 304건으로 매 변경마다 회귀 검증합니다.
   </p>
   <div class="grid c2">
     <div class="card case">
@@ -737,36 +745,12 @@
   </div>
   <div class="faq">
     <h3>Q. 어떤 회사·데이터로 검증됐나요?</h3>
-    <p>대형·중견·소형(유가증권·코스닥) 6개사에 대해 23개 도구를 실제 API로 호출한 골드 출력
-    133건이 저장소에 있으며, 모든 변경은 이 실측 출력과 459개 테스트로 회귀 검증됩니다.
+    <p>대형·중견·소형(유가증권·코스닥) 10개사에 대해 31개 도구를 실제 API로 호출한 골드 출력
+    304건이 저장소에 있으며, 모든 변경은 이 실측 출력과 5,700여 개 테스트로 회귀 검증됩니다.
     라이브로 재현되지 않은 신호는 문서에 정직하게 ⚠ 미검증으로 표기합니다.</p>
   </div>
 </section>
 
-<!-- ═══════════ 다른 MCP ═══════════ -->
-<section id="others">
-  <div class="kicker">Not the only one</div>
-  <h2>공시를 자주 분석한다면 — 이런 MCP도 좋습니다</h2>
-  <p class="lead">이 프로젝트는 <strong>불공정거래 위험 신호</strong>에 특화돼 있습니다. 목적이 다르면 아래가 더 잘 맞을 수 있어요. 모두 훌륭한 오픈소스입니다.</p>
-  <div class="grid c2">
-    <div class="card">
-      <h3><a href="https://github.com/jjlabsio/korea-stock-mcp">korea-stock-mcp</a></h3>
-      <p>DART 공시·재무에 더해 <strong>KRX 주가·거래 데이터</strong>(코스피/코스닥 일별 시세)까지 다룹니다. 공시와 주가를 함께 보고 싶을 때.</p>
-    </div>
-    <div class="card">
-      <h3><a href="https://github.com/2geonhyup/dart-mcp">dart-mcp</a></h3>
-      <p><strong>재무 분석·시각화</strong>에 특화. 사업부별 매출, 차트 시각화, DCF 밸류에이션까지 — 기업 가치를 뜯어볼 때.</p>
-    </div>
-    <div class="card">
-      <h3><a href="https://github.com/chrisryugj/korean-dart-mcp">korean-dart-mcp</a></h3>
-      <p>OpenDART 83개 API를 15개 도구로. <strong>공시 첨부(HWP·PDF 등)를 마크다운으로</strong> 풀어 주고, 버핏식 애널리스트 프레임을 제공합니다.</p>
-    </div>
-    <div class="card">
-      <h3><a href="https://github.com/procpalee/OpenDART-MCP-Server">OpenDART-MCP-Server</a></h3>
-      <p><strong>설치 없이 원격</strong>으로. Vercel에 배포돼 커스텀 커넥터 URL만으로 OpenDART 83개 API를 바로 씁니다.</p>
-    </div>
-  </div>
-</section>
 
 </main>
 
