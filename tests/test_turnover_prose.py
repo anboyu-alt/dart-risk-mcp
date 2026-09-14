@@ -31,7 +31,10 @@ from dart_risk_mcp.core.explain import TURNOVER_PROSE, turnover_prose  # noqa: E
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
 _REQUIRED_KEYS = {"receivable", "inventory", "payable", "working_capital",
                   "asset", "ccc"}
-_PROSE_FIELDS = ("label", "formula", "meaning", "fall", "caveat")
+_PROSE_FIELDS = ("label", "formula", "meaning", "fall", "caveat", "sense")
+# sense(2026-09-14) — meaning/fall/caveat이 이미 하던 말을 기계가 읽을 수 있게
+# 한 낱말로 뽑은 것. 뷰어 증감 화살표 색이 여기에 맞춰진다.
+_SENSE_VALUES = {"up", "down", "none"}
 # v0.8.5 무판정 원칙 — 회전율 해설에서 금지되는 판정 어휘. "나쁨"은 정확히
 # 이 세 글자가 없어야 한다는 뜻이지, "나쁘지"(나쁘/지)까지 막지 않는다 —
 # 두 문자열은 애초에 다르다(부분 문자열 관계가 아니다).
@@ -42,11 +45,11 @@ class TestTurnoverProseContent(unittest.TestCase):
     def test_6항목이_전부_있다(self):
         self.assertEqual(set(TURNOVER_PROSE.keys()), _REQUIRED_KEYS)
 
-    def test_다섯_키가_전부_비어있지_않다(self):
+    def test_여섯_키가_전부_비어있지_않다(self):
         for key, entry in TURNOVER_PROSE.items():
             self.assertEqual(
                 set(entry.keys()), set(_PROSE_FIELDS),
-                f"{key}의 키 구성이 다섯 필드와 다르다: {sorted(entry.keys())}",
+                f"{key}의 키 구성이 여섯 필드와 다르다: {sorted(entry.keys())}",
             )
             for field in _PROSE_FIELDS:
                 value = entry[field]
@@ -213,3 +216,40 @@ def test_뷰어는_여섯_항목을_전부_담는다():
     assert "TURNOVER_PROSE_KEY_MAP" in body or "ccc" in body
     # 값이 있는 지표만 고르는 조건이 뷰어에 들어가면 안 된다
     assert "value !== null" not in body, "뷰어까지 추리면 접힘의 이점이 없다"
+
+
+class TestTurnoverSense(unittest.TestCase):
+    """`sense`는 새 판단이 아니라 meaning/fall/caveat이 이미 하던 말의 요약이다.
+
+    둘이 어긋나면 화면이 **제 해설과 반대 방향을 칠한다** — 뷰어 증감 화살표
+    색이 이 값을 그대로 쓰기 때문이다(2026-09-14). 그래서 값 자체가 아니라
+    해설과의 정합을 잠근다.
+    """
+
+    def test_허용된_값만_쓴다(self):
+        for key, entry in TURNOVER_PROSE.items():
+            self.assertIn(entry["sense"], _SENSE_VALUES, key)
+
+    def test_해석이_갈린다고_적은_지표는_none이다(self):
+        # caveat이 「높다고 좋은 것이 아니다」·「분모가 줄어서 올라갈 수도
+        # 있다」고 적어 둔 둘이다. 여기에 색을 칠하면 화면이 자기모순이 된다.
+        for key in ("payable", "working_capital"):
+            self.assertEqual(
+                TURNOVER_PROSE[key]["sense"], "none",
+                f"{key}의 caveat은 방향이 갈린다고 말하는데 sense가 한쪽을 가리킨다",
+            )
+
+    def test_CCC는_짧아지는_쪽이다(self):
+        self.assertEqual(TURNOVER_PROSE["ccc"]["sense"], "down")
+        self.assertIn("짧아지면", TURNOVER_PROSE["ccc"]["fall"])
+
+    def test_내려가면_곤란하다고_적은_지표는_up이다(self):
+        # fall이 「돈이 안 들어온다」·「안 팔리는 물건이 쌓인다」·「매출이
+        # 따라오지 않았다」로 하락의 곤란함을 적는 셋이다.
+        for key in ("receivable", "inventory", "asset"):
+            self.assertEqual(TURNOVER_PROSE[key]["sense"], "up", key)
+
+    def test_sense는_회사에_대한_평가어를_쓰지_않는다(self):
+        # 방향 이름일 뿐이라는 것 — 「양호」·「위험」 같은 값이 들어오면 실패
+        for key, entry in TURNOVER_PROSE.items():
+            self.assertNotIn(entry["sense"], ("good", "bad", "양호", "위험"), key)

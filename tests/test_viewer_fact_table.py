@@ -102,11 +102,37 @@ def test_방향이_기호와_색으로_함께_나온다():
     up, down, flat = _run([
         "deltaHTML(4.2)", "deltaHTML(-6.6)", "deltaHTML(0)",
     ])
-    assert "▲" in up and "+4.2%" in up and 'class="delta up"' in up
-    assert "▼" in down and "-6.6%" in down and 'class="delta down"' in down
+    assert "▲" in up and "+4.2%" in up and "delta up good" in up
+    assert "▼" in down and "-6.6%" in down and "delta down bad" in down
     # 0은 방향이 없다 — 화살표를 붙이면 없는 움직임을 만든다
     assert "▲" not in flat and "▼" not in flat
     assert 'class="delta flat"' in flat and "0.0%" in flat
+
+
+def test_내려가는_쪽이_개선인_지표는_색이_반대다():
+    """부채비율·CCC — 6개사 실측에서 12건이 정확히 반대로 칠해져 있었다."""
+    down, up = _run([
+        'deltaHTML(-3166.1, { unit: "%p", sense: "down" })',
+        'deltaHTML(12.5, { sense: "down" })',
+    ])
+    assert "▼" in down and "delta down good" in down, "하락인데 개선색이 아니다"
+    assert "▲" in up and "delta up bad" in up
+
+
+def test_방향에_좋고_나쁨이_없으면_색을_쓰지_않는다():
+    """매입채무·운전자본회전율, 내부자 보유비율 — 실측 39건."""
+    for expr in ('deltaHTML(4.2, { sense: "none" })',
+                 'deltaHTML(-4.2, { sense: "none" })'):
+        out = _run([expr])[0]
+        assert "delta" in out and " dir" in out, expr
+        assert "good" not in out and "bad" not in out, f"{expr}: 뜻 없는 색이 붙었다"
+        # 방향 자체는 남는다 — 색만 빼는 것이지 사실을 지우는 게 아니다
+        assert ("▲" in out) or ("▼" in out), expr
+
+
+def test_모르는_sense는_색을_지어내지_않는다():
+    out = _run(['deltaHTML(4.2, { sense: "엉뚱" })'])[0]
+    assert " dir" in out and "good" not in out and "bad" not in out
 
 
 def test_결측은_0이_아니라_대시다():
@@ -166,7 +192,7 @@ def test_셀을_이스케이프한다():
 
 def test_raw_셀은_호출부가_만든_HTML을_그대로_받는다():
     out = _run(['factTableHTML(["a"], [[{ raw: deltaHTML(1.0) }]])'])[0]
-    assert 'class="delta up"' in out and "&lt;span" not in out
+    assert "delta up good" in out and "&lt;span" not in out
 
 
 def test_숫자_열은_우측정렬_클래스를_받는다():
@@ -246,24 +272,35 @@ def test_증감_열_이름이_증감이라고_말한다():
         assert "증감" in h
 
 
-def test_읽는_법이_색의_뜻과_해석의_갈림을_함께_말한다():
+def test_읽는_법이_화살표와_색을_따로_설명한다():
     note = _delta_note()
-    assert "늘었는지 줄었는지" in note, "색이 무엇을 가리키는지 말해야 한다"
-    assert "좋은 신호일 수도" in note and "나쁜 신호일 수도" in note, (
-        "지표마다 증가의 뜻이 다르다는 것이 빠지면 부채비율 ▲초록이 오독된다"
-    )
+    assert "늘었는지 줄었는지" in note, "▲▼가 무엇인지 말해야 한다"
+    assert "개선으로 읽히는" in note, "색이 증감이 아니라 방향의 뜻임을 말해야 한다"
+    assert "색 없이" in note, "색이 빠지는 지표가 있다는 것을 말해야 한다"
     # 회사에 대한 단정은 여전히 금지선이다 — 읽는 법은 지표 해석이지 평가가 아니다
     for banned in ("투자", "위험합니다", "부실합니다", "등급", "점수"):
         assert banned not in note, banned
 
 
-def test_색을_지표별로_뒤집지_않는다():
-    """higherIsWorse로 색을 뒤집으면 화면이 「이 변화는 나쁘다」고 말하게 된다."""
-    i = _HTML.index("function deltaHTML(")
-    body = _cut(_HTML, "function deltaHTML(")
-    assert "higherIsWorse" not in body
-    # 호출부도 마찬가지 — 플래그를 색 인자로 넘기지 않는다
-    assert not re.search(r"deltaHTML\([^)]*higherIsWorse", _HTML[i:])
+def test_방향_판단을_뷰어가_복제하지_않는다():
+    """근거는 core에 있다 — 뷰어가 지표 표를 들고 있으면 core가 바뀔 때 낡는다."""
+    body = _cut(_HTML, "function turnoverSense(")
+    assert "DATA.turnover_prose" in body, "core가 내보낸 sense를 읽지 않는다"
+    assert '"none"' in body, "모르는 키에 기본 방향을 지어내면 안 된다"
+    # 회전율 지표 이름을 뷰어에 나열해 두면 그게 곧 복제다
+    for hardcoded in ("매입채무회전율", "현금전환주기"):
+        assert hardcoded not in body, f"{hardcoded}를 뷰어가 직접 들고 있다"
+
+
+def test_비율_추세는_higherIsWorse를_색조로_잇는다():
+    body = _cut(_HTML, "function ratioTrendLine(")
+    assert 'sense: higherIsWorse ? "down" : "up"' in body
+
+
+def test_내부자_지분은_중립이다():
+    i = _HTML.index("직전 보고 대비 증감")
+    seg = _HTML[max(0, i - 1400):i]
+    assert 'sense: "none"' in seg, "지분 증감에 좋고 나쁨 색이 붙어 있다"
 
 
 def test_스파크라인은_중립_단색_그대로다():
