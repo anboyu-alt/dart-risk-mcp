@@ -899,6 +899,14 @@ document.querySelectorAll("#scr-scan .chip[data-days]").forEach((c) => {
 // 수 있어(비상장·동명 충돌 등) corp_code(c)도 함께 저장해 재클릭 시
 // CORPS 조회 없이도 override로 바로 재스캔할 수 있게 한다.
 const RECENT_MAX = 20;
+// 최근 목록의 신호 수 표기. 옛 저장 항목은 `sig`(한정층 이전 원자료)를 들고
+// 있어 **그 값을 새 라벨로 되살리면 안 된다** — 대시보드와 다른 수가 같은
+// 화면에 섞인다. 모르는 것은 「—」로 적고 다시 스캔하면 채워진다.
+// ⚠ 색을 쓰지 않는다 — 옛 코드는 신호 1건이면 빨강이라 사실상 모든 회사가
+//   붉었다(10개사 실측 10/10). 100%면 정보가 아니라 배경이다.
+function recentObsLabel(x) {
+  return Number.isFinite(x && x.obs) ? String(x.obs) : "—";
+}
 function pushRecent(entry) {
   const list = JSON.parse(localStorage.getItem(LS_RECENT) || "[]")
     .filter((x) => x.n !== entry.n);
@@ -913,7 +921,7 @@ function renderRecent() {
   $("recentRows").innerHTML = list.map((x) =>
     `<div class="feedrow g-recent" data-n="${esc(x.n)}" data-c="${esc(x.c || "")}" data-s="${esc(x.s || "")}">
       <span class="mm">${esc(x.s)}</span><span>${esc(x.n)}</span>
-      <span class="mono" style="font-size:12px;color:${x.sig > 0 ? "var(--red)" : "var(--dim2)"}">신호 ${x.sig} · 정정 ${x.corr}%</span>
+      <span class="mono" style="font-size:12px;color:var(--dim2)">관찰 신호 ${recentObsLabel(x)} · 정정 ${x.corr}%</span>
     </div>`).join("");
   $("recentRows").querySelectorAll(".feedrow").forEach((r) => {
     r.onclick = () => {
@@ -1743,7 +1751,12 @@ function buildResult(name, stockCode, corpCode, items, bgn, end, totalCount) {
           truncated: totalCount > items.length ? totalCount : 0 };
   $("topCompany").textContent = `${name} · ${stockCode}`;
   enableNav();
-  pushRecent({ n: name, s: stockCode, c: corpCode, sig: events.length, corr: amendRate });
+  // ⚠ **관찰 신호 수**를 넘긴다. 옛 코드는 `events.length`(한정층 이전 원자료)라
+  //   같은 회사가 화면마다 다른 수를 말했다 — 삼성전자가 최근 목록 45, 대시보드
+  //   15였다(3배). 한정층은 절차·사후 보고를 신호로 세지 말자고 만든 것인데
+  //   이 자리만 그 앞단에 남아 있었다. 키 이름도 `sig`→`obs`로 바꿔 **옛 저장
+  //   값이 새 라벨로 되살아나지 않게** 한다(renderRecent가 「—」로 적는다).
+  pushRecent({ n: name, s: stockCode, c: corpCode, obs: observedEvents.length, corr: amendRate });
   track("scan", { corp_name: name, stock_code: stockCode });
   // ── 작업2: 딥링크 해시 동기화 — API 키는 절대 포함하지 않는다.
   const scanHash = buildScanHash(stockCode, LOOKBACK_DAYS);
@@ -1992,7 +2005,7 @@ function renderDetail(rcept) {
         ${panelTitleHTML(`▍META`)}
         <div style="display:flex;flex-direction:column;gap:10px;font-size:13px;font-family:var(--mono)">
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">카테고리</span><span>${s0 ? esc(DATA.categories[String(cat)]) : "—"}</span></div>
-          <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">신호 무게</span><span style="color:${isTop ? "var(--red)" : "var(--dim2)"}">${isTop ? "이 기간 대표 유형" : detObs.length ? "감지됨" : procSig ? "절차·사후 보고" : "—"}</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">신호 상태</span><!-- ⚠ 「신호 무게」가 아니다 — 이 칸이 내는 값은 「이 기간 대표 유형」·「감지됨」·「절차·사후 보고」·「—」로 전부 **상태**이고 무게가 아니다. 2026-08-30에 「MAX」→「대표 유형」, TOP WEIGHT→HEADLINE TYPE으로 같은 부류를 고칠 때 이 자리만 남았다. 무점수 원칙(v0.8.5)에서 「무게」는 있지도 않은 점수를 약속하는 말이다. --><span style="color:${isTop ? "var(--red)" : "var(--dim2)"}">${isTop ? "이 기간 대표 유형" : detObs.length ? "감지됨" : procSig ? "절차·사후 보고" : "—"}</span></div>
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">정정 여부</span><span>${r.isAmend ? "정정공시" : "원공시"}</span></div>
           <div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">체인 위치</span><span>${pos >= 0 ? `${pos + 1} / ${CUR.observedEvents.length}` : "—"}</span></div>
           ${r.signals.some((s) => isObservedSig(s) && s.priority === "first") ? `<div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">관찰 순서</span><span><span class="badge-cau">먼저</span> <span class="dim" style="font-size:0.78rem">— 회사의 존속·상장·회계 신뢰성이 걸린 사실 (위험도 등급 아님)</span></span></div>` : ""}
@@ -2255,10 +2268,18 @@ function renderDash() {
            (실물 확인 2026-08-24). 숫자를 바꾸면 아래 '신호 감지'와 분모가
            달라지므로 **라벨을 사실에 맞춘다**. -->
       <div class="kpi"><div class="v">${items.length}</div><div class="k">${CUR.truncated ? "수집 공시" : "전체 공시"}</div></div>
-      <div class="kpi ${observedEvents.length ? "alert" : ""}"><div class="v">${observedEvents.length}</div><div class="k">신호 감지</div></div>
+      <!-- ⚠ 붉은색을 쓰지 않는다 — 옛 조건은 관찰 신호가 0보다 크기만 하면 되어
+           **신호 1건이면 빨강**이었고 10개사 실측에서 10/10(삼성전자·NAVER·
+           KB금융·이마트 포함)이 붉었다. 100%에 붙는 것은 표시가 아니라 배경이고,
+           붉은 큰 숫자는 회사에 대한 판정으로 읽힌다(v0.8.5). 수는 그대로 둔다. -->
+      <div class="kpi"><div class="v">${observedEvents.length}</div><div class="k">신호 감지</div></div>
       <div class="kpi"><div class="v">${capitalEvents.length}</div><div class="k">자본 이벤트</div></div>
       <div class="kpi"><div class="v">${amendCount}</div><div class="k">정정공시</div></div>
-      <div class="kpi ${amendRate >= 20 ? "alert" : ""}"><div class="v">${amendRate}%</div><div class="k">정정 비율</div></div>
+      <!-- ⚠ 문턱은 AMEND_NOTE_FLOOR 하나다. 옛 코드는 여기만 20이라 **같은
+           숫자에 임계가 둘**이었고(빨강 20 · 설명 25), 20~25% 구간은 붉은데
+           이유가 없었다. 20은 유래가 적혀 있지 않고 25는 실측 근거가 있다
+           (488곳 p75 = 23.1%) — 근거 있는 쪽으로 모은다. -->
+      <div class="kpi ${amendRate >= AMEND_NOTE_FLOOR ? "alert" : ""}"><div class="v">${amendRate}%</div><div class="k">정정 비율</div></div>
     </div>
     ${CUR.truncated ? `<p class="dim" style="font-size:0.82rem;margin-top:0.7rem">※ 이 기간 전체 공시 ${CUR.truncated}건 중 최근 ${items.length}건만 수집·분석했습니다(공시 다량 기업). <b>실제로 덮인 구간은 ${coveredFrom(items)}부터</b>이고 그 이전은 빠졌습니다 — 기간을 좁혀 나눠 보거나 MCP 대화를 이용하세요.</p>` : ""}
     ${amendRate >= AMEND_NOTE_FLOOR ? `<div class="dim" style="font-size:0.82rem;margin-top:0.7rem">${whyDetailsHTML(
