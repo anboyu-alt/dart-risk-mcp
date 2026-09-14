@@ -125,6 +125,19 @@
     background: var(--surface); border: 1px solid var(--border);
     border-radius: 14px; padding: 1.35rem 1.4rem;
   }
+  /* 스크린샷 — 이 페이지의 첫 이미지다(그전까지 <img>가 하나도 없었다).
+     카드와 같은 모서리·테두리를 쓰고, 폭은 컨테이너에 맞춘다.
+     ⚠ 뷰어는 어두운 화면이라 밝은 배경 위에서 경계가 사라지지 않게
+        테두리를 남긴다. 다크 모드에서도 같은 변수라 함께 따라간다. */
+  figure.shot { margin: 1.1rem 0 0.4rem; }
+  figure.shot img {
+    display: block; width: 100%; height: auto;
+    border: 1px solid var(--border); border-radius: 14px;
+  }
+  figure.shot figcaption {
+    font-size: 0.88rem; color: var(--text-dim);
+    margin-top: 0.6rem; line-height: 1.7;
+  }
   .card h3 { font-size: 1.02rem; font-weight: 800; margin-bottom: 0.5rem; }
   .card p { font-size: 0.92rem; color: var(--text-dim); }
   .card .num {
@@ -263,6 +276,9 @@
       <a href="#demo">대화 데모</a>
       <a href="#tools">도구 33개</a>
       <a href="#cases">실측 사례</a>
+      <!-- 페이지 안의 소개 절. 아래 🔎 링크는 실제 도구로 바로 가는 CTA라
+           그대로 둔다 — 둘은 목적지가 다르다. -->
+      <a href="#viewer">먼저 써 보기</a>
       <a href="#start">시작하기</a>
       <a href="#principles">원칙</a>
       <a href="#faq">FAQ</a>
@@ -640,6 +656,49 @@
 → DEPI 0.99 · TATA −0.02  (지수·비율 사실 표기)</div>
     </div>
   </div>
+</section>
+
+<!-- ═══════════ 리스크 뷰어 ═══════════ -->
+<section id="viewer">
+  <div class="kicker">Try it first</div>
+  <h2>설치 전에 — 브라우저에서 먼저 써 보세요</h2>
+  <p class="lead">
+    MCP 설치는 터미널이나 Claude Desktop이 필요합니다. <strong>리스크 뷰어</strong>는
+    브라우저만 있으면 되고, <strong>키도 없이 하루 5곳까지</strong> 조회됩니다 —
+    이 도구가 무엇을 보는지 눈으로 확인하고 설치를 결정하세요.
+  </p>
+
+  <figure class="shot">
+    <img src="images/viewer/viewer-dashboard.png" loading="lazy"
+         alt="리스크 뷰어 결과 대시보드 — 상단에 전체 공시·신호 감지·자본 이벤트·정정 비율, 왼쪽에 가장 무거운 신호와 먼저 볼 공시, 오른쪽에 카테고리 분포와 신호 체인">
+    <figcaption>
+      종목명을 넣으면 나오는 첫 화면. 왼쪽은 이 기간 <strong>가장 무거운 신호</strong>와
+      「먼저 볼 공시」, 오른쪽은 신호가 어느 유형에 몰렸는지와 시간순 연결입니다.
+    </figcaption>
+  </figure>
+
+  <figure class="shot">
+    <img src="images/viewer/viewer-tables.png" loading="lazy"
+         alt="리스크 뷰어 재무 패널 — 계정별 전기·당기·증감 표, 부채비율·유동비율 3기간 추이, 회전율 5종과 현금전환주기">
+    <figcaption>
+      같은 화면을 내려가면 나오는 재무 패널. 같은 ▼라도 <strong>부채비율은 초록</strong>
+      (내려가는 쪽이 통상 개선), <strong>유동비율은 빨강</strong>이고, 방향에 좋고 나쁨이
+      없는 <strong>매입채무회전율은 색이 없습니다</strong>. 값이 없는 칸은 비워 두지 않고
+      <code>―</code>로 적습니다.
+    </figcaption>
+  </figure>
+
+  <p style="font-size:0.95rem;color:var(--text-dim);margin:1rem 0 0;">
+    화면은 다섯입니다 — 스캔 입력 · 공시 피드 · 공시 상세 · 결과 대시보드 ·
+    <strong>임원 겸직 비교</strong>(2~5개사의 임원 명단을 다년으로 겹쳐 공통 인물을 찾습니다).
+    뷰어도 <strong>점수·등급을 매기지 않고</strong> 모든 행에서 DART 원문으로 바로 갑니다.
+  </p>
+  <p style="font-size:0.95rem;color:var(--text-dim);margin:0.5rem 0 1rem;">
+    다만 뷰어는 <strong>웹 축약판</strong>입니다 — 다년 조회·비상장 감사보고서·주석 낱말
+    검색·원문 계정명 대조 같은 것은 아래 도구 33개에 있습니다. 뷰어에서 흥미로운 회사를
+    찾고, 깊게 파는 것은 MCP로 — 그 순서를 권합니다.
+  </p>
+  <a class="btn" href="https://dart-risk-mcp.vercel.app">🔎 지금 열어 보기 — 리스크 뷰어</a>
 </section>
 
 <!-- ═══════════ 시작하기 ═══════════ -->
