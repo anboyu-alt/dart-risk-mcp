@@ -52,7 +52,9 @@ _DEEP_IDS = [
 
 # 펼칠 때만 받는 블록 — 스켈레톤에 스피너가 없는 것이 **맞다**(아직 아무것도
 # 조회하지 않았으므로). 대신 무엇을 여는 것인지 접힌 상태에서 알 수 있어야 한다.
-_LAZY_IDS = ["debtCore", "auditSvcCore"]
+# marketCore(KRX 시세)는 2026-09-23에 합류했다 — 사용자 본인 KRX 키가
+# 있어야만 동작하고 창마다 수십 콜이 드는 별도 API라 같은 관례를 따른다.
+_LAZY_IDS = ["debtCore", "auditSvcCore", "marketCore"]
 
 
 def _render_dash() -> str:
@@ -171,7 +173,7 @@ def test_지연_로드_블록은_무엇을_여는지_밝힌다(cid):
     )
 
 
-@pytest.mark.parametrize("fn", ["loadDebtBalance", "loadAuditServices"])
+@pytest.mark.parametrize("fn", ["loadDebtBalance", "loadAuditServices", "loadMarketReaction"])
 def test_지연_로드가_한_번만_받는다(fn):
     """<details>는 열고 닫을 때마다 toggle이 난다 — 매번 다시 쏘면 안 된다."""
     i = _SRC.find(f"async function {fn}(")

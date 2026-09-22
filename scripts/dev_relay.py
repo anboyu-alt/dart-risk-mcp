@@ -19,6 +19,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qsl, urlencode, urlsplit
@@ -26,6 +27,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 import requests
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from dart_risk_mcp.core.krx_client import KRX_API_IDS, KRX_BASE, _normalize_row  # noqa: E402
 from tool_server.corp import handle_corp  # noqa: E402
 from tool_server.doc import handle_doc  # noqa: E402
 
@@ -45,6 +47,12 @@ ALLOWED_ENDPOINTS = {"list.json", "company.json",
                      "accnutAdtorNonAdtServcCnclsSttus.json"}
 DART_BASE = "https://opendart.fss.or.kr/api/"
 TOOL_DIR = os.path.join(os.path.dirname(__file__), "..", "docs", "tool")
+
+# core dart_risk_mcp/core/krx_client.py의 KRX_API_IDS.values()와 같아야 한다
+# (tests/test_viewer_krx_relay.py가 대조).
+_KRX_ALLOWED_APIS = set(KRX_API_IDS.values())
+_KRX_BASDD_RE = re.compile(r"\d{8}")
+_KRX_ISU_RE = re.compile(r"\d{6}")
 
 
 def _env_key() -> str:
@@ -69,6 +77,59 @@ def _with_key(query: str) -> str:
     return urlencode(pairs)
 
 
+def _krx_relay(query: dict, key: str) -> "tuple[int, dict]":
+    """GET /api/krx 몸통 — `api/krx.js`·`relay/worker.js`와 같은 계약.
+
+    사용자 본인 KRX 키 전용. 서버 키 폴백·캐시·쿼터가 없다(약관 제11조 ②).
+    행 정규화는 core `krx_client._normalize_row`/`_to_number`를 그대로
+    재사용한다(JS 릴레이 둘은 같은 규칙을 각자 옮겨 적었다 — 언어가 달라
+    import를 공유할 수 없다).
+    """
+    key = (key or "").strip()
+    if not key:
+        return 400, {"ok": False, "error": "missing_key"}
+    api = query.get("api", "")
+    bas_dd = query.get("basDd", "")
+    isu = query.get("isu", "")
+    if (
+        api not in _KRX_ALLOWED_APIS
+        or not _KRX_BASDD_RE.fullmatch(bas_dd or "")
+        or not _KRX_ISU_RE.fullmatch(isu or "")
+    ):
+        return 400, {"ok": False, "error": "bad_params"}
+
+    try:
+        resp = requests.get(
+            f"{KRX_BASE}/{api}",
+            params={"basDd": bas_dd},
+            headers={"AUTH_KEY": key},
+            timeout=15,
+        )
+    except requests.RequestException:
+        return 502, {"ok": False, "error": "upstream"}
+
+    if resp.status_code == 401:
+        return 401, {"ok": False, "error": "unauthorized"}
+    if resp.status_code != 200:
+        return 502, {"ok": False, "error": "upstream"}
+
+    try:
+        data = resp.json()
+    except ValueError:
+        return 502, {"ok": False, "error": "upstream"}
+
+    out_block = data.get("OutBlock_1") if isinstance(data, dict) else None
+    if not isinstance(out_block, list):
+        return 502, {"ok": False, "error": "upstream"}
+    if not out_block:
+        return 200, {"ok": True, "found": False, "empty": True}
+
+    row = next((r for r in out_block if str(r.get("ISU_CD")) == isu), None)
+    if row is None:
+        return 200, {"ok": True, "found": False, "empty": False}
+    return 200, {"ok": True, "found": True, "row": _normalize_row(bas_dd, row)}
+
+
 class RelayHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=os.path.abspath(TOOL_DIR), **kwargs)
@@ -80,10 +141,11 @@ class RelayHandler(SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         super().end_headers()
 
-    def do_OPTIONS(self):  # X-DART-Key 커스텀 헤더 preflight (api/doc.py와 동일 계약)
+    def do_OPTIONS(self):  # X-DART-Key·X-KRX-Key 커스텀 헤더 preflight
         self.send_response(204)
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-DART-Key")
+        self.send_header("Access-Control-Allow-Headers",
+                         "Content-Type, X-DART-Key, X-KRX-Key")
         self.end_headers()
 
     def do_POST(self):
@@ -151,6 +213,19 @@ class RelayHandler(SimpleHTTPRequestHandler):
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")  # 로컬은 캐시 불필요
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+        if parts.path == "/api/krx":
+            # 사용자 본인 KRX 키 전용 — 환경변수 폴백 없음(약관 제11조 ②,
+            # DART 경로의 `_with_key`와 다른 지점).
+            query = dict(parse_qsl(parts.query))
+            key = (self.headers.get("X-KRX-Key") or "").strip()
+            status, body = _krx_relay(query, key)
+            payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(payload)
             return
