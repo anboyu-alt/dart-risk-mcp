@@ -2,16 +2,21 @@
 `METRIC_PROSE`) 검증.
 
 `tests/test_turnover_prose.py`(`TURNOVER_PROSE`)를 본보기로 삼는다 — 같은
-필드 계약(label/formula(선택)/meaning/fall(선택)/caveat), 같은 무판정
-원칙, 같은 export 배선 검사 구조다. 뷰어의 회전율 패널만 「지표 읽는 법」
-접힌 층을 갖고 있었는데, 메자닌·희석·재무·자금사용·소유보고·감사 패널의
+필드 계약(label/formula(선택)/meaning/fall(선택)/sense(선택)/caveat), 같은
+무판정 원칙, 같은 export 배선 검사 구조다. 뷰어의 회전율 패널만 「지표 읽는
+법」 접힌 층을 갖고 있었는데, 메자닌·희석·재무·자금사용·소유보고·감사 패널의
 수치에는 대응물이 없었다 — 이 파일이 그 데이터·export·테스트를 고정한다.
 뷰어 렌더 배선은 다음 과제의 몫이다(④가 그 경계를 고정한다).
 
-  ① 콘텐츠 완결성 — 패널 7개(mezzanine/dilution/financial/fund_usage/
-     insider/audit/overview) 키 집합이 브리프의 목록과 정확히 같다.
-     entry마다 label·meaning·caveat 필수, formula·fall은 선택, 그 외 키
-     없음. 모든 값은 비어 있지 않은 문자열. 문장은
+2026-09-22: `market`(공시 전후 시장 반응, KRX 시세·KIND 시장경보) 패널을
+더했다 — 5항목 전부 `sense: "none"`(등락·배수·회전율·시총 어느 쪽도 방향에
+좋고 나쁨이 없다). `sense`는 `TURNOVER_PROSE`가 먼저 쓰던 필드를 이 사전의
+계약으로 확장한 것이다.
+
+  ① 콘텐츠 완결성 — 패널 8개(mezzanine/dilution/financial/fund_usage/
+     insider/audit/overview/market) 키 집합이 브리프의 목록과 정확히 같다.
+     entry마다 label·meaning·caveat 필수, formula·fall·sense는 선택, 그 외
+     키 없음. 모든 값은 비어 있지 않은 문자열. 문장은
      `(?<=[다요])\\.` 분할 기준으로 60자 이하.
   ② v0.8.5 무판정 원칙 — 판정 어휘가 없고(hygiene 패턴·등급 이모지 부재
      포함), `tests/test_severity_token_leak.py`의 파라미터에도 등록됐다.
@@ -57,11 +62,18 @@ _REQUIRED_PANEL_KEYS: dict[str, set[str]] = {
     "insider": {"holding_series", "short_accumulation", "delta_pp"},
     "audit": {"opinion", "auditor_change", "mgmt_issue"},
     "overview": {"amend_rate", "tiers"},
+    "market": {
+        "d0_change", "pre_post_return", "volume_ratio", "turnover", "mktcap",
+    },
 }
 
 _REQUIRED_FIELDS = {"label", "meaning", "caveat"}
-_OPTIONAL_FIELDS = {"formula", "fall"}
+_OPTIONAL_FIELDS = {"formula", "fall", "sense"}
 _ALL_FIELDS = _REQUIRED_FIELDS | _OPTIONAL_FIELDS
+
+# `TURNOVER_PROSE`와 같은 계약 — 있으면 이 값 중 하나여야 한다("market"
+# 패널 전부가 `"none"`).
+_VALID_SENSE_VALUES = {"up", "down", "none"}
 
 # v0.8.5 무판정 원칙 — GLOSSARY·TURNOVER_PROSE와 같은 금지 낱말 목록.
 _BANNED_VERDICT_WORDS = (
@@ -78,7 +90,7 @@ def _sentences(text: str) -> list[str]:
 
 
 class TestMetricProseContent(unittest.TestCase):
-    def test_패널_7개가_정확히_있다(self):
+    def test_패널_8개가_정확히_있다(self):
         self.assertEqual(set(METRIC_PROSE.keys()), set(_REQUIRED_PANEL_KEYS))
 
     def test_패널별_키_집합이_브리프_목록과_정확히_같다(self):
@@ -139,6 +151,7 @@ class TestMetricProseContent(unittest.TestCase):
             "insider": {"short_accumulation"},
             "audit": set(),
             "overview": {"amend_rate"},
+            "market": {"pre_post_return", "volume_ratio", "turnover"},
         }
         for panel, keys in has_formula.items():
             for key in keys:
@@ -151,6 +164,24 @@ class TestMetricProseContent(unittest.TestCase):
                     "formula", METRIC_PROSE[panel][key],
                     f"{panel}.{key}에는 formula가 없어야 한다(브리프: 없음)",
                 )
+
+    def test_sense가_있으면_유효한_값이다(self):
+        """`TURNOVER_PROSE.sense`와 같은 계약 — `up`/`down`/`none` 중 하나."""
+        for panel, entries in METRIC_PROSE.items():
+            for key, entry in entries.items():
+                if "sense" in entry:
+                    self.assertIn(
+                        entry["sense"], _VALID_SENSE_VALUES,
+                        f"{panel}.{key}.sense가 유효하지 않다: {entry['sense']!r}",
+                    )
+
+    def test_market_패널은_전부_sense_none이다(self):
+        """등락·배수·회전율·시총 어느 쪽도 방향에 좋고 나쁨이 없다(v0.8.5)."""
+        for key, entry in METRIC_PROSE["market"].items():
+            self.assertEqual(
+                entry.get("sense"), "none",
+                f"market.{key}.sense는 'none'이어야 한다: {entry.get('sense')!r}",
+            )
 
 
 class TestNoVerdictVocabulary(unittest.TestCase):

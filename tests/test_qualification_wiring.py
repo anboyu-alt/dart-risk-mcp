@@ -220,8 +220,9 @@ def test_atlas_like_set_has_headline():
 def test_server_source_wires_observed_events():
     src = _SERVER_PY.read_text(encoding="utf-8")
 
-    # 두 도구 모두 qualify_signals로 신호를 한정한다.
-    assert src.count("qualify_signals(matched, parsed, d)") == 2
+    # 세 도구 모두 qualify_signals로 신호를 한정한다(analyze_company_risk·
+    # build_event_timeline·2026-09-22 track_market_reaction).
+    assert src.count("qualify_signals(matched, parsed, d)") == 3
 
     # analyze_company_risk: observed/procedural 분리가 존재하고, 집계·헤드라인·
     # 절차 섹션이 signal_events가 아니라 observed_events/procedural_events를 쓴다.

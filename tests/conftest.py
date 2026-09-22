@@ -1,4 +1,5 @@
 """스위트 공통 가드 둘 (2026-09-07): ① 가짜 키 DART 호출 ② 지우지 않은 mkdtemp.
+2026-09-22에 KRX·KIND 호스트 가드를 더했다(아래 「KRX·KIND 가드」 참고).
 
 ②는 파일 말미 「mkdtemp 가드」 참고. 아래는 ①.
 
@@ -29,12 +30,24 @@ fetcher 쪽 동작은 실제 거절과 같으므로 도구 출력은 변하지 �
 monkeypatch)`를 부른다. 도구가 새 fetcher를 부르게 되면 `STRUCTURED_FETCH_STUBS`에
 **빈 성공 응답**을 하나 더 적는다(반환 모양이 fetcher마다 다르다 — 리스트로
 뭉뚱그리면 도구가 TypeError로 죽는다).
+
+## KRX·KIND 가드 (2026-09-22)
+
+`track_market_reaction`이 KRX Open API(사용자 키)·KIND 웹(키 개념 없음)을
+새로 부른다. 같은 이유로 같은 자리에 가드를 더했다 — KRX 호스트는 헤더
+`AUTH_KEY`가 실제 env `KRX_API_KEY`와 다르면(키 없는 환경에서는 전부) 401 JSON
+가짜 응답을 준다. KIND 호스트는 애초에 키 개념이 없어 **무조건** 빈 결과
+픽스처를 주지만, 이 가드를 통과했다는 사실 자체를 리크로 기록한다 —
+`allow_kind` 픽스처를 쓴 테스트만 그 기록을 지나친다(kind_client 자체를
+단위 테스트하는 파일처럼 `requests.post`를 직접 patch하는 테스트는 이 가드에
+닿지 않는다).
 """
 
 from __future__ import annotations
 
 import json
 import os
+import pathlib
 import tempfile
 from urllib.parse import parse_qs, urlsplit
 
@@ -43,11 +56,16 @@ import requests
 
 import dart_risk_mcp.server as srv
 from dart_risk_mcp.core.dart_client import DART_BASE, FetchList
+from dart_risk_mcp.core.krx_client import KRX_BASE
+from dart_risk_mcp.core.kind_client import KIND_ALERT_URL
 
 # 호스트는 코드의 상수에서 읽는다 — 손으로 적으면 틀린다(첫 판이 fss를 fsc로
 # 적어 가드가 아무것도 못 잡았다. `opendart.fss.or.kr`이 맞다).
 _DART_HOST = urlsplit(DART_BASE).netloc
 _REAL_KEY = os.environ.get("DART_API_KEY", "")
+_KRX_HOST = urlsplit(KRX_BASE).netloc
+_KIND_HOST = urlsplit(KIND_ALERT_URL).netloc
+_REAL_KRX_KEY = os.environ.get("KRX_API_KEY", "")
 
 
 # ---------------------------------------------------------------- 스텁 묶음
@@ -60,6 +78,21 @@ def _empty_debt_balance(*a, **k):
 
 def _empty_mezzanine(*a, **k):
     return {"rows": [], "failed_kinds": [], "fetch_failed": False}
+
+
+def _empty_price_series(*a, **k):
+    # krx_client.fetch_price_series의 빈 성공 응답과 같은 키.
+    return {"rows": [], "days_requested": 0, "days_fetched": 0, "days_cached": 0,
+            "days_uncovered": [], "quota_hit": False, "fetch_failed": False,
+            "api_id": "stk_bydd_trd"}
+
+
+def _empty_market_alerts(*a, **k):
+    # kind_client.fetch_market_alerts의 빈 성공 응답과 같은 키.
+    return {"alerts": [], "by_kind": {"caution": 0, "warning": 0, "risk": 0},
+            "clamped": False, "clamp_start": None, "failed_kinds": [],
+            "parse_failed": False, "fetch_failed": False,
+            "source_url": KIND_ALERT_URL}
 
 
 # 도구가 공시 목록 외에 따로 부르는 구조화 fetcher — **빈 성공 응답**.
@@ -78,6 +111,8 @@ STRUCTURED_FETCH_STUBS = {
     "fetch_affiliate_investments": lambda *a, **k: [],
     "fetch_document_text": lambda *a, **k: "",
     "extract_cb_investors": lambda *a, **k: [],
+    "fetch_price_series": _empty_price_series,
+    "fetch_market_alerts": _empty_market_alerts,
 }
 
 
@@ -92,6 +127,22 @@ def stub_structured_fetchers(monkeypatch) -> None:
 def no_structured_dart(monkeypatch):
     """공시 목록만 mock하는 도구 테스트에 붙인다 — 나머지 fetcher가 DART로 새지 않게."""
     stub_structured_fetchers(monkeypatch)
+
+
+_ALLOW_KIND_KEY = pytest.StashKey[bool]()
+
+
+@pytest.fixture
+def allow_kind(request):
+    """이 테스트 안에서는 KIND 호스트로의 요청을 leak으로 세지 않는다.
+
+    KIND는 키 개념이 없어 가드가 **무조건** 빈 결과 픽스처를 준다 — 그
+    사실 자체(=진짜 웹으로 나가려 했다는 사실)는 여전히 기록되고, 이
+    픽스처를 쓴 테스트만 그 기록을 지나친다. `kind_client.requests.post`를
+    직접 patch하는 단위 테스트(`test_kind_client.py`)는 이 가드에 닿지
+    않으므로 이 픽스처가 필요 없다.
+    """
+    request.node.stash[_ALLOW_KIND_KEY] = True
 
 
 # ---------------------------------------------------------------- 가드
@@ -111,6 +162,37 @@ def _fake_dart_rejection(url: str) -> requests.Response:
     return r
 
 
+def _fake_krx_rejection(url: str) -> requests.Response:
+    """KRX가 인증되지 않은 키에 주는 응답 모양 — 스펙 문서의 실측 그대로:
+    HTTP 401 · `{"respMsg":"Unauthorized API Call","respCode":"401"}`."""
+    r = requests.Response()
+    r.status_code = 401
+    r.url = url
+    r.headers["Content-Type"] = "application/json;charset=UTF-8"
+    r._content = json.dumps(
+        {"respMsg": "Unauthorized API Call", "respCode": "401"},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    r.encoding = "utf-8"
+    return r
+
+
+_KIND_EMPTY_HTML = (
+    pathlib.Path(__file__).parent / "fixtures" / "kind" / "risk_A005930_samsung_empty.html"
+).read_text(encoding="utf-8")
+
+
+def _fake_kind_empty(url: str) -> requests.Response:
+    """KIND는 키 개념이 없다 — 무조건 「조회된 결과값이 없습니다」 픽스처를 준다."""
+    r = requests.Response()
+    r.status_code = 200
+    r.url = url
+    r.headers["Content-Type"] = "text/html;charset=UTF-8"
+    r._content = _KIND_EMPTY_HTML.encode("utf-8")
+    r.encoding = "utf-8"
+    return r
+
+
 def _key_of(url: str, kwargs: dict) -> str:
     params = kwargs.get("params") or {}
     if isinstance(params, dict) and params.get("crtfc_key"):
@@ -118,17 +200,35 @@ def _key_of(url: str, kwargs: dict) -> str:
     return parse_qs(urlsplit(url).query).get("crtfc_key", [""])[0]
 
 
+def _krx_auth_key_of(kwargs: dict) -> str:
+    headers = kwargs.get("headers") or {}
+    return str(headers.get("AUTH_KEY", "")) if isinstance(headers, dict) else ""
+
+
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_call(item):
     leaks: list[str] = []
+    allow_kind_leak = item.stash.get(_ALLOW_KIND_KEY, False)
     real_request = requests.Session.request
 
     def guarded(self, method, url, *args, **kwargs):
-        if _DART_HOST in urlsplit(url).netloc:
+        netloc = urlsplit(url).netloc
+        if _DART_HOST in netloc:
             key = _key_of(url, kwargs)
             if not _REAL_KEY or key != _REAL_KEY:
-                leaks.append(urlsplit(url).path.rsplit("/", 1)[-1])
+                leaks.append(f"DART:{urlsplit(url).path.rsplit('/', 1)[-1]}")
                 return _fake_dart_rejection(url)
+            return real_request(self, method, url, *args, **kwargs)
+        if _KRX_HOST in netloc:
+            auth = _krx_auth_key_of(kwargs)
+            if not _REAL_KRX_KEY or auth != _REAL_KRX_KEY:
+                leaks.append("KRX:" + urlsplit(url).path.rsplit("/", 1)[-1])
+                return _fake_krx_rejection(url)
+            return real_request(self, method, url, *args, **kwargs)
+        if _KIND_HOST in netloc:
+            if not allow_kind_leak:
+                leaks.append("KIND:investattentwarnrisky")
+            return _fake_kind_empty(url)
         return real_request(self, method, url, *args, **kwargs)
 
     requests.Session.request = guarded
@@ -142,11 +242,12 @@ def pytest_runtest_call(item):
 
         summary = ", ".join(f"{ep}×{n}" for ep, n in Counter(leaks).most_common())
         pytest.fail(
-            "가짜 키로 DART를 실제 호출했다 — mock이 빠진 fetcher가 있다.\n"
+            "가짜 키로 DART/KRX/KIND를 실제 호출했다 — mock이 빠진 fetcher가 있다.\n"
             f"  엔드포인트: {summary}\n"
             "  고치는 법: @pytest.mark.usefixtures(\"no_structured_dart\") 또는 "
             "stub_structured_fetchers(monkeypatch). 새 fetcher면 "
-            "tests/conftest.py의 STRUCTURED_FETCH_STUBS에 빈 성공 응답을 추가.",
+            "tests/conftest.py의 STRUCTURED_FETCH_STUBS에 빈 성공 응답을 추가. "
+            "KIND 호출을 의도한 테스트라면 allow_kind 픽스처를 쓴다.",
             pytrace=False,
         )
     return result

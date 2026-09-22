@@ -53,6 +53,9 @@ _STRING_SLICES = {
     "_po",
     # 상대방 주요사업 문구 — 한 줄에 넣으려 줄이는 것이다.
     "_biz",
+    # 접수번호 앞 8자리(=접수일) — `track_market_reaction`이
+    # `rcept_no[:8]`로 YYYYMMDD를 뗀다. `_d8`과 같은 이유로 목록 상한이 아니다.
+    "rcept_no",
 }
 # 검사 대상 밖 — 근거를 반드시 남긴다.
 _ALLOW = {

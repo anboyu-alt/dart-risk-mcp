@@ -51,6 +51,12 @@ _CONTRACT = {
     # 갈라 따로 다룬다. 되사기·소각은 **강등이 아니라 방향 안내**라 tier가
     # observed이므로 이 필터에 걸리지 않는다(그게 이 수정이 안전한 이유다).
     "track_capital_structure": ("tier",),
+    # 2026-09-22 신설. `tier`·`label`만 쓴다 — `q.tier != TIER_OBSERVED`로
+    # 강등된 신호를 통째로 거르므로 강등 사유(`note`·`reason`)를 화면에
+    # 낼 일이 없다(신호·패턴 입력으로도 쓰지 않는 사실 표기 도구라
+    # `_supports_pattern` 방향 필터도 필요 없다). `label`은 표의 「신호」
+    # 열에 그대로 찍힌다.
+    "track_market_reaction": ("tier", "label"),
 }
 
 

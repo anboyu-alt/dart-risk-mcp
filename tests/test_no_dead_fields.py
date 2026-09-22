@@ -38,8 +38,15 @@ _ROOT = pathlib.Path(__file__).resolve().parents[1]
 # 2026-09-11: `core/notes.py`도 같은 이유로 넣는다 — `outline_note_tables`가
 # **만드는** 키(note_no·tables_total·unit_as_reported 등)를 server.py가 읽는
 # 것이 「죽은 필드」로 신고됐다. `_ACCEPTED`로 우회하면 안 된다.
+# 2026-09-22: 같은 이유로 `core/krx_client.py`·`core/kind_client.py`·
+# `core/market_context.py`를 넣는다 — `event_window_facts`·`window_overview`·
+# `fetch_price_series`·`fetch_market_alerts`가 만드는 키(d0_fluc_rt·
+# turnover_pre_pct·days_uncovered·clamp_start 등)는 DART 응답 필드가 아니라
+# 이 세 모듈이 만드는 값이다. `_ACCEPTED`로 우회하면 안 된다.
 _FILES = ["dart_risk_mcp/server.py", "dart_risk_mcp/core/dart_client.py",
-          "dart_risk_mcp/core/audit_report.py", "dart_risk_mcp/core/notes.py"]
+          "dart_risk_mcp/core/audit_report.py", "dart_risk_mcp/core/notes.py",
+          "dart_risk_mcp/core/krx_client.py", "dart_risk_mcp/core/kind_client.py",
+          "dart_risk_mcp/core/market_context.py"]
 _KEYS = json.loads((_ROOT / "tests" / "fixtures" / "api" / "response_keys.json")
                    .read_text(encoding="utf-8"))
 _API = {k for v in _KEYS["endpoints"].values() for k in v}

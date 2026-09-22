@@ -17,10 +17,11 @@ HTML 파싱은 regex + 문자열 처리로 한다.
 from __future__ import annotations
 
 import re
-import time
 from datetime import datetime, timedelta
 
 import requests
+
+from .dart_client import _cache_get, _cache_set
 
 KIND_ALERT_URL = "https://kind.krx.co.kr/investwarn/investattentwarnrisky.do"
 
@@ -60,29 +61,11 @@ _ALT_ATTR_RE = re.compile(r"alt='([^']+)'")
 _DATE_DASH_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 _EMPTY_MARK = "조회된 결과값이 없습니다"
 
-# 10분 메모리 캐시 — dart_client._cache_get/_cache_set과 같은 관례
-# (동시 작업 중인 다른 파일과의 결합을 피하려고 이 모듈 안에 자체 복제한다).
+# 10분 메모리 캐시 — dart_client._cache_get/_cache_set을 그대로 재사용한다
+# (동일 캐시 형태 `{key: (timestamp, value)}`를 자체 복제하지 않는다).
 _alert_cache: dict[tuple, tuple[float, dict]] = {}
 _ALERT_CACHE_MAX = 50
 _ALERT_CACHE_TTL = 600
-
-
-def _cache_get(cache: dict, key, ttl: int):
-    item = cache.get(key)
-    if item is None:
-        return None
-    ts, val = item
-    if time.time() - ts > ttl:
-        cache.pop(key, None)
-        return None
-    return val
-
-
-def _cache_set(cache: dict, key, val, limit: int) -> None:
-    if len(cache) >= limit and key not in cache:
-        oldest_key = min(cache.items(), key=lambda kv: kv[1][0])[0]
-        cache.pop(oldest_key, None)
-    cache[key] = (time.time(), val)
 
 
 def _strip_tags(html_fragment: str) -> str:
