@@ -1906,6 +1906,24 @@ def _date8_add(date8: str, days: int) -> str:
         return date8
 
 
+def _non_target_market_tail(corp_cls) -> str:
+    """비대상 시장 안내의 꼬리 — 법인구분마다 뜻이 다르다.
+
+    N(코넥스)은 별도 API를 신청하면 볼 수 있는 시장이지만, E(기타법인)는 시장이
+    없는 것이다 — 상장폐지·스팩 합병 완료 등으로 DART 등록이 바뀐 회사가 여기
+    온다(2026-09-23 실측: 하나금융21호기업인수목적 406760은 corp_cls=E이고 최근
+    코스닥 시세에 그 코드가 없다). E에 「코넥스 API를 신청하라」고 적으면 화면이
+    사실과 다른 길을 안내한다.
+    """
+    if (corp_cls or "") == "N":
+        return " — 코넥스는 「코넥스 일별매매정보」 API를 따로 활용 신청해야 합니다."
+    if (corp_cls or "") == "E":
+        return (" — DART 법인구분이 기타법인(E)이라 유가·코스닥 어느 쪽에도 속하지 않습니다"
+                "(상장폐지·합병 완료 등으로 등록이 바뀐 회사가 여기 옵니다. 종목코드가 남아 있어도"
+                " 현재 시세가 없을 수 있습니다).")
+    return " — 법인구분을 확인하지 못해 어느 시장인지 알 수 없습니다(없다는 뜻이 아닙니다)."
+
+
 def _market_alerts_only_report(corp_name, stock_code, corp_cls, lookback_years,
                                lookback_days, from_date, to_date) -> str:
     """승인된 KRX API 밖의 시장(코넥스 등)은 시세 없이 KIND 시장경보 절만 낸다."""
@@ -1922,7 +1940,7 @@ def _market_alerts_only_report(corp_name, stock_code, corp_cls, lookback_years,
         "",
         f"⚠ 이 회사가 속한 시장(corp_cls={corp_cls or '미상'})은 승인된 KRX Open API"
         "(유가증권·코스닥 일별매매정보) 조회 대상이 아니라 시세·거래량 대조는 생략합니다"
-        " — 코넥스는 「코넥스 일별매매정보」 API를 따로 활용 신청해야 합니다.",
+        + _non_target_market_tail(corp_cls),
         "",
         "## 🚨 시장경보 이력 (KIND)",
         "",

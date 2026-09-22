@@ -153,6 +153,17 @@ class TestUnsupportedMarket:
         assert "「투자위험」 지정" in out
         assert "사건별 시세" not in out and "구간 개괄" not in out
 
+    def test_기타법인E는_코넥스_안내를_붙이지_않는다(self, monkeypatch):
+        """실측(2026-09-23): 하나금융21호기업인수목적 406760은 corp_cls=E(스팩 합병
+        완료 뒤)인데 화면이 「코넥스 API를 신청하라」고 안내했다 — E는 시장이 없는
+        것이지 다른 시장인 것이 아니다."""
+        _wire(monkeypatch, corp_cls="E", disclosures=[_mk_disclosure(_CB_TITLE)], alerts=[])
+        out = srv.track_market_reaction("테스트기업")
+        assert not out.startswith("❌")
+        assert "조회 대상이 아니라" in out and "기타법인(E)" in out
+        assert "코넥스" not in out
+        assert "시장경보 지정 이력이 없습니다" in out
+
     def test_비상장은_대상이_아니다(self, monkeypatch):
         _wire(monkeypatch, resolve_corp=_resolve_corp_no_stock)
         out = srv.track_market_reaction("비상장기업")
