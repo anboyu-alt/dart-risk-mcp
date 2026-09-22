@@ -7903,16 +7903,22 @@ function marketReactionHTML(picked, series) {
     { label: "D0→D+5", num: true }, { label: "거래량 배수(전 5일/당일)", num: true },
     { label: "회전율(전 5일 합)", num: true }, { label: "시총", num: true },
   ];
+  // 각주는 셀에 넣지 않고 표 아래에 단다 — 셀에 넣으면 신호 열이 세로로 늘어나
+  // 표가 안 읽힌다(2026-09-23 CSA 코스믹 실측: 기준가 조정 각주가 15줄로 감겨
+  // 「자금유출성 거래」 한 칸이 화면 절반을 차지했다). MCP 표도 각주를 아래에 단다.
+  const noteLines = [];
   const tableRows = picked.map((g) => {
     const fact = eventWindowFacts(rows, g.date, { baseline: KRX_BASELINE_DAYS });
     const label = g.label + (g.count > 1 ? ` ×${g.count}` : "");
     if (!fact) {
-      return [fmtDate(g.date), `${label} — 이 조회 창 안에 시세 자료가 없습니다`, "―", "―", "―", "―", "―", "―"];
+      noteLines.push(`[${fmtDate(g.date)}] ${label}: 이 조회 창 안에 시세 자료가 없습니다`);
+      return [fmtDate(g.date), `${label} ※`, "―", "―", "―", "―", "―", "―"];
     }
     const notes = marketFactNotes(fact);
+    if (notes.length) noteLines.push(`[${fmtDate(g.date)}] ${label}: ${notes.join(" · ")}`);
     return [
       fmtDate(g.date),
-      notes.length ? `${label} — ${notes.join(" · ")}` : label,
+      notes.length ? `${label} ※` : label,
       { raw: deltaHTML(fact.d0_fluc_rt, { sense: "none" }) },
       { raw: deltaHTML(fact.pre_return_pct, { sense: "none" }) },
       { raw: deltaHTML(fact.post_return_pct, { sense: "none" }) },
@@ -7926,6 +7932,7 @@ function marketReactionHTML(picked, series) {
     ? `${series.daysRequested || 0}거래일 중 ${uncoveredCount}일 미조회(호출 예산 — 받은 날은 캐시되므로 다시 실행하면 이어서 받습니다)`
     : "";
   let html = factTableHTML(headers, tableRows, { note, deltaNote: true });
+  for (const n of noteLines) html += `<div class="ftnote">※ ${esc(n)}</div>`;
 
   const pendingCount = (series.pending || []).length;
   if (pendingCount) {
@@ -7951,7 +7958,7 @@ function marketReactionHTML(picked, series) {
     html += `${fmtDate(overview.start_date)} 종가 ${fmtPrice(overview.start_close)} → ` +
       `${fmtDate(overview.end_date)} 종가 ${fmtPrice(overview.end_close)}${ret}<br>`;
     if (overview.high_close !== null) {
-      html += `창 안 최고 ${fmtPrice(overview.high_close)}(${fmtDate(overview.high_date)}) · ` +
+      html += `구간 안 최고 ${fmtPrice(overview.high_close)}(${fmtDate(overview.high_date)}) · ` +
         `최저 ${fmtPrice(overview.low_close)}(${fmtDate(overview.low_date)})<br>`;
     }
     if (overview.avg_turnover_pct !== null) {

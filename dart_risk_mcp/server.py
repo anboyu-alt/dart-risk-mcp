@@ -9987,7 +9987,7 @@ def track_market_reaction(
         )
         if overview.get("high_close") is not None:
             lines.append(
-                f"- 창 안 최고 {_fmt_price(overview['high_close'])}"
+                f"- 구간 안 최고 {_fmt_price(overview['high_close'])}"
                 f"({_fmt_date8(overview['high_date'])}) · "
                 f"최저 {_fmt_price(overview['low_close'])}({_fmt_date8(overview['low_date'])})"
             )
