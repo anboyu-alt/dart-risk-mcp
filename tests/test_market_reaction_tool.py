@@ -151,7 +151,27 @@ class TestUnsupportedMarket:
         assert not out.startswith("❌")
         assert "조회 대상이 아니라" in out and "코넥스" in out
         assert "「투자위험」 지정" in out
-        assert "사건별 시세" not in out and "창 개괄" not in out
+        assert "사건별 시세" not in out and "구간 개괄" not in out
+
+    def test_기타법인E는_코넥스_안내를_붙이지_않는다(self, monkeypatch):
+        """실측(2026-09-23): 하나금융21호기업인수목적 406760은 corp_cls=E(스팩 합병
+        완료 뒤)인데 화면이 「코넥스 API를 신청하라」고 안내했다 — E는 시장이 없는
+        것이지 다른 시장인 것이 아니다."""
+        _wire(monkeypatch, corp_cls="E", disclosures=[_mk_disclosure(_CB_TITLE)], alerts=[])
+        out = srv.track_market_reaction("테스트기업")
+        assert not out.startswith("❌")
+        assert "조회 대상이 아니라" in out and "기타법인(E)" in out
+        assert "코넥스" not in out
+        assert "시장경보 지정 이력이 없습니다" in out
+
+    def test_흡수_블록_한_줄도_법인구분별로_가른다(self, monkeypatch):
+        """analyze/timeline의 「📈 공시 전후 시장 반응」 한 줄 안내가 「(코넥스 등)」으로
+        E를 뭉뚱그렸다 — 도구 34와 같은 꼬리(`_non_target_market_tail`)를 쓴다."""
+        e_lines = srv._market_reaction_block([], "406760", "E", "krxkey", lookback_days=365)
+        n_lines = srv._market_reaction_block([], "216400", "N", "krxkey", lookback_days=365)
+        e_txt, n_txt = "\n".join(e_lines), "\n".join(n_lines)
+        assert "corp_cls=E" in e_txt and "기타법인(E)" in e_txt and "코넥스" not in e_txt
+        assert "corp_cls=N" in n_txt and "코넥스" in n_txt
 
     def test_비상장은_대상이_아니다(self, monkeypatch):
         _wire(monkeypatch, resolve_corp=_resolve_corp_no_stock)
@@ -174,7 +194,8 @@ class TestNormalTable:
         assert first_line == "📈 **테스트기업** (005930) — 공시 전후 시장 반응 (365일)"
         assert "## ① 사건별 시세·거래량 대조" in out
         assert "## ② 🚨 시장경보 이력 (KIND)" in out
-        assert "## ③ 📊 창 개괄" in out
+        assert "## ③ 📊 시세 구간 개괄" in out
+        assert "가장 오래된 사건 100일 앞부터" in out
         assert "2026.01.15" in out
         assert "2026.02.01" in out
         assert "한국거래소 통계정보" in out

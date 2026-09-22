@@ -222,6 +222,21 @@ def test_today_not_cached_read_or_write(monkeypatch, tmp_path):
     assert calls == ["20260918"]
 
 
+def test_gap_before_marks_rows_after_uncovered_weekday(monkeypatch, tmp_path):
+    """앞 거래일이 미조회(실패)면 그 다음 행에 gap_before=True — `price_breaks`가
+    며칠치 움직임을 하루 등락률과 견주지 않게 한다. 휴장일(빈 응답)은 빈틈이 아니다."""
+    calls = []
+    row = lambda p: {"ISU_CD": "005930", "TDD_CLSPRC": str(p), "FLUC_RT": "0.00",
+                     "ACC_TRDVOL": "1", "ACC_TRDVAL": "1", "MKTCAP": "1", "LIST_SHRS": "1", "SECT_TP_NM": ""}
+    # 월 조회 · 화 실패 · 수 휴장(빈 응답) · 목 조회 · 금 조회
+    _install_daily(monkeypatch, {"20260914": [row(100)], "20260915": None, "20260916": [],
+                                 "20260917": [row(110)], "20260918": [row(111)]}, calls)
+    out = kc.fetch_price_series("005930", "Y", "20260914", "20260918", "k")
+    assert out["days_uncovered"] == ["20260915"]
+    flags = {r["date"]: r["gap_before"] for r in out["rows"]}
+    assert flags == {"20260914": False, "20260917": True, "20260918": False}
+
+
 def test_failure_401_not_cached_and_flagged(monkeypatch, tmp_path):
     calls = []
     _install_daily(monkeypatch, {"20260918": None}, calls)

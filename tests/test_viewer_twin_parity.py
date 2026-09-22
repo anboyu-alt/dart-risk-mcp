@@ -37,8 +37,14 @@ import pytest
 from dart_risk_mcp.core import qualifiers as _q
 from dart_risk_mcp.core import signals as _sig
 from dart_risk_mcp.core.krx_client import _weekday_candidates
-from dart_risk_mcp.core.market_context import event_window_facts, window_overview
-from dart_risk_mcp.server import _fmt_pct_signed, _fmt_ratio, _fmt_turnover_pct, _market_fact_notes
+from dart_risk_mcp.core.market_context import event_window_facts, price_breaks, window_overview
+from dart_risk_mcp.server import (
+    _fmt_pct_signed,
+    _fmt_price,
+    _fmt_ratio,
+    _fmt_turnover_pct,
+    _market_fact_notes,
+)
 from dart_risk_mcp.core.dart_client import (
     _fold_corp_name,
     classify_mezzanine_filing,
@@ -140,11 +146,14 @@ _FUNCS = (
     # 포맷·각주 헬퍼(위 가드 `test_이름으로_짝지어지는_쌍은_모두_잠겨_있다`가
     # 즉시 신고해 함께 넣었다).
     "function weekdayCandidates(",
+    "function priceBreaks(",
+    "function breakLabel(",
     "function eventWindowFacts(",
     "function windowOverview(",
     "function fmtPctSigned(",
     "function fmtRatio(",
     "function fmtTurnoverPct(",
+    "function fmtPrice(",
     "function marketFactNotes(",
 )
 
@@ -1033,9 +1042,10 @@ def test_공모_사모를_더해_두_배로_세지_않는다():
 # 계산)만은 실제 달력이 필요해 별도로 실제 날짜를 쓴다.
 
 def _krx_row(date, close=None, fluc=None, volume=None, mktcap=None,
-             list_shrs=None, sect=None):
+             list_shrs=None, sect=None, gap_before=False):
     return {"date": date, "close": close, "fluc_rt": fluc, "volume": volume,
-            "value": None, "mktcap": mktcap, "list_shrs": list_shrs, "sect": sect}
+            "value": None, "mktcap": mktcap, "list_shrs": list_shrs, "sect": sect,
+            "gap_before": gap_before}
 
 
 def _krx_series(n, start="20260101", close0=10000, step=10, volume=100000,
@@ -1162,7 +1172,159 @@ def test_창_개괄_빈_rows가_같다():
     assert core is None and got is None
 
 
-def test_시세_포맷_헬퍼_4종이_같다():
+# ── 종가 불연속 — KRX 등락률(FLUC_RT) 기반 기준가 조정 판정 (2026-09-23) ────
+# core `tests/test_market_context.py`의 `_split_rows`·rights-issue·CSA 코스믹·
+# 「등락률이 주식수보다 우선」 픽스처와 같은 시나리오를 재사용한다(같은 상수
+# TOL 1.0·1.8·0.55·1.4·0.7). ⚠ core `_row`의 `fluc_rt` 기본값은 **0.0**(None이
+# 아니다) — `_split_rows`가 override하지 않으므로 분할 시나리오는 등락률
+# 기반 분기(주 규칙)를 탄다. 등락률을 명시적으로 `None`으로 준 픽스처만
+# 보조 규칙(주식수 점프)을 탄다.
+
+
+def _split_rows(n_before=70, n_after=10, ratio=5.0):
+    """n_before일 뒤 1:ratio 액면분할 — 종가 ÷ratio·주식수 ×ratio(등락률은
+    기본값 0.0 — core `_split_rows`와 같은 픽스처, 등락률 기반 주 규칙을 탄다).
+    """
+    rows = []
+    d = int("20260101")
+    for _ in range(n_before):
+        rows.append(_krx_row(str(d).zfill(8), close=100000, fluc=0.0, volume=1000, list_shrs=1_000_000))
+        d += 1
+    for _ in range(n_after):
+        rows.append(_krx_row(str(d).zfill(8), close=20000, fluc=0.0, volume=5000,
+                              list_shrs=int(1_000_000 * ratio)))
+        d += 1
+    return rows
+
+
+def test_주식수_점프_판정이_같다():
+    """분할(불연속) · 유상증자 신주상장(등락률이 원값과 같아 불연속 아님) ·
+    CSA 코스믹(병합 뒤 무상증자, 불연속) · 종가 없는 행은 판정 안 함."""
+    split_rows = _split_rows()
+    rights_rows = [
+        _krx_row("20260101", close=3780, list_shrs=3_290_720),
+        _krx_row("20260102", close=3400, fluc=-10.05, list_shrs=11_399_543),
+    ]
+    csa_rows = [
+        _krx_row("20260101", close=2860, list_shrs=7_109_265),
+        _krx_row("20260102", close=1859, fluc=0.5, list_shrs=14_218_530),
+    ]
+    none_rows = [_krx_row("20260101", close=None, list_shrs=None), _krx_row("20260102", close=100, list_shrs=10)]
+
+    for rows, want_hit in ((split_rows, True), (rights_rows, False), (csa_rows, True), (none_rows, False)):
+        core = price_breaks(rows)
+        got = _viewer([["priceBreaks", rows]])[0]
+        assert core == got, f"priceBreaks가 갈린다: core={core!r} 뷰어={got!r}"
+        assert bool(core) == want_hit
+
+    assert split_rows and len(price_breaks(split_rows)) == 1
+    b_split = price_breaks(split_rows)[0]
+    assert b_split["adj"] == pytest.approx(0.2) and b_split["share_ratio"] == pytest.approx(5.0)
+    b_csa = price_breaks(csa_rows)[0]
+    assert b_csa["share_ratio"] == pytest.approx(2.0)
+
+
+def test_등락률이_주식수보다_우선한다():
+    """주식수가 그대로인데 기준가만 바뀐 경우(유상증자 권리락·감자 재개)도
+    잡는다 — 옛 규칙(주식수 점프)은 이 부류의 절반을 놓쳤다."""
+    rows = [_krx_row("20260101", close=1000, list_shrs=100),
+            _krx_row("20260102", close=681, fluc=22.51, list_shrs=100)]
+    core = price_breaks(rows)
+    got = _viewer([["priceBreaks", rows]])[0]
+    assert core == got
+    assert len(core) == 1 and core[0]["share_ratio"] == pytest.approx(1.0)
+    assert core[0]["adj"] == pytest.approx(681 / 1.2251 / 1000, rel=1e-3)
+
+    # 1%p 안의 어긋남은 반올림·기준가 소폭 조정이라 잡지 않는다
+    rows_ok = [_krx_row("20260101", close=1000), _krx_row("20260102", close=1010, fluc=1.0)]
+    assert price_breaks(rows_ok) == _viewer([["priceBreaks", rows_ok]])[0] == []
+
+    # 앞 거래일이 미조회(gap_before)면 며칠치 움직임을 하루 등락률과 견주지 않는다
+    rows_gap = [_krx_row("20260101", close=1000),
+                _krx_row("20260104", close=1200, fluc=2.0, gap_before=True)]
+    assert price_breaks(rows_gap) == _viewer([["priceBreaks", rows_gap]])[0] == []
+
+    # 등락률이 없으면(None) 보조 규칙(주식수 점프 + 종가 역비례)
+    rows_nofr = [_krx_row("20260101", close=100000, list_shrs=1_000_000),
+                 _krx_row("20260102", close=20000, fluc=None, list_shrs=5_000_000)]
+    core_nofr = price_breaks(rows_nofr)
+    got_nofr = _viewer([["priceBreaks", rows_nofr]])[0]
+    assert core_nofr == got_nofr
+    assert core_nofr[0]["adj"] == pytest.approx(0.2)
+
+    rows_nofr2 = [_krx_row("20260101", close=3780, list_shrs=3_290_720),
+                  _krx_row("20260102", close=3400, fluc=None, list_shrs=11_399_543)]
+    assert price_breaks(rows_nofr2) == _viewer([["priceBreaks", rows_nofr2]])[0] == []
+
+
+def test_breakLabel이_같다():
+    """각주 한 토막 — core `_break_label`의 쌍둥이(주식수 점프가 없으면
+    괄호를 붙이지 않는다)."""
+    from dart_risk_mcp.core.market_context import _break_label
+
+    labels = [
+        {"date": "20260101", "adj": 0.2, "share_ratio": 5.0},
+        {"date": "20260102", "adj": 0.65, "share_ratio": 2.0},
+        {"date": "20260103", "adj": 0.556, "share_ratio": 1.0},   # 주식수 변동 없음 → 괄호 없음
+    ]
+    for b in labels:
+        core = _break_label(b)
+        got = _viewer([["breakLabel", b]])[0]
+        assert core == got, f"breakLabel이 갈린다: core={core!r} 뷰어={got!r}"
+    assert "(주식수" not in _break_label(labels[2])
+
+
+def test_이벤트창_분할_불연속이_같다():
+    """사건일 = 분할 3일 뒤 — pre 등락·기준선 거래량 배수가 막히고 post는 정상."""
+    rows = _split_rows()
+    event = rows[73]["date"]
+    core = event_window_facts(rows, event)
+    got = _viewer([["eventWindowFacts", rows, event]])[0]
+    for k in core:
+        assert core[k] == got.get(k) or pytest.approx(core[k]) == got.get(k), (
+            f"{k}가 갈린다: core={core[k]!r} 뷰어={got.get(k)!r}")
+    assert core["pre_return_pct"] is None and got["pre_return_pct"] is None
+    assert core["pre_vol_ratio"] is None and core["d0_vol_ratio"] is None
+    assert "기준가 조정" in core["baseline_note"]
+    assert core["price_breaks"][0]["date"] == rows[70]["date"]
+    assert "불연속" in core["price_break_note"] and "주식수 ×5.00" in core["price_break_note"]
+    assert core["post_return_pct"] == pytest.approx(0.0) == got["post_return_pct"]
+
+    # 분할이 기준선 안(창 밖)이면 등락은 내고 거래량 배수만 막는다 — 각주도
+    # 등락을 「생략」이라 적지 않는다(CSA 코스믹 09-10 사건 실측으로 잡은 자기모순)
+    event_h = rows[78]["date"]
+    core_h = event_window_facts(rows, event_h)
+    got_h = _viewer([["eventWindowFacts", rows, event_h]])[0]
+    for k in core_h:
+        assert core_h[k] == got_h.get(k) or pytest.approx(core_h[k]) == got_h.get(k), (
+            f"{k}가 갈린다: core={core_h[k]!r} 뷰어={got_h.get(k)!r}")
+    assert core_h["pre_return_pct"] is not None and core_h["price_break_note"] is None
+    assert core_h["pre_vol_ratio"] is None and "기준가 조정" in core_h["baseline_note"]
+
+    # 사건일이 분할 훨씬 뒤(기준선도 분할 뒤)면 아무것도 막지 않는다
+    rows_long = _split_rows(n_before=5, n_after=90)
+    event_long = rows_long[90]["date"]
+    core_long = event_window_facts(rows_long, event_long)
+    got_long = _viewer([["eventWindowFacts", rows_long, event_long]])[0]
+    for k in core_long:
+        assert core_long[k] == got_long.get(k) or pytest.approx(core_long[k]) == got_long.get(k), (
+            f"{k}가 갈린다: core={core_long[k]!r} 뷰어={got_long.get(k)!r}")
+    assert core_long["price_breaks"] == [] and core_long["pre_return_pct"] is not None
+
+
+def test_창_개괄_분할이_등락을_막는_것이_같다():
+    rows = _split_rows()
+    core = window_overview(rows)
+    got = _viewer([["windowOverview", rows]])[0]
+    for k in core:
+        assert core[k] == got.get(k) or pytest.approx(core[k]) == got.get(k), (
+            f"{k}가 갈린다: core={core[k]!r} 뷰어={got.get(k)!r}")
+    assert core["window_return_pct"] is None
+    assert core["price_breaks"][0]["adj"] == pytest.approx(0.2)
+    assert core["high_close"] == 100000 and core["low_close"] == 20000
+
+
+def test_시세_포맷_헬퍼_5종이_같다():
     """결측(None) 표기는 core `"-"`·뷰어 `"―"`로 **의도된 차이**다(fmtKRW·
     deltaHTML과 같은 관례) — 숫자 값의 형식만 대조한다.
     """
@@ -1171,6 +1333,7 @@ def test_시세_포맷_헬퍼_4종이_같다():
         calls.append(["fmtPctSigned", x]); expect.append(_fmt_pct_signed(x))
         calls.append(["fmtRatio", x]); expect.append(_fmt_ratio(x))
         calls.append(["fmtTurnoverPct", x]); expect.append(_fmt_turnover_pct(x))
+        calls.append(["fmtPrice", x]); expect.append(_fmt_price(x))
     got = _viewer(calls)
     bad = [(c, e, g) for c, e, g in zip(calls, expect, got) if e != g]
     assert not bad, "시세 포맷 헬퍼가 갈린다:\n" + "\n".join(

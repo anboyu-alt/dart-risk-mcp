@@ -188,6 +188,8 @@ from .kind_client import (
 )
 from .market_context import (
     event_window_facts,
+    price_breaks,
+    _break_label,
     align_alerts_with_events,
     window_overview,
     MGMT_ISSUE_MKTCAP_KRW,
@@ -366,6 +368,8 @@ __all__ = [
     "event_window_facts",
     "align_alerts_with_events",
     "window_overview",
+    "price_breaks",
+    "_break_label",
     "MGMT_ISSUE_MKTCAP_KRW",
     "MGMT_ISSUE_PRICE_KRW",
 ]

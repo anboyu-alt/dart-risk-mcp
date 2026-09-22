@@ -144,6 +144,7 @@ from .core import (
     event_window_facts,
     align_alerts_with_events,
     window_overview,
+    _break_label,
 )
 from .core.taxonomy import CROSS_SIGNAL_PATTERNS
 from .core.qualifiers import (
@@ -1891,6 +1892,8 @@ def _market_fact_notes(fact: dict) -> list[str]:
             f"창 안 거래량 0인 거래일 {zero}/{fact.get('window_days', 0)}일"
             "(매매거래정지 등 — 공시 목록에서 확인)"
         )
+    if fact.get("price_break_note"):
+        notes.append(fact["price_break_note"])
     if fact.get("uncovered_note"):
         notes.append(fact["uncovered_note"])
     return notes
@@ -1901,6 +1904,24 @@ def _date8_add(date8: str, days: int) -> str:
         return (datetime.strptime(date8, "%Y%m%d") + timedelta(days=days)).strftime("%Y%m%d")
     except ValueError:
         return date8
+
+
+def _non_target_market_tail(corp_cls) -> str:
+    """비대상 시장 안내의 꼬리 — 법인구분마다 뜻이 다르다.
+
+    N(코넥스)은 별도 API를 신청하면 볼 수 있는 시장이지만, E(기타법인)는 시장이
+    없는 것이다 — 상장폐지·스팩 합병 완료 등으로 DART 등록이 바뀐 회사가 여기
+    온다(2026-09-23 실측: 하나금융21호기업인수목적 406760은 corp_cls=E이고 최근
+    코스닥 시세에 그 코드가 없다). E에 「코넥스 API를 신청하라」고 적으면 화면이
+    사실과 다른 길을 안내한다.
+    """
+    if (corp_cls or "") == "N":
+        return " — 코넥스는 「코넥스 일별매매정보」 API를 따로 활용 신청해야 합니다."
+    if (corp_cls or "") == "E":
+        return (" — DART 법인구분이 기타법인(E)이라 유가·코스닥 어느 쪽에도 속하지 않습니다"
+                "(상장폐지·합병 완료 등으로 등록이 바뀐 회사가 여기 옵니다. 종목코드가 남아 있어도"
+                " 현재 시세가 없을 수 있습니다).")
+    return " — 법인구분을 확인하지 못해 어느 시장인지 알 수 없습니다(없다는 뜻이 아닙니다)."
 
 
 def _market_alerts_only_report(corp_name, stock_code, corp_cls, lookback_years,
@@ -1919,7 +1940,7 @@ def _market_alerts_only_report(corp_name, stock_code, corp_cls, lookback_years,
         "",
         f"⚠ 이 회사가 속한 시장(corp_cls={corp_cls or '미상'})은 승인된 KRX Open API"
         "(유가증권·코스닥 일별매매정보) 조회 대상이 아니라 시세·거래량 대조는 생략합니다"
-        " — 코넥스는 「코넥스 일별매매정보」 API를 따로 활용 신청해야 합니다.",
+        + _non_target_market_tail(corp_cls),
         "",
         "## 🚨 시장경보 이력 (KIND)",
         "",
@@ -2014,8 +2035,9 @@ def _market_reaction_block(
     if corp_cls not in KRX_API_IDS:
         return [
             "",
-            "📈 공시 전후 시장 반응: 이 회사가 속한 시장은 KRX Open API 조회 "
-            "대상이 아니라(코넥스 등) 시세·거래량 대조를 생략합니다.",
+            f"📈 공시 전후 시장 반응: 이 회사가 속한 시장(corp_cls={corp_cls or '미상'})은 "
+            "KRX Open API 조회 대상이 아니라 시세·거래량 대조를 생략합니다"
+            + _non_target_market_tail(corp_cls),
         ]
 
     picked: list[dict] = []
@@ -9946,20 +9968,27 @@ def track_market_reaction(
                     )
 
     lines.append("")
-    lines.append("## ③ 📊 창 개괄")
-    lines.append("")
+    # ⚠ 시세 구간은 조회 창이 아니라 **사건 기준**이다 — 가장 오래된 사건 100일 앞
+    # ~ 가장 최근 사건 10일 뒤(오늘 상한). 1년 창이라도 마지막 사건이 6월이면 시세는
+    # 7월에서 끝난다(상상인증권 실측: 9월 병합이 「창 개괄」에 없었다). 머리글에
+    # 구간을 적어 「창 끝 시가총액」이 「지금 시총」으로 읽히지 않게 한다.
     overview = window_overview(rows)
+    span = (f" (시세 구간 {_fmt_date8(overview['start_date'])}~{_fmt_date8(overview['end_date'])} — "
+            "가장 오래된 사건 100일 앞부터 가장 최근 사건 10일 뒤까지)") if overview else ""
+    lines.append(f"## ③ 📊 시세 구간 개괄{span}")
+    lines.append("")
     if overview is None:
         lines.append("이 창 안에 거래일 시세 자료가 없습니다.")
     else:
+        ret = (f" ({_fmt_pct_signed(overview['window_return_pct'])})"
+               if overview.get("window_return_pct") is not None else " (구간 등락 미산정 — 아래 불연속 참고)")
         lines.append(
             f"- {_fmt_date8(overview['start_date'])} 종가 {_fmt_price(overview['start_close'])} "
-            f"→ {_fmt_date8(overview['end_date'])} 종가 {_fmt_price(overview['end_close'])}"
-            f" ({_fmt_pct_signed(overview['window_return_pct'])})"
+            f"→ {_fmt_date8(overview['end_date'])} 종가 {_fmt_price(overview['end_close'])}{ret}"
         )
         if overview.get("high_close") is not None:
             lines.append(
-                f"- 창 안 최고 {_fmt_price(overview['high_close'])}"
+                f"- 구간 안 최고 {_fmt_price(overview['high_close'])}"
                 f"({_fmt_date8(overview['high_date'])}) · "
                 f"최저 {_fmt_price(overview['low_close'])}({_fmt_date8(overview['low_date'])})"
             )
@@ -9967,6 +9996,12 @@ def track_market_reaction(
             lines.append(
                 f"- 평균 일 회전율 {_fmt_turnover_pct(overview['avg_turnover_pct'])} "
                 f"({overview['turnover_days']}거래일 기준)"
+            )
+        if overview.get("price_breaks"):
+            moves = " · ".join(_break_label(b) for b in overview["price_breaks"])
+            lines.append(
+                f"- 구간 안 KRX 기준가 조정으로 종가가 불연속: {moves} — 분할·병합·감자·"
+                "무상증자·유상증자 권리락 등. 구간 등락은 내지 않았고 최고·최저 종가는 조정 전 원값입니다."
             )
         if overview.get("days_zero_volume"):
             lines.append(
@@ -9984,7 +10019,7 @@ def track_market_reaction(
                 )
             else:
                 lines.append(f"- 코스닥 소속부: {overview.get('sect_end')} (창 안 변동 없음)")
-        lines.append(f"- 창 끝 시가총액: {_fmt_mktcap(overview['end_mktcap'])}")
+        lines.append(f"- 구간 끝({_fmt_date8(overview['end_date'])}) 시가총액: {_fmt_mktcap(overview['end_mktcap'])}")
         if overview["days_mktcap_under_20bn"] or overview["days_close_under_1000"]:
             lines.append(
                 "- 관리종목 지정요건의 규정 수치(시총 200억·주가 1,000원)와 대조: "

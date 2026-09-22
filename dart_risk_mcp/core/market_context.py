@@ -38,6 +38,12 @@ def _calendar_days_between(a: str, b: str) -> int:
     return abs((da - db).days)
 
 
+def _dot_date(date8) -> str:
+    """YYYYMMDD → YYYY.MM.DD (8자리가 아니면 그대로)."""
+    d = str(date8 or "")
+    return f"{d[:4]}.{d[4:6]}.{d[6:]}" if len(d) == 8 and d.isdigit() else d
+
+
 def _avg(values: list[float]) -> float | None:
     if not values:
         return None
@@ -51,6 +57,78 @@ def _row_turnover_pct(row: dict) -> float | None:
     if volume is None or list_shrs is None or list_shrs == 0:
         return None
     return volume / list_shrs * 100
+
+
+PRICE_BREAK_TOL_PCT = 1.0       # 원값 등락과 KRX 등락률(FLUC_RT)이 이만큼(%p) 어긋나면 기준가 조정일
+PRICE_BREAK_SHARE_UP = 1.8      # (등락률이 없을 때의 보조 규칙) 주식수가 이 배수를 넘겨 늘면 점프
+PRICE_BREAK_SHARE_DOWN = 0.55   # 이 비율 이하로 줄면 점프
+PRICE_BREAK_PRODUCT_MAX = 1.4   # 늘어난 쪽: 주식수비×종가비가 이 값 이하면 가격이 역비례(분할·무상증자 권리락)
+PRICE_BREAK_PRODUCT_MIN = 0.7   # 줄어든 쪽: 이 값을 넘으면 가격이 역비례(병합·감자)
+
+
+def price_breaks(rows: list[dict]) -> list[dict]:
+    """연속 거래일 사이에서 **KRX가 기준가를 조정한 날**(종가 불연속)을 찾는다.
+
+    KRX 일별매매정보의 `FLUC_RT`는 전일 **기준가** 대비 등락률이라, 액면분할·
+    병합·감자·무상증자·유상증자 권리락·인적분할 재상장처럼 기준가가 조정된 날은
+    원값 종가 비교(`close/prev_close`)와 어긋난다. 그 어긋남이 곧 사실이다 —
+    캐시 1년 전 종목 실측(2026-09-23): 연속 거래일 쌍 1,428,842개 중
+    |원값−등락률| < 0.02%p가 99.9%이고, 1%p를 넘는 것은 815건. 그중 **394건(48%)은
+    상장주식수가 그대로**라(유상증자 권리락 000500 −31.9% vs +22.5% · 무상감자
+    재개 002210 +85% vs −7.5% · 삼성바이오로직스 인적분할 재상장 20251124 +46.5%
+    vs −0.45%) 주식수 점프만 보던 첫 판(313건)은 절반을 놓쳤다.
+
+    반환 원소 `{"date", "adj", "share_ratio"}` — `adj`는 기준가 ÷ 전일 종가
+    (5:1 분할 0.20 · 5:1 병합 5.00 · 권리락 0.7 안팎), `share_ratio`는 그날 상장
+    주식수 ÷ 전일(없으면 None). 등락률이 없는 행은 보조 규칙(주식수 점프 + 종가
+    역비례)으로 본다. `gap_before`(그 앞 거래일이 미조회)인 행은 전일이 아닌
+    날과 비교하게 되므로 건너뛴다 — 며칠치 움직임을 하루 등락률과 견주면 없는
+    불연속을 만든다. 종가가 없는 행은 판정하지 않는다.
+    """
+    out = []
+    prev = None
+    for row in rows:
+        close = row.get("close")
+        if row.get("gap_before"):
+            prev = None
+        if close is None or close <= 0:
+            prev = None
+            continue
+        if prev is not None:
+            pclose, pls = prev
+            ls = row.get("list_shrs")
+            share_ratio = (ls / pls) if (ls and pls) else None
+            fr = row.get("fluc_rt")
+            hit = False
+            adj = None
+            if fr is not None:
+                raw_pct = (close / pclose - 1) * 100
+                if abs(raw_pct - fr) >= PRICE_BREAK_TOL_PCT and (1 + fr / 100) > 0:
+                    base_price = close / (1 + fr / 100)
+                    adj = base_price / pclose
+                    hit = True
+            elif share_ratio is not None and (
+                share_ratio >= PRICE_BREAK_SHARE_UP or share_ratio <= PRICE_BREAK_SHARE_DOWN
+            ):
+                product = share_ratio * (close / pclose)
+                if (share_ratio >= PRICE_BREAK_SHARE_UP and product <= PRICE_BREAK_PRODUCT_MAX) or (
+                    share_ratio <= PRICE_BREAK_SHARE_DOWN and product >= PRICE_BREAK_PRODUCT_MIN
+                ):
+                    adj = close / pclose
+                    hit = True
+            if hit:
+                out.append({"date": row.get("date"), "adj": adj, "share_ratio": share_ratio})
+        prev = (close, row.get("list_shrs"))
+    return out
+
+
+def _break_label(b: dict) -> str:
+    """각주용 한 토막 — `2026.08.04 기준가 ×15.00 (주식수 ×0.07)`."""
+    txt = f"{_dot_date(b['date'])} 기준가 ×{b['adj']:.2f}"
+    sr = b.get("share_ratio")
+    if sr is not None and (sr >= PRICE_BREAK_SHARE_UP or sr <= PRICE_BREAK_SHARE_DOWN):
+        txt += f" (주식수 ×{sr:.2f})"
+    return txt
 
 
 def event_window_facts(
@@ -95,9 +173,24 @@ def event_window_facts(
     post_rows = rows[d0_idx + 1 : post_end]
     post_partial = len(post_rows) < post
 
+    # --- 종가 불연속(액면분할·병합·무상증자 권리락) ---
+    # KRX의 FLUC_RT는 조정 기준(LS ELECTRIC 5:1 분할일 +13.71%)인데 우리 등락은
+    # 원값 종가 비교라 그날을 건너뛰면 -77%가 나온다(2026-09-23 실측, 1년 전 종목
+    # 주식수 점프 550건 중 가격 역비례 313건). 그 구간의 비교는 내지 않고 사실만 적는다.
+    span_rows = baseline_rows + pre_rows + [d0_row] + post_rows
+    breaks = price_breaks(span_rows)
+    pre_span = (pre_rows[0].get("date"), pre_rows[-1].get("date")) if len(pre_rows) >= 2 else None
+    post_span = (d0_date, post_rows[-1].get("date")) if post_rows else None
+    base_span = (baseline_rows[0].get("date"), d0_date) if baseline_rows else None
+
+    def _hit(span):
+        return span is not None and any(span[0] < b["date"] <= span[1] for b in breaks)
+
+    pre_break, post_break, base_break = _hit(pre_span), _hit(post_span), _hit(base_span)
+
     # --- 등락률 ---
     pre_return_pct = None
-    if len(pre_rows) >= 2:
+    if len(pre_rows) >= 2 and not pre_break:
         first_close = pre_rows[0].get("close")
         last_close = pre_rows[-1].get("close")
         if first_close is not None and last_close is not None and first_close != 0:
@@ -105,7 +198,7 @@ def event_window_facts(
 
     post_return_pct = None
     d0_close = d0_row.get("close")
-    if post_rows:
+    if post_rows and not post_break:
         last_post_close = post_rows[-1].get("close")
         if d0_close is not None and last_post_close is not None and d0_close != 0:
             post_return_pct = (last_post_close - d0_close) / d0_close * 100
@@ -118,6 +211,13 @@ def event_window_facts(
 
     if baseline_avail < min_baseline:
         baseline_note = f"기준선 {baseline_avail}거래일 (최소 {min_baseline})"
+    elif base_break:
+        # 분할 뒤 주식수가 N배면 거래량도 N배 — 기준선과 창의 거래량 단위가 다르다.
+        # 날짜·배율을 여기 적는다(창 밖·기준선 안의 변동은 아래 price_break_note에
+        # 오르지 않으므로 이 줄이 유일한 근거다).
+        baseline_note = "기준선 안 기준가 조정(" + " · ".join(
+            _break_label(b) for b in breaks if base_span[0] < b["date"] <= base_span[1]
+        ) + ")으로 거래량 단위가 달라 배수를 내지 않습니다"
     else:
         baseline_vols = [
             r.get("volume") for r in baseline_rows if r.get("volume") is not None
@@ -159,7 +259,25 @@ def event_window_facts(
     window_rows = pre_rows + [d0_row] + post_rows
     zero_volume_days = sum(1 for r in window_rows if r.get("volume") == 0)
 
+    # ⚠ 이 각주는 **등락을 내지 않은 경우에만** 붙는다 — 기준선 안(창 밖)의 변동은
+    # 거래량 배수만 막고 등락은 그대로 내므로(위 baseline_note), 거기까지 「전후
+    # 비교 생략」이라 적으면 화면에 찍힌 등락과 각주가 서로 다른 말을 한다
+    # (CSA 코스믹 09-10 사건 실측: 08-04 병합이 기준선 안인데 「-5.8%/+0.7%」 옆에
+    # 「생략」이 붙었다).
+    price_break_note = None
+    window_breaks = [
+        b for b in breaks
+        if (pre_span and pre_span[0] < b["date"] <= pre_span[1])
+        or (post_span and post_span[0] < b["date"] <= post_span[1])
+    ]
+    if window_breaks:
+        price_break_note = "창 안 KRX 기준가 조정으로 종가가 불연속: " + " · ".join(
+            _break_label(b) for b in window_breaks
+        ) + " (분할·병합·감자·무상증자·유상증자 권리락 등 — 그 전후 등락은 조정 전 원값이라 내지 않았습니다)"
+
     return {
+        "price_breaks": breaks,
+        "price_break_note": price_break_note,
         "zero_volume_days": zero_volume_days,
         "window_days": len(window_rows),
         "d0_no_trade": d0_row.get("volume") == 0,
@@ -227,8 +345,9 @@ def window_overview(rows: list[dict]) -> dict | None:
     start_close = start_row.get("close")
     end_close = end_row.get("close")
 
+    breaks = price_breaks(rows)
     window_return_pct = None
-    if start_close is not None and end_close is not None and start_close != 0:
+    if not breaks and start_close is not None and end_close is not None and start_close != 0:
         window_return_pct = (end_close - start_close) / start_close * 100
 
     high_close = None
@@ -279,6 +398,7 @@ def window_overview(rows: list[dict]) -> dict | None:
             prev_sect = cur
 
     return {
+        "price_breaks": breaks,
         "days_zero_volume": days_zero_volume,
         "sect_start": rows[0].get("sect"),
         "sect_end": end_row.get("sect"),

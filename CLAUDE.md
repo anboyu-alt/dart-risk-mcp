@@ -645,7 +645,7 @@ DART 공시만으로는 「무슨 일이 있었는가」까지만 안다 — 불
   그 공시 한 건 전후 10거래일만 본다(`lookback_years`/`from_date`/`to_date`는
   무시) ② "시장경보 이력 (KIND)" — 투자주의·경고·위험 지정·해제·사유와
   지정일 ±10일 안의 관찰 공시 정렬. 시장경보 0건(「이 창에는 없음」)과
-  KIND 조회 실패(「확인 불가」)를 가른다 ③ "창 개괄" — 창 시작·끝 종가와
+  KIND 조회 실패(「확인 불가」)를 가른다 ③ "시세 구간 개괄"(2026-09-23까지는 「창 개괄」) — 구간 시작·끝 종가와
   등락, 최고·최저, 평균 일 회전율, 관리종목 지정요건 규정 수치(시총
   200억·종가 1,000원) 대조 거래일 수(규정 수치라 우리 임계가 아니다)
 - **KRX Open API는 하루 단위·시장 전체 응답이라 종목별 기간 조회가 없다**
@@ -685,6 +685,31 @@ DART 공시만으로는 「무슨 일이 있었는가」까지만 안다 — 불
   홀딩스 실측: 5개월 96거래일 전부 거래량 0). 등락 0%·배수 None만 적으면
   「조용한 시장」으로 읽히므로 「거래량 0인 거래일 N/M일」을 창 개괄에
   따로 센다.
+- **KRX 기준가 조정일의 종가 불연속 (2026-09-23 자율 테스트 발견 1)**: KRX의
+  `FLUC_RT`는 전일 **기준가** 대비라 액면분할·병합·감자·무상증자·유상증자
+  권리락·인적분할 재상장처럼 기준가가 조정된 날은 조정 기준(LS ELECTRIC 5:1
+  분할일 +13.71%)인데, 우리 전후 등락·창 등락·최고/최저는 **원값 종가 비교**라
+  그날을 건너뛰면 −77%가 났고 거래량 배수도 주식수 5배만큼 부풀었다.
+  `market_context.price_breaks`가 연속 거래일 쌍에서 **|원값 등락 − FLUC_RT| ≥
+  1%p**(`PRICE_BREAK_TOL_PCT`)를 기준가 조정일로 잡아 `adj`(기준가÷전일 종가 —
+  5:1 분할 0.20 · 병합 5.00)·`share_ratio`를 싣고, 그 날이 D−5~D+5 창 안이면
+  등락을 내지 않고 각주로 밝히며, 기준선 안이면 거래량 배수만 내지 않는다(등락은
+  그대로 내므로 「전후 비교 생략」 각주를 거기까지 붙이면 화면과 각주가 어긋난다 —
+  CSA 코스믹 09-10 사건에서 실제로 그랬다). 창 개괄은 구간 등락을 비우고 불연속
+  줄을 적는다. ⚠ **주식수 점프로 잡으면 절반을 놓친다** — 첫 판이 그랬다. 캐시
+  전수(연속 쌍 1,428,842개)에서 1%p를 넘는 어긋남 815건 중 **394건은 상장주식수가
+  그대로**다(유상증자 권리락 가온전선 0630 −31.9% vs +22.51% · 무상감자 재개
+  동성제약 0730 +85% vs −7.5% · 삼성바이오로직스 인적분할 재상장 20251124 +46.5%
+  vs −0.45%). 노이즈 바닥은 99.9%가 0.02%p 안이고, 0.1~1%p 361건은 거의 전부
+  스팩(46xxxx)의 기준가 1틱 차이라 1%p 임계가 그 둘을 가른다. 등락률이 없는 행만
+  보조 규칙(주식수 ×1.8↑/×0.55↓ + 종가 역비례)을 쓴다. ⚠ **앞 거래일이 미조회면
+  견주지 않는다** — `fetch_price_series`가 행마다 `gap_before`를 채운다(예산·
+  소프트캡·실패·발표 전 사이의 평일이 있으면 True, 휴장일은 빈 응답으로 알고
+  있어 빈틈이 아니다). 며칠치 움직임을 하루 등락률과 견주면 없는 불연속이 생긴다.
+  ⚠ **③ 창 개괄은 조회 창이 아니라 사건 기준 시세 구간**(가장 오래된 사건 −100일
+  ~ 가장 최근 사건 +10일)이라 머리글에 구간을 적고 「구간 끝(날짜) 시가총액」으로
+  표기한다 — 1년 조회의 마지막 사건이 6월이면 9월 병합은 개괄에 없다(상상인증권
+  실측). `tests/test_market_context.py`·`test_krx_client.py`가 고정.
 - **코스닥 소속부는 날짜별로 바뀐다** — 「관리종목(소속부없음)」·
   「투자주의환기종목(소속부없음)」이 중견·우량·벤처·기술성장 소속부와
   함께 오고(유가증권은 이 필드가 늘 빈 문자열), 창 안에서 바뀌면(제이스코
@@ -1718,7 +1743,7 @@ rcept 계열 136건(43%)이고 그중 **116건(85%)이 낡았다**(최고 4개�
 - **취득 공시의 상대방이 「자금유출·자산이전 상대방 확인」에서는 (미확인)이던 것 (2026-09-11)**: 같은 리포트 안에서 한 블록은 「(주)카나리아바이오 · 특수관계인」을 적고 다른 블록은 같은 공시를 「거래상대방: (미확인)」으로 적고 있었다. 「타법인주식및출자증권취득결정」은 `resolve_decision_type`이 빈 값이고 `_is_asset_disposal_title`도 False라 **금전대여·담보 서식 파서**로 떨어졌다. `_is_acquisition_title`·`_acquisition_counterparty`를 신설해 취득 서식 폴백을 걸었고(원문 ZIP 10분 캐시 공유라 호출 증가 없음), 뷰어 `loadAssetTransferCore`도 `ACQ_REVIEW`를 후보에 넣고 제목으로 파서를 가른다 — core `_outflow_review_candidates`는 진작 그 키를 후보로 삼고 있었는데 뷰어만 빠져 있었다. 라이브: 세종메디칼 3건 전부 상대방·관계·금액 표기(미확인 0).
 - **「원문 이 화면에서 보기」가 빈 패널이던 것 (2026-09-11, 사용자 제보)**: 서버는 멀쩡했다 — 프로덕션 `/api/doc`에 같은 5건을 직접 호출하니 전부 200 + 2,400~3,824자. 브라우저로 재현해 잡은 원인은 **`matchedKeywordsFor`의 `TypeError: s.keywords is not iterable`**이었다. `r.signals`는 `matchSignals`의 원본이 아니라 **한정층(`qualifySignals`)이 만든 객체**이고 거기에는 `keywords`가 없다(실측 코아스 1년 **신호 객체 63개 전부**). 즉 **신호가 붙은 공시에서는 원문 열람이 한 번도 된 적이 없다** — 신호 없는 공시에서만 열렸다. 배포 데이터에서 키로 되찾도록 고쳤고(⚠ `DATA`는 비동기 로드라 즉시 실행 맵은 빈 채로 굳는다 — 첫 호출 때 만든다), `toggleDocViewer`의 **캐시 경로에도** try/catch를 걸었다(스캔이 이미 원문을 받아 두므로 사용자가 누르면 대개 그쪽으로 온다 — 실제로 죽던 쪽이다). 함께: 200인데 블록이 0개면 「응답 N자 · 블록 0개」를 적고, 조회 실패 문구에 **HTTP 상태를 남긴다**(서버가 400 키 없음 / 404 본문 없음 / 502 DART 실패를 구분해 주는데 화면이 그걸 지우고 있었다). 라이브 확인: 코아스 20260506800991 → 3,012자 렌더 · 키워드 강조 2개 · 예외 0. `tests/test_viewer_doc_viewer.py`가 고정.
 
-- **KRX 시세 패널 — 사용자 본인 키 릴레이(2026-09-23, DEFERRED 15)**: 「MARKET REACTION — 공시 전후 시장 반응」 지연 로드 패널(`#marketCore`, 최근 관찰 신호 3건 · MCP 흡수 블록과 같은 표·각주·창 개괄). ⚠ **약관 제11조 ②라 운영자 키 폴백이 없다** — 릴레이 `/api/krx`(`api/krx.js`·`relay/worker.js`·`scripts/dev_relay.py`)는 사용자 `X-KRX-Key`를 `AUTH_KEY`로 전달만 하고 `no-store`·쿼터 없음·서버 키 참조 0(`tests/test_viewer_krx_relay.py`가 세 곳을 대조). KRX 응답이 하루치 시장 전체(600KB)라 **릴레이가 해당 종목 한 행만 돌려준다** — 그것이 이 라우트의 존재 이유다. 뷰어에 corp_cls가 없어 **최근 거래일 stk·ksq 탐침**으로 시장을 판별해 `dart_tool_krx_mkt`에 기억한다(실측 코아스 → stk · 제이스코홀딩스 → ksq). (날짜, 종목) 행은 `dart_tool_krx_rows`(3,000건 FIFO)에 캐시, **빈 응답은 오늘부터 7일 안이면 저장하지 않는다**(발표 전 — core `KRX_EMPTY_GRACE_DAYS`와 같은 규칙). KRX 키 칸은 `#krxKeyPanel`로 **DART 키 패널과 독립**(`#setupPanel`은 DART 키가 있으면 통째로 숨어 그 안에 넣으면 독립이 성립하지 않는다). 순수 함수 쌍둥이 `weekdayCandidates`·`eventWindowFacts`·`windowOverview`는 `test_viewer_twin_parity`에 등록. **KIND는 프록시하지 않는다**(비공식 파싱 부하가 우리 도메인에 걸린다) — 패널이 MCP `track_market_reaction`으로 넘긴다. 라이브(로컬 릴레이): 코아스 1년 사건 3건이 MCP와 **값 일치**(D0·전후 등락·배수·회전율·시총), 99거래일 cold 약 45초(진행 「N/M거래일 수신」), 콘솔 오류 0. ⚠ 브라우저 판에서는 클립보드 붙여넣기가 막혀 키 입력 검증은 일회용 로컬 서버로 localStorage에 넣어 했다(값은 컨텍스트에 노출하지 않음).
+- **KRX 시세 패널 — 사용자 본인 키 릴레이(2026-09-23, DEFERRED 15)**: 「MARKET REACTION — 공시 전후 시장 반응」 지연 로드 패널(`#marketCore`, 최근 관찰 신호 3건 · MCP 흡수 블록과 같은 표·각주·창 개괄). ⚠ **약관 제11조 ②라 운영자 키 폴백이 없다** — 릴레이 `/api/krx`(`api/krx.js`·`relay/worker.js`·`scripts/dev_relay.py`)는 사용자 `X-KRX-Key`를 `AUTH_KEY`로 전달만 하고 `no-store`·쿼터 없음·서버 키 참조 0(`tests/test_viewer_krx_relay.py`가 세 곳을 대조). KRX 응답이 하루치 시장 전체(600KB)라 **릴레이가 해당 종목 한 행만 돌려준다** — 그것이 이 라우트의 존재 이유다. 뷰어에 corp_cls가 없어 **최근 거래일 stk·ksq 탐침**으로 시장을 판별해 `dart_tool_krx_mkt`에 기억한다(실측 코아스 → stk · 제이스코홀딩스 → ksq). (날짜, 종목) 행은 `dart_tool_krx_rows`(3,000건 FIFO)에 캐시, **빈 응답은 오늘부터 7일 안이면 저장하지 않는다**(발표 전 — core `KRX_EMPTY_GRACE_DAYS`와 같은 규칙). KRX 키 칸은 `#krxKeyPanel`로 **DART 키 패널과 독립**(`#setupPanel`은 DART 키가 있으면 통째로 숨어 그 안에 넣으면 독립이 성립하지 않는다). 순수 함수 쌍둥이 `weekdayCandidates`·`eventWindowFacts`·`windowOverview`는 `test_viewer_twin_parity`에 등록. **KIND는 프록시하지 않는다**(비공식 파싱 부하가 우리 도메인에 걸린다) — 패널이 MCP `track_market_reaction`으로 넘긴다. 라이브(로컬 릴레이): 코아스 1년 사건 3건이 MCP와 **값 일치**(D0·전후 등락·배수·회전율·시총), 99거래일 cold 약 45초(진행 「N/M거래일 수신」), 콘솔 오류 0. ⚠ 브라우저 판에서는 클립보드 붙여넣기가 막혀 키 입력 검증은 일회용 로컬 서버로 localStorage에 넣어 했다(값은 컨텍스트에 노출하지 않음). **각주는 표 아래에 단다(2026-09-23)** — 첫 판은 `marketFactNotes`를 「신호」 셀에 이어 붙였는데 기준가 조정 각주(「기준선 안 기준가 조정(2026.08.04 기준가 ×14.78 (주식수 ×0.07) · …)」)가 좁은 열에서 **15줄로 감겨** 한 칸이 화면 절반을 차지했다(CSA 코스믹 로컬 릴레이 실측). 셀에는 「※」만 남기고 각주는 `.ftnote`로 표 아래에 `[날짜] 신호: 각주` 형식으로 둔다 — MCP 표와 같은 배치. 종가 불연속(`priceBreaks`·`breakLabel`·`gap_before`)은 도구 34 항목의 규칙을 그대로 이식했고 `test_viewer_twin_parity`가 잠근다.
 - **정적 단일 파일**: `docs/tool/index.html` (외부 JS 의존 0, 빌드 없음). 데이터는 `signals-data.json`(scripts/export_tool_data.py로 수동 재생성) + `corp-map.json` + `corp-aliases.json`.
 - **릴레이**: JS 릴레이 `api/[endpoint].js`(Vercel icn1)·`relay/worker.js`(Cloudflare 미러)·`scripts/dev_relay.py`(로컬) 3곳이 **동일 화이트리스트 16종**을 복제 유지 — list, company, fnlttSinglAcnt, accnutAdtorNmNdAdtOpinion, exctvSttus, elestock, alotMatter, pssrpCptalUseDtls, prvsrpCptalUseDtls, otrCprInvstmntSttus(v1.9.0 — 종속회사 유출 사실 병기), fnlttSinglAcntAll(v1.21.0 — 뷰어 회전율 3기간 블록), irdsSttus·stockTotqySttus(2026-08-31 — 뷰어 희석 블록), cvbdIsDecsn·bdwtIsDecsn·exbdIsDecsn(2026-09-01 — 뷰어 메자닌 블록). 하나 추가하면 3곳 모두 갱신.
 - **원문 추출**: `api/doc.py`(껍데기) + `tool_server/doc.py`(몸통, 단위 테스트 `tests/test_tool_server_doc.py`) — `GET /api/doc?rcept_no=&max_chars=` + `X-DART-Key` 헤더. `fetch_disclosure_full` 재사용, 200 응답만 CDN 캐시(s-maxage=86400, 키가 URL에 없어 캐시 키 안전). `.vercelignore`에 `!tool_server` 필수(빠뜨리면 함수 번들에 안 들어가 ModuleNotFoundError).
@@ -2055,6 +2080,8 @@ env -u DART_API_KEY python -m pytest tests/ -q          # PowerShell은 $env:DAR
     키 있음                159 passed ·  0 skipped · 438초 ~ 568초
 
 ⚠ **소요는 실행마다 갈린다** — 같은 두 파일을 같은 커밋에서 재는데 438초(7분 18초)와 568초(9분 28초)가 나왔다(다른 세션·같은 기기). 실제 DART 왕복이라 그렇다. **단일 값을 적으면 다음 사람이 또 「문서와 다르다」를 겪는다.** 전체 스위트의 9~10분도 스위트가 무거워진 게 아니라 이 두 파일 때문이고, 키를 벗기면 0.64초로 떨어진다.
+
+**KRX 키는 테스트마다 기본으로 비운다 (2026-09-23, 같은 `tests/conftest.py`)**: autouse `_blank_krx_key_by_default`가 `KRX_API_KEY` env를 지우고 `server._KRX_API_KEY`를 `""`로 둔다. 셸에 KRX 키가 있으면 `analyze_company_risk`·`build_event_timeline`이 시장 반응 블록을 켜고 corp_cls를 얻으려 `fetch_company_info`를 **가짜 키로 실제 호출**해, 공시 목록만 mock한 테스트(`test_fetch_failure_honesty`)가 위 leak 가드에 걸렸다 — CI(키 없음)는 초록이고 제작자 PC만 빨간 「키 유무로 갈리는」 부류(PR #458 계열)가 v1.29.0부터 잠복해 있었다. KRX가 필요한 테스트는 자기가 `monkeypatch.setattr(srv, "_KRX_API_KEY", …)`로 켠다(`test_market_reaction_tool` 관례 — autouse가 먼저 돌고 테스트의 patch가 덮는다).
 
 **가짜 키 DART 호출 가드 (2026-09-07, `tests/conftest.py`)**: 도구 하나가 fetcher를 여럿 부르는데 테스트가 공시 목록만 mock하면 나머지(자금사용·채무잔액·부실 이벤트·메자닌·희석·원문)가 패치된 가짜 키 `"k"`로 **DART에 실제 요청**을 보낸다. 전수 측정: **13개 테스트가 231회**, 스위트 175초 중 약 96초였고 CI가 매 실행마다 그 요청을 DART에 던지고 있었다(가장 느린 테스트 34초). `pytest_runtest_call` 래퍼가 `requests.Session.request`를 감싸 opendart 호스트 + env 실제 키와 다른 `crtfc_key`(키 없는 환경에서는 전부)면 **DART의 실제 거절 응답과 같은 모양**(HTTP 200 · `{"status":"010","message":"등록되지 않은 인증키입니다."}` — 라이브 실측)을 즉시 돌려주고, 테스트가 끝나면 **그 테스트를 실패**시켜 어느 엔드포인트가 샜는지 알린다. 고치는 법은 `@pytest.mark.usefixtures("no_structured_dart")`(구조화 fetcher 14종을 빈 성공 응답으로 스텁, `STRUCTURED_FETCH_STUBS`). 실제 키 호출은 통과시킨다. ⚠ 호스트는 `DART_BASE`에서 읽는다 — 첫 판이 `fss`를 `fsc`로 손으로 적어 가드가 아무것도 못 잡았다. ⚠ 반환 모양이 fetcher마다 다르다(`fetch_debt_balance`는 dict, `fetch_mezzanine_decisions`는 `{"rows","failed_kinds","fetch_failed"}`) — 리스트로 뭉뚱그리면 도구가 TypeError로 죽는다. 효과: 키 없는 스위트 **175초 → 80초**, 새는 테스트 0. 부수: 페이지 간 `time.sleep(0.25)`·재시도 sleep을 실제로 돌리던 테스트 2개도 `dc.time.sleep`을 막았다(`TestThrottleGuard`와 같은 관례).
 
