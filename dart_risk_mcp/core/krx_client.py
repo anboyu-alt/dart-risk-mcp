@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -47,7 +48,12 @@ KRX_API_IDS = {"Y": "stk_bydd_trd", "K": "ksq_bydd_trd"}
 
 KRX_DAILY_CAP = 10_000   # 약관 제8조 ④ — 키당 1일 10,000회
 KRX_SOFT_CAP = 9_000     # 배치 cron·다른 소비처 몫을 남겨 두는 자체 여유
-KRX_CALL_BUDGET = 80     # 도구 1회 호출당 네트워크 콜 상한(대기 1분 예산 기준 초기값)
+# 도구 1회 호출당 네트워크 콜 상한. 실측(2026-09-22, 제작자 키): 콜당 중앙값
+# 1.04초(코스닥 596KB · 유가 293KB), 동시 5콜까지 429 없음(10콜 wall 2.4초).
+# 동시 4로 120콜 ≈ 30초 — 대기 예산 1분 안. 1년(≈245거래일)은 한 번에 못 채우고
+# 남는 날은 `days_uncovered`로 알린다(캐시가 쌓이면 다음 호출이 이어 받는다).
+KRX_CALL_BUDGET = 120
+KRX_CONCURRENCY = 4      # 실측 5까지 스로틀 없음 — 여유 하나를 뺐다
 
 # 캐시에 남기는 필드 8종만 — 저장 용량과 「원문 그대로」 원칙의 절충.
 KRX_KEEP_FIELDS = (
@@ -226,6 +232,11 @@ def _normalize_row(date8: str, raw: dict) -> dict:
         "value": _to_number(raw.get("ACC_TRDVAL")),
         "mktcap": _to_number(raw.get("MKTCAP")),
         "list_shrs": _to_number(raw.get("LIST_SHRS")),
+        # 코스닥 소속부 — 실측(2026-09-22)에 「관리종목(소속부없음)」·
+        # 「투자주의환기종목(소속부없음)」이 그대로 온다(유가증권은 늘 빈 문자열).
+        # 날짜별로 바뀌므로(제이스코홀딩스 2025-09 중견기업부 → 2026-09 관리종목)
+        # 시계열 사실로 쓸 수 있다.
+        "sect": (raw.get("SECT_TP_NM") or "").strip() or None,
     }
 
 
@@ -298,48 +309,60 @@ def fetch_price_series(
     days_uncovered: list[str] = []
     fetch_failed = False
     quota_hit = False
-    budget_left = budget
 
+    # 1단계 — 최근 날짜부터 캐시를 읽고, 미스는 예산·소프트캡 안에서 조회 대상으로.
+    payloads: dict[str, dict] = {}
+    to_fetch: list[str] = []
+    quota_room = max(0, KRX_SOFT_CAP - _quota_count(quota_date))
     for date8 in reversed(candidates):
-        day_payload = None
-
         if date8 != today:
-            day_payload = _read_cache(api_id, date8)
-            if day_payload is not None:
+            cached = _read_cache(api_id, date8)
+            if cached is not None:
+                payloads[date8] = cached
                 days_cached += 1
-
-        if day_payload is None:
-            if quota_exhausted:
-                quota_hit = True
-                days_uncovered.append(date8)
                 continue
-            if budget_left <= 0:
-                days_uncovered.append(date8)
-                continue
+        if quota_exhausted or len(to_fetch) >= quota_room:
+            quota_hit = True
+            days_uncovered.append(date8)
+            continue
+        if len(to_fetch) >= budget:
+            days_uncovered.append(date8)
+            continue
+        to_fetch.append(date8)
 
-            budget_left -= 1
-            result = krx_get_daily(api_id, date8, api_key)
+    # 2단계 — 동시 조회. 실측(2026-09-22)에 동시 5콜까지 스로틀이 없었다.
+    # 계수는 시도마다 올린다(캐시 히트는 안 센다). 실패는 캐시하지 않는다.
+    if to_fetch:
+        for date8 in to_fetch:
             if _quota_increment(quota_date) >= KRX_SOFT_CAP:
                 quota_exhausted = True
-
+        workers = max(1, min(KRX_CONCURRENCY, len(to_fetch)))
+        if workers == 1:
+            fetched = [(d, krx_get_daily(api_id, d, api_key)) for d in to_fetch]
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                fetched = list(zip(
+                    to_fetch,
+                    ex.map(lambda d: krx_get_daily(api_id, d, api_key), to_fetch),
+                ))
+        for date8, result in fetched:
             if result is None:
                 fetch_failed = True
                 days_uncovered.append(date8)
                 continue
-
             days_fetched += 1
             if result:
                 kept_rows = [{k: r.get(k) for k in KRX_KEEP_FIELDS} for r in result]
                 day_payload = {"rows": kept_rows}
             else:
                 day_payload = {"empty": True}
-
             if date8 != today:
                 _write_cache(api_id, date8, day_payload)
+            payloads[date8] = day_payload
 
+    for date8, day_payload in payloads.items():
         if day_payload.get("empty"):
             continue
-
         stock_row = next(
             (r for r in day_payload.get("rows", []) if str(r.get("ISU_CD")) == str(stock_code)),
             None,

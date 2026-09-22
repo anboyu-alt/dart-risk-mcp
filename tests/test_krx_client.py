@@ -366,3 +366,50 @@ def test_weekday_candidates_excludes_weekend():
 
 def test_module_importable():
     import dart_risk_mcp.core.krx_client  # noqa: F401
+
+
+# ---------------------------------------------------------------- 동시 조회·소속부 (2026-09-22 실측 반영)
+
+def test_concurrent_fetch_covers_every_date_and_counts_quota(monkeypatch, _cache_dir):
+    """예산 안의 미스 날짜는 전부 한 번씩 조회되고(동시 조회여도 누락·중복 없음),
+    계수는 네트워크 시도 수만큼 오른다."""
+    seen = []
+
+    def fake(api_id, date8, key):
+        seen.append(date8)
+        return [{"ISU_CD": "023440", "TDD_CLSPRC": "521", "FLUC_RT": "0.00",
+                 "ACC_TRDVOL": "0", "ACC_TRDVAL": "0", "MKTCAP": "46964378481",
+                 "LIST_SHRS": "90142761", "SECT_TP_NM": "관리종목(소속부없음)"}]
+
+    monkeypatch.setattr(kc, "krx_get_daily", fake)
+    monkeypatch.setattr(kc, "KRX_CONCURRENCY", 4)
+    res = kc.fetch_price_series("023440", "K", "20260901", "20260912", "k", budget=100)
+    weekdays = kc._weekday_candidates("20260901", "20260912")
+    assert sorted(seen) == weekdays and len(seen) == len(set(seen))
+    assert res["days_fetched"] == len(weekdays)
+    assert kc._quota_count(kc._today_str()) == len(weekdays)
+    assert [r["date"] for r in res["rows"]] == weekdays
+
+
+def test_sect_field_normalized_from_sect_tp_nm(monkeypatch):
+    """코스닥 소속부(「관리종목(소속부없음)」)는 `sect`로 실리고, 유가증권의 빈
+    문자열은 None이다(실측 2026-09-22: 유가는 늘 빈 문자열)."""
+    def fake(api_id, date8, key):
+        return [{"ISU_CD": "023440", "TDD_CLSPRC": "521", "SECT_TP_NM": "관리종목(소속부없음)"},
+                {"ISU_CD": "005930", "TDD_CLSPRC": "261000", "SECT_TP_NM": ""}]
+
+    monkeypatch.setattr(kc, "krx_get_daily", fake)
+    k = kc.fetch_price_series("023440", "K", "20260918", "20260918", "k")
+    y = kc.fetch_price_series("005930", "Y", "20260918", "20260918", "k")
+    assert k["rows"][0]["sect"] == "관리종목(소속부없음)"
+    assert y["rows"][0]["sect"] is None
+
+
+def test_budget_applies_before_concurrent_fetch(monkeypatch):
+    """예산 3이면 정확히 3개 날짜만(최근 셋) 조회하고 나머지는 uncovered."""
+    seen = []
+    monkeypatch.setattr(kc, "krx_get_daily", lambda a, d, k: (seen.append(d) or []))
+    res = kc.fetch_price_series("023440", "K", "20260901", "20260912", "k", budget=3)
+    weekdays = kc._weekday_candidates("20260901", "20260912")   # 0912는 토요일
+    assert sorted(seen) == weekdays[-3:]
+    assert res["days_uncovered"] == weekdays[:-3]

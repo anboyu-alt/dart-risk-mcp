@@ -137,19 +137,32 @@ def event_window_facts(
                 d0_vol_ratio = d0_volume / baseline_avg
 
     # --- 회전율 ---
+    # ⚠ `_row_turnover_pct`는 이미 퍼센트(volume/list_shrs*100)를 낸다 —
+    # 여기서 다시 ×100을 하면 이중으로 곱해진다(2026-09-22 실측으로 발견:
+    # 거래량 10만·상장주식수 100만인 합성 데이터에서 하루 회전율 10%가
+    # 5거래일 합에서 5000%로 찍혔다). `window_overview`의 같은 이름 계산은
+    # 이 곱이 없어 값이 맞다 — 같은 파일 안에서 갈려 있었다.
     turnover_note = None
     turnover_pre_pct = None
     pre_turnovers = [_row_turnover_pct(r) for r in pre_rows]
     if pre_rows and all(t is not None for t in pre_turnovers):
-        turnover_pre_pct = sum(pre_turnovers) * 100
+        turnover_pre_pct = sum(pre_turnovers)
     turnover_d0_pct = _row_turnover_pct(d0_row)
-    if turnover_d0_pct is not None:
-        turnover_d0_pct = turnover_d0_pct * 100
 
     if turnover_pre_pct is None or turnover_d0_pct is None:
         turnover_note = "상장주식수가 없어 회전율을 계산할 수 없는 거래일이 있습니다"
 
+    # --- 거래량 0인 거래일 (매매거래정지 등) ---
+    # 라이브 실측(2026-09-22): 제이스코홀딩스는 5개월 96거래일이 전부 거래량 0
+    # (관리종목·매매거래정지)이고 종가가 521원으로 고정돼 있었다. 등락 0%·배수
+    # None만 적으면 「조용한 시장」으로 읽히므로 그 사실을 따로 센다.
+    window_rows = pre_rows + [d0_row] + post_rows
+    zero_volume_days = sum(1 for r in window_rows if r.get("volume") == 0)
+
     return {
+        "zero_volume_days": zero_volume_days,
+        "window_days": len(window_rows),
+        "d0_no_trade": d0_row.get("volume") == 0,
         "event_date": event_date8,
         "d0_date": d0_date,
         "d0_shifted": d0_shifted,
@@ -252,7 +265,24 @@ def window_overview(rows: list[dict]) -> dict | None:
         if row.get("close") is not None and row["close"] < MGMT_ISSUE_PRICE_KRW
     )
 
+    days_zero_volume = sum(1 for row in rows if row.get("volume") == 0)
+
+    # 코스닥 소속부 시계열 — 「관리종목(소속부없음)」 편입·해제가 날짜별로 보인다
+    # (실측: 제이스코홀딩스 2025-09 중견기업부 → 2026-09 관리종목). 유가증권은
+    # 값이 없어(None) 변동도 없다.
+    sect_changes = []
+    prev_sect = rows[0].get("sect")
+    for row in rows[1:]:
+        cur = row.get("sect")
+        if cur != prev_sect:
+            sect_changes.append({"date": row.get("date"), "from": prev_sect, "to": cur})
+            prev_sect = cur
+
     return {
+        "days_zero_volume": days_zero_volume,
+        "sect_start": rows[0].get("sect"),
+        "sect_end": end_row.get("sect"),
+        "sect_changes": sect_changes,
         "start_date": start_row.get("date"),
         "start_close": start_close,
         "end_date": end_row.get("date"),

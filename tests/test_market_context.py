@@ -320,3 +320,41 @@ def test_no_judgment_words_in_source():
     source = inspect.getsource(mc)
     for word in ("급등", "급락", "이상", "과열", "위험"):
         assert word not in source, f"판정 어휘 '{word}'가 market_context.py에 있습니다"
+
+
+# ---------------------------------------------------------------- 거래량 0·소속부 (2026-09-22 라이브 실측 반영)
+
+def test_zero_volume_days_counted_in_event_window():
+    """매매거래정지 종목(제이스코홀딩스 실측: 96거래일 전부 거래량 0·종가 고정)은
+    등락 0%·배수 None만으로는 「조용한 시장」으로 읽힌다 — 창 안 거래량 0인
+    거래일 수와 D0 무거래를 따로 센다."""
+    rows = [_row(BASE, i, close=521, volume=0) for i in range(80)]
+    f = mc.event_window_facts(rows, _d(BASE, 70))
+    assert f["zero_volume_days"] == 11 and f["window_days"] == 11
+    assert f["d0_no_trade"] is True
+    assert f["baseline_note"] == "기준선 평균 거래량이 0입니다"
+
+    rows2 = [_row(BASE, i) for i in range(80)]
+    f2 = mc.event_window_facts(rows2, _d(BASE, 70))
+    assert f2["zero_volume_days"] == 0 and f2["d0_no_trade"] is False
+
+
+def test_overview_counts_zero_volume_and_tracks_sect_changes():
+    rows = [_row(BASE, i) for i in range(6)]
+    for r in rows[:3]:
+        r["sect"] = "중견기업부"
+    for r in rows[3:]:
+        r["sect"] = "관리종목(소속부없음)"
+    rows[1]["volume"] = 0
+    rows[4]["volume"] = 0
+    ov = mc.window_overview(rows)
+    assert ov["days_zero_volume"] == 2
+    assert ov["sect_start"] == "중견기업부" and ov["sect_end"] == "관리종목(소속부없음)"
+    assert ov["sect_changes"] == [{"date": _d(BASE, 3), "from": "중견기업부",
+                                   "to": "관리종목(소속부없음)"}]
+
+
+def test_overview_sect_absent_for_kospi_rows():
+    """유가증권 행은 `sect`가 없거나 None — 변동 없음으로 나와야 한다."""
+    ov = mc.window_overview([_row(BASE, i) for i in range(3)])
+    assert ov["sect_start"] is None and ov["sect_changes"] == []

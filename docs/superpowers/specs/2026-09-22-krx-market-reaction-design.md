@@ -30,13 +30,31 @@
   제공할 수 없다**.
   → 공개 뷰어에 **운영자 키로 받은 시세를 싣지 않는다.** 뷰어는 사용자 본인 키 경로만
   (다음 PR). MCP는 사용자 기기에서 사용자 키로 돌므로 해당 없음.
-- ⚠ **미측정**(키가 아직 환경에 없다): 콜당 지연 · 응답 크기 · 필드명 전수 · 휴장일
-  응답 모양 · 코스닥 `SECT_TP_NM` 값 분포. 구현은 공개 명세의 필드명
-  (`BAS_DD`·`ISU_CD`·`ISU_NM`·`MKT_NM`·`SECT_TP_NM`·`TDD_CLSPRC`·`CMPPREVDD_PRC`·
-  `FLUC_RT`·`TDD_OPNPRC`·`TDD_HGPRC`·`TDD_LWPRC`·`ACC_TRDVOL`·`ACC_TRDVAL`·`MKTCAP`·
-  `LIST_SHRS`)으로 쓰되, **키가 들어오면 0단계 실측으로 대조**하고
-  `tests/fixtures/api/krx_response_keys.json`에 고정한다. 대조 전까지 그 픽스처는
-  `"unverified": true`를 단다 — 「재지 않은 값을 실측이라 적지 않는다」.
+- **0단계 실측 (2026-09-22, 제작자 키 — 값은 `tests/fixtures/api/krx_response_keys.json`)**
+  - 필드 15종 확인: `BAS_DD`·`ISU_CD`(6자리)·`ISU_NM`·`MKT_NM`·`SECT_TP_NM`·`TDD_CLSPRC`·
+    `CMPPREVDD_PRC`·`FLUC_RT`·`TDD_OPNPRC`·`TDD_HGPRC`·`TDD_LWPRC`·`ACC_TRDVOL`·
+    `ACC_TRDVAL`·`MKTCAP`·`LIST_SHRS`. 값은 콤마 없는 문자열. `MKTCAP`은 **원** 단위
+    (삼성전자 1,525,878,716,688,000 = 1,525조). 2015-01-05도 같은 필드로 온다.
+  - 하루치: 유가 942행 293KB · 코스닥 1,820행 596KB. 콜당 지연 **중앙값 1.04초**
+    (10콜, 최대 1.41초). **동시 5콜까지 429 없음**(10콜 wall 2.4초).
+    → `KRX_CONCURRENCY = 4`, `KRX_CALL_BUDGET = 120`. 라이브: 코스닥 103거래일
+    cold **36.0초**(2.9콜/초), 같은 창 재조회 **1.37초**(캐시 103/103, 0콜),
+    유가 103일 30.4초.
+  - 휴장일(토·일)과 **발표 전 당일**은 모두 HTTP 200 + `OutBlock_1: []`(17바이트)로
+    구분되지 않는다 → 당일은 캐시하지 않고, 어제(월요일 09-21)는 09-22 자정 무렵
+    이미 942행이 왔으므로 과거 날짜의 빈 배열은 휴장일로 캐시한다.
+  - **코스닥 `SECT_TP_NM`에 「관리종목(소속부없음)」 128 · 「투자주의환기종목(소속부없음)」
+    40 · SPAC 66 · 외국기업 15**가 소속부(중견·우량·벤처·기술성장)와 함께 온다.
+    유가증권은 942행 전부 빈 문자열. 날짜별로 바뀐다(제이스코홀딩스 2025-09-22
+    「중견기업부」 → 2026-09-18 「관리종목(소속부없음)」) → `rows[].sect`·
+    `window_overview.sect_changes`로 사실 표기.
+  - **매매거래정지 종목은 거래량 0·OHLC 0·종가 고정**으로 온다(제이스코홀딩스 5개월
+    96거래일 전부 거래량 0, 종가 521). 등락 0%·배수 None만 적으면 「조용한 시장」으로
+    읽히므로 `zero_volume_days`·`d0_no_trade`·`days_zero_volume`를 따로 센다.
+  - `stk_isu_base_info`는 `ISU_CD`가 ISIN(`KR7005930003`)이고 6자리는 `ISU_SRT_CD`.
+    `LIST_SHRS`가 매매정보에도 있어 이번 범위에서는 쓰지 않는다.
+  - KIND 3종 조회 wall 3.6초(제이스코홀딩스 1년: 주의 1건 「단일계좌거래량」
+    2025-11-17 지정).
 
 ### KRX Open API에 없는 것
 
