@@ -36,6 +36,9 @@ import pytest
 
 from dart_risk_mcp.core import qualifiers as _q
 from dart_risk_mcp.core import signals as _sig
+from dart_risk_mcp.core.krx_client import _weekday_candidates
+from dart_risk_mcp.core.market_context import event_window_facts, window_overview
+from dart_risk_mcp.server import _fmt_pct_signed, _fmt_ratio, _fmt_turnover_pct, _market_fact_notes
 from dart_risk_mcp.core.dart_client import (
     _fold_corp_name,
     classify_mezzanine_filing,
@@ -133,6 +136,16 @@ _FUNCS = (
     # 2026-09-13 채무증권 잔액 이식 — 집계 규칙을 core에서 순수 함수로
     # 떼어(summarize_debt_balance) 양쪽이 같은 규칙을 쓰게 했다.
     "function summarizeDebtBalance(",
+    # 2026-09-23 KRX 시세(공시 전후 시장 반응) 이식 — 세 순수 함수 쌍둥이 +
+    # 포맷·각주 헬퍼(위 가드 `test_이름으로_짝지어지는_쌍은_모두_잠겨_있다`가
+    # 즉시 신고해 함께 넣었다).
+    "function weekdayCandidates(",
+    "function eventWindowFacts(",
+    "function windowOverview(",
+    "function fmtPctSigned(",
+    "function fmtRatio(",
+    "function fmtTurnoverPct(",
+    "function marketFactNotes(",
 )
 
 # 이름은 `_FUNCS`에서 뽑는다 — 예전에는 아래 JS의 `const FN = {...}`에도 손으로
@@ -582,6 +595,11 @@ def test_이름으로_짝지어지는_쌍은_모두_잠겨_있다():
         "_mzn_num": "이 파일의 parseMezzanineRow 대조에 포함",
         "_mzn_int": "이 파일의 parseMezzanineRow 대조에 포함",
         "_mzn_date": "이 파일의 parseMezzanineRow 대조에 포함",
+        # 뷰어 쪽은 eventWindowFacts 내부의 지역 클로저(`const rowTurnoverPct =
+        # (row) => {...}`)라 독립 호출 대상이 아니다 — 이 파일의
+        # eventWindowFacts 대조(거래량 0·회전율 미계산 케이스)가 그 계산
+        # 경로를 이미 태운다.
+        "_row_turnover_pct": "이 파일의 eventWindowFacts 대조에 포함",
     }
 
     core_funcs: dict = {}
@@ -1003,3 +1021,201 @@ def test_공모_사모를_더해_두_배로_세지_않는다():
     for out in (summarize_debt_balance(_DEBT_ROWS),
                 _viewer([["summarizeDebtBalance", _DEBT_ROWS]])[0]):
         assert out["by_kind"]["corporate_bond"]["total"] == 808_470_000_000
+
+
+# ── KRX 시세 — 공시 전후 시장 반응 (2026-09-23 이식) ──────────────────────
+#
+# 세 순수 함수(`weekdayCandidates`·`eventWindowFacts`·`windowOverview`)는
+# core `krx_client._weekday_candidates`·`market_context.event_window_facts`·
+# `market_context.window_overview`의 쌍둥이다. 합성 rows 9케이스로 정상·
+# 절단·경계를 함께 대조한다 — 날짜 문자열은 달력상 유효할 필요가 없다(두
+# 구현 모두 문자열 비교·정수 증가만 쓴다), 다만 `weekdayCandidates`(요일
+# 계산)만은 실제 달력이 필요해 별도로 실제 날짜를 쓴다.
+
+def _krx_row(date, close=None, fluc=None, volume=None, mktcap=None,
+             list_shrs=None, sect=None):
+    return {"date": date, "close": close, "fluc_rt": fluc, "volume": volume,
+            "value": None, "mktcap": mktcap, "list_shrs": list_shrs, "sect": sect}
+
+
+def _krx_series(n, start="20260101", close0=10000, step=10, volume=100000,
+                 list_shrs=1000000, mktcap=10_000_000_000, sect=None):
+    rows = []
+    d = int(start)
+    close = close0
+    for i in range(n):
+        rows.append(_krx_row(str(d).zfill(8), close=close, fluc=0.5, volume=volume,
+                              mktcap=mktcap, list_shrs=list_shrs, sect=sect))
+        close += step
+        d += 1
+    return rows
+
+
+def test_이벤트창_정상_사례가_같다():
+    """기준선·전후 창이 전부 꽉 찬 정상 사례 — 값이 그대로 일치해야 한다."""
+    rows = _krx_series(80)
+    event = rows[70]["date"]
+    core = event_window_facts(rows, event, baseline=60)
+    got = _viewer([["eventWindowFacts", rows, event, {"baseline": 60}]])[0]
+    for k in core:
+        assert core[k] == got.get(k) or pytest.approx(core[k]) == got.get(k), (
+            f"{k}가 갈린다: core={core[k]!r} 뷰어={got.get(k)!r}")
+
+
+def test_이벤트창_휴장일_접수가_같다():
+    """사건일 자체가 휴장일이면 다음 거래일로 밀린다 — `d0_shifted`가 서야 한다."""
+    rows = _krx_series(80)
+    holiday_row = rows[70]
+    rows = [r for r in rows if r["date"] != holiday_row["date"]]   # 그날만 빠진 창
+    core = event_window_facts(rows, holiday_row["date"], baseline=60)
+    got = _viewer([["eventWindowFacts", rows, holiday_row["date"], {"baseline": 60}]])[0]
+    assert core["d0_shifted"] is True
+    for k in ("d0_shifted", "d0_date", "pre_return_pct", "post_return_pct"):
+        assert core[k] == got.get(k), f"{k}가 갈린다: core={core[k]!r} 뷰어={got.get(k)!r}"
+
+
+def test_이벤트창_덜_찬_창이_같다():
+    """사건이 창 끝자락에 있으면 D+5가 다 안 찬다 — `post_partial`."""
+    rows = _krx_series(75)
+    event = rows[73]["date"]   # 뒤에 1거래일만 남는다
+    core = event_window_facts(rows, event, baseline=60)
+    got = _viewer([["eventWindowFacts", rows, event, {"baseline": 60}]])[0]
+    assert core["post_partial"] is True
+    assert core["days_post_avail"] == got["days_post_avail"] == 1
+    assert core["post_return_pct"] == got["post_return_pct"]
+
+
+def test_이벤트창_기준선_부족이_같다():
+    """사건이 창 앞머리에 있으면 기준선(60거래일)이 모자란다."""
+    rows = _krx_series(20)
+    event = rows[10]["date"]
+    core = event_window_facts(rows, event, baseline=60, min_baseline=20)
+    got = _viewer([["eventWindowFacts", rows, event, {"baseline": 60, "minBaseline": 20}]])[0]
+    assert core["baseline_note"] is not None
+    assert core["baseline_note"] == got["baseline_note"]
+    assert core["pre_vol_ratio"] is None and got["pre_vol_ratio"] is None
+
+
+def test_이벤트창_거래량_0이_같다():
+    """매매거래정지 등으로 거래량 0인 거래일이 섞인 창 — `zero_volume_days`."""
+    rows = _krx_series(80)
+    for i in (68, 69, 70, 71):
+        rows[i] = dict(rows[i], volume=0)
+    event = rows[70]["date"]
+    core = event_window_facts(rows, event, baseline=60)
+    got = _viewer([["eventWindowFacts", rows, event, {"baseline": 60}]])[0]
+    assert core["zero_volume_days"] == got["zero_volume_days"] == 4
+    assert core["d0_no_trade"] is True and got["d0_no_trade"] is True
+
+
+def test_이벤트창_기준선_거래량_0이_같다():
+    """기준선 평균 거래량 자체가 0이면(그 구간 전부 매매정지) 배수를 못 낸다."""
+    rows = _krx_series(80, volume=0)
+    for i in range(65, 80):
+        rows[i] = dict(rows[i], volume=100000)   # 창 안(전 5·D0·후 5)만 거래 재개
+    event = rows[70]["date"]
+    core = event_window_facts(rows, event, baseline=60)
+    got = _viewer([["eventWindowFacts", rows, event, {"baseline": 60}]])[0]
+    assert core["baseline_note"] == "기준선 평균 거래량이 0입니다"
+    assert core["baseline_note"] == got["baseline_note"]
+    assert core["pre_vol_ratio"] is None and got["pre_vol_ratio"] is None
+
+
+def test_이벤트창_상장주식수_없음이_같다():
+    """`list_shrs`가 없으면 회전율을 계산하지 않는다 — `turnover_note`."""
+    rows = _krx_series(80, list_shrs=None)
+    event = rows[70]["date"]
+    core = event_window_facts(rows, event, baseline=60)
+    got = _viewer([["eventWindowFacts", rows, event, {"baseline": 60}]])[0]
+    assert core["turnover_note"] is not None
+    assert core["turnover_note"] == got["turnover_note"]
+    assert core["turnover_pre_pct"] is None and got["turnover_pre_pct"] is None
+
+
+def test_이벤트창_사건이_범위_밖이면_둘_다_없음이다():
+    """사건일이 조회 범위를 넘으면 "0"이 아니라 계산 불가(None)다."""
+    rows = _krx_series(30)
+    future = "20990101"
+    core = event_window_facts(rows, future, baseline=60)
+    got = _viewer([["eventWindowFacts", rows, future, {"baseline": 60}]])[0]
+    assert core is None and got is None
+
+
+def test_창_개괄이_같다():
+    """소속부 변동·관리종목 규정선 대조까지 포함한 개괄이 일치하는지."""
+    rows = _krx_series(60, close0=900, mktcap=15_000_000_000, sect="중견기업부")
+    for i in range(40, 60):
+        rows[i] = dict(rows[i], sect="관리종목(소속부없음)")
+    for i in (5, 6):
+        rows[i] = dict(rows[i], volume=0)
+    core = window_overview(rows)
+    got = _viewer([["windowOverview", rows]])[0]
+    for k in core:
+        assert core[k] == got.get(k), f"{k}가 갈린다: core={core[k]!r} 뷰어={got.get(k)!r}"
+    assert core["sect_changes"], "소속부 변동이 픽스처에서 실제로 발화하지 않았다"
+    assert core["days_mktcap_under_20bn"] > 0, "시총 미달 거래일이 픽스처에서 발화하지 않았다"
+
+
+def test_창_개괄_빈_rows가_같다():
+    core = window_overview([])
+    got = _viewer([["windowOverview", []]])[0]
+    assert core is None and got is None
+
+
+def test_시세_포맷_헬퍼_4종이_같다():
+    """결측(None) 표기는 core `"-"`·뷰어 `"―"`로 **의도된 차이**다(fmtKRW·
+    deltaHTML과 같은 관례) — 숫자 값의 형식만 대조한다.
+    """
+    calls, expect = [], []
+    for x in (0, 0.0, 3.2, -1.05, 12.345, 100.0):
+        calls.append(["fmtPctSigned", x]); expect.append(_fmt_pct_signed(x))
+        calls.append(["fmtRatio", x]); expect.append(_fmt_ratio(x))
+        calls.append(["fmtTurnoverPct", x]); expect.append(_fmt_turnover_pct(x))
+    got = _viewer(calls)
+    bad = [(c, e, g) for c, e, g in zip(calls, expect, got) if e != g]
+    assert not bad, "시세 포맷 헬퍼가 갈린다:\n" + "\n".join(
+        f"  {c[0]}({c[1]!r}) core={e!r} 뷰어={g!r}" for c, e, g in bad[:12]
+    )
+
+
+_MARKET_FACTS = [
+    {"d0_shifted": True, "pre_partial": False, "post_partial": False,
+     "baseline_note": None, "turnover_note": None, "zero_volume_days": 0,
+     "window_days": 11, "days_pre_avail": 5, "days_post_avail": 5},
+    {"d0_shifted": False, "pre_partial": True, "post_partial": True,
+     "baseline_note": "기준선 10거래일 (최소 20)", "turnover_note": None,
+     "zero_volume_days": 3, "window_days": 8, "days_pre_avail": 2, "days_post_avail": 1},
+    {"d0_shifted": False, "pre_partial": False, "post_partial": False,
+     "baseline_note": None,
+     "turnover_note": "상장주식수가 없어 회전율을 계산할 수 없는 거래일이 있습니다",
+     "zero_volume_days": 0, "window_days": 11, "days_pre_avail": 5, "days_post_avail": 5},
+    {"d0_shifted": False, "pre_partial": False, "post_partial": False,
+     "baseline_note": None, "turnover_note": None, "zero_volume_days": 0,
+     "window_days": 11, "days_pre_avail": 5, "days_post_avail": 5},   # 각주 없음
+]
+
+
+def test_시세_각주가_같다():
+    calls = [["marketFactNotes", f] for f in _MARKET_FACTS]
+    got = _viewer(calls)
+    for f, g in zip(_MARKET_FACTS, got):
+        core = _market_fact_notes(f)
+        assert core == g, f"각주가 갈린다: core={core!r} 뷰어={g!r}"
+
+
+def test_주말_요일_후보가_같다():
+    """월~금만 남기고 토·일을 뺀다 — `weekdayCandidates`는 실제 달력이 필요하다."""
+    import datetime as _dt
+    # 임의의 월요일부터 다음 주 일요일까지 — 실제 요일 계산이 맞는지 본다.
+    start = _dt.date(2026, 1, 5)   # 월요일
+    while start.weekday() != 0:
+        start += _dt.timedelta(days=1)
+    end = start + _dt.timedelta(days=13)   # 두 주 꽉 채움(토·일 포함)
+    s8, e8 = start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
+    core = _weekday_candidates(s8, e8)
+    got = _viewer([["weekdayCandidates", s8, e8]])[0]
+    assert core == got
+    assert len(core) == 10, "월~금 두 주는 10일이어야 한다"
+    for d8 in core:
+        wd = _dt.datetime.strptime(d8, "%Y%m%d").weekday()
+        assert wd < 5, f"{d8}는 주말인데 후보에 들어갔다"

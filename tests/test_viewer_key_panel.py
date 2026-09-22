@@ -172,6 +172,51 @@ def test_면책_문구가_공용_키_조회를_숨기지_않는다():
     assert "서버에 저장되지 않습니다" in disc
 
 
+# ── ⑤ KRX 키는 DART 키 상태와 독립이다 (2026-09-23) ──────────────────
+#
+# 「공시 전후 시장 반응」 패널은 사용자 본인의 KRX Open API 키로만 동작한다
+# (약관 제11조 — 운영자 키로 대신 조회할 수 없다). 이 키는 DART 키와
+# 완전히 별개의 저장소·화면 요소를 쓴다 — DART 키를 넣거나 지워도 KRX
+# 키 칸은 영향을 받지 않고, 그 반대도 마찬가지다.
+
+def test_krx_키_패널이_DART_키_함수를_참조하지_않는다():
+    """`renderKeyPanel`(DART 전용)이 KRX 패널을 건드리면 두 키가 얽힌다."""
+    body = _cut("renderKeyPanel")
+    assert "krx" not in body.lower(), (
+        "renderKeyPanel이 KRX 키 관련 요소를 참조한다 — DART 키 상태가 "
+        "KRX 키 칸의 표시를 바꿀 수 있게 된다")
+
+
+def test_krx_키_패널_함수가_DART_키를_참조하지_않는다():
+    """`renderKrxKeyPanel`이 `LS_KEY`/`SERVER_KEY`를 읽으면 독립이 우연이 된다."""
+    body = _cut("renderKrxKeyPanel")
+    assert "LS_KEY" not in body and "SERVER_KEY" not in body, (
+        "renderKrxKeyPanel이 DART 키 상태를 읽는다 — 독립이 구조로 보장되지 않는다")
+
+
+def test_krx_키_패널은_hidden_토글을_받지_않는다():
+    """`#krxKeyPanel`에 `classList.toggle("hidden"` 호출이 있으면 어떤 조건에서든
+    DART 키 상태(또는 다른 상태)에 따라 사라질 수 있다 — 이 패널은 항상 보인다."""
+    assert 'krxKeyPanel").classList.toggle("hidden"' not in _SRC
+    assert 'krxKeyPanel").classList.add("hidden"' not in _SRC
+
+
+def test_krx_키_저장과_삭제가_DART_키를_건드리지_않는다():
+    body_save = _handler("saveKrxKey")
+    body_clear = _handler("clearKrxKey")
+    for body, name in ((body_save, "saveKrxKey"), (body_clear, "clearKrxKey")):
+        assert "LS_KEY" not in body, f"{name}이 DART 키 저장소를 건드린다"
+        assert "renderKeyPanel()" not in body, f"{name}이 DART 키 화면을 다시 그린다"
+
+
+def test_krx_키_칸이_문서에_있다():
+    assert 'id="krxKeyPanel"' in _SRC
+    assert 'id="krxKeyMask"' in _SRC
+    assert 'id="krxKeyInput"' in _SRC
+    assert 'href="https://openapi.krx.co.kr"' in _SRC
+    assert "제11조" in _SRC
+
+
 def test_키_패널_문구를_JS가_상황에_맞게_바꾼다():
     """같은 패널이 두 상황에 쓰인다 — 걸려 있는 것이 다르므로 문구도 다르다.
 

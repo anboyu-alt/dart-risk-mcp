@@ -46,12 +46,121 @@ const CORS_HEADERS = {
   "Access-Control-Max-Age": "86400",
 };
 
+/**
+ * KRX Open API 릴레이 — 사용자 본인 키 전용 (GET /api/krx).
+ *
+ * DART 경로(위)와 다른 라우트다 — 키 전달이 헤더 `X-KRX-Key` → 업스트림
+ * `AUTH_KEY`이고, 서버 키·캐시가 없다(약관 제11조 ② — 운영자 키로 받은
+ * 시세를 방문자에게 보여 줄 수 없다). `api/krx.js`(Vercel)와 같은 계약.
+ *
+ * ⚠ Cloudflare에서 KRX가 해외 IP를 막는지는 재지 않았다 — 실패는 502로
+ * 두고 뷰어가 `fetchFailHTML`로 밝힌다.
+ */
+const KRX_BASE = "https://data-dbg.krx.co.kr/svc/apis/sto";
+// core dart_risk_mcp/core/krx_client.py의 KRX_API_IDS.values()와 같아야 한다.
+const KRX_ALLOWED_APIS = new Set(["stk_bydd_trd", "ksq_bydd_trd"]);
+const KRX_CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, X-KRX-Key",
+  "Access-Control-Max-Age": "86400",
+};
+
+function krxToNumber(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const s = String(value).replace(/,/g, "").trim();
+  if (!s) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function krxNormalizeRow(date8, raw) {
+  return {
+    date: date8,
+    close: krxToNumber(raw.TDD_CLSPRC),
+    fluc_rt: krxToNumber(raw.FLUC_RT),
+    volume: krxToNumber(raw.ACC_TRDVOL),
+    value: krxToNumber(raw.ACC_TRDVAL),
+    mktcap: krxToNumber(raw.MKTCAP),
+    list_shrs: krxToNumber(raw.LIST_SHRS),
+    sect: (raw.SECT_TP_NM || "").trim() || null,
+  };
+}
+
+function krxJson(status, body) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      ...KRX_CORS_HEADERS,
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
+async function handleKrx(request, url) {
+  if (request.method !== "GET") {
+    return krxJson(403, { ok: false, error: "forbidden" });
+  }
+  const key = (request.headers.get("X-KRX-Key") || "").trim();
+  if (!key) {
+    return krxJson(400, { ok: false, error: "missing_key" });
+  }
+  const api = url.searchParams.get("api") || "";
+  const basDd = url.searchParams.get("basDd") || "";
+  const isu = url.searchParams.get("isu") || "";
+  if (!KRX_ALLOWED_APIS.has(api) || !/^\d{8}$/.test(basDd) || !/^\d{6}$/.test(isu)) {
+    return krxJson(400, { ok: false, error: "bad_params" });
+  }
+
+  let upstream;
+  try {
+    upstream = await fetch(`${KRX_BASE}/${api}?basDd=${encodeURIComponent(basDd)}`, {
+      headers: { AUTH_KEY: key },
+    });
+  } catch (e) {
+    return krxJson(502, { ok: false, error: "upstream" });
+  }
+  if (upstream.status === 401) {
+    return krxJson(401, { ok: false, error: "unauthorized" });
+  }
+  if (upstream.status !== 200) {
+    return krxJson(502, { ok: false, error: "upstream" });
+  }
+
+  let data;
+  try {
+    data = await upstream.json();
+  } catch (e) {
+    return krxJson(502, { ok: false, error: "upstream" });
+  }
+  const rows = data && Array.isArray(data.OutBlock_1) ? data.OutBlock_1 : null;
+  if (rows === null) {
+    return krxJson(502, { ok: false, error: "upstream" });
+  }
+  if (!rows.length) {
+    return krxJson(200, { ok: true, found: false, empty: true });
+  }
+  const row = rows.find((r) => String(r.ISU_CD) === isu);
+  if (!row) {
+    return krxJson(200, { ok: true, found: false, empty: false });
+  }
+  return krxJson(200, { ok: true, found: true, row: krxNormalizeRow(basDd, row) });
+}
+
 export default {
   async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/api/krx") {
+      if (request.method === "OPTIONS") {
+        return new Response(null, { status: 204, headers: KRX_CORS_HEADERS });
+      }
+      return handleKrx(request, url);
+    }
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: CORS_HEADERS });
     }
-    const url = new URL(request.url);
     const m = url.pathname.match(/^\/api\/([A-Za-z0-9]+\.json)$/);
     if (request.method !== "GET" || !m || !ALLOWED_ENDPOINTS.has(m[1])) {
       return new Response(JSON.stringify({ error: "forbidden" }), {
