@@ -1662,8 +1662,11 @@ dict는 **키가 corp_code**라 `main`의 `e["names"]`가 죽고 `merge_renames`
 > (단축명 "market", `{회사명}_market.txt`). `KRX_API_KEY`가 없는 재생성
 > 환경에서는 성공 표(📈) 대신 `❌ KRX_API_KEY ...` 안내가 골드로 저장될 수
 > 있다 — 그것도 유효한 hygiene 대상이다. 이 항목을 추가한 시점에는 아직
-> 실제 재생성을 돌리지 않아 골드 파일 수(304건)는 그대로다 — 재생성 뒤에
-> 이 숫자를 함께 고친다.
+> 2026-09-23 `--tools market`으로 10개사 골든을 만들어 **314건**이 됐다(`_market.txt`).
+> ⚠ 단축명 `market`은 시장 스캔 preset 골든(`market_*.txt`)과 **겹친다** — 그 필터로
+> 돌리면 preset 14건도 함께 재생성되니 PR에 안 실을 거면 `git checkout`으로 되돌린다.
+> 첫 재생성에서 「🚨 시장경보 이력 (KIND)」의 `(KIND)`가 미등록 영문 코드로 걸려
+> `_ALLOWED_PAREN_ABBREVS`에 넣었다(거래소 시스템 고유 이름이지 내부 코드가 아니다).
 API 키는 `tmp/_apikey.txt` 또는 환경변수 `DART_API_KEY`에서 자동 로드.
 
 ```bash

@@ -147,6 +147,10 @@ _ALLOWED_PAREN_ABBREVS = {
     "CB", "BW", "EB", "RCPS", "BCPS", "CPS",
     # 투자/IR
     "IR", "NDR", "PE", "PEF",
+    # 거래소 시스템 — 2026-09-23 추가. `track_market_reaction`의 「🚨 시장경보
+    # 이력 (KIND)」 절 제목·꼬리말. 내부 flag 코드가 아니라 한국거래소 공시
+    # 시스템의 고유 이름(kind.krx.co.kr)이고, 사용자가 출처를 찾아갈 이름이다.
+    "KIND",
     # 임원 직위 — 2026-08-23 추가. find_actor_overlap이 겸직 임원의 직위를
     # 사실로 병기하면서(동명이인을 눈으로 가릴 수 있게) DART 임원현황의
     # `ofcps` 원문 표기가 처음 골든에 들어왔다: 「상무(CSO)/사내이사」·
