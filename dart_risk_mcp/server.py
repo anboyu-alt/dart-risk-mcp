@@ -2035,8 +2035,9 @@ def _market_reaction_block(
     if corp_cls not in KRX_API_IDS:
         return [
             "",
-            "📈 공시 전후 시장 반응: 이 회사가 속한 시장은 KRX Open API 조회 "
-            "대상이 아니라(코넥스 등) 시세·거래량 대조를 생략합니다.",
+            f"📈 공시 전후 시장 반응: 이 회사가 속한 시장(corp_cls={corp_cls or '미상'})은 "
+            "KRX Open API 조회 대상이 아니라 시세·거래량 대조를 생략합니다"
+            + _non_target_market_tail(corp_cls),
         ]
 
     picked: list[dict] = []

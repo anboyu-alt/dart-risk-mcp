@@ -164,6 +164,15 @@ class TestUnsupportedMarket:
         assert "코넥스" not in out
         assert "시장경보 지정 이력이 없습니다" in out
 
+    def test_흡수_블록_한_줄도_법인구분별로_가른다(self, monkeypatch):
+        """analyze/timeline의 「📈 공시 전후 시장 반응」 한 줄 안내가 「(코넥스 등)」으로
+        E를 뭉뚱그렸다 — 도구 34와 같은 꼬리(`_non_target_market_tail`)를 쓴다."""
+        e_lines = srv._market_reaction_block([], "406760", "E", "krxkey", lookback_days=365)
+        n_lines = srv._market_reaction_block([], "216400", "N", "krxkey", lookback_days=365)
+        e_txt, n_txt = "\n".join(e_lines), "\n".join(n_lines)
+        assert "corp_cls=E" in e_txt and "기타법인(E)" in e_txt and "코넥스" not in e_txt
+        assert "corp_cls=N" in n_txt and "코넥스" in n_txt
+
     def test_비상장은_대상이_아니다(self, monkeypatch):
         _wire(monkeypatch, resolve_corp=_resolve_corp_no_stock)
         out = srv.track_market_reaction("비상장기업")
