@@ -68,6 +68,7 @@ from dart_risk_mcp.server import (  # noqa: E402
     scan_financial_anomaly,
     search_market_disclosures,
     track_capital_structure,
+    track_market_reaction,
     track_turnover_trend,
     get_financial_statements_full,
     list_report_revisions,
@@ -133,6 +134,14 @@ COMPANY_TOOL_MATRIX: list[tuple[str, Callable[[dict], str]]] = [
     ("fsfull",        lambda c: get_financial_statements_full(c["name"], _FS_YEAR)),
     ("revisions",     lambda c: list_report_revisions(c["name"], _FS_YEAR)),
     ("audit_text",    lambda c: get_audit_opinion_text(c["name"], _FS_YEAR)),
+    # v1.29.0 — track_market_reaction. 단축명 "market"은 E-2(시장 전체
+    # preset 스캔)와 같은 글자를 쓰지만 파일명이 갈린다: 이쪽은
+    # `{회사명}_market.txt`, preset 쪽은 `market_{preset}.txt` — `_short_name`이
+    # 파일명 접두로 구분하므로 충돌하지 않는다(`test_golden_output_hygiene.py`의
+    # `_FIRST_LINE_PATTERNS["market"]`은 두 형식을 알터네이션으로 함께 받는다).
+    # KRX_API_KEY가 없는 재생성 환경에서는 `❌ KRX_API_KEY ...` 안내가 골드로
+    # 저장된다 — 그것도 유효한 hygiene 대상이다(fsfull·audit_text와 같은 관례).
+    ("market",        lambda c: track_market_reaction(c["name"])),
 ]
 
 # B. 종목코드 인자 1개 도구

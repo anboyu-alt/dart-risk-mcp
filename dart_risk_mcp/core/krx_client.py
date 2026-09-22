@@ -54,6 +54,11 @@ KRX_SOFT_CAP = 9_000     # 배치 cron·다른 소비처 몫을 남겨 두는 �
 # 남는 날은 `days_uncovered`로 알린다(캐시가 쌓이면 다음 호출이 이어 받는다).
 KRX_CALL_BUDGET = 120
 KRX_CONCURRENCY = 4      # 실측 5까지 스로틀 없음 — 여유 하나를 뺐다
+# ⚠ 빈 응답(`OutBlock_1: []`)은 휴장일과 **발표 전**을 구분하지 않는다. 실측(2026-09-23
+# 00:42 KST): 전 거래일(09-22)이 아직 빈 배열이었고 첫 판은 그것을 휴장일로 **영구
+# 캐시**했다(두 시장 모두 — 손으로 지웠다). 최근 이 일수 안의 빈 응답은 캐시하지 않고
+# `days_pending`으로 알린다. 7일이면 추석·설 연휴(최장 6일)를 덮는다.
+KRX_EMPTY_GRACE_DAYS = 7
 
 # 캐시에 남기는 필드 8종만 — 저장 용량과 「원문 그대로」 원칙의 절충.
 KRX_KEEP_FIELDS = (
@@ -260,6 +265,7 @@ def _empty_series_result(*, api_id, fetch_failed, **extra) -> dict:
         "days_fetched": 0,
         "days_cached": 0,
         "days_uncovered": [],
+        "days_pending": [],
         "quota_hit": False,
         "fetch_failed": fetch_failed,
         "api_id": api_id,
@@ -307,6 +313,7 @@ def fetch_price_series(
     days_fetched = 0
     days_cached = 0
     days_uncovered: list[str] = []
+    days_pending: list[str] = []
     fetch_failed = False
     quota_hit = False
 
@@ -345,6 +352,8 @@ def fetch_price_series(
                     to_fetch,
                     ex.map(lambda d: krx_get_daily(api_id, d, api_key), to_fetch),
                 ))
+        grace_floor = (datetime.strptime(today, "%Y%m%d")
+                       - timedelta(days=KRX_EMPTY_GRACE_DAYS)).strftime("%Y%m%d")
         for date8, result in fetched:
             if result is None:
                 fetch_failed = True
@@ -356,6 +365,12 @@ def fetch_price_series(
                 day_payload = {"rows": kept_rows}
             else:
                 day_payload = {"empty": True}
+                if date8 >= grace_floor:
+                    # 최근 며칠의 빈 응답은 휴장일이 아니라 **발표 전**일 수 있다 —
+                    # 캐시하면 영구 휴장일이 된다. 오늘치로만 두고 다음 호출이 다시 본다.
+                    days_pending.append(date8)
+                    payloads[date8] = day_payload
+                    continue
             if date8 != today:
                 _write_cache(api_id, date8, day_payload)
             payloads[date8] = day_payload
@@ -378,6 +393,7 @@ def fetch_price_series(
         "days_fetched": days_fetched,
         "days_cached": days_cached,
         "days_uncovered": sorted(days_uncovered),
+        "days_pending": sorted(days_pending),
         "quota_hit": quota_hit,
         "fetch_failed": fetch_failed,
         "api_id": api_id,

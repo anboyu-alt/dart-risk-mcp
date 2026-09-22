@@ -1891,7 +1891,63 @@ def _market_fact_notes(fact: dict) -> list[str]:
             f"창 안 거래량 0인 거래일 {zero}/{fact.get('window_days', 0)}일"
             "(매매거래정지 등 — 공시 목록에서 확인)"
         )
+    if fact.get("uncovered_note"):
+        notes.append(fact["uncovered_note"])
     return notes
+
+
+def _date8_add(date8: str, days: int) -> str:
+    try:
+        return (datetime.strptime(date8, "%Y%m%d") + timedelta(days=days)).strftime("%Y%m%d")
+    except ValueError:
+        return date8
+
+
+def _market_alerts_only_report(corp_name, stock_code, corp_cls, lookback_years,
+                               lookback_days, from_date, to_date) -> str:
+    """승인된 KRX API 밖의 시장(코넥스 등)은 시세 없이 KIND 시장경보 절만 낸다."""
+    lookback_years = _coerce_lookback(lookback_years)
+    bgn_de, end_de, lb_days, _mp, window_phrase, win_err = _resolve_window(
+        lookback_years, lookback_days, from_date, to_date
+    )
+    if win_err:
+        return f"❌ {win_err}"
+    today8 = datetime.now().strftime("%Y%m%d")
+    alert_start = bgn_de or (datetime.now() - timedelta(days=int(lb_days or 0))).strftime("%Y%m%d")
+    lines = [
+        f"📈 **{corp_name}** ({stock_code}) — 공시 전후 시장 반응 ({window_phrase})",
+        "",
+        f"⚠ 이 회사가 속한 시장(corp_cls={corp_cls or '미상'})은 승인된 KRX Open API"
+        "(유가증권·코스닥 일별매매정보) 조회 대상이 아니라 시세·거래량 대조는 생략합니다"
+        " — 코넥스는 「코넥스 일별매매정보」 API를 따로 활용 신청해야 합니다.",
+        "",
+        "## 🚨 시장경보 이력 (KIND)",
+        "",
+    ]
+    alerts_result = fetch_market_alerts(stock_code, alert_start, end_de or today8)
+    if alerts_result.get("fetch_failed"):
+        lines.append("확인 불가 — KIND 응답에 실패했습니다(없다는 뜻이 아닙니다).")
+    else:
+        alert_list = alerts_result.get("alerts") or []
+        if alerts_result.get("clamped"):
+            lines.append(
+                f"⚠ KIND는 3년까지만 조회됩니다 — {_fmt_date8(alerts_result.get('clamp_start') or '')}부터 조회했습니다."
+            )
+        if not alert_list:
+            lines.append("이 창에는 시장경보 지정 이력이 없습니다.")
+        for a in alert_list[:_MARKET_ALERT_TOOL_MAX]:
+            kind_label = _KIND_ALERT_LABEL.get(a.get("kind", ""), a.get("kind", ""))
+            reason = f" ({a['reason']})" if a.get("reason") else ""
+            released = f" → 해제 {_fmt_date8(a['released'])}" if a.get("released") else ""
+            lines.append(
+                f"- [{_fmt_date8(a.get('designated') or a.get('announced') or '')}] "
+                f"「{kind_label}」 지정{reason}{released}"
+            )
+        if len(alert_list) > _MARKET_ALERT_TOOL_MAX:
+            lines.append(f"… 외 {len(alert_list) - _MARKET_ALERT_TOOL_MAX}건")
+    lines.append("")
+    lines.append("📎 KIND 시장경보는 비공식 웹 조회입니다(kind.krx.co.kr) · 시세 대조 없음.")
+    return _append_size_footer("\n".join(lines).rstrip("\n"), lookback_years)
 
 
 def _fmt_price(x) -> str:
@@ -9663,10 +9719,11 @@ def track_market_reaction(
 
     corp_cls = fetch_company_info(corp_code, _api_key()).get("corp_cls", "")
     if corp_cls not in KRX_API_IDS:
-        return (
-            f"❌ **{corp_name}**이(가) 속한 시장은 KRX Open API 조회 대상이 "
-            "아닙니다(유가증권·코스닥만 지원 — 코넥스 등 제외)."
-        )
+        # 코넥스(N) 등은 승인된 KRX API(유가·코스닥 일별매매정보)에 없다. 그래도
+        # **KIND 시장경보는 코넥스도 다룬다**(실측 2026-09-23: 위험 지정 종목
+        # 인바이츠바이오코아·더콘텐츠온이 둘 다 코넥스) — 시세 없이 경보 절만 낸다.
+        return _market_alerts_only_report(corp_name, stock_code, corp_cls, lookback_years,
+                                          lookback_days, from_date, to_date)
 
     lookback_years = _coerce_lookback(lookback_years)
     today8 = datetime.now().strftime("%Y%m%d")
@@ -9676,8 +9733,19 @@ def track_market_reaction(
         ev_date8 = rcept_no[:8]
         if len(ev_date8) != 8 or not ev_date8.isdigit():
             return f"❌ rcept_no 형식이 올바르지 않습니다 (받은 값: {rcept_no!r})."
+        # 그날 하루치 공시 목록(1콜)에서 접수번호를 찾아 제목을 라벨로 쓴다 — 「지정
+        # 공시」라는 빈 라벨보다 낫고, 못 찾으면 그 사실을 적는다(없다는 뜻이 아니다).
+        label = "지정 공시"
+        day_rows, _st = fetch_company_disclosures_with_status(
+            corp_code, _api_key(), 1, max_pages=3, bgn_de=ev_date8, end_de=ev_date8,
+        )
+        hit = next((d for d in (day_rows or []) if d.get("rcept_no") == rcept_no), None)
+        if hit:
+            label = hit.get("report_nm") or label
+        else:
+            label = f"지정 공시(접수번호를 그날 공시 목록에서 찾지 못함)"
         events = [{
-            "key": "", "label": "지정 공시", "report_nm": "",
+            "key": "", "label": label, "report_nm": label,
             "rcept_dt": ev_date8, "rcept_no": rcept_no, "is_amendment": False,
         }]
         window_phrase = f"접수번호 {rcept_no} 전후"
@@ -9783,11 +9851,26 @@ def track_market_reaction(
     lines.append("| 접수일 | 신호 | D0 등락 | D-5→D-1 | D0→D+5 | 거래량 배수(전 5일/당일) | 회전율(전 5일 합) | 시총 |")
     lines.append("|---|---|---|---|---|---|---|---|")
     facts_by_event: list[tuple[dict, "dict | None"]] = []
+    # 예산에 걸려 못 받은 구간(오래된 쪽)에 걸친 사건은 창이 비어 「D-5 중 0일 자료」
+    # 같은 각주가 붙는다 — 자료가 없어서가 아니라 **아직 안 받아서**다. 그 사실을 적는다.
+    uncovered_max = max(series.get("days_uncovered") or [""])
     for e in shown:
-        fact = event_window_facts(rows, (e["rcept_dt"] or "")[:8], baseline=_MARKET_BASELINE_DAYS)
+        ev8 = (e["rcept_dt"] or "")[:8]
+        fact = event_window_facts(rows, ev8, baseline=_MARKET_BASELINE_DAYS)
+        if fact is not None and uncovered_max and ev8 <= _date8_add(uncovered_max, 100):
+            fact = {**fact, "uncovered_note": (
+                "이 사건의 창 일부가 미조회 구간(호출 예산)입니다 — 다시 실행하면 이어서 받습니다"
+            )}
         facts_by_event.append((e, fact))
         if fact is None:
-            lines.append(f"| {_fmt_date8((e['rcept_dt'] or '')[:8])} | {e.get('label', '-')} | - | - | - | - | - | - |")
+            pend = series.get("days_pending") or []
+            why = (
+                "KRX 발표 전(마감 후 다시 조회)" if pend and ev8 >= pend[0]
+                else "이 조회 창 안에 시세 자료 없음"
+            )
+            lines.append(
+                f"| {_fmt_date8(ev8)} | {e.get('label', '-')} | {why} | - | - | - | - | - |"
+            )
         else:
             lines.append(_market_table_row(fact, e))
     # 같은 접수일에 신호가 여럿이면(한 공시가 신호 2~3개를 켠다) 각주가 그대로
@@ -9819,6 +9902,12 @@ def track_market_reaction(
     )
     if series.get("quota_hit"):
         lines.append("⚠ KRX 일일 호출 한도에 도달해 일부 거래일을 받지 못했습니다.")
+    pending = series.get("days_pending") or []
+    if pending:
+        lines.append(
+            f"※ 최근 {len(pending)}거래일({_fmt_date8(pending[0])}~{_fmt_date8(pending[-1])})은 "
+            "KRX가 아직 발표하지 않아 비어 있습니다(휴장일이 아닐 수 있음 — 마감 후 다시 조회)."
+        )
 
     lines.append("")
     lines.append("## ② 🚨 시장경보 이력 (KIND)")

@@ -413,3 +413,27 @@ def test_budget_applies_before_concurrent_fetch(monkeypatch):
     weekdays = kc._weekday_candidates("20260901", "20260912")   # 0912는 토요일
     assert sorted(seen) == weekdays[-3:]
     assert res["days_uncovered"] == weekdays[:-3]
+
+
+# ---------------------------------------------------------------- 발표 전 빈 응답 (2026-09-23 실측)
+
+def test_recent_empty_response_is_pending_not_cached(monkeypatch, _cache_dir):
+    """전 거래일이 아직 빈 배열로 오는 시각(실측 09-23 00:42 KST에 09-22가 빈 응답)이
+    있다 — 그것을 휴장일로 영구 캐시하면 그 날짜의 시세가 영원히 사라진다.
+    오늘부터 KRX_EMPTY_GRACE_DAYS 안의 빈 응답은 캐시하지 않고 days_pending에 적는다."""
+    monkeypatch.setattr(kc, "_today_str", lambda: "20260923")
+    monkeypatch.setattr(kc, "krx_get_daily", lambda a, d, k: [])
+    res = kc.fetch_price_series("005930", "Y", "20260921", "20260922", "k")
+    assert res["days_pending"] == ["20260921", "20260922"]
+    assert kc._read_cache("stk_bydd_trd", "20260922") is None
+    assert kc._read_cache("stk_bydd_trd", "20260921") is None
+    assert res["fetch_failed"] is False and res["days_uncovered"] == []
+
+
+def test_old_empty_response_is_still_cached_as_holiday(monkeypatch, _cache_dir):
+    """유예 밖(8일 이전)의 빈 응답은 휴장일로 캐시한다 — 여기서 바뀌면 안 된다."""
+    monkeypatch.setattr(kc, "_today_str", lambda: "20260923")
+    monkeypatch.setattr(kc, "krx_get_daily", lambda a, d, k: [])
+    res = kc.fetch_price_series("005930", "Y", "20260901", "20260901", "k")
+    assert res["days_pending"] == []
+    assert kc._read_cache("stk_bydd_trd", "20260901") == {"empty": True}

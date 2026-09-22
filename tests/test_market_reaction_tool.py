@@ -140,11 +140,18 @@ class TestKeyGuards:
 
 
 class TestUnsupportedMarket:
-    def test_코넥스는_대상이_아니다(self, monkeypatch):
-        _wire(monkeypatch, corp_cls="N", disclosures=[_mk_disclosure(_CB_TITLE)])
+    def test_코넥스는_시세_없이_KIND_절만_낸다(self, monkeypatch):
+        """실측(2026-09-23): 위험 지정 종목 인바이츠바이오코아·더콘텐츠온이 둘 다
+        코넥스였다 — 시세 API는 없지만 KIND 시장경보는 코넥스도 다루므로 ❌로
+        끊지 않고 경보 절만 낸다."""
+        _wire(monkeypatch, corp_cls="N", disclosures=[_mk_disclosure(_CB_TITLE)],
+              alerts=[{"kind": "risk", "name": "테스트기업", "announced": "20260202",
+                       "designated": "20260203", "released": None}])
         out = srv.track_market_reaction("테스트기업")
-        assert out.startswith("❌")
-        assert "코넥스" in out or "KRX Open API 조회 대상이" in out
+        assert not out.startswith("❌")
+        assert "조회 대상이 아니라" in out and "코넥스" in out
+        assert "「투자위험」 지정" in out
+        assert "사건별 시세" not in out and "창 개괄" not in out
 
     def test_비상장은_대상이_아니다(self, monkeypatch):
         _wire(monkeypatch, resolve_corp=_resolve_corp_no_stock)
@@ -234,10 +241,19 @@ class TestPartialAndQuota:
 class TestRceptNo:
     def test_rcept_no_단건(self, monkeypatch):
         rows = _synth_price_rows("20260101", "20260220")
-        _wire(monkeypatch, price_rows=rows)
+        _wire(monkeypatch, price_rows=rows,
+              disclosures=[_mk_disclosure(_CB_TITLE, rcept_no="20260201000001")])
         out = srv.track_market_reaction("테스트기업", rcept_no="20260201000001")
         assert "접수번호 20260201000001 전후" in out.splitlines()[0]
         assert "2026.02.01" in out
+        # 그날 공시 목록에서 찾은 제목이 라벨이 된다(「지정 공시」가 아니라)
+        assert _CB_TITLE in out
+
+    def test_rcept_no_목록에_없으면_그_사실을_적는다(self, monkeypatch):
+        rows = _synth_price_rows("20260101", "20260220")
+        _wire(monkeypatch, price_rows=rows, disclosures=[])
+        out = srv.track_market_reaction("테스트기업", rcept_no="20260201000001")
+        assert "찾지 못함" in out
 
     def test_rcept_no_형식_오류(self, monkeypatch):
         _wire(monkeypatch)
