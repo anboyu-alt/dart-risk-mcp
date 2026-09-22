@@ -1455,6 +1455,16 @@ async function krxFetchSeries(api, isu, startDd, endDd, onProgress) {
   krxSaveRowsCache(cache);
 
   const rows = Object.keys(rowsByDate).sort().map((d) => rowsByDate[d]);
+  // 앞 거래일이 미조회(예산·소프트캡·실패·발표 전)면 이 행의 「전일」이 실제
+  // 전 거래일이 아니다 — `priceBreaks`가 전일 종가·등락률을 견줄 때 그 쌍을
+  // 건너뛰도록 표시한다(휴장일은 빈 응답으로 캐시되므로 빈틈이 아니다). 첫
+  // 행은 늘 false. core `fetch_price_series`와 같은 계산.
+  const unknownDays = uncovered.concat(pending);
+  let prevDate = null;
+  for (const row of rows) {
+    row.gap_before = !!prevDate && unknownDays.some((d) => prevDate < d && d < row.date);
+    prevDate = row.date;
+  }
   return {
     rows,
     daysRequested,
@@ -1463,6 +1473,64 @@ async function krxFetchSeries(api, isu, startDd, endDd, onProgress) {
     uncovered: uncovered.sort(),
     pending: pending.sort(),
   };
+}
+
+// 연속 거래일 사이에서 KRX가 기준가를 조정한 날(종가 불연속)을 찾는다 — core
+// `market_context.price_breaks`의 쌍둥이(같은 상수·같은 규칙). 등락률(`fluc_rt`)이
+// 원값 종가 비교와 어긋나면(±1%p 이상) 그날이 기준가 조정일이다(액면분할·병합·
+// 감자·무상증자·유상증자 권리락 등). 등락률이 없는 행은 보조 규칙(주식수 점프 +
+// 종가 역비례)을 쓴다. `gap_before`(앞 거래일 미조회)인 행은 건너뛴다.
+const PRICE_BREAK_TOL_PCT = 1.0;
+const PRICE_BREAK_SHARE_UP = 1.8;
+const PRICE_BREAK_SHARE_DOWN = 0.55;
+const PRICE_BREAK_PRODUCT_MAX = 1.4;
+const PRICE_BREAK_PRODUCT_MIN = 0.7;
+
+function priceBreaks(rows) {
+  const out = [];
+  let prev = null;
+  for (const row of rows) {
+    const close = row.close;
+    if (row.gap_before) prev = null;
+    if (close === undefined || close === null || close <= 0) { prev = null; continue; }
+    if (prev !== null) {
+      const pclose = prev[0], pls = prev[1];
+      const ls = row.list_shrs;
+      const shareRatio = (ls && pls) ? (ls / pls) : null;
+      const fr = row.fluc_rt;
+      let hit = false, adj = null;
+      if (fr !== undefined && fr !== null) {
+        const rawPct = (close / pclose - 1) * 100;
+        if (Math.abs(rawPct - fr) >= PRICE_BREAK_TOL_PCT && (1 + fr / 100) > 0) {
+          const basePrice = close / (1 + fr / 100);
+          adj = basePrice / pclose;
+          hit = true;
+        }
+      } else if (shareRatio !== null &&
+                 (shareRatio >= PRICE_BREAK_SHARE_UP || shareRatio <= PRICE_BREAK_SHARE_DOWN)) {
+        const product = shareRatio * (close / pclose);
+        if ((shareRatio >= PRICE_BREAK_SHARE_UP && product <= PRICE_BREAK_PRODUCT_MAX) ||
+            (shareRatio <= PRICE_BREAK_SHARE_DOWN && product >= PRICE_BREAK_PRODUCT_MIN)) {
+          adj = close / pclose;
+          hit = true;
+        }
+      }
+      if (hit) out.push({ date: row.date, adj, share_ratio: shareRatio });
+    }
+    prev = [close, row.list_shrs];
+  }
+  return out;
+}
+
+// 각주용 한 토막 — core `_break_label`의 쌍둥이("2026.08.04 기준가 ×15.00
+// (주식수 ×0.07)").
+function breakLabel(b) {
+  let txt = `${fmtDate(b.date)} 기준가 ×${b.adj.toFixed(2)}`;
+  const sr = b.share_ratio;
+  if (sr !== undefined && sr !== null && (sr >= PRICE_BREAK_SHARE_UP || sr <= PRICE_BREAK_SHARE_DOWN)) {
+    txt += ` (주식수 ×${sr.toFixed(2)})`;
+  }
+  return txt;
 }
 
 // 사건일(공시 접수일) 전후 거래일 창의 사실을 계산한다 — core
@@ -1499,8 +1567,19 @@ function eventWindowFacts(rows, eventDate8, opts) {
 
   const avg = (values) => values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
 
+  // --- 종가 불연속(액면분할·병합·무상증자 권리락) ---
+  // KRX의 FLUC_RT는 조정 기준인데 등락은 원값 종가 비교라, 그 구간을
+  // 건너뛰면 거짓 등락이 난다(core `event_window_facts`와 같은 이유).
+  const spanRows = baselineRows.concat(preRows, [d0Row], postRows);
+  const breaks = priceBreaks(spanRows);
+  const preSpan = preRows.length >= 2 ? [preRows[0].date, preRows[preRows.length - 1].date] : null;
+  const postSpan = postRows.length ? [d0Date, postRows[postRows.length - 1].date] : null;
+  const baseSpan = baselineRows.length ? [baselineRows[0].date, d0Date] : null;
+  const hit = (span) => span !== null && breaks.some((b) => span[0] < b.date && b.date <= span[1]);
+  const preBreak = hit(preSpan), postBreak = hit(postSpan), baseBreak = hit(baseSpan);
+
   let preReturnPct = null;
-  if (preRows.length >= 2) {
+  if (preRows.length >= 2 && !preBreak) {
     const firstClose = nz(preRows[0].close), lastClose = nz(preRows[preRows.length - 1].close);
     if (firstClose !== null && lastClose !== null && firstClose !== 0) {
       preReturnPct = (lastClose - firstClose) / firstClose * 100;
@@ -1509,7 +1588,7 @@ function eventWindowFacts(rows, eventDate8, opts) {
 
   let postReturnPct = null;
   const d0Close = nz(d0Row.close);
-  if (postRows.length) {
+  if (postRows.length && !postBreak) {
     const lastPostClose = nz(postRows[postRows.length - 1].close);
     if (d0Close !== null && lastPostClose !== null && d0Close !== 0) {
       postReturnPct = (lastPostClose - d0Close) / d0Close * 100;
@@ -1520,6 +1599,14 @@ function eventWindowFacts(rows, eventDate8, opts) {
   let baselineNote = null, preVolRatio = null, d0VolRatio = null;
   if (baselineAvail < minBaseline) {
     baselineNote = `기준선 ${baselineAvail}거래일 (최소 ${minBaseline})`;
+  } else if (baseBreak) {
+    // 분할 뒤 주식수가 N배면 거래량도 N배 — 기준선과 창의 거래량 단위가 다르다.
+    // 날짜·배율을 여기 적는다(창 밖·기준선 안의 변동은 아래 priceBreakNote에
+    // 오르지 않으므로 이 줄이 유일한 근거다).
+    const baseWindowBreaks = breaks.filter((b) => baseSpan[0] < b.date && b.date <= baseSpan[1]);
+    baselineNote = "기준선 안 기준가 조정(" +
+      baseWindowBreaks.map(breakLabel).join(" · ") +
+      ")으로 거래량 단위가 달라 배수를 내지 않습니다";
   } else {
     const baselineVols = baselineRows.map((r) => nz(r.volume)).filter((v) => v !== null);
     const baselineAvg = baselineVols.length ? avg(baselineVols) : null;
@@ -1555,7 +1642,23 @@ function eventWindowFacts(rows, eventDate8, opts) {
   const windowRows = preRows.concat([d0Row], postRows);
   const zeroVolumeDays = windowRows.filter((r) => r.volume === 0).length;
 
+  // ⚠ 이 각주는 **등락을 내지 않은 경우에만** 붙는다 — 기준선 안(창 밖)의 변동은
+  // 거래량 배수만 막고 등락은 그대로 내므로(위 baselineNote), 거기까지 「전후
+  // 비교 생략」이라 적으면 화면에 찍힌 등락과 각주가 서로 다른 말을 한다.
+  let priceBreakNote = null;
+  const windowBreaks = breaks.filter((b) =>
+    (preSpan && preSpan[0] < b.date && b.date <= preSpan[1]) ||
+    (postSpan && postSpan[0] < b.date && b.date <= postSpan[1])
+  );
+  if (windowBreaks.length) {
+    priceBreakNote = "창 안 KRX 기준가 조정으로 종가가 불연속: " +
+      windowBreaks.map(breakLabel).join(" · ") +
+      " (분할·병합·감자·무상증자·유상증자 권리락 등 — 그 전후 등락은 조정 전 원값이라 내지 않았습니다)";
+  }
+
   return {
+    price_breaks: breaks,
+    price_break_note: priceBreakNote,
     zero_volume_days: zeroVolumeDays,
     window_days: windowRows.length,
     d0_no_trade: d0Row.volume === 0,
@@ -1589,8 +1692,9 @@ function windowOverview(rows) {
   const startRow = rows[0], endRow = rows[rows.length - 1];
   const startClose = nz(startRow.close), endClose = nz(endRow.close);
 
+  const breaks = priceBreaks(rows);
   let windowReturnPct = null;
-  if (startClose !== null && endClose !== null && startClose !== 0) {
+  if (!breaks.length && startClose !== null && endClose !== null && startClose !== 0) {
     windowReturnPct = (endClose - startClose) / startClose * 100;
   }
 
@@ -1632,6 +1736,7 @@ function windowOverview(rows) {
   }
 
   return {
+    price_breaks: breaks,
     days_zero_volume: daysZeroVolume,
     sect_start: nz(rows[0].sect),
     sect_end: nz(endRow.sect),
@@ -1659,6 +1764,9 @@ function windowOverview(rows) {
 function fmtPctSigned(x) { return (x === null || x === undefined) ? "―" : `${x >= 0 ? "+" : ""}${x.toFixed(1)}%`; }
 function fmtRatio(x) { return (x === null || x === undefined) ? "―" : `${x.toFixed(1)}배`; }
 function fmtTurnoverPct(x) { return (x === null || x === undefined) ? "―" : `${x.toFixed(2)}%`; }
+// 주가(원) — core `_fmt_price`와 같은 계산(시총과 달리 억·조로 접지 않는다).
+// core는 `int(x)`(0쪽으로 절삭)를 쓰므로 `Math.round`가 아니라 `Math.trunc`.
+function fmtPrice(x) { return (x === null || x === undefined) ? "―" : `${Math.trunc(x).toLocaleString()}원`; }
 
 // 관찰 이벤트 중 최근 `max`건 — 정정은 이미 CUR.observedEvents 자체가
 // 제외한다(신호가 안 붙으면 events에 안 실린다, buildResult 참고). 같은
@@ -7780,6 +7888,7 @@ function marketFactNotes(fact) {
     notes.push(`창 안 거래량 0인 거래일 ${zero}/${fact.window_days || 0}일` +
       `(매매거래정지 등 — 공시 목록에서 확인)`);
   }
+  if (fact.price_break_note) notes.push(fact.price_break_note);
   return notes;
 }
 
@@ -7823,12 +7932,41 @@ function marketReactionHTML(picked, series) {
     html += `<div class="ftnote">최근 ${pendingCount}거래일은 KRX 발표 전일 수 있습니다.</div>`;
   }
 
+  // ⚠ 시세 구간은 조회 창이 아니라 **사건 기준**이다 — 가장 오래된 사건 100일
+  // 앞 ~ 가장 최근 사건 10일 뒤(오늘 상한, `loadMarketReaction`의 구간 계산과
+  // 같다). 머리글에 구간을 적어 「구간 끝 시가총액」이 「지금 시총」으로
+  // 읽히지 않게 한다(core `_market_reaction_block`과 같은 문구).
   const overview = windowOverview(rows);
-  html += `<div style="margin-top:0.6rem;font-size:0.88rem"><b>창 개괄</b><br>`;
+  const span = overview
+    ? ` (시세 구간 ${fmtDate(overview.start_date)}~${fmtDate(overview.end_date)} — ` +
+      `가장 오래된 사건 100일 앞부터 가장 최근 사건 10일 뒤까지)`
+    : "";
+  html += `<div style="margin-top:0.6rem;font-size:0.88rem"><b>시세 구간 개괄${span}</b><br>`;
   if (!overview) {
     html += `이 창 안에 거래일 시세 자료가 없습니다.`;
   } else {
-    html += `거래량 0인 거래일 ${overview.days_zero_volume}/${overview.days}일<br>`;
+    const ret = overview.window_return_pct !== null
+      ? ` (${fmtPctSigned(overview.window_return_pct)})`
+      : ` (구간 등락 미산정 — 아래 불연속 참고)`;
+    html += `${fmtDate(overview.start_date)} 종가 ${fmtPrice(overview.start_close)} → ` +
+      `${fmtDate(overview.end_date)} 종가 ${fmtPrice(overview.end_close)}${ret}<br>`;
+    if (overview.high_close !== null) {
+      html += `창 안 최고 ${fmtPrice(overview.high_close)}(${fmtDate(overview.high_date)}) · ` +
+        `최저 ${fmtPrice(overview.low_close)}(${fmtDate(overview.low_date)})<br>`;
+    }
+    if (overview.avg_turnover_pct !== null) {
+      html += `평균 일 회전율 ${fmtTurnoverPct(overview.avg_turnover_pct)} ` +
+        `(${overview.turnover_days}거래일 기준)<br>`;
+    }
+    if (overview.price_breaks && overview.price_breaks.length) {
+      const moves = overview.price_breaks.map(breakLabel).join(" · ");
+      html += `구간 안 KRX 기준가 조정으로 종가가 불연속: ${moves} — 분할·병합·감자·` +
+        `무상증자·유상증자 권리락 등. 구간 등락은 내지 않았고 최고·최저 종가는 조정 전 원값입니다.<br>`;
+    }
+    if (overview.days_zero_volume) {
+      html += `거래량 0인 거래일 ${overview.days_zero_volume}/${overview.days}일 ` +
+        `— 매매거래정지 등일 수 있습니다(공시 목록에서 확인).<br>`;
+    }
     if (overview.sect_changes && overview.sect_changes.length) {
       const moves = overview.sect_changes.map(
         (c) => `${esc(c.to || "(없음)")}(${fmtDate(c.date)}부터)`).join(" → ");
@@ -7836,6 +7974,7 @@ function marketReactionHTML(picked, series) {
     } else if (overview.sect_end || overview.sect_start) {
       html += `코스닥 소속부: ${esc(overview.sect_end)} (창 안 변동 없음)<br>`;
     }
+    html += `구간 끝(${fmtDate(overview.end_date)}) 시가총액: ${fmtKRW(overview.end_mktcap)}<br>`;
     if (overview.days_mktcap_under_20bn || overview.days_close_under_1000) {
       html += `관리종목 지정요건의 규정 수치(시총 200억·주가 1,000원)와 대조: ` +
         `시총 미달 ${overview.days_mktcap_under_20bn}거래일 · 주가 미달 ${overview.days_close_under_1000}거래일` +

@@ -151,7 +151,7 @@ class TestUnsupportedMarket:
         assert not out.startswith("❌")
         assert "조회 대상이 아니라" in out and "코넥스" in out
         assert "「투자위험」 지정" in out
-        assert "사건별 시세" not in out and "창 개괄" not in out
+        assert "사건별 시세" not in out and "구간 개괄" not in out
 
     def test_비상장은_대상이_아니다(self, monkeypatch):
         _wire(monkeypatch, resolve_corp=_resolve_corp_no_stock)
@@ -174,7 +174,8 @@ class TestNormalTable:
         assert first_line == "📈 **테스트기업** (005930) — 공시 전후 시장 반응 (365일)"
         assert "## ① 사건별 시세·거래량 대조" in out
         assert "## ② 🚨 시장경보 이력 (KIND)" in out
-        assert "## ③ 📊 창 개괄" in out
+        assert "## ③ 📊 시세 구간 개괄" in out
+        assert "가장 오래된 사건 100일 앞부터" in out
         assert "2026.01.15" in out
         assert "2026.02.01" in out
         assert "한국거래소 통계정보" in out

@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import pathlib
 import tempfile
 from urllib.parse import parse_qs, urlsplit
@@ -121,6 +122,24 @@ def stub_structured_fetchers(monkeypatch) -> None:
     for name, fn in STRUCTURED_FETCH_STUBS.items():
         assert hasattr(srv, name), f"server.{name}이 없다 — STRUCTURED_FETCH_STUBS를 고쳐라"
         monkeypatch.setattr(srv, name, fn)
+
+
+@pytest.fixture(autouse=True)
+def _blank_krx_key_by_default(monkeypatch):
+    """모든 테스트는 KRX 키가 **없는** 조건에서 시작한다 (2026-09-23).
+
+    제작자 PC에 `KRX_API_KEY`가 있으면 `analyze_company_risk`·`build_event_timeline`이
+    시장 반응 블록을 켜고, 그 앞단에서 corp_cls를 얻으려 `fetch_company_info`
+    (company.json)를 **가짜 키로 실제 호출**한다 — 공시 목록만 mock한 테스트
+    (`test_fetch_failure_honesty` 등)가 위 leak 가드에 걸려 실패했다. CI(키 없음)
+    에서는 통과하고 제작자 PC에서만 빨간, 키 유무로 갈리는 부류다(PR #458과 같은
+    계열). `server._KRX_API_KEY`는 import 시점 상수라 env만 지워서는 안 된다
+    (`_krx_api_key()`는 상수 우선). KRX가 필요한 테스트는 자기가
+    `monkeypatch.setattr(srv, "_KRX_API_KEY", ...)`로 켠다(`test_market_reaction_tool`
+    관례) — 이 픽스처가 먼저 돌고 테스트의 patch가 덮는다.
+    """
+    monkeypatch.delenv("KRX_API_KEY", raising=False)
+    monkeypatch.setattr(srv, "_KRX_API_KEY", "")
 
 
 @pytest.fixture

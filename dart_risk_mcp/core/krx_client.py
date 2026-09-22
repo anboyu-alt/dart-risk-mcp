@@ -385,7 +385,21 @@ def fetch_price_series(
         if stock_row is not None:
             rows_by_date[date8] = _normalize_row(date8, stock_row)
 
-    rows = [rows_by_date[d] for d in sorted(rows_by_date)]
+    # 앞 거래일이 미조회(예산·소프트캡·실패·발표 전)면 이 행의 「전일」이 실제
+    # 전 거래일이 아니다 — `market_context.price_breaks`가 전일 종가와 등락률을
+    # 견줄 때 그 쌍을 건너뛰도록 `gap_before`로 표시한다(휴장일은 빈 응답으로 알고
+    # 있으므로 빈틈이 아니다). 첫 행은 늘 False. ⚠ 릴레이(`/api/krx`)의 행 정규화는
+    # `_normalize_row`와 같아야 하므로 이 키는 여기서 시계열에만 붙인다 — 뷰어는
+    # `krxFetchSeries`가 같은 규칙으로 채운다.
+    unknown_days = set(days_uncovered) | set(days_pending)
+    rows = []
+    prev_date = None
+    for date8 in sorted(rows_by_date):
+        rows.append({
+            **rows_by_date[date8],
+            "gap_before": bool(prev_date) and any(prev_date < d < date8 for d in unknown_days),
+        })
+        prev_date = date8
 
     return {
         "rows": rows,
