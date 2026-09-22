@@ -137,6 +137,13 @@ from .core import (
     SIGNAL_TYPES,
     _fs_response_to_periods,
     _parse_fs_amount,
+    fetch_price_series,
+    KRX_API_IDS,
+    KRX_CALL_BUDGET,
+    fetch_market_alerts,
+    event_window_facts,
+    align_alerts_with_events,
+    window_overview,
 )
 from .core.taxonomy import CROSS_SIGNAL_PATTERNS
 from .core.qualifiers import (
@@ -226,6 +233,19 @@ def _api_key() -> str:
     두 값이 같아 순서와 무관하다. `tests/test_api_key_single_source.py`가 고정.
     """
     return _DART_API_KEY or os.environ.get("DART_API_KEY", "")
+
+
+_KRX_API_KEY: str = os.environ.get("KRX_API_KEY", "")
+
+
+def _krx_api_key() -> str:
+    """KRX Open API 키 — **이 함수 하나로만** 읽는다. `_api_key()`와 같은 모양·
+    같은 우선순위(모듈 상수 우선, 비어 있으면 호출 시점 env) — 이유도 같다:
+    테스트 다수가 모듈 상수를 패치하고 그 값이 fetcher에 넘어갔는지를
+    `assert_called_with`로 본다. `tests/test_api_key_single_source.py`가
+    두 키 모두에 대해 이 계약을 고정한다.
+    """
+    return _KRX_API_KEY or os.environ.get("KRX_API_KEY", "")
 
 
 def _estimate_output_size(text: str) -> tuple[int, int]:
@@ -427,6 +447,19 @@ _AUDIT_SCOPES = ("consolidated", "separate")
 
 _CAPITAL_TIMELINE_MAX = 30   # `track_capital_structure` 시계열 표시 상한
 _DIVIDEND_ROWS_MAX = 20      # `track_fund_usage` 배당 이력 표시 상한
+
+# 시장 반응(KRX/KIND) — `track_market_reaction`·흡수 블록 공통 상수.
+_MARKET_EVENT_MAX = 12       # `track_market_reaction` 단독 도구의 표 상한
+_MARKET_BLOCK_MAX = 3        # analyze·timeline 흡수 블록 상한(원문 확인 관례와 동일)
+_MARKET_BASELINE_DAYS = 60   # 거래량 배수 기준선(거래일)
+_MARKET_ALERT_LINES_MAX = 5  # KIND 시장경보 표시 상한(흡수 블록)
+_MARKET_ALERT_TOOL_MAX = 40  # 단독 도구의 시장경보 상한(코아스 1년 실측 30건 — 넘으면 건수로)
+# 흡수 블록의 KRX 콜 예산 — 실측(2026-09-22) 동시 4콜 2.9콜/초라 60콜 ≈ 20초.
+# analyze 자체 시간 위에 얹히므로 단독 도구(`KRX_CALL_BUDGET`=120)보다 작게.
+# 모자란 날은 `days_uncovered`로 밝히고, 캐시가 쌓이면 다음 호출이 이어 받는다.
+_MARKET_BLOCK_BUDGET = 60
+# 약관 제10조 ③ — 시세를 찍는 출력에는 이 문구를 명시해야 한다.
+_KRX_ATTRIBUTION = "한국거래소 통계정보"
 
 
 def _validate_choice(name: str, value, allowed) -> str:
@@ -1797,6 +1830,277 @@ def _control_change_detail_block(d: dict) -> list[str]:
     return lines
 
 
+# ── 시장 반응(KRX 시세·KIND 시장경보) ────────────────────────────────────
+#
+# 이 도구는 지금까지 DART 공시만 읽었다 — "무슨 일이 있었는가"까지다.
+# 시세·거래량·회전율은 그 일 전후로 시장이 어떻게 움직였는지를 사실로
+# 붙인다. **점수·등급은 여전히 매기지 않는다**(v0.8.5) — 임계값·판정 어휘
+# ("급등"·"급락"·"이상"·"과열" 등) 없이 등락률·배수·회전율·일수만 적는다.
+# KIND가 부여한 고유 명칭("투자주의"·"투자경고"·"투자위험")은 인용이라
+# 예외다. 근거: docs/superpowers/specs/2026-09-22-krx-market-reaction-design.md
+
+_KIND_ALERT_LABEL = {
+    "caution": "투자주의", "warning": "투자경고", "risk": "투자위험",
+}
+
+
+def _fmt_pct_signed(x) -> str:
+    """부호 있는 퍼센트 한 자리. 값이 없으면 계산 불가 사실 그대로 `-`."""
+    return "-" if x is None else f"{x:+.1f}%"
+
+
+def _fmt_ratio(x) -> str:
+    """배수(소수 한 자리). 값이 없으면 `-`."""
+    return "-" if x is None else f"{x:.1f}배"
+
+
+def _fmt_turnover_pct(x) -> str:
+    """회전율 퍼센트(소수 둘째 자리). 값이 없으면 `-`."""
+    return "-" if x is None else f"{x:.2f}%"
+
+
+def _fmt_mktcap(x) -> str:
+    """시가총액(원) — `_format_amount`를 재사용한다. 값이 없으면 `-`."""
+    if x is None:
+        return "-"
+    return _format_amount(str(int(x))) or "-"
+
+
+def _market_fact_notes(fact: dict) -> list[str]:
+    """`event_window_facts` 한 건의 사실 각주 — 절단·계산 불가 사유를 그대로 옮긴다.
+
+    "값이 없다"와 "계산할 수 없다"를 구분하는 market_context의 원칙을
+    그대로 표시로 옮긴다 — 조용히 `-`만 찍으면 왜 없는지 알 수 없다.
+    """
+    notes: list[str] = []
+    if fact.get("d0_shifted"):
+        notes.append("휴장일 접수 → 다음 거래일 기준")
+    if fact.get("pre_partial"):
+        notes.append(f"D-5 중 {fact.get('days_pre_avail', 0)}일 자료")
+    if fact.get("post_partial"):
+        notes.append(f"D+5 중 {fact.get('days_post_avail', 0)}일 자료")
+    if fact.get("baseline_note"):
+        notes.append(fact["baseline_note"])
+    if fact.get("turnover_note"):
+        notes.append(fact["turnover_note"])
+    # 매매거래정지 종목은 거래량 0·종가 고정으로 온다(실측 2026-09-22 제이스코홀딩스
+    # 96거래일 전부). 등락 0%·배수 `-`만 찍으면 「조용한 시장」으로 읽힌다.
+    zero = fact.get("zero_volume_days") or 0
+    if zero:
+        notes.append(
+            f"창 안 거래량 0인 거래일 {zero}/{fact.get('window_days', 0)}일"
+            "(매매거래정지 등 — 공시 목록에서 확인)"
+        )
+    if fact.get("uncovered_note"):
+        notes.append(fact["uncovered_note"])
+    return notes
+
+
+def _date8_add(date8: str, days: int) -> str:
+    try:
+        return (datetime.strptime(date8, "%Y%m%d") + timedelta(days=days)).strftime("%Y%m%d")
+    except ValueError:
+        return date8
+
+
+def _market_alerts_only_report(corp_name, stock_code, corp_cls, lookback_years,
+                               lookback_days, from_date, to_date) -> str:
+    """승인된 KRX API 밖의 시장(코넥스 등)은 시세 없이 KIND 시장경보 절만 낸다."""
+    lookback_years = _coerce_lookback(lookback_years)
+    bgn_de, end_de, lb_days, _mp, window_phrase, win_err = _resolve_window(
+        lookback_years, lookback_days, from_date, to_date
+    )
+    if win_err:
+        return f"❌ {win_err}"
+    today8 = datetime.now().strftime("%Y%m%d")
+    alert_start = bgn_de or (datetime.now() - timedelta(days=int(lb_days or 0))).strftime("%Y%m%d")
+    lines = [
+        f"📈 **{corp_name}** ({stock_code}) — 공시 전후 시장 반응 ({window_phrase})",
+        "",
+        f"⚠ 이 회사가 속한 시장(corp_cls={corp_cls or '미상'})은 승인된 KRX Open API"
+        "(유가증권·코스닥 일별매매정보) 조회 대상이 아니라 시세·거래량 대조는 생략합니다"
+        " — 코넥스는 「코넥스 일별매매정보」 API를 따로 활용 신청해야 합니다.",
+        "",
+        "## 🚨 시장경보 이력 (KIND)",
+        "",
+    ]
+    alerts_result = fetch_market_alerts(stock_code, alert_start, end_de or today8)
+    if alerts_result.get("fetch_failed"):
+        lines.append("확인 불가 — KIND 응답에 실패했습니다(없다는 뜻이 아닙니다).")
+    else:
+        alert_list = alerts_result.get("alerts") or []
+        if alerts_result.get("clamped"):
+            lines.append(
+                f"⚠ KIND는 3년까지만 조회됩니다 — {_fmt_date8(alerts_result.get('clamp_start') or '')}부터 조회했습니다."
+            )
+        if not alert_list:
+            lines.append("이 창에는 시장경보 지정 이력이 없습니다.")
+        for a in alert_list[:_MARKET_ALERT_TOOL_MAX]:
+            kind_label = _KIND_ALERT_LABEL.get(a.get("kind", ""), a.get("kind", ""))
+            reason = f" ({a['reason']})" if a.get("reason") else ""
+            released = f" → 해제 {_fmt_date8(a['released'])}" if a.get("released") else ""
+            lines.append(
+                f"- [{_fmt_date8(a.get('designated') or a.get('announced') or '')}] "
+                f"「{kind_label}」 지정{reason}{released}"
+            )
+        if len(alert_list) > _MARKET_ALERT_TOOL_MAX:
+            lines.append(f"… 외 {len(alert_list) - _MARKET_ALERT_TOOL_MAX}건")
+    lines.append("")
+    lines.append("📎 KIND 시장경보는 비공식 웹 조회입니다(kind.krx.co.kr) · 시세 대조 없음.")
+    return _append_size_footer("\n".join(lines).rstrip("\n"), lookback_years)
+
+
+def _fmt_price(x) -> str:
+    """주가(원) — 시총과 달리 억·조로 접지 않고 원 단위 콤마 그대로."""
+    if x is None:
+        return "-"
+    try:
+        return f"{int(x):,}원"
+    except (TypeError, ValueError):
+        return str(x)
+
+
+def _render_event_window_row(fact: dict, event: dict) -> str:
+    """관찰 이벤트 한 건 + 시세 사실을 흡수 블록용 한 줄로 렌더한다.
+
+    값 없음은 `-`, 퍼센트는 `+3.2%`, 배수는 `2.4배`, 회전율은 `1.83%`,
+    시총은 `_format_amount`로 옮긴다. 판정 어휘 없음(v0.8.5) — 등락률·
+    배수·회전율·일수를 사실로만 옮긴다.
+    """
+    date = _fmt_date8((event.get("rcept_dt") or "")[:8]) or (event.get("rcept_dt") or "-")
+    label = event.get("label") or event.get("key") or "-"
+    d0 = _fmt_pct_signed(fact.get("d0_fluc_rt"))
+    pre = _fmt_pct_signed(fact.get("pre_return_pct"))
+    post = _fmt_pct_signed(fact.get("post_return_pct"))
+    vol = _fmt_ratio(fact.get("d0_vol_ratio"))
+    turn = _fmt_turnover_pct(fact.get("turnover_pre_pct"))
+    mktcap = _fmt_mktcap(fact.get("mktcap_d0"))
+    line = (
+        f"- [{date}] {label}: D0 등락 {d0} · 전 {pre}/후 {post} · "
+        f"거래량 배수 {vol} · 회전율(전 5일 합) {turn} · 시총 {mktcap}"
+    )
+    extra = _market_fact_notes(fact)
+    if extra:
+        line += " — " + " · ".join(extra)
+    return line
+
+
+def _market_reaction_block(
+    observed_events: list[dict],
+    stock_code: str,
+    corp_cls: str,
+    krx_key: str,
+    *,
+    lookback_days: int,
+    max_check: int = _MARKET_BLOCK_MAX,
+) -> list[str]:
+    """공시 전후 시장 반응(KRX 시세·KIND 시장경보) 흡수 블록.
+
+    형제 `_related_party_detail_block`(위)과 같은 관례 — 관찰 이벤트 중
+    최근 `max_check`건만 확인한다(원문 조회가 아니라 시세 조회지만 같은
+    "최근 N건만" 예산 원칙). **키가 없거나 이 시장이 대상이 아니면** 그
+    사실만 한 줄 적고 조용히 생략하지 않는다.
+
+    시세는 **항상 있는 자료**다 — 조회 실패를 "없다"로 접으면 사용자는
+    "이 회사는 시세가 없다"로 읽는다(v0.8.5 오류 처리 원칙, `_fetch_failed_notice`
+    와 같은 태도). 그래서 실패는 블록을 생략하지 않고 실패 사실을 남긴다.
+    """
+    if not krx_key:
+        return [
+            "",
+            "📈 공시 전후 시장 반응: KRX_API_KEY 환경변수가 설정되지 않았습니다 "
+            "— 시세·거래량 대조는 생략합니다(설정하면 이 자리에 표가 붙습니다).",
+        ]
+    if corp_cls not in KRX_API_IDS:
+        return [
+            "",
+            "📈 공시 전후 시장 반응: 이 회사가 속한 시장은 KRX Open API 조회 "
+            "대상이 아니라(코넥스 등) 시세·거래량 대조를 생략합니다.",
+        ]
+
+    picked: list[dict] = []
+    seen: set[str] = set()
+    for e in sorted(observed_events, key=lambda x: x.get("rcept_dt", ""), reverse=True):
+        dt = (e.get("rcept_dt") or "")[:8]
+        if e.get("is_amendment") or len(dt) != 8 or not dt.isdigit():
+            continue
+        dedup_key = f"{dt}:{e.get('key', '')}"
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+        picked.append(e)
+        if len(picked) >= max_check:
+            break
+    if not picked:
+        return []
+
+    event_dates = sorted((e.get("rcept_dt") or "")[:8] for e in picked)
+    oldest, newest = event_dates[0], event_dates[-1]
+    today8 = datetime.now().strftime("%Y%m%d")
+    # 기준선 60거래일 ≈ 달력 100일 앞(주말·공휴일 여유) ~ 가장 최근 사건 + 10일.
+    start_dd = (datetime.strptime(oldest, "%Y%m%d") - timedelta(days=100)).strftime("%Y%m%d")
+    end_dd = min(
+        (datetime.strptime(newest, "%Y%m%d") + timedelta(days=10)).strftime("%Y%m%d"),
+        today8,
+    )
+
+    series = fetch_price_series(
+        stock_code, corp_cls, start_dd, end_dd, krx_key, budget=_MARKET_BLOCK_BUDGET
+    )
+    if series.get("fetch_failed"):
+        return [
+            "",
+            "📈 공시 전후 시장 반응: KRX 시세 조회에 실패했습니다 — "
+            "자료가 없다는 뜻이 아닙니다. API 키·일일 호출 한도를 확인한 뒤 "
+            "다시 시도해 주세요.",
+        ]
+
+    rows = series.get("rows", [])
+    lines = ["", "📈 **공시 전후 시장 반응**"]
+    for e in sorted(picked, key=lambda x: x.get("rcept_dt", ""), reverse=True):
+        event_date8 = (e.get("rcept_dt") or "")[:8]
+        fact = event_window_facts(rows, event_date8, baseline=_MARKET_BASELINE_DAYS)
+        label = e.get("label") or e.get("key") or "-"
+        if fact is None:
+            lines.append(
+                f"- [{_fmt_date8(event_date8)}] {label}: "
+                "이 조회 창 안에 시세 자료가 없습니다."
+            )
+            continue
+        lines.append(_render_event_window_row(fact, e))
+
+    days_uncovered = series.get("days_uncovered") or []
+    if days_uncovered:
+        lines.append(
+            f"  ⚠ {series.get('days_requested', 0)}거래일 중 "
+            f"{len(days_uncovered)}일 미조회(호출 예산 — 받은 날은 캐시되므로 "
+            "다시 실행하면 이어서 받습니다)"
+        )
+    if series.get("quota_hit"):
+        lines.append("  ⚠ KRX 일일 호출 한도에 도달해 일부 거래일을 받지 못했습니다.")
+
+    alerts = fetch_market_alerts(stock_code, start_dd, today8)
+    if alerts.get("fetch_failed"):
+        lines.append("  시장경보 확인 불가(KIND 응답 실패)")
+    else:
+        alert_list = alerts.get("alerts") or []
+        for a in alert_list[:_MARKET_ALERT_LINES_MAX]:
+            kind_label = _KIND_ALERT_LABEL.get(a.get("kind", ""), a.get("kind", ""))
+            when = _fmt_date8(a.get("designated") or a.get("announced") or "")
+            reason = f" ({a['reason']})" if a.get("reason") else ""
+            released = f" → 해제 {_fmt_date8(a['released'])}" if a.get("released") else ""
+            lines.append(f"  🚨 [{when}] 「{kind_label}」 지정{reason}{released}")
+        omitted = len(alert_list) - _MARKET_ALERT_LINES_MAX
+        if omitted > 0:
+            lines.append(f"  … 외 {omitted}건")
+
+    lines.append(
+        f"📎 {_KRX_ATTRIBUTION} · 접수일은 사건일과 다를 수 있고 장 마감 후 "
+        "접수는 다음 거래일부터 반응이 나타납니다."
+    )
+    return lines
+
+
 def _confirm_acquisition_targets(
     signal_events: list[dict],
     disclosures: list[dict],
@@ -2892,6 +3196,24 @@ def analyze_company_risk(
         lines += _related_party_detail_block(observed_events)
         lines += _earnings_shock_block(observed_events)
 
+    # 공시 전후 시장 반응(KRX 시세·KIND 시장경보) — 넓은 창(지도 모드)에서는
+    # 생략한다(형제 블록과 같은 가드). 종목코드가 없는 비상장은 대상이 아니다.
+    # ⚠ **KRX 키가 없으면 corp_cls를 조회하지 않는다** — corp_cls는 이
+    # 도구가 그때까지 부르지 않던 값이라, 조건 없이 fetch_company_info를
+    # 호출하면 KRX_API_KEY를 설정하지 않은(=거의 모든) 호출에서도 매번
+    # 새 DART 콜이 하나 늘어난다. 키가 없으면 `_market_reaction_block`이
+    # 어차피 "미설정" 안내 한 줄만 내므로, 그 값을 위해 콜을 쓰지 않는다.
+    if deep and stock_code:
+        _krx_key = _krx_api_key()
+        _market_corp_cls = (
+            fetch_company_info(corp_code, _api_key()).get("corp_cls", "")
+            if _krx_key else ""
+        )
+        lines += _market_reaction_block(
+            observed_events, stock_code, _market_corp_cls, _krx_key,
+            lookback_days=lookback_days,
+        )
+
     # v1.7.0: 최대주주변경 원문 상세 — 원문 추출 실패 시 블록 자체 생략
     _latest_ctrl_change = _find_latest_control_change(disclosures) if deep else None
     if _latest_ctrl_change:
@@ -3687,6 +4009,34 @@ def build_event_timeline(
         if _blk and _blk[0] == "" and lines and lines[-1] == "":
             _blk = _blk[1:]
         lines += _blk
+
+    # 공시 전후 시장 반응(KRX 시세·KIND 시장경보) — 넓은 창(지도 모드)에서는
+    # 생략한다(형제 블록과 같은 가드). timeline의 events는 튜플이라
+    # (rcept_dt, phase, key, label, report_nm, rcept_no, note) 위치로 읽는다.
+    # ⚠ **KRX 키가 없으면 corp_cls를 조회하지 않는다** — analyze_company_risk
+    # 와 같은 판단(위 주석 참고): 키가 없으면 `_market_reaction_block`이
+    # 어차피 "미설정" 안내만 내므로 그 값을 위해 새 DART 콜을 쓰지 않는다.
+    if deep and stock_code:
+        _market_events = [
+            {
+                "key": evt[2], "label": evt[3], "report_nm": evt[4],
+                "rcept_dt": evt[0], "rcept_no": evt[5] if len(evt) > 5 else "",
+                "is_amendment": False,
+            }
+            for evt in events
+        ]
+        _krx_key = _krx_api_key()
+        _market_corp_cls = (
+            fetch_company_info(corp_code, _api_key()).get("corp_cls", "")
+            if _krx_key else ""
+        )
+        _market_blk = _market_reaction_block(
+            _market_events, stock_code, _market_corp_cls, _krx_key,
+            lookback_days=lookback_days,
+        )
+        if _market_blk and _market_blk[0] == "" and lines and lines[-1] == "":
+            _market_blk = _market_blk[1:]
+        lines += _market_blk
 
     _latest_ctrl_change = _find_latest_control_change(disclosures) if deep else None
     if _latest_ctrl_change:
@@ -9305,6 +9655,352 @@ def get_audit_opinion_text(
         f"`search_notes_in_report(rcept_no=\"{rcept}\", terms=[…])`로 보세요."
     )
     return "\n".join(lines).rstrip() + "\n"
+
+
+# ── 도구 34: 공시 전후 시장 반응 ──────────────────────────────────────────
+
+
+def _market_table_row(fact: dict, event: dict) -> str:
+    """`track_market_reaction`의 표 한 행 — 접수일·신호·D0 등락·전/후 누적
+    등락·거래량 배수(전 5일/당일)·회전율(전 5일 합)·시총."""
+    date = _fmt_date8((event.get("rcept_dt") or "")[:8])
+    label = event.get("label") or event.get("key") or "-"
+    d0 = _fmt_pct_signed(fact.get("d0_fluc_rt"))
+    pre = _fmt_pct_signed(fact.get("pre_return_pct"))
+    post = _fmt_pct_signed(fact.get("post_return_pct"))
+    vol = f"{_fmt_ratio(fact.get('pre_vol_ratio'))}/{_fmt_ratio(fact.get('d0_vol_ratio'))}"
+    turn = _fmt_turnover_pct(fact.get("turnover_pre_pct"))
+    mktcap = _fmt_mktcap(fact.get("mktcap_d0"))
+    return f"| {date} | {label} | {d0} | {pre} | {post} | {vol} | {turn} | {mktcap} |"
+
+
+@mcp.tool()
+def track_market_reaction(
+    company_name: str,
+    lookback_years: int = 1,
+    lookback_days: int | None = None,
+    from_date: str = "",
+    to_date: str = "",
+    rcept_no: str = "",
+) -> str:
+    """공시 전후 시장 반응(KRX 시세·KIND 시장경보)을 사실로 표기한다.
+
+    DART 공시만으로는 "무슨 일이 있었는가"까지만 안다 — 이 도구는 그
+    전후로 시세·거래량·회전율이 어떻게 움직였는지를 붙인다. **점수·등급은
+    매기지 않는다**(v0.8.5) — 임계값·판정 어휘("급등"·"급락"·"이상"·"과열" 등)
+    없이 등락률·배수·회전율·일수만 적는다. 신호·패턴 입력으로 쓰지 않는다.
+
+    Args:
+        company_name: 기업명 (예: "에코프로") 또는 종목코드 6자리
+        lookback_years: 조회 기간(년). 기본 1년, 1~5년 범위. rcept_no를
+            주면 무시된다.
+        from_date: 조회 시작일(선택). "2024-01-01"·"20240101" 형식.
+        to_date: 조회 종료일(선택). 미지정 시 오늘.
+        rcept_no: 공시 접수번호 하나만 볼 때(선택) — 그 건 전후 10거래일만
+            본다. 주면 lookback_years/from_date/to_date는 무시된다.
+    """
+    if not _api_key():
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+    krx_key = _krx_api_key()
+    if not krx_key:
+        return (
+            "❌ KRX_API_KEY 환경변수가 설정되지 않았습니다 — "
+            "openapi.krx.co.kr에서 발급(유가증권·코스닥 일별매매정보 활용 신청 필요)."
+        )
+
+    result = resolve_corp(company_name, _api_key())
+    if not result:
+        return f"❌ '{company_name}'에 해당하는 기업을 DART에서 찾을 수 없습니다."
+    corp_name, corp_info = result
+    corp_code = corp_info["corp_code"]
+    stock_code = corp_info.get("stock_code", "")
+    if not stock_code:
+        return f"❌ **{corp_name}**은(는) 종목코드가 없습니다(비상장) — 시장 반응을 조회할 수 없습니다."
+
+    corp_cls = fetch_company_info(corp_code, _api_key()).get("corp_cls", "")
+    if corp_cls not in KRX_API_IDS:
+        # 코넥스(N) 등은 승인된 KRX API(유가·코스닥 일별매매정보)에 없다. 그래도
+        # **KIND 시장경보는 코넥스도 다룬다**(실측 2026-09-23: 위험 지정 종목
+        # 인바이츠바이오코아·더콘텐츠온이 둘 다 코넥스) — 시세 없이 경보 절만 낸다.
+        return _market_alerts_only_report(corp_name, stock_code, corp_cls, lookback_years,
+                                          lookback_days, from_date, to_date)
+
+    lookback_years = _coerce_lookback(lookback_years)
+    today8 = datetime.now().strftime("%Y%m%d")
+    rcept_no = str(rcept_no or "").strip()
+
+    if rcept_no:
+        ev_date8 = rcept_no[:8]
+        if len(ev_date8) != 8 or not ev_date8.isdigit():
+            return f"❌ rcept_no 형식이 올바르지 않습니다 (받은 값: {rcept_no!r})."
+        # 그날 하루치 공시 목록(1콜)에서 접수번호를 찾아 제목을 라벨로 쓴다 — 「지정
+        # 공시」라는 빈 라벨보다 낫고, 못 찾으면 그 사실을 적는다(없다는 뜻이 아니다).
+        label = "지정 공시"
+        day_rows, _st = fetch_company_disclosures_with_status(
+            corp_code, _api_key(), 1, max_pages=3, bgn_de=ev_date8, end_de=ev_date8,
+        )
+        hit = next((d for d in (day_rows or []) if d.get("rcept_no") == rcept_no), None)
+        if hit:
+            label = hit.get("report_nm") or label
+        else:
+            label = f"지정 공시(접수번호를 그날 공시 목록에서 찾지 못함)"
+        events = [{
+            "key": "", "label": label, "report_nm": label,
+            "rcept_dt": ev_date8, "rcept_no": rcept_no, "is_amendment": False,
+        }]
+        window_phrase = f"접수번호 {rcept_no} 전후"
+        oldest, newest = ev_date8, ev_date8
+        post_pad_days = 15
+        alert_start = (datetime.strptime(ev_date8, "%Y%m%d") - timedelta(days=100)).strftime("%Y%m%d")
+    else:
+        bgn_de, end_de, lookback_days, max_pages, window_phrase, win_err = _resolve_window(
+            lookback_years, lookback_days, from_date, to_date
+        )
+        if win_err:
+            return f"❌ {win_err}"
+        # 시장경보는 시세 창(가장 오래된 사건 - 100일)이 아니라 **조회 창** 기준으로
+        # 본다 — 머리글이 「최근 N일」이라 적는데 그 밖의 경보가 섞이면 창이 거짓이 된다.
+        # ⚠ `_resolve_window`는 from_date가 없으면 bgn_de를 빈 문자열로 준다(하부가
+        # lookback_days로 계산) — 그대로 KIND에 넘기면 날짜 파싱 실패로 「확인 불가」가
+        # 된다(라이브 4개사 전부 그랬다, 2026-09-23). 그때는 오늘 - lookback_days.
+        alert_start = bgn_de or (
+            datetime.now() - timedelta(days=int(lookback_days or 0))
+        ).strftime("%Y%m%d")
+        disclosures, fetch_status = fetch_company_disclosures_with_status(
+            corp_code, _api_key(), lookback_days, max_pages=max_pages,
+            bgn_de=bgn_de, end_de=end_de,
+        )
+        if fetch_status == FETCH_ERROR:
+            return _fetch_failed_notice(corp_name, window_phrase)
+
+        events = []
+        for d in disclosures:
+            report_nm = d.get("report_nm", "")
+            if is_amendment_disclosure(report_nm):
+                continue
+            rcept_dt = d.get("rcept_dt", "")[:10]
+            parsed = parse_report_name(report_nm)
+            matched = match_signals(report_nm)
+            qualified = qualify_signals(matched, parsed, d)
+            for sig, q in zip(matched, qualified):
+                if q.tier != TIER_OBSERVED:
+                    continue
+                events.append({
+                    "key": sig["key"], "label": q.label, "report_nm": report_nm,
+                    "rcept_dt": rcept_dt, "rcept_no": d.get("rcept_no", ""),
+                    "is_amendment": False,
+                })
+        if not events:
+            return (
+                f"📈 **{corp_name}** ({stock_code}) — 공시 전후 시장 반응 "
+                f"(최근 {window_phrase})\n\n"
+                "이 기간 관찰된 신호가 없어 대조할 사건이 없습니다."
+            )
+        dates = sorted((e["rcept_dt"] or "")[:8] for e in events if (e["rcept_dt"] or "")[:8].isdigit())
+        oldest, newest = dates[0], dates[-1]
+        post_pad_days = 10
+
+    # 같은 접수일·같은 신호는 한 사건으로 접는다 — 한 회사가 하루에 CB 공시를 셋
+    # 내면(코아스 2026-08-13 실측) 시세 창이 완전히 같아 표 세 줄이 똑같이 찍히고,
+    # 경보 정렬의 「±10일 안 관찰 공시」도 세 번 되풀이된다. 건수는 라벨에 남긴다.
+    grouped: dict[tuple[str, str], dict] = {}
+    for e in events:
+        gkey = ((e["rcept_dt"] or "")[:8], e.get("label") or e.get("key") or "-")
+        if gkey in grouped:
+            grouped[gkey]["_n"] += 1
+        else:
+            grouped[gkey] = dict(e, _n=1)
+    n_raw = len(events)
+    events = []
+    for g in grouped.values():
+        if g["_n"] > 1:
+            g["label"] = f"{g['label']} ×{g['_n']}"
+        events.append(g)
+    events_sorted = sorted(events, key=lambda x: x["rcept_dt"], reverse=True)
+    shown = events_sorted[:_MARKET_EVENT_MAX]
+    omitted = max(0, len(events_sorted) - len(shown))
+
+    start_dd = (datetime.strptime(oldest, "%Y%m%d") - timedelta(days=100)).strftime("%Y%m%d")
+    end_dd = min(
+        (datetime.strptime(newest, "%Y%m%d") + timedelta(days=post_pad_days)).strftime("%Y%m%d"),
+        today8,
+    )
+
+    series = fetch_price_series(stock_code, corp_cls, start_dd, end_dd, krx_key, budget=KRX_CALL_BUDGET)
+    if series.get("fetch_failed"):
+        return (
+            f"⚠ **{corp_name}**의 KRX 시세를 불러오지 못했습니다 ({window_phrase}).\n\n"
+            "**자료가 없다는 뜻이 아닙니다** — KRX 조회가 실패했습니다. "
+            "API 키가 올바른지, 일일 호출 한도를 넘지 않았는지 확인한 뒤 다시 시도해 주세요."
+        )
+    rows = series.get("rows", [])
+
+    lines = [
+        f"📈 **{corp_name}** ({stock_code}) — 공시 전후 시장 반응 ({window_phrase})",
+        "",
+    ]
+
+    lines.append("## ① 사건별 시세·거래량 대조")
+    lines.append("")
+    if omitted:
+        lines.append(
+            f"※ 관찰 신호 {n_raw}건(접수일·신호 기준 사건 {len(events_sorted)}건) 중 "
+            f"최근 {len(shown)}건만 표시 · {omitted}건 생략"
+        )
+        lines.append("")
+    lines.append("| 접수일 | 신호 | D0 등락 | D-5→D-1 | D0→D+5 | 거래량 배수(전 5일/당일) | 회전율(전 5일 합) | 시총 |")
+    lines.append("|---|---|---|---|---|---|---|---|")
+    facts_by_event: list[tuple[dict, "dict | None"]] = []
+    # 예산에 걸려 못 받은 구간(오래된 쪽)에 걸친 사건은 창이 비어 「D-5 중 0일 자료」
+    # 같은 각주가 붙는다 — 자료가 없어서가 아니라 **아직 안 받아서**다. 그 사실을 적는다.
+    uncovered_max = max(series.get("days_uncovered") or [""])
+    for e in shown:
+        ev8 = (e["rcept_dt"] or "")[:8]
+        fact = event_window_facts(rows, ev8, baseline=_MARKET_BASELINE_DAYS)
+        if fact is not None and uncovered_max and ev8 <= _date8_add(uncovered_max, 100):
+            fact = {**fact, "uncovered_note": (
+                "이 사건의 창 일부가 미조회 구간(호출 예산)입니다 — 다시 실행하면 이어서 받습니다"
+            )}
+        facts_by_event.append((e, fact))
+        if fact is None:
+            pend = series.get("days_pending") or []
+            why = (
+                "KRX 발표 전(마감 후 다시 조회)" if pend and ev8 >= pend[0]
+                else "이 조회 창 안에 시세 자료 없음"
+            )
+            lines.append(
+                f"| {_fmt_date8(ev8)} | {e.get('label', '-')} | {why} | - | - | - | - | - |"
+            )
+        else:
+            lines.append(_market_table_row(fact, e))
+    # 같은 접수일에 신호가 여럿이면(한 공시가 신호 2~3개를 켠다) 각주가 그대로
+    # 되풀이된다 — 라이브(제이스코홀딩스)에서 같은 줄이 세 번씩 찍혔다. 날짜+문구로 접는다.
+    seen_notes: set[tuple[str, str]] = set()
+    for e, fact in facts_by_event:
+        if fact is None:
+            continue
+        extra = _market_fact_notes(fact)
+        if not extra:
+            continue
+        d8 = (e["rcept_dt"] or "")[:8]
+        key = (d8, " · ".join(extra))
+        if key in seen_notes:
+            continue
+        seen_notes.add(key)
+        lines.append(f"  - [{_fmt_date8(d8)}] " + " · ".join(extra))
+
+    days_uncovered = series.get("days_uncovered") or []
+    lines.append("")
+    lines.append(
+        f"조회 거래일 {series.get('days_requested', 0)}일 중 "
+        f"{series.get('days_fetched', 0) + series.get('days_cached', 0)}일 확인"
+        + (
+            f" · {len(days_uncovered)}일 미조회(호출 예산 {KRX_CALL_BUDGET}콜/회 — "
+            "받은 날은 캐시되므로 같은 조회를 다시 실행하면 이어서 받습니다)"
+            if days_uncovered else ""
+        )
+    )
+    if series.get("quota_hit"):
+        lines.append("⚠ KRX 일일 호출 한도에 도달해 일부 거래일을 받지 못했습니다.")
+    pending = series.get("days_pending") or []
+    if pending:
+        lines.append(
+            f"※ 최근 {len(pending)}거래일({_fmt_date8(pending[0])}~{_fmt_date8(pending[-1])})은 "
+            "KRX가 아직 발표하지 않아 비어 있습니다(휴장일이 아닐 수 있음 — 마감 후 다시 조회)."
+        )
+
+    lines.append("")
+    lines.append("## ② 🚨 시장경보 이력 (KIND)")
+    lines.append("")
+    alerts_result = fetch_market_alerts(stock_code, alert_start, today8)
+    if alerts_result.get("fetch_failed"):
+        lines.append("확인 불가 — KIND 응답에 실패했습니다(없다는 뜻이 아닙니다).")
+    else:
+        alert_list = alerts_result.get("alerts") or []
+        if alerts_result.get("clamped"):
+            lines.append(
+                f"⚠ KIND는 3년까지만 조회됩니다 — {_fmt_date8(alerts_result.get('clamp_start') or '')}부터 조회했습니다."
+            )
+        if not alert_list:
+            lines.append("이 창에는 시장경보 지정 이력이 없습니다.")
+        else:
+            aligned = align_alerts_with_events(alert_list, events, days=10)
+            if len(aligned) > _MARKET_ALERT_TOOL_MAX:
+                lines.append(
+                    f"※ 시장경보 {len(aligned)}건 중 최근 {_MARKET_ALERT_TOOL_MAX}건만 표시 · "
+                    f"{len(aligned) - _MARKET_ALERT_TOOL_MAX}건 생략"
+                )
+            for g in aligned[:_MARKET_ALERT_TOOL_MAX]:
+                a = g["alert"]
+                kind_label = _KIND_ALERT_LABEL.get(a.get("kind", ""), a.get("kind", ""))
+                reason = f" ({a['reason']})" if a.get("reason") else ""
+                released = f" → 해제 {_fmt_date8(a['released'])}" if a.get("released") else ""
+                lines.append(
+                    f"- [{_fmt_date8(a.get('designated') or a.get('announced') or '')}] "
+                    f"「{kind_label}」 지정{reason}{released}"
+                )
+                for ev in g["events"]:
+                    lines.append(
+                        f"    ↳ ±10일 안 관찰 공시: [{_fmt_date8((ev.get('rcept_dt') or '')[:8])}] "
+                        f"{ev.get('label', '-')}"
+                    )
+
+    lines.append("")
+    lines.append("## ③ 📊 창 개괄")
+    lines.append("")
+    overview = window_overview(rows)
+    if overview is None:
+        lines.append("이 창 안에 거래일 시세 자료가 없습니다.")
+    else:
+        lines.append(
+            f"- {_fmt_date8(overview['start_date'])} 종가 {_fmt_price(overview['start_close'])} "
+            f"→ {_fmt_date8(overview['end_date'])} 종가 {_fmt_price(overview['end_close'])}"
+            f" ({_fmt_pct_signed(overview['window_return_pct'])})"
+        )
+        if overview.get("high_close") is not None:
+            lines.append(
+                f"- 창 안 최고 {_fmt_price(overview['high_close'])}"
+                f"({_fmt_date8(overview['high_date'])}) · "
+                f"최저 {_fmt_price(overview['low_close'])}({_fmt_date8(overview['low_date'])})"
+            )
+        if overview.get("avg_turnover_pct") is not None:
+            lines.append(
+                f"- 평균 일 회전율 {_fmt_turnover_pct(overview['avg_turnover_pct'])} "
+                f"({overview['turnover_days']}거래일 기준)"
+            )
+        if overview.get("days_zero_volume"):
+            lines.append(
+                f"- 거래량 0인 거래일 {overview['days_zero_volume']}/{overview['days']}일 "
+                "— 매매거래정지 등일 수 있습니다(공시 목록에서 확인)."
+            )
+        # 코스닥 소속부(KRX 「관리종목(소속부없음)」 등)는 날짜별 사실이다. 유가증권은 값이 없다.
+        if overview.get("sect_end") or overview.get("sect_start"):
+            if overview.get("sect_changes"):
+                moves = " → ".join(
+                    f"{c['to'] or '(없음)'}({_fmt_date8(c['date'])}부터)" for c in overview["sect_changes"]
+                )
+                lines.append(
+                    f"- 코스닥 소속부: {overview.get('sect_start') or '(없음)'} → {moves}"
+                )
+            else:
+                lines.append(f"- 코스닥 소속부: {overview.get('sect_end')} (창 안 변동 없음)")
+        lines.append(f"- 창 끝 시가총액: {_fmt_mktcap(overview['end_mktcap'])}")
+        if overview["days_mktcap_under_20bn"] or overview["days_close_under_1000"]:
+            lines.append(
+                "- 관리종목 지정요건의 규정 수치(시총 200억·주가 1,000원)와 대조: "
+                f"시총 미달 {overview['days_mktcap_under_20bn']}거래일 · "
+                f"주가 미달 {overview['days_close_under_1000']}거래일"
+                " — 이 도구의 임계가 아니라 규정 수치입니다."
+            )
+
+    lines.append("")
+    lines.append(
+        f"📎 {_KRX_ATTRIBUTION} · 접수일은 사건일과 다를 수 있고 장 마감 후 접수는 "
+        "다음 거래일부터 반응이 나타납니다 · 정정공시는 대조에서 제외했습니다 · "
+        "KIND 시장경보는 비공식 웹 조회입니다(kind.krx.co.kr)."
+    )
+
+    return _append_size_footer("\n".join(lines).rstrip("\n"), lookback_years)
 
 
 def main() -> None:

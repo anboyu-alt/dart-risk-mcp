@@ -1,0 +1,421 @@
+{
+ "_note": "KRX Open API 실측 2026-09-22 (제작자 키). 값은 공개 시세. fields는 응답 첫 행의 키 순서.",
+ "measured": "2026-09-22",
+ "apis": {
+  "stk_bydd_trd": {
+   "basDd": "20260918",
+   "status": 200,
+   "n_rows": 942,
+   "bytes": 293254,
+   "ms": 879,
+   "fields": [
+    "BAS_DD",
+    "ISU_CD",
+    "ISU_NM",
+    "MKT_NM",
+    "SECT_TP_NM",
+    "TDD_CLSPRC",
+    "CMPPREVDD_PRC",
+    "FLUC_RT",
+    "TDD_OPNPRC",
+    "TDD_HGPRC",
+    "TDD_LWPRC",
+    "ACC_TRDVOL",
+    "ACC_TRDVAL",
+    "MKTCAP",
+    "LIST_SHRS"
+   ],
+   "sect_tp_nm_dist": [
+    [
+     "",
+     942
+    ]
+   ],
+   "samples": [
+    {
+     "BAS_DD": "20260918",
+     "ISU_CD": "005930",
+     "ISU_NM": "삼성전자",
+     "MKT_NM": "KOSPI",
+     "SECT_TP_NM": "",
+     "TDD_CLSPRC": "261000",
+     "CMPPREVDD_PRC": "8500",
+     "FLUC_RT": "3.37",
+     "TDD_OPNPRC": "261000",
+     "TDD_HGPRC": "262000",
+     "TDD_LWPRC": "257500",
+     "ACC_TRDVOL": "17489615",
+     "ACC_TRDVAL": "4554291006250",
+     "MKTCAP": "1525878716688000",
+     "LIST_SHRS": "5846278608"
+    },
+    {
+     "BAS_DD": "20260918",
+     "ISU_CD": "071950",
+     "ISU_NM": "코아스",
+     "MKT_NM": "KOSPI",
+     "SECT_TP_NM": "",
+     "TDD_CLSPRC": "1806",
+     "CMPPREVDD_PRC": "-25",
+     "FLUC_RT": "-1.37",
+     "TDD_OPNPRC": "1831",
+     "TDD_HGPRC": "1847",
+     "TDD_LWPRC": "1802",
+     "ACC_TRDVOL": "30396",
+     "ACC_TRDVAL": "55066316",
+     "MKTCAP": "26113306170",
+     "LIST_SHRS": "14459195"
+    }
+   ]
+  },
+  "ksq_bydd_trd": {
+   "basDd": "20260918",
+   "status": 200,
+   "n_rows": 1820,
+   "bytes": 594816,
+   "ms": 1029,
+   "fields": [
+    "BAS_DD",
+    "ISU_CD",
+    "ISU_NM",
+    "MKT_NM",
+    "SECT_TP_NM",
+    "TDD_CLSPRC",
+    "CMPPREVDD_PRC",
+    "FLUC_RT",
+    "TDD_OPNPRC",
+    "TDD_HGPRC",
+    "TDD_LWPRC",
+    "ACC_TRDVOL",
+    "ACC_TRDVAL",
+    "MKTCAP",
+    "LIST_SHRS"
+   ],
+   "sect_tp_nm_dist": [
+    [
+     "중견기업부",
+     511
+    ],
+    [
+     "우량기업부",
+     466
+    ],
+    [
+     "벤처기업부",
+     339
+    ],
+    [
+     "기술성장기업부",
+     255
+    ],
+    [
+     "관리종목(소속부없음)",
+     128
+    ],
+    [
+     "SPAC(소속부없음)",
+     66
+    ],
+    [
+     "투자주의환기종목(소속부없음)",
+     40
+    ],
+    [
+     "외국기업(소속부없음)",
+     15
+    ]
+   ],
+   "samples": [
+    {
+     "BAS_DD": "20260918",
+     "ISU_CD": "028300",
+     "ISU_NM": "HLB",
+     "MKT_NM": "KOSDAQ",
+     "SECT_TP_NM": "중견기업부",
+     "TDD_CLSPRC": "29650",
+     "CMPPREVDD_PRC": "-2350",
+     "FLUC_RT": "-7.34",
+     "TDD_OPNPRC": "31950",
+     "TDD_HGPRC": "32200",
+     "TDD_LWPRC": "29400",
+     "ACC_TRDVOL": "1336430",
+     "ACC_TRDVAL": "40512496225",
+     "MKTCAP": "3949327311950",
+     "LIST_SHRS": "133198223"
+    },
+    {
+     "BAS_DD": "20260918",
+     "ISU_CD": "023440",
+     "ISU_NM": "제이스코홀딩스",
+     "MKT_NM": "KOSDAQ",
+     "SECT_TP_NM": "관리종목(소속부없음)",
+     "TDD_CLSPRC": "521",
+     "CMPPREVDD_PRC": "0",
+     "FLUC_RT": "0.00",
+     "TDD_OPNPRC": "0",
+     "TDD_HGPRC": "0",
+     "TDD_LWPRC": "0",
+     "ACC_TRDVOL": "0",
+     "ACC_TRDVAL": "0",
+     "MKTCAP": "46964378481",
+     "LIST_SHRS": "90142761"
+    },
+    {
+     "BAS_DD": "20260918",
+     "ISU_CD": "032580",
+     "ISU_NM": "피델릭스",
+     "MKT_NM": "KOSDAQ",
+     "SECT_TP_NM": "중견기업부",
+     "TDD_CLSPRC": "5780",
+     "CMPPREVDD_PRC": "570",
+     "FLUC_RT": "10.94",
+     "TDD_OPNPRC": "5300",
+     "TDD_HGPRC": "5990",
+     "TDD_LWPRC": "5210",
+     "ACC_TRDVOL": "969113",
+     "ACC_TRDVAL": "5427577210",
+     "MKTCAP": "191503329920",
+     "LIST_SHRS": "33132064"
+    }
+   ]
+  },
+  "stk_isu_base_info": {
+   "basDd": "20260918",
+   "status": 200,
+   "n_rows": 942,
+   "bytes": 278238,
+   "ms": 293,
+   "fields": [
+    "ISU_CD",
+    "ISU_SRT_CD",
+    "ISU_NM",
+    "ISU_ABBRV",
+    "ISU_ENG_NM",
+    "LIST_DD",
+    "MKT_TP_NM",
+    "SECUGRP_NM",
+    "SECT_TP_NM",
+    "KIND_STKCERT_TP_NM",
+    "PARVAL",
+    "LIST_SHRS"
+   ],
+   "sect_tp_nm_dist": [
+    [
+     "",
+     942
+    ]
+   ],
+   "samples": [
+    {
+     "ISU_CD": "KR7005930003",
+     "ISU_SRT_CD": "005930",
+     "ISU_NM": "삼성전자보통주",
+     "ISU_ABBRV": "삼성전자",
+     "ISU_ENG_NM": "SamsungElectronics",
+     "LIST_DD": "19750611",
+     "MKT_TP_NM": "KOSPI",
+     "SECUGRP_NM": "주권",
+     "SECT_TP_NM": "",
+     "KIND_STKCERT_TP_NM": "보통주",
+     "PARVAL": "100",
+     "LIST_SHRS": "5846278608"
+    },
+    {
+     "ISU_CD": "KR7071950000",
+     "ISU_SRT_CD": "071950",
+     "ISU_NM": "코아스보통주",
+     "ISU_ABBRV": "코아스",
+     "ISU_ENG_NM": "KOAS",
+     "LIST_DD": "20050804",
+     "MKT_TP_NM": "KOSPI",
+     "SECUGRP_NM": "주권",
+     "SECT_TP_NM": "",
+     "KIND_STKCERT_TP_NM": "보통주",
+     "PARVAL": "500",
+     "LIST_SHRS": "14459195"
+    }
+   ]
+  },
+  "ksq_isu_base_info": {
+   "basDd": "20260918",
+   "status": 200,
+   "n_rows": 1820,
+   "bytes": 560931,
+   "ms": 526,
+   "fields": [
+    "ISU_CD",
+    "ISU_SRT_CD",
+    "ISU_NM",
+    "ISU_ABBRV",
+    "ISU_ENG_NM",
+    "LIST_DD",
+    "MKT_TP_NM",
+    "SECUGRP_NM",
+    "SECT_TP_NM",
+    "KIND_STKCERT_TP_NM",
+    "PARVAL",
+    "LIST_SHRS"
+   ],
+   "sect_tp_nm_dist": [
+    [
+     "중견기업부",
+     511
+    ],
+    [
+     "우량기업부",
+     466
+    ],
+    [
+     "벤처기업부",
+     339
+    ],
+    [
+     "기술성장기업부",
+     255
+    ],
+    [
+     "관리종목(소속부없음)",
+     128
+    ],
+    [
+     "SPAC(소속부없음)",
+     66
+    ],
+    [
+     "투자주의환기종목(소속부없음)",
+     40
+    ],
+    [
+     "외국기업(소속부없음)",
+     15
+    ]
+   ],
+   "samples": [
+    {
+     "ISU_CD": "KR7028300002",
+     "ISU_SRT_CD": "028300",
+     "ISU_NM": "에이치엘비",
+     "ISU_ABBRV": "HLB",
+     "ISU_ENG_NM": "HLB",
+     "LIST_DD": "19960727",
+     "MKT_TP_NM": "KOSDAQ",
+     "SECUGRP_NM": "주권",
+     "SECT_TP_NM": "중견기업부",
+     "KIND_STKCERT_TP_NM": "보통주",
+     "PARVAL": "500",
+     "LIST_SHRS": "133198223"
+    },
+    {
+     "ISU_CD": "KR7023440001",
+     "ISU_SRT_CD": "023440",
+     "ISU_NM": "제이스코홀딩스",
+     "ISU_ABBRV": "제이스코홀딩스",
+     "ISU_ENG_NM": "J Steel Company Holdings",
+     "LIST_DD": "19941007",
+     "MKT_TP_NM": "KOSDAQ",
+     "SECUGRP_NM": "주권",
+     "SECT_TP_NM": "관리종목(소속부없음)",
+     "KIND_STKCERT_TP_NM": "보통주",
+     "PARVAL": "500",
+     "LIST_SHRS": "90142761"
+    },
+    {
+     "ISU_CD": "KR7032580003",
+     "ISU_SRT_CD": "032580",
+     "ISU_NM": "피델릭스",
+     "ISU_ABBRV": "피델릭스",
+     "ISU_ENG_NM": "Fidelix Co., Ltd.",
+     "LIST_DD": "19970422",
+     "MKT_TP_NM": "KOSDAQ",
+     "SECUGRP_NM": "주권",
+     "SECT_TP_NM": "중견기업부",
+     "KIND_STKCERT_TP_NM": "보통주",
+     "PARVAL": "500",
+     "LIST_SHRS": "33132064"
+    }
+   ]
+  }
+ },
+ "holiday_20260920": {
+  "status": 200,
+  "n_rows": 0,
+  "bytes": 17
+ },
+ "today_before_publish_20260922": {
+  "status": 200,
+  "n_rows": 0,
+  "bytes": 17
+ },
+ "latency_ksq_10": [
+  [
+   "20260901",
+   200,
+   991,
+   595823,
+   1822
+  ],
+  [
+   "20260902",
+   200,
+   1153,
+   596683,
+   1822
+  ],
+  [
+   "20260903",
+   200,
+   1016,
+   595794,
+   1821
+  ],
+  [
+   "20260904",
+   200,
+   1082,
+   594626,
+   1822
+  ],
+  [
+   "20260905",
+   200,
+   97,
+   17,
+   0
+  ],
+  [
+   "20260908",
+   200,
+   1058,
+   596510,
+   1822
+  ],
+  [
+   "20260909",
+   200,
+   1414,
+   595207,
+   1822
+  ],
+  [
+   "20260910",
+   200,
+   1072,
+   595808,
+   1823
+  ],
+  [
+   "20260911",
+   200,
+   888,
+   595755,
+   1822
+  ],
+  [
+   "20260912",
+   200,
+   64,
+   17,
+   0
+  ]
+ ]
+}

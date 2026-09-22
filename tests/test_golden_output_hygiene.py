@@ -112,7 +112,16 @@ _FIRST_LINE_PATTERNS: dict[str, str] = {
     "actor_overlap": r"^🔍 \*\*여러 회사를 동시에 드나든 .+\*\*",
     "compare_fs":    r"^📊 \*\*재무 비교\*\* \(\d+개 기업\)$",
     "precedents":    r"^📚 \*\*신호별 해석 — 왜 주목해야 하는지\*\*$",
-    "market":        r"^🔍 \*\*시장 공시 스캔\*\* \(preset=[a-z_0-9]+, 최근 \d+일\)$",
+    # "market"은 두 소비처가 공유하는 단축명이다 — E-2(search_market_disclosures
+    # preset 스캔, 파일명 `market_{preset}.txt`)와 v1.29.0 COMPANY_TOOL_MATRIX의
+    # `track_market_reaction`(파일명 `{회사명}_market.txt`)이 `_short_name`에서
+    # 같은 접두 "market"으로 갈린다(파일명 패턴이 달라 실제 충돌은 없다). 그래서
+    # 이 정규식은 두 도구의 첫 줄을 알터네이션으로 함께 받는다 — 후자는 성공
+    # 표(📈)와 KRX_API_KEY 미설정 안내(❌) 둘 다 골드로 저장될 수 있다(재생성
+    # 환경에 KRX 키가 없을 수 있다).
+    "market":        r"^(?:🔍 \*\*시장 공시 스캔\*\* \(preset=[a-z_0-9]+, 최근 \d+일\)"
+                     r"|📈 \*\*.+\*\* \(\d{6}\) — 공시 전후 시장 반응 \(.+\)"
+                     r"|❌ KRX_API_KEY .+)$",
     # DS005 주요결정 (자동 탐지, v1.6.0부터 decision_type 정상 해석 — 첫 골드)
     "decision":      r"^📑 \*\*주요사항 결정 공시\*\* \(rcept_no=\d+\)$",
     # 기존 단일 disclosure (v0.7.x 골드 — risk_check 이전 명명 잔존)
@@ -138,6 +147,10 @@ _ALLOWED_PAREN_ABBREVS = {
     "CB", "BW", "EB", "RCPS", "BCPS", "CPS",
     # 투자/IR
     "IR", "NDR", "PE", "PEF",
+    # 거래소 시스템 — 2026-09-23 추가. `track_market_reaction`의 「🚨 시장경보
+    # 이력 (KIND)」 절 제목·꼬리말. 내부 flag 코드가 아니라 한국거래소 공시
+    # 시스템의 고유 이름(kind.krx.co.kr)이고, 사용자가 출처를 찾아갈 이름이다.
+    "KIND",
     # 임원 직위 — 2026-08-23 추가. find_actor_overlap이 겸직 임원의 직위를
     # 사실로 병기하면서(동명이인을 눈으로 가릴 수 있게) DART 임원현황의
     # `ofcps` 원문 표기가 처음 골든에 들어왔다: 「상무(CSO)/사내이사」·
