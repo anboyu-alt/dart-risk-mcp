@@ -239,6 +239,7 @@ python -m dart_risk_mcp.setup
 - uv 사용자: `"command": "uvx", "args": ["dart-risk-mcp"]` 로 대체 가능(별도 설치 불필요).
 - 특정 버전 고정: `pip install dart-risk-mcp==1.6.0` · 개발판: `pip install git+https://github.com/anboyu-alt/dart-risk-mcp.git`
 - `KRX_API_KEY`(선택) — [openapi.krx.co.kr](https://openapi.krx.co.kr)에서 발급(유가증권·코스닥 일별매매정보 활용 신청 필요. 뷰어의 시장 차트까지 쓰려면 KOSPI·KOSDAQ 시리즈 일별시세도 함께 신청). `track_market_reaction`(공시 전후 시세·거래량 대조) 전용이며, 없어도 나머지 도구는 그대로 작동합니다. `env`에 `"KRX_API_KEY": "발급받은_키"`를 함께 넣으세요.
+- `KIS_APP_KEY`·`KIS_APP_SECRET`(선택) — [한국투자증권 KIS Developers](https://apiportal.koreainvestment.com)의 실전투자 앱키·앱시크릿. 넣으면 `track_market_reaction`의 시세·거래량 대조가 한국투자증권 일봉(원주가)으로도 돕니다. KRX 키와 함께 두면 KRX가 한 번에 다 못 받은 날(호출 예산·실패)만 KIS로 메우고, KIS만 두면 KIS 단독으로 돌되 일자별 시가총액·회전율은 비웁니다(그 두 값은 KRX에만 있습니다). 한국투자증권 계좌가 있어야 발급됩니다.
 
 </details>
 
@@ -293,7 +294,7 @@ python -m dart_risk_mcp.setup
 | "돈이 어디로 갔는지 쫓고 싶어" | `track_fund_usage` 계획 vs 실제 집행 · `track_capital_structure` 자본 이벤트 리듬 · `get_major_decision` 합병·양수도 상대방 · `get_affiliate_investments` 출자망 |
 | "사람을 쫓고 싶어" | `find_actor_overlap` 공통 행위자 탐지(간판 도구) · `track_insider_trading` 지분 변동 시계열 · `get_shareholder_info` · `get_executive_compensation` · `manage_watchlist` 인물 워치리스트 · `lookup_known_actor` 공개기록 조회(opt-in) |
 | "시장 전체를 훑고 싶어" | `search_market_disclosures` 12개 프리셋 배치 스캔 · `find_risk_precedents` 신호 해설·위기 타임라인 |
-| "이 공시 전후로 주가·거래량이 어떻게 움직였나 / 투자경고 지정 이력이 있나" | `track_market_reaction` KRX 시세·거래량 대조 + KIND 시장경보 이력(`KRX_API_KEY` 필요) |
+| "이 공시 전후로 주가·거래량이 어떻게 움직였나 / 투자경고 지정 이력이 있나" | `track_market_reaction` KRX 시세·거래량 대조 + KIND 시장경보 이력(`KRX_API_KEY` 또는 `KIS_APP_KEY`·`KIS_APP_SECRET` 필요) |
 
 ## 실측으로 검증합니다
 

@@ -11,7 +11,7 @@ AI 어시스턴트와 개발자를 위한 프로젝트 내부 가이드입니다
 - **언어:** Python 3.11+
 - **의존성:** `mcp>=1.0.0`, `requests>=2.28.0` (외부 라이브러리 최소화 원칙)
 - **실행:** `python -m dart_risk_mcp` (stdio 전송)
-- **API 키:** 환경변수 `DART_API_KEY` 필수, `KRX_API_KEY`(선택 — `track_market_reaction` 전용, openapi.krx.co.kr 발급)
+- **API 키:** 환경변수 `DART_API_KEY` 필수, `KRX_API_KEY`(선택 — `track_market_reaction` 전용, openapi.krx.co.kr 발급), `KIS_APP_KEY`·`KIS_APP_SECRET`(선택 — 같은 도구의 시세 원천, 한국투자증권 실전투자 앱키)
 
 ---
 
@@ -26,6 +26,7 @@ dart_risk_mcp/
     ├── __init__.py      # 공개 API export
     ├── dart_client.py   # DART API 클라이언트 (핵심)
     ├── krx_client.py    # KRX Open API 클라이언트 — 일별매매정보 날짜별 디스크 캐시 (v1.29.0)
+    ├── kis_client.py    # 한국투자증권 Open API — 종목 일봉(원주가), KRX 빈 날 메우기·KIS 단독 (2026-09-23)
     ├── kind_client.py   # KIND 시장경보(투자주의·경고·위험) 비공식 웹 파싱 (v1.29.0)
     ├── market_context.py # 공시-시세 대조 순수 함수 (사건 창 사실·경보 정렬·창 개괄, v1.29.0)
     ├── signals.py       # 58개 신호 유형 (8개 카테고리) + 키워드 매칭 (v0.4.0 카탈로그 기반 보강)
@@ -727,6 +728,32 @@ DART 공시만으로는 「무슨 일이 있었는가」까지만 안다 — 불
   장 마감 후 접수는 다음 거래일부터 반응이 나타난다는 고지 · 정정공시는
   대조에서 제외 · KIND는 비공식 웹 조회(`kind.krx.co.kr`) 출처 명시.
 - 설계·실측 근거: `docs/superpowers/specs/2026-09-22-krx-market-reaction-design.md`
+- **시세 원천 둘 — KRX가 먼저, KIS가 메운다 (2026-09-23, 제작자 요청)**: 한국투자증권(KIS)
+  Open API 일봉은 **종목·기간 단위**라 1년이 **3콜**이다(KRX는 하루 단위·시장 전체라
+  약 245콜이고, 몰리면 IP가 약 10분 403으로 막힌다). 대신 일자별 **시가총액·상장주식수·
+  코스닥 소속부가 없다**. 그래서 `_market_series`가 ① KRX 키가 있으면 KRX로 받고
+  **못 받은 날(호출 예산·실패·발표 전)만** KIS로 메운다(`fill_series_with_kis`) ② KIS만
+  있으면 KIS 단독(`fetch_price_series_kis`) — 회전율·시총을 비우고 그 사실을 **한 번만**
+  밝힌다(사건마다 각주로 되풀이하지 않는다 — 섞인 코아스 1년에서 같은 각주가 네 줄에
+  찍혔다). **라이브 대조**(GitHub Actions, 2026-08-01~09-22 · CSA 코스믹·코아스·삼성전자
+  각 36거래일): 종가·거래량·거래대금 **전부 일치**, 등락률 ±0.01%p **전부 일치**, 기준가
+  조정일(CSA 코스믹 08-04·08-26)도 두 원천에서 같게 잡혔다 — 섞어도 뜻이 같다는 근거다.
+  섞기 실측: CSA 코스믹 1년 KRX 예산 10콜(46행) → KIS가 197거래일을 메워 243행·미조회 0·7.6초.
+  ⚠ **원주가(`FID_ORG_ADJ_PRC="1"`)를 쓴다** — `"0"`은 수정주가라 KRX 원값과 섞으면 분할
+  앞 구간이 절반 값이 된다(CSA 코스믹 08-04 원주가 3,045 ↔ 수정 1,522). ⚠ `prdy_vrss`는
+  **기준가 대비**라(08-26 종가 1,859·+429 → 기준가 1,430) KRX `FLUC_RT`와 같은 뜻으로
+  등락률을 만든다. ⚠ 락구분(`flng_cls_code`)·분할비율(`prtt_rate`)은 분할일에도 `00`·
+  `0.00`이라 읽지 않는다. ⚠ 오늘 행은 장중 부분 자료라 뺀다(`days_pending`). ⚠ KIS로
+  메운 행은 `src="kis"` 표지를 달아 `window_overview`가 **소속부 이동을 KRX 행으로만** 본다
+  — 안 그러면 「관리종목 → (없음) → 관리종목」 같은 없는 이동이 생긴다. 시총 규정선 대조도
+  분모(`mktcap_days`)를 밝힌다(「시총 미달 0거래일」이 「전부 넘었다」로 읽히지 않게).
+  ⚠ **토큰은 1분 1회 발급 제한**이라 `~/.cache/dart-risk-mcp/kis/token_<앱키 지문>.json`에
+  24시간 캐시한다(파일 이름·본문에 앱키·시크릿을 남기지 않는다. 만료 표기는 시간대 없는
+  KST라 KST로 못 박는다 — 기기 로컬로 읽으면 UTC 기기에서 9시간 늦게 만료된 줄 안다).
+  라이브 한 번의 검증 실행 전체(도구 3회 포함)에서 토큰 발급 **1회**. ⚠ **공개 뷰어에는
+  싣지 않는다** — KIS 약관도 제3자 제공을 막는 것으로 알려져 있다(검색 요약 기준 · **약관 원문 조항은 아직 확인하지 않았다** — 확인 전까지 KRX 제11조 ②와 같은 태도로 다룬다). 테스트는
+  `conftest`가 KIS 키를 비우고 KIS 호스트를 **무조건** 막는다(실제 키로 돌면 제작자의
+  토큰을 갈아엎는다). `tests/test_kis_client.py`가 고정.
 
 ---
 
@@ -887,6 +914,7 @@ DART 공시만으로는 「무슨 일이 있었는가」까지만 안다 — 불
 | 채무증권 잔액 | 메모리 `_debt_balance_cache` (최대 20건) | 10분 |
 | XBRL 감가상각비 | 메모리 `_xbrl_dep_cache` (최대 10건) | 10분 |
 | KRX 일별매매정보 | 디스크 `~/.cache/dart-risk-mcp/krx/{api_id}/{basDd}.json.gz`(날짜별 시장 전체) | 과거 날짜 TTL 없음(불변)·휴장일 빈 배열 캐시·당일 미캐시 |
+| KIS 접근 토큰 | 디스크 `~/.cache/dart-risk-mcp/kis/token_{앱키 sha256 16자}.json`(토큰·만료 epoch만 — 앱키·시크릿 없음) | 발급 응답의 만료(24시간)·10분 전 재발급 |
 | KRX 일일 호출 계수 | 디스크 `~/.cache/dart-risk-mcp/krx/quota_{YYYYMMDD}.json` | 자정(날짜 롤오버) |
 | 워치리스트(영속, 캐시 아님) | `~/.config/dart-risk-mcp/watchlist.json` (`DART_WATCHLIST_PATH`로 오버라이드) | 영속(비휘발) |
 | 행위자 레지스트리(Notion) | `~/.cache/dart-risk-mcp/known_actors_notion.json` | 24시간 |
@@ -2112,7 +2140,7 @@ env -u DART_API_KEY python -m pytest tests/ -q          # PowerShell은 $env:DAR
 
 ⚠ **소요는 실행마다 갈린다** — 같은 두 파일을 같은 커밋에서 재는데 438초(7분 18초)와 568초(9분 28초)가 나왔다(다른 세션·같은 기기). 실제 DART 왕복이라 그렇다. **단일 값을 적으면 다음 사람이 또 「문서와 다르다」를 겪는다.** 전체 스위트의 9~10분도 스위트가 무거워진 게 아니라 이 두 파일 때문이고, 키를 벗기면 0.64초로 떨어진다.
 
-**KRX 키는 테스트마다 기본으로 비운다 (2026-09-23, 같은 `tests/conftest.py`)**: autouse `_blank_krx_key_by_default`가 `KRX_API_KEY` env를 지우고 `server._KRX_API_KEY`를 `""`로 둔다. 셸에 KRX 키가 있으면 `analyze_company_risk`·`build_event_timeline`이 시장 반응 블록을 켜고 corp_cls를 얻으려 `fetch_company_info`를 **가짜 키로 실제 호출**해, 공시 목록만 mock한 테스트(`test_fetch_failure_honesty`)가 위 leak 가드에 걸렸다 — CI(키 없음)는 초록이고 제작자 PC만 빨간 「키 유무로 갈리는」 부류(PR #458 계열)가 v1.29.0부터 잠복해 있었다. KRX가 필요한 테스트는 자기가 `monkeypatch.setattr(srv, "_KRX_API_KEY", …)`로 켠다(`test_market_reaction_tool` 관례 — autouse가 먼저 돌고 테스트의 patch가 덮는다).
+**KRX 키는 테스트마다 기본으로 비운다 (2026-09-23, 같은 `tests/conftest.py`)**: autouse `_blank_krx_key_by_default`가 `KRX_API_KEY` env를 지우고 `server._KRX_API_KEY`를 `""`로 둔다. 셸에 KRX 키가 있으면 `analyze_company_risk`·`build_event_timeline`이 시장 반응 블록을 켜고 corp_cls를 얻으려 `fetch_company_info`를 **가짜 키로 실제 호출**해, 공시 목록만 mock한 테스트(`test_fetch_failure_honesty`)가 위 leak 가드에 걸렸다 — CI(키 없음)는 초록이고 제작자 PC만 빨간 「키 유무로 갈리는」 부류(PR #458 계열)가 v1.29.0부터 잠복해 있었다. KRX가 필요한 테스트는 자기가 `monkeypatch.setattr(srv, "_KRX_API_KEY", …)`로 켠다(`test_market_reaction_tool` 관례 — autouse가 먼저 돌고 테스트의 patch가 덮는다). 같은 픽스처가 `KIS_APP_KEY`·`KIS_APP_SECRET`도 비우고(2026-09-23), 가드는 KIS 호스트를 키와 무관하게 **항상** 막는다 — 토큰 발급이 1분 1회로 제한돼 실제 키로 테스트가 나가면 제작자의 토큰을 갈아엎는다.
 
 **가짜 키 DART 호출 가드 (2026-09-07, `tests/conftest.py`)**: 도구 하나가 fetcher를 여럿 부르는데 테스트가 공시 목록만 mock하면 나머지(자금사용·채무잔액·부실 이벤트·메자닌·희석·원문)가 패치된 가짜 키 `"k"`로 **DART에 실제 요청**을 보낸다. 전수 측정: **13개 테스트가 231회**, 스위트 175초 중 약 96초였고 CI가 매 실행마다 그 요청을 DART에 던지고 있었다(가장 느린 테스트 34초). `pytest_runtest_call` 래퍼가 `requests.Session.request`를 감싸 opendart 호스트 + env 실제 키와 다른 `crtfc_key`(키 없는 환경에서는 전부)면 **DART의 실제 거절 응답과 같은 모양**(HTTP 200 · `{"status":"010","message":"등록되지 않은 인증키입니다."}` — 라이브 실측)을 즉시 돌려주고, 테스트가 끝나면 **그 테스트를 실패**시켜 어느 엔드포인트가 샜는지 알린다. 고치는 법은 `@pytest.mark.usefixtures("no_structured_dart")`(구조화 fetcher 14종을 빈 성공 응답으로 스텁, `STRUCTURED_FETCH_STUBS`). 실제 키 호출은 통과시킨다. ⚠ 호스트는 `DART_BASE`에서 읽는다 — 첫 판이 `fss`를 `fsc`로 손으로 적어 가드가 아무것도 못 잡았다. ⚠ 반환 모양이 fetcher마다 다르다(`fetch_debt_balance`는 dict, `fetch_mezzanine_decisions`는 `{"rows","failed_kinds","fetch_failed"}`) — 리스트로 뭉뚱그리면 도구가 TypeError로 죽는다. 효과: 키 없는 스위트 **175초 → 80초**, 새는 테스트 0. 부수: 페이지 간 `time.sleep(0.25)`·재시도 sleep을 실제로 돌리던 테스트 2개도 `dc.time.sleep`을 막았다(`TestThrottleGuard`와 같은 관례).
 

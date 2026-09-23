@@ -1976,9 +1976,10 @@ def _market_pending_why(series: dict) -> str:
 
 
 def _market_fact_for_render(fact: "dict | None", series: dict) -> "dict | None":
-    """KIS 단독이면 회전율 각주(「상장주식수가 없어…」)를 사건마다 붙이지 않는다 —
-    `_market_source_notes`가 한 번 밝힌다."""
-    if fact is not None and series.get("no_share_data"):
+    """KIS가 끼면 회전율 각주(「상장주식수가 없어…」)를 사건마다 붙이지 않는다 —
+    `_market_source_notes`가 한 번 밝힌다. 라이브(2026-09-23 코아스 1년, KRX 예산
+    뒤를 KIS가 메움)에서 같은 각주가 사건 네 줄에 되풀이됐다."""
+    if fact is not None and (series.get("no_share_data") or series.get("source") == "krx+kis"):
         return {**fact, "turnover_note": None}
     return fact
 
@@ -9824,7 +9825,11 @@ def track_market_reaction(
     to_date: str = "",
     rcept_no: str = "",
 ) -> str:
-    """공시 전후 시장 반응(KRX 시세·KIND 시장경보)을 사실로 표기한다.
+    """공시 전후 시장 반응(KRX·한국투자증권 시세, KIND 시장경보)을 사실로 표기한다.
+
+    시세 원천은 `KRX_API_KEY`(일자별 시총·회전율 포함) 또는 한국투자증권
+    `KIS_APP_KEY`·`KIS_APP_SECRET`(원주가 일봉) 중 하나면 된다. 둘 다 있으면 KRX가
+    먼저이고 KRX가 못 받은 날만 KIS로 메운다.
 
     DART 공시만으로는 "무슨 일이 있었는가"까지만 안다 — 이 도구는 그
     전후로 시세·거래량·회전율이 어떻게 움직였는지를 붙인다. **점수·등급은

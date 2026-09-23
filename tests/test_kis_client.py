@@ -373,3 +373,21 @@ class TestKisOnlyRender:
         out = srv.track_market_reaction("테스트기업")
         assert out.startswith("❌ KRX_API_KEY 환경변수가 설정되지 않았습니다")
         assert "KIS_APP_KEY" in out and "KIS_APP_SECRET" in out
+
+
+class TestMixedRender:
+    def test_섞인_시계열은_출처를_둘_다_밝히고_회전율_각주를_되풀이하지_않는다(self, monkeypatch):
+        _wire_kis_only(monkeypatch, [])
+        monkeypatch.setattr(srv, "_KRX_API_KEY", "krx")
+        kis_rows = _kis_series_rows("20260420", "20260731")
+        krx_rows = [dict(r, mktcap=30_000_000_000, list_shrs=1_000_000, src=None)
+                    for r in _kis_series_rows("20260801", "20260812")]
+        monkeypatch.setattr(srv, "fetch_price_series", lambda *a, **k: {"rows": krx_rows})
+        monkeypatch.setattr(srv, "fill_series_with_kis", lambda *a, **k: {
+            "rows": kis_rows + krx_rows, "days_requested": 80, "days_fetched": 80,
+            "days_cached": 0, "days_uncovered": [], "days_pending": [], "quota_hit": False,
+            "fetch_failed": False, "source": "krx+kis", "kis_days": len(kis_rows)})
+        out = srv.track_market_reaction("테스트기업")
+        assert "한국거래소 통계정보" in out and "한국투자증권 Open API" in out
+        assert out.count("KRX로 못 받은") == 1
+        assert "상장주식수가 없어 회전율을 계산할 수 없는" not in out
