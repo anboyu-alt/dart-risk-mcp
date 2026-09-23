@@ -534,12 +534,19 @@
         </p>
         <p class="dim" style="font-size:0.84rem;margin-top:0.4rem">
           저장된 KRX 키: <span id="krxKeyMask" class="mono"></span>
+          <button class="ghost" id="changeKrxKey" style="margin-left:0.5rem;font-size:0.8rem;padding:0.15rem 0.5rem">변경</button>
+          <button class="ghost" id="clearKrxKey" style="margin-left:0.3rem;font-size:0.8rem;padding:0.15rem 0.5rem">삭제</button>
         </p>
-        <label for="krxKeyInput">KRX API KEY · 40 CHARS</label>
-        <input type="password" id="krxKeyInput" placeholder="발급받은 인증키를 붙여넣으세요" autocomplete="off">
-        <div style="margin-top:0.6rem">
-          <button id="saveKrxKey">저장</button>
-          <button class="ghost" id="clearKrxKey" style="margin-left:0.5rem">삭제</button>
+        <!-- 입력 칸은 키가 없거나 「변경」을 눌렀을 때만 보인다 — 키를 이미
+             넣었는데 빈 입력 칸이 그대로 떠 있으면 「저장이 안 됐나」로 읽힌다
+             (2026-09-23 제작자 제보). 패널 자체는 숨기지 않는다(위 주석). -->
+        <div id="krxKeyEdit">
+          <label for="krxKeyInput">KRX API KEY · 40 CHARS</label>
+          <input type="password" id="krxKeyInput" placeholder="발급받은 인증키를 붙여넣으세요" autocomplete="off">
+          <div style="margin-top:0.6rem">
+            <button id="saveKrxKey">저장</button>
+            <button class="ghost" id="cancelKrxKey" style="margin-left:0.5rem">취소</button>
+          </div>
         </div>
       </div>
 
@@ -902,20 +909,40 @@ function yLabel(days) { return days <= 365 ? "1년" : days <= 1095 ? "3년" : "5
 // KRX 키 패널 — `renderKeyPanel`(DART 전용)과 완전히 분리된 함수다. 이
 // 함수는 DART 키(`LS_KEY`)나 `SERVER_KEY`를 한 번도 읽지 않는다 — 그래야
 // "DART 키 상태와 독립"이 우연이 아니라 구조로 보장된다.
+let KRX_KEY_EDITING = false;   // 「변경」을 눌러 입력 칸을 연 상태
 function renderKrxKeyPanel() {
   const k = localStorage.getItem(LS_KRX_KEY) || "";
   $("krxKeyMask").textContent = k ? k.slice(0, 4) + "…" + k.slice(-4) : "(없음)";
+  // 키가 있으면 입력 칸을 접는다 — 저장된 키 한 줄 + 「변경」「삭제」만 남는다.
+  // 키가 없으면 입력 칸이 곧 안내라 늘 연다. 「취소」는 키가 있을 때만 뜻이 있다.
+  const showEdit = !k || KRX_KEY_EDITING;
+  $("krxKeyEdit").classList.toggle("hidden", !showEdit);
+  $("changeKrxKey").classList.toggle("hidden", !k || KRX_KEY_EDITING);
+  $("clearKrxKey").classList.toggle("hidden", !k);
+  $("cancelKrxKey").classList.toggle("hidden", !k);
 }
 $("saveKrxKey").onclick = () => {
   const k = $("krxKeyInput").value.trim();
   if (k.length !== 40) { alert("KRX API 키는 40자입니다. 다시 확인해 주세요."); return; }
   localStorage.setItem(LS_KRX_KEY, k);
   $("krxKeyInput").value = "";
+  KRX_KEY_EDITING = false;
+  renderKrxKeyPanel();
+};
+$("changeKrxKey").onclick = () => {
+  KRX_KEY_EDITING = true;
+  renderKrxKeyPanel();
+  $("krxKeyInput").focus();
+};
+$("cancelKrxKey").onclick = () => {
+  KRX_KEY_EDITING = false;
+  $("krxKeyInput").value = "";
   renderKrxKeyPanel();
 };
 $("clearKrxKey").onclick = () => {
   localStorage.removeItem(LS_KRX_KEY);
   $("krxKeyInput").value = "";
+  KRX_KEY_EDITING = false;
   renderKrxKeyPanel();
 };
 

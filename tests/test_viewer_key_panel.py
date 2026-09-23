@@ -231,3 +231,63 @@ def test_키_패널_문구를_JS가_상황에_맞게_바꾼다():
     assert "FREE_SCANS" in body, "키 패널 문구가 무료 조회 수를 박아 넣었다"
     panel = _setup_panel()
     assert "본인의 DART 인증키" in panel, "공용 키 없는 배포용 정적 문구가 사라졌다"
+
+
+# ── KRX 키가 있으면 입력 칸을 접는다 (2026-09-23 제작자 제보) ───────────────
+#
+# 「키를 이미 넣었는데 빈 입력 칸이 그대로 떠서 헷갈린다」 — 저장된 키 한 줄과
+# 「변경」「삭제」만 남기고 입력 칸은 키가 없거나 「변경」을 눌렀을 때만 연다.
+# 패널 자체는 여전히 숨기지 않는다(위 `test_krx_키_패널은_hidden_토글을_받지_않는다`).
+
+def test_krx_키_입력_칸은_별도_블록이고_변경_취소_버튼이_있다():
+    assert 'id="krxKeyEdit"' in _SRC
+    assert 'id="changeKrxKey"' in _SRC and 'id="cancelKrxKey"' in _SRC
+    body = _cut("renderKrxKeyPanel")
+    assert 'krxKeyEdit").classList.toggle("hidden"' in body
+    # 패널 자체를 접는 코드는 여전히 없다
+    assert 'krxKeyPanel").classList' not in body
+
+
+def test_krx_키가_있으면_입력_칸이_접히고_변경을_누르면_열린다(tmp_path):
+    import json, shutil, subprocess
+    node = shutil.which("node")
+    if not node:
+        import pytest
+        pytest.skip("node 없음")
+    body = _cut("renderKrxKeyPanel")
+    js = """
+const _store = {};
+global.localStorage = { getItem: (k) => (k in _store ? _store[k] : null),
+  setItem: (k, v) => { _store[k] = String(v); }, removeItem: (k) => { delete _store[k]; } };
+const els = {};
+const mk = () => ({ hidden: false, textContent: "", value: "", focus() {},
+  classList: { toggle(c, on) { if (c === "hidden") this._el.hidden = !!on; } } });
+for (const id of ["krxKeyMask", "krxKeyEdit", "changeKrxKey", "clearKrxKey", "cancelKrxKey", "krxKeyInput"]) {
+  const e = mk(); e.classList._el = e; els[id] = e;
+}
+global.$ = (id) => els[id];
+const LS_KRX_KEY = "dart_tool_krx_key";
+let KRX_KEY_EDITING = false;
+""" + body + """
+const out = {};
+renderKrxKeyPanel();                       // 키 없음
+out.noKey = { edit: els.krxKeyEdit.hidden, change: els.changeKrxKey.hidden, clear: els.clearKrxKey.hidden, mask: els.krxKeyMask.textContent };
+_store[LS_KRX_KEY] = "A".repeat(18) + "B".repeat(18) + "CDEF";
+renderKrxKeyPanel();                       // 키 있음
+out.withKey = { edit: els.krxKeyEdit.hidden, change: els.changeKrxKey.hidden, clear: els.clearKrxKey.hidden, mask: els.krxKeyMask.textContent };
+KRX_KEY_EDITING = true; renderKrxKeyPanel();   // 「변경」
+out.editing = { edit: els.krxKeyEdit.hidden, change: els.changeKrxKey.hidden, cancel: els.cancelKrxKey.hidden };
+console.log(JSON.stringify(out));
+"""
+    f = tmp_path / "krxpanel.js"
+    f.write_text(js, encoding="utf-8")
+    r = subprocess.run([node, str(f)], capture_output=True, text=True, encoding="utf-8")
+    assert r.returncode == 0, r.stderr[:800]
+    out = json.loads(r.stdout)
+    # 키 없음: 입력 칸 열림 · 변경/삭제 숨김
+    assert out["noKey"] == {"edit": False, "change": True, "clear": True, "mask": "(없음)"}
+    # 키 있음: 입력 칸 접힘 · 변경/삭제 보임 · 가림표
+    assert out["withKey"]["edit"] is True and out["withKey"]["change"] is False and out["withKey"]["clear"] is False
+    assert out["withKey"]["mask"] == "AAAA…CDEF"
+    # 변경: 입력 칸 열림 · 변경 버튼 숨김 · 취소 보임
+    assert out["editing"] == {"edit": False, "change": True, "cancel": False}
