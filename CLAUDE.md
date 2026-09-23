@@ -43,7 +43,7 @@ dart_risk_mcp/
 > 동봉 데이터: `dart_risk_mcp/data/known_actors.json`(빈 스켈레톤 — v1.5.0부터 인물 데이터 미포함). 레지스트리 원본은 제작자 비공개 Notion DB. DB 셋업: `scripts/setup_known_actors_db.py`(+`setup-known-actors-db.yml`, 1회성).
 > 레지스트리 로드: `load_known_actors()` 우선순위 = `DART_KNOWN_ACTORS_PATH`(로컬 JSON) > Notion(`NOTION_TOKEN`+`DB_KNOWN_ACTORS` env, 24h 캐시 `~/.cache/dart-risk-mcp/known_actors_notion.json`) > 동봉(빈 스켈레톤). Notion 미설정 시 네트워크 시도 없이 graceful 비활성화. 자동 갱신: `scripts/refresh_known_actors.py` + `.github/workflows/refresh-known-actors.yml`(매일 cron — 시장 신규 CB/유상증자 인수자를 등재 인물과 표기 정규화 매칭해 `auto_matched` 근거를 Notion에 기록, public 커밋 없음). 운영자 Secrets: `DART_API_KEY`, `NOTION_TOKEN`, `DB_KNOWN_ACTORS`.
 > 레지스트리 DB 스키마: 인물명(title)·status(select)·source·evidence·date·rcept_no(rich_text)·url·tags·**관련기업**(multi_select — 등장 회사명 태깅, evidence 텍스트와 분리해 회사별 필터링·추적 가능). `discover_actors.py`는 반복 등장한 문제 회사 전체를, `refresh_known_actors.py`는 해당 근거의 단일 회사를 태깅. 스키마 마이그레이션: `scripts/setup_known_actors_db.py`를 `DB_KNOWN_ACTORS` 설정된 상태로 재실행하면 신규 속성 추가 + 기존 행 소급 백필(추가만, 삭제 없음).
-> 자동 발굴: `scripts/discover_actors.py`(같은 cron)는 시장 '문제 회사'(자금조달+불안정 신호 동반)의 행위자를 **sightings로 누적**(보존 창 `WINDOW_MONTHS=140`개월 — 2015년까지의 백필 데이터가 프루닝되지 않도록 넓힘, "12개월"이던 옛 서술은 2026-08-04 감사에서 실코드와 불일치 확인·정정)하고, 서로 다른 문제 회사 2곳+(N=2)에 반복 등장하는 행위자를 레지스트리(비공개 Notion)에 `auto_matched`(자동 발굴)로 등재 + 제작자 이메일. 수집원은 3종(v1.8.0): ① CB/BW·EB·유상증자 **인수자**(`collect_funding_sightings_range`) ② 자금유출성 거래(금전대여·채무보증·담보제공·유형자산양수)의 **유출 상대방**(`collect_outflow_sightings_range` — classify_outflow_relation이 affiliated/external로 판정한 건만, **subsidiary(종속회사·자회사)는 세력 추적 대상이 아니라 제외**) ③ 최대주주변경(정정 제외)의 **신규 최대주주**(`collect_control_change_sightings_range` — "외 N인" 접미 제거 후 저장). 세 수집원 모두 상대방이 공시 회사 자신과 동일 명칭이면 제외한다. sighting 레코드의 출처는 `"src"` 필드(값 `"funding"`/`"outflow"`/`"control"`, 없으면 `"funding"` 기본 취급 — 기존 인수자 레코드와의 하위 호환)로 구분하며, 등재 evidence 문구에 혼합 출처를 "문제 회사 N곳 등장(유출 상대방·신규 최대주주): A사·B사" 형식으로 반영한다(`SRC_LABELS`/`_SRC_ORDER`). 인물 분류 필드 `"kind"`(person/fund/corp — 이미 이 의미로 쓰이던 필드라 출처 구분에는 재사용하지 않고 `"src"`를 신설)는 세 수집원 모두 동일하게 `classify_actor`로 채운다. 후자 두 수집원은 기존 `should_store`(자산운용 등 기타기관 보존)보다 넓게 제외한다 — `classify_tracked_entity`가 은행·증권·캐피탈·저축은행·금고·보험·투자신탁 등 제도권 금융기관(`classify_actor`의 institution 판정)에 더해 단독 표기 "신탁"(institution 패턴에 없음)도 게이트한다(대여·담보·최대주주 자리의 금융기관은 정상적인 대주·수탁 관계일 뿐 추적 대상이 아니라는 설계 결정). **노출 경계**: sightings(1회 포함, 미검증)는 **private repo `dart-risk-mcp-sightings`**(제작자만, `SIGHTINGS_REPO_TOKEN` PAT), 레지스트리도 **비공개 Notion**(접근은 opt-in, README 참고) — public 레포에는 어떤 인물 데이터도 커밋하지 않는다. 행위자는 `classify_actor`로 개인/조합/법인 3분류 추적(레지스트리 `구분` select) — 제도권 기관(증권사·은행·연기금 등, 반복 등장이 정상)과 임원은 제외. 베이스 백필: `scripts/backfill_sightings.py`(+`backfill-sightings.yml`). 개명 소급 병합: 행위자명은 제출 시점 사명으로 동결되므로 `scripts/backfill_renames.py`(+`backfill-renames.yml`)가 '상호변경안내' 공시를 백필해 `corp_renames`({corp_code: 옛 사명})를 sightings에 영속하고, `reconcile_corp_renames`가 옛 사명 행위자 키를 corp_code로 재해석해 별칭 병합한다. 단 '상호변경안내'는 사실상 코스닥 전용이라(610사 중 K 354 vs Y 2 실측) **KOSPI 개명(주총 정관변경, 예: 에이프로젠KIC→에이프로젠 00152385)은 수동 시드**로 소급한다 — private sightings repo의 `manual_renames.json`(스키마는 corp_renames와 동일, **근거 rcept_no 없는 entry는 기계적 거부**)을 `scripts/merge_manual_renames.py`(+`merge-manual-renames.yml`, DART 대조 검증: rcept↔corp_code 연결 치명·원문 옛 사명 표기 경고)가 검증·병합하고, daily cron(discover_actors.main)도 같은 시드를 자동 반영한다(`apply_manual_renames`). 공개 `corp-aliases.json`(주간 corp-map diff)도 `_combined_legacy_index`로 legacy 해석에 합류해 diff 도입 이후 개명은 시장 무관 자동 커버(라이브: 한국조선해양→에이치디한국조선해양 등 KOSPI 3건 소급 병합 실측). 상세: `docs/superpowers/plans/2026-08-03-kospi-rename-manual-seed.md`. 연결망 시각화: `scripts/build_network_html.py`(+`network_template.html`) — sightings에서 2사+ 추적 행위자↔회사 이분 그래프를 자체 완결형 HTML로 렌더(외부 CDN 없음). **출력 HTML은 실명 포함 → public 레포 커밋 금지**, 스크립트만 레포에 둠. 노드 병합 우선순위는 `actor_corp_ids`(reconcile_corp_renames의 명부 해석, v1.11.0) > fold2cc(비모호 fold) > 미병합 — 동명 별개 법인(실측: 에이프로젠 상장 00152385 vs 비상장 00549059)은 병합하지 않고 검색 리스트 시장 배지 + 상세 패널 "동명 별개 법인 N건" 사실 주석으로 구분한다. 유가증권(KOSPI) 상장사의 옛 상호는 '상호변경안내'가 사실상 코스닥 공시라(corp_renames 610사 중 K 354 vs Y 2 실측) 백필로 소급되지 않는 알려진 한계 — 에이프로젠KIC(2020년 KIC→MED 개명, 주총 공시로만 존재) 명의 행위자 키가 그 사례.
+> 자동 발굴: `scripts/discover_actors.py`(같은 cron)는 시장 '문제 회사'(자금조달+불안정 신호 동반)의 행위자를 **sightings로 누적**(보존 창 `WINDOW_MONTHS=140`개월 — 2015년까지의 백필 데이터가 프루닝되지 않도록 넓힘, "12개월"이던 옛 서술은 2026-08-04 감사에서 실코드와 불일치 확인·정정)하고, 서로 다른 문제 회사 2곳+(N=2)에 반복 등장하는 행위자를 레지스트리(비공개 Notion)에 `auto_matched`(자동 발굴)로 등재 + 제작자 이메일. 수집원은 3종(v1.8.0): ① CB/BW·EB·유상증자 **인수자**(`collect_funding_sightings_range`) ② 자금유출성 거래(금전대여·채무보증·담보제공·유형자산양수)의 **유출 상대방**(`collect_outflow_sightings_range` — classify_outflow_relation이 affiliated/external로 판정한 건만, **subsidiary(종속회사·자회사)는 세력 추적 대상이 아니라 제외**) ③ 최대주주변경(정정 제외)의 **신규 최대주주**(`collect_control_change_sightings_range` — "외 N인" 접미 제거 후 저장). 세 수집원 모두 상대방이 공시 회사 자신과 동일 명칭이면 제외한다. sighting 레코드의 출처는 `"src"` 필드(값 `"funding"`/`"outflow"`/`"control"`, 없으면 `"funding"` 기본 취급 — 기존 인수자 레코드와의 하위 호환)로 구분하며, 등재 evidence 문구에 혼합 출처를 "문제 회사 N곳 등장(유출 상대방·신규 최대주주): A사·B사" 형식으로 반영한다(`SRC_LABELS`/`_SRC_ORDER`). 인물 분류 필드 `"kind"`(person/fund/corp — 이미 이 의미로 쓰이던 필드라 출처 구분에는 재사용하지 않고 `"src"`를 신설)는 세 수집원 모두 동일하게 `classify_actor`로 채운다. 후자 두 수집원은 기존 `should_store`(자산운용 등 기타기관 보존)보다 넓게 제외한다 — `classify_tracked_entity`가 은행·증권·캐피탈·저축은행·금고·보험·투자신탁 등 제도권 금융기관(`classify_actor`의 institution 판정)에 더해 단독 표기 "신탁"(institution 패턴에 없음)도 게이트한다(대여·담보·최대주주 자리의 금융기관은 정상적인 대주·수탁 관계일 뿐 추적 대상이 아니라는 설계 결정). **노출 경계**: sightings(1회 포함, 미검증)는 **private repo `dart-risk-mcp-sightings`**(제작자만, `SIGHTINGS_REPO_TOKEN` PAT), 레지스트리도 **비공개 Notion**(접근은 opt-in) — public 레포에는 어떤 인물 데이터도 커밋하지 않는다. 행위자는 `classify_actor`로 개인/조합/법인 3분류 추적(레지스트리 `구분` select) — 제도권 기관(증권사·은행·연기금 등, 반복 등장이 정상)과 임원은 제외. 베이스 백필: `scripts/backfill_sightings.py`(+`backfill-sightings.yml`). 개명 소급 병합: 행위자명은 제출 시점 사명으로 동결되므로 `scripts/backfill_renames.py`(+`backfill-renames.yml`)가 '상호변경안내' 공시를 백필해 `corp_renames`({corp_code: 옛 사명})를 sightings에 영속하고, `reconcile_corp_renames`가 옛 사명 행위자 키를 corp_code로 재해석해 별칭 병합한다. 단 '상호변경안내'는 사실상 코스닥 전용이라(610사 중 K 354 vs Y 2 실측) **KOSPI 개명(주총 정관변경, 예: 에이프로젠KIC→에이프로젠 00152385)은 수동 시드**로 소급한다 — private sightings repo의 `manual_renames.json`(스키마는 corp_renames와 동일, **근거 rcept_no 없는 entry는 기계적 거부**)을 `scripts/merge_manual_renames.py`(+`merge-manual-renames.yml`, DART 대조 검증: rcept↔corp_code 연결 치명·원문 옛 사명 표기 경고)가 검증·병합하고, daily cron(discover_actors.main)도 같은 시드를 자동 반영한다(`apply_manual_renames`). 공개 `corp-aliases.json`(주간 corp-map diff)도 `_combined_legacy_index`로 legacy 해석에 합류해 diff 도입 이후 개명은 시장 무관 자동 커버(라이브: 한국조선해양→에이치디한국조선해양 등 KOSPI 3건 소급 병합 실측). 상세: `docs/superpowers/plans/2026-08-03-kospi-rename-manual-seed.md`. 연결망 시각화: `scripts/build_network_html.py`(+`network_template.html`) — sightings에서 2사+ 추적 행위자↔회사 이분 그래프를 자체 완결형 HTML로 렌더(외부 CDN 없음). **출력 HTML은 실명 포함 → public 레포 커밋 금지**, 스크립트만 레포에 둠. 노드 병합 우선순위는 `actor_corp_ids`(reconcile_corp_renames의 명부 해석, v1.11.0) > fold2cc(비모호 fold) > 미병합 — 동명 별개 법인(실측: 에이프로젠 상장 00152385 vs 비상장 00549059)은 병합하지 않고 검색 리스트 시장 배지 + 상세 패널 "동명 별개 법인 N건" 사실 주석으로 구분한다. 유가증권(KOSPI) 상장사의 옛 상호는 '상호변경안내'가 사실상 코스닥 공시라(corp_renames 610사 중 K 354 vs Y 2 실측) 백필로 소급되지 않는 알려진 한계 — 에이프로젠KIC(2020년 KIC→MED 개명, 주총 공시로만 존재) 명의 행위자 키가 그 사례.
 
 > **백필 실적(2026-08-17)**: 수집 3,429건 → 1차 통과 1,242건 → 2차 분류 완료. taxonomy가
 > 매핑된 사례 **277건 / 22개 유형**(4.3이 130건으로 최다). 카탈로그 MD는 37종 → **45종**.
@@ -941,7 +941,7 @@ DART 공시만으로는 「무슨 일이 있었는가」까지만 안다 — 불
 
 ## 비범위 (v1.0 GA에서 영구 확정)
 
-PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설계 결정과 충돌합니다. README "이 도구가 하지 않는 것" 절과 동일 정책이며, 우회 코드 추가를 금지합니다.
+PR이나 이슈가 다음 항목 중 하나를 요청한다면 본 도구의 설계 결정과 충돌합니다. 우회 코드 추가를 금지합니다.
 
 | 비범위 | 사유 / 검증 출처 |
 |--------|------------------|
@@ -1403,6 +1403,25 @@ core 0.27초)이고 로그의 initialize 응답 5~8초는 부팅 직후 cold 시
 ⚠ **`examples/*.md`의 `dart-risk-analyzer`는 고치지 않았다** — 그때 실제로 그
 이름으로 돌린 **과거 보고서 산출물**이라 그 표기가 사실이다(골든과 같은 성격).
 
+## 외부 노출을 줄였다 (2026-09-24, 제작자 결정)
+
+*"우리 MCP를 외부에 알리는 것을 안 하려고 한다. private로 하자는 건 아니고."*
+저장소는 공개 그대로 두고 **알리는 통로만** 닫았다.
+
+- README를 짧은 개인 메모로 바꿨다(PyPI 설명도 이것이다 — `pyproject`의 `readme`).
+  배지·설치 안내·소개 문구·뷰어 링크·데모 대화가 없다. 라이선스와 서드파티 고지 한
+  줄은 남긴다(이식 코드의 Apache 2.0 고지 의무).
+- 소개 페이지 `docs/index.html`과 Pages 전용 `docs/_config.yml`을 지웠고
+  **GitHub Pages를 껐다**(`anboyu-alt.github.io/dart-risk-mcp/` 404).
+  Pages가 `docs/`를 통째로 공개하고 있어 `docs/tool/` 뷰어 사본도 함께 내려갔다.
+- 뷰어 ↔ GitHub 링크를 끊었다 — 뷰어의 「프로젝트 소개 ↗」·「GitHub ↗」·「웹
+  축약판」 안내·릴레이 코드 링크·푸터 저장소 링크를 지웠고, 저장소 설정의
+  **홈페이지 주소(뷰어)를 비웠다**. 확장 매니페스트의 `homepage`(소개 페이지)도 지웠다.
+- ⚠ **그대로 둔 것**: 저장소 설명·토픽, `pyproject`의 저장소 URL, 확장 매니페스트의
+  `repository`·`documentation`·`support`, 뷰어의 `DEFAULT_RELAY`(기능 주소).
+  README 골드 건수·테스트 어림수 검사(`test_doc_facts`)는 적혀 있지 않은 값이라 뺐다.
+- ⚠ 릴리스 노트도 짧게 쓴다(제작자 요청).
+
 ## 릴리스 정책 — 버전·CHANGELOG는 PR에 넣지 않는다 (2026-08-23)
 
 **PR에서 버전 번호와 CHANGELOG 항목을 건드리지 않는다.** 머지 후 별도로
@@ -1784,9 +1803,8 @@ rcept 계열 136건(43%)이고 그중 **116건(85%)이 낡았다**(최고 4개�
 - **왜 1이 아닌가** — 재생성 사이의 연속성이 남아야 「이번에 무엇이 바뀌었나」를
   비교할 근거가 있고, 서로 다른 공시 유형 2종이 남아 원문 서식 다양성이 최소한
   유지된다.
-- README의 건수는 `tests/test_doc_facts.py::test_골드_출력_건수가_실제와_같다`가
-  대조하므로 재생성 뒤에는 그 수치도 함께 고친다. 상한 자체는
-  `tests/test_golden_retention.py`가 고정한다.
+- 상한 자체는 `tests/test_golden_retention.py`가 고정한다. (README는 2026-09-24부터
+  골드 건수를 적지 않는다 — 아래 「외부 노출을 줄였다」 참고.)
 
 ---
 
