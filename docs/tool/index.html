@@ -1374,38 +1374,36 @@ const DART_ERR = {
  * 사용자 본인의 KRX Open API 키로만 동작한다(약관 제11조 — 운영자 키로
  * 받은 시세를 방문자에게 보여줄 수 없다). 릴레이(`/api/krx`)는 헤더로
  * 받은 키를 그대로 KRX에 전달만 하고 캐시하지 않는다(`no-store`).
- * `eventWindowFacts`·`windowOverview`·`weekdayCandidates`는 core
+ * `windowOverview`·`weekdayCandidates`·`priceBreaks`는 core
  * `market_context.py`·`krx_client._weekday_candidates`의 쌍둥이다(같은
  * 입력·출력 계약, `tests/test_viewer_twin_parity.py`가 잠근다).
- * 설계 근거: docs/superpowers/specs/2026-09-23-viewer-krx-panel-design.md
+ * 설계 근거: docs/superpowers/specs/2026-09-23-viewer-market-chart-design.md
  */
 const KRX_API_IDS = ["stk_bydd_trd", "ksq_bydd_trd"];   // core KRX_API_IDS의 값과 같다
-// 종목 시장 → 지수 api(코스피·코스닥 일별 지수). 릴레이 세 곳의 허용 목록과
-// core `KRX_INDEX_API_IDS`·`KRX_INDEX_NAMES`와 같다. 지수 응답은 하루치 모든
-// 지수라 릴레이가 이름 정확 일치 한 행만 돌려준다(「코스피 (외국주포함)」 아님).
-const KRX_INDEX_API_IDS = { stk_bydd_trd: "kospi_dd_trd", ksq_bydd_trd: "kosdaq_dd_trd" };
-const KRX_INDEX_NAMES = { kospi_dd_trd: "코스피", kosdaq_dd_trd: "코스닥" };
-// 차트가 1년 전체(≈245거래일)+기준선 100일을 한 번에 받도록 예산을 넓혔다
-// (2026-09-23 차트 도입). core `KRX_CALL_BUDGET`(120)은 MCP의 대기 예산 1분
-// 기준이고, 뷰어는 펼칠 때만 받으며 진행을 보여 주므로 더 기다릴 수 있다 —
-// 실측 콜당 중앙값 1.04초·동시 4 → 340콜 ≈ 90초. 넘는 날은 `uncovered`로 밝힌다.
-// 달력 465일(창 365+기준선 100)의 평일은 332일이라 340이면 한 번에 다 받는다
-// (첫 판 320은 오래된 12일이 늘 남았다 — 코아스 로컬 실측).
-const KRX_CALL_BUDGET = 340;
-const KRX_INDEX_CALL_BUDGET = 270;   // 지수는 창 안만 — 달력 365일의 평일 261일(첫 판 260은 늘 1일이 남았다)
-const KRX_CONCURRENCY = 4;      // core KRX_CONCURRENCY와 같음
-const KRX_BASELINE_DAYS = 60;   // core _MARKET_BASELINE_DAYS와 같음
+// 종목 시장 → 지수 시리즈. 지수는 사용자 키로 받지 않고 운영자가 매일 모아 두는
+// 정적 파일(`index-daily.json`, scripts/build_index_daily.py)에서 읽는다(2026-09-23
+// 제작자 결정 — 지수는 사람마다 다르지 않아 사용자마다 약 260번씩 다시 받을 이유가
+// 없었다. 로딩 시간의 절반이 거기 들었다).
+const KRX_INDEX_SERIES = { stk_bydd_trd: { key: "kospi", name: "코스피" },
+                           ksq_bydd_trd: { key: "kosdaq", name: "코스닥" } };
+// 차트 창(365일)의 평일은 261일이라 270이면 한 번에 다 받는다. 전후 대조표를
+// 뺐으므로(2026-09-23 제작자 — 「차트에 이벤트만 매칭하면 전후 움직임은 그냥
+// 보인다」) 표의 기준선 100일도 더는 받지 않는다(옛 예산 340).
+const KRX_CALL_BUDGET = 270;
+// ⚠ 동시 호출 수는 처리량만 보고 올리면 안 된다. 2026-09-23 실측 — 짧은 구간은
+// 동시 24까지 실패가 없었지만(120콜), 1분 남짓 초당 30콜 넘게 보내자 KRX 앞단이
+// IP를 통째로 막아 **모든 호출이 403 Access Denied**가 됐다. 초당 3~7콜 수준에서는
+// 막힌 적이 없다. 6이면 1년 첫 조회가 약 45초다.
+const KRX_CONCURRENCY = 6;
 const KRX_EMPTY_GRACE_DAYS = 7; // core KRX_EMPTY_GRACE_DAYS와 같음 — 최근 빈 응답은 "발표 전"일 수 있다
-const KRX_EVENT_MAX = 12;       // 표 상한 — MCP `track_market_reaction`의 12건과 같다(초과는 건수로 밝힌다)
 const KRX_CHART_DAYS = 365;     // 차트 창 — 스캔 창이 이보다 길면 최근 1년만 그리고 그 사실을 적는다
-const KRX_ROWS_MAX = 6000;      // 행 캐시 FIFO 상한 — 회사당 종목≈310+지수≈245행, 10곳분
+const KRX_ROWS_MAX = 6000;      // 행 캐시 FIFO 상한 — 회사당 종목≈245행, 20곳분
 const KRX_ATTRIBUTION = "한국거래소 통계정보";   // KRX Open API 약관 제10조 ③
 
 async function krxGet(api, basDd, isu) {
   const key = (localStorage.getItem(LS_KRX_KEY) || "").trim();
   if (!key) throw new Error("KRX 키가 설정되지 않았습니다 — 설정에서 KRX 키를 입력하세요");
-  // 지수 api는 종목 코드가 없다 — 릴레이가 `isu`를 받지 않는다.
-  const usp = new URLSearchParams(KRX_INDEX_NAMES[api] ? { api, basDd } : { api, basDd, isu });
+  const usp = new URLSearchParams({ api, basDd, isu });
   const r = await fetch(`${relayBase()}/api/krx?${usp}`, { headers: { "X-KRX-Key": key } });
   let j = {};
   try { j = await r.json(); } catch (e) { /* 빈 본문 등 — 아래서 상태코드로 처리 */ }
@@ -1476,10 +1474,15 @@ function krxSaveRowsCache(cache) {
 // `stockCode`의 일별 시세를 `startDd`~`endDd`(포함) 구간에서 모은다.
 // 캐시 히트는 예산을 소모하지 않는다. 오늘(KST)은 캐시를 읽지도 쓰지도
 // 않는다 — 장중 값이 굳어 버리는 것을 막는다.
-// `opts.budget`(기본 `KRX_CALL_BUDGET`) — 지수 시계열은 같은 함수를 `isu="IDX"`·
-// `KRX_INDEX_CALL_BUDGET`으로 부른다(캐시 키의 isu 자리에 그 상수가 들어간다).
+// `opts.onPartial(rows)` — 한 묶음(동시 호출 수만큼)을 받을 때마다 지금까지 모인
+// 행을 날짜 오름차순으로 넘긴다. 최근 날짜부터 받으므로 차트를 먼저 그릴 수 있다.
+// ⚠ 호출이 하나라도 실패하면 **남은 묶음을 보내지 않고 멈춘다**(`stopped`). KRX
+// 앞단은 짧은 시간에 많이 두드리면 IP를 403으로 막는데(2026-09-23 실측), 막힌
+// 뒤에 계속 보내면 전부 실패하면서 차단만 길어진다. 남은 날은 `uncovered`로 밝히고
+// 받은 날은 캐시되므로 다시 펼치면 이어 받는다.
 async function krxFetchSeries(api, isu, startDd, endDd, onProgress, opts) {
   const budget = (opts && opts.budget) || KRX_CALL_BUDGET;
+  const onPartial = opts && opts.onPartial;
   const candidates = weekdayCandidates(startDd, endDd);
   const daysRequested = candidates.length;
   const today8 = ymd(new Date());
@@ -1505,7 +1508,7 @@ async function krxFetchSeries(api, isu, startDd, endDd, onProgress, opts) {
     toFetch.push(d8);
   }
 
-  let done = 0;
+  let done = 0, failed = 0, stopped = 0;
   const total = toFetch.length;
   const runOne = async (d8) => {
     try {
@@ -1527,13 +1530,22 @@ async function krxFetchSeries(api, isu, startDd, endDd, onProgress, opts) {
       // 없다는 뜻이라 행을 만들지 않고 캐시도 하지 않는다.
     } catch (e) {
       uncovered.push(d8);
+      failed++;
     } finally {
       done++;
       if (onProgress) onProgress(done, total);
     }
   };
   for (let i = 0; i < toFetch.length; i += KRX_CONCURRENCY) {
+    if (failed) {
+      // 실패 뒤에는 더 보내지 않는다 — 남은 날은 미조회로 둔다.
+      const rest = toFetch.slice(i);
+      uncovered.push(...rest);
+      stopped = rest.length;
+      break;
+    }
     await Promise.all(toFetch.slice(i, i + KRX_CONCURRENCY).map(runOne));
+    if (onPartial) onPartial(Object.keys(rowsByDate).sort().map((d) => rowsByDate[d]));
   }
   krxSaveRowsCache(cache);
 
@@ -1555,6 +1567,8 @@ async function krxFetchSeries(api, isu, startDd, endDd, onProgress, opts) {
     daysCached,
     uncovered: uncovered.sort(),
     pending: pending.sort(),
+    failed,
+    stopped,
   };
 }
 
@@ -1614,157 +1628,6 @@ function breakLabel(b) {
     txt += ` (주식수 ×${sr.toFixed(2)})`;
   }
   return txt;
-}
-
-// 사건일(공시 접수일) 전후 거래일 창의 사실을 계산한다 — core
-// `market_context.event_window_facts`의 쌍둥이(같은 반환 키·같은 규칙).
-function eventWindowFacts(rows, eventDate8, opts) {
-  const o = opts || {};
-  const pre = o.pre === undefined ? 5 : o.pre;
-  const post = o.post === undefined ? 5 : o.post;
-  const baseline = o.baseline === undefined ? 60 : o.baseline;
-  const minBaseline = o.minBaseline === undefined ? 20 : o.minBaseline;
-
-  let d0Idx = null;
-  for (let i = 0; i < rows.length; i++) {
-    if ((rows[i].date || "") >= eventDate8) { d0Idx = i; break; }
-  }
-  if (d0Idx === null) return null;
-
-  const nz = (v) => (v === undefined ? null : v);
-  const d0Row = rows[d0Idx];
-  const d0Date = d0Row.date;
-  const d0Shifted = d0Date !== eventDate8;
-
-  const preStart = Math.max(0, d0Idx - pre);
-  const preRows = rows.slice(preStart, d0Idx);
-  const prePartial = preRows.length < pre;
-
-  const baselineEnd = preStart;
-  const baselineStart = Math.max(0, baselineEnd - baseline);
-  const baselineRows = rows.slice(baselineStart, baselineEnd);
-
-  const postEnd = Math.min(rows.length, d0Idx + 1 + post);
-  const postRows = rows.slice(d0Idx + 1, postEnd);
-  const postPartial = postRows.length < post;
-
-  const avg = (values) => values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
-
-  // --- 종가 불연속(액면분할·병합·무상증자 권리락) ---
-  // KRX의 FLUC_RT는 조정 기준인데 등락은 원값 종가 비교라, 그 구간을
-  // 건너뛰면 거짓 등락이 난다(core `event_window_facts`와 같은 이유).
-  const spanRows = baselineRows.concat(preRows, [d0Row], postRows);
-  const breaks = priceBreaks(spanRows);
-  const preSpan = preRows.length >= 2 ? [preRows[0].date, preRows[preRows.length - 1].date] : null;
-  const postSpan = postRows.length ? [d0Date, postRows[postRows.length - 1].date] : null;
-  const baseSpan = baselineRows.length ? [baselineRows[0].date, d0Date] : null;
-  const hit = (span) => span !== null && breaks.some((b) => span[0] < b.date && b.date <= span[1]);
-  const preBreak = hit(preSpan), postBreak = hit(postSpan), baseBreak = hit(baseSpan);
-
-  let preReturnPct = null;
-  if (preRows.length >= 2 && !preBreak) {
-    const firstClose = nz(preRows[0].close), lastClose = nz(preRows[preRows.length - 1].close);
-    if (firstClose !== null && lastClose !== null && firstClose !== 0) {
-      preReturnPct = (lastClose - firstClose) / firstClose * 100;
-    }
-  }
-
-  let postReturnPct = null;
-  const d0Close = nz(d0Row.close);
-  if (postRows.length && !postBreak) {
-    const lastPostClose = nz(postRows[postRows.length - 1].close);
-    if (d0Close !== null && lastPostClose !== null && d0Close !== 0) {
-      postReturnPct = (lastPostClose - d0Close) / d0Close * 100;
-    }
-  }
-
-  const baselineAvail = baselineRows.length;
-  let baselineNote = null, preVolRatio = null, d0VolRatio = null;
-  if (baselineAvail < minBaseline) {
-    baselineNote = `기준선 ${baselineAvail}거래일 (최소 ${minBaseline})`;
-  } else if (baseBreak) {
-    // 분할 뒤 주식수가 N배면 거래량도 N배 — 기준선과 창의 거래량 단위가 다르다.
-    // 날짜·배율을 여기 적는다(창 밖·기준선 안의 변동은 아래 priceBreakNote에
-    // 오르지 않으므로 이 줄이 유일한 근거다).
-    const baseWindowBreaks = breaks.filter((b) => baseSpan[0] < b.date && b.date <= baseSpan[1]);
-    baselineNote = "기준선 안 기준가 조정(" +
-      baseWindowBreaks.map(breakLabel).join(" · ") +
-      ")으로 거래량 단위가 달라 배수를 내지 않습니다";
-  } else {
-    const baselineVols = baselineRows.map((r) => nz(r.volume)).filter((v) => v !== null);
-    const baselineAvg = baselineVols.length ? avg(baselineVols) : null;
-    if (baselineAvg === null) {
-      baselineNote = "기준선 거래량 자료가 없습니다";
-    } else if (baselineAvg === 0) {
-      baselineNote = "기준선 평균 거래량이 0입니다";
-    } else {
-      const preVols = preRows.map((r) => nz(r.volume)).filter((v) => v !== null);
-      const preAvg = preVols.length ? avg(preVols) : null;
-      if (preAvg !== null) preVolRatio = preAvg / baselineAvg;
-      const d0Volume = nz(d0Row.volume);
-      if (d0Volume !== null) d0VolRatio = d0Volume / baselineAvg;
-    }
-  }
-
-  const rowTurnoverPct = (row) => {
-    const volume = nz(row.volume), listShrs = nz(row.list_shrs);
-    if (volume === null || listShrs === null || listShrs === 0) return null;
-    return volume / listShrs * 100;
-  };
-
-  let turnoverNote = null, turnoverPrePct = null;
-  const preTurnovers = preRows.map(rowTurnoverPct);
-  if (preRows.length && preTurnovers.every((t) => t !== null)) {
-    turnoverPrePct = preTurnovers.reduce((a, b) => a + b, 0);
-  }
-  const turnoverD0Pct = rowTurnoverPct(d0Row);
-  if (turnoverPrePct === null || turnoverD0Pct === null) {
-    turnoverNote = "상장주식수가 없어 회전율을 계산할 수 없는 거래일이 있습니다";
-  }
-
-  const windowRows = preRows.concat([d0Row], postRows);
-  const zeroVolumeDays = windowRows.filter((r) => r.volume === 0).length;
-
-  // ⚠ 이 각주는 **등락을 내지 않은 경우에만** 붙는다 — 기준선 안(창 밖)의 변동은
-  // 거래량 배수만 막고 등락은 그대로 내므로(위 baselineNote), 거기까지 「전후
-  // 비교 생략」이라 적으면 화면에 찍힌 등락과 각주가 서로 다른 말을 한다.
-  let priceBreakNote = null;
-  const windowBreaks = breaks.filter((b) =>
-    (preSpan && preSpan[0] < b.date && b.date <= preSpan[1]) ||
-    (postSpan && postSpan[0] < b.date && b.date <= postSpan[1])
-  );
-  if (windowBreaks.length) {
-    priceBreakNote = "창 안 KRX 기준가 조정으로 종가가 불연속: " +
-      windowBreaks.map(breakLabel).join(" · ") +
-      " (분할·병합·감자·무상증자·유상증자 권리락 등 — 그 전후 등락은 조정 전 원값이라 내지 않았습니다)";
-  }
-
-  return {
-    price_breaks: breaks,
-    price_break_note: priceBreakNote,
-    zero_volume_days: zeroVolumeDays,
-    window_days: windowRows.length,
-    d0_no_trade: d0Row.volume === 0,
-    event_date: eventDate8,
-    d0_date: d0Date,
-    d0_shifted: d0Shifted,
-    d0_close: d0Close,
-    d0_fluc_rt: nz(d0Row.fluc_rt),
-    pre_return_pct: preReturnPct,
-    post_return_pct: postReturnPct,
-    pre_vol_ratio: preVolRatio,
-    d0_vol_ratio: d0VolRatio,
-    baseline_note: baselineNote,
-    turnover_pre_pct: turnoverPrePct,
-    turnover_d0_pct: turnoverD0Pct,
-    turnover_note: turnoverNote,
-    mktcap_d0: nz(d0Row.mktcap),
-    days_pre_avail: preRows.length,
-    days_post_avail: postRows.length,
-    baseline_avail: baselineAvail,
-    post_partial: postPartial,
-    pre_partial: prePartial,
-  };
 }
 
 // 조회 창 전체의 시가·종가·고저·회전율·시총 개괄 — core
@@ -1845,7 +1708,6 @@ function windowOverview(rows) {
 // core `_fmt_pct_signed`(파이썬 `+` 포맷)는 0도 "+0.0%"로 부호를 붙인다 —
 // `x > 0`이 아니라 `x >= 0`이어야 0에서 갈리지 않는다.
 function fmtPctSigned(x) { return (x === null || x === undefined) ? "―" : `${x >= 0 ? "+" : ""}${x.toFixed(1)}%`; }
-function fmtRatio(x) { return (x === null || x === undefined) ? "―" : `${x.toFixed(1)}배`; }
 function fmtTurnoverPct(x) { return (x === null || x === undefined) ? "―" : `${x.toFixed(2)}%`; }
 // 주가(원) — core `_fmt_price`와 같은 계산(시총과 달리 억·조로 접지 않는다).
 // core는 `int(x)`(0쪽으로 절삭)를 쓰므로 `Math.round`가 아니라 `Math.trunc`.
@@ -1928,7 +1790,7 @@ function marketChartModel(rows, idxRows, events, opts) {
     }
   }
 
-  // 마커 — 접수일 이후 첫 거래일에 놓는다(`eventWindowFacts`의 D0와 같은 규칙).
+  // 마커 — 접수일 이후 첫 거래일에 놓는다(core `event_window_facts`의 D0와 같은 규칙).
   const byDay = new Map();
   let dropped = 0;
   for (const g of (events || [])) {
@@ -1978,7 +1840,7 @@ function marketChartModel(rows, idxRows, events, opts) {
 
   return {
     startDd, endDd, days, idx, idxClose, hasIdx, markers, dropped, breaks, haltBands,
-    sectMarks, xTicks, yMin, yMax, yTicks, volMax,
+    sectMarks, xTicks, yMin, yMax, yTicks, volMax, W: o.width || MKT_W,
     uncovered: (o.uncovered || []).length, pending: (o.pending || []).length,
     idxUncovered: (o.idxUncovered || []).length,
   };
@@ -2007,9 +1869,10 @@ const MKT_PRICE_TOP = 10, MKT_PRICE_H = 190, MKT_VOL_TOP = 214, MKT_VOL_H = 56, 
 
 function marketChartSVG(model) {
   const m = model;
+  const W = m.W || MKT_W;   // 패널 폭(px) — 전폭 배치라 고정 760이면 세로가 과하게 커진다
   const n = m.days.length;
   if (!n) return "";
-  const plotW = MKT_W - MKT_PAD_L - MKT_PAD_R;
+  const plotW = W - MKT_PAD_L - MKT_PAD_R;
   const x = (i) => n < 2 ? MKT_PAD_L + plotW / 2 : MKT_PAD_L + plotW * i / (n - 1);
   const span = (m.yMax - m.yMin) || 1;
   const y = (v) => MKT_PRICE_TOP + MKT_PRICE_H * (m.yMax - v) / span;
@@ -2030,15 +1893,15 @@ function marketChartSVG(model) {
   let s = "";
   // 격자·축
   for (const t of m.yTicks) {
-    s += `<line x1="${MKT_PAD_L}" x2="${MKT_W - MKT_PAD_R}" y1="${f1(y(t))}" y2="${f1(y(t))}" class="mkt-grid"/>`;
-    s += `<text x="${MKT_W - MKT_PAD_R + 6}" y="${f1(y(t) + 3.5)}" class="mkt-ax">${esc(Math.round(t).toLocaleString())}</text>`;
+    s += `<line x1="${MKT_PAD_L}" x2="${W - MKT_PAD_R}" y1="${f1(y(t))}" y2="${f1(y(t))}" class="mkt-grid"/>`;
+    s += `<text x="${W - MKT_PAD_R + 6}" y="${f1(y(t) + 3.5)}" class="mkt-ax">${esc(Math.round(t).toLocaleString())}</text>`;
   }
   for (const t of m.xTicks) {
     s += `<line x1="${f1(x(t.i))}" x2="${f1(x(t.i))}" y1="${MKT_PRICE_TOP}" y2="${MKT_VOL_TOP + MKT_VOL_H}" class="mkt-grid"/>`;
     s += `<text x="${f1(x(t.i))}" y="${MKT_H - 6}" class="mkt-ax mkt-ax-x">${esc(t.label)}</text>`;
   }
   if (m.volMax > 0) {
-    s += `<text x="${MKT_W - MKT_PAD_R + 6}" y="${MKT_VOL_TOP + 4}" class="mkt-ax">${esc(fmtVolumeShort(m.volMax))}</text>`;
+    s += `<text x="${W - MKT_PAD_R + 6}" y="${MKT_VOL_TOP + 4}" class="mkt-ax">${esc(fmtVolumeShort(m.volMax))}</text>`;
   }
   // 거래량 0 구간(빗금 띠) — 위·아래 칸을 함께 덮는다
   for (const b of m.haltBands) {
@@ -2061,12 +1924,14 @@ function marketChartSVG(model) {
   let flip = 0;
   const noteText = (i, yPos, text) => {
     const cx = x(i), est = text.length * 5.6;
-    const left = cx + 3 + est > MKT_W - MKT_PAD_R;
+    const left = cx + 3 + est > W - MKT_PAD_R;
     return `<text x="${f1(left ? cx - 3 : cx + 3)}" y="${f1(yPos)}" class="mkt-note"${left ? ' text-anchor="end"' : ""}>${esc(text)}</text>`;
   };
   for (const b of m.breaks) {
-    s += `<line x1="${f1(x(b.i))}" x2="${f1(x(b.i))}" y1="${MKT_PRICE_TOP}" y2="${MKT_VOL_TOP + MKT_VOL_H}" class="mkt-break"/>`;
-    s += noteText(b.i, MKT_PRICE_TOP + 10 + (flip++ % 2) * 12, b.label);
+    // 선 위 라벨은 짧게(날짜는 x축이 말한다) — 가까운 조정일 둘이 긴 라벨로 겹쳤다
+    // (CSA 코스믹 08.04·08.26 실측). 전체 문구는 선에 붙은 title로 남긴다.
+    s += `<line x1="${f1(x(b.i))}" x2="${f1(x(b.i))}" y1="${MKT_PRICE_TOP}" y2="${MKT_VOL_TOP + MKT_VOL_H}" class="mkt-break"><title>${esc(b.label)}</title></line>`;
+    s += noteText(b.i, MKT_PRICE_TOP + 10 + (flip++ % 2) * 12, `기준가 ×${b.adj.toFixed(2)}`);
   }
   for (const c of m.sectMarks) {
     s += `<line x1="${f1(x(c.i))}" x2="${f1(x(c.i))}" y1="${MKT_PRICE_TOP}" y2="${MKT_VOL_TOP + MKT_VOL_H}" class="mkt-sect"/>`;
@@ -2096,7 +1961,7 @@ function marketChartSVG(model) {
   s += `<line class="mkt-xhair" x1="0" x2="0" y1="${MKT_PRICE_TOP}" y2="${MKT_VOL_TOP + MKT_VOL_H}" style="display:none"/>`;
   const label = `${fmtDate(m.startDd)}~${fmtDate(m.endDd)} 종가·거래량 ${n}거래일, 관찰 신호 마커 ${m.markers.length}곳` +
     (m.hasIdx ? ", 지수 병기" : "");
-  return `<svg class="mktchart" viewBox="0 0 ${MKT_W} ${MKT_H}" role="img" aria-label="${esc(label)}">` +
+  return `<svg class="mktchart" viewBox="0 0 ${W} ${MKT_H}" role="img" aria-label="${esc(label)}">` +
     `<title>${esc(label)}</title><defs><pattern id="mktHatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">` +
     `<line x1="0" y1="0" x2="0" y2="6" class="mkt-hatch"/></pattern></defs>${s}</svg>`;
 }
@@ -2132,8 +1997,9 @@ function attachMarketChartHover(wrap, model, idxName) {
   if (!svg || !tip) return;
   const xhair = svg.querySelector(".mkt-xhair");
   const m = model, n = m.days.length;
+  const W = m.W || MKT_W;
   if (!n) return;
-  const plotW = MKT_W - MKT_PAD_L - MKT_PAD_R;
+  const plotW = W - MKT_PAD_L - MKT_PAD_R;
   const x = (i) => n < 2 ? MKT_PAD_L + plotW / 2 : MKT_PAD_L + plotW * i / (n - 1);
   const line = (text, cls) => {
     const el = document.createElement("div");
@@ -2160,7 +2026,7 @@ function attachMarketChartHover(wrap, model, idxName) {
       }
     }
     const r = svg.getBoundingClientRect();
-    const px = x(i) * r.width / MKT_W;
+    const px = x(i) * r.width / W;
     tip.style.display = "block";
     const tw = tip.offsetWidth || 200;
     tip.style.left = `${Math.max(0, Math.min(r.width - tw, px + (px > r.width / 2 ? -tw - 10 : 10)))}px`;
@@ -2169,7 +2035,7 @@ function attachMarketChartHover(wrap, model, idxName) {
   const hide = () => { tip.style.display = "none"; if (xhair) xhair.style.display = "none"; };
   const nearest = (clientX) => {
     const r = svg.getBoundingClientRect();
-    const sx = (clientX - r.left) * MKT_W / r.width;
+    const sx = (clientX - r.left) * W / r.width;
     if (n < 2) return 0;
     const i = Math.round((sx - MKT_PAD_L) / plotW * (n - 1));
     return Math.max(0, Math.min(n - 1, i));
@@ -3269,8 +3135,18 @@ function renderDash() {
       <div class="dim" style="margin-top:0.4rem">공시 외 지표(재무·감사의견·연속적자)는 아래 블록에서 확인하세요.</div></div>`;
   }
 
+  // 공시와 시장 — OBSERVATION TIMELINE처럼 가로 전체를 쓴다(2026-09-23 제작자
+  // 요청: 시간축 차트라 좁은 격자 칸에서는 한 해가 한 뼘에 눌린다). 관찰 신호가
+  // 없어도 낸다(주가·거래량 자체가 사실이다). 종목 시세는 사용자 본인 키로 받는
+  // 별도 API라(약관 제11조) debtCore·auditSvcCore와 같은 「펼칠 때만」 관례를 따른다.
+  const marketPanel = `<div class="panel">${panelTitleHTML(`▍MARKET — 공시와 시장 (1년 주가·거래량·지수)`)}
+    <details id="marketDetails"><summary style="cursor:pointer;color:var(--amber);font-weight:700;font-size:0.88rem">펼쳐서 조회 — 1년 주가·거래량 위에 관찰 신호를 표시하고 코스피·코스닥 지수를 겹칩니다</summary>
+    <div id="marketCore"><span class="dim" style="font-size:0.84rem">종목 시세는 본인 KRX 키로 받습니다(처음 한 번 약 45초, 이후 캐시) — 스캔을 느리게 하지 않으려고 펼칠 때만 받습니다.</span></div></details></div>`;
+
+  if (!observedEvents.length) html += marketPanel;
   if (observedEvents.length) {
     html += timelinePanel(observedEvents, bgn, end);
+    html += marketPanel;
     html += flowNotes(observedEvents);
     html += `<div class="panel">${panelTitleHTML(`▍SIGNAL COMMENTARY — 무게순 · 사실 서술`)}
       <div class="proselist">` + detectedTypes.map((s) =>
@@ -3421,12 +3297,6 @@ function renderDash() {
   html += `<div class="panel">${panelTitleHTML(`▍DEBT — 채무증권 미상환 잔액`)}
     <details id="debtDetails"><summary style="cursor:pointer;color:var(--amber);font-weight:700;font-size:0.88rem">펼쳐서 조회 — 회사채·단기사채·기업어음·신종자본증권·조건부자본증권</summary>
     <div id="debtCore"><span class="dim" style="font-size:0.84rem">엔드포인트 5개를 조회합니다 — 스캔을 느리게 하지 않으려고 펼칠 때만 받습니다.</span></div></details></div>`;
-  // KRX 시세는 사용자 본인 키가 있어야만 동작하고(약관 제11조), 창마다
-  // 수십 콜이 드는 별도 API라 debtCore·auditSvcCore와 같은 "펼칠 때만"
-  // 관례를 따른다.
-  html += `<div class="panel">${panelTitleHTML(`▍MARKET REACTION — 공시와 시장 (1년)`)}
-    <details id="marketDetails"><summary style="cursor:pointer;color:var(--amber);font-weight:700;font-size:0.88rem">펼쳐서 조회 — 1년 시세·거래량·지수 위에 관찰 신호 마커, 최근 ${KRX_EVENT_MAX}건 전후 대조표</summary>
-    <div id="marketCore"><span class="dim" style="font-size:0.84rem">KRX Open API를 조회합니다(본인 키 필요, 1년치는 처음 한 번 1~2분) — 스캔을 느리게 하지 않으려고 펼칠 때만 받습니다.</span></div></details></div>`;
   html += `</div>`;  // .deepgrid 닫기 — convoPanel은 격자 밖(전폭)
   html += convoPanel(name);
   $("result").innerHTML = html;
@@ -8266,100 +8136,35 @@ async function loadDebtBalance(corpCode) {
 
 function fmtWon(x) { return (x === null || x === undefined) ? "―" : `${Math.round(x).toLocaleString()}원`; }
 
-function marketFactNotes(fact) {
-  const notes = [];
-  if (fact.d0_shifted) notes.push("휴장일 접수 → 다음 거래일 기준");
-  if (fact.pre_partial) notes.push(`D-5 중 ${fact.days_pre_avail || 0}일 자료`);
-  if (fact.post_partial) notes.push(`D+5 중 ${fact.days_post_avail || 0}일 자료`);
-  if (fact.baseline_note) notes.push(fact.baseline_note);
-  if (fact.turnover_note) notes.push(fact.turnover_note);
-  // 매매거래정지 종목은 거래량 0·종가 고정으로 온다 — 등락 0%·배수 "―"만
-  // 찍으면 「조용한 시장」으로 읽힌다(core `_market_fact_notes`와 같은 이유).
-  const zero = fact.zero_volume_days || 0;
-  if (zero) {
-    notes.push(`창 안 거래량 0인 거래일 ${zero}/${fact.window_days || 0}일` +
-      `(매매거래정지 등 — 공시 목록에서 확인)`);
-  }
-  if (fact.price_break_note) notes.push(fact.price_break_note);
-  return notes;
-}
-
-// 관찰 이벤트 최근 KRX_EVENT_MAX건 + KRX 시세를 사실로 표기한다. 판정
-// 어휘 없음(v0.8.5) — 등락률·배수·회전율·일수만 적는다. core
-// `_render_event_window_row`/`_market_fact_notes`/`window_overview` 렌더와
-// 같은 문구 규칙(MCP `track_market_reaction`과 같은 사건이면 같은 값).
-// `extra`(차트 도입, 2026-09-23): `chartHTML`(차트+범례), `totalEvents`(창 안 관찰
-// 사건 전체 수 — 표는 KRX_EVENT_MAX건이라 몇 건을 뺐는지 적는다), `windowRows`
-// (차트 창 안 행 — 개괄은 이 창 기준), `idxStatus`·`idxName`, `clipNote`.
-function marketReactionHTML(picked, series, extra) {
+// 공시와 시장 패널 본문 — 차트 + 시세 구간 개괄. 판정 어휘 없음(v0.8.5).
+// ⚠ 사건별 전후 대조표는 두지 않는다(2026-09-23 제작자 결정 — 「차트에 이벤트만
+//   매칭하면 그 전후 주가 움직임은 그냥 보인다. 따로 해석해 줄 필요가 없다」).
+//   표가 쓰던 D0·전후 누적 등락·거래량 배수는 MCP `track_market_reaction`에 남는다.
+// `extra`: `chartHTML`(차트+범례), `windowRows`(차트 창 안 행), `status`(수신 중
+// 문구), `clipNote`, `idxNote`.
+function marketReactionHTML(series, extra) {
   const ex = extra || {};
-  const rows = series.rows || [];
-  const headers = [
-    "접수일", "신호", { label: "D0 등락", num: true }, { label: "D-5→D-1", num: true },
-    { label: "D0→D+5", num: true }, { label: "거래량 배수(전 5일/당일)", num: true },
-    { label: "회전율(전 5일 합)", num: true }, { label: "시총", num: true },
-  ];
-  // 각주는 셀에 넣지 않고 표 아래에 단다 — 셀에 넣으면 신호 열이 세로로 늘어나
-  // 표가 안 읽힌다(2026-09-23 CSA 코스믹 실측: 기준가 조정 각주가 15줄로 감겨
-  // 「자금유출성 거래」 한 칸이 화면 절반을 차지했다). MCP 표도 각주를 아래에 단다.
-  const noteLines = [];
-  const tableRows = picked.map((g) => {
-    const fact = eventWindowFacts(rows, g.date, { baseline: KRX_BASELINE_DAYS });
-    const label = g.label + (g.count > 1 ? ` ×${g.count}` : "");
-    if (!fact) {
-      noteLines.push(`[${fmtDate(g.date)}] ${label}: 이 조회 창 안에 시세 자료가 없습니다`);
-      return [fmtDate(g.date), `${label} ※`, "―", "―", "―", "―", "―", "―"];
-    }
-    const notes = marketFactNotes(fact);
-    if (notes.length) noteLines.push(`[${fmtDate(g.date)}] ${label}: ${notes.join(" · ")}`);
-    return [
-      fmtDate(g.date),
-      notes.length ? `${label} ※` : label,
-      { raw: deltaHTML(fact.d0_fluc_rt, { sense: "none" }) },
-      { raw: deltaHTML(fact.pre_return_pct, { sense: "none" }) },
-      { raw: deltaHTML(fact.post_return_pct, { sense: "none" }) },
-      `${fmtRatio(fact.pre_vol_ratio)}/${fmtRatio(fact.d0_vol_ratio)}`,
-      fmtTurnoverPct(fact.turnover_pre_pct),
-      fmtKRW(fact.mktcap_d0),
-    ];
-  });
-  const uncoveredCount = (series.uncovered || []).length;
-  const note = uncoveredCount
-    ? `${series.daysRequested || 0}거래일 중 ${uncoveredCount}일 미조회(호출 예산 — 받은 날은 캐시되므로 다시 실행하면 이어서 받습니다)`
-    : "";
+  const rows = ex.windowRows || series.rows || [];
   let html = ex.chartHTML || "";
+  if (ex.status) html += `<div class="ftnote" id="marketProgress">${esc(ex.status)}</div>`;
   if (ex.clipNote) html += `<div class="ftnote">${esc(ex.clipNote)}</div>`;
-  if (ex.idxStatus === "loading") {
-    html += `<div class="ftnote" id="marketIdxProgress">${esc(ex.idxName || "지수")} 수신 중…</div>`;
-  } else if (ex.idxStatus && ex.idxStatus.startsWith("failed:")) {
-    html += `<div class="ftnote">⚠ ${esc(ex.idxName || "지수")}를 조회하지 못했습니다 — ${esc(ex.idxStatus.slice(7))}. 자료가 없다는 뜻이 아닙니다(차트는 종목만).</div>`;
-  }
-  const total = ex.totalEvents === undefined ? picked.length : ex.totalEvents;
-  const tableHead = total > picked.length
-    ? `<div class="ftnote" style="margin-top:0.8rem"><b>사건별 전후 대조</b> — 관찰 ${total}건 중 최근 ${KRX_EVENT_MAX}건 · ${total - picked.length}건 생략(차트 마커는 전부)</div>`
-    : `<div class="ftnote" style="margin-top:0.8rem"><b>사건별 전후 대조</b> — 관찰 ${picked.length}건</div>`;
-  html += tableHead;
-  if (picked.length) html += factTableHTML(headers, tableRows, { note, deltaNote: true });
-  else html += `<div class="ftnote">이 창에 관찰 신호가 없어 대조할 사건이 없습니다.${note ? ` ${esc(note)}` : ""}</div>`;
-  for (const n of noteLines) html += `<div class="ftnote">※ ${esc(n)}</div>`;
+  if (ex.idxNote) html += `<div class="ftnote">${esc(ex.idxNote)}</div>`;
 
+  const uncoveredCount = (series.uncovered || []).length;
+  if (uncoveredCount) {
+    html += `<div class="ftnote">⚠ ${series.daysRequested || 0}거래일 중 ${uncoveredCount}일 미조회` +
+      (series.stopped
+        ? ` — KRX가 호출을 거절해 나머지를 보내지 않고 멈췄습니다(잠시 뒤 다시 펼치면 받은 날은 캐시에서, 나머지만 이어 받습니다).`
+        : ` — 받은 날은 캐시되므로 다시 펼치면 이어 받습니다.`) + ` 자료가 없다는 뜻이 아닙니다.</div>`;
+  }
   const pendingCount = (series.pending || []).length;
   if (pendingCount) {
     html += `<div class="ftnote">최근 ${pendingCount}거래일은 KRX 발표 전일 수 있습니다.</div>`;
   }
 
-  // ⚠ 시세 구간은 조회 창이 아니라 **사건 기준**이다 — 가장 오래된 사건 100일
-  // 앞 ~ 가장 최근 사건 10일 뒤(오늘 상한, `loadMarketReaction`의 구간 계산과
-  // 같다). 머리글에 구간을 적어 「구간 끝 시가총액」이 「지금 시총」으로
-  // 읽히지 않게 한다(core `_market_reaction_block`과 같은 문구).
-  const overview = windowOverview(ex.windowRows || rows);
-  const span = overview
-    ? (ex.windowRows
-      ? ` (차트 창 ${fmtDate(overview.start_date)}~${fmtDate(overview.end_date)} — 사건별 대조의 기준선은 이보다 100일 앞까지 받았습니다)`
-      : ` (시세 구간 ${fmtDate(overview.start_date)}~${fmtDate(overview.end_date)} — ` +
-        `가장 오래된 사건 100일 앞부터 가장 최근 사건 10일 뒤까지)`)
-    : "";
-  html += `<div style="margin-top:0.6rem;font-size:0.88rem"><b>시세 구간 개괄${span}</b><br>`;
+  const overview = windowOverview(rows);
+  html += `<div style="margin-top:0.6rem;font-size:0.88rem"><b>시세 구간 개괄${overview
+    ? ` (${fmtDate(overview.start_date)}~${fmtDate(overview.end_date)})` : ""}</b><br>`;
   if (!overview) {
     html += `이 창 안에 거래일 시세 자료가 없습니다.`;
   } else {
@@ -8401,19 +8206,37 @@ function marketReactionHTML(picked, series, extra) {
   }
   html += `</div>`;
 
-  html += metricProseHTML("market");
-  html += `<div class="ftnote">📎 ${KRX_ATTRIBUTION} · 접수일은 사건일과 다를 수 있고 장 마감 후 접수는 ` +
-    `다음 거래일부터 반응이 나타납니다 · 정정공시는 대조에서 제외했습니다 · ` +
-    `표는 최근 관찰 신호 ${KRX_EVENT_MAX}건까지 대조합니다 · 기준가 조정 앞뒤 종가는 조정 전 원값입니다 · ` +
-    (ex.chartHTML ? `지수 선은 창 시작일(과 기준가 조정일)마다 종목 종가에 맞춘 상대 움직임이라 지수 값 자체가 아닙니다 · ` : "") +
-    `시장경보(투자주의·경고·위험)는 MCP track_market_reaction에서 확인하세요.</div>`;
+  // 표가 없으니 표의 지표(당일·전후 등락, 거래량 배수) 읽는 법은 싣지 않는다 —
+  // 화면에 없는 숫자를 설명하지 않는다(`audit.mgmt_issue`와 같은 규칙).
+  html += metricProseHTML("market", ["d0_change", "pre_post_return", "volume_ratio"]);
+  html += `<div class="ftnote">📎 ${KRX_ATTRIBUTION} · 종목 시세는 본인 KRX 키로 받고, 지수는 운영자가 ` +
+    `매일 모아 두는 파일에서 읽습니다 · 마커는 공시 접수일(휴장일이면 다음 거래일)이고 장 마감 후 접수는 ` +
+    `다음 거래일부터 반응이 나타납니다 · 정정공시는 표시하지 않습니다 · 기준가 조정 앞뒤 종가는 조정 전 원값입니다 · ` +
+    `지수 선은 창 시작일(과 기준가 조정일)마다 종목 종가에 맞춘 상대 움직임이라 지수 값 자체가 아닙니다 · ` +
+    `사건별 전후 등락·거래량 배수와 시장경보(투자주의·경고·위험)는 MCP track_market_reaction에서 확인하세요.</div>`;
   return html;
 }
 
-// KRX 시세 조회 — 사용자 본인 키가 있어야만 동작한다(약관 제11조 때문에
-// 운영자 키로 대신 조회할 수 없다). 최근 관찰 신호 최대 KRX_EVENT_MAX건
-// 전후의 등락·거래량·회전율·시총을 사실로 표기한다(v0.8.5 — 판정 없음).
-// debtCore·auditSvcCore와 같은 관례로 `<details>`를 펼칠 때만 조회한다.
+// 코스피·코스닥 일별 종가 — 정적 파일을 한 번만 받는다(모든 회사가 같은 값을 쓴다).
+let INDEX_DAILY = null;
+async function loadIndexDaily() {
+  if (INDEX_DAILY) return INDEX_DAILY;
+  const r = await fetch("index-daily.json");
+  if (!r.ok) throw new Error(`지수 파일을 받지 못했습니다 (HTTP ${r.status})`);
+  INDEX_DAILY = await r.json();
+  return INDEX_DAILY;
+}
+
+// 지수 파일에서 차트 창 안의 행만 {date, close}로 뽑는다(순수 함수).
+function indexRowsFromDaily(daily, seriesKey, startDd, endDd) {
+  const m = (daily && daily[seriesKey]) || {};
+  return Object.keys(m).filter((d) => d >= startDd && d <= endDd).sort()
+    .map((d) => ({ date: d, close: m[d] }));
+}
+
+// KRX 시세 조회 — 종목 시세는 사용자 본인 키가 있어야만 동작한다(약관 제11조 때문에
+// 운영자 키로 대신 조회할 수 없다). debtCore·auditSvcCore와 같은 관례로 `<details>`를
+// 펼칠 때만 조회한다. 최근 날짜부터 받으며 한 묶음마다 차트를 다시 그린다.
 async function loadMarketReaction(corpCode, stockCode) {
   const el = $("marketCore");
   if (!el || el.dataset.loaded) return;
@@ -8421,15 +8244,12 @@ async function loadMarketReaction(corpCode, stockCode) {
 
   const krxKey = (localStorage.getItem(LS_KRX_KEY) || "").trim();
   if (!krxKey) {
-    el.innerHTML = `<span class="dim" style="font-size:0.88rem">KRX 키를 넣으면 이 자리에 시세·거래량 대조가 붙습니다 — 설정의 KRX 키 칸에 입력하세요(운영자 키로는 조회할 수 없습니다 — KRX Open API 약관 제11조).</span>`;
+    el.innerHTML = `<span class="dim" style="font-size:0.88rem">KRX 키를 넣으면 이 자리에 1년 주가·거래량 차트가 붙습니다 — 설정의 KRX 키 칸에 입력하세요(종목 시세는 운영자 키로 조회할 수 없습니다 — KRX Open API 약관 제11조).</span>`;
     return;
   }
 
-  // 차트 마커는 창 안 관찰 사건 **전부**, 표는 최근 KRX_EVENT_MAX건(몇 건을
-  // 뺐는지 표 머리에 적는다). 사건이 없어도 차트(종가·거래량·지수)는 그린다.
-  const allEvents = (CUR && CUR.observedEvents) || [];
-  const allPicked = pickMarketEvents(allEvents, Infinity);
-  const picked = pickMarketEvents(allEvents, KRX_EVENT_MAX);
+  // 차트 마커는 창 안 관찰 사건 **전부**. 사건이 없어도 차트(종가·거래량·지수)는 그린다.
+  const allPicked = pickMarketEvents((CUR && CUR.observedEvents) || [], Infinity);
 
   el.innerHTML = `<span class="spinner"></span><span class="dim" style="font-size:0.88rem" id="marketProgress">시장 판별 중…</span>`;
 
@@ -8445,65 +8265,65 @@ async function loadMarketReaction(corpCode, stockCode) {
     return;
   }
 
-  // 차트 창 = 스캔 창(최대 1년). 종목 시세는 창 시작 100일 앞부터 받는다 —
-  // 창 초입 사건의 기준선 60거래일이 지금 표와 같게 계산되도록. 지수는 창 안만.
+  // 차트 창 = 스캔 창(최대 1년).
   const todayD = ymd(new Date());
   const clipped = LOOKBACK_DAYS > KRX_CHART_DAYS;
   const chartDays = clipped ? KRX_CHART_DAYS : LOOKBACK_DAYS;
   const chartStart = ymd(new Date(Date.now() - chartDays * 86400000));
-  const startDd = ymd(new Date(date8(chartStart).getTime() - 100 * 86400000));
   const clipNote = clipped
-    ? `스캔 창 ${LOOKBACK_DAYS}일 중 최근 ${KRX_CHART_DAYS}일만 그립니다(그 앞 구간의 관찰 신호는 차트·표에 없습니다).`
+    ? `스캔 창 ${LOOKBACK_DAYS}일 중 최근 ${KRX_CHART_DAYS}일만 그립니다(그 앞 구간의 관찰 신호는 차트에 없습니다).`
     : "";
+
+  const idx = KRX_INDEX_SERIES[api];
+  let idxRows = [], idxNote = "";
+  try {
+    const daily = await loadIndexDaily();
+    idxRows = indexRowsFromDaily(daily, idx.key, chartStart, todayD);
+    const last = daily.meta && daily.meta.last;
+    if (last && last < ymd(new Date(Date.now() - 4 * 86400000))) {
+      idxNote = `${idx.name} 지수 자료는 ${fmtDate(last)}까지입니다(그 뒤는 차트에 지수 선이 없습니다).`;
+    }
+  } catch (e) {
+    idxNote = `⚠ ${idx.name} 지수 파일을 받지 못했습니다 — ${e.message}. 자료가 없다는 뜻이 아닙니다(차트는 종목만).`;
+  }
+
+  let lastModel = null;
+  const draw = (rows, series, status) => {
+    const windowRows = rows.filter((r) => r.date >= chartStart);
+    const ov = windowOverview(windowRows);
+    const W = Math.max(640, Math.round(el.clientWidth || 0) || MKT_W);
+    const model = marketChartModel(rows, idxRows, allPicked, {
+      startDd: chartStart, endDd: todayD, sectChanges: ov ? ov.sect_changes : [], width: W,
+    });
+    lastModel = model;
+    const svg = marketChartSVG(model);
+    const chartHTML = svg
+      ? `<div class="mkt-wrap">${svg}<div class="mkt-tip"></div></div>${marketChartLegendHTML(model, idx.name)}` +
+        (model.dropped && !status ? `<div class="ftnote">차트 창 밖·자료 없는 날의 관찰 사건 ${model.dropped}건은 마커로 찍지 못했습니다.</div>` : "")
+      : `<div class="ftnote">차트 창 안에 거래일 시세 자료가 아직 없습니다.</div>`;
+    el.innerHTML = marketReactionHTML(series, { chartHTML, windowRows, status, clipNote, idxNote });
+    const wrap = el.querySelector(".mkt-wrap");
+    if (wrap) attachMarketChartHover(wrap, model, idx.name);
+  };
 
   let series;
   try {
-    series = await krxFetchSeries(api, stockCode, startDd, todayD, (done, total) => {
+    series = await krxFetchSeries(api, stockCode, chartStart, todayD, (done, total) => {
       const p = $("marketProgress");
       if (p) p.textContent = `종목 ${done}/${total}거래일 수신…`;
+    }, {
+      // 받은 만큼 먼저 그린다 — 최근 날짜부터 오므로 오른쪽부터 차오른다.
+      onPartial: (rows) => {
+        const p = $("marketProgress");
+        const msg = p ? p.textContent : "수신 중…";
+        draw(rows, { rows }, msg);
+      },
     });
   } catch (e) {
     el.innerHTML = fetchFailHTML(e.message);
     return;
   }
-
-  const idxApi = KRX_INDEX_API_IDS[api];
-  const idxName = KRX_INDEX_NAMES[idxApi] || "지수";
-  const windowRows = series.rows.filter((r) => r.date >= chartStart);
-  const render = (idxSeries, idxStatus) => {
-    const ov = windowOverview(windowRows);
-    const model = marketChartModel(series.rows, idxSeries ? idxSeries.rows : [], allPicked, {
-      startDd: chartStart, endDd: todayD, sectChanges: ov ? ov.sect_changes : [],
-      uncovered: series.uncovered, pending: series.pending,
-      idxUncovered: idxSeries ? idxSeries.uncovered : [],
-    });
-    const svg = marketChartSVG(model);
-    const chartHTML = svg
-      ? `<div class="mkt-wrap">${svg}<div class="mkt-tip"></div></div>${marketChartLegendHTML(model, idxName)}` +
-        (model.dropped ? `<div class="ftnote">차트 창 밖·자료 없는 날의 관찰 사건 ${model.dropped}건은 마커로 찍지 못했습니다.</div>` : "") +
-        (model.idxUncovered ? `<div class="ftnote">${esc(idxName)} ${model.idxUncovered}거래일 미조회(호출 예산 — 다시 펼치면 이어서 받습니다).</div>` : "")
-      : `<div class="ftnote">차트 창 안에 거래일 시세 자료가 없어 차트를 그리지 않았습니다.</div>`;
-    el.innerHTML = marketReactionHTML(picked, series, {
-      chartHTML, totalEvents: allPicked.length, windowRows, idxStatus, idxName, clipNote,
-    });
-    const wrap = el.querySelector(".mkt-wrap");
-    if (wrap) attachMarketChartHover(wrap, model, idxName);
-  };
-
-  // 종목 시계열이 오면 차트를 먼저 그리고, 지수는 받는 대로 덧그린다 —
-  // 기다리는 동안 빈 화면이 아니다.
-  render(null, idxApi ? "loading" : "");
-  if (idxApi) {
-    try {
-      const idxSeries = await krxFetchSeries(idxApi, "IDX", chartStart, todayD, (done, total) => {
-        const p = $("marketIdxProgress");
-        if (p) p.textContent = `${idxName} ${done}/${total}거래일 수신…`;
-      }, { budget: KRX_INDEX_CALL_BUDGET });
-      render(idxSeries, "done");
-    } catch (e) {
-      render(null, `failed:${e.message}`);
-    }
-  }
+  draw(series.rows, series, "");
 }
 
 /* ── 대화 안내 ────────────────────────────────── */

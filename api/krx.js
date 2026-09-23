@@ -14,32 +14,18 @@
  * 행만** 돌려준다 — 브라우저가 그 용량을 직접 받지 않게 하는 것이 이 라우트의
  * 존재 이유다. 아무것도 저장하지 않는다.
  *
- * 계약: GET /api/krx?api={stk_bydd_trd|ksq_bydd_trd|kospi_dd_trd|kosdaq_dd_trd}
- * &basDd=YYYYMMDD&isu=071950(지수는 생략)
+ * 계약: GET /api/krx?api={stk_bydd_trd|ksq_bydd_trd}&basDd=YYYYMMDD&isu=071950
  * 헤더 X-KRX-Key(필수) → 업스트림 AUTH_KEY.
  *
- * **지수(코스피·코스닥, 2026-09-23 추가)**: 경로가 종목과 다르다(`svc/apis/idx/...`,
- * 종목은 `svc/apis/sto/...`). 응답은 하루치 **모든 지수**(실측 코스피 54행·
- * 코스닥 40행)이고 첫 행이 「코스피 (외국주포함)」이라 `IDX_NM` **정확 일치**로
- * 「코스피」/「코스닥」 한 행만 고른다(종목이 `ISU_CD`로 한 행만 고르는 것과 같은
- * 이유). `isu`는 지수에서 받지 않는다(있어도 무시). 정규화 키는 종목과 다르다
- * (`close`/`fluc_rt`/`mktcap` — `volume`·`value`·`list_shrs`·`sect`가 없다).
- *
  * 설계: docs/superpowers/specs/2026-09-23-viewer-krx-panel-design.md
- * 「릴레이 계약 (3곳 동일)」절, docs/superpowers/specs/2026-09-23-viewer-market-chart-design.md
- * 「릴레이」절.
+ * 「릴레이 계약 (3곳 동일)」절.
  */
 
-const KRX_STO_BASE = "https://data-dbg.krx.co.kr/svc/apis/sto";
-const KRX_IDX_BASE = "https://data-dbg.krx.co.kr/svc/apis/idx";
+const KRX_BASE = "https://data-dbg.krx.co.kr/svc/apis/sto";
 
-// core dart_risk_mcp/core/krx_client.py의 KRX_API_IDS.values()·
-// KRX_INDEX_API_IDS.values()와 같아야 한다(tests/test_viewer_krx_relay.py가 대조).
-const STOCK_APIS = new Set(["stk_bydd_trd", "ksq_bydd_trd"]);
-const INDEX_APIS = new Set(["kospi_dd_trd", "kosdaq_dd_trd"]);
-const ALLOWED_APIS = new Set([...STOCK_APIS, ...INDEX_APIS]);
-// core KRX_INDEX_NAMES와 같아야 한다.
-const INDEX_NAMES = { kospi_dd_trd: "코스피", kosdaq_dd_trd: "코스닥" };
+// core dart_risk_mcp/core/krx_client.py의 KRX_API_IDS.values()와 같아야 한다
+// (tests/test_viewer_krx_relay.py가 대조).
+const ALLOWED_APIS = new Set(["stk_bydd_trd", "ksq_bydd_trd"]);
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -72,17 +58,6 @@ function normalizeRow(date8, raw) {
   };
 }
 
-/** core `_normalize_index_row`와 같은 키·값. 종목 행과 이름을 다르게 둔다 —
- * 지수에는 기준가 조정이 없어 `priceBreaks`류를 재사용하면 안 된다는 뜻이다. */
-function normalizeIndexRow(date8, raw) {
-  return {
-    date: date8,
-    close: toNumber(raw.CLSPRC_IDX),
-    fluc_rt: toNumber(raw.FLUC_RT),
-    mktcap: toNumber(raw.MKTCAP),
-  };
-}
-
 function qs(v) {
   return Array.isArray(v) ? v[0] : v;
 }
@@ -110,13 +85,8 @@ export default async function handler(req, res) {
 
   const api = qs(req.query.api);
   const basDd = String(qs(req.query.basDd) || "");
-  const isIndex = INDEX_APIS.has(api);
   const isu = String(qs(req.query.isu) || "");
-  if (
-    !ALLOWED_APIS.has(api)
-    || !/^\d{8}$/.test(basDd)
-    || (!isIndex && !/^\d{6}$/.test(isu))
-  ) {
+  if (!ALLOWED_APIS.has(api) || !/^\d{8}$/.test(basDd) || !/^\d{6}$/.test(isu)) {
     res.status(400).json({ ok: false, error: "bad_params" });
     return;
   }
@@ -124,7 +94,7 @@ export default async function handler(req, res) {
   let upstream;
   try {
     upstream = await fetch(
-      `${isIndex ? KRX_IDX_BASE : KRX_STO_BASE}/${api}?basDd=${encodeURIComponent(basDd)}`,
+      `${KRX_BASE}/${api}?basDd=${encodeURIComponent(basDd)}`,
       { headers: { AUTH_KEY: key } },
     );
   } catch (e) {
@@ -156,15 +126,6 @@ export default async function handler(req, res) {
   }
   if (!rows.length) {
     res.status(200).json({ ok: true, found: false, empty: true });
-    return;
-  }
-  if (isIndex) {
-    const row = rows.find((r) => r.IDX_NM === INDEX_NAMES[api]);
-    if (!row) {
-      res.status(200).json({ ok: true, found: false, empty: false });
-      return;
-    }
-    res.status(200).json({ ok: true, found: true, row: normalizeIndexRow(basDd, row) });
     return;
   }
   const row = rows.find((r) => String(r.ISU_CD) === isu);

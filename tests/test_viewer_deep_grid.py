@@ -52,9 +52,10 @@ _DEEP_IDS = [
 
 # 펼칠 때만 받는 블록 — 스켈레톤에 스피너가 없는 것이 **맞다**(아직 아무것도
 # 조회하지 않았으므로). 대신 무엇을 여는 것인지 접힌 상태에서 알 수 있어야 한다.
-# marketCore(KRX 시세)는 2026-09-23에 합류했다 — 사용자 본인 KRX 키가
-# 있어야만 동작하고 창마다 수십 콜이 드는 별도 API라 같은 관례를 따른다.
-_LAZY_IDS = ["debtCore", "auditSvcCore", "marketCore"]
+# marketCore(KRX 시세)도 펼칠 때만 받지만 **격자 밖(전폭)**이다 — 1년 시간축
+# 차트라 OBSERVATION TIMELINE처럼 가로 전체를 쓴다(2026-09-23 제작자 요청).
+# 그 배치는 아래 `test_시장_차트는_격자_밖_전폭이다`가 잠근다.
+_LAZY_IDS = ["debtCore", "auditSvcCore"]
 
 
 def _render_dash() -> str:
@@ -94,6 +95,20 @@ class TestDeepGrid:
             assert open_at < at < close_at, (
                 f"{cid}가 격자 밖에 있다 — 이 패널만 1열로 남아 줄이 어긋난다"
             )
+
+    def test_시장_차트는_격자_밖_전폭이다(self):
+        """1년 시간축 차트는 격자 칸(약 500px)에 넣으면 한 해가 한 뼘에 눌린다 —
+        OBSERVATION TIMELINE 바로 뒤, 격자 앞에 둔다. 관찰 신호가 없는 회사에도
+        낸다(주가·거래량 자체가 사실이다)."""
+        body = _render_dash()
+        open_at = body.find('<div class="deepgrid">')
+        decl = body.find("const marketPanel =")
+        assert 0 <= decl < open_at, "marketPanel 선언이 격자 뒤에 있다"
+        assert 'id="marketCore"' in body[decl:open_at]
+        tl = body.find("html += timelinePanel(")
+        use = body.find("html += marketPanel;", tl)
+        assert tl >= 0 and tl < use < open_at, "시장 차트가 타임라인 바로 뒤에 없다"
+        assert "if (!observedEvents.length) html += marketPanel;" in body
 
     def test_convoPanel은_격자_밖이다(self):
         body = _render_dash()
