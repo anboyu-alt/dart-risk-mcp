@@ -2130,9 +2130,14 @@ def _market_reaction_block(
     krx_key: str,
     *,
     lookback_days: int,
+    window_end: str = "",
     max_check: int = _MARKET_BLOCK_MAX,
 ) -> list[str]:
     """공시 전후 시장 반응(KRX 시세·KIND 시장경보) 흡수 블록.
+
+    `window_end`(YYYYMMDD)는 호출 도구의 조회 창 끝이다. 비면 오늘. 시장경보를
+    그 날까지만 받는다 — 과거 창(`to_date`)을 조회했는데 그 뒤의 경보가 섞이면
+    창이 거짓이 된다.
 
     형제 `_related_party_detail_block`(위)과 같은 관례 — 관찰 이벤트 중
     최근 `max_check`건만 확인한다(원문 조회가 아니라 시세 조회지만 같은
@@ -2221,7 +2226,7 @@ def _market_reaction_block(
     if series.get("quota_hit"):
         lines.append("  ⚠ KRX 일일 호출 한도에 도달해 일부 거래일을 받지 못했습니다.")
 
-    alerts = fetch_market_alerts(stock_code, start_dd, today8)
+    alerts = fetch_market_alerts(stock_code, start_dd, min(window_end or today8, today8))
     if alerts.get("fetch_failed"):
         lines.append("  시장경보 확인 불가(KIND 응답 실패)")
     else:
@@ -3353,7 +3358,7 @@ def analyze_company_risk(
         )
         lines += _market_reaction_block(
             observed_events, stock_code, _market_corp_cls, _krx_key,
-            lookback_days=lookback_days,
+            lookback_days=lookback_days, window_end=end_de,
         )
 
     # v1.7.0: 최대주주변경 원문 상세 — 원문 추출 실패 시 블록 자체 생략
@@ -4174,7 +4179,7 @@ def build_event_timeline(
         )
         _market_blk = _market_reaction_block(
             _market_events, stock_code, _market_corp_cls, _krx_key,
-            lookback_days=lookback_days,
+            lookback_days=lookback_days, window_end=end_de,
         )
         if _market_blk and _market_blk[0] == "" and lines and lines[-1] == "":
             _market_blk = _market_blk[1:]
@@ -9895,6 +9900,12 @@ def track_market_reaction(
         oldest, newest = ev_date8, ev_date8
         post_pad_days = 15
         alert_start = (datetime.strptime(ev_date8, "%Y%m%d") - timedelta(days=100)).strftime("%Y%m%d")
+        # 끝도 그 공시 전후로 둔다 — 오늘까지 받으면 몇 년 뒤의 경보가 「이 공시 전후」
+        # 머리글 아래 섞인다(시작과 같은 100일 폭, 오늘 상한).
+        alert_end = min(
+            (datetime.strptime(ev_date8, "%Y%m%d") + timedelta(days=100)).strftime("%Y%m%d"),
+            today8,
+        )
     else:
         bgn_de, end_de, lookback_days, max_pages, window_phrase, win_err = _resolve_window(
             lookback_years, lookback_days, from_date, to_date
@@ -9909,6 +9920,9 @@ def track_market_reaction(
         alert_start = bgn_de or (
             datetime.now() - timedelta(days=int(lookback_days or 0))
         ).strftime("%Y%m%d")
+        # 끝도 조회 창 끝이다 — 2023년을 물었는데 2026년 경보까지 나왔다(코아스 실측,
+        # 2026-09-24). to_date가 없으면 _resolve_window가 end_de를 비워 준다 → 오늘.
+        alert_end = min(end_de or today8, today8)
         disclosures, fetch_status = fetch_company_disclosures_with_status(
             corp_code, _api_key(), lookback_days, max_pages=max_pages,
             bgn_de=bgn_de, end_de=end_de,
@@ -10064,7 +10078,7 @@ def track_market_reaction(
     lines.append("")
     lines.append("## ② 🚨 시장경보 이력 (KIND)")
     lines.append("")
-    alerts_result = fetch_market_alerts(stock_code, alert_start, today8)
+    alerts_result = fetch_market_alerts(stock_code, alert_start, alert_end)
     if alerts_result.get("fetch_failed"):
         lines.append("확인 불가 — KIND 응답에 실패했습니다(없다는 뜻이 아닙니다).")
     else:
