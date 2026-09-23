@@ -70,3 +70,24 @@ def test_compatibility_declares_python_and_platforms():
     c = _manifest()["compatibility"]
     assert c["runtimes"]["python"].startswith(">=3.")
     assert {"darwin", "win32", "linux"}.issubset(set(c["platforms"]))
+
+
+def test_krx_key_is_optional_user_config_and_env():
+    """2026-09-23 실측: 배포 .mcpb(v1.28.1)의 user_config에 DART 키만 있어 확장 사용자는
+    KRX 키를 앱 UI에서 넣을 길이 없었다 — v1.29.0의 track_market_reaction이 확장에서는
+    설정 불가였다. 선택(required false)·민감·환경변수 주입을 고정한다."""
+    m = _manifest()
+    uc = m["user_config"]["krx_api_key"]
+    assert uc["required"] is False and uc["sensitive"] is True
+    assert m["server"]["mcp_config"]["env"]["KRX_API_KEY"] == "${user_config.krx_api_key}"
+    # DART 키 계약은 그대로다
+    assert m["user_config"]["dart_api_key"]["required"] is True
+
+
+def test_long_description_tool_count_matches_server():
+    """long_description의 「N개 도구」가 실제 등록 도구 수와 같아야 한다(「26개」로 낡아 있었다)."""
+    import re
+    from dart_risk_mcp.server import mcp
+    n = len(mcp._tool_manager.list_tools())
+    m = re.search(r"(\d+)개 도구", _manifest()["long_description"])
+    assert m and int(m.group(1)) == n, (m.group(0) if m else None, n)
