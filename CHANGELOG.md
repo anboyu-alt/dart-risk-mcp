@@ -2,6 +2,11 @@
 
 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식 준수. 버전은 [SemVer](https://semver.org/lang/ko/).
 
+## [1.29.3] - 2026-09-24
+
+- 시세 대조에 한국투자증권 Open API를 선택 원천으로 추가 (#521)
+- README 정리, 소개 페이지 삭제 (#522)
+
 ## [1.29.2] - 2026-09-23
 
 **뷰어 「공시와 시장」을 가볍게.** 1년 차트를 처음 여는 데 약 3분 걸리던 것을
