@@ -1417,8 +1417,14 @@ core 0.27초)이고 로그의 initialize 응답 5~8초는 부팅 직후 cold 시
 - 뷰어 ↔ GitHub 링크를 끊었다 — 뷰어의 「프로젝트 소개 ↗」·「GitHub ↗」·「웹
   축약판」 안내·릴레이 코드 링크·푸터 저장소 링크를 지웠고, 저장소 설정의
   **홈페이지 주소(뷰어)를 비웠다**. 확장 매니페스트의 `homepage`(소개 페이지)도 지웠다.
-- ⚠ **그대로 둔 것**: 저장소 설명·토픽, `pyproject`의 저장소 URL, 확장 매니페스트의
-  `repository`·`documentation`·`support`, 뷰어의 `DEFAULT_RELAY`(기능 주소).
+- 같은 날 이어서: 저장소 **설명·주제 태그 15개**를 지웠고, `pyproject`의 `[project.urls]`
+  (PyPI 페이지 링크)와 확장 매니페스트의 `author.url`·`repository`·`documentation`·
+  `support`(설치 화면 링크)를 지웠다(`mcpb validate` 통과). ⚠ PyPI 페이지는 **다음 릴리스
+  업로드부터** 바뀐다 — 이미 올라간 판의 메타데이터는 고칠 수 없다.
+- ⚠ **홈페이지 주소가 한 번 되살아났다** — 비운 다음 날 뷰어 주소로 다시 채워져
+  있었다. 원인은 확인하지 못했다(`gh repo edit`가 함께 보냈을 가능성 · Vercel 연동).
+  다시 비웠다. 또 생기면 Vercel 프로젝트의 GitHub 연동을 본다.
+- ⚠ **그대로 둔 것**: 뷰어의 `DEFAULT_RELAY`(기능 주소).
   README 골드 건수·테스트 어림수 검사(`test_doc_facts`)는 적혀 있지 않은 값이라 뺐다.
 - ⚠ 릴리스 노트도 짧게 쓴다(제작자 요청).
 
