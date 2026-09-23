@@ -327,6 +327,67 @@ class TestVerdictVocabulary:
             assert emoji not in out
 
 
+class TestAlertWindowEnd:
+    """시장경보는 조회 창 **끝**까지만 받는다(2026-09-24 라이브 발견).
+
+    코아스 2023.01~12를 물었는데 KIND 절에 2026년 경보까지 30여 줄이 나왔고
+    「KIND는 3년까지만 — 2023.09.30부터」라는 엉뚱한 절단 고지도 붙었다. 끝을
+    오늘로 넘겨 창이 3년을 넘어 버린 탓이다. 머리글이 창을 말하는데 그 밖의
+    경보가 섞이면 창이 거짓이 된다."""
+
+    def _record(self, monkeypatch):
+        seen = []
+        stub = _alerts_stub()
+
+        def _fn(stock_code, start8, end8):
+            seen.append((start8, end8))
+            return stub(stock_code, start8, end8)
+
+        monkeypatch.setattr(srv, "fetch_market_alerts", _fn)
+        return seen
+
+    def test_과거_창은_to_date까지만(self, monkeypatch):
+        rows = _synth_price_rows("20221001", "20231231")
+        _wire(monkeypatch, price_rows=rows,
+              disclosures=[_mk_disclosure(_CB_TITLE, rcept_dt="20230601")])
+        seen = self._record(monkeypatch)
+        srv.track_market_reaction("테스트기업", from_date="2023-01-01", to_date="2023-12-31")
+        assert seen == [("20230101", "20231231")]
+
+    def test_to_date_없으면_오늘까지(self, monkeypatch):
+        rows = _synth_price_rows("20260101", "20260220")
+        _wire(monkeypatch, price_rows=rows,
+              disclosures=[_mk_disclosure(_CB_TITLE, rcept_dt="20260201")])
+        seen = self._record(monkeypatch)
+        srv.track_market_reaction("테스트기업")
+        assert seen and seen[0][1] == srv.datetime.now().strftime("%Y%m%d")
+
+    def test_rcept_no는_그_공시_전후_100일(self, monkeypatch):
+        rows = _synth_price_rows("20221001", "20231231")
+        _wire(monkeypatch, price_rows=rows,
+              disclosures=[_mk_disclosure(_CB_TITLE, rcept_no="20230601000001",
+                                          rcept_dt="20230601")])
+        seen = self._record(monkeypatch)
+        srv.track_market_reaction("테스트기업", rcept_no="20230601000001")
+        assert seen == [("20230221", "20230909")]
+
+    def test_analyze_흡수_블록도_창_끝까지(self, monkeypatch):
+        rows = _synth_price_rows("20221001", "20231231")
+        _wire(monkeypatch, price_rows=rows,
+              disclosures=[_mk_disclosure(_CB_TITLE, rcept_dt="20230601")])
+        seen = self._record(monkeypatch)
+        srv.analyze_company_risk("테스트기업", from_date="2023-01-01", to_date="2023-12-31")
+        assert seen and all(end8 == "20231231" for _, end8 in seen)
+
+    def test_timeline_흡수_블록도_창_끝까지(self, monkeypatch):
+        rows = _synth_price_rows("20221001", "20231231")
+        _wire(monkeypatch, price_rows=rows,
+              disclosures=[_mk_disclosure(_CB_TITLE, rcept_dt="20230601")])
+        seen = self._record(monkeypatch)
+        srv.build_event_timeline("테스트기업", from_date="2023-01-01", to_date="2023-12-31")
+        assert seen and all(end8 == "20231231" for _, end8 in seen)
+
+
 class TestAbsorbedBlocks:
     """analyze_company_risk·build_event_timeline 흡수 블록."""
 
