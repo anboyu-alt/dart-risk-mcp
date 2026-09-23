@@ -2,6 +2,10 @@
 
 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식 준수. 버전은 [SemVer](https://semver.org/lang/ko/).
 
+## [1.29.4] - 2026-09-24
+
+- 패키지 메타데이터 정리 (#524)
+
 ## [1.29.3] - 2026-09-24
 
 - 시세 대조에 한국투자증권 Open API를 선택 원천으로 추가 (#521)
