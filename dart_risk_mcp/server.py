@@ -140,6 +140,9 @@ from .core import (
     fetch_price_series,
     KRX_API_IDS,
     KRX_CALL_BUDGET,
+    fetch_price_series_kis,
+    fill_series_with_kis,
+    KIS_SOURCE_LABEL,
     fetch_market_alerts,
     event_window_facts,
     align_alerts_with_events,
@@ -247,6 +250,26 @@ def _krx_api_key() -> str:
     두 키 모두에 대해 이 계약을 고정한다.
     """
     return _KRX_API_KEY or os.environ.get("KRX_API_KEY", "")
+
+
+_KIS_APP_KEY: str = os.environ.get("KIS_APP_KEY", "")
+_KIS_APP_SECRET: str = os.environ.get("KIS_APP_SECRET", "")
+
+
+def _kis_app_key() -> str:
+    """한국투자증권 Open API 앱키 — `_krx_api_key()`와 같은 모양·같은 우선순위."""
+    return _KIS_APP_KEY or os.environ.get("KIS_APP_KEY", "")
+
+
+def _kis_app_secret() -> str:
+    """한국투자증권 Open API 앱시크릿 — `_krx_api_key()`와 같은 모양·같은 우선순위."""
+    return _KIS_APP_SECRET or os.environ.get("KIS_APP_SECRET", "")
+
+
+def _kis_credentials() -> "tuple[str, str] | None":
+    """KIS 앱키·시크릿이 **둘 다** 있을 때만 (앱키, 시크릿). 하나만 있으면 None."""
+    k, s = _kis_app_key(), _kis_app_secret()
+    return (k, s) if (k and s) else None
 
 
 def _estimate_output_size(text: str) -> tuple[int, int]:
@@ -1867,6 +1890,99 @@ def _fmt_mktcap(x) -> str:
     return _format_amount(str(int(x))) or "-"
 
 
+def _market_series(
+    stock_code: str, corp_cls: str, start_dd: str, end_dd: str, krx_key: str, *, budget: int,
+) -> dict:
+    """시세 구간을 받는다 — KRX가 있으면 KRX로 받고 못 받은 날은 KIS로 메우며,
+    KIS만 있으면 KIS 단독.
+
+    **KRX가 먼저다** — 일자별 시가총액·상장주식수·코스닥 소속부는 KRX에만 있다
+    (회전율·시총·관리종목 규정선 대조가 여기서 나온다). KIS는 종목·기간 단위라
+    1년이 3콜이지만 그 셋이 없다. 그래서 KRX가 호출 예산·실패(403 IP 차단 등)·
+    발표 전으로 **못 받은 날만** KIS 원주가 일봉으로 채운다(`fill_series_with_kis`).
+    둘 다 원값 종가·원값 거래량·기준가 대비 등락률이라 섞어도 뜻이 같다.
+    """
+    kis = _kis_credentials()
+    if krx_key:
+        series = fetch_price_series(stock_code, corp_cls, start_dd, end_dd, krx_key, budget=budget)
+        if kis and not series.get("unsupported_market"):
+            series = fill_series_with_kis(series, stock_code, corp_cls, *kis)
+        return series
+    if kis:
+        return fetch_price_series_kis(stock_code, corp_cls, start_dd, end_dd, *kis)
+    return {"rows": [], "fetch_failed": True, "missing_key": True, "source": ""}
+
+
+def _market_source_name(series: dict) -> str:
+    """사용자에게 보이는 시세 출처 이름."""
+    src = series.get("source") or "krx"
+    return {"kis": "KIS(한국투자증권)", "krx+kis": "KRX·KIS"}.get(src, "KRX")
+
+
+def _market_attribution(series: dict) -> str:
+    """출처 표기. KRX 자료를 한 날이라도 찍으면 「한국거래소 통계정보」를 명시한다
+    (KRX 약관 제10조 ③). KIS로 메운 날이 있으면 그 사실도 함께 적는다."""
+    src = series.get("source") or "krx"
+    if src == "kis":
+        return f"시세: {KIS_SOURCE_LABEL}(원주가 일봉)"
+    if src == "krx+kis":
+        return (f"{_KRX_ATTRIBUTION} · 일부 거래일({series.get('kis_days', 0)}일)은 "
+                f"{KIS_SOURCE_LABEL}(원주가 일봉)")
+    return _KRX_ATTRIBUTION
+
+
+def _market_missing_key_line() -> str:
+    """두 원천 모두 없을 때의 안내 — KRX 문구로 시작한다(골든 첫 줄 패턴 호환)."""
+    return (
+        "KRX_API_KEY 환경변수가 설정되지 않았습니다 — "
+        "openapi.krx.co.kr에서 발급(유가증권·코스닥 일별매매정보 활용 신청 필요). "
+        "또는 한국투자증권 Open API 앱키(KIS_APP_KEY·KIS_APP_SECRET)를 설정해도 "
+        "시세·거래량 대조가 됩니다(일자별 시총·회전율은 KRX에만 있습니다)."
+    )
+
+
+def _market_source_notes(series: dict) -> list[str]:
+    """출처 때문에 비는 칸을 한 번만 밝힌다 — 사건마다 각주로 되풀이하지 않는다."""
+    notes = []
+    src = series.get("source") or "krx"
+    if src == "kis":
+        notes.append(
+            f"※ 시세 출처는 {KIS_SOURCE_LABEL}(원주가 일봉)입니다 — 일자별 시가총액·"
+            "상장주식수·코스닥 소속부가 없어 회전율·시총은 비워 둡니다(KRX_API_KEY를 "
+            "설정하면 채워집니다)."
+        )
+    elif src == "krx+kis":
+        notes.append(
+            f"※ KRX로 못 받은 {series.get('kis_days', 0)}거래일은 {KIS_SOURCE_LABEL}"
+            "(원주가 일봉)로 메웠습니다 — 그날은 시가총액·상장주식수가 없어 회전율·시총이 빕니다."
+        )
+    if series.get("kis_fill_failed"):
+        notes.append("※ 못 받은 날을 KIS로 메우려 했으나 KIS 조회에 실패했습니다(없다는 뜻이 아닙니다).")
+    return notes
+
+
+def _market_uncovered_why(series: dict) -> str:
+    """미조회 사유 — 출처마다 다르다. KIS는 캐시가 없어 「이어서 받는다」가 아니다."""
+    if (series.get("source") or "krx") == "kis":
+        return "KIS 조회가 중간에 실패 — 다시 시도해 주세요"
+    return "호출 예산 — 받은 날은 캐시되므로 다시 실행하면 이어서 받습니다"
+
+
+def _market_pending_why(series: dict) -> str:
+    """사건일이 아직 자료가 없는 최근 거래일일 때의 표 칸 문구."""
+    if (series.get("source") or "krx") == "kis":
+        return "오늘 — 장중 부분 자료라 제외"
+    return "KRX 발표 전(마감 후 다시 조회)"
+
+
+def _market_fact_for_render(fact: "dict | None", series: dict) -> "dict | None":
+    """KIS 단독이면 회전율 각주(「상장주식수가 없어…」)를 사건마다 붙이지 않는다 —
+    `_market_source_notes`가 한 번 밝힌다."""
+    if fact is not None and series.get("no_share_data"):
+        return {**fact, "turnover_note": None}
+    return fact
+
+
 def _market_fact_notes(fact: dict) -> list[str]:
     """`event_window_facts` 한 건의 사실 각주 — 절단·계산 불가 사유를 그대로 옮긴다.
 
@@ -2026,11 +2142,12 @@ def _market_reaction_block(
     "이 회사는 시세가 없다"로 읽는다(v0.8.5 오류 처리 원칙, `_fetch_failed_notice`
     와 같은 태도). 그래서 실패는 블록을 생략하지 않고 실패 사실을 남긴다.
     """
-    if not krx_key:
+    if not krx_key and not _kis_credentials():
         return [
             "",
             "📈 공시 전후 시장 반응: KRX_API_KEY 환경변수가 설정되지 않았습니다 "
-            "— 시세·거래량 대조는 생략합니다(설정하면 이 자리에 표가 붙습니다).",
+            "— 시세·거래량 대조는 생략합니다(설정하면 이 자리에 표가 붙습니다. "
+            "한국투자증권 Open API 앱키 KIS_APP_KEY·KIS_APP_SECRET도 됩니다).",
         ]
     if corp_cls not in KRX_API_IDS:
         return [
@@ -2066,13 +2183,13 @@ def _market_reaction_block(
         today8,
     )
 
-    series = fetch_price_series(
+    series = _market_series(
         stock_code, corp_cls, start_dd, end_dd, krx_key, budget=_MARKET_BLOCK_BUDGET
     )
     if series.get("fetch_failed"):
         return [
             "",
-            "📈 공시 전후 시장 반응: KRX 시세 조회에 실패했습니다 — "
+            f"📈 공시 전후 시장 반응: {_market_source_name(series)} 시세 조회에 실패했습니다 — "
             "자료가 없다는 뜻이 아닙니다. API 키·일일 호출 한도를 확인한 뒤 "
             "다시 시도해 주세요.",
         ]
@@ -2081,7 +2198,9 @@ def _market_reaction_block(
     lines = ["", "📈 **공시 전후 시장 반응**"]
     for e in sorted(picked, key=lambda x: x.get("rcept_dt", ""), reverse=True):
         event_date8 = (e.get("rcept_dt") or "")[:8]
-        fact = event_window_facts(rows, event_date8, baseline=_MARKET_BASELINE_DAYS)
+        fact = _market_fact_for_render(
+            event_window_facts(rows, event_date8, baseline=_MARKET_BASELINE_DAYS), series
+        )
         label = e.get("label") or e.get("key") or "-"
         if fact is None:
             lines.append(
@@ -2095,9 +2214,9 @@ def _market_reaction_block(
     if days_uncovered:
         lines.append(
             f"  ⚠ {series.get('days_requested', 0)}거래일 중 "
-            f"{len(days_uncovered)}일 미조회(호출 예산 — 받은 날은 캐시되므로 "
-            "다시 실행하면 이어서 받습니다)"
+            f"{len(days_uncovered)}일 미조회({_market_uncovered_why(series)})"
         )
+    lines += ["  " + n for n in _market_source_notes(series)]
     if series.get("quota_hit"):
         lines.append("  ⚠ KRX 일일 호출 한도에 도달해 일부 거래일을 받지 못했습니다.")
 
@@ -2117,7 +2236,7 @@ def _market_reaction_block(
             lines.append(f"  … 외 {omitted}건")
 
     lines.append(
-        f"📎 {_KRX_ATTRIBUTION} · 접수일은 사건일과 다를 수 있고 장 마감 후 "
+        f"📎 {_market_attribution(series)} · 접수일은 사건일과 다를 수 있고 장 마감 후 "
         "접수는 다음 거래일부터 반응이 나타납니다."
     )
     return lines
@@ -3229,7 +3348,7 @@ def analyze_company_risk(
         _krx_key = _krx_api_key()
         _market_corp_cls = (
             fetch_company_info(corp_code, _api_key()).get("corp_cls", "")
-            if _krx_key else ""
+            if (_krx_key or _kis_credentials()) else ""
         )
         lines += _market_reaction_block(
             observed_events, stock_code, _market_corp_cls, _krx_key,
@@ -4050,7 +4169,7 @@ def build_event_timeline(
         _krx_key = _krx_api_key()
         _market_corp_cls = (
             fetch_company_info(corp_code, _api_key()).get("corp_cls", "")
-            if _krx_key else ""
+            if (_krx_key or _kis_credentials()) else ""
         )
         _market_blk = _market_reaction_block(
             _market_events, stock_code, _market_corp_cls, _krx_key,
@@ -9724,11 +9843,8 @@ def track_market_reaction(
     if not _api_key():
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
     krx_key = _krx_api_key()
-    if not krx_key:
-        return (
-            "❌ KRX_API_KEY 환경변수가 설정되지 않았습니다 — "
-            "openapi.krx.co.kr에서 발급(유가증권·코스닥 일별매매정보 활용 신청 필요)."
-        )
+    if not krx_key and not _kis_credentials():
+        return "❌ " + _market_missing_key_line()
 
     result = resolve_corp(company_name, _api_key())
     if not result:
@@ -9848,11 +9964,12 @@ def track_market_reaction(
         today8,
     )
 
-    series = fetch_price_series(stock_code, corp_cls, start_dd, end_dd, krx_key, budget=KRX_CALL_BUDGET)
+    series = _market_series(stock_code, corp_cls, start_dd, end_dd, krx_key, budget=KRX_CALL_BUDGET)
     if series.get("fetch_failed"):
+        _src_name = _market_source_name(series)
         return (
-            f"⚠ **{corp_name}**의 KRX 시세를 불러오지 못했습니다 ({window_phrase}).\n\n"
-            "**자료가 없다는 뜻이 아닙니다** — KRX 조회가 실패했습니다. "
+            f"⚠ **{corp_name}**의 {_src_name} 시세를 불러오지 못했습니다 ({window_phrase}).\n\n"
+            f"**자료가 없다는 뜻이 아닙니다** — {_src_name} 조회가 실패했습니다. "
             "API 키가 올바른지, 일일 호출 한도를 넘지 않았는지 확인한 뒤 다시 시도해 주세요."
         )
     rows = series.get("rows", [])
@@ -9878,7 +9995,9 @@ def track_market_reaction(
     uncovered_max = max(series.get("days_uncovered") or [""])
     for e in shown:
         ev8 = (e["rcept_dt"] or "")[:8]
-        fact = event_window_facts(rows, ev8, baseline=_MARKET_BASELINE_DAYS)
+        fact = _market_fact_for_render(
+            event_window_facts(rows, ev8, baseline=_MARKET_BASELINE_DAYS), series
+        )
         if fact is not None and uncovered_max and ev8 <= _date8_add(uncovered_max, 100):
             fact = {**fact, "uncovered_note": (
                 "이 사건의 창 일부가 미조회 구간(호출 예산)입니다 — 다시 실행하면 이어서 받습니다"
@@ -9887,7 +10006,7 @@ def track_market_reaction(
         if fact is None:
             pend = series.get("days_pending") or []
             why = (
-                "KRX 발표 전(마감 후 다시 조회)" if pend and ev8 >= pend[0]
+                _market_pending_why(series) if pend and ev8 >= pend[0]
                 else "이 조회 창 안에 시세 자료 없음"
             )
             lines.append(
@@ -9917,15 +10036,21 @@ def track_market_reaction(
         f"조회 거래일 {series.get('days_requested', 0)}일 중 "
         f"{series.get('days_fetched', 0) + series.get('days_cached', 0)}일 확인"
         + (
-            f" · {len(days_uncovered)}일 미조회(호출 예산 {KRX_CALL_BUDGET}콜/회 — "
-            "받은 날은 캐시되므로 같은 조회를 다시 실행하면 이어서 받습니다)"
-            if days_uncovered else ""
-        )
+            (f" · {len(days_uncovered)}일 미조회(호출 예산 {KRX_CALL_BUDGET}콜/회 — "
+             "받은 날은 캐시되므로 같은 조회를 다시 실행하면 이어서 받습니다)")
+            if (series.get("source") or "krx") != "kis"
+            else f" · {len(days_uncovered)}일 미조회({_market_uncovered_why(series)})"
+        ) if days_uncovered else ""
     )
+    lines += _market_source_notes(series)
     if series.get("quota_hit"):
         lines.append("⚠ KRX 일일 호출 한도에 도달해 일부 거래일을 받지 못했습니다.")
     pending = series.get("days_pending") or []
-    if pending:
+    if pending and (series.get("source") or "krx") == "kis":
+        lines.append(
+            f"※ 오늘({_fmt_date8(pending[-1])})은 장중·마감 직후 부분 자료일 수 있어 대조에서 뺐습니다."
+        )
+    elif pending:
         lines.append(
             f"※ 최근 {len(pending)}거래일({_fmt_date8(pending[0])}~{_fmt_date8(pending[-1])})은 "
             "KRX가 아직 발표하지 않아 비어 있습니다(휴장일이 아닐 수 있음 — 마감 후 다시 조회)."
@@ -10019,18 +10144,31 @@ def track_market_reaction(
                 )
             else:
                 lines.append(f"- 코스닥 소속부: {overview.get('sect_end')} (창 안 변동 없음)")
-        lines.append(f"- 구간 끝({_fmt_date8(overview['end_date'])}) 시가총액: {_fmt_mktcap(overview['end_mktcap'])}")
+        _mk_days = overview.get("mktcap_days", overview["days"])
+        if overview.get("end_mktcap") is not None:
+            # 시총이 있는 마지막 거래일 — KIS로 메운 끝 구간이면 끝 거래일과 다르다.
+            _mk_date = overview.get("end_mktcap_date") or overview["end_date"]
+            lines.append(f"- 구간 끝({_fmt_date8(_mk_date)}) 시가총액: {_fmt_mktcap(overview['end_mktcap'])}")
         if overview["days_mktcap_under_20bn"] or overview["days_close_under_1000"]:
+            # 시총은 KRX만 준다 — KIS로 메운 날은 대조 대상이 아니다. 분모를 밝히지
+            # 않으면 「시총 미달 0거래일」이 「전부 넘었다」로 읽힌다.
+            if _mk_days == 0:
+                _mk_part = "시총 대조 불가(일자별 시총 자료 없음)"
+            elif _mk_days < overview["days"]:
+                _mk_part = (f"시총 미달 {overview['days_mktcap_under_20bn']}거래일"
+                            f"(시총 자료가 있는 {_mk_days}거래일 중)")
+            else:
+                _mk_part = f"시총 미달 {overview['days_mktcap_under_20bn']}거래일"
             lines.append(
                 "- 관리종목 지정요건의 규정 수치(시총 200억·주가 1,000원)와 대조: "
-                f"시총 미달 {overview['days_mktcap_under_20bn']}거래일 · "
+                f"{_mk_part} · "
                 f"주가 미달 {overview['days_close_under_1000']}거래일"
                 " — 이 도구의 임계가 아니라 규정 수치입니다."
             )
 
     lines.append("")
     lines.append(
-        f"📎 {_KRX_ATTRIBUTION} · 접수일은 사건일과 다를 수 있고 장 마감 후 접수는 "
+        f"📎 {_market_attribution(series)} · 접수일은 사건일과 다를 수 있고 장 마감 후 접수는 "
         "다음 거래일부터 반응이 나타납니다 · 정정공시는 대조에서 제외했습니다 · "
         "KIND 시장경보는 비공식 웹 조회입니다(kind.krx.co.kr)."
     )

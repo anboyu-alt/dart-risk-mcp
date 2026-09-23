@@ -84,6 +84,16 @@ def test_krx_key_is_optional_user_config_and_env():
     assert m["user_config"]["dart_api_key"]["required"] is True
 
 
+def test_kis_keys_are_optional_user_config_and_env():
+    """2026-09-23: KIS(한국투자증권) 앱키·시크릿도 KRX 키와 같은 계약 — 선택·민감·env 주입."""
+    m = _manifest()
+    env = m["server"]["mcp_config"]["env"]
+    for name, env_name in (("kis_app_key", "KIS_APP_KEY"), ("kis_app_secret", "KIS_APP_SECRET")):
+        uc = m["user_config"][name]
+        assert uc["required"] is False and uc["sensitive"] is True
+        assert env[env_name] == "${user_config." + name + "}"
+
+
 def test_long_description_tool_count_matches_server():
     """long_description의 「N개 도구」가 실제 등록 도구 수와 같아야 한다(「26개」로 낡아 있었다)."""
     import re

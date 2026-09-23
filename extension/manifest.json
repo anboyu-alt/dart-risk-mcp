@@ -26,7 +26,9 @@
       "args": ["run", "--directory", "${__dirname}", "src/server.py"],
       "env": {
         "DART_API_KEY": "${user_config.dart_api_key}",
-        "KRX_API_KEY": "${user_config.krx_api_key}"
+        "KRX_API_KEY": "${user_config.krx_api_key}",
+        "KIS_APP_KEY": "${user_config.kis_app_key}",
+        "KIS_APP_SECRET": "${user_config.kis_app_secret}"
       }
     }
   },
@@ -42,6 +44,22 @@
       "type": "string",
       "title": "KRX Open API 키 (선택)",
       "description": "한국거래소 Open API 인증키. https://openapi.krx.co.kr 에서 발급 후 「유가증권·코스닥 일별매매정보」 활용 신청이 필요합니다. 공시 전후 시세·거래량 대조(track_market_reaction)에만 쓰이며, 비워 두면 나머지 도구는 그대로 동작합니다.",
+      "sensitive": true,
+      "required": false,
+      "default": ""
+    },
+    "kis_app_key": {
+      "type": "string",
+      "title": "한국투자증권 Open API 앱키 (선택)",
+      "description": "KIS Developers(https://apiportal.koreainvestment.com)에서 발급한 실전투자 앱키. 앱시크릿과 함께 넣으면 공시 전후 시세 대조가 KIS 일봉으로도 돕니다 — KRX 키가 있으면 KRX가 못 받은 날만 메우고, 없으면 KIS 단독(일자별 시총·회전율 제외).",
+      "sensitive": true,
+      "required": false,
+      "default": ""
+    },
+    "kis_app_secret": {
+      "type": "string",
+      "title": "한국투자증권 Open API 앱시크릿 (선택)",
+      "description": "위 앱키와 짝인 앱시크릿. 둘 중 하나만 넣으면 쓰지 않습니다.",
       "sensitive": true,
       "required": false,
       "default": ""

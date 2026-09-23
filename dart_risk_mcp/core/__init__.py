@@ -182,6 +182,11 @@ from .krx_client import (
     KRX_API_IDS,
     KRX_CALL_BUDGET,
 )
+from .kis_client import (
+    fetch_price_series_kis,
+    fill_series_with_kis,
+    KIS_SOURCE_LABEL,
+)
 from .kind_client import (
     fetch_market_alerts,
     KIND_ALERT_URL,
@@ -363,6 +368,9 @@ __all__ = [
     "fetch_price_series",
     "KRX_API_IDS",
     "KRX_CALL_BUDGET",
+    "fetch_price_series_kis",
+    "fill_series_with_kis",
+    "KIS_SOURCE_LABEL",
     "fetch_market_alerts",
     "KIND_ALERT_URL",
     "event_window_facts",
