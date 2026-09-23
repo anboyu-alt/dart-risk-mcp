@@ -254,6 +254,47 @@ def test_최근_빈_응답은_캐시하지_않고_오래된_빈_응답은_캐시
     assert r_old2["r"]["daysCached"] == 1
 
 
+# ── ②b gap_before — 앞 거래일이 미조회면 표시하고, 휴장일은 빈틈이 아니다 ──
+
+def _mon_tue_wed_back(days: int):
+    """days일 전 언저리의 (월, 화, 수) 세 평일 — 그레이스(7일) 밖이어야 한다."""
+    import datetime as _dt
+    d = _dt.date.today() - _dt.timedelta(days=days)
+    while d.weekday() != 2:
+        d -= _dt.timedelta(days=1)
+    f = lambda x: x.strftime("%Y%m%d")
+    return f(d - _dt.timedelta(days=2)), f(d - _dt.timedelta(days=1)), f(d)
+
+
+def test_gap_before는_미조회_다음_행에만_붙고_휴장일은_빈틈이_아니다():
+    """core `fetch_price_series`와 같은 계산(2026-09-23) — `priceBreaks`가 며칠치
+    움직임을 하루 등락률과 견주지 않게 하는 표시. 화요일 조회가 실패(uncovered)하면
+    수요일 행에 gap_before=true, 화요일이 휴장(빈 응답)이면 false."""
+    a, b, c = _mon_tue_wed_back(40)
+    tail = (
+        'const _orig = global.fetch; global.fetch = async (url) => { '
+        '  if (String(url).includes("basDd=" + B8)) throw new Error("boom"); return _orig(url); };\n'
+        'krxFetchSeries("stk_bydd_trd", "005930", A8, C8).then((r) => '
+        'console.log(JSON.stringify({rows: r.rows.map((x) => [x.date, x.gap_before]), '
+        'uncovered: r.uncovered})));'
+    ).replace("A8", json.dumps(a)).replace("B8", json.dumps(b)).replace("C8", json.dumps(c))
+    out = _run_krx(tail, fetch_responses={a: _row_resp(a), c: _row_resp(c)},
+                   default_response=_EMPTY_RESP)
+    assert out["uncovered"] == [b]
+    assert out["rows"] == [[a, False], [c, True]], out
+
+    # 화요일이 휴장(빈 응답)이면 수요일은 빈틈이 아니다
+    out2 = _run_krx(
+        'krxFetchSeries("stk_bydd_trd", "005930", A8, C8).then((r) => '
+        'console.log(JSON.stringify({rows: r.rows.map((x) => [x.date, x.gap_before]), '
+        'uncovered: r.uncovered})));'
+        .replace("A8", json.dumps(a)).replace("C8", json.dumps(c)),
+        fetch_responses={a: _row_resp(a), b: _EMPTY_RESP, c: _row_resp(c)},
+        default_response=_EMPTY_RESP)
+    assert out2["uncovered"] == []
+    assert out2["rows"] == [[a, False], [c, False]], out2
+
+
 # ── ③ 호출 예산 — 넘는 날짜는 uncovered로 밝힌다 ───────────────────────
 
 def test_예산을_넘으면_오래된_쪽이_uncovered로_남는다():
