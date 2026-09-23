@@ -70,8 +70,6 @@
   .railfoot { margin-top: auto; padding: 16px 22px 0; font-family: var(--mono);
     font-size: 10.5px; color: var(--faint); letter-spacing: 0.1em; line-height: 1.9; }
   .railfoot .lv { color: var(--green); }
-  .raillinks { padding: 12px 22px 0; display: flex; gap: 0.8rem; font-size: 12px; }
-  .raillinks a { color: var(--dim); }
 
   /* ── 메인 ── */
   .mainarea { flex: 1; min-width: 0; padding: 24px 32px 56px; }
@@ -435,7 +433,7 @@
     .navitem { padding: 8px 12px; font-size: 13px; border-left: 0; border-bottom: 2px solid transparent; }
     .navitem.active { border-bottom-color: var(--amber); }
     .navitem .no { display: none; }
-    .railfoot, .raillinks { display: none; }
+    .railfoot { display: none; }
     .mainarea { padding: 18px 14px 48px; }
     .g-feed { grid-template-columns: 76px 1fr 70px; }
     .g-feed .colcat, .g-feed .colcorr { display: none; }
@@ -453,7 +451,6 @@
     <div class="navitem sub disabled" id="nav-detail" onclick="showScreen('detail')"><span class="no">└</span>공시 상세</div>
     <div class="navitem disabled" id="nav-dash" onclick="showScreen('dash')"><span class="no">03</span>결과 대시보드</div>
     <div class="navitem" id="nav-compare" onclick="showScreen('compare')"><span class="no">04</span>임원 겸직 비교</div>
-    <div class="raillinks"><a href="https://anboyu-alt.github.io/dart-risk-mcp/" target="_blank" rel="noopener">프로젝트 소개 ↗</a><a href="https://github.com/anboyu-alt/dart-risk-mcp" target="_blank" rel="noopener">GitHub ↗</a></div>
     <div class="railfoot">SESSION · KST<br><span id="clock">—</span><br><span class="lv">● SIGNAL FEED LIVE</span></div>
   </nav>
 
@@ -483,7 +480,6 @@
         <ul class="dim" style="font-size:0.86rem;margin:0.5rem 0 0 1.2rem">
           <li><strong style="color:var(--tx)">하루 몇 곳은 키 없이</strong> 바로 조회됩니다 — 그 이상 보시려면 <strong style="color:var(--tx)">본인의 무료 DART API 키</strong>를 입력하세요(증빙서류 없이 즉시 발급). 입력한 키는 이 브라우저에만 저장되고, 서버에 아무것도 남지 않습니다</li>
           <li>점수·등급·매수 추천은 없습니다 — <strong style="color:var(--tx)">공시라는 공개 기록의 사실 표기</strong>와 원문 링크만 제공합니다</li>
-          <li>이 페이지는 오픈소스 분석 엔진 <a href="https://anboyu-alt.github.io/dart-risk-mcp/" target="_blank" rel="noopener">dart-risk-mcp</a>의 웹 축약판입니다 — AI와의 대화(MCP)에서는 원문 열람·자금 추적까지 더 깊이 들어갑니다</li>
         </ul>
       </div>
 
@@ -542,7 +538,7 @@
         <div style="margin-top:0.9rem"><button id="saveKey">저장하고 시작 ▸</button></div>
         <p class="dim" style="font-size:0.84rem;margin-top:0.9rem">
           이 도구는 서버에 데이터를 쌓지 않습니다. 입력한 키는 <strong style="color:var(--tx)">이 브라우저에만 저장</strong>되고,
-          공개 코드로 검증 가능한 <a href="https://github.com/anboyu-alt/dart-risk-mcp/tree/master/relay">무저장 릴레이</a>를
+          저장하지 않는 릴레이를
           거쳐 금융감독원 DART로만 전송됩니다.
         </p>
         <details class="settings">
@@ -650,7 +646,6 @@
       키를 입력하지 않은 동안에는 운영자 키로 하루 몇 곳까지 대신 조회해 드립니다.
       서비스 개선을 위해 접속 기록·쿠키·기기 정보를 수집합니다.
       "주의" 표시는 사실 관찰의 우선순위이며 위험 판정·투자 판단 근거가 아닙니다.
-      · <a href="https://github.com/anboyu-alt/dart-risk-mcp">dart-risk-mcp</a> (MIT)
       <span id="verline"></span>
     </p>
   </div>

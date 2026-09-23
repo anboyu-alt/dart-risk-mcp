@@ -74,18 +74,10 @@ def test_매트릭스에서_빠진_도구를_문서가_밝힌다():
         assert name in _CLAUDE, f"{name}이 매트릭스에서 빠진 이유가 문서에 없다"
 
 
-def test_골드_출력_건수가_실제와_같다():
-    n = len(list((_ROOT / "tests" / "fixtures" / "sample_outputs").glob("*.txt")))
-    m = re.search(r"실측 골드 출력 (\d+)건", _README)
-    assert m
-    assert int(m.group(1)) == n, f"README {m.group(1)} (실제 {n})"
-
-
-def test_테스트_수는_어림수로_적는다():
-    """정확한 수를 적으면 테스트를 추가할 때마다 문서가 틀린다."""
-    assert re.search(r"테스트 [\d,]+여 개", _README), (
-        "README의 테스트 개수는 '…여 개' 형태로 적어 둔다"
-    )
+# 2026-09-24: README를 짧은 개인 메모로 바꾸며(외부 홍보 중단) 골드 건수·
+# 테스트 어림수를 README에서 뺐다. 그 두 검사도 함께 뺐다 — 적혀 있지 않은
+# 값을 대조할 수는 없다. 위 매트릭스 검사는 README에 그 문구가 없으면 0회
+# 돌아 그대로 둔다.
 
 
 # ⚠ 테스트 **개수**는 여기서 검사하지 않는다. 2026-08-26에 AST로 어림해
