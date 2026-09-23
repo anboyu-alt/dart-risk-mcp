@@ -4,7 +4,7 @@
   "display_name": "dart-risk",
   "version": "1.29.0",
   "description": "공시 기반 불공정거래 위험 모니터링 — 금융감독원 전자공시(DART)에서 위험 신호를 읽는 MCP 서버",
-  "long_description": "DART 전자공시를 흐름과 연결로 읽어 불공정거래 위험 신호를 표면화합니다. 자본 이벤트 리듬, 회사마다 이름을 바꾸는 투자조합 뒤의 같은 임원, 조달 명분과 다른 곳으로 흘러간 자금 등을 26개 도구로 조회합니다. 점수·등급을 매기지 않고 사실만 표기합니다. DART API 키(무료)가 필요합니다.",
+  "long_description": "DART 전자공시를 흐름과 연결로 읽어 불공정거래 위험 신호를 표면화합니다. 자본 이벤트 리듬, 회사마다 이름을 바꾸는 투자조합 뒤의 같은 임원, 조달 명분과 다른 곳으로 흘러간 자금 등을 34개 도구로 조회합니다. 점수·등급을 매기지 않고 사실만 표기합니다. DART API 키(무료)가 필요합니다.",
   "author": {
     "name": "anboyu-alt",
     "url": "https://github.com/anboyu-alt"
@@ -25,7 +25,8 @@
       "command": "uv",
       "args": ["run", "--directory", "${__dirname}", "src/server.py"],
       "env": {
-        "DART_API_KEY": "${user_config.dart_api_key}"
+        "DART_API_KEY": "${user_config.dart_api_key}",
+        "KRX_API_KEY": "${user_config.krx_api_key}"
       }
     }
   },
@@ -36,6 +37,14 @@
       "description": "DART OpenAPI 인증키(무료). https://opendart.fss.or.kr 에서 이메일 인증으로 즉시 발급 — 하루 2만 건.",
       "sensitive": true,
       "required": true
+    },
+    "krx_api_key": {
+      "type": "string",
+      "title": "KRX Open API 키 (선택)",
+      "description": "한국거래소 Open API 인증키. https://openapi.krx.co.kr 에서 발급 후 「유가증권·코스닥 일별매매정보」 활용 신청이 필요합니다. 공시 전후 시세·거래량 대조(track_market_reaction)에만 쓰이며, 비워 두면 나머지 도구는 그대로 동작합니다.",
+      "sensitive": true,
+      "required": false,
+      "default": ""
     }
   },
   "compatibility": {
