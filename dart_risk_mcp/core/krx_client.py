@@ -66,6 +66,23 @@ KRX_KEEP_FIELDS = (
     "MKTCAP", "LIST_SHRS", "SECT_TP_NM",
 )
 
+# ── 지수(코스피·코스닥) ──────────────────────────────────────────
+#
+# 뷰어의 「공시와 시장」 차트가 종목 시세 위에 지수를 겹쳐 그리기 위한
+# 상수·정규화 함수만 여기 둔다. MCP 도구는 지수를 쓰지 않으므로 fetch 함수는
+# 두지 않는다 — 로컬 릴레이(scripts/dev_relay.py)가 이 상수·함수를 import해
+# 세 릴레이(api/krx.js·relay/worker.js·scripts/dev_relay.py)의 정규화가
+# 갈리지 않게 한다.
+#
+# 실측(2026-09-23, basDd=20260918): 종목과 경로가 다르다(`svc/apis/idx/...`,
+# 종목은 `svc/apis/sto/...`). 응답은 하루치 **모든 지수**(코스피 54행·코스닥
+# 40행)이고 첫 행이 「코스피 (외국주포함)」이라 `IDX_NM` **정확 일치**로
+# 「코스피」/「코스닥」 한 행만 골라야 한다(종목이 `ISU_CD`로 한 행만 고르는 것과
+# 같은 이유). 휴장일은 종목과 같은 `{"OutBlock_1": []}`.
+KRX_INDEX_BASE = "https://data-dbg.krx.co.kr/svc/apis/idx"
+KRX_INDEX_API_IDS = {"Y": "kospi_dd_trd", "K": "kosdaq_dd_trd"}
+KRX_INDEX_NAMES = {"kospi_dd_trd": "코스피", "kosdaq_dd_trd": "코스닥"}
+
 
 # ── 경로 ──────────────────────────────────────────────────────────
 
@@ -242,6 +259,21 @@ def _normalize_row(date8: str, raw: dict) -> dict:
         # 날짜별로 바뀌므로(제이스코홀딩스 2025-09 중견기업부 → 2026-09 관리종목)
         # 시계열 사실로 쓸 수 있다.
         "sect": (raw.get("SECT_TP_NM") or "").strip() or None,
+    }
+
+
+def _normalize_index_row(date8: str, raw: dict) -> dict:
+    """지수 행 하나를 정규화한다. 순수 함수 — 네트워크 호출 없음.
+
+    종목 행(`_normalize_row`)과 키 이름을 다르게 둔다(`close`/`fluc_rt`/`mktcap`
+    셋만 겹치고 `volume`·`value`가 없다) — 지수에는 기준가 조정이라는 개념이
+    없어 `priceBreaks`류를 그대로 재사용하면 안 된다는 뜻을 이름으로도 드러낸다.
+    """
+    return {
+        "date": date8,
+        "close": _to_number(raw.get("CLSPRC_IDX")),
+        "fluc_rt": _to_number(raw.get("FLUC_RT")),
+        "mktcap": _to_number(raw.get("MKTCAP")),
     }
 
 

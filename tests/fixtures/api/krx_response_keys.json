@@ -1,5 +1,5 @@
 {
- "_note": "KRX Open API 실측 2026-09-22 (제작자 키). 값은 공개 시세. fields는 응답 첫 행의 키 순서.",
+ "_note": "KRX Open API 실측 2026-09-22 (제작자 키). 값은 공개 시세. fields는 응답 첫 행의 키 순서. 지수(kospi_dd_trd·kosdaq_dd_trd)는 2026-09-23 추가 실측 — 경로가 종목과 다르다(svc/apis/idx/...).",
  "measured": "2026-09-22",
  "apis": {
   "stk_bydd_trd": {
@@ -176,6 +176,78 @@
      "ACC_TRDVAL": "5427577210",
      "MKTCAP": "191503329920",
      "LIST_SHRS": "33132064"
+    }
+   ]
+  },
+  "kospi_dd_trd": {
+   "basDd": "20260918",
+   "status": 200,
+   "n_rows": 54,
+   "bytes": 15169,
+   "fields": [
+    "BAS_DD",
+    "IDX_CLSS",
+    "IDX_NM",
+    "CLSPRC_IDX",
+    "CMPPREVDD_IDX",
+    "FLUC_RT",
+    "OPNPRC_IDX",
+    "HGPRC_IDX",
+    "LWPRC_IDX",
+    "ACC_TRDVOL",
+    "ACC_TRDVAL",
+    "MKTCAP"
+   ],
+   "samples": [
+    {
+     "BAS_DD": "20260918",
+     "IDX_CLSS": "KOSPI",
+     "IDX_NM": "코스피",
+     "CLSPRC_IDX": "6894.23",
+     "CMPPREVDD_IDX": "178.82",
+     "FLUC_RT": "2.66",
+     "OPNPRC_IDX": "6885.70",
+     "HGPRC_IDX": "6914.08",
+     "LWPRC_IDX": "6830.95",
+     "ACC_TRDVOL": "346573461",
+     "ACC_TRDVAL": "28104555485673",
+     "MKTCAP": "5683776067592413"
+    }
+   ]
+  },
+  "kosdaq_dd_trd": {
+   "basDd": "20260918",
+   "status": 200,
+   "n_rows": 40,
+   "bytes": 11115,
+   "fields": [
+    "BAS_DD",
+    "IDX_CLSS",
+    "IDX_NM",
+    "CLSPRC_IDX",
+    "CMPPREVDD_IDX",
+    "FLUC_RT",
+    "OPNPRC_IDX",
+    "HGPRC_IDX",
+    "LWPRC_IDX",
+    "ACC_TRDVOL",
+    "ACC_TRDVAL",
+    "MKTCAP"
+   ],
+   "samples": [
+    {
+     "BAS_DD": "20260918",
+     "IDX_CLSS": "KOSDAQ",
+     "IDX_NM": "코스닥",
+     "CLSPRC_IDX": "827.12",
+     "CMPPREVDD_IDX": "4.94",
+     "FLUC_RT": "0.60",
+     "OPNPRC_IDX": "832.72",
+     "HGPRC_IDX": "833.57",
+     "LWPRC_IDX": "824.73",
+     "ACC_TRDVOL": "700399865",
+     "ACC_TRDVAL": "7484629421174",
+     "MKTCAP": "459756151241984"
     }
    ]
   },

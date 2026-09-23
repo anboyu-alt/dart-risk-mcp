@@ -55,10 +55,20 @@ const CORS_HEADERS = {
  *
  * ⚠ Cloudflare에서 KRX가 해외 IP를 막는지는 재지 않았다 — 실패는 502로
  * 두고 뷰어가 `fetchFailHTML`로 밝힌다.
+ *
+ * **지수(코스피·코스닥, 2026-09-23 추가)**: `api/krx.js`와 같은 계약 — 경로
+ * 접두가 다르고(`idx/` — 종목은 `sto/`), `IDX_NM` 정확 일치로 한 행만 고르며
+ * `isu`는 받지 않는다. 정규화 키도 다르다(`close`/`fluc_rt`/`mktcap`뿐).
  */
-const KRX_BASE = "https://data-dbg.krx.co.kr/svc/apis/sto";
-// core dart_risk_mcp/core/krx_client.py의 KRX_API_IDS.values()와 같아야 한다.
-const KRX_ALLOWED_APIS = new Set(["stk_bydd_trd", "ksq_bydd_trd"]);
+const KRX_STO_BASE = "https://data-dbg.krx.co.kr/svc/apis/sto";
+const KRX_IDX_BASE = "https://data-dbg.krx.co.kr/svc/apis/idx";
+// core dart_risk_mcp/core/krx_client.py의 KRX_API_IDS.values()·
+// KRX_INDEX_API_IDS.values()와 같아야 한다.
+const KRX_STOCK_APIS = new Set(["stk_bydd_trd", "ksq_bydd_trd"]);
+const KRX_INDEX_APIS = new Set(["kospi_dd_trd", "kosdaq_dd_trd"]);
+const KRX_ALLOWED_APIS = new Set([...KRX_STOCK_APIS, ...KRX_INDEX_APIS]);
+// core KRX_INDEX_NAMES와 같아야 한다.
+const KRX_INDEX_NAMES = { kospi_dd_trd: "코스피", kosdaq_dd_trd: "코스닥" };
 const KRX_CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, OPTIONS",
@@ -88,6 +98,16 @@ function krxNormalizeRow(date8, raw) {
   };
 }
 
+/** core `_normalize_index_row`와 같은 키·값. */
+function krxNormalizeIndexRow(date8, raw) {
+  return {
+    date: date8,
+    close: krxToNumber(raw.CLSPRC_IDX),
+    fluc_rt: krxToNumber(raw.FLUC_RT),
+    mktcap: krxToNumber(raw.MKTCAP),
+  };
+}
+
 function krxJson(status, body) {
   return new Response(JSON.stringify(body), {
     status,
@@ -108,15 +128,21 @@ async function handleKrx(request, url) {
     return krxJson(400, { ok: false, error: "missing_key" });
   }
   const api = url.searchParams.get("api") || "";
+  const isIndex = KRX_INDEX_APIS.has(api);
   const basDd = url.searchParams.get("basDd") || "";
   const isu = url.searchParams.get("isu") || "";
-  if (!KRX_ALLOWED_APIS.has(api) || !/^\d{8}$/.test(basDd) || !/^\d{6}$/.test(isu)) {
+  if (
+    !KRX_ALLOWED_APIS.has(api)
+    || !/^\d{8}$/.test(basDd)
+    || (!isIndex && !/^\d{6}$/.test(isu))
+  ) {
     return krxJson(400, { ok: false, error: "bad_params" });
   }
 
   let upstream;
   try {
-    upstream = await fetch(`${KRX_BASE}/${api}?basDd=${encodeURIComponent(basDd)}`, {
+    const base = isIndex ? KRX_IDX_BASE : KRX_STO_BASE;
+    upstream = await fetch(`${base}/${api}?basDd=${encodeURIComponent(basDd)}`, {
       headers: { AUTH_KEY: key },
     });
   } catch (e) {
@@ -141,6 +167,13 @@ async function handleKrx(request, url) {
   }
   if (!rows.length) {
     return krxJson(200, { ok: true, found: false, empty: true });
+  }
+  if (isIndex) {
+    const row = rows.find((r) => r.IDX_NM === KRX_INDEX_NAMES[api]);
+    if (!row) {
+      return krxJson(200, { ok: true, found: false, empty: false });
+    }
+    return krxJson(200, { ok: true, found: true, row: krxNormalizeIndexRow(basDd, row) });
   }
   const row = rows.find((r) => String(r.ISU_CD) === isu);
   if (!row) {
