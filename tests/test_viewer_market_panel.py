@@ -148,8 +148,12 @@ def _run_krx(js_tail: str, fetch_responses: dict, default_response: dict,
     # 감지)가 표면화되지 않아 조용히 틀린 결과(전부 uncovered)를 낸다. 실제로
     # 이 함정에 한 번 걸렸다 — 그래서 이 넷은 자동 끌어오기에 맡기지 않고
     # 미리 명시적으로 끌어온다.
+    # `KRX_INDEX_NAMES`도 같은 함정이다 — `krxGet`이 지수 api인지 가르는 데 쓰는데
+    # 없으면 ReferenceError가 `runOne`에 삼켜져 전부 uncovered로 보인다(2026-09-23
+    # 차트 도입 때 실제로 그렇게 실패했다).
     consts = "\n".join(
-        _cut_decl(html, n) for n in ("LS_KRX_KEY", "LS_KRX_ROWS", "LS_KRX_MKT", "KRX_API_IDS")
+        _cut_decl(html, n) for n in ("LS_KRX_KEY", "LS_KRX_ROWS", "LS_KRX_MKT", "KRX_API_IDS",
+                                     "KRX_INDEX_NAMES", "KRX_ROWS_MAX", "KRX_CALL_BUDGET")
     )
     cache_seed = ""
     if initial_cache:
@@ -302,19 +306,20 @@ def test_예산을_넘으면_오래된_쪽이_uncovered로_남는다():
     end = _dt.date.today() - _dt.timedelta(days=1)
     while end.weekday() >= 5:
         end -= _dt.timedelta(days=1)
-    start = end - _dt.timedelta(days=260)   # 달력 260일 ≈ 평일 180여 일(120 초과)
+    start = end - _dt.timedelta(days=600)   # 달력 600일 ≈ 평일 428일(예산 340 초과)
     s8, e8 = start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
 
     out = _run_krx(
         'krxFetchSeries("stk_bydd_trd", "005930", S8, E8).then((r) => '
-        'console.log(JSON.stringify({r, calls: FETCH_CALLS})));'
+        'console.log(JSON.stringify({r, calls: FETCH_CALLS, budget: KRX_CALL_BUDGET})));'
         .replace("S8", json.dumps(s8)).replace("E8", json.dumps(e8)),
         fetch_responses={}, default_response=_EMPTY_RESP,
     )
-    r, calls = out["r"], out["calls"]
-    assert r["daysRequested"] > 120, "표본 구간이 예산(120)을 못 넘겼다 — 구간을 넓혀야 한다"
-    assert len(r["uncovered"]) == r["daysRequested"] - 120
-    assert len(calls) <= 120, "예산을 넘겨 fetch를 불렀다"
+    r, calls, budget = out["r"], out["calls"], out["budget"]
+    assert budget == 340, "차트 예산(340)이 바뀌었다 — 스펙과 이 테스트를 함께 고친다"
+    assert r["daysRequested"] > budget, "표본 구간이 예산을 못 넘겼다 — 구간을 넓혀야 한다"
+    assert len(r["uncovered"]) == r["daysRequested"] - budget
+    assert len(calls) <= budget, "예산을 넘겨 fetch를 불렀다"
     # 남는 쪽은 항상 **오래된 날짜**다(최근을 먼저 채운다 — core와 같은 판단).
     if r["uncovered"]:
         assert max(r["uncovered"]) < min(calls), (

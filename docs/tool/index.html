@@ -325,6 +325,44 @@
      (실측: 「▼ -」까지만 보였다). 숫자만 줄바꿈을 막고 라벨은 접히게 둔다. */
   td.lbl { min-width: 6.5rem; }
   .ftnote { font-size: 0.78rem; color: var(--dim); margin-top: 0.45rem; }
+  /* 공시와 시장 차트 — 마크만 색을 입고 텍스트는 텍스트 색. 오르내림 색 없음. */
+  .mkt-wrap { position: relative; margin-top: 0.6rem; }
+  .mkt-wrap svg.mktchart { width: 100%; height: auto; display: block; font-family: var(--sans); }
+  .mkt-grid { stroke: var(--line); stroke-width: 1; }
+  .mkt-ax { fill: var(--dim); font-size: 11px; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .mkt-ax-x { text-anchor: middle; }
+  .mkt-price { fill: none; stroke: var(--tx); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .mkt-idx { fill: none; stroke: var(--dim); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+  .mkt-vol { fill: var(--faint); }
+  .mkt-hatch { stroke: var(--dim2); stroke-width: 1; }
+  .mkt-halt { opacity: 0.35; }
+  .mkt-break { stroke: var(--dim2); stroke-width: 1; stroke-dasharray: 3 3; }
+  .mkt-sect { stroke: var(--dim2); stroke-width: 1; stroke-dasharray: 1 3; }
+  .mkt-note { fill: var(--dim2); font-size: 10px; }
+  .mkt-ring { fill: var(--panel); stroke: none; }
+  .mkt-mk-first, .mkt-mk-watch { fill: var(--amber); }
+  .mkt-mk-context { fill: var(--panel); stroke: var(--amber); stroke-width: 1.6; }
+  .mkt-hit { fill: transparent; }
+  .mkt-a { cursor: pointer; outline: none; }
+  .mkt-a:hover .mkt-mk, .mkt-a:focus .mkt-mk { stroke: var(--tx); stroke-width: 1.6; }
+  .mkt-cnt { fill: var(--dim); font-size: 10px; text-anchor: middle; font-family: var(--mono); }
+  .mkt-xhair { stroke: var(--dim2); stroke-width: 1; pointer-events: none; }
+  .mkt-tip { position: absolute; top: 6px; left: 0; display: none; pointer-events: none; z-index: 5;
+    background: var(--cell); border: 1px solid var(--line2); border-radius: 4px; padding: 0.45rem 0.6rem;
+    font-size: 0.78rem; color: var(--tx); max-width: 320px; line-height: 1.45; white-space: nowrap; }
+  .mkt-tip-date { font-family: var(--mono); color: var(--dim2); }
+  .mkt-tip-mk { color: var(--amber2); }
+  .mkt-legend { display: flex; flex-wrap: wrap; gap: 0.35rem 1rem; font-size: 0.78rem; color: var(--dim); margin-top: 0.4rem; }
+  .mkt-legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
+  .mkt-key { display: inline-block; width: 14px; height: 0; border-top: 2px solid var(--tx); }
+  .mkt-key-idx { border-top: 1.5px solid var(--dim); }
+  .mkt-key-first { width: 8px; height: 8px; border: 0; background: var(--amber); transform: rotate(45deg); }
+  .mkt-key-watch { width: 9px; height: 9px; border: 0; border-radius: 50%; background: var(--amber); }
+  .mkt-key-context { width: 9px; height: 9px; border: 1.6px solid var(--amber); border-radius: 50%; box-sizing: border-box; }
+  .mkt-key-halt { width: 14px; height: 10px; border: 0;
+    background: repeating-linear-gradient(45deg, var(--dim2) 0 1px, transparent 1px 4px); opacity: 0.6; }
+  .mkt-key-break { border-top: 1px dashed var(--dim2); }
+  .mkt-key-sect { border-top: 1px dotted var(--dim2); }
   .factwarn { border: 1px solid var(--warn-border); background: var(--warn-bg);
     border-radius: 4px; padding: 0.7rem 1rem; margin-top: 0.6rem; font-size: 0.88rem; }
   .chipItem { display: inline-flex; align-items: center; gap: 0.45rem;
@@ -641,7 +679,7 @@ const LS_SNAP = "dart_scan_snap";     // 재스캔 diff 스냅샷 — 기업당(
 // 대신 조회할 수 없다 — 설계 근거: 2026-09-23 KRX 패널 스펙).
 const LS_KRX_KEY = "dart_tool_krx_key";
 const LS_KRX_MKT = "dart_tool_krx_mkt";     // {isu: "stk_bydd_trd"|"ksq_bydd_trd"} 시장 판별 캐시
-const LS_KRX_ROWS = "dart_tool_krx_rows";   // {"api|basDd|isu": row|null} 최대 3,000건 FIFO
+const LS_KRX_ROWS = "dart_tool_krx_rows";   // {"api|basDd|isu": row|null} 최대 KRX_ROWS_MAX건 FIFO(지수는 isu 자리가 "IDX")
 // 키 없이 쓰는 방문자의 오늘 조회 목록 — {d: "YYYYMMDD", k: [{k,n,y}, …]}
 const LS_QUOTA = "dart_quota_used";
 // 릴레이 서버 키로 열어 주는 하루 무료 조회 기업 수. `/api/health`가 알려 주면
@@ -1342,17 +1380,32 @@ const DART_ERR = {
  * 설계 근거: docs/superpowers/specs/2026-09-23-viewer-krx-panel-design.md
  */
 const KRX_API_IDS = ["stk_bydd_trd", "ksq_bydd_trd"];   // core KRX_API_IDS의 값과 같다
-const KRX_CALL_BUDGET = 120;    // core KRX_CALL_BUDGET과 같음(대기 예산 1분 안)
+// 종목 시장 → 지수 api(코스피·코스닥 일별 지수). 릴레이 세 곳의 허용 목록과
+// core `KRX_INDEX_API_IDS`·`KRX_INDEX_NAMES`와 같다. 지수 응답은 하루치 모든
+// 지수라 릴레이가 이름 정확 일치 한 행만 돌려준다(「코스피 (외국주포함)」 아님).
+const KRX_INDEX_API_IDS = { stk_bydd_trd: "kospi_dd_trd", ksq_bydd_trd: "kosdaq_dd_trd" };
+const KRX_INDEX_NAMES = { kospi_dd_trd: "코스피", kosdaq_dd_trd: "코스닥" };
+// 차트가 1년 전체(≈245거래일)+기준선 100일을 한 번에 받도록 예산을 넓혔다
+// (2026-09-23 차트 도입). core `KRX_CALL_BUDGET`(120)은 MCP의 대기 예산 1분
+// 기준이고, 뷰어는 펼칠 때만 받으며 진행을 보여 주므로 더 기다릴 수 있다 —
+// 실측 콜당 중앙값 1.04초·동시 4 → 340콜 ≈ 90초. 넘는 날은 `uncovered`로 밝힌다.
+// 달력 465일(창 365+기준선 100)의 평일은 332일이라 340이면 한 번에 다 받는다
+// (첫 판 320은 오래된 12일이 늘 남았다 — 코아스 로컬 실측).
+const KRX_CALL_BUDGET = 340;
+const KRX_INDEX_CALL_BUDGET = 270;   // 지수는 창 안만 — 달력 365일의 평일 261일(첫 판 260은 늘 1일이 남았다)
 const KRX_CONCURRENCY = 4;      // core KRX_CONCURRENCY와 같음
 const KRX_BASELINE_DAYS = 60;   // core _MARKET_BASELINE_DAYS와 같음
 const KRX_EMPTY_GRACE_DAYS = 7; // core KRX_EMPTY_GRACE_DAYS와 같음 — 최근 빈 응답은 "발표 전"일 수 있다
-const KRX_EVENT_MAX = 3;        // 스펙: "최근 3건만"(MCP 흡수 블록과 동일 예산 관례)
+const KRX_EVENT_MAX = 12;       // 표 상한 — MCP `track_market_reaction`의 12건과 같다(초과는 건수로 밝힌다)
+const KRX_CHART_DAYS = 365;     // 차트 창 — 스캔 창이 이보다 길면 최근 1년만 그리고 그 사실을 적는다
+const KRX_ROWS_MAX = 6000;      // 행 캐시 FIFO 상한 — 회사당 종목≈310+지수≈245행, 10곳분
 const KRX_ATTRIBUTION = "한국거래소 통계정보";   // KRX Open API 약관 제10조 ③
 
 async function krxGet(api, basDd, isu) {
   const key = (localStorage.getItem(LS_KRX_KEY) || "").trim();
   if (!key) throw new Error("KRX 키가 설정되지 않았습니다 — 설정에서 KRX 키를 입력하세요");
-  const usp = new URLSearchParams({ api, basDd, isu });
+  // 지수 api는 종목 코드가 없다 — 릴레이가 `isu`를 받지 않는다.
+  const usp = new URLSearchParams(KRX_INDEX_NAMES[api] ? { api, basDd } : { api, basDd, isu });
   const r = await fetch(`${relayBase()}/api/krx?${usp}`, { headers: { "X-KRX-Key": key } });
   let j = {};
   try { j = await r.json(); } catch (e) { /* 빈 본문 등 — 아래서 상태코드로 처리 */ }
@@ -1411,10 +1464,10 @@ function krxRowsCache() {
 }
 function krxSaveRowsCache(cache) {
   const keys = Object.keys(cache);
-  if (keys.length > 3000) {
+  if (keys.length > KRX_ROWS_MAX) {
     // FIFO — 오래된 날짜부터 버린다(키에 basDd가 들어 있어 정렬로 가른다).
     keys.sort((a, b) => a.split("|")[1] < b.split("|")[1] ? -1 : 1);
-    for (const k of keys.slice(0, keys.length - 3000)) delete cache[k];
+    for (const k of keys.slice(0, keys.length - KRX_ROWS_MAX)) delete cache[k];
   }
   try { localStorage.setItem(LS_KRX_ROWS, JSON.stringify(cache)); }
   catch (e) { /* 저장 실패는 무시 — 캐시는 부가 기능이다 */ }
@@ -1423,7 +1476,10 @@ function krxSaveRowsCache(cache) {
 // `stockCode`의 일별 시세를 `startDd`~`endDd`(포함) 구간에서 모은다.
 // 캐시 히트는 예산을 소모하지 않는다. 오늘(KST)은 캐시를 읽지도 쓰지도
 // 않는다 — 장중 값이 굳어 버리는 것을 막는다.
-async function krxFetchSeries(api, isu, startDd, endDd, onProgress) {
+// `opts.budget`(기본 `KRX_CALL_BUDGET`) — 지수 시계열은 같은 함수를 `isu="IDX"`·
+// `KRX_INDEX_CALL_BUDGET`으로 부른다(캐시 키의 isu 자리에 그 상수가 들어간다).
+async function krxFetchSeries(api, isu, startDd, endDd, onProgress, opts) {
+  const budget = (opts && opts.budget) || KRX_CALL_BUDGET;
   const candidates = weekdayCandidates(startDd, endDd);
   const daysRequested = candidates.length;
   const today8 = ymd(new Date());
@@ -1445,7 +1501,7 @@ async function krxFetchSeries(api, isu, startDd, endDd, onProgress) {
         continue;
       }
     }
-    if (toFetch.length >= KRX_CALL_BUDGET) { uncovered.push(d8); continue; }
+    if (toFetch.length >= budget) { uncovered.push(d8); continue; }
     toFetch.push(d8);
   }
 
@@ -1810,11 +1866,320 @@ function pickMarketEvents(events, max) {
     const key = obsSigs[0].key;
     const gkey = `${dt}:${key}`;
     if (index.has(gkey)) { index.get(gkey).count++; continue; }
-    const g = { date: dt, key, label: signalLabel(key), count: 1, rcept: e.rcept };
+    const g = { date: dt, key, label: signalLabel(key), count: 1, rcept: e.rcept,
+                priority: obsSigs[0].priority || "watch", nm: e.nm || "" };
     index.set(gkey, g);
     groups.push(g);
   }
   return groups.slice(0, max);
+}
+
+// ── 공시와 시장 차트 — 순수 모델 ───────────────────────────────────────
+// 설계: docs/superpowers/specs/2026-09-23-viewer-market-chart-design.md
+// 1년 종가·거래량 위에 관찰 신호 마커, 코스피·코스닥 지수(종목에 맞춘 상대
+// 움직임), 기준가 조정일·거래량 0 구간·코스닥 소속부 변경을 얹는다. 네트워크
+// 없음·판정 없음(v0.8.5) — 무엇이 언제 있었는지만 그린다.
+//
+// ⚠ 지수는 **구간별 정규화**다 — 창 시작일과 기준가 조정일(분할·병합·감자·
+//   권리락) 다음 구간의 첫 거래일마다 종목 종가에 다시 맞춘다
+//   (`stock[t0] × idx[t] / idx[t0]`). 그래야 종목 선이 뛰어도 지수가 엉뚱한
+//   높이에 남지 않는다. 지수 값 자체가 아니라는 것을 범례·고지가 말한다.
+// ⚠ 없는 값을 잇지 않는다 — 미조회·발표 전 날은 선을 끊는다(`gap_before`).
+const MKT_PRIORITY_RANK = { first: 0, watch: 1, context: 2 };
+
+function marketChartModel(rows, idxRows, events, opts) {
+  const o = opts || {};
+  const all = (rows || []).filter((r) => r && r.date);
+  const startDd = o.startDd || (all.length ? all[0].date : "");
+  const endDd = o.endDd || (all.length ? all[all.length - 1].date : "");
+  const nz = (v) => (v === undefined || v === null || !Number.isFinite(v)) ? null : v;
+
+  const days = all.filter((r) => r.date >= startDd && r.date <= endDd).map((r, i) => ({
+    i, date: r.date, close: nz(r.close), fluc_rt: nz(r.fluc_rt), volume: nz(r.volume),
+    mktcap: nz(r.mktcap), gap: !!r.gap_before, sect: r.sect || null,
+  }));
+  const n = days.length;
+  const idxByDate = {};
+  for (const r of (idxRows || [])) if (r && r.date) idxByDate[r.date] = nz(r.close);
+  const dayIndex = (date8) => {
+    for (let i = 0; i < n; i++) if (days[i].date >= date8) return i;
+    return null;
+  };
+
+  // 기준가 조정일 — 전체 rows(기준선 포함)로 잡아야 창 첫 거래일의 조정도 잡힌다.
+  const breaks = priceBreaks(all).filter((b) => b.date >= startDd && b.date <= endDd)
+    .map((b) => ({ ...b, i: dayIndex(b.date), label: breakLabel(b) }))
+    .filter((b) => b.i !== null);
+
+  // 지수 정규화 — 구간 경계는 [0]과 각 조정일 인덱스.
+  const bounds = [0].concat(breaks.map((b) => b.i)).filter((v, k, a) => a.indexOf(v) === k).sort((a, b) => a - b);
+  const idx = new Array(n).fill(null), idxClose = new Array(n).fill(null);
+  let hasIdx = false;
+  for (let s = 0; s < bounds.length; s++) {
+    const from = bounds[s], to = (s + 1 < bounds.length) ? bounds[s + 1] : n;
+    let anchor = null;
+    for (let i = from; i < to; i++) {
+      const ic = nz(idxByDate[days[i].date]);
+      idxClose[i] = ic;
+      if (anchor === null && ic !== null && days[i].close !== null && ic > 0) {
+        anchor = { close: days[i].close, ic };
+      }
+      if (anchor !== null && ic !== null) { idx[i] = anchor.close * ic / anchor.ic; hasIdx = true; }
+    }
+  }
+
+  // 마커 — 접수일 이후 첫 거래일에 놓는다(`eventWindowFacts`의 D0와 같은 규칙).
+  const byDay = new Map();
+  let dropped = 0;
+  for (const g of (events || [])) {
+    if (!g || !g.date) continue;
+    const i = (g.date < startDd) ? null : dayIndex(g.date);
+    if (i === null) { dropped++; continue; }
+    const item = { label: g.label, count: g.count || 1, rcept: g.rcept, nm: g.nm || "",
+                   priority: g.priority || "watch", origDate: g.date, shifted: days[i].date !== g.date };
+    if (!byDay.has(i)) byDay.set(i, { i, date: days[i].date, items: [], count: 0, priority: "context" });
+    const m = byDay.get(i);
+    m.items.push(item);
+    m.count += item.count;
+    if ((MKT_PRIORITY_RANK[item.priority] ?? 1) < (MKT_PRIORITY_RANK[m.priority] ?? 1)) m.priority = item.priority;
+  }
+  const markers = [...byDay.values()].sort((a, b) => a.i - b.i);
+
+  // 거래량 0 연속 구간 — 「정지」라 단정하지 않는다(그건 DART 공시가 말한다).
+  const haltBands = [];
+  for (let i = 0; i < n; i++) {
+    if (days[i].volume !== 0) continue;
+    const from = i;
+    while (i + 1 < n && days[i + 1].volume === 0) i++;
+    haltBands.push({ from, to: i, n: i - from + 1 });
+  }
+
+  const sectMarks = (o.sectChanges || []).map((c) => ({ i: dayIndex(c.date), from: c.from, to: c.to, date: c.date }))
+    .filter((m) => m.i !== null && m.i > 0);
+
+  // 축 — x는 월 초(그 달의 첫 거래일), y는 종가 4단 눈금.
+  const xTicks = [];
+  let prevMonth = null;
+  for (const d of days) {
+    const ym = d.date.slice(0, 6);
+    if (ym !== prevMonth) {
+      if (prevMonth !== null) xTicks.push({ i: d.i, label: `${d.date.slice(2, 4)}.${d.date.slice(4, 6)}` });
+      prevMonth = ym;
+    }
+  }
+  const closes = days.map((d) => d.close).filter((v) => v !== null);
+  const idxVals = idx.filter((v) => v !== null);
+  const lo = closes.length ? Math.min(...closes, ...idxVals) : 0;
+  const hi = closes.length ? Math.max(...closes, ...idxVals) : 1;
+  const pad = (hi - lo) * 0.06 || hi * 0.06 || 1;
+  const yMin = Math.max(0, lo - pad), yMax = hi + pad;
+  const yTicks = niceTicks(yMin, yMax, 4);
+  const volMax = Math.max(0, ...days.map((d) => d.volume === null ? 0 : d.volume));
+
+  return {
+    startDd, endDd, days, idx, idxClose, hasIdx, markers, dropped, breaks, haltBands,
+    sectMarks, xTicks, yMin, yMax, yTicks, volMax,
+    uncovered: (o.uncovered || []).length, pending: (o.pending || []).length,
+    idxUncovered: (o.idxUncovered || []).length,
+  };
+}
+
+// lo~hi 안의 「보기 좋은」 눈금 값(1·2·5 × 10^k 간격) — 최대 `count`+1개.
+function niceTicks(lo, hi, count) {
+  if (!(hi > lo)) return [];
+  const raw = (hi - lo) / Math.max(1, count);
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const norm = raw / mag;
+  const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
+  const out = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(6));
+  return out;
+}
+
+// ── 공시와 시장 차트 — SVG(순수, 문자열) ──────────────────────────────
+// 위 칸 종가(2px `--tx`)+정규화 지수(1.5px `--dim`)+마커, 아래 칸 거래량(`--faint`).
+// 격자는 1px 실선 `--line`(점선은 조정일·소속부 **표지**에만). 마커는 한 색
+// (`--amber`)에 **모양이 관찰 순서**(◆ 먼저·● 관찰·○ 참고) — 카테고리 색으로
+// 칠하지 않는 이유는 스펙 참고(팔레트 인접 쌍이 검증기에서 실패한다).
+// 오르내림을 색으로 칠하지 않는다(스파크라인과 같은 계약).
+const MKT_W = 760, MKT_PAD_L = 8, MKT_PAD_R = 72;
+const MKT_PRICE_TOP = 10, MKT_PRICE_H = 190, MKT_VOL_TOP = 214, MKT_VOL_H = 56, MKT_H = 296;
+
+function marketChartSVG(model) {
+  const m = model;
+  const n = m.days.length;
+  if (!n) return "";
+  const plotW = MKT_W - MKT_PAD_L - MKT_PAD_R;
+  const x = (i) => n < 2 ? MKT_PAD_L + plotW / 2 : MKT_PAD_L + plotW * i / (n - 1);
+  const span = (m.yMax - m.yMin) || 1;
+  const y = (v) => MKT_PRICE_TOP + MKT_PRICE_H * (m.yMax - v) / span;
+  const vy = (v) => MKT_VOL_TOP + MKT_VOL_H - (m.volMax > 0 ? MKT_VOL_H * v / m.volMax : 0);
+  const half = n < 2 ? plotW / 2 : plotW / (n - 1) / 2;
+  const f1 = (v) => v.toFixed(1);
+  const path = (get) => {
+    let d = "", pen = false;
+    for (let i = 0; i < n; i++) {
+      const v = get(i);
+      if (m.days[i].gap) pen = false;        // 앞 거래일 미조회 — 잇지 않는다
+      if (v === null) { pen = false; continue; }
+      d += `${pen ? "L" : "M"}${f1(x(i))},${f1(y(v))}`;
+      pen = true;
+    }
+    return d;
+  };
+  let s = "";
+  // 격자·축
+  for (const t of m.yTicks) {
+    s += `<line x1="${MKT_PAD_L}" x2="${MKT_W - MKT_PAD_R}" y1="${f1(y(t))}" y2="${f1(y(t))}" class="mkt-grid"/>`;
+    s += `<text x="${MKT_W - MKT_PAD_R + 6}" y="${f1(y(t) + 3.5)}" class="mkt-ax">${esc(Math.round(t).toLocaleString())}</text>`;
+  }
+  for (const t of m.xTicks) {
+    s += `<line x1="${f1(x(t.i))}" x2="${f1(x(t.i))}" y1="${MKT_PRICE_TOP}" y2="${MKT_VOL_TOP + MKT_VOL_H}" class="mkt-grid"/>`;
+    s += `<text x="${f1(x(t.i))}" y="${MKT_H - 6}" class="mkt-ax mkt-ax-x">${esc(t.label)}</text>`;
+  }
+  if (m.volMax > 0) {
+    s += `<text x="${MKT_W - MKT_PAD_R + 6}" y="${MKT_VOL_TOP + 4}" class="mkt-ax">${esc(fmtVolumeShort(m.volMax))}</text>`;
+  }
+  // 거래량 0 구간(빗금 띠) — 위·아래 칸을 함께 덮는다
+  for (const b of m.haltBands) {
+    const x0 = x(b.from) - half, x1 = x(b.to) + half;
+    s += `<rect x="${f1(x0)}" y="${MKT_PRICE_TOP}" width="${f1(Math.max(1, x1 - x0))}" height="${MKT_VOL_TOP + MKT_VOL_H - MKT_PRICE_TOP}" fill="url(#mktHatch)" class="mkt-halt"><title>${esc(`거래량 0 · ${b.n}거래일 (${fmtDate(m.days[b.from].date)}~${fmtDate(m.days[b.to].date)})`)}</title></rect>`;
+  }
+  // 거래량 막대
+  const barW = Math.max(0.6, Math.min(6, half * 2 - 0.6));
+  for (const d of m.days) {
+    if (d.volume === null || d.volume <= 0) continue;
+    s += `<rect x="${f1(x(d.i) - barW / 2)}" y="${f1(vy(d.volume))}" width="${f1(barW)}" height="${f1(MKT_VOL_TOP + MKT_VOL_H - vy(d.volume))}" class="mkt-vol"/>`;
+  }
+  // 지수(정규화) 선 — 종가 선 아래에 깔린다
+  if (m.hasIdx) s += `<path d="${path((i) => m.idx[i])}" class="mkt-idx"/>`;
+  // 종가 선
+  s += `<path d="${path((i) => m.days[i].close)}" class="mkt-price"/>`;
+  // 기준가 조정일·소속부 변경 표지(점선 — 격자가 아니라 사건). 라벨이 오른쪽
+  // 축 영역을 넘으면 선의 왼쪽에 붙인다(CSA 코스믹 실측: 8월 조정일 라벨이
+  // 「(주식수」에서 잘렸다).
+  let flip = 0;
+  const noteText = (i, yPos, text) => {
+    const cx = x(i), est = text.length * 5.6;
+    const left = cx + 3 + est > MKT_W - MKT_PAD_R;
+    return `<text x="${f1(left ? cx - 3 : cx + 3)}" y="${f1(yPos)}" class="mkt-note"${left ? ' text-anchor="end"' : ""}>${esc(text)}</text>`;
+  };
+  for (const b of m.breaks) {
+    s += `<line x1="${f1(x(b.i))}" x2="${f1(x(b.i))}" y1="${MKT_PRICE_TOP}" y2="${MKT_VOL_TOP + MKT_VOL_H}" class="mkt-break"/>`;
+    s += noteText(b.i, MKT_PRICE_TOP + 10 + (flip++ % 2) * 12, b.label);
+  }
+  for (const c of m.sectMarks) {
+    s += `<line x1="${f1(x(c.i))}" x2="${f1(x(c.i))}" y1="${MKT_PRICE_TOP}" y2="${MKT_VOL_TOP + MKT_VOL_H}" class="mkt-sect"/>`;
+    s += noteText(c.i, MKT_VOL_TOP - 6 - (flip++ % 2) * 12, `→ ${c.to || "(소속부 없음)"}`);
+  }
+  // 마커 — 한 색, 모양은 관찰 순서. 2px 표면 링 + 24px 명중 영역 + 원문 링크.
+  for (const mk of m.markers) {
+    const d = m.days[mk.i];
+    const cy = d.close === null ? (MKT_PRICE_TOP + MKT_PRICE_H / 2) : y(d.close);
+    const cx = x(mk.i);
+    const title = mk.items.map((it) =>
+      `${it.label}${it.count > 1 ? ` ×${it.count}` : ""}${it.nm ? ` — ${it.nm}` : ""} (접수 ${fmtDate(it.origDate)}${it.shifted ? " · 휴장일 접수 → 다음 거래일" : ""})`).join(" / ");
+    let shape;
+    if (mk.priority === "first") {
+      shape = `<polygon points="${f1(cx)},${f1(cy - 7.5)} ${f1(cx + 7.5)},${f1(cy)} ${f1(cx)},${f1(cy + 7.5)} ${f1(cx - 7.5)},${f1(cy)}" class="mkt-ring"/>` +
+        `<polygon points="${f1(cx)},${f1(cy - 5.5)} ${f1(cx + 5.5)},${f1(cy)} ${f1(cx)},${f1(cy + 5.5)} ${f1(cx - 5.5)},${f1(cy)}" class="mkt-mk mkt-mk-first"/>`;
+    } else if (mk.priority === "context") {
+      shape = `<circle cx="${f1(cx)}" cy="${f1(cy)}" r="6.5" class="mkt-ring"/><circle cx="${f1(cx)}" cy="${f1(cy)}" r="4.5" class="mkt-mk mkt-mk-context"/>`;
+    } else {
+      shape = `<circle cx="${f1(cx)}" cy="${f1(cy)}" r="6.5" class="mkt-ring"/><circle cx="${f1(cx)}" cy="${f1(cy)}" r="4.5" class="mkt-mk mkt-mk-watch"/>`;
+    }
+    const href = mk.items[0].rcept ? dartUrl(mk.items[0].rcept) : "";
+    s += `<a ${href ? `href="${esc(href)}" target="_blank" rel="noopener" ` : ""}data-i="${mk.i}" class="mkt-a"><title>${esc(title)}</title>` +
+      `<circle cx="${f1(cx)}" cy="${f1(cy)}" r="12" class="mkt-hit"/>${shape}` +
+      (mk.count > 1 ? `<text x="${f1(cx)}" y="${f1(cy - 11)}" class="mkt-cnt">×${mk.count}</text>` : "") + `</a>`;
+  }
+  s += `<line class="mkt-xhair" x1="0" x2="0" y1="${MKT_PRICE_TOP}" y2="${MKT_VOL_TOP + MKT_VOL_H}" style="display:none"/>`;
+  const label = `${fmtDate(m.startDd)}~${fmtDate(m.endDd)} 종가·거래량 ${n}거래일, 관찰 신호 마커 ${m.markers.length}곳` +
+    (m.hasIdx ? ", 지수 병기" : "");
+  return `<svg class="mktchart" viewBox="0 0 ${MKT_W} ${MKT_H}" role="img" aria-label="${esc(label)}">` +
+    `<title>${esc(label)}</title><defs><pattern id="mktHatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">` +
+    `<line x1="0" y1="0" x2="0" y2="6" class="mkt-hatch"/></pattern></defs>${s}</svg>`;
+}
+
+function fmtVolumeShort(v) {
+  if (v === null || v === undefined) return "―";
+  if (v >= 1e8) return `${(v / 1e8).toFixed(1)}억주`;
+  if (v >= 1e4) return `${Math.round(v / 1e4).toLocaleString()}만주`;
+  return `${Math.round(v).toLocaleString()}주`;
+}
+
+// 범례 — 실제로 찍힌 것만. 텍스트는 텍스트 색(마크만 색을 입는다).
+function marketChartLegendHTML(model, idxName) {
+  const m = model;
+  const items = [`<span><i class="mkt-key mkt-key-price"></i>종가</span>`];
+  if (m.hasIdx) items.push(`<span><i class="mkt-key mkt-key-idx"></i>${esc(idxName || "지수")} — 종목에 맞춘 상대 움직임(지수 값 아님)</span>`);
+  const prios = new Set(m.markers.map((mk) => mk.priority));
+  if (prios.has("first")) items.push(`<span><i class="mkt-key mkt-key-first"></i>먼저 볼 신호</span>`);
+  if (prios.has("watch")) items.push(`<span><i class="mkt-key mkt-key-watch"></i>관찰 신호</span>`);
+  if (prios.has("context")) items.push(`<span><i class="mkt-key mkt-key-context"></i>참고 신호(원문 확인 필요)</span>`);
+  if (m.haltBands.length) items.push(`<span><i class="mkt-key mkt-key-halt"></i>거래량 0 구간</span>`);
+  if (m.breaks.length) items.push(`<span><i class="mkt-key mkt-key-break"></i>기준가 조정일</span>`);
+  if (m.sectMarks.length) items.push(`<span><i class="mkt-key mkt-key-sect"></i>코스닥 소속부 변경</span>`);
+  return `<div class="mkt-legend">${items.join("")}</div>`;
+}
+
+// 호버 — 십자선이 가장 가까운 거래일에 붙고 툴팁 하나가 그날의 값과 마커를
+// 함께 적는다. 값은 textContent로 넣는다(공시명은 DART 원문 데이터).
+// 마커 `<a>`의 포커스도 같은 툴팁을 띄운다.
+function attachMarketChartHover(wrap, model, idxName) {
+  const svg = wrap.querySelector("svg.mktchart");
+  const tip = wrap.querySelector(".mkt-tip");
+  if (!svg || !tip) return;
+  const xhair = svg.querySelector(".mkt-xhair");
+  const m = model, n = m.days.length;
+  if (!n) return;
+  const plotW = MKT_W - MKT_PAD_L - MKT_PAD_R;
+  const x = (i) => n < 2 ? MKT_PAD_L + plotW / 2 : MKT_PAD_L + plotW * i / (n - 1);
+  const line = (text, cls) => {
+    const el = document.createElement("div");
+    if (cls) el.className = cls;
+    el.textContent = text;
+    tip.appendChild(el);
+  };
+  const show = (i) => {
+    if (i === null || i < 0 || i >= n) return;
+    const d = m.days[i];
+    tip.replaceChildren();
+    line(fmtDate(d.date), "mkt-tip-date");
+    line(`종가 ${fmtPrice(d.close)}${d.fluc_rt !== null ? ` · 등락 ${fmtPctSigned(d.fluc_rt)}` : ""}`);
+    line(`거래량 ${d.volume === null ? "―" : `${d.volume.toLocaleString()}주`}`);
+    if (m.idxClose[i] !== null) {
+      line(`${idxName || "지수"} ${m.idxClose[i].toLocaleString()}${m.idx[i] !== null ? ` → 종목 기준 환산 ${fmtPrice(m.idx[i])}` : ""}`);
+    }
+    if (d.gap) line("앞 거래일 미조회 — 선을 잇지 않았습니다", "dim");
+    const mk = m.markers.find((k) => k.i === i);
+    if (mk) {
+      for (const it of mk.items) {
+        line(`${it.priority === "first" ? "◆" : it.priority === "context" ? "○" : "●"} ${it.label}${it.count > 1 ? ` ×${it.count}` : ""}${it.nm ? ` — ${it.nm}` : ""}`, "mkt-tip-mk");
+        if (it.shifted) line(`접수 ${fmtDate(it.origDate)} (휴장일 → 다음 거래일에 표시)`, "dim");
+      }
+    }
+    const r = svg.getBoundingClientRect();
+    const px = x(i) * r.width / MKT_W;
+    tip.style.display = "block";
+    const tw = tip.offsetWidth || 200;
+    tip.style.left = `${Math.max(0, Math.min(r.width - tw, px + (px > r.width / 2 ? -tw - 10 : 10)))}px`;
+    if (xhair) { xhair.setAttribute("x1", x(i).toFixed(1)); xhair.setAttribute("x2", x(i).toFixed(1)); xhair.style.display = ""; }
+  };
+  const hide = () => { tip.style.display = "none"; if (xhair) xhair.style.display = "none"; };
+  const nearest = (clientX) => {
+    const r = svg.getBoundingClientRect();
+    const sx = (clientX - r.left) * MKT_W / r.width;
+    if (n < 2) return 0;
+    const i = Math.round((sx - MKT_PAD_L) / plotW * (n - 1));
+    return Math.max(0, Math.min(n - 1, i));
+  };
+  svg.addEventListener("pointermove", (ev) => show(nearest(ev.clientX)));
+  svg.addEventListener("pointerleave", hide);
+  svg.querySelectorAll("a[data-i]").forEach((a) => {
+    a.addEventListener("focus", () => show(+a.dataset.i));
+    a.addEventListener("blur", hide);
+  });
 }
 
 // 12개월 창에서 희석성·비희석성 최대 카운트. core `detect_capital_churn`의
@@ -3059,9 +3424,9 @@ function renderDash() {
   // KRX 시세는 사용자 본인 키가 있어야만 동작하고(약관 제11조), 창마다
   // 수십 콜이 드는 별도 API라 debtCore·auditSvcCore와 같은 "펼칠 때만"
   // 관례를 따른다.
-  html += `<div class="panel">${panelTitleHTML(`▍MARKET REACTION — 공시 전후 시장 반응`)}
-    <details id="marketDetails"><summary style="cursor:pointer;color:var(--amber);font-weight:700;font-size:0.88rem">펼쳐서 조회 — 최근 관찰 신호 최대 ${KRX_EVENT_MAX}건의 KRX 시세·거래량 대조</summary>
-    <div id="marketCore"><span class="dim" style="font-size:0.84rem">KRX Open API를 조회합니다(본인 키 필요) — 스캔을 느리게 하지 않으려고 펼칠 때만 받습니다.</span></div></details></div>`;
+  html += `<div class="panel">${panelTitleHTML(`▍MARKET REACTION — 공시와 시장 (1년)`)}
+    <details id="marketDetails"><summary style="cursor:pointer;color:var(--amber);font-weight:700;font-size:0.88rem">펼쳐서 조회 — 1년 시세·거래량·지수 위에 관찰 신호 마커, 최근 ${KRX_EVENT_MAX}건 전후 대조표</summary>
+    <div id="marketCore"><span class="dim" style="font-size:0.84rem">KRX Open API를 조회합니다(본인 키 필요, 1년치는 처음 한 번 1~2분) — 스캔을 느리게 하지 않으려고 펼칠 때만 받습니다.</span></div></details></div>`;
   html += `</div>`;  // .deepgrid 닫기 — convoPanel은 격자 밖(전폭)
   html += convoPanel(name);
   $("result").innerHTML = html;
@@ -7923,7 +8288,11 @@ function marketFactNotes(fact) {
 // 어휘 없음(v0.8.5) — 등락률·배수·회전율·일수만 적는다. core
 // `_render_event_window_row`/`_market_fact_notes`/`window_overview` 렌더와
 // 같은 문구 규칙(MCP `track_market_reaction`과 같은 사건이면 같은 값).
-function marketReactionHTML(picked, series) {
+// `extra`(차트 도입, 2026-09-23): `chartHTML`(차트+범례), `totalEvents`(창 안 관찰
+// 사건 전체 수 — 표는 KRX_EVENT_MAX건이라 몇 건을 뺐는지 적는다), `windowRows`
+// (차트 창 안 행 — 개괄은 이 창 기준), `idxStatus`·`idxName`, `clipNote`.
+function marketReactionHTML(picked, series, extra) {
+  const ex = extra || {};
   const rows = series.rows || [];
   const headers = [
     "접수일", "신호", { label: "D0 등락", num: true }, { label: "D-5→D-1", num: true },
@@ -7958,7 +8327,20 @@ function marketReactionHTML(picked, series) {
   const note = uncoveredCount
     ? `${series.daysRequested || 0}거래일 중 ${uncoveredCount}일 미조회(호출 예산 — 받은 날은 캐시되므로 다시 실행하면 이어서 받습니다)`
     : "";
-  let html = factTableHTML(headers, tableRows, { note, deltaNote: true });
+  let html = ex.chartHTML || "";
+  if (ex.clipNote) html += `<div class="ftnote">${esc(ex.clipNote)}</div>`;
+  if (ex.idxStatus === "loading") {
+    html += `<div class="ftnote" id="marketIdxProgress">${esc(ex.idxName || "지수")} 수신 중…</div>`;
+  } else if (ex.idxStatus && ex.idxStatus.startsWith("failed:")) {
+    html += `<div class="ftnote">⚠ ${esc(ex.idxName || "지수")}를 조회하지 못했습니다 — ${esc(ex.idxStatus.slice(7))}. 자료가 없다는 뜻이 아닙니다(차트는 종목만).</div>`;
+  }
+  const total = ex.totalEvents === undefined ? picked.length : ex.totalEvents;
+  const tableHead = total > picked.length
+    ? `<div class="ftnote" style="margin-top:0.8rem"><b>사건별 전후 대조</b> — 관찰 ${total}건 중 최근 ${KRX_EVENT_MAX}건 · ${total - picked.length}건 생략(차트 마커는 전부)</div>`
+    : `<div class="ftnote" style="margin-top:0.8rem"><b>사건별 전후 대조</b> — 관찰 ${picked.length}건</div>`;
+  html += tableHead;
+  if (picked.length) html += factTableHTML(headers, tableRows, { note, deltaNote: true });
+  else html += `<div class="ftnote">이 창에 관찰 신호가 없어 대조할 사건이 없습니다.${note ? ` ${esc(note)}` : ""}</div>`;
   for (const n of noteLines) html += `<div class="ftnote">※ ${esc(n)}</div>`;
 
   const pendingCount = (series.pending || []).length;
@@ -7970,10 +8352,12 @@ function marketReactionHTML(picked, series) {
   // 앞 ~ 가장 최근 사건 10일 뒤(오늘 상한, `loadMarketReaction`의 구간 계산과
   // 같다). 머리글에 구간을 적어 「구간 끝 시가총액」이 「지금 시총」으로
   // 읽히지 않게 한다(core `_market_reaction_block`과 같은 문구).
-  const overview = windowOverview(rows);
+  const overview = windowOverview(ex.windowRows || rows);
   const span = overview
-    ? ` (시세 구간 ${fmtDate(overview.start_date)}~${fmtDate(overview.end_date)} — ` +
-      `가장 오래된 사건 100일 앞부터 가장 최근 사건 10일 뒤까지)`
+    ? (ex.windowRows
+      ? ` (차트 창 ${fmtDate(overview.start_date)}~${fmtDate(overview.end_date)} — 사건별 대조의 기준선은 이보다 100일 앞까지 받았습니다)`
+      : ` (시세 구간 ${fmtDate(overview.start_date)}~${fmtDate(overview.end_date)} — ` +
+        `가장 오래된 사건 100일 앞부터 가장 최근 사건 10일 뒤까지)`)
     : "";
   html += `<div style="margin-top:0.6rem;font-size:0.88rem"><b>시세 구간 개괄${span}</b><br>`;
   if (!overview) {
@@ -8020,8 +8404,9 @@ function marketReactionHTML(picked, series) {
   html += metricProseHTML("market");
   html += `<div class="ftnote">📎 ${KRX_ATTRIBUTION} · 접수일은 사건일과 다를 수 있고 장 마감 후 접수는 ` +
     `다음 거래일부터 반응이 나타납니다 · 정정공시는 대조에서 제외했습니다 · ` +
-    `최근 관찰 신호 ${KRX_EVENT_MAX}건만 대조합니다 · 시장경보(투자주의·경고·위험)는 ` +
-    `MCP track_market_reaction에서 확인하세요.</div>`;
+    `표는 최근 관찰 신호 ${KRX_EVENT_MAX}건까지 대조합니다 · 기준가 조정 앞뒤 종가는 조정 전 원값입니다 · ` +
+    (ex.chartHTML ? `지수 선은 창 시작일(과 기준가 조정일)마다 종목 종가에 맞춘 상대 움직임이라 지수 값 자체가 아닙니다 · ` : "") +
+    `시장경보(투자주의·경고·위험)는 MCP track_market_reaction에서 확인하세요.</div>`;
   return html;
 }
 
@@ -8040,11 +8425,11 @@ async function loadMarketReaction(corpCode, stockCode) {
     return;
   }
 
-  const picked = pickMarketEvents((CUR && CUR.observedEvents) || [], KRX_EVENT_MAX);
-  if (!picked.length) {
-    el.innerHTML = `<span class="dim" style="font-size:0.88rem">이 창에 관찰 신호가 없어 대조할 사건이 없습니다.</span>`;
-    return;
-  }
+  // 차트 마커는 창 안 관찰 사건 **전부**, 표는 최근 KRX_EVENT_MAX건(몇 건을
+  // 뺐는지 표 머리에 적는다). 사건이 없어도 차트(종가·거래량·지수)는 그린다.
+  const allEvents = (CUR && CUR.observedEvents) || [];
+  const allPicked = pickMarketEvents(allEvents, Infinity);
+  const picked = pickMarketEvents(allEvents, KRX_EVENT_MAX);
 
   el.innerHTML = `<span class="spinner"></span><span class="dim" style="font-size:0.88rem" id="marketProgress">시장 판별 중…</span>`;
 
@@ -8060,27 +8445,65 @@ async function loadMarketReaction(corpCode, stockCode) {
     return;
   }
 
-  const dates = picked.map((g) => g.date).sort();
-  const oldest = dates[0], newest = dates[dates.length - 1];
-  // 기준선 60거래일 ≈ 달력 100일 앞(주말·공휴일 여유) ~ 가장 최근 사건 + 10일
-  // (core `_market_reaction_block`과 같은 창 계산).
-  const startDd = ymd(new Date(date8(oldest).getTime() - 100 * 86400000));
+  // 차트 창 = 스캔 창(최대 1년). 종목 시세는 창 시작 100일 앞부터 받는다 —
+  // 창 초입 사건의 기준선 60거래일이 지금 표와 같게 계산되도록. 지수는 창 안만.
   const todayD = ymd(new Date());
-  const wantEnd = ymd(new Date(date8(newest).getTime() + 10 * 86400000));
-  const endDd = wantEnd < todayD ? wantEnd : todayD;
+  const clipped = LOOKBACK_DAYS > KRX_CHART_DAYS;
+  const chartDays = clipped ? KRX_CHART_DAYS : LOOKBACK_DAYS;
+  const chartStart = ymd(new Date(Date.now() - chartDays * 86400000));
+  const startDd = ymd(new Date(date8(chartStart).getTime() - 100 * 86400000));
+  const clipNote = clipped
+    ? `스캔 창 ${LOOKBACK_DAYS}일 중 최근 ${KRX_CHART_DAYS}일만 그립니다(그 앞 구간의 관찰 신호는 차트·표에 없습니다).`
+    : "";
 
   let series;
   try {
-    series = await krxFetchSeries(api, stockCode, startDd, endDd, (done, total) => {
+    series = await krxFetchSeries(api, stockCode, startDd, todayD, (done, total) => {
       const p = $("marketProgress");
-      if (p) p.textContent = `${done}/${total}거래일 수신…`;
+      if (p) p.textContent = `종목 ${done}/${total}거래일 수신…`;
     });
   } catch (e) {
     el.innerHTML = fetchFailHTML(e.message);
     return;
   }
 
-  el.innerHTML = marketReactionHTML(picked, series);
+  const idxApi = KRX_INDEX_API_IDS[api];
+  const idxName = KRX_INDEX_NAMES[idxApi] || "지수";
+  const windowRows = series.rows.filter((r) => r.date >= chartStart);
+  const render = (idxSeries, idxStatus) => {
+    const ov = windowOverview(windowRows);
+    const model = marketChartModel(series.rows, idxSeries ? idxSeries.rows : [], allPicked, {
+      startDd: chartStart, endDd: todayD, sectChanges: ov ? ov.sect_changes : [],
+      uncovered: series.uncovered, pending: series.pending,
+      idxUncovered: idxSeries ? idxSeries.uncovered : [],
+    });
+    const svg = marketChartSVG(model);
+    const chartHTML = svg
+      ? `<div class="mkt-wrap">${svg}<div class="mkt-tip"></div></div>${marketChartLegendHTML(model, idxName)}` +
+        (model.dropped ? `<div class="ftnote">차트 창 밖·자료 없는 날의 관찰 사건 ${model.dropped}건은 마커로 찍지 못했습니다.</div>` : "") +
+        (model.idxUncovered ? `<div class="ftnote">${esc(idxName)} ${model.idxUncovered}거래일 미조회(호출 예산 — 다시 펼치면 이어서 받습니다).</div>` : "")
+      : `<div class="ftnote">차트 창 안에 거래일 시세 자료가 없어 차트를 그리지 않았습니다.</div>`;
+    el.innerHTML = marketReactionHTML(picked, series, {
+      chartHTML, totalEvents: allPicked.length, windowRows, idxStatus, idxName, clipNote,
+    });
+    const wrap = el.querySelector(".mkt-wrap");
+    if (wrap) attachMarketChartHover(wrap, model, idxName);
+  };
+
+  // 종목 시계열이 오면 차트를 먼저 그리고, 지수는 받는 대로 덧그린다 —
+  // 기다리는 동안 빈 화면이 아니다.
+  render(null, idxApi ? "loading" : "");
+  if (idxApi) {
+    try {
+      const idxSeries = await krxFetchSeries(idxApi, "IDX", chartStart, todayD, (done, total) => {
+        const p = $("marketIdxProgress");
+        if (p) p.textContent = `${idxName} ${done}/${total}거래일 수신…`;
+      }, { budget: KRX_INDEX_CALL_BUDGET });
+      render(idxSeries, "done");
+    } catch (e) {
+      render(null, `failed:${e.message}`);
+    }
+  }
 }
 
 /* ── 대화 안내 ────────────────────────────────── */
