@@ -58,6 +58,7 @@ import requests
 import dart_risk_mcp.server as srv
 from dart_risk_mcp.core.dart_client import DART_BASE, FetchList
 from dart_risk_mcp.core.krx_client import KRX_BASE
+from dart_risk_mcp.core.kis_client import KIS_BASE
 from dart_risk_mcp.core.kind_client import KIND_ALERT_URL
 
 # 호스트는 코드의 상수에서 읽는다 — 손으로 적으면 틀린다(첫 판이 fss를 fsc로
@@ -67,6 +68,10 @@ _REAL_KEY = os.environ.get("DART_API_KEY", "")
 _KRX_HOST = urlsplit(KRX_BASE).netloc
 _KIND_HOST = urlsplit(KIND_ALERT_URL).netloc
 _REAL_KRX_KEY = os.environ.get("KRX_API_KEY", "")
+# KIS(한국투자증권)는 테스트에서 **항상** 막는다 — 토큰 발급이 1분 1회로 제한돼
+# 실제 키로도 테스트가 돌면 제작자의 토큰을 갈아엎는다. 필요한 테스트는
+# `kis_client.requests`를 직접 patch한다.
+_KIS_HOST = urlsplit(KIS_BASE).netloc
 
 
 # ---------------------------------------------------------------- 스텁 묶음
@@ -140,6 +145,12 @@ def _blank_krx_key_by_default(monkeypatch):
     """
     monkeypatch.delenv("KRX_API_KEY", raising=False)
     monkeypatch.setattr(srv, "_KRX_API_KEY", "")
+    # KIS 앱키도 같은 이유로 비운다(2026-09-23) — 제작자 PC에 KIS 키가 있으면
+    # 시장 반응 블록이 켜져 fetch_company_info를 가짜 키로 부른다.
+    for _name in ("KIS_APP_KEY", "KIS_APP_SECRET"):
+        monkeypatch.delenv(_name, raising=False)
+    monkeypatch.setattr(srv, "_KIS_APP_KEY", "")
+    monkeypatch.setattr(srv, "_KIS_APP_SECRET", "")
 
 
 @pytest.fixture
@@ -196,6 +207,20 @@ def _fake_krx_rejection(url: str) -> requests.Response:
     return r
 
 
+def _fake_kis_rejection(url: str) -> requests.Response:
+    """KIS가 인증 실패에 주는 모양(HTTP 403 · JSON). 토큰·일봉 둘 다 실패로 읽힌다."""
+    r = requests.Response()
+    r.status_code = 403
+    r.url = url
+    r.headers["Content-Type"] = "application/json;charset=UTF-8"
+    r._content = json.dumps(
+        {"error_description": "유효하지 않은 AppKey입니다.", "error_code": "EGW00103"},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    r.encoding = "utf-8"
+    return r
+
+
 _KIND_EMPTY_HTML = (
     pathlib.Path(__file__).parent / "fixtures" / "kind" / "risk_A005930_samsung_empty.html"
 ).read_text(encoding="utf-8")
@@ -244,6 +269,9 @@ def pytest_runtest_call(item):
                 leaks.append("KRX:" + urlsplit(url).path.rsplit("/", 1)[-1])
                 return _fake_krx_rejection(url)
             return real_request(self, method, url, *args, **kwargs)
+        if _KIS_HOST in netloc:
+            leaks.append("KIS:" + urlsplit(url).path.rsplit("/", 1)[-1])
+            return _fake_kis_rejection(url)
         if _KIND_HOST in netloc:
             if not allow_kind_leak:
                 leaks.append("KIND:investattentwarnrisky")
@@ -261,7 +289,7 @@ def pytest_runtest_call(item):
 
         summary = ", ".join(f"{ep}×{n}" for ep, n in Counter(leaks).most_common())
         pytest.fail(
-            "가짜 키로 DART/KRX/KIND를 실제 호출했다 — mock이 빠진 fetcher가 있다.\n"
+            "가짜 키로 DART/KRX/KIS/KIND를 실제 호출했다 — mock이 빠진 fetcher가 있다.\n"
             f"  엔드포인트: {summary}\n"
             "  고치는 법: @pytest.mark.usefixtures(\"no_structured_dart\") 또는 "
             "stub_structured_fetchers(monkeypatch). 새 fetcher면 "

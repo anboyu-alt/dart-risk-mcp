@@ -389,19 +389,29 @@ def window_overview(rows: list[dict]) -> dict | None:
     # 코스닥 소속부 시계열 — 「관리종목(소속부없음)」 편입·해제가 날짜별로 보인다
     # (실측: 제이스코홀딩스 2025-09 중견기업부 → 2026-09 관리종목). 유가증권은
     # 값이 없어(None) 변동도 없다.
+    # ⚠ KIS로 메운 행(`src="kis"`)은 소속부 자체가 없다(None) — 그대로 훑으면
+    # 「관리종목 → (없음) → 관리종목」 같은 없는 이동이 생긴다. KRX 행만 본다.
+    krx_rows = [r for r in rows if r.get("src") != "kis"]
     sect_changes = []
-    prev_sect = rows[0].get("sect")
-    for row in rows[1:]:
+    prev_sect = krx_rows[0].get("sect") if krx_rows else None
+    for row in krx_rows[1:]:
         cur = row.get("sect")
         if cur != prev_sect:
             sect_changes.append({"date": row.get("date"), "from": prev_sect, "to": cur})
             prev_sect = cur
 
+    # 시총은 KRX만 준다 — KIS로 메운 날은 None이다. 「구간 끝 시총」은 시총이 있는
+    # 마지막 거래일의 값이고 그 날짜를 함께 돌려준다(끝 거래일과 다를 수 있다).
+    # `mktcap_days`는 규정 수치 대조의 분모다 — 없으면 「미달 0거래일」이 「전부
+    # 넘었다」로 읽힌다.
+    mktcap_rows = [r for r in rows if r.get("mktcap") is not None]
+    mktcap_end_row = mktcap_rows[-1] if mktcap_rows else None
+
     return {
         "price_breaks": breaks,
         "days_zero_volume": days_zero_volume,
-        "sect_start": rows[0].get("sect"),
-        "sect_end": end_row.get("sect"),
+        "sect_start": krx_rows[0].get("sect") if krx_rows else None,
+        "sect_end": krx_rows[-1].get("sect") if krx_rows else None,
         "sect_changes": sect_changes,
         "start_date": start_row.get("date"),
         "start_close": start_close,
@@ -414,7 +424,9 @@ def window_overview(rows: list[dict]) -> dict | None:
         "low_date": low_date,
         "avg_turnover_pct": avg_turnover_pct,
         "turnover_days": turnover_days,
-        "end_mktcap": end_row.get("mktcap"),
+        "end_mktcap": mktcap_end_row.get("mktcap") if mktcap_end_row else None,
+        "end_mktcap_date": mktcap_end_row.get("date") if mktcap_end_row else None,
+        "mktcap_days": len(mktcap_rows),
         "days": len(rows),
         "days_mktcap_under_20bn": days_mktcap_under_20bn,
         "days_close_under_1000": days_close_under_1000,

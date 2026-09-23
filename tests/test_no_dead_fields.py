@@ -43,10 +43,12 @@ _ROOT = pathlib.Path(__file__).resolve().parents[1]
 # `fetch_price_series`·`fetch_market_alerts`가 만드는 키(d0_fluc_rt·
 # turnover_pre_pct·days_uncovered·clamp_start 등)는 DART 응답 필드가 아니라
 # 이 세 모듈이 만드는 값이다. `_ACCEPTED`로 우회하면 안 된다.
+# 2026-09-23: `core/kis_client.py`(한국투자증권 시세 경로)도 같은 이유로 넣는다 —
+# kis_days·kis_fill_failed·no_share_data는 그 모듈이 만드는 값이다.
 _FILES = ["dart_risk_mcp/server.py", "dart_risk_mcp/core/dart_client.py",
           "dart_risk_mcp/core/audit_report.py", "dart_risk_mcp/core/notes.py",
           "dart_risk_mcp/core/krx_client.py", "dart_risk_mcp/core/kind_client.py",
-          "dart_risk_mcp/core/market_context.py"]
+          "dart_risk_mcp/core/market_context.py", "dart_risk_mcp/core/kis_client.py"]
 _KEYS = json.loads((_ROOT / "tests" / "fixtures" / "api" / "response_keys.json")
                    .read_text(encoding="utf-8"))
 _API = {k for v in _KEYS["endpoints"].values() for k in v}
@@ -64,6 +66,9 @@ _ACCEPTED = {
     "outside_window", "pattern_id", "signal_sequence", "zombie_ma",
     # elestock 구필드 폴백 — 응답에 없다는 사실을 코드 주석이 이미 적고 있다.
     "stkqy_rt",
+    # KIS 오류 코드(EGW00123 만료 토큰 등) — 2026-09-23 실측은 정상 응답뿐이라
+    # 오류 응답의 키를 떠 보지 못했다. 없으면 재발급 재시도만 안 할 뿐 조회는 실패로 끝난다.
+    "msg_cd",
 }
 
 

@@ -37,6 +37,8 @@ SERVER = ROOT / "dart_risk_mcp" / "server.py"
 _API_KEYS = [
     ("DART_API_KEY", "_DART_API_KEY", "_api_key"),
     ("KRX_API_KEY", "_KRX_API_KEY", "_krx_api_key"),
+    ("KIS_APP_KEY", "_KIS_APP_KEY", "_kis_app_key"),
+    ("KIS_APP_SECRET", "_KIS_APP_SECRET", "_kis_app_secret"),
 ]
 _IDS = [t[0] for t in _API_KEYS]
 

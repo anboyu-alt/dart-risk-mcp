@@ -1670,22 +1670,27 @@ function windowOverview(rows) {
   }
   const daysZeroVolume = rows.filter((r) => r.volume === 0).length;
 
-  // 코스닥 소속부 시계열 — 유가증권은 값이 없어(None) 변동도 없다.
+  // 코스닥 소속부 시계열 — 유가증권은 값이 없어(None) 변동도 없다. core와 같이
+  // KIS로 메운 행(src "kis" — MCP에만 있다)은 소속부가 없어 건너뛴다.
+  const krxRows = rows.filter((r) => r.src !== "kis");
   const sectChanges = [];
-  let prevSect = nz(rows[0].sect);
-  for (let i = 1; i < rows.length; i++) {
-    const cur = nz(rows[i].sect);
+  let prevSect = krxRows.length ? nz(krxRows[0].sect) : null;
+  for (let i = 1; i < krxRows.length; i++) {
+    const cur = nz(krxRows[i].sect);
     if (cur !== prevSect) {
-      sectChanges.push({ date: rows[i].date, from: prevSect, to: cur });
+      sectChanges.push({ date: krxRows[i].date, from: prevSect, to: cur });
       prevSect = cur;
     }
   }
+  // 시총이 있는 마지막 거래일(core `window_overview`와 같은 규칙).
+  const mktcapRows = rows.filter((r) => nz(r.mktcap) !== null);
+  const mktcapEndRow = mktcapRows.length ? mktcapRows[mktcapRows.length - 1] : null;
 
   return {
     price_breaks: breaks,
     days_zero_volume: daysZeroVolume,
-    sect_start: nz(rows[0].sect),
-    sect_end: nz(endRow.sect),
+    sect_start: krxRows.length ? nz(krxRows[0].sect) : null,
+    sect_end: krxRows.length ? nz(krxRows[krxRows.length - 1].sect) : null,
     sect_changes: sectChanges,
     start_date: startRow.date,
     start_close: startClose,
@@ -1698,7 +1703,9 @@ function windowOverview(rows) {
     low_date: lowDate,
     avg_turnover_pct: avgTurnoverPct,
     turnover_days: turnoverDays,
-    end_mktcap: nz(endRow.mktcap),
+    end_mktcap: mktcapEndRow ? nz(mktcapEndRow.mktcap) : null,
+    end_mktcap_date: mktcapEndRow ? mktcapEndRow.date : null,
+    mktcap_days: mktcapRows.length,
     days: rows.length,
     days_mktcap_under_20bn: daysMktcapUnder20bn,
     days_close_under_1000: daysCloseUnder1000,
