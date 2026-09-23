@@ -306,7 +306,7 @@ def test_예산을_넘으면_오래된_쪽이_uncovered로_남는다():
     end = _dt.date.today() - _dt.timedelta(days=1)
     while end.weekday() >= 5:
         end -= _dt.timedelta(days=1)
-    start = end - _dt.timedelta(days=600)   # 달력 600일 ≈ 평일 428일(예산 320 초과)
+    start = end - _dt.timedelta(days=600)   # 달력 600일 ≈ 평일 428일(예산 340 초과)
     s8, e8 = start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
 
     out = _run_krx(
@@ -316,7 +316,7 @@ def test_예산을_넘으면_오래된_쪽이_uncovered로_남는다():
         fetch_responses={}, default_response=_EMPTY_RESP,
     )
     r, calls, budget = out["r"], out["calls"], out["budget"]
-    assert budget == 320, "차트 예산(320)이 바뀌었다 — 스펙과 이 테스트를 함께 고친다"
+    assert budget == 340, "차트 예산(340)이 바뀌었다 — 스펙과 이 테스트를 함께 고친다"
     assert r["daysRequested"] > budget, "표본 구간이 예산을 못 넘겼다 — 구간을 넓혀야 한다"
     assert len(r["uncovered"]) == r["daysRequested"] - budget
     assert len(calls) <= budget, "예산을 넘겨 fetch를 불렀다"

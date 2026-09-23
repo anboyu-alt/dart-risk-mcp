@@ -349,7 +349,7 @@
   .mkt-xhair { stroke: var(--dim2); stroke-width: 1; pointer-events: none; }
   .mkt-tip { position: absolute; top: 6px; left: 0; display: none; pointer-events: none; z-index: 5;
     background: var(--cell); border: 1px solid var(--line2); border-radius: 4px; padding: 0.45rem 0.6rem;
-    font-size: 0.78rem; color: var(--tx); max-width: 260px; line-height: 1.45; }
+    font-size: 0.78rem; color: var(--tx); max-width: 320px; line-height: 1.45; white-space: nowrap; }
   .mkt-tip-date { font-family: var(--mono); color: var(--dim2); }
   .mkt-tip-mk { color: var(--amber2); }
   .mkt-legend { display: flex; flex-wrap: wrap; gap: 0.35rem 1rem; font-size: 0.78rem; color: var(--dim); margin-top: 0.4rem; }
@@ -1388,9 +1388,11 @@ const KRX_INDEX_NAMES = { kospi_dd_trd: "코스피", kosdaq_dd_trd: "코스닥" 
 // 차트가 1년 전체(≈245거래일)+기준선 100일을 한 번에 받도록 예산을 넓혔다
 // (2026-09-23 차트 도입). core `KRX_CALL_BUDGET`(120)은 MCP의 대기 예산 1분
 // 기준이고, 뷰어는 펼칠 때만 받으며 진행을 보여 주므로 더 기다릴 수 있다 —
-// 실측 콜당 중앙값 1.04초·동시 4 → 320콜 ≈ 85초. 넘는 날은 `uncovered`로 밝힌다.
-const KRX_CALL_BUDGET = 320;
-const KRX_INDEX_CALL_BUDGET = 260;   // 지수는 창 안만(기준선 불필요) ≈ 245거래일
+// 실측 콜당 중앙값 1.04초·동시 4 → 340콜 ≈ 90초. 넘는 날은 `uncovered`로 밝힌다.
+// 달력 465일(창 365+기준선 100)의 평일은 332일이라 340이면 한 번에 다 받는다
+// (첫 판 320은 오래된 12일이 늘 남았다 — 코아스 로컬 실측).
+const KRX_CALL_BUDGET = 340;
+const KRX_INDEX_CALL_BUDGET = 270;   // 지수는 창 안만 — 달력 365일의 평일 261일(첫 판 260은 늘 1일이 남았다)
 const KRX_CONCURRENCY = 4;      // core KRX_CONCURRENCY와 같음
 const KRX_BASELINE_DAYS = 60;   // core _MARKET_BASELINE_DAYS와 같음
 const KRX_EMPTY_GRACE_DAYS = 7; // core KRX_EMPTY_GRACE_DAYS와 같음 — 최근 빈 응답은 "발표 전"일 수 있다
@@ -2053,15 +2055,22 @@ function marketChartSVG(model) {
   if (m.hasIdx) s += `<path d="${path((i) => m.idx[i])}" class="mkt-idx"/>`;
   // 종가 선
   s += `<path d="${path((i) => m.days[i].close)}" class="mkt-price"/>`;
-  // 기준가 조정일·소속부 변경 표지(점선 — 격자가 아니라 사건)
+  // 기준가 조정일·소속부 변경 표지(점선 — 격자가 아니라 사건). 라벨이 오른쪽
+  // 축 영역을 넘으면 선의 왼쪽에 붙인다(CSA 코스믹 실측: 8월 조정일 라벨이
+  // 「(주식수」에서 잘렸다).
   let flip = 0;
+  const noteText = (i, yPos, text) => {
+    const cx = x(i), est = text.length * 5.6;
+    const left = cx + 3 + est > MKT_W - MKT_PAD_R;
+    return `<text x="${f1(left ? cx - 3 : cx + 3)}" y="${f1(yPos)}" class="mkt-note"${left ? ' text-anchor="end"' : ""}>${esc(text)}</text>`;
+  };
   for (const b of m.breaks) {
     s += `<line x1="${f1(x(b.i))}" x2="${f1(x(b.i))}" y1="${MKT_PRICE_TOP}" y2="${MKT_VOL_TOP + MKT_VOL_H}" class="mkt-break"/>`;
-    s += `<text x="${f1(x(b.i) + 3)}" y="${MKT_PRICE_TOP + 10 + (flip++ % 2) * 12}" class="mkt-note">${esc(b.label)}</text>`;
+    s += noteText(b.i, MKT_PRICE_TOP + 10 + (flip++ % 2) * 12, b.label);
   }
   for (const c of m.sectMarks) {
     s += `<line x1="${f1(x(c.i))}" x2="${f1(x(c.i))}" y1="${MKT_PRICE_TOP}" y2="${MKT_VOL_TOP + MKT_VOL_H}" class="mkt-sect"/>`;
-    s += `<text x="${f1(x(c.i) + 3)}" y="${MKT_VOL_TOP - 6 - (flip++ % 2) * 12}" class="mkt-note">${esc(`→ ${c.to || "(소속부 없음)"}`)}</text>`;
+    s += noteText(c.i, MKT_VOL_TOP - 6 - (flip++ % 2) * 12, `→ ${c.to || "(소속부 없음)"}`);
   }
   // 마커 — 한 색, 모양은 관찰 순서. 2px 표면 링 + 24px 명중 영역 + 원문 링크.
   for (const mk of m.markers) {
