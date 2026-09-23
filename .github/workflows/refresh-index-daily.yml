@@ -1,0 +1,45 @@
+name: Refresh index daily
+
+# 공개 리스크 뷰어 「공시와 시장」 차트가 읽는 코스피·코스닥 일별 종가 —
+# docs/tool/index-daily.json. 마지막 날짜 다음부터 어제까지만 받는다(보통 1~3콜×2).
+#
+# 지수는 사람마다 다르지 않아 운영자가 모아 두고 정적 파일로 내보낸다(2026-09-23
+# 제작자 결정). 종목 시세는 여전히 사용자 본인 키로만 받는다 — CLAUDE.md
+# 「KRX Open API 약관 경계」 참고.
+#
+# 필요한 Secret: KRX_API_KEY. 없으면 스크립트가 경고만 남기고 성공으로 끝난다.
+
+on:
+  schedule:
+    - cron: "30 23 * * *"   # UTC 23:30 = 한국 08:30 (전 거래일 자료가 발표된 뒤)
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install requests
+      - name: Refresh index-daily.json
+        env:
+          KRX_API_KEY: ${{ secrets.KRX_API_KEY }}
+        run: python scripts/build_index_daily.py
+      - name: Commit if changed
+        run: |
+          if [ -n "$(git status --porcelain docs/tool/index-daily.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add docs/tool/index-daily.json
+            git commit -m "chore(index): 코스피·코스닥 일별 종가 갱신"
+            git push
+          else
+            echo "index-daily.json 변경 없음"
+          fi

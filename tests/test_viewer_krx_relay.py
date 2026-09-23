@@ -22,13 +22,7 @@ import subprocess
 import pytest
 import requests
 
-from dart_risk_mcp.core.krx_client import (
-    KRX_API_IDS,
-    KRX_INDEX_API_IDS,
-    KRX_INDEX_NAMES,
-    _normalize_index_row,
-    _normalize_row,
-)
+from dart_risk_mcp.core.krx_client import KRX_API_IDS, _normalize_row
 
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
 _API_KRX_JS = _ROOT / "api" / "krx.js"
@@ -36,8 +30,6 @@ _WORKER_JS = _ROOT / "relay" / "worker.js"
 _DEV_RELAY_PY = _ROOT / "scripts" / "dev_relay.py"
 
 _CORE_APIS = set(KRX_API_IDS.values())
-_CORE_INDEX_APIS = set(KRX_INDEX_API_IDS.values())
-_CORE_ALL_APIS = _CORE_APIS | _CORE_INDEX_APIS
 
 
 def _src(path: pathlib.Path) -> str:
@@ -111,14 +103,6 @@ def test_core_KRX_API_IDS가_두_값이다():
     assert _CORE_APIS == {"stk_bydd_trd", "ksq_bydd_trd"}
 
 
-def test_core_KRX_INDEX_API_IDS가_두_값이다():
-    assert _CORE_INDEX_APIS == {"kospi_dd_trd", "kosdaq_dd_trd"}
-
-
-def test_core_KRX_INDEX_NAMES가_예상과_같다():
-    assert KRX_INDEX_NAMES == {"kospi_dd_trd": "코스피", "kosdaq_dd_trd": "코스닥"}
-
-
 def test_Vercel_허용_api가_core와_같다():
     src = _src(_API_KRX_JS)
     assert 'new Set(["stk_bydd_trd", "ksq_bydd_trd"])' in src.replace("\n", " ") or (
@@ -136,36 +120,7 @@ def test_Cloudflare_허용_api가_core와_같다():
 
 def test_로컬_릴레이_허용_api가_core와_같다(monkeypatch):
     mod = _load_dev_relay()
-    assert mod._KRX_ALLOWED_APIS == _CORE_ALL_APIS
-
-
-# ── ③b 허용 api에 지수 2종도 포함된다 (종목 화이트리스트는 불변) ────
-
-@pytest.mark.parametrize("path", [_API_KRX_JS, _WORKER_JS],
-                        ids=["api/krx.js", "relay/worker.js"])
-def test_JS_릴레이_허용_api에_지수_2종이_있다(path):
-    src = _src(path)
-    for api_id in _CORE_INDEX_APIS:
-        assert f'"{api_id}"' in src, f"{path}에 {api_id}가 없다"
-
-
-def test_로컬_릴레이_허용_api에_지수_2종이_있다():
-    mod = _load_dev_relay()
-    assert _CORE_INDEX_APIS <= mod._KRX_ALLOWED_APIS
-
-
-def test_로컬_릴레이_허용_api_전체가_core_전체와_같다():
-    mod = _load_dev_relay()
-    assert mod._KRX_ALLOWED_APIS == _CORE_ALL_APIS
-
-
-@pytest.mark.parametrize("path", [_API_KRX_JS, _WORKER_JS],
-                        ids=["api/krx.js", "relay/worker.js"])
-def test_JS_릴레이가_지수_경로_접두를_쓴다(path):
-    """지수는 `svc/apis/idx/...`, 종목은 `svc/apis/sto/...` — 접두가 다르다."""
-    src = _src(path)
-    assert "svc/apis/idx" in src, f"{path}에 지수 경로 접두(idx)가 없다"
-    assert "svc/apis/sto" in src, f"{path}에 종목 경로 접두(sto)가 없다"
+    assert mod._KRX_ALLOWED_APIS == _CORE_APIS
 
 
 # ── ④ 로컬 릴레이 — 400/401/200/502 (핸들러 클래스가 아니라 순수 함수를
@@ -315,110 +270,6 @@ def test_AUTH_KEY_헤더로_사용자_키를_넘긴다(relay, monkeypatch):
     assert "ksq_bydd_trd" in seen["url"]
 
 
-# ── ④b 로컬 릴레이 — 지수(코스피·코스닥) 분기 ────────────────────────
-
-def test_지수_요청은_isu_없이_통과한다(relay, monkeypatch):
-    monkeypatch.setattr(relay.requests, "get",
-                        lambda *a, **k: _FakeResp(200, {"OutBlock_1": []}))
-    status, body = relay._krx_relay(
-        {"api": "kospi_dd_trd", "basDd": "20260918"}, "userkey")
-    assert status == 200
-    assert body == {"ok": True, "found": False, "empty": True}
-
-
-def test_지수_요청에_isu가_있어도_무시한다(relay, monkeypatch):
-    """지수는 isu 필터를 쓰지 않는다 — 있어도 400이 되면 안 된다."""
-    monkeypatch.setattr(relay.requests, "get",
-                        lambda *a, **k: _FakeResp(200, {"OutBlock_1": []}))
-    status, body = relay._krx_relay(
-        {"api": "kospi_dd_trd", "basDd": "20260918", "isu": "005930"}, "userkey")
-    assert status == 200
-    assert body == {"ok": True, "found": False, "empty": True}
-
-
-def test_지수_요청도_basDd_형식은_검증한다(relay):
-    status, body = relay._krx_relay(
-        {"api": "kospi_dd_trd", "basDd": "2026-09-18"}, "userkey")
-    assert status == 400
-    assert body == {"ok": False, "error": "bad_params"}
-
-
-_IDX_KOSPI_FOREIGN = {
-    "BAS_DD": "20260918", "IDX_CLSS": "KOSPI", "IDX_NM": "코스피 (외국주포함)",
-    "CLSPRC_IDX": "9999.99", "CMPPREVDD_IDX": "1.00", "FLUC_RT": "0.01",
-    "OPNPRC_IDX": "1", "HGPRC_IDX": "1", "LWPRC_IDX": "1",
-    "ACC_TRDVOL": "1", "ACC_TRDVAL": "1", "MKTCAP": "1",
-}
-_IDX_KOSPI = {
-    "BAS_DD": "20260918", "IDX_CLSS": "KOSPI", "IDX_NM": "코스피",
-    "CLSPRC_IDX": "6894.23", "CMPPREVDD_IDX": "178.82", "FLUC_RT": "2.66",
-    "OPNPRC_IDX": "6885.70", "HGPRC_IDX": "6914.08", "LWPRC_IDX": "6830.95",
-    "ACC_TRDVOL": "346573461", "ACC_TRDVAL": "28104555485673",
-    "MKTCAP": "5683776067592413",
-}
-_IDX_KOSDAQ = {
-    "BAS_DD": "20260918", "IDX_CLSS": "KOSDAQ", "IDX_NM": "코스닥",
-    "CLSPRC_IDX": "827.12", "CMPPREVDD_IDX": "4.94", "FLUC_RT": "0.60",
-    "OPNPRC_IDX": "832.72", "HGPRC_IDX": "833.57", "LWPRC_IDX": "824.73",
-    "ACC_TRDVOL": "700399865", "ACC_TRDVAL": "7484629421174",
-    "MKTCAP": "459756151241984",
-}
-
-
-def test_지수는_IDX_NM_정확일치로_고른다(relay, monkeypatch):
-    """실측대로 첫 행이 「코스피 (외국주포함)」이지만 그 행을 고르면 안 된다."""
-    monkeypatch.setattr(
-        relay.requests, "get",
-        lambda *a, **k: _FakeResp(200, {"OutBlock_1": [_IDX_KOSPI_FOREIGN, _IDX_KOSPI]}),
-    )
-    status, body = relay._krx_relay({"api": "kospi_dd_trd", "basDd": "20260918"}, "userkey")
-    assert status == 200
-    assert body["ok"] is True and body["found"] is True
-    assert body["row"] == _normalize_index_row("20260918", _IDX_KOSPI)
-    assert body["row"]["close"] != _normalize_index_row("20260918", _IDX_KOSPI_FOREIGN)["close"]
-
-
-def test_찾는_지수가_그날_응답에_없으면_200_notempty(relay, monkeypatch):
-    """코스닥 api인데 응답에 코스피 행만 있다 — 다른 지수일 수 있다."""
-    monkeypatch.setattr(
-        relay.requests, "get",
-        lambda *a, **k: _FakeResp(200, {"OutBlock_1": [_IDX_KOSPI]}),
-    )
-    status, body = relay._krx_relay({"api": "kosdaq_dd_trd", "basDd": "20260918"}, "userkey")
-    assert status == 200
-    assert body == {"ok": True, "found": False, "empty": False}
-
-
-def test_지수_행이_core_normalize_index_row와_일치(relay, monkeypatch):
-    monkeypatch.setattr(
-        relay.requests, "get",
-        lambda *a, **k: _FakeResp(200, {"OutBlock_1": [_IDX_KOSDAQ]}),
-    )
-    status, body = relay._krx_relay({"api": "kosdaq_dd_trd", "basDd": "20260918"}, "userkey")
-    assert status == 200
-    assert body["ok"] is True and body["found"] is True
-    assert body["row"] == _normalize_index_row("20260918", _IDX_KOSDAQ)
-    # 종목 행과 키 이름이 다르다 — volume·value·list_shrs·sect가 없다.
-    assert set(body["row"]) == {"date", "close", "fluc_rt", "mktcap"}
-
-
-def test_지수_요청은_AUTH_KEY와_idx_경로를_쓴다(relay, monkeypatch):
-    seen = {}
-
-    def fake_get(url, params=None, headers=None, timeout=None):
-        seen["url"] = url
-        seen["params"] = params
-        seen["headers"] = headers
-        return _FakeResp(200, {"OutBlock_1": []})
-
-    monkeypatch.setattr(relay.requests, "get", fake_get)
-    relay._krx_relay({"api": "kospi_dd_trd", "basDd": "20260918"}, "MYUSERKEY")
-    assert seen["headers"] == {"AUTH_KEY": "MYUSERKEY"}
-    assert seen["params"] == {"basDd": "20260918"}
-    assert "svc/apis/idx" in seen["url"]
-    assert "kospi_dd_trd" in seen["url"]
-
-
 # ── ⑤ JS 두 릴레이의 정규화가 core와 같다 (쌍둥이 대조) ──────────────
 
 def _extract_js_fn(src: str, marker: str) -> str:
@@ -480,44 +331,6 @@ def test_Cloudflare_정규화가_core와_같다():
     norm = _extract_js_fn(src, "function krxNormalizeRow(")
     got = _node_normalize(norm, to_num, "krxNormalizeRow", _JS_SAMPLES)
     assert got == _py_normalize(_JS_SAMPLES)
-
-
-# ── ⑤b JS 두 릴레이의 지수 정규화가 core와 같다 ─────────────────────
-
-_JS_INDEX_SAMPLES = [
-    {
-        "CLSPRC_IDX": "6,894.23", "FLUC_RT": "2.66",
-        "MKTCAP": "5,683,776,067,592,413",
-    },
-    {
-        "CLSPRC_IDX": "0", "FLUC_RT": "0.00", "MKTCAP": "0",
-    },
-    {
-        "CLSPRC_IDX": None, "FLUC_RT": "", "MKTCAP": "12345.6",
-    },
-]
-
-
-def _py_normalize_index(samples: "list[dict]") -> "list[dict]":
-    return [_normalize_index_row("20260101", s) for s in samples]
-
-
-@pytest.mark.skipif(not shutil.which("node"), reason="node 없음")
-def test_Vercel_지수_정규화가_core와_같다():
-    src = _src(_API_KRX_JS)
-    to_num = _extract_js_fn(src, "function toNumber(")
-    norm = _extract_js_fn(src, "function normalizeIndexRow(")
-    got = _node_normalize(norm, to_num, "normalizeIndexRow", _JS_INDEX_SAMPLES)
-    assert got == _py_normalize_index(_JS_INDEX_SAMPLES)
-
-
-@pytest.mark.skipif(not shutil.which("node"), reason="node 없음")
-def test_Cloudflare_지수_정규화가_core와_같다():
-    src = _src(_WORKER_JS)
-    to_num = _extract_js_fn(src, "function krxToNumber(")
-    norm = _extract_js_fn(src, "function krxNormalizeIndexRow(")
-    got = _node_normalize(norm, to_num, "krxNormalizeIndexRow", _JS_INDEX_SAMPLES)
-    assert got == _py_normalize_index(_JS_INDEX_SAMPLES)
 
 
 # ── 부수 — 세 파일 모두 GET만 허용, KRX_API_KEY 서버 키를 두지 않는다 ──

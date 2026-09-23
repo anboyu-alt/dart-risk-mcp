@@ -129,6 +129,8 @@ global.fetch = async (url) => {
   const basDd = u.searchParams.get("basDd");
   FETCH_CALLS.push(basDd);
   const resp = (FETCH_RESPONSES[basDd] !== undefined) ? FETCH_RESPONSES[basDd] : DEFAULT_RESPONSE;
+  // "FAIL"은 릴레이가 KRX 거절(403 등)을 502로 돌려준 경우를 흉내 낸다.
+  if (resp === "FAIL") return { ok: false, status: 502, json: async () => ({ ok: false, error: "upstream" }) };
   return { ok: true, status: 200, json: async () => resp };
 };
 """
@@ -148,12 +150,12 @@ def _run_krx(js_tail: str, fetch_responses: dict, default_response: dict,
     # 감지)가 표면화되지 않아 조용히 틀린 결과(전부 uncovered)를 낸다. 실제로
     # 이 함정에 한 번 걸렸다 — 그래서 이 넷은 자동 끌어오기에 맡기지 않고
     # 미리 명시적으로 끌어온다.
-    # `KRX_INDEX_NAMES`도 같은 함정이다 — `krxGet`이 지수 api인지 가르는 데 쓰는데
-    # 없으면 ReferenceError가 `runOne`에 삼켜져 전부 uncovered로 보인다(2026-09-23
-    # 차트 도입 때 실제로 그렇게 실패했다).
+    # `KRX_ROWS_MAX`·`KRX_CALL_BUDGET`도 같은 함정이다 — 캐시 저장·예산 판정에
+    # 쓰는데 없으면 ReferenceError가 `runOne`에 삼켜져 전부 uncovered로 보인다
+    # (2026-09-23 차트 도입 때 실제로 그렇게 실패했다).
     consts = "\n".join(
         _cut_decl(html, n) for n in ("LS_KRX_KEY", "LS_KRX_ROWS", "LS_KRX_MKT", "KRX_API_IDS",
-                                     "KRX_INDEX_NAMES", "KRX_ROWS_MAX", "KRX_CALL_BUDGET")
+                                     "KRX_ROWS_MAX", "KRX_CALL_BUDGET")
     )
     cache_seed = ""
     if initial_cache:
@@ -306,7 +308,7 @@ def test_예산을_넘으면_오래된_쪽이_uncovered로_남는다():
     end = _dt.date.today() - _dt.timedelta(days=1)
     while end.weekday() >= 5:
         end -= _dt.timedelta(days=1)
-    start = end - _dt.timedelta(days=600)   # 달력 600일 ≈ 평일 428일(예산 340 초과)
+    start = end - _dt.timedelta(days=600)   # 달력 600일 ≈ 평일 428일(예산 270 초과)
     s8, e8 = start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
 
     out = _run_krx(
@@ -316,7 +318,7 @@ def test_예산을_넘으면_오래된_쪽이_uncovered로_남는다():
         fetch_responses={}, default_response=_EMPTY_RESP,
     )
     r, calls, budget = out["r"], out["calls"], out["budget"]
-    assert budget == 340, "차트 예산(340)이 바뀌었다 — 스펙과 이 테스트를 함께 고친다"
+    assert budget == 270, "차트 예산(270)이 바뀌었다 — 스펙과 이 테스트를 함께 고친다"
     assert r["daysRequested"] > budget, "표본 구간이 예산을 못 넘겼다 — 구간을 넓혀야 한다"
     assert len(r["uncovered"]) == r["daysRequested"] - budget
     assert len(calls) <= budget, "예산을 넘겨 fetch를 불렀다"
@@ -324,6 +326,91 @@ def test_예산을_넘으면_오래된_쪽이_uncovered로_남는다():
     if r["uncovered"]:
         assert max(r["uncovered"]) < min(calls), (
             "uncovered가 최근 날짜다 — 오래된 쪽이 남아야 한다")
+
+
+def test_호출이_실패하면_남은_묶음을_보내지_않고_멈춘다():
+    """KRX 앞단은 짧은 시간에 많이 두드리면 IP를 403으로 막는다(2026-09-23 실측).
+    막힌 뒤 계속 보내면 전부 실패하면서 차단만 길어지므로, 한 묶음에서라도 실패가
+    나오면 거기서 멈추고 남은 날을 미조회로 밝힌다."""
+    import datetime as _dt
+    end = _dt.date.today() - _dt.timedelta(days=30)
+    while end.weekday() >= 5:
+        end -= _dt.timedelta(days=1)
+    start = end - _dt.timedelta(days=60)
+    s8, e8 = start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
+    out = _run_krx(
+        'krxFetchSeries("stk_bydd_trd", "005930", S8, E8).then((r) => '
+        'console.log(JSON.stringify({r, calls: FETCH_CALLS, conc: KRX_CONCURRENCY})));'
+        .replace("S8", json.dumps(s8)).replace("E8", json.dumps(e8)),
+        fetch_responses={e8: "FAIL"}, default_response=_row_resp("x"),
+    )
+    r, calls, conc = out["r"], out["calls"], out["conc"]
+    assert r["failed"] == 1
+    assert len(calls) == conc, "실패가 난 첫 묶음 뒤에도 호출을 보냈다"
+    assert r["stopped"] == r["daysRequested"] - conc
+    assert len(r["uncovered"]) == r["stopped"] + 1
+
+
+def test_받는_대로_중간_결과를_넘긴다():
+    """한 묶음마다 `onPartial`로 지금까지의 행을 넘긴다 — 차트를 먼저 그리기 위해서다.
+    행은 날짜 오름차순이고 개수는 묶음마다 늘어난다."""
+    import datetime as _dt
+    end = _dt.date.today() - _dt.timedelta(days=30)
+    while end.weekday() >= 5:
+        end -= _dt.timedelta(days=1)
+    start = end - _dt.timedelta(days=30)
+    s8, e8 = start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
+    out = _run_krx(
+        'const P = []; krxFetchSeries("stk_bydd_trd", "005930", S8, E8, null, '
+        '{ onPartial: (rows) => P.push(rows.map((x) => x.date)) }).then((r) => '
+        'console.log(JSON.stringify({P, n: r.rows.length})));'
+        .replace("S8", json.dumps(s8)).replace("E8", json.dumps(e8)),
+        fetch_responses={}, default_response={"ok": True, "found": True, "row": {
+            "date": "D", "close": 100, "fluc_rt": 0, "volume": 1, "value": 1,
+            "mktcap": 1, "list_shrs": 1, "sect": None}},
+    )
+    sizes = [len(p) for p in out["P"]]
+    assert len(sizes) >= 2 and sizes == sorted(sizes), sizes
+    assert sizes[-1] == out["n"]
+
+
+def test_지수는_정적_파일에서_읽고_릴레이로_받지_않는다():
+    """지수는 운영자가 모아 두는 `index-daily.json`에서 읽는다(2026-09-23 제작자 결정).
+    사용자 키로 약 260번씩 다시 받던 것이 로딩 시간의 절반이었다."""
+    loader = _cut(_SRC, "async function loadMarketReaction(")
+    assert "loadIndexDaily()" in loader
+    assert "kospi_dd_trd" not in _SRC and "kosdaq_dd_trd" not in _SRC, (
+        "뷰어가 지수 api를 직접 부른다 — 정적 파일로 바뀌었다")
+    assert 'fetch("index-daily.json")' in _cut(_SRC, "async function loadIndexDaily(")
+
+
+def test_지수_파일이_실재하고_두_시리즈를_담는다():
+    p = _ROOT / "docs" / "tool" / "index-daily.json"
+    d = json.loads(p.read_text(encoding="utf-8"))
+    assert set(d) >= {"meta", "kospi", "kosdaq", "holidays"}
+    assert len(d["kospi"]) > 200 and len(d["kosdaq"]) > 200
+    assert d["meta"]["last"] == max(d["kospi"]), "meta.last가 실제 마지막 날짜와 다르다"
+    assert "한국거래소 통계정보" in d["meta"]["source"]
+
+
+def test_지수_행_추출은_창_안만_날짜순이다():
+    out = _node(
+        _cut(_SRC, "function indexRowsFromDaily(") + "\n"
+        'const D = {kospi: {"20260103": 3, "20260101": 1, "20260102": 2, "20251231": 0}};'
+        'console.log(JSON.stringify(indexRowsFromDaily(D, "kospi", "20260101", "20260102")));'
+    )
+    assert json.loads(out.stdout) == [{"date": "20260101", "close": 1}, {"date": "20260102", "close": 2}]
+
+
+def test_사건별_대조표를_두지_않는다():
+    """2026-09-23 제작자 — 「차트에 이벤트만 매칭하면 전후 주가 움직임은 그냥 보인다」.
+    전후 등락·거래량 배수는 MCP `track_market_reaction`에만 남는다."""
+    render = _cut(_SRC, "function marketReactionHTML(")
+    for gone in ("D0 등락", "D-5→D-1", "거래량 배수(전 5일/당일)", "사건별 전후 대조"):
+        assert gone not in render, f"대조표 흔적 「{gone}」이 남았다"
+    assert "eventWindowFacts" not in _SRC and "marketFactNotes" not in _SRC
+    # 표에 없는 지표의 읽는 법은 싣지 않는다
+    assert '["d0_change", "pre_post_return", "volume_ratio"]' in render
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -355,37 +442,9 @@ def test_판정_어휘가_없다():
         assert bad not in body, f"marketReactionHTML에 판정 어휘 '{bad}'가 있다"
 
 
-def test_증감_셀에_색이_없다():
-    """등락 방향에 좋고 나쁨이 없다 — deltaHTML을 sense none으로 쓴다."""
-    body = _cut(_SRC, "function marketReactionHTML(")
-    assert body.count('sense: "none"') >= 3, (
-        "D0 등락·전·후 세 칸이 전부 sense:none이어야 한다")
-
-
-def test_최근_N건만_대조한다는_고지가_있다():
-    body = _cut(_SRC, "function marketReactionHTML(")
-    assert "KRX_EVENT_MAX" in body
-
-
-def test_같은_날_같은_신호는_배수로_접는다():
-    """`pickMarketEvents`가 (날짜, 첫 관찰 신호 키)로 묶어 count를 올린다."""
-    body = _cut(_SRC, "function pickMarketEvents(")
-    assert "count++" in body or "count + 1" in body.replace(" ", "")
-    render = _cut(_SRC, "function marketReactionHTML(")
-    assert "×${g.count}" in render or "g.count > 1" in render
-
-
 def test_관리종목_규정선_대조_문구가_있다():
     body = _cut(_SRC, "function marketReactionHTML(")
     assert "이 도구의 임계가 아니라 규정 수치입니다" in body
-
-
-def test_패널이_deepgrid_안에_있다():
-    """스펙: `.deepgrid` 안, `<details>` 펼침 시 조회."""
-    i = _SRC.index('id="marketDetails"')
-    j = _SRC.rindex('<div class="deepgrid">', 0, i)
-    k = _SRC.index("// .deepgrid 닫기", i)
-    assert j < i < k, "marketDetails가 .deepgrid 격자 밖에 있다"
 
 
 def test_krx_키_없으면_details_열어도_조회하지_않는다():

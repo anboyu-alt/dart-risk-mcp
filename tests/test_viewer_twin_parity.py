@@ -37,13 +37,11 @@ import pytest
 from dart_risk_mcp.core import qualifiers as _q
 from dart_risk_mcp.core import signals as _sig
 from dart_risk_mcp.core.krx_client import _weekday_candidates
-from dart_risk_mcp.core.market_context import event_window_facts, price_breaks, window_overview
+from dart_risk_mcp.core.market_context import price_breaks, window_overview
 from dart_risk_mcp.server import (
     _fmt_pct_signed,
     _fmt_price,
-    _fmt_ratio,
     _fmt_turnover_pct,
-    _market_fact_notes,
 )
 from dart_risk_mcp.core.dart_client import (
     _fold_corp_name,
@@ -148,13 +146,10 @@ _FUNCS = (
     "function weekdayCandidates(",
     "function priceBreaks(",
     "function breakLabel(",
-    "function eventWindowFacts(",
     "function windowOverview(",
     "function fmtPctSigned(",
-    "function fmtRatio(",
     "function fmtTurnoverPct(",
     "function fmtPrice(",
-    "function marketFactNotes(",
 )
 
 # 이름은 `_FUNCS`에서 뽑는다 — 예전에는 아래 JS의 `const FN = {...}`에도 손으로
@@ -604,11 +599,6 @@ def test_이름으로_짝지어지는_쌍은_모두_잠겨_있다():
         "_mzn_num": "이 파일의 parseMezzanineRow 대조에 포함",
         "_mzn_int": "이 파일의 parseMezzanineRow 대조에 포함",
         "_mzn_date": "이 파일의 parseMezzanineRow 대조에 포함",
-        # 뷰어 쪽은 eventWindowFacts 내부의 지역 클로저(`const rowTurnoverPct =
-        # (row) => {...}`)라 독립 호출 대상이 아니다 — 이 파일의
-        # eventWindowFacts 대조(거래량 0·회전율 미계산 케이스)가 그 계산
-        # 경로를 이미 태운다.
-        "_row_turnover_pct": "이 파일의 eventWindowFacts 대조에 포함",
     }
 
     core_funcs: dict = {}
@@ -1034,9 +1024,10 @@ def test_공모_사모를_더해_두_배로_세지_않는다():
 
 # ── KRX 시세 — 공시 전후 시장 반응 (2026-09-23 이식) ──────────────────────
 #
-# 세 순수 함수(`weekdayCandidates`·`eventWindowFacts`·`windowOverview`)는
-# core `krx_client._weekday_candidates`·`market_context.event_window_facts`·
-# `market_context.window_overview`의 쌍둥이다. 합성 rows 9케이스로 정상·
+# 두 순수 함수(`weekdayCandidates`·`windowOverview`)는 core
+# `krx_client._weekday_candidates`·`market_context.window_overview`의 쌍둥이다.
+# (`eventWindowFacts`는 2026-09-23 뷰어에서 사건별 대조표를 빼며 함께 지웠다 —
+# 그 계산은 MCP `track_market_reaction`에만 남는다.) 합성 rows로 정상·
 # 절단·경계를 함께 대조한다 — 날짜 문자열은 달력상 유효할 필요가 없다(두
 # 구현 모두 문자열 비교·정수 증가만 쓴다), 다만 `weekdayCandidates`(요일
 # 계산)만은 실제 달력이 필요해 별도로 실제 날짜를 쓴다.
@@ -1059,96 +1050,6 @@ def _krx_series(n, start="20260101", close0=10000, step=10, volume=100000,
         close += step
         d += 1
     return rows
-
-
-def test_이벤트창_정상_사례가_같다():
-    """기준선·전후 창이 전부 꽉 찬 정상 사례 — 값이 그대로 일치해야 한다."""
-    rows = _krx_series(80)
-    event = rows[70]["date"]
-    core = event_window_facts(rows, event, baseline=60)
-    got = _viewer([["eventWindowFacts", rows, event, {"baseline": 60}]])[0]
-    for k in core:
-        assert core[k] == got.get(k) or pytest.approx(core[k]) == got.get(k), (
-            f"{k}가 갈린다: core={core[k]!r} 뷰어={got.get(k)!r}")
-
-
-def test_이벤트창_휴장일_접수가_같다():
-    """사건일 자체가 휴장일이면 다음 거래일로 밀린다 — `d0_shifted`가 서야 한다."""
-    rows = _krx_series(80)
-    holiday_row = rows[70]
-    rows = [r for r in rows if r["date"] != holiday_row["date"]]   # 그날만 빠진 창
-    core = event_window_facts(rows, holiday_row["date"], baseline=60)
-    got = _viewer([["eventWindowFacts", rows, holiday_row["date"], {"baseline": 60}]])[0]
-    assert core["d0_shifted"] is True
-    for k in ("d0_shifted", "d0_date", "pre_return_pct", "post_return_pct"):
-        assert core[k] == got.get(k), f"{k}가 갈린다: core={core[k]!r} 뷰어={got.get(k)!r}"
-
-
-def test_이벤트창_덜_찬_창이_같다():
-    """사건이 창 끝자락에 있으면 D+5가 다 안 찬다 — `post_partial`."""
-    rows = _krx_series(75)
-    event = rows[73]["date"]   # 뒤에 1거래일만 남는다
-    core = event_window_facts(rows, event, baseline=60)
-    got = _viewer([["eventWindowFacts", rows, event, {"baseline": 60}]])[0]
-    assert core["post_partial"] is True
-    assert core["days_post_avail"] == got["days_post_avail"] == 1
-    assert core["post_return_pct"] == got["post_return_pct"]
-
-
-def test_이벤트창_기준선_부족이_같다():
-    """사건이 창 앞머리에 있으면 기준선(60거래일)이 모자란다."""
-    rows = _krx_series(20)
-    event = rows[10]["date"]
-    core = event_window_facts(rows, event, baseline=60, min_baseline=20)
-    got = _viewer([["eventWindowFacts", rows, event, {"baseline": 60, "minBaseline": 20}]])[0]
-    assert core["baseline_note"] is not None
-    assert core["baseline_note"] == got["baseline_note"]
-    assert core["pre_vol_ratio"] is None and got["pre_vol_ratio"] is None
-
-
-def test_이벤트창_거래량_0이_같다():
-    """매매거래정지 등으로 거래량 0인 거래일이 섞인 창 — `zero_volume_days`."""
-    rows = _krx_series(80)
-    for i in (68, 69, 70, 71):
-        rows[i] = dict(rows[i], volume=0)
-    event = rows[70]["date"]
-    core = event_window_facts(rows, event, baseline=60)
-    got = _viewer([["eventWindowFacts", rows, event, {"baseline": 60}]])[0]
-    assert core["zero_volume_days"] == got["zero_volume_days"] == 4
-    assert core["d0_no_trade"] is True and got["d0_no_trade"] is True
-
-
-def test_이벤트창_기준선_거래량_0이_같다():
-    """기준선 평균 거래량 자체가 0이면(그 구간 전부 매매정지) 배수를 못 낸다."""
-    rows = _krx_series(80, volume=0)
-    for i in range(65, 80):
-        rows[i] = dict(rows[i], volume=100000)   # 창 안(전 5·D0·후 5)만 거래 재개
-    event = rows[70]["date"]
-    core = event_window_facts(rows, event, baseline=60)
-    got = _viewer([["eventWindowFacts", rows, event, {"baseline": 60}]])[0]
-    assert core["baseline_note"] == "기준선 평균 거래량이 0입니다"
-    assert core["baseline_note"] == got["baseline_note"]
-    assert core["pre_vol_ratio"] is None and got["pre_vol_ratio"] is None
-
-
-def test_이벤트창_상장주식수_없음이_같다():
-    """`list_shrs`가 없으면 회전율을 계산하지 않는다 — `turnover_note`."""
-    rows = _krx_series(80, list_shrs=None)
-    event = rows[70]["date"]
-    core = event_window_facts(rows, event, baseline=60)
-    got = _viewer([["eventWindowFacts", rows, event, {"baseline": 60}]])[0]
-    assert core["turnover_note"] is not None
-    assert core["turnover_note"] == got["turnover_note"]
-    assert core["turnover_pre_pct"] is None and got["turnover_pre_pct"] is None
-
-
-def test_이벤트창_사건이_범위_밖이면_둘_다_없음이다():
-    """사건일이 조회 범위를 넘으면 "0"이 아니라 계산 불가(None)다."""
-    rows = _krx_series(30)
-    future = "20990101"
-    core = event_window_facts(rows, future, baseline=60)
-    got = _viewer([["eventWindowFacts", rows, future, {"baseline": 60}]])[0]
-    assert core is None and got is None
 
 
 def test_창_개괄이_같다():
@@ -1274,44 +1175,6 @@ def test_breakLabel이_같다():
     assert "(주식수" not in _break_label(labels[2])
 
 
-def test_이벤트창_분할_불연속이_같다():
-    """사건일 = 분할 3일 뒤 — pre 등락·기준선 거래량 배수가 막히고 post는 정상."""
-    rows = _split_rows()
-    event = rows[73]["date"]
-    core = event_window_facts(rows, event)
-    got = _viewer([["eventWindowFacts", rows, event]])[0]
-    for k in core:
-        assert core[k] == got.get(k) or pytest.approx(core[k]) == got.get(k), (
-            f"{k}가 갈린다: core={core[k]!r} 뷰어={got.get(k)!r}")
-    assert core["pre_return_pct"] is None and got["pre_return_pct"] is None
-    assert core["pre_vol_ratio"] is None and core["d0_vol_ratio"] is None
-    assert "기준가 조정" in core["baseline_note"]
-    assert core["price_breaks"][0]["date"] == rows[70]["date"]
-    assert "불연속" in core["price_break_note"] and "주식수 ×5.00" in core["price_break_note"]
-    assert core["post_return_pct"] == pytest.approx(0.0) == got["post_return_pct"]
-
-    # 분할이 기준선 안(창 밖)이면 등락은 내고 거래량 배수만 막는다 — 각주도
-    # 등락을 「생략」이라 적지 않는다(CSA 코스믹 09-10 사건 실측으로 잡은 자기모순)
-    event_h = rows[78]["date"]
-    core_h = event_window_facts(rows, event_h)
-    got_h = _viewer([["eventWindowFacts", rows, event_h]])[0]
-    for k in core_h:
-        assert core_h[k] == got_h.get(k) or pytest.approx(core_h[k]) == got_h.get(k), (
-            f"{k}가 갈린다: core={core_h[k]!r} 뷰어={got_h.get(k)!r}")
-    assert core_h["pre_return_pct"] is not None and core_h["price_break_note"] is None
-    assert core_h["pre_vol_ratio"] is None and "기준가 조정" in core_h["baseline_note"]
-
-    # 사건일이 분할 훨씬 뒤(기준선도 분할 뒤)면 아무것도 막지 않는다
-    rows_long = _split_rows(n_before=5, n_after=90)
-    event_long = rows_long[90]["date"]
-    core_long = event_window_facts(rows_long, event_long)
-    got_long = _viewer([["eventWindowFacts", rows_long, event_long]])[0]
-    for k in core_long:
-        assert core_long[k] == got_long.get(k) or pytest.approx(core_long[k]) == got_long.get(k), (
-            f"{k}가 갈린다: core={core_long[k]!r} 뷰어={got_long.get(k)!r}")
-    assert core_long["price_breaks"] == [] and core_long["pre_return_pct"] is not None
-
-
 def test_창_개괄_분할이_등락을_막는_것이_같다():
     rows = _split_rows()
     core = window_overview(rows)
@@ -1324,14 +1187,13 @@ def test_창_개괄_분할이_등락을_막는_것이_같다():
     assert core["high_close"] == 100000 and core["low_close"] == 20000
 
 
-def test_시세_포맷_헬퍼_5종이_같다():
+def test_시세_포맷_헬퍼_4종이_같다():
     """결측(None) 표기는 core `"-"`·뷰어 `"―"`로 **의도된 차이**다(fmtKRW·
     deltaHTML과 같은 관례) — 숫자 값의 형식만 대조한다.
     """
     calls, expect = [], []
     for x in (0, 0.0, 3.2, -1.05, 12.345, 100.0):
         calls.append(["fmtPctSigned", x]); expect.append(_fmt_pct_signed(x))
-        calls.append(["fmtRatio", x]); expect.append(_fmt_ratio(x))
         calls.append(["fmtTurnoverPct", x]); expect.append(_fmt_turnover_pct(x))
         calls.append(["fmtPrice", x]); expect.append(_fmt_price(x))
     got = _viewer(calls)
@@ -1341,29 +1203,6 @@ def test_시세_포맷_헬퍼_5종이_같다():
     )
 
 
-_MARKET_FACTS = [
-    {"d0_shifted": True, "pre_partial": False, "post_partial": False,
-     "baseline_note": None, "turnover_note": None, "zero_volume_days": 0,
-     "window_days": 11, "days_pre_avail": 5, "days_post_avail": 5},
-    {"d0_shifted": False, "pre_partial": True, "post_partial": True,
-     "baseline_note": "기준선 10거래일 (최소 20)", "turnover_note": None,
-     "zero_volume_days": 3, "window_days": 8, "days_pre_avail": 2, "days_post_avail": 1},
-    {"d0_shifted": False, "pre_partial": False, "post_partial": False,
-     "baseline_note": None,
-     "turnover_note": "상장주식수가 없어 회전율을 계산할 수 없는 거래일이 있습니다",
-     "zero_volume_days": 0, "window_days": 11, "days_pre_avail": 5, "days_post_avail": 5},
-    {"d0_shifted": False, "pre_partial": False, "post_partial": False,
-     "baseline_note": None, "turnover_note": None, "zero_volume_days": 0,
-     "window_days": 11, "days_pre_avail": 5, "days_post_avail": 5},   # 각주 없음
-]
-
-
-def test_시세_각주가_같다():
-    calls = [["marketFactNotes", f] for f in _MARKET_FACTS]
-    got = _viewer(calls)
-    for f, g in zip(_MARKET_FACTS, got):
-        core = _market_fact_notes(f)
-        assert core == g, f"각주가 갈린다: core={core!r} 뷰어={g!r}"
 
 
 def test_주말_요일_후보가_같다():

@@ -7,7 +7,7 @@ core에 쌍둥이가 없는 뷰어 전용 순수 함수라(이름을 `Model`/`SV
 거래량 0 연속 구간 · 코스닥 소속부 변경 · **기준가 조정일마다 지수를 종목에
 다시 맞춘다** · 지수가 없으면 종목만 · 창 밖 사건은 버리되 센다 ② SVG:
 태그 균형 · 판정 어휘 0 · 오르내림 색 없음 · 마커는 원문 링크+title ·
-격자는 실선 ③ 상수·문구: 표 상한 12·「건 생략」 고지·예산·캐시 상한.
+격자는 실선 ③ 상수·문구: 예산·동시성·캐시 상한·차트 폭·패널 문구.
 """
 import datetime as _dt
 import json
@@ -266,38 +266,41 @@ def test_텍스트는_텍스트_색이다():
 
 # ── ③ 상수·문구 ─────────────────────────────────────────────────────────
 
-def test_표_상한과_예산_상수():
-    assert "const KRX_EVENT_MAX = 12;" in _SRC
+def test_예산_동시성_캐시_상수():
+    assert "const KRX_CALL_BUDGET = 270;" in _SRC, "차트 창 평일 261일을 한 번에 받는 예산"
+    assert "const KRX_CONCURRENCY = 6;" in _SRC, (
+        "동시 호출 수를 올리기 전에 KRX 차단(403)을 다시 재야 한다 — 2026-09-23 실측")
     assert "const KRX_ROWS_MAX = 6000;" in _SRC
     assert "const KRX_CHART_DAYS = 365;" in _SRC
-    assert re.search(r"const KRX_INDEX_CALL_BUDGET = \d+;", _SRC)
     assert "KRX_ROWS_MAX" in _cut(_SRC, "function krxSaveRowsCache(")
     assert "3000" not in _cut(_SRC, "function krxSaveRowsCache("), "캐시 상한 리터럴이 부활했다"
+    for gone in ("KRX_EVENT_MAX", "KRX_BASELINE_DAYS", "KRX_INDEX_CALL_BUDGET"):
+        assert gone not in _SRC, f"대조표·지수 호출용 상수 {gone}이 남았다"
 
 
-def test_표가_잘리면_전체_수와_생략_수를_적는다():
-    render = _cut(_SRC, "function marketReactionHTML(")
-    assert "관찰 ${total}건 중 최근 ${KRX_EVENT_MAX}건 · ${total - picked.length}건 생략" in render
+def test_차트_마커는_상한_없이_전부다():
     loader = _cut(_SRC, "async function loadMarketReaction(")
-    assert "totalEvents: allPicked.length" in loader
-    assert "pickMarketEvents(allEvents, Infinity)" in loader, "차트 마커는 상한 없이 전부여야 한다"
+    assert "pickMarketEvents((CUR && CUR.observedEvents) || [], Infinity)" in loader
 
 
-def test_지수_실패는_종목만이라고_밝히고_스캔_창_절단을_적는다():
-    render = _cut(_SRC, "function marketReactionHTML(")
-    assert "자료가 없다는 뜻이 아닙니다(차트는 종목만)" in render
+def test_지수_파일_실패는_종목만이라고_밝히고_스캔_창_절단을_적는다():
     loader = _cut(_SRC, "async function loadMarketReaction(")
+    assert "자료가 없다는 뜻이 아닙니다(차트는 종목만)" in loader
     assert "최근 ${KRX_CHART_DAYS}일만 그립니다" in loader
-    assert "거래일 미조회" in loader
+    render = _cut(_SRC, "function marketReactionHTML(")
+    assert "일 미조회" in render and "자료가 없다는 뜻이 아닙니다" in render
 
 
-def test_지수_api는_종목_코드를_보내지_않는다():
-    get = _cut(_SRC, "async function krxGet(")
-    assert "KRX_INDEX_NAMES[api] ? { api, basDd }" in get
-    idx = _cut_decl(_SRC, "KRX_INDEX_API_IDS")
-    assert "kospi_dd_trd" in idx and "kosdaq_dd_trd" in idx
+def test_차트_폭은_패널_폭을_따른다():
+    """전폭 배치라 viewBox를 760으로 고정하면 세로가 과하게 커진다 — 패널 폭(px)을
+    모델에 싣고 SVG·호버가 같은 값을 쓴다."""
+    out = _model(_rows(10), [], [], {"width": 1400})
+    assert out["m"]["W"] == 1400
+    assert 'viewBox="0 0 1400 ' in out["svg"]
+    hover = _cut(_SRC, "function attachMarketChartHover(")
+    assert "const W = m.W || MKT_W;" in hover
 
 
 def test_패널_제목과_펼침_문구():
-    assert "MARKET REACTION — 공시와 시장 (1년)" in _SRC
-    assert "1년 시세·거래량·지수 위에 관찰 신호 마커" in _SRC
+    assert "MARKET — 공시와 시장 (1년 주가·거래량·지수)" in _SRC
+    assert "1년 주가·거래량 위에 관찰 신호를 표시하고 코스피·코스닥 지수를 겹칩니다" in _SRC

@@ -27,15 +27,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 import requests
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from dart_risk_mcp.core.krx_client import (  # noqa: E402
-    KRX_API_IDS,
-    KRX_BASE,
-    KRX_INDEX_API_IDS,
-    KRX_INDEX_BASE,
-    KRX_INDEX_NAMES,
-    _normalize_index_row,
-    _normalize_row,
-)
+from dart_risk_mcp.core.krx_client import KRX_API_IDS, KRX_BASE, _normalize_row  # noqa: E402
 from tool_server.corp import handle_corp  # noqa: E402
 from tool_server.doc import handle_doc  # noqa: E402
 
@@ -56,10 +48,9 @@ ALLOWED_ENDPOINTS = {"list.json", "company.json",
 DART_BASE = "https://opendart.fss.or.kr/api/"
 TOOL_DIR = os.path.join(os.path.dirname(__file__), "..", "docs", "tool")
 
-# core dart_risk_mcp/core/krx_client.py의 KRX_API_IDS.values()·
-# KRX_INDEX_API_IDS.values()와 같아야 한다(tests/test_viewer_krx_relay.py가 대조).
-_KRX_INDEX_APIS = set(KRX_INDEX_API_IDS.values())
-_KRX_ALLOWED_APIS = set(KRX_API_IDS.values()) | _KRX_INDEX_APIS
+# core dart_risk_mcp/core/krx_client.py의 KRX_API_IDS.values()와 같아야 한다
+# (tests/test_viewer_krx_relay.py가 대조).
+_KRX_ALLOWED_APIS = set(KRX_API_IDS.values())
 _KRX_BASDD_RE = re.compile(r"\d{8}")
 _KRX_ISU_RE = re.compile(r"\d{6}")
 
@@ -90,32 +81,26 @@ def _krx_relay(query: dict, key: str) -> "tuple[int, dict]":
     """GET /api/krx 몸통 — `api/krx.js`·`relay/worker.js`와 같은 계약.
 
     사용자 본인 KRX 키 전용. 서버 키 폴백·캐시·쿼터가 없다(약관 제11조 ②).
-    행 정규화는 core `krx_client._normalize_row`/`_normalize_index_row`/
-    `_to_number`를 그대로 재사용한다(JS 릴레이 둘은 같은 규칙을 각자 옮겨
-    적었다 — 언어가 달라 import를 공유할 수 없다).
-
-    지수(코스피·코스닥)는 종목과 경로가 다르고(`KRX_INDEX_BASE`) `isu`를
-    받지 않는다 — `IDX_NM`이 그 시장 이름과 정확히 같은 행 하나만 고른다
-    (하루 응답에 「코스피 (외국주포함)」 같은 다른 지수도 함께 오므로).
+    행 정규화는 core `krx_client._normalize_row`/`_to_number`를 그대로
+    재사용한다(JS 릴레이 둘은 같은 규칙을 각자 옮겨 적었다 — 언어가 달라
+    import를 공유할 수 없다).
     """
     key = (key or "").strip()
     if not key:
         return 400, {"ok": False, "error": "missing_key"}
     api = query.get("api", "")
-    is_index = api in _KRX_INDEX_APIS
     bas_dd = query.get("basDd", "")
     isu = query.get("isu", "")
     if (
         api not in _KRX_ALLOWED_APIS
         or not _KRX_BASDD_RE.fullmatch(bas_dd or "")
-        or (not is_index and not _KRX_ISU_RE.fullmatch(isu or ""))
+        or not _KRX_ISU_RE.fullmatch(isu or "")
     ):
         return 400, {"ok": False, "error": "bad_params"}
 
-    base = KRX_INDEX_BASE if is_index else KRX_BASE
     try:
         resp = requests.get(
-            f"{base}/{api}",
+            f"{KRX_BASE}/{api}",
             params={"basDd": bas_dd},
             headers={"AUTH_KEY": key},
             timeout=15,
@@ -138,13 +123,6 @@ def _krx_relay(query: dict, key: str) -> "tuple[int, dict]":
         return 502, {"ok": False, "error": "upstream"}
     if not out_block:
         return 200, {"ok": True, "found": False, "empty": True}
-
-    if is_index:
-        name = KRX_INDEX_NAMES.get(api)
-        row = next((r for r in out_block if r.get("IDX_NM") == name), None)
-        if row is None:
-            return 200, {"ok": True, "found": False, "empty": False}
-        return 200, {"ok": True, "found": True, "row": _normalize_index_row(bas_dd, row)}
 
     row = next((r for r in out_block if str(r.get("ISU_CD")) == isu), None)
     if row is None:
