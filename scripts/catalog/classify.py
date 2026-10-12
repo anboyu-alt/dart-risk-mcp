@@ -32,7 +32,12 @@ from scripts._console import use_utf8_stdout  # noqa: E402
 from scripts.catalog.extract import extract_full, extract_light  # noqa: E402
 
 API_URL = "https://api.anthropic.com/v1/messages"
-MODEL = "claude-haiku-4-5-20251001"
+# Haiku 5.5는 thinking이 기본으로 켜져 있고 effort 기본값이 medium이다. 분류는
+# 짧은 JSON 하나를 내는 일이라 effort를 low로 낮추고, thinking이 max_tokens를
+# 먹어 JSON이 잘리지 않도록 상한을 넉넉히 둔다(2026-10-12, Haiku 4.5에서 교체).
+MODEL = "claude-haiku-5-5"
+_EFFORT = "low"
+_MAX_TOKENS = 8000
 _TIMEOUT = 120
 _SLEEP = 0.2
 # Phase A(collect.py)의 출력을 바로 받는다 — 중간 산출물 catalog_bodies.jsonl은 없다.
@@ -95,7 +100,8 @@ def call_anthropic(system: str, user: str, api_key: str, model: str = MODEL) -> 
     """
     payload = {
         "model": model,
-        "max_tokens": 1500,
+        "max_tokens": _MAX_TOKENS,
+        "output_config": {"effort": _EFFORT},
         "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
         "messages": [{"role": "user", "content": user}],
     }

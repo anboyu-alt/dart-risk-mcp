@@ -66,7 +66,7 @@ dart_risk_mcp/
 > `extract_full`이 `None`을 반환해 요약 모드로 degrade한다.
 > 자동 갱신: `.github/workflows/refresh-catalog.yml`(매월 1일 UTC 18:00 cron +
 > workflow_dispatch — 수집 연도·분류 건수 상한 수동 입력 가능). 필요 Secret은
-> `ANTHROPIC_API_KEY` 하나뿐(분류 단계 LLM 호출용). 카탈로그 MD·gap 리포트 생성 후
+> `ANTHROPIC_API_KEY` 하나뿐(분류 단계 LLM 호출용 — 모델은 `classify.py`의 `MODEL`, 2026-10-12 Haiku 4.5→`claude-haiku-5-5` 교체. 5.5는 thinking이 기본으로 켜져 있어 `effort=low`·`max_tokens=8000`으로 JSON 절단을 막는다). 카탈로그 MD·gap 리포트 생성 후
 > `load_catalog_excerpt`가 비어있지 않은지·점수 메타가 노출되지 않는지 검증하고,
 > `test_catalog_render.py`/`test_catalog_labels.py`/`test_golden_output_hygiene.py`를
 > 통과해야 커밋·푸시한다. 패키징 경계 자체는 `tests/test_catalog_packaging.py`가 고정.
