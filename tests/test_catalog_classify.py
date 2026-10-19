@@ -129,6 +129,23 @@ class TestCallAnthropicRetry(unittest.TestCase):
         self.assertEqual(got, "hello")
         self.assertEqual(mock_post.call_count, 1)
 
+    @patch.dict("os.environ", {"ANTHROPIC_WORKSPACE_ID": "wrkspc_test"})
+    @patch("scripts.catalog.classify.time.sleep")
+    @patch("scripts.catalog.classify.requests.post")
+    def test_workspace_header_sent_when_env_set(self, mock_post, mock_sleep):
+        mock_post.return_value = _fake_response(200)
+        classify.call_anthropic("sys", "user", "key")
+        headers = mock_post.call_args.kwargs["headers"]
+        self.assertEqual(headers["anthropic-workspace-id"], "wrkspc_test")
+
+    @patch.dict("os.environ", {"ANTHROPIC_WORKSPACE_ID": ""})
+    @patch("scripts.catalog.classify.time.sleep")
+    @patch("scripts.catalog.classify.requests.post")
+    def test_workspace_header_omitted_when_env_empty(self, mock_post, mock_sleep):
+        mock_post.return_value = _fake_response(200)
+        classify.call_anthropic("sys", "user", "key")
+        self.assertNotIn("anthropic-workspace-id", mock_post.call_args.kwargs["headers"])
+
     @patch("scripts.catalog.classify.time.sleep")
     @patch("scripts.catalog.classify.requests.post")
     def test_429_then_200_retries_and_succeeds(self, mock_post, mock_sleep):

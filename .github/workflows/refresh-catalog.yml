@@ -40,6 +40,8 @@ jobs:
       - name: Classify
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # 워크스페이스에 묶이지 않은 키라 헤더로 워크스페이스를 지정한다(식별자, 비밀값 아님)
+          ANTHROPIC_WORKSPACE_ID: wrkspc_01HBuYJdmVPC8Uocd5DVQMnw
         run: python scripts/catalog/classify.py --resume --limit "${{ github.event.inputs.limit || 0 }}"
 
       - name: Build catalog MD
