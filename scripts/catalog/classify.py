@@ -110,6 +110,10 @@ def call_anthropic(system: str, user: str, api_key: str, model: str = MODEL) -> 
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
     }
+    # 워크스페이스에 묶이지 않은 키는 이 헤더가 없으면 400으로 거부된다.
+    workspace = os.environ.get("ANTHROPIC_WORKSPACE_ID", "").strip()
+    if workspace:
+        headers["anthropic-workspace-id"] = workspace
     try:
         resp = None
         for attempt in range(_MAX_RETRIES + 1):
