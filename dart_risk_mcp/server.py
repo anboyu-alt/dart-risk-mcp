@@ -10,6 +10,7 @@
 # import 시점에 TypeError로 죽는다(3.11+에서는 동작 차이 없음).
 from __future__ import annotations
 
+import logging
 import os
 import re
 import warnings
@@ -223,6 +224,8 @@ def _holder_display(v: str) -> str:
 # 사람이 아무 설정도 하지 않아도 모든 세션에 실린다.
 # ⚠ 다른 DART 도구를 밀어내는 말은 쓰지 않는다(제작자 결정) — 우리가
 # 무엇을 하는지만 적는다. tests/test_server_name_and_aliases.py가 고정.
+log = logging.getLogger(__name__)
+
 mcp = FastMCP(
     "dart-risk",
     instructions=(
@@ -2183,6 +2186,10 @@ def _market_reaction_block(
         dt = (e.get("rcept_dt") or "")[:8]
         if e.get("is_amendment") or len(dt) != 8 or not dt.isdigit():
             continue
+        # 파생 신호(자기 공시가 없다) — 결의 공시 자신이 이미 후보다. 같은 날 행이
+        # 하나 더 생겨 최근 N건 자리를 다른 날 사건에게서 뺏지 않게 한다.
+        if e.get("key") == "BOARD_CONFLICT":
+            continue
         dedup_key = f"{dt}:{e.get('key', '')}"
         if dedup_key in seen:
             continue
@@ -3036,20 +3043,13 @@ def analyze_company_risk(
     # 생략한다(형제 원문 사실 블록과 같은 가드). 겹침이 의결 표기까지 서면
     # `BOARD_CONFLICT`를 관찰 신호로 올린다 — taxonomy 4.5는 어느 패턴에도 쓰이지 않아
     # 위 패턴 판정에는 영향이 없다.
-    _board_cands = _board_candidates(outflow_confirmations, _acq_confirmations) if deep else []
-    _board_row = (
-        _board_row_from_candidate(_board_cands[0], disclosures, corp_code, corp_name)
-        if _board_cands else None
+    _board = _board_embedded_for_report(
+        corp_code, corp_name, disclosures, outflow_confirmations, _acq_confirmations,
+        _api_key(), deep,
     )
-    _board = _board_embedded(
-        corp_code, corp_name, disclosures, _board_row, _api_key(),
-        note=(f"(해당 {len(_board_cands)}건 중 최근 1건 확인 · "
-              f"{len(_board_cands) - 1}건 미확인)" if len(_board_cands) > 1 else ""),
-    )
-    if _board["gated"]:
-        _bc_event = _board_conflict_event(_board_row)
-        signal_events.append(_bc_event)
-        observed_events.append(_bc_event)
+    if _board["event"]:
+        signal_events.append(_board["event"])
+        observed_events.append(_board["event"])
 
     # 「이 리포트에 나온 용어」 절 입력 — 실제로 찍힌 해설만 모은다.
     # ⚠ 패턴 prose는 넣지 않는다 — `_render_pattern_watch_block`은
@@ -4031,18 +4031,13 @@ def build_event_timeline(
     # 이사회 이해상충 확인 — `analyze_company_risk`와 같은 조건·같은 블록(그쪽 주석
     # 참고). 겹침이 의결 표기까지 서면 `BOARD_CONFLICT` 이벤트를 타임라인에 더하고,
     # 결의 공시 이벤트 줄 끝에 한 줄 요약을 붙인다.
-    _board_cands = _board_candidates(outflow_confirmations, _acq_confirmations) if deep else []
-    _board_row = (
-        _board_row_from_candidate(_board_cands[0], disclosures, corp_code, corp_name)
-        if _board_cands else None
+    _board = _board_embedded_for_report(
+        corp_code, corp_name, disclosures, outflow_confirmations, _acq_confirmations,
+        _api_key(), deep,
     )
-    _board = _board_embedded(
-        corp_code, corp_name, disclosures, _board_row, _api_key(),
-        note=(f"(해당 {len(_board_cands)}건 중 최근 1건 확인 · "
-              f"{len(_board_cands) - 1}건 미확인)" if len(_board_cands) > 1 else ""),
-    )
-    if _board["gated"]:
-        _bc_event = _board_conflict_event(_board_row)
+    _board_row = _board["row"]
+    if _board["event"]:
+        _bc_event = _board["event"]
         events.append((
             _bc_event["rcept_dt"], _PHASE_MAP.get("BOARD_CONFLICT", "심화기"),
             "BOARD_CONFLICT", _bc_event["label"], _bc_event["report_nm"],
@@ -4109,6 +4104,7 @@ def build_event_timeline(
     )
     lines.append("")
 
+    _board_tail_done = False
     for phase_name in ("진입기", "심화기", "탈출기"):
         phase_events = phases[phase_name]
         if not phase_events:
@@ -4117,12 +4113,13 @@ def build_event_timeline(
         # 이 단계에서 처음 등장한 신호에 대해 한 줄 해설을 붙여준다(중복 방지).
         seen_keys: set[str] = set()
         for evt in phase_events:
-            _board_tail = (
-                f" · 🪑 {_board['summary']}"
-                if (_board["summary"] and _board_row and evt[2] != "BOARD_CONFLICT"
-                    and len(evt) > 5 and evt[5] == _board_row["rcept_no"])
-                else ""
-            )
+            # 같은 접수번호가 신호를 둘 이상 켜도 요약은 첫 줄에만 붙인다.
+            _board_tail = ""
+            if (_board["summary"] and _board_row and not _board_tail_done
+                    and evt[2] != "BOARD_CONFLICT"
+                    and len(evt) > 5 and evt[5] == _board_row["rcept_no"]):
+                _board_tail = f" · 🪑 {_board['summary']}"
+                _board_tail_done = True
             lines.append(f"  • {evt[0]}  [{evt[3]}]  {evt[4]}")
             lines[-1] += _board_tail
             # 방향 안내는 **건별**로 붙는다(해설과 달리 중복 제거하지 않는다).
@@ -10771,6 +10768,9 @@ def _board_embedded(
         block, gated, summary = _board_conflict_block(
             corp_code, corp_name, disclosures, row, api_key, want_header=want_header)
     except Exception:
+        # 화면에는 「확인하지 못했습니다」만 나가므로, 코드 결함(KeyError 등)과 API 실패를
+        # 로그에서 가를 수 있게 트레이스백을 남긴다.
+        log.exception("이사회 이해상충 블록 생성 실패 rcept_no=%s", row.get("rcept_no"))
         out["lines"] = ["", _BOARD_EMBED_FAIL]
         return out
     lines = [""]
@@ -10781,6 +10781,26 @@ def _board_embedded(
     lines += block.splitlines() + ["", _BOARD_FOOTER]
     out.update(lines=lines, gated=gated, summary=summary)
     return out
+
+
+def _board_embedded_for_report(
+    corp_code: str, corp_name: str, disclosures, outflow_confirmations,
+    acq_confirmations, api_key: str, deep: bool,
+) -> dict:
+    """`analyze_company_risk`·`build_event_timeline` 공용 호출부 — 후보 선택 → 행 복원 →
+    블록 → (겹침이 서면) 신호 이벤트. `_board_embedded`의 결과에 `row`(대상 결의 공시)와
+    `event`(`BOARD_CONFLICT` 이벤트 또는 None)를 더해 돌려준다. 지도 모드(`deep`가
+    아님)이거나 후보가 없으면 아무것도 열지 않는다."""
+    cands = _board_candidates(outflow_confirmations, acq_confirmations) if deep else []
+    row = (_board_row_from_candidate(cands[0], disclosures, corp_code, corp_name)
+           if cands else None)
+    board = _board_embedded(
+        corp_code, corp_name, disclosures, row, api_key,
+        note=(f"(해당 {len(cands)}건 중 최근 1건 확인 · {len(cands) - 1}건 미확인)"
+              if len(cands) > 1 else ""),
+    )
+    board["event"] = _board_conflict_event(row) if board["gated"] else None
+    return board
 
 
 def _board_conflict_event(row: dict) -> dict:

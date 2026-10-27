@@ -175,6 +175,24 @@ class TestAnalyzeWiring:
         assert LABEL not in out
         assert "기업 공시 관찰 요약: SKAI" in out        # 리포트는 정상 반환
 
+    def test_BOARD_CONFLICT는_의도적으로_헤드라인_후보다(self, wired):
+        """의도된 동작 — 이 신호는 제목이 아니라 원문(의결표+임원현황) 대조의 산물이라
+        `AMBIGUOUS_SIGNAL_KEYS`(제목만으론 양면적인 신호)가 아니다. 다른 관찰 신호가
+        전부 양면적(ACQ_REVIEW 등)이면 이 신호가 요약의 대표 유형이 된다."""
+        out = srv.analyze_company_risk("SKAI")
+        summary = out.split("조회 기간:", 1)[0]
+        assert LABEL in summary
+
+    def test_블록_예외는_트레이스백을_로그에_남긴다(self, wired, monkeypatch, caplog):
+        def boom(*a, **kw):
+            raise KeyError("code fault")
+
+        monkeypatch.setattr(srv, "_board_conflict_block", boom)
+        with caplog.at_level("ERROR"):
+            srv.analyze_company_risk("SKAI")
+        assert any("이사회 이해상충 블록 생성 실패" in r.getMessage() and r.exc_info
+                   for r in caplog.records)
+
     def test_판정_어휘가_없다(self, wired):
         out = srv.analyze_company_risk("SKAI")
         block = out.split("🪑 **이사회 이해상충 확인**", 1)[1].split("📎 사실 표기입니다", 1)[0]
@@ -196,6 +214,25 @@ class TestTimelineWiring:
         out = srv.build_event_timeline("SKAI")
         assert any(f"[{LABEL}]" in ln for ln in out.splitlines())
         assert "🪑 **이사회 이해상충 확인**" in out
+
+    def test_같은_접수번호가_신호_둘이면_요약은_첫_줄에만_붙는다(self, wired, monkeypatch):
+        orig = srv.match_signals
+        extra = next(t for t in srv.SIGNAL_TYPES if t["key"] == "RELATED_PARTY")
+
+        def two(title):
+            got = list(orig(title))
+            if title == TITLE:
+                got.append(dict(extra))
+            return got
+
+        monkeypatch.setattr(srv, "match_signals", two)
+        # RELATED_PARTY가 켜지면 원문 사실 블록이 따로 DART를 부른다 — 이 테스트의 관심 밖
+        monkeypatch.setattr(srv, "_related_party_detail_block", lambda *a, **kw: [])
+        out = srv.build_event_timeline("SKAI")
+        same = [ln for ln in out.splitlines()
+                if TITLE in ln and f"[{LABEL}]" not in ln and ln.lstrip().startswith("•")]
+        assert len(same) >= 2                      # 전제: 한 공시가 이벤트 줄 둘
+        assert sum(" · 🪑 " in ln for ln in same) == 1
 
     def test_후보가_없으면_호출_0회(self, wired, monkeypatch):
         monkeypatch.setattr(
@@ -277,6 +314,31 @@ class TestRiskCheckWiring:
         out = srv.check_disclosure_risk(rcept_no=FILING)
         assert "조회 실패로 확인하지 못했습니다" in out
         assert "공시 리스크 분석" in out
+
+
+# ── 시장 반응 블록 입력 ────────────────────────────────────────────────────
+
+def test_시장_반응_후보에_BOARD_CONFLICT는_들어가지_않는다(monkeypatch):
+    seen = {}
+
+    def fake_series(stock, cls, start, end, key, **kw):
+        seen["start"], seen["end"] = start, end
+        return {"rows": []}
+
+    monkeypatch.setattr(srv, "_market_series", fake_series)
+    monkeypatch.setattr(srv, "fetch_market_alerts",
+                        lambda *a, **kw: {"alerts": []})
+    events = [
+        {"key": "BOARD_CONFLICT", "label": "BC라벨", "rcept_dt": "20260301",
+         "rcept_no": "1", "is_amendment": False},
+        {"key": "ACQ_REVIEW", "label": "AR라벨", "rcept_dt": "20250101",
+         "rcept_no": "2", "is_amendment": False},
+    ]
+    lines = srv._market_reaction_block(events, "357880", "K", "krxkey", lookback_days=365)
+    text = "\n".join(lines)
+    assert "AR라벨" in text
+    assert "BC라벨" not in text
+    assert seen["end"] < "20260301"      # 시세 창도 BOARD_CONFLICT 날짜로 늘지 않는다
 
 
 # ── 후보 선택 (순수 함수) ──────────────────────────────────────────────────
