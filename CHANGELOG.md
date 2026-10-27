@@ -2,6 +2,15 @@
 
 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식 준수. 버전은 [SemVer](https://semver.org/lang/ko/).
 
+## [1.30.0] - 2026-10-28
+
+**이사회 이해상충 점검 도구.** `check_board_conflict`(35번째)가 주요사항보고서 거래의
+상대방이 최대주주·특수관계인일 때, 그 결의에 참여한 이사가 상대방·대상회사 임원을
+겸하는지 공시 범위(원문 당사자·정기보고서 의결표·임원현황 주요경력)에서 대조한다.
+구조화 신호 `BOARD_CONFLICT`(taxonomy 4.5 신설, 패턴 미사용)를 `analyze_company_risk`·
+`build_event_timeline`·`check_disclosure_risk`에 흡수했다. 이사회의사록 첨부 파싱은
+전제가 실측에서 확인되지 않아 보류(DEFERRED 18). (#530)
+
 ## [1.29.5] - 2026-09-24
 
 - 시장경보를 조회 창 끝까지만 표시 (#526)
