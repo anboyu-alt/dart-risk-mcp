@@ -404,3 +404,12 @@ class TestSummarize:
         row = parsed["rows"][-2]
         s = summarize_board_conflict(parsed["directors"], ov, row)
         assert "표에 없음 1" in s
+
+    def test_대조_불가는_겸직_0인과_다르다(self, parsed):
+        row = parsed["rows"][-2]
+        s = summarize_board_conflict(parsed["directors"], None, row)
+        assert "겸직 대조 불가" in s
+        assert "0인" not in s
+        assert "전체 이사 결의 표기" in s
+        assert summarize_board_conflict([], None, None).endswith("의결표 없음")
+        assert "이사 수 확인 불가" in summarize_board_conflict([], None, None)

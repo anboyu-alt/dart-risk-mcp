@@ -431,9 +431,22 @@ def _tally(values: list[str]) -> str:
     return " · ".join(f"{_vote_label(v)} {c[v]}" for v in order)
 
 
-def summarize_board_conflict(directors: list[dict], overlaps: list[dict], row: "dict | None") -> str:
-    """한 줄 사실 요약 — 판정·평가 어휘 없음."""
+def summarize_board_conflict(directors: list[dict], overlaps: "list[dict] | None", row: "dict | None") -> str:
+    """한 줄 사실 요약 — 판정·평가 어휘 없음.
+
+    `overlaps=None`은 「대조하지 못했다」(임원 명부를 못 받았거나 비었다)이고 빈 리스트
+    `[]`는 「대조했고 일치가 없다」다 — 둘을 섞으면 못 본 것이 「겸직 0인」으로 읽힌다.
+    """
     n = len(directors or [])
+    if overlaps is None:
+        head = ((f"이사 {n}인 · " if n else "이사 수 확인 불가 · ")
+                + "상대방·대상회사 임원 겸직 대조 불가(임원 명부 확인 불가)")
+        if not row:
+            return head + " · 의결표 없음"
+        votes = row.get("votes") or {}
+        if not votes:
+            return head + " · 결의 표기 없음"
+        return head + f" · 전체 이사 결의 표기: {_tally(list(votes.values()))}"
     persons = {}
     for o in overlaps or []:
         persons.setdefault(_name_key(o.get("name")), o.get("name") or "")

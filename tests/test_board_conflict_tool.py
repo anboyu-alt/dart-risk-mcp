@@ -139,12 +139,11 @@ class TestSkaiRceptMode:
         assert "신재혁" in out and "이재철" in out and "제갈완" in out
         assert "MAO, XUCHAO" in out
         assert "디렉터스컴퍼니" in out
-        assert "이사회 결의 참여 이사의 상대방 겸직" in out
+        assert "🎯 이사회 결의 참여 이사의 상대방·대상회사 겸직" in out
         want = ("요약: 이사 7인 중 4인이 상대방·대상회사 임원 겸직 · "
                 "겸직 이사 결의 표기: 찬성 3 · 「-」 1 · "
                 "전체 이사 결의 표기: 찬성 4 · 「-」 3")
         assert want in out
-        assert "찬성 3" in out
 
     def test_의결표_이사가_명부에_없으면_밝힌다(self, wired):
         out = srv.check_board_conflict("SKAI", FILING)
@@ -173,14 +172,14 @@ class TestSkaiRceptMode:
 # ── 정기보고서 미접수 경로 ─────────────────────────────────────────────────
 
 @pytest.mark.usefixtures("no_structured_dart")
-def test_정기보고서_미접수면_연도_11011로_명부를_받고_그_사실을_적는다(wired, monkeypatch):
+def test_정기보고서가_목록에_전혀_없으면_전년_11011로_명부를_받고_그_사실을_적는다(wired, monkeypatch):
     monkeypatch.setattr(
         srv, "fetch_company_disclosures_with_status",
         lambda *a, **kw: ([_FILING_ROW], FETCH_OK))
     out = srv.check_board_conflict("SKAI", FILING)
     assert "결의일 이후 정기보고서 미접수 — 의결표 없음" in out
-    assert "명부 기준 보고서" in out
-    assert wired.roster == [(CORP, "2025", "11011")]
+    assert "명부 기준 보고서: 결의일 전년(2024)" in out
+    assert wired.roster == [(CORP, "2024", "11011")]
     assert wired.audit_text == []
     assert "의결표 없음" in out.split("요약:")[1]
     assert "「-」는 표가 불참과 제척을 가르지 않습니다" not in out
@@ -394,7 +393,7 @@ def test_원문을_못_받으면_없다고_말하지_않는다(wired, monkeypatc
     monkeypatch.setattr(srv, "fetch_document_text", lambda *a, **kw: "")
     out = srv.check_board_conflict("SKAI", FILING)
     assert "원문을 받지 못했습니다" in out
-    assert "신호가 없다는 뜻이 아닙니다" in out or "없다는 뜻이 아닙니다" in out
+    assert "신호가 없다는 뜻이 아닙니다" in out
 
 
 @pytest.mark.usefixtures("no_structured_dart")
@@ -410,7 +409,10 @@ def test_임원현황_조회_실패는_겸직_없음이_아니다(wired, monkeyp
 # ── 대조군 ────────────────────────────────────────────────────────────────
 
 @pytest.mark.usefixtures("no_structured_dart")
-def test_대조군은_해당_없음_사실_문장과_0인(wired, monkeypatch):
+def test_대조군은_해당_없음_사실_문장과_0인(wired, monkeypatch, roster):
+    monkeypatch.setattr(
+        srv, "fetch_executive_roster_rows",
+        lambda *a, **kw: FetchList(roster))
     monkeypatch.setattr(
         srv, "resolve_disclosure_row_with_status",
         lambda *a, **kw: (_CONTROL_ROW, "found"))
@@ -423,9 +425,157 @@ def test_대조군은_해당_없음_사실_문장과_0인(wired, monkeypatch):
     out = srv.check_board_conflict("데이원컴퍼니", CONTROL)
     assert "해당 없음" in out.split("━━ 겸직 대조 ━━")[1].split("━━ 한계 ━━")[0]
     assert "상대방·대상회사 임원 겸직 0인" in out
-    assert "이사회 결의 참여 이사의 상대방 겸직" not in out
+    assert "🎯" not in out
     assert "결의일 이후 정기보고서 미접수" in out
     _assert_no_judgment(out)
+
+
+# ── 빈 명부는 「겸직 없음」이 아니다 (fix round 1) ───────────────────────────
+
+@pytest.mark.usefixtures("no_structured_dart")
+class TestEmptyRoster:
+    @pytest.fixture(autouse=True)
+    def _empty(self, no_structured_dart, wired, monkeypatch):
+        monkeypatch.setattr(
+            srv, "fetch_executive_roster_rows", lambda *a, **kw: FetchList())
+
+    def test_0행_명부는_대조하지_못했다고_적는다(self, wired):
+        out = srv.check_board_conflict("SKAI", FILING)
+        sec = out.split("━━ 겸직 대조 ━━")[1].split("━━ 한계 ━━")[0]
+        assert "대조를 하지 못했습니다" in sec
+        assert "자료 없음과 다릅니다" in sec
+        assert "해당 없음" not in out
+        assert "0인" not in out
+        assert "겸직 대조 불가" in out.split("요약:")[1]
+        assert "🎯" not in out
+
+    def test_블록은_겹침_False와_대조_불가_요약(self, wired):
+        block, found, summary = srv._board_conflict_block(
+            CORP, "SKAI", [_PERIODIC_ROW, _FILING_ROW], _FILING_ROW, "k")
+        assert found is False
+        assert "겸직 대조 불가" in summary and "0인" not in summary
+
+    def test_명부_조회_실패도_0인으로_말하지_않는다(self, wired, monkeypatch):
+        monkeypatch.setattr(
+            srv, "fetch_executive_roster_rows",
+            lambda *a, **kw: FetchList(fetch_failed=True))
+        out = srv.check_board_conflict("SKAI", FILING)
+        assert "자료가 없다는 뜻이 아닙니다" in out
+        assert "대조를 하지 못했습니다" in out
+        assert "0인" not in out and "해당 없음" not in out
+
+
+@pytest.mark.usefixtures("no_structured_dart")
+class TestRosterBasis:
+    def test_결의일_이후_정기보고서가_없으면_결의일_이전_최근_정기보고서를_쓴다(
+            self, wired, monkeypatch):
+        old = dict(_PERIODIC_ROW, rcept_no="20250320000001",
+                   report_nm="사업보고서 (2024.12)", rcept_dt="20250320")
+        half = dict(_PERIODIC_ROW, rcept_no="20250814000002",
+                    report_nm="반기보고서 (2025.06)", rcept_dt="20250814")
+        monkeypatch.setattr(
+            srv, "fetch_company_disclosures_with_status",
+            lambda *a, **kw: ([_FILING_ROW, half, old], FETCH_OK))
+        out = srv.check_board_conflict("SKAI", FILING)
+        assert wired.roster == [(CORP, "2025", "11012")]
+        assert ("명부 기준: 반기보고서 (2025.06) 20250814000002 — 결의일 이전 최근 "
+                "정기보고서라 결의 시점 명부와 다를 수 있습니다") in out
+        assert "결의일 이후 정기보고서 미접수" in out
+        assert "임원 명부를 확인하지 못해" not in out   # 명부가 실제로 대조됐다
+        assert "4인" in out
+
+
+# ── 🎯 게이트 (fix round 1) ────────────────────────────────────────────────
+
+def _only(roster, *names):
+    return [r for r in roster if r["nm"].replace("\n", " ").strip() in names]
+
+
+@pytest.mark.usefixtures("no_structured_dart")
+class TestGate:
+    def test_의결표가_없으면_사실_줄만_쓰고_게이트는_False다(self, wired, monkeypatch):
+        monkeypatch.setattr(
+            srv, "fetch_company_disclosures_with_status",
+            lambda *a, **kw: ([_FILING_ROW], FETCH_OK))
+        out = srv.check_board_conflict("SKAI", FILING)
+        assert "🎯" not in out
+        assert "겸직 4인 확인 — 결의 참여 표기는 의결표에서 확인되지 않았습니다" in out
+        _, found, _ = srv._board_conflict_block(
+            CORP, "SKAI", [_FILING_ROW], _FILING_ROW, "k")
+        assert found is False
+
+    def test_겸직_이사_표기가_전부_대시면_사실_줄만_쓴다(self, wired, monkeypatch, roster):
+        # MAO, XUCHAO 한 명만 대상회사 쪽으로 겹치고 그의 표기는 「-」다
+        mao = _only(roster, "MAO, XUCHAO")
+        assert len(mao) == 1
+        monkeypatch.setattr(
+            srv, "fetch_executive_roster_rows", lambda *a, **kw: FetchList(mao))
+        out = srv.check_board_conflict("SKAI", FILING)
+        assert "🎯" not in out
+        assert "겸직 1인 확인 — 그 이사들의 결의 표기는 전부 「-」입니다" in out
+        block, found, summary = srv._board_conflict_block(
+            CORP, "SKAI", [_PERIODIC_ROW, _FILING_ROW], _FILING_ROW, "k")
+        assert found is False
+        assert "이사 7인 중 1인이" in summary
+
+    def test_대상회사_쪽만_겹쳐도_근거와_표기를_그대로_적는다(self, wired, monkeypatch, roster):
+        mao = _only(roster, "MAO, XUCHAO")
+        monkeypatch.setattr(
+            srv, "fetch_executive_roster_rows", lambda *a, **kw: FetchList(mao))
+        out = srv.check_board_conflict("SKAI", FILING)
+        sec = out.split("━━ 겸직 대조 ━━")[1].split("━━ 한계 ━━")[0]
+        line = next(ln for ln in sec.splitlines() if ln.startswith("- MAO"))
+        assert "대상회사 (주)스카이인텔리전스" in line
+        assert "상대방 주식회사" not in line
+        assert "스카이인텔리전스 글로벌 CEO" in line
+        assert "결의 표기 -" in line
+
+    def test_표기가_하나라도_대시가_아니면_게이트_통과(self, wired, monkeypatch, roster):
+        two = _only(roster, "MAO, XUCHAO", "신재혁")
+        monkeypatch.setattr(
+            srv, "fetch_executive_roster_rows", lambda *a, **kw: FetchList(two))
+        out = srv.check_board_conflict("SKAI", FILING)
+        assert "🎯 이사회 결의 참여 이사의 상대방·대상회사 겸직" in out
+        _, found, _ = srv._board_conflict_block(
+            CORP, "SKAI", [_PERIODIC_ROW, _FILING_ROW], _FILING_ROW, "k")
+        assert found is True
+
+
+# ── rcept 모드 정기보고서 창 (fix round 1) ──────────────────────────────────
+
+@pytest.mark.usefixtures("no_structured_dart")
+class TestRceptPeriodicWindow:
+    def test_결의일과_접수일_사이의_반기보고서를_쓴다(self, wired, monkeypatch):
+        # 결의 2025-08-14(의결표 25회차 날짜) → 접수 2025-12-19: 사이에 반기보고서가 있다
+        text = _txt("20251219000418_text.txt").replace("2025년 12월 19일", "2025년 8월 14일")
+        monkeypatch.setattr(srv, "fetch_document_text", lambda *a, **kw: text)
+        half = dict(_PERIODIC_ROW, rcept_no="20250815000111",
+                    report_nm="반기보고서 (2025.06)", rcept_dt="20250815")
+        seen = {}
+
+        def fake_list(corp, key, *a, **kw):
+            seen.update(kw)
+            return ([_FILING_ROW, half, _PERIODIC_ROW], FETCH_OK)
+
+        monkeypatch.setattr(srv, "fetch_company_disclosures_with_status", fake_list)
+        md = _txt("20260323001292_board_section.md")
+        monkeypatch.setattr(srv, "fetch_audit_report_text", lambda r, k, prefer="": md)
+        out = srv.check_board_conflict("SKAI", FILING)
+        assert "출처: 반기보고서 (2025.06) 20250815000111" in out
+        assert "25회차 2025.08.14" in out
+        assert seen["bgn_de"] <= "20250814"          # 접수일(20251219)보다 앞서 훑는다
+        assert seen["pblntf_ty"] == "A"
+        assert wired.roster == [(CORP, "2025", "11012")]
+
+    def test_정기보고서_목록_조회_실패는_미접수가_아니다(self, wired, monkeypatch):
+        monkeypatch.setattr(
+            srv, "fetch_company_disclosures_with_status",
+            lambda *a, **kw: ([], FETCH_ERROR))
+        out = srv.check_board_conflict("SKAI", FILING)
+        assert "정기보고서 목록" in out
+        assert "자료가 없다는 뜻이 아닙니다" in out
+        assert "의결표가 없다는 뜻이 아닙니다" in out
+        assert "정기보고서 미접수" not in out
 
 
 # ── 자금유출 서식 폴백 ────────────────────────────────────────────────────
