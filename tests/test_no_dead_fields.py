@@ -45,7 +45,12 @@ _ROOT = pathlib.Path(__file__).resolve().parents[1]
 # 이 세 모듈이 만드는 값이다. `_ACCEPTED`로 우회하면 안 된다.
 # 2026-09-23: `core/kis_client.py`(한국투자증권 시세 경로)도 같은 이유로 넣는다 —
 # kis_days·kis_fill_failed·no_share_data는 그 모듈이 만드는 값이다.
+# 2026-10-27: `core/board.py`(이사회 이해상충 점검)도 같은 이유로 넣는다 —
+# `parse_decision_parties`·`match_director_overlap`이 만드는 `resolution_date8`·
+# `outside_directors_present`·`role_at_issuer`·`birth_match` 같은 키를 server.py의
+# `_board_conflict_block`이 읽는다. `_ACCEPTED`로 우회하지 않는다.
 _FILES = ["dart_risk_mcp/server.py", "dart_risk_mcp/core/dart_client.py",
+          "dart_risk_mcp/core/board.py",
           "dart_risk_mcp/core/audit_report.py", "dart_risk_mcp/core/notes.py",
           "dart_risk_mcp/core/krx_client.py", "dart_risk_mcp/core/kind_client.py",
           "dart_risk_mcp/core/market_context.py", "dart_risk_mcp/core/kis_client.py"]

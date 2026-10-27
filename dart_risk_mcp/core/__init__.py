@@ -24,6 +24,8 @@ from .dart_client import (
     fetch_executive_compensation,
     fetch_executive_roster,
     fetch_executive_roster_detail,
+    fetch_executive_roster_rows,
+    periodic_report_code,
     fetch_insider_timeline,
     classify_fund_use,
     fetch_fund_usage,
@@ -201,6 +203,15 @@ from .market_context import (
     MGMT_ISSUE_PRICE_KRW,
 )
 
+from .board import (
+    parse_decision_parties,
+    extract_board_section_with_title,
+    parse_board_resolutions,
+    find_resolution_rows,
+    match_director_overlap,
+    summarize_board_conflict,
+)
+
 __all__ = [
     "_fund_text",
     "resolve_corp",
@@ -227,6 +238,8 @@ __all__ = [
     "fetch_executive_compensation",
     "fetch_executive_roster",
     "fetch_executive_roster_detail",
+    "fetch_executive_roster_rows",
+    "periodic_report_code",
     "fetch_insider_timeline",
     "match_signals",
     "is_amendment_disclosure",
@@ -380,4 +393,10 @@ __all__ = [
     "_break_label",
     "MGMT_ISSUE_MKTCAP_KRW",
     "MGMT_ISSUE_PRICE_KRW",
+    "parse_decision_parties",
+    "extract_board_section_with_title",
+    "parse_board_resolutions",
+    "find_resolution_rows",
+    "match_director_overlap",
+    "summarize_board_conflict",
 ]

@@ -140,6 +140,9 @@ _LOOKBACK_TOOLS = [
     ("track_capital_structure",
      lambda v: S.track_capital_structure("삼성전자", v)),
     ("track_turnover_trend", lambda v: S.track_turnover_trend("삼성전자", v)),
+    # 이 인자는 이름이 lookback_days(일 단위, 1~730)다 — 같은 부류의 경계 입력이다.
+    ("check_board_conflict",
+     lambda v: S.check_board_conflict("삼성전자", "", v)),
 ]
 
 

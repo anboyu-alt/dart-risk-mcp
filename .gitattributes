@@ -4,3 +4,7 @@
 # TestVendoredChartLibrary.test_library_file_matches_the_recorded_checksum이
 # 매 checkout마다 깨질 수 있다. binary로 지정해 변환을 완전히 끈다.
 docs/tool/se/vendor/*.js binary
+
+# 이사회 이해상충 픽스처는 DART 원문을 가공 없이 저장한 것이다 — 개행 변환(core.autocrlf)이
+# 바이트를 바꾸면 「원문 그대로」라는 전제가 깨진다(tests/fixtures/board/README.md).
+tests/fixtures/board/* -text

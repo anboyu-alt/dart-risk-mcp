@@ -1,0 +1,749 @@
+"""core/board.py 순수 파서 5종 — SKAI(357880) 실공시 픽스처 기준."""
+import json
+import re
+from pathlib import Path
+
+import pytest
+
+from dart_risk_mcp.core.board import (
+    career_mentions,
+    extract_board_section,
+    find_resolution_rows,
+    match_director_overlap,
+    parse_board_resolutions,
+    parse_decision_parties,
+    summarize_board_conflict,
+)
+
+FIX = Path(__file__).parent / "fixtures" / "board"
+
+
+def _txt(name: str) -> str:
+    return (FIX / name).read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def skai_text() -> str:
+    return _txt("20251219000418_text.txt")
+
+
+@pytest.fixture(scope="module")
+def control_text() -> str:
+    return _txt("control_20261023000221_text.txt")
+
+
+@pytest.fixture(scope="module")
+def board_md() -> str:
+    return _txt("20260323001292_board_section.md")
+
+
+@pytest.fixture(scope="module")
+def roster() -> list[dict]:
+    return json.loads(_txt("exctvSttus_01381984_2025_11011.json"))
+
+
+@pytest.fixture(scope="module")
+def skai_parties(skai_text) -> dict:
+    return parse_decision_parties(skai_text)
+
+
+@pytest.fixture(scope="module")
+def parsed(board_md) -> dict:
+    return parse_board_resolutions(extract_board_section(board_md))
+
+
+# ── parse_decision_parties ─────────────────────────────────────────────────
+
+class TestDecisionParties:
+    def test_skai_정확한_반환(self, skai_parties):
+        assert skai_parties == {
+            "counterparty": {
+                "name": "주식회사 디렉터스컴퍼니",
+                "rep": "신재혁",
+                "relation": "최대주주",
+            },
+            "target": {
+                "name": "(주)스카이인텔리전스",
+                "rep": "이재철",
+                "relation": "최대주주의 특수관계인",
+            },
+            "resolution_date8": "20251219",
+            "outside_directors_present": "2",
+            "related_party": True,
+        }
+
+    def test_대조군_개인_상대방(self, control_text):
+        p = parse_decision_parties(control_text)
+        assert p["counterparty"]["name"] == "김상곤 외 2인"
+        assert p["counterparty"]["rep"] == ""  # 개인이라 대표이사 행이 없다
+        assert p["counterparty"]["relation"] == "-"
+        assert p["target"]["name"] == "(주)지아이티아카데미"
+        assert p["target"]["rep"] == "김상곤"
+        assert p["target"]["relation"] == "-"
+        assert p["resolution_date8"] == "20261023"
+        assert p["outside_directors_present"] == "2"
+        assert p["related_party"] is False
+
+    def test_CRLF_개행이_섞여도_같다(self, skai_text, skai_parties):
+        crlf = skai_text.replace(" 6. 거래상대방", "\r\n6. 거래상대방")
+        assert parse_decision_parties(crlf) == skai_parties
+
+    def test_정정_원문은_빈_값(self, skai_text):
+        amended = "정정신고(보고) " + skai_text
+        p = parse_decision_parties(amended)
+        assert p["counterparty"] == {"name": "", "rep": "", "relation": ""}
+        assert p["target"] == {"name": "", "rep": "", "relation": ""}
+        assert p["resolution_date8"] == ""
+        assert p["outside_directors_present"] == ""
+        assert p["related_party"] is False
+
+    @pytest.mark.parametrize("bad", ["", "   ", None, "관련 없는 문장입니다."])
+    def test_빈_입력은_예외없이_빈_값(self, bad):
+        p = parse_decision_parties(bad)
+        assert p["counterparty"]["name"] == ""
+        assert p["target"]["name"] == ""
+        assert p["related_party"] is False
+
+    def test_관계_라벨_변형을_모두_받는다(self):
+        text = (
+            "1. 발행회사 회사명 가나다 주식회사 국적 대한민국 대표자 홍길동 "
+            "자본금(원) 100 회사와의관계 계열회사 발행주식총수(주) 10 "
+            "6. 거래상대방 회사명(성명) 라마바 주식회사 자본금(원) 5 "
+            "회사와 관계 특수관계인 7. 거래대금지급 "
+            "9. 이사회결의일(결정일) 2025.12.19 - 사외이사참석여부 참석(명) 1 불참(명) 0"
+        )
+        p = parse_decision_parties(text)
+        assert p["target"]["relation"] == "계열회사"
+        assert p["counterparty"]["relation"] == "특수관계인"
+        assert p["target"]["rep"] == "홍길동"
+        assert p["resolution_date8"] == "20251219"
+        assert p["related_party"] is True
+
+    def test_부정_관계표기는_관련당사자가_아니다(self):
+        text = (
+            "1. 발행회사 회사명 가나다 국적 대한민국 대표자 홍길동 자본금(원) 1 "
+            "회사와 관계 특수관계 없음 발행주식총수(주) 1 "
+            "6. 거래상대방 회사명(성명) 라마바 자본금(원) 5 회사와의 관계 최대주주 아님 7. 거래대금"
+        )
+        p = parse_decision_parties(text)
+        assert p["related_party"] is False
+
+    def test_더러운_대표자_값은_버린다(self):
+        text = (
+            "1. 발행회사 회사명 가나다 국적 대한민국 대표자 홍길동은 신주를 취득합니다 "
+            "자본금(원) 1 회사와 관계 - 발행주식총수(주) 1 "
+            "6. 거래상대방 회사명(성명) 라마바 자본금(원) 5 회사와의 관계 - 7. 대금"
+        )
+        assert parse_decision_parties(text)["target"]["rep"] == ""
+
+
+# ── extract_board_section ──────────────────────────────────────────────────
+
+class TestExtractBoardSection:
+    def test_제목줄부터_표_끝까지(self, board_md):
+        sec = extract_board_section(board_md)
+        first = sec.split("\n", 1)[0]
+        assert "이사회의 주요 의결사항" in first
+        assert "| 35 | 2025년 12월 19일 | 타법인 주식취득 계약의 건 |" in sec
+        # 앞 절(내부회계 인력 표·이사회 운영 규정)은 들어오지 않는다
+        assert "내부회계담당인력수" not in sec
+        assert "제37조(이사회)" not in sec
+
+    def test_다음_소제목에서_끊는다(self, board_md):
+        sec = extract_board_section(board_md + "\n다. 이사회 내 위원회\n| 위원회 | 구성 |\n")
+        assert "이사회 내 위원회" not in sec
+        assert "| 35 |" in sec
+
+    def test_공백_변형을_허용한다(self):
+        md = "가. 개요\n(2) 이사회의주요  의결사항 등\n| a | b |\n|---|---|\n| 1 | 2 |\n나. 다음\n"
+        sec = extract_board_section(md)
+        assert sec.startswith("(2) 이사회의주요  의결사항 등")
+        assert "| 1 | 2 |" in sec
+        assert "다음" not in sec
+
+    @pytest.mark.parametrize("src", ["", "의결사항이 없는 문서", None])
+    def test_없으면_빈_문자열(self, src):
+        assert extract_board_section(src) == ""
+
+    @pytest.mark.parametrize("title", [
+        "나. 중요의결사항 등", "나. 중요 의결사항 등", "다. 중요 의결 사항 등",
+        "(2) 이사회의 주요 의결사항 등", "(2) 주요 의결사항",
+    ])
+    def test_제목_변형을_받는다(self, title):
+        md = f"가. 개요\n{title}\n| a | b |\n|---|---|\n| 1 | 2 |\n라. 다음\n"
+        sec = extract_board_section(md)
+        assert sec.startswith(title) and "| 1 | 2 |" in sec
+
+    def test_같은_낱말의_다른_절보다_의결표_절을_우선한다(self, board_md):
+        """제목 변형을 넓히면 「다. 중요 의결 사항 등 (1) 이사회 운영 규정」(정관 발췌 표)이
+        먼저 걸린다 — SKAI 사업보고서 실측. 이사 그룹 머리가 든 의결표 절을 골라야 한다."""
+        pre = "다. 중요 의결 사항 등\n| 구분 | 내용 |\n|---|---|\n| 제37조 | 이사회 |\n\n"
+        sec = extract_board_section(pre + board_md)
+        assert "사내이사 등의 성명" in sec and "제37조" not in sec
+        assert parse_board_resolutions(sec)["rows"]
+
+    def test_삼성전자_서식은_절은_찾지만_회차_열이_없어_아직_읽지_못한다(self):
+        """알려진 한계(CLAUDE.md 35번 항목): 「이사의 성명」 머리는 받지만 회차 열이 없어
+        고정 열이 3칸이다(날짜 칸에 「'25.01.31 (1차)」). 읽게 되면 기대를 바꾼다."""
+        sec = extract_board_section(_txt("삼성전자_board_section.md"))
+        assert sec.startswith("나. 중요의결사항 등")
+        # 표는 찾았으나 못 읽는다 — 「표 없음」(table_found False)과 다르다
+        assert parse_board_resolutions(sec) == {
+            "directors": [], "rows": [], "unparsed": 0, "table_found": True, "tables": []}
+
+    def test_셀트리온_출석률_없는_이름_줄과_별도_출석율_줄(self):
+        sec = extract_board_section(_txt("셀트리온_board_section.md"))
+        p = parse_board_resolutions(sec)
+        names = [d["name"] for d in p["directors"]]
+        assert len(names) == 12 and names[0] == "서정진" and names[-1] == "최종문"
+        # 별도 「출석율」 줄에서 채운다
+        assert p["directors"][0]["attendance"] == "91%"
+        r = next(r for r in p["rows"] if r["no"] == "25-001")
+        assert r["date8"] == "20250219" and r["result"] == "가결"
+        assert r["votes"]["서정진"] == "찬성" and r["votes"]["김형기"] == "불참"
+        assert len(r["votes"]) == 12
+        assert p["unparsed"] >= 1  # 안건이 여러 줄인 행의 이어쓰기 줄은 읽지 않는다
+
+    def test_두산_이사의_성명_머리와_출석률_이름_줄(self):
+        sec = extract_board_section(_txt("두산_board_section.md"))
+        p = parse_board_resolutions(sec)
+        assert [d["name"] for d in p["directors"]][:2] == ["박정원", "김민철"]
+        assert len(p["directors"]) == 7
+        assert p["directors"][0]["attendance"] == "50%" and p["directors"][0]["group"] == ""
+        # 이 서식은 이사 구성이 바뀔 때마다 표가 반복된다 — 반복된 표를 모두 읽는다(최종 리뷰 I2)
+        assert sec.count("| 회차 |") >= 2
+        assert [r["no"] for r in p["rows"]] == ["1", "2", "3", "4", "5", "6", "7"]
+        assert p["rows"][0]["date8"] == "20250214"
+        assert len(p["tables"]) == 2
+
+    def test_이름_줄_같지만_열_수가_맞는_행이_없으면_이사를_주장하지_않는다(self):
+        md = ("나. 중요의결사항 등\n| 회차 | 개최일자 | 의안내용 | 가결 | 사내이사 |\n"
+              "|---|---|---|---|---|\n| 홍길동 | 김철수 |\n")
+        assert parse_board_resolutions(md) == {
+            "directors": [], "rows": [], "unparsed": 0, "table_found": True, "tables": []}
+
+
+# ── parse_board_resolutions ────────────────────────────────────────────────
+
+class TestBoardResolutions:
+    def test_이사_명단_순서와_출석률(self, parsed):
+        names = [d["name"] for d in parsed["directors"]]
+        assert names == [
+            "신재혁", "이재철", "제갈완", "MAO, XUCHAO", "곽노준", "신기동", "홍영훈",
+        ]
+        att = {d["name"]: d["attendance"] for d in parsed["directors"]}
+        assert att["신재혁"] == "100%"
+        assert att["MAO, XUCHAO"] == "0%"
+
+    def test_사내사외_구분은_추정하지_않는다(self, parsed):
+        # 이름 줄에 사내/사외 표지가 없고 헤더의 병합 폭이 마크다운에 안 드러난다
+        assert {d["group"] for d in parsed["directors"]} == {""}
+
+    def test_행_수와_미파싱(self, parsed):
+        assert len(parsed["rows"]) == 35
+        # 회차·일자·안건이 모두 빈 마지막 행은 조용히 버리지 않고 센다
+        assert parsed["unparsed"] == 1
+
+    def test_35회차_찬반_원문_그대로(self, parsed):
+        row = [r for r in parsed["rows"] if r["no"] == "35"][0]
+        assert row["date8"] == "20251219"
+        assert row["result"] == "가결"
+        assert "타법인 주식취득" in row["agenda"]
+        assert row["votes"] == {
+            "신재혁": "찬성",
+            "이재철": "찬성",
+            "제갈완": "찬성",
+            "MAO, XUCHAO": "-",
+            "곽노준": "-",
+            "신기동": "-",
+            "홍영훈": "찬성",
+        }
+
+    def test_첫_행_날짜(self, parsed):
+        assert parsed["rows"][0]["no"] == "1"
+        assert parsed["rows"][0]["date8"] == "20250103"
+        assert parsed["rows"][0]["agenda"] == "대표이사 선임"
+
+    def test_CRLF에도_같은_결과(self, board_md, parsed):
+        crlf = extract_board_section(board_md).replace("\n", "\r\n")
+        assert parse_board_resolutions(crlf) == parsed
+
+    def test_날짜_표기_변형(self):
+        sec = (
+            "| 회차 | 개최 일자 | 의안 내용 | 가결 여부 | 사내이사 등의 성명 | 사외이사 등의 성명 |\n"
+            "|---|---|---|---|---|---|\n"
+            "| 김갑(출석률: 100%) | 이을(출석률: 50%) |\n"
+            "| 찬 반 여 부 |\n"
+            "| 1 | 2025.12.19 | 가 | 가결 | 찬성 | 반대 |\n"
+            "| 2 | 2025-01-05 | 나 | 부결 | 기권 | 찬성 |\n"
+            "| 3 | 2025년 3월 7일 | 다 | 가결 | 찬성 | 비고 |\n"
+        )
+        p = parse_board_resolutions(sec)
+        assert [r["date8"] for r in p["rows"]] == ["20251219", "20250105", "20250307"]
+        assert p["rows"][1]["votes"] == {"김갑": "기권", "이을": "찬성"}
+        assert p["rows"][2]["votes"]["이을"] == "비고"  # 원문 그대로, 변환 없음
+        assert p["unparsed"] == 0
+
+    def test_셀_수가_다른_행은_센다(self):
+        sec = (
+            "| 회차 | 개최 일자 | 의안 내용 | 가결 여부 | 사내이사 등의 성명 | 사외이사 등의 성명 |\n"
+            "|---|---|---|---|---|---|\n"
+            "| 김갑(출석률: 100%) | 이을(출석률: 50%) |\n"
+            "| 찬 반 여 부 |\n"
+            "| 1 | 2025.12.19 | 가 | 가결 | 찬성 | 반대 |\n"
+            "| 2 | 2025.12.20 | 나 | 가결 | 찬성 |\n"
+        )
+        p = parse_board_resolutions(sec)
+        assert len(p["rows"]) == 1
+        assert p["unparsed"] == 1
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            "",
+            None,
+            "| 구분 | 내용 |\n|---|---|\n| 제37조 | 이사회는 이사로 구성한다. |\n",
+        ],
+    )
+    def test_표가_없으면_table_found_False(self, src):
+        assert parse_board_resolutions(src) == {
+            "directors": [], "rows": [], "unparsed": 0, "table_found": False, "tables": []}
+
+    def test_이사_칸이_없는_머리는_표는_찾았으나_못_읽는다(self):
+        src = ("| 회차 | 개최 일자 | 의안 내용 | 가결 여부 |\n|---|---|---|---|\n"
+               "| 1 | 2025.1.1 | 가 | 가결 |\n")
+        assert parse_board_resolutions(src) == {
+            "directors": [], "rows": [], "unparsed": 0, "table_found": True, "tables": []}
+
+
+# ── find_resolution_rows ───────────────────────────────────────────────────
+
+class TestFindResolutionRows:
+    def test_SKAI_20251219(self, parsed):
+        rows = find_resolution_rows(parsed, "20251219", "타법인 주식취득")
+        assert [r["no"] for r in rows] == ["35"]
+
+    def test_안건_힌트가_든_행을_앞에(self):
+        parsed = {
+            "directors": [],
+            "unparsed": 0,
+            "rows": [
+                {"no": "1", "date8": "20250101", "agenda": "정관 변경의 건", "result": "가결", "votes": {}},
+                {"no": "2", "date8": "20250101", "agenda": "타법인 주식 양수의 건", "result": "가결", "votes": {}},
+                {"no": "3", "date8": "20250102", "agenda": "타법인 주식 양수의 건", "result": "가결", "votes": {}},
+            ],
+        }
+        assert [r["no"] for r in find_resolution_rows(parsed, "20250101", "타법인주식양수")] == ["2", "1"]
+        assert [r["no"] for r in find_resolution_rows(parsed, "20250101")] == ["1", "2"]
+        assert find_resolution_rows(parsed, "20990101") == []
+
+    @pytest.mark.parametrize("p", [None, {}, {"rows": []}])
+    def test_빈_입력(self, p):
+        assert find_resolution_rows(p, "20251219") == []
+
+
+# ── match_director_overlap ─────────────────────────────────────────────────
+
+def _by_key(rows):
+    return {(r["name"], r["side"]): r for r in rows}
+
+
+class TestDirectorOverlap:
+    def test_SKAI_겸직_사람_집합(self, roster, skai_parties):
+        ov = match_director_overlap(roster, skai_parties)
+        # MAO, XUCHAO는 주요경력에 대상회사(스카이인텔리전스)가 직접 적혀 있다
+        assert {r["name"] for r in ov} == {"신재혁", "이재철", "제갈완", "MAO, XUCHAO"}
+
+    def test_근거와_역할(self, roster, skai_parties):
+        k = _by_key(match_director_overlap(roster, skai_parties))
+        sh = k[("신재혁", "counterparty")]
+        assert sh["role_at_issuer"] == "대표이사/사내이사"
+        assert sh["other_name"] == "주식회사 디렉터스컴퍼니"
+        assert sh["evidence"][0] == "공시 거래상대방 대표자 일치"
+        assert any(e.startswith("임원현황 주요경력: 「") and "디렉터스컴퍼니" in e for e in sh["evidence"])
+        assert sh["role_at_other"] == "대표자(공시 기재)"
+        assert sh["mxmm_shrholdr_relate"] == "특수관계인"
+        assert sh["birth_match"] is None
+        assert ("신재혁", "target") not in k
+
+        # 이재철: 대상회사 대표자(①+②) · 상대방 임원 경력(②) — 같은 사람이라 행 둘
+        jc_t = k[("이재철", "target")]
+        assert jc_t["evidence"][0] == "공시 발행회사 대표자 일치"
+        assert len(jc_t["evidence"]) == 2
+        jc_c = k[("이재철", "counterparty")]
+        assert len(jc_c["evidence"]) == 1 and jc_c["evidence"][0].startswith("임원현황 주요경력")
+        assert jc_c["role_at_other"].count("디렉터스컴퍼니") == 1
+        assert "COO" in jc_c["role_at_other"]
+        assert jc_c["role_at_issuer"] == "부대표/사내이사"
+
+        # 제갈완: 경력 근거만
+        jw = k[("제갈완", "counterparty")]
+        assert len(jw["evidence"]) == 1 and jw["evidence"][0].startswith("임원현황 주요경력")
+        assert "CFO" in jw["role_at_other"]
+        assert all(r["birth_match"] is None for r in k.values())
+        assert k[("MAO, XUCHAO", "target")]["role_at_issuer"] == "사내이사"  # 직위=구분이면 한 번만
+
+    def test_경력_인용은_20자_이내로_한_줄(self, roster, skai_parties):
+        for r in match_director_overlap(roster, skai_parties):
+            if r["role_at_other"] != "대표자(공시 기재)":
+                assert "\n" not in r["role_at_other"]
+                assert len(r["role_at_other"]) <= 20 + 10 + 20  # 앞 20 + 회사명 + 뒤 20
+
+    def test_이름_정규화_각주_공백_개행(self, roster, skai_parties):
+        names = {r["name"] for r in match_director_overlap(roster, skai_parties)}
+        assert "이재철" in names and "이재철(1)" not in names
+        assert "제갈완" in names and "제갈완 " not in names
+        assert "MAO, XUCHAO" in names  # 개행은 공백 하나로
+
+    def test_상대방_명부_이름_일치와_생년월(self, skai_parties):
+        issuer = [{"nm": "홍길동", "birth_ym": "1970년 01월", "ofcps": "사외이사",
+                   "rgist_exctv_at": "사외이사", "main_career": "", "mxmm_shrholdr_relate": "-"}]
+        other_same = [{"nm": "홍 길동", "birth_ym": "1970년 01월", "ofcps": "이사", "rgist_exctv_at": "사내이사"}]
+        other_diff = [{"nm": "홍길동", "birth_ym": "1985년 05월", "ofcps": "이사", "rgist_exctv_at": "사내이사"}]
+        other_nobirth = [{"nm": "홍길동", "birth_ym": "", "ofcps": "이사", "rgist_exctv_at": "사내이사"}]
+        r = match_director_overlap(issuer, skai_parties, other_same)
+        assert len(r) == 1 and r[0]["birth_match"] is True
+        assert r[0]["evidence"] == ["상대방 임원현황 이름 일치"]
+        assert r[0]["side"] == "counterparty"
+        assert r[0]["role_at_other"] == "이사/사내이사"
+        assert match_director_overlap(issuer, skai_parties, other_diff)[0]["birth_match"] is False
+        assert match_director_overlap(issuer, skai_parties, other_nobirth)[0]["birth_match"] is None
+        assert match_director_overlap(issuer, skai_parties, [])  == []
+
+    def test_합계_빈_이름은_건너뛴다(self, skai_parties):
+        rows = [
+            {"nm": "계", "main_career": "디렉터스컴퍼니"},
+            {"nm": "합계", "main_career": "디렉터스컴퍼니"},
+            {"nm": "", "main_career": "디렉터스컴퍼니"},
+        ]
+        assert match_director_overlap(rows, skai_parties) == []
+
+    def test_대조군은_겸직_없음(self, roster, control_text):
+        assert match_director_overlap(roster, parse_decision_parties(control_text)) == []
+
+    @pytest.mark.parametrize("r", [None, []])
+    def test_빈_명부(self, r, skai_parties):
+        assert match_director_overlap(r, skai_parties) == []
+
+    def test_파티가_비어도_예외없음(self, roster):
+        assert match_director_overlap(roster, {}) == []
+        assert match_director_overlap(roster, parse_decision_parties("")) == []
+
+
+# ── summarize_board_conflict ───────────────────────────────────────────────
+
+_FORBIDDEN = re.compile(r"위험|제척 없음|심각|의심|위반|문제")
+
+
+class TestSummarize:
+    def test_SKAI(self, parsed, roster, skai_parties):
+        ov = match_director_overlap(roster, skai_parties)
+        row = find_resolution_rows(parsed, skai_parties["resolution_date8"], "타법인 주식")[0]
+        s = summarize_board_conflict(parsed["directors"], ov, row)
+        assert "\n" not in s
+        assert "이사 7인 중 4인이 상대방·대상회사 임원 겸직" in s
+        assert "겸직 이사 결의 표기: 찬성 3 · 「-」 1" in s  # 신재혁·이재철·제갈완 찬성 / MAO '-'
+        assert "전체 이사 결의 표기: 찬성 4 · 「-」 3" in s
+        assert not _FORBIDDEN.search(s)
+
+    def test_의결표_없음(self, parsed, roster, skai_parties):
+        ov = match_director_overlap(roster, skai_parties)
+        s = summarize_board_conflict(parsed["directors"], ov, None)
+        assert s.endswith("의결표 없음")
+        assert "이사 7인 중 4인" in s
+
+    def test_이사_수_확인_불가(self):
+        s = summarize_board_conflict([], [], None)
+        assert "이사 수 확인 불가" in s
+        assert not _FORBIDDEN.search(s)
+
+    def test_겸직_0인(self, parsed):
+        row = parsed["rows"][-2]
+        s = summarize_board_conflict(parsed["directors"], [], row)
+        assert "이사 7인 중 0인이" in s
+        assert "찬성" in s
+
+    def test_의결표에_이름이_없는_겸직자는_따로_센다(self, parsed):
+        # 최종 리뷰 I3: 의결표 밖 임원(미등기 등)은 「이사 N인 중 K인」의 K에 넣지 않는다
+        ov = [{"name": "없는사람", "side": "counterparty"}]
+        row = parsed["rows"][-2]
+        s = summarize_board_conflict(parsed["directors"], ov, row)
+        assert "이사 7인 중 0인이" in s
+        assert "의결표 밖 임원 겸직 1인" in s
+        assert "겸직 이사 결의 표기" not in s
+
+    def test_대조_불가는_겸직_0인과_다르다(self, parsed):
+        row = parsed["rows"][-2]
+        s = summarize_board_conflict(parsed["directors"], None, row)
+        assert "겸직 대조 불가" in s
+        assert "0인" not in s
+        assert "전체 이사 결의 표기" in s
+        assert summarize_board_conflict([], None, None).endswith("의결표 없음")
+        assert "이사 수 확인 불가" in summarize_board_conflict([], None, None)
+
+
+
+# ── Fix round 3: 절 선택·이름 줄 양성 근거·제목 ────────────────────────────────
+
+from dart_risk_mcp.core.board import extract_board_section_with_title  # noqa: E402
+
+
+class TestSectionAndTitle:
+    def test_제목은_찾은_절의_원문_첫_줄이다(self, board_md):
+        title, sec = extract_board_section_with_title(board_md)
+        assert title == "(2) 이사회의 주요 의결사항 등"
+        assert sec == extract_board_section(board_md)
+        assert extract_board_section_with_title(_txt("셀트리온_board_section.md"))[0] == "다. 중요의결사항 등"
+        assert extract_board_section_with_title(_txt("두산_board_section.md"))[0] == "나. 중요의결사항 등"
+        assert extract_board_section_with_title("") == ("", "")
+
+    def test_셀트리온형_의결표가_같은_제목의_앞선_표_절에_가려지지_않는다(self):
+        """개최일자+의안 머리(그룹 머리 칸 없음)인 실제 의결표 앞에, 같은 낱말 제목의 다른 표 절이
+        있는 문서 — 앞선 절은 의결표 머리(개최일자+가결여부/회차)가 없어 건너뛴다."""
+        decoy = ("다. 중요 의결 사항 등 (1) 이사회 운영 규정\n\n"
+                 "| 구분 | 내용 |\n|---|---|\n| 제37조 | 이사의 성명을 공고한다 |\n\n")
+        md = decoy + _txt("셀트리온_board_section.md")
+        title, sec = extract_board_section_with_title(md)
+        assert title == "다. 중요의결사항 등" and "제37조" not in sec
+        assert len(parse_board_resolutions(sec)["directors"]) == 12
+
+    def test_넓은_이사의_성명은_절_선택에_쓰이지_않는다(self):
+        """「이사의 성명」이 든 다른 표가 앞서도(의결표 머리가 없으면) 실제 의결표 절을 고른다."""
+        decoy = ("나. 중요의결사항 등\n| 구분 | 이사의 성명 |\n|---|---|\n| 선임 | 홍길동 |\n\n")
+        md = decoy + _txt("두산_board_section.md")
+        sec = extract_board_section(md)
+        assert "홍길동" not in sec and "개최일자" in sec
+
+
+class TestNameRowEvidence:
+    HEAD = "| 회차 | 개최일자 | 의안내용 | 가결 | 사내이사 | 사외이사 |\n|---|---|---|---|---|---|\n"
+
+    def test_구분_성명_계_줄은_이사가_되지_않는다(self):
+        md = (self.HEAD + "| 구분 | 성명 | 계 | 합계 | 비고 |\n"
+              "| 1 | 2025.01.01 | 가 | 가결 | 찬성 | 찬성 | 찬성 | 찬성 | 찬성 |\n")
+        assert parse_board_resolutions(md) == {
+            "directors": [], "rows": [], "unparsed": 0, "table_found": True, "tables": []}
+
+    def test_사람_이름이어도_열_수가_맞는_첫_데이터_행이_없으면_이사가_아니다(self):
+        md = (self.HEAD + "| 홍길동 | 김철수 | 이영희 |\n"
+              "| 1 | 2025.01.01 | 가 | 가결 | 찬성 |\n")
+        assert parse_board_resolutions(md)["directors"] == []
+
+    def test_출석률_칸이_하나라도_있으면_이름_줄이다(self):
+        md = (self.HEAD + "| 홍길동(출석률: 100%) | 김철수 |\n"
+              "| 1 | 2025.01.01 | 가 | 가결 | 찬성 | 찬성 |\n")
+        p = parse_board_resolutions(md)
+        assert [d["name"] for d in p["directors"]] == ["홍길동", "김철수"] and len(p["rows"]) == 1
+
+    def test_의안_칸은_칸_전체가_의안일_때만_머리다(self):
+        md = ("| 회차 | 개최일자 | 동의안 | 회의안건 | 사내이사 |\n|---|---|---|---|---|\n"
+              "| 홍길동 | 김철수 |\n| 1 | 2025.01.01 | 가 | 가결 | 찬성 |\n")
+        assert parse_board_resolutions(md)["table_found"] is False
+
+    def test_출석율_줄은_이름_줄_바로_다음에서만_한_번_적용한다(self):
+        names = "| 서정진 | 서진석 |\n"
+        late = (self.HEAD + names + "| 가결여부 | 찬 반 여 부 |\n"
+                "| 25-001 | 2025.01.01 | 가 | 가결 | 찬성 | 찬성 |\n"
+                "| 출석율 | 10% | 20% |\n")
+        p = parse_board_resolutions(late)
+        assert [d["attendance"] for d in p["directors"]] == ["", ""]  # 뒤쪽 줄은 덮어쓰지 않는다
+        assert p["unparsed"] == 1
+        adj = self.HEAD + names + "| 출석율 | 91% | 100% |\n| 25-001 | 2025.01.01 | 가 | 가결 | 찬성 | 찬성 |\n"
+        assert [d["attendance"] for d in parse_board_resolutions(adj)["directors"]] == ["91%", "100%"]
+
+    def test_새_머리_줄이_나오면_첫_표에서_멈춘다(self):
+        head = "| 회차 | 개최일자 | 의안내용 | 가결 | 사내이사 |\n|---|---|---|---|---|\n"
+        md = (head + "| 홍길동(출석률: 100%) | 김철수(출석률: 100%) |\n"
+              "| 1 | 2025.01.01 | 가 | 가결 | 찬성 | 찬성 |\n"
+              + head + "| 박(출석률: 50%) |\n| 2 | 2025.02.01 | 나 | 가결 | 찬성 |\n")
+        p = parse_board_resolutions(md)
+        # 최종 리뷰 I2: 새 머리 줄은 새 표다 — 첫 표에서 멈추지 않고 다음 표도 그 표의 이사로 읽는다
+        assert [r["no"] for r in p["rows"]] == ["1", "2"] and p["unparsed"] == 0
+        assert [[d["name"] for d in t["directors"]] for t in p["tables"]] == [["홍길동", "김철수"], ["박"]]
+        assert p["directors"] == p["tables"][0]["directors"]
+
+
+# ── 최종 리뷰 수정 (2026-10-28) ──────────────────────────────────────────────
+
+from dart_risk_mcp.core.board import _clean_name, _name_key  # noqa: E402
+
+
+def _row(nm, career="", rgist="사내이사"):
+    return {"nm": nm, "ofcps": "이사", "rgist_exctv_at": rgist, "main_career": career,
+            "mxmm_shrholdr_relate": "-"}
+
+
+def _parties(cp_name, tg_name="", cp_rep="", tg_rep=""):
+    return {"counterparty": {"name": cp_name, "rep": cp_rep, "relation": "최대주주"},
+            "target": {"name": tg_name, "rep": tg_rep, "relation": ""}}
+
+
+class TestFootnoteAsterisks:
+    """C1 — 임원현황 이름 뒤 별표 각주(라이브 나이스정보통신 2026/11012)."""
+
+    @pytest.mark.parametrize("raw,clean", [
+        ("김승현*", "김승현"), ("조인혜*", "조인혜"), ("조대민**", "조대민"), ("김진철***", "김진철"),
+    ])
+    def test_별표_각주를_뗀다(self, raw, clean):
+        assert _clean_name(raw) == clean
+        assert _name_key(raw) == _name_key(clean)
+
+    def test_다른_표지도_뗀다(self):
+        assert _clean_name("홍길동†") == "홍길동" and _clean_name("홍길동※") == "홍길동"
+        assert _clean_name("이재철(1)") == "이재철"
+
+    def test_별표_이름도_대표자와_일치한다(self, skai_parties):
+        ov = match_director_overlap([_row("신재혁**")], skai_parties)
+        assert ov and ov[0]["name"] == "신재혁"
+        assert ov[0]["evidence"][0] == "공시 거래상대방 대표자 일치"
+
+
+class TestCareerTense:
+    """I4 — 주요경력은 **현재** 경력 조각만 겸직 근거다."""
+
+    def test_과거_경력_SK는_겸직이_아니다(self):
+        assert match_director_overlap([_row("홍길동", "前 SK하이닉스 부사장")], _parties("SK(주)")) == []
+
+    def test_LG처럼_짧은_이름은_경력_대조를_하지_않는다(self):
+        rows = [_row("홍길동", "現 LG전자 고문")]
+        assert match_director_overlap(rows, _parties("(주)LG")) == []
+        assert career_mentions(rows, _parties("(주)LG")) == []
+
+    def test_과거_경력은_사실로만_남는다(self):
+        rows = [_row("홍길동", "前 SK하이닉스 부사장")]
+        p = _parties("SK하이닉스(주)")
+        assert match_director_overlap(rows, p) == []
+        assert career_mentions(rows, p) == [{
+            "name": "홍길동", "side": "counterparty", "other_name": "SK하이닉스(주)",
+            "quote": "前 SK하이닉스 부사장", "tense": "past"}]
+
+    def test_닫힌_기간은_과거다(self):
+        rows = [_row("홍길동", "18.07~21.04 SK하이닉스 전무\n21.05~ 現 삼성물산 고문")]
+        p = _parties("SK하이닉스(주)")
+        assert match_director_overlap(rows, p) == []
+        assert [m["tense"] for m in career_mentions(rows, p)] == ["past"]
+
+    def test_현재_표기는_겸직이다(self):
+        rows = [_row("홍길동", "前 삼성전자 상무 / 現 SK하이닉스 부사장")]
+        ov = match_director_overlap(rows, _parties("SK하이닉스(주)"))
+        assert len(ov) == 1 and "現 SK하이닉스 부사장" in ov[0]["evidence"][0]
+        assert career_mentions(rows, _parties("SK하이닉스(주)")) == []
+
+    def test_열린_기간도_현재다(self):
+        ov = match_director_overlap([_row("홍길동", "21.04~ SK하이닉스 고문")], _parties("SK하이닉스(주)"))
+        assert len(ov) == 1
+
+    def test_삼성전자의_전은_과거_표지가_아니다(self):
+        ov = match_director_overlap([_row("홍길동", "現 삼성전자 고문")], _parties("삼성전자(주)"))
+        assert len(ov) == 1
+
+    def test_재직_시기_표기가_없으면_겸직으로_세지_않는다(self):
+        rows = [_row("홍길동", "SK하이닉스 부사장")]
+        p = _parties("SK하이닉스(주)")
+        assert match_director_overlap(rows, p) == []
+        assert [m["tense"] for m in career_mentions(rows, p)] == ["unknown"]
+
+    @pytest.mark.parametrize("name", ["주식회사 코리아", "홀딩스(주)", "그룹", "(주)회사"])
+    def test_일반_낱말_이름은_대조하지_않는다(self, name):
+        rows = [_row("홍길동", f"現 {name} 이사")]
+        assert match_director_overlap(rows, _parties(name)) == []
+
+    def test_SKAI_네_명은_그대로이고_과거_언급은_없다(self, roster, skai_parties):
+        ov = match_director_overlap(roster, skai_parties)
+        assert {r["name"] for r in ov} == {"신재혁", "이재철", "제갈완", "MAO, XUCHAO"}
+        assert len(ov) == 5  # 이재철은 상대방·대상회사 양쪽
+        assert career_mentions(roster, skai_parties) == []
+
+
+class TestIndividualCounterparty:
+    """I5 — 거래상대방이 개인(「김상곤 외 2인」)이면 명부 이름과 바로 대조한다."""
+
+    def test_명부에_같은_이름이_있으면_거래상대방_본인(self, control_text):
+        p = parse_decision_parties(control_text)
+        assert p["counterparty"]["name"].startswith("김상곤")
+        ov = [o for o in match_director_overlap([_row("김상곤")], p) if o["side"] == "counterparty"]
+        assert len(ov) == 1
+        assert ov[0]["role_at_other"] == "거래상대방 본인"
+        assert ov[0]["evidence"] == ["공시 거래상대방 본인(성명 일치)"]
+
+    def test_명부에_없으면_일치하지_않는다(self, roster, control_text):
+        assert match_director_overlap(roster, parse_decision_parties(control_text)) == []
+
+    def test_법인_이름은_본인_대조를_하지_않는다(self):
+        assert match_director_overlap([_row("디렉터스")], _parties("주식회사 디렉터스")) == []
+
+
+class TestSummarizeScope:
+    """I3 — K는 의결표(없으면 명부의 등기이사) 안의 겸직자만 센다."""
+
+    def test_의결표_밖_겸직은_따로_센다(self, parsed):
+        row = parsed["rows"][-2]
+        ov = [{"name": "신재혁", "side": "counterparty"}, {"name": "김본중", "side": "counterparty"}]
+        s = summarize_board_conflict(parsed["directors"], ov, row)
+        assert "이사 7인 중 1인이 상대방·대상회사 임원 겸직 · 의결표 밖 임원 겸직 1인" in s
+        assert "겸직 이사 결의 표기: " in s and "표에 없음" not in s
+
+    def test_의결표가_없으면_등기이사_명부_기준(self, roster, skai_parties):
+        ov = match_director_overlap(roster, skai_parties) + [{"name": "최재식", "side": "target"}]
+        s = summarize_board_conflict([], ov, None, roster=roster)
+        # 사내이사 4 · 사외이사 2 — 감사·미등기 제외
+        assert s.startswith("등기이사 6인(명부 기준) 중 4인이 상대방·대상회사 임원 겸직")
+        assert "등기이사 밖 임원 겸직 1인" in s and s.endswith("의결표 없음")
+
+    def test_결의일_행_없음은_의결표_없음과_다르다(self, parsed):
+        s = summarize_board_conflict(parsed["directors"], [], None, table_state="no_row")
+        assert s.endswith("결의일 행 없음") and "의결표 없음" not in s
+        assert summarize_board_conflict([], [], None, table_state="periodic_failed").endswith(
+            "의결표 확인 불가")
+        assert summarize_board_conflict([], [], None, table_unread=True).endswith("의결표 못 읽음")
+
+    def test_당사자_미확인은_사유를_적는다(self):
+        s = summarize_board_conflict([], None, None, unmatched_reason="거래 당사자를 원문에서 읽지 못함")
+        assert "겸직 대조 불가(거래 당사자를 원문에서 읽지 못함)" in s
+        assert "0인" not in s
+
+
+class TestTableBlankLines:
+    """m5 — 표 안의 빈 줄 뒤 행을 조용히 버리지 않는다."""
+    HEAD = ("나. 중요의결사항 등\n| 회차 | 개최일자 | 의안내용 | 가결여부 | 이사의 성명 |\n"
+            "|---|---|---|---|---|\n| 갑돌이(출석률: 100%) | 을순이(출석률: 100%) |\n| 찬반여부 |\n")
+
+    def test_빈_줄_뒤_행도_읽는다(self):
+        md = (self.HEAD + "| 1 | 2025.01.02 | 가 | 가결 | 찬성 | 찬성 |\n\n"
+              "| 2 | 2025.02.03 | 나 | 가결 | 찬성 | 찬성 |\n")
+        assert [r["no"] for r in parse_board_resolutions(md)["rows"]] == ["1", "2"]
+
+    def test_빈_줄_뒤_깨진_행은_미파싱으로_센다(self):
+        md = (self.HEAD + "| 1 | 2025.01.02 | 가 | 가결 | 찬성 | 찬성 |\n\n| 깨진 | 줄 |\n")
+        p = parse_board_resolutions(md)
+        assert [r["no"] for r in p["rows"]] == ["1"] and p["unparsed"] == 1
+
+    def test_빈_줄_뒤_본문이면_표가_끝난다(self):
+        md = (self.HEAD + "| 1 | 2025.01.02 | 가 | 가결 | 찬성 | 찬성 |\n\n※ 각주 문장\n"
+              "| 2 | 2025.02.03 | 나 | 가결 | 찬성 | 찬성 |\n")
+        assert [r["no"] for r in parse_board_resolutions(md)["rows"]] == ["1"]
+
+
+class TestRepeatedTablesDoosan:
+    """I2 — 두산형 반복 의결표: 표마다 그 표의 이사로 읽는다."""
+
+    def test_둘째_표의_이사와_행(self):
+        p = parse_board_resolutions(extract_board_section(_txt("두산_board_section.md")))
+        t1, t2 = p["tables"]
+        n2 = [d["name"] for d in t2["directors"]]
+        assert "유승우" in n2 and "문홍성" not in n2
+        assert "문홍성" in [d["name"] for d in t1["directors"]]
+        r5 = next(r for r in p["rows"] if r["no"] == "5")
+        assert any(r is r5 for r in t2["rows"])
+        assert r5["date8"] == "20250910" and r5["votes"]["유승우"].startswith("찬성")
+        assert len(t1["rows"]) == 2 and len(t2["rows"]) == 5
+
+
+def test_독립이사도_등기이사다():
+    """2026 반기보고서부터 사외이사가 `rgist_exctv_at` 「독립이사」로 온다(라이브 두산 00117212·
+    나이스정보통신 00264945, 2026/11012) — 빼면 의결표 없는 결의의 분모가 사내이사만 남는다."""
+    from dart_risk_mcp.core.board import board_scope
+    roster = [_row("갑돌이", rgist="사내이사"), _row("을순이", rgist="독립이사"),
+              _row("병철이", rgist="미등기"), _row("정숙이", rgist="기타비상무이사")]
+    label, keys, _ = board_scope([], roster)
+    assert label == "등기이사 3인(명부 기준)" and len(keys) == 3

@@ -142,6 +142,9 @@ SIGNAL_KEY_TO_TAXONOMY: dict[str, list[str]] = {
     # v0.5.0: 자금흐름·주요결정
     "FUND_DIVERSION":         ["5.3", "8.1"],
     "FUND_UNREPORTED":        ["4.3"],
+    # 구조화 파생 신호 — 제목 키워드 없음. check_board_conflict가 의결표·임원현황을
+    # 대조해 겸직이 확인될 때만 붙는다. 어느 패턴에도 쓰지 않는다(1.8 선례).
+    "BOARD_CONFLICT":         ["4.5"],
     "DECISION_RELATED_PARTY": ["4.2"],
     "DECISION_OVERSIZED":     ["5.3"],
     "DECISION_NO_EXTVAL":     ["4.3"],
@@ -895,6 +898,12 @@ SIGNAL_TYPES = [
         "key":   "FUND_UNREPORTED",
         "label": "자금사용내역 미기재",
         "score": 3,
+        "keywords": [],
+    },
+    {
+        "key":   "BOARD_CONFLICT",
+        "label": "이사회 결의 참여 이사의 상대방·대상회사 겸직",
+        "score": 0,
         "keywords": [],
     },
     {

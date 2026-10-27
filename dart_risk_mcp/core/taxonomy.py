@@ -775,6 +775,41 @@ TAXONOMY = {
         ],
         "investor_implication": "Insolvency risk; default imminent",
     },
+    # ── 4.5 (신설): 거래 결의에 참여한 이사의 상대방·대상회사 겸직 ──────────
+    # 제목 키워드가 없는 **구조화 파생** 신호다 — `check_board_conflict`가
+    # 이사회 의결표와 임원현황을 대조해 겸직이 확인될 때만 붙는다.
+    # ⚠ 1.8 선례: base_score 0, 어느 패턴에도 넣지 않는다(패턴 발화 조건 +0).
+    # 의결표의 「-」가 불참인지 제척인지는 표가 말하지 않으므로 사실 표기만 한다.
+    "4.5": {
+        "id": "4.5",
+        "category": "Governance & Disclosure",
+        "name": "특수관계자 거래 결의의 이사 겸직",
+        "description": (
+            "거래 상대방이 최대주주·특수관계인인 이사회 결의에 참여한 이사가 "
+            "그 상대방 또는 대상회사의 임원도 맡고 있는 사실. 사실 표기 전용 — "
+            "의결표의 불참·제척 여부는 의사록으로 확인해야 한다."
+        ),
+        "base_score": 0,
+        "severity": "OBSERVATION",
+        "crisis_timeline_months": 0,
+        "keywords": ["이사회 결의", "겸직"],
+        "indicators": [
+            "거래 상대방·대상회사의 임원을 겸하는 이사가 해당 안건 표결에 참여",
+            "의결표에서 그 이사의 표기가 「-」(불참·제척 여부 불명)가 아님",
+        ],
+        "legal_basis": [
+            "상법 제398조(이사 등과 회사 간의 거래)",
+            "상법 제391조 제3항·제368조 제3항(특별이해관계인의 의결권 제한)",
+        ],
+        "red_flags": [
+            "상대방 또는 대상회사의 임원을 겸하는 이사가 표결에 참여",
+            "겸직 이사의 의결 표기가 찬성·반대 등으로 적힘",
+        ],
+        "field_evidence": [],
+        "investor_implication": (
+            "Interested-director participation; verify minutes for recusal"
+        ),
+    },
 
     # CATEGORY 5: Corporate Action Manipulation (5 signals)
     "5.1": {

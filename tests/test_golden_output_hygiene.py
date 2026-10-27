@@ -28,6 +28,7 @@ _INTERNAL_CODES = [
     "CAPITAL_CHURN",
     "FUND_DIVERSION",
     "FUND_UNREPORTED",
+    "BOARD_CONFLICT",
     "DECISION_RELATED_PARTY",
     "DECISION_OVERSIZED",
     "DECISION_NO_EXTVAL",
@@ -122,6 +123,17 @@ _FIRST_LINE_PATTERNS: dict[str, str] = {
     "market":        r"^(?:🔍 \*\*시장 공시 스캔\*\* \(preset=[a-z_0-9]+, 최근 \d+일\)"
                      r"|📈 \*\*.+\*\* \(\d{6}\) — 공시 전후 시장 반응 \(.+\)"
                      r"|❌ KRX_API_KEY .+)$",
+    # 이사회 이해상충 확인(Task 4) — 접수번호 모드는 접수번호, 창 모드는 「최근 N일」이 온다.
+    # 골드 단축명은 `board`(창 모드)·`board_rcept`(접수번호 모드) 둘이고
+    # 첫 줄 형식은 같다. `board_conflict`는 도구 이름 그대로의 별칭으로 남긴다.
+    "board_conflict": r"^🪑 .+ — 이사회 이해상충 확인 · .+$",
+    "board":          r"^🪑 .+ — 이사회 이해상충 확인 · .+$",
+    # 접수번호 모드는 list.json 행을 못 찾는 경우(접수번호 앞 8자리 ≠ 접수일 —
+    # 아틀라스링크 20260810000747이 접수일 2026.08.11이라 실제로 이 한 줄이 된다,
+    # `resolve_disclosure_row_with_status`의 알려진 한계)에 🪑 머리글 없이
+    # 안내 한 줄만 낸다. 그것도 유효한 도구 출력이라 알터네이션으로 받는다.
+    "board_rcept":    r"^(?:🪑 .+ — 이사회 이해상충 확인 · .+"
+                      r"|이 접수번호를 찾지 못했습니다 — .+)$",
     # DS005 주요결정 (자동 탐지, v1.6.0부터 decision_type 정상 해석 — 첫 골드)
     "decision":      r"^📑 \*\*주요사항 결정 공시\*\* \(rcept_no=\d+\)$",
     # 기존 단일 disclosure (v0.7.x 골드 — risk_check 이전 명명 잔존)
@@ -158,6 +170,10 @@ _ALLOWED_PAREN_ABBREVS = {
     # 실측에 나온 두 개만 넣는다 — 안 본 약어를 미리 넣으면 이 검사가
     # 막으려는 것(우리가 만든 라벨에 코드가 새는 것)을 못 잡는다.
     "CSO", "CTO",
+    # 회사 약칭 — 2026-10-28 추가. `check_board_conflict`가 이사회 의결표의 안건을 원문
+    # 그대로 인용하면서 두산 골드에 「두산로지스틱스솔루션(주)(DLS) 지분 매각의 건」이
+    # 들어왔다. 회사가 의결표에 적은 자회사 약칭이지 내부 flag 코드가 아니다. 실측 하나만.
+    "DLS",
     # 재무제표 구분 — 2026-09-12 추가. `get_financial_statements_full`을 이
     # 검사의 코퍼스에 넣자 바로 걸렸다(STX_fsfull.txt의 「연결(CFS)」).
     # ⚠ 이것들은 **사용자가 넣는 인자 값**이다 — `fs_div="CFS"`·
