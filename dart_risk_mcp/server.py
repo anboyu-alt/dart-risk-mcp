@@ -104,6 +104,7 @@ from .core import (
     remove_person,
     fetch_executive_compensation,
     fetch_executive_roster_detail,
+    fetch_executive_roster_rows,
     fetch_financial_statements,
     fs_currency,
     fetch_financial_statements_all,

@@ -29,6 +29,7 @@ from .signals import (
     DILUTIVE_CAPITAL_EVENTS,
     NON_DILUTIVE_CAPITAL_EVENTS,
     is_amendment_disclosure,
+    strip_amendment_prefix,
 )
 
 log = logging.getLogger(__name__)
@@ -6186,6 +6187,105 @@ def fetch_executive_roster_detail(
         {**entry, "years": sorted(entry["years"])}
         for entry in rows.values()
     ]
+
+
+# ── 임원 명부 행 (이사회 이해상충 점검) ───────────────────────────────────
+# `fetch_executive_roster_detail`은 사람 단위로 합쳐 주요경력·최대주주관계를
+# 버린다. 이사회 이해상충 점검은 **한 보고서(사업연도+보고서코드)의 원 행**이
+# 필요하다 — 그 보고서가 가리키는 시점의 명부를 그대로 읽기 위해서다.
+# 옆에 새 함수를 두고 기존 함수는 건드리지 않는다.
+_roster_rows_cache: dict[tuple, tuple[float, list]] = {}
+_ROSTER_ROWS_CACHE_MAX = 50
+_ROSTER_ROWS_CACHE_TTL = 600
+
+_ROSTER_ROW_KEYS = (
+    "nm", "birth_ym", "ofcps", "rgist_exctv_at", "chrg_job",
+    "main_career", "mxmm_shrholdr_relate", "hffc_pd", "fte_at",
+)
+
+
+def fetch_executive_roster_rows(
+    corp_code: str,
+    api_key: str,
+    bsns_year: str,
+    reprt_code: str = "11011",
+) -> FetchList:
+    """`exctvSttus`(임원현황) 1콜 — 한 보고서의 임원 행을 아홉 키로 반환.
+
+    키: nm · birth_ym · ofcps · rgist_exctv_at · chrg_job · main_career ·
+    mxmm_shrholdr_relate · hffc_pd · fte_at. 「계」·「합계」 행은 뺀다.
+
+    status 000 → 행, 013(자료 없음) → 빈 `FetchList`(`fetch_failed` False),
+    그 밖(020 한도 초과·800 점검·HTTP 오류·예외) → 빈 `FetchList`
+    (`fetch_failed` True) — **못 받은 것과 없는 것을 가른다.** 정상 응답
+    (000·013)만 10분 캐시하고, 실패는 캐시하지 않는다.
+    """
+    if not corp_code or not api_key:
+        return FetchList()
+
+    cache_key = ("roster_rows", corp_code, bsns_year, reprt_code)
+    cached = _cache_get(_roster_rows_cache, cache_key, _ROSTER_ROWS_CACHE_TTL)
+    if cached is not None:
+        return FetchList(cached)
+
+    rows: list[dict] = []
+    _ros_ok = 0
+    try:
+        resp = _retry("GET", f"{DART_BASE}/exctvSttus.json", params={
+            "crtfc_key": api_key,
+            "corp_code": corp_code,
+            "bsns_year": bsns_year,
+            "reprt_code": reprt_code,
+        }, timeout=15)
+        data = resp.json() if resp is not None else {}
+        status = data.get("status")
+        if status in ("000", "013"):
+            _ros_ok += 1
+        if status != "000":
+            if status != "013":
+                _log_dart_status(status or "?",
+                                 f"exctvSttus year={bsns_year} reprt={reprt_code} corp_code={corp_code}")
+        else:
+            for item in data.get("list") or []:
+                nm = (item.get("nm") or "").strip()
+                if not nm or nm in ("계", "합계"):
+                    continue
+                rows.append({k: (item.get(k) or "").strip() for k in _ROSTER_ROW_KEYS})
+    except Exception as e:
+        log.debug("exctvSttus year=%s reprt=%s 조회 실패 (%s): %s",
+                  bsns_year, reprt_code, corp_code, e)
+
+    # ⚠ 못 받은 결과를 캐시하지 않는다 — 정상 응답(000·013)이 있었을 때만.
+    if _ros_ok:
+        _cache_set(_roster_rows_cache, cache_key, list(rows), _ROSTER_ROWS_CACHE_MAX)
+    return FetchList(rows, fetch_failed=not _ros_ok)
+
+
+_PERIODIC_TITLE_RE = re.compile(r"^(사업|반기|분기)보고서\s*\(\s*(\d{4})\s*[.\-]\s*(\d{1,2})\s*\)")
+
+
+def periodic_report_code(report_nm: str):
+    """정기보고서 제목 → `(bsns_year, reprt_code)`. 정기보고서가 아니면 None.
+
+    사업보고서 → 11011 · 반기보고서 → 11012 · 분기보고서는 결산월 기준
+    3월 → 11013, 9월 → 11014. 제목의 괄호 연도는 **사업연도**다
+    (`사업보고서 (2025.12)`는 2026년에 접수된다). 접두 태그
+    (`[기재정정]` 등)는 `strip_amendment_prefix`로 뗀다.
+    """
+    title = strip_amendment_prefix(report_nm or "").strip()
+    m = _PERIODIC_TITLE_RE.match(title)
+    if not m:
+        return None
+    kind, year, month = m.group(1), m.group(2), int(m.group(3))
+    if kind == "사업":
+        return (year, "11011")
+    if kind == "반기":
+        return (year, "11012")
+    if month == 3:
+        return (year, "11013")
+    if month == 9:
+        return (year, "11014")
+    return None
 
 
 def fetch_affiliate_investments(

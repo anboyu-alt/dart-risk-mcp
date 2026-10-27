@@ -111,6 +111,7 @@ STRUCTURED_FETCH_STUBS = {
     "fetch_treasury_decisions": lambda *a, **k: [],
     "fetch_debt_balance": _empty_debt_balance,
     "fetch_executive_roster_detail": lambda *a, **k: [],
+    "fetch_executive_roster_rows": lambda *a, **k: FetchList(),
     "fetch_mezzanine_decisions": _empty_mezzanine,
     "fetch_stock_totals": lambda *a, **k: [],
     "fetch_issuance_history": lambda *a, **k: [],
