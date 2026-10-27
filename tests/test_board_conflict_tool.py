@@ -215,9 +215,26 @@ def _targets(n):
             for i in range(n)]
 
 
+def _doc_all_related(wired, monkeypatch, related=(), unrelated=()):
+    """창 모드 후보 접수번호마다 SKAI 원문(관계 「최대주주」) 또는 대조군 원문(관계 「-」)을 준다."""
+    skai, ctrl = _txt("20251219000418_text.txt"), _txt("control_20261023000221_text.txt")
+
+    def _doc(rcept, k, max_chars=3000):
+        wired.doc_text.append(rcept)
+        if rcept in related or rcept == FILING:
+            return skai
+        if rcept in unrelated or rcept == CONTROL:
+            return ctrl
+        return ""
+
+    monkeypatch.setattr(srv, "fetch_document_text", _doc)
+
+
 @pytest.mark.usefixtures("no_structured_dart")
 def test_창_모드_대상_4건_중_최근_3건만_확인한다(wired, monkeypatch):
-    rows = _targets(4) + [
+    targets = _targets(4)
+    _doc_all_related(wired, monkeypatch, related={t["rcept_no"] for t in targets})
+    rows = targets + [
         dict(_FILING_ROW, rcept_no="20251218000001", rcept_dt="20251218",
              report_nm="[기재정정]주요사항보고서(타법인주식및출자증권양수결정)"),
         dict(_FILING_ROW, rcept_no="20251217000001", rcept_dt="20251217",
@@ -228,10 +245,13 @@ def test_창_모드_대상_4건_중_최근_3건만_확인한다(wired, monkeypat
         lambda *a, **kw: (rows, FETCH_OK))
     out = srv.check_board_conflict("SKAI")
     assert out.splitlines()[0].startswith("🪑 SKAI — 이사회 이해상충 확인 · ")
-    assert "해당 유형 공시 4건 중 최근 3건 확인 · 1건 미확인" in out
-    # 최신 3건만 원문을 연다 (정정·무관 공시는 후보가 아니다)
+    assert ("해당 유형 공시 4건 중 최근 3건 원문 확인 · 1건 미확인 — 상대방 관계 표기가 "
+            "최대주주·특수관계인인 건 3건 대조(표시 상한 3건)") in out
+    # 관계가 확인된 3건이 차면 멈춘다 (정정·무관 공시는 후보가 아니다). 원문은 관계를 읽을 때
+    # 한 번만 받는다 — 블록이 다시 받지 않는다.
     assert wired.doc_text == ["20251213000418", "20251212000418", "20251211000418"]
     assert out.count("━━ 거래 ━━") == 3
+    assert "접수번호 모드는" not in out   # 접수번호 모드 한계 줄은 그 모드에서만
 
 
 @pytest.mark.usefixtures("no_structured_dart")
@@ -240,7 +260,7 @@ def test_창_모드_3건_이하면_미확인_문구가_없다(wired, monkeypatch
         srv, "fetch_company_disclosures_with_status",
         lambda *a, **kw: ([_FILING_ROW, _PERIODIC_ROW], FETCH_OK))
     out = srv.check_board_conflict("SKAI")
-    assert "해당 유형 공시 1건 확인" in out
+    assert "해당 유형 공시 1건 원문 확인 — 상대방 관계 표기가 최대주주·특수관계인인 건 1건 대조" in out
     assert "미확인" not in out
 
 
@@ -424,7 +444,8 @@ def test_대조군은_해당_없음_사실_문장과_0인(wired, monkeypatch, ro
         lambda *a, **kw: ([_CONTROL_ROW], FETCH_OK))
     out = srv.check_board_conflict("데이원컴퍼니", CONTROL)
     assert "해당 없음" in out.split("━━ 겸직 대조 ━━")[1].split("━━ 한계 ━━")[0]
-    assert "상대방·대상회사 임원 겸직 0인" in out
+    # 의결표가 없으면 명부의 등기이사(사내 4 · 사외 2 — 감사·미등기 제외)가 분모다
+    assert "등기이사 6인(명부 기준) 중 0인이 상대방·대상회사 임원 겸직" in out
     assert "🎯" not in out
     assert "결의일 이후 정기보고서 미접수" in out
     _assert_no_judgment(out)
@@ -443,7 +464,9 @@ class TestEmptyRoster:
         out = srv.check_board_conflict("SKAI", FILING)
         sec = out.split("━━ 겸직 대조 ━━")[1].split("━━ 한계 ━━")[0]
         assert "대조를 하지 못했습니다" in sec
-        assert "자료 없음과 다릅니다" in sec
+        # DART가 0행을 줬다(013) — 실패가 아니므로 「자료 없음과 다릅니다」라 쓰지 않는다
+        assert "DART 응답에 해당 사업연도 임원현황 자료가 없습니다" in sec
+        assert "자료 없음과 다릅니다" not in sec
         assert "해당 없음" not in out
         assert "0인" not in out
         assert "겸직 대조 불가" in out.split("요약:")[1]
@@ -635,7 +658,8 @@ class TestBlockFunction:
         import inspect
         sig = inspect.signature(srv._board_conflict_block)
         assert list(sig.parameters) == [
-            "corp_code", "corp_name", "disclosures", "row", "api_key", "want_header", "info"]
+            "corp_code", "corp_name", "disclosures", "row", "api_key", "want_header", "info",
+            "text", "rcept_mode"]
         assert sig.parameters["want_header"].kind is inspect.Parameter.KEYWORD_ONLY
         assert sig.parameters["want_header"].default is True
 
@@ -681,7 +705,12 @@ class TestMissingFromTable:
             srv, "fetch_executive_roster_rows", lambda *a, **kw: FetchList(mao))
         out = srv.check_board_conflict("SKAI", FILING)
         assert "🎯" not in out
-        assert "겸직 1인 확인 — 그 이사들은 의결표에 이름이 없습니다" in out
+        # 최종 리뷰 I3: 의결표에 없는 임원은 따로 적고 「이사 N인 중 K인」의 K에 넣지 않는다
+        assert "의결표 밖 임원 겸직: 가나다 — 요약의 겸직 이사 수에 넣지 않았습니다" in out
+        assert "의결표 이사 중 해당 없음" in out
+        summary = out.split("요약: ")[1].splitlines()[0]
+        assert summary.startswith("이사 7인 중 0인이 상대방·대상회사 임원 겸직 · 의결표 밖 임원 겸직 1인")
+        assert "그 이사들은 의결표에 이름이 없습니다" not in out
 
 
 class TestParticipationMark:
@@ -696,3 +725,173 @@ class TestParticipationMark:
     ])
     def test_참여_표기(self, v, expected):
         assert srv._board_participated(v) is expected
+
+
+# ── 최종 리뷰 수정 (2026-10-28) ──────────────────────────────────────────────
+
+def _summary(out: str) -> str:
+    return out.split("요약: ")[1].splitlines()[0]
+
+
+def _overlap_sec(out: str) -> str:
+    return out.split("━━ 겸직 대조 ━━")[1].split("━━ 한계 ━━")[0]
+
+
+@pytest.mark.usefixtures("no_structured_dart")
+class TestPartiesUnread:
+    """I1 — 거래 당사자를 원문에서 못 읽으면 「해당 없음 … 0인」이 아니라 대조 불가다."""
+
+    def test_당사자를_못_읽으면_대조_불가(self, wired, monkeypatch):
+        monkeypatch.setattr(srv, "fetch_document_text",
+                            lambda *a, **kw: "주요사항보고서 본문 — 서식을 읽을 수 있는 표가 없음")
+        out = srv.check_board_conflict("SKAI", FILING)
+        sec = _overlap_sec(out)
+        assert ("거래 당사자를 원문에서 읽지 못해 겸직 대조를 하지 못했습니다(자료 없음과 다릅니다)"
+                in sec)
+        assert "해당 없음" not in out and "0인" not in out
+        assert "겸직 대조 불가(거래 당사자를 원문에서 읽지 못함)" in _summary(out)
+        assert wired.roster == []   # 대조할 상대가 없으면 명부를 받지 않는다
+        assert "🎯" not in out
+
+
+@pytest.mark.usefixtures("no_structured_dart")
+class TestDoosanRepeatedTable:
+    """I2 — 반복 의결표(두산): 행 없음은 「의결표 없음」이 아니고, 둘째 표의 행도 읽는다."""
+
+    @pytest.fixture(autouse=True)
+    def _doosan(self, no_structured_dart, wired, monkeypatch):
+        monkeypatch.setattr(
+            srv, "fetch_audit_report_text",
+            lambda rcept, k, prefer="": _txt("두산_board_section.md") if rcept == PERIODIC else "")
+
+    def test_결의일_행이_없으면_읽은_행_수를_적는다(self, wired):
+        out = srv.check_board_conflict("SKAI", FILING)   # 결의일 2025.12.19 — 두산 표에 없음
+        assert ("의결표(표 2개·7행 읽음)에 결의일 2025.12.19 행이 없습니다(출처 사업보고서 "
+                f"(2025.12) {PERIODIC}) — 의결표가 없다는 뜻이 아닙니다.") in out
+        s = _summary(out)
+        assert s.endswith("결의일 행 없음") and "의결표 없음" not in s
+        # 행이 없으니 분모는 명부의 등기이사다
+        assert s.startswith("등기이사 6인(명부 기준) 중 4인이")
+
+    def test_둘째_표의_행이면_그_표의_이사로_센다(self, wired, monkeypatch):
+        text = _txt("20251219000418_text.txt").replace("2025년 12월 19일", "2025년 9월 10일")
+        monkeypatch.setattr(srv, "fetch_document_text", lambda *a, **kw: text)
+        out = srv.check_board_conflict("SKAI", FILING)
+        assert "5회차 2025.09.10" in out
+        assert "반복 의결표 서식 — 이사 구성이 바뀔 때마다 이어진 표 2개를 모두 읽었고" in out
+        assert "유승우 찬성찬성찬성" in out and "문홍성" not in out.split("이사별 표기:")[1].splitlines()[0]
+        # SKAI 명부의 겸직자는 두산 의결표에 없다 — K는 0, 의결표 밖으로 따로 센다
+        assert _summary(out).startswith(
+            "이사 7인 중 0인이 상대방·대상회사 임원 겸직 · 의결표 밖 임원 겸직 4인")
+
+
+@pytest.mark.usefixtures("no_structured_dart")
+def test_정기보고서_원문을_못_받으면_의결표_확인_불가(wired, monkeypatch):
+    monkeypatch.setattr(srv, "fetch_audit_report_text", lambda *a, **kw: "")
+    out = srv.check_board_conflict("SKAI", FILING)
+    assert "정기보고서 원문을 받지 못해 의결표를 확인하지 못했습니다 — 의결표가 없다는 뜻이 아닙니다." in out
+    assert _summary(out).endswith("의결표 확인 불가")
+
+
+@pytest.mark.usefixtures("no_structured_dart")
+def test_과거_경력은_사실_줄만_남고_겸직이_아니다(wired, monkeypatch):
+    rows = [{"nm": "홍길동", "ofcps": "사외이사", "rgist_exctv_at": "사외이사",
+             "main_career": "18.07~21.04 디렉터스컴퍼니 전무\n21.05~ 現 서울대학교 교수",
+             "mxmm_shrholdr_relate": "-"}]
+    monkeypatch.setattr(srv, "fetch_executive_roster_rows", lambda *a, **kw: FetchList(rows))
+    out = srv.check_board_conflict("SKAI", FILING)
+    sec = _overlap_sec(out)
+    assert ("- 과거 경력에 상대방명 등장: 홍길동 — 「18.07~21.04 디렉터스컴퍼니 전무」 "
+            "(현재 경력 표기가 없어 겸직으로 세지 않았습니다)") in sec
+    assert "해당 없음" in sec and "🎯" not in out
+    assert "중 0인이" in _summary(out)
+
+
+@pytest.mark.usefixtures("no_structured_dart")
+class TestWindowRelatedFilter:
+    """I6 — 창 모드는 관계 표기가 최대주주·특수관계인인 건만 대조하고, 태그 붙은 제목은 뺀다."""
+
+    def _rows(self, monkeypatch, rows):
+        monkeypatch.setattr(srv, "fetch_company_disclosures_with_status",
+                            lambda *a, **kw: (rows + [_PERIODIC_ROW], FETCH_OK))
+
+    def test_첨부정정_제목은_후보가_아니다(self, wired, monkeypatch):
+        tagged = dict(_FILING_ROW, rcept_no="20251220000001", rcept_dt="20251220",
+                      report_nm="[첨부정정]주요사항보고서(타법인주식및출자증권양수결정)")
+        self._rows(monkeypatch, [tagged, _FILING_ROW])
+        out = srv.check_board_conflict("SKAI")
+        assert "20251220000001" not in wired.doc_text and "20251220000001" not in out
+        assert "해당 유형 공시 1건 원문 확인" in out
+
+    def test_관계가_아닌_건만_있으면_블록_없이_그렇게_적는다(self, wired, monkeypatch):
+        ts = _targets(2)
+        _doc_all_related(wired, monkeypatch, unrelated={t["rcept_no"] for t in ts})
+        self._rows(monkeypatch, ts)
+        out = srv.check_board_conflict("SKAI")
+        assert ("해당 유형 공시 2건 원문 확인 — 상대방 관계 표기가 최대주주·특수관계인인 건 없음"
+                in out)
+        assert "━━ 거래 ━━" not in out and wired.audit_text == [] and wired.roster == []
+        assert "관계 표기가 최대주주·특수관계인으로 읽히지 않아 대조하지 않은 건:" in out
+        assert "거래상대방 관계 「-」" in out
+
+    def test_관계가_아닌_건을_건너뛰고_관계인_건을_대조한다(self, wired, monkeypatch):
+        ts = _targets(3)   # 최신순: ...12, ...11, ...10
+        _doc_all_related(wired, monkeypatch,
+                         unrelated={ts[2]["rcept_no"], ts[1]["rcept_no"]},
+                         related={ts[0]["rcept_no"]})
+        self._rows(monkeypatch, ts)
+        out = srv.check_board_conflict("SKAI")
+        assert "건 1건 대조" in out
+        assert out.count("━━ 거래 ━━") == 1
+        assert f"(rcept_no={ts[0]['rcept_no']})" in out.split("━━ 거래 ━━")[1]
+
+    def test_원문은_최대_6건까지만_연다(self, wired, monkeypatch):
+        ts = [dict(_FILING_ROW, rcept_no=f"202512{27 - i:02d}000418", rcept_dt=f"202512{27 - i:02d}")
+              for i in range(7)]
+        _doc_all_related(wired, monkeypatch, unrelated={t["rcept_no"] for t in ts})
+        self._rows(monkeypatch, ts)
+        out = srv.check_board_conflict("SKAI")
+        assert len(wired.doc_text) == 6
+        assert ("해당 유형 공시 7건 중 최근 6건 원문 확인 · 1건 미확인 — 상대방 관계 표기가 "
+                "최대주주·특수관계인인 건 없음") in out
+
+    def test_원문을_못_받은_건은_관계가_없다고_말하지_않는다(self, wired, monkeypatch):
+        ts = _targets(1)
+        _doc_all_related(wired, monkeypatch)   # 후보 접수번호에 원문 없음
+        self._rows(monkeypatch, ts)
+        out = srv.check_board_conflict("SKAI")
+        assert "원문 미수신 1건" in out
+        assert "원문을 받지 못해 관계를 확인하지 못한 건(관계가 없다는 뜻이 아닙니다):" in out
+
+
+@pytest.mark.usefixtures("no_structured_dart")
+def test_접수번호_모드에만_접수번호_한계_줄이_있다(wired):
+    out = srv.check_board_conflict("SKAI", FILING)
+    assert "- 접수번호 모드는 접수번호 앞 8자리가" in out
+    block, _, _ = srv._board_conflict_block(
+        CORP, "SKAI", [_PERIODIC_ROW, _FILING_ROW], _FILING_ROW, "k")
+    assert "접수번호 모드는" not in block
+    assert "분기보고서는 3월·9월 분기 제목만 정기보고서로 읽습니다" in block
+
+
+@pytest.mark.usefixtures("no_structured_dart")
+def test_창_모드_관계_칸을_못_읽으면_대시가_아니라_못_읽음이다(wired, monkeypatch):
+    ts = _targets(1)
+    monkeypatch.setattr(srv, "fetch_document_text", lambda *a, **kw: "관계 표가 없는 원문")
+    monkeypatch.setattr(srv, "fetch_company_disclosures_with_status",
+                        lambda *a, **kw: (ts + [_PERIODIC_ROW], FETCH_OK))
+    out = srv.check_board_conflict("SKAI")
+    assert "거래상대방 관계 (원문에서 읽지 못함)" in out
+    assert "거래상대방 관계 「-」" not in out
+
+
+def test_제목이_특수관계인_거래면_관계_칸과_무관하게_대상이다(monkeypatch):
+    """「특수관계인에대한출자」는 제목이 상대방을 특수관계인으로 밝힌다 — 관계 칸이 「출자조합」이어도
+    대조 대상이다(라이브 삼성전자 2026-07-30 2건). 관계 칸만 보면 창 모드에서 빠진다."""
+    monkeypatch.setattr(srv, "parse_related_party_detail",
+                        lambda text: {"counterparty": "삼성 투자조합", "relation": "출자조합"})
+    p = srv._board_parties("특수관계인 출자 원문", "특수관계인에대한출자")
+    assert p["counterparty"]["name"] == "삼성 투자조합" and p["related_party"] is True
+    monkeypatch.setattr(srv, "parse_outflow_detail",
+                        lambda text: {"counterparty": "갑", "relation": "출자조합"})
+    assert srv._board_parties("원문", "타인에대한채무보증결정")["related_party"] is False

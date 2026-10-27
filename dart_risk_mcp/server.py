@@ -173,7 +173,11 @@ from .core.qualifiers import (
 )
 from .core.signals import SIGNAL_LABELS
 from .core.board import _name_key as _board_name_key
+from .core.board import board_scope as _board_scope
+from .core.board import career_mentions as _board_career_mentions
+from .core.board import is_related_relation as _board_is_related_relation
 from .core.dart_client import _fold_corp_name as _board_fold_corp_name
+from .core.dart_client import _LEADING_TAGS_RE as _BOARD_LEADING_TAGS_RE
 
 # 법인 표기 접사 — core `_AFFIL_CORP_SUFFIX_RE`와 같은 집합이다(그쪽은
 # 타법인 출자현황 대조용). 이름을 **비교**할 때만 지우고 화면에는 원문을 쓴다.
@@ -3620,20 +3624,27 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
                         lines.append(f"  • {title}")
 
     # 이사회 이해상충 확인 — 행 복원에 성공했고, 1차 대상 유형이며, 원문의 거래상대방
-    # 또는 대상회사가 최대주주·특수관계인 계열로 읽힐 때만 같은 블록 1회. 대조군(상대방이
-    # 특수관계가 아닌 공시)에는 블록도 원문 추가 조회도 없다.
+    # 또는 대상회사가 최대주주·특수관계인 계열로 읽힐 때만 같은 블록 1회. 관계는
+    # `_board_parties`로 읽는다 — 인수 서식만 보는 `parse_decision_parties`를 쓰면 금전대여·
+    # 담보·특수관계인 거래는 관계가 있어도 조용히 빠진다. 대상 유형인데 관계가 아니면 그 사실
+    # 한 줄만 남기고(정기보고서·명부 조회 없음), 원문을 못 받으면 실패 문구를 남긴다.
     if filing and lookup_status == "found" and rcept_no and _api_key():
         _fr_nm = filing.get("report_nm") or ""
         _fr_corp = str(filing.get("corp_code") or "")
         if _fr_corp and not is_amendment_disclosure(_fr_nm) and _board_is_target(_fr_nm):
+            _fr_text = ""
             try:
                 _fr_text = fetch_document_text(rcept_no, _api_key(), max_chars=6000) or ""
-                _fr_related = bool(parse_decision_parties(_fr_text)["related_party"])
+                _fr_related = (bool(_board_parties(_fr_text, _fr_nm)["related_party"])
+                               if _fr_text else None)
             except Exception:
                 _fr_related = None
             if _fr_related is None:
                 lines += ["", _BOARD_EMBED_FAIL]
-            elif _fr_related:
+            elif not _fr_related:
+                lines += ["", "🪑 이사회 이해상충: 상대방 관계 표기가 최대주주·특수관계인이 "
+                              "아니어서 대조하지 않았습니다"]
+            else:
                 _fr_name = filing.get("corp_name") or _fr_corp
                 try:
                     _fr_disc = _board_periodic_disclosures(
@@ -3646,7 +3657,7 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
                         {"rcept_no": rcept_no, "rcept_dt": filing.get("rcept_dt"),
                          "report_nm": _fr_nm},
                         [filing], _fr_corp, _fr_name),
-                    _api_key(), want_header=True,
+                    _api_key(), want_header=True, text=_fr_text,
                 )
                 lines += _fr_board["lines"]
 
@@ -10313,7 +10324,8 @@ def track_market_reaction(
 #   문장으로 밝힌다. 판정·점수·등급은 없다(v0.8.5). 반복 호출을 막으려고 흐름을
 #   `_board_conflict_block` 하나로 두었다 — 다른 도구가 같은 블록을 재사용한다.
 
-_BOARD_MAX_CHECK = 3          # 창 모드에서 원문을 여는 결정 공시 상한
+_BOARD_MAX_CHECK = 3          # 창 모드에서 대조 블록을 내는 결정 공시 상한(임베드 후보 상한도 같다)
+_BOARD_SCAN_MAX = 6           # 창 모드에서 관계를 읽으려고 원문을 여는 결정 공시 상한
 _BOARD_PERIODIC_MAX = 2       # 결의일 이후 정기보고서 중 의결표를 찾아볼 상한
 _BOARD_ROWS_SHOWN = 3         # 같은 결의일 행을 그리는 상한
 _BOARD_DECISION_TYPES = frozenset({
@@ -10365,18 +10377,20 @@ def _board_type_label(report_nm: str) -> str:
 def _board_parties(text: str, report_nm: str) -> dict:
     """결정 공시 원문 → 거래 당사자. 인수 서식은 `parse_decision_parties`가 읽고,
     그 서식이 아닌 자금유출·특수관계인 거래는 기존 파서로 상대방·관계를 채운다
-    (대표자는 `parse_decision_parties`가 읽은 값, 없으면 "")."""
+    (대표자는 `parse_decision_parties`가 읽은 값, 없으면 "").
+
+    `related_party`는 **채운 뒤의** 상대방·대상회사 관계로 다시 정한다 — 인수 서식만 보는
+    `parse_decision_parties`의 값을 그대로 쓰면 금전대여·담보·특수관계인 거래는 늘 False다.
+    제목에 「특수관계인」이 있으면(「특수관계인에대한출자」 등) 관계 칸과 무관하게 True다."""
     parties = parse_decision_parties(text)
     cp = parties["counterparty"]
-    if cp.get("name"):
-        return parties
-    keys = {s["key"] for s in match_signals(report_nm or "")}
+    keys = set() if cp.get("name") else {s["key"] for s in match_signals(report_nm or "")}
     detail: dict = {}
     if "FUND_OUTFLOW" in keys:
         detail = parse_outflow_detail(text)
     if not detail.get("counterparty") and "RELATED_PARTY" in keys:
         detail = parse_related_party_detail(text)
-    if not detail.get("counterparty") and _is_asset_disposal_title(report_nm):
+    if not cp.get("name") and not detail.get("counterparty") and _is_asset_disposal_title(report_nm):
         detail = parse_asset_disposal_detail(text)
     if detail.get("counterparty"):
         parties["counterparty"] = {
@@ -10384,7 +10398,28 @@ def _board_parties(text: str, report_nm: str) -> dict:
             "rep": cp.get("rep", ""),
             "relation": detail.get("relation", "") or "",
         }
+    # 제목이 「특수관계인에대한출자·자금대여·담보제공…」이면 제출사가 상대방을 특수관계인으로
+    # 밝힌 것이다 — 관계 칸이 「출자조합」처럼 표지 낱말이 없어도 대상이다(라이브 삼성전자
+    # 2026-07-30 「특수관계인에대한출자」 2건, 관계 칸 「출자조합」).
+    parties["related_party"] = (
+        "특수관계인" in (report_nm or "").replace(" ", "")
+        or any(_board_is_related_relation(p.get("relation"))
+               for p in (parties["counterparty"], parties["target"])))
     return parties
+
+
+def _board_relation_text(parties: dict) -> str:
+    """관계 표기 한 줄 — 창 모드에서 대조하지 않은 건에 붙인다."""
+    cp, tg = parties["counterparty"], parties["target"]
+
+    def _rel(p: dict) -> str:
+        # 관계 칸을 못 읽은 것과 원문이 「-」인 것을 가른다
+        return f"「{p['relation']}」" if p.get("relation") else "(원문에서 읽지 못함)"
+
+    out = f"거래상대방 관계 {_rel(cp)}"
+    if tg.get("name"):
+        out += f" · 대상회사 관계 {_rel(tg)}"
+    return out
 
 
 def _board_periodic_all(disclosures) -> list[tuple]:
@@ -10459,6 +10494,8 @@ def _board_conflict_block(
     *,
     want_header: bool = True,
     info: "dict | None" = None,
+    text: "str | None" = None,
+    rcept_mode: bool = False,
 ) -> "tuple[str, bool, str]":
     """결정 공시 한 건의 이사회 이해상충 대조 → `(마크다운 블록, 겸직 겹침 여부, 한 줄 요약)`.
 
@@ -10474,6 +10511,11 @@ def _board_conflict_block(
     `info`를 주면 `info["has_table"]`에 **의결표 행을 찾았는지**, `info["table_state"]`에
     `"row"`(행 있음)·`"unread"`(의결표는 있으나 이 서식을 읽지 못함)·`"none"`(의결표 없음)을 적는다
     — 임베드 호출부가 후보를 순회하다 멈출 지점을 정하고 열어 본 후보의 결과를 밝히는 데 쓴다.
+    `"no_row"`(의결표는 읽었으나 결의일 행 없음)·`"periodic_failed"`(정기보고서 원문을 못 받음)·
+    `"failed"`(결정 공시 원문을 못 받음)도 있다.
+
+    `text`를 주면 결정 공시 원문을 다시 받지 않는다(창 모드가 관계를 먼저 읽은 원문).
+    `rcept_mode`는 접수번호 모드의 한계 줄을 붙일지 — 창 모드·임베드에는 해당이 없다.
     """
     rcept = str(row.get("rcept_no") or "")
     title = _clean_report_name(row.get("report_nm") or "")
@@ -10484,10 +10526,11 @@ def _board_conflict_block(
     lines += ["━━ 거래 ━━",
               f"공시: {_fmt_date8(rcept_dt) or '-'} {title} (rcept_no={rcept})"]
 
-    try:
-        text = fetch_document_text(rcept, api_key, max_chars=6000) or ""
-    except Exception:
-        text = ""
+    if text is None:
+        try:
+            text = fetch_document_text(rcept, api_key, max_chars=6000) or ""
+        except Exception:
+            text = ""
     if not text:
         if info is not None:
             info["table_state"] = "failed"
@@ -10511,36 +10554,68 @@ def _board_conflict_block(
         lines.append("대상회사: " + _board_party_text(parties["target"], "회사와 관계"))
 
     res = _board_find_resolution(disclosures, date8, parties, api_key)
+    state = _board_table_state(res)
     if info is not None:
         info["has_table"] = bool(res["found"])
-        info["table_state"] = ("row" if res["found"]
-                               else "unread" if res.get("unread") else "none")
+        info["table_state"] = state
     lines += ["", "━━ 이사회 의결 ━━"] + _board_resolution_lines(
         res, corp_name, date8, disclosures)
 
     ro = _board_roster_overlap(
         corp_code, corp_name, disclosures, res, date8, rcept_dt, parties, api_key)
     row0 = res["found"][2][0] if res["found"] else None
-    directors = res["found"][1]["directors"] if res["found"] else []
+    directors = _board_row_directors(res)
     gated, overlap_lines = _board_overlap_lines(ro, row0, directors)
 
-    lines += ["", "━━ 겸직 대조 ━━", ro["basis_note"]] + overlap_lines
+    lines += ["", "━━ 겸직 대조 ━━"] + ([ro["basis_note"]] if ro["basis_note"] else []) \
+        + overlap_lines
     if gated:
         _bc_label = next(t["label"] for t in SIGNAL_TYPES if t["key"] == "BOARD_CONFLICT")
         lines += ["", "🎯 " + _bc_label]
     lines += ["", "━━ 한계 ━━",
               "- 비상장 상대방 임원은 공시 기재(대표자·발행사 임원 주요경력)로만 확인했습니다 — "
               "등기부 대조를 권합니다.",
+              "- 주요경력은 현재 경력(現·현재·재직 중·끝나지 않은 기간)에 적힌 회사명만 겸직 근거로 "
+              "셉니다. 접사를 뗀 회사명이 3자 미만(LG·SK 등)이면 경력 대조를 하지 않습니다.",
               "- 이사회의사록 첨부는 이 도구가 읽지 않습니다.",
               "- CB·BW·유상증자 발행대상자 유형은 이 도구의 1차 범위 밖입니다.",
-              "- 접수번호 모드는 접수번호 앞 8자리가 접수일과 다른 공시(실측 0.7%)를 찾지 못합니다 — "
-              "그때는 창 모드로 다시 조회하세요."]
+              "- 분기보고서는 3월·9월 분기 제목만 정기보고서로 읽습니다 — 12월 결산이 아닌 회사의 "
+              "분기보고서는 의결표·명부 후보에서 빠집니다."]
+    if rcept_mode:
+        lines.append("- 접수번호 모드는 접수번호 앞 8자리가 접수일과 다른 공시(실측 0.7%)를 찾지 "
+                     "못합니다 — 그때는 창 모드로 다시 조회하세요.")
 
     summary = summarize_board_conflict(
-        directors, ro["overlaps"], row0,
-        table_unread=bool(res.get("unread")) and not res["found"])
+        directors, ro["overlaps"], row0, table_state=state,
+        roster=list(ro["roster"]) if ro["roster"] else None,
+        unmatched_reason=("거래 당사자를 원문에서 읽지 못함" if ro.get("parties_unread") else ""))
     lines += ["", f"요약: {summary}"]
     return "\n".join(lines), gated, summary
+
+
+def _board_table_state(res: dict) -> str:
+    """의결표 조회 결과 상태 — `row`·`unread`·`no_row`·`periodic_failed`·`none`."""
+    if res["found"]:
+        return "row"
+    if res.get("unread"):
+        return "unread"
+    if res.get("no_row"):
+        return "no_row"
+    if res.get("periodic_failed"):
+        return "periodic_failed"
+    return "none"
+
+
+def _board_row_directors(res: dict) -> list:
+    """찾은 결의 행이 든 **그 표**의 이사 — 반복 의결표(두산)는 표마다 이사가 다르다."""
+    if not res["found"]:
+        return []
+    _cand, parsed, rows = res["found"]
+    row0 = rows[0]
+    for t in parsed.get("tables") or []:
+        if any(r is row0 for r in t.get("rows") or []):
+            return t.get("directors") or []
+    return parsed.get("directors") or []
 
 
 def _board_find_resolution(disclosures, date8: str, parties: dict, api_key: str) -> dict:
@@ -10560,11 +10635,17 @@ def _board_find_resolution(disclosures, date8: str, parties: dict, api_key: str)
     title = ""
     tried: list[str] = []
     unread: list[tuple] = []
+    no_row: list[tuple] = []  # (cand, 읽은 행 수, 표 수) — 의결표는 읽었으나 결의일 행 없음
+    periodic_failed = False
     for cand in cands:
         _dt, rn, nm, _code = cand
         label = f"{nm} {rn}"
-        md = fetch_audit_report_text(rn, api_key) or ""
+        try:
+            md = fetch_audit_report_text(rn, api_key) or ""
+        except Exception:
+            md = ""
         if not md:
+            periodic_failed = True
             tried.append(f"{label}: 원문을 받지 못했습니다")
             continue
         sec_title, sec = extract_board_section_with_title(md)
@@ -10582,18 +10663,29 @@ def _board_find_resolution(disclosures, date8: str, parties: dict, api_key: str)
             found = (cand, parsed, rows)
             title = sec_title
             break
-        tried.append(f"{label}: 결의일 {_fmt_date8(date8)} 행 없음 "
-                     f"(의결표 {len(parsed['rows'])}행 중)")
+        n_tables = len(parsed.get("tables") or []) or 1
+        no_row.append((cand, len(parsed["rows"]), n_tables, sec_title))
+        tried.append(f"{label}: 「{sec_title}」 의결표({_board_rows_read(len(parsed['rows']), n_tables)})"
+                     f"에 결의일 {_fmt_date8(date8)} 행 없음")
     return {"cands_all": cands_all, "cands": cands, "found": found, "tried": tried,
-            "unread": unread, "title": title}
+            "unread": unread, "title": title, "no_row": no_row,
+            "periodic_failed": periodic_failed}
+
+
+def _board_rows_read(n_rows: int, n_tables: int) -> str:
+    return (f"표 {n_tables}개·" if n_tables > 1 else "") + f"{n_rows}행 읽음"
 
 
 def _board_resolution_lines(res: dict, corp_name: str, date8: str, disclosures) -> list[str]:
     found, cands, cands_all = res["found"], res["cands"], res["cands_all"]
     out: list[str] = []
     if found:
-        cand, _parsed, rows = found
+        cand, parsed, rows = found
         out.append(f"출처: {cand[2]} {cand[1]} 「{(res.get('title') or '의결사항')}」")
+        n_tables = len(parsed.get("tables") or [])
+        if n_tables > 1:
+            out.append(f"(반복 의결표 서식 — 이사 구성이 바뀔 때마다 이어진 표 {n_tables}개를 모두 "
+                       "읽었고, 이사 명단은 이 결의 행이 든 표의 것입니다)")
         for r in rows[:_BOARD_ROWS_SHOWN]:
             no = f"{r['no']}회차 " if r.get("no") else ""
             out.append(f"{no}{_fmt_date8(r['date8'])} 「{r['agenda'] or '안건 미기재'}」"
@@ -10622,7 +10714,16 @@ def _board_resolution_lines(res: dict, corp_name: str, date8: str, disclosures) 
             out.append(f"(결의일 이후 정기보고서 {len(cands_all)}건 중 접수순 앞 "
                        f"{len(cands)}건 확인 · {len(cands_all) - len(cands)}건 미확인)")
     else:
-        out.append("접수된 정기보고서의 의결표에서 이 결의일의 행을 찾지 못했습니다 — 의결표 없음")
+        if res.get("no_row"):
+            cand, n_rows, n_tables, _st = res["no_row"][0]
+            out.append(f"의결표({_board_rows_read(n_rows, n_tables)})에 결의일 {_fmt_date8(date8)} "
+                       f"행이 없습니다(출처 {cand[2]} {cand[1]}) — 의결표가 없다는 뜻이 아닙니다.")
+        elif res.get("periodic_failed"):
+            out.append("정기보고서 원문을 받지 못해 의결표를 확인하지 못했습니다 — "
+                       "의결표가 없다는 뜻이 아닙니다.")
+        else:
+            out.append("접수된 정기보고서에서 「이사회의 주요 의결사항」 절을 찾지 못했습니다 — "
+                       "의결표 없음")
         out += [f"- {t}" for t in res["tried"]]
         if len(cands_all) > len(cands):
             out.append(f"(결의일 이후 정기보고서 {len(cands_all)}건 중 접수순 앞 "
@@ -10643,7 +10744,19 @@ def _board_roster_overlap(
     읽힌다.
 
     `overlaps`는 대조했을 때만 리스트이고, 명부를 못 받았거나 0행이면 **None**
-    (대조 불가) — `[]`(대조했고 일치 없음)와 다르다."""
+    (대조 불가) — `[]`(대조했고 일치 없음)와 다르다.
+
+    거래상대방·대상회사의 이름과 대표자를 **하나도** 원문에서 읽지 못했으면 대조할 상대가 없다 —
+    명부를 받지 않고 `parties_unread=True`·`overlaps=None`으로 돌려준다(「해당 없음 … 0인」은
+    대조한 결과처럼 읽힌다)."""
+    cp, tg = parties["counterparty"], parties["target"]
+    if not any((cp.get("name"), cp.get("rep"), tg.get("name"), tg.get("rep"))):
+        return {
+            "basis_note": "", "year": "", "reprt": "", "roster": FetchList(),
+            "roster_failed": False, "other_rows": None, "other_note": "",
+            "overlaps": None, "corp_name": corp_name, "parties_unread": True,
+            "mentions": [],
+        }
     found, cands = res["found"], res["cands"]
     basis = found[0] if found else (cands[0] if cands else None)
     if basis:
@@ -10686,12 +10799,15 @@ def _board_roster_overlap(
                 other_note = f"상대방({cp_name}) 임원현황 {len(other_rows)}명도 대조했습니다."
 
     overlaps = None
+    mentions: list = []
     if not roster_failed and roster:
         overlaps = match_director_overlap(list(roster), parties, other_rows)
+        mentions = _board_career_mentions(list(roster), parties)
     return {
         "basis_note": basis_note, "year": year, "reprt": reprt, "roster": roster,
         "roster_failed": roster_failed, "other_rows": other_rows,
         "other_note": other_note, "overlaps": overlaps, "corp_name": corp_name,
+        "parties_unread": False, "mentions": mentions,
     }
 
 
@@ -10700,14 +10816,25 @@ def _board_overlap_lines(ro: dict, row0, directors: list) -> "tuple[bool, list[s
 
     게이트: 의결표 행이 있고, 겸직 이사 중 하나 이상의 표기에 찬성·반대·기권이 있다
     (`_board_participated` — 「-」·공란·불참은 참여가 아니다).
+
+    범위(`board_scope`): 의결표 이사가 있으면 그 이름들, 없으면 명부의 등기이사(사내·사외·
+    기타비상무). 범위 밖 겸직자(미등기 임원 등)는 「의결표 밖 임원 겸직」 줄로 따로 적고
+    요약의 이사 수 K와 게이트에 넣지 않는다.
     """
     out: list[str] = []
     overlaps = ro["overlaps"]
+    if ro.get("parties_unread"):
+        out.append("거래 당사자를 원문에서 읽지 못해 겸직 대조를 하지 못했습니다(자료 없음과 다릅니다)"
+                   " — 거래상대방·대상회사의 이름과 대표자가 원문에서 읽히지 않았습니다.")
+        return False, out
     if ro["roster_failed"]:
         out.append(_fetch_failed_notice(ro["corp_name"], f"임원현황 {ro['year']}"))
-    if overlaps is None:
         out.append("임원 명부를 확인하지 못해 겸직 대조를 하지 못했습니다(자료 없음과 다릅니다)"
-                   f" — 조회 {len(ro['roster'])}명 · {ro['year']}/{ro['reprt']}")
+                   f" — {ro['year']}/{ro['reprt']}")
+        return False, out
+    if overlaps is None:
+        out.append(f"DART 응답에 해당 사업연도 임원현황 자료가 없습니다(bsns_year {ro['year']}, "
+                   f"reprt_code {ro['reprt']}) — 겸직 대조를 하지 못했습니다.")
         return False, out
     scope = (f"대조 범위: 발행사 임원현황 {len(ro['roster'])}명 × "
              "공시 기재 대표자·임원현황 주요경력")
@@ -10717,11 +10844,28 @@ def _board_overlap_lines(ro: dict, row0, directors: list) -> "tuple[bool, list[s
     if ro["other_note"] and ro["other_rows"] is None:
         out.append("⚠ " + ro["other_note"])
     votes_by_key = {_board_name_key(n): v for n, v in (row0 or {}).get("votes", {}).items()}
-    if overlaps:
-        out += [_board_overlap_line(o, votes_by_key, row0 is not None) for o in overlaps]
+    _label, scope_keys, outside_label = _board_scope(directors, list(ro["roster"]))
+    inside = [o for o in overlaps
+              if scope_keys is None or _board_name_key(o["name"]) in scope_keys]
+    outside = [o for o in overlaps if o not in inside]
+    if inside:
+        out += [_board_overlap_line(o, votes_by_key, row0 is not None) for o in inside]
+    elif outside:
+        out.append(("의결표 이사" if directors else "등기이사") + " 중 해당 없음 — 공시에 적힌 "
+                   "상대방·대상회사 대표자 및 임원현황 주요경력과 일치하는 이사가 이 범위에서는 "
+                   "확인되지 않았습니다.")
     else:
         out.append("해당 없음 — 공시에 적힌 상대방·대상회사 대표자 및 임원현황 주요경력과 "
                    "일치하는 이사가 이 범위에서는 확인되지 않았습니다.")
+    if outside:
+        names = list(dict.fromkeys(o["name"] for o in outside))
+        out.append(f"{outside_label}: {', '.join(names)} — 요약의 겸직 이사 수에 넣지 않았습니다")
+        out += [_board_overlap_line(o, {}, False) for o in outside]
+    for m in ro.get("mentions") or []:
+        side = "상대방" if m["side"] == "counterparty" else "대상회사"
+        what = "과거 경력" if m["tense"] == "past" else "재직 시기 표기가 없는 경력"
+        out.append(f"- {what}에 {side}명 등장: {m['name']} — 「{m['quote']}」 "
+                   "(현재 경력 표기가 없어 겸직으로 세지 않았습니다)")
     if directors:
         roster_keys = {_board_name_key(r.get("nm")) for r in ro["roster"]}
         missing = [d["name"] for d in directors
@@ -10729,17 +10873,15 @@ def _board_overlap_lines(ro: dict, row0, directors: list) -> "tuple[bool, list[s
         if missing:
             out.append("의결표에는 있으나 임원현황에 없는 이사: " + ", ".join(missing)
                        + " — 겸직 대조 불가")
-    persons = {_board_name_key(o["name"]) for o in overlaps}
+    persons = {_board_name_key(o["name"]) for o in inside}
     gated = bool(row0) and any(_board_participated(votes_by_key.get(k)) for k in persons)
     if persons and not gated:
         out.append(
             f"겸직 {len(persons)}인 확인 — "
             + ("결의 참여 표기는 의결표에서 확인되지 않았습니다" if not row0
-               else ("그 이사들은 의결표에 이름이 없습니다"
-                     if not any(k in votes_by_key for k in persons)
-                     else ("그 이사들의 결의 표기는 전부 「-」입니다"
-                           if all((votes_by_key.get(k) or "").strip() in ("", "-") for k in persons)
-                           else "그 이사들의 결의 표기에 찬성·반대·기권이 없습니다(불참 등)"))))
+               else ("그 이사들의 결의 표기는 전부 「-」입니다"
+                     if all((votes_by_key.get(k) or "").strip() in ("", "-") for k in persons)
+                     else "그 이사들의 결의 표기에 찬성·반대·기권이 없습니다(불참 등)")))
     return gated, out
 
 
@@ -10809,7 +10951,7 @@ def _board_embed_header(note: str = "") -> str:
 
 def _board_embedded(
     corp_code: str, corp_name: str, disclosures, row: "dict | None", api_key: str,
-    *, want_header: bool = False, note: str = "",
+    *, want_header: bool = False, note: str = "", text: "str | None" = None,
 ) -> dict:
     """다른 도구에 끼워 넣는 이사회 이해상충 블록 → `{lines, gated, summary, row}`.
 
@@ -10824,7 +10966,7 @@ def _board_embedded(
     try:
         block, gated, summary = _board_conflict_block(
             corp_code, corp_name, disclosures, row, api_key,
-            want_header=want_header, info=info)
+            want_header=want_header, info=info, text=text)
     except Exception:
         # 화면에는 「확인하지 못했습니다」만 나가므로, 코드 결함(KeyError 등)과 API 실패를
         # 로그에서 가를 수 있게 트레이스백을 남긴다.
@@ -10869,7 +11011,8 @@ def _board_embedded_for_report(
         cur = _board_embedded(corp_code, corp_name, disclosures, row, api_key)
         outcome = ("조회 실패" if cur["failed"] or cur["table_state"] == "failed"
                    else {"row": "의결표 행 있음", "unread": "의결표 못 읽음",
-                         "none": "의결표 없음"}[cur["table_state"]])
+                         "no_row": "결의일 행 없음", "periodic_failed": "의결표 확인 불가",
+                         "none": "의결표 없음"}.get(cur["table_state"], "의결표 없음"))
         opened.append((row["rcept_no"], outcome))
         if first is None:
             first = cur
@@ -10942,7 +11085,8 @@ def check_board_conflict(
         rcept_no: 결정 공시 접수번호 14자리(선택). 주면 그 한 건만 확인하고
             lookback_days는 무시합니다.
         lookback_days: 접수번호가 없을 때의 조회 창(일). 기본 180, 1~730.
-            해당 유형의 정정 아닌 공시 중 최근 3건의 원문을 확인합니다.
+            해당 유형의 정정·태그 없는 공시 중 최근 6건까지 원문을 열어, 상대방 관계
+            표기가 최대주주·특수관계인인 건을 최대 3건 대조합니다.
     """
     api_key = _api_key()
     if not api_key:
@@ -10993,7 +11137,7 @@ def check_board_conflict(
                     f"아닙니다. 대상: {_BOARD_SCOPE_NOTE}.")
         disclosures = _board_periodic_disclosures(corp_code, api_key, row.get("rcept_dt"))
         block, _found, _summary = _board_conflict_block(
-            corp_code, corp_name, disclosures, row, api_key)
+            corp_code, corp_name, disclosures, row, api_key, rcept_mode=True)
         return block + "\n\n" + _BOARD_FOOTER
 
     window = f"최근 {lookback_days}일"
@@ -11001,9 +11145,12 @@ def check_board_conflict(
         corp_code, api_key, lookback_days, max_pages=_page_budget(lookback_days))
     if st == FETCH_ERROR:
         return _fetch_failed_notice(corp_name, window)
+    # 정정 태그만이 아니라 **선행 대괄호 태그가 붙은 제목은 전부** 뺀다 — `is_amendment_disclosure`는
+    # `[첨부정정]`을 놓쳐 두산 창에서 「원문을 받지 못했습니다」 블록이 자리를 차지했다.
     targets = sorted(
         (d for d in rows
          if not is_amendment_disclosure(d.get("report_nm") or "")
+         and not _BOARD_LEADING_TAGS_RE.match(d.get("report_nm") or "")
          and _board_is_target(d.get("report_nm") or "")),
         key=lambda d: (str(d.get("rcept_dt") or ""), str(d.get("rcept_no") or "")),
         reverse=True,
@@ -11015,15 +11162,60 @@ def check_board_conflict(
     if not targets:
         lines.append(f"이 창에는 해당 유형 공시가 없습니다 ({window} · 대상: {_BOARD_SCOPE_NOTE}).")
         return "\n".join(lines) + "\n\n" + _BOARD_FOOTER
-    checked = targets[:_BOARD_MAX_CHECK]
-    if len(targets) > len(checked):
-        lines.append(f"해당 유형 공시 {len(targets)}건 중 최근 {len(checked)}건 확인 · "
-                     f"{len(targets) - len(checked)}건 미확인")
+
+    # 최신순 최대 `_BOARD_SCAN_MAX`건의 원문을 열어 상대방·대상회사 관계를 읽고, 관계 표기가
+    # 최대주주·특수관계인인 건만 `_BOARD_MAX_CHECK`건까지 블록으로 낸다(그 수가 차면 멈춘다).
+    # 종속회사 채무보증 같은 건이 세 자리를 다 차지하던 것(아틀라스링크)을 막는다.
+    picked: list[tuple] = []     # (행, 원문)
+    skipped: list[tuple] = []    # (행, 관계 표기)
+    unread_rows: list[dict] = []
+    opened = 0
+    for tgt in targets[:_BOARD_SCAN_MAX]:
+        if len(picked) >= _BOARD_MAX_CHECK:
+            break
+        opened += 1
+        try:
+            text = fetch_document_text(str(tgt.get("rcept_no") or ""), api_key,
+                                       max_chars=6000) or ""
+        except Exception:
+            text = ""
+        if not text:
+            unread_rows.append(tgt)
+            continue
+        parties = _board_parties(text, tgt.get("report_nm") or "")
+        if parties["related_party"]:
+            picked.append((tgt, text))
+        else:
+            skipped.append((tgt, _board_relation_text(parties)))
+
+    n = len(targets)
+    head = (f"해당 유형 공시 {n}건 중 최근 {opened}건 원문 확인" if n > opened
+            else f"해당 유형 공시 {n}건 원문 확인")
+    if n > opened:
+        head += f" · {n - opened}건 미확인"
+    if unread_rows:
+        head += f" · 원문 미수신 {len(unread_rows)}건"
+    if picked:
+        head += (f" — 상대방 관계 표기가 최대주주·특수관계인인 건 {len(picked)}건 대조"
+                 + (f"(표시 상한 {_BOARD_MAX_CHECK}건)" if len(picked) >= _BOARD_MAX_CHECK
+                    and n > opened else ""))
     else:
-        lines.append(f"해당 유형 공시 {len(targets)}건 확인")
-    for i, tgt in enumerate(checked):
+        head += " — 상대방 관계 표기가 최대주주·특수관계인인 건 없음"
+    lines.append(head)
+
+    def _row_label(d: dict) -> str:
+        return (f"{_fmt_date8(str(d.get('rcept_dt') or '')[:8]) or '-'} "
+                f"{_clean_report_name(d.get('report_nm') or '')} (rcept_no={d.get('rcept_no')})")
+
+    if skipped:
+        lines.append("관계 표기가 최대주주·특수관계인으로 읽히지 않아 대조하지 않은 건:")
+        lines += [f"- {_row_label(d)} · {rel}" for d, rel in skipped]
+    if unread_rows:
+        lines.append("원문을 받지 못해 관계를 확인하지 못한 건(관계가 없다는 뜻이 아닙니다):")
+        lines += [f"- {_row_label(d)}" for d in unread_rows]
+    for i, (tgt, text) in enumerate(picked):
         block, _found, _summary = _board_conflict_block(
-            corp_code, corp_name, rows, tgt, api_key, want_header=False)
+            corp_code, corp_name, rows, tgt, api_key, want_header=False, text=text)
         lines += ["", _BOARD_SEP, "", block] if i else ["", block]
     return "\n".join(lines) + "\n\n" + _BOARD_FOOTER
 

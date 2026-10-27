@@ -371,7 +371,10 @@ class TestRiskCheckWiring:
             srv, "fetch_company_disclosures_with_status",
             lambda *a, **kw: (FetchList([_CONTROL_ROW]), FETCH_OK))
         out = srv.check_disclosure_risk(rcept_no=CONTROL)
-        assert "이사회 이해상충" not in out
+        # 1차 대상 유형인데 관계가 아니면 그 사실 한 줄만 — 정기보고서·명부는 열지 않는다
+        assert ("🪑 이사회 이해상충: 상대방 관계 표기가 최대주주·특수관계인이 아니어서 "
+                "대조하지 않았습니다") in out
+        assert "━━ 겸직 대조 ━━" not in out
         assert wired.audit_text == [] and wired.roster == []
 
     def test_1차_대상이_아닌_제목이면_원문도_열지_않는다(self, wired):
@@ -448,3 +451,50 @@ class TestCandidates:
 
     def test_빈_입력(self):
         assert srv._board_candidates(None, []) == []
+
+
+# ── 최종 리뷰 I7: check_disclosure_risk는 1차 대상 유형 전부에서 관계를 읽는다 ─────────────
+
+@pytest.mark.usefixtures("no_structured_dart")
+class TestRiskCheckLoanTitle:
+    LOAN = "금전대여결정"
+
+    @pytest.fixture(autouse=True)
+    def _row(self, no_structured_dart, wired, monkeypatch):
+        row = dict(_FILING_ROW, report_nm=self.LOAN)
+        monkeypatch.setattr(
+            srv, "resolve_disclosure_row_with_status",
+            lambda rcept, k, *a, **kw: (row, "found"))
+        monkeypatch.setattr(srv, "resolve_corp_code_from_rcept_no", lambda *a, **kw: "")
+        # 인수 서식이 아닌 원문 — 관계는 금전대여 파서(`parse_outflow_detail`)가 읽는다
+        self.doc_calls = []
+
+        def _doc(rcept, k, max_chars=3000):
+            self.doc_calls.append(rcept)
+            return "금전대여 결정 본문 — 인수 서식 표가 없는 원문" if rcept == FILING else ""
+
+        monkeypatch.setattr(srv, "fetch_document_text", _doc)
+        assert srv._board_is_target(self.LOAN)
+
+    def test_금전대여_상대가_최대주주면_블록이_붙는다(self, wired, monkeypatch):
+        monkeypatch.setattr(srv, "parse_outflow_detail", lambda text: {
+            "counterparty": "주식회사 디렉터스컴퍼니", "relation": "최대주주"})
+        out = srv.check_disclosure_risk(rcept_no=FILING)
+        assert f"🪑 SKAI — 이사회 이해상충 확인 · {FILING}" in out
+        assert "━━ 겸직 대조 ━━" in out
+        assert "거래상대방: 주식회사 디렉터스컴퍼니" in out
+        assert self.doc_calls.count(FILING) >= 1
+
+    def test_금전대여_상대가_관계가_아니면_한_줄만(self, wired, monkeypatch):
+        monkeypatch.setattr(srv, "parse_outflow_detail", lambda text: {
+            "counterparty": "주식회사 아무개", "relation": "-"})
+        out = srv.check_disclosure_risk(rcept_no=FILING)
+        assert ("🪑 이사회 이해상충: 상대방 관계 표기가 최대주주·특수관계인이 아니어서 "
+                "대조하지 않았습니다") in out
+        assert "━━ 겸직 대조 ━━" not in out
+        assert wired.audit_text == [] and wired.roster == []
+
+    def test_원문을_못_받으면_실패_문구(self, wired, monkeypatch):
+        monkeypatch.setattr(srv, "fetch_document_text", lambda *a, **kw: "")
+        out = srv.check_disclosure_risk(rcept_no=FILING)
+        assert "🪑 이사회 이해상충 확인: 조회 실패로 확인하지 못했습니다" in out

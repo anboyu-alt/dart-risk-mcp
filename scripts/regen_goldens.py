@@ -261,7 +261,8 @@ def _resolve_first_normal_rcept(company: dict, api_key: str) -> str | None:
 
 def _resolve_titled_rcept(company: dict, api_key: str, marks: tuple[str, ...],
                           lookback_days: int = 1100,
-                          skip_amendments: bool = True) -> str | None:
+                          skip_amendments: bool = True,
+                          skip_attach_amend: bool = False) -> str | None:
     """제목이 `marks` 중 하나를 담은 **최신** 공시의 접수번호.
 
     `search_notes_in_report`·`get_mezzanine_terms`는 아무 공시가 아니라 **특정
@@ -271,6 +272,10 @@ def _resolve_titled_rcept(company: dict, api_key: str, marks: tuple[str, ...],
 
     ⚠ 정정본은 건너뛴다 — DS005·메자닌 구조화 조회가 최초접수일 기준이라
     정정 접수번호로는 빈 결과가 온다(CLAUDE.md 「부가 발견 2」).
+
+    `skip_attach_amend`: `[첨부정정]` 제목도 건너뛴다(`is_amendment_disclosure`가 놓친다).
+    **`board_rcept`에만** 켠다 — 다른 도구(notes·mezz)에 켜면 골드가 고르는 공시가 이 기능
+    도입 전과 달라진다.
     """
     corp = resolve_corp(company["name"], api_key)
     if not corp or not corp[1]:
@@ -280,7 +285,9 @@ def _resolve_titled_rcept(company: dict, api_key: str, marks: tuple[str, ...],
         return None
     for d in fetch_company_disclosures(corp_code, api_key, lookback_days) or []:
         nm = (d.get("report_nm") or "").strip()
-        if skip_amendments and (is_amendment_disclosure(nm) or "[첨부정정]" in nm):
+        if skip_amendments and is_amendment_disclosure(nm):
+            continue
+        if skip_attach_amend and "[첨부정정]" in nm:
             # is_amendment_disclosure는 [첨부정정]을 놓친다(그 패턴 주석 참고)
             continue
         if not any(m in nm.replace(" ", "") for m in marks):
@@ -436,7 +443,8 @@ def build_call_matrix(
         if tool_filter and short not in tool_filter:
             continue
         for c in companies:
-            rcept = _resolve_titled_rcept(c, api_key, marks)
+            rcept = _resolve_titled_rcept(c, api_key, marks,
+                                          skip_attach_amend=(short == "board_rcept"))
             if not rcept:
                 sys.stderr.write(f"  SKIP {short}: {c['name']} 해당 공시 없음\n")
                 continue

@@ -12,21 +12,28 @@ from .dart_client import (
     _fold_corp_name,
     _is_amended_document,
     classify_outflow_relation,
+    strip_holder_suffix,
 )
 
 __all__ = [
     "parse_decision_parties",
+    "is_related_relation",
     "extract_board_section",
+    "extract_board_section_with_title",
     "parse_board_resolutions",
     "find_resolution_rows",
     "match_director_overlap",
+    "career_mentions",
+    "board_scope",
     "summarize_board_conflict",
 ]
 
 # ── 공통 유틸 ──────────────────────────────────────────────────────────────
 
 _WS_RE = re.compile(r"\s+")
-_FOOTNOTE_RE = re.compile(r"\(\s*\d+\s*\)")  # 임원현황 이름 뒤 각주 표지: 이재철(1)
+# 임원현황 이름 뒤 각주 표지: 이재철(1) · 김승현* · 조대민** · 김진철***(라이브 나이스정보통신
+# 2026/11012) · †·‡·※. 사람 이름에 이 기호가 들어가는 일은 없어 위치와 무관하게 뗀다.
+_FOOTNOTE_RE = re.compile(r"\(\s*\d+\s*\)|[*＊†‡※]+")
 _DATE_RE = re.compile(r"(\d{4})\s*[년.\-/]\s*(\d{1,2})\s*[월.\-/]\s*(\d{1,2})")
 _SKIP_NAMES = {"", "계", "합계"}
 
@@ -170,10 +177,15 @@ def parse_decision_parties(text: str) -> dict:
         if n:
             out["outside_directors_present"] = n.group(1)
 
-    for rel in (out["counterparty"]["relation"], out["target"]["relation"]):
-        if any(k in rel for k in _MARKERS) and classify_outflow_relation(rel) != "external":
-            out["related_party"] = True
+    out["related_party"] = any(is_related_relation(rel) for rel in (
+        out["counterparty"]["relation"], out["target"]["relation"]))
     return out
+
+
+def is_related_relation(rel) -> bool:
+    """관계 표기가 최대주주·특수관계인·계열을 말하는가(부정 표기로 external이면 아니다)."""
+    rel = rel or ""
+    return any(k in rel for k in _MARKERS) and classify_outflow_relation(rel) != "external"
 
 
 # ── extract_board_section ──────────────────────────────────────────────────
@@ -293,48 +305,31 @@ def _plausible_names(cells) -> bool:
                     for x in cells))
 
 
-def parse_board_resolutions(section_md: str) -> dict:
-    """이사회 의결표(2단 헤더 파이프 표)를 읽는다.
+def _is_table_header(lines: list[str], i: int) -> bool:
+    """i번째 줄이 새 의결표의 머리 줄인가 — 머리 칸 + 바로 다음 줄이 구분선."""
+    c = _cells(lines[i]) if i < len(lines) else None
+    return bool(c) and _is_header_cells(c) and i + 1 < len(lines) and _is_sep(_cells(lines[i + 1]))
 
-    상단 헤더(회차·개최 일자·의안 내용·가결 여부·사내이사 등·사외이사 등) 아래
-    이사 이름 줄(`이름(출석률: N%)`)이 따로 오고, 데이터 행은 4칸 + 이사 수만큼이다.
-    `group`: 이름 줄에 사내/사외 표지가 없고 상단 헤더의 두 그룹 셀 폭이 마크다운에
-    드러나지 않아 위치로 추정할 수 없다 — 추측하지 않고 전부 ""로 둔다.
 
-    `table_found`: **의결표 머리 줄을 찾았는가**. False는 「표가 없다」, True인데
-    `directors`·`rows`가 비면 「표는 있으나 이 서식을 읽지 못했다」다 — 두 경우를 섞으면
-    못 읽은 표가 「의결표 없음」으로 나온다.
+def _next_pipe_line(lines: list[str], i: int) -> "int | None":
+    """i부터 빈 줄을 건너뛴 첫 줄의 위치 — 그 줄이 파이프 행이 아니면(본문 문장) None."""
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    if i < len(lines) and _cells(lines[i]) is not None:
+        return i
+    return None
 
-    이름 줄은 **양성 근거**가 있을 때만 이사 줄로 읽는다: 칸 하나 이상이 `이름(출석률: N%)`이거나,
-    (출석률 표기가 없으면) 모든 칸이 사람 이름이고 비이름 단어(사내이사·구분·합계…)가 없으며
-    그 다음 데이터 행의 열 수가 이름 수와 맞아야 한다. 「출석율」 줄은 이름 줄 바로 다음
-    (사이에 구분선만 허용) 한 번만 적용한다. 첫 표만 읽는다 — 새 머리 줄이 나오면 멈춘다.
+
+def _parse_one_table(lines: list[str], h: int, hcells: list[str]):
+    """머리 줄 h부터 표 하나를 읽는다 → `(표 dict 또는 None, unparsed, 표가 끝난 위치)`.
+
+    표 dict는 `{"directors", "rows"}`. None은 「표는 찾았으나 이 서식을 읽지 못했다」.
+    끝난 위치는 다음 표의 머리 줄(있으면) 또는 표 바깥 첫 줄이다.
     """
-    empty = {"directors": [], "rows": [], "unparsed": 0, "table_found": False}
-    lines = _norm(section_md).split("\n")
-
-    h = None
-    hcells = None
-    for i, ln in enumerate(lines):  # ① 그룹 머리 칸(…등의 성명 / 이사의 성명)이 있는 머리 줄
-        c = _cells(ln)
-        if (c and any(_HDR_DATE_CELL_RE.search(x) for x in c)
-                and any(_NAME_HDR_RE.search(x) for x in c)):
-            h, hcells = i, c
-            break
-    if h is None:  # ② 그룹 머리 칸이 없는 서식 — 「개최일자」와 「의안(내용)」 칸
-        for i, ln in enumerate(lines):
-            c = _cells(ln)
-            if (c and any(_HDR_DATE_CELL_RE.search(x) for x in c)
-                    and any(_HDR_AGENDA_CELL_RE.fullmatch(x) for x in c)):
-                h, hcells = i, c
-                break
-    if h is None:
-        return empty
-    found = dict(empty, table_found=True)  # 이후의 빈 반환은 「표는 찾았으나 못 읽음」
     fixed = next((k for k, x in enumerate(hcells)
                   if _NAME_HDR_RE.search(x) or _PLAIN_GROUP_RE.fullmatch(x)), 4)
     if fixed < 4:
-        return found
+        return None, 0, h + 1
 
     i = h + 1
     while i < len(lines) and (_cells(lines[i]) is None and not lines[i].strip()):
@@ -345,14 +340,14 @@ def parse_board_resolutions(section_md: str) -> dict:
             break
         i += 1
     if i >= len(lines):
-        return found
+        return None, 0, i
     name_cells = _cells(lines[i])
     if not name_cells:
-        return found
+        return None, 0, i
     name_i = i
     with_attend = any(_ATTEND_RE.match(x) for x in name_cells)
     if not with_attend and not _plausible_names(name_cells):
-        return found
+        return None, 0, i + 1
     if not with_attend:
         # 출석률 표기가 없는 이름 줄은 열 수가 맞는 첫 데이터 행이 있어야 이사 줄이다
         first_data = None
@@ -367,7 +362,7 @@ def parse_board_resolutions(section_md: str) -> dict:
             first_data = d
             break
         if first_data is None or len(first_data) != fixed + len(name_cells):
-            return found
+            return None, 0, i + 1
 
     directors = []
     for x in name_cells:
@@ -382,11 +377,19 @@ def parse_board_resolutions(section_md: str) -> dict:
     attend_done = False
     i = name_i + 1
     while i < len(lines):
+        if not lines[i].strip():
+            # 표 안의 빈 줄 — 뒤에 파이프 행이 이어지면 같은 표다(조용히 버리지 않는다).
+            # 새 머리 줄이면 그 자리에서 이 표가 끝나고, 본문 문장이면 표 바깥이다.
+            nxt = _next_pipe_line(lines, i)
+            if nxt is None or _is_table_header(lines, nxt):
+                return {"directors": directors, "rows": rows}, unparsed, (nxt if nxt is not None else i)
+            i = nxt
+            continue
         c = _cells(lines[i])
         if c is None:
             break
-        if _is_header_cells(c) and i + 1 < len(lines) and _is_sep(_cells(lines[i + 1])):
-            break  # 새 표의 머리 줄 — 첫 표만 읽는다
+        if _is_table_header(lines, i):
+            return {"directors": directors, "rows": rows}, unparsed, i  # 새 표의 머리 줄
         pos = i
         i += 1
         if _is_sep(c) or len(c) == 1:  # 구분선·「찬 반 여 부」 같은 1칸 줄
@@ -410,8 +413,72 @@ def parse_board_resolutions(section_md: str) -> dict:
             "votes": dict(zip(names, c[fixed:])),
         })
     if not with_attend and not rows:
-        return found  # 이름 줄 같아 보였지만 열 수가 맞는 데이터 행이 없다 — 이사를 주장하지 않는다
-    return {"directors": directors, "rows": rows, "unparsed": unparsed, "table_found": True}
+        return None, unparsed, i  # 이름 줄 같아 보였지만 열 수가 맞는 데이터 행이 없다
+    return {"directors": directors, "rows": rows}, unparsed, i
+
+
+def parse_board_resolutions(section_md: str) -> dict:
+    """이사회 의결표(2단 헤더 파이프 표)를 읽는다.
+
+    상단 헤더(회차·개최 일자·의안 내용·가결 여부·사내이사 등·사외이사 등) 아래
+    이사 이름 줄(`이름(출석률: N%)`)이 따로 오고, 데이터 행은 4칸 + 이사 수만큼이다.
+    `group`: 이름 줄에 사내/사외 표지가 없고 상단 헤더의 두 그룹 셀 폭이 마크다운에
+    드러나지 않아 위치로 추정할 수 없다 — 추측하지 않고 전부 ""로 둔다.
+
+    `table_found`: **의결표 머리 줄을 찾았는가**. False는 「표가 없다」, True인데
+    `directors`·`rows`가 비면 「표는 있으나 이 서식을 읽지 못했다」다 — 두 경우를 섞으면
+    못 읽은 표가 「의결표 없음」으로 나온다.
+
+    이름 줄은 **양성 근거**가 있을 때만 이사 줄로 읽는다: 칸 하나 이상이 `이름(출석률: N%)`이거나,
+    (출석률 표기가 없으면) 모든 칸이 사람 이름이고 비이름 단어(사내이사·구분·합계…)가 없으며
+    그 다음 데이터 행의 열 수가 이름 수와 맞아야 한다. 「출석율」 줄은 이름 줄 바로 다음
+    (사이에 구분선만 허용) 한 번만 적용한다.
+
+    **반복 의결표**(두산 — 이사 구성이 바뀔 때마다 같은 머리의 표가 다시 온다): 새 머리 줄이
+    나오면 거기서 새 표를 읽는다. `tables`는 표마다 `{"directors", "rows"}`(행 dict는
+    `rows`와 **같은 객체**라 `r is row`로 어느 표의 행인지 찾는다). `directors`는 첫 표의 이사다
+    (하위 호환) — 행의 이사는 그 행이 든 표에서 읽어야 한다. 첫 표 뒤의 표를 못 읽으면 거기서
+    멈추고 `unparsed`에 1을 더한다. 표 안의 빈 줄 뒤에 파이프 행이 이어지면 같은 표로 읽는다.
+    """
+    empty = {"directors": [], "rows": [], "unparsed": 0, "table_found": False, "tables": []}
+    lines = _norm(section_md).split("\n")
+
+    h = None
+    hcells = None
+    for i, ln in enumerate(lines):  # ① 그룹 머리 칸(…등의 성명 / 이사의 성명)이 있는 머리 줄
+        c = _cells(ln)
+        if (c and any(_HDR_DATE_CELL_RE.search(x) for x in c)
+                and any(_NAME_HDR_RE.search(x) for x in c)):
+            h, hcells = i, c
+            break
+    if h is None:  # ② 그룹 머리 칸이 없는 서식 — 「개최일자」와 「의안(내용)」 칸
+        for i, ln in enumerate(lines):
+            c = _cells(ln)
+            if (c and any(_HDR_DATE_CELL_RE.search(x) for x in c)
+                    and any(_HDR_AGENDA_CELL_RE.fullmatch(x) for x in c)):
+                h, hcells = i, c
+                break
+    if h is None:
+        return empty
+    found = dict(empty, table_found=True)  # 이후의 빈 반환은 「표는 찾았으나 못 읽음」
+
+    table, unparsed, end = _parse_one_table(lines, h, hcells)
+    if table is None:
+        return found
+    tables = [table]
+    while end < len(lines) and _is_table_header(lines, end):
+        nxt, n_unparsed, nxt_end = _parse_one_table(lines, end, _cells(lines[end]))
+        if nxt is None:
+            unparsed += 1  # 이어진 표를 읽지 못했다 — 조용히 버리지 않고 센다
+            break
+        unparsed += n_unparsed
+        tables.append(nxt)
+        if nxt_end <= end:
+            break
+        end = nxt_end
+    rows = [r for t in tables for r in t["rows"]]
+    return {"directors": tables[0]["directors"], "rows": rows, "unparsed": unparsed,
+            "table_found": True, "tables": tables}
 
 
 # ── find_resolution_rows ───────────────────────────────────────────────────
@@ -434,19 +501,112 @@ def _role(ofcps, rgist) -> str:
     return "/".join(dict.fromkeys(x for x in (o, g) if x))  # 직위=구분이면 한 번만
 
 
-def _career_quote(career: str, company_fold: str) -> str:
-    """주요경력에서 (공백 무시·대문자) 회사명이 나오면 그 줄 안 앞뒤 20자까지 인용."""
-    idx = [i for i, ch in enumerate(career) if not ch.isspace()]
-    flat = "".join(career[i].upper() for i in idx)
+# 주요경력 조각의 시제 — 겸직 근거 ②는 **현재** 조각만 쓴다(최종 리뷰 I4).
+# ⚠ 「현」·「전」 한 글자는 단어 안에 흔하다(현대·삼성전자) — 괄호 표기 「(현)」·「전)」나
+#   조각 맨 앞의 「현 」·「전 」일 때만 표지로 본다.
+_DATE_TOKEN = r"\d{2,4}(?:[.\-/]\d{1,2}){0,2}"
+_PRESENT_RE = re.compile(r"現|현재|재직\s*중|\(\s*현\s*\)|(?<![가-힣])현\s*\)|^\s*현(?=\s)")
+_PAST_RE = re.compile(r"前|\(\s*전\s*\)|(?<![가-힣])전\s*\)|^\s*전(?=\s)")
+_OPEN_PERIOD_RE = re.compile(_DATE_TOKEN + r"\s*~(?!\s*[\d~])")        # 21.04~ · 21.04~ 現
+_CLOSED_PERIOD_RE = re.compile(_DATE_TOKEN + r"\s*~\s*\d{2,4}|^\s*~\s*\d")  # 18.07~21.04 · ~08.02
+_LETTER_RE = re.compile(r"[가-힣A-Za-z]")
+# 조각 경계: 기간 시작(날짜 + ~) 앞 · 「 / 」·「|」·「;」·「·」 구분자
+_SEG_SPLIT_RE = re.compile(r"(?<![\d.\-/])(?=" + _DATE_TOKEN + r"\s*~)|\s+/\s+|\s*[|;·]\s*")
+_MARKER_POS_RE = re.compile(r"前|現|\(\s*[전현]\s*\)|(?<![가-힣])[전현](?=\s)")
+# 접사를 뗀 회사명이 이보다 짧으면 경력 대조를 하지 않는다 — 「LG」·「SK」는 다른 계열사
+# 이름(LG전자·SK하이닉스) 안에 들어 있어 같은 회사라고 볼 근거가 없다.
+_CAREER_MIN_FOLD = 3
+_GENERIC_FOLDS = frozenset({
+    "주식회사", "회사", "홀딩스", "그룹", "코리아", "HOLDINGS", "GROUP", "KOREA",
+})
+
+
+def _split_markers(seg: str) -> list[str]:
+    """「前 A사 상무 現 B사 고문」처럼 한 조각에 표지가 둘이면 표지 앞에서 가른다.
+    「21.04~ 現 …」처럼 기간 바로 뒤의 표지는 같은 조각이다(가르면 기간이 떨어진다)."""
+    out: list[str] = []
+    start = 0
+    for m in _MARKER_POS_RE.finditer(seg):
+        p = m.start()
+        prev = seg[start:p].rstrip()
+        if p == start or not prev or prev.endswith("~"):
+            continue
+        out.append(seg[start:p])
+        start = p
+    out.append(seg[start:])
+    return out
+
+
+def _career_segments(career: str) -> list[str]:
+    """주요경력을 경력 조각으로 나눈다 — 줄·기간 시작·구분자·표지 기준.
+    날짜만 있는 줄(「2013~2016 」 + 다음 줄 「Bestfit Consulting CEO」)은 다음 줄과 잇는다."""
+    lines: list[str] = []
+    for ln in _norm(career).split("\n"):
+        if not ln.strip():
+            continue
+        if lines and not _LETTER_RE.search(lines[-1]):
+            lines[-1] = lines[-1] + " " + ln
+        else:
+            lines.append(ln)
+    segs: list[str] = []
+    for ln in lines:
+        for part in _SEG_SPLIT_RE.split(ln):
+            for sub in _split_markers(part or ""):
+                if sub.strip():
+                    segs.append(sub.strip())
+    return segs
+
+
+def _segment_tense(seg: str) -> str:
+    """`current`(現·현재·재직 중·열린 기간) · `past`(前·닫힌 기간) · `unknown`(표기 없음)."""
+    if _PRESENT_RE.search(seg) or _OPEN_PERIOD_RE.search(seg):
+        return "current"
+    if _PAST_RE.search(seg) or _CLOSED_PERIOD_RE.search(seg):
+        return "past"
+    return "unknown"
+
+
+def _career_fold(company_name: str) -> str:
+    """경력 대조에 쓸 회사명 폴딩 — 너무 짧거나 일반 낱말이면 ""(대조하지 않는다)."""
+    fold = _fold_corp_name(company_name)
+    if len(fold) < _CAREER_MIN_FOLD or fold in _GENERIC_FOLDS:
+        return ""
+    return fold
+
+
+def _quote_in(seg: str, company_fold: str) -> str:
+    """조각에서 (공백 무시·대문자) 회사명이 나오면 앞뒤 20자까지 인용. 없으면 ""."""
+    idx = [i for i, ch in enumerate(seg) if not ch.isspace()]
+    flat = "".join(seg[i].upper() for i in idx)
     pos = flat.find(company_fold)
     if pos < 0:
         return ""
     start, end = idx[pos], idx[pos + len(company_fold) - 1] + 1
-    line_start = career.rfind("\n", 0, start) + 1
-    line_end = career.find("\n", end)
-    line_end = len(career) if line_end < 0 else line_end
-    a, b = max(line_start, start - 20), min(line_end, end + 20)
-    return _WS_RE.sub(" ", career[a:b]).strip()
+    a, b = max(0, start - 20), min(len(seg), end + 20)
+    return _WS_RE.sub(" ", seg[a:b]).strip()
+
+
+def _career_hits(career: str, company_fold: str) -> list[tuple[str, str]]:
+    """회사명이 나오는 경력 조각마다 `(시제, 인용)`."""
+    if not company_fold:
+        return []
+    out = []
+    for seg in _career_segments(career):
+        q = _quote_in(seg, company_fold)
+        if q:
+            out.append((_segment_tense(seg), q))
+    return out
+
+
+_PERSON_NAME_RE = re.compile(r"[가-힣]{2,4}")
+
+
+def _individual_name(name: str) -> str:
+    """거래상대방 표기가 개인 이름(「김상곤 외 2인」)이면 대표 성명. 아니면 ""."""
+    base = strip_holder_suffix(name or "").strip()
+    if _PERSON_NAME_RE.fullmatch(base) and _fold_corp_name(base) == base:
+        return base
+    return ""
 
 
 def _birth_match(birth: str, others: list[dict]):
@@ -460,6 +620,14 @@ def _birth_match(birth: str, others: list[dict]):
     return any(flags)
 
 
+def _sides(parties: dict):
+    out = []
+    for side in ("counterparty", "target"):
+        p = (parties or {}).get(side) or {}
+        out.append((side, p.get("name") or "", p.get("rep") or ""))
+    return out
+
+
 def match_director_overlap(
     roster_rows: list[dict],
     parties: dict,
@@ -467,8 +635,11 @@ def match_director_overlap(
 ) -> list[dict]:
     """공시 회사 임원현황과 거래상대방·대상회사를 사실로 대조한다.
 
-    근거 ① 임원 이름 = 공시에 적힌 상대방/대상회사 대표자 ② 주요경력에 상대방/대상회사
-    이름이 적힘 ③ `other_roster_rows`(거래상대방의 임원현황)에 같은 이름. ③이 있을 때만
+    근거 ① 임원 이름 = 공시에 적힌 상대방/대상회사 대표자 (①′ 거래상대방이 개인이면 그 성명)
+    ② 주요경력의 **현재** 경력 조각(現·현재·재직 중·열린 기간 `21.04~`)에 상대방/대상회사
+    이름이 적힘 — 前·닫힌 기간(`18.07~21.04`)·시기 표기 없는 조각은 겸직 근거가 아니다
+    (`career_mentions`가 사실로만 돌려준다). 접사를 뗀 회사명이 3자 미만이거나 일반 낱말이면
+    ②를 하지 않는다 ③ `other_roster_rows`(거래상대방의 임원현황)에 같은 이름. ③이 있을 때만
     `birth_match`(생년월 일치 여부)를 채운다. 사람이 상대방·대상 양쪽에 걸리면 행 둘.
     """
     parties = parties or {}
@@ -477,10 +648,8 @@ def match_director_overlap(
     for o in others:
         other_by_key.setdefault(_name_key(o.get("nm")), []).append(o)
 
-    sides = []
-    for side in ("counterparty", "target"):
-        p = parties.get(side) or {}
-        sides.append((side, p.get("name") or "", p.get("rep") or ""))
+    sides = _sides(parties)
+    cp_person = _individual_name(sides[0][1])
 
     out: list[dict] = []
     seen: set = set()
@@ -501,12 +670,13 @@ def match_director_overlap(
                 evidence.append("공시 거래상대방 대표자 일치" if side == "counterparty"
                                 else "공시 발행회사 대표자 일치")
                 role_other = "대표자(공시 기재)"
-            fold = _fold_corp_name(other_name)
-            if len(fold) >= 2:
-                quote = _career_quote(career, fold)
-                if quote:
-                    evidence.append(f"임원현황 주요경력: 「{quote}」")
-                    role_other = role_other or quote
+            if side == "counterparty" and cp_person and key == _name_key(cp_person):
+                evidence.append("공시 거래상대방 본인(성명 일치)")
+                role_other = role_other or "거래상대방 본인"
+            current = [q for t, q in _career_hits(career, _career_fold(other_name)) if t == "current"]
+            if current:
+                evidence.append(f"임원현황 주요경력: 「{current[0]}」")
+                role_other = role_other or current[0]
             birth = None
             if side == "counterparty" and key in other_by_key:
                 evidence.append("상대방 임원현황 이름 일치")
@@ -519,6 +689,7 @@ def match_director_overlap(
             out.append({
                 "name": name,
                 "role_at_issuer": _role(r.get("ofcps"), r.get("rgist_exctv_at")),
+                "rgist": _WS_RE.sub(" ", r.get("rgist_exctv_at") or "").strip(),
                 "side": side,
                 "other_name": other_name,
                 "role_at_other": role_other,
@@ -529,7 +700,42 @@ def match_director_overlap(
     return out
 
 
+def career_mentions(roster_rows: list[dict], parties: dict) -> list[dict]:
+    """주요경력에 상대방·대상회사 이름이 나오지만 **현재 경력이 아닌** 경우 — 사실로만 남긴다.
+
+    `tense`: `past`(前·닫힌 기간) · `unknown`(재직 시기 표기 없음). 같은 사람·같은 쪽에
+    현재 경력 일치가 있으면(겸직 근거 ②) 돌려주지 않는다. 겸직으로 세지 않고 게이트도 열지 않는다.
+    """
+    out: list[dict] = []
+    for r in roster_rows or []:
+        if not isinstance(r, dict):
+            continue
+        name = _clean_name(r.get("nm"))
+        key = _name_key(name)
+        if key in _SKIP_NAMES or name in _SKIP_NAMES:
+            continue
+        career = r.get("main_career") or ""
+        for side, other_name, _rep in _sides(parties):
+            hits = _career_hits(career, _career_fold(other_name))
+            if not hits or any(t == "current" for t, _q in hits):
+                continue
+            tense, quote = hits[0]
+            out.append({"name": name, "side": side, "other_name": other_name,
+                        "quote": quote, "tense": tense})
+    return out
+
+
 # ── summarize_board_conflict ───────────────────────────────────────────────
+
+# 「독립이사」: 2026 반기보고서부터 사외이사가 이 표기로 온다(라이브 두산·나이스정보통신 2026/11012).
+_REGISTERED = frozenset({"사내이사", "사외이사", "독립이사", "기타비상무이사"})
+_TABLE_SUFFIX = {
+    "none": " · 의결표 없음",
+    "unread": " · 의결표 못 읽음",
+    "no_row": " · 결의일 행 없음",
+    "periodic_failed": " · 의결표 확인 불가",
+}
+
 
 def _vote_label(v: str) -> str:
     v = (v or "").strip()
@@ -548,31 +754,63 @@ def _tally(values: list[str]) -> str:
     return " · ".join(f"{_vote_label(v)} {c[v]}" for v in order)
 
 
+def board_scope(directors: list[dict], roster: "list[dict] | None"):
+    """요약의 「이사 N인」 범위 → `(라벨, 이름 키 집합 또는 None, 범위 밖 라벨)`.
+
+    의결표 이사가 있으면 그 이름들, 없으면 명부(`exctvSttus`)의 사내이사·사외이사(독립이사)·기타비상무이사
+    (「등기이사 N인(명부 기준)」), 둘 다 없으면 `("", None, "")` — 이사 수 확인 불가.
+    """
+    if directors:
+        keys = {_name_key(d.get("name")) for d in directors}
+        return f"이사 {len(directors)}인", keys, "의결표 밖 임원 겸직"
+    reg = [r for r in (roster or []) if isinstance(r, dict)
+           and _WS_RE.sub("", r.get("rgist_exctv_at") or "") in _REGISTERED]
+    if reg:
+        keys = {_name_key(r.get("nm")) for r in reg}
+        return f"등기이사 {len(keys)}인(명부 기준)", keys, "등기이사 밖 임원 겸직"
+    return "", None, ""
+
+
 def summarize_board_conflict(directors: list[dict], overlaps: "list[dict] | None", row: "dict | None",
-                             *, table_unread: bool = False) -> str:
+                             *, table_unread: bool = False, table_state: str = "",
+                             roster: "list[dict] | None" = None,
+                             unmatched_reason: str = "") -> str:
     """한 줄 사실 요약 — 판정·평가 어휘 없음.
 
-    `overlaps=None`은 「대조하지 못했다」(임원 명부를 못 받았거나 비었다)이고 빈 리스트
-    `[]`는 「대조했고 일치가 없다」다 — 둘을 섞으면 못 본 것이 「겸직 0인」으로 읽힌다.
-    `table_unread`: 의결표는 찾았으나 이 서식을 읽지 못했다 — 「의결표 없음」과 다르다.
+    `overlaps=None`은 「대조하지 못했다」(임원 명부를 못 받았거나 비었다, 거래 당사자를 원문에서
+    못 읽었다 — 사유는 `unmatched_reason`)이고 빈 리스트 `[]`는 「대조했고 일치가 없다」다 —
+    둘을 섞으면 못 본 것이 「겸직 0인」으로 읽힌다.
+
+    「이사 N인 중 K인」: N은 의결표 이사 수(없으면 명부의 등기이사 수), K는 **그 안의** 겸직자다.
+    범위 밖 겸직자(미등기 임원 등)는 「의결표 밖 임원 겸직 M인」으로 따로 적고 K에 넣지 않는다.
+
+    `table_state`: `none`(의결표 없음) · `unread`(의결표는 있으나 이 서식을 못 읽음) · `no_row`
+    (의결표는 읽었으나 결의일 행 없음) · `periodic_failed`(정기보고서 원문을 못 받음).
+    `table_unread=True`는 `table_state="unread"`와 같다(하위 호환).
     """
-    no_table = " · 의결표 못 읽음" if table_unread else " · 의결표 없음"
-    n = len(directors or [])
+    state = table_state or ("unread" if table_unread else "none")
+    no_table = _TABLE_SUFFIX.get(state, _TABLE_SUFFIX["none"])
+    label, scope, outside_label = board_scope(directors, roster)
     if overlaps is None:
-        head = ((f"이사 {n}인 · " if n else "이사 수 확인 불가 · ")
-                + "상대방·대상회사 임원 겸직 대조 불가(임원 명부 확인 불가)")
+        reason = unmatched_reason or "임원 명부 확인 불가"
+        head = ((f"{label} · " if label else "이사 수 확인 불가 · ")
+                + f"상대방·대상회사 임원 겸직 대조 불가({reason})")
         if not row:
             return head + no_table
         votes = row.get("votes") or {}
         if not votes:
             return head + " · 결의 표기 없음"
         return head + f" · 전체 이사 결의 표기: {_tally(list(votes.values()))}"
-    persons = {}
+    persons: dict = {}
     for o in overlaps or []:
         persons.setdefault(_name_key(o.get("name")), o.get("name") or "")
-    k = len(persons)
-    head = (f"이사 {n}인 중 {k}인이 상대방·대상회사 임원 겸직" if n
+    inside = [k for k in persons if scope is None or k in scope]
+    outside = [k for k in persons if scope is not None and k not in scope]
+    k = len(inside)
+    head = (f"{label} 중 {k}인이 상대방·대상회사 임원 겸직" if label
             else f"이사 수 확인 불가 · 상대방·대상회사 임원 겸직 {k}인")
+    if outside:
+        head += f" · {outside_label} {len(outside)}인"
     if not row:
         return head + no_table
     votes = row.get("votes") or {}
@@ -581,8 +819,8 @@ def summarize_board_conflict(directors: list[dict], overlaps: "list[dict] | None
     by_key = {_name_key(name): v for name, v in votes.items()}
     parts = [head]
     if k:
-        mine = [by_key[key] for key in persons if key in by_key]
-        missing = sum(1 for key in persons if key not in by_key)
+        mine = [by_key[key] for key in inside if key in by_key]
+        missing = sum(1 for key in inside if key not in by_key)
         t = _tally(mine) if mine else ""
         if missing:
             t = (t + " · " if t else "") + f"표에 없음 {missing}"
