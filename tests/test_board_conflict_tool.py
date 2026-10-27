@@ -672,3 +672,25 @@ class TestBlockFunction:
         block, found, _ = srv._board_conflict_block(
             CORP, "SKAI", None, _FILING_ROW, "k")
         assert "정기보고서 미접수" in block and isinstance(found, bool)
+
+
+class TestMissingFromTable:
+    def test_겸직_이사가_의결표에_없으면_그렇게_적는다(self, wired, monkeypatch, roster):
+        mao = [dict(r, nm="가나다") for r in _only(roster, "MAO, XUCHAO")]
+        monkeypatch.setattr(
+            srv, "fetch_executive_roster_rows", lambda *a, **kw: FetchList(mao))
+        out = srv.check_board_conflict("SKAI", FILING)
+        assert "🎯" not in out
+        assert "겸직 1인 확인 — 그 이사들은 의결표에 이름이 없습니다" in out
+
+
+class TestParticipationMark:
+    """불참은 결의 참여가 아니다 — 셀트리온·두산 서식은 불참을 명시한다."""
+
+    @pytest.mark.parametrize("v,expected", [
+        ("찬성", True), ("반대", True), ("기권", True), ("-", False), ("", False),
+        (None, False), ("불참", False), ("불참불참불참", False), ("불참 )", False),
+        ("찬성불참", True),
+    ])
+    def test_참여_표기(self, v, expected):
+        assert srv._board_participated(v) is expected

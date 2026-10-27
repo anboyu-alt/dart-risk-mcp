@@ -10414,6 +10414,16 @@ def _board_party_text(p: dict, rel_label: str) -> str:
             f" · {rel_label} 「{p.get('relation') or '-'}」")
 
 
+_BOARD_ABSENT_RE = re.compile(r"(?:불참\s*)+\)?")
+
+
+def _board_participated(v) -> bool:
+    """의결표 표기가 결의 참여를 말하는가 — 공란·「-」·「불참」(여러 안건이 붙어 「불참불참」으로
+    와도)만 아니다. 불참을 참여로 세면 안 된다(셀트리온·두산 서식은 불참을 명시한다)."""
+    t = (v or "").strip()
+    return t not in ("", "-") and not _BOARD_ABSENT_RE.fullmatch(t)
+
+
 def _board_vote(v) -> str:
     return "「공란」" if (v or "").strip() == "" else v
 
@@ -10690,13 +10700,16 @@ def _board_overlap_lines(ro: dict, row0, directors: list) -> "tuple[bool, list[s
             out.append("의결표에는 있으나 임원현황에 없는 이사: " + ", ".join(missing)
                        + " — 겸직 대조 불가")
     persons = {_board_name_key(o["name"]) for o in overlaps}
-    gated = bool(row0) and any(
-        (votes_by_key.get(k) or "").strip() not in ("", "-") for k in persons)
+    gated = bool(row0) and any(_board_participated(votes_by_key.get(k)) for k in persons)
     if persons and not gated:
         out.append(
             f"겸직 {len(persons)}인 확인 — "
             + ("결의 참여 표기는 의결표에서 확인되지 않았습니다" if not row0
-               else "그 이사들의 결의 표기는 전부 「-」입니다"))
+               else ("그 이사들은 의결표에 이름이 없습니다"
+                     if not any(k in votes_by_key for k in persons)
+                     else ("그 이사들의 결의 표기는 전부 「-」입니다"
+                           if all((votes_by_key.get(k) or "").strip() in ("", "-") for k in persons)
+                           else "그 이사들의 결의 표기는 전부 「-」·「불참」입니다"))))
     return gated, out
 
 

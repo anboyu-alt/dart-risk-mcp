@@ -219,7 +219,18 @@ def extract_board_section(markdown: str) -> str:
 
 _SEP_CELL_RE = re.compile(r":?-{3,}:?")
 _ATTEND_RE = re.compile(r"^(.*?)\s*\(\s*출석률\s*[:：]\s*([\d.]+\s*%)\s*\)\s*$", re.S)
-_GROUP_HDR_RE = re.compile(r"사내\s*이사\s*등의\s*성명|사외\s*이사\s*등의\s*성명")
+# 이사 그룹 머리 — SKAI는 「사내이사 등의 성명」·「사외이사 등의 성명」 두 칸, 삼성전자·두산은
+# 「이사의 성명」 한 칸(사내/사외를 가르지 않는다 — group은 ""로 둔다).
+_GROUP_HDR_RE = re.compile(
+    r"사내\s*이사\s*등의\s*성명|사외\s*이사\s*등의\s*성명|(?<![가-힣])이사의\s*성명")
+# 그룹 머리 칸이 따로 없는 서식(셀트리온)의 머리 줄: 「개최일자」와 「의안」 칸이 함께 있다.
+_HDR_DATE_RE = re.compile(r"개최\s*일자")
+_HDR_AGENDA_RE = re.compile(r"의\s*안")
+_PLAIN_GROUP_RE = re.compile(r"(?:사내|사외)\s*이사")
+# 출석률 표기가 없는 이름 줄의 셀: 한글 2~5자 또는 쉼표·공백이 든 로마자(숫자 없음)
+_PERSON_CELL_RE = re.compile(r"[가-힣]{2,5}|[A-Za-z][A-Za-z ,.'-]*[A-Za-z]")
+_ATTEND_ROW_RE = re.compile(r"출석\s*[률율]")
+_RESULT_LABEL_RE = re.compile(r"가결\s*여부")
 
 
 def _cells(line: str):
@@ -254,9 +265,17 @@ def parse_board_resolutions(section_md: str) -> dict:
         if c and any(_GROUP_HDR_RE.search(x) for x in c):
             h, hcells = i, c
             break
+    if h is None:  # 그룹 머리 칸이 없는 서식 — 「개최일자」·「의안」 칸이 함께 있는 줄
+        for i, ln in enumerate(lines):
+            c = _cells(ln)
+            if (c and any(_HDR_DATE_RE.search(x) for x in c)
+                    and any(_HDR_AGENDA_RE.search(x) for x in c)):
+                h, hcells = i, c
+                break
     if h is None:
         return empty
-    fixed = next((k for k, x in enumerate(hcells) if _GROUP_HDR_RE.search(x)), 4)
+    fixed = next((k for k, x in enumerate(hcells)
+                  if _GROUP_HDR_RE.search(x) or _PLAIN_GROUP_RE.fullmatch(x)), 4)
     if fixed < 4:
         return empty
 
@@ -271,7 +290,11 @@ def parse_board_resolutions(section_md: str) -> dict:
     if i >= len(lines):
         return empty
     name_cells = _cells(lines[i])
-    if not name_cells or not any(_ATTEND_RE.match(x) for x in name_cells):
+    if not name_cells:
+        return empty
+    with_attend = any(_ATTEND_RE.match(x) for x in name_cells)
+    if not with_attend and not (
+            len(name_cells) >= 2 and all(_PERSON_CELL_RE.fullmatch(x) for x in name_cells)):
         return empty
 
     directors = []
@@ -292,6 +315,12 @@ def parse_board_resolutions(section_md: str) -> dict:
         i += 1
         if _is_sep(c) or len(c) == 1:  # 구분선·「찬 반 여 부」 같은 1칸 줄
             continue
+        if _RESULT_LABEL_RE.fullmatch(c[0]) and len(c) == 2:  # 「가결여부 | 찬 반 여 부」
+            continue
+        if _ATTEND_ROW_RE.fullmatch(c[0]) and len(c) == len(names) + 1:  # 출석율 줄
+            for d, a in zip(directors, c[1:]):
+                d["attendance"] = _WS_RE.sub("", a)
+            continue
         if len(c) != expected or not (c[0] or c[1] or c[2]):
             unparsed += 1
             continue
@@ -302,6 +331,8 @@ def parse_board_resolutions(section_md: str) -> dict:
             "result": c[3],
             "votes": dict(zip(names, c[fixed:])),
         })
+    if not with_attend and not rows:
+        return empty  # 이름 줄 같아 보였지만 열 수가 맞는 데이터 행이 없다 — 이사를 주장하지 않는다
     return {"directors": directors, "rows": rows, "unparsed": unparsed}
 
 

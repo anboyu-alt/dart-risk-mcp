@@ -181,18 +181,41 @@ class TestExtractBoardSection:
         assert "사내이사 등의 성명" in sec and "제37조" not in sec
         assert parse_board_resolutions(sec)["rows"]
 
-    @pytest.mark.parametrize("name,first_title", [
-        ("삼성전자_board_section.md", "나. 중요의결사항 등"),
-        ("셀트리온_board_section.md", "다. 중요의결사항 등"),
-    ])
-    def test_SKAI_밖_서식은_절은_찾지만_아직_읽지_못한다(self, name, first_title):
-        """알려진 한계(CLAUDE.md 35번 항목 2026-10-28): 제목 변형은 받지만 표 머리가 달라
-        (그룹 머리 「사내이사 등의 성명」 없음·이름 줄 출석률 표기 차이) 이사·행을 못 읽는다.
-        파서가 이 서식을 읽게 되면 이 테스트를 읽는 기대로 바꾼다."""
-        sec = extract_board_section(_txt(name))
-        assert sec.startswith(first_title)
-        parsed = parse_board_resolutions(sec)
-        assert parsed == {"directors": [], "rows": [], "unparsed": 0}
+    def test_삼성전자_서식은_절은_찾지만_회차_열이_없어_아직_읽지_못한다(self):
+        """알려진 한계(CLAUDE.md 35번 항목): 「이사의 성명」 머리는 받지만 회차 열이 없어
+        고정 열이 3칸이다(날짜 칸에 「'25.01.31 (1차)」). 읽게 되면 기대를 바꾼다."""
+        sec = extract_board_section(_txt("삼성전자_board_section.md"))
+        assert sec.startswith("나. 중요의결사항 등")
+        assert parse_board_resolutions(sec) == {"directors": [], "rows": [], "unparsed": 0}
+
+    def test_셀트리온_출석률_없는_이름_줄과_별도_출석율_줄(self):
+        sec = extract_board_section(_txt("셀트리온_board_section.md"))
+        p = parse_board_resolutions(sec)
+        names = [d["name"] for d in p["directors"]]
+        assert len(names) == 12 and names[0] == "서정진" and names[-1] == "최종문"
+        # 별도 「출석율」 줄에서 채운다
+        assert p["directors"][0]["attendance"] == "91%"
+        r = next(r for r in p["rows"] if r["no"] == "25-001")
+        assert r["date8"] == "20250219" and r["result"] == "가결"
+        assert r["votes"]["서정진"] == "찬성" and r["votes"]["김형기"] == "불참"
+        assert len(r["votes"]) == 12
+        assert p["unparsed"] >= 1  # 안건이 여러 줄인 행의 이어쓰기 줄은 읽지 않는다
+
+    def test_두산_이사의_성명_머리와_출석률_이름_줄(self):
+        sec = extract_board_section(_txt("두산_board_section.md"))
+        p = parse_board_resolutions(sec)
+        assert [d["name"] for d in p["directors"]][:2] == ["박정원", "김민철"]
+        assert len(p["directors"]) == 7
+        assert p["directors"][0]["attendance"] == "50%" and p["directors"][0]["group"] == ""
+        assert [r["no"] for r in p["rows"]] == ["1", "2"]
+        assert p["rows"][0]["date8"] == "20250214"
+        # 이 서식은 이사 구성이 바뀔 때마다 표가 반복된다 — 첫 표만 읽는다(문서화된 한계)
+        assert sec.count("| 회차 |") >= 2
+
+    def test_이름_줄_같지만_열_수가_맞는_행이_없으면_이사를_주장하지_않는다(self):
+        md = ("나. 중요의결사항 등\n| 회차 | 개최일자 | 의안내용 | 가결 | 사내이사 |\n"
+              "|---|---|---|---|---|\n| 홍길동 | 김철수 |\n")
+        assert parse_board_resolutions(md) == {"directors": [], "rows": [], "unparsed": 0}
 
 
 # ── parse_board_resolutions ────────────────────────────────────────────────
