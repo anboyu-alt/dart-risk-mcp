@@ -51,7 +51,7 @@ def test_문서_도구_목록이_등록_도구와_같다():
     )
 
 
-def test_도구_개수가_서른넷이다():
+def test_도구_개수가_서른다섯이다():
     """CLAUDE.md 곳곳이 도구 개수를 적는다 — 늘리면 그 문장들도 함께 고쳐야 한다.
 
     2026-09-11 v1.23.0에서 27 → 30 (비상장 재무·주석 검색·메자닌 단건).
@@ -59,8 +59,8 @@ def test_도구_개수가_서른넷이다():
     2026-09-11 v1.25.0에서 32 → 33 (감사의견 절 읽기).
     2026-09-22 v1.29.0에서 33 → 34 (KRX 시세·KIND 시장경보 — 공시 전후 시장 반응).
     """
-    assert len(_HEADS) == 34
-    assert "MCP 도구 34개" in _DOC
+    assert len(_HEADS) == 35
+    assert "MCP 도구 35개" in _DOC
 
 
 @pytest.mark.parametrize("name,argtxt", _HEADS)

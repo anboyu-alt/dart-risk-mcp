@@ -21,7 +21,7 @@ AI 어시스턴트와 개발자를 위한 프로젝트 내부 가이드입니다
 dart_risk_mcp/
 ├── __init__.py          # 패키지 버전 (0.1.0)
 ├── __main__.py          # 진입점 → server.main() 호출
-├── server.py            # MCP 서버 + 34개 도구 정의
+├── server.py            # MCP 서버 + 35개 도구 정의
 └── core/
     ├── __init__.py      # 공개 API export
     ├── dart_client.py   # DART API 클라이언트 (핵심)
@@ -29,15 +29,16 @@ dart_risk_mcp/
     ├── kis_client.py    # 한국투자증권 Open API — 종목 일봉(원주가), KRX 빈 날 메우기·KIS 단독 (2026-09-23)
     ├── kind_client.py   # KIND 시장경보(투자주의·경고·위험) 비공식 웹 파싱 (v1.29.0)
     ├── market_context.py # 공시-시세 대조 순수 함수 (사건 창 사실·경보 정렬·창 개괄, v1.29.0)
-    ├── signals.py       # 58개 신호 유형 (8개 카테고리) + 키워드 매칭 (v0.4.0 카탈로그 기반 보강)
+    ├── signals.py       # 59개 신호 유형 (8개 카테고리) + 키워드 매칭 (v0.4.0 카탈로그 기반 보강)
     ├── catalog.py       # 금감원·금융위 MD 카탈로그 로더 (load_catalog_excerpt, taxonomy_label_ko)
     ├── cb_extractor.py  # CB/BW 인수자명 추출
     ├── sector_policy.py # 업종별 유의 회계정책 정적 맵 (KSIC 조회, kreports 이식/Apache 2.0)
     ├── notes.py         # 재무제표 주석 카테고리 분류 (제목 키워드 10종, kreports 이식/Apache 2.0)
     ├── watchlist.py     # 인물↔회사군 영속 워치리스트 (순수 파일 I/O)
     ├── known_actors.py  # 공개기록 행위자 레지스트리 로드/조회, 회사명 역방향 조회 포함 (비공개 Notion opt-in)
+    ├── board.py         # 이사회 이해상충 점검 순수 함수 — 결정 공시 상대방 파싱·사업보고서 의결표 파싱·임원 겸직 대조 (v1.30.0, 네트워크 호출 없음)
     ├── qualifiers.py    # 신호 한정층 — 제목 구조 파싱(parse_report_name) + observed/procedural tier 판정(qualify_signals) + 헤드라인 선정(pick_headline). 순수 함수, 네트워크 호출 없음
-    └── taxonomy.py      # 46개 신호 분류 + 위험 점수 + 복합 패턴 11종
+    └── taxonomy.py      # 47개 신호 분류 + 위험 점수 + 복합 패턴 11종
 ```
 
 > 동봉 데이터: `dart_risk_mcp/data/known_actors.json`(빈 스켈레톤 — v1.5.0부터 인물 데이터 미포함). 레지스트리 원본은 제작자 비공개 Notion DB. DB 셋업: `scripts/setup_known_actors_db.py`(+`setup-known-actors-db.yml`, 1회성).
@@ -74,7 +75,7 @@ dart_risk_mcp/
 
 ---
 
-## MCP 도구 34개
+## MCP 도구 35개
 
 ### 1. `analyze_company_risk(company_name, lookback_years=1, lookback_days=0, from_date="", to_date="")`
 
@@ -179,6 +180,10 @@ dart_risk_mcp/
   1년 코퍼스 재측정: 상장폐지 계열 **1,018건이 전부 관찰 신호**다(상장폐지 369 ·
   상장적격성실질심사 237 · 관리종목 171 · 개선기간부여 109 · 상장폐지사유발생 88 ·
   정리매매 27, 강등 11건은 R2·R5 정당 강등). 별도 신호 신설은 필요 없다. **2026-08-30 시장 전수로 재확인**: 픽스처는 「신호가 붙는 제목」만 담아 무신호를 못 보므로 원본을 다시 훑었다(90일 54,485건 · 상한 도달일 0). 검색어에 「매매거래정지」까지 넓게 넣으니 퇴출 계열 573건 중 무신호 239건이 나왔는데 **전수 분류 결과 전부 정례 매매정지**였다 — 주식병합·전자등록 변경 94 · 액면병합 변경상장 54 · 감자 변경상장 15 · 무상증자·주식분할·단일판매공급계약 등 23. 즉 v1.12.1이 「"거래정지"·"매매정지" 키워드를 제거한」 판단이 여전히 맞다 — 키워드를 넓히면 그 오탐이 되돌아온다.
+
+  ⚠ `BOARD_CONFLICT`(taxonomy 4.5, v1.30.0)는 이 표에 없다 — 제목 키워드가 없고 `check_board_conflict`/
+  분석 도구가 **원문 대조로 확인했을 때만** 만드는 파생 신호라서다(`FUND_UNREPORTED`와 같은 부류). 표는 제목으로
+  발화하는 키(와 미발화 설명 대상)를 적는 자리이고 `tests/test_signal_key_table.py`가 그 경계를 잠근다.
 
   v1.6.1 신규: `STAKE_PLEDGE`(최대주주 주식담보제공계약 체결·해제·취소 — 참고 강도, taxonomy 3.7).
   "최대주주변경을수반하는주식담보제공계약체결"류는 최대주주 개인의 주식담보 차입이라
@@ -755,6 +760,23 @@ DART 공시만으로는 「무슨 일이 있었는가」까지만 안다 — 불
   `conftest`가 KIS 키를 비우고 KIS 호스트를 **무조건** 막는다(실제 키로 돌면 제작자의
   토큰을 갈아엎는다). `tests/test_kis_client.py`가 고정.
 
+### 35. `check_board_conflict(company_name, rcept_no="", lookback_days=180)` ✨ v1.30.0
+
+주요사항보고서 거래의 상대방이 최대주주·특수관계인일 때, 그 결의에 참여한 이사가 상대방·대상회사 임원을 겸하는지 공시 범위에서 대조합니다.
+
+주요사항보고서 거래의 상대방이 최대주주·특수관계인일 때 결의에 참여한 이사가 상대방·대상회사 임원을 겸하는지가 기사의 쟁점인데 도구 흐름에 없었다. 제안 명세를 2026-10-27 라이브 실측(SKAI 357880 · corp_code 01381984)으로 대조해 설계를 바꿨다. **점수·등급·판정은 없다** — 공시에 적힌 이름·표기를 맞대어 본 사실만 낸다.
+
+- 내부 흐름: `resolve_corp`(8자리 corp_code 직접 해석 가능) → 대상 공시(접수번호 1건 또는 창 안 1차 유형 최신 `_BOARD_MAX_CHECK=3`건, 정정 제외, 「해당 유형 공시 N건 중 최근 3건 확인 · K건 미확인」) → `fetch_document_text` → `board.parse_decision_parties`(상대방·대상회사 이름·대표자·관계·이사회결의일·사외이사 참석) → 정기보고서 선정(결의일 이후 첫 정기보고서 → 없으면 결의일 이전 최근 정기보고서(명부가 결의 시점과 다를 수 있음을 적는다) → 그것도 없으면 결의일 연도−1 사업보고서) → 사업보고서 마크다운에서 `extract_board_section`·`parse_board_resolutions`·`find_resolution_rows` → `fetch_executive_roster_rows(bsns_year, reprt_code)`(상장 상대방이면 그 회사 명부도 1회) → `match_director_overlap` → 렌더.
+- 1차 대상 유형: 타법인주식 양수·양도(법정 「양수결정」·자율공시 「취득결정」 모두), 유형자산·영업 양수도, 금전대여·담보제공·채무보증, 특수관계인 거래(`_board_is_target`). CB·BW·유상증자 발행대상자 유형은 1차 범위 밖(서식이 달라 관계 칸 파서 없음).
+- 출력 절: 거래 / 이사회 의결 / 겸직 대조 / 한계 / 요약 / 📎. 의결표의 「-」는 그대로 적고 「표가 불참과 제척을 가르지 않습니다 — 의사록은 공시 첨부에서 확인」을 붙인다. 「제척 없음」 같은 판정 표현은 쓰지 않는다.
+- 🎯 라벨·`BOARD_CONFLICT` 신호는 **의결표 행 발견 + 겸직 이사 중 「-」 아닌 표기 1인 이상**일 때만. 겹침은 있는데 게이트가 안 열리면 사실 줄만(「겸직 N인 확인 — 결의 참여 표기는 의결표에서 확인되지 않았습니다」/「… 전부 「-」입니다」). 명부 0행·조회 실패는 「임원 명부를 확인하지 못해 겸직 대조를 하지 못했습니다(자료 없음과 다릅니다)」 — 「해당 없음」이라 쓰지 않는다.
+- 겸직 근거 세 축: ① 이름 = 공시의 대표자(상대방 대표자는 「거래상대방」 블록에 「대표자」 라벨이 없어 후미 【거래상대방에 관한 사항】의 「대표이사 <이름>」에서 읽는다) ② `exctvSttus.main_career`(주요경력)에 상대방·대상회사명 등장(겸직 전용 키가 응답에 없다 — 16키 실측) ③ 상장 상대방 명부 이름 일치(+`birth_ym`). 이름 폴딩은 `이재철(1)`(각주)·`제갈완 `(끝 공백)·`MAO,\nXUCHAO`(개행) 실측 변형을 흡수.
+- **SKAI 실측** (픽스처 `tests/fixtures/board/`): 20251219000418 「주요사항보고서(타법인주식및출자증권양수결정)」 — 거래상대방 주식회사 디렉터스컴퍼니 「최대주주」 · 대상회사 (주)스카이인텔리전스 대표자 이재철 「최대주주의 특수관계인」 · 이사회결의일 2025-12-19 · 사외이사 참석 2 · **DS005 구조화 데이터 없음**(원문 파싱이 주 경로). 사업보고서 20260323001292 「(2) 이사회의 주요 의결사항 등」 표: 열 머리 2단(6칸 → 이름 7칸 「신재혁(출석률: 100%) … MAO, XUCHAO(출석률: 0%) …」 → 「찬 반 여 부」 1칸 → 데이터 11칸), 35회차 2025-12-19 「타법인 주식취득 계약의 건」 가결 · 찬성·찬성·찬성·-·-·-·찬성. 겸직 **4인**(신재혁 ①②·이재철 ①②·제갈완 ②·MAO, XUCHAO ② — 주요경력 「스카이인텔리전스 글로벌 CEO」; 제안 명세는 3인이라 했으나 픽스처가 4인) · 요약 「이사 7인 중 4인이 상대방·대상회사 임원 겸직 · 겸직 이사 결의 표기: 찬성 3 · 「-」 1 · 전체 이사 결의 표기: 찬성 4 · 「-」 3」. 20261021000417: 상대방 주식회사 스카이디렉터스 「최대주주」, 결의일 이후 정기보고서 미접수(2026-10-27 기준) · 첨부는 주요사항보고서 PDF 1건뿐이고 「의사록」 파일 없음 · 본문에 「제398조」「특별이해관계」「제542조의9」 0건.
+- **설계 결정과 이유**: (1) **의사록 첨부 파싱 제외** — 전제 미확인(위 20261021000417에 의사록 첨부 없음) + DART OpenAPI는 첨부를 주지 않아 `dart.fss.or.kr` 비공식 파싱 + PDF 의존성이 필요(런타임 `mcp`+`requests` 원칙, `test_catalog_packaging`) → `docs/DEFERRED-DECISIONS.md` 18. (2) JSON이 아니라 마크다운(34개 도구 전부 `-> str`, hygiene 검사). (3) `find_actor_overlap` 미통합(회사군×이름 vs 결의 1건×상대방; 공유 가능한 것은 명부 조회·이름 폴딩뿐이라 core 순수 함수로 뗐다). (4) taxonomy **4.5 신설**(`특수관계자 거래 결의의 이사 겸직`, OBSERVATION, base_score 0, 어느 패턴에도 미사용 — 1.8 선례. 4.2에 얹으면 `related_party_hollowing` 겹침 수가 바뀐다). (5) `BOARD_CONFLICT`는 `AMBIGUOUS_SIGNAL_KEYS`·`_PRIORITY_CONTEXT`에 넣지 않는다 — 원문 대조를 거친 확인 사실이라 양면적 제목 신호가 아니며, 다른 관찰 신호가 전부 양면적(FUND_OUTFLOW·ACQ_REVIEW·ASSET_TRANSFER·RELATED_PARTY)이면 헤드라인에 오르는 것이 의도(`tests/test_board_conflict_wiring.py`가 고정). (6) 신호의 `rcept_dt`는 결의일이 아니라 그 결정 공시의 접수일(블록이 결의일을 돌려주지 않음). (7) 파이프라인: `analyze_company_risk`·`build_event_timeline`은 `_confirm_outflow_counterparties`/`_confirm_acquisition_targets`가 affiliated(또는 「최대주주」)로 확인한 최근 1건에만 「🪑 이사회 이해상충 확인」 블록(정기보고서 ZIP 1회·명부 1콜), 지도 모드 생략, 시장 반응 블록 후보에서는 제외(파생 신호라 자체 공시가 없음), 타임라인 해당 사건 줄 끝에 ` · 🪑 요약`(공시당 1회); `check_disclosure_risk`는 행 복원 + 1차 유형 + `related_party`일 때 1회. 실패는 블록 생략 + 「🪑 이사회 이해상충 확인: 조회 실패로 확인하지 못했습니다 — 겸직이 없다는 뜻이 아닙니다」(`log.exception`으로 코드 결함과 API 실패를 로그에서 가른다). (8) rcept 모드의 정기보고서 목록 창은 접수일−400일~오늘(`pblntf_ty="A"`) — 결의일은 원문을 읽어야 알 수 있다.
+- **알려진 한계**(출력 「한계」 절과 동일): 비상장 상대방 임원은 공시 기재(대표자·발행사 임원 주요경력)로만 확인 — 등기부 대조 권고 · 의사록은 읽지 않음 · 유출 확인 상한(최근 4건) 밖의 affiliated 건은 후보가 못 됨(🔍 헤더가 미확인 건수를 밝힘) · 동명이인(상장 상대방이 아니면 생년월 대조 불가).
+- **`core/board.py`**: 네트워크 호출 없는 순수 함수 모듈. 공개 이름 6개 — `parse_decision_parties`·`extract_board_section`·`parse_board_resolutions`·`find_resolution_rows`·`match_director_overlap`·`summarize_board_conflict`. `tests/test_no_dead_fields.py`의 `_FILES`에 등록(읽기만 하고 아무도 안 넣는 키를 신고).
+- 테스트: `tests/test_board_parsers.py`·`test_board_roster_fetch.py`·`test_board_conflict_tool.py`·`test_board_signal_registration.py`·`test_board_conflict_wiring.py`.
+
 ---
 
 ## 핵심 내부 함수
@@ -800,6 +822,8 @@ DART 공시만으로는 「무슨 일이 있었는가」까지만 안다 — 불
 | `fetch_market_disclosures(api_key, bgn_de, end_de, pblntf_ty, max_pages)` | corp_code 없이 시장 전체 공시 조회 |
 | `fetch_executive_compensation(corp_code, api_key, year, report_type)` | 보수 4개 엔드포인트 통합 조회 |
 | `fetch_executive_roster(corp_code, api_key, lookback_years)` | 임원현황(exctvSttus) 다년 수집 → {임원명: {연도}} 합집합. ⚠ **프로덕션 소비처 0** — `find_actor_overlap`은 직위·등기 여부를 보존하는 `fetch_executive_roster_detail`을 쓴다(2026-08-30 정정) |
+| `fetch_executive_roster_rows(corp_code, api_key, bsns_year, reprt_code="11011")` | `exctvSttus`(임원현황) **1콜** — 한 보고서의 임원 행을 아홉 키로 반환. `FetchList`라 조회 실패(`.fetch_failed`)와 빈 명부를 가른다. `check_board_conflict`의 겸직 대조 입력(v1.30.0). 다년 합집합인 `fetch_executive_roster`와 달리 **한 시점의 명부**다 |
+| `periodic_report_code(report_nm)` | 정기보고서 제목 → `(bsns_year, reprt_code)`. 정기보고서가 아니면 None. `check_board_conflict`가 결의일 전후 보고서를 고를 때 쓴다 (v1.30.0) |
 | `fetch_insider_timeline(corp_code, api_key, lookback_years)` | elestock + hyslrSttus + hyslrChgSttus + tesstkAcqsDspsSttus 4엔드포인트 × 4분기 통합 시계열 (v0.8.6) |
 | `detect_insider_pre_disclosure(insider_records, signal_events, window_days=30)` | 매도 ±30일 내 부정 공시 패턴 탐지 (v0.8.6) |
 | `fetch_treasury_decisions(corp_code, api_key, lookback_years)` | 자사주 결정 4엔드포인트(취득·처분·신탁체결·신탁해지) 통합. key=TREASURY/TREASURY_TRUST로 정규화 (v0.8.7) |
@@ -1002,6 +1026,7 @@ PR로 이연). 같은 이유로 공개 레포·Vercel에도 시세 캐시를 배
 | `fund_diversion_chain`(금감원 2019-12 무자본 M&A 합동점검 반영) | ✅ | **2026-08-22 정정 — 아래 「후보 0곳」 기록은 스캔 절단의 산물이었다.** 그 판정의 근거였던 `market_items.json`은 3,384건뿐이었는데, 같은 365일 창을 새로 전수 수집하니 **201,361건**이었다(전체의 1.7%만 훑고 '시장에 없다'고 결론냈다 — v1.10.2가 고친 청크 절단 문제와 같은 뿌리). 새 코퍼스로 재집계하니 한정층 통과 기준 CB_BW 1,884건/577개사 · ACQ_REVIEW 132건/109개사이고 **교집합이 50개사**다(0이 아니다). 라이브 종단 확인: **KR모터스(000040)** `analyze_company_risk` 1년 — 20251001 「주요사항보고서(타법인주식및출자증권양수결정)」 + 20260312·20260324 「주요사항보고서(전환사채권발행결정)」로 **2/2 발화**. 덧붙여 `ACQ_REVIEW`의 재현율 갭(86%)을 같은 감사에서 수정했으므로(아래 행) 교집합은 142개사로 늘어난다 — 이 패턴은 요구 신호가 2개뿐이라 특이도가 낮다는 점(겹침 2개 = 곧 전부 일치)을 함께 읽어야 한다. 내용 확인 게이트(`capital_backflow` 방식) 도입은 별도 판단. 근거: `docs/superpowers/specs/2026-08-22-signal-keyword-audit.md` |
 | ~~`fund_diversion_chain` 후보 0곳(2026-08-03 기록)~~ | ❌ 폐기 | 2026-08-04 재점검 — `find_pattern_match`는 signal_sequence의 단순 부분집합 판정(순서·타임라인 미강제)이라 11개 패턴 중 요구 신호 개수가 2개(1.1+5.8)로 가장 낮아 원리적으로 가장 발화하기 쉬운 조합이다. 다만 90일 표집 후보(오리엔트정공·엔솔바이오사이언스 등 stock_acq/business_acq 발화 기업)에 CB_BW가 동반 관측되지 않아 이번 라운드도 라이브 매칭 사례 미발굴. 2026-08-03 재점검(365일 시장 전체 스캔, `market_items.json` 3,384건/1,058개 법인 — Task 1 스캔 재사용, 90일이 아닌 1년 전체 창으로 확장) — CB_BW 발행결정(제목 "전환사채권발행결정"·"신주인수권부사채권발행결정")과 ACQ_REVIEW(제목 "타법인주식및출자증권양수결정"·"영업양수결정")를 corp_code 기준 교차한 결과 **후보 0곳**. **산정 방법(기재정정 제외, 브리프 기준)**: CB_BW 6건/5개 법인(HLB·본느·유티아이·피아이이·효성화학), ACQ_REVIEW 1건/1개 법인(두산), 교집합 0 — `tmp/fund_misuse_probe/find_chain_candidates.py` 재실행 + `tmp/fund_misuse_probe/chain_candidates.txt`에 법인명 전체 목록 기록·재현 확인(스크립트 전문·실행 결과는 `docs/superpowers/plans/2026-08-02-fund-misuse-detection-verification.md` 부록 C에도 보존, 참고: 기재정정 포함 시 CB_BW 18건/15개 법인·ACQ_REVIEW 5건/5개 법인이나 이는 브리프 산정 기준이 아님). 90일 표집보다 넓은 1년 창에서도 두 신호가 겹치는 법인이 시장에 없다는 것을 재확인 — `find_pattern_match` 자체의 결함이 아니라 실세계에서 CB/BW 조달사와 타법인출자·영업양수 실행사가 겹치는 사례 자체가 희소함을 시사(zombie_ma·delisting_evasion처럼 요구 신호 수가 많은 패턴보다 이론상 쉬운 조합인데도 후보가 안 잡히는 것은 표본 부재이지 게이트 로직 문제가 아님). 후보 0건이라 `analyze_company_risk` 종단 실행은 생략 |
 | `STAKE_PLEDGE`(v1.6.1, 최대주주 주식담보제공계약) | ✅ | 시장 전체 스캔 라이브 매칭(2026-07-31) — 아진산업(주식담보제공계약해제ㆍ취소등)·인카금융서비스(주식담보제공계약체결) 2건, 골드 `market_shareholder_change.txt`/`market_all_risk.txt`. `FUND_OUTFLOW`에서 분리되기 전에는 이 2건이 [최대주주변경, 자금유출성거래]로 오분류됐던 것도 같은 골드 diff로 확인 |
+| `check_board_conflict`(v1.30.0) / `BOARD_CONFLICT`(taxonomy 4.5) | ⚠ | 라이브 미실행 — Task 8에서 채움. 설계 근거로 쓴 2026-10-27 SKAI(357880) 실측(상대방 주식회사 디렉터스컴퍼니 · 겸직 4인 · 의결표 35회차 2025-12-19 찬성 4·「-」 3)은 도구 종단 실행이 아니라 `tests/fixtures/board/` 픽스처 기준이다 |
 | `LOAN_ADVANCE_SURGE`(대여금·선급금 급증, 금감원 2019-12 무자본 M&A 합동점검 반영) | ⚠ | "대여금·선급금 (계정 노출 시)" 사실 표기 블록 자체는 두산에너빌리티(BS 3계정 노출, 2024 전년 대비 감소)·헬릭스미스·두산(CF 전용 노출) 라이브 확인. 단 플래그 임계(2배↑·10억↑)를 충족하는 실사례는 6사+아틀라스링크 매트릭스에서 아직 미발굴 — 셀트리온·삼성전자·제이스코홀딩스·아틀라스링크는 계정 자체가 노출되지 않음(정상). 2026-08-04 재점검: `extract_loan_advance`/판정식(`la_cur>=10억 and la_cur>=la_pri*2`) 필드명·0-분모 처리 모두 정상, 라이브 헌팅은 예산상 재수행하지 않음(코드 감사만) |
 | `CROSS_SIGNAL_PATTERNS` 부분 겹침 표기(2026-08-17) | ✅ | 전부 일치는 회사당 0.2개(10개사 실측, 그마저 전부 2신호 패턴)라 5~6신호 패턴은 발화한 적이 없다. `find_pattern_overlaps`로 "6개 중 3개 관찰 + 안 보임 + 확인해볼 것"을 표기하도록 전환 — 부분 일치는 회사당 1.3개이고 **대조군(셀트리온·삼성전자·두산에너빌리티)은 0**이라 변별력 확인. `capital_backflow`의 v1.6.1 내용 확인 게이트는 그대로 유지(실패 시 겹침 목록에서 제외) |
 | 패턴의 **순서** 축(`signal_sequence` 순서) | ❌ 도입 안 함 | 12개사×3년 실측 — 순서 일치율 **64%**(무작위 50%). 제약으로 쓰면 진짜 사례를 떨어뜨린다. 원인은 이 도구가 사건 발생 순서가 아니라 **공시 접수일**을 보기 때문. 근거: `docs/superpowers/specs/2026-08-21-pattern-sequence-measurement.md` |
@@ -1759,9 +1784,9 @@ dict는 **키가 corp_code**라 `main`의 `e["names"]`가 죽고 `merge_renames`
 ### 골드 출력 재생성 (회귀 검증용)
 
 `scripts/regen_goldens.py`로 10개 회사 × 32개 도구 매트릭스를 한 번에 재생성합니다.
-(전체 34개 중 `lookup_known_actor`·`manage_watchlist`는 외부 데이터·사용자 자산에
+(전체 35개 중 `lookup_known_actor`·`manage_watchlist`는 외부 데이터·사용자 자산에
 의존하고, `get_unlisted_financials`·`search_notes_in_report`·`get_mezzanine_terms`는
-비상장 법인·접수번호 단건이 대상이라 이 매트릭스에 해당 사례가 없어 제외됩니다.)
+비상장 법인·접수번호 단건이 대상이라 이 매트릭스에 해당 사례가 없어 제외됩니다. `check_board_conflict`도 아직 매트릭스에 없다 — 결정 공시(주요사항보고서) 접수번호와 정기보고서 의결표가 함께 있는 회사가 필요한 도구라 회사×도구 일괄 호출에 맞지 않아서이고, 편입 여부는 [Task 8에서 정하며 이 문장은 그때 고친다].)
 
 > ⚠ **v1.23.0~v1.26.0 도구 여섯이 이 매트릭스에 하나도 없었다(2026-09-12 발견)**. 그래서 `tests/test_golden_output_hygiene.py`가 그 출력을 **한 번도 검사한 적이 없다** — v0.8.5 무판정 원칙(점수·등급·이모지 회귀)의 기계적 방어가 그만큼 비어 있었다. 회사명 단일 인자인 셋(`get_financial_statements_full`·`list_report_revisions`·`get_audit_opinion_text`)을 먼저 넣어 골든 30건을 만들었고, **넣자마자 두 건이 걸렸다**: ① `fs_div="CFS"`·`statement="BS"` 같은 **인자 값**이 「미등록 영문 코드」로 잡혔다(사용자가 그대로 호출에 쓰는 값이라 화면에 있어야 한다 — 근거와 함께 화이트리스트에 등록) ② 삼성전자 감사보고서 인용문의 「Device Solutions**(DS)** 부문」이 잡혔다. ②는 **이 도구가 원문을 그대로 인용하는 것이 목적**이라 우리 어휘 규칙을 걸면 안 되는 자리다 — `tests/test_audit_opinion_text_tool.py`의 `_our_words`가 같은 판단을 먼저 했고(감사인이 쓴 「위험」을 지우면 안 된다), 그 규칙을 `_our_words_only`로 hygiene에 옮겨 **모든 검사에 일관 적용**한다(점수·등급 낱말도 감사인 문장에서는 정상이다). **나머지 셋도 이어서 메웠다** — `search_notes_in_report`·`get_mezzanine_terms`는 아무 접수번호가 아니라 **특정 유형**(사업보고서 / 메자닌 발행결정)이 필요해 `_resolve_titled_rcept`를 새로 뒀고(정정본은 건너뛴다 — DS005·메자닌 구조화 조회가 최초접수일 기준이라 정정 접수번호로는 빈 결과가 온다), 파일명에 rcept를 **넣지 않는다**(「그 회사의 그 유형 최신 공시」라는 뜻이라 회사 기준으로 덮어쓰는 편이 낫고, 넣으면 재생성마다 쌓여 프루닝 규칙에 얹혀야 한다). `get_unlisted_financials`는 COMPANIES가 전부 상장사라 「상장사입니다」만 저장되므로 실측 비상장 법인(올품)을 따로 두되 **이름이 아니라 corp_code로 부른다** — 「올품」은 DART에 동명 법인이 둘(00455750·00442385)이라 이름으로 부르면 되물음이 골드가 된다(실제로 한 번 그렇게 저장됐다: 406자 되물음 → corp_code로 바꾸니 7,536자 재무제표). ⚠ **`search_notes_in_report`도 원문 인용 도구다** — STX 골드의 「담보설정금액**(USD)**」·「**(JPY)**」가 내부 코드 검사에 걸렸는데 회사가 낸 표의 통화 표기다. `_our_words_only`를 이 파일에도 적용하되 **종료 표지를 달리한다**: 주석 발췌는 표 줄(`|`)이 인용의 일부라 audit_text 규칙을 그대로 쓰면 첫 표에서 인용이 끊긴다(여기서는 꼬리말 `📎`만 우리 말이다). 최종 **10개사 × 31개 도구 · 골드 304건**.
 
