@@ -105,6 +105,17 @@ from .core import (
     fetch_executive_compensation,
     fetch_executive_roster_detail,
     fetch_executive_roster_rows,
+    periodic_report_code,
+    FetchList,
+    parse_outflow_detail,
+    parse_related_party_detail,
+    parse_asset_disposal_detail,
+    parse_decision_parties,
+    extract_board_section,
+    parse_board_resolutions,
+    find_resolution_rows,
+    match_director_overlap,
+    summarize_board_conflict,
     fetch_financial_statements,
     fs_currency,
     fetch_financial_statements_all,
@@ -160,6 +171,8 @@ from .core.qualifiers import (
     supports_pattern as _supports_pattern,
 )
 from .core.signals import SIGNAL_LABELS
+from .core.board import _name_key as _board_name_key
+from .core.dart_client import _fold_corp_name as _board_fold_corp_name
 
 # 법인 표기 접사 — core `_AFFIL_CORP_SUFFIX_RE`와 같은 집합이다(그쪽은
 # 타법인 출자현황 대조용). 이름을 **비교**할 때만 지우고 화면에는 원문을 쓴다.
@@ -10194,6 +10207,439 @@ def track_market_reaction(
     )
 
     return _append_size_footer("\n".join(lines).rstrip("\n"), lookback_years)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 이사회 이해상충 확인 — check_board_conflict (2026-10-27)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# 주요사항보고서 거래의 상대방이 최대주주·특수관계인일 때, 그 결의에 이름이 오른
+# 이사가 상대방·대상회사 임원을 겸하는지를 **공시 범위 안에서** 대조한다. 재료는
+# 셋이다 — 결정 공시 원문(상대방·대표자·결의일) · 정기보고서의 「이사회의 주요
+# 의결사항」 표(이사별 찬반 표기) · 임원현황(`exctvSttus`, 직위·주요경력·최대주주와의
+# 관계). 순수 파싱·대조는 `core/board.py`가 하고 여기서는 조회를 엮어 렌더한다.
+#
+# ⚠ 의결표의 「-」는 불참인지 제척인지 가르지 않는다 — 표기 그대로 적고 그 한계를
+#   문장으로 밝힌다. 판정·점수·등급은 없다(v0.8.5). 반복 호출을 막으려고 흐름을
+#   `_board_conflict_block` 하나로 두었다 — 다른 도구가 같은 블록을 재사용한다.
+
+_BOARD_MAX_CHECK = 3          # 창 모드에서 원문을 여는 결정 공시 상한
+_BOARD_PERIODIC_MAX = 2       # 결의일 이후 정기보고서 중 의결표를 찾아볼 상한
+_BOARD_ROWS_SHOWN = 3         # 같은 결의일 행을 그리는 상한
+_BOARD_DECISION_TYPES = frozenset({
+    "stock_acq", "stock_div", "business_acq", "business_div",
+    "tangible_acq", "tangible_div",
+})
+_BOARD_TYPE_LABEL = {
+    "stock_acq": "타법인 주식 양수", "stock_div": "타법인 주식 양도",
+    "business_acq": "영업 양수", "business_div": "영업 양도",
+    "tangible_acq": "유형자산 양수", "tangible_div": "유형자산 양도",
+}
+_BOARD_SIGNAL_KEYS = ("FUND_OUTFLOW", "RELATED_PARTY")
+_BOARD_SCOPE_NOTE = (
+    "타법인 주식·영업·유형자산 양수·양도, 금전대여·채무보증·담보제공, "
+    "특수관계인 자금거래"
+)
+_BOARD_SEP = "─" * 24
+_BOARD_FOOTER = (
+    "📎 사실 표기입니다 — 판정·점수·등급이 아닙니다. 동명이인 가능성이 있습니다."
+)
+
+
+def _board_is_target(report_nm: str) -> bool:
+    """1차 대상 유형인가 — 결정 공시이거나 자금유출·특수관계인 거래 신호가 붙는 제목."""
+    title = report_nm or ""
+    if resolve_decision_type(title) in _BOARD_DECISION_TYPES:
+        return True
+    if _is_acquisition_title(title) or _is_asset_disposal_title(title):
+        return True
+    return any(s["key"] in _BOARD_SIGNAL_KEYS for s in match_signals(title))
+
+
+def _board_type_label(report_nm: str) -> str:
+    dtype = resolve_decision_type(report_nm or "")
+    if dtype in _BOARD_TYPE_LABEL:
+        return _BOARD_TYPE_LABEL[dtype]
+    if _is_acquisition_title(report_nm):
+        return "타법인 주식 취득"
+    if _is_asset_disposal_title(report_nm):
+        return "자산 처분·양도"
+    keys = {s["key"] for s in match_signals(report_nm or "")}
+    if "FUND_OUTFLOW" in keys:
+        return "금전대여·채무보증·담보제공"
+    if "RELATED_PARTY" in keys:
+        return "특수관계인 거래"
+    return _clean_report_name(report_nm)
+
+
+def _board_parties(text: str, report_nm: str) -> dict:
+    """결정 공시 원문 → 거래 당사자. 인수 서식은 `parse_decision_parties`가 읽고,
+    그 서식이 아닌 자금유출·특수관계인 거래는 기존 파서로 상대방·관계를 채운다
+    (대표자는 `parse_decision_parties`가 읽은 값, 없으면 "")."""
+    parties = parse_decision_parties(text)
+    cp = parties["counterparty"]
+    if cp.get("name"):
+        return parties
+    keys = {s["key"] for s in match_signals(report_nm or "")}
+    detail: dict = {}
+    if "FUND_OUTFLOW" in keys:
+        detail = parse_outflow_detail(text)
+    if not detail.get("counterparty") and "RELATED_PARTY" in keys:
+        detail = parse_related_party_detail(text)
+    if not detail.get("counterparty") and _is_asset_disposal_title(report_nm):
+        detail = parse_asset_disposal_detail(text)
+    if detail.get("counterparty"):
+        parties["counterparty"] = {
+            "name": detail["counterparty"],
+            "rep": cp.get("rep", ""),
+            "relation": detail.get("relation", "") or "",
+        }
+    return parties
+
+
+def _board_periodic_candidates(disclosures, date8: str) -> list[tuple]:
+    """결의일 이후 접수된 정기보고서를 접수순 오름차순으로 — `(rcept_dt, rcept_no,
+    report_nm, (bsns_year, reprt_code))`. 정정 태그가 붙은 것도 후보다."""
+    seen: set = set()
+    out = []
+    for d in disclosures or []:
+        code = periodic_report_code(d.get("report_nm") or "")
+        dt = str(d.get("rcept_dt") or "")
+        rn = str(d.get("rcept_no") or "")
+        if code and len(dt) == 8 and dt >= (date8 or "") and rn and rn not in seen:
+            seen.add(rn)
+            out.append((dt, rn, _clean_report_name(d.get("report_nm") or ""), code))
+    out.sort(key=lambda c: (c[0], c[1]))
+    return out
+
+
+def _board_party_text(p: dict, rel_label: str) -> str:
+    return (f"{p.get('name') or '(공시에서 읽지 못함)'}"
+            f" · 대표자 {p.get('rep') or '공시에서 읽지 못함'}"
+            f" · {rel_label} 「{p.get('relation') or '-'}」")
+
+
+def _board_vote(v) -> str:
+    return "「공란」" if (v or "").strip() == "" else v
+
+
+def _board_overlap_line(o: dict, votes_by_key: dict, has_row: bool) -> str:
+    side = "상대방" if o["side"] == "counterparty" else "대상회사"
+    parts = [f"{o['name']} — 발행사 {o['role_at_issuer'] or '직위 미기재'}",
+             f"{side} {o['other_name'] or '(이름 미확인)'}: " + " · ".join(o["evidence"])]
+    role = (o.get("role_at_other") or "").strip()
+    if role and role != "대표자(공시 기재)" and not any(role in e for e in o["evidence"]):
+        parts.append(f"{side} 임원현황 직책 「{role}」")
+    if o.get("mxmm_shrholdr_relate"):
+        parts.append(f"최대주주와의 관계 「{o['mxmm_shrholdr_relate']}」")
+    if has_row:
+        key = _board_name_key(o["name"])
+        parts.append("결의 표기 " + (_board_vote(votes_by_key[key]) if key in votes_by_key
+                                    else "표에 없음"))
+    bm = o.get("birth_match")
+    parts.append("생년월 일치" if bm is True else "생년월 불일치" if bm is False
+                 else "생년월 대조 불가")
+    return "- " + " · ".join(parts)
+
+
+def _board_conflict_block(
+    corp_code: str,
+    corp_name: str,
+    disclosures,
+    row: dict,
+    api_key: str,
+    *,
+    want_header: bool = True,
+) -> "tuple[str, bool, str]":
+    """결정 공시 한 건의 이사회 이해상충 대조 → `(마크다운 블록, 겸직 겹침 여부, 한 줄 요약)`.
+
+    `disclosures`는 이 회사의 공시 목록(정기보고서를 찾는 재료 — `FetchList`면
+    `.fetch_failed`를 읽는다). `row`는 대상 결정 공시의 list.json 행. 블록에는
+    꼬리말 고지를 싣지 않는다(도구가 한 번만 붙인다) — 재사용처에서 되풀이되지
+    않게. 원문을 못 받으면 겹침 False·요약 ""를 돌려주고 이유를 블록에 적는다.
+    """
+    rcept = str(row.get("rcept_no") or "")
+    title = _clean_report_name(row.get("report_nm") or "")
+    rcept_dt = str(row.get("rcept_dt") or "")[:8]
+    lines: list[str] = []
+    if want_header:
+        lines += [f"🪑 {corp_name} — 이사회 이해상충 확인 · {rcept}", ""]
+    lines += ["━━ 거래 ━━",
+              f"공시: {_fmt_date8(rcept_dt) or '-'} {title} (rcept_no={rcept})"]
+
+    try:
+        text = fetch_document_text(rcept, api_key, max_chars=6000) or ""
+    except Exception:
+        text = ""
+    if not text:
+        lines.append(
+            "⚠ 결정 공시 원문을 받지 못했습니다 — **신호가 없다는 뜻이 아닙니다.** "
+            "조회가 실패했거나 원문이 비어 있습니다. 잠시 후 다시 시도하세요.")
+        return "\n".join(lines), False, ""
+
+    parties = _board_parties(text, row.get("report_nm") or "")
+    date8 = parties["resolution_date8"]
+    date_note = ""
+    if not date8:
+        date8, date_note = rcept_dt, " (결의일 미기재 — 접수일 기준)"
+    typ = f"유형: {_board_type_label(row.get('report_nm') or '')}"
+    typ += f" · 이사회결의일 {_fmt_date8(date8) or '-'}{date_note}"
+    if parties["outside_directors_present"]:
+        typ += f" · 사외이사 참석 {parties['outside_directors_present']}"
+    lines.append(typ)
+    lines.append("거래상대방: " + _board_party_text(parties["counterparty"], "회사와의 관계"))
+    if parties["target"].get("name"):
+        lines.append("대상회사: " + _board_party_text(parties["target"], "회사와 관계"))
+
+    # ── 이사회 의결 ───────────────────────────────────────────────────────
+    cp_name = parties["counterparty"].get("name", "")
+    tg_name = parties["target"].get("name", "")
+    hint = " ".join(h for h in (_board_fold_corp_name(cp_name)[:4],
+                                _board_fold_corp_name(tg_name)[:4]) if h)
+    cands_all = _board_periodic_candidates(disclosures, date8)
+    cands = cands_all[:_BOARD_PERIODIC_MAX]
+    found = None            # (cand, parsed, rows)
+    tried: list[str] = []
+    for cand in cands:
+        dt, rn, nm, _code = cand
+        md = fetch_audit_report_text(rn, api_key) or ""
+        label = f"{nm} {rn}"
+        if not md:
+            tried.append(f"{label}: 원문을 받지 못했습니다")
+            continue
+        sec = extract_board_section(md)
+        if not sec:
+            tried.append(f"{label}: 「이사회의 주요 의결사항」 절을 찾지 못했습니다")
+            continue
+        parsed = parse_board_resolutions(sec)
+        rows = find_resolution_rows(parsed, date8, hint)
+        if rows:
+            found = (cand, parsed, rows)
+            break
+        tried.append(f"{label}: 결의일 {_fmt_date8(date8)} 행 없음 "
+                     f"(의결표 {len(parsed['rows'])}행 중)")
+
+    lines += ["", "━━ 이사회 의결 ━━"]
+    row0 = None
+    directors: list[dict] = []
+    if found:
+        cand, parsed, rows = found
+        directors = parsed["directors"]
+        row0 = rows[0]
+        lines.append(f"출처: {cand[2]} {cand[1]} 「이사회의 주요 의결사항」")
+        for r in rows[:_BOARD_ROWS_SHOWN]:
+            no = f"{r['no']}회차 " if r.get("no") else ""
+            lines.append(f"{no}{_fmt_date8(r['date8'])} 「{r['agenda'] or '안건 미기재'}」"
+                         f" — {r['result'] or '가결 여부 미기재'}")
+            lines.append("이사별 표기: " + " · ".join(
+                f"{n} {_board_vote(v)}" for n, v in r["votes"].items()))
+        if len(rows) > 1:
+            shown = min(len(rows), _BOARD_ROWS_SHOWN)
+            lines.append(f"※ 같은 결의일 행 {len(rows)}건 중 {shown}건 표시 — "
+                         "상대방·대상회사 이름이 든 안건을 앞에 두었고 요약은 첫 행 기준입니다.")
+        if any((v or "").strip() in ("", "-") for r in rows[:_BOARD_ROWS_SHOWN]
+               for v in r["votes"].values()):
+            lines.append("(「-」는 표가 불참과 제척을 가르지 않습니다 — 의사록은 공시 첨부에서 확인)")
+    else:
+        if not cands:
+            if getattr(disclosures, "fetch_failed", False):
+                lines.append(_fetch_failed_notice(corp_name, "정기보고서 목록"))
+                lines.append("의결표를 확인하지 못했습니다 — 의결표가 없다는 뜻이 아닙니다.")
+            else:
+                lines.append("결의일 이후 정기보고서 미접수 — 의결표 없음")
+        else:
+            lines.append("접수된 정기보고서의 의결표에서 이 결의일의 행을 찾지 못했습니다 — 의결표 없음")
+            lines += [f"- {t}" for t in tried]
+            if len(cands_all) > len(cands):
+                lines.append(f"(결의일 이후 정기보고서 {len(cands_all)}건 중 접수순 앞 "
+                             f"{len(cands)}건 확인 · {len(cands_all) - len(cands)}건 미확인)")
+
+    # ── 명부 ─────────────────────────────────────────────────────────────
+    if found:
+        basis = found[0]
+    elif cands:
+        basis = cands[0]
+    else:
+        basis = None
+    if basis:
+        year, reprt = basis[3]
+        basis_note = f"임원현황 기준 보고서: {basis[2]} {basis[1]} (bsns_year {year}, reprt_code {reprt})"
+    else:
+        year, reprt = (date8 or rcept_dt)[:4], "11011"
+        basis_note = (f"명부 기준 보고서: 결의일 연도({year})의 사업보고서(reprt_code 11011) — "
+                      "정기보고서가 접수되지 않아 이 연도로 시도했습니다")
+    try:
+        roster = fetch_executive_roster_rows(corp_code, api_key, year, reprt)
+    except Exception:
+        roster = FetchList(fetch_failed=True)
+    roster_failed = bool(getattr(roster, "fetch_failed", False))
+
+    other_rows = None
+    other_note = ""
+    if cp_name and classify_target_listing(cp_name) == "listed":
+        resolved = resolve_corp(cp_name, api_key)
+        other_code = (resolved[1].get("corp_code") if resolved else "") or ""
+        if other_code and other_code != corp_code:
+            try:
+                other_rows = fetch_executive_roster_rows(other_code, api_key, year, reprt)
+            except Exception:
+                other_rows = FetchList(fetch_failed=True)
+            if getattr(other_rows, "fetch_failed", False):
+                other_note = (f"상대방({cp_name}) 임원현황을 불러오지 못했습니다 — "
+                              "겸직이 없다는 뜻이 아닙니다.")
+                other_rows = None
+            else:
+                other_note = f"상대방({cp_name}) 임원현황 {len(other_rows)}명도 대조했습니다."
+
+    overlaps = match_director_overlap(list(roster), parties, other_rows) if not roster_failed else []
+    votes_by_key = {_board_name_key(n): v for n, v in (row0 or {}).get("votes", {}).items()}
+
+    lines += ["", "━━ 겸직 대조 ━━", basis_note]
+    if roster_failed:
+        lines.append(_fetch_failed_notice(corp_name, f"임원현황 {year}"))
+    else:
+        scope = f"대조 범위: 발행사 임원현황 {len(roster)}명 × 공시 기재 대표자·임원현황 주요경력"
+        lines.append(scope + (f" · {other_note}" if other_note and other_rows is not None else ""))
+        if other_note and other_rows is None:
+            lines.append("⚠ " + other_note)
+        if overlaps:
+            lines += [_board_overlap_line(o, votes_by_key, row0 is not None) for o in overlaps]
+        else:
+            lines.append("해당 없음 — 공시에 적힌 상대방·대상회사 대표자 및 임원현황 주요경력과 "
+                         "일치하는 이사가 이 범위에서는 확인되지 않았습니다.")
+        if directors and not roster_failed:
+            roster_keys = {_board_name_key(r.get("nm")) for r in roster}
+            missing = [d["name"] for d in directors
+                       if _board_name_key(d["name"]) not in roster_keys]
+            if missing:
+                lines.append("의결표에는 있으나 임원현황에 없는 이사: " + ", ".join(missing)
+                             + " — 겸직 대조 불가")
+    if overlaps:
+        lines += ["", "🎯 이사회 결의 참여 이사의 상대방 겸직"]
+
+    lines += ["", "━━ 한계 ━━",
+              "- 비상장 상대방 임원은 공시 기재(대표자·발행사 임원 주요경력)로만 확인했습니다 — "
+              "등기부 대조를 권합니다.",
+              "- 이사회의사록 첨부는 이 도구가 읽지 않습니다.",
+              "- CB·BW·유상증자 발행대상자 유형은 이 도구의 1차 범위 밖입니다."]
+
+    summary = summarize_board_conflict(directors, overlaps, row0)
+    lines += ["", f"요약: {summary}"]
+    return "\n".join(lines), bool(overlaps), summary
+
+
+@mcp.tool()
+def check_board_conflict(
+    company_name: str,
+    rcept_no: str = "",
+    lookback_days: int = 180,
+) -> str:
+    """주요사항보고서 거래의 상대방이 최대주주·특수관계인일 때, 그 결의에 참여한 이사가 상대방·대상회사 임원을 겸하는지 공시 범위에서 대조합니다.
+
+    결정 공시 원문(상대방·대표자·이사회결의일) → 정기보고서 「이사회의 주요 의결사항」
+    표(이사별 찬반 표기) → 임원현황(직위·주요경력·최대주주와의 관계)을 엮어 사실로
+    나열합니다. 비상장 상대방 임원은 공시 기재(대표자·발행사 임원 주요경력)로만
+    확인되므로 등기부로 보완해야 합니다. 이사회의사록 첨부는 읽지 않습니다.
+    의결표의 「-」는 불참과 제척을 가르지 않아 표기 그대로 적습니다. 판정·점수·등급은
+    없습니다.
+
+    1차 대상 유형: 타법인 주식·영업·유형자산 양수·양도 결정, 금전대여·채무보증·
+    담보제공, 특수관계인 자금거래. CB·BW·유상증자 발행대상자 유형은 범위 밖입니다.
+
+    Args:
+        company_name: 기업명, 종목코드 6자리 또는 corp_code 8자리.
+        rcept_no: 결정 공시 접수번호 14자리(선택). 주면 그 한 건만 확인하고
+            lookback_days는 무시합니다.
+        lookback_days: 접수번호가 없을 때의 조회 창(일). 기본 180, 1~730.
+            해당 유형의 정정 아닌 공시 중 최근 3건의 원문을 확인합니다.
+    """
+    api_key = _api_key()
+    if not api_key:
+        return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
+    lookback_days = _coerce_int(lookback_days, 180, 1, 730)
+    query = (company_name or "").strip()
+    if not query:
+        return "❌ 기업명을 입력하세요."
+    rcept_no = str(rcept_no or "").strip()
+    if rcept_no and not re.fullmatch(r"\d{14}", rcept_no):
+        return f"❌ rcept_no는 14자리 숫자여야 합니다 (받은 값: {rcept_no!r})."
+
+    if re.fullmatch(r"\d{8}", query):
+        corp_code = query
+        corp_name = corp_name_by_code(query, api_key)
+    else:
+        resolved = resolve_corp(query, api_key)
+        corp_name, corp_code = "", ""
+        if resolved:
+            corp_name, info = resolved
+            corp_code = info["corp_code"]
+    if not corp_name or not corp_code:
+        return f"❌ '{company_name}'에 해당하는 기업을 DART에서 찾을 수 없습니다."
+
+    if rcept_no:
+        row, status = resolve_disclosure_row_with_status(rcept_no, api_key)
+        if not row:
+            if status == "scan_limit":
+                return ("⚠ 이 접수번호의 공시를 확인하지 못했습니다 — 접수일에 공시가 매우 "
+                        "많아 조회 범위(하루 5,000건)를 넘었습니다. **신호가 없다는 뜻이 "
+                        "아닙니다.** 창 모드(`rcept_no` 없이 `lookback_days`)로 다시 조회해 보세요.")
+            if status == "error":
+                return ("⚠ 이 접수번호의 공시를 확인하지 못했습니다 — 조회 중 오류가 "
+                        "발생했습니다(일시적일 수 있습니다). **신호가 없다는 뜻이 아닙니다.** "
+                        "잠시 후 다시 시도해 주세요.")
+            return ("이 접수번호를 찾지 못했습니다 — 접수번호가 정확한지, 접수일이 번호 앞 "
+                    "8자리와 같은지 확인해 주세요(드물게 다른 공시가 있습니다).")
+        row_corp = str(row.get("corp_code") or "")
+        if row_corp and row_corp != corp_code:
+            return (f"❌ 접수번호 {rcept_no}는 {corp_name}({corp_code})이 아니라 다른 회사"
+                    f"({row_corp} {row.get('corp_name') or ''})의 공시입니다.")
+        report_nm = row.get("report_nm") or ""
+        if is_amendment_disclosure(report_nm):
+            return (f"ℹ️ {_clean_report_name(report_nm)}은(는) 정정공시입니다 — 원공시의 "
+                    "번복·수정이라 대상에서 제외합니다. 원공시 접수번호로 다시 조회하세요.")
+        if not _board_is_target(report_nm):
+            return (f"ℹ️ {_clean_report_name(report_nm)}은(는) 이 도구의 1차 대상 유형이 "
+                    f"아닙니다. 대상: {_BOARD_SCOPE_NOTE}.")
+        # 결의일 이후 정기보고서만 찾으면 되므로 접수일부터 정기공시(A)만 받는다.
+        rows, st = fetch_company_disclosures_with_status(
+            corp_code, api_key, 400,
+            bgn_de=str(row.get("rcept_dt") or "")[:8], pblntf_ty="A",
+        )
+        disclosures = FetchList(rows or [], fetch_failed=(st == FETCH_ERROR))
+        block, _found, _summary = _board_conflict_block(
+            corp_code, corp_name, disclosures, row, api_key)
+        return block + "\n\n" + _BOARD_FOOTER
+
+    window = f"최근 {lookback_days}일"
+    rows, st = fetch_company_disclosures_with_status(
+        corp_code, api_key, lookback_days, max_pages=_page_budget(lookback_days))
+    if st == FETCH_ERROR:
+        return _fetch_failed_notice(corp_name, window)
+    targets = sorted(
+        (d for d in rows
+         if not is_amendment_disclosure(d.get("report_nm") or "")
+         and _board_is_target(d.get("report_nm") or "")),
+        key=lambda d: (str(d.get("rcept_dt") or ""), str(d.get("rcept_no") or "")),
+        reverse=True,
+    )
+    lines = [f"🪑 {corp_name} — 이사회 이해상충 확인 · {window}", ""]
+    notice = _truncation_notice(st, rows, window)
+    if notice:
+        lines += [notice, ""]
+    if not targets:
+        lines.append(f"이 창에는 해당 유형 공시가 없습니다 ({window} · 대상: {_BOARD_SCOPE_NOTE}).")
+        return "\n".join(lines) + "\n\n" + _BOARD_FOOTER
+    checked = targets[:_BOARD_MAX_CHECK]
+    if len(targets) > len(checked):
+        lines.append(f"해당 유형 공시 {len(targets)}건 중 최근 {len(checked)}건 확인 · "
+                     f"{len(targets) - len(checked)}건 미확인")
+    else:
+        lines.append(f"해당 유형 공시 {len(targets)}건 확인")
+    for i, tgt in enumerate(checked):
+        block, _found, _summary = _board_conflict_block(
+            corp_code, corp_name, rows, tgt, api_key, want_header=False)
+        lines += ["", _BOARD_SEP, "", block] if i else ["", block]
+    return "\n".join(lines) + "\n\n" + _BOARD_FOOTER
 
 
 def main() -> None:

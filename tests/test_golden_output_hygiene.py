@@ -122,6 +122,8 @@ _FIRST_LINE_PATTERNS: dict[str, str] = {
     "market":        r"^(?:🔍 \*\*시장 공시 스캔\*\* \(preset=[a-z_0-9]+, 최근 \d+일\)"
                      r"|📈 \*\*.+\*\* \(\d{6}\) — 공시 전후 시장 반응 \(.+\)"
                      r"|❌ KRX_API_KEY .+)$",
+    # 이사회 이해상충 확인(Task 4) — 접수번호 모드는 접수번호, 창 모드는 「최근 N일」이 온다.
+    "board_conflict": r"^🪑 .+ — 이사회 이해상충 확인 · .+$",
     # DS005 주요결정 (자동 탐지, v1.6.0부터 decision_type 정상 해석 — 첫 골드)
     "decision":      r"^📑 \*\*주요사항 결정 공시\*\* \(rcept_no=\d+\)$",
     # 기존 단일 disclosure (v0.7.x 골드 — risk_check 이전 명명 잔존)
