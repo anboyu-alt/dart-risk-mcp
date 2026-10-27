@@ -50,6 +50,7 @@ from dart_risk_mcp.core.signals import is_amendment_disclosure  # noqa: E402
 from dart_risk_mcp.server import (  # noqa: E402
     analyze_company_risk,
     build_event_timeline,
+    check_board_conflict,
     check_disclosure_anomaly,
     check_disclosure_risk,
     compare_financials,
@@ -142,6 +143,11 @@ COMPANY_TOOL_MATRIX: list[tuple[str, Callable[[dict], str]]] = [
     # KRX_API_KEY가 없는 재생성 환경에서는 `❌ KRX_API_KEY ...` 안내가 골드로
     # 저장된다 — 그것도 유효한 hygiene 대상이다(fsfull·audit_text와 같은 관례).
     ("market",        lambda c: track_market_reaction(c["name"])),
+    # 이사회 이해상충 확인(35번 도구) — 창 모드(기본 180일). 파일 `{회사명}_board.txt`.
+    # 해당 유형(주요사항보고서 양수·양도 등) 공시가 창에 없는 회사가 많아
+    # 「이 창에는 해당 유형 공시가 없습니다」가 골드로 저장되는 것이 정상이다.
+    # 접수번호 모드는 아래 `_TITLED_RCEPT_TOOLS`의 `board_rcept`.
+    ("board",         lambda c: check_board_conflict(c["name"])),
 ]
 
 # B. 종목코드 인자 1개 도구
@@ -159,10 +165,20 @@ _MEZZ_TITLE_MARKS = ("전환사채권발행결정", "신주인수권부사채권
                      "교환사채권발행결정")
 
 # C-2. 유형이 정해진 rcept 도구 (v1.23.0) — (단축명, 제목 마커, 호출 함수)
-_TITLED_RCEPT_TOOLS: list[tuple[str, tuple[str, ...], Callable[[str], str]]] = [
+# 호출 함수는 `(접수번호, 회사 dict)`를 받는다 — `check_board_conflict`는
+# 접수번호만으로는 호출할 수 없고 회사 인자가 필요하다(나머지 둘은 무시한다).
+_TITLED_RCEPT_TOOLS: list[tuple[str, tuple[str, ...], Callable[[str, dict], str]]] = [
     ("notes", ("사업보고서",),
-     lambda r: search_notes_in_report(r, ["계속기업", "특수관계자"])),
-    ("mezz", _MEZZ_TITLE_MARKS, lambda r: get_mezzanine_terms(r)),
+     lambda r, c: search_notes_in_report(r, ["계속기업", "특수관계자"])),
+    ("mezz", _MEZZ_TITLE_MARKS, lambda r, c: get_mezzanine_terms(r)),
+    # 이사회 이해상충(접수번호 모드). 파일 `{회사명}_board_rcept.txt`.
+    # ⚠ 마커를 「양수결정」·「취득결정」으로만 두면 「자기주식취득결정」·「주권관련
+    #   사채권의취득결정」(둘 다 이 도구의 1차 대상 유형이 아니다)이 걸려 골드가
+    #   「1차 대상 유형이 아닙니다」 한 줄이 된다(첫 재생성에서 셀트리온·삼성전자·STX가
+    #   그랬다). 1차 대상인 양수 계열 제목만 고른다.
+    ("board_rcept", ("주식및출자증권양수결정", "주식및출자증권취득결정",
+                     "유형자산양수결정", "영업양수결정"),
+     lambda r, c: check_board_conflict(c["name"], rcept_no=r)),
 ]
 
 # C-3. 비상장 외감법인 — `get_unlisted_financials`는 상장사를 되돌려 보내므로
@@ -264,7 +280,8 @@ def _resolve_titled_rcept(company: dict, api_key: str, marks: tuple[str, ...],
         return None
     for d in fetch_company_disclosures(corp_code, api_key, lookback_days) or []:
         nm = (d.get("report_nm") or "").strip()
-        if skip_amendments and is_amendment_disclosure(nm):
+        if skip_amendments and (is_amendment_disclosure(nm) or "[첨부정정]" in nm):
+            # is_amendment_disclosure는 [첨부정정]을 놓친다(그 패턴 주석 참고)
             continue
         if not any(m in nm.replace(" ", "") for m in marks):
             continue
@@ -425,7 +442,7 @@ def build_call_matrix(
                 continue
             label = f"{c['name']} {short}"
             path = GOLDEN / f"{c['name']}_{short}.txt"
-            calls.append((label, (lambda fn=fn, r=rcept: fn(r)), path))
+            calls.append((label, (lambda fn=fn, r=rcept, c=c: fn(r, c)), path))
 
     # C-3. 비상장 전용 (v1.23.0) — COMPANIES가 전부 상장사라 이 도구는 그
     #      매트릭스에서 「상장사입니다」만 저장된다. 실측된 비상장 외감법인을
