@@ -145,6 +145,52 @@ class TestAnalyzeWiring:
         assert wired.doc_text == [FILING]
         assert "해당 2건 중 최근 1건 확인 · 1건 미확인" in out
 
+    @pytest.fixture
+    def newer_without_table(self, wired, monkeypatch):
+        """최신 후보(2026-10-21 결의)는 그 날짜 이후 정기보고서가 없어 의결표가 없고,
+        그보다 오래된 후보(2025-12-19)는 의결표 행이 있다(SKAI 라이브와 같은 모양)."""
+        newer = "20261021000417"
+        newer_row = srv._outflow_row(
+            "20261021", TITLE, newer, "주식회사 스카이디렉터스", "최대주주",
+            "affiliated", 0)
+        text = _txt("20251219000418_text.txt").replace(
+            "9. 이사회결의일(결정일) 2025년 12월 19일", "9. 이사회결의일(결정일) 2026년 10월 21일")
+        assert "2026년 10월 21일" in text
+        orig = srv.fetch_document_text
+        monkeypatch.setattr(
+            srv, "fetch_document_text",
+            lambda rcept, k, max_chars=3000: (
+                (wired.doc_text.append(rcept) or text) if rcept == newer
+                else orig(rcept, k, max_chars)))
+        monkeypatch.setattr(
+            srv, "_confirm_outflow_counterparties",
+            lambda *a, **kw: [_affiliated_row(), newer_row])
+        return newer
+
+    def test_최신_후보에_의결표가_없으면_다음_후보로_내려간다(self, wired, newer_without_table):
+        out = srv.analyze_company_risk("SKAI")
+        assert wired.doc_text == [newer_without_table, FILING]
+        # 블록·신호는 의결표가 나온 오래된 후보(2025-12-19)에서 온다
+        assert f"(rcept_no={FILING})" in out
+        assert f"(rcept_no={newer_without_table})" not in out
+        assert out.count("🪑 **이사회 이해상충 확인**") == 1
+        assert "(해당 2건 중 최근 2건 확인)" in out
+        assert LABEL in _observed_section(out)
+
+    def test_어느_후보에도_의결표가_없으면_최근_후보를_쓴다(self, wired, newer_without_table, monkeypatch):
+        monkeypatch.setattr(
+            srv, "fetch_audit_report_text", lambda rcept, k, prefer="": "")
+        out = srv.analyze_company_risk("SKAI")
+        assert f"(rcept_no={newer_without_table})" in out
+        assert f"(rcept_no={FILING})" not in out
+        assert "(해당 2건 중 최근 2건 확인)" in out
+        assert LABEL not in _observed_section(out)
+
+    def test_타임라인도_의결표가_나온_후보를_쓴다(self, wired, newer_without_table):
+        out = srv.build_event_timeline("SKAI")
+        assert f"(rcept_no={FILING})" in out
+        assert any(f"[{LABEL}]" in ln for ln in out.splitlines())
+
     def test_지도_모드는_생략한다(self, wired):
         out = srv.analyze_company_risk("SKAI", lookback_years=3)
         assert _no_calls(wired)

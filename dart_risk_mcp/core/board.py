@@ -178,7 +178,8 @@ def parse_decision_parties(text: str) -> dict:
 
 # ── extract_board_section ──────────────────────────────────────────────────
 
-_BOARD_TITLE_RE = re.compile(r"이사회의\s*주요\s*의결사항")
+# 제목은 회사마다 다르다 — 「(2) 이사회의 주요 의결사항 등」(SKAI) · 「다. 중요의결사항 등」(셀트리온).
+_BOARD_TITLE_RE = re.compile(r"(?:이사회의\s*)?(?:주요|중요)\s*의결\s*사항")
 _NEXT_HEADING_RE = re.compile(r"^\s*(?:\(\d+\)|[가-하]\.|\d+\.|[IVX]+\.)|^#{1,4} ")
 
 
@@ -192,19 +193,26 @@ def _section_from(lines: list[str], start: int) -> str:
 
 
 def extract_board_section(markdown: str) -> str:
-    """「이사회의 주요 의결사항」 제목 줄부터 다음 소제목 줄 앞까지. 없으면 ""."""
+    """「이사회의 주요 의결사항」·「중요의결사항」 제목 줄부터 다음 소제목 줄 앞까지. 없으면 ""."""
     lines = _norm(markdown).split("\n")
     starts = [i for i, ln in enumerate(lines) if _BOARD_TITLE_RE.search(ln)]
     if not starts:
         return ""
+    # 우선순위: ① 이사 그룹 머리(사내이사 등의 성명) 표가 든 절 — 제목 변형을 넓힌 뒤에는
+    # 「다. 중요 의결 사항 등 (1) 이사회 운영 규정」처럼 같은 낱말을 쓰는 다른 절이 앞에
+    # 올 수 있다(SKAI 사업보고서 실측: 정관 발췌 표가 먼저 잡혀 의결표를 가렸다)
+    # ② 표(`|`)가 딸린 절(목차 줄의 언급이 아니라 실제 절) ③ 첫 절.
     fallback = ""
+    with_table = ""
     for s in starts:
         sec = _section_from(lines, s)
         if not fallback:
             fallback = sec
-        if "|" in sec:  # 목차 줄의 언급이 아니라 표가 딸린 실제 절을 우선한다
+        if _GROUP_HDR_RE.search(sec) and "|" in sec:
             return sec
-    return fallback
+        if "|" in sec and not with_table:
+            with_table = sec
+    return with_table or fallback
 
 
 # ── parse_board_resolutions ────────────────────────────────────────────────

@@ -10445,6 +10445,7 @@ def _board_conflict_block(
     api_key: str,
     *,
     want_header: bool = True,
+    info: "dict | None" = None,
 ) -> "tuple[str, bool, str]":
     """결정 공시 한 건의 이사회 이해상충 대조 → `(마크다운 블록, 겸직 겹침 여부, 한 줄 요약)`.
 
@@ -10456,6 +10457,9 @@ def _board_conflict_block(
     겹침 여부(`bool`)는 **결의 참여 표기까지 선 경우만** True다 — 의결표 행이 있고
     겸직 이사 중 하나 이상의 표기가 「-」·공란이 아닐 때. 임원현황상 겸직만 확인된
     경우는 사실 줄로 적고 False다(Task 5의 신호 입력이 이 값을 쓴다).
+
+    `info`를 주면 `info["has_table"]`에 **의결표 행을 찾았는지**를 적는다 — 임베드 호출부가
+    후보를 순회하다 멈출 지점을 정하는 데 쓴다.
     """
     rcept = str(row.get("rcept_no") or "")
     title = _clean_report_name(row.get("report_nm") or "")
@@ -10491,6 +10495,8 @@ def _board_conflict_block(
         lines.append("대상회사: " + _board_party_text(parties["target"], "회사와 관계"))
 
     res = _board_find_resolution(disclosures, date8, parties, api_key)
+    if info is not None:
+        info["has_table"] = bool(res["found"])
     lines += ["", "━━ 이사회 의결 ━━"] + _board_resolution_lines(
         res, corp_name, date8, disclosures)
 
@@ -10508,7 +10514,9 @@ def _board_conflict_block(
               "- 비상장 상대방 임원은 공시 기재(대표자·발행사 임원 주요경력)로만 확인했습니다 — "
               "등기부 대조를 권합니다.",
               "- 이사회의사록 첨부는 이 도구가 읽지 않습니다.",
-              "- CB·BW·유상증자 발행대상자 유형은 이 도구의 1차 범위 밖입니다."]
+              "- CB·BW·유상증자 발행대상자 유형은 이 도구의 1차 범위 밖입니다.",
+              "- 접수번호 모드는 접수번호 앞 8자리가 접수일과 다른 공시(실측 0.7%)를 찾지 못합니다 — "
+              "그때는 창 모드로 다시 조회하세요."]
 
     summary = summarize_board_conflict(directors, ro["overlaps"], row0)
     lines += ["", f"요약: {summary}"]
@@ -10752,6 +10760,10 @@ def _board_row_from_candidate(pick: dict, disclosures, corp_code: str, corp_name
     }
 
 
+def _board_embed_header(note: str = "") -> str:
+    return "🪑 **이사회 이해상충 확인**" + (f" {note}" if note else "")
+
+
 def _board_embedded(
     corp_code: str, corp_name: str, disclosures, row: "dict | None", api_key: str,
     *, want_header: bool = False, note: str = "",
@@ -10761,12 +10773,14 @@ def _board_embedded(
     `row`가 None이면 아무것도 하지 않는다(원문·ZIP·명부 호출 0). 블록 생성 중 예외는
     블록만 빼고 실패 사실 한 줄을 남긴다 — 도구는 계속 돌려준다. 꼬리말 고지는 여기서
     한 번만 붙인다."""
-    out = {"lines": [], "gated": False, "summary": "", "row": row}
+    out = {"lines": [], "gated": False, "summary": "", "row": row, "has_table": False}
     if not row:
         return out
+    info: dict = {}
     try:
         block, gated, summary = _board_conflict_block(
-            corp_code, corp_name, disclosures, row, api_key, want_header=want_header)
+            corp_code, corp_name, disclosures, row, api_key,
+            want_header=want_header, info=info)
     except Exception:
         # 화면에는 「확인하지 못했습니다」만 나가므로, 코드 결함(KeyError 등)과 API 실패를
         # 로그에서 가를 수 있게 트레이스백을 남긴다.
@@ -10775,11 +10789,12 @@ def _board_embedded(
         return out
     lines = [""]
     if not want_header:
-        lines += ["🪑 **이사회 이해상충 확인**" + (f" {note}" if note else ""),
+        lines += [_board_embed_header(note),
                   "상대방이 계열·특수관계로 확인된 거래에서, 결의에 참여한 이사가 상대방·"
                   "대상회사 임원을 겸하는지 공시 범위에서 대조한 사실 표기입니다.", ""]
     lines += block.splitlines() + ["", _BOARD_FOOTER]
-    out.update(lines=lines, gated=gated, summary=summary)
+    out.update(lines=lines, gated=gated, summary=summary,
+               has_table=bool(info.get("has_table")))
     return out
 
 
@@ -10790,15 +10805,37 @@ def _board_embedded_for_report(
     """`analyze_company_risk`·`build_event_timeline` 공용 호출부 — 후보 선택 → 행 복원 →
     블록 → (겹침이 서면) 신호 이벤트. `_board_embedded`의 결과에 `row`(대상 결의 공시)와
     `event`(`BOARD_CONFLICT` 이벤트 또는 None)를 더해 돌려준다. 지도 모드(`deep`가
-    아님)이거나 후보가 없으면 아무것도 열지 않는다."""
+    아님)이거나 후보가 없으면 아무것도 열지 않는다. 후보는 최근순 최대 3건을 훑어
+    의결표 행이 나온 첫 후보를 쓴다(없으면 최근 후보)."""
     cands = _board_candidates(outflow_confirmations, acq_confirmations) if deep else []
-    row = (_board_row_from_candidate(cands[0], disclosures, corp_code, corp_name)
-           if cands else None)
-    board = _board_embedded(
-        corp_code, corp_name, disclosures, row, api_key,
-        note=(f"(해당 {len(cands)}건 중 최근 1건 확인 · {len(cands) - 1}건 미확인)"
-              if len(cands) > 1 else ""),
-    )
+    # 후보를 최근순으로 최대 `_BOARD_MAX_CHECK`건 훑어 **의결표 행이 나온 첫 후보**를 쓴다
+    # (최신 후보에 의결표가 없다고 그 아래 후보를 보지 않으면 게이트가 열릴 거래를
+    # 놓친다 — SKAI 2026-10-21 건이 2025-12-19 건을 가렸다). 어느 후보에도 의결표 행이
+    # 없으면 가장 최근 후보의 블록을 그대로 쓴다. 원문·정기보고서 ZIP은 캐시되므로
+    # 비용은 후보 수만큼의 결정 공시 원문과 명부 조회로 한정된다.
+    tried = cands[:_BOARD_MAX_CHECK]
+    board: dict = {"lines": [], "gated": False, "summary": "", "row": None,
+                   "has_table": False}
+    first: "dict | None" = None
+    checked = 0
+    for cand in tried:
+        row = _board_row_from_candidate(cand, disclosures, corp_code, corp_name)
+        cur = _board_embedded(corp_code, corp_name, disclosures, row, api_key)
+        checked += 1
+        if first is None:
+            first = cur
+        if cur["has_table"]:
+            board = cur
+            break
+    else:
+        board = first or board
+    # 헤더에 「후보 N건 중 M건 확인」 — M은 실제로 연 후보 수다. 블록이 만들어진 뒤에
+    # 갈아 끼운다(멈춘 지점을 알아야 M이 정해진다).
+    if len(cands) > 1 and len(board["lines"]) > 1 and board["lines"][1].startswith("🪑 **"):
+        board["lines"][1] = _board_embed_header(
+            f"(해당 {len(cands)}건 중 최근 {checked}건 확인"
+            + (f" · {len(cands) - checked}건 미확인" if len(cands) > checked else "") + ")")
+    row = board["row"]
     board["event"] = _board_conflict_event(row) if board["gated"] else None
     return board
 

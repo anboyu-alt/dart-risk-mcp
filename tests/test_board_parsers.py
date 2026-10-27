@@ -164,6 +164,36 @@ class TestExtractBoardSection:
     def test_없으면_빈_문자열(self, src):
         assert extract_board_section(src) == ""
 
+    @pytest.mark.parametrize("title", [
+        "나. 중요의결사항 등", "나. 중요 의결사항 등", "다. 중요 의결 사항 등",
+        "(2) 이사회의 주요 의결사항 등", "(2) 주요 의결사항",
+    ])
+    def test_제목_변형을_받는다(self, title):
+        md = f"가. 개요\n{title}\n| a | b |\n|---|---|\n| 1 | 2 |\n라. 다음\n"
+        sec = extract_board_section(md)
+        assert sec.startswith(title) and "| 1 | 2 |" in sec
+
+    def test_같은_낱말의_다른_절보다_의결표_절을_우선한다(self, board_md):
+        """제목 변형을 넓히면 「다. 중요 의결 사항 등 (1) 이사회 운영 규정」(정관 발췌 표)이
+        먼저 걸린다 — SKAI 사업보고서 실측. 이사 그룹 머리가 든 의결표 절을 골라야 한다."""
+        pre = "다. 중요 의결 사항 등\n| 구분 | 내용 |\n|---|---|\n| 제37조 | 이사회 |\n\n"
+        sec = extract_board_section(pre + board_md)
+        assert "사내이사 등의 성명" in sec and "제37조" not in sec
+        assert parse_board_resolutions(sec)["rows"]
+
+    @pytest.mark.parametrize("name,first_title", [
+        ("삼성전자_board_section.md", "나. 중요의결사항 등"),
+        ("셀트리온_board_section.md", "다. 중요의결사항 등"),
+    ])
+    def test_SKAI_밖_서식은_절은_찾지만_아직_읽지_못한다(self, name, first_title):
+        """알려진 한계(CLAUDE.md 35번 항목 2026-10-28): 제목 변형은 받지만 표 머리가 달라
+        (그룹 머리 「사내이사 등의 성명」 없음·이름 줄 출석률 표기 차이) 이사·행을 못 읽는다.
+        파서가 이 서식을 읽게 되면 이 테스트를 읽는 기대로 바꾼다."""
+        sec = extract_board_section(_txt(name))
+        assert sec.startswith(first_title)
+        parsed = parse_board_resolutions(sec)
+        assert parsed == {"directors": [], "rows": [], "unparsed": 0}
+
 
 # ── parse_board_resolutions ────────────────────────────────────────────────
 

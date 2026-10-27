@@ -635,7 +635,7 @@ class TestBlockFunction:
         import inspect
         sig = inspect.signature(srv._board_conflict_block)
         assert list(sig.parameters) == [
-            "corp_code", "corp_name", "disclosures", "row", "api_key", "want_header"]
+            "corp_code", "corp_name", "disclosures", "row", "api_key", "want_header", "info"]
         assert sig.parameters["want_header"].kind is inspect.Parameter.KEYWORD_ONLY
         assert sig.parameters["want_header"].default is True
 
