@@ -201,6 +201,15 @@ from .market_context import (
     MGMT_ISSUE_PRICE_KRW,
 )
 
+from .board import (
+    parse_decision_parties,
+    extract_board_section,
+    parse_board_resolutions,
+    find_resolution_rows,
+    match_director_overlap,
+    summarize_board_conflict,
+)
+
 __all__ = [
     "_fund_text",
     "resolve_corp",
@@ -380,4 +389,10 @@ __all__ = [
     "_break_label",
     "MGMT_ISSUE_MKTCAP_KRW",
     "MGMT_ISSUE_PRICE_KRW",
+    "parse_decision_parties",
+    "extract_board_section",
+    "parse_board_resolutions",
+    "find_resolution_rows",
+    "match_director_overlap",
+    "summarize_board_conflict",
 ]
