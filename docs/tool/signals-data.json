@@ -748,6 +748,17 @@
    "priority": "first"
   },
   {
+   "key": "BOARD_CONFLICT",
+   "label": "이사회 결의 참여 이사의 상대방·대상회사 겸직",
+   "keywords": [],
+   "taxonomies": [
+    "4.5"
+   ],
+   "category": 4,
+   "prose": "",
+   "priority": "watch"
+  },
+  {
    "key": "INSIDER_PRE_DISCLOSURE",
    "label": "임원·대주주 매도 후 부정 공시",
    "keywords": [],
@@ -1097,6 +1108,7 @@
   "GOING_CONCERN": "회생·파산 절차",
   "FUND_DIVERSION": "조달자금 목적외 사용",
   "FUND_UNREPORTED": "자금사용내역 미기재",
+  "BOARD_CONFLICT": "이사회 결의 참여 이사의 상대방·대상회사 겸직",
   "DECISION_RELATED_PARTY": "특수관계인 대상 결정",
   "DECISION_OVERSIZED": "자산대비 대형 결정",
   "DECISION_NO_EXTVAL": "외부평가 미실시 결정",
@@ -1789,6 +1801,7 @@
    "4.2": "비정상 가격의 특수관계자 거래",
    "4.3": "공시·보고 의무 위반",
    "4.4": "감사의견 비적정·거절",
+   "4.5": "특수관계자 거래 결의의 이사 겸직",
    "5.1": "액면분할 + 배당 조합",
    "5.2": "적자 상황에서의 자사주 매입",
    "5.3": "장외 자산 이전",

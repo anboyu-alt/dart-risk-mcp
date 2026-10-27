@@ -3775,6 +3775,7 @@ _PHASE_MAP = {
     "DECISION_OVERSIZED":     "심화기",
     "DECISION_NO_EXTVAL":     "심화기",
     "FUND_UNREPORTED":        "심화기",
+    "BOARD_CONFLICT":         "심화기",
     # v0.6.0: 자본 이벤트 과다 반복 + 재무제표 YoY 이상
     "CAPITAL_CHURN":       "심화기",
     "AR_SURGE":            "심화기",
@@ -10412,7 +10413,8 @@ def _board_conflict_block(
 
     lines += ["", "━━ 겸직 대조 ━━", ro["basis_note"]] + overlap_lines
     if gated:
-        lines += ["", "🎯 이사회 결의 참여 이사의 상대방·대상회사 겸직"]
+        _bc_label = next(t["label"] for t in SIGNAL_TYPES if t["key"] == "BOARD_CONFLICT")
+        lines += ["", "🎯 " + _bc_label]
     lines += ["", "━━ 한계 ━━",
               "- 비상장 상대방 임원은 공시 기재(대표자·발행사 임원 주요경력)로만 확인했습니다 — "
               "등기부 대조를 권합니다.",

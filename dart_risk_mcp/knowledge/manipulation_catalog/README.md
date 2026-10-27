@@ -7,7 +7,7 @@
   - 1차 스크리닝 제외: 2187건 (정밀 분류 대상이 아니었던 건, 신규 유형 후보 아님)
   - 정밀 분류 대상: 1242건 (유형 매핑 277건 / **미매핑(신규 유형 후보) 965건**)
 - **본문 확보 경로**(정밀 분류 대상 1242건 기준): page 421건, pdf 821건
-- **생성일**: 2026-10-12
+- **생성일**: 2026-10-27
 - **데이터 소스**: 금융감독원(FSS) 보도자료 게시판 웹 파싱
 
 > 본문 확보 경로가 `page`·`title_only`인 레코드는 보도자료 전문이 아니라
@@ -20,7 +20,7 @@
 | [01_cb_debt.md](01_cb_debt.md) | 전환사채·부채 조작 | 8 | 2 |
 | [02_capital_structure.md](02_capital_structure.md) | 자본구조 조작 | 8 | 6 |
 | [03_ownership_control.md](03_ownership_control.md) | 지분·지배권 | 7 | 29 |
-| [04_governance.md](04_governance.md) | 거버넌스·공시 | 4 | 146 |
+| [04_governance.md](04_governance.md) | 거버넌스·공시 | 5 | 146 |
 | [05_corporate_action.md](05_corporate_action.md) | 기업행동 조작 | 8 | 9 |
 | [06_accounting.md](06_accounting.md) | 회계·재무보고 | 3 | 106 |
 | [07_market_manipulation.md](07_market_manipulation.md) | 시장조작·거래 | 3 | 11 |
