@@ -97,6 +97,14 @@ def test_020은_실패이고_캐시하지_않는다(monkeypatch):
     assert not dc._roster_rows_cache
 
 
+def test_800은_실패이고_캐시하지_않는다(monkeypatch):
+    calls = _patch(monkeypatch, lambda *a, **k: _Resp({"status": "800"}))
+    r = fetch_executive_roster_rows("c", "K", "2025")
+    assert list(r) == [] and r.fetch_failed is True
+    fetch_executive_roster_rows("c", "K", "2025")
+    assert len(calls) == 2 and not dc._roster_rows_cache
+
+
 def test_예외는_실패이고_캐시하지_않는다(monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("network down")
@@ -130,6 +138,8 @@ def test_키_또는_회사코드가_없으면_실패가_아니라_빈_결과(mon
 @pytest.mark.parametrize("title,expected", [
     ("사업보고서 (2025.12)", ("2025", "11011")),
     ("[기재정정]사업보고서 (2025.12)", ("2025", "11011")),
+    ("[첨부정정]사업보고서 (2025.12)", ("2025", "11011")),
+    ("[기재정정][첨부정정]분기보고서 (2026.03)", ("2026", "11013")),
     ("반기보고서 (2026.06)", ("2026", "11012")),
     ("분기보고서 (2026.03)", ("2026", "11013")),
     ("분기보고서 (2026.09)", ("2026", "11014")),

@@ -29,7 +29,6 @@ from .signals import (
     DILUTIVE_CAPITAL_EVENTS,
     NON_DILUTIVE_CAPITAL_EVENTS,
     is_amendment_disclosure,
-    strip_amendment_prefix,
 )
 
 log = logging.getLogger(__name__)
@@ -6261,18 +6260,21 @@ def fetch_executive_roster_rows(
     return FetchList(rows, fetch_failed=not _ros_ok)
 
 
+_LEADING_TAGS_RE = re.compile(r"^\s*(?:\[[^\]]*\]\s*)+")
 _PERIODIC_TITLE_RE = re.compile(r"^(사업|반기|분기)보고서\s*\(\s*(\d{4})\s*[.\-]\s*(\d{1,2})\s*\)")
 
 
-def periodic_report_code(report_nm: str):
+def periodic_report_code(report_nm: str) -> "tuple[str, str] | None":
     """정기보고서 제목 → `(bsns_year, reprt_code)`. 정기보고서가 아니면 None.
 
     사업보고서 → 11011 · 반기보고서 → 11012 · 분기보고서는 결산월 기준
     3월 → 11013, 9월 → 11014. 제목의 괄호 연도는 **사업연도**다
-    (`사업보고서 (2025.12)`는 2026년에 접수된다). 접두 태그
-    (`[기재정정]` 등)는 `strip_amendment_prefix`로 뗀다.
+    (`사업보고서 (2025.12)`는 2026년에 접수된다). 선행 대괄호 태그는
+    **전부** 뗀다(`[기재정정]`·`[첨부정정]` 등, 여러 개도) — 판본을 판정하지
+    않고 접수순 그대로 모두 후보로 본다(`list_report_revisions`와 같은 태도).
+    `strip_amendment_prefix`는 `[첨부정정]`을 안 떼므로 쓰지 않는다.
     """
-    title = strip_amendment_prefix(report_nm or "").strip()
+    title = _LEADING_TAGS_RE.sub("", report_nm or "")
     m = _PERIODIC_TITLE_RE.match(title)
     if not m:
         return None
