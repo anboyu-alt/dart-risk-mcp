@@ -186,7 +186,9 @@ class TestExtractBoardSection:
         고정 열이 3칸이다(날짜 칸에 「'25.01.31 (1차)」). 읽게 되면 기대를 바꾼다."""
         sec = extract_board_section(_txt("삼성전자_board_section.md"))
         assert sec.startswith("나. 중요의결사항 등")
-        assert parse_board_resolutions(sec) == {"directors": [], "rows": [], "unparsed": 0}
+        # 표는 찾았으나 못 읽는다 — 「표 없음」(table_found False)과 다르다
+        assert parse_board_resolutions(sec) == {
+            "directors": [], "rows": [], "unparsed": 0, "table_found": True}
 
     def test_셀트리온_출석률_없는_이름_줄과_별도_출석율_줄(self):
         sec = extract_board_section(_txt("셀트리온_board_section.md"))
@@ -215,7 +217,8 @@ class TestExtractBoardSection:
     def test_이름_줄_같지만_열_수가_맞는_행이_없으면_이사를_주장하지_않는다(self):
         md = ("나. 중요의결사항 등\n| 회차 | 개최일자 | 의안내용 | 가결 | 사내이사 |\n"
               "|---|---|---|---|---|\n| 홍길동 | 김철수 |\n")
-        assert parse_board_resolutions(md) == {"directors": [], "rows": [], "unparsed": 0}
+        assert parse_board_resolutions(md) == {
+            "directors": [], "rows": [], "unparsed": 0, "table_found": True}
 
 
 # ── parse_board_resolutions ────────────────────────────────────────────────
@@ -298,11 +301,17 @@ class TestBoardResolutions:
             "",
             None,
             "| 구분 | 내용 |\n|---|---|\n| 제37조 | 이사회는 이사로 구성한다. |\n",
-            "| 회차 | 개최 일자 | 의안 내용 | 가결 여부 |\n|---|---|---|---|\n| 1 | 2025.1.1 | 가 | 가결 |\n",
         ],
     )
-    def test_2단_헤더가_아니면_빈_결과(self, src):
-        assert parse_board_resolutions(src) == {"directors": [], "rows": [], "unparsed": 0}
+    def test_표가_없으면_table_found_False(self, src):
+        assert parse_board_resolutions(src) == {
+            "directors": [], "rows": [], "unparsed": 0, "table_found": False}
+
+    def test_이사_칸이_없는_머리는_표는_찾았으나_못_읽는다(self):
+        src = ("| 회차 | 개최 일자 | 의안 내용 | 가결 여부 |\n|---|---|---|---|\n"
+               "| 1 | 2025.1.1 | 가 | 가결 |\n")
+        assert parse_board_resolutions(src) == {
+            "directors": [], "rows": [], "unparsed": 0, "table_found": True}
 
 
 # ── find_resolution_rows ───────────────────────────────────────────────────
@@ -466,3 +475,81 @@ class TestSummarize:
         assert "전체 이사 결의 표기" in s
         assert summarize_board_conflict([], None, None).endswith("의결표 없음")
         assert "이사 수 확인 불가" in summarize_board_conflict([], None, None)
+
+
+
+# ── Fix round 3: 절 선택·이름 줄 양성 근거·제목 ────────────────────────────────
+
+from dart_risk_mcp.core.board import extract_board_section_with_title  # noqa: E402
+
+
+class TestSectionAndTitle:
+    def test_제목은_찾은_절의_원문_첫_줄이다(self, board_md):
+        title, sec = extract_board_section_with_title(board_md)
+        assert title == "(2) 이사회의 주요 의결사항 등"
+        assert sec == extract_board_section(board_md)
+        assert extract_board_section_with_title(_txt("셀트리온_board_section.md"))[0] == "다. 중요의결사항 등"
+        assert extract_board_section_with_title(_txt("두산_board_section.md"))[0] == "나. 중요의결사항 등"
+        assert extract_board_section_with_title("") == ("", "")
+
+    def test_셀트리온형_의결표가_같은_제목의_앞선_표_절에_가려지지_않는다(self):
+        """개최일자+의안 머리(그룹 머리 칸 없음)인 실제 의결표 앞에, 같은 낱말 제목의 다른 표 절이
+        있는 문서 — 앞선 절은 의결표 머리(개최일자+가결여부/회차)가 없어 건너뛴다."""
+        decoy = ("다. 중요 의결 사항 등 (1) 이사회 운영 규정\n\n"
+                 "| 구분 | 내용 |\n|---|---|\n| 제37조 | 이사의 성명을 공고한다 |\n\n")
+        md = decoy + _txt("셀트리온_board_section.md")
+        title, sec = extract_board_section_with_title(md)
+        assert title == "다. 중요의결사항 등" and "제37조" not in sec
+        assert len(parse_board_resolutions(sec)["directors"]) == 12
+
+    def test_넓은_이사의_성명은_절_선택에_쓰이지_않는다(self):
+        """「이사의 성명」이 든 다른 표가 앞서도(의결표 머리가 없으면) 실제 의결표 절을 고른다."""
+        decoy = ("나. 중요의결사항 등\n| 구분 | 이사의 성명 |\n|---|---|\n| 선임 | 홍길동 |\n\n")
+        md = decoy + _txt("두산_board_section.md")
+        sec = extract_board_section(md)
+        assert "홍길동" not in sec and "개최일자" in sec
+
+
+class TestNameRowEvidence:
+    HEAD = "| 회차 | 개최일자 | 의안내용 | 가결 | 사내이사 | 사외이사 |\n|---|---|---|---|---|---|\n"
+
+    def test_구분_성명_계_줄은_이사가_되지_않는다(self):
+        md = (self.HEAD + "| 구분 | 성명 | 계 | 합계 | 비고 |\n"
+              "| 1 | 2025.01.01 | 가 | 가결 | 찬성 | 찬성 | 찬성 | 찬성 | 찬성 |\n")
+        assert parse_board_resolutions(md) == {
+            "directors": [], "rows": [], "unparsed": 0, "table_found": True}
+
+    def test_사람_이름이어도_열_수가_맞는_첫_데이터_행이_없으면_이사가_아니다(self):
+        md = (self.HEAD + "| 홍길동 | 김철수 | 이영희 |\n"
+              "| 1 | 2025.01.01 | 가 | 가결 | 찬성 |\n")
+        assert parse_board_resolutions(md)["directors"] == []
+
+    def test_출석률_칸이_하나라도_있으면_이름_줄이다(self):
+        md = (self.HEAD + "| 홍길동(출석률: 100%) | 김철수 |\n"
+              "| 1 | 2025.01.01 | 가 | 가결 | 찬성 | 찬성 |\n")
+        p = parse_board_resolutions(md)
+        assert [d["name"] for d in p["directors"]] == ["홍길동", "김철수"] and len(p["rows"]) == 1
+
+    def test_의안_칸은_칸_전체가_의안일_때만_머리다(self):
+        md = ("| 회차 | 개최일자 | 동의안 | 회의안건 | 사내이사 |\n|---|---|---|---|---|\n"
+              "| 홍길동 | 김철수 |\n| 1 | 2025.01.01 | 가 | 가결 | 찬성 |\n")
+        assert parse_board_resolutions(md)["table_found"] is False
+
+    def test_출석율_줄은_이름_줄_바로_다음에서만_한_번_적용한다(self):
+        names = "| 서정진 | 서진석 |\n"
+        late = (self.HEAD + names + "| 가결여부 | 찬 반 여 부 |\n"
+                "| 25-001 | 2025.01.01 | 가 | 가결 | 찬성 | 찬성 |\n"
+                "| 출석율 | 10% | 20% |\n")
+        p = parse_board_resolutions(late)
+        assert [d["attendance"] for d in p["directors"]] == ["", ""]  # 뒤쪽 줄은 덮어쓰지 않는다
+        assert p["unparsed"] == 1
+        adj = self.HEAD + names + "| 출석율 | 91% | 100% |\n| 25-001 | 2025.01.01 | 가 | 가결 | 찬성 | 찬성 |\n"
+        assert [d["attendance"] for d in parse_board_resolutions(adj)["directors"]] == ["91%", "100%"]
+
+    def test_새_머리_줄이_나오면_첫_표에서_멈춘다(self):
+        head = "| 회차 | 개최일자 | 의안내용 | 가결 | 사내이사 |\n|---|---|---|---|---|\n"
+        md = (head + "| 홍길동(출석률: 100%) | 김철수(출석률: 100%) |\n"
+              "| 1 | 2025.01.01 | 가 | 가결 | 찬성 | 찬성 |\n"
+              + head + "| 박(출석률: 50%) |\n| 2 | 2025.02.01 | 나 | 가결 | 찬성 |\n")
+        p = parse_board_resolutions(md)
+        assert [r["no"] for r in p["rows"]] == ["1"] and p["unparsed"] == 0

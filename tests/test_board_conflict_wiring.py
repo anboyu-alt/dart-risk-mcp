@@ -175,7 +175,48 @@ class TestAnalyzeWiring:
         assert f"(rcept_no={newer_without_table})" not in out
         assert out.count("🪑 **이사회 이해상충 확인**") == 1
         assert "(해당 2건 중 최근 2건 확인)" in out
+        assert f"열어 본 후보: {newer_without_table} 의결표 없음 · {FILING} 의결표 행 있음" in out
+        assert (f"가장 최근 후보({newer_without_table})가 아니라 {FILING}의 의결표를 쓴 결과입니다"
+                " — 최근 후보는 「의결표 없음」" in out)
         assert LABEL in _observed_section(out)
+
+    def test_최신_후보_조회가_실패해도_고지를_남기고_다음_후보를_쓴다(
+            self, wired, newer_without_table, monkeypatch):
+        orig = srv.fetch_document_text
+        monkeypatch.setattr(
+            srv, "fetch_document_text",
+            lambda rcept, k, max_chars=3000: "" if rcept == newer_without_table
+            else orig(rcept, k, max_chars))
+        out = srv.analyze_company_risk("SKAI")
+        assert f"열어 본 후보: {newer_without_table} 조회 실패 · {FILING} 의결표 행 있음" in out
+        assert "(해당 2건 중 최근 2건 확인)" in out
+        assert f"(rcept_no={FILING})" in out
+
+    def test_후보_전부가_실패하면_실패_문구_뒤에_N_M_고지를_붙인다(
+            self, wired, newer_without_table, monkeypatch):
+        monkeypatch.setattr(srv, "fetch_document_text", lambda *a, **kw: "")
+        out = srv.analyze_company_risk("SKAI")
+        assert "(해당 2건 중 최근 2건 확인)" in out
+        assert "열어 본 후보:" in out and out.count("조회 실패") >= 2
+
+    def test_의결표를_찾았으나_못_읽으면_없다고_적지_않는다(self, wired, monkeypatch):
+        sam = (_FIX / "삼성전자_board_section.md").read_text(encoding="utf-8")
+        monkeypatch.setattr(srv, "fetch_audit_report_text", lambda rcept, k, prefer="": sam)
+        out = srv.analyze_company_risk("SKAI")
+        assert "의결표를 찾았으나 이 서식은 읽지 못했습니다(출처 사업보고서 (2025.12) 20260323001292)" in out
+        assert "의결표가 없다는 뜻이 아닙니다" in out
+        assert "의결표 못 읽음" in out
+        assert "0행 중" not in out and "의결표 없음" not in out
+        assert LABEL not in _observed_section(out)
+
+    def test_출처_표기는_찾은_절의_원문_제목이다(self, wired, monkeypatch):
+        sec = _txt("20260323001292_board_section.md").replace(
+            "(2) 이사회의 주요 의결사항 등", "나. 중요의결사항 등")
+        assert "나. 중요의결사항 등" in sec
+        monkeypatch.setattr(srv, "fetch_audit_report_text", lambda rcept, k, prefer="": sec)
+        out = srv.analyze_company_risk("SKAI")
+        assert f"출처: 사업보고서 (2025.12) {PERIODIC} 「나. 중요의결사항 등」" in out
+        assert "「이사회의 주요 의결사항」" not in out
 
     def test_어느_후보에도_의결표가_없으면_최근_후보를_쓴다(self, wired, newer_without_table, monkeypatch):
         monkeypatch.setattr(

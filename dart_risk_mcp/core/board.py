@@ -181,6 +181,29 @@ def parse_decision_parties(text: str) -> dict:
 # 제목은 회사마다 다르다 — 「(2) 이사회의 주요 의결사항 등」(SKAI) · 「다. 중요의결사항 등」(셀트리온).
 _BOARD_TITLE_RE = re.compile(r"(?:이사회의\s*)?(?:주요|중요)\s*의결\s*사항")
 _NEXT_HEADING_RE = re.compile(r"^\s*(?:\(\d+\)|[가-하]\.|\d+\.|[IVX]+\.)|^#{1,4} ")
+_SEP_CELL_RE = re.compile(r":?-{3,}:?")
+_ATTEND_RE = re.compile(r"^(.*?)\s*\(\s*출석률\s*[:：]\s*([\d.]+\s*%)\s*\)\s*$", re.S)
+# 의결표 머리 줄의 칸들 — 「개최일자」는 모든 서식에 있고, 「가결여부」나 「회차」가 같은 줄에 있다.
+_HDR_DATE_CELL_RE = re.compile(r"개최\s*일자")
+_HDR_RESULT_OR_NO_RE = re.compile(r"가결\s*여부|회차")
+# 이사 그룹 머리 — SKAI는 「사내이사 등의 성명」·「사외이사 등의 성명」 두 칸, 삼성전자·두산은
+# 「이사의 성명」 한 칸(사내/사외를 가르지 않는다 — group은 ""로 둔다). ⚠ 이 넓은 형태는
+# **머리 줄 판정에만** 쓴다 — 절 선택에 쓰면 같은 낱말을 쓰는 다른 표가 의결표 절을 가린다.
+_NAME_HDR_RE = re.compile(
+    r"사내\s*이사\s*등의\s*성명|사외\s*이사\s*등의\s*성명|(?<![가-힣])이사의\s*성명")
+# 그룹 머리 칸이 따로 없는 서식(셀트리온)의 머리 줄: 「개최일자」 칸과 칸 전체가 「의안(내용)」인 칸.
+_HDR_AGENDA_CELL_RE = re.compile(r"의\s*안(?:\s*내\s*용)?")
+_PLAIN_GROUP_RE = re.compile(r"(?:사내|사외)\s*이사")
+# 출석률 표기가 없는 이름 줄의 셀: 한글 2~5자 또는 쉼표·공백이 든 로마자(숫자 없음)
+_PERSON_CELL_RE = re.compile(r"[가-힣]{2,5}|[A-Za-z][A-Za-z ,.'-]*[A-Za-z]")
+# 이름처럼 생겼지만 이름이 아닌 칸 — 머리·합계 줄이 이사 줄로 읽히는 것을 막는다.
+_NON_NAME_TOKENS = frozenset({
+    "이사", "사내이사", "사외이사", "기타비상무이사", "비상무이사", "감사", "감사위원", "성명",
+    "구분", "계", "합계", "소계", "비고", "회차", "개최일자", "의안내용", "가결여부",
+    "찬반여부", "출석률", "출석율", "참석여부",
+})
+_ATTEND_ROW_RE = re.compile(r"출석\s*[률율]")
+_RESULT_LABEL_RE = re.compile(r"가결\s*여부")
 
 
 def _section_from(lines: list[str], start: int) -> str:
@@ -192,46 +215,57 @@ def _section_from(lines: list[str], start: int) -> str:
     return "\n".join(lines[start:end]).rstrip()
 
 
-def extract_board_section(markdown: str) -> str:
-    """「이사회의 주요 의결사항」·「중요의결사항」 제목 줄부터 다음 소제목 줄 앞까지. 없으면 ""."""
+_TITLE_MAX = 60
+
+
+def _title_of(sec: str) -> str:
+    """절의 첫 줄(앞뒤 공백 제거). 60자를 넘으면 말줄임표로 끊긴 것을 밝힌다."""
+    first = sec.split("\n", 1)[0].strip()
+    return first if len(first) <= _TITLE_MAX else first[:_TITLE_MAX] + "…"
+
+
+def _has_resolution_table(sec: str) -> bool:
+    """절에 의결표 머리 줄이 있는가 — 「개최일자」 칸과 「가결여부」·「회차」 칸이 한 줄에."""
+    for ln in sec.split("\n"):
+        c = _cells(ln)
+        if (c and any(_HDR_DATE_CELL_RE.search(x) for x in c)
+                and any(_HDR_RESULT_OR_NO_RE.search(x) for x in c)):
+            return True
+    return False
+
+
+def extract_board_section_with_title(markdown: str) -> "tuple[str, str]":
+    """`(제목 줄, 절)` — 제목 줄은 절의 첫 줄(원문 표기 그대로, 앞뒤 공백만 제거). 없으면 `("", "")`.
+
+    우선순위: ① **의결표 머리 줄**(「개최일자」+「가결여부」/「회차」 칸)이 든 절 — 제목 변형을
+    넓힌 뒤에는 「다. 중요 의결 사항 등 (1) 이사회 운영 규정」(정관 발췌 표)처럼 같은 낱말을
+    쓰는 다른 절이 앞에 올 수 있다(SKAI 사업보고서 실측) ② 표(`|`)가 딸린 절(목차 줄의
+    언급이 아니라 실제 절) ③ 첫 절.
+    """
     lines = _norm(markdown).split("\n")
     starts = [i for i, ln in enumerate(lines) if _BOARD_TITLE_RE.search(ln)]
     if not starts:
-        return ""
-    # 우선순위: ① 이사 그룹 머리(사내이사 등의 성명) 표가 든 절 — 제목 변형을 넓힌 뒤에는
-    # 「다. 중요 의결 사항 등 (1) 이사회 운영 규정」처럼 같은 낱말을 쓰는 다른 절이 앞에
-    # 올 수 있다(SKAI 사업보고서 실측: 정관 발췌 표가 먼저 잡혀 의결표를 가렸다)
-    # ② 표(`|`)가 딸린 절(목차 줄의 언급이 아니라 실제 절) ③ 첫 절.
+        return "", ""
     fallback = ""
     with_table = ""
     for s in starts:
         sec = _section_from(lines, s)
         if not fallback:
             fallback = sec
-        if _GROUP_HDR_RE.search(sec) and "|" in sec:
-            return sec
+        if "|" in sec and _has_resolution_table(sec):
+            return _title_of(sec), sec
         if "|" in sec and not with_table:
             with_table = sec
-    return with_table or fallback
+    sec = with_table or fallback
+    return _title_of(sec), sec
+
+
+def extract_board_section(markdown: str) -> str:
+    """「이사회의 주요 의결사항」·「중요의결사항」 제목 줄부터 다음 소제목 줄 앞까지. 없으면 ""."""
+    return extract_board_section_with_title(markdown)[1]
 
 
 # ── parse_board_resolutions ────────────────────────────────────────────────
-
-_SEP_CELL_RE = re.compile(r":?-{3,}:?")
-_ATTEND_RE = re.compile(r"^(.*?)\s*\(\s*출석률\s*[:：]\s*([\d.]+\s*%)\s*\)\s*$", re.S)
-# 이사 그룹 머리 — SKAI는 「사내이사 등의 성명」·「사외이사 등의 성명」 두 칸, 삼성전자·두산은
-# 「이사의 성명」 한 칸(사내/사외를 가르지 않는다 — group은 ""로 둔다).
-_GROUP_HDR_RE = re.compile(
-    r"사내\s*이사\s*등의\s*성명|사외\s*이사\s*등의\s*성명|(?<![가-힣])이사의\s*성명")
-# 그룹 머리 칸이 따로 없는 서식(셀트리온)의 머리 줄: 「개최일자」와 「의안」 칸이 함께 있다.
-_HDR_DATE_RE = re.compile(r"개최\s*일자")
-_HDR_AGENDA_RE = re.compile(r"의\s*안")
-_PLAIN_GROUP_RE = re.compile(r"(?:사내|사외)\s*이사")
-# 출석률 표기가 없는 이름 줄의 셀: 한글 2~5자 또는 쉼표·공백이 든 로마자(숫자 없음)
-_PERSON_CELL_RE = re.compile(r"[가-힣]{2,5}|[A-Za-z][A-Za-z ,.'-]*[A-Za-z]")
-_ATTEND_ROW_RE = re.compile(r"출석\s*[률율]")
-_RESULT_LABEL_RE = re.compile(r"가결\s*여부")
-
 
 def _cells(line: str):
     s = line.strip()
@@ -247,6 +281,18 @@ def _is_sep(cells) -> bool:
     return bool(cells) and all(_SEP_CELL_RE.fullmatch(c) for c in cells)
 
 
+def _is_header_cells(c) -> bool:
+    return bool(c) and any(_HDR_DATE_CELL_RE.search(x) for x in c) and (
+        any(_NAME_HDR_RE.search(x) for x in c)
+        or any(_HDR_AGENDA_CELL_RE.fullmatch(x) for x in c))
+
+
+def _plausible_names(cells) -> bool:
+    return (len(cells) >= 2
+            and all(_PERSON_CELL_RE.fullmatch(x) and _WS_RE.sub("", x) not in _NON_NAME_TOKENS
+                    for x in cells))
+
+
 def parse_board_resolutions(section_md: str) -> dict:
     """이사회 의결표(2단 헤더 파이프 표)를 읽는다.
 
@@ -254,30 +300,41 @@ def parse_board_resolutions(section_md: str) -> dict:
     이사 이름 줄(`이름(출석률: N%)`)이 따로 오고, 데이터 행은 4칸 + 이사 수만큼이다.
     `group`: 이름 줄에 사내/사외 표지가 없고 상단 헤더의 두 그룹 셀 폭이 마크다운에
     드러나지 않아 위치로 추정할 수 없다 — 추측하지 않고 전부 ""로 둔다.
+
+    `table_found`: **의결표 머리 줄을 찾았는가**. False는 「표가 없다」, True인데
+    `directors`·`rows`가 비면 「표는 있으나 이 서식을 읽지 못했다」다 — 두 경우를 섞으면
+    못 읽은 표가 「의결표 없음」으로 나온다.
+
+    이름 줄은 **양성 근거**가 있을 때만 이사 줄로 읽는다: 칸 하나 이상이 `이름(출석률: N%)`이거나,
+    (출석률 표기가 없으면) 모든 칸이 사람 이름이고 비이름 단어(사내이사·구분·합계…)가 없으며
+    그 다음 데이터 행의 열 수가 이름 수와 맞아야 한다. 「출석율」 줄은 이름 줄 바로 다음
+    (사이에 구분선만 허용) 한 번만 적용한다. 첫 표만 읽는다 — 새 머리 줄이 나오면 멈춘다.
     """
-    empty = {"directors": [], "rows": [], "unparsed": 0}
+    empty = {"directors": [], "rows": [], "unparsed": 0, "table_found": False}
     lines = _norm(section_md).split("\n")
 
     h = None
     hcells = None
-    for i, ln in enumerate(lines):
+    for i, ln in enumerate(lines):  # ① 그룹 머리 칸(…등의 성명 / 이사의 성명)이 있는 머리 줄
         c = _cells(ln)
-        if c and any(_GROUP_HDR_RE.search(x) for x in c):
+        if (c and any(_HDR_DATE_CELL_RE.search(x) for x in c)
+                and any(_NAME_HDR_RE.search(x) for x in c)):
             h, hcells = i, c
             break
-    if h is None:  # 그룹 머리 칸이 없는 서식 — 「개최일자」·「의안」 칸이 함께 있는 줄
+    if h is None:  # ② 그룹 머리 칸이 없는 서식 — 「개최일자」와 「의안(내용)」 칸
         for i, ln in enumerate(lines):
             c = _cells(ln)
-            if (c and any(_HDR_DATE_RE.search(x) for x in c)
-                    and any(_HDR_AGENDA_RE.search(x) for x in c)):
+            if (c and any(_HDR_DATE_CELL_RE.search(x) for x in c)
+                    and any(_HDR_AGENDA_CELL_RE.fullmatch(x) for x in c)):
                 h, hcells = i, c
                 break
     if h is None:
         return empty
+    found = dict(empty, table_found=True)  # 이후의 빈 반환은 「표는 찾았으나 못 읽음」
     fixed = next((k for k, x in enumerate(hcells)
-                  if _GROUP_HDR_RE.search(x) or _PLAIN_GROUP_RE.fullmatch(x)), 4)
+                  if _NAME_HDR_RE.search(x) or _PLAIN_GROUP_RE.fullmatch(x)), 4)
     if fixed < 4:
-        return empty
+        return found
 
     i = h + 1
     while i < len(lines) and (_cells(lines[i]) is None and not lines[i].strip()):
@@ -288,14 +345,29 @@ def parse_board_resolutions(section_md: str) -> dict:
             break
         i += 1
     if i >= len(lines):
-        return empty
+        return found
     name_cells = _cells(lines[i])
     if not name_cells:
-        return empty
+        return found
+    name_i = i
     with_attend = any(_ATTEND_RE.match(x) for x in name_cells)
-    if not with_attend and not (
-            len(name_cells) >= 2 and all(_PERSON_CELL_RE.fullmatch(x) for x in name_cells)):
-        return empty
+    if not with_attend and not _plausible_names(name_cells):
+        return found
+    if not with_attend:
+        # 출석률 표기가 없는 이름 줄은 열 수가 맞는 첫 데이터 행이 있어야 이사 줄이다
+        first_data = None
+        for j in range(i + 1, len(lines)):
+            d = _cells(lines[j])
+            if d is None:
+                break
+            if (_is_sep(d) or len(d) == 1
+                    or (_RESULT_LABEL_RE.fullmatch(d[0]) and len(d) == 2)
+                    or (_ATTEND_ROW_RE.fullmatch(d[0]) and len(d) == len(name_cells) + 1)):
+                continue
+            first_data = d
+            break
+        if first_data is None or len(first_data) != fixed + len(name_cells):
+            return found
 
     directors = []
     for x in name_cells:
@@ -307,19 +379,25 @@ def parse_board_resolutions(section_md: str) -> dict:
 
     rows: list[dict] = []
     unparsed = 0
-    i += 1
+    attend_done = False
+    i = name_i + 1
     while i < len(lines):
         c = _cells(lines[i])
         if c is None:
             break
+        if _is_header_cells(c) and i + 1 < len(lines) and _is_sep(_cells(lines[i + 1])):
+            break  # 새 표의 머리 줄 — 첫 표만 읽는다
+        pos = i
         i += 1
         if _is_sep(c) or len(c) == 1:  # 구분선·「찬 반 여 부」 같은 1칸 줄
             continue
         if _RESULT_LABEL_RE.fullmatch(c[0]) and len(c) == 2:  # 「가결여부 | 찬 반 여 부」
             continue
-        if _ATTEND_ROW_RE.fullmatch(c[0]) and len(c) == len(names) + 1:  # 출석율 줄
+        if (not attend_done and pos <= name_i + 2 and _ATTEND_ROW_RE.fullmatch(c[0])
+                and len(c) == len(names) + 1):  # 이름 줄 바로 다음의 출석율 줄 — 한 번만
             for d, a in zip(directors, c[1:]):
                 d["attendance"] = _WS_RE.sub("", a)
+            attend_done = True
             continue
         if len(c) != expected or not (c[0] or c[1] or c[2]):
             unparsed += 1
@@ -332,8 +410,8 @@ def parse_board_resolutions(section_md: str) -> dict:
             "votes": dict(zip(names, c[fixed:])),
         })
     if not with_attend and not rows:
-        return empty  # 이름 줄 같아 보였지만 열 수가 맞는 데이터 행이 없다 — 이사를 주장하지 않는다
-    return {"directors": directors, "rows": rows, "unparsed": unparsed}
+        return found  # 이름 줄 같아 보였지만 열 수가 맞는 데이터 행이 없다 — 이사를 주장하지 않는다
+    return {"directors": directors, "rows": rows, "unparsed": unparsed, "table_found": True}
 
 
 # ── find_resolution_rows ───────────────────────────────────────────────────
@@ -470,18 +548,21 @@ def _tally(values: list[str]) -> str:
     return " · ".join(f"{_vote_label(v)} {c[v]}" for v in order)
 
 
-def summarize_board_conflict(directors: list[dict], overlaps: "list[dict] | None", row: "dict | None") -> str:
+def summarize_board_conflict(directors: list[dict], overlaps: "list[dict] | None", row: "dict | None",
+                             *, table_unread: bool = False) -> str:
     """한 줄 사실 요약 — 판정·평가 어휘 없음.
 
     `overlaps=None`은 「대조하지 못했다」(임원 명부를 못 받았거나 비었다)이고 빈 리스트
     `[]`는 「대조했고 일치가 없다」다 — 둘을 섞으면 못 본 것이 「겸직 0인」으로 읽힌다.
+    `table_unread`: 의결표는 찾았으나 이 서식을 읽지 못했다 — 「의결표 없음」과 다르다.
     """
+    no_table = " · 의결표 못 읽음" if table_unread else " · 의결표 없음"
     n = len(directors or [])
     if overlaps is None:
         head = ((f"이사 {n}인 · " if n else "이사 수 확인 불가 · ")
                 + "상대방·대상회사 임원 겸직 대조 불가(임원 명부 확인 불가)")
         if not row:
-            return head + " · 의결표 없음"
+            return head + no_table
         votes = row.get("votes") or {}
         if not votes:
             return head + " · 결의 표기 없음"
@@ -493,7 +574,7 @@ def summarize_board_conflict(directors: list[dict], overlaps: "list[dict] | None
     head = (f"이사 {n}인 중 {k}인이 상대방·대상회사 임원 겸직" if n
             else f"이사 수 확인 불가 · 상대방·대상회사 임원 겸직 {k}인")
     if not row:
-        return head + " · 의결표 없음"
+        return head + no_table
     votes = row.get("votes") or {}
     if not votes:
         return head + " · 결의 표기 없음"

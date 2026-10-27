@@ -112,7 +112,7 @@ from .core import (
     parse_related_party_detail,
     parse_asset_disposal_detail,
     parse_decision_parties,
-    extract_board_section,
+    extract_board_section_with_title,
     parse_board_resolutions,
     find_resolution_rows,
     match_director_overlap,
@@ -10414,14 +10414,17 @@ def _board_party_text(p: dict, rel_label: str) -> str:
             f" · {rel_label} 「{p.get('relation') or '-'}」")
 
 
-_BOARD_ABSENT_RE = re.compile(r"(?:불참\s*)+\)?")
+_BOARD_VOTE_RE = re.compile(r"찬성|반대|기권")
 
 
 def _board_participated(v) -> bool:
-    """의결표 표기가 결의 참여를 말하는가 — 공란·「-」·「불참」(여러 안건이 붙어 「불참불참」으로
-    와도)만 아니다. 불참을 참여로 세면 안 된다(셀트리온·두산 서식은 불참을 명시한다)."""
-    t = (v or "").strip()
-    return t not in ("", "-") and not _BOARD_ABSENT_RE.fullmatch(t)
+    """의결표 표기가 결의 참여를 말하는가 — **양성 근거**로 정한다: 칸에 「찬성」·「반대」·「기권」이
+    있을 때만 True다. 공란·「-」·「불참」·「불참(사유)」·「미참석」·「결석」·「참석」(감사 칸의 출석
+    표기)은 False. ⚠ 안건이 여럿인 회차는 한 칸에 안건별 표기가 붙어 오므로(`찬성불참`)
+    그 칸은 찬성이 들어 있어 True다 — 어느 안건에 참여했는지는 갈라 읽지 않는다(안건 단위 모호성을
+    표기 그대로 둔다). 참여로 잘못 세는 쪽(게이트가 열리는 쪽)이 닫히는 쪽보다 나빠서 거부 목록이
+    아니라 허용 목록으로 판정한다."""
+    return bool(_BOARD_VOTE_RE.search(v or ""))
 
 
 def _board_vote(v) -> str:
@@ -10465,11 +10468,12 @@ def _board_conflict_block(
     않게. 원문을 못 받으면 겹침 False·요약 ""를 돌려주고 이유를 블록에 적는다.
 
     겹침 여부(`bool`)는 **결의 참여 표기까지 선 경우만** True다 — 의결표 행이 있고
-    겸직 이사 중 하나 이상의 표기가 「-」·공란이 아닐 때. 임원현황상 겸직만 확인된
+    겸직 이사 중 하나 이상의 표기에 「찬성」·「반대」·「기권」이 있을 때(`_board_participated`). 임원현황상 겸직만 확인된
     경우는 사실 줄로 적고 False다(Task 5의 신호 입력이 이 값을 쓴다).
 
-    `info`를 주면 `info["has_table"]`에 **의결표 행을 찾았는지**를 적는다 — 임베드 호출부가
-    후보를 순회하다 멈출 지점을 정하는 데 쓴다.
+    `info`를 주면 `info["has_table"]`에 **의결표 행을 찾았는지**, `info["table_state"]`에
+    `"row"`(행 있음)·`"unread"`(의결표는 있으나 이 서식을 읽지 못함)·`"none"`(의결표 없음)을 적는다
+    — 임베드 호출부가 후보를 순회하다 멈출 지점을 정하고 열어 본 후보의 결과를 밝히는 데 쓴다.
     """
     rcept = str(row.get("rcept_no") or "")
     title = _clean_report_name(row.get("report_nm") or "")
@@ -10485,6 +10489,8 @@ def _board_conflict_block(
     except Exception:
         text = ""
     if not text:
+        if info is not None:
+            info["table_state"] = "failed"
         lines.append(
             "⚠ 결정 공시 원문을 받지 못했습니다 — **신호가 없다는 뜻이 아닙니다.** "
             "조회가 실패했거나 원문이 비어 있습니다. 잠시 후 다시 시도하세요.")
@@ -10507,6 +10513,8 @@ def _board_conflict_block(
     res = _board_find_resolution(disclosures, date8, parties, api_key)
     if info is not None:
         info["has_table"] = bool(res["found"])
+        info["table_state"] = ("row" if res["found"]
+                               else "unread" if res.get("unread") else "none")
     lines += ["", "━━ 이사회 의결 ━━"] + _board_resolution_lines(
         res, corp_name, date8, disclosures)
 
@@ -10528,7 +10536,9 @@ def _board_conflict_block(
               "- 접수번호 모드는 접수번호 앞 8자리가 접수일과 다른 공시(실측 0.7%)를 찾지 못합니다 — "
               "그때는 창 모드로 다시 조회하세요."]
 
-    summary = summarize_board_conflict(directors, ro["overlaps"], row0)
+    summary = summarize_board_conflict(
+        directors, ro["overlaps"], row0,
+        table_unread=bool(res.get("unread")) and not res["found"])
     lines += ["", f"요약: {summary}"]
     return "\n".join(lines), gated, summary
 
@@ -10536,8 +10546,10 @@ def _board_conflict_block(
 def _board_find_resolution(disclosures, date8: str, parties: dict, api_key: str) -> dict:
     """결의일 이후 정기보고서(접수순 앞 `_BOARD_PERIODIC_MAX`건)에서 의결표 행을 찾는다.
 
-    행이 나오면 멈춘다. 반환: `{cands_all, cands, found, tried}` — `found`는
-    `(cand, parsed, rows)` 또는 None, `tried`는 못 찾은 사유 줄들."""
+    행이 나오면 멈춘다. 반환: `{cands_all, cands, found, tried, unread, title}` — `found`는
+    `(cand, parsed, rows)` 또는 None, `tried`는 못 찾은 사유 줄들, `unread`는 「의결표는 찾았으나
+    이 서식을 읽지 못한」 정기보고서(`(cand, 절 제목, 절 글자 수)`) 목록, `title`은 찾은 절의
+    제목 줄(원문 표기)."""
     cp_name = parties["counterparty"].get("name", "")
     tg_name = parties["target"].get("name", "")
     hint = " ".join(h for h in (_board_fold_corp_name(cp_name)[:4],
@@ -10545,7 +10557,9 @@ def _board_find_resolution(disclosures, date8: str, parties: dict, api_key: str)
     cands_all = _board_periodic_candidates(disclosures, date8)
     cands = cands_all[:_BOARD_PERIODIC_MAX]
     found = None
+    title = ""
     tried: list[str] = []
+    unread: list[tuple] = []
     for cand in cands:
         _dt, rn, nm, _code = cand
         label = f"{nm} {rn}"
@@ -10553,18 +10567,25 @@ def _board_find_resolution(disclosures, date8: str, parties: dict, api_key: str)
         if not md:
             tried.append(f"{label}: 원문을 받지 못했습니다")
             continue
-        sec = extract_board_section(md)
+        sec_title, sec = extract_board_section_with_title(md)
         if not sec:
             tried.append(f"{label}: 「이사회의 주요 의결사항」 절을 찾지 못했습니다")
             continue
         parsed = parse_board_resolutions(sec)
+        if parsed.get("table_found") and not parsed["rows"]:
+            # 표는 찾았는데 읽지 못했다 — 「의결표 없음」이 아니다
+            unread.append((cand, sec_title, len(sec)))
+            tried.append(f"{label}: 「{sec_title}」 절의 의결표 서식을 읽지 못했습니다")
+            continue
         rows = find_resolution_rows(parsed, date8, hint)
         if rows:
             found = (cand, parsed, rows)
+            title = sec_title
             break
         tried.append(f"{label}: 결의일 {_fmt_date8(date8)} 행 없음 "
                      f"(의결표 {len(parsed['rows'])}행 중)")
-    return {"cands_all": cands_all, "cands": cands, "found": found, "tried": tried}
+    return {"cands_all": cands_all, "cands": cands, "found": found, "tried": tried,
+            "unread": unread, "title": title}
 
 
 def _board_resolution_lines(res: dict, corp_name: str, date8: str, disclosures) -> list[str]:
@@ -10572,7 +10593,7 @@ def _board_resolution_lines(res: dict, corp_name: str, date8: str, disclosures) 
     out: list[str] = []
     if found:
         cand, _parsed, rows = found
-        out.append(f"출처: {cand[2]} {cand[1]} 「이사회의 주요 의결사항」")
+        out.append(f"출처: {cand[2]} {cand[1]} 「{(res.get('title') or '의결사항')}」")
         for r in rows[:_BOARD_ROWS_SHOWN]:
             no = f"{r['no']}회차 " if r.get("no") else ""
             out.append(f"{no}{_fmt_date8(r['date8'])} 「{r['agenda'] or '안건 미기재'}」"
@@ -10592,6 +10613,14 @@ def _board_resolution_lines(res: dict, corp_name: str, date8: str, disclosures) 
             out.append("의결표를 확인하지 못했습니다 — 의결표가 없다는 뜻이 아닙니다.")
         else:
             out.append("결의일 이후 정기보고서 미접수 — 의결표 없음")
+    elif res.get("unread"):
+        first = res["unread"][0]
+        out.append(f"의결표를 찾았으나 이 서식은 읽지 못했습니다(출처 {first[0][2]} {first[0][1]}) — "
+                   "의결표가 없다는 뜻이 아닙니다. 원문에서 직접 확인하세요.")
+        out += [f"- {t}" for t in res["tried"]]
+        if len(cands_all) > len(cands):
+            out.append(f"(결의일 이후 정기보고서 {len(cands_all)}건 중 접수순 앞 "
+                       f"{len(cands)}건 확인 · {len(cands_all) - len(cands)}건 미확인)")
     else:
         out.append("접수된 정기보고서의 의결표에서 이 결의일의 행을 찾지 못했습니다 — 의결표 없음")
         out += [f"- {t}" for t in res["tried"]]
@@ -10669,7 +10698,8 @@ def _board_roster_overlap(
 def _board_overlap_lines(ro: dict, row0, directors: list) -> "tuple[bool, list[str]]":
     """겸직 대조 절 본문 → `(🎯 게이트 통과 여부, 줄들)`.
 
-    게이트: 의결표 행이 있고, 겸직 이사 중 하나 이상의 표기가 「-」·공란이 아니다.
+    게이트: 의결표 행이 있고, 겸직 이사 중 하나 이상의 표기에 찬성·반대·기권이 있다
+    (`_board_participated` — 「-」·공란·불참은 참여가 아니다).
     """
     out: list[str] = []
     overlaps = ro["overlaps"]
@@ -10709,7 +10739,7 @@ def _board_overlap_lines(ro: dict, row0, directors: list) -> "tuple[bool, list[s
                      if not any(k in votes_by_key for k in persons)
                      else ("그 이사들의 결의 표기는 전부 「-」입니다"
                            if all((votes_by_key.get(k) or "").strip() in ("", "-") for k in persons)
-                           else "그 이사들의 결의 표기는 전부 「-」·「불참」입니다"))))
+                           else "그 이사들의 결의 표기에 찬성·반대·기권이 없습니다(불참 등)"))))
     return gated, out
 
 
@@ -10786,7 +10816,8 @@ def _board_embedded(
     `row`가 None이면 아무것도 하지 않는다(원문·ZIP·명부 호출 0). 블록 생성 중 예외는
     블록만 빼고 실패 사실 한 줄을 남긴다 — 도구는 계속 돌려준다. 꼬리말 고지는 여기서
     한 번만 붙인다."""
-    out = {"lines": [], "gated": False, "summary": "", "row": row, "has_table": False}
+    out = {"lines": [], "gated": False, "summary": "", "row": row, "has_table": False,
+           "table_state": "none", "failed": False}
     if not row:
         return out
     info: dict = {}
@@ -10799,6 +10830,7 @@ def _board_embedded(
         # 로그에서 가를 수 있게 트레이스백을 남긴다.
         log.exception("이사회 이해상충 블록 생성 실패 rcept_no=%s", row.get("rcept_no"))
         out["lines"] = ["", _BOARD_EMBED_FAIL]
+        out["failed"] = True
         return out
     lines = [""]
     if not want_header:
@@ -10807,7 +10839,8 @@ def _board_embedded(
                   "대상회사 임원을 겸하는지 공시 범위에서 대조한 사실 표기입니다.", ""]
     lines += block.splitlines() + ["", _BOARD_FOOTER]
     out.update(lines=lines, gated=gated, summary=summary,
-               has_table=bool(info.get("has_table")))
+               has_table=bool(info.get("has_table")),
+               table_state=info.get("table_state") or "none")
     return out
 
 
@@ -10829,12 +10862,15 @@ def _board_embedded_for_report(
     tried = cands[:_BOARD_MAX_CHECK]
     board: dict = {"lines": [], "gated": False, "summary": "", "row": None,
                    "has_table": False}
+    opened: list[tuple] = []  # (후보 접수번호, 결과 한 줄)
     first: "dict | None" = None
-    checked = 0
     for cand in tried:
         row = _board_row_from_candidate(cand, disclosures, corp_code, corp_name)
         cur = _board_embedded(corp_code, corp_name, disclosures, row, api_key)
-        checked += 1
+        outcome = ("조회 실패" if cur["failed"] or cur["table_state"] == "failed"
+                   else {"row": "의결표 행 있음", "unread": "의결표 못 읽음",
+                         "none": "의결표 없음"}[cur["table_state"]])
+        opened.append((row["rcept_no"], outcome))
         if first is None:
             first = cur
         if cur["has_table"]:
@@ -10842,12 +10878,26 @@ def _board_embedded_for_report(
             break
     else:
         board = first or board
-    # 헤더에 「후보 N건 중 M건 확인」 — M은 실제로 연 후보 수다. 블록이 만들어진 뒤에
-    # 갈아 끼운다(멈춘 지점을 알아야 M이 정해진다).
-    if len(cands) > 1 and len(board["lines"]) > 1 and board["lines"][1].startswith("🪑 **"):
-        board["lines"][1] = _board_embed_header(
-            f"(해당 {len(cands)}건 중 최근 {checked}건 확인"
-            + (f" · {len(cands) - checked}건 미확인" if len(cands) > checked else "") + ")")
+    checked = len(opened)
+    # 후보가 여럿이면 헤더에 「해당 N건 중 최근 M건 확인」 — M은 실제로 연 후보 수다 —
+    # 그리고 둘 이상 열었으면 후보별 결과 한 줄과, 고른 후보가 가장 최근이 아니라는 사실을 밝힌다.
+    # 블록이 만들어진 뒤에 붙인다(멈춘 지점을 알아야 M이 정해진다). 첫 후보가 실패해도
+    # (헤더 줄이 없는 실패 문구) 같은 고지를 단다.
+    if len(cands) > 1 and board["lines"]:
+        note = (f"(해당 {len(cands)}건 중 최근 {checked}건 확인"
+                + (f" · {len(cands) - checked}건 미확인" if len(cands) > checked else "") + ")")
+        extra: list[str] = []
+        if checked > 1:
+            extra.append("열어 본 후보: " + " · ".join(f"{rn} {o}" for rn, o in opened))
+            chosen = (board["row"] or {}).get("rcept_no")
+            if chosen and chosen != opened[0][0]:
+                extra.append(f"가장 최근 후보({opened[0][0]})가 아니라 {chosen}의 의결표를 쓴 "
+                             f"결과입니다 — 최근 후보는 「{opened[0][1]}」.")
+        if len(board["lines"]) > 1 and board["lines"][1].startswith("🪑 **"):
+            board["lines"][1] = _board_embed_header(note)
+            board["lines"][2:2] = extra
+        else:
+            board["lines"] += ["", "🪑 " + note.strip("()")] + extra
     row = board["row"]
     board["event"] = _board_conflict_event(row) if board["gated"] else None
     return board

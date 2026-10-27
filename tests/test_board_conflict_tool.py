@@ -125,7 +125,7 @@ class TestSkaiRceptMode:
     def test_의결표_출처와_표기(self, wired):
         out = srv.check_board_conflict("SKAI", FILING)
         assert PERIODIC in out
-        assert "「이사회의 주요 의결사항」" in out
+        assert "「(2) 이사회의 주요 의결사항 등」" in out
         assert "35회차" in out
         assert "2025.12.19" in out
         assert "타법인 주식취득 계약의 건" in out
@@ -685,12 +685,14 @@ class TestMissingFromTable:
 
 
 class TestParticipationMark:
-    """불참은 결의 참여가 아니다 — 셀트리온·두산 서식은 불참을 명시한다."""
+    """결의 참여는 양성 근거(찬성·반대·기권)로만 센다 — 불참·미참석·결석·「-」·참석(감사 칸)은 아니다.
+    안건이 여럿이라 한 칸에 붙은 `찬성불참`은 찬성이 들어 있어 True다(문서화된 안건 단위 모호성)."""
 
     @pytest.mark.parametrize("v,expected", [
         ("찬성", True), ("반대", True), ("기권", True), ("-", False), ("", False),
         (None, False), ("불참", False), ("불참불참불참", False), ("불참 )", False),
-        ("찬성불참", True),
+        ("불참(출장)", False), ("미참석", False), ("결석", False), ("참석", False),
+        ("의결권제한", False), ("찬성불참", True),
     ])
     def test_참여_표기(self, v, expected):
         assert srv._board_participated(v) is expected

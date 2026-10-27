@@ -205,7 +205,7 @@ from .market_context import (
 
 from .board import (
     parse_decision_parties,
-    extract_board_section,
+    extract_board_section_with_title,
     parse_board_resolutions,
     find_resolution_rows,
     match_director_overlap,
@@ -394,7 +394,7 @@ __all__ = [
     "MGMT_ISSUE_MKTCAP_KRW",
     "MGMT_ISSUE_PRICE_KRW",
     "parse_decision_parties",
-    "extract_board_section",
+    "extract_board_section_with_title",
     "parse_board_resolutions",
     "find_resolution_rows",
     "match_director_overlap",
