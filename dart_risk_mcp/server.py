@@ -3031,6 +3031,26 @@ def analyze_company_risk(
         acq_confirmations=_acq_confirmations,
     )
 
+    # 이사회 이해상충 확인 — 상대방이 계열·특수관계로 확인된 거래가 있을 때만, 그
+    # 최근 1건의 원문·정기보고서·임원현황을 연다(없으면 호출 0). 넓은 창(지도 모드)에서는
+    # 생략한다(형제 원문 사실 블록과 같은 가드). 겹침이 의결 표기까지 서면
+    # `BOARD_CONFLICT`를 관찰 신호로 올린다 — taxonomy 4.5는 어느 패턴에도 쓰이지 않아
+    # 위 패턴 판정에는 영향이 없다.
+    _board_cands = _board_candidates(outflow_confirmations, _acq_confirmations) if deep else []
+    _board_row = (
+        _board_row_from_candidate(_board_cands[0], disclosures, corp_code, corp_name)
+        if _board_cands else None
+    )
+    _board = _board_embedded(
+        corp_code, corp_name, disclosures, _board_row, _api_key(),
+        note=(f"(해당 {len(_board_cands)}건 중 최근 1건 확인 · "
+              f"{len(_board_cands) - 1}건 미확인)" if len(_board_cands) > 1 else ""),
+    )
+    if _board["gated"]:
+        _bc_event = _board_conflict_event(_board_row)
+        signal_events.append(_bc_event)
+        observed_events.append(_bc_event)
+
     # 「이 리포트에 나온 용어」 절 입력 — 실제로 찍힌 해설만 모은다.
     # ⚠ 패턴 prose는 넣지 않는다 — `_render_pattern_watch_block`은
     # PATTERN_PROSE를 렌더하지 않는다(패턴명·taxonomy 라벨·확인해볼 것만
@@ -3263,6 +3283,9 @@ def analyze_company_risk(
             "",
         ]
         lines += _render_outflow_confirmations(outflow_confirmations, _affiliate_facts)
+
+    # 이사회 이해상충 확인 (후보가 있을 때만 — 위 `_board` 참고)
+    lines += _board["lines"]
 
     # v0.6.0 자본 변동 타임라인 (최근 12개월 요약)
     if churn.get("events"):
@@ -3595,6 +3618,37 @@ def check_disclosure_risk(rcept_no: str = "", report_name: str = "") -> str:
                         lines.append(f"  • **{title}** — {body}")
                     else:
                         lines.append(f"  • {title}")
+
+    # 이사회 이해상충 확인 — 행 복원에 성공했고, 1차 대상 유형이며, 원문의 거래상대방
+    # 또는 대상회사가 최대주주·특수관계인 계열로 읽힐 때만 같은 블록 1회. 대조군(상대방이
+    # 특수관계가 아닌 공시)에는 블록도 원문 추가 조회도 없다.
+    if filing and lookup_status == "found" and rcept_no and _api_key():
+        _fr_nm = filing.get("report_nm") or ""
+        _fr_corp = str(filing.get("corp_code") or "")
+        if _fr_corp and not is_amendment_disclosure(_fr_nm) and _board_is_target(_fr_nm):
+            try:
+                _fr_text = fetch_document_text(rcept_no, _api_key(), max_chars=6000) or ""
+                _fr_related = bool(parse_decision_parties(_fr_text)["related_party"])
+            except Exception:
+                _fr_related = None
+            if _fr_related is None:
+                lines += ["", _BOARD_EMBED_FAIL]
+            elif _fr_related:
+                _fr_name = filing.get("corp_name") or _fr_corp
+                try:
+                    _fr_disc = _board_periodic_disclosures(
+                        _fr_corp, _api_key(), filing.get("rcept_dt"))
+                except Exception:
+                    _fr_disc = FetchList(fetch_failed=True)
+                _fr_board = _board_embedded(
+                    _fr_corp, _fr_name, _fr_disc,
+                    _board_row_from_candidate(
+                        {"rcept_no": rcept_no, "rcept_dt": filing.get("rcept_dt"),
+                         "report_nm": _fr_nm},
+                        [filing], _fr_corp, _fr_name),
+                    _api_key(), want_header=True,
+                )
+                lines += _fr_board["lines"]
 
     # 원문 요약
     if rcept_no and _api_key():
@@ -3974,6 +4028,31 @@ def build_event_timeline(
     )
     _top_overlap = _pattern_overlaps[0] if _pattern_overlaps else None
 
+    # 이사회 이해상충 확인 — `analyze_company_risk`와 같은 조건·같은 블록(그쪽 주석
+    # 참고). 겹침이 의결 표기까지 서면 `BOARD_CONFLICT` 이벤트를 타임라인에 더하고,
+    # 결의 공시 이벤트 줄 끝에 한 줄 요약을 붙인다.
+    _board_cands = _board_candidates(outflow_confirmations, _acq_confirmations) if deep else []
+    _board_row = (
+        _board_row_from_candidate(_board_cands[0], disclosures, corp_code, corp_name)
+        if _board_cands else None
+    )
+    _board = _board_embedded(
+        corp_code, corp_name, disclosures, _board_row, _api_key(),
+        note=(f"(해당 {len(_board_cands)}건 중 최근 1건 확인 · "
+              f"{len(_board_cands) - 1}건 미확인)" if len(_board_cands) > 1 else ""),
+    )
+    if _board["gated"]:
+        _bc_event = _board_conflict_event(_board_row)
+        events.append((
+            _bc_event["rcept_dt"], _PHASE_MAP.get("BOARD_CONFLICT", "심화기"),
+            "BOARD_CONFLICT", _bc_event["label"], _bc_event["report_nm"],
+            _bc_event["rcept_no"], "",
+        ))
+        events.sort(key=lambda e: e[0])
+        phases = {"진입기": [], "심화기": [], "탈출기": []}
+        for evt in events:
+            phases[evt[1]].append(evt)
+
     # 「이 리포트에 나온 용어」 절 입력 — 실제로 찍힌 해설만 모은다.
     # ⚠ 패턴 prose는 넣지 않는다 — `_render_pattern_watch_block`은
     # PATTERN_PROSE를 렌더하지 않는다(패턴명·taxonomy 라벨·확인해볼 것만
@@ -4038,7 +4117,14 @@ def build_event_timeline(
         # 이 단계에서 처음 등장한 신호에 대해 한 줄 해설을 붙여준다(중복 방지).
         seen_keys: set[str] = set()
         for evt in phase_events:
+            _board_tail = (
+                f" · 🪑 {_board['summary']}"
+                if (_board["summary"] and _board_row and evt[2] != "BOARD_CONFLICT"
+                    and len(evt) > 5 and evt[5] == _board_row["rcept_no"])
+                else ""
+            )
             lines.append(f"  • {evt[0]}  [{evt[3]}]  {evt[4]}")
+            lines[-1] += _board_tail
             # 방향 안내는 **건별**로 붙는다(해설과 달리 중복 제거하지 않는다).
             # 없으면 진입기(자금 조달) 목록에 되사기·매도가 「CB/BW발행」이라는
             # 라벨만 달고 섞인다 — 실물(진원생명과학 1년): 진입기 12건 중 5건이
@@ -4086,6 +4172,12 @@ def build_event_timeline(
         ]
         lines += _render_outflow_confirmations(outflow_confirmations, _affiliate_facts)
         lines.append("")
+
+    if _board["lines"]:
+        _board_blk = _board["lines"]
+        if _board_blk[0] == "" and lines and lines[-1] == "":
+            _board_blk = _board_blk[1:]
+        lines += _board_blk + [""]
 
     # CB 인수자 (있으면) — match_signals는 이미 정정공시 제외 처리
     cb_rcept_list = [
@@ -10603,6 +10695,110 @@ def _board_overlap_lines(ro: dict, row0, directors: list) -> "tuple[bool, list[s
     return gated, out
 
 
+def _board_periodic_disclosures(corp_code: str, api_key: str, rcept_dt) -> "FetchList":
+    """결정 공시 한 건 기준의 정기공시(A) 목록 — `check_board_conflict`(접수번호 모드)와
+    `check_disclosure_risk`가 함께 쓴다.
+
+    결의일은 원문을 읽어야 알 수 있고 접수일보다 앞설 수 있어(접수 전 결의) 접수일
+    400일 전부터 오늘까지 본다 — 결의일~접수일 사이에 낸 정기보고서와, 명부 기준으로 쓸
+    결의일 이전 최근 정기보고서가 모두 든다."""
+    _rd = str(rcept_dt or "")[:8]
+    try:
+        _bgn = (datetime.strptime(_rd, "%Y%m%d") - timedelta(days=400)).strftime("%Y%m%d")
+    except ValueError:
+        _bgn = _rd
+    rows, st = fetch_company_disclosures_with_status(
+        corp_code, api_key, bgn_de=_bgn, pblntf_ty="A",
+    )
+    return FetchList(rows or [], fetch_failed=(st == FETCH_ERROR))
+
+
+_BOARD_EMBED_FAIL = (
+    "🪑 이사회 이해상충 확인: 조회 실패로 확인하지 못했습니다 — 겸직이 없다는 뜻이 아닙니다.")
+
+
+def _board_candidates(*confirmation_lists) -> list[dict]:
+    """상대방 확인 행(`_confirm_outflow_counterparties`·`_confirm_acquisition_targets`) 중
+    이사회 이해상충 대조 후보 — 상대방이 계열·특수관계로 분류됐거나 관계 표기에
+    「최대주주」가 있고(부정 표기로 external이면 제외), 제목이 1차 대상 유형인 행.
+    최근 접수 순."""
+    seen: set = set()
+    out: list[dict] = []
+    for lst in confirmation_lists:
+        for r in lst or []:
+            rn = str(r.get("rcept_no") or "")
+            if not rn or rn in seen:
+                continue
+            cls = r.get("classification")
+            rel = r.get("relation") or ""
+            related = cls == "affiliated" or ("최대주주" in rel and cls != "external")
+            if related and _board_is_target(r.get("report_nm") or ""):
+                seen.add(rn)
+                out.append(r)
+    out.sort(key=lambda r: ("".join(c for c in str(r.get("rcept_dt") or "") if c.isdigit())[:8],
+                            str(r.get("rcept_no"))), reverse=True)
+    return out
+
+
+def _board_row_from_candidate(pick: dict, disclosures, corp_code: str, corp_name: str) -> dict:
+    """확인 행 → `_board_conflict_block`이 기대하는 list.json 형태의 행. 공시 목록에
+    같은 접수번호가 있으면 그 행을 바탕으로 한다."""
+    rn = str(pick.get("rcept_no") or "")
+    base = next((d for d in disclosures or [] if str(d.get("rcept_no") or "") == rn), {})
+    dt = "".join(c for c in str(base.get("rcept_dt") or pick.get("rcept_dt") or "")
+                 if c.isdigit())[:8]
+    return {
+        "corp_code": corp_code, "corp_name": corp_name,
+        **base,
+        "rcept_no": rn, "rcept_dt": dt,
+        "report_nm": base.get("report_nm") or pick.get("report_nm") or "",
+    }
+
+
+def _board_embedded(
+    corp_code: str, corp_name: str, disclosures, row: "dict | None", api_key: str,
+    *, want_header: bool = False, note: str = "",
+) -> dict:
+    """다른 도구에 끼워 넣는 이사회 이해상충 블록 → `{lines, gated, summary, row}`.
+
+    `row`가 None이면 아무것도 하지 않는다(원문·ZIP·명부 호출 0). 블록 생성 중 예외는
+    블록만 빼고 실패 사실 한 줄을 남긴다 — 도구는 계속 돌려준다. 꼬리말 고지는 여기서
+    한 번만 붙인다."""
+    out = {"lines": [], "gated": False, "summary": "", "row": row}
+    if not row:
+        return out
+    try:
+        block, gated, summary = _board_conflict_block(
+            corp_code, corp_name, disclosures, row, api_key, want_header=want_header)
+    except Exception:
+        out["lines"] = ["", _BOARD_EMBED_FAIL]
+        return out
+    lines = [""]
+    if not want_header:
+        lines += ["🪑 **이사회 이해상충 확인**" + (f" {note}" if note else ""),
+                  "상대방이 계열·특수관계로 확인된 거래에서, 결의에 참여한 이사가 상대방·"
+                  "대상회사 임원을 겸하는지 공시 범위에서 대조한 사실 표기입니다.", ""]
+    lines += block.splitlines() + ["", _BOARD_FOOTER]
+    out.update(lines=lines, gated=gated, summary=summary)
+    return out
+
+
+def _board_conflict_event(row: dict) -> dict:
+    """`BOARD_CONFLICT` 신호 이벤트 — `FUND_UNREPORTED`와 같은 dict 모양(제목이 없는
+    구조화 파생 신호라 한정층을 거치지 않고 observed)."""
+    meta = next((t for t in SIGNAL_TYPES if t["key"] == "BOARD_CONFLICT"),
+                {"label": "BOARD_CONFLICT", "score": 0})
+    return {
+        "key": "BOARD_CONFLICT",
+        "label": meta["label"],
+        "score": meta["score"],
+        "report_nm": "이사회 결의 참여 이사 겸직 확인 — " + _clean_report_name(row["report_nm"]),
+        "rcept_dt": row["rcept_dt"],
+        "rcept_no": row["rcept_no"],
+        "is_amendment": False,
+    }
+
+
 @mcp.tool()
 def check_board_conflict(
     company_name: str,
@@ -10675,18 +10871,7 @@ def check_board_conflict(
         if not _board_is_target(report_nm):
             return (f"ℹ️ {_clean_report_name(report_nm)}은(는) 이 도구의 1차 대상 유형이 "
                     f"아닙니다. 대상: {_BOARD_SCOPE_NOTE}.")
-        # 정기공시(A)만 받는다. 결의일은 원문을 읽어야 알 수 있고 접수일보다 앞설 수
-        # 있어(접수 전 결의) 접수일 400일 전부터 오늘까지 본다 — 결의일~접수일 사이에
-        # 낸 정기보고서와, 명부 기준으로 쓸 결의일 이전 최근 정기보고서가 모두 든다.
-        _rd = str(row.get("rcept_dt") or "")[:8]
-        try:
-            _bgn = (datetime.strptime(_rd, "%Y%m%d") - timedelta(days=400)).strftime("%Y%m%d")
-        except ValueError:
-            _bgn = _rd
-        rows, st = fetch_company_disclosures_with_status(
-            corp_code, api_key, bgn_de=_bgn, pblntf_ty="A",
-        )
-        disclosures = FetchList(rows or [], fetch_failed=(st == FETCH_ERROR))
+        disclosures = _board_periodic_disclosures(corp_code, api_key, row.get("rcept_dt"))
         block, _found, _summary = _board_conflict_block(
             corp_code, corp_name, disclosures, row, api_key)
         return block + "\n\n" + _BOARD_FOOTER
