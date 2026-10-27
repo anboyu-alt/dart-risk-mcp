@@ -790,7 +790,7 @@ TAXONOMY = {
             "의결표의 불참·제척 여부는 의사록으로 확인해야 한다."
         ),
         "base_score": 0,
-        "severity": "MEDIUM",
+        "severity": "OBSERVATION",
         "crisis_timeline_months": 0,
         "keywords": ["이사회 결의", "겸직"],
         "indicators": [

@@ -924,7 +924,7 @@
 
 ## 4.5: 특수관계자 거래 결의의 이사 겸직
 
-- **Severity**: MEDIUM
+- **Severity**: OBSERVATION
 - **Base Score**: 0
 - **Crisis Timeline**: 0개월
 

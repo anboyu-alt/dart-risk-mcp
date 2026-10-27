@@ -5,6 +5,7 @@
 """
 import json
 import pathlib
+import re
 
 from dart_risk_mcp.core.explain import FLAG_PROSE
 from dart_risk_mcp.core.signals import (
@@ -39,7 +40,7 @@ def test_taxonomy_4_5():
     assert t["id"] == "4.5"
     assert t["name"] == "특수관계자 거래 결의의 이사 겸직"
     assert t["base_score"] == 0
-    assert t["severity"] == "MEDIUM"
+    assert t["severity"] == "OBSERVATION"
     assert t["keywords"] == ["이사회 결의", "겸직"]
     assert any("상법 제398조" in x for x in t["legal_basis"])
     assert any("제368조" in x for x in t["legal_basis"])
@@ -57,7 +58,20 @@ def test_FLAG_PROSE가_있고_판정어가_없다():
     text = p["title"] + p["body"]
     for bad in ("위험", "심각", "의심", "제척 없음", "위반"):
         assert bad not in text
-    assert p["body"].split("다.")[0].count("다.") == 0
+    # test_prose_readability._sentences 와 같은 분할 규칙
+    sents = [s.strip() for s in re.split(r"(?<=[다요])\.", p["body"]) if s.strip()]
+    assert len(sents) == 3
+    # track_capital_structure 가 split("다.")[0] 로 첫 문장을 자르므로 첫 문장 안에 「다.」는 하나
+    assert sents[0].count("다") >= 1
+    assert (sents[0] + ".").count("다.") == 1
+
+def test_4_5는_1_8의_필드를_모두_갖는다():
+    assert set(TAXONOMY["4.5"]) >= set(TAXONOMY["1.8"])
+
+
+def test_export에_severity가_없다():
+    text = (_ROOT / "docs" / "tool" / "signals-data.json").read_text(encoding="utf-8")
+    assert '"severity"' not in text
 
 
 def test_단계는_심화기다():
