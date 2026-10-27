@@ -62,7 +62,6 @@ def test_FLAG_PROSE가_있고_판정어가_없다():
     sents = [s.strip() for s in re.split(r"(?<=[다요])\.", p["body"]) if s.strip()]
     assert len(sents) == 3
     # track_capital_structure 가 split("다.")[0] 로 첫 문장을 자르므로 첫 문장 안에 「다.」는 하나
-    assert sents[0].count("다") >= 1
     assert (sents[0] + ".").count("다.") == 1
 
 def test_4_5는_1_8의_필드를_모두_갖는다():
