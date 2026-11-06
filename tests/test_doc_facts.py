@@ -55,6 +55,20 @@ def test_발화_불가_신호_목록이_실제와_같다():
     )
 
 
+def test_README가_든_도구_이름은_실제_도구_목록과_같다():
+    """2026-11-06: README에 기능 설명 한 절(「하는 일」)을 되살렸다.
+
+    이름을 적는 순간 낡을 수 있다 — 없는 도구를 적으면 틀린 안내이고,
+    새 도구가 빠지면 그 절이 「전부」처럼 읽힌다. 양쪽을 함께 본다.
+    """
+    m = re.search(r"## 하는 일\n(.*?)\n## ", _README, re.S)
+    assert m, "README에 「하는 일」 절이 없다"
+    named = set(re.findall(r"`([a-z_]+)`", m.group(1)))
+    assert named == _TOOLS, (
+        f"README에만: {sorted(named - _TOOLS)}, 코드에만: {sorted(_TOOLS - named)}"
+    )
+
+
 def _golden_matrix_tools() -> set:
     src = (_ROOT / "scripts" / "regen_goldens.py").read_text(encoding="utf-8")
     return {m for m in re.findall(r"\b([a-z_]{6,})\(", src) if m in _TOOLS}
