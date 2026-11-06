@@ -2,6 +2,10 @@
 
 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식 준수. 버전은 [SemVer](https://semver.org/lang/ko/).
 
+## [1.30.1] - 2026-11-06
+
+- 공시 목록 도구(`list_disclosures_by_stock`)가 종목코드 외에 기업명·DART 기업코드 8자리도 받는다 — 종목코드가 없는 회사(상장 준비 비상장사 등)의 공시 목록·접수번호를 볼 수 있다. 동명 법인은 고르지 않고 되묻는다 (#532)
+
 ## [1.30.0] - 2026-10-28
 
 **이사회 이해상충 점검 도구.** `check_board_conflict`(35번째)가 주요사항보고서 거래의
