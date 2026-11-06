@@ -4883,22 +4883,33 @@ def list_disclosures_by_stock(
     from_date: str = "",
     to_date: str = "",
 ) -> str:
-    """종목코드로 최근 공시의 접수번호(rcept_no) 목록을 조회한다.
+    """종목코드·기업명·기업코드로 최근 공시의 접수번호(rcept_no) 목록을 조회한다.
 
     반환된 접수번호는 get_disclosure_document, view_disclosure,
-    check_disclosure_risk 등에 바로 사용할 수 있다.
+    check_disclosure_risk 등에 바로 사용할 수 있다. 종목코드가 없는 회사
+    (상장을 준비하는 비상장사 등)도 기업명이나 기업코드로 조회된다 —
+    증권신고서·투자설명서의 접수번호를 여기서 찾는다.
 
     Args:
-        stock_code: 종목코드 6자리 (예: "086520")
+        stock_code: 종목코드 6자리(예: "086520"), 기업명(예: "데스틴파워"),
+            또는 DART 기업코드 8자리(예: "01135039"). 같은 이름의 법인이
+            여럿이면 조회하지 않고 기업코드 목록을 보여 준다.
         lookback_years: 조회 기간(년). 기본 1년, 1~5년 범위.
     """
     import re as _re
 
-    if not _api_key():
+    api_key = _api_key()
+    if not api_key:
         return "❌ DART_API_KEY 환경변수가 설정되지 않았습니다."
 
-    if not _re.match(r"^\d{6}$", stock_code):
-        return "❌ 종목코드는 6자리 숫자여야 합니다. 예: '086520'"
+    # 인자 이름은 `stock_code` 그대로다(하위 호환) — 받는 값만 넓혔다.
+    # 옛 구현은 6자리 숫자만 받아 종목코드가 없는 회사의 공시 목록을 볼 길이
+    # 없었다(2026-11-06 실측: 「데스틴파워」 → 「종목코드는 6자리 숫자여야
+    # 합니다」). 접수번호만 알면 원문은 읽히는데 그 접수번호를 못 찾았다.
+    query = str(stock_code or "").strip()
+    if not query:
+        return ("❌ 종목코드 6자리, 기업명, 또는 DART 기업코드 8자리를 입력하세요. "
+                "예: '086520' · '데스틴파워' · '01135039'")
 
     bgn_de, end_de, lookback_days, max_pages, window_phrase, win_err = _resolve_window(
         lookback_years, lookback_days, from_date, to_date
@@ -4906,13 +4917,60 @@ def list_disclosures_by_stock(
     if win_err:
         return f"❌ {win_err}"
 
-    result = resolve_corp(stock_code, _api_key())
-    if not result:
-        return f"❌ 종목코드 '{stock_code}'에 해당하는 기업을 DART에서 찾을 수 없습니다."
+    is_stock = bool(_re.fullmatch(r"\d{6}", query))
+    _dupe_note = ""
+    if _re.fullmatch(r"\d{8}", query):
+        # 기업코드 직접 지정 — 동명 법인을 되물은 뒤 답하는 경로이기도 하다.
+        corp_code = query
+        corp_name = corp_name_by_code(query, api_key)
+        if not corp_name:
+            return f"❌ 기업코드 '{query}'에 해당하는 기업을 DART 명부에서 찾을 수 없습니다."
+        corp_info = {
+            "corp_code": corp_code,
+            "stock_code": next(
+                (c.get("stock_code") or "" for c in find_corp_candidates(corp_name, api_key)
+                 if c.get("corp_code") == corp_code), ""),
+        }
+    else:
+        if not is_stock:
+            # 동명 법인: 어느 쪽인지 알 수 없으면 고르지 않는다 — 옛 법인을
+            # 잡으면 「공시가 없습니다」가 회사에 대한 거짓 진술이 된다
+            # (실측 '올품' 00442385는 공시 0건). 상장사가 하나뿐이면
+            # resolve_corp의 기존 선택(상장 우선)을 따르고 나머지를 알린다.
+            cands = find_corp_candidates(query, api_key)
+            if len(cands) > 1:
+                listed = [c for c in cands if c.get("stock_code")]
+                if len(listed) != 1:
+                    return _unlisted_candidate_block(
+                        query, cands,
+                        retry_hint=("위 corp_code 중 하나를 골라 다시 부르세요 — "
+                                    "`list_disclosures_by_stock(stock_code=\"<corp_code 8자리>\")`."),
+                    )
+                others = [c["corp_code"] for c in cands if not c.get("stock_code")]
+                _dupe_note = (
+                    f"ℹ️ 같은 이름의 다른 법인이 {len(others)}곳 있습니다"
+                    f"(기업코드 {', '.join(others)}) — 그쪽 공시는 기업코드로 조회하세요."
+                )
+        result = resolve_corp(query, api_key)
+        if not result:
+            if is_stock:
+                return f"❌ 종목코드 '{query}'에 해당하는 기업을 DART에서 찾을 수 없습니다."
+            return (f"❌ '{query}'에 해당하는 기업을 DART에서 찾을 수 없습니다. "
+                    "정식 상호, 종목코드 6자리, 또는 기업코드 8자리로 다시 조회하세요.")
+        corp_name, corp_info = result
+        corp_code = corp_info["corp_code"]
 
-    corp_name, corp_info = result
-    corp_code = corp_info["corp_code"]
-    _alias_note = _alias_note_line(corp_info)
+    # 머리글의 괄호 — 종목코드로 부른 경로는 옛 표기 그대로다. 그 밖에는
+    # 종목코드가 있으면 그것을, 없으면 그 사실과 다시 부를 기업코드를 적는다.
+    if is_stock:
+        stock_code = query
+    else:
+        stock_code = ((corp_info.get("stock_code") or "").strip()
+                      or f"종목코드 없음 · 기업코드 {corp_code}")
+
+    _alias_note = "\n".join(
+        n for n in (_alias_note_line(corp_info), _dupe_note) if n
+    )
     _note_block = f"{_alias_note}\n\n" if _alias_note else ""
 
     disclosures, fetch_status = fetch_company_disclosures_with_status(
@@ -8757,8 +8815,13 @@ _UNLISTED_SECTIONS = ("fs", "notes", "all")
 _UNLISTED_MAX_CHARS = 12000
 
 
-def _unlisted_candidate_block(name: str, cands: list[dict]) -> str:
-    """동명 법인 후보를 보여 주고 되묻는다 — 임의로 고르지 않는다."""
+def _unlisted_candidate_block(name: str, cands: list[dict], retry_hint: str = "") -> str:
+    """동명 법인 후보를 보여 주고 되묻는다 — 임의로 고르지 않는다.
+
+    `retry_hint`는 「다시 부르는 법」 한 줄이다. 비우면 `get_unlisted_financials`
+    안내(이 블록의 원래 호출자)를 쓴다 — `list_disclosures_by_stock`도 같은
+    블록을 쓰므로 호출자가 제 도구 이름을 넘긴다.
+    """
     lines = [
         f"❓ **'{name}'** 이름으로 DART에 법인이 {len(cands)}개 있습니다 — "
         "어느 쪽인지 알 수 없어 조회하지 않았습니다.",
@@ -8775,9 +8838,12 @@ def _unlisted_candidate_block(name: str, cands: list[dict]) -> str:
         "",
         "수정일이 최신인 쪽이 현행일 가능성이 높지만 **확정은 아닙니다** — "
         "옛 법인에 공시가 한 건도 없는 경우가 있습니다(실측 '올품' 00442385는 0건).",
-        "`list_disclosures_by_stock`은 종목코드 전용이라 비상장에는 쓸 수 없습니다. "
-        "위 corp_code 중 하나를 골라 다시 부르세요 — "
-        "`get_unlisted_financials(company_name=\"<corp_code 8자리>\")`도 받습니다.",
+        retry_hint or (
+            "위 corp_code 중 하나를 골라 다시 부르세요 — "
+            "`get_unlisted_financials(company_name=\"<corp_code 8자리>\")`도 받습니다. "
+            "어느 쪽에 공시가 있는지는 "
+            "`list_disclosures_by_stock(stock_code=\"<corp_code 8자리>\")`로 볼 수 있습니다."
+        ),
     ]
     return "\n".join(lines)
 
